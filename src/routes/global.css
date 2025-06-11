@@ -1,0 +1,32 @@
+@import 'open-props/style';
+@import 'open-props/normalize.min.css';
+
+/* Light Mode (Default) */
+:root {
+  --bg-color: var(--gray-0);
+  --text-color: var(--gray-10);
+  --text-secondary: var(--gray-8);
+  --text-muted: var(--gray-3);
+  --primary-color: var(--blue-6);
+  --secondary-color: var(--blue-4);
+  color-scheme: light;
+}
+
+/* Dark Mode */
+.dark {
+  --bg-color: var(--gray-10);
+  --text-color: var(--gray-0);
+  --text-secondary: var(--gray-3);
+  --text-muted: var(--gray-8);
+  --primary-color: var(--blue-3);
+  --secondary-color: var(--blue-1);
+  color-scheme: dark;
+}
+
+/* Apply to body */
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: system-ui, sans-serif;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}

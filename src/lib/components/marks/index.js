@@ -1,0 +1,1 @@
+export { default as DotsMark } from './DotsMark.svelte';
