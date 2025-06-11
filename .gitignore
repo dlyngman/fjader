@@ -25,6 +25,7 @@ vite.config.ts.timestamp-*
 #llm utils
 llm_context.ipynb
 llm_context.txt
+.ipynb_checkpoints
 
 # Static data
 /static/data
