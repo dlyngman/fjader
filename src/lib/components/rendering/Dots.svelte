@@ -258,12 +258,16 @@
         existingBuffer.destroy();
       }
 
-      // Smart buffer sizing - avoid frequent reallocations
-      const bufferSize = Math.max(
-        requiredSize,
-        Math.ceil(requiredSize * 1.5), // 50% headroom for growth
-        4096 // Minimum reasonable size
-      );
+      // Define a memory block size to prevent thrashing with tiny allocations.
+      const MEMORY_BLOCK_SIZE = 256; // 256 bytes is a reasonable default
+      // Calculate the desired size with 50% headroom for growth.
+      const desiredSize = Math.ceil(requiredSize * 1.5);
+      // Round up the desired size to the next multiple of MEMORY_BLOCK_SIZE.
+      // This ensures we grow in sensible steps without over-allocating for small plots.
+      const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
+      // Final buffer size must be at least the required size, and padded to a multiple of 4.
+      let bufferSize = Math.max(requiredSize, roundedUpSize);
+      bufferSize = (bufferSize + 3) & ~3; // Ensure 4-byte alignment
 
       const newBuffer = device.createBuffer({
         size: bufferSize,
