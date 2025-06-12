@@ -1,6 +1,6 @@
 <script>
 	import { Selection } from '@uwdata/mosaic-core';
-	import { makeClient } from '@uwdata/mosaic-core';
+	import { sum, min, max } from '@uwdata/mosaic-sql';
 	import { setContext, getContext } from 'svelte';
 	import {
 		ChartContainer,
@@ -12,7 +12,8 @@
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		DotsMark
+		DotsMark,
+		BarMark
 	} from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');
@@ -71,6 +72,68 @@
 		}
 	});
 </script>
+
+<div class="chart-wrapper">
+	<ChartContainer xLabel="bill_length" yLabel="species">
+	  {#snippet background()}
+		<Grid show='x'/>
+		<Frame />
+		<AxisLeft />
+		<AxisBottom />
+		<MarginLabel />
+	  {/snippet}
+  
+	  {#snippet canvas()}
+		<WebGPUCanvas>
+		  {#snippet canvasComponents()}
+			<BarMark
+			  table="penguins"
+			  x={max("bill_length")}
+			  y="species"
+			  orientation="horizontal"
+			  alpha="0.8"
+			/>
+		  {/snippet}
+		</WebGPUCanvas>
+	  {/snippet}
+  
+	  {#snippet foreground()}
+		<Crosshair />
+	  {/snippet}
+	</ChartContainer>
+  </div>
+  
+  <!-- For horizontal bars, just change orientation -->
+  <!-- <div class="chart-wrapper">
+	<ChartContainer xLabel="bill_length" yLabel="species">
+	  {#snippet background()}
+		<Grid />
+		<Frame />
+		<AxisLeft />
+		<AxisBottom />
+		<MarginLabel />
+	  {/snippet}
+  
+	  {#snippet canvas()}
+		<WebGPUCanvas>
+		  {#snippet canvasComponents()}
+			<BarMark
+			  table="penguins"
+			  x="bill_length"
+			  y="species"
+			  color="species"
+			  orientation="horizontal"
+			  alpha="0.8"
+			/>
+		  {/snippet}
+		</WebGPUCanvas>
+	  {/snippet}
+  
+	  {#snippet foreground()}
+		<Crosshair />
+	  {/snippet}
+	</ChartContainer>
+  </div> -->
 
 <div class="main-view-container">
 

@@ -1,7 +1,9 @@
 <script>
   import { setContext } from 'svelte';
   import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
-  import { ScaleCoordinator } from '$lib/scales/ScaleCoordinator.svelte.js';
+  // import { ChartScales } from '$lib/scales/ChartScales.js';
+  // import { ChartScales } from '$lib/scales/ChartScales.svelte';
+  import { ChartScales } from '$lib/scales/ChartScales.svelte';
 
   let {
     xLabel,
@@ -18,7 +20,7 @@
     height: 250 
   });
 
-  let scaleCoordinator = $derived(new ScaleCoordinator({
+  let scales = $derived(new ChartScales({
     xLabel,
     yLabel,
     layout
@@ -51,66 +53,34 @@
     reset: layout.reset.bind(layout),
     getDebugInfo: layout.getDebugInfo.bind(layout),
 
-    // Scale coordinator properties - reactive to scaleCoordinator changes
-    get xScale() { return scaleCoordinator.xScale?.scale; },
-    get yScale() { return scaleCoordinator.yScale?.scale; },
-    get xTargetScale() { return scaleCoordinator.xTargetScale?.scale; },
-    get yTargetScale() { return scaleCoordinator.yTargetScale?.scale; },
+    // Scale coordinator properties - reactive to scales changes
+    get xScale() { return scales.xScale?.scale; },
+    get yScale() { return scales.yScale?.scale; },
+    get xTargetScale() { return scales.xTargetScale?.scale; },
+    get yTargetScale() { return scales.yTargetScale?.scale; },
     
-    get xLabel() { return scaleCoordinator.xLabel; },
-    get yLabel() { return scaleCoordinator.yLabel; },
+    get xLabel() { return scales.xLabel; },
+    get yLabel() { return scales.yLabel; },
     
-    get currentXDataPoint() { return scaleCoordinator.currentXDataPoint; },
-    get currentYDataPoint() { return scaleCoordinator.currentYDataPoint; },
-    get currentXScreenPoint() { return scaleCoordinator.currentXScreenPoint; },
-    get currentYScreenPoint() { return scaleCoordinator.currentYScreenPoint; },
+    get currentXDataPoint() { return scales.currentXDataPoint; },
+    get currentYDataPoint() { return scales.currentYDataPoint; },
+    get currentXScreenPoint() { return scales.currentXScreenPoint; },
+    get currentYScreenPoint() { return scales.currentYScreenPoint; },
     
-    get xScaleState() { return scaleCoordinator.xScaleState; },
-    get yScaleState() { return scaleCoordinator.yScaleState; },
+    get xScaleState() { return scales.xScaleState; },
+    get yScaleState() { return scales.yScaleState; },
     
-    get scaleTypes() { return scaleCoordinator.scaleTypes; },
-    get scalesReady() { return scaleCoordinator.scalesReady; },
-    get active() { return scaleCoordinator.active; },
+    get scaleTypes() { return scales.scaleTypes; },
+    get scalesReady() { return scales.scalesReady; },
+    get active() { return scales.active; },
     
     // Scale coordinator methods
-    registerScaleType: (dimension, type, priority, markId) => scaleCoordinator.registerScaleType(dimension, type, priority, markId),
-    unregisterScaleType: (dimension, markId) => scaleCoordinator.unregisterScaleType(dimension, markId),
-    getScaleRequirementsSummary: () => scaleCoordinator.getScaleRequirementsSummary()
+    registerScaleType: (dimension, type, priority, markId) => scales.registerScaleType(dimension, type, priority, markId),
+    unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
+    getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
   };
 
   setContext('chart', chartContext);
-
-  // // Set chart context
-  // setContext('chart', mergeReactive(
-  //   layout.getContextData(),
-  //   // scaleCoordinator.getContextData(),
-  //   {
-  //     // Getters that always reference the current reactive scaleCoordinator
-  //     get xScale() { return scaleCoordinator.xScale?.scale; },
-  //     get yScale() { return scaleCoordinator.yScale?.scale; },
-  //     get xTargetScale() { return scaleCoordinator.xTargetScale?.scale; },
-  //     get yTargetScale() { return scaleCoordinator.yTargetScale?.scale; },
-      
-  //     get xLabel() { return scaleCoordinator.xLabel; },
-  //     get yLabel() { return scaleCoordinator.yLabel; },
-      
-  //     get currentXDataPoint() { return scaleCoordinator.currentXDataPoint; },
-  //     get currentYDataPoint() { return scaleCoordinator.currentYDataPoint; },
-  //     get currentXScreenPoint() { return scaleCoordinator.currentXScreenPoint; },
-  //     get currentYScreenPoint() { return scaleCoordinator.currentYScreenPoint; },
-      
-  //     get xScaleState() { return scaleCoordinator.xScaleState; },
-  //     get yScaleState() { return scaleCoordinator.yScaleState; },
-      
-  //     get scaleTypes() { return scaleCoordinator.scaleTypes; },
-  //     get scalesReady() { return scaleCoordinator.scalesReady; },
-  //     get active() { return scaleCoordinator.active; },
-      
-  //     registerScaleType: (dimension, type) => scaleCoordinator.registerScaleType(dimension, type)
-  //   } 
-  //     // get xLabel() { return xLabel; },
-  //     // get yLabel() { return yLabel; }
-  // ));
   
   // Interaction state
   let svg = $state();
@@ -133,14 +103,14 @@
       ? 1 + Math.abs(event.deltaY) * 0.0025 
       : 1 - Math.abs(event.deltaY) * 0.0025;
     
-    scaleCoordinator.applyZoom(innerPoint, scaleFactor, x, y);
+    scales.applyZoom(innerPoint, scaleFactor, x, y);
   }
   
   function handleDoubleClick(event) {
     event.preventDefault();
     const point = { x: event.offsetX, y: event.offsetY };
     const { x, y } = layout.getActiveAxes(point);
-    scaleCoordinator.resetZoom({ x, y });
+    scales.resetZoom({ x, y });
   }
   
   // TOUCH HANDLERS
@@ -174,7 +144,7 @@
       const point = { x: event.offsetX, y: event.offsetY };
       const { innerPoint } = layout.getActiveAxes(point);
       
-      scaleCoordinator.applyZoom(innerPoint, scaleFactor, activePanX, activePanY);
+      scales.applyZoom(innerPoint, scaleFactor, activePanX, activePanY);
       initialTouchDistance = currentDistance;
     }
   }
@@ -192,7 +162,7 @@
     
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     
-    scaleCoordinator.clearCurrentDataPoints();
+    scales.clearCurrentDataPoints();
     
     const point = { x: event.offsetX, y: event.offsetY };
     const { x, y, innerPoint } = layout.getActiveAxes(point);
@@ -200,7 +170,7 @@
     activePanX = x;
     activePanY = y;
     isPanning = true;
-    panningAnchorPoint = scaleCoordinator.calculatePanningAnchor(innerPoint);
+    panningAnchorPoint = scales.calculatePanningAnchor(innerPoint);
 
     if (event.target.setPointerCapture) {
       event.target.setPointerCapture(event.pointerId);
@@ -213,9 +183,9 @@
     event.preventDefault();
     const point = { x: event.offsetX, y: event.offsetY };
     const innerPoint = layout.toInnerCoordinates(point);
-    const { dx, dy } = scaleCoordinator.calculatePanDeltas(innerPoint, panningAnchorPoint);
+    const { dx, dy } = scales.calculatePanDeltas(innerPoint, panningAnchorPoint);
     
-    scaleCoordinator.applyPan(dx, dy, activePanX, activePanY);
+    scales.applyPan(dx, dy, activePanX, activePanY);
   }
   
   function handlePointerUp() {
@@ -226,17 +196,17 @@
 
   // MOUSE TRACKING HANDLERS  
   function handleInnerMouseEnter() {
-    scaleCoordinator.active = true;
+    scales.active = true;
   }
 
   function handleInnerMouseLeave() {
-    scaleCoordinator.clearCurrentDataPoints();
-    scaleCoordinator.active = false;
+    scales.clearCurrentDataPoints();
+    scales.active = false;
   }
 
   function handleInnerMouseMove(event) {
     const innerPoint = layout.toInnerCoordinates({ x: event.offsetX, y: event.offsetY });
-    scaleCoordinator.updateCurrentDataPoints(innerPoint);
+    scales.updateCurrentDataPoints(innerPoint);
   }
 </script>
 

@@ -1,9 +1,7 @@
-// src/lib/scales/ScaleCoordinator.svelte.js
-
 import { getScaleState } from '$lib/scales';
 import { resolveScaleType, SCALE_PRIORITIES } from './ScalePriorities.js';
 
-export class ScaleCoordinator {
+export class ChartScales {
   // ✅ UPDATED: Store requirements as objects with priority info
   scaleRequirements = $state({
     x: [], // [{ type: 'band', priority: 3, markType: 'bar-abc123' }, ...]

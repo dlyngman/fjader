@@ -755,3 +755,323 @@ console.log('Derivation Chain:', component.getDerivationChain());
 console.log('Transform Pipeline:', transform.getSteps());
 // [{ name: 'topN', input: 47, output: 20 }, { name: 'topN', input: 20, output: 10 }]
 ```
+
+
+# 🎬 **Advanced Animation & GPU Coordination Architecture**
+
+## 🎯 **Core Design Philosophy**
+
+**JavaScript-Controlled, GPU-Executed Animation System**: Separate animation control (JavaScript) from animation execution (GPU) for optimal performance and developer experience while maintaining architectural consistency with existing reactive patterns.
+
+---
+
+## 🎨 **WebGPU Tween Interpolation Architecture**
+
+### **AnimationCoordinator.svelte.js** - *JavaScript Animation Control*
+**Responsibility**: Manages animation timing, easing, and state transitions using Svelte's reactive system
+- **Tween Integration**: Uses Svelte `tweened()` for familiar animation control
+- **State Management**: Tracks current/target data states for interpolation
+- **Interruption Handling**: Manages mid-animation data changes and redirections
+- **Racing Chart Support**: Coordinates complex multi-stage animations
+
+**Key Features**:
+- ✅ **Familiar Svelte API**: Standard `tweened()` with duration, easing, interruption
+- ✅ **Flexible Control**: JavaScript timing logic remains debuggable and testable
+- ✅ **Smooth Interruptions**: Mid-animation data changes redirect naturally
+- ✅ **Scale Integration**: Works seamlessly with existing scale coordination system
+
+### **GPU Animation Shaders** - *Parallel Interpolation Execution*
+**Responsibility**: Performs high-performance interpolation and rendering on GPU
+- **Buffer Management**: Current/target data buffers with animation progress uniform
+- **Parallel Processing**: All mark instances interpolate simultaneously 
+- **Scale Integration**: Applies current scale transformations during interpolation
+- **Visual Properties**: Animates position, color, size, opacity in parallel
+
+**Key Features**:
+- ✅ **GPU Parallelization**: All interpolation happens simultaneously across instances
+- ✅ **Minimal CPU Overhead**: Single `float32` progress upload per frame
+- ✅ **120fps Capable**: Handles 10+ animated charts simultaneously
+- ✅ **Simple Shader Logic**: `mix(current, target, progress)` keeps GPU code clean
+
+**Data Flow**:
+```
+New Data Arrives
+     ↓
+Current = getCurrentInterpolatedState(progress)
+Target = newDataValues  
+     ↓
+Svelte Tween: progress 0→1
+     ↓
+GPU Shader: mix(current, target, progress)
+     ↓
+Apply Current Scales → Render
+```
+
+**GPU Buffer Layout**:
+```glsl
+@binding(1) currentValues: array<f32>    // Where we are now
+@binding(2) targetValues: array<f32>     // Where we're going  
+@binding(3) categories: array<f32>       // Stable category indices
+@binding(4) colors: array<vec4<f32>>     // Visual properties
+@binding(6) animationProgress: f32       // 0.0 → 1.0 from Svelte
+```
+
+---
+
+## 🏷️ **Category Lifecycle Management**
+
+### **Enhanced BandScaleState** - *Smart Category Positioning*
+**Responsibility**: Manages category appearance/disappearance with smooth off-screen transitions
+- **Ghost Category Tracking**: Keeps removed categories temporarily for animation-out
+- **Off-Screen Positioning**: Places disappearing categories outside chart bounds
+- **Smart Exit Directions**: Configurable exit directions (left/right/fade for different use cases)
+- **Cleanup Coordination**: Removes ghost categories after animation completion
+
+**Key Features**:
+- ✅ **GPU Simplicity**: Shader unchanged - just interpolates between positions
+- ✅ **Business Logic Separation**: Category lifecycle handled in JavaScript, not GPU
+- ✅ **Configurable Behavior**: Exit directions and timing customizable per chart type
+- ✅ **Racing Chart Support**: Categories slide in/out based on ranking changes
+
+**Category State Management**:
+```javascript
+// Active categories: Normal band positions (0.0 - 1.0)
+activeDomain: ['USA', 'China', 'Brazil']
+
+// Ghost categories: Off-screen positions for animation-out
+ghostCategories: {
+  'Germany': { 
+    targetPosition: 1.2,        // Off-screen right
+    removeAfter: 1704123456789  // Cleanup timestamp
+  }
+}
+```
+
+**Visual Behavior Example**:
+```
+Racing Chart Transition:
+['USA', 'China', 'Japan', 'Germany'] 
+           ↓ (Germany falls out, Brazil enters)
+['USA', 'China', 'Brazil'] 
+
+User Experience:
+- 'Brazil' slides in from left (-0.2 → 0.6)
+- 'Germany' slides out to right (0.8 → 1.2) 
+- 'USA', 'China' smoothly reposition to make room
+```
+
+---
+
+## 🖥️ **GPU Coordination Architecture**
+
+### **DashboardGPUProvider.svelte** - *Centralized Resource Management*
+**Responsibility**: Single WebGPU context managing all charts in a dashboard
+- **Resource Sharing**: Shared device, pipelines, shaders, and uniform buffers
+- **Viewport Management**: Chart registration with coordinate mapping
+- **Render Orchestration**: Single render pass for all charts with optimal ordering
+- **Layer System**: Z-index based rendering with shared animation loop
+
+**Key Features**:
+- ✅ **~10x Performance**: Single GPU context vs multiple contexts
+- ✅ **Resource Efficiency**: Shared pipelines, buffers, and shaders
+- ✅ **Synchronized Animation**: Single animation loop coordinates all charts
+- ✅ **Memory Optimization**: Eliminates GPU context switching overhead
+
+### **Chart Registration System** - *Lightweight Chart Integration*
+**Responsibility**: Register individual charts with the central GPU coordinator
+- **Viewport Definition**: Chart boundaries and coordinate mapping
+- **Draw Function Registration**: Chart-specific rendering logic
+- **Resource Allocation**: Per-chart data buffers and bind groups
+- **Event Coordination**: Mouse/touch event mapping to chart coordinates
+
+**Registration API**:
+```javascript
+dashboardCoordinator.registerChart(chartId, {
+  viewport: { x, y, width, height },
+  drawFunction: (passEncoder, viewport) => { /* chart drawing */ },
+  zIndex: 0,
+  markTypes: ['dots', 'bars'], // For resource sharing
+  updateFrequency: 'realtime' | 'ondemand'
+});
+```
+
+**Resource Sharing Strategy**:
+```javascript
+// Shared across all charts in dashboard
+sharedResources = {
+  device: GPUDevice,
+  pipelines: {
+    'dots': GPURenderPipeline,
+    'bars': GPURenderPipeline,
+    'lines': GPURenderPipeline
+  },
+  uniformBuffers: {
+    resolution: GPUBuffer,
+    devicePixelRatio: GPUBuffer
+  }
+}
+
+// Per-chart resources
+chartResources = {
+  [chartId]: {
+    viewport: { x, y, width, height },
+    dataBuffers: [GPUBuffer, ...],
+    scaleParams: GPUBuffer,
+    bindGroups: [GPUBindGroup, ...]
+  }
+}
+```
+
+---
+
+## 🔧 **Context Integration Strategy**
+
+### **setDivePlotCoordinators()** - *Unified Dashboard Setup*
+**Responsibility**: Single initialization call for all dashboard-level coordination
+- **Scale Registry**: Cross-chart scale state sharing
+- **GPU Coordination**: Centralized WebGPU resource management
+- **Dependency Management**: Ensures proper initialization order
+- **Context Provision**: Makes both systems available to child components
+
+**Integration API**:
+```javascript
+// Single call initializes complete dashboard coordination
+setDivePlotCoordinators();
+
+// Internally calls:
+setScaleRegistry();     // Cross-chart scale sharing
+setGPUCoordinator();    // Cross-chart GPU resource sharing
+
+// Components can access both:
+const scaleRegistry = getContext('scale-registry');
+const gpuCoordinator = getContext('gpu-coordinator');
+```
+
+**Key Features**:
+- ✅ **Single Setup**: One call initializes all dashboard coordination
+- ✅ **Consistent Pattern**: Matches existing context approach
+- ✅ **Clear Dependencies**: Explicit relationship between scale and GPU coordination
+- ✅ **Developer Experience**: Simple API hides complex coordination setup
+
+---
+
+## 🖱️ **SVG Interaction Layer Strategy**
+
+### **Foreground SVG Event Handling** - *Interaction Coordination*
+**Responsibility**: Handle all mouse/touch interactions through SVG layer while maintaining GPU/SVG scale synchronization
+- **Event Mapping**: Translate SVG coordinates to chart data coordinates
+- **Scale Synchronization**: SVG and GPU scales stay perfectly synchronized
+- **Interaction Delegation**: Route interactions to appropriate chart components
+- **Crosshair Coordination**: Visual feedback remains in SVG layer
+
+**Key Features**:
+- ✅ **Separation of Concerns**: Interaction logic separate from GPU rendering
+- ✅ **Familiar Patterns**: Leverages existing mouse/touch event handling
+- ✅ **Scale Consistency**: No coordinate translation errors between layers
+- ✅ **Performance**: GPU focused on rendering, SVG handles interactions
+
+**Coordinate Flow**:
+```
+User Interaction (SVG coordinates)
+         ↓
+Chart Context Layout Transformation
+         ↓
+Scale Invert (Data coordinates)
+         ↓
+Update Reactive Scale State
+         ↓
+GPU Re-render (Automatic via reactivity)
+```
+
+---
+
+## 📋 **Implementation Phases**
+
+### **Phase 1: GPU Coordination Foundation** *(2 weeks)*
+**1.1 Dashboard GPU Provider**
+- Single WebGPU context with chart registration system
+- Viewport management and coordinate mapping utilities
+- Shared resource initialization (device, pipelines, buffers)
+- Basic render orchestration with z-index ordering
+
+**1.2 Context Integration**
+- Implement `setDivePlotCoordinators()` unified setup function
+- Integration with existing `setScaleRegistry()` 
+- Context provider pattern for GPU coordinator access
+- Update existing components to use coordinated GPU context
+
+### **Phase 2: Animation Infrastructure** *(2 weeks)*
+**2.1 Tween Animation System**
+- JavaScript animation control using Svelte `tweened()`
+- Current/target data buffer management
+- Animation progress uniform and GPU integration
+- Base animated renderer with common animation patterns
+
+**2.2 Enhanced Category Management**
+- Extend `BandScaleState` with ghost category support
+- Off-screen positioning and cleanup logic
+- Configurable exit directions and animation timing
+- Integration with existing band scale system
+
+### **Phase 3: Advanced Animation Features** *(1-2 weeks)*
+**3.1 Racing Chart Utilities**
+- Multi-stage animation sequencing for time-series data
+- Automatic duration calculation and ranking management
+- Category appearance/disappearance coordination
+- Performance monitoring for complex animation chains
+
+**3.2 Multi-Property Animation**
+- Extend shaders for color, size, opacity transitions
+- Multiple simultaneous tween coordination
+- Advanced easing and staggered animation support
+- Edge case handling (data structure changes, scale updates)
+
+### **Phase 4: Performance & Polish** *(1 week)*
+**4.1 Performance Optimization**
+- Buffer reuse strategies and memory usage optimization
+- Batch animation updates across multiple charts
+- Animation frame coordination and GPU resource management
+- Performance monitoring and debugging utilities
+
+**4.2 Developer Experience**
+- Animation debugging and inspection tools
+- TypeScript definitions for animation APIs
+- Comprehensive documentation and examples
+- Integration testing for complex dashboard scenarios
+
+---
+
+## 🎯 **Success Metrics**
+
+### **Performance Targets**
+- ✅ **120fps Animation**: 10+ animated charts simultaneously
+- ✅ **<1ms Frame Time**: For animation progress updates
+- ✅ **~10x Resource Efficiency**: vs separate GPU contexts per chart
+- ✅ **Smooth Interruptions**: No janky animation redirections
+
+### **Developer Experience Goals**
+- ✅ **Simple API**: `<BarMark animate duration={800} easing={cubicOut} />`
+- ✅ **Familiar Patterns**: Svelte `tweened()` integration throughout
+- ✅ **Easy Racing Charts**: Minimal configuration for complex animations
+- ✅ **Debugging Tools**: Clear visibility into animation state and performance
+
+### **Architectural Benefits**
+- ✅ **Consistent Patterns**: Aligns with existing reactive architecture
+- ✅ **Clean Separation**: JavaScript control, GPU execution boundary
+- ✅ **Resource Efficiency**: Shared GPU resources across dashboard
+- ✅ **Extensible Foundation**: Easy to add new animation types and behaviors
+
+---
+
+## 🔍 **Architectural Validation**
+
+This animation and GPU coordination strategy maintains and extends the core architectural principles:
+
+**✅ Database-First Processing**: Animations work on pre-aggregated data
+**✅ Priority-Based Scale Resolution**: Animation system respects scale conflicts  
+**✅ Reactive Derivations**: Animation state flows through existing reactive patterns
+**✅ Grammar of Graphics**: Animations are mark-based, not chart-type specific
+**✅ Resource Sharing**: GPU coordination eliminates resource duplication
+**✅ Separation of Concerns**: Clear boundaries between control and execution
+
+**Bottom Line**: This architecture delivers professional-grade animated dashboards with GPU performance and Svelte simplicity, while maintaining the clean, extensible codebase established in the current system.
