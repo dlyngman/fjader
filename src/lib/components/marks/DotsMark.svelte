@@ -13,7 +13,7 @@
     color, 
     alpha = 0.5, 
     radius = 3,
-    limit = 5000 
+    limit
   } = $props();
 
   const coordinator = getContext('mosaic-coordinator');

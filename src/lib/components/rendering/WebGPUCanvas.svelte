@@ -1,314 +1,475 @@
 <script>
-    import { onMount, onDestroy, setContext, getContext } from "svelte";
-  
-    let {
-      canvasComponents,
-      msaaSampleCount = 4 
-    } = $props();
-  
-    const c = getContext('chart');
-    let width = $derived(c.innerWidth)
-    let height = $derived(c.innerHeight)
-    let margin = $derived(c.margin)
-  
-    let canvas;
-    let device;
-    let context;
-    let rafId = null;
-    let needsRedraw = false;
-    let initialized = false;
-  
-    // WebGPU state
-    let presentationFormat;
+  import { onMount, onDestroy, setContext, getContext } from "svelte";
+  import { getGPUContext } from '$lib/gpu';
 
-    const devicePixelRatio = window.devicePixelRatio || 1;
-  
-    // Layer management system
-    const layers = [];
-  
-    async function initWebGPU() {
-      if (!navigator.gpu) {
-        throw new Error('WebGPU not supported');
-      }
-  
-      const adapter = await navigator.gpu.requestAdapter();
-      if (!adapter) {
-        throw new Error('No appropriate GPUAdapter found');
-      }
-  
-      device = await adapter.requestDevice();
-      context = canvas.getContext('webgpu');
+  let {
+    canvasComponents,
+    msaaSampleCount = 4 
+  } = $props();
+
+  const c = getContext('chart');
+  let width = $derived(c.innerWidth);
+  let height = $derived(c.innerHeight);
+  let margin = $derived(c.margin);
+
+  let canvas;
+  let context;
+  let gpuCoordinator;
+  let chartControl;
+  let contextConfigured = $state(false);
+  let initializationError = $state(null);
+
+  const chartId = `chart-${crypto.randomUUID().slice(0, 8)}`;
+  const devicePixelRatio = window.devicePixelRatio || 1;
+  const layers = [];
+
+  // Enhanced initialization with comprehensive error handling
+  async function initWebGPU() {
+    try {
+      console.log(`🚀 Initializing WebGPUCanvas ${chartId}`);
       
-      presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+      // Get shared GPU coordinator
+      gpuCoordinator = getGPUContext();
+      
+      if (!gpuCoordinator) {
+        throw new Error('GPUCoordinator not found. Ensure setCoordinators() was called in a parent component.');
+      }
+
+      // Wait for coordinator initialization with timeout
+      let attempts = 0;
+      const maxAttempts = 100; // 5 seconds at 50ms intervals
+      
+      while (!gpuCoordinator.isInitialized && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        attempts++;
+      }
+
+      if (!gpuCoordinator.isInitialized) {
+        throw new Error(`GPUCoordinator failed to initialize within ${maxAttempts * 50}ms timeout`);
+      }
+
+      // Configure context with proper error handling
+      await configureContext();
+      
+      // Register with coordinator after context is ready
+      registerWithCoordinator();
+      
+      console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
+    } catch (error) {
+      console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
+      initializationError = error.message;
+      throw error;
+    }
+  }
+
+  // Separate context configuration with proper error handling
+  async function configureContext() {
+    if (!canvas) {
+      throw new Error('Canvas element not available for context configuration');
+    }
+
+    try {
+      // Get WebGPU context
+      context = canvas.getContext('webgpu');
+      if (!context) {
+        throw new Error('Failed to get WebGPU context from canvas. WebGPU may not be supported.');
+      }
+
+      const device = gpuCoordinator.device;
+      const presentationFormat = gpuCoordinator.presentationFormat;
+
+      if (!device) {
+        throw new Error('No WebGPU device available from coordinator');
+      }
+
+      // Configure context
       context.configure({
         device,
         format: presentationFormat,
         alphaMode: 'premultiplied',
       });
-  
-      initialized = true;
+      
+      contextConfigured = true;
+      console.log(`🎨 Context configured successfully for chart ${chartId}`);
+      
+      // Setup initial canvas size
       setupCanvas();
-      requestRedraw(); // Initial draw after initialization
+      
+    } catch (error) {
+      console.error(`❌ Context configuration failed for chart ${chartId}:`, error);
+      contextConfigured = false;
+      throw error;
     }
-  
-    function setupCanvas() {
-      if (!canvas || !initialized) return;
-      
-      // Set canvas size
-      canvas.width = width * devicePixelRatio;
-      canvas.height = height * devicePixelRatio;
-      canvas.style.width = width + 'px';
-      canvas.style.height = height + 'px';
-      canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
-      
-      needsRedraw = true;
+  }
 
-      // Reconfigure WebGPU context when size changes
-      // context.configure({
-      //   device,
-      //   format: presentationFormat,
-      //   alphaMode: 'premultiplied',
-      // });
+  // Clean registration with coordinator
+  function registerWithCoordinator() {
+    if (!contextConfigured) {
+      console.error(`⚠️ Attempting to register chart ${chartId} before context is configured`);
+      return;
     }
 
-    function update() {
-      if (!device || !context || !needsRedraw || !initialized) return;
-      
-      // Create command encoder for all drawing operations
-      const commandEncoder = device.createCommandEncoder();
-      const textureView = context.getCurrentTexture().createView();
+    console.log(`📋 Registering chart ${chartId} with coordinator`);
+    
+    try {
+      chartControl = gpuCoordinator.registerChart(chartId, canvas, {
+        drawFunction: drawLayers,
+        zIndex: 0,
+        markTypes: layers.map(layer => layer.markType || 'unknown'),
+      });
 
-      let renderPassDescriptor;
+      // Immediately notify coordinator that context is ready
+      chartControl.update({ contextConfigured: true });
+      console.log(`✅ Chart ${chartId} registered and ready`);
       
-      if (msaaSampleCount > 1) {
-        // Create a multisampled texture for rendering when msaaSampleCount > 1
-        const multisampleTexture = device.createTexture({
-          size: {
-            width: canvas.width,
-            height: canvas.height
-          },
-          sampleCount: msaaSampleCount,
-          format: presentationFormat,
-          usage: GPUTextureUsage.RENDER_ATTACHMENT
+    } catch (error) {
+      console.error(`❌ Chart registration failed for ${chartId}:`, error);
+      throw error;
+    }
+  }
+
+  // Robust canvas setup with dimension change detection
+  function setupCanvas() {
+    if (!canvas || !contextConfigured) {
+      console.debug(`⚠️ setupCanvas called before canvas/context ready for ${chartId}`);
+      return;
+    }
+    
+    try {
+      // Calculate new dimensions
+      const canvasWidth = width * devicePixelRatio;
+      const canvasHeight = height * devicePixelRatio;
+      
+      // Only update if dimensions actually changed to avoid unnecessary work
+      const dimensionsChanged = 
+        canvas.width !== canvasWidth || 
+        canvas.height !== canvasHeight;
+      
+      const positionChanged = 
+        canvas.style.transform !== `translate(${margin.left}px, ${margin.top}px)`;
+
+      if (dimensionsChanged) {
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+        
+        console.debug(`📐 Canvas ${chartId} resized to ${canvasWidth}x${canvasHeight}`);
+      }
+
+      if (positionChanged) {
+        canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
+        console.debug(`📍 Canvas ${chartId} repositioned to (${margin.left}, ${margin.top})`);
+      }
+
+      // Notify coordinator of changes
+      if (chartControl && (dimensionsChanged || positionChanged)) {
+        chartControl.update({ 
+          canvasResized: dimensionsChanged,
+          canvasRepositioned: positionChanged 
         });
-        
-        // Configure render pass with multisampling
-        renderPassDescriptor = {
-          colorAttachments: [{
-            view: multisampleTexture.createView(),
-            resolveTarget: textureView,
-            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          }],
-        };
-        
-        // Rest of the rendering code...
-        const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-        
-        // Draw all registered layers in order
-        for (let i = 0; i < layers.length; i++) {
-          const layer = layers[i];
-          if (layer.visible !== false) {
-            layer.draw(passEncoder, device, presentationFormat);
-          }
-        }
-        
-        passEncoder.end();
-        device.queue.submit([commandEncoder.finish()]);
-        
-        // Clean up
-        multisampleTexture.destroy();
-      } else {
-        // Use the original non-multisampled configuration when msaaSampleCount is 0 or 1
-        renderPassDescriptor = {
-          colorAttachments: [{
-            view: textureView,
-            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          }],
-        };
-        
-        const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-        
-        // Draw all registered layers in order
-        for (let i = 0; i < layers.length; i++) {
-          const layer = layers[i];
-          if (layer.visible !== false) {
-            layer.draw(passEncoder, device, presentationFormat);
-          }
-        }
-        
-        passEncoder.end();
-        device.queue.submit([commandEncoder.finish()]);
       }
       
-      needsRedraw = false;
-      rafId = null;
+    } catch (error) {
+      console.error(`❌ Canvas setup failed for ${chartId}:`, error);
+      initializationError = `Canvas setup failed: ${error.message}`;
+    }
+  }
+
+  // Enhanced layer rendering with comprehensive error handling
+  function drawLayers(passEncoder, sharedResources) {
+    const visibleLayers = layers.filter(layer => layer.visible !== false);
+    
+    if (visibleLayers.length === 0) {
+      console.debug(`📝 No visible layers to render for chart ${chartId}`);
+      return;
     }
 
-    // function update() {
-    //   if (!device || !context || !needsRedraw || !initialized) return;
-      
-    //   // Create command encoder for all drawing operations
-    //   const commandEncoder = device.createCommandEncoder();
-    //   const textureView = context.getCurrentTexture().createView();
-  
-    //   // Create a multisampled texture for rendering
-    //   const multisampleTexture = device.createTexture({
-    //     size: {
-    //       width: canvas.width,
-    //       height: canvas.height
-    //     },
-    //     sampleCount: 4, // 4x MSAA
-    //     format: presentationFormat,
-    //     usage: GPUTextureUsage.RENDER_ATTACHMENT
-    //   });
-
-    //   // Render pass descriptor with transparent background
-    //   const renderPassDescriptor = {
-    //     colorAttachments: [{
-    //       view: multisampleTexture.createView(), // Render to multisampled texture
-    //       resolveTarget: textureView,  // Resolve to the canvas texture
-    //       clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }, // Transparent background
-    //       loadOp: 'clear',
-    //       storeOp: 'store',
-    //     }],
-    //   };
-  
-    //   const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-  
-    //   // Draw all registered layers in order
-    //   for (let i = 0; i < layers.length; i++) {
-    //     const layer = layers[i];
-    //     if (layer.visible !== false) {
-    //       layer.draw(passEncoder, device, presentationFormat);
-    //     }
-    //   }
-      
-    //   passEncoder.end();
-    //   device.queue.submit([commandEncoder.finish()]);
-
-    //   // Clean up the multisampled texture
-    //   multisampleTexture.destroy();
-      
-    //   needsRedraw = false;
-    //   rafId = null;
-    // }
-  
-    function requestRedraw() {
-      if (rafId !== null || !initialized) return;
-      needsRedraw = true;
-      rafId = requestAnimationFrame(update);
+    console.debug(`🎨 Rendering ${visibleLayers.length} layers for chart ${chartId}`);
+    
+    let successfulLayers = 0;
+    let failedLayers = 0;
+    
+    for (let i = 0; i < visibleLayers.length; i++) {
+      const layer = visibleLayers[i];
+      try {
+        layer.draw(passEncoder, gpuCoordinator.device, gpuCoordinator.presentationFormat);
+        successfulLayers++;
+      } catch (error) {
+        console.error(`❌ Layer ${i} (${layer.markType || 'unknown'}) render failed:`, error);
+        failedLayers++;
+        // Continue rendering other layers even if one fails
+      }
     }
-  
-    // WebGPU context that child components can use
-    setContext('webgpu-canvas', {
-      registerLayer(layer) {
-        // Allow specifying a z-index for ordering
-        const zIndex = layer.zIndex || 0;
-        let insertIndex = layers.length;
+
+    if (failedLayers > 0) {
+      console.warn(`⚠️ Chart ${chartId}: ${successfulLayers} layers rendered successfully, ${failedLayers} failed`);
+    }
+  }
+
+  // Enhanced layer management with better tracking
+  function createLayerControl(layer) {
+    const layerId = `layer-${crypto.randomUUID().slice(0, 6)}`;
+    console.log(`📋 Registering layer ${layerId} (${layer.markType || 'unknown'}) for chart ${chartId}`);
+    
+    const zIndex = layer.zIndex || 0;
+    let insertIndex = layers.findIndex(l => (l.zIndex || 0) > zIndex);
+    if (insertIndex === -1) insertIndex = layers.length;
+    
+    const layerWithId = { ...layer, id: layerId, chartId };
+    layers.splice(insertIndex, 0, layerWithId);
+    
+    console.log(`✅ Layer ${layerId} registered. Total layers for ${chartId}: ${layers.length}`);
+    
+    if (chartControl) {
+      chartControl.update({ 
+        markTypes: layers.map(l => l.markType || 'unknown')
+      });
+      chartControl.invalidate();
+    }
+    
+    return {
+      update(newProps) {
+        const oldMarkType = layerWithId.markType;
+        Object.assign(layerWithId, newProps);
         
-        // Find the correct position to insert based on zIndex
-        for (let i = 0; i < layers.length; i++) {
-          if ((layers[i].zIndex || 0) > zIndex) {
-            insertIndex = i;
-            break;
-          }
+        // Update chart registration if mark types changed
+        if (newProps.markType && newProps.markType !== oldMarkType && chartControl) {
+          chartControl.update({ 
+            markTypes: layers.map(l => l.markType || 'unknown')
+          });
         }
         
-        layers.splice(insertIndex, 0, layer);
-        if (initialized) {
-          requestRedraw();
-        }
-        
-        // Return functions to interact with this layer
-        return {
-          update(newProps) {
-            Object.assign(layer, newProps);
-            if (initialized) {
-              requestRedraw();
-            }
-          },
-          remove() {
-            const index = layers.indexOf(layer);
-            if (index !== -1) {
-              layers.splice(index, 1);
-              if (initialized) {
-                requestRedraw();
-              }
-            }
-          },
-          invalidate() {
-            if (initialized) {
-              requestRedraw();
-            }
-          }
-        };
+        chartControl?.invalidate();
       },
       
-      getCanvasDimensions() {
-        return { 
-          width: width * devicePixelRatio, 
-          height: height * devicePixelRatio
-        };
-      },
-
-      getMsaaSampleCount() {
-        return msaaSampleCount;
-      },
-  
-      getDevice() {
-        return device;
-      },
-  
-      getPresentationFormat() {
-        return presentationFormat;
-      },
-  
-      isInitialized() {
-        return initialized;
+      remove() {
+        const index = layers.indexOf(layerWithId);
+        if (index !== -1) {
+          layers.splice(index, 1);
+          console.log(`🗑️ Layer ${layerId} removed. Total layers for ${chartId}: ${layers.length}`);
+          
+          if (chartControl) {
+            chartControl.update({ 
+              markTypes: layers.map(l => l.markType || 'unknown')
+            });
+            chartControl.invalidate();
+          }
+        }
       },
       
       invalidate() {
-        if (initialized) {
-          requestRedraw();
-        }
+        chartControl?.invalidate();
+      },
+      
+      // Additional debugging info
+      getInfo() {
+        return {
+          layerId,
+          chartId,
+          markType: layerWithId.markType,
+          zIndex: layerWithId.zIndex,
+          visible: layerWithId.visible
+        };
       }
-    });
-  
-    onMount(async () => {
-      try {
-        await initWebGPU();
-      } catch (error) {
-        console.error('WebGPU initialization failed:', error);
-      }
-    });
-  
-    onDestroy(() => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-      }
-      if (device) {
-        device.destroy();
-      }
-    });
+    };
+  }
 
-    $effect(() => {
-      // Trigger on width, height, or margin changes
-      void width;
-      void height;
-      void margin;
-  
-      if (canvas && initialized) {
-        setupCanvas();
-        requestRedraw(); // Add this to trigger a redraw after resizing
-        // console.log('canvas resize redraw')
+  // Enhanced context with better state management and error handling
+  setContext('webgpu-canvas', {
+    registerLayer(layer) {
+      try {
+        return createLayerControl(layer);
+      } catch (error) {
+        console.error(`❌ Layer registration failed for chart ${chartId}:`, error);
+        // Return a dummy control to prevent crashes
+        return {
+          update: () => {},
+          remove: () => {},
+          invalidate: () => {},
+          getInfo: () => ({ error: error.message })
+        };
       }
-    });
+    },
+    
+    getCanvasDimensions() {
+      return { 
+        width: width * devicePixelRatio, 
+        height: height * devicePixelRatio,
+        cssWidth: width,
+        cssHeight: height,
+        devicePixelRatio
+      };
+    },
+
+    getMsaaSampleCount() {
+      return gpuCoordinator?.msaaSampleCount || msaaSampleCount;
+    },
+
+    getDevice() {
+      return gpuCoordinator?.device;
+    },
+
+    getPresentationFormat() {
+      return gpuCoordinator?.presentationFormat;
+    },
+
+    isInitialized() {
+      return contextConfigured && gpuCoordinator?.isInitialized;
+    },
+    
+    invalidate() {
+      chartControl?.invalidate();
+    },
+
+    // Enhanced debugging support
+    getDebugInfo() {
+      return {
+        chartId,
+        contextConfigured,
+        initializationError,
+        layerCount: layers.length,
+        layers: layers.map(l => ({
+          id: l.id,
+          markType: l.markType,
+          zIndex: l.zIndex,
+          visible: l.visible
+        })),
+        canvasDimensions: {
+          width: canvas?.width,
+          height: canvas?.height,
+          cssWidth: canvas?.style.width,
+          cssHeight: canvas?.style.height
+        }
+      };
+    }
+  });
+
+  onMount(async () => {
+    try {
+      await initWebGPU();
+    } catch (error) {
+      console.error(`❌ WebGPUCanvas ${chartId} mount failed:`, error);
+      // Error is already stored in initializationError state
+    }
+  });
+
+  onDestroy(() => {
+    console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
+    
+    try {
+      // Clean up chart registration
+      if (chartControl) {
+        chartControl.remove();
+        chartControl = null;
+      }
+      
+      // Context cleanup happens automatically when canvas is removed
+      contextConfigured = false;
+      
+      // Clear references
+      gpuCoordinator = null;
+      context = null;
+      
+      console.log(`✅ WebGPUCanvas ${chartId} destroyed successfully`);
+    } catch (error) {
+      console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
+    }
+  });
+
+  // Reactive effect for dimension changes with proper debouncing
+  let resizeTimeoutId = null;
   
+  $effect(() => {
+    // Only react to meaningful dimension changes
+    if (width > 0 && height > 0 && contextConfigured) {
+      // Debounce rapid resize events
+      if (resizeTimeoutId) {
+        clearTimeout(resizeTimeoutId);
+      }
+      
+      resizeTimeoutId = setTimeout(() => {
+        setupCanvas();
+        resizeTimeoutId = null;
+      }, 8); // ~120fps throttling
+    }
+  });
+
+  // Cleanup resize timeout on destroy
+  onDestroy(() => {
+    if (resizeTimeoutId) {
+      clearTimeout(resizeTimeoutId);
+    }
+  });
 </script>
-  
-<canvas bind:this={canvas}></canvas>
-{@render canvasComponents?.()}
+
+{#if initializationError}
+  <div class="webgpu-error">
+    <p>WebGPU initialization failed for chart {chartId}:</p>
+    <p class="error-message">{initializationError}</p>
+    <p class="error-help">
+      Please ensure your browser supports WebGPU and try refreshing the page.
+    </p>
+  </div>
+{:else}
+  <canvas bind:this={canvas}></canvas>
+  {#if contextConfigured}
+    {@render canvasComponents?.()}
+  {:else}
+    <div class="webgpu-loading">
+      <p>Initializing WebGPU context for chart {chartId}...</p>
+    </div>
+  {/if}
+{/if}
+
+<style>
+  canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  .webgpu-error,
+  .webgpu-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.9);
+    border: 1px dashed #ccc;
+    font-size: 12px;
+    color: #666;
+    z-index: 1000;
+  }
+
+  .webgpu-error {
+    background-color: rgba(255, 240, 240, 0.9);
+    border-color: #ffcccb;
+    color: #d32f2f;
+  }
+
+  .error-message {
+    font-family: monospace;
+    background-color: rgba(255, 255, 255, 0.8);
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin: 8px 0;
+    font-size: 11px;
+  }
+
+  .error-help {
+    font-style: italic;
+    margin-top: 8px;
+  }
+
+  .webgpu-loading {
+    background-color: rgba(240, 248, 255, 0.9);
+    border-color: #bbdefb;
+    color: #1976d2;
+  }
+</style>

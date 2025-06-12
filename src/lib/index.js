@@ -1,1 +1,30 @@
-// place files you want to import through the `$lib` alias in this folder.
+// src/lib/index.js
+import { setScaleRegistry } from '$lib/scales';
+import { setGPUCoordinator } from '$lib/gpu';
+
+/**
+ * Initialize all coordinators for the charting library
+ * Call this once at the top level of your application
+ * 
+ * @param {Object} config - Configuration options
+ * @param {number} config.msaaSampleCount - MSAA sample count for WebGPU (default: 4)
+ * @param {boolean} config.enableDebugging - Enable debugging features (default: true in development)
+ * @returns {Object} Coordinator instances for advanced usage
+ */
+export function setCoordinators(config = {}) {
+  const scaleRegistry = setScaleRegistry();
+  const gpuCoordinator = setGPUCoordinator({
+    msaaSampleCount: config.msaaSampleCount ?? 4,
+    enableDebugging: config.enableDebugging !== false
+  });
+  
+  console.log('✅ DivePlot coordinators initialized');
+  
+  // Return coordinators for advanced usage scenarios
+  return {
+    scaleRegistry,
+    gpuCoordinator
+  };
+}
+
+export * from './components';

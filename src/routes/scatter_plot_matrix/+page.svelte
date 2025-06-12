@@ -1,11 +1,13 @@
 <script>
   import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
   import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
-  import { setScaleRegistry } from "$lib/scales";
+  // import { setScaleRegistry } from "$lib/scales";
+  import { setCoordinators } from "$lib";
   import { onMount, onDestroy, setContext } from "svelte";
   import MainView from "./MainView.svelte";
   
-  setScaleRegistry();
+  // setScaleRegistry();
+  setCoordinators();
 
   let coord;
   // setContext('mosaic-coordinator', coord);

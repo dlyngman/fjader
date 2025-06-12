@@ -1,9 +1,10 @@
 <script>
   import { getContext, onMount, onDestroy, untrack } from 'svelte';
   import { getScaleState } from '$lib/scales';
+  import { getGPUContext } from '$lib/gpu';
 
   let { 
-    data, // This would be an Arrow Table
+    data, // Arrow Table
     dataVersion,
     r = 3,
     fill = 'blue',
@@ -15,11 +16,21 @@
   
   const c = getContext('chart');
   const webGPUContext = getContext('webgpu-canvas');
+  const gpuCoordinator = getGPUContext();
+
+  // Enhanced resource tracking for proper cleanup
+  let ownedResources = {
+    pipeline: false,
+    shader: false,
+    buffers: [],
+    layerControl: null
+  };
 
   // WebGPU resources
   let pipeline;
   let bindGroup;
   let resourcesCreated = false;
+  let initializationError = $state(null);
 
   // Separate buffers for Arrow columns
   let xBuffer;
@@ -32,10 +43,10 @@
   let dprBuffer;
   let instanceCount = 0;
   
-  let layerControl;
   let quadGeometryBuffer;
   const quadVertexCount = 6;
 
+  // Derived reactive state
   let xDomain = $derived(c.xScale?.domain() ?? []);
   let yDomain = $derived(c.yScale?.domain() ?? []);
   let xRange = $derived(c.xScale?.range() ?? []);
@@ -43,7 +54,7 @@
 
   const devicePixelRatio = window.devicePixelRatio || 1;
 
-  // Updated shader to work with separate buffers
+  // Enhanced shader with better structure and comments
   const shaderCode = `
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -128,300 +139,528 @@
     ]);
   }
 
+  // Enhanced resource creation with proper sharing and error handling
   async function createGPUResources(device) {
-    const shaderModule = device.createShaderModule({
-      code: shaderCode,
-    });
-    const msaaSampleCount = webGPUContext.getMsaaSampleCount();
+    try {
+      console.log('🔧 Creating GPU resources for Dots component');
+      
+      if (!gpuCoordinator) {
+        throw new Error('GPU coordinator not available');
+      }
 
-    pipeline = device.createRenderPipeline({
-      layout: 'auto',
-      vertex: {
-        module: shaderModule,
-        entryPoint: 'vertexMain',
-        buffers: [{
-          arrayStride: 2 * 4,
-          attributes: [{
-            shaderLocation: 0,
-            offset: 0,
-            format: 'float32x2',
-          }],
-        }],
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: 'fragmentMain',
-        targets: [{
-          format: webGPUContext.getPresentationFormat(),
-          blend: {
-            color: {
-              srcFactor: 'src-alpha',
-              dstFactor: 'one-minus-src-alpha',
-              operation: 'add',
-            },
-            alpha: {
-              srcFactor: 'one',
-              dstFactor: 'one-minus-src-alpha',
-              operation: 'add',
-            },
+      // Create or get shared shader with reference counting
+      const shaderModule = await gpuCoordinator.getOrCreateSharedShader('dots', shaderCode);
+      ownedResources.shader = true;
+
+      // Create or get shared pipeline with proper lifecycle
+      pipeline = await gpuCoordinator.getOrCreateSharedPipeline('dots', async () => {
+        const msaaSampleCount = webGPUContext.getMsaaSampleCount();
+
+        return device.createRenderPipeline({
+          layout: 'auto',
+          vertex: {
+            module: shaderModule,
+            entryPoint: 'vertexMain',
+            buffers: [{
+              arrayStride: 2 * 4,
+              attributes: [{
+                shaderLocation: 0,
+                offset: 0,
+                format: 'float32x2',
+              }],
+            }],
           },
-        }],
-      },
-      primitive: {
-        topology: 'triangle-list',
-      },
-      multisample: {
-        count: msaaSampleCount > 1 ? msaaSampleCount : 1  // Must be at least 1
-      },
-    });
-
-    const quadVertices = createQuadGeometry();
-    quadGeometryBuffer = device.createBuffer({
-      size: quadVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
-
-    resolutionBuffer = device.createBuffer({
-      size: 8,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    dprBuffer = device.createBuffer({
-      size: 4,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    const { width, height } = webGPUContext.getCanvasDimensions();
-    device.queue.writeBuffer(resolutionBuffer, 0, new Float32Array([width, height]));
-    device.queue.writeBuffer(dprBuffer, 0, new Float32Array([devicePixelRatio]));
-
-    resourcesCreated = true;
-  }
-
-  function updateInstanceData(device, arrowTable) {
-    const tsStartUpdate = Date.now();
-    if (!arrowTable || arrowTable.numRows === 0 || !resourcesCreated) return;
-
-    instanceCount = arrowTable.numRows;
-
-    // Get Arrow columns
-    const xColumn = arrowTable.getChild('x');
-    const yColumn = arrowTable.getChild('y');
-    const colorColumn = arrowTable.getChild('color');
-
-    // Convert Float64Array to Float32Array
-    const xData = new Float32Array(xColumn.toArray());
-    const yData = new Float32Array(yColumn.toArray());
-
-    // Create or update buffers with proper size and alignment
-    function createOrUpdateBuffer(buffer, data, minSize = 16384) {
-      const size = Math.max(data.byteLength, minSize);
-      if (!buffer || buffer.size < size) {
-        if (buffer) buffer.destroy();
-        return device.createBuffer({
-          size,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+          fragment: {
+            module: shaderModule,
+            entryPoint: 'fragmentMain',
+            targets: [{
+              format: webGPUContext.getPresentationFormat(),
+              blend: {
+                color: {
+                  srcFactor: 'src-alpha',
+                  dstFactor: 'one-minus-src-alpha',
+                  operation: 'add',
+                },
+                alpha: {
+                  srcFactor: 'one',
+                  dstFactor: 'one-minus-src-alpha',
+                  operation: 'add',
+                },
+              },
+            }],
+          },
+          primitive: { topology: 'triangle-list' },
+          multisample: { count: msaaSampleCount > 1 ? msaaSampleCount : 1 },
         });
-      }
-      return buffer;
-    }
+      });
+      ownedResources.pipeline = true;
 
-    // Update x buffer
-    xBuffer = createOrUpdateBuffer(xBuffer, xData);
-    device.queue.writeBuffer(xBuffer, 0, xData);
+      // Create quad geometry buffer
+      const quadVertices = createQuadGeometry();
+      quadGeometryBuffer = device.createBuffer({
+        size: quadVertices.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+      ownedResources.buffers.push(quadGeometryBuffer);
 
-    // Update y buffer  
-    yBuffer = createOrUpdateBuffer(yBuffer, yData);
-    device.queue.writeBuffer(yBuffer, 0, yData);
-
-    // Create radius and alpha data
-    const radiusData = new Float32Array(instanceCount);
-    const alphaData = new Float32Array(instanceCount);
-    
-    if (typeof r === 'function' || typeof alpha === 'function') {
-      for (let i = 0; i < instanceCount; i++) {
-        radiusData[i] = typeof r === 'function' ? r({x: xData[i], y: yData[i]}) : r;
-        alphaData[i] = typeof alpha === 'function' ? alpha({x: xData[i], y: yData[i]}) : alpha;
-      }
-    } else {
-      radiusData.fill(r);
-      alphaData.fill(alpha);
-    }
-
-    // Update radius buffer
-    radiusBuffer = createOrUpdateBuffer(radiusBuffer, radiusData);
-    device.queue.writeBuffer(radiusBuffer, 0, radiusData);
-
-    // Update alpha buffer
-    alphaBuffer = createOrUpdateBuffer(alphaBuffer, alphaData);
-    device.queue.writeBuffer(alphaBuffer, 0, alphaData);
-
-    // Handle colors
-    const colorData = new Float32Array(instanceCount * 4);
-    const colorArray = colorColumn.toArray();
-    
-    for (let i = 0; i < instanceCount; i++) {
-      const fillColor = colorScale(colorArray[i]);
-      const rgba = parseColor(fillColor);
-      colorData.set(rgba, i * 4);
-    }
-
-    colorBuffer = createOrUpdateBuffer(colorBuffer, colorData);
-    device.queue.writeBuffer(colorBuffer, 0, colorData);
-
-    // Create scale parameters buffer if it doesn't exist
-    if (!scaleParamsBuffer) {
-      scaleParamsBuffer = device.createBuffer({
-        size: 32,
+      // Create chart-specific uniform buffers
+      resolutionBuffer = device.createBuffer({
+        size: 8,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
-    }
-    updateScaleParameters(device);
+      ownedResources.buffers.push(resolutionBuffer);
 
-    // Create bind group only after all buffers are ready
-    if (!bindGroup) {
-      createBindGroup(device);
+      // Use shared DPR buffer if available, create own if needed
+      dprBuffer = gpuCoordinator?.getSharedUniformBuffer('devicePixelRatio');
+      
+      if (!dprBuffer) {
+        console.warn('🔶 Creating own DPR buffer - coordinator should provide this');
+        dprBuffer = device.createBuffer({
+          size: 4,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(dprBuffer, 0, new Float32Array([devicePixelRatio]));
+        ownedResources.buffers.push(dprBuffer);
+      }
+
+      // Update initial values
+      const { width, height } = webGPUContext.getCanvasDimensions();
+      device.queue.writeBuffer(resolutionBuffer, 0, new Float32Array([width, height]));
+
+      resourcesCreated = true;
+      console.log('✅ GPU resources created successfully for Dots component');
+      
+    } catch (error) {
+      console.error('❌ Failed to create GPU resources for Dots component:', error);
+      initializationError = error.message;
+      throw error;
     }
   }
 
+  // Enhanced buffer management with smart sizing and reuse
+  function createOrUpdateBuffer(existingBuffer, data, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
+    const device = webGPUContext.getDevice();
+    if (!device) {
+      throw new Error('No WebGPU device available');
+    }
+    
+    const requiredSize = data.byteLength;
+    
+    // Only recreate if actually needed, with smart sizing strategy
+    if (!existingBuffer || existingBuffer.size < requiredSize) {
+      if (existingBuffer) {
+        // Remove from tracking before destroying
+        const index = ownedResources.buffers.indexOf(existingBuffer);
+        if (index !== -1) {
+          ownedResources.buffers.splice(index, 1);
+        }
+        existingBuffer.destroy();
+      }
+
+      // Smart buffer sizing - avoid frequent reallocations
+      const bufferSize = Math.max(
+        requiredSize,
+        Math.ceil(requiredSize * 1.5), // 50% headroom for growth
+        4096 // Minimum reasonable size
+      );
+
+      const newBuffer = device.createBuffer({
+        size: bufferSize,
+        usage,
+      });
+      
+      ownedResources.buffers.push(newBuffer);
+      console.debug(`📊 Created buffer of size ${bufferSize} bytes (required: ${requiredSize})`);
+      return newBuffer;
+    }
+    
+    return existingBuffer;
+  }
+
+  // Enhanced instance data management with better error handling
+  function updateInstanceData(device, arrowTable) {
+    try {
+      if (!arrowTable || arrowTable.numRows === 0 || !resourcesCreated) {
+        console.debug('⚠️ Skipping instance data update - no data or resources not ready');
+        return;
+      }
+
+      const startTime = performance.now();
+      instanceCount = arrowTable.numRows;
+
+      console.debug(`📊 Updating instance data for ${instanceCount} dots`);
+
+      // Get Arrow columns with error checking
+      const xColumn = arrowTable.getChild('x');
+      const yColumn = arrowTable.getChild('y');
+      const colorColumn = arrowTable.getChild('color');
+
+      if (!xColumn || !yColumn) {
+        throw new Error('Required x and y columns not found in Arrow table');
+      }
+
+      // Convert data with type safety
+      const xData = new Float32Array(xColumn.toArray());
+      const yData = new Float32Array(yColumn.toArray());
+
+      // Update position buffers
+      xBuffer = createOrUpdateBuffer(xBuffer, xData);
+      device.queue.writeBuffer(xBuffer, 0, xData);
+
+      yBuffer = createOrUpdateBuffer(yBuffer, yData);
+      device.queue.writeBuffer(yBuffer, 0, yData);
+
+      // Create radius and alpha data
+      const radiusData = new Float32Array(instanceCount);
+      const alphaData = new Float32Array(instanceCount);
+      
+      if (typeof r === 'function' || typeof alpha === 'function') {
+        for (let i = 0; i < instanceCount; i++) {
+          radiusData[i] = typeof r === 'function' ? r({x: xData[i], y: yData[i]}) : r;
+          alphaData[i] = typeof alpha === 'function' ? alpha({x: xData[i], y: yData[i]}) : alpha;
+        }
+      } else {
+        radiusData.fill(r);
+        alphaData.fill(alpha);
+      }
+
+      // Update attribute buffers
+      radiusBuffer = createOrUpdateBuffer(radiusBuffer, radiusData);
+      device.queue.writeBuffer(radiusBuffer, 0, radiusData);
+
+      alphaBuffer = createOrUpdateBuffer(alphaBuffer, alphaData);
+      device.queue.writeBuffer(alphaBuffer, 0, alphaData);
+
+      // Handle colors with error checking
+      const colorData = new Float32Array(instanceCount * 4);
+      
+      if (colorColumn) {
+        const colorArray = colorColumn.toArray();
+        for (let i = 0; i < instanceCount; i++) {
+          const fillColor = colorScale(colorArray[i]);
+          const rgba = parseColor(fillColor);
+          colorData.set(rgba, i * 4);
+        }
+      } else {
+        // Fallback to single color
+        const rgba = parseColor(fill);
+        for (let i = 0; i < instanceCount; i++) {
+          colorData.set(rgba, i * 4);
+        }
+      }
+
+      colorBuffer = createOrUpdateBuffer(colorBuffer, colorData);
+      device.queue.writeBuffer(colorBuffer, 0, colorData);
+
+      // Create scale parameters buffer if needed
+      if (!scaleParamsBuffer) {
+        scaleParamsBuffer = device.createBuffer({
+          size: 32,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        ownedResources.buffers.push(scaleParamsBuffer);
+      }
+      
+      updateScaleParameters(device);
+
+      // Create bind group after all buffers are ready
+      if (!bindGroup) {
+        createBindGroup(device);
+      }
+
+      const updateTime = performance.now() - startTime;
+      console.debug(`✅ Instance data updated in ${updateTime.toFixed(2)}ms`);
+      
+    } catch (error) {
+      console.error('❌ Failed to update instance data:', error);
+      initializationError = error.message;
+      throw error;
+    }
+  }
+
+  // Enhanced bind group creation with comprehensive validation
   function createBindGroup(device) {
-    // Make sure all buffers exist before creating bind group
-    if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer || !scaleParamsBuffer || !resolutionBuffer || !dprBuffer || !pipeline) {
-      console.warn('Not all buffers are ready for bind group creation');
+    try {
+      // Comprehensive validation of all required resources
+      const requiredBuffers = {
+        resolutionBuffer,
+        xBuffer,
+        yBuffer,
+        radiusBuffer,
+        alphaBuffer,
+        colorBuffer,
+        scaleParamsBuffer,
+        dprBuffer
+      };
+
+      const missingBuffers = Object.entries(requiredBuffers)
+        .filter(([name, buffer]) => !buffer)
+        .map(([name]) => name);
+
+      if (missingBuffers.length > 0 || !pipeline) {
+        console.warn(`⚠️ Cannot create bind group - missing resources: ${missingBuffers.join(', ')}${!pipeline ? ', pipeline' : ''}`);
+        return;
+      }
+
+      bindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: resolutionBuffer } },
+          { binding: 1, resource: { buffer: xBuffer } },
+          { binding: 2, resource: { buffer: yBuffer } },
+          { binding: 3, resource: { buffer: radiusBuffer } },
+          { binding: 4, resource: { buffer: alphaBuffer } },
+          { binding: 5, resource: { buffer: colorBuffer } },
+          { binding: 6, resource: { buffer: scaleParamsBuffer } },
+          { binding: 7, resource: { buffer: dprBuffer } },
+        ],
+      });
+
+      console.debug('✅ Bind group created successfully');
+      
+    } catch (error) {
+      console.error('❌ Failed to create bind group:', error);
+      initializationError = error.message;
+      throw error;
+    }
+  }
+
+  // Enhanced scale parameter updates
+  function updateScaleParameters(device) {
+    if (!scaleParamsBuffer) {
+      console.warn('⚠️ Cannot update scale parameters - buffer not available');
       return;
     }
 
-    bindGroup = device.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: resolutionBuffer } },
-        { binding: 1, resource: { buffer: xBuffer } },
-        { binding: 2, resource: { buffer: yBuffer } },
-        { binding: 3, resource: { buffer: radiusBuffer } },
-        { binding: 4, resource: { buffer: alphaBuffer } },
-        { binding: 5, resource: { buffer: colorBuffer } },
-        { binding: 6, resource: { buffer: scaleParamsBuffer } },
-        { binding: 7, resource: { buffer: dprBuffer } },
-      ],
-    });
-  }
+    try {
+      const scaleParams = new Float32Array(8);
+      scaleParams[0] = xDomain[0] ?? 0;
+      scaleParams[1] = yDomain[0] ?? 0;
+      scaleParams[2] = xDomain[1] ?? 1;
+      scaleParams[3] = yDomain[1] ?? 1;
+      scaleParams[4] = xRange[0] ?? 0;
+      scaleParams[5] = yRange[0] ?? 0;
+      scaleParams[6] = xRange[1] ?? 1;
+      scaleParams[7] = yRange[1] ?? 1;
 
-  function updateScaleParameters(device) {
-    if (!scaleParamsBuffer) return;
-
-    const scaleParams = new Float32Array(8);
-    scaleParams[0] = xDomain[0] ?? 0;
-    scaleParams[1] = yDomain[0] ?? 0;
-    scaleParams[2] = xDomain[1] ?? 1;
-    scaleParams[3] = yDomain[1] ?? 1;
-    scaleParams[4] = xRange[0] ?? 0;
-    scaleParams[5] = yRange[0] ?? 0;
-    scaleParams[6] = xRange[1] ?? 1;
-    scaleParams[7] = yRange[1] ?? 1;
-
-    device.queue.writeBuffer(scaleParamsBuffer, 0, scaleParams);
-  }
-
-  function draw(passEncoder, device, presentationFormat) {
-    if (!pipeline || !bindGroup || instanceCount === 0) return;
-
-    passEncoder.setPipeline(pipeline);
-    passEncoder.setBindGroup(0, bindGroup);
-    passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-    passEncoder.draw(quadVertexCount, instanceCount);
-  }
-
-  function parseColor(color) {
-    if (color.startsWith('#')) {
-      const r = parseInt(color.slice(1, 3), 16) / 255;
-      const g = parseInt(color.slice(3, 5), 16) / 255;
-      const b = parseInt(color.slice(5, 7), 16) / 255;
-      return [r, g, b, 1.0];
+      device.queue.writeBuffer(scaleParamsBuffer, 0, scaleParams);
+      
+    } catch (error) {
+      console.error('❌ Failed to update scale parameters:', error);
     }
-    return [0.0, 0.0, 1.0, 1.0];
   }
 
+  // Enhanced draw function with comprehensive error handling
+  function draw(passEncoder, device, presentationFormat) {
+    try {
+      if (!pipeline || !bindGroup || instanceCount === 0) {
+        console.debug('⚠️ Skipping draw - resources not ready or no instances');
+        return;
+      }
+
+      passEncoder.setPipeline(pipeline);
+      passEncoder.setBindGroup(0, bindGroup);
+      passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+      passEncoder.draw(quadVertexCount, instanceCount);
+      
+    } catch (error) {
+      console.error('❌ Draw operation failed:', error);
+      throw error;
+    }
+  }
+
+  // Enhanced color parsing with better error handling
+  function parseColor(color) {
+    try {
+      if (typeof color === 'string' && color.startsWith('#')) {
+        const r = parseInt(color.slice(1, 3), 16) / 255;
+        const g = parseInt(color.slice(3, 5), 16) / 255;
+        const b = parseInt(color.slice(5, 7), 16) / 255;
+        return [r, g, b, 1.0];
+      }
+      // Add support for other color formats if needed
+      console.warn(`⚠️ Unrecognized color format: ${color}, using default blue`);
+      return [0.0, 0.0, 1.0, 1.0];
+    } catch (error) {
+      console.error('❌ Color parsing failed:', error);
+      return [0.0, 0.0, 1.0, 1.0];
+    }
+  }
+
+  // Enhanced initialization with comprehensive error handling
   async function initialize() {
-    const device = webGPUContext.getDevice();
-    if (device) {
+    try {
+      console.log('🚀 Initializing Dots component');
+      
+      const device = webGPUContext.getDevice();
+      if (!device) {
+        throw new Error('No WebGPU device available from context');
+      }
+
       await createGPUResources(device);
       updateInstanceData(device, data);
       
-      // Register this component as a WebGPU layer
-      layerControl = webGPUContext.registerLayer({
+      // Register layer with enhanced metadata
+      ownedResources.layerControl = webGPUContext.registerLayer({
         zIndex,
         draw,
-        visible: true
+        visible: true,
+        markType: 'dots',
+        componentId: `dots-${crypto.randomUUID().slice(0, 6)}`
       });
+
+      console.log('✅ Dots component initialized successfully');
+      
+    } catch (error) {
+      console.error('❌ Dots component initialization failed:', error);
+      initializationError = error.message;
+      throw error;
     }
   }
 
-  // Wait for WebGPU to be initialized before setting up resources
+  // Wait for WebGPU context with better error handling
   async function waitForWebGPU() {
-    while (!webGPUContext.isInitialized()) {
+    let attempts = 0;
+    const maxAttempts = 100;
+    
+    while (!webGPUContext.isInitialized() && attempts < maxAttempts) {
       await new Promise(resolve => setTimeout(resolve, 50));
+      attempts++;
     }
+    
+    if (!webGPUContext.isInitialized()) {
+      throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
+    }
+    
     await initialize();
   }
 
   onMount(async () => {
-    await waitForWebGPU();
-  });
-
-  onDestroy(() => {
-    // Clean up WebGPU resources
-    if (quadGeometryBuffer) quadGeometryBuffer.destroy();
-    if (xBuffer) xBuffer.destroy();
-    if (yBuffer) yBuffer.destroy();
-    if (radiusBuffer) radiusBuffer.destroy();
-    if (alphaBuffer) alphaBuffer.destroy();
-    if (colorBuffer) colorBuffer.destroy();
-    if (scaleParamsBuffer) scaleParamsBuffer.destroy();
-    if (resolutionBuffer) resolutionBuffer.destroy();
-    if (dprBuffer) dprBuffer.destroy();
-    
-    // Clean up layer
-    if (layerControl) {
-      layerControl.remove();
+    try {
+      await waitForWebGPU();
+    } catch (error) {
+      console.error('❌ Dots component mount failed:', error);
+      initializationError = error.message;
     }
   });
 
-  // Update instance data when dataVersion changes;
+  // Comprehensive cleanup with resource tracking
+  onDestroy(() => {
+    console.log('🧹 Cleaning up Dots component resources');
+    
+    try {
+      // Clean up chart-specific buffers
+      ownedResources.buffers.forEach(buffer => {
+        if (buffer && !buffer.destroyed) {
+          buffer.destroy();
+        }
+      });
+      ownedResources.buffers = [];
+
+      // Release shared resource references
+      if (ownedResources.pipeline && gpuCoordinator) {
+        gpuCoordinator.releaseSharedPipeline('dots');
+      }
+      
+      if (ownedResources.shader && gpuCoordinator) {
+        gpuCoordinator.releaseSharedShader('dots');
+      }
+
+      // Release shared uniform buffer reference
+      if (dprBuffer && !ownedResources.buffers.includes(dprBuffer) && gpuCoordinator) {
+        gpuCoordinator.releaseSharedUniformBuffer('devicePixelRatio');
+      }
+
+      // Clean up layer registration
+      if (ownedResources.layerControl) {
+        ownedResources.layerControl.remove();
+      }
+
+      console.log('✅ Dots component cleanup complete');
+      
+    } catch (error) {
+      console.error('❌ Error during Dots component cleanup:', error);
+    }
+  });
+
+  // Enhanced reactive effect for data updates
   $effect(() => {
     void dataVersion;
     
     untrack(() => {
       const device = webGPUContext.getDevice();
-      if (device && layerControl && resourcesCreated) {
-        updateInstanceData(device, data);
-        layerControl.invalidate();
+      if (device && ownedResources.layerControl && resourcesCreated && !initializationError) {
+        try {
+          updateInstanceData(device, data);
+          ownedResources.layerControl.invalidate();
+        } catch (error) {
+          console.error('❌ Data update effect failed:', error);
+          initializationError = error.message;
+        }
       }
     });
   });
 
-  // Update the scale change effect to only update scale parameters
+  // Enhanced reactive effect for scale changes
   $effect(() => {
     void xDomain, yDomain, xRange, yRange;
+    
     const device = webGPUContext.getDevice();
-    if (device && layerControl && resourcesCreated && scaleParamsBuffer) {
-      // Only update scale parameters, not the entire bind group
-      updateScaleParameters(device);
-      layerControl.invalidate();
+    if (device && ownedResources.layerControl && resourcesCreated && scaleParamsBuffer && !initializationError) {
+      try {
+        updateScaleParameters(device);
+        ownedResources.layerControl.invalidate();
+      } catch (error) {
+        console.error('❌ Scale update effect failed:', error);
+      }
     }
   });
 
-  // Update resolution when canvas size changes
+  // Enhanced reactive effect for resolution changes
   $effect(() => {
-    // Trigger on width and height changes from the chart context
-    // void c.innerWidth;
-    // void c.innerHeight;
     const { width, height } = webGPUContext.getCanvasDimensions();
     const device = webGPUContext.getDevice();
-    if (resolutionBuffer && device && layerControl && resourcesCreated) {
-      device.queue.writeBuffer(resolutionBuffer, 0, new Float32Array([width, height]));
-      // layerControl.invalidate();
-      // console.log('resolution buffer updated')
+    
+    if (resolutionBuffer && device && ownedResources.layerControl && resourcesCreated && !initializationError) {
+      try {
+        device.queue.writeBuffer(resolutionBuffer, 0, new Float32Array([width, height]));
+        // Note: Don't invalidate for resolution changes to avoid unnecessary redraws
+      } catch (error) {
+        console.error('❌ Resolution update effect failed:', error);
+      }
     }
   });
 </script>
+
+{#if initializationError}
+  <div class="dots-error">
+    <p>Dots component failed to initialize:</p>
+    <p class="error-message">{initializationError}</p>
+  </div>
+{/if}
+
+<style>
+  .dots-error {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background-color: rgba(255, 240, 240, 0.9);
+    border: 1px solid #ffcccb;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #d32f2f;
+    z-index: 1000;
+    max-width: 300px;
+  }
+
+  .error-message {
+    font-family: monospace;
+    background-color: rgba(255, 255, 255, 0.8);
+    padding: 4px 6px;
+    border-radius: 2px;
+    margin-top: 4px;
+    font-size: 11px;
+  }
+</style>
