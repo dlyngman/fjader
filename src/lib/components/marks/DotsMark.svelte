@@ -1,9 +1,10 @@
+<!-- src/lib/components/marks/DotsMark.svelte -->
 <script>
   import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
   import { getContext, onMount, onDestroy, untrack } from 'svelte';
   import { getScaleState } from '$lib/scales';
   import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { Dots } from '$lib/components';
+  import { Dots } from '$lib/components';
 
   let { 
     table, 
@@ -13,7 +14,10 @@
     color, 
     alpha = 0.5, 
     radius = 3,
-    limit
+    limit,
+    // These are PREFERENCES, not guarantees
+    preferredXScaleType = 'linear', 
+    preferredYScaleType = 'linear',
   } = $props();
 
   const coordinator = getContext('mosaic-coordinator');
@@ -25,12 +29,39 @@
   let colorScale = $derived(getScaleState(color, 'ordinal'));
   let client = $state(null);
 
-  // Register scale types with chart container BEFORE creating client
-  // Move inside createClient in case we need to change depending on x/y 
-  c.registerScaleType('x', 'linear', SCALE_PRIORITIES.PREFER, markId);
-  c.registerScaleType('y', 'linear', SCALE_PRIORITIES.PREFER, markId);
-  // c.registerScaleType('x', 'linear');
-  // c.registerScaleType('y', 'linear');
+  // Register scale type PREFERENCES with chart container
+  // These are requests that may be overridden by higher priority marks
+  c.registerScaleType('x', preferredXScaleType, SCALE_PRIORITIES.PREFER, markId);
+  c.registerScaleType('y', preferredYScaleType, SCALE_PRIORITIES.PREFER, markId);
+
+  // Get the ACTUAL resolved scale types from the chart's scale resolution
+  // This is what we'll actually get, which may differ from our preferences
+  let actualXScaleType = $derived(c.scaleTypes?.x || 'linear');
+  let actualYScaleType = $derived(c.scaleTypes?.y || 'linear');
+
+  // Validation: Check if dots can work with the resolved scale types
+  let scaleCompatibilityError = $derived.by(() => {
+    // Dots generally work with linear and identity scales well
+    // They can work with band/point scales but might not look ideal
+    const incompatibleX = actualXScaleType && !['linear', 'identity', 'band', 'point'].includes(actualXScaleType);
+    const incompatibleY = actualYScaleType && !['linear', 'identity', 'band', 'point'].includes(actualYScaleType);
+    
+    if (incompatibleX || incompatibleY) {
+      return `DotsMark cannot render with scale types: x=${actualXScaleType}, y=${actualYScaleType}`;
+    }
+    
+    // Warn if we got something different from what we preferred
+    if (actualXScaleType !== preferredXScaleType || actualYScaleType !== preferredYScaleType) {
+      console.warn(
+        `DotsMark: Scale types resolved differently than preferred. ` +
+        `Preferred: x=${preferredXScaleType}, y=${preferredYScaleType}. ` +
+        `Actual: x=${actualXScaleType}, y=${actualYScaleType}. ` +
+        `This might be due to other marks with higher priority requirements.`
+      );
+    }
+    
+    return null;
+  });
 
   function createClient() {
     if (client) {
@@ -62,17 +93,6 @@
     })
   });
 
-  // // Loading state coordination (optional)
-  // $effect(() => {
-  //   if (client?.delayedLoading) {
-  //     c.xScaleState?.setUpdatesEnabled?.(false);
-  //     c.yScaleState?.setUpdatesEnabled?.(false);
-  //   } else {
-  //     c.xScaleState?.setUpdatesEnabled?.(true);
-  //     c.yScaleState?.setUpdatesEnabled?.(true);
-  //   }
-  // });
-
   onDestroy(() => {
     c.unregisterScaleType('x', markId);
     c.unregisterScaleType('y', markId);
@@ -84,10 +104,17 @@
 
 </script>
 
-{#if client?.arrowTable}
+{#if scaleCompatibilityError}
+  <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="red" font-size="14">
+    Scale Error: {scaleCompatibilityError}
+  </text>
+{:else if client?.arrowTable}
+  <!-- Pass the ACTUAL resolved scale types, not the requested ones -->
   <Dots
     data={client.arrowTable}
     dataVersion={client.dataVersion}
+    xScaleType={actualXScaleType}
+    yScaleType={actualYScaleType}
     alpha={alpha}
     r={radius}
   />

@@ -1,6 +1,7 @@
 <script>
   import { getContext, onMount, onDestroy, untrack } from 'svelte';
   import { getScaleState } from '$lib/scales';
+  import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
   import { getGPUContext } from '$lib/gpu';
 
   let { 
@@ -18,57 +19,28 @@
   const webGPUContext = getContext('webgpu-canvas');
   const gpuCoordinator = getGPUContext();
 
-  // Enhanced resource tracking for proper cleanup
-  let ownedResources = {
-    pipeline: false,
-    shader: false,
-    buffers: [],
-    layerControl: null
-  };
-
-  // WebGPU resources
-  let pipeline;
-  let bindGroup;
-  let resourcesCreated = false;
+  // Use BaseGPURenderer for common functionality
+  let renderer = $state(null);
   let initializationError = $state(null);
 
-  // Separate buffers for Arrow columns
+  // Dots-specific buffers (managed through base renderer)
   let xBuffer;
   let yBuffer;
   let radiusBuffer;
   let alphaBuffer;
   let colorBuffer;
-  let scaleParamsBuffer;
-  let resolutionBuffer;
-  let dprBuffer;
-  let instanceCount = 0;
-  
   let quadGeometryBuffer;
+  
   const quadVertexCount = 6;
 
-  // Derived reactive state
-  let xDomain = $derived(c.xScale?.domain() ?? []);
-  let yDomain = $derived(c.yScale?.domain() ?? []);
-  let xRange = $derived(c.xScale?.range() ?? []);
-  let yRange = $derived(c.yScale?.range() ?? []);
-
-  const devicePixelRatio = window.devicePixelRatio || 1;
-
-  // Enhanced shader with better structure and comments
-  const shaderCode = `
+  // Component-specific shader code - much simpler now!
+  const dotsShaderCode = `
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
       @location(0) color: vec4<f32>,
       @location(1) uv: vec2<f32>,
       @location(2) radius: f32,
       @location(3) alpha: f32,
-    };
-
-    struct ScaleParams {
-      domainMin: vec2<f32>,
-      domainMax: vec2<f32>,
-      rangeMin: vec2<f32>,
-      rangeMax: vec2<f32>,
     };
 
     @group(0) @binding(0) var<uniform> resolution: vec2<f32>;
@@ -79,11 +51,6 @@
     @group(0) @binding(5) var<storage, read> colors: array<vec4<f32>>;
     @group(0) @binding(6) var<uniform> scaleParams: ScaleParams;
     @group(0) @binding(7) var<uniform> devicePixelRatio: f32;
-    
-    fn scaleValue(value: f32, domainMin: f32, domainMax: f32, rangeMin: f32, rangeMax: f32) -> f32 {
-      let normalized = (value - domainMin) / (domainMax - domainMin);
-      return rangeMin + normalized * (rangeMax - rangeMin);
-    }
     
     @vertex
     fn vertexMain(
@@ -97,12 +64,11 @@
       let alpha = alphaValues[instanceIdx];
       let color = colors[instanceIdx];
       
-      // Apply scales on GPU
-      let scaledX = scaleValue(x, scaleParams.domainMin.x, scaleParams.domainMax.x, 
-                               scaleParams.rangeMin.x, scaleParams.rangeMax.x);
-      let scaledY = scaleValue(y, scaleParams.domainMin.y, scaleParams.domainMax.y, 
-                               scaleParams.rangeMin.y, scaleParams.rangeMax.y);
+      // Use centralized scale functions - works for any scale type!
+      let scaledX = scaleX(x, scaleParams);
+      let scaledY = scaleY(y, scaleParams);
       
+      // Rest of dots-specific positioning logic stays the same
       let displayRadius = radius * devicePixelRatio;
       let radiusWithPadding = displayRadius * 1.2;
       let worldPos = vec2<f32>(scaledX * devicePixelRatio, scaledY * devicePixelRatio) + quadPosition * radiusWithPadding;
@@ -128,6 +94,20 @@
     }
   `;
 
+  // Generate complete shader with centralized scale support
+  const shaderCode = BaseGPURenderer.generateShader(dotsShaderCode);
+
+  // Dots-specific vertex buffer layout
+  const vertexBufferLayout = [{
+    arrayStride: 2 * 4, // 2 floats * 4 bytes
+    attributes: [{
+      shaderLocation: 0,
+      offset: 0,
+      format: 'float32x2',
+    }],
+  }];
+
+  // Create quad geometry for dot rendering
   function createQuadGeometry() {
     return new Float32Array([
       -1, -1,  // bottom-left
@@ -139,161 +119,39 @@
     ]);
   }
 
-  // Enhanced resource creation with proper sharing and error handling
-  async function createGPUResources(device) {
-    try {
-      console.log('🔧 Creating GPU resources for Dots component');
-      
-      if (!gpuCoordinator) {
-        throw new Error('GPU coordinator not available');
-      }
-
-      // Create or get shared shader with reference counting
-      const shaderModule = await gpuCoordinator.getOrCreateSharedShader('dots', shaderCode);
-      ownedResources.shader = true;
-
-      // Create or get shared pipeline with proper lifecycle
-      pipeline = await gpuCoordinator.getOrCreateSharedPipeline('dots', async () => {
-        const msaaSampleCount = webGPUContext.getMsaaSampleCount();
-
-        return device.createRenderPipeline({
-          layout: 'auto',
-          vertex: {
-            module: shaderModule,
-            entryPoint: 'vertexMain',
-            buffers: [{
-              arrayStride: 2 * 4,
-              attributes: [{
-                shaderLocation: 0,
-                offset: 0,
-                format: 'float32x2',
-              }],
-            }],
-          },
-          fragment: {
-            module: shaderModule,
-            entryPoint: 'fragmentMain',
-            targets: [{
-              format: webGPUContext.getPresentationFormat(),
-              blend: {
-                color: {
-                  srcFactor: 'src-alpha',
-                  dstFactor: 'one-minus-src-alpha',
-                  operation: 'add',
-                },
-                alpha: {
-                  srcFactor: 'one',
-                  dstFactor: 'one-minus-src-alpha',
-                  operation: 'add',
-                },
-              },
-            }],
-          },
-          primitive: { topology: 'triangle-list' },
-          multisample: { count: msaaSampleCount > 1 ? msaaSampleCount : 1 },
-        });
-      });
-      ownedResources.pipeline = true;
-
-      // Create quad geometry buffer
-      const quadVertices = createQuadGeometry();
-      quadGeometryBuffer = device.createBuffer({
-        size: quadVertices.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      });
-      device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
-      ownedResources.buffers.push(quadGeometryBuffer);
-
-      // Create chart-specific uniform buffers
-      resolutionBuffer = device.createBuffer({
-        size: 8,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      ownedResources.buffers.push(resolutionBuffer);
-
-      // Use shared DPR buffer if available, create own if needed
-      dprBuffer = gpuCoordinator?.getSharedUniformBuffer('devicePixelRatio');
-      
-      if (!dprBuffer) {
-        console.warn('🔶 Creating own DPR buffer - coordinator should provide this');
-        dprBuffer = device.createBuffer({
-          size: 4,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        device.queue.writeBuffer(dprBuffer, 0, new Float32Array([devicePixelRatio]));
-        ownedResources.buffers.push(dprBuffer);
-      }
-
-      // Update initial values
-      const { width, height } = webGPUContext.getCanvasDimensions();
-      device.queue.writeBuffer(resolutionBuffer, 0, new Float32Array([width, height]));
-
-      resourcesCreated = true;
-      console.log('✅ GPU resources created successfully for Dots component');
-      
-    } catch (error) {
-      console.error('❌ Failed to create GPU resources for Dots component:', error);
-      initializationError = error.message;
-      throw error;
-    }
-  }
-
-  // Enhanced buffer management with smart sizing and reuse
-  function createOrUpdateBuffer(existingBuffer, data, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
+  // Initialize dots-specific geometry
+  async function initializeDotsGeometry() {
     const device = webGPUContext.getDevice();
     if (!device) {
       throw new Error('No WebGPU device available');
     }
-    
-    const requiredSize = data.byteLength;
-    
-    // Only recreate if actually needed, with smart sizing strategy
-    if (!existingBuffer || existingBuffer.size < requiredSize) {
-      if (existingBuffer) {
-        // Remove from tracking before destroying
-        const index = ownedResources.buffers.indexOf(existingBuffer);
-        if (index !== -1) {
-          ownedResources.buffers.splice(index, 1);
-        }
-        existingBuffer.destroy();
-      }
 
-      // Define a memory block size to prevent thrashing with tiny allocations.
-      const MEMORY_BLOCK_SIZE = 256; // 256 bytes is a reasonable default
-      // Calculate the desired size with 50% headroom for growth.
-      const desiredSize = Math.ceil(requiredSize * 1.5);
-      // Round up the desired size to the next multiple of MEMORY_BLOCK_SIZE.
-      // This ensures we grow in sensible steps without over-allocating for small plots.
-      const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
-      // Final buffer size must be at least the required size, and padded to a multiple of 4.
-      let bufferSize = Math.max(requiredSize, roundedUpSize);
-      bufferSize = (bufferSize + 3) & ~3; // Ensure 4-byte alignment
-
-      const newBuffer = device.createBuffer({
-        size: bufferSize,
-        usage,
-      });
-      
-      ownedResources.buffers.push(newBuffer);
-      console.debug(`📊 Created buffer of size ${bufferSize} bytes (required: ${requiredSize})`);
-      return newBuffer;
-    }
-    
-    return existingBuffer;
+    // Create quad geometry buffer
+    const quadVertices = createQuadGeometry();
+    quadGeometryBuffer = device.createBuffer({
+      size: quadVertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
   }
 
-  // Enhanced instance data management with better error handling
-  function updateInstanceData(device, arrowTable) {
+  // Update instance data using base renderer's buffer management
+  function updateInstanceData(arrowTable) {
     try {
-      if (!arrowTable || arrowTable.numRows === 0 || !resourcesCreated) {
-        console.debug('⚠️ Skipping instance data update - no data or resources not ready');
+      if (!arrowTable || arrowTable.numRows === 0 || !renderer?.resourcesCreated) {
+        console.debug('⚠️ Skipping dots instance data update - no data or resources not ready');
         return;
       }
 
-      const startTime = performance.now();
-      instanceCount = arrowTable.numRows;
+      const device = webGPUContext.getDevice();
+      if (!device) {
+        throw new Error('No WebGPU device available');
+      }
 
-      console.debug(`📊 Updating instance data for ${instanceCount} dots`);
+      const startTime = performance.now();
+      const instanceCount = arrowTable.numRows;
+
+      console.debug(`📊 Updating dots instance data for ${instanceCount} dots`);
 
       // Get Arrow columns with error checking
       const xColumn = arrowTable.getChild('x');
@@ -304,15 +162,19 @@
         throw new Error('Required x and y columns not found in Arrow table');
       }
 
-      // Convert data with type safety
-      const xData = new Float32Array(xColumn.toArray());
-      const yData = new Float32Array(yColumn.toArray());
+      // Process data through BaseGPURenderer for proper scale handling
+      const xValues = xColumn.toArray();
+      const yValues = yColumn.toArray();
+      
+      // Use BaseGPURenderer's data processing for scale-aware conversion
+      const xData = renderer.processDataForAxis(xValues, 'x');
+      const yData = renderer.processDataForAxis(yValues, 'y');
 
-      // Update position buffers
-      xBuffer = createOrUpdateBuffer(xBuffer, xData);
+      // Update position buffers using base renderer's smart buffer management
+      xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
       device.queue.writeBuffer(xBuffer, 0, xData);
 
-      yBuffer = createOrUpdateBuffer(yBuffer, yData);
+      yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
       device.queue.writeBuffer(yBuffer, 0, yData);
 
       // Create radius and alpha data
@@ -321,8 +183,8 @@
       
       if (typeof r === 'function' || typeof alpha === 'function') {
         for (let i = 0; i < instanceCount; i++) {
-          radiusData[i] = typeof r === 'function' ? r({x: xData[i], y: yData[i]}) : r;
-          alphaData[i] = typeof alpha === 'function' ? alpha({x: xData[i], y: yData[i]}) : alpha;
+          radiusData[i] = typeof r === 'function' ? r({x: xValues[i], y: yValues[i]}) : r;
+          alphaData[i] = typeof alpha === 'function' ? alpha({x: xValues[i], y: yValues[i]}) : alpha;
         }
       } else {
         radiusData.fill(r);
@@ -330,10 +192,10 @@
       }
 
       // Update attribute buffers
-      radiusBuffer = createOrUpdateBuffer(radiusBuffer, radiusData);
+      radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
       device.queue.writeBuffer(radiusBuffer, 0, radiusData);
 
-      alphaBuffer = createOrUpdateBuffer(alphaBuffer, alphaData);
+      alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
       device.queue.writeBuffer(alphaBuffer, 0, alphaData);
 
       // Handle colors with error checking
@@ -343,182 +205,72 @@
         const colorArray = colorColumn.toArray();
         for (let i = 0; i < instanceCount; i++) {
           const fillColor = colorScale(colorArray[i]);
-          const rgba = parseColor(fillColor);
+          const rgba = renderer.parseColor(fillColor);
           colorData.set(rgba, i * 4);
         }
       } else {
         // Fallback to single color
-        const rgba = parseColor(fill);
+        const rgba = renderer.parseColor(fill);
         for (let i = 0; i < instanceCount; i++) {
           colorData.set(rgba, i * 4);
         }
       }
 
-      colorBuffer = createOrUpdateBuffer(colorBuffer, colorData);
+      colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
       device.queue.writeBuffer(colorBuffer, 0, colorData);
 
-      // Create scale parameters buffer if needed
-      if (!scaleParamsBuffer) {
-        scaleParamsBuffer = device.createBuffer({
-          size: 32,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        ownedResources.buffers.push(scaleParamsBuffer);
-      }
-      
-      updateScaleParameters(device);
-
       // Create bind group after all buffers are ready
-      if (!bindGroup) {
-        createBindGroup(device);
-      }
+      createDotsBindGroup();
+
+      // Update instance count
+      renderer.updateInstanceCount(instanceCount);
 
       const updateTime = performance.now() - startTime;
-      console.debug(`✅ Instance data updated in ${updateTime.toFixed(2)}ms`);
+      console.debug(`✅ Dots instance data updated in ${updateTime.toFixed(2)}ms`);
       
     } catch (error) {
-      console.error('❌ Failed to update instance data:', error);
+      console.error('❌ Failed to update dots instance data:', error);
       initializationError = error.message;
       throw error;
     }
   }
 
-  // Enhanced bind group creation with comprehensive validation
-  function createBindGroup(device) {
-    try {
-      // Comprehensive validation of all required resources
-      const requiredBuffers = {
-        resolutionBuffer,
-        xBuffer,
-        yBuffer,
-        radiusBuffer,
-        alphaBuffer,
-        colorBuffer,
-        scaleParamsBuffer,
-        dprBuffer
-      };
-
-      const missingBuffers = Object.entries(requiredBuffers)
-        .filter(([name, buffer]) => !buffer)
-        .map(([name]) => name);
-
-      if (missingBuffers.length > 0 || !pipeline) {
-        console.warn(`⚠️ Cannot create bind group - missing resources: ${missingBuffers.join(', ')}${!pipeline ? ', pipeline' : ''}`);
-        return;
-      }
-
-      bindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: resolutionBuffer } },
-          { binding: 1, resource: { buffer: xBuffer } },
-          { binding: 2, resource: { buffer: yBuffer } },
-          { binding: 3, resource: { buffer: radiusBuffer } },
-          { binding: 4, resource: { buffer: alphaBuffer } },
-          { binding: 5, resource: { buffer: colorBuffer } },
-          { binding: 6, resource: { buffer: scaleParamsBuffer } },
-          { binding: 7, resource: { buffer: dprBuffer } },
-        ],
-      });
-
-      console.debug('✅ Bind group created successfully');
-      
-    } catch (error) {
-      console.error('❌ Failed to create bind group:', error);
-      initializationError = error.message;
-      throw error;
-    }
-  }
-
-  // Enhanced scale parameter updates
-  function updateScaleParameters(device) {
-    if (!scaleParamsBuffer) {
-      console.warn('⚠️ Cannot update scale parameters - buffer not available');
+  // Create dots-specific bind group
+  function createDotsBindGroup() {
+    // Validate all buffers exist
+    if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer) {
+      console.warn('⚠️ Cannot create dots bind group - missing data buffers');
       return;
     }
 
-    try {
-      const scaleParams = new Float32Array(8);
-      scaleParams[0] = xDomain[0] ?? 0;
-      scaleParams[1] = yDomain[0] ?? 0;
-      scaleParams[2] = xDomain[1] ?? 1;
-      scaleParams[3] = yDomain[1] ?? 1;
-      scaleParams[4] = xRange[0] ?? 0;
-      scaleParams[5] = yRange[0] ?? 0;
-      scaleParams[6] = xRange[1] ?? 1;
-      scaleParams[7] = yRange[1] ?? 1;
+    // Shape-specific bindings (bindings 1-5)
+    const dotsBindings = [
+      { binding: 1, resource: { buffer: xBuffer } },
+      { binding: 2, resource: { buffer: yBuffer } },
+      { binding: 3, resource: { buffer: radiusBuffer } },
+      { binding: 4, resource: { buffer: alphaBuffer } },
+      { binding: 5, resource: { buffer: colorBuffer } },
+    ];
 
-      device.queue.writeBuffer(scaleParamsBuffer, 0, scaleParams);
-      
-    } catch (error) {
-      console.error('❌ Failed to update scale parameters:', error);
-    }
+    // Use base renderer to create bind group (includes common bindings)
+    renderer.createBindGroup(dotsBindings);
   }
 
-  // Enhanced draw function with comprehensive error handling
-  function draw(passEncoder, device, presentationFormat) {
+  // Dots-specific draw function
+  function drawDots(passEncoder) {
     try {
-      if (!pipeline || !bindGroup || instanceCount === 0) {
-        console.debug('⚠️ Skipping draw - resources not ready or no instances');
+      if (!renderer?.pipeline || !renderer?.bindGroup || renderer.instanceCount === 0) {
+        console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
         return;
       }
 
-      passEncoder.setPipeline(pipeline);
-      passEncoder.setBindGroup(0, bindGroup);
+      passEncoder.setPipeline(renderer.pipeline);
+      passEncoder.setBindGroup(0, renderer.bindGroup);
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-      passEncoder.draw(quadVertexCount, instanceCount);
+      passEncoder.draw(quadVertexCount, renderer.instanceCount);
       
     } catch (error) {
-      console.error('❌ Draw operation failed:', error);
-      throw error;
-    }
-  }
-
-  // Enhanced color parsing with better error handling
-  function parseColor(color) {
-    try {
-      if (typeof color === 'string' && color.startsWith('#')) {
-        const r = parseInt(color.slice(1, 3), 16) / 255;
-        const g = parseInt(color.slice(3, 5), 16) / 255;
-        const b = parseInt(color.slice(5, 7), 16) / 255;
-        return [r, g, b, 1.0];
-      }
-      // Add support for other color formats if needed
-      console.warn(`⚠️ Unrecognized color format: ${color}, using default blue`);
-      return [0.0, 0.0, 1.0, 1.0];
-    } catch (error) {
-      console.error('❌ Color parsing failed:', error);
-      return [0.0, 0.0, 1.0, 1.0];
-    }
-  }
-
-  // Enhanced initialization with comprehensive error handling
-  async function initialize() {
-    try {
-      console.log('🚀 Initializing Dots component');
-      
-      const device = webGPUContext.getDevice();
-      if (!device) {
-        throw new Error('No WebGPU device available from context');
-      }
-
-      await createGPUResources(device);
-      updateInstanceData(device, data);
-      
-      // Register layer with enhanced metadata
-      ownedResources.layerControl = webGPUContext.registerLayer({
-        zIndex,
-        draw,
-        visible: true,
-        markType: 'dots',
-        componentId: `dots-${crypto.randomUUID().slice(0, 6)}`
-      });
-
-      console.log('✅ Dots component initialized successfully');
-      
-    } catch (error) {
-      console.error('❌ Dots component initialization failed:', error);
-      initializationError = error.message;
+      console.error('❌ Dots draw operation failed:', error);
       throw error;
     }
   }
@@ -537,7 +289,50 @@
       throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
     }
     
-    await initialize();
+    await initializeDots();
+  }
+
+  // Initialize dots renderer
+  async function initializeDots() {
+    try {
+      console.log('🚀 Initializing Dots component with centralized scale support');
+
+      // Check GPU coordinator is available
+      if (!gpuCoordinator) {
+        throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
+      }
+
+      // Create base renderer with scale type information
+      renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, c, { 
+        zIndex,
+        xScaleType: c.scaleTypes?.x || 'linear',
+        yScaleType: c.scaleTypes?.y || 'linear'
+      });
+
+      // Initialize with dots-specific configuration using centralized shader
+      await renderer.initialize({
+        shaderCode, // This now includes universal scale support!
+        vertexBufferLayout,
+      });
+
+      // Initialize dots-specific geometry
+      await initializeDotsGeometry();
+
+      // Update instance data if available
+      if (data) {
+        updateInstanceData(data);
+      }
+      
+      // Register layer with base renderer
+      renderer.registerLayer(drawDots);
+
+      console.log('✅ Dots component initialized successfully with centralized scales');
+      
+    } catch (error) {
+      console.error('❌ Dots component initialization failed:', error);
+      initializationError = error.message;
+      throw error;
+    }
   }
 
   onMount(async () => {
@@ -549,36 +344,18 @@
     }
   });
 
-  // Comprehensive cleanup with resource tracking
   onDestroy(() => {
-    console.log('🧹 Cleaning up Dots component resources');
+    console.log('🧹 Cleaning up Dots component');
     
     try {
-      // Clean up chart-specific buffers
-      ownedResources.buffers.forEach(buffer => {
-        if (buffer && !buffer.destroyed) {
-          buffer.destroy();
-        }
-      });
-      ownedResources.buffers = [];
-
-      // Release shared resource references
-      if (ownedResources.pipeline && gpuCoordinator) {
-        gpuCoordinator.releaseSharedPipeline('dots');
-      }
-      
-      if (ownedResources.shader && gpuCoordinator) {
-        gpuCoordinator.releaseSharedShader('dots');
+      // Clean up dots-specific resources
+      if (quadGeometryBuffer && !quadGeometryBuffer.destroyed) {
+        quadGeometryBuffer.destroy();
       }
 
-      // Release shared uniform buffer reference
-      if (dprBuffer && !ownedResources.buffers.includes(dprBuffer) && gpuCoordinator) {
-        gpuCoordinator.releaseSharedUniformBuffer('devicePixelRatio');
-      }
-
-      // Clean up layer registration
-      if (ownedResources.layerControl) {
-        ownedResources.layerControl.remove();
+      // Base renderer handles all other cleanup
+      if (renderer) {
+        renderer.destroy();
       }
 
       console.log('✅ Dots component cleanup complete');
@@ -593,47 +370,49 @@
     void dataVersion;
     
     untrack(() => {
-      const device = webGPUContext.getDevice();
-      if (device && ownedResources.layerControl && resourcesCreated && !initializationError) {
+      if (renderer?.resourcesCreated && !initializationError && data) {
         try {
-          updateInstanceData(device, data);
-          ownedResources.layerControl.invalidate();
+          updateInstanceData(data);
         } catch (error) {
-          console.error('❌ Data update effect failed:', error);
+          console.error('❌ Dots data update effect failed:', error);
           initializationError = error.message;
         }
       }
     });
   });
 
-  // Enhanced reactive effect for scale changes
+  // Reactive effect for scale changes - BaseGPURenderer handles the heavy lifting
   $effect(() => {
-    void xDomain, yDomain, xRange, yRange;
+    if (!renderer) return;
     
-    const device = webGPUContext.getDevice();
-    if (device && ownedResources.layerControl && resourcesCreated && scaleParamsBuffer && !initializationError) {
-      try {
-        updateScaleParameters(device);
-        ownedResources.layerControl.invalidate();
-      } catch (error) {
-        console.error('❌ Scale update effect failed:', error);
-      }
-    }
+    // Access scale properties to make this reactive
+    const xScale = c?.xScale;
+    const yScale = c?.yScale;
+    
+    // Track scale domains and ranges
+    void xScale?.domain?.();
+    void yScale?.domain?.();
+    void xScale?.range?.();
+    void yScale?.range?.();
+    
+    // Track band scale properties for completeness
+    void xScale?.bandwidth?.();
+    void yScale?.bandwidth?.();
+    
+    untrack(() => {
+      renderer.handleScaleChange();
+    });
   });
 
-  // Enhanced reactive effect for resolution changes
+  // Reactive effect for resolution changes
   $effect(() => {
-    const { width, height } = webGPUContext.getCanvasDimensions();
-    const device = webGPUContext.getDevice();
+    if (!renderer) return;
     
-    if (resolutionBuffer && device && ownedResources.layerControl && resourcesCreated && !initializationError) {
-      try {
-        device.queue.writeBuffer(resolutionBuffer, 0, new Float32Array([width, height]));
-        // Note: Don't invalidate for resolution changes to avoid unnecessary redraws
-      } catch (error) {
-        console.error('❌ Resolution update effect failed:', error);
-      }
-    }
+    const { width, height } = webGPUContext.getCanvasDimensions();
+    
+    untrack(() => {
+      renderer.handleResolutionChange();
+    });
   });
 </script>
 

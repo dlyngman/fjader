@@ -20,7 +20,7 @@
   console.log('🚀 Initializing enhanced coordination for performance demo...');
   const coordinators = setCoordinators({
     msaaSampleCount: 4,
-    enableDebugging: true
+    enableDebugging: false
   });
 
   // State management
