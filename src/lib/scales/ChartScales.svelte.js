@@ -1,8 +1,8 @@
+// src/lib/scales/ChartScales.svelte.js
 import { getScaleState } from '$lib/scales';
 import { resolveScaleType, SCALE_PRIORITIES } from './ScalePriorities.js';
 
 export class ChartScales {
-  // ✅ UPDATED: Store requirements as objects with priority info
   scaleRequirements = $state({
     x: [], // [{ type: 'band', priority: 3, markType: 'bar-abc123' }, ...]
     y: []  // [{ type: 'linear', priority: 2, markType: 'dot-def456' }, ...]
@@ -19,17 +19,32 @@ export class ChartScales {
   get yLabel() { return this.config.yLabel; }
   get layout() { return this.config.layout; }
 
-  // ✅ UPDATED: Resolve scale types using priority system
-  scaleTypes = $derived({
-    x: resolveScaleType(this.scaleRequirements.x),
-    y: resolveScaleType(this.scaleRequirements.y)
+  // ✅ ENHANCED: Resolve scale types with error handling
+  scaleTypes = $derived.by(() => {
+    try {
+      return {
+        x: resolveScaleType(this.scaleRequirements.x),
+        y: resolveScaleType(this.scaleRequirements.y)
+      };
+    } catch (error) {
+      console.error('❌ Scale resolution failed:', error);
+      
+      // Provide helpful debugging info
+      console.error('Scale requirements at time of error:', {
+        x: this.scaleRequirements.x.map(req => `${req.markId}:${req.type}(${req.priority})`),
+        y: this.scaleRequirements.y.map(req => `${req.markId}:${req.type}(${req.priority})`)
+      });
+      
+      // Return safe fallback - this allows the app to continue functioning
+      return { x: 'linear', y: 'linear' };
+    }
   });
 
-  // ✅ UPDATED: Use resolved scale types instead of hardcoded 'linear'
-  xScaleState = $derived(getScaleState(this.xLabel, this.scaleTypes.x));
-  yScaleState = $derived(getScaleState(this.yLabel, this.scaleTypes.y));
+  // ✅ Use resolved scale types with fallback
+  xScaleState = $derived(getScaleState(this.xLabel, this.scaleTypes?.x || 'linear'));
+  yScaleState = $derived(getScaleState(this.yLabel, this.scaleTypes?.y || 'linear'));
 
-  // ✅ Base scales (unchanged)
+  // Rest of the class remains the same...
   baseXScale = $derived(
     this.layout.isReady 
       ? this.xScaleState.getBaseScale('x', this.layout.innerWidth) 
@@ -42,7 +57,6 @@ export class ChartScales {
       : null
   );
 
-  // ✅ Scales (unchanged)
   xScale = $derived(
     this.layout.isReady && this.baseXScale
       ? this.xScaleState.updateScaleDomain(this.baseXScale) 
@@ -55,7 +69,6 @@ export class ChartScales {
       : null
   );
 
-  // ✅ Target scales (unchanged)
   xTargetScale = $derived(
     this.layout.isReady && this.baseXScale
       ? this.xScaleState.updateScaleDomain(this.baseXScale, false) 
@@ -68,20 +81,13 @@ export class ChartScales {
       : null
   );
 
-  // ✅ Current data points (unchanged)
   currentXDataPoint = $derived(this.xScaleState.currentDataPoint);
   currentYDataPoint = $derived(this.yScaleState.currentDataPoint);
-
-  // ✅ Screen coordinates (unchanged)
   currentXScreenPoint = $derived(this.xScale?.scale(this.currentXDataPoint));
   currentYScreenPoint = $derived(this.yScale?.scale(this.currentYDataPoint));
+  scalesReady = $derived(this.xScaleState?.ready && this.yScaleState?.ready);
 
-  // ✅ Scales ready (unchanged)
-  scalesReady = $derived(
-    this.xScaleState?.ready && this.yScaleState?.ready
-  );
-
-  // ✅ NEW: Enhanced registerScaleType with priority support
+  // Enhanced registerScaleType with better logging
   registerScaleType = (dimension, type, priority = SCALE_PRIORITIES.PREFER, markId = 'unknown') => {
     const requirements = this.scaleRequirements[dimension];
     
@@ -93,17 +99,15 @@ export class ChartScales {
     );
     
     if (!existing) {
-      // Add new requirement
       requirements.push({ type, priority, markId });
       
-      // console.log(`📊 Registered scale requirement: ${dimension} = ${type} (priority: ${priority}, mark: ${markId})`);
+      console.log(`📊 Registered scale requirement: ${dimension} = ${type} (priority: ${priority}, mark: ${markId})`);
       
       // Trigger reactivity by reassigning the array
       this.scaleRequirements[dimension] = [...requirements];
     }
   }
 
-  // ✅ NEW: Remove scale requirements for a specific mark
   unregisterScaleType = (dimension, markId) => {
     const requirements = this.scaleRequirements[dimension];
     const filtered = requirements.filter(req => req.markId !== markId);
@@ -114,17 +118,16 @@ export class ChartScales {
     }
   }
 
-  // ✅ NEW: Get current scale requirements summary for debugging
   getScaleRequirementsSummary = () => {
     return {
       x: {
-        resolved: this.scaleTypes.x,
+        resolved: this.scaleTypes?.x || 'unknown',
         requirements: this.scaleRequirements.x.map(req => 
           `${req.markId}:${req.type}(${req.priority})`
         )
       },
       y: {
-        resolved: this.scaleTypes.y,
+        resolved: this.scaleTypes?.y || 'unknown',
         requirements: this.scaleRequirements.y.map(req => 
           `${req.markId}:${req.type}(${req.priority})`
         )
@@ -132,32 +135,32 @@ export class ChartScales {
     };
   }
 
-  // ✅ All interaction methods remain unchanged
+  // All interaction methods remain unchanged...
   clearCurrentDataPoints = () => {
     this.xScaleState.currentDataPoint = null;
     this.yScaleState.currentDataPoint = null;
   }
 
   updateCurrentDataPoints = (innerPoint) => {
-    if (this.scaleTypes.x === 'linear') {
+    if (this.scaleTypes?.x === 'linear') {
       this.xScaleState.currentDataPoint = this.xScale?.scale.invert(innerPoint.x);
     }
-    if (this.scaleTypes.y === 'linear') {
+    if (this.scaleTypes?.y === 'linear') {
       this.yScaleState.currentDataPoint = this.yScale?.scale.invert(innerPoint.y);
     }
   }
 
   resetZoom = (axes = { x: true, y: true }) => {
-    if (axes.x && this.scaleTypes.x === 'linear') {
+    if (axes.x && this.scaleTypes?.x === 'linear') {
       this.xScaleState.resetZoom();
     }
-    if (axes.y && this.scaleTypes.y === 'linear') {
+    if (axes.y && this.scaleTypes?.y === 'linear') {
       this.yScaleState.resetZoom();
     }
   }
 
   applyZoom = (innerPoint, scaleFactor, doX, doY) => {
-    if (doX && this.scaleTypes.x === 'linear') {
+    if (doX && this.scaleTypes?.x === 'linear') {
       this.xScaleState.applyZoomDomain(
         this.xScale.scale.invert(innerPoint.x), 
         scaleFactor, 
@@ -165,7 +168,7 @@ export class ChartScales {
         this.layout.innerWidth
       );
     }
-    if (doY && this.scaleTypes.y === 'linear') {
+    if (doY && this.scaleTypes?.y === 'linear') {
       this.yScaleState.applyZoomDomain(
         this.yScale.scale.invert(innerPoint.y), 
         scaleFactor, 
@@ -176,29 +179,28 @@ export class ChartScales {
   }
 
   applyPan = (dx, dy, activePanX, activePanY) => {
-    if (activePanX && this.scaleTypes.x === 'linear') {
+    if (activePanX && this.scaleTypes?.x === 'linear') {
       this.xScaleState.applyPanDomain(-dx);
     }
-    if (activePanY && this.scaleTypes.y === 'linear') {
+    if (activePanY && this.scaleTypes?.y === 'linear') {
       this.yScaleState.applyPanDomain(-dy);
     }
   }
 
   calculatePanningAnchor = (innerPoint) => {
     return {
-      x: this.scaleTypes.x === 'linear' ? this.xScale.scale.invert(innerPoint.x) : 0,
-      y: this.scaleTypes.y === 'linear' ? this.yScale.scale.invert(innerPoint.y) : 0
+      x: this.scaleTypes?.x === 'linear' ? this.xScale.scale.invert(innerPoint.x) : 0,
+      y: this.scaleTypes?.y === 'linear' ? this.yScale.scale.invert(innerPoint.y) : 0
     };
   }
 
   calculatePanDeltas = (innerPoint, panningAnchorPoint) => {
     return {
-      dx: this.scaleTypes.x === 'linear' ? this.xScale.scale.invert(innerPoint.x) - panningAnchorPoint.x : 0,
-      dy: this.scaleTypes.y === 'linear' ? this.yScale.scale.invert(innerPoint.y) - panningAnchorPoint.y : 0
+      dx: this.scaleTypes?.x === 'linear' ? this.xScale.scale.invert(innerPoint.x) - panningAnchorPoint.x : 0,
+      dy: this.scaleTypes?.y === 'linear' ? this.yScale.scale.invert(innerPoint.y) - panningAnchorPoint.y : 0
     };
   }
 
-  // ✅ UPDATED: Context data includes new methods
   getContextData() {
     const coordinator = this;
     
@@ -223,7 +225,6 @@ export class ChartScales {
       get scalesReady() { return coordinator.scalesReady; },
       get active() { return coordinator.active; },
       
-      // ✅ NEW: Enhanced registration methods
       registerScaleType: coordinator.registerScaleType,
       unregisterScaleType: coordinator.unregisterScaleType,
       getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary

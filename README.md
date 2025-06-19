@@ -5,7 +5,7 @@
 ### **ChartContainer.svelte** - *Main Chart Component*
 **Responsibility**: Top-level chart orchestration and user interaction handling
 - **Layout Management**: Creates and binds to `ChartLayout` instance
-- **Scale Coordination**: Creates and manages reactive `ChartScales` instance  
+- **Scale Coordination**: Creates and manages reactive `ChartScales` instance
 - **User Interactions**: Handles all mouse/touch events (pan, zoom, crosshair)
 - **Context Provider**: Provides comprehensive chart context to child components
 - **Rendering Coordination**: Manages SVG layers (background, foreground) and canvas layer
@@ -30,7 +30,7 @@
 - **Layout State**: Tracks when layout is ready for rendering
 
 **Key Features**:
-- ✅ Pure class (no Svelte dependencies)  
+- ✅ Pure class (no Svelte dependencies)
 - ✅ Reactive properties via getters
 - ✅ Context data provider for chart context
 - ✅ Comprehensive coordinate utilities
@@ -82,7 +82,7 @@
 
 ### **Scale State Classes** - *Individual Scale Management*
 **LinearScaleState.svelte.js**: Manages continuous data with zoom/pan interactions
-**BandScaleState.svelte.js**: Manages categorical data with uniform bands  
+**BandScaleState.svelte.js**: Manages categorical data with uniform bands
 **PointScaleState.svelte.js**: Manages ordinal data with point positioning
 
 **Responsibility**: Manages domain state and interactions for a single scale
@@ -507,76 +507,173 @@ const complexQuery = QueryBuilder
 
 ---
 
-## 🎨 **Enhanced GPU Coordination System** *(Currently Implemented)*
+## 🎨 **GPU Rendering & Coordination Pipeline** 
 
-### **GPUCoordinator.svelte** - *Centralized Resource Management*
+### **GPUCoordinator.svelte.js** - *Centralized Scheduler & Resource Manager*
 **Current Implementation Status: ✅ Production Ready**
 
-**Responsibility**: Single WebGPU context managing all charts in a dashboard
-- **Resource Sharing**: Shared device, pipelines, shaders, and uniform buffers
-- **Viewport Management**: Chart registration with coordinate mapping
-- **Render Orchestration**: Single render pass for all charts with optimal ordering
-- **Layer System**: Z-index based rendering with shared animation loop
+**Responsibility**: A singleton that manages all GPU resources, layers, and render scheduling for an entire dashboard. It acts as the central "brain" for all rendering operations.
+
+-   **Shared Resource Management**: Manages and reference-counts shared WebGPU resources (device, pipelines, shaders, uniform buffers) to maximize VRAM efficiency.
+-   **Canvas & Layer Management**: Tracks all chart canvases and their associated renderable layers, providing a global view of the entire scene.
+-   **Debounced Render Scheduling**: Employs an intelligent "dirty set" and `queueMicrotask` pattern to handle high-frequency invalidation events (e.g., during animations) with maximum efficiency, preventing redundant work and ensuring a single, coordinated render pass per frame.
+-   **Optimized Render Orchestration**: Contains the logic to perform batched rendering, minimizing expensive GPU state changes.
 
 **Key Features**:
-- ✅ **Reference-counted resource sharing** - Automatic cleanup when resources are no longer needed
-- ✅ **Render batching** - Multiple charts rendered efficiently in batches by mark type  
-- ✅ **Shared pipelines and shaders** - ~50-70% reduction in GPU memory usage
-- ✅ **Coordinated rendering** - Single GPU context manages all charts in a dashboard
-- ✅ **Comprehensive error handling** - Graceful degradation with automatic recovery
-- ✅ **Development debugging tools** - Rich browser console interface for performance analysis
-- ✅ **Real-time performance monitoring** - FPS tracking, resource analysis, and benchmarking
+-   ✅ **Centralized Layer Management**: The coordinator is the single source of truth for all renderable layers, enabling advanced, cross-chart optimizations.
+-   ✅ **Debounced Invalidation**: Prevents "invalidation storms" during animations and interactions, keeping the main thread responsive.
+-   ✅ **Reference-counted resource sharing**: Automatic cleanup of pipelines and shaders when they are no longer in use.
+-   ✅ **Render batching**: The architecture enables rendering all marks of the same type (e.g., all 'dots') in efficient batches.
+-   ✅ **Comprehensive error handling**: Graceful degradation with automatic recovery.
+-   ✅ **Rich debugging tools**: A browser console interface for performance analysis and state inspection.
 
-**Measured Performance Benefits**:
-- **~50-70% reduction** in GPU memory usage through resource sharing
-- **~30-50% faster** chart initialization due to resource reuse
-- **Consistent >60 FPS** with 4+ charts through coordinated rendering
-- **Comprehensive monitoring** - Real-time validation of performance improvements
+### **Registration Model: Canvas + Layers**
 
-### **Chart Registration System** - *Lightweight Chart Integration*
-**Responsibility**: Register individual charts with the central GPU coordinator
-- **Viewport Definition**: Chart boundaries and coordinate mapping
-- **Draw Function Registration**: Chart-specific rendering logic
-- **Resource Allocation**: Per-chart data buffers and bind groups
-- **Event Coordination**: Mouse/touch event mapping to chart coordinates
+The previous model where renderers registered with `WebGPUCanvas` has been refactored to a more direct and efficient model. Renderers now register their layers **directly with the `GPUCoordinator`**, making the coordinator the true manager of the scene.
 
-**Registration API**:
+#### **1. Canvas Registration (`ChartContainer.svelte`)**
+The top-level chart container is responsible for creating a canvas and registering it as a render target.
+
 ```javascript
-dashboardCoordinator.registerChart(chartId, {
-  viewport: { x, y, width, height },
-  drawFunction: (passEncoder, viewport) => { /* chart drawing */ },
-  zIndex: 0,
-  markTypes: ['dots', 'bars'], // For resource sharing
-  updateFrequency: 'realtime' | 'ondemand'
-});
-```
-
-**Resource Sharing Strategy**:
-```javascript
-// Shared across all charts in dashboard
-sharedResources = {
-  device: GPUDevice,
-  pipelines: {
-    'dots': GPURenderPipeline,
-    'bars': GPURenderPipeline,
-    'lines': GPURenderPipeline
-  },
-  uniformBuffers: {
-    resolution: GPUBuffer,
-    devicePixelRatio: GPUBuffer
-  }
-}
-
-// Per-chart resources
-chartResources = {
-  [chartId]: {
-    viewport: { x, y, width, height },
-    dataBuffers: [GPUBuffer, ...],
-    scaleParams: GPUBuffer,
-    bindGroups: [GPUBindGroup, ...]
-  }
+// A Svelte action can simplify this boilerplate
+function webgpu(canvas, chartId) {
+    const coordinator = getGPUContext();
+    // ... configures context ...
+    coordinator.registerCanvas(chartId, canvas, context); // Registers the canvas surface
+    
+    return { destroy: () => coordinator.unregisterCanvas(chartId) };
 }
 ```
+
+#### **2. Layer Registration (`BaseGPURenderer.svelte.js`)**
+Each mark's renderer, once initialized, registers itself directly with the coordinator, specifying which chart it belongs to.
+
+```javascript
+// Inside a renderer like BaseGPURenderer
+function registerLayer(drawFunction) {
+    const chartId = this.chartContext.chartId;
+    const layerConfig = {
+        draw: drawFunction,
+        markType: 'dots',
+        renderer: this // Pass a reference to itself
+    };
+    
+    // ✅ Renderer talks directly to the global coordinator
+    this.layerControl = this.gpuCoordinator.registerLayer(chartId, layerConfig);
+}
+```
+This two-part registration provides a clear separation of concerns: `WebGPUCanvas` manages the render surface, and the `GPUCoordinator` manages the content to be drawn on all surfaces.
+
+### **Resource Sharing Strategy: Centralized & Reference-Counted**
+
+Our architecture employs a centralized resource management strategy, with the `GPUCoordinator` acting as the singleton owner of all shared WebGPU objects. This eliminates resource duplication and ensures efficient memory usage across an entire dashboard. Resources are reference-counted and automatically cleaned up when no longer in use.
+
+**1. `GPUCoordinator` - The Central Hub**
+
+The coordinator holds maps of all shared resources. The keys are typically strings (like a mark type), and the values are objects containing the resource and its metadata.
+
+```javascript
+// Inside GPUCoordinator instance
+this.#sharedResources = {
+  // Pipelines are shared by mark type (e.g., 'dots', 'bars').
+  pipelines: Map<'dots', { pipeline: GPURenderPipeline, refCount: number, ... }>,
+
+  // Shaders are also shared by mark type.
+  shaderModules: Map<'dots', { module: GPUShaderModule, refCount: number, ... }>,
+
+  // Uniform buffers can be shared globally (e.g., for device pixel ratio).
+  uniformBuffers: Map<'devicePixelRatio', { buffer: GPUBuffer, refCount: number, ... }>
+};
+```
+
+**2. Chart & Layer Registration - The Scene Graph**
+
+The coordinator builds a "scene graph" that describes what to render and where. It maintains a map of all canvases and the layers that should be drawn onto them.
+
+```javascript
+// Inside GPUCoordinator instance
+// A map where the key is a chart's unique ID.
+this.#registeredCharts = Map<chartId, {
+    canvas: HTMLCanvasElement,
+    context: GPUCanvasContext,
+    visible: boolean,
+    needsRedraw: boolean,
+
+    // Each chart has its own map of layers.
+    layers: Map<layerId, {
+        id: layerId,
+        markType: string,
+        draw: (passEncoder) => void,
+        
+        // CRITICAL: A direct reference back to the renderer instance
+        // that owns the layer-specific buffers and bind groups.
+        renderer: BaseGPURenderer 
+    }>
+}>;
+```
+
+**3. `BaseGPURenderer` - The Leaf Node**
+
+Each renderer instance (one per mark component) is responsible for its own **non-shared, layer-specific resources**. It gets the shared resources from the coordinator but owns its own data buffers.
+
+```javascript
+// Inside a BaseGPURenderer instance for a specific DotsMark
+this.pipeline; // A *reference* to the shared 'dots' pipeline from the coordinator.
+this.bindGroup; // The bind group is UNIQUE to this layer.
+
+// These buffers are owned exclusively by this renderer instance.
+this.xBuffer;      // Holds x-values for this layer's data.
+this.yBuffer;      // Holds y-values for this layer's data.
+this.colorBuffer;  // Holds color values for this layer's data.
+```
+
+This multi-level strategy provides the best of both worlds:
+*   **Maximum Sharing:** Expensive, stateless resources like pipelines and shaders are created once and shared globally.
+*   **Clear Ownership:** Stateful, data-driven resources like data buffers and bind groups are owned by the specific renderer instance that needs them, preventing conflicts and ensuring correct data is drawn for each layer.
+
+---
+
+### **WebGPUCanvas.svelte** - *Dedicated WebGPU Canvas Provider*
+**Responsibility**: Manages the lifecycle of a single `<canvas>` element and its associated WebGPU context. It has been simplified to be a "dumb" provider of a rendering surface.
+
+-   **WebGPU Setup**: Handles device initialization and context configuration.
+-   **Canvas Management**: Owns the `<canvas>` element and handles resizing.
+-   **Context Registration**: Registers its configured canvas with the central `GPUCoordinator`.
+
+**Key Features**:
+-   ✅ **Single Responsibility**: Focused purely on managing the canvas, not layers.
+-   ✅ **Decoupled**: Has no knowledge of the marks or layers being drawn onto it.
+-   ✅ **Robust Initialization**: Reliably communicates its readiness (`contextConfigured`) and resize events to the coordinator.
+
+### **WebGPUCirclesCanvasMark.svelte** - *Dot Mark Implementation*
+**Responsibility**: Grammar of Graphics dot mark with data integration and scale registration.
+-   **Mark Identity**: Unique mark ID used throughout lifecycle.
+-   **Scale Registration**: Registers scale type requirements with priority system.
+-   **Data Client Integration**: Uses DataClient for data fetching with mark ID.
+-   **Error Handling**: Manages loading/error states.
+-   **Cleanup**: Proper cleanup of scale requirements and data extents.
+
+**Key Features**:
+-   ✅ Grammar of Graphics alignment (dot mark, not scatter plot).
+-   ✅ Priority-based scale type registration.
+-   ✅ Unique mark identification for multi-instance support.
+-   ✅ Automatic data management with consistent ID usage.
+-   ✅ Proper cleanup preventing interference between marks.
+
+### **WebGPUCirclesColor.svelte** - *Low-Level Circle Renderer*
+**Responsibility**: Direct WebGPU circle rendering with color encoding, managed by a `BaseGPURenderer`.
+-   **Shader Management**: Leverages shared shaders from the `GPUCoordinator`.
+-   **Buffer Management**: Efficient GPU buffer creation and updates for layer-specific data.
+-   **Color Encoding**: Integration with ordinal color scales.
+-   **Performance Optimization**: Instanced rendering, SDF circles.
+-   **Resource Cleanup**: Proper GPU resource management.
+
+**Key Features**:
+-   ✅ High-performance instanced rendering.
+-   ✅ SDF-based smooth circles.
+-   ✅ Color scale integration.
+-   ✅ Efficient buffer management.
+
 
 ### **🔧 Context Integration Strategy**
 
@@ -860,87 +957,27 @@ GPU Re-render (Automatic via reactivity)
 
 ---
 
-## 🎨 **Rendering System**
-
-### **WebGPUCanvas.svelte** - *GPU Rendering Layer*
-**Responsibility**: WebGPU rendering context and layer management
-- **WebGPU Setup**: Device initialization, context configuration
-- **Layer System**: Manages multiple rendering layers with z-ordering
-- **MSAA Support**: Configurable anti-aliasing
-- **Render Loop**: Frame-based rendering with invalidation
-- **Context Provider**: Provides WebGPU context to child components
-
-**Key Features**:
-- ✅ High-performance GPU rendering
-- ✅ Layer composition system
-- ✅ Automatic redraw management
-- ✅ MSAA for smooth graphics
-
-### **WebGPUCirclesCanvasMark.svelte** - *Dot Mark Implementation*
-**Responsibility**: Grammar of Graphics dot mark with data integration and scale registration
-- **Mark Identity**: Unique mark ID used throughout lifecycle
-- **Scale Registration**: Registers scale type requirements with priority system
-- **Data Client Integration**: Uses DataClient for data fetching with mark ID
-- **Error Handling**: Manages loading/error states
-- **Cleanup**: Proper cleanup of scale requirements and data extents
-
-**Key Features**:
-- ✅ Grammar of Graphics alignment (dot mark, not scatter plot)
-- ✅ Priority-based scale type registration  
-- ✅ Unique mark identification for multi-instance support
-- ✅ Automatic data management with consistent ID usage
-- ✅ Proper cleanup preventing interference between marks
-
-### **WebGPUCirclesColor.svelte** - *Low-Level Circle Renderer*
-**Responsibility**: Direct WebGPU circle rendering with color encoding
-- **Shader Management**: Vertex/fragment shader compilation
-- **Buffer Management**: Efficient GPU buffer creation and updates
-- **Color Encoding**: Integration with ordinal color scales
-- **Performance Optimization**: Instanced rendering, SDF circles
-- **Resource Cleanup**: Proper GPU resource management
-
-**Key Features**:
-- ✅ High-performance instanced rendering
-- ✅ SDF-based smooth circles
-- ✅ Color scale integration
-- ✅ Efficient buffer management
-
----
-
 ## 🔄 **Data Flow & Reactivity**
 
 ### **Current Data Flow (Implemented)**:
-1. **Parent** updates chartConfig
-2. **ChartContainer** receives new xLabel/yLabel props
-3. **ChartScales** recreated with new labels (via `$derived`)
-4. **New scale states** retrieved from registry based on resolved scale types
-5. **Charts sync** automatically if sharing scale states
+1.  **Parent** updates chartConfig
+2.  **ChartContainer** receives new xLabel/yLabel props
+3.  **ChartScales** recreated with new labels (via `$derived`)
+4.  **New scale states** retrieved from registry based on resolved scale types
+5.  **Charts sync** automatically if sharing scale states
 
-### **Proposed Enhanced Data Flow (Future)**:
-1. **Generic DataClient** receives any Mosaic SQL expression (`sum("amount")`, `count()`, complex chains)
-2. **DataClient Query Builder** parses expression and constructs SQL query automatically
-3. **Mosaic Coordinator** executes query with pre-aggregation caching
-4. **Aggregated data** returned (10-100 rows instead of millions)
-5. **Reactive Derivations** process aggregated data through visual transformations
-6. **Alternative: Functional Pipeline** processes complex multi-step transformations
-7. **Scale states** updated with final processed extents including transform metadata
-8. **WebGPU rendering** displays processed results efficiently
+### **New Invalidation & Redraw Flow (Implemented)**
+The previous invalidation logic could cause redundant work during rapid updates. The new system is debounced and highly efficient.
 
-### **Mark Registration Flow**:
-1. **Mark** creates unique ID: `dot-a1b2c3d4`
-2. **Mark** registers scale requirements: `c.registerScaleType('x', 'linear', PREFER, markId)`
-3. **ChartScales** collects all requirements and resolves conflicts
-4. **Scale states** retrieved based on resolved types
-5. **DataClient** uses same mark ID for extent registration
-6. **Perfect traceability** throughout mark lifecycle
-
-### **Interaction Flow**:
-1. **User** pans/zooms in ChartContainer
-2. **ChartContainer** delegates to ChartScales
-3. **ChartScales** updates shared scale state (if scale type supports interactions)
-4. **All charts** with same scale state update automatically via reactivity
+1.  **Invalidation Event**: An interaction (pan/zoom) or resize triggers an `$effect` in a component.
+2.  **Mark as Dirty**: The component calls `coordinator.invalidateChart(chartId)`.
+3.  **Add to Dirty Set**: The coordinator adds the `chartId` to a global `#dirtyChartIDs` set. This is a very fast operation.
+4.  **Schedule a Microtask**: The coordinator uses `queueMicrotask` to schedule a **single** task to run after all synchronous code has finished. This microtask's only job is to call `requestAnimationFrame`.
+5.  **De-duplication**: All subsequent invalidation calls within the same event tick see that a microtask is already queued and do nothing further. This prevents the "invalidation storm."
+6.  **Coordinated Render**: The single `requestAnimationFrame` fires. The coordinator's `render()` method runs, iterates through the `#dirtyChartIDs` set, renders only those charts in efficient batches, and then clears the set.
 
 ---
+
 
 ## 🎯 **Key Design Principles**
 
@@ -1013,12 +1050,13 @@ GPU Re-render (Automatic via reactivity)
 - **Error handling and recovery systems**
 
 ### **🔧 Recent Major Improvements**:
-- ✅ **Enhanced GPU Coordination**: Reference-counted resource sharing with ~50-70% memory savings
-- ✅ **Performance Monitoring**: Real-time FPS tracking and comprehensive reporting tools
-- ✅ **Development Debugging**: Rich browser console interface with 15+ monitoring commands
-- ✅ **Error Handling**: Automatic recovery from WebGPU failures with graceful degradation
-- ✅ **Benchmarking**: Automated performance testing and validation tools
-- ✅ **Resource Management**: Reference counting and automatic cleanup systems
+- ✅ **Coordinator-Centric Rendering**: Refactored the render pipeline to centralize layer management in the `GPUCoordinator`, enabling efficient cross-chart batching and a robust, debounced invalidation system.
+- ✅ **Enhanced GPU Coordination**: Reference-counted resource sharing with ~50-70% memory savings.
+- ✅ **Performance Monitoring**: Real-time FPS tracking and comprehensive reporting tools.
+- ✅ **Development Debugging**: Rich browser console interface with 15+ monitoring commands.
+- ✅ **Error Handling**: Automatic recovery from WebGPU failures with graceful degradation.
+- ✅ **Benchmarking**: Automated performance testing and validation tools.
+- ✅ **Resource Management**: Reference counting and automatic cleanup systems.
 
 ### **📋 Next Major Implementation Phases**:
 
@@ -1352,3 +1390,140 @@ function renderScene() {
 - **Debugging**: Debugging across threads can be more challenging than single-threaded logic.
 
 This advanced architecture represents the gold standard for building demanding, real-time data visualization applications on the web.
+
+
+
+# GPU-Accelerated Data Visualization Pipeline Summary (plan)
+
+## Core Architecture Concepts
+
+**End-to-End GPU Pipeline**: Process raw data points entirely on GPU using WebGPU, generate Catmull-Rom curves, apply transforms (dodge, stacking), and render - keeping everything in GPU memory to avoid CPU↔GPU transfers.
+
+**Data Space Processing**: Generate curves and transformations in data coordinate space, then use GPU-side scale functions to convert to screen coordinates. This maintains mathematical precision similar to SVG while leveraging GPU parallelism.
+
+**Performance Target**: 10+ charts at 120fps on modern high-end laptops, even with integrated GPUs.
+
+## Data Processing on GPU
+
+**Curve Generation**: Catmull-Rom interpolation from raw data points using compute shaders, with each curve segment calculated in parallel across GPU cores.
+
+**Complex Transforms**: Even operations like dodge transforms and stacking can be efficiently implemented on GPU using parallel algorithms (spatial hashing, prefix sums) - worthwhile even for smaller datasets (1000 rows) given the cumulative throughput requirements.
+
+**Animation & Morphing**: Store both "old" and "new" curve geometries on GPU, interpolate between them over 300ms for smooth transitions synchronized across all visual elements.
+
+## GPU Text Rendering
+
+**Fixed-Size Approach**: Labels maintain consistent font size during zoom/pan (better UX for data viz), significantly simplifying implementation vs. scalable text.
+
+**Font Atlas Strategy**: Use Canvas 2D API to render CSS fonts to texture atlas, upload to GPU. Supports same fonts as CSS with crisp quality when properly handling high-DPI displays.
+
+**Performance Integration**: Text rendering reuses position data from curve generation pipeline, adding minimal overhead (~0.1-0.5ms) to overall frame time.
+
+## JavaScript Integration
+
+**Buffer Readback**: Read processed GPU data back to JavaScript for tooltips/interactions using WebGPU's async buffer mapping. Optimized by caching data during "interaction mode" vs. "data update mode" since these are mutually exclusive.
+
+**Text Formatting**: CPU-side formatting using `Intl` APIs and D3-style helpers during data preparation, sending pre-formatted glyph indices to GPU rather than doing string manipulation on GPU.
+
+## Key Advantages & Mitigations
+
+**Why GPU Over CPU**: Even for smaller datasets, the combination of high frame rate, multiple charts, and existing GPU infrastructure makes GPU processing more efficient than CPU alternatives.
+
+**Browser/Hardware Considerations**: Build Canvas 2D fallback for WebGPU-unsupported browsers; adaptive quality settings for varying GPU capabilities; focus on modern high-end laptop targets reduces compatibility concerns.
+
+**Performance Reality**: Modern integrated GPUs can handle this workload in ~0.5-1ms total frame time, leaving massive headroom for additional complexity and features.
+
+
+
+---
+
+## 🏗️ **Architectural Evolution: Controller-Based Mark Design**
+
+To manage component complexity and ensure long-term maintainability, our mark components (`DotsMark`, `BarMark`, etc.) are built upon a robust, multi-layer **Controller-based architecture**. This represents a key architectural departure from the monolithic class structure found in other data visualization libraries, and is specifically designed to leverage the strengths of a reactive, GPU-first rendering system.
+
+### **Core Principle: Clear Separation of View, Controller, and Service**
+
+Instead of a single `Mark` class that handles all data fetching, state, and rendering logic, our architecture separates these concerns into distinct, specialized layers. This ensures each part of the system has a single, clear responsibility and a well-defined API.
+
+| Layer | Component(s) | Responsibility | Analogy |
+| :--- | :--- | :--- | :--- |
+| **View** | `*.svelte` Component | **Declares user intent** and reactively renders state from its controller. | The **Storefront** |
+| **Controller** | `BaseMarkSetup.js`, `*MarkSetup.js` | **Translates visual semantics** into concrete data requirements and manages the component's lifecycle. | The **Manager** |
+| **Service** | `DataClient.js` | **Provides a generic bridge** to the Mosaic backend for data fetching and state holding. | The **Courier** |
+
+---
+
+### **Four-Layer Mark Architecture in Detail**
+
+#### 1. **Mark Component (`<DotsMark.svelte>`) - The View**
+**Responsibility**: The user-facing Svelte component that gathers props and delegates all logic to its controller.
+- **Declarative API**: Provides a simple, props-based API where users pass in `mosaic-sql` expressions (`<BarMark x="category" y={count()} />`).
+- **Controller Instantiation**: Creates and manages the lifecycle of its corresponding `*MarkSetup` controller.
+- **Reactive Rendering**: Listens to state changes from its `setup` controller (`client.arrowTable`, `gpuReady`, `error`) and passes the results to a low-level WebGPU renderer (e.g., `<Dots>`).
+- **"Dumb" by Design**: Contains no business logic, query building, or complex state management.
+
+#### 2. **Specialized Controller (`DensityMarkSetup.js`) - The Specialist Manager**
+**Responsibility**: Encapsulates the unique data logic for a specific, complex mark type.
+- **Inheritance**: `extends BaseMarkSetup` to inherit all common functionality.
+- **Query Overriding**: Implements a custom `buildQuery()` method to generate the specialized SQL needed for that mark (e.g., using `bin2d` for a heatmap). This is the primary extension point for new mark types.
+- **Context-Aware**: Uses its knowledge of the mark's visual requirements to construct the correct queries (e.g., an ordered `DISTINCT` query for a sorted bar chart's categorical domain).
+
+#### 3. **Generic Controller (`BaseMarkSetup.js`) - The General Manager**
+**Responsibility**: Manages the common lifecycle and state for *any* mark, providing a reusable foundation.
+- **Lifecycle Orchestration**: The `setup()` method orchestrates the entire initialization flow: scale registration, client creation, metadata fetching, and domain setting.
+- **Scale Registration**: Communicates the mark's scale requirements to the `ChartScales` coordinator.
+-   **Data Requirement Logic**: Contains the logic to:
+    -   Build the `fieldRequests` for continuous scale extents (`min`/`max`).
+    -   Fetch and set domains for categorical scales (`DISTINCT` query).
+- **Default Query Builder**: Provides a default `buildQuery()` that correctly handles `mosaic-sql` expressions, aggregations, and automatic `GROUP BY` clause generation for simple marks.
+- **State Management**: Holds the reactive `$state` (`client`, `gpuReady`, `error`) that the Svelte component consumes.
+
+#### 4. **`DataClient.js` - The Service & Adapter**
+**Responsibility**: A generic, reusable service that communicates with the Mosaic backend and holds the resulting data state.
+- **Mosaic Integration**: `extends MosaicClient`, making it a valid participant in the Mosaic ecosystem (selections, caching, pre-aggregation). It adapts our application's needs to the `MosaicClient` API.
+- **Query Execution**: Takes a fully-formed `Query` object (built by its `MarkSetup` controller) and executes it via the `Coordinator`.
+- **State Holding**: It is the stateful container for `arrowTable`, `loading`, `error`, and `fieldInfo`.
+- **Decoupled & Generic**: It has **zero dependencies** on Svelte context or any chart-specific visual logic.
+
+---
+
+### **Data & Initialization Flow (Corrected)**
+
+The lifecycle is orchestrated by the `Coordinator` and Svelte's reactivity, ensuring a robust and predictable flow.
+
+1.  **Mount (`onMount` in Mark.svelte):**
+    -   The `<DotsMark>` component is mounted.
+    -   It instantiates its `BaseMarkSetup` controller.
+    -   The `BaseMarkSetup` constructor immediately registers its scale requirements (`'linear'`, `'band'`) with the `ChartScales` coordinator.
+    -   The component then calls `setup.setup()`.
+
+2.  **Setup Orchestration (`BaseMarkSetup.setup()`):**
+    -   The controller first determines what metadata it needs (e.g., `min`/`max` for its linear `x` axis).
+    -   It creates a new `DataClient` instance, passing it the necessary configuration, including the list of required metadata (`fieldRequests`) and a reference to its own `buildQuery` method.
+    -   It connects the client to the main Mosaic `Coordinator`: `coordinator.connect(client)`.
+
+3.  **Mosaic Lifecycle Trigger (`coordinator.connect()`):**
+    -   The Mosaic `Coordinator` takes ownership and begins the client lifecycle.
+    -   It calls `client.initialize()`, which in turn calls `await client.prepare()`.
+
+4.  **Metadata Fetch (`DataClient.prepare()`):**
+    -   The `DataClient`'s `prepare` method executes. It is a "dumb" executor.
+    -   It runs the `fieldRequests` it was given during construction to fetch the `min`/`max` values.
+    -   Upon completion, it sets its public, reactive state: `this.fieldInfo = ...`.
+
+5.  **Reactive Domain Setting (`BaseMarkSetup` `$effect`):**
+    -   A Svelte `$effect` inside `BaseMarkSetup` was waiting for `client.fieldInfo` to be populated.
+    -   This effect now triggers. It reads the `fieldInfo` and calls `scaleState.addMark(...)` to set the initial domain for any **continuous** scales.
+    -   It then proceeds to `await` its own `#fetchCategoricalDomains()` method.
+
+6.  **Categorical Domain Fetch (`BaseMarkSetup`):**
+    -   If the mark requires a `band` or `point` scale, this method constructs and executes the necessary `SELECT DISTINCT ... ORDER BY ...` query.
+    -   When the query returns, it populates the domain of the corresponding `BandScaleState`.
+    -   Finally, it sets `this.categoricalDataFetched = true`.
+
+7.  **GPU Readiness & Rendering:**
+    -   The `gpuReady` `$derived` property in `BaseMarkSetup` now becomes `true` (because `scalesReady` and `categoricalDataFetched` are both true).
+    -   The Svelte View (`<DotsMark.svelte>`), which was reactively waiting on `setup.gpuReady`, now renders its low-level `<Dots>` WebGPU component.
+    -   Simultaneously, the `MosaicClient` lifecycle continues, and the main data query is executed, populating `client.arrowTable`, which is also passed to the renderer.
+
+This refined architecture ensures a clean, predictable, and extensible system where each layer has a clear and logical purpose, fully leveraging the power of both Mosaic's data engine and Svelte's reactivity.

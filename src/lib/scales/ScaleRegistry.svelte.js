@@ -6,6 +6,9 @@ import { scaleOrdinal } from 'd3-scale';
 // Define the Scale Registry state class
 class ScaleRegistry {
   constructor() {
+    this.registryId = Math.random().toString(36).slice(2, 8);
+    console.log(`🏗️ NEW ScaleRegistry created: ${this.registryId}`);
+
     this.scales = {
       linear: new Map(),
       band: new Map(),
@@ -14,7 +17,9 @@ class ScaleRegistry {
   }
 
   getOrCreateScale(name, type='linear') {
+    console.log(`🔍 Registry ${this.registryId} getting scale: ${name} (${type})`);
     if (!this.scales[type].has(name)) {
+      console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`);
       if (type === 'linear') {
         this.scales[type].set(name, new LinearScaleState(name));
       } else if (type === 'band') {
@@ -26,7 +31,7 @@ class ScaleRegistry {
       	  .domain(['Adelie', 'Gentoo', 'Chinstrap']));
       }
     } else {
-      // console.log(`Found existing scale: ${name}`);
+      console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
     }
     return this.scales[type].get(name);
   }
@@ -47,6 +52,16 @@ export function getScaleState(name, type='linear') {
     console.error('Scale Registry context missing. Make sure to call setScaleRegistry() in a parent component.');
     return null;
   }
+
+  const scaleInstance = scaleRegistry.getOrCreateScale(name, type);
+  
+  // ✅ ADD: Debug what we're returning
+  console.log(`🎯 getScaleState(${name}, ${type}) returning:`, {
+    registryId: scaleRegistry.registryId,
+    scaleInstance,
+    scaleInstanceId: scaleInstance?.name,
+    scaleObject: scaleInstance
+  });
   
   return scaleRegistry.getOrCreateScale(name, type);
 }

@@ -191,18 +191,19 @@ export class BaseGPURenderer {
    */
   processDataForAxis(data, axis) {
     const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
-    const scale = axis === 'x' ? this.#chartContext.xScale : this.#chartContext.yScale;
+    const scaleState = axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 
     switch (scaleType) {
       case 'linear':
-      case 'identity':
-        // Pass through numeric values - GPU will handle scaling
+        case 'identity':
+          // Pass through numeric values - GPU will handle scaling
         return new Float32Array(data.map(d => d ?? 0));
         
       case 'band':
       case 'point':
         // CPU: Convert strings to indices, GPU: Convert indices to positions
-        return this.#convertCategoriesToIndices(data, scale, axis);
+        return scaleState.processDataForGPU(data, this.#markType);
+        // return this.#convertCategoriesToIndices(data, scale, axis);  TODO: remove old method, logic moved to scaleState where it belongs!
         
       case 'log':
         // Future: logarithmic scale support
@@ -226,7 +227,9 @@ export class BaseGPURenderer {
    * @returns {Float32Array} Array of indices
    */
   #convertCategoriesToIndices(categoryData, scale, axis) {
+    console.log(categoryData)
     const domain = scale?.domain?.() || [];
+    console.log(domain)
     
     // Create category → index mapping with performance optimization
     const categoryMap = new Map();
@@ -302,28 +305,59 @@ export class BaseGPURenderer {
   }
 
   /**
-   * Register this renderer as a layer with the WebGPU canvas
-   * @param {Function} drawFunction - Shape-specific draw function
+   * Register this renderer as a layer with the GPU Coordinator.
+   * @param {Function} drawFunction - Shape-specific draw function.
    */
   registerLayer(drawFunction) {
     try {
-      this.#ownedResources.layerControl = this.#webGPUContext.registerLayer({
-        zIndex: this.#zIndex,
-        draw: drawFunction,
-        visible: true,
-        markType: this.#markType,
-        componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
-      });
+        // ✅ Get the chartId from the chartContext, which is stable.
+        const chartId = this.#chartContext.chartId;
 
-      console.log(`📋 ${this.#markType} layer registered successfully`);
-      return this.#ownedResources.layerControl;
-      
+        // ✅ Create the configuration object for this specific layer.
+        const layerConfig = {
+            draw: drawFunction,
+            markType: this.#markType,
+            // Pass a reference to this renderer instance. The coordinator will
+            // need this to access its state (pipeline, bindGroup) during the render loop.
+            renderer: this, 
+            componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
+        };
+
+        // ✅ Call the NEW registerLayer method on the COORDINATOR, not the webgpu-canvas context.
+        this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
+
+        console.log(`📋 ${this.#markType} layer registered directly with coordinator for chart ${chartId}`);
+        return this.#ownedResources.layerControl;
+
     } catch (error) {
-      console.error(`❌ ${this.#markType} layer registration failed:`, error);
-      this.#initializationError = error.message;
-      throw error;
+        console.error(`❌ ${this.#markType} layer registration failed:`, error);
+        this.#initializationError = error.message;
+        throw error;
     }
   }
+  // /**
+  //  * Register this renderer as a layer with the WebGPU canvas
+  //  * @param {Function} drawFunction - Shape-specific draw function
+  //  */
+  // registerLayer(drawFunction) {
+  //   try {
+  //     this.#ownedResources.layerControl = this.#webGPUContext.registerLayer({
+  //       zIndex: this.#zIndex,
+  //       draw: drawFunction,
+  //       visible: true,
+  //       markType: this.#markType,
+  //       componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
+  //     });
+
+  //     console.log(`📋 ${this.#markType} layer registered successfully`);
+  //     return this.#ownedResources.layerControl;
+      
+  //   } catch (error) {
+  //     console.error(`❌ ${this.#markType} layer registration failed:`, error);
+  //     this.#initializationError = error.message;
+  //     throw error;
+  //   }
+  // }
 
   // ===== SHARED RESOURCE MANAGEMENT =====
 
@@ -474,28 +508,85 @@ export class BaseGPURenderer {
    * Enhanced scale parameters update with complete scale type support
    * This is where all the magic happens for universal scale support!
    */
+  // updateScaleParameters() {
+  //   if (!this.#scaleParamsBuffer || !this.#chartContext) {
+  //     return;
+  //   }
+
+  //   try {
+  //     const device = this.#webGPUContext.getDevice();
+  //     if (!device) return;
+
+  //     const xScale = this.#chartContext.xScale;
+  //     const yScale = this.#chartContext.yScale;
+      
+  //     if (!xScale || !yScale) return;
+
+  //     // Convert scale type strings to GPU constants
+  //     const xScaleType = this.#getGPUScaleType(this.#xScaleType);
+  //     const yScaleType = this.#getGPUScaleType(this.#yScaleType);
+
+  //     // Enhanced scale parameters (16 floats) - matches GPU struct exactly
+  //     const scaleParams = new Float32Array(16);
+      
+  //     // Positions 0-7: Core scale parameters (backward compatible)
+  //     scaleParams[0] = this.#getDomainMin(xScale, this.#xScaleType);
+  //     scaleParams[1] = this.#getDomainMin(yScale, this.#yScaleType);
+  //     scaleParams[2] = this.#getDomainMax(xScale, this.#xScaleType);
+  //     scaleParams[3] = this.#getDomainMax(yScale, this.#yScaleType);
+  //     scaleParams[4] = this.#getRangeMin(xScale);
+  //     scaleParams[5] = this.#getRangeMin(yScale);
+  //     scaleParams[6] = this.#getRangeMax(xScale);
+  //     scaleParams[7] = this.#getRangeMax(yScale);
+
+  //     // Positions 8-15: Enhanced scale parameters
+  //     scaleParams[8] = xScaleType; // X scale type constant
+  //     scaleParams[9] = yScaleType; // Y scale type constant
+  //     scaleParams[10] = this.#getBandwidth(xScale, this.#xScaleType); // X bandwidth
+  //     scaleParams[11] = this.#getBandwidth(yScale, this.#yScaleType); // Y bandwidth
+  //     scaleParams[12] = this.#getPadding(xScale, this.#xScaleType); // X padding
+  //     scaleParams[13] = this.#getPadding(yScale, this.#yScaleType); // Y padding
+  //     scaleParams[14] = this.#getCategoryCount(xScale, this.#xScaleType); // X category count
+  //     scaleParams[15] = this.#getCategoryCount(yScale, this.#yScaleType); // Y category count
+
+  //     device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
+      
+  //   } catch (error) {
+  //     console.error(`❌ Failed to update scale parameters for ${this.#markType}:`, error);
+  //   }
+  // }
+
   updateScaleParameters() {
+    const chartId = `${this.#chartContext?.xLabel || 'unknown'}x${this.#chartContext?.yLabel || 'unknown'}`;
+    
     if (!this.#scaleParamsBuffer || !this.#chartContext) {
+      console.log(`❌ [${chartId}] updateScaleParameters: Missing buffer or context`);
       return;
     }
-
+  
     try {
       const device = this.#webGPUContext.getDevice();
       if (!device) return;
-
+  
       const xScale = this.#chartContext.xScale;
       const yScale = this.#chartContext.yScale;
       
       if (!xScale || !yScale) return;
-
-      // Convert scale type strings to GPU constants
-      const xScaleType = this.#getGPUScaleType(this.#xScaleType);
-      const yScaleType = this.#getGPUScaleType(this.#yScaleType);
-
+  
+      // Log the actual scale values being used
+      const xDomain = xScale.scale?.domain?.() || [0, 1];
+      const yDomain = yScale.scale?.domain?.() || [0, 1];
+      const xRange = xScale.scale?.range?.() || [0, 1];
+      const yRange = yScale.scale?.range?.() || [0, 1];
+      
+      console.log(`📊 [${chartId}] Scale values for GPU:`, {
+        xDomain, yDomain, xRange, yRange
+      });
+  
       // Enhanced scale parameters (16 floats) - matches GPU struct exactly
       const scaleParams = new Float32Array(16);
       
-      // Positions 0-7: Core scale parameters (backward compatible)
+      // Positions 0-7: Core scale parameters (existing logic)
       scaleParams[0] = this.#getDomainMin(xScale, this.#xScaleType);
       scaleParams[1] = this.#getDomainMin(yScale, this.#yScaleType);
       scaleParams[2] = this.#getDomainMax(xScale, this.#xScaleType);
@@ -504,21 +595,15 @@ export class BaseGPURenderer {
       scaleParams[5] = this.#getRangeMin(yScale);
       scaleParams[6] = this.#getRangeMax(xScale);
       scaleParams[7] = this.#getRangeMax(yScale);
-
-      // Positions 8-15: Enhanced scale parameters
-      scaleParams[8] = xScaleType; // X scale type constant
-      scaleParams[9] = yScaleType; // Y scale type constant
-      scaleParams[10] = this.#getBandwidth(xScale, this.#xScaleType); // X bandwidth
-      scaleParams[11] = this.#getBandwidth(yScale, this.#yScaleType); // Y bandwidth
-      scaleParams[12] = this.#getPadding(xScale, this.#xScaleType); // X padding
-      scaleParams[13] = this.#getPadding(yScale, this.#yScaleType); // Y padding
-      scaleParams[14] = this.#getCategoryCount(xScale, this.#xScaleType); // X category count
-      scaleParams[15] = this.#getCategoryCount(yScale, this.#yScaleType); // Y category count
-
+  
+      // ... rest of positions 8-15
+  
+      console.log(`🎯 [${chartId}] Writing scale params to GPU:`, Array.from(scaleParams));
       device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
+      console.log(`✅ [${chartId}] GPU buffer written successfully`);
       
     } catch (error) {
-      console.error(`❌ Failed to update scale parameters for ${this.#markType}:`, error);
+      console.error(`❌ [${chartId}] updateScaleParameters failed:`, error);
     }
   }
 
@@ -684,11 +769,49 @@ export class BaseGPURenderer {
    * Helper method to update scales (called from component's $effect)
    * @param {Function} callback - Optional callback when scales change
    */
-  handleScaleChange(callback) {
+  // handleScaleChange(callback) {
+  //   if (this.#resourcesCreated && !this.#initializationError) {
+  //     this.updateScaleParameters();
+  //     if (callback) callback();
+  //     this.invalidateLayer();
+  //   }
+  // }
+  // handleScaleChange(callback) {
+  //   const chartId = `${this.#chartContext?.xLabel || 'unknown'}x${this.#chartContext?.yLabel || 'unknown'}`;
+    
+  //   console.log(`🔧 [${chartId}] BaseGPURenderer.handleScaleChange called for ${this.#markType}`, {
+  //     resourcesCreated: this.#resourcesCreated,
+  //     initializationError: this.#initializationError,
+  //     hasScaleParamsBuffer: !!this.#scaleParamsBuffer,
+  //     hasChartContext: !!this.#chartContext
+  //   });
+    
+  //   if (this.#resourcesCreated && !this.#initializationError) {
+  //     console.log(`✅ [${chartId}] Calling updateScaleParameters for ${this.#markType}`);
+  //     this.updateScaleParameters();
+      
+  //     if (callback) callback();
+      
+  //     console.log(`🔄 [${chartId}] Calling invalidateLayer for ${this.#markType}`);
+  //     this.invalidateLayer();
+  //   } else {
+  //     console.log(`❌ [${chartId}] Skipping scale update for ${this.#markType}:`, {
+  //       resourcesCreated: this.#resourcesCreated,
+  //       initializationError: this.#initializationError
+  //     });
+  //   }
+  // }
+
+    /**
+   * Updates the GPU buffer that contains scale parameters (domain, range, etc.).
+   * This should be called whenever the scale's domain or range changes.
+   * @param {Function} callback - Optional callback after parameters are updated.
+   */
+  handleScaleOrRangeUpdate(callback) {
     if (this.#resourcesCreated && !this.#initializationError) {
-      this.updateScaleParameters();
+      this.updateScaleParameters(); // This updates the GPU buffer
       if (callback) callback();
-      this.invalidateLayer();
+      // DO NOT invalidate the layer here. Let the canvas handle it.
     }
   }
 
@@ -706,11 +829,30 @@ export class BaseGPURenderer {
 
   // ===== LAYER MANAGEMENT =====
 
+  // /**
+  //  * Invalidate the layer to trigger a redraw
+  //  */
+  // invalidateLayer() {
+  //   this.#ownedResources.layerControl?.invalidate();
+  // }
+
+  // /**
+  //  * Explicitly requests a redraw for this renderer's layer.
+  //  * This should be used for data updates or other visual changes.
+  //  */
+  // invalidateLayer() {
+  //   this.#ownedResources.layerControl?.invalidate();
+  // }
+
   /**
-   * Invalidate the layer to trigger a redraw
+   * Invalidate the layer's parent chart to trigger a redraw.
    */
   invalidateLayer() {
-    this.#ownedResources.layerControl?.invalidate();
+    // We no longer call a method on the layerControl itself.
+    // Instead, we tell the coordinator that our parent chart is dirty.
+    if (this.#gpuCoordinator && this.#chartContext?.chartId) {
+        this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
+    }
   }
 
   /**

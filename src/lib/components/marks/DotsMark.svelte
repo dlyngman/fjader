@@ -1,10 +1,13 @@
 <!-- src/lib/components/marks/DotsMark.svelte -->
 <script>
-  import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
   import { getContext, onMount, onDestroy, untrack } from 'svelte';
-  import { getScaleState } from '$lib/scales';
+  import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  import { Dots } from '../rendering/index.js';
   import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-  import { Dots } from '$lib/components';
+
+  // =================================================================
+  // ==  PROPS: The Public API of the Mark                        ==
+  // =================================================================
 
   let { 
     table, 
@@ -15,119 +18,173 @@
     alpha = 0.5, 
     radius = 3,
     limit,
-    // These are PREFERENCES, not guarantees
+    filterNulls = false,
     preferredXScaleType = 'linear', 
     preferredYScaleType = 'linear',
   } = $props();
 
+  // =================================================================
+  // ==  CONTEXT & CONTROLLER SETUP                               ==
+  // =================================================================
+
   const coordinator = getContext('mosaic-coordinator');
-  const c = getContext('chart');
+  const chartContext = getContext('chart');
 
-  const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
+  // ✅ REACTIVE: Create setup with scale requirements in config
+  // The reactive effects in BaseMarkSetup will handle all initialization automatically
+  const setup = new BaseMarkSetup(
+    {
+      // Mark metadata
+      markType: 'dot',
+      supportedScaleTypes: {
+        x: ['linear', 'identity', 'band', 'point', 'time', 'log'],
+        y: ['linear', 'identity', 'band', 'point', 'time', 'log']
+      },
+      
+      // Scale requirements passed to constructor
+      scaleRequirements: {
+        x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
+        y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+      },
+      
+      // Data configuration
+      table,
+      selection,
+      select: { x, y, ...(color && { color }) },
+      
+      // DataClient options
+      clientOptions: {
+        limit,
+        filterNulls: filterNulls ? [x, y] : null
+      }
+    },
+    coordinator,
+    chartContext
+  );
 
-  // Get color scale for the color encoding
-  let colorScale = $derived(getScaleState(color, 'ordinal'));
-  let client = $state(null);
-
-  // Register scale type PREFERENCES with chart container
-  // These are requests that may be overridden by higher priority marks
-  c.registerScaleType('x', preferredXScaleType, SCALE_PRIORITIES.PREFER, markId);
-  c.registerScaleType('y', preferredYScaleType, SCALE_PRIORITIES.PREFER, markId);
-
-  // Get the ACTUAL resolved scale types from the chart's scale resolution
-  // This is what we'll actually get, which may differ from our preferences
-  let actualXScaleType = $derived(c.scaleTypes?.x || 'linear');
-  let actualYScaleType = $derived(c.scaleTypes?.y || 'linear');
-
-  // Validation: Check if dots can work with the resolved scale types
-  let scaleCompatibilityError = $derived.by(() => {
-    // Dots generally work with linear and identity scales well
-    // They can work with band/point scales but might not look ideal
-    const incompatibleX = actualXScaleType && !['linear', 'identity', 'band', 'point'].includes(actualXScaleType);
-    const incompatibleY = actualYScaleType && !['linear', 'identity', 'band', 'point'].includes(actualYScaleType);
-    
-    if (incompatibleX || incompatibleY) {
-      return `DotsMark cannot render with scale types: x=${actualXScaleType}, y=${actualYScaleType}`;
-    }
-    
-    // Warn if we got something different from what we preferred
-    if (actualXScaleType !== preferredXScaleType || actualYScaleType !== preferredYScaleType) {
-      console.warn(
-        `DotsMark: Scale types resolved differently than preferred. ` +
-        `Preferred: x=${preferredXScaleType}, y=${preferredYScaleType}. ` +
-        `Actual: x=${actualXScaleType}, y=${actualYScaleType}. ` +
-        `This might be due to other marks with higher priority requirements.`
-      );
-    }
-    
-    return null;
-  });
-
-  function createClient() {
-    if (client) {
-      client.destroy();
-      client = null;
-    }
-
-    client = new DataClient(table, selection, {
-      select: { x, y, color },
-      limit,
-      filterNulls: [x, y],
-      dataFormat: 'arrow',
-      name: markId
-    });
-
-    if (coordinator) {
-      coordinator.connect(client);
-    }
-  }
+  // =================================================================
+  // ==  LIFECYCLE MANAGEMENT                                     ==
+  // =================================================================
 
   onMount(() => {
-    createClient();
-  });
-
-  $effect(() => {
-    void x; void y; void color; void table;
-    untrack(() => {
-      if (client) createClient();
-    })
-  });
-
-  onDestroy(() => {
-    c.unregisterScaleType('x', markId);
-    c.unregisterScaleType('y', markId);
-
-    if (client) {
-      client.destroy();
+    console.log(`🎯 Mounting DotsMark with setup ${setup.markId}`);
+    // ✅ REACTIVE: No more setup.setup() call! 
+    // The reactive effects in BaseMarkSetup handle everything automatically
+    setup.registerInitialScaleRequirements();
+    
+    // Optional: Monitor setup progress in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`📊 DotsMark ${setup.markId} mounted, reactive setup will begin automatically`);
     }
   });
 
+  // ✅ REACTIVE: Handle scale type preference changes
+  $effect(() => {
+    void preferredXScaleType, preferredYScaleType;
+    
+    untrack(() => {
+      console.log(`🔄 ${setup.markId} Scale type preferences changed to x:${preferredXScaleType}, y:${preferredYScaleType}`);
+      setup.updateScaleRequirements({
+        x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
+        y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+      });
+    });
+  });
+
+  // ✅ REACTIVE: Handle data/config changes
+  $effect(() => {
+    void table, selection, x, y, color, limit, filterNulls;
+    
+    untrack(() => {
+      console.log(`📝 ${setup.markId} Data config changed`);
+      setup.updateConfig({ 
+        table, 
+        selection, 
+        x, 
+        y, 
+        color,
+        select: { x, y, ...(color && { color }) },
+        clientOptions: { 
+          limit, 
+          filterNulls: filterNulls ? [x, y] : null 
+        } 
+      });
+    });
+  });
+
+  // ✅ REACTIVE: Optional monitoring effect for development
+  if (process.env.NODE_ENV === 'development') {
+    $effect(() => {
+      const progress = {
+        scaleCompatibilityError: setup.scaleCompatibilityError,
+        gpuReady: setup.gpuReady,
+        hasClient: !!setup.client,
+        hasData: !!setup.client?.arrowTable,
+        categoricalDataFetched: setup.categoricalDataFetched,
+        actualScaleTypes: {
+          x: setup.actualXScaleType,
+          y: setup.actualYScaleType
+        }
+      };
+      
+      console.debug(`🔍 DotsMark ${setup.markId} status:`, progress);
+    });
+  }
+
+  // ✅ REACTIVE: Cleanup
+  onDestroy(() => {
+    console.log(`🧹 Destroying DotsMark ${setup.markId}`);
+    setup.destroy();
+  });
 </script>
 
-{#if scaleCompatibilityError}
-  <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="red" font-size="14">
-    Scale Error: {scaleCompatibilityError}
+<!-- ================================================================= -->
+<!-- ==  VIEW & RENDERING LOGIC                                     == -->
+<!-- ================================================================= -->
+
+{#if setup.scaleCompatibilityError}
+  <!-- Display scale compatibility error -->
+  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+    Scale Error: {setup.scaleCompatibilityError}
   </text>
-{:else if client?.arrowTable}
-  <!-- Pass the ACTUAL resolved scale types, not the requested ones -->
+{:else if setup.client?.arrowTable && setup.gpuReady}
+  <!-- ✅ REACTIVE: Render when data and GPU are ready -->
+  <!-- 
+    Debug Info: Mark {setup.markId}
+    - Scale Types: x={setup.actualXScaleType}, y={setup.actualYScaleType}
+    - GPU Ready: {setup.gpuReady}
+    - Data Rows: {setup.client.arrowTable.numRows}
+    - Categorical Data Fetched: {setup.categoricalDataFetched}
+  -->
+  
   <Dots
-    data={client.arrowTable}
-    dataVersion={client.dataVersion}
-    xScaleType={actualXScaleType}
-    yScaleType={actualYScaleType}
-    alpha={alpha}
+    data={setup.client.arrowTable}
+    dataVersion={setup.client.dataVersion}
+    xScaleType={setup.actualXScaleType}
+    yScaleType={setup.actualYScaleType}
+    {alpha}
     r={radius}
   />
-{:else if client?.error}
-  <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="red" font-size="14">
-    Error: {client.error.message}
+{:else if setup.client?.error}
+  <!-- Display data error -->
+  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+    Error: {setup.client.error.message}
   </text>
-{:else if client?.delayedLoading}
-  <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="currentColor" font-size="14">
-    Loading...
+{:else if setup.client?.delayedLoading}
+  <!-- Display loading state -->
+  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+    Loading data...
   </text>
 {:else}
-  <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="currentColor" font-size="14">
-    No data available
+  <!-- Display initialization state -->
+  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+    Initializing mark...
+    {#if process.env.NODE_ENV === 'development'}
+      <!-- Debug info in development -->
+      <tspan x={chartContext.margin.left} dy="15" font-size="10" fill="gray">
+        Scales: {setup.actualXScaleType || 'pending'} × {setup.actualYScaleType || 'pending'}
+        | GPU Ready: {setup.gpuReady}
+      </tspan>
+    {/if}
   </text>
 {/if}

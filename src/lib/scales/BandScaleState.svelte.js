@@ -18,6 +18,18 @@ export class BandScaleState {
   #enableUpdates = $state(true);
   #frozenDomain = null;
 
+  // ✅ NEW: Reactive category→index mapping cache
+  #categoryIndexMap = $derived.by(() => {
+    // Make dependencies explicit for proper reactivity tracking
+    const domain = this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
+    
+    const map = new Map();
+    domain.forEach((category, index) => {
+      map.set(category, index);
+    });
+    return map;
+  });
+
   constructor(name, domain = [], options = {}) {
     this.name = name;
     this.#domain = [...domain];
@@ -51,6 +63,17 @@ export class BandScaleState {
 
   get effectiveDomain() {
     return this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
+  }
+
+  /**
+   * Check if the scale is ready for GPU processing
+   * @returns {boolean} True if scale has categories and mapping is ready
+   */
+  get isReadyForGPU() {
+    return this.ready && 
+           this.effectiveDomain.length > 0 && 
+           this.#categoryIndexMap instanceof Map &&
+           this.#extents.size > 0; // Ensure we have received data from marks
   }
 
   /**
@@ -106,6 +129,75 @@ export class BandScaleState {
     }
     
     this.#domain = allCategories;
+  }
+
+  // ✅ NEW: Process categorical data for GPU consumption
+  /**
+   * Convert categorical data to indices for GPU processing
+   * This is the authoritative source for category→index conversion
+   * @param {Array} categoryData - Array of category values from mark data
+   * @param {string} markId - Identifier for the mark (for debugging)
+   * @returns {Float32Array} Array of indices corresponding to categories
+   */
+  processDataForGPU(categoryData, markId = 'unknown') {
+    const categoryMap = this.#categoryIndexMap;
+    
+    // Defensive check - ensure we have a valid Map
+    if (!(categoryMap instanceof Map)) {
+      console.error(`🚨 BandScale "${this.name}": categoryMap is not a Map:`, categoryMap);
+      console.error('Domain state:', {
+        enableUpdates: this.#enableUpdates,
+        domain: this.#domain,
+        frozenDomain: this.#frozenDomain,
+        effectiveDomain: this.effectiveDomain
+      });
+      // Fallback: create a temporary mapping
+      const fallbackMap = new Map();
+      this.effectiveDomain.forEach((category, index) => {
+        fallbackMap.set(category, index);
+      });
+      return this.#processWithMap(categoryData, fallbackMap, markId);
+    }
+    
+    return this.#processWithMap(categoryData, categoryMap, markId);
+  }
+
+  /**
+   * Helper method to process data with a given category map
+   * @private
+   */
+  #processWithMap(categoryData, categoryMap, markId) {
+    const unmappedCategories = new Set();
+    
+    const indices = new Float32Array(categoryData.map(category => {
+      const index = categoryMap.get(category);
+      if (index !== undefined) {
+        return index;
+      } else {
+        unmappedCategories.add(category);
+        return 0; // Default to first category index
+      }
+    }));
+
+    // Warn about unmapped categories in development with full context
+    if (unmappedCategories.size > 0 && process.env.NODE_ENV === 'development') {
+      console.warn(
+        `🔶 BandScale "${this.name}": Unmapped categories for mark "${markId}":`,
+        Array.from(unmappedCategories).slice(0, 5), // Limit output for readability
+        unmappedCategories.size > 5 ? `... and ${unmappedCategories.size - 5} more` : '',
+        `\nValid categories:`, $state.snapshot(this.effectiveDomain)
+      );
+    }
+
+    return indices;
+  }
+
+  /**
+   * Get the current category→index mapping (for debugging)
+   * @returns {Map} Current category→index mapping
+   */
+  getCategoryIndexMap() {
+    return new Map(this.#categoryIndexMap);
   }
 
   getExtents() {
@@ -182,7 +274,9 @@ export class BandScaleState {
       effectiveDomain: [...this.effectiveDomain],
       extentsCount: this.#extents.size,
       extents: Object.fromEntries(this.#extents),
-      padding: this.#padding
+      padding: this.#padding,
+      categoryIndexMap: Object.fromEntries(this.#categoryIndexMap), // Show current mapping
+      categoryCount: this.effectiveDomain.length
     };
   }
 

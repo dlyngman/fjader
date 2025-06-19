@@ -258,6 +258,8 @@
 
   // Dots-specific draw function
   function drawDots(passEncoder) {
+    console.log('Dots draw operation started');
+
     try {
       if (!renderer?.pipeline || !renderer?.bindGroup || renderer.instanceCount === 0) {
         console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
@@ -268,6 +270,8 @@
       passEncoder.setBindGroup(0, renderer.bindGroup);
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
+
+      console.log('Dots draw operation completed');
       
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);
@@ -373,6 +377,7 @@
       if (renderer?.resourcesCreated && !initializationError && data) {
         try {
           updateInstanceData(data);
+          renderer.invalidateLayer(); // ✅ Explicitly invalidate ONLY when data changes.
         } catch (error) {
           console.error('❌ Dots data update effect failed:', error);
           initializationError = error.message;
@@ -381,28 +386,114 @@
     });
   });
 
-  // Reactive effect for scale changes - BaseGPURenderer handles the heavy lifting
+  // EFFECT 1: Handles RESIZE events.
+  // This effect only updates the GPU buffers with the new scale range.
+  // It does NOT request a redraw, because the WebGPUCanvas is already handling that.
   $effect(() => {
     if (!renderer) return;
+
+    // Dependencies: track layout changes
+    void c.innerWidth;
+    void c.innerHeight;
     
-    // Access scale properties to make this reactive
-    const xScale = c?.xScale;
-    const yScale = c?.yScale;
-    
-    // Track scale domains and ranges
-    void xScale?.domain?.();
-    void yScale?.domain?.();
-    void xScale?.range?.();
-    void yScale?.range?.();
-    
-    // Track band scale properties for completeness
-    void xScale?.bandwidth?.();
-    void yScale?.bandwidth?.();
-    
+    console.log(`[${c.xLabel}x${c.yLabel}] Layout change detected. Updating renderer buffers only.`);
+
     untrack(() => {
-      renderer.handleScaleChange();
+      renderer.handleResolutionChange();
+      renderer.handleScaleOrRangeUpdate();
     });
   });
+
+  // EFFECT 2: Handles INTERACTIVE pan/zoom events.
+  // This effect updates the GPU buffers AND explicitly requests a redraw
+  // to render the smooth tweening animation.
+  $effect(() => {
+    if (!renderer) return;
+
+    // Dependencies: track domain changes from the scale state tween
+    void c.xScaleState?.domain?.current;
+    void c.yScaleState?.domain?.current;
+
+    console.log(`[${c.xLabel}x${c.yLabel}] Domain change detected. Updating buffers and invalidating.`);
+    
+    untrack(() => {
+      // First, update the GPU buffer with the latest domain value from the tween
+      renderer.handleScaleOrRangeUpdate();
+      
+      // THEN, request a redraw to show this frame of the animation
+      renderer.invalidateLayer(); 
+    });
+  });
+
+  // // Reactive effect for scale changes - BaseGPURenderer handles the heavy lifting
+  // $effect(() => {
+  //   // if (!renderer) return;
+    
+  //   // // Access scale properties to make this reactive
+  //   // const xScale = c?.xScale;
+  //   // const yScale = c?.yScale;
+    
+  //   // // Track scale domains and ranges
+  //   // void xScale?.domain?.();
+  //   // void yScale?.domain?.();
+  //   // void xScale?.range?.();
+  //   // void yScale?.range?.();
+    
+  //   // // Track band scale properties for completeness
+  //   // void xScale?.bandwidth?.();
+  //   // void yScale?.bandwidth?.();
+
+  //   // if (!renderer) return;
+  
+  //   // // Access the chart context itself to ensure we get fresh scale references
+  //   // const currentXScale = chartContext?.xScale?;
+  //   // const currentYScale = chartContext?.yScale;
+    
+  //   // // Force reactive tracking by accessing the scale methods
+  //   // if (currentXScale?.scale) {
+  //   //   void currentXScale.scale.domain();
+  //   //   void currentXScale.scale.range();
+  //   // }
+  //   // if (currentYScale?.scale) {
+  //   //   void currentYScale.scale.domain();
+  //   //   void currentYScale.scale.range();
+  //   // }
+    
+  //   // // Also track the scale state objects directly
+  //   // void chartContext?.xScaleState?.domain?.current;
+  //   // void chartContext?.yScaleState?.domain?.current;
+
+  //   // Track scale state domain changes directly - these only change from user interactions
+  //   // void c?.xScaleState?.scale?.domain();  // ← Only changes from zoom/pan
+  //   // void c?.yScaleState?.scale?.domain();  // ← Not from GPU reads
+  //   // void c?.xScale?.scale?.domain();
+  //   // void c?.yScale?.scale?.domain();
+
+  //   // void c?.xScaleState?.domain?.current
+  //   // void c?.yScaleState?.domain?.current
+
+  //   if (!renderer) return;
+
+  //   // --- DEPENDENCIES ---
+  //   // 1. Track domain changes (for pan/zoom)
+  //   void c.xScaleState?.domain?.current;
+  //   void c.yScaleState?.domain?.current;
+
+  //   // 2. Track range changes (for resize)
+  //   void c.innerWidth;
+  //   void c.innerHeight;
+
+  //   // --- LOGIC ---
+  //   console.log(`[${c.xLabel}x${c.yLabel}] Scale or layout change detected. Triggering renderer update.`);
+  
+  //   // console.log('scale domains actually changed');
+
+  //   // console.log('scale change')
+    
+  //   untrack(() => {
+  //     renderer.handleScaleChange();
+  //   });
+  // });
 
   // Reactive effect for resolution changes
   $effect(() => {

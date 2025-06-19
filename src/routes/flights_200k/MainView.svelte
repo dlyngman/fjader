@@ -2,6 +2,8 @@
 	import { Selection } from '@uwdata/mosaic-core';
 	import { sum, min, max } from '@uwdata/mosaic-sql';
 	import { setContext, getContext } from 'svelte';
+	import Plot from './Plot.svelte';
+
 	import {
 		ChartContainer,
 		ColumnSelector,
@@ -17,7 +19,9 @@
 	} from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');
-	const selection = Selection.crossfilter();
+	const brushSeletion = Selection.crossfilter();
+
+
 </script>
 <div class="main-view-container">
 	<div class="chart-wrapper">
@@ -38,10 +42,12 @@
 			{#snippet canvasComponents()}
 				<DotsMark
 				table="flights"
+				selection={brushSeletion}
 				x={"delay"}
 				y={"time"}
 				color={"distance"}
 				alpha="0.8"
+				limit=50
 				/>
 			{/snippet}
 			</WebGPUCanvas>
@@ -53,6 +59,8 @@
 		</ChartContainer>
   </div>  
 </div>
+
+<Plot selection = {brushSeletion}/>
 
 <style>
 	.main-view-container {

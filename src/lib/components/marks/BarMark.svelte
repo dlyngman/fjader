@@ -56,9 +56,42 @@
         coordinator.connect(client);
       }
     }
+
+    // In BarMark.svelte or any mark needing band scales
+    async function fetchCategoricalDomain() {
+        console.log('fetching categories')
+
+        if (c.scaleTypes?.x !== 'band' && c.scaleTypes?.y !== 'band') {
+            return; // No categorical scales needed
+        }
+        
+        // Fetch distinct values for x-axis if it's categorical
+        if (c.scaleTypes?.x === 'band') {
+            const distinctQuery = Query.from(table)
+            .select({ x: sqlColumn(x) })
+            .distinct();
+            
+            const result = await coordinator.query(distinctQuery);
+            const categories = Array.from(result).map(row => row.x);
+            
+            c.xScaleState.addMark(categories, markId);
+        }
+
+        if (c.scaleTypes?.y === 'band') {
+            const distinctQuery = Query.from(table)
+            .select({ y: sqlColumn(y) })
+            .distinct();
+            
+            const result = await coordinator.query(distinctQuery);
+            const categories = Array.from(result).map(row => row.y);
+            
+            c.xScaleState.addMark(categories, markId);
+        }
+    }
   
-    onMount(() => {
-      createClient();
+    onMount(async () => {
+        await fetchCategoricalDomain();
+        createClient();
     });
   
     $effect(() => {

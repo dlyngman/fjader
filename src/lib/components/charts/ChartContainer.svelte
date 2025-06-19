@@ -1,8 +1,6 @@
 <script>
   import { setContext } from 'svelte';
   import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
-  // import { ChartScales } from '$lib/scales/ChartScales.js';
-  // import { ChartScales } from '$lib/scales/ChartScales.svelte';
   import { ChartScales } from '$lib/scales/ChartScales.svelte';
 
   let {
@@ -25,6 +23,31 @@
     yLabel,
     layout
   }));
+
+  $effect(() => {
+      console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
+    });
+
+    $effect(() => {
+    const xState = scales.xScaleState;
+    const yState = scales.yScaleState;
+    
+    console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
+      xStateId: xState?.name,
+      yStateId: yState?.name,
+      xStateObject: xState,
+      yStateObject: yState,
+      // Check if it's the same object reference
+      xStateSame: window.lastXState === xState,
+      yStateSame: window.lastYState === yState
+    });
+    
+    // Store for comparison (dev only)
+    if (typeof window !== 'undefined') {
+      window.lastXState = xState;
+      window.lastYState = yState;
+    }
+  });
 
   // $inspect('is ready', layout.isReady)
 

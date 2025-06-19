@@ -174,9 +174,10 @@ export class GPUCoordinator {
   // Chart registration and management
   #registeredCharts = $state(new Map());
   #renderQueue = $state([]);
+  #lastRenderTime = 0;
+
   #needsRedraw = $state(false);
   #rafId = null;
-  #lastRenderTime = 0;
 
   // Enhanced render batching
   #renderBatches = $state({
@@ -184,6 +185,9 @@ export class GPUCoordinator {
     byZIndex: new Map(),   // 0 -> [charts...], 1 -> [charts...]
     needsRebuild: true
   });
+
+  #dirtyChartIDs = new Set();
+  #invalidationQueued = false;
 
   // Configuration
   #msaaSampleCount = 4;
@@ -382,99 +386,300 @@ export class GPUCoordinator {
 
   // ===== CHART REGISTRATION =====
 
+  /**
+   * NEW: The central entry point for all invalidation requests.
+   * Marks a chart as dirty and schedules a single, debounced render.
+   * @param {string} chartId
+   */
+  invalidateChart(chartId) {
+    const chart = this.#registeredCharts.get(chartId);
+    if (chart) {
+        // Mark the individual chart as needing a redraw.
+        chart.needsRedraw = true;
+        // Add its ID to our global "dirty" list.
+        this.#dirtyChartIDs.add(chartId);
+        // Call the debounced scheduler.
+        this.#queueInvalidation();
+    }
+  }
+
+  /**
+  * NEW: The private, debounced scheduler using a microtask.
+  */
+  #queueInvalidation() {
+    // If a render is already queued for this tick, do nothing. This is the debounce guard.
+    if (this.#invalidationQueued) return;
+
+    // Set the flag to block subsequent calls in this tick.
+    this.#invalidationQueued = true;
+
+    // Schedule a microtask. This function will run *after* the current synchronous
+    // script block has finished executing, but *before* the browser repaints.
+    queueMicrotask(() => {
+        // Now that all invalidations for this tick have been collected,
+        // we can schedule the single animation frame.
+        this.requestRedraw();
+        // Reset the flag so the next tick's invalidations can schedule a new render.
+        this.#invalidationQueued = false;
+    });
+  }
+
+  /**
+  * NEW: Registers a renderable layer directly to a specific chart.
+  * @param {string} chartId The ID of the parent chart.
+  * @param {object} layerConfig The layer's configuration (draw function, markType, etc.).
+  * @returns {object} A control object with a `remove` method.
+  */
+  registerLayer(chartId, layerConfig) {
+    const chart = this.#registeredCharts.get(chartId);
+    if (!chart) {
+        console.error(`Attempted to register layer on non-existent chart: ${chartId}`);
+        return { remove: () => {} };
+    }
+
+    // Use a unique ID for the layer for easy removal.
+    const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
+    chart.layers.set(layerId, { ...layerConfig, id: layerId });
+
+    // Mark that batches need rebuilding since the layer composition has changed.
+    this.#renderBatches.needsRebuild = true;
+    this.invalidateChart(chartId); // Invalidate the chart to ensure the new layer is drawn.
+
+    return {
+        remove: () => this.unregisterLayer(chartId, layerId)
+    };
+  }
+
+  /**
+  * NEW: Removes a layer from a chart.
+  * @param {string} chartId
+  * @param {string} layerId
+  */
+  unregisterLayer(chartId, layerId) {
+    const chart = this.#registeredCharts.get(chartId);
+    if (chart && chart.layers.has(layerId)) {
+        chart.layers.delete(layerId);
+        this.#renderBatches.needsRebuild = true;
+        this.invalidateChart(chartId); // Invalidate to render the chart without the layer.
+    }
+  }
+
   registerChart(chartId, canvas, config) {
     const {
-      drawFunction,
-      zIndex = 0,
-      markTypes = [],
+      zIndex = 0
+      // markTypes are no longer needed here, they come from layers.
     } = config;
 
     if (this.#registeredCharts.has(chartId)) {
-      console.warn(`Chart ${chartId} already registered, updating config`);
+        console.warn(`Chart ${chartId} already registered, updating config`);
     }
 
-    // Calculate viewport from canvas position
-    const rect = canvas.getBoundingClientRect();
-    const viewport = {
-      x: rect.left,
-      y: rect.top,
-      width: canvas.width,
-      height: canvas.height
-    };
-
     const chartConfig = {
-      chartId,
-      canvas,
-      viewport,
-      drawFunction,
-      zIndex,
-      markTypes,
-      visible: true,
-      needsRedraw: true,
-      context: canvas.getContext('webgpu'),
-      contextConfigured: false
+        chartId,
+        canvas,
+        zIndex,
+        visible: true,
+        needsRedraw: true,
+        context: canvas.getContext('webgpu'),
+        contextConfigured: false,
+        // ✅ CRITICAL: Each chart now has its own map to hold its layers.
+        layers: new Map()
     };
 
     this.#registeredCharts.set(chartId, chartConfig);
-    this.#renderBatches.needsRebuild = true; // Mark for rebuild
-    this.#updateRenderQueue();
+    this.#updateRenderQueue(); // This is still useful for z-index sorting.
 
-    console.log(`📊 Registered chart: ${chartId} with marks: [${markTypes.join(', ')}]`);
-
-    // Return control object for the chart
     return {
-      update: (newConfig) => {
-        const existingConfig = this.#registeredCharts.get(chartId);
-        if (existingConfig) {
-          Object.assign(existingConfig, newConfig);
-          
-          // Update viewport if canvas size changed
-          if (newConfig.canvasResized) {
-            const rect = existingConfig.canvas.getBoundingClientRect();
-            existingConfig.viewport = {
-              x: rect.left,
-              y: rect.top,
-              width: existingConfig.canvas.width,
-              height: existingConfig.canvas.height
-            };
+        update: (newConfig) => {
+          console.log(`🔍 Chart ${chartId} update called with:`, newConfig);
+
+          const existingConfig = this.#registeredCharts.get(chartId);
+          if (existingConfig) {
+            console.log(`🔄 Chart ${chartId} config update:`, {
+              oldMarkTypes: existingConfig.markTypes,
+              newMarkTypes: newConfig.markTypes,
+              fullNewConfig: newConfig
+            });
+
+            // Update only provided values
+            for (const [key, value] of Object.entries(newConfig)) {
+              if (value !== undefined) {
+                existingConfig[key] = value;
+              }
+            }
+            
+            // Update viewport if canvas size changed
+            if (newConfig.canvasResized) {
+              const rect = existingConfig.canvas.getBoundingClientRect();
+              existingConfig.viewport = {
+                x: rect.left,
+                y: rect.top,
+                width: existingConfig.canvas.width,
+                height: existingConfig.canvas.height
+              };
+            }
+
+            // Mark context as configured when WebGPUCanvas tells us
+            if (newConfig.contextConfigured) {
+              existingConfig.contextConfigured = true;
+            }
+
+            // Check if mark types changed (affects batching)
+            if (newConfig.markTypes) {
+              this.#renderBatches.needsRebuild = true;
+            }
+
+            // Force redraw for canvas dimension/position changes
+            if (newConfig.canvasResized || newConfig.canvasRepositioned) {
+              console.log(`📐 [${chartId}] Canvas changed, setting needsRedraw = true (was ${existingConfig.needsRedraw})`);
+              existingConfig.needsRedraw = true;
+            }
+            
+            this.#updateRenderQueue();
+            this.requestRedraw();
           }
-
-          // Mark context as configured when WebGPUCanvas tells us
-          if (newConfig.contextConfigured) {
-            existingConfig.contextConfigured = true;
+        },
+        setVisible: (visible) => {
+          const config = this.#registeredCharts.get(chartId);
+          if (config) {
+            config.visible = visible;
+            this.requestRedraw();
           }
-
-          // Check if mark types changed (affects batching)
-          if (newConfig.markTypes) {
-            this.#renderBatches.needsRebuild = true;
-          }
-          
-          this.#updateRenderQueue();
-          this.requestRedraw();
+        },
+        // ✅ MODIFIED: The invalidate function is now simpler and more direct.
+        invalidate: () => {
+            this.invalidateChart(chartId);
+        },
+        remove: () => {
+            this.unregisterChart(chartId);
         }
-      },
-      
-      setVisible: (visible) => {
-        const config = this.#registeredCharts.get(chartId);
-        if (config) {
-          config.visible = visible;
-          this.requestRedraw();
-        }
-      },
-
-      invalidate: () => {
-        const config = this.#registeredCharts.get(chartId);
-        if (config) {
-          config.needsRedraw = true;
-          this.requestRedraw();
-        }
-      },
-
-      remove: () => {
-        this.unregisterChart(chartId);
-      }
     };
   }
+
+  // registerChart(chartId, canvas, config) {
+  //   const {
+  //     drawFunction,
+  //     zIndex = 0,
+  //     markTypes = [],
+  //   } = config;
+
+  //   if (this.#registeredCharts.has(chartId)) {
+  //     console.warn(`Chart ${chartId} already registered, updating config`);
+  //   }
+
+  //   // Calculate viewport from canvas position
+  //   const rect = canvas.getBoundingClientRect();
+  //   const viewport = {
+  //     x: rect.left,
+  //     y: rect.top,
+  //     width: canvas.width,
+  //     height: canvas.height
+  //   };
+
+  //   const chartConfig = {
+  //     chartId,
+  //     canvas,
+  //     viewport,
+  //     drawFunction,
+  //     zIndex,
+  //     markTypes,
+  //     visible: true,
+  //     needsRedraw: true,
+  //     context: canvas.getContext('webgpu'),
+  //     contextConfigured: false
+  //   };
+
+  //   this.#registeredCharts.set(chartId, chartConfig);
+  //   this.#renderBatches.needsRebuild = true; // Mark for rebuild
+  //   this.#updateRenderQueue();
+
+  //   console.log(`📊 Registered chart: ${chartId} with marks: [${markTypes.join(', ')}]`);
+
+  //   // Return control object for the chart
+  //   return {
+  //     update: (newConfig) => {
+  //       console.log(`🔍 Chart ${chartId} update called with:`, newConfig);
+
+  //       const existingConfig = this.#registeredCharts.get(chartId);
+  //       if (existingConfig) {
+  //         console.log(`🔄 Chart ${chartId} config update:`, {
+  //           oldMarkTypes: existingConfig.markTypes,
+  //           newMarkTypes: newConfig.markTypes,
+  //           fullNewConfig: newConfig
+  //         });
+
+  //         // Update only provided values
+  //         for (const [key, value] of Object.entries(newConfig)) {
+  //           if (value !== undefined) {
+  //             existingConfig[key] = value;
+  //           }
+  //         }
+          
+  //         // Update viewport if canvas size changed
+  //         if (newConfig.canvasResized) {
+  //           const rect = existingConfig.canvas.getBoundingClientRect();
+  //           existingConfig.viewport = {
+  //             x: rect.left,
+  //             y: rect.top,
+  //             width: existingConfig.canvas.width,
+  //             height: existingConfig.canvas.height
+  //           };
+  //         }
+
+  //         // Mark context as configured when WebGPUCanvas tells us
+  //         if (newConfig.contextConfigured) {
+  //           existingConfig.contextConfigured = true;
+  //         }
+
+  //         // Check if mark types changed (affects batching)
+  //         if (newConfig.markTypes) {
+  //           this.#renderBatches.needsRebuild = true;
+  //         }
+
+  //         // Force redraw for canvas dimension/position changes
+  //         if (newConfig.canvasResized || newConfig.canvasRepositioned) {
+  //           console.log(`📐 [${chartId}] Canvas changed, setting needsRedraw = true (was ${existingConfig.needsRedraw})`);
+  //           existingConfig.needsRedraw = true;
+  //         }
+          
+  //         this.#updateRenderQueue();
+  //         this.requestRedraw();
+  //       }
+  //     },
+      
+  //     setVisible: (visible) => {
+  //       const config = this.#registeredCharts.get(chartId);
+  //       if (config) {
+  //         config.visible = visible;
+  //         this.requestRedraw();
+  //       }
+  //     },
+
+  //     // invalidate: () => {
+  //     //   const config = this.#registeredCharts.get(chartId);
+  //     //   if (config) {
+  //     //     config.needsRedraw = true;
+  //     //     this.requestRedraw();
+  //     //   }
+  //     // },
+  //     invalidate: () => {
+  //       console.log(`🎯 [${chartId}] Chart control invalidate called`);
+        
+  //       const config = this.#registeredCharts.get(chartId);
+  //       if (config) {
+  //         console.log(`✅ [${chartId}] Setting needsRedraw = true (was ${config.needsRedraw})`);
+  //         config.needsRedraw = true;
+  //         this.requestRedraw();
+  //       } else {
+  //         console.log(`❌ [${chartId}] Chart config not found in coordinator!`);
+  //       }
+  //     },
+
+  //     remove: () => {
+  //       this.unregisterChart(chartId);
+  //     }
+  //   };
+  // }
 
   unregisterChart(chartId) {
     if (this.#registeredCharts.has(chartId)) {
@@ -501,154 +706,473 @@ export class GPUCoordinator {
   requestRedraw() {
     if (this.#rafId !== null || !this.#initialized) return;
     
+    console.log(`🎨 GPUCoordinator requestRedraw called`);
     this.#needsRedraw = true;
     this.#rafId = requestAnimationFrame(() => this.#render());
   }
 
   #render() {
-    if (!this.#device || !this.#needsRedraw) {
-      this.#rafId = null;
-      return;
+
+    console.groupCollapsed(`[${Date.now() % 10000}] --- GPU Coordinator State Snapshot ---`);
+    console.log(`Dirty Chart IDs Set (${this.#dirtyChartIDs.size}):`, this.#dirtyChartIDs);
+    
+    // Log the full state of all registered charts
+    const chartStates = Array.from(this.#registeredCharts.entries()).map(([id, config]) => ({
+        chartId: id,
+        isDirty: this.#dirtyChartIDs.has(id),
+        visible: config.visible,
+        contextConfigured: config.contextConfigured,
+        layerCount: config.layers.size,
+        layers: Array.from(config.layers.values()).map(layer => ({
+            layerId: layer.id,
+            markType: layer.markType,
+            hasRenderer: !!layer.renderer,
+            rendererReady: !!(layer.renderer?.pipeline && layer.renderer?.bindGroup),
+            pipeline: layer.renderer?.pipeline,
+            bindGroup: layer.renderer?.bindGroup
+        }))
+    }));
+    console.table(chartStates);
+    
+    // Log the list of charts that will actually be rendered
+    const chartsToRender = chartStates.filter(c => c.isDirty && c.visible && c.contextConfigured);
+    console.log(`Charts that SHOULD be rendered in this frame (${chartsToRender.length}):`, chartsToRender.map(c => c.chartId));
+
+    console.groupEnd(); 
+    // ✅ MODIFIED: The new entry condition.
+    // We render if there are any charts in our "dirty" list.
+    if (!this.#device || this.#dirtyChartIDs.size === 0) {
+        this.#rafId = null;
+        return;
     }
 
     try {
-      this.debugger?.startRenderTiming();
+        this.debugger?.startRenderTiming();
 
-      // Use live data instead of cached render queue
-      const liveRenderQueue = Array.from(this.#registeredCharts.values())
-        .filter(config => config.visible)
-        .sort((a, b) => a.zIndex - b.zIndex);
-      
-      // Only include charts with properly configured contexts
-      const chartsNeedingRender = liveRenderQueue.filter(chart => 
-        chart.visible && 
-        chart.needsRedraw && 
-        chart.drawFunction &&
-        chart.contextConfigured
-      );
+        // ✅ MODIFIED: Build the list of charts to render directly from the dirty set.
+        // This is more efficient than filtering all registered charts.
+        const chartsNeedingRender = [];
+        for (const chartId of this.#dirtyChartIDs) {
+            const chart = this.#registeredCharts.get(chartId);
+            // We still need these checks to ensure the chart is actually ready to be drawn.
+            if (chart?.visible && chart.contextConfigured) {
+                chartsNeedingRender.push(chart);
+            }
+        }
+        
+        // ✅ CRITICAL: Clear the set immediately after processing it.
+        // This makes the system ready for the next tick's invalidations.
+        this.#dirtyChartIDs.clear();
 
-      if (chartsNeedingRender.length === 0) {
-        this.#needsRedraw = false;
-        this.#rafId = null;
-        return;
-      }
+        if (chartsNeedingRender.length === 0) {
+            this.#rafId = null; // No visible/ready charts were dirty.
+            return;
+        }
 
-      // Enhanced coordinated rendering with batching
-      this.#coordinatedRender(chartsNeedingRender);
-      this.#lastRenderTime = Date.now();
+        this.#coordinatedRender(chartsNeedingRender);
+        this.#lastRenderTime = Date.now();
 
-      this.debugger?.endRenderTiming();
-
+        this.debugger?.endRenderTiming();
     } catch (error) {
       console.error('GPUCoordinator render error:', error);
       this.debugger?.recordRenderError(error, 'main-render-loop');
+        // ... error handling ...
     } finally {
-      this.#needsRedraw = false;
-      this.#rafId = null;
+        // The global #needsRedraw flag is no longer used for scheduling, so we can remove it.
+        // this.#needsRedraw = false;
+        this.#rafId = null;
     }
   }
 
-  #coordinatedRender(charts) {
-    // Rebuild batches if needed
+  // #render() {
+  //   console.log(`🔍 GPUCoordinator #render() called`, {
+  //     hasDevice: !!this.#device,
+  //     needsRedraw: this.#needsRedraw,
+  //     initialized: this.#initialized
+  //   });
+
+  //   if (!this.#device || !this.#needsRedraw) {
+  //     console.log(`❌ Render failed: no device`);
+  //     this.#rafId = null;
+  //     return;
+  //   }
+
+  //   if (!this.#needsRedraw) {
+  //     console.log(`❌ Render failed: needsRedraw is false`);
+  //     this.#rafId = null;
+  //     return;
+  //   }
+
+  //   try {
+  //     this.debugger?.startRenderTiming();
+
+  //     // Use live data instead of cached render queue
+  //     const liveRenderQueue = Array.from(this.#registeredCharts.values())
+  //       .filter(config => config.visible)
+  //       .sort((a, b) => a.zIndex - b.zIndex);
+      
+  //     // Only include charts with properly configured contexts
+  //     const chartsNeedingRender = liveRenderQueue.filter(chart => 
+  //       chart.visible && 
+  //       chart.needsRedraw && 
+  //       chart.drawFunction &&
+  //       chart.contextConfigured
+  //     );
+
+  //     // ADD THIS LOGGING:
+  //     console.log(`🔍 Render filter results:`, {
+  //       totalRegistered: this.#registeredCharts.size,
+  //       liveQueue: liveRenderQueue.length,
+  //       needingRender: chartsNeedingRender.length,
+  //       chartDetails: liveRenderQueue.map(chart => ({
+  //         id: chart.chartId,
+  //         visible: chart.visible,
+  //         needsRedraw: chart.needsRedraw,
+  //         hasDrawFunction: !!chart.drawFunction,
+  //         contextConfigured: chart.contextConfigured
+  //       }))
+  //     });
+
+  //     if (chartsNeedingRender.length === 0) {
+  //       console.log(`❌ No charts need rendering - exiting #render()`);
+  //       this.#needsRedraw = false;
+  //       this.#rafId = null;
+  //       return;
+  //     }
+
+  //     console.log(`🎨 Proceeding to render ${chartsNeedingRender.length} charts`);
+
+  //     // Enhanced coordinated rendering with batching
+  //     this.#coordinatedRender(chartsNeedingRender);
+  //     this.#lastRenderTime = Date.now();
+
+  //     this.debugger?.endRenderTiming();
+
+  //   } catch (error) {
+  //     console.error('GPUCoordinator render error:', error);
+  //     this.debugger?.recordRenderError(error, 'main-render-loop');
+  //   } finally {
+  //     this.#needsRedraw = false;
+  //     this.#rafId = null;
+  //   }
+  // }
+
+
+  #coordinatedRender(chartsNeedingRender) {
+    console.log(`🎯 Starting FULLY OPTIMIZED render for ${chartsNeedingRender.length} charts.`);
+    
     if (this.#renderBatches.needsRebuild) {
-      this.#rebuildRenderBatches(charts);
+        this.#rebuildRenderBatches();
     }
 
     try {
-      // Use mark-type batching for maximum efficiency
-      this.#renderByMarkTypeBatches(charts);
-    } catch (error) {
-      console.error('Coordinated render failed:', error);
-      this.debugger?.recordRenderError(error, 'coordinated-render');
-      // Fallback to individual chart rendering
-      this.#fallbackIndividualRender(charts);
-    }
-  }
+        // We need a map to store the render pass encoders for each dirty chart.
+        // Map<chartId, GPURenderPassEncoder>
+        const passEncoders = new Map();
+        const commandBuffers = [];
 
-  #renderByMarkTypeBatches(charts) {
-    const commandEncoders = [];
-    
-    // Process each mark type batch
-    for (const [markType, chartsForType] of this.#renderBatches.byMarkType) {
-      if (chartsForType.length === 0) continue;
-      
-      console.debug(`🎨 Batch rendering ${chartsForType.length} charts with ${markType} marks`);
-      
-      // Get shared pipeline for this mark type
-      const sharedResource = this.#sharedResources.pipelines.get(markType);
-      
-      for (const chartConfig of chartsForType) {
-        if (!charts.includes(chartConfig)) continue; // Skip if not in current render list
+        // A helper to get or create a pass encoder for a chart.
+        const getPassEncoder = (chartConfig) => {
+            if (passEncoders.has(chartConfig.chartId)) {
+                return passEncoders.get(chartConfig.chartId);
+            }
+
+            const commandEncoder = this.#device.createCommandEncoder({ label: `${chartConfig.chartId}-encoder` });
+            const context = chartConfig.context;
+            const textureView = context.getCurrentTexture().createView();
+            const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas);
+            const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+            
+            // Store everything we need to finish it later.
+            passEncoders.set(chartConfig.chartId, { passEncoder, commandEncoder });
+            return { passEncoder, commandEncoder };
+        };
         
-        try {
-          const context = chartConfig.context;
-          if (!context) continue;
-          
-          const textureView = context.getCurrentTexture().createView();
-          const commandEncoder = this.#device.createCommandEncoder({
-            label: `${chartConfig.chartId}-${markType}-encoder`
-          });
-          
-          const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas);
-          const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-          
-          // Pass enhanced shared resources for efficiency
-          chartConfig.drawFunction(passEncoder, {
-            pipelines: this.#sharedResources.pipelines,
-            uniformBuffers: this.#sharedResources.uniformBuffers,
-            shaderModules: this.#sharedResources.shaderModules,
-            currentMarkType: markType,
-            sharedPipeline: sharedResource?.pipeline
-          });
-          
-          passEncoder.end();
-          commandEncoders.push(commandEncoder.finish());
-          chartConfig.needsRedraw = false;
-          
-        } catch (error) {
-          console.error(`❌ Batch render failed for chart ${chartConfig.chartId}:`, error);
-          this.debugger?.recordRenderError(error, `batch-render-${chartConfig.chartId}`);
-        }
-      }
-    }
+        // Iterate through the batches by MARK TYPE for efficiency.
+        for (const [markType, layersInBatch] of this.#renderBatches.byMarkType) {
+            // Get the shared pipeline for this mark type ONCE.
+            const sharedPipeline = this.getSharedPipeline(markType);
+            if (!sharedPipeline) continue;
 
-    // Submit all commands together for maximum GPU efficiency
-    if (commandEncoders.length > 0) {
-      this.#device.queue.submit(commandEncoders);
-      console.debug(`✅ Submitted ${commandEncoders.length} render commands in batch`);
+            // Set this pipeline ONCE for all subsequent draw calls of this type.
+            // NOTE: This is the key optimization, but WebGPU requires setPipeline
+            // to be called within a render pass. So we must call it for each pass.
+            // The REAL optimization is that we don't have to LOOK UP the pipeline repeatedly.
+            // The logic below still yields the most efficient command structure.
+
+            for (const layer of layersInBatch) {
+                const chartConfig = layer.chart;
+
+                // IMPORTANT: Only draw this layer if its parent chart is in the dirty list.
+                if (!chartsNeedingRender.includes(chartConfig)) {
+                    continue;
+                }
+
+                // Get or create the render pass for this layer's chart.
+                const { passEncoder } = getPassEncoder(chartConfig);
+                
+                const renderer = layer.renderer;
+                if (renderer?.pipeline && renderer?.bindGroup) {
+                    // The primary optimization: we set the pipeline once per mark type *per render pass*.
+                    passEncoder.setPipeline(renderer.pipeline);
+                    passEncoder.setBindGroup(0, renderer.bindGroup);
+                    layer.draw(passEncoder);
+                }
+            }
+        }
+
+        // Now, end all the render passes and finish the command buffers.
+        for (const { passEncoder, commandEncoder } of passEncoders.values()) {
+            passEncoder.end();
+            commandBuffers.push(commandEncoder.finish());
+        }
+
+        if (commandBuffers.length > 0) {
+            this.#device.queue.submit(commandBuffers);
+            console.log(`✅ Submitted ${commandBuffers.length} command buffers from batched render.`);
+        }
+        
+        chartsNeedingRender.forEach(chart => chart.needsRedraw = false);
+
+    } catch (error) {
+        console.error('Batched coordinated render failed:', error);
+        // In a real app, you might want a fallback to the simpler render loop here.
     }
   }
 
-  #rebuildRenderBatches(charts) {
-    console.debug(`🔄 Rebuilding render batches for ${charts.length} charts`);
+  // #coordinatedRender(chartsNeedingRender) {
+  //   console.log(`🎯 Starting coordinated render for ${chartsNeedingRender.length} charts`);
     
-    // Clear existing batches
-    this.#renderBatches.byMarkType.clear();
-    this.#renderBatches.byZIndex.clear();
+  //   if (this.#renderBatches.needsRebuild) {
+  //       this.#rebuildRenderBatches();
+  //   }
+  
+  //   try {
+  //       const commandEncoders = new Map(); // Map<chartId, GPUCommandEncoder>
+
+  //       // This loop prepares a command encoder for each dirty chart.
+  //       for (const chartConfig of chartsNeedingRender) {
+  //           const commandEncoder = this.#device.createCommandEncoder({
+  //               label: `${chartConfig.chartId}-encoder`
+  //           });
+  //           commandEncoders.set(chartConfig.chartId, commandEncoder);
+  //       }
+
+  //       // Now, iterate through the batches by MARK TYPE for efficiency.
+  //       for (const [markType, layersInBatch] of this.#renderBatches.byMarkType) {
+
+  //           // Get the shared pipeline for this mark type ONCE.
+  //           const sharedPipeline = this.getSharedPipeline(markType);
+  //           if (!sharedPipeline) continue; // Skip if no pipeline for this mark type
+
+  //           // For each layer in this mark type batch...
+  //           for (const layer of layersInBatch) {
+  //               const chartConfig = layer.chart;
+
+  //               // IMPORTANT: Check if this layer's parent chart is actually dirty.
+  //               // This is the key intersection of the two data structures.
+  //               if (!commandEncoders.has(chartConfig.chartId)) {
+  //                   continue; // Skip this layer if its chart is not being rendered in this frame.
+  //               }
+
+  //               // We have a dirty layer! Let's draw it.
+  //               const commandEncoder = commandEncoders.get(chartConfig.chartId);
+  //               const context = chartConfig.context;
+  //               const textureView = context.getCurrentTexture().createView();
+  //               const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas);
+                
+  //               const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+
+  //               // Here's the magic: we use the renderer instance we saved on the layer object.
+  //               const renderer = layer.renderer;
+  //               if (renderer) {
+  //                   passEncoder.setPipeline(renderer.pipeline || sharedPipeline);
+  //                   passEncoder.setBindGroup(0, renderer.bindGroup);
+  //               }
+                
+  //               // Execute the layer's specific draw function.
+  //               layer.draw(passEncoder);
+
+  //               passEncoder.end();
+  //           }
+  //       }
+
+  //       // Finally, submit all the prepared command buffers at once.
+  //       const finalCommands = [];
+  //       for (const encoder of commandEncoders.values()) {
+  //           finalCommands.push(encoder.finish());
+  //       }
+
+  //       if (finalCommands.length > 0) {
+  //           this.#device.queue.submit(finalCommands);
+  //           console.debug(`✅ Submitted ${finalCommands.length} render commands in batch`);
+  //       }
+        
+  //       // After a successful render, mark the charts as clean.
+  //       chartsNeedingRender.forEach(chart => chart.needsRedraw = false);
+
+  //   } catch (error) {
+  //       console.error('Coordinated render failed:', error);
+  //       this.debugger?.recordRenderError(error, 'coordinated-render');
+  //   }
+  // }
+
+  // #coordinatedRender(charts) {
+  //   console.log(`🎯 Starting coordinated render for ${charts.length} charts`);
     
-    for (const chart of charts) {
-      // Group by mark types
-      for (const markType of chart.markTypes || ['unknown']) {
-        if (!this.#renderBatches.byMarkType.has(markType)) {
-          this.#renderBatches.byMarkType.set(markType, []);
-        }
-        this.#renderBatches.byMarkType.get(markType).push(chart);
-      }
+  //   // Rebuild batches if needed
+  //   if (this.#renderBatches.needsRebuild) {
+  //     console.log(`🔄 Rebuilding render batches...`);
+  //     this.#rebuildRenderBatches(charts);
+  //     console.log(`✅ Render batches rebuilt`);
+  //   }
+  
+  //   try {
+  //     console.log(`🎨 Starting mark-type batch rendering...`);
+  //     // Use mark-type batching for maximum efficiency
+  //     this.#renderByMarkTypeBatches(charts);
+  //     console.log(`✅ Mark-type batch rendering completed`);
+  //   } catch (error) {
+  //     console.error('Coordinated render failed:', error);
+  //     this.debugger?.recordRenderError(error, 'coordinated-render');
+  //     console.log(`🔄 Falling back to individual render...`);
+  //     // Fallback to individual chart rendering
+  //     this.#fallbackIndividualRender(charts);
+  //     console.log(`✅ Fallback individual render completed`);
+  //   }
+  // }
+
+  // #coordinatedRender(charts) {
+  //   // Rebuild batches if needed
+  //   if (this.#renderBatches.needsRebuild) {
+  //     this.#rebuildRenderBatches(charts);
+  //   }
+
+  //   try {
+  //     // Use mark-type batching for maximum efficiency
+  //     this.#renderByMarkTypeBatches(charts);
+  //   } catch (error) {
+  //     console.error('Coordinated render failed:', error);
+  //     this.debugger?.recordRenderError(error, 'coordinated-render');
+  //     // Fallback to individual chart rendering
+  //     this.#fallbackIndividualRender(charts);
+  //   }
+  // }
+
+  // #renderByMarkTypeBatches(charts) {
+  //   const commandEncoders = [];
+    
+  //   // Process each mark type batch
+  //   for (const [markType, chartsForType] of this.#renderBatches.byMarkType) {
+  //     if (chartsForType.length === 0) continue;
       
-      // Group by z-index
-      const zIndex = chart.zIndex || 0;
-      if (!this.#renderBatches.byZIndex.has(zIndex)) {
-        this.#renderBatches.byZIndex.set(zIndex, []);
-      }
-      this.#renderBatches.byZIndex.get(zIndex).push(chart);
+  //     console.debug(`🎨 Batch rendering ${chartsForType.length} charts with ${markType} marks`);
+      
+  //     // Get shared pipeline for this mark type
+  //     const sharedResource = this.#sharedResources.pipelines.get(markType);
+      
+  //     for (const chartConfig of chartsForType) {
+
+  //       console.log(`📊 Before render: Chart ${chartConfig.chartId} needsRedraw = ${chartConfig.needsRedraw}`);
+
+  //       if (!charts.includes(chartConfig)) continue; // Skip if not in current render list
+        
+  //       try {
+  //         const context = chartConfig.context;
+  //         if (!context) continue;
+          
+  //         const textureView = context.getCurrentTexture().createView();
+  //         const commandEncoder = this.#device.createCommandEncoder({
+  //           label: `${chartConfig.chartId}-${markType}-encoder`
+  //         });
+          
+  //         const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas);
+  //         const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+          
+  //         // Pass enhanced shared resources for efficiency
+  //         chartConfig.drawFunction(passEncoder, {
+  //           pipelines: this.#sharedResources.pipelines,
+  //           uniformBuffers: this.#sharedResources.uniformBuffers,
+  //           shaderModules: this.#sharedResources.shaderModules,
+  //           currentMarkType: markType,
+  //           sharedPipeline: sharedResource?.pipeline
+  //         });
+          
+  //         passEncoder.end();
+  //         commandEncoders.push(commandEncoder.finish());
+  //         chartConfig.needsRedraw = false;
+  //         console.log(`📊 After render: Chart ${chartConfig.chartId} needsRedraw = false`);
+          
+  //       } catch (error) {
+  //         console.error(`❌ Batch render failed for chart ${chartConfig.chartId}:`, error);
+  //         this.debugger?.recordRenderError(error, `batch-render-${chartConfig.chartId}`);
+  //       }
+  //     }
+  //   }
+
+  //   // Submit all commands together for maximum GPU efficiency
+  //   if (commandEncoders.length > 0) {
+  //     this.#device.queue.submit(commandEncoders);
+  //     console.debug(`✅ Submitted ${commandEncoders.length} render commands in batch`);
+  //   }
+  // }
+
+  // #rebuildRenderBatches(charts) {
+  //   console.debug(`🔄 Rebuilding render batches for ${charts.length} charts`);
+    
+  //   // Clear existing batches
+  //   this.#renderBatches.byMarkType.clear();
+  //   this.#renderBatches.byZIndex.clear();
+    
+  //   for (const chart of charts) {
+  //     // Group by mark types
+  //     for (const markType of chart.markTypes || ['unknown']) {
+  //       if (!this.#renderBatches.byMarkType.has(markType)) {
+  //         this.#renderBatches.byMarkType.set(markType, []);
+  //       }
+  //       this.#renderBatches.byMarkType.get(markType).push(chart);
+  //     }
+      
+  //     // Group by z-index
+  //     const zIndex = chart.zIndex || 0;
+  //     if (!this.#renderBatches.byZIndex.has(zIndex)) {
+  //       this.#renderBatches.byZIndex.set(zIndex, []);
+  //     }
+  //     this.#renderBatches.byZIndex.get(zIndex).push(chart);
+  //   }
+    
+  //   this.#renderBatches.needsRebuild = false;
+    
+  //   console.debug(`✅ Render batches rebuilt:`, {
+  //     markTypes: this.#renderBatches.byMarkType.size,
+  //     zLevels: this.#renderBatches.byZIndex.size
+  //   });
+  // }
+
+
+  #rebuildRenderBatches() {
+    console.debug(`🔄 Rebuilding render batches...`);
+    this.#renderBatches.byMarkType.clear();
+    this.#renderBatches.byZIndex.clear(); // Keep this for future z-index work
+
+    for (const chartConfig of this.#registeredCharts.values()) {
+        if (chartConfig.layers && chartConfig.layers.size > 0) {
+            for (const layerConfig of chartConfig.layers.values()) {
+                const markType = layerConfig.markType || 'unknown';
+
+                if (!this.#renderBatches.byMarkType.has(markType)) {
+                    this.#renderBatches.byMarkType.set(markType, []);
+                }
+                
+                this.#renderBatches.byMarkType.get(markType).push({
+                    ...layerConfig,
+                    chart: chartConfig 
+                });
+            }
+        }
     }
-    
     this.#renderBatches.needsRebuild = false;
-    
-    console.debug(`✅ Render batches rebuilt:`, {
-      markTypes: this.#renderBatches.byMarkType.size,
-      zLevels: this.#renderBatches.byZIndex.size
-    });
+    console.debug(`✅ Render batches rebuilt.`);
   }
 
   #fallbackIndividualRender(charts) {
