@@ -176,6 +176,8 @@ export class GPUCoordinator {
   #renderQueue = $state([]);
   #lastRenderTime = 0;
 
+  #loopIsActive = false;
+
   #needsRedraw = $state(false);
   #rafId = null;
 
