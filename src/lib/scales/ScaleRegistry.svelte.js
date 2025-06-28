@@ -17,9 +17,9 @@ class ScaleRegistry {
   }
 
   getOrCreateScale(name, type='linear') {
-    console.log(`🔍 Registry ${this.registryId} getting scale: ${name} (${type})`);
+    // console.log(`🔍 Registry ${this.registryId} getting scale: ${name} (${type})`);
     if (!this.scales[type].has(name)) {
-      console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`);
+      // console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`);
       if (type === 'linear') {
         this.scales[type].set(name, new LinearScaleState(name));
       } else if (type === 'band') {
@@ -31,7 +31,7 @@ class ScaleRegistry {
       	  .domain(['Adelie', 'Gentoo', 'Chinstrap']));
       }
     } else {
-      console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
+      // console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
     }
     return this.scales[type].get(name);
   }
@@ -55,13 +55,13 @@ export function getScaleState(name, type='linear') {
 
   const scaleInstance = scaleRegistry.getOrCreateScale(name, type);
   
-  // ✅ ADD: Debug what we're returning
-  console.log(`🎯 getScaleState(${name}, ${type}) returning:`, {
-    registryId: scaleRegistry.registryId,
-    scaleInstance,
-    scaleInstanceId: scaleInstance?.name,
-    scaleObject: scaleInstance
-  });
+  // // ✅ ADD: Debug what we're returning
+  // console.log(`🎯 getScaleState(${name}, ${type}) returning:`, {
+  //   registryId: scaleRegistry.registryId,
+  //   scaleInstance,
+  //   scaleInstanceId: scaleInstance?.name,
+  //   scaleObject: scaleInstance
+  // });
   
   return scaleRegistry.getOrCreateScale(name, type);
 }

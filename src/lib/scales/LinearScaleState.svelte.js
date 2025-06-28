@@ -253,13 +253,6 @@ export class LinearScaleState {
   }
 
   resetZoom() {
-    console.log(`🔄 Scale ${this.name}: resetZoom called`, {
-      currentDomain: this.domain.current,
-      targetDomain: this.effectiveExtent,
-      ready: this.ready,
-      zoomEffectEnabled: this.zoomInEffect.enabled
-    });
-
     const [currentMin, currentMax] = this.domain.target;
     const [targetMin, targetMax] = this.effectiveExtent;
     

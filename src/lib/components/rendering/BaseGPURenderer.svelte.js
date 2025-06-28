@@ -227,9 +227,9 @@ export class BaseGPURenderer {
    * @returns {Float32Array} Array of indices
    */
   #convertCategoriesToIndices(categoryData, scale, axis) {
-    console.log(categoryData)
+    // console.log(categoryData)
     const domain = scale?.domain?.() || [];
-    console.log(domain)
+    // console.log(domain)
     
     // Create category → index mapping with performance optimization
     const categoryMap = new Map();
@@ -284,7 +284,7 @@ export class BaseGPURenderer {
    */
   async initialize(config) {
     try {
-      console.log(`🔧 Initializing ${this.#markType} renderer`);
+      // console.log(`🔧 Initializing ${this.#markType} renderer`);
       
       const device = this.#webGPUContext.getDevice();
       if (!device) {
@@ -295,7 +295,7 @@ export class BaseGPURenderer {
       await this.#createCommonBuffers(device);
       
       this.#resourcesCreated = true;
-      console.log(`✅ ${this.#markType} renderer initialized successfully`);
+      // console.log(`✅ ${this.#markType} renderer initialized successfully`);
       
     } catch (error) {
       console.error(`❌ ${this.#markType} renderer initialization failed:`, error);
@@ -326,7 +326,7 @@ export class BaseGPURenderer {
         // ✅ Call the NEW registerLayer method on the COORDINATOR, not the webgpu-canvas context.
         this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
 
-        console.log(`📋 ${this.#markType} layer registered directly with coordinator for chart ${chartId}`);
+        // console.log(`📋 ${this.#markType} layer registered directly with coordinator for chart ${chartId}`);
         return this.#ownedResources.layerControl;
 
     } catch (error) {
@@ -579,9 +579,9 @@ export class BaseGPURenderer {
       const xRange = xScale.scale?.range?.() || [0, 1];
       const yRange = yScale.scale?.range?.() || [0, 1];
       
-      console.log(`📊 [${chartId}] Scale values for GPU:`, {
-        xDomain, yDomain, xRange, yRange
-      });
+      // console.log(`📊 [${chartId}] Scale values for GPU:`, {
+      //   xDomain, yDomain, xRange, yRange
+      // });
   
       // Enhanced scale parameters (16 floats) - matches GPU struct exactly
       const scaleParams = new Float32Array(16);
@@ -598,9 +598,9 @@ export class BaseGPURenderer {
   
       // ... rest of positions 8-15
   
-      console.log(`🎯 [${chartId}] Writing scale params to GPU:`, Array.from(scaleParams));
+      // console.log(`🎯 [${chartId}] Writing scale params to GPU:`, Array.from(scaleParams));
       device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
-      console.log(`✅ [${chartId}] GPU buffer written successfully`);
+      // console.log(`✅ [${chartId}] GPU buffer written successfully`);
       
     } catch (error) {
       console.error(`❌ [${chartId}] updateScaleParameters failed:`, error);

@@ -424,13 +424,6 @@
         setupCanvas();
     }
   });
-
-  // Cleanup resize timeout on destroy
-  onDestroy(() => {
-    if (resizeTimeoutId) {
-      clearTimeout(resizeTimeoutId);
-    }
-  });
 </script>
 
 {#if initializationError}

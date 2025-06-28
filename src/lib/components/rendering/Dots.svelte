@@ -258,7 +258,7 @@
 
   // Dots-specific draw function
   function drawDots(passEncoder) {
-    console.log('Dots draw operation started');
+    // console.log('Dots draw operation started');
 
     try {
       if (!renderer?.pipeline || !renderer?.bindGroup || renderer.instanceCount === 0) {
@@ -271,7 +271,7 @@
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
 
-      console.log('Dots draw operation completed');
+      // console.log('Dots draw operation completed');
       
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);
@@ -299,7 +299,7 @@
   // Initialize dots renderer
   async function initializeDots() {
     try {
-      console.log('🚀 Initializing Dots component with centralized scale support');
+      // console.log('🚀 Initializing Dots component with centralized scale support');
 
       // Check GPU coordinator is available
       if (!gpuCoordinator) {
@@ -330,7 +330,7 @@
       // Register layer with base renderer
       renderer.registerLayer(drawDots);
 
-      console.log('✅ Dots component initialized successfully with centralized scales');
+      // console.log('✅ Dots component initialized successfully with centralized scales');
       
     } catch (error) {
       console.error('❌ Dots component initialization failed:', error);
@@ -349,7 +349,7 @@
   });
 
   onDestroy(() => {
-    console.log('🧹 Cleaning up Dots component');
+    // console.log('🧹 Cleaning up Dots component');
     
     try {
       // Clean up dots-specific resources
@@ -362,7 +362,7 @@
         renderer.destroy();
       }
 
-      console.log('✅ Dots component cleanup complete');
+      // console.log('✅ Dots component cleanup complete');
       
     } catch (error) {
       console.error('❌ Error during Dots component cleanup:', error);
@@ -396,7 +396,7 @@
     void c.innerWidth;
     void c.innerHeight;
     
-    console.log(`[${c.xLabel}x${c.yLabel}] Layout change detected. Updating renderer buffers only.`);
+    // console.log(`[${c.xLabel}x${c.yLabel}] Layout change detected. Updating renderer buffers only.`);
 
     untrack(() => {
       renderer.handleResolutionChange();
@@ -414,7 +414,7 @@
     void c.xScaleState?.domain?.current;
     void c.yScaleState?.domain?.current;
 
-    console.log(`[${c.xLabel}x${c.yLabel}] Domain change detected. Updating buffers and invalidating.`);
+    // console.log(`[${c.xLabel}x${c.yLabel}] Domain change detected. Updating buffers and invalidating.`);
     
     untrack(() => {
       // First, update the GPU buffer with the latest domain value from the tween
