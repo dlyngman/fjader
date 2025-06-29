@@ -957,24 +957,49 @@ GPU Re-render (Automatic via reactivity)
 
 ---
 
-## 🔄 **Data Flow & Reactivity**
+## 🔄 **Data Flow & Reactivity: The Managed Render Loop**
 
 ### **Current Data Flow (Implemented)**:
 1.  **Parent** updates chartConfig
 2.  **ChartContainer** receives new xLabel/yLabel props
-3.  **ChartScales** recreated with new labels (via `$derived`)
-4.  **New scale states** retrieved from registry based on resolved scale types
+3.  **ChartScales** is recreated with new labels (via `$derived`)
+4.  **New scale states** are retrieved from the registry based on resolved scale types
 5.  **Charts sync** automatically if sharing scale states
 
-### **New Invalidation & Redraw Flow (Implemented)**
-The previous invalidation logic could cause redundant work during rapid updates. The new system is debounced and highly efficient.
+### **New Invalidation & Redraw Flow: Dual-Mode Managed Loop (Implemented)**
+The previous microtask-based invalidation has been upgraded to a more robust and explicit **Managed Loop** system. This provides maximum efficiency for both static data updates and smooth, continuous animations without hacks or guesswork. The `GPUCoordinator` operates in two distinct modes:
 
-1.  **Invalidation Event**: An interaction (pan/zoom) or resize triggers an `$effect` in a component.
+#### **Mode 1: Sleeping (On-Demand, Event-Driven Rendering)**
+This is the default, highly efficient state for static charts. The render loop is "asleep" until a change occurs.
+
+**Use Cases**: Initial data load, chart resizing, props changing.
+
+**Flow**:
+1.  **Invalidation Event**: A resize or data update triggers an `$effect` in a component.
 2.  **Mark as Dirty**: The component calls `coordinator.invalidateChart(chartId)`.
-3.  **Add to Dirty Set**: The coordinator adds the `chartId` to a global `#dirtyChartIDs` set. This is a very fast operation.
-4.  **Schedule a Microtask**: The coordinator uses `queueMicrotask` to schedule a **single** task to run after all synchronous code has finished. This microtask's only job is to call `requestAnimationFrame`.
-5.  **De-duplication**: All subsequent invalidation calls within the same event tick see that a microtask is already queued and do nothing further. This prevents the "invalidation storm."
-6.  **Coordinated Render**: The single `requestAnimationFrame` fires. The coordinator's `render()` method runs, iterates through the `#dirtyChartIDs` set, renders only those charts in efficient batches, and then clears the set.
+3.  **Add to Dirty Set**: The coordinator adds the `chartId` to the global `#dirtyChartIDs` set.
+4.  **Check Loop State**: The coordinator sees that its continuous loop is not active (`#loopIsActive` is `false`).
+5.  **Schedule a Single Frame**: It calls `#requestSingleFrame()`, which queues a **single** `requestAnimationFrame` to perform the render. No more work is scheduled.
+6.  **Render & Sleep**: The `rAF` fires. The coordinator's `render()` method runs, draws only the dirty charts, clears the set, and goes back to sleep.
+
+#### **Mode 2: Active (Continuous Rendering)**
+This mode is explicitly requested by components that require smooth, high-framerate updates.
+
+**Use Cases**: Animations (tweening), real-time crosshair feedback, interactive brushing.
+
+**Flow**:
+1.  **Request Loop**: An animation starts (e.g., in `Dots.svelte`). It calls `coordinator.requestActiveLoop(requesterId)` with a unique ID.
+2.  **Start Loop**: The coordinator sees it's the first requester, sets `#loopIsActive` to `true`, and starts a continuous `rAF` loop via `#setupContinuousRenderLoop()`.
+3.  **Frame-by-Frame Updates**: On each animation frame, the Svelte tween updates its value. The component's `$effect` tracks this change and calls `coordinator.invalidateChart(chartId)`.
+4.  **Continuous Render**: The active `rAF` loop fires, sees the dirty chart in the `#dirtyChartIDs` set, and re-renders it with the new interpolated data.
+5.  **Release Loop**: When the animation finishes, the component calls `coordinator.releaseActiveLoop(requesterId)`.
+6.  **Go to Sleep**: The coordinator removes the ID from its set of requesters. If the set is now empty, it sets `#loopIsActive` to `false`. The `rAF` loop runs one last time, sees the flag is false, and terminates, returning the system to Sleeping Mode.
+
+### **Architectural Advantages of the Managed Loop**:
+- ✅ **Explicit Control**: The system doesn't have to guess if an animation is running. Components that need high-frequency updates explicitly request them.
+- ✅ **Maximum Efficiency**: The GPU is completely idle in Sleeping Mode. The continuous loop only runs when absolutely necessary.
+- ✅ **Animation-Ready**: Eliminates the need for `setTimeout` workarounds to keep the render loop alive for the duration of an animation.
+- ✅ **Robust & Centralized**: The coordinator perfectly handles multiple components requesting/releasing the active loop, ensuring it runs as long as needed and stops when all work is done.
 
 ---
 
@@ -1487,43 +1512,98 @@ Instead of a single `Mark` class that handles all data fetching, state, and rend
 
 ---
 
-### **Data & Initialization Flow (Corrected)**
 
-The lifecycle is orchestrated by the `Coordinator` and Svelte's reactivity, ensuring a robust and predictable flow.
+### **Data & Initialization Flow: A Reactive State machine (Corrected)**
 
-1.  **Mount (`onMount` in Mark.svelte):**
-    -   The `<DotsMark>` component is mounted.
-    -   It instantiates its `BaseMarkSetup` controller.
-    -   The `BaseMarkSetup` constructor immediately registers its scale requirements (`'linear'`, `'band'`) with the `ChartScales` coordinator.
-    -   The component then calls `setup.setup()`.
+The lifecycle of a mark is no longer a simple, imperative set of steps but a robust, declarative **state machine** orchestrated by Svelte 5's reactivity. The `BaseMarkSetup` controller manages a series of state flags that are flipped as each asynchronous step completes. This ensures that the system is resilient to timing issues and that data fetching and GPU preparation happen in a predictable, efficient order.
 
-2.  **Setup Orchestration (`BaseMarkSetup.setup()`):**
-    -   The controller first determines what metadata it needs (e.g., `min`/`max` for its linear `x` axis).
-    -   It creates a new `DataClient` instance, passing it the necessary configuration, including the list of required metadata (`fieldRequests`) and a reference to its own `buildQuery` method.
-    -   It connects the client to the main Mosaic `Coordinator`: `coordinator.connect(client)`.
+The entire process is kicked off when a mark component (e.g., `<DotsMark>`) is mounted.
 
-3.  **Mosaic Lifecycle Trigger (`coordinator.connect()`):**
-    -   The Mosaic `Coordinator` takes ownership and begins the client lifecycle.
-    -   It calls `client.initialize()`, which in turn calls `await client.prepare()`.
+#### **Visualizing the Flow**
+
+```
+        Mark Component / Controller                  Mosaic Coordinator / DataClient
+┌───────────────────────────────────────┐         ┌───────────────────────────────────────┐
+| 1. <DotsMark> mounts, creates         |         |                                       |
+|    `BaseMarkSetup` controller.        |         |                                       |
+|    Calls `registerInitialScales()`    |         |                                       |
+└──────────────────┬────────────────────┘         |                                       |
+                   │ (Scale requirements updated) |                                       |
+┌──────────────────▼────────────────────┐         |                                       |
+| 2. `$effect` chain begins in          |         |                                       |
+|    `BaseMarkSetup`:                     |         |                                       |
+|    - `scaleStatesReady` → true        |         |                                       |
+|    - `scaleMappingsReady` → true      |         |                                       |
+|    - `clientCreated` → true           |         |                                       |
+|    (creates `DataClient` instance)    |         |                                       |
+└──────────────────┬────────────────────┘         |                                       |
+                   │ `coordinator.connect(client)`│                                       |
+                   ├─────────────────────────────►│ 3. Hand-off to Mosaic. Coordinator  |
+                   │                              │    takes ownership of client lifecycle. |
+                   │                              └──────────────────┬────────────────────┘
+                   │                                                 │ `client.prepare()`
+┌──────────────────▼────────────────────┐         ┌──────────────────▼────────────────────┐
+| 6. `$effect` chain resumes:           |         | 4. `DataClient` executes `fieldRequests`|
+|    - `continuousDomainsSet` → true    |         |    (e.g., MIN/MAX queries) to get     |
+|    (sets min/max on linear scales)    |         |    metadata.                          |
+|    - `categoricalFetchStarted` → true |         |                                       |
+|    (triggers DISTINCT query)          |         |                                       |
+└──────────────────┬────────────────────┘         └──────────────────┬────────────────────┘
+                   │ `await #fetchCategorical()`                    │ `this.fieldInfo` populated
+                   │                              ◄─────────────────┤
+┌──────────────────▼────────────────────┐         ┌──────────────────▼────────────────────┐
+| 7. Final fetch completes:             |         | 8. In parallel, Coordinator issues    |
+|    `categoricalDataFetched` → true    |         |    the main data query for the mark.  |
+└──────────────────┬────────────────────┘         └──────────────────┬────────────────────┘
+                   │ `gpuReady` now `true`                           │ `client.arrowTable` populated
+┌──────────────────▼────────────────────┐         ┌──────────────────▼────────────────────┐
+| 9. Svelte View (`<DotsMark>`) finally |         |                                       |
+|    renders the low-level GPU          |         |                                       |
+|    renderer (`<Dots>`), passing it    |         |                                       |
+|    the `arrowTable`.                  |         |                                       |
+└───────────────────────────────────────┘         └───────────────────────────────────────┘
+```
+
+#### **Step-by-Step Breakdown**
+
+1.  **Mount & Initial Registration (`onMount` in Mark.svelte):**
+    *   The `<DotsMark>` component is mounted and instantiates its `BaseMarkSetup` controller.
+    *   It immediately calls `setup.registerInitialScaleRequirements()`, which informs the `ChartScales` coordinator of its needs (e.g., `'linear'`, `'band'`). This is the **ignition key** for the entire process.
+
+2.  **The Reactive Chain Reaction (`$effect`s in `BaseMarkSetup`):**
+    *   A series of Svelte `$effect`s within `BaseMarkSetup` now take over, creating a reactive chain reaction. Each effect waits for the previous step's state flag to become `true` before executing its logic and setting its own flag.
+    *   This chain handles:
+        *   Waiting for the chart's scale state objects (`xScaleState`, `yScaleState`) to be ready.
+        *   Mapping the mark's `x`/`y` encodings to the correct scale state instances.
+        *   Finally, creating the `DataClient` instance.
+
+3.  **Hand-off to Mosaic (`coordinator.connect()`):**
+    *   Upon creation, the `DataClient` is connected to the main Mosaic `Coordinator`. The `Coordinator` now takes ownership of the client's lifecycle, which is crucial for managing queries and caching across the application.
 
 4.  **Metadata Fetch (`DataClient.prepare()`):**
-    -   The `DataClient`'s `prepare` method executes. It is a "dumb" executor.
-    -   It runs the `fieldRequests` it was given during construction to fetch the `min`/`max` values.
-    -   Upon completion, it sets its public, reactive state: `this.fieldInfo = ...`.
+    *   The Mosaic `Coordinator` calls the client's `prepare()` method.
+    *   The `DataClient` executes the initial `fieldRequests` it was given (e.g., `SELECT MIN(x), MAX(x) FROM ...`) to fetch the necessary metadata for setting up continuous scale domains.
+    *   When complete, it sets its public, reactive state: `client.fieldInfo = ...`.
 
-5.  **Reactive Domain Setting (`BaseMarkSetup` `$effect`):**
-    -   A Svelte `$effect` inside `BaseMarkSetup` was waiting for `client.fieldInfo` to be populated.
-    -   This effect now triggers. It reads the `fieldInfo` and calls `scaleState.addMark(...)` to set the initial domain for any **continuous** scales.
-    -   It then proceeds to `await` its own `#fetchCategoricalDomains()` method.
+5.  **Resuming the Reactive Chain (`$effect` for continuous domains):**
+    *   Back in `BaseMarkSetup`, an `$effect` that was waiting for `client.fieldInfo` to be populated now triggers.
+    *   It reads the fetched `min`/`max` values and calls `scaleState.addMark(...)` to set the initial domain for any **continuous** scales.
 
-6.  **Categorical Domain Fetch (`BaseMarkSetup`):**
-    -   If the mark requires a `band` or `point` scale, this method constructs and executes the necessary `SELECT DISTINCT ... ORDER BY ...` query.
-    -   When the query returns, it populates the domain of the corresponding `BandScaleState`.
-    -   Finally, it sets `this.categoricalDataFetched = true`.
+6.  **Final Domain Fetch (Categorical):**
+    *   The completion of the previous step triggers the final effect in the chain.
+    *   This effect calls the async `#fetchCategoricalDomains()` method, which runs any necessary `SELECT DISTINCT ...` queries for band or point scales.
 
-7.  **GPU Readiness & Rendering:**
-    -   The `gpuReady` `$derived` property in `BaseMarkSetup` now becomes `true` (because `scalesReady` and `categoricalDataFetched` are both true).
-    -   The Svelte View (`<DotsMark.svelte>`), which was reactively waiting on `setup.gpuReady`, now renders its low-level `<Dots>` WebGPU component.
-    -   Simultaneously, the `MosaicClient` lifecycle continues, and the main data query is executed, populating `client.arrowTable`, which is also passed to the renderer.
+7.  **The "Ready" Signal (`gpuReady`):**
+    *   Once the categorical domain fetch completes, the final state flag, `categoricalDataFetched`, is set to `true`.
+    *   This causes the `$derived` property `setup.gpuReady` to finally evaluate to `true`.
 
-This refined architecture ensures a clean, predictable, and extensible system where each layer has a clear and logical purpose, fully leveraging the power of both Mosaic's data engine and Svelte's reactivity.
+8.  **View Renders:**
+    *   The Svelte View (`<DotsMark.svelte>`), which was reactively waiting on `setup.gpuReady`, now receives the signal.
+    *   It renders its low-level `<Dots>` WebGPU component. Simultaneously, the main data query has been executing in the background, and the `client.arrowTable` is passed to the renderer, which can now draw the marks.
+
+#### **Key Advantages of this Architecture:**
+
+*   **Declarative & Robust**: The flow is driven by state changes, not imperative calls, making it resilient to race conditions and complex asynchronous timing.
+*   **Efficient**: Metadata queries are dispatched early and in parallel where possible.
+*   **Extensible**: New, complex marks can easily extend `BaseMarkSetup` and tap into this lifecycle without rewriting boilerplate.
+*   **Debuggable**: The state flags (`#scaleStatesReady`, `#clientCreated`, etc.) provide a clear, step-by-step trace of the initialization process.
