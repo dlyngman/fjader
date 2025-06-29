@@ -320,6 +320,25 @@ export class LinearScaleState {
     this.domain.target = [min, max];
   }
 
+  #domainScaleFactor = $derived.by(() => {
+    const [min, max] = this.domain.current;
+    const range = max - min;
+    
+    // Handle the division-by-zero edge case.
+    return range === 0 ? 0 : 1 / range;
+  });
+
+  get gpuState() {
+      const [min, max] = this.domain.current;
+
+      return {
+          domainMin: min,
+          domainMax: max,
+          categoryCount: 0,
+          domainScale: this.#domainScaleFactor
+      };
+  }
+
   /**
    * Get debug information about current state
    * @returns {Object} Debug information

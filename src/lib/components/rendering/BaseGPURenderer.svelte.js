@@ -1,6 +1,3 @@
-// src/lib/components/rendering/BaseGPURenderer.svelte.js
-import { untrack } from 'svelte';
-
 /**
  * Base class for GPU-based renderers that handles common patterns:
  * - Resource lifecycle management
@@ -30,11 +27,17 @@ export class BaseGPURenderer {
   #instanceCount = $state(0);
 
   // GPU resources
+  #device = null;
   #pipeline = $state(null);
   #bindGroup = $state(null);
+  #scaleParamsArray = new Float32Array(32);
   #scaleParamsBuffer = $state(null);
   #resolutionBuffer = $state(null);
   #dprBuffer = $state(null);
+
+  // Resource tracking
+  #ownedBuffers = []; 
+  #layerControl = null;
 
   // Configuration
   #zIndex;
@@ -72,6 +75,18 @@ export class BaseGPURenderer {
         bandwidth: vec2<f32>,       // [10-11] Band scale bandwidths
         padding: vec2<f32>,         // [12-13] Band scale padding
         categoryCount: vec2<f32>,   // [14-15] Number of categories for band scales
+
+        // Pre-computed optimization values
+        domainScale: vec2<f32>,     // 1.0 / (domainMax - domainMin)
+        rangeSize: vec2<f32>,       // rangeMax - rangeMin
+        
+        // Padding to ensure 128-byte alignment, ready for future use
+        padding_0: vec2<f32>,
+        padding_1: vec2<f32>,
+        padding_2: vec2<f32>,
+        padding_3: vec2<f32>,
+        padding_4: vec2<f32>,
+        padding_5: vec2<f32>,
       };
 
       // Universal scaling function that handles all scale types
@@ -79,22 +94,21 @@ export class BaseGPURenderer {
         value: f32, 
         scaleType: f32,
         domainMin: f32, 
-        domainMax: f32, 
+        domainScale: f32,
         rangeMin: f32, 
-        rangeMax: f32,
+        rangeSize: f32,
         bandwidth: f32,
         categoryCount: f32
       ) -> f32 {
         if (scaleType == 0.0) {
           // Linear scale
-          let normalized = (value - domainMin) / (domainMax - domainMin);
-          return rangeMin + normalized * (rangeMax - rangeMin);
+          let normalized = (value - domainMin) * domainScale;
+          return rangeMin + normalized * rangeSize;
           
         } else if (scaleType == 1.0) {
           // Band scale: value is category index, position at center of band
           let categoryIndex = floor(value);
-          let totalRange = rangeMax - rangeMin;
-          let step = totalRange / categoryCount;
+          let step = rangeSize / categoryCount;
           
           // Position at center of the band
           return rangeMin + categoryIndex * step + bandwidth * 0.5;
@@ -102,8 +116,7 @@ export class BaseGPURenderer {
         } else if (scaleType == 2.0) {
           // Point scale: evenly distributed points
           let categoryIndex = floor(value);
-          let totalRange = rangeMax - rangeMin;
-          let step = totalRange / max(1.0, categoryCount - 1.0);
+          let step = rangeSize / max(1.0, categoryCount - 1.0);
           
           return rangeMin + categoryIndex * step;
           
@@ -111,18 +124,11 @@ export class BaseGPURenderer {
           // Identity scale: pass through (for pixel coordinates)
           return value;
           
-        } else if (scaleType == 4.0) {
-          // Log scale (future enhancement)
-          let logValue = log(value);
-          let logMin = log(domainMin);
-          let logMax = log(domainMax);
-          let normalized = (logValue - logMin) / (logMax - logMin);
-          return rangeMin + normalized * (rangeMax - rangeMin);
         }
         
         // Fallback to linear for unknown scale types
-        let normalized = (value - domainMin) / (domainMax - domainMin);
-        return rangeMin + normalized * (rangeMax - rangeMin);
+        let normalized = (value - domainMin) * domainScale;
+        return rangeMin + normalized * rangeSize;
       }
 
       // Convenience functions for X and Y axes - components just call these!
@@ -131,9 +137,9 @@ export class BaseGPURenderer {
           value,
           scaleParams.scaleTypes.x,
           scaleParams.domainMin.x,
-          scaleParams.domainMax.x,
+          scaleParams.domainScale.x,
           scaleParams.rangeMin.x,
-          scaleParams.rangeMax.x,
+          scaleParams.rangeSize.x,
           scaleParams.bandwidth.x,
           scaleParams.categoryCount.x
         );
@@ -144,9 +150,9 @@ export class BaseGPURenderer {
           value,
           scaleParams.scaleTypes.y,
           scaleParams.domainMin.y,
-          scaleParams.domainMax.y,
+          scaleParams.domainScale.y,
           scaleParams.rangeMin.y,
-          scaleParams.rangeMax.y,
+          scaleParams.rangeSize.y,
           scaleParams.bandwidth.y,
           scaleParams.categoryCount.y
         );
@@ -219,53 +225,7 @@ export class BaseGPURenderer {
     }
   }
 
-  /**
-   * Convert categorical data to indices for band/point scales
-   * @param {Array} categoryData - Array of category strings
-   * @param {Object} scale - D3 scale object
-   * @param {string} axis - 'x' or 'y'
-   * @returns {Float32Array} Array of indices
-   */
-  #convertCategoriesToIndices(categoryData, scale, axis) {
-    // console.log(categoryData)
-    const domain = scale?.domain?.() || [];
-    // console.log(domain)
-    
-    // Create category → index mapping with performance optimization
-    const categoryMap = new Map();
-    domain.forEach((category, index) => {
-      categoryMap.set(category, index);
-    });
-
-    // Track unmapped categories for debugging
-    const unmappedCategories = new Set();
-    
-    const indices = new Float32Array(categoryData.map(category => {
-      const index = categoryMap.get(category);
-      if (index !== undefined) {
-        return index;
-      } else {
-        unmappedCategories.add(category);
-        return 0; // Default to first category
-      }
-    }));
-
-    // Warn about unmapped categories (only in development)
-    if (unmappedCategories.size > 0 && process.env.NODE_ENV === 'development') {
-      console.warn(
-        `🔶 ${this.#markType}: Unmapped categories for ${axis}-axis:`, 
-        Array.from(unmappedCategories).slice(0, 5), // Limit output
-        unmappedCategories.size > 5 ? `... and ${unmappedCategories.size - 5} more` : ''
-      );
-    }
-
-    return indices;
-  }
-
   // ===== PUBLIC GETTERS =====
-
-  get xScaleType() { return this.#xScaleType; }
-  get yScaleType() { return this.#yScaleType; }
 
   get resourcesCreated() { return this.#resourcesCreated; }
   get initializationError() { return this.#initializationError; }
@@ -285,14 +245,13 @@ export class BaseGPURenderer {
   async initialize(config) {
     try {
       // console.log(`🔧 Initializing ${this.#markType} renderer`);
-      
-      const device = this.#webGPUContext.getDevice();
-      if (!device) {
+      this.#device = this.#webGPUContext.getDevice();
+      if (!this.#device) {
         throw new Error('No WebGPU device available from context');
       }
 
-      await this.#createSharedResources(device, config);
-      await this.#createCommonBuffers(device);
+      await this.#createSharedResources(this.#device, config);
+      await this.#createCommonBuffers(this.#device);
       
       this.#resourcesCreated = true;
       // console.log(`✅ ${this.#markType} renderer initialized successfully`);
@@ -335,29 +294,6 @@ export class BaseGPURenderer {
         throw error;
     }
   }
-  // /**
-  //  * Register this renderer as a layer with the WebGPU canvas
-  //  * @param {Function} drawFunction - Shape-specific draw function
-  //  */
-  // registerLayer(drawFunction) {
-  //   try {
-  //     this.#ownedResources.layerControl = this.#webGPUContext.registerLayer({
-  //       zIndex: this.#zIndex,
-  //       draw: drawFunction,
-  //       visible: true,
-  //       markType: this.#markType,
-  //       componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
-  //     });
-
-  //     console.log(`📋 ${this.#markType} layer registered successfully`);
-  //     return this.#ownedResources.layerControl;
-      
-  //   } catch (error) {
-  //     console.error(`❌ ${this.#markType} layer registration failed:`, error);
-  //     this.#initializationError = error.message;
-  //     throw error;
-  //   }
-  // }
 
   // ===== SHARED RESOURCE MANAGEMENT =====
 
@@ -422,7 +358,7 @@ export class BaseGPURenderer {
     this.#ownedResources.buffers.push(this.#resolutionBuffer);
 
     this.#scaleParamsBuffer = device.createBuffer({
-      size: 64, // 16 f32 values for enhanced scale parameters
+      size: 128, // 16 f32 values for enhanced scale parameters
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.#ownedResources.buffers.push(this.#scaleParamsBuffer);
@@ -455,8 +391,8 @@ export class BaseGPURenderer {
    * @returns {GPUBuffer} New or existing buffer
    */
   createOrUpdateBuffer(existingBuffer, data, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
-    const device = this.#webGPUContext.getDevice();
-    if (!device) {
+    // const device = this.#webGPUContext.getDevice();
+    if (!this.#device) {
       throw new Error('No WebGPU device available');
     }
     
@@ -480,7 +416,7 @@ export class BaseGPURenderer {
       let bufferSize = Math.max(requiredSize, roundedUpSize);
       bufferSize = (bufferSize + 3) & ~3; // Ensure 4-byte alignment
 
-      const newBuffer = device.createBuffer({
+      const newBuffer = this.#device.createBuffer({
         size: bufferSize,
         usage,
       });
@@ -505,109 +441,69 @@ export class BaseGPURenderer {
   // ===== ENHANCED SCALE INTEGRATION =====
 
   /**
-   * Enhanced scale parameters update with complete scale type support
-   * This is where all the magic happens for universal scale support!
-   */
-  // updateScaleParameters() {
-  //   if (!this.#scaleParamsBuffer || !this.#chartContext) {
-  //     return;
-  //   }
-
-  //   try {
-  //     const device = this.#webGPUContext.getDevice();
-  //     if (!device) return;
-
-  //     const xScale = this.#chartContext.xScale;
-  //     const yScale = this.#chartContext.yScale;
-      
-  //     if (!xScale || !yScale) return;
-
-  //     // Convert scale type strings to GPU constants
-  //     const xScaleType = this.#getGPUScaleType(this.#xScaleType);
-  //     const yScaleType = this.#getGPUScaleType(this.#yScaleType);
-
-  //     // Enhanced scale parameters (16 floats) - matches GPU struct exactly
-  //     const scaleParams = new Float32Array(16);
-      
-  //     // Positions 0-7: Core scale parameters (backward compatible)
-  //     scaleParams[0] = this.#getDomainMin(xScale, this.#xScaleType);
-  //     scaleParams[1] = this.#getDomainMin(yScale, this.#yScaleType);
-  //     scaleParams[2] = this.#getDomainMax(xScale, this.#xScaleType);
-  //     scaleParams[3] = this.#getDomainMax(yScale, this.#yScaleType);
-  //     scaleParams[4] = this.#getRangeMin(xScale);
-  //     scaleParams[5] = this.#getRangeMin(yScale);
-  //     scaleParams[6] = this.#getRangeMax(xScale);
-  //     scaleParams[7] = this.#getRangeMax(yScale);
-
-  //     // Positions 8-15: Enhanced scale parameters
-  //     scaleParams[8] = xScaleType; // X scale type constant
-  //     scaleParams[9] = yScaleType; // Y scale type constant
-  //     scaleParams[10] = this.#getBandwidth(xScale, this.#xScaleType); // X bandwidth
-  //     scaleParams[11] = this.#getBandwidth(yScale, this.#yScaleType); // Y bandwidth
-  //     scaleParams[12] = this.#getPadding(xScale, this.#xScaleType); // X padding
-  //     scaleParams[13] = this.#getPadding(yScale, this.#yScaleType); // Y padding
-  //     scaleParams[14] = this.#getCategoryCount(xScale, this.#xScaleType); // X category count
-  //     scaleParams[15] = this.#getCategoryCount(yScale, this.#yScaleType); // Y category count
-
-  //     device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
-      
-  //   } catch (error) {
-  //     console.error(`❌ Failed to update scale parameters for ${this.#markType}:`, error);
-  //   }
-  // }
-
-  updateScaleParameters() {
-    const chartId = `${this.#chartContext?.xLabel || 'unknown'}x${this.#chartContext?.yLabel || 'unknown'}`;
-    
-    if (!this.#scaleParamsBuffer || !this.#chartContext) {
-      console.log(`❌ [${chartId}] updateScaleParameters: Missing buffer or context`);
-      return;
+ * Updates the GPU's uniform buffer with all necessary scale parameters.
+ * This function is on the "hot path" and is called on every frame during interactions.
+ * It's optimized to be extremely fast by using a pre-allocated array and a
+ * unified `gpuState` interface from the scale state objects.
+ */
+updateScaleParameters() {
+    if (!this.#device || !this.#scaleParamsBuffer || !this.#chartContext) {
+        return;
     }
-  
+
     try {
-      const device = this.#webGPUContext.getDevice();
-      if (!device) return;
-  
-      const xScale = this.#chartContext.xScale;
-      const yScale = this.#chartContext.yScale;
-      
-      if (!xScale || !yScale) return;
-  
-      // Log the actual scale values being used
-      const xDomain = xScale.scale?.domain?.() || [0, 1];
-      const yDomain = yScale.scale?.domain?.() || [0, 1];
-      const xRange = xScale.scale?.range?.() || [0, 1];
-      const yRange = yScale.scale?.range?.() || [0, 1];
-      
-      // console.log(`📊 [${chartId}] Scale values for GPU:`, {
-      //   xDomain, yDomain, xRange, yRange
-      // });
-  
-      // Enhanced scale parameters (16 floats) - matches GPU struct exactly
-      const scaleParams = new Float32Array(16);
-      
-      // Positions 0-7: Core scale parameters (existing logic)
-      scaleParams[0] = this.#getDomainMin(xScale, this.#xScaleType);
-      scaleParams[1] = this.#getDomainMin(yScale, this.#yScaleType);
-      scaleParams[2] = this.#getDomainMax(xScale, this.#xScaleType);
-      scaleParams[3] = this.#getDomainMax(yScale, this.#yScaleType);
-      scaleParams[4] = this.#getRangeMin(xScale);
-      scaleParams[5] = this.#getRangeMin(yScale);
-      scaleParams[6] = this.#getRangeMax(xScale);
-      scaleParams[7] = this.#getRangeMax(yScale);
-  
-      // ... rest of positions 8-15
-  
-      // console.log(`🎯 [${chartId}] Writing scale params to GPU:`, Array.from(scaleParams));
-      device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
-      // console.log(`✅ [${chartId}] GPU buffer written successfully`);
-      
+      const c = this.#chartContext;
+      const scaleParams = this.#scaleParamsArray;
+
+      const xScaleState = c.xScaleState;
+      const yScaleState = c.yScaleState;
+      const scaleTypes = c.scaleTypes;
+
+      if (!xScaleState || !yScaleState || !scaleTypes) return;
+
+      const xGpuState = xScaleState.gpuState;
+      const yGpuState = yScaleState.gpuState;
+
+      // ---- Indices 0-7: Core Domain & Range ----
+      scaleParams[0] = xGpuState.domainMin;
+      scaleParams[1] = yGpuState.domainMin;
+      scaleParams[2] = xGpuState.domainMax;
+      scaleParams[3] = yGpuState.domainMax;
+      scaleParams[4] = 0;
+      scaleParams[5] = c.innerHeight;
+      scaleParams[6] = c.innerWidth;
+      scaleParams[7] = 0;
+
+      // ---- Indices 8-15: Scale Type & Categorical Info ----
+      scaleParams[8] = this.#getGPUScaleType(scaleTypes.x);
+      scaleParams[9] = this.#getGPUScaleType(scaleTypes.y);
+      scaleParams[10] = xScaleState.bandwidth ?? 0; // Get directly from state class
+      scaleParams[11] = yScaleState.bandwidth ?? 0;
+      scaleParams[12] = xScaleState.padding ?? 0;   // Assumes `padding` getter exists
+      scaleParams[13] = yScaleState.padding ?? 0;
+      scaleParams[14] = xGpuState.categoryCount;
+      scaleParams[15] = yGpuState.categoryCount;
+
+      // ---- Indices 16-23: Pre-computed Factors for Optimization ----
+      // Get the pre-calculated domain scale factor (1 / (max - min))
+      scaleParams[16] = xGpuState.domainScale ?? 0;
+      scaleParams[17] = yGpuState.domainScale ?? 0;
+
+      // Pre-calculate the range width/height
+      scaleParams[18] = c.innerWidth;
+      scaleParams[19] = -c.innerHeight;
+
+      // The remaining slots (20-31) are reserved for future use (e.g., rangeScale factors)
+      // It's good practice to zero them out.
+      scaleParams.fill(0, 20);
+
+      // Final, single write to the GPU command queue.
+      this.#device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
+        
     } catch (error) {
-      console.error(`❌ [${chartId}] updateScaleParameters failed:`, error);
+      console.error(`❌ Failed to update scale parameters for ${this.#markType}:`, error);
     }
   }
-
-  // ===== SCALE TYPE HELPERS =====
 
   /**
    * Convert scale type string to GPU constant
@@ -626,84 +522,6 @@ export class BaseGPURenderer {
         console.warn(`Unknown scale type: ${scaleType}, defaulting to linear`);
         return 0;
     }
-  }
-
-  /**
-   * Get domain minimum for different scale types
-   */
-  #getDomainMin(scale, scaleType) {
-    if (scaleType === 'identity') return 0.0; // Identity: pass-through
-    if (scaleType === 'band' || scaleType === 'point') return 0.0; // Band/point: use indices
-    if (scaleType === 'log') {
-      const domain = scale?.domain?.() || [1, 10];
-      return Math.log(Math.max(domain[0] || 1, 1));
-    }
-    const domain = scale?.domain?.() || [0, 1];
-    return domain[0] ?? 0.0;
-  }
-
-  /**
-   * Get domain maximum for different scale types
-   */
-  #getDomainMax(scale, scaleType) {
-    if (scaleType === 'identity') return 1.0; // Identity: pass-through
-    if (scaleType === 'band' || scaleType === 'point') {
-      const domain = scale?.domain?.() || [];
-      return Math.max(0, domain.length - 1); // Number of categories - 1
-    }
-    if (scaleType === 'log') {
-      const domain = scale?.domain?.() || [1, 10];
-      return Math.log(Math.max(domain[1] || 10, 1));
-    }
-    const domain = scale?.domain?.() || [0, 1];
-    return domain[1] ?? 1.0;
-  }
-
-  /**
-   * Get range minimum
-   */
-  #getRangeMin(scale) {
-    const range = scale?.range?.() || [0, 1];
-    return range[0] ?? 0.0;
-  }
-
-  /**
-   * Get range maximum
-   */
-  #getRangeMax(scale) {
-    const range = scale?.range?.() || [0, 1];
-    return range[1] ?? 1.0;
-  }
-
-  /**
-   * Get bandwidth for band scales
-   */
-  #getBandwidth(scale, scaleType) {
-    if (scaleType === 'band') {
-      return scale?.bandwidth?.() ?? 0.0;
-    }
-    return 0.0;
-  }
-
-  /**
-   * Get padding for band scales
-   */
-  #getPadding(scale, scaleType) {
-    if (scaleType === 'band') {
-      return scale?.paddingInner?.() ?? 0.1;
-    }
-    return 0.0;
-  }
-
-  /**
-   * Get category count for band/point scales
-   */
-  #getCategoryCount(scale, scaleType) {
-    if (scaleType === 'band' || scaleType === 'point') {
-      const domain = scale?.domain?.() || [];
-      return domain.length;
-    }
-    return 0.0;
   }
 
   /**
@@ -764,44 +582,6 @@ export class BaseGPURenderer {
   }
 
   // ===== REACTIVE EFFECTS HELPERS =====
-
-  /**
-   * Helper method to update scales (called from component's $effect)
-   * @param {Function} callback - Optional callback when scales change
-   */
-  // handleScaleChange(callback) {
-  //   if (this.#resourcesCreated && !this.#initializationError) {
-  //     this.updateScaleParameters();
-  //     if (callback) callback();
-  //     this.invalidateLayer();
-  //   }
-  // }
-  // handleScaleChange(callback) {
-  //   const chartId = `${this.#chartContext?.xLabel || 'unknown'}x${this.#chartContext?.yLabel || 'unknown'}`;
-    
-  //   console.log(`🔧 [${chartId}] BaseGPURenderer.handleScaleChange called for ${this.#markType}`, {
-  //     resourcesCreated: this.#resourcesCreated,
-  //     initializationError: this.#initializationError,
-  //     hasScaleParamsBuffer: !!this.#scaleParamsBuffer,
-  //     hasChartContext: !!this.#chartContext
-  //   });
-    
-  //   if (this.#resourcesCreated && !this.#initializationError) {
-  //     console.log(`✅ [${chartId}] Calling updateScaleParameters for ${this.#markType}`);
-  //     this.updateScaleParameters();
-      
-  //     if (callback) callback();
-      
-  //     console.log(`🔄 [${chartId}] Calling invalidateLayer for ${this.#markType}`);
-  //     this.invalidateLayer();
-  //   } else {
-  //     console.log(`❌ [${chartId}] Skipping scale update for ${this.#markType}:`, {
-  //       resourcesCreated: this.#resourcesCreated,
-  //       initializationError: this.#initializationError
-  //     });
-  //   }
-  // }
-
     /**
    * Updates the GPU buffer that contains scale parameters (domain, range, etc.).
    * This should be called whenever the scale's domain or range changes.
@@ -829,21 +609,6 @@ export class BaseGPURenderer {
 
   // ===== LAYER MANAGEMENT =====
 
-  // /**
-  //  * Invalidate the layer to trigger a redraw
-  //  */
-  // invalidateLayer() {
-  //   this.#ownedResources.layerControl?.invalidate();
-  // }
-
-  // /**
-  //  * Explicitly requests a redraw for this renderer's layer.
-  //  * This should be used for data updates or other visual changes.
-  //  */
-  // invalidateLayer() {
-  //   this.#ownedResources.layerControl?.invalidate();
-  // }
-
   /**
    * Invalidate the layer's parent chart to trigger a redraw.
    */
@@ -856,7 +621,7 @@ export class BaseGPURenderer {
   }
 
   /**
-   * Update layer properties
+   * Update layer properties, obsolete?
    * @param {Object} props - Properties to update
    */
   updateLayer(props) {
@@ -927,34 +692,5 @@ export class BaseGPURenderer {
     } catch (error) {
       console.error(`❌ Error during ${this.#markType} renderer cleanup:`, error);
     }
-  }
-
-  // ===== DEBUG UTILITIES =====
-
-  /**
-   * Get debug information about the renderer state
-   * @returns {Object} Debug information
-   */
-  getDebugInfo() {
-    return {
-      markType: this.#markType,
-      resourcesCreated: this.#resourcesCreated,
-      initializationError: this.#initializationError,
-      instanceCount: this.#instanceCount,
-      scaleTypes: {
-        x: this.#xScaleType,
-        y: this.#yScaleType
-      },
-      ownedResources: {
-        pipeline: this.#ownedResources.pipeline,
-        shader: this.#ownedResources.shader,
-        bufferCount: this.#ownedResources.buffers.length,
-        hasLayerControl: !!this.#ownedResources.layerControl
-      },
-      bufferSizes: this.#ownedResources.buffers.map(buffer => ({
-        size: buffer.size,
-        usage: buffer.usage
-      }))
-    };
   }
 }

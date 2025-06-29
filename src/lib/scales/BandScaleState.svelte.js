@@ -263,6 +263,17 @@ export class BandScaleState {
     return;
   }
 
+  gpuState = $derived.by(() => {
+    const categoryCount = this.#categoryIndexMap.size;
+
+    return {
+        domainMin: 0,
+        domainMax: Math.max(0, categoryCount - 1),
+        categoryCount: categoryCount,
+        domainScale: 0, // Fulfills the interface contract with a sensible default
+    };
+  });
+
   /**
    * Get debug information
    */
