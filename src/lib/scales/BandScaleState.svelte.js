@@ -1,7 +1,7 @@
 import { scaleBand } from 'd3-scale';
 
 export class BandScaleState {
-  // Basic scale properties
+  id = crypto.randomUUID();
   name = $state('');
   type = 'band';
   ready = $state(false);

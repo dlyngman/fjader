@@ -39,40 +39,16 @@ export class BaseMarkSetup {
     this.#coordinator = coordinator;
     this.#chartContext = chartContext;
     this.#markId = `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
-
-    // ✅ Register scale requirements immediately in constructor
-    // this.#registerScaleRequirements();
-
-    // ✅ Setup reactive effects for initialization
+    this.#registerScaleRequirements();
     this.#setupReactiveEffects();
   }
 
-  registerInitialScaleRequirements() {
-    console.log(`📊 Registering initial scale requirements for mark ${this.#markId}`);
-    this.#registerScaleRequirements();
-  }
-
-  // =================================================================
-  // ==  REACTIVE SETUP EFFECTS                                     ==
-  // =================================================================
-
   #setupReactiveEffects() {
-    // // Effect 0: Register scale requirements (runs first, once)
-    // $effect(() => {
-    //   if (this.#chartContext && this.#config.scaleRequirements) {
-    //     console.log(`📊 Registering scale requirements for mark ${this.#markId}`);
-    //     this.#registerScaleRequirements();
-    //   }
-    // });
 
-    // Effect 1: Monitor scale states readiness
+    // Effect 1: Wait for scale objects to be available in context
     $effect(() => {
       const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
-      
-      const ready = !!(scaleTypes && xScaleState && yScaleState);
-      
-      if (ready && !this.#scaleStatesReady) {
-        console.log(`📊 Scale states ready for mark ${this.#markId}`);
+      if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
         this.#scaleStatesReady = true;
       }
     });
@@ -80,34 +56,23 @@ export class BaseMarkSetup {
     // Effect 2: Setup scale mappings when scale states are ready
     $effect(() => {
       if (this.#scaleStatesReady && !this.#scaleMappingsReady) {
-        try {
-          console.log(`🔗 Setting up scale mappings for mark ${this.#markId}`);
-          this.#setupScaleMappings();
-          this.#scaleMappingsReady = true;
-        } catch (error) {
-          console.error(`❌ Scale mapping failed for ${this.#markId}:`, error);
-        }
+        this.#setupScaleMappings();
+        this.#scaleMappingsReady = true;
       }
     });
 
     // Effect 3: Create client when scale mappings are ready
     $effect(() => {
       if (this.#scaleMappingsReady && !this.#clientCreated) {
-        try {
-          console.log(`🚀 Creating client for mark ${this.#markId}`);
-          const fieldRequests = this.#buildFieldInfoRequests();
-          this.createClient(fieldRequests);
-          this.#clientCreated = true;
-        } catch (error) {
-          console.error(`❌ Client creation failed for ${this.#markId}:`, error);
-        }
+        const fieldRequests = this.#buildFieldInfoRequests();
+        this.#createClient(fieldRequests);
+        this.#clientCreated = true;
       }
     });
 
     // Effect 4: Monitor client data readiness
     $effect(() => {
       if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
-        console.log(`📋 Client data ready for mark ${this.#markId}`);
         this.#clientDataReady = true;
       }
     });
@@ -115,20 +80,14 @@ export class BaseMarkSetup {
     // Effect 5: Set initial continuous domains when client data is ready
     $effect(() => {
       if (this.#clientDataReady && !this.#continuousDomainsSet) {
-        try {
-          console.log(`📐 Setting initial continuous domains for mark ${this.#markId}`);
-          this.#setInitialContinuousDomains(this.client.fieldInfo);
-          this.#continuousDomainsSet = true;
-        } catch (error) {
-          console.error(`❌ Setting continuous domains failed for ${this.#markId}:`, error);
-        }
+        this.#setInitialContinuousDomains(this.client.fieldInfo);
+        this.#continuousDomainsSet = true;
       }
     });
 
     // Effect 6: Start categorical domain fetch when continuous domains are set
     $effect(() => {
       if (this.#continuousDomainsSet && !this.#categoricalFetchStarted) {
-        console.log(`🏷️ Starting categorical domain fetch for mark ${this.#markId}`);
         this.#categoricalFetchStarted = true;
         
         // Trigger async operation without awaiting in effect
@@ -141,46 +100,7 @@ export class BaseMarkSetup {
         });
       }
     });
-
-    // ✅ NEW: Force reconnection when chartContext/scales change
-    $effect(() => {
-      const currentXScaleState = this.#chartContext.xScaleState;
-      const currentYScaleState = this.#chartContext.yScaleState;
-      
-      // Track if we have different scale state instances
-      if (currentXScaleState && currentYScaleState) {
-        const scaleStatesChanged = 
-          this.#scaleMap?.x !== currentXScaleState || 
-          this.#scaleMap?.y !== currentYScaleState;
-          
-        if (scaleStatesChanged && this.#clientCreated) {
-          console.log(`🔄 ${this.#markId} Scale states changed, forcing reconnection`);
-          this.#resetSetupState();
-        }
-      }
-    });
-
-    // Debug effect (only in development)
-    if (process.env.NODE_ENV === 'development') {
-      $effect(() => {
-        const progress = {
-          scaleStatesReady: this.#scaleStatesReady,
-          scaleMappingsReady: this.#scaleMappingsReady,
-          clientCreated: this.#clientCreated,
-          clientDataReady: this.#clientDataReady,
-          continuousDomainsSet: this.#continuousDomainsSet,
-          categoricalFetchStarted: this.#categoricalFetchStarted,
-          categoricalDataFetched: this.categoricalDataFetched
-        };
-        
-        console.debug(`🔍 Setup progress for ${this.#markId}:`, progress);
-      });
-    }
   }
-
-  // =================================================================
-  // ==  SCALE REGISTRATION (MOVED FROM COMPONENT)                 ==
-  // =================================================================
 
   /**
    * Register scale requirements with the chart context
@@ -207,50 +127,6 @@ export class BaseMarkSetup {
       );
     }
   }
-
-  /**
-   * Update scale requirements (called when scale type preferences change)
-   */
-  updateScaleRequirements(newRequirements) {
-    // Unregister old requirements
-    this.#chartContext.unregisterScaleType('x', this.#markId);
-    this.#chartContext.unregisterScaleType('y', this.#markId);
-    
-    // Update config
-    this.#config.scaleRequirements = newRequirements;
-    
-    // Register new requirements
-    this.#registerScaleRequirements();
-
-    // Reset setup state to trigger re-initialization
-    this.#resetSetupState();
-  }
-
-  /**
-   * Reset setup state to trigger re-initialization
-   */
-  #resetSetupState() {
-    this.#scaleStatesReady = false;
-    this.#scaleMappingsReady = false;
-    this.#clientCreated = false;
-    this.#clientDataReady = false;
-    this.#continuousDomainsSet = false;
-    this.#categoricalFetchStarted = false;
-    this.categoricalDataFetched = false;
-    
-    // Clean up existing client
-    if (this.client) {
-      this.client.destroy();
-      this.client = null;
-    }
-    
-    // Clean up scale data
-    this.#cleanupScaleData();
-  }
-
-  // =================================================================
-  // ==  PUBLIC GETTERS & DERIVED STATE                           ==
-  // =================================================================
 
   get actualXScaleType() {
     return this.#chartContext.scaleTypes?.x || 'linear';
@@ -291,43 +167,10 @@ export class BaseMarkSetup {
     return xReady && yReady;
   });
 
-  // =================================================================
-  // ==  REACTIVE CONFIGURATION UPDATES                            ==
-  // =================================================================
-
-  /**
-   * Handles updates to the component's props - now reactive
-   */
-  async updateConfig(newConfig) {
-    const oldConfig = this.#config;
-    this.#config = { ...oldConfig, ...newConfig };
-    
-    const needsReset = ['table', 'selection', 'x', 'y', 'color', 'select'].some(
-      key => newConfig[key] !== undefined && !this.#deepEqual(newConfig[key], oldConfig[key])
-    );
-
-    if (needsReset) {
-      console.log(`🔄 ${this.#markId} Config change requires reset`);
-      this.#resetSetupState();
-    } else {
-      console.log(`📝 ${this.#markId} Config updated without reset`);
-    }
-  }
-
-  #cleanupScaleData() {
-    Object.values(this.#scaleMap).forEach(scale => {
-      if (scale?.removeMark) {
-        scale.removeMark(this.#markId);
-      }
-    });
-  }
-
   /**
    * Cleans up all resources used by this mark controller.
    */
   destroy() {
-    console.log(`🧹 Destroying mark ${this.#markId}`);
-    
     // Unregister scale requirements
     this.#chartContext.unregisterScaleType('x', this.#markId);
     this.#chartContext.unregisterScaleType('y', this.#markId);
@@ -341,10 +184,6 @@ export class BaseMarkSetup {
       this.client = null;
     }
   }
-
-  // =================================================================
-  // ==  QUERY & DATA LOGIC (designed for extension)                ==
-  // =================================================================
 
   /**
    * @virtual
@@ -399,11 +238,7 @@ export class BaseMarkSetup {
     return q;
   }
 
-  // =================================================================
-  // ==  PRIVATE HELPER METHODS                                     ==
-  // =================================================================
-
-  createClient(fieldRequests) {
+  #createClient(fieldRequests) {
     if (this.client) this.client.destroy();
     
     this.client = new DataClient(
@@ -524,23 +359,5 @@ export class BaseMarkSetup {
 
   #setScalesReady() {
     Object.values(this.#scaleMap).forEach(scale => scale?.setReady?.());
-  }
-
-  #deepEqual(a, b) {
-    if (a === b) return true;
-    if (a == null || b == null) return false;
-    if (typeof a !== typeof b) return false;
-    if (typeof a !== 'object') return false;
-    
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
-    
-    for (const key of keysA) {
-      if (!keysB.includes(key)) return false;
-      if (!this.#deepEqual(a[key], b[key])) return false;
-    }
-    
-    return true;
   }
 }

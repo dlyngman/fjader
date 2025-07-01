@@ -10,7 +10,7 @@ const tweenOptions = {
 };
 
 export class LinearScaleState {
-  // Basic scale properties
+  id = crypto.randomUUID();
   name = $state('');  // e.g., 'x', 'y', 'color'
 
   #initExtent = [];
