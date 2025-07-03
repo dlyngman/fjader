@@ -24,18 +24,18 @@
   // GPU buffers
   let xBuffer, yBuffer, radiusBuffer, alphaBuffer, colorBuffer, quadGeometryBuffer;
 
-  // Buffer readiness tracking
-  let buffersReady = $state({
-    x: false,
-    y: false,
-    radius: false,
-    alpha: false,
-    color: false
-  });
+  // // Buffer readiness tracking
+  // let buffersReady = $state({
+  //   x: false,
+  //   y: false,
+  //   radius: false,
+  //   alpha: false,
+  //   color: false
+  // });
 
-  let allBuffersReady = $derived(
-    Object.values(buffersReady).every(Boolean)
-  );
+  // let allBuffersReady = $derived(
+  //   Object.values(buffersReady).every(Boolean)
+  // );
 
   const quadVertexCount = 6;
   
@@ -111,90 +111,132 @@
   }];
 
   // X Buffer Effect
+  // $effect(() => {
+  //   if (xData && renderer?.resourcesCreated) {
+  //     const device = webGPUContext.getDevice();
+  //     if (!device) return;
+      
+  //     xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
+  //     device.queue.writeBuffer(xBuffer, 0, xData);
+  //     buffersReady.x = true;
+      
+  //     console.debug(`📊 X buffer updated: ${xData.length} values`);
+  //   }
+  // });
+
+  // // Y Buffer Effect  
+  // $effect(() => {
+  //   if (yData && renderer?.resourcesCreated) {
+  //     const device = webGPUContext.getDevice();
+  //     if (!device) return;
+      
+  //     yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
+  //     device.queue.writeBuffer(yBuffer, 0, yData);
+  //     buffersReady.y = true;
+      
+  //     console.debug(`📊 Y buffer updated: ${yData.length} values`);
+  //   }
+  // });
+
+  // // Color Buffer Effect
+  // $effect(() => {
+  //   if (colorData && renderer?.resourcesCreated) {
+  //     const device = webGPUContext.getDevice();
+  //     if (!device) return;
+      
+  //     colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+  //     device.queue.writeBuffer(colorBuffer, 0, colorData);
+  //     buffersReady.color = true;
+      
+  //     console.debug(`🎨 Color buffer updated: ${colorData.length / 4} colors`);
+  //   }
+  // });
+
+  // // Radius Buffer Effect
+  // $effect(() => {
+  //   if (radiusData && renderer?.resourcesCreated) {
+  //     const device = webGPUContext.getDevice();
+  //     if (!device) return;
+      
+  //     radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
+  //     device.queue.writeBuffer(radiusBuffer, 0, radiusData);
+  //     buffersReady.radius = true;
+      
+  //     console.debug(`📏 Radius buffer updated: ${radiusData.length} values`);
+  //   }
+  // });
+
+  // // Alpha Buffer Effect
+  // $effect(() => {
+  //   if (alphaData && renderer?.resourcesCreated) {
+  //     const device = webGPUContext.getDevice();
+  //     if (!device) return;
+      
+  //     alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
+  //     device.queue.writeBuffer(alphaBuffer, 0, alphaData);
+  //     buffersReady.alpha = true;
+      
+  //     console.debug(`👻 Alpha buffer updated: ${alphaData.length} values`);
+  //   }
+  // });
+
   $effect(() => {
-    if (xData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
-      xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
-      device.queue.writeBuffer(xBuffer, 0, xData);
-      buffersReady.x = true;
-      
-      console.debug(`📊 X buffer updated: ${xData.length} values`);
-    }
+    console.log('running consolidated effect')
+    void dataVersion; // Trigger when data actually changes
+    void renderer?.resourcesCreated;
+    
+    untrack(() => {
+      if (renderer?.resourcesCreated && xData && yData) {
+        // Update all buffers at once (like old updateInstanceData)
+        const device = webGPUContext.getDevice();
+        if (!device) return;
+        
+        // Batch all buffer updates
+        xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
+        device.queue.writeBuffer(xBuffer, 0, xData);
+        
+        yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
+        device.queue.writeBuffer(yBuffer, 0, yData);
+        
+        if (radiusData) {
+          radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
+          device.queue.writeBuffer(radiusBuffer, 0, radiusData);
+        }
+        
+        if (alphaData) {
+          alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
+          device.queue.writeBuffer(alphaBuffer, 0, alphaData);
+        }
+        
+        if (colorData) {
+          colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+          device.queue.writeBuffer(colorBuffer, 0, colorData);
+        }
+        
+        createDotsBindGroup();
+        renderer.updateInstanceCount(xData?.length);
+        gpuCoordinator.invalidateChart(chartContext.chartId);
+      } else {
+        console.log('not ready')
+      }
+    });
   });
 
-  // Y Buffer Effect  
-  $effect(() => {
-    if (yData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
+  // // Bind Group Creation Effect
+  // $effect(() => {
+  //   if (allBuffersReady && renderer?.resourcesCreated) {
+  //     createDotsBindGroup();
       
-      yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
-      device.queue.writeBuffer(yBuffer, 0, yData);
-      buffersReady.y = true;
+  //     // Update instance count for renderer
+  //     const instanceCount = xData?.length || 0;
+  //     renderer.updateInstanceCount(instanceCount);
       
-      console.debug(`📊 Y buffer updated: ${yData.length} values`);
-    }
-  });
-
-  // Color Buffer Effect
-  $effect(() => {
-    if (colorData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
+  //     // Trigger render
+  //     gpuCoordinator.invalidateChart(chartContext.chartId);
       
-      colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
-      device.queue.writeBuffer(colorBuffer, 0, colorData);
-      buffersReady.color = true;
-      
-      console.debug(`🎨 Color buffer updated: ${colorData.length / 4} colors`);
-    }
-  });
-
-  // Radius Buffer Effect
-  $effect(() => {
-    if (radiusData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
-      radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
-      device.queue.writeBuffer(radiusBuffer, 0, radiusData);
-      buffersReady.radius = true;
-      
-      console.debug(`📏 Radius buffer updated: ${radiusData.length} values`);
-    }
-  });
-
-  // Alpha Buffer Effect
-  $effect(() => {
-    if (alphaData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
-      alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
-      device.queue.writeBuffer(alphaBuffer, 0, alphaData);
-      buffersReady.alpha = true;
-      
-      console.debug(`👻 Alpha buffer updated: ${alphaData.length} values`);
-    }
-  });
-
-  // Bind Group Creation Effect
-  $effect(() => {
-    if (allBuffersReady && renderer?.resourcesCreated) {
-      createDotsBindGroup();
-      
-      // Update instance count for renderer
-      const instanceCount = xData?.length || 0;
-      renderer.updateInstanceCount(instanceCount);
-      
-      // Trigger render
-      gpuCoordinator.invalidateChart(chartContext.chartId);
-      
-      console.debug(`✅ All buffers ready, bind group created, ${instanceCount} instances`);
-    }
-  });
+  //     console.debug(`✅ All buffers ready, bind group created, ${instanceCount} instances`);
+  //   }
+  // });
 
   let lastEffectRun;
 
