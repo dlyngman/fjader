@@ -1,39 +1,44 @@
 <script>
   import { getContext, onMount, onDestroy, untrack } from 'svelte';
-  import { getScaleState } from '$lib/scales';
   import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
   import { getGPUContext } from '$lib/gpu';
 
   let { 
-    data, // Arrow Table
-    dataVersion,
-    r = 3,
-    fill = 'blue',
-    alpha = .5,
+    xData,        // Float32Array - processed X positions
+    yData,        // Float32Array - processed Y positions  
+    colorData,    // Float32Array - RGBA colors (instanceCount * 4)
+    radiusData,   // Float32Array - radius values
+    alphaData,    // Float32Array - alpha values
+    dataVersion,  // number - for triggering updates
     zIndex = 0,
   } = $props();
 
-  let colorScale = $derived(getScaleState('color', 'ordinal'));
-  
-  const c = getContext('chart');
+  const chartContext = getContext('chart');
   const webGPUContext = getContext('webgpu-canvas');
   const gpuCoordinator = getGPUContext();
 
-  // Use BaseGPURenderer for common functionality
+  // Renderer and buffer state
   let renderer = $state(null);
   let initializationError = $state(null);
 
-  // Dots-specific buffers (managed through base renderer)
-  let xBuffer;
-  let yBuffer;
-  let radiusBuffer;
-  let alphaBuffer;
-  let colorBuffer;
-  let quadGeometryBuffer;
-  
-  const quadVertexCount = 6;
+  // GPU buffers
+  let xBuffer, yBuffer, radiusBuffer, alphaBuffer, colorBuffer, quadGeometryBuffer;
 
-  // Component-specific shader code - much simpler now!
+  // Buffer readiness tracking
+  let buffersReady = $state({
+    x: false,
+    y: false,
+    radius: false,
+    alpha: false,
+    color: false
+  });
+
+  let allBuffersReady = $derived(
+    Object.values(buffersReady).every(Boolean)
+  );
+
+  const quadVertexCount = 6;
+  
   const dotsShaderCode = `
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -68,7 +73,6 @@
       let scaledX = scaleX(x, scaleParams);
       let scaledY = scaleY(y, scaleParams);
       
-      // Rest of dots-specific positioning logic stays the same
       let displayRadius = radius * devicePixelRatio;
       let radiusWithPadding = displayRadius * 1.2;
       let worldPos = vec2<f32>(scaledX * devicePixelRatio, scaledY * devicePixelRatio) + quadPosition * radiusWithPadding;
@@ -94,7 +98,6 @@
     }
   `;
 
-  // Generate complete shader with centralized scale support
   const shaderCode = BaseGPURenderer.generateShader(dotsShaderCode);
 
   // Dots-specific vertex buffer layout
@@ -107,6 +110,135 @@
     }],
   }];
 
+  // X Buffer Effect
+  $effect(() => {
+    if (xData && renderer?.resourcesCreated) {
+      const device = webGPUContext.getDevice();
+      if (!device) return;
+      
+      xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
+      device.queue.writeBuffer(xBuffer, 0, xData);
+      buffersReady.x = true;
+      
+      console.debug(`📊 X buffer updated: ${xData.length} values`);
+    }
+  });
+
+  // Y Buffer Effect  
+  $effect(() => {
+    if (yData && renderer?.resourcesCreated) {
+      const device = webGPUContext.getDevice();
+      if (!device) return;
+      
+      yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
+      device.queue.writeBuffer(yBuffer, 0, yData);
+      buffersReady.y = true;
+      
+      console.debug(`📊 Y buffer updated: ${yData.length} values`);
+    }
+  });
+
+  // Color Buffer Effect
+  $effect(() => {
+    if (colorData && renderer?.resourcesCreated) {
+      const device = webGPUContext.getDevice();
+      if (!device) return;
+      
+      colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+      device.queue.writeBuffer(colorBuffer, 0, colorData);
+      buffersReady.color = true;
+      
+      console.debug(`🎨 Color buffer updated: ${colorData.length / 4} colors`);
+    }
+  });
+
+  // Radius Buffer Effect
+  $effect(() => {
+    if (radiusData && renderer?.resourcesCreated) {
+      const device = webGPUContext.getDevice();
+      if (!device) return;
+      
+      radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
+      device.queue.writeBuffer(radiusBuffer, 0, radiusData);
+      buffersReady.radius = true;
+      
+      console.debug(`📏 Radius buffer updated: ${radiusData.length} values`);
+    }
+  });
+
+  // Alpha Buffer Effect
+  $effect(() => {
+    if (alphaData && renderer?.resourcesCreated) {
+      const device = webGPUContext.getDevice();
+      if (!device) return;
+      
+      alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
+      device.queue.writeBuffer(alphaBuffer, 0, alphaData);
+      buffersReady.alpha = true;
+      
+      console.debug(`👻 Alpha buffer updated: ${alphaData.length} values`);
+    }
+  });
+
+  // Bind Group Creation Effect
+  $effect(() => {
+    if (allBuffersReady && renderer?.resourcesCreated) {
+      createDotsBindGroup();
+      
+      // Update instance count for renderer
+      const instanceCount = xData?.length || 0;
+      renderer.updateInstanceCount(instanceCount);
+      
+      // Trigger render
+      gpuCoordinator.invalidateChart(chartContext.chartId);
+      
+      console.debug(`✅ All buffers ready, bind group created, ${instanceCount} instances`);
+    }
+  });
+
+  let lastEffectRun;
+
+  // Single lightweight interaction effect
+  $effect(() => {
+    const startEffect = performance.now()
+    if (!renderer?.resourcesCreated) return;
+    
+    // Track scale and layout changes
+    void chartContext.xScaleState?.domain?.current;
+    void chartContext.yScaleState?.domain?.current;
+    // void chartContext.innerWidth;
+    // void chartContext.innerHeight;
+    
+    untrack(() => {
+      // Update scale uniforms only
+      renderer.handleScaleOrRangeUpdate();
+      // renderer.handleResolutionChange();
+      
+      // Trigger render for interactions
+      gpuCoordinator.invalidateChart(chartContext.chartId);
+    });
+    // console.log('Interaction effect time', performance.now() - startEffect)
+    // console.log(performance.now() - lastEffectRun)
+    lastEffectRun = performance.now()
+  });
+
+  // Single lightweight interaction effect
+  $effect(() => {
+    if (!renderer?.resourcesCreated) return;
+    
+    // Track layout changes
+    void chartContext.innerWidth;
+    void chartContext.innerHeight;
+    
+    untrack(() => {
+      // Update scale uniforms only
+      renderer.handleScaleOrRangeUpdate();
+      renderer.handleResolutionChange();
+      
+      // Trigger render for interactions
+      gpuCoordinator.invalidateChart(chartContext.chartId);
+    });
+  });
   // Create quad geometry for dot rendering
   function createQuadGeometry() {
     return new Float32Array([
@@ -135,105 +267,6 @@
     device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
   }
 
-  // Update instance data using base renderer's buffer management
-  function updateInstanceData(arrowTable) {
-    try {
-      if (!arrowTable || arrowTable.numRows === 0 || !renderer?.resourcesCreated) {
-        console.debug('⚠️ Skipping dots instance data update - no data or resources not ready');
-        return;
-      }
-
-      const device = webGPUContext.getDevice();
-      if (!device) {
-        throw new Error('No WebGPU device available');
-      }
-
-      const startTime = performance.now();
-      const instanceCount = arrowTable.numRows;
-
-      console.debug(`📊 Updating dots instance data for ${instanceCount} dots`);
-
-      // Get Arrow columns with error checking
-      const xColumn = arrowTable.getChild('x');
-      const yColumn = arrowTable.getChild('y');
-      const colorColumn = arrowTable.getChild('color');
-
-      if (!xColumn || !yColumn) {
-        throw new Error('Required x and y columns not found in Arrow table');
-      }
-
-      // Process data through BaseGPURenderer for proper scale handling
-      const xValues = xColumn.toArray();
-      const yValues = yColumn.toArray();
-      
-      // Use BaseGPURenderer's data processing for scale-aware conversion
-      const xData = renderer.processDataForAxis(xValues, 'x');
-      const yData = renderer.processDataForAxis(yValues, 'y');
-
-      // Update position buffers using base renderer's smart buffer management
-      xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
-      device.queue.writeBuffer(xBuffer, 0, xData);
-
-      yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
-      device.queue.writeBuffer(yBuffer, 0, yData);
-
-      // Create radius and alpha data
-      const radiusData = new Float32Array(instanceCount);
-      const alphaData = new Float32Array(instanceCount);
-      
-      if (typeof r === 'function' || typeof alpha === 'function') {
-        for (let i = 0; i < instanceCount; i++) {
-          radiusData[i] = typeof r === 'function' ? r({x: xValues[i], y: yValues[i]}) : r;
-          alphaData[i] = typeof alpha === 'function' ? alpha({x: xValues[i], y: yValues[i]}) : alpha;
-        }
-      } else {
-        radiusData.fill(r);
-        alphaData.fill(alpha);
-      }
-
-      // Update attribute buffers
-      radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
-      device.queue.writeBuffer(radiusBuffer, 0, radiusData);
-
-      alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
-      device.queue.writeBuffer(alphaBuffer, 0, alphaData);
-
-      // Handle colors with error checking
-      const colorData = new Float32Array(instanceCount * 4);
-      
-      if (colorColumn) {
-        const colorArray = colorColumn.toArray();
-        for (let i = 0; i < instanceCount; i++) {
-          const fillColor = colorScale(colorArray[i]);
-          const rgba = renderer.parseColor(fillColor);
-          colorData.set(rgba, i * 4);
-        }
-      } else {
-        // Fallback to single color
-        const rgba = renderer.parseColor(fill);
-        for (let i = 0; i < instanceCount; i++) {
-          colorData.set(rgba, i * 4);
-        }
-      }
-
-      colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
-      device.queue.writeBuffer(colorBuffer, 0, colorData);
-
-      // Create bind group after all buffers are ready
-      createDotsBindGroup();
-
-      // Update instance count
-      renderer.updateInstanceCount(instanceCount);
-
-      const updateTime = performance.now() - startTime;
-      console.debug(`✅ Dots instance data updated in ${updateTime.toFixed(2)}ms`);
-      
-    } catch (error) {
-      console.error('❌ Failed to update dots instance data:', error);
-      initializationError = error.message;
-      throw error;
-    }
-  }
 
   // Create dots-specific bind group
   function createDotsBindGroup() {
@@ -299,18 +332,15 @@
   // Initialize dots renderer
   async function initializeDots() {
     try {
-      // console.log('🚀 Initializing Dots component with centralized scale support');
-
-      // Check GPU coordinator is available
       if (!gpuCoordinator) {
         throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
       }
 
       // Create base renderer with scale type information
-      renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, c, { 
+      renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, chartContext, { 
         zIndex,
-        xScaleType: c.scaleTypes?.x || 'linear',
-        yScaleType: c.scaleTypes?.y || 'linear'
+        xScaleType: chartContext.scaleTypes?.x || 'linear',
+        yScaleType: chartContext.scaleTypes?.y || 'linear'
       });
 
       // Initialize with dots-specific configuration using centralized shader
@@ -321,17 +351,10 @@
 
       // Initialize dots-specific geometry
       await initializeDotsGeometry();
-
-      // Update instance data if available
-      if (data) {
-        updateInstanceData(data);
-      }
       
       // Register layer with base renderer
       renderer.registerLayer(drawDots);
 
-      // console.log('✅ Dots component initialized successfully with centralized scales');
-      
     } catch (error) {
       console.error('❌ Dots component initialization failed:', error);
       initializationError = error.message;
@@ -367,143 +390,6 @@
     } catch (error) {
       console.error('❌ Error during Dots component cleanup:', error);
     }
-  });
-
-  // Enhanced reactive effect for data updates
-  $effect(() => {
-    void dataVersion;
-    
-    untrack(() => {
-      if (renderer?.resourcesCreated && !initializationError && data) {
-        try {
-          updateInstanceData(data);
-          renderer.invalidateLayer(); // ✅ Explicitly invalidate ONLY when data changes.
-        } catch (error) {
-          console.error('❌ Dots data update effect failed:', error);
-          initializationError = error.message;
-        }
-      }
-    });
-  });
-
-  // EFFECT 1: Handles RESIZE events.
-  // This effect only updates the GPU buffers with the new scale range.
-  // It does NOT request a redraw, because the WebGPUCanvas is already handling that.
-  $effect(() => {
-    if (!renderer) return;
-
-    // Dependencies: track layout changes
-    void c.innerWidth;
-    void c.innerHeight;
-    
-    // console.log(`[${c.xLabel}x${c.yLabel}] Layout change detected. Updating renderer buffers only.`);
-
-    untrack(() => {
-      renderer.handleResolutionChange();
-      renderer.handleScaleOrRangeUpdate();
-    });
-  });
-
-  // EFFECT 2: Handles INTERACTIVE pan/zoom events.
-  // This effect updates the GPU buffers AND explicitly requests a redraw
-  // to render the smooth tweening animation.
-  $effect(() => {
-    if (!renderer) return;
-
-    // Dependencies: track domain changes from the scale state tween
-    void c.xScaleState?.domain?.current;
-    void c.yScaleState?.domain?.current;
-
-    // console.log(`[${c.xLabel}x${c.yLabel}] Domain change detected. Updating buffers and invalidating.`);
-    
-    untrack(() => {
-      // First, update the GPU buffer with the latest domain value from the tween
-      renderer.handleScaleOrRangeUpdate();
-      
-      // THEN, request a redraw to show this frame of the animation
-      renderer.invalidateLayer(); 
-    });
-  });
-
-  // // Reactive effect for scale changes - BaseGPURenderer handles the heavy lifting
-  // $effect(() => {
-  //   // if (!renderer) return;
-    
-  //   // // Access scale properties to make this reactive
-  //   // const xScale = c?.xScale;
-  //   // const yScale = c?.yScale;
-    
-  //   // // Track scale domains and ranges
-  //   // void xScale?.domain?.();
-  //   // void yScale?.domain?.();
-  //   // void xScale?.range?.();
-  //   // void yScale?.range?.();
-    
-  //   // // Track band scale properties for completeness
-  //   // void xScale?.bandwidth?.();
-  //   // void yScale?.bandwidth?.();
-
-  //   // if (!renderer) return;
-  
-  //   // // Access the chart context itself to ensure we get fresh scale references
-  //   // const currentXScale = chartContext?.xScale?;
-  //   // const currentYScale = chartContext?.yScale;
-    
-  //   // // Force reactive tracking by accessing the scale methods
-  //   // if (currentXScale?.scale) {
-  //   //   void currentXScale.scale.domain();
-  //   //   void currentXScale.scale.range();
-  //   // }
-  //   // if (currentYScale?.scale) {
-  //   //   void currentYScale.scale.domain();
-  //   //   void currentYScale.scale.range();
-  //   // }
-    
-  //   // // Also track the scale state objects directly
-  //   // void chartContext?.xScaleState?.domain?.current;
-  //   // void chartContext?.yScaleState?.domain?.current;
-
-  //   // Track scale state domain changes directly - these only change from user interactions
-  //   // void c?.xScaleState?.scale?.domain();  // ← Only changes from zoom/pan
-  //   // void c?.yScaleState?.scale?.domain();  // ← Not from GPU reads
-  //   // void c?.xScale?.scale?.domain();
-  //   // void c?.yScale?.scale?.domain();
-
-  //   // void c?.xScaleState?.domain?.current
-  //   // void c?.yScaleState?.domain?.current
-
-  //   if (!renderer) return;
-
-  //   // --- DEPENDENCIES ---
-  //   // 1. Track domain changes (for pan/zoom)
-  //   void c.xScaleState?.domain?.current;
-  //   void c.yScaleState?.domain?.current;
-
-  //   // 2. Track range changes (for resize)
-  //   void c.innerWidth;
-  //   void c.innerHeight;
-
-  //   // --- LOGIC ---
-  //   console.log(`[${c.xLabel}x${c.yLabel}] Scale or layout change detected. Triggering renderer update.`);
-  
-  //   // console.log('scale domains actually changed');
-
-  //   // console.log('scale change')
-    
-  //   untrack(() => {
-  //     renderer.handleScaleChange();
-  //   });
-  // });
-
-  // Reactive effect for resolution changes
-  $effect(() => {
-    if (!renderer) return;
-    
-    const { width, height } = webGPUContext.getCanvasDimensions();
-    
-    untrack(() => {
-      renderer.handleResolutionChange();
-    });
   });
 </script>
 

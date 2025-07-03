@@ -30,7 +30,6 @@
   let leaveTimeout = null; // To hold the ID of our setTimeout
   const DEACTIVATION_DELAY = 1000; // Longer than longest animation
 
-
   $effect(() => {
       console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
     });

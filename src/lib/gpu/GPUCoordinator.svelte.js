@@ -39,6 +39,9 @@ export class GPUCoordinator {
   // Configuration
   #msaaSampleCount = 4;
 
+  lastInvalidation;
+  lastRender;
+
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
   }
@@ -67,6 +70,7 @@ export class GPUCoordinator {
 
   // ===== LOOP MANAGEMENT API =====
   requestActiveLoop(requesterId) {
+    console.log('requesting active loop')
     if (!requesterId) return;
     this.#activeLoopRequesters.add(requesterId);
     if (!this.#loopIsActive && this.#activeLoopRequesters.size > 0) {
@@ -76,6 +80,7 @@ export class GPUCoordinator {
   }
 
   releaseActiveLoop(requesterId) {
+    console.log('releasing active loop')
     this.#activeLoopRequesters.delete(requesterId);
     if (this.#loopIsActive && this.#activeLoopRequesters.size === 0) {
       this.#loopIsActive = false;
@@ -192,7 +197,6 @@ export class GPUCoordinator {
   // == 3. PUBLIC API: Invalidation
   // ===================================================================
   // The single entry point for triggering a render.
-
   invalidateChart(chartId) {
     if (this.#registeredCharts.has(chartId)) {
       this.#dirtyChartIDs.add(chartId);
@@ -202,6 +206,8 @@ export class GPUCoordinator {
         this.#requestSingleFrame();
       }
     }
+    // console.log('invalidation', performance.now() - this.lastInvalidation)
+    this.lastInvalidation = performance.now()
   }
 
   // ===================================================================
@@ -231,6 +237,7 @@ export class GPUCoordinator {
   }
 
   #render() {
+    // console.log('nr dirty charts', this.#dirtyChartIDs.size)
     if (this.#dirtyChartIDs.size === 0) {
       return; // Nothing to do this frame.
     }
@@ -254,6 +261,8 @@ export class GPUCoordinator {
 
   #coordinatedRender(chartsNeedingRender) {
     // console.log(`🎯 Starting FULLY OPTIMIZED render for ${chartsNeedingRender.length} charts.`);
+    // console.log('charts needing render', chartsNeedingRender.length)
+
     
     if (this.#renderBatches.needsRebuild) {
         this.#rebuildRenderBatches();
@@ -332,6 +341,8 @@ export class GPUCoordinator {
         console.error('Batched coordinated render failed:', error);
         // In a real app, you might want a fallback to the simpler render loop here.
     }
+    console.log('render time', performance.now() - this.lastRender)
+    this.lastRender = performance.now()
   }
 
   #rebuildRenderBatches() {
