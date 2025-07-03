@@ -39,9 +39,6 @@ export class GPUCoordinator {
   // Configuration
   #msaaSampleCount = 4;
 
-  lastInvalidation;
-  lastRender;
-
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
   }
@@ -206,8 +203,6 @@ export class GPUCoordinator {
         this.#requestSingleFrame();
       }
     }
-    // console.log('invalidation', performance.now() - this.lastInvalidation)
-    this.lastInvalidation = performance.now()
   }
 
   // ===================================================================
@@ -237,7 +232,6 @@ export class GPUCoordinator {
   }
 
   #render() {
-    // console.log('nr dirty charts', this.#dirtyChartIDs.size)
     if (this.#dirtyChartIDs.size === 0) {
       return; // Nothing to do this frame.
     }
@@ -260,10 +254,6 @@ export class GPUCoordinator {
   }
 
   #coordinatedRender(chartsNeedingRender) {
-    // console.log(`🎯 Starting FULLY OPTIMIZED render for ${chartsNeedingRender.length} charts.`);
-    // console.log('charts needing render', chartsNeedingRender.length)
-
-    
     if (this.#renderBatches.needsRebuild) {
         this.#rebuildRenderBatches();
     }
@@ -332,7 +322,6 @@ export class GPUCoordinator {
 
         if (commandBuffers.length > 0) {
             this.#device.queue.submit(commandBuffers);
-            // console.log(`✅ Submitted ${commandBuffers.length} command buffers from batched render.`);
         }
         
         chartsNeedingRender.forEach(chart => chart.needsRedraw = false);
@@ -341,8 +330,6 @@ export class GPUCoordinator {
         console.error('Batched coordinated render failed:', error);
         // In a real app, you might want a fallback to the simpler render loop here.
     }
-    console.log('render time', performance.now() - this.lastRender)
-    this.lastRender = performance.now()
   }
 
   #rebuildRenderBatches() {
@@ -473,11 +460,9 @@ export class GPUCoordinator {
     
     if (existing) {
       existing.refCount++;
-      // console.log(`♻️ Reusing shared pipeline for ${markType} (refs: ${existing.refCount})`);
       return existing.pipeline;
     }
 
-    // console.log(`🆕 Creating new shared pipeline for ${markType}`);
     const pipeline = await createFn();
     
     this.#sharedResources.pipelines.set(markType, {
@@ -494,10 +479,8 @@ export class GPUCoordinator {
     if (!resource) return;
 
     resource.refCount--;
-    // console.log(`🔄 Released shared pipeline for ${markType} (refs: ${resource.refCount})`);
 
     if (resource.refCount <= 0) {
-      // console.log(`🗑️ Destroying unused shared pipeline for ${markType}`);
       this.#sharedResources.pipelines.delete(markType);
     }
   }
@@ -507,11 +490,9 @@ export class GPUCoordinator {
     
     if (existing) {
       existing.refCount++;
-      // console.log(`♻️ Reusing shared shader for ${markType} (refs: ${existing.refCount})`);
       return existing.module;
     }
 
-    // console.log(`🆕 Creating new shared shader for ${markType}`);
     const module = this.#device.createShaderModule({ code: shaderCode });
     
     this.#sharedResources.shaderModules.set(markType, {
@@ -528,10 +509,8 @@ export class GPUCoordinator {
     if (!resource) return;
 
     resource.refCount--;
-    // console.log(`🔄 Released shared shader for ${markType} (refs: ${resource.refCount})`);
 
     if (resource.refCount <= 0) {
-      // console.log(`🗑️ Destroying unused shared shader for ${markType}`);
       this.#sharedResources.shaderModules.delete(markType);
     }
   }

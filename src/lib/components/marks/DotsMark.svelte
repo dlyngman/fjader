@@ -157,6 +157,7 @@
   });
 </script>
 
+
 {#if setup?.gpuReady && xData && yData}
   <Dots
     {xData}
@@ -179,26 +180,3 @@
     Initializing mark...
   </text>
 {/if}
-
-<!-- {#if setup?.client?.arrowTable && setup.gpuReady}
-  <Dots
-    data={setup.client.arrowTable}
-    dataVersion={setup.client.dataVersion}
-    xScaleType={setup.actualXScaleType}
-    yScaleType={setup.actualYScaleType}
-    {alpha}
-    r={radius}
-  />
-{:else if setup?.client?.error}
-  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-    Error: {setup.client.error.message}
-  </text>
-{:else if setup?.client?.delayedLoading}
-  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-    Loading data...
-  </text>
-{:else}
-  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-    Initializing mark...
-  </text>
-{/if} -->

@@ -71,6 +71,8 @@
 			gridColumns = value;
 		}
 	});
+
+	let webGPU = $state(true);
 </script>
 
 <div class="main-view-container">
@@ -92,14 +94,16 @@
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<DotsMark
-									table={'penguins'}
-									x={config.x}
-									y={config.y}
-									color={'species'}
-									alpha="0.5"
-									radius="5"
-								/>
+								{#if webGPU}
+									<DotsMark
+										table={'penguins'}
+										x={config.x}
+										y={config.y}
+										color={'species'}
+										alpha="0.5"
+										radius="5"
+									/>
+								{/if}
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
