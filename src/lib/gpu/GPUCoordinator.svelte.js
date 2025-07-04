@@ -23,6 +23,9 @@ export class GPUCoordinator {
   #registeredCharts = $state(new Map());
   #renderQueue = [];
 
+  // Map for caching MSAA textures
+  #msaaTextures = new Map();
+
   // --- Managed Loop Properties ---
   #loopIsActive = false;
   #activeLoopRequesters = new Set(); // Stores unique IDs of components needing the loop
@@ -157,6 +160,15 @@ export class GPUCoordinator {
       this.#registeredCharts.delete(chartId);
       this.#renderBatches.needsRebuild = true;
       this.#updateRenderQueue();
+
+      // Clean up the cached MSAA texture when a chart is unregistered
+      const msaaTexture = this.#msaaTextures.get(chartId);
+      if (msaaTexture) {
+        msaaTexture.destroy();
+        this.#msaaTextures.delete(chartId);
+        console.debug(`🗑️ Destroyed cached MSAA texture for chart: ${chartId}`);
+      }
+
       console.log(`📊 Unregistered chart: ${chartId}`);
     }
   }
@@ -273,7 +285,7 @@ export class GPUCoordinator {
             const commandEncoder = this.#device.createCommandEncoder({ label: `${chartConfig.chartId}-encoder` });
             const context = chartConfig.context;
             const textureView = context.getCurrentTexture().createView();
-            const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas);
+            const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas, chartConfig.chartId);
             const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
             
             // Store everything we need to finish it later.
@@ -417,20 +429,34 @@ export class GPUCoordinator {
     }
   }
 
-  #createRenderPassDescriptor(textureView, canvas) {
+  #createRenderPassDescriptor(textureView, canvas, chartId) {
     if (this.#msaaSampleCount > 1) {
-      const multisampleTexture = this.#device.createTexture({
-        size: {
-          width: canvas.width,
-          height: canvas.height
-        },
-        sampleCount: this.#msaaSampleCount,
-        format: this.#presentationFormat,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT
-      });
+      let multisampleTexture = this.#msaaTextures.get(chartId);
+
+      // Recreate texture if it doesn't exist or if canvas dimensions have changed.
+      if (!multisampleTexture || 
+          multisampleTexture.width !== canvas.width ||
+          multisampleTexture.height !== canvas.height) {
+          
+          // Destroy the old texture if it exists
+          multisampleTexture?.destroy();
+          
+          // Create the new texture
+          multisampleTexture = this.#device.createTexture({
+              size: { width: canvas.width, height: canvas.height },
+              sampleCount: this.#msaaSampleCount,
+              format: this.#presentationFormat,
+              usage: GPUTextureUsage.RENDER_ATTACHMENT
+          });
+
+          // Store the new texture in our cache
+          this.#msaaTextures.set(chartId, multisampleTexture);
+          console.debug(`✨ Created/Resized MSAA texture for chart ${chartId} to ${canvas.width}x${canvas.height}`);
+      }
 
       return {
         colorAttachments: [{
+          // Use the cached texture's view
           view: multisampleTexture.createView(),
           resolveTarget: textureView,
           clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
@@ -559,6 +585,11 @@ export class GPUCoordinator {
     }
     this.#loopIsActive = false;
     this.#activeLoopRequesters.clear();
+
+    for (const texture of this.#msaaTextures.values()) {
+      texture.destroy();
+    }
+    this.#msaaTextures.clear();
 
     // Destroy shared resources
     for (const resource of this.#sharedResources.uniformBuffers.values()) {
