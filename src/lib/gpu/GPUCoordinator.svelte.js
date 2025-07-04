@@ -3,7 +3,8 @@ import { setContext, getContext } from 'svelte';
 
 /**
  * Manages all WebGPU resources, layers, and render scheduling for the dashboard.
- * Implements a "Managed Loop" for high-performance, on-demand rendering.
+ * Implements a "Managed Loop" for high-performance, on-demand rendering and
+ * a cached "Render Plan" to keep the per-frame render path extremely lean.
 */
 export class GPUCoordinator {
   // WebGPU core resources
@@ -21,7 +22,6 @@ export class GPUCoordinator {
 
   // Chart registration and management
   #registeredCharts = $state(new Map());
-  #renderQueue = [];
 
   // Map for caching MSAA textures
   #msaaTextures = new Map();
@@ -31,13 +31,7 @@ export class GPUCoordinator {
   #activeLoopRequesters = new Set(); // Stores unique IDs of components needing the loop
   #rafId = null;
   #dirtyChartIDs = new Set();
-
-  // Enhanced render batching
-  #renderBatches = $state({
-    byMarkType: new Map(), // 'dots' -> [chart1, chart2, ...]
-    byZIndex: new Map(),   // 0 -> [charts...], 1 -> [charts...]
-    needsRebuild: true
-  });
+  #chartsToRenderThisFrame = []; 
 
   // Configuration
   #msaaSampleCount = 4;
@@ -52,11 +46,7 @@ export class GPUCoordinator {
   // These are the primary methods external code will call.
 
   async initialize() {
-    if (this.#initialized) {
-      console.warn('GPUCoordinator already initialized');
-      return;
-    }
-
+    if (this.#initialized) return;
     try {
       await this.#initWebGPU();
       await this.#createSharedResources();
@@ -84,7 +74,6 @@ export class GPUCoordinator {
     this.#activeLoopRequesters.delete(requesterId);
     if (this.#loopIsActive && this.#activeLoopRequesters.size === 0) {
       this.#loopIsActive = false;
-      // The loop will stop itself on the next frame check.
     }
   }
 
@@ -94,8 +83,6 @@ export class GPUCoordinator {
   // These methods form the public interface for components to register themselves.
 
   registerChart(chartId, canvas, config) {
-    const { zIndex = 0 } = config;
-
     if (this.#registeredCharts.has(chartId)) {
         console.warn(`Chart ${chartId} already registered, updating config`);
     }
@@ -103,15 +90,17 @@ export class GPUCoordinator {
     const chartConfig = {
         chartId,
         canvas,
-        zIndex,
+        zIndex: config.zIndex || 0,
         visible: true,
         context: canvas.getContext('webgpu'),
         contextConfigured: false,
-        layers: new Map()
+        layers: new Map(),
+        renderPlan: [],       // Holds the pre-sorted, ready-to-render layer list
+        needsPlanRebuild: true // Signals when the render plan is stale
     };
 
     this.#registeredCharts.set(chartId, chartConfig);
-    this.#updateRenderQueue(); // This is still useful for z-index sorting.
+    // this.#updateRenderQueue(); // This is still useful for z-index sorting.
 
     return {
         update: (newConfig) => {
@@ -158,8 +147,8 @@ export class GPUCoordinator {
   unregisterChart(chartId) {
     if (this.#registeredCharts.has(chartId)) {
       this.#registeredCharts.delete(chartId);
-      this.#renderBatches.needsRebuild = true;
-      this.#updateRenderQueue();
+      // this.#renderBatches.needsRebuild = true;
+      // this.#updateRenderQueue();
 
       // Clean up the cached MSAA texture when a chart is unregistered
       const msaaTexture = this.#msaaTextures.get(chartId);
@@ -182,10 +171,13 @@ export class GPUCoordinator {
 
     // Use a unique ID for the layer for easy removal.
     const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
-    chart.layers.set(layerId, { ...layerConfig, id: layerId });
+    chart.layers.set(layerId, { ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
+
+    chart.needsPlanRebuild = true; // The layer structure has changed
+
 
     // Mark that batches need rebuilding since the layer composition has changed.
-    this.#renderBatches.needsRebuild = true;
+    // this.#renderBatches.needsRebuild = true;
     this.invalidateChart(chartId); // Invalidate the chart to ensure the new layer is drawn.
 
     return {
@@ -195,9 +187,10 @@ export class GPUCoordinator {
 
   unregisterLayer(chartId, layerId) {
     const chart = this.#registeredCharts.get(chartId);
-    if (chart && chart.layers.has(layerId)) {
+    if (chart?.layers.has(layerId)) {
         chart.layers.delete(layerId);
-        this.#renderBatches.needsRebuild = true;
+        chart.needsPlanRebuild = true; // The layer structure has changed
+        // this.#renderBatches.needsRebuild = true;
         this.invalidateChart(chartId); // Invalidate to render the chart without the layer.
     }
   }
@@ -244,93 +237,132 @@ export class GPUCoordinator {
   }
 
   #render() {
-    if (this.#dirtyChartIDs.size === 0) {
-      return; // Nothing to do this frame.
-    }
-
+    if (this.#dirtyChartIDs.size === 0) return;
     try {
-        const chartsNeedingRender = [];
+        this.#chartsToRenderThisFrame.length = 0;
         for (const chartId of this.#dirtyChartIDs) {
             const chart = this.#registeredCharts.get(chartId);
             if (chart?.visible && chart.contextConfigured) {
-                chartsNeedingRender.push(chart);
+                this.#chartsToRenderThisFrame.push(chart);
             }
         }        
         this.#dirtyChartIDs.clear();
-        if (chartsNeedingRender.length > 0) {
-          this.#coordinatedRender(chartsNeedingRender);
+        if (this.#chartsToRenderThisFrame.length > 0) {
+          this.#coordinatedRender(this.#chartsToRenderThisFrame);
         }
     } catch (error) {
       console.error('GPUCoordinator render error:', error);
     }
   }
 
-// In GPUCoordinator.svelte.js
-#coordinatedRender(chartsNeedingRender) {
-    if (this.#renderBatches.needsRebuild) {
-        this.#rebuildRenderBatches();
+  /**
+   * Builds a sorted and batched "Render Plan" for a chart.
+   * This is run only when a chart's layer structure changes, not on every frame.
+   */
+  #buildRenderPlanForChart(chartConfig) {
+    console.debug(`🛠️ Rebuilding render plan for chart: ${chartConfig.chartId}`);
+    const layers = Array.from(chartConfig.layers.values());
+    if (layers.length === 0) {
+        chartConfig.renderPlan = [];
+        chartConfig.needsPlanRebuild = false;
+        return;
     }
 
+    const zIndexGroups = new Map();
+    for (const layer of layers) {
+        const zIndex = layer.zIndex;
+        if (!zIndexGroups.has(zIndex)) zIndexGroups.set(zIndex, []);
+        zIndexGroups.get(zIndex).push(layer);
+    }
+
+    const sortedZLevels = Array.from(zIndexGroups.keys()).sort((a, b) => a - b);
+    const newPlan = [];
+    for (const zLevel of sortedZLevels) {
+        const layersInZLevel = zIndexGroups.get(zLevel);
+        // Within a Z-level, we can still batch by markType for performance
+        const markTypeGroups = new Map();
+        for (const layer of layersInZLevel) {
+            const markType = layer.markType || 'unknown';
+            if (!markTypeGroups.has(markType)) markTypeGroups.set(markType, []);
+            markTypeGroups.get(markType).push(layer);
+        }
+        for (const batchedLayers of markTypeGroups.values()) {
+            newPlan.push(...batchedLayers);
+        }
+    }
+
+    // Enrich the plan with cached pipeline references to avoid lookups in the hot loop.
+    for (const layer of newPlan) {
+        layer.cachedPipeline = layer.renderer?.pipeline;
+    }
+
+    chartConfig.renderPlan = newPlan;
+    chartConfig.needsPlanRebuild = false; // The plan is now fresh.
+  }
+
+  /**
+   * The main render function. It is designed to be lean, performing minimal work
+   * by iterating over a pre-computed "Render Plan".
+   */
+  #coordinatedRender(chartsNeedingRender) {
     try {
-        // Single command encoder for entire frame
-        const commandEncoder = this.#device.createCommandEncoder({ 
-            label: `frame-encoder` 
-        });
-        
-        // Render each chart
+        const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
+
         for (const chartConfig of chartsNeedingRender) {
-            if (!chartConfig.contextConfigured) continue;
+            if (chartConfig.needsPlanRebuild) {
+                this.#buildRenderPlanForChart(chartConfig);
+            }
             
-            const context = chartConfig.context;
-            const textureView = context.getCurrentTexture().createView();
-            const renderPassDescriptor = this.#createRenderPassDescriptor(
-                textureView, 
-                chartConfig.canvas,
-                chartConfig.chartId  // Pass chartId for MSAA cache
+            const passEncoder = commandEncoder.beginRenderPass(
+                this.#createRenderPassDescriptor(
+                    chartConfig.context.getCurrentTexture().createView(),
+                    chartConfig.canvas,
+                    chartConfig.chartId
+                )
             );
             
-            const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-            
-            // Draw all layers for this chart
-            for (const layer of chartConfig.layers.values()) {
+            let currentPipeline = null;
+            for (const layer of chartConfig.renderPlan) {
                 const renderer = layer.renderer;
-                if (renderer?.pipeline && renderer?.bindGroup) {
-                    passEncoder.setPipeline(renderer.pipeline);
+                if (renderer?.bindGroup) {
+                    const pipelineToUse = layer.cachedPipeline;
+
+                    // Skip this individual layer if its pipeline isn't ready yet.
+                    if (!pipelineToUse) continue;
+
+                    // Set pipeline only if it's different from the currently active one.
+                    if (pipelineToUse !== currentPipeline) {
+                        passEncoder.setPipeline(pipelineToUse);
+                        currentPipeline = pipelineToUse;
+                    }
+                    
                     passEncoder.setBindGroup(0, renderer.bindGroup);
                     layer.draw(passEncoder);
                 }
             }
-            
             passEncoder.end();
         }
+
+        this.#device.queue.submit([commandEncoder.finish()]);
         
-        // Single submission for entire frame
-        const commandBuffer = commandEncoder.finish();
-        this.#device.queue.submit([commandBuffer]);
-                
     } catch (error) {
         console.error('Coordinated render failed:', error);
-        // Fallback to individual renders if batched fails
         this.#fallbackRender(chartsNeedingRender);
     }
-  } 
+  }
 
-  // Add fallback for safety
   #fallbackRender(chartsNeedingRender) {
     console.warn('Using fallback render path');
     for (const chartConfig of chartsNeedingRender) {
         try {
             const commandEncoder = this.#device.createCommandEncoder();
-            const context = chartConfig.context;
-            const textureView = context.getCurrentTexture().createView();
-            const renderPassDescriptor = this.#createRenderPassDescriptor(
-                textureView, 
-                chartConfig.canvas,
-                chartConfig.chartId
+            const passEncoder = commandEncoder.beginRenderPass(
+                this.#createRenderPassDescriptor(
+                    chartConfig.context.getCurrentTexture().createView(),
+                    chartConfig.canvas,
+                    chartConfig.chartId
+                )
             );
-            
-            const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-            
             for (const layer of chartConfig.layers.values()) {
                 const renderer = layer.renderer;
                 if (renderer?.pipeline && renderer?.bindGroup) {
@@ -339,45 +371,12 @@ export class GPUCoordinator {
                     layer.draw(passEncoder);
                 }
             }
-            
             passEncoder.end();
             this.#device.queue.submit([commandEncoder.finish()]);
-            
         } catch (error) {
             console.error(`Failed to render chart ${chartConfig.chartId}:`, error);
         }
     }
-  }
-
-  #rebuildRenderBatches() {
-    console.debug(`🔄 Rebuilding render batches...`);
-    this.#renderBatches.byMarkType.clear();
-    this.#renderBatches.byZIndex.clear(); // Keep this for future z-index work
-
-    for (const chartConfig of this.#registeredCharts.values()) {
-        if (chartConfig.layers && chartConfig.layers.size > 0) {
-            for (const layerConfig of chartConfig.layers.values()) {
-                const markType = layerConfig.markType || 'unknown';
-
-                if (!this.#renderBatches.byMarkType.has(markType)) {
-                    this.#renderBatches.byMarkType.set(markType, []);
-                }
-                
-                this.#renderBatches.byMarkType.get(markType).push({
-                    ...layerConfig,
-                    chart: chartConfig 
-                });
-            }
-        }
-    }
-    this.#renderBatches.needsRebuild = false;
-    console.debug(`✅ Render batches rebuilt.`);
-  }
-
-  #updateRenderQueue() {
-    this.#renderQueue = Array.from(this.#registeredCharts.values())
-      .filter(config => config.visible)
-      .sort((a, b) => a.zIndex - b.zIndex);
   }
 
   // ===================================================================
@@ -395,7 +394,10 @@ export class GPUCoordinator {
       throw new Error('WebGPU not supported');
     }
 
-    const adapter = await navigator.gpu.requestAdapter();
+    const adapter = await navigator.gpu.requestAdapter({
+      powerPreference: "high-performance"
+    });
+
     if (!adapter) {
       throw new Error('No appropriate GPUAdapter found');
     }
@@ -612,7 +614,6 @@ export class GPUCoordinator {
     this.#sharedResources.pipelines.clear();
     this.#sharedResources.shaderModules.clear();
     this.#registeredCharts.clear();
-    this.#renderQueue = [];
     this.#dirtyChartIDs.clear();
 
     this.#initialized = false;
