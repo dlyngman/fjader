@@ -265,82 +265,87 @@ export class GPUCoordinator {
     }
   }
 
-  #coordinatedRender(chartsNeedingRender) {
+// In GPUCoordinator.svelte.js
+#coordinatedRender(chartsNeedingRender) {
     if (this.#renderBatches.needsRebuild) {
         this.#rebuildRenderBatches();
     }
 
     try {
-        // We need a map to store the render pass encoders for each dirty chart.
-        // Map<chartId, GPURenderPassEncoder>
-        const passEncoders = new Map();
-        const commandBuffers = [];
-
-        // A helper to get or create a pass encoder for a chart.
-        const getPassEncoder = (chartConfig) => {
-            if (passEncoders.has(chartConfig.chartId)) {
-                return passEncoders.get(chartConfig.chartId);
-            }
-
-            const commandEncoder = this.#device.createCommandEncoder({ label: `${chartConfig.chartId}-encoder` });
+        // Single command encoder for entire frame
+        const commandEncoder = this.#device.createCommandEncoder({ 
+            label: `frame-encoder` 
+        });
+        
+        // Render each chart
+        for (const chartConfig of chartsNeedingRender) {
+            if (!chartConfig.contextConfigured) continue;
+            
             const context = chartConfig.context;
             const textureView = context.getCurrentTexture().createView();
-            const renderPassDescriptor = this.#createRenderPassDescriptor(textureView, chartConfig.canvas, chartConfig.chartId);
+            const renderPassDescriptor = this.#createRenderPassDescriptor(
+                textureView, 
+                chartConfig.canvas,
+                chartConfig.chartId  // Pass chartId for MSAA cache
+            );
+            
             const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
             
-            // Store everything we need to finish it later.
-            passEncoders.set(chartConfig.chartId, { passEncoder, commandEncoder });
-            return { passEncoder, commandEncoder };
-        };
-        
-        // Iterate through the batches by MARK TYPE for efficiency.
-        for (const [markType, layersInBatch] of this.#renderBatches.byMarkType) {
-            // Get the shared pipeline for this mark type ONCE.
-            const sharedPipeline = this.getSharedPipeline(markType);
-            if (!sharedPipeline) continue;
-
-            // Set this pipeline ONCE for all subsequent draw calls of this type.
-            // NOTE: This is the key optimization, but WebGPU requires setPipeline
-            // to be called within a render pass. So we must call it for each pass.
-            // The REAL optimization is that we don't have to LOOK UP the pipeline repeatedly.
-            // The logic below still yields the most efficient command structure.
-
-            for (const layer of layersInBatch) {
-                const chartConfig = layer.chart;
-
-                // IMPORTANT: Only draw this layer if its parent chart is in the dirty list.
-                if (!chartsNeedingRender.includes(chartConfig)) {
-                    continue;
-                }
-
-                // Get or create the render pass for this layer's chart.
-                const { passEncoder } = getPassEncoder(chartConfig);
-                
+            // Draw all layers for this chart
+            for (const layer of chartConfig.layers.values()) {
                 const renderer = layer.renderer;
                 if (renderer?.pipeline && renderer?.bindGroup) {
-                    // The primary optimization: we set the pipeline once per mark type *per render pass*.
                     passEncoder.setPipeline(renderer.pipeline);
                     passEncoder.setBindGroup(0, renderer.bindGroup);
                     layer.draw(passEncoder);
                 }
             }
-        }
-
-        // Now, end all the render passes and finish the command buffers.
-        for (const { passEncoder, commandEncoder } of passEncoders.values()) {
+            
             passEncoder.end();
-            commandBuffers.push(commandEncoder.finish());
-        }
-
-        if (commandBuffers.length > 0) {
-            this.#device.queue.submit(commandBuffers);
         }
         
-        chartsNeedingRender.forEach(chart => chart.needsRedraw = false);
-
+        // Single submission for entire frame
+        const commandBuffer = commandEncoder.finish();
+        this.#device.queue.submit([commandBuffer]);
+                
     } catch (error) {
-        console.error('Batched coordinated render failed:', error);
-        // In a real app, you might want a fallback to the simpler render loop here.
+        console.error('Coordinated render failed:', error);
+        // Fallback to individual renders if batched fails
+        this.#fallbackRender(chartsNeedingRender);
+    }
+  } 
+
+  // Add fallback for safety
+  #fallbackRender(chartsNeedingRender) {
+    console.warn('Using fallback render path');
+    for (const chartConfig of chartsNeedingRender) {
+        try {
+            const commandEncoder = this.#device.createCommandEncoder();
+            const context = chartConfig.context;
+            const textureView = context.getCurrentTexture().createView();
+            const renderPassDescriptor = this.#createRenderPassDescriptor(
+                textureView, 
+                chartConfig.canvas,
+                chartConfig.chartId
+            );
+            
+            const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+            
+            for (const layer of chartConfig.layers.values()) {
+                const renderer = layer.renderer;
+                if (renderer?.pipeline && renderer?.bindGroup) {
+                    passEncoder.setPipeline(renderer.pipeline);
+                    passEncoder.setBindGroup(0, renderer.bindGroup);
+                    layer.draw(passEncoder);
+                }
+            }
+            
+            passEncoder.end();
+            this.#device.queue.submit([commandEncoder.finish()]);
+            
+        } catch (error) {
+            console.error(`Failed to render chart ${chartConfig.chartId}:`, error);
+        }
     }
   }
 
