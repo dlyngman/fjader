@@ -231,19 +231,41 @@ export class LinearScaleState {
 
   applyPanDomain(dx) {
     const [min, max] = this.domain.current;
-    const range = max - min;
+    let newMin = min + dx;
+    let newMax = max + dx;
     
-    // First check if we'd exceed either limit
-    if (min + dx < this.domainLimits.min) {
-        // Would exceed minimum limit, snap to minimum
-        this.domain.target = [this.domainLimits.min, this.domainLimits.min + range];
-    } else if (max + dx > this.domainLimits.max) {
-        // Would exceed maximum limit, snap to maximum
-        this.domain.target = [this.domainLimits.max - range, this.domainLimits.max];
-    } else {
-        // Within bounds, apply the pan normally
-        this.domain.target = [min + dx, max + dx];
+    const range = max - min;
+    if (newMin < this.domainLimits.min) {
+        newMin = this.domainLimits.min;
+        newMax = newMin + range;
+    } else if (newMax > this.domainLimits.max) {
+        newMax = this.domainLimits.max;
+        newMin = newMax - range;
     }
+
+    this.domain.target = [newMin, newMax];
+  }
+
+  setConstrainedDomain(newDomain) {
+    let [newMin, newMax] = newDomain;
+    
+    // Reuse existing constraint logic from applyPanDomain
+    const range = newMax - newMin;
+    if (newMin < this.domainLimits.min) {
+      newMin = this.domainLimits.min;
+      newMax = newMin + range;
+    } else if (newMax > this.domainLimits.max) {
+      newMax = this.domainLimits.max;
+      newMin = newMax - range;
+      
+      // Double-check if this pushed us below minLimit
+      if (newMin < this.domainLimits.min) {
+        newMin = this.domainLimits.min;
+        // We can't preserve the width in this case
+      }
+    }
+    
+    this.domain.target = [newMin, newMax];
   }
 
   updateScaleDomain(scale, current = true) {

@@ -41,8 +41,8 @@
       coord = new Coordinator();
       coord.databaseConnector(wasm);
 
-      coord.manager.logQueries(true);
-      coord.manager.logger(queryLogger);
+      // coord.manager.logQueries(true);
+      // coord.manager.logger(queryLogger);
     
       setContext('mosaic-coordinator', coord);
 

@@ -28,10 +28,10 @@ export class GPUCoordinator {
 
   // --- Managed Loop Properties ---
   #loopIsActive = false;
-  #activeLoopRequesters = new Set(); // Stores unique IDs of components needing the loop
   #rafId = null;
   #dirtyChartIDs = new Set();
-  #chartsToRenderThisFrame = []; 
+
+  #renderScheduled = false;
 
   // Configuration
   #msaaSampleCount = 4;
@@ -50,30 +50,95 @@ export class GPUCoordinator {
     try {
       await this.#initWebGPU();
       await this.#createSharedResources();
+      // this.startRenderLoop(); 
       this.#initialized = true;
       console.log('✅ GPUCoordinator initialized successfully');
     } catch (error) {
       console.error('❌ GPUCoordinator initialization failed:', error);
+      // this.stopRenderLoop();
       throw error;
     }
   }
 
-  // ===== LOOP MANAGEMENT API =====
-  requestActiveLoop(requesterId) {
-    console.log('requesting active loop')
-    if (!requesterId) return;
-    this.#activeLoopRequesters.add(requesterId);
-    if (!this.#loopIsActive && this.#activeLoopRequesters.size > 0) {
-      this.#loopIsActive = true;
-      this.#setupContinuousRenderLoop();
+  /**
+   * The single entry point for triggering a render. This method is designed
+   * to be called many times per frame without performance penalty.
+   */
+  invalidateChart(chartId) {
+    if (this.#registeredCharts.has(chartId)) {
+      // console.log(`🎯 Adding ${chartId} to dirty set at ${performance.now().toFixed(3)}ms`);
+      this.#dirtyChartIDs.add(chartId);
+
+      if (!this.#renderScheduled) {
+        this.#renderScheduled = true;
+        queueMicrotask(() => {
+          console.log(`🚀 Single render for charts:`, Array.from(this.#dirtyChartIDs), 
+                    `at ${performance.now().toFixed(3)}ms`);
+          this.#renderScheduled = false;
+          const chartsToRender = [];
+          for (const chartId of this.#dirtyChartIDs) {
+              const chart = this.#registeredCharts.get(chartId);
+              if (chart?.visible && chart.contextConfigured) {
+                  chartsToRender.push(chart);
+              }
+          }
+          this.#coordinatedRender(chartsToRender);
+          // this.#coordinatedRender(/* all dirty charts */);
+          this.#dirtyChartIDs.clear();
+        });
+      }
+
+      // queueMicrotask(() => {
+      //   console.log(`🎯 Microtask for ${chartId} at ${performance.now().toFixed(3)}ms`);
+      // });
     }
   }
 
-  releaseActiveLoop(requesterId) {
-    console.log('releasing active loop')
-    this.#activeLoopRequesters.delete(requesterId);
-    if (this.#loopIsActive && this.#activeLoopRequesters.size === 0) {
-      this.#loopIsActive = false;
+  // ===================================================================
+  // == 2. PRIVATE: Core Rendering & Scheduling Logic
+  // ===================================================================
+
+  startRenderLoop() {
+    if (this.#loopIsActive) return;
+    this.#loopIsActive = true;
+    
+    const loop = () => {
+      // console.log(this.#dirtyChartIDs.size)
+      if (!this.#loopIsActive) { 
+        this.#rafId = null; 
+        return; 
+      }
+
+      // The entire render logic is here.
+      if (this.#dirtyChartIDs.size > 0) {
+        // Collect chart objects that need rendering for this frame
+        const chartsToRender = [];
+        for (const chartId of this.#dirtyChartIDs) {
+            const chart = this.#registeredCharts.get(chartId);
+            if (chart?.visible && chart.contextConfigured) {
+                chartsToRender.push(chart);
+            }
+        }
+        // console.log([this.#dirtyChartIDs.size, chartsToRender.length])
+        
+        // Clear the set for the next frame
+        this.#dirtyChartIDs.clear();
+        
+        if (chartsToRender.length > 0) {
+          this.#coordinatedRender(chartsToRender);
+        }
+      }
+
+      this.#rafId = requestAnimationFrame(loop);
+    };
+    this.#rafId = requestAnimationFrame(loop);
+  }
+
+  stopRenderLoop() {
+    this.#loopIsActive = false;
+    if (this.#rafId) {
+      cancelAnimationFrame(this.#rafId);
+      this.#rafId = null;
     }
   }
 
@@ -195,65 +260,65 @@ export class GPUCoordinator {
     }
   }
 
-  // ===================================================================
-  // == 3. PUBLIC API: Invalidation
-  // ===================================================================
-  // The single entry point for triggering a render.
-  invalidateChart(chartId) {
-    if (this.#registeredCharts.has(chartId)) {
-      this.#dirtyChartIDs.add(chartId);
-      // If the loop is sleeping, we need to schedule a single frame to render this change.
-      if (!this.#loopIsActive) {
-        console.log('loop sleeping, single frame requested')
-        this.#requestSingleFrame();
-      }
-    }
-  }
+  // // ===================================================================
+  // // == 3. PUBLIC API: Invalidation
+  // // ===================================================================
+  // // The single entry point for triggering a render.
+  // invalidateChart(chartId) {
+  //   if (this.#registeredCharts.has(chartId)) {
+  //     this.#dirtyChartIDs.add(chartId);
+  //     // If the loop is sleeping, we need to schedule a single frame to render this change.
+  //     if (!this.#loopIsActive) {
+  //       console.log('loop sleeping, single frame requested')
+  //       this.#requestSingleFrame();
+  //     }
+  //   }
+  // }
 
   // ===================================================================
   // == 4. PRIVATE: Core Rendering & Scheduling Logic
   // ===================================================================
   // These are the internal "engine" methods that drive the rendering process.
 
-  #setupContinuousRenderLoop() {
-    const loop = () => {
-      if (!this.#loopIsActive) {
-        this.#rafId = null; // Loop has been requested to stop.
-        return;
-      }
-      this.#render();
-      this.#rafId = requestAnimationFrame(loop);
-    };
-    this.#rafId = requestAnimationFrame(loop);
-  }
+  // #setupContinuousRenderLoop() {
+  //   const loop = () => {
+  //     if (!this.#loopIsActive) {
+  //       this.#rafId = null; // Loop has been requested to stop.
+  //       return;
+  //     }
+  //     this.#render();
+  //     this.#rafId = requestAnimationFrame(loop);
+  //   };
+  //   this.#rafId = requestAnimationFrame(loop);
+  // }
 
-  #requestSingleFrame() {
-    // Only schedule a one-off frame if the main loop isn't running and a frame isn't already requested.
-    if (this.#loopIsActive || this.#rafId) return;
-    this.#rafId = requestAnimationFrame(() => {
-      this.#render();
-      this.#rafId = null; // This was a one-off frame.
-    });
-  }
+  // #requestSingleFrame() {
+  //   // Only schedule a one-off frame if the main loop isn't running and a frame isn't already requested.
+  //   if (this.#loopIsActive || this.#rafId) return;
+  //   this.#rafId = requestAnimationFrame(() => {
+  //     this.#render();
+  //     this.#rafId = null; // This was a one-off frame.
+  //   });
+  // }
 
-  #render() {
-    if (this.#dirtyChartIDs.size === 0) return;
-    try {
-        this.#chartsToRenderThisFrame.length = 0;
-        for (const chartId of this.#dirtyChartIDs) {
-            const chart = this.#registeredCharts.get(chartId);
-            if (chart?.visible && chart.contextConfigured) {
-                this.#chartsToRenderThisFrame.push(chart);
-            }
-        }        
-        this.#dirtyChartIDs.clear();
-        if (this.#chartsToRenderThisFrame.length > 0) {
-          this.#coordinatedRender(this.#chartsToRenderThisFrame);
-        }
-    } catch (error) {
-      console.error('GPUCoordinator render error:', error);
-    }
-  }
+  // #render() {
+  //   if (this.#dirtyChartIDs.size === 0) return;
+  //   try {
+  //       this.#chartsToRenderThisFrame.length = 0;
+  //       for (const chartId of this.#dirtyChartIDs) {
+  //           const chart = this.#registeredCharts.get(chartId);
+  //           if (chart?.visible && chart.contextConfigured) {
+  //               this.#chartsToRenderThisFrame.push(chart);
+  //           }
+  //       }        
+  //       this.#dirtyChartIDs.clear();
+  //       if (this.#chartsToRenderThisFrame.length > 0) {
+  //         this.#coordinatedRender(this.#chartsToRenderThisFrame);
+  //       }
+  //   } catch (error) {
+  //     console.error('GPUCoordinator render error:', error);
+  //   }
+  // }
 
   /**
    * Builds a sorted and batched "Render Plan" for a chart.
@@ -306,6 +371,15 @@ export class GPUCoordinator {
    */
   #coordinatedRender(chartsNeedingRender) {
     try {
+
+        for (const chartConfig of chartsNeedingRender) {
+          if (chartConfig.layers.size > 0) {
+              for (const layer of chartConfig.layers.values()) {
+                  layer.renderer?.handleScaleOrRangeUpdate();
+              }
+          }
+        }
+
         const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
 
         for (const chartConfig of chartsNeedingRender) {
@@ -586,12 +660,13 @@ export class GPUCoordinator {
   // ===== CLEANUP =====
 
   destroy() {
+    this.stopRenderLoop();
     if (this.#rafId) {
       cancelAnimationFrame(this.#rafId);
       this.#rafId = null;
     }
     this.#loopIsActive = false;
-    this.#activeLoopRequesters.clear();
+    // this.#activeLoopRequesters.clear();
 
     for (const texture of this.#msaaTextures.values()) {
       texture.destroy();

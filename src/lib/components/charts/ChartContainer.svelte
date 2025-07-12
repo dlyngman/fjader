@@ -1,5 +1,5 @@
 <script>
-  import { setContext, onDestroy } from 'svelte';
+  import { setContext, onDestroy, untrack } from 'svelte';
   import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
   import { ChartScales } from '$lib/scales/ChartScales.svelte';
   import { getGPUContext } from '$lib/gpu';
@@ -122,6 +122,30 @@
   let initialTouchDistance = $state(0);
   let isZooming = $state(false);
 
+  // $effect.pre(() => {
+  //   void scales.xScaleState?.domain?.current;
+  //   void scales.yScaleState?.domain?.current;
+  //   if (layout.isReady) {
+  //     gpuCoordinator.invalidateChart(layout.chartId);
+  //   }
+  // });
+  $effect.pre(() => {
+    // Depend on the tweened domain values from the scale states.
+    void scales.xScaleState?.domain?.current;
+    void scales.yScaleState?.domain?.current;
+
+    // const timestamp = performance.now();
+    // console.log(`📊 Chart ${layout.chartId} effect.pre fired at ${timestamp.toFixed(3)}ms`);
+    
+    // This effect running means the state is fresh for this frame.
+    // Tell the coordinator that this chart needs to be included in its upcoming render pass.
+    untrack(() => {
+        if (layout.isReady) {
+            gpuCoordinator.invalidateChart(layout.chartId);
+        }
+    });
+  });
+
   // GPUCoordinator handlers
   function handleContainerMouseEnter() {
     // If a "go to sleep" timer is pending from a previous mouse leave, cancel it.
@@ -132,7 +156,7 @@
     }
 
     // Wake up the render loop. The coordinator handles multiple requests gracefully.
-    gpuCoordinator.requestActiveLoop(requesterId);
+    // gpuCoordinator.requestActiveLoop(requesterId);
   }
 
   function handleContainerMouseLeave() {
@@ -140,7 +164,7 @@
     // This gives any animations triggered by interactions (like double-click reset)
     // time to complete smoothly even after the mouse has left the chart.
     leaveTimeout = setTimeout(() => {
-      gpuCoordinator.releaseActiveLoop(requesterId);
+      // gpuCoordinator.releaseActiveLoop(requesterId);
       leaveTimeout = null; // Clear the timer ID after it has run
       // console.log('loop cancel request sent')
     }, DEACTIVATION_DELAY);
@@ -208,14 +232,12 @@
     activePanX = false;
     activePanY = false;
   }
+
+  let panContext;
   
   // PAN HANDLERS
   function handlePointerDown(event) {
     event.preventDefault();
-    
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
-    
-    scales.clearCurrentDataPoints();
     
     const point = { x: event.offsetX, y: event.offsetY };
     const { x, y, innerPoint } = layout.getActiveAxes(point);
@@ -223,8 +245,29 @@
     activePanX = x;
     activePanY = y;
     isPanning = true;
-    panningAnchorPoint = scales.calculatePanningAnchor(innerPoint);
-
+    
+    // 🚀 NEW: Pre-calculate everything we need for fast math
+    panContext = {
+      // Screen position where pan started
+      initialScreenPos: { x: event.offsetX, y: event.offsetY },
+      
+      // Domain at start of pan (we'll offset from this)
+      initialDomain: {
+        x: activePanX ? [...scales.xScaleState.domain.current] : null,
+        y: activePanY ? [...scales.yScaleState.domain.current] : null
+      },
+      
+      // Pre-calculated screen-pixel to data-unit conversion ratios
+      screenToDataRatio: {
+        x: activePanX ? 
+          (scales.xScaleState.domain.current[1] - scales.xScaleState.domain.current[0]) / layout.innerWidth : 0,
+        y: activePanY ?
+          (scales.yScaleState.domain.current[1] - scales.yScaleState.domain.current[0]) / layout.innerHeight : 0
+      }
+    };
+    
+    scales.clearCurrentDataPoints();
+    
     if (event.target.setPointerCapture) {
       event.target.setPointerCapture(event.pointerId);
     }
@@ -234,11 +277,35 @@
     if (!isPanning) return;
     
     event.preventDefault();
-    const point = { x: event.offsetX, y: event.offsetY };
-    const innerPoint = layout.toInnerCoordinates(point);
-    const { dx, dy } = scales.calculatePanDeltas(innerPoint, panningAnchorPoint);
     
-    scales.applyPan(dx, dy, activePanX, activePanY);
+    // 🚀 ULTRA-FAST: Just subtract screen coordinates (no coordinate transforms!)
+    const screenDelta = {
+      x: event.offsetX - panContext.initialScreenPos.x,
+      y: event.offsetY - panContext.initialScreenPos.y
+    };
+    
+    // 🚀 ULTRA-FAST: Simple multiplication (no scale.invert()!)
+    const dataDelta = {
+      x: -screenDelta.x * panContext.screenToDataRatio.x, // Negative: pan right = domain left
+      y: screenDelta.y * panContext.screenToDataRatio.y   // Positive: pan down = domain up (y-axis flipped)
+    };
+    
+    // 🚀 FAST: Apply to original domain (preserves "grab point" UX)
+    if (activePanX) {
+      const newXDomain = [
+        panContext.initialDomain.x[0] + dataDelta.x,
+        panContext.initialDomain.x[1] + dataDelta.x
+      ];
+      scales.applyPanDomain(newXDomain, 'x');
+    }
+    
+    if (activePanY) {
+      const newYDomain = [
+        panContext.initialDomain.y[0] + dataDelta.y,
+        panContext.initialDomain.y[1] + dataDelta.y
+      ];
+      scales.applyPanDomain(newYDomain, 'y');
+    }
   }
   
   function handlePointerUp() {
@@ -269,7 +336,7 @@
     }
 
     // Always release this component's hold on the active loop when it's destroyed.
-    gpuCoordinator.releaseActiveLoop(requesterId);
+    // gpuCoordinator.releaseActiveLoop(requesterId);
   });
 </script>
 
