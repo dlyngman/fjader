@@ -131,7 +131,7 @@ export class BaseGPURenderer {
         return rangeMin + normalized * rangeSize;
       }
 
-      // Convenience functions for X and Y axes - components just call these!
+      // Convenience functions for X and Y axes - components call these
       fn scaleX(value: f32, scaleParams: ScaleParams) -> f32 {
         return scaleValue(
           value,

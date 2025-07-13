@@ -26,9 +26,6 @@
   }));
 
   const gpuCoordinator = getGPUContext();
-  const requesterId = `chart-hover-${layout.chartId}`; // A unique ID for this chart's hover state
-  let leaveTimeout = null; // To hold the ID of our setTimeout
-  const DEACTIVATION_DELAY = 1000; // Longer than longest animation
 
   $effect(() => {
       console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
@@ -145,30 +142,6 @@
         }
     });
   });
-
-  // GPUCoordinator handlers
-  function handleContainerMouseEnter() {
-    // If a "go to sleep" timer is pending from a previous mouse leave, cancel it.
-    // This handles cases where the user quickly leaves and re-enters the chart.
-    if (leaveTimeout) {
-    clearTimeout(leaveTimeout);
-      leaveTimeout = null;
-    }
-
-    // Wake up the render loop. The coordinator handles multiple requests gracefully.
-    // gpuCoordinator.requestActiveLoop(requesterId);
-  }
-
-  function handleContainerMouseLeave() {
-    // Don't stop the loop immediately. Instead, set a timer.
-    // This gives any animations triggered by interactions (like double-click reset)
-    // time to complete smoothly even after the mouse has left the chart.
-    leaveTimeout = setTimeout(() => {
-      // gpuCoordinator.releaseActiveLoop(requesterId);
-      leaveTimeout = null; // Clear the timer ID after it has run
-      // console.log('loop cancel request sent')
-    }, DEACTIVATION_DELAY);
-    }
   
   // ZOOM HANDLERS
   function handleWheel(event) {
@@ -328,16 +301,6 @@
     const innerPoint = layout.toInnerCoordinates({ x: event.offsetX, y: event.offsetY });
     scales.updateCurrentDataPoints(innerPoint);
   }
-
-  onDestroy(() => {
-    // If the component is destroyed, cancel any pending "go to sleep" timer.
-    if (leaveTimeout) {
-        clearTimeout(leaveTimeout);
-    }
-
-    // Always release this component's hold on the active loop when it's destroyed.
-    // gpuCoordinator.releaseActiveLoop(requesterId);
-  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -345,8 +308,6 @@
   class="chart-container" 
   bind:clientWidth={layout.width} 
   bind:clientHeight={layout.height}
-  onmouseenter={handleContainerMouseEnter}
-  onmouseleave={handleContainerMouseLeave}
 >  
   {#if layout.isReady}
     <svg 
