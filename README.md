@@ -270,12 +270,11 @@ Database → GROUP BY/SUM → 20 aggregated rows → Client visual transforms �
 -   **Optimized Render Orchestration**: Contains the logic to perform batched rendering by iterating over a pre-computed "Render Plan" for each chart, minimizing expensive GPU state changes during the render pass.
 
 **Key Features**:
--   ✅ **Centralized Layer Management**: The coordinator is the single source of truth for all renderable layers, enabling advanced, cross-chart optimizations.
+-   ✅ **Centralized Layer Management**: The single source of truth for all renderable layers, enabling advanced, cross-chart optimizations.
 -   ✅ **Debounced Invalidation**: Prevents "invalidation storms" during animations and interactions, keeping the main thread responsive.
 -   ✅ **Reference-counted resource sharing**: Automatic cleanup of pipelines and shaders when they are no longer in use.
 -   ✅ **Render batching**: The architecture enables rendering all marks of the same type (e.g., all 'dots') in efficient batches.
 -   ✅ **Comprehensive error handling**: Graceful degradation with automatic recovery.
--   ✅ **Rich debugging tools**: A browser console interface for performance analysis and state inspection.
 
 ### **Data Flow & Reactivity: The Svelte-Driven Render Loop**
 
@@ -298,10 +297,10 @@ The process is event-driven and seamlessly handles both static data updates and 
 4.  **Invalidation Signal**: Inside the `$effect.pre`, a single, lightweight call is made to `gpuCoordinator.invalidateChart(chartId)`. This simply flags the chart as needing a redraw.
 
 5.  **Microtask Debouncing for Batching**: The `invalidateChart` method is the core of our efficient debouncing strategy. It performs two simple actions:
-    *   It adds the `chartId` to a global "dirty" set.
-    *   It schedules the main render function to run in a **`queueMicrotask`**.
+      *   It adds the `chartId` to a global "dirty" set.
+      *   It schedules the main render function to run in a **`queueMicrotask`**.
 
-    This is extremely efficient because the microtask queue is processed only after the current script and all Svelte effects for this frame have finished. This guarantees that no matter how many `tween` values change in a single frame (e.g., x-axis, y-axis, and multiple charts animating at once), the expensive render function is only queued up **once**.
+      This is extremely efficient because the microtask queue is processed only after the current script and all Svelte effects for this frame have finished. This guarantees that no matter how many `tween` values change in a single frame (e.g., x-axis, y-axis, and multiple charts animating at once), the expensive render function is only queued up **once**.
 
 6.  **Coordinated GPU Render**: The microtask executes, and the `GPUCoordinator` performs its highly optimized, batched render pass on the complete set of dirty charts for that frame.
 
@@ -350,8 +349,8 @@ Instead of a single `Mark` class that handles all data fetching, state, and rend
 - **Lifecycle Orchestration**: The `setup()` method orchestrates the entire initialization flow: scale registration, client creation, metadata fetching, and domain setting.
 - **Scale Registration**: Communicates the mark's scale requirements to the `ChartScales` coordinator.
 -   **Data Requirement Logic**: Contains the logic to:
-    -   Build the `fieldRequests` for continuous scale extents (`min`/`max`).
-    -   Fetch and set domains for categorical scales (`DISTINCT` query).
+      -   Build the `fieldRequests` for continuous scale extents (`min`/`max`).
+      -   Fetch and set domains for categorical scales (`DISTINCT` query).
 - **Default Query Builder**: Provides a default `buildQuery()` that correctly handles `mosaic-sql` expressions, aggregations, and automatic `GROUP BY` clause generation for simple marks.
 - **State Management**: Holds the reactive `$state` (`client`, `gpuReady`, `error`) that the Svelte component consumes.
 
@@ -363,7 +362,6 @@ Instead of a single `Mark` class that handles all data fetching, state, and rend
 - **Decoupled & Generic**: It has **zero dependencies** on Svelte context or any chart-specific visual logic.
 
 ---
-
 
 ### **Data & Initialization Flow: A Reactive State machine (Corrected)**
 
@@ -462,79 +460,6 @@ The entire process is kicked off when a mark component (e.g., `<DotsMark>`) is m
 
 ---
 
-## 🔍 **Debugging & Development**
-
-### **Scale Resolution Debugging**:
-```javascript
-// Inspect current scale requirements and resolution
-console.log('Scale Requirements:', c.getScaleRequirementsSummary());
-// Output:
-// {
-//   x: {
-//     resolved: 'band',
-//     requirements: ['bar-abc123:band(3)', 'dot-def456:linear(2)']
-//   },
-//   y: { resolved: 'linear', requirements: [...] }
-// }
-```
-
-### **Database vs Client Processing Debugging**:
-```javascript
-// Check what SQL query the DataClient generated from Mosaic expression
-console.log('Generated SQL:', client.query());
-// SELECT category, SUM(amount) as value FROM sales GROUP BY category
-
-// For complex expressions
-console.log('Complex Query SQL:', client.query());
-// SELECT region, SUM(amount) as value FROM sales WHERE category = 'premium' GROUP BY region
-
-// Future: Monitor reactive derivation performance
-console.log('Derivation Performance:', component.getDerivationStats());
-// { topNData: { computeTime: 2.3ms }, stackedData: { computeTime: 1.1ms } }
-
-// Future: Monitor functional transform performance
-console.log('Transform Performance:', flow.getPerformanceReport());
-// { topN: { averageMs: 2.3 }, stack: { averageMs: 1.1 } }
-```
-
-### **Enhanced GPU Coordination Debugging** *(Currently Available)*:
-```javascript
-// ✅ Complete debugging interface available now
-DivePlotDebug.help()                              // Show all available commands
-DivePlotDebug.gpu().quickStats()                  // GPU resource sharing overview
-DivePlotDebug.gpu().analyzeResourceSharing()      // Detailed efficiency analysis
-DivePlotDebug.performance.startMonitoring()       // Real-time performance tracking
-DivePlotDebug.benchmark.quick()                   // Automated 10-second benchmark
-
-// ✅ Error simulation and testing
-DivePlotErrorUtils.simulate.webgpuNotSupported()  // Test WebGPU fallback
-DivePlotErrorUtils.testRecovery.retryMechanism()  // Test automatic recovery
-```
-
-### **Mark Lifecycle Tracing**:
-- Each mark instance has unique ID for complete traceability
-- Scale registrations, data extents, and cleanup all use same ID
-- Console logging shows mark registration and cleanup events
-- Perfect debugging story for multi-mark scenarios
-
-### **Conflict Analysis**:
-- Clear error messages when marks have incompatible scale requirements
-- Suggestions for resolution (separate containers, different mark types)
-- Priority levels explicitly shown in debug output
-
-### **Future: Transform Pipeline Debugging**:
-```javascript
-// Proposed reactive derivation inspection
-console.log('Derivation Chain:', component.getDerivationChain());
-// { rawData: 47 rows, topNData: 10 rows, stackedData: 10 rows, animatedData: 10 rows }
-
-// Proposed functional transform inspection
-console.log('Transform Pipeline:', transform.getSteps());
-// [{ name: 'topN', input: 47, output: 20 }, { name: 'topN', input: 20, output: 10 }]
-```
-
----
-
 ## 🚧 **Current State & Future Roadmap**
 
 ### **✅ Currently Implemented & Working**:
@@ -554,7 +479,6 @@ console.log('Transform Pipeline:', transform.getSteps());
 - ✅ **Simplified Reactive Rendering**: Re-architected the render pipeline to be driven directly by Svelte's reactive primitives (`$effect.pre`), removing the complex manual `rAF` loop and replacing it with a more robust and efficient `queueMicrotask`-based batching strategy.
 - ✅ **Enhanced GPU Coordination**: Reference-counted resource sharing with ~50-70% memory savings.
 - ✅ **Performance Monitoring**: Real-time FPS tracking and comprehensive reporting tools.
-- ✅ **Development Debugging**: Rich browser console interface with 15+ monitoring commands.
 - ✅ **Error Handling**: Automatic recovery from WebGPU failures with graceful degradation.
 - ✅ **Benchmarking**: Automated performance testing and validation tools.
 - ✅ **Resource Management**: Reference counting and automatic cleanup systems.
@@ -607,12 +531,12 @@ console.log('Transform Pipeline:', transform.getSteps());
 We are designing a client-side processing system for visual transformations on database-aggregated data. After extensive analysis, we evaluated several architectural approaches:
 
 **Considered Alternatives**:
-1. **Class-Based Transformer Pipeline**: Observable Plot-style processor classes
-2. **Pure Declarative Configuration**: Simple props that hide all complexity
-3. **Functional Transform Composition**: RxJS/Ramda-style function composition
-4. **Schema-Driven Processing**: Vega-Lite-style JSON specifications
-5. **Plugin Architecture**: Extensible plugin system for custom transforms
-6. **Svelte Actions System**: Leveraging Svelte's action system for side effects
+1. Class-Based Transformer Pipeline: Observable Plot-style processor classes
+2. Pure Declarative Configuration: Simple props that hide all complexity
+3. Functional Transform Composition: RxJS/Ramda-style function composition
+4. Schema-Driven Processing: Vega-Lite-style JSON specifications
+5. Plugin Architecture: Extensible plugin system for custom transforms
+6. Svelte Actions System: Leveraging Svelte's action system for side effects
 
 **Selected Approach**: **Reactive Derivations + Functional Fallback** - Leverages Svelte's native reactivity for common cases while providing unlimited flexibility through functional composition for complex scenarios.
 
