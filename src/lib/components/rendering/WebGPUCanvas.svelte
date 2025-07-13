@@ -4,7 +4,7 @@
 
   let {
     canvasComponents,
-    msaaSampleCount = 4 
+    // msaaSampleCount = 4 
   } = $props();
 
   const c = getContext('chart');
@@ -24,9 +24,7 @@
 
   // Enhanced initialization with comprehensive error handling
   async function initWebGPU() {
-    try {
-      console.log(`🚀 Initializing WebGPUCanvas ${chartId}`);
-      
+    try {      
       // Get shared GPU coordinator
       gpuCoordinator = getGPUContext();
       
@@ -89,7 +87,6 @@
       });
       
       contextConfigured = true;
-      console.log(`🎨 Context configured successfully for chart ${chartId}`);
       
       // Setup initial canvas size
       setupCanvas();
@@ -146,20 +143,15 @@
       // Only proceed if there's an actual change.
       if (!dimensionsChanged && !positionChanged) return;
 
-      console.log(`[${chartId}] Canvas needs update. Resized: ${dimensionsChanged}, Repositioned: ${positionChanged}`);
-
       if (dimensionsChanged) {
         canvas.width = canvasWidth;
         canvas.height = canvasHeight;
         canvas.style.width = width + 'px';
-        canvas.style.height = height + 'px';
-        
-        console.debug(`📐 Canvas ${chartId} resized to ${canvasWidth}x${canvasHeight}`);
+        canvas.style.height = height + 'px';        
       }
 
       if (positionChanged) {
         canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
-        console.debug(`📍 Canvas ${chartId} repositioned to (${margin.left}, ${margin.top})`);
       }
 
       if (chartControl) {
@@ -185,7 +177,7 @@
     },
 
     getMsaaSampleCount() {
-      return gpuCoordinator?.msaaSampleCount || msaaSampleCount;
+      return gpuCoordinator?.msaaSampleCount || 4;
     },
 
     getDevice() {
