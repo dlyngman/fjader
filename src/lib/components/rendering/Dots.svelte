@@ -161,18 +161,18 @@
     }
   });
 
-  // Single lightweight interaction effect
-  $effect(() => {
-    if (!renderer?.resourcesCreated) return;
+  // // Single lightweight interaction effect
+  // $effect(() => {
+  //   if (!renderer?.resourcesCreated) return;
     
-    void chartContext.xScaleState?.domain?.current;
-    void chartContext.yScaleState?.domain?.current;
+  //   void chartContext.xScaleState?.domain?.current;
+  //   void chartContext.yScaleState?.domain?.current;
     
-    untrack(() => {
-      renderer.handleScaleOrRangeUpdate();
-      gpuCoordinator.invalidateChart(chartContext.chartId);
-    });
-  });
+  //   untrack(() => {
+  //     renderer.handleScaleOrRangeUpdate();
+  //     gpuCoordinator.invalidateChart(chartContext.chartId);
+  //   });
+  // });
 
   // Resize change
   $effect(() => {

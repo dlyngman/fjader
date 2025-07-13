@@ -178,12 +178,21 @@ export class ChartScales {
     }
   }
 
-  applyPan = (dx, dy, activePanX, activePanY) => {
-    if (activePanX && this.scaleTypes?.x === 'linear') {
-      this.xScaleState.applyPanDomain(-dx);
+  // applyPan = (dx, dy, activePanX, activePanY) => {
+  //   if (activePanX && this.scaleTypes?.x === 'linear') {
+  //     this.xScaleState.applyPanDomain(-dx);
+  //   }
+  //   if (activePanY && this.scaleTypes?.y === 'linear') {
+  //     this.yScaleState.applyPanDomain(-dy);
+  //   }
+  // }
+
+  applyPanDomain = (newDomain, axis) => {
+    if (axis === 'x' && this.scaleTypes?.x === 'linear') {
+      this.xScaleState.setConstrainedDomain(newDomain); // 🚀 Direct constraint application
     }
-    if (activePanY && this.scaleTypes?.y === 'linear') {
-      this.yScaleState.applyPanDomain(-dy);
+    if (axis === 'y' && this.scaleTypes?.y === 'linear') {
+      this.yScaleState.setConstrainedDomain(newDomain); // 🚀 Direct constraint application
     }
   }
 

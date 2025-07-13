@@ -1,4 +1,3 @@
-// src/lib/gpu/GPUCoordinator.svelte.js
 import { setContext, getContext } from 'svelte';
 
 /**
@@ -26,12 +25,8 @@ export class GPUCoordinator {
   // Map for caching MSAA textures
   #msaaTextures = new Map();
 
-  // --- Managed Loop Properties ---
-  #loopIsActive = false;
-  #activeLoopRequesters = new Set(); // Stores unique IDs of components needing the loop
-  #rafId = null;
   #dirtyChartIDs = new Set();
-  #chartsToRenderThisFrame = []; 
+  #renderScheduled = false;
 
   // Configuration
   #msaaSampleCount = 4;
@@ -39,11 +34,6 @@ export class GPUCoordinator {
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
   }
-
-  // ===================================================================
-  // == 1. PUBLIC API: Core Lifecycle & Loop Management
-  // ===================================================================
-  // These are the primary methods external code will call.
 
   async initialize() {
     if (this.#initialized) return;
@@ -58,29 +48,35 @@ export class GPUCoordinator {
     }
   }
 
-  // ===== LOOP MANAGEMENT API =====
-  requestActiveLoop(requesterId) {
-    console.log('requesting active loop')
-    if (!requesterId) return;
-    this.#activeLoopRequesters.add(requesterId);
-    if (!this.#loopIsActive && this.#activeLoopRequesters.size > 0) {
-      this.#loopIsActive = true;
-      this.#setupContinuousRenderLoop();
+  /**
+   * The single entry point for triggering a render. This method is designed
+   * to be called many times per frame without performance penalty.
+   */
+  invalidateChart(chartId) {
+    if (this.#registeredCharts.has(chartId)) {
+      // console.log(`🎯 Adding ${chartId} to dirty set at ${performance.now().toFixed(3)}ms`);
+      this.#dirtyChartIDs.add(chartId);
+
+      if (!this.#renderScheduled) {
+        this.#renderScheduled = true;
+        queueMicrotask(() => {
+          // console.log(`🚀 Single render for charts:`, Array.from(this.#dirtyChartIDs), 
+          //           `at ${performance.now().toFixed(3)}ms`);
+          this.#renderScheduled = false;
+          const chartsToRender = [];
+          for (const chartId of this.#dirtyChartIDs) {
+              const chart = this.#registeredCharts.get(chartId);
+              if (chart?.visible && chart.contextConfigured) {
+                  chartsToRender.push(chart);
+              }
+          }
+          this.#coordinatedRender(chartsToRender);
+          this.#dirtyChartIDs.clear();
+        });
+      }
     }
   }
 
-  releaseActiveLoop(requesterId) {
-    console.log('releasing active loop')
-    this.#activeLoopRequesters.delete(requesterId);
-    if (this.#loopIsActive && this.#activeLoopRequesters.size === 0) {
-      this.#loopIsActive = false;
-    }
-  }
-
-  // ===================================================================
-  // == 2. PUBLIC API: Chart & Layer Registration
-  // ===================================================================
-  // These methods form the public interface for components to register themselves.
 
   registerChart(chartId, canvas, config) {
     if (this.#registeredCharts.has(chartId)) {
@@ -100,30 +96,11 @@ export class GPUCoordinator {
     };
 
     this.#registeredCharts.set(chartId, chartConfig);
-    // this.#updateRenderQueue(); // This is still useful for z-index sorting.
 
     return {
-        update: (newConfig) => {
-          const existingConfig = this.#registeredCharts.get(chartId);
-          if (!existingConfig) return;
-
-          // Update only provided values
-          for (const [key, value] of Object.entries(newConfig)) {
-              if (value !== undefined) {
-                  existingConfig[key] = value;
-              }
-          }
-
-          // Mark context as configured when WebGPUCanvas tells us.
-          // This is a critical signal.
-          if (newConfig.contextConfigured) {
-              existingConfig.contextConfigured = true;
-          }
-
-          // If the canvas was resized or moved, we must invalidate to trigger a redraw.
-          if (newConfig.canvasResized || newConfig.canvasRepositioned) {
-              this.invalidateChart(chartId);
-          }
+        setContextReady: () => {
+          const chart = this.#registeredCharts.get(chartId);
+          if (chart) chart.contextConfigured = true;
         },
 
         setVisible: (visible) => {
@@ -147,8 +124,6 @@ export class GPUCoordinator {
   unregisterChart(chartId) {
     if (this.#registeredCharts.has(chartId)) {
       this.#registeredCharts.delete(chartId);
-      // this.#renderBatches.needsRebuild = true;
-      // this.#updateRenderQueue();
 
       // Clean up the cached MSAA texture when a chart is unregistered
       const msaaTexture = this.#msaaTextures.get(chartId);
@@ -174,10 +149,6 @@ export class GPUCoordinator {
     chart.layers.set(layerId, { ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
 
     chart.needsPlanRebuild = true; // The layer structure has changed
-
-
-    // Mark that batches need rebuilding since the layer composition has changed.
-    // this.#renderBatches.needsRebuild = true;
     this.invalidateChart(chartId); // Invalidate the chart to ensure the new layer is drawn.
 
     return {
@@ -190,68 +161,7 @@ export class GPUCoordinator {
     if (chart?.layers.has(layerId)) {
         chart.layers.delete(layerId);
         chart.needsPlanRebuild = true; // The layer structure has changed
-        // this.#renderBatches.needsRebuild = true;
         this.invalidateChart(chartId); // Invalidate to render the chart without the layer.
-    }
-  }
-
-  // ===================================================================
-  // == 3. PUBLIC API: Invalidation
-  // ===================================================================
-  // The single entry point for triggering a render.
-  invalidateChart(chartId) {
-    if (this.#registeredCharts.has(chartId)) {
-      this.#dirtyChartIDs.add(chartId);
-      // If the loop is sleeping, we need to schedule a single frame to render this change.
-      if (!this.#loopIsActive) {
-        console.log('loop sleeping, single frame requested')
-        this.#requestSingleFrame();
-      }
-    }
-  }
-
-  // ===================================================================
-  // == 4. PRIVATE: Core Rendering & Scheduling Logic
-  // ===================================================================
-  // These are the internal "engine" methods that drive the rendering process.
-
-  #setupContinuousRenderLoop() {
-    const loop = () => {
-      if (!this.#loopIsActive) {
-        this.#rafId = null; // Loop has been requested to stop.
-        return;
-      }
-      this.#render();
-      this.#rafId = requestAnimationFrame(loop);
-    };
-    this.#rafId = requestAnimationFrame(loop);
-  }
-
-  #requestSingleFrame() {
-    // Only schedule a one-off frame if the main loop isn't running and a frame isn't already requested.
-    if (this.#loopIsActive || this.#rafId) return;
-    this.#rafId = requestAnimationFrame(() => {
-      this.#render();
-      this.#rafId = null; // This was a one-off frame.
-    });
-  }
-
-  #render() {
-    if (this.#dirtyChartIDs.size === 0) return;
-    try {
-        this.#chartsToRenderThisFrame.length = 0;
-        for (const chartId of this.#dirtyChartIDs) {
-            const chart = this.#registeredCharts.get(chartId);
-            if (chart?.visible && chart.contextConfigured) {
-                this.#chartsToRenderThisFrame.push(chart);
-            }
-        }        
-        this.#dirtyChartIDs.clear();
-        if (this.#chartsToRenderThisFrame.length > 0) {
-          this.#coordinatedRender(this.#chartsToRenderThisFrame);
-        }
-    } catch (error) {
-      console.error('GPUCoordinator render error:', error);
     }
   }
 
@@ -260,7 +170,7 @@ export class GPUCoordinator {
    * This is run only when a chart's layer structure changes, not on every frame.
    */
   #buildRenderPlanForChart(chartConfig) {
-    console.debug(`🛠️ Rebuilding render plan for chart: ${chartConfig.chartId}`);
+    // console.debug(`🛠️ Rebuilding render plan for chart: ${chartConfig.chartId}`);
     const layers = Array.from(chartConfig.layers.values());
     if (layers.length === 0) {
         chartConfig.renderPlan = [];
@@ -306,6 +216,15 @@ export class GPUCoordinator {
    */
   #coordinatedRender(chartsNeedingRender) {
     try {
+
+        for (const chartConfig of chartsNeedingRender) {
+          if (chartConfig.layers.size > 0) {
+              for (const layer of chartConfig.layers.values()) {
+                  layer.renderer?.handleScaleOrRangeUpdate();
+              }
+          }
+        }
+
         const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
 
         for (const chartConfig of chartsNeedingRender) {
@@ -378,11 +297,6 @@ export class GPUCoordinator {
         }
     }
   }
-
-  // ===================================================================
-  // == 5. PRIVATE: WebGPU & Resource Initialization
-  // ===================================================================
-  // Low-level setup and helper methods.
 
   async #initWebGPU() {
     // Double-check we're on client-side
@@ -483,11 +397,6 @@ export class GPUCoordinator {
     }
   }
 
-  // ===================================================================
-  // == 6. PUBLIC API: Resource Sharing
-  // ===================================================================
-  // The public interface for renderers to get shared GPU resources.
-
   async getOrCreateSharedPipeline(markType, createFn) {
     const existing = this.#sharedResources.pipelines.get(markType);
     
@@ -564,11 +473,6 @@ export class GPUCoordinator {
     }
   }
 
-  // ===================================================================
-  // == 7. PUBLIC API: Getters
-  // ===================================================================
-  // Public accessors for state and development tools.
-
   // Legacy getters for backward compatibility
   getSharedPipeline(markType) {
     return this.#sharedResources.pipelines.get(markType)?.pipeline;
@@ -583,16 +487,7 @@ export class GPUCoordinator {
   get msaaSampleCount() { return this.#msaaSampleCount; }
   get isInitialized() { return this.#initialized; }
 
-  // ===== CLEANUP =====
-
   destroy() {
-    if (this.#rafId) {
-      cancelAnimationFrame(this.#rafId);
-      this.#rafId = null;
-    }
-    this.#loopIsActive = false;
-    this.#activeLoopRequesters.clear();
-
     for (const texture of this.#msaaTextures.values()) {
       texture.destroy();
     }
@@ -622,9 +517,6 @@ export class GPUCoordinator {
   }
 }
 
-// ===================================================================
-// == CONTEXT FUNCTIONS
-// ===================================================================
 
 export function setGPUCoordinator(config = {}) {
   const coordinator = new GPUCoordinator(config);

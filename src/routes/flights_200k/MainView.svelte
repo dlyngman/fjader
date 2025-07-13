@@ -47,7 +47,6 @@
 				y={"time"}
 				color={"distance"}
 				alpha="0.8"
-				limit=50
 				/>
 			{/snippet}
 			</WebGPUCanvas>
