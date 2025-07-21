@@ -34,11 +34,11 @@ export class BaseMarkSetup {
    * @param {import('@uwdata/mosaic-core').Coordinator} coordinator The Mosaic coordinator instance.
    * @param {object} chartContext The chart's context object.
    */
-  constructor(config, coordinator, chartContext) {
+  constructor(config, coordinator, chartContext, stableId = null) {
     this.#config = config;
     this.#coordinator = coordinator;
     this.#chartContext = chartContext;
-    this.#markId = `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
+    this.#markId =  stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
     this.#registerScaleRequirements();
     this.#setupReactiveEffects();
   }

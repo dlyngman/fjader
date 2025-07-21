@@ -688,3 +688,250 @@ This comprehensive architecture maintains design consistency while enabling powe
 **✅ Performance Optimized**: All proposals maintain or improve current performance characteristics
 
 **Bottom Line**: This architecture delivers a comprehensive, high-performance charting library that maintains developer experience excellence while providing the performance and capabilities needed for sophisticated data applications.
+
+
+# 🚀 ** Proposal: GPU-Accelerated Cross-Filtering Animations**
+
+## 🎯 **Background: Beyond Static Visualizations**
+
+Traditional data visualization libraries treat animations as cosmetic enhancements - simple A-to-B transitions that assume the chart's fundamental structure remains constant. For data scientists engaged in exploratory analysis, this approach breaks down rapidly.
+
+When a user brushes a histogram to filter data, changes a scale from linear to logarithmic, or switches the variable mapped to an axis, the entire analytical context shifts. A simple cross-fade or immediate snap fails to preserve the user's mental model of the data, interrupting their analytical flow and obscuring the very relationships they're trying to understand.
+
+### **The Cross-Filtering Challenge**
+
+In serious data exploration, users expect to:
+- **Brush one chart** and see 4-5 linked charts smoothly transition to filtered states
+- **Switch scale types** (linear→log) and watch every point migrate to its new position
+- **Change variable mappings** (bill_length→flipper_length) and observe how correlations reshape
+- **Make rapid changes** without waiting for previous animations to complete
+
+Current libraries handle these scenarios poorly, forcing users to mentally reconstruct relationships after each jarring transition.
+
+---
+
+## 🎯 **Target Audience & Hardware Assumptions**
+
+This architecture is designed for **data scientists and analysts** working with substantial datasets on modern hardware:
+
+### **Primary Users**
+- Data scientists performing exploratory data analysis
+- Analysts building interactive dashboards for complex datasets
+- Researchers working with 100k+ point datasets
+- Users comfortable with cutting-edge browser features
+
+### **Hardware Requirements**
+- **Modern high-end laptops**: 16-32GB unified memory
+- **WebGPU support**: Latest Chrome/Edge browsers
+- **Dedicated GPU**: Integrated graphics acceptable, discrete preferred
+- **Performance tolerance**: Users already analyzing complex data expect some computational overhead
+
+### **Datasets**
+- **Primary**: 10k-1M+ data points per chart
+- **Secondary**: Multiple linked charts (3-8 charts typical)
+- **Use cases**: Cross-filtering, real-time parameter exploration, statistical model comparison
+
+---
+
+## 🏗️ **High-Level Architecture: Pre-Computed Screen Coordinates**
+
+### **Core Design Principle**
+
+**Separate animation control (JavaScript/Svelte) from animation execution (GPU)** to achieve optimal performance and flexibility.
+
+The fundamental insight is to **pre-compute screen coordinates on the GPU** rather than interpolating raw data values or scale parameters. This eliminates complex scaling logic from the per-frame render path while enabling seamless animation interruptions.
+
+### **Animation Flow Overview**
+
+```
+Data Update → Compute Pass (positions) → Render Pass (interpolation) → Display
+     ↓              ↓                        ↓
+New Arrow Table → Screen Coordinates → Mix(from, to, progress) → Pixels
+```
+
+### **Three-Buffer System**
+
+1. **`from_coords`**: Starting screen positions (Float32Array)
+2. **`to_coords`**: Target screen positions (Float32Array)  
+3. **`current_coords`**: Interpolated positions computed each frame
+
+---
+
+## ⚡ **Technical Implementation**
+
+### **Phase 1: Coordinate Pre-Computation**
+
+On animation start or interruption, dispatch a **WebGPU Compute Pipeline**:
+
+```glsl
+@compute @workgroup_size(64)
+fn computeTargetCoordinates(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= instanceCount) { return; }
+    
+    let dataValue = rawData[id.x];
+    let screenPos = scaleValue(dataValue, targetScaleParams);
+    
+    to_coords[id.x] = screenPos;
+}
+```
+
+**Key Benefits**:
+- ✅ **Universal Scale Support**: Leverages existing `BaseGPURenderer` scale functions
+- ✅ **One-Time Cost**: Expensive scaling logic runs once, not per-frame
+- ✅ **Perfect Accuracy**: No accumulated floating-point errors during animation
+
+### **Phase 2: Per-Frame Interpolation**
+
+Every animation frame, compute interpolated positions:
+
+```glsl
+@compute @workgroup_size(64) 
+fn interpolateCurrentPositions(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (id.x >= instanceCount) { return; }
+    
+    current_coords[id.x] = mix(from_coords[id.x], to_coords[id.x], progress);
+}
+```
+
+### **Phase 3: Simplified Render Pipeline**
+
+The render shader becomes trivial:
+
+```glsl
+@vertex
+fn vertexMain(@builtin(instance_index) instanceIdx: u32) -> VertexOutput {
+    let position = current_coords[instanceIdx];
+    
+    // Direct position usage - no scaling logic needed
+    output.position = vec4<f32>(position, 0.0, 1.0);
+    return output;
+}
+```
+
+---
+
+## 🎨 **Cross-Filtering Integration**
+
+### **Mosaic Coordination Strategy**
+
+Leverage **Arrow null masks** with consistent table ordering to eliminate complex data correspondence problems:
+
+```
+Brush Selection → Mosaic Query → Arrow Table (same size, null masked) → Animation
+```
+
+**Advantages**:
+- ✅ **Zero JavaScript iteration**: Native Arrow null handling
+- ✅ **Predictable memory**: Fixed buffer sizes throughout animation
+- ✅ **Point correspondence**: Same ordering guarantees 1:1 mapping
+- ✅ **GPU-friendly**: Simple null checks in shaders
+
+### **Multi-Chart Animation Flow**
+
+```
+User brushes Chart A
+└─ Mosaic updates selections
+   └─ Charts B, C, D receive new Arrow tables (potentially staggered)
+      └─ Each chart independently starts animation
+         └─ GPU coordinator batches compute/render passes naturally
+```
+
+**Natural Staggering Benefits**:
+- ✅ **No master controller complexity**: Each chart manages own lifecycle
+- ✅ **Resilient timing**: Charts don't wait for each other
+- ✅ **Organic feel**: Matches user expectation of data loading
+
+### **Smooth Interruption Handling**
+
+Critical for rapid exploratory workflows:
+
+```
+Animation A→B in progress (60% complete)
+New data C arrives
+1. Capture: current_interpolated_position → new_from_coords  
+2. Compute: data_C_positions → new_to_coords
+3. Continue: animate from interpolated_position → C
+```
+
+**Result**: Seamless animation redirection with zero visual snapping.
+
+---
+
+## 📊 **Performance Characteristics**
+
+### **Compute Overhead Analysis**
+
+| Dataset Size | Compute Cost | Render Benefit | Overall Impact |
+|--------------|--------------|-----------------|-----------------|
+| 1k points | ~100μs overhead | Minimal | Slight negative |
+| 10k points | ~200μs overhead | Moderate gain | Neutral |
+| 100k+ points | ~500μs overhead | Massive gain | Major positive |
+
+### **Memory Usage**
+
+**During Animation**:
+- **Normal rendering**: ~1x dataset memory
+- **With animation**: ~3x dataset memory (from + to + current buffers)
+- **Target hardware**: Easily handles 3MB → 9MB for 100k point chart
+
+**Cross-Filtering Scenario** (5 charts, 50k points each):
+- **Memory**: ~15MB GPU buffers during animation
+- **Performance**: 60fps sustained on target hardware
+- **User benefit**: Fluid multi-chart exploration
+
+---
+
+## 🎯 **Architectural Integration**
+
+### **Leverages Existing Strengths**
+
+This proposal builds directly on current architectural excellence:
+
+- ✅ **Universal Scale Functions**: `BaseGPURenderer.getScaleShaderFragment()` handles all scale types
+- ✅ **Reactive Coordination**: Svelte `Tween` + `$effect.pre` provides perfect timing
+- ✅ **Resource Management**: `GPUCoordinator` extends naturally to manage compute pipelines
+- ✅ **Hybrid Rendering**: Keep SVG for text (crisp), GPU for marks (performant)
+
+### **Maintains Design Principles**
+
+- ✅ **Database-First**: DuckDB/Mosaic handles analytical complexity
+- ✅ **Grammar of Graphics**: Mark-based animations, not chart-type specific
+- ✅ **Scale Priority System**: Animations respect existing scale resolution logic
+- ✅ **Separation of Concerns**: Animation execution (GPU) separate from control (Svelte)
+
+---
+
+## 🚀 **Implementation Roadmap**
+
+### **Phase 1: Foundation (4-6 weeks)**
+- Extend `BaseGPURenderer` with compute pipeline support
+- Implement basic coordinate interpolation for `DotsMark`
+- Add smooth interruption handling
+- Test with single chart scenarios
+
+### **Phase 2: Cross-Filtering (6-8 weeks)**
+- Modify Mosaic integration for consistent Arrow table sizing
+- Implement null mask handling in shaders
+- Test multi-chart coordination and timing
+- Optimize compute pass batching in `GPUCoordinator`
+
+### **Phase 3: Advanced Animations (8-10 weeks)**
+- Scale transformation animations (linear→log visual transitions)
+- Variable mapping changes (watch correlations reshape)
+- Complex mark types (bar heights, area charts)
+- Performance optimization and monitoring
+
+---
+
+## 💡 **Competitive Advantage**
+
+This architecture delivers capabilities **no other web-based visualization library provides**:
+
+- **Smooth cross-filtering**: Brush one chart, watch linked charts flow to new states
+- **Scale transformation insight**: See data distribution changes during linear→log transitions  
+- **Rapid exploration**: Make parameter changes without waiting for animations to complete
+- **Large dataset fluidity**: 100k+ points animate smoothly across multiple charts
+
+For data scientists, this transforms visualization from static reporting to **fluid analytical conversation** with the data.
+
+**Bottom Line**: This investment creates a genuinely differentiated tool for serious data exploration, perfectly aligned with the library's "selfish" focus on high-end analytical workflows.

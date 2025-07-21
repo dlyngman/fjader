@@ -142,11 +142,11 @@ export class ChartScales {
   }
 
   updateCurrentDataPoints = (innerPoint) => {
-    if (this.scaleTypes?.x === 'linear') {
-      this.xScaleState.currentDataPoint = this.xScale?.scale.invert(innerPoint.x);
-    }
     if (this.scaleTypes?.y === 'linear') {
       this.yScaleState.currentDataPoint = this.yScale?.scale.invert(innerPoint.y);
+    }
+    if (this.scaleTypes?.x === 'linear') {
+      this.xScaleState.currentDataPoint = this.xScale?.scale.invert(innerPoint.x);
     }
   }
 
