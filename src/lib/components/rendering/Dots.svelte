@@ -97,82 +97,102 @@
     }],
   }];
 
-  // X Buffer Effect
   $effect(() => {
     if (xData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
       xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
-      device.queue.writeBuffer(xBuffer, 0, xData);
     }
   });
 
-  // Y Buffer Effect  
   $effect(() => {
     if (yData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
       yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
-      device.queue.writeBuffer(yBuffer, 0, yData);
     }
   });
 
-  // Color Buffer Effect
   $effect(() => {
     if (colorData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
       colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
-      device.queue.writeBuffer(colorBuffer, 0, colorData);
     }
   });
 
-  // Radius Buffer Effect
   $effect(() => {
     if (radiusData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
       radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
-      device.queue.writeBuffer(radiusBuffer, 0, radiusData);
     }
   });
 
-  // Alpha Buffer Effect
   $effect(() => {
     if (alphaData && renderer?.resourcesCreated) {
-      const device = webGPUContext.getDevice();
-      if (!device) return;
-      
       alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
-      device.queue.writeBuffer(alphaBuffer, 0, alphaData);
+    }
+  });
+
+  let bindGroupReady = $derived(!!renderer?.bindGroup);
+
+  $effect(() => {
+    void renderer?.resourcesCreated;
+    void bindGroupReady;
+
+
+    if (xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer && 
+        renderer?.resourcesCreated && !bindGroupReady) {
+      untrack(() => {
+        createDotsBindGroup();
+      });
     }
   });
 
   $effect(() => {
-    if (xData && yData && renderer?.resourcesCreated) {
-      // All required data exists, safe to create bind group
-      createDotsBindGroup();
-      renderer.updateInstanceCount(xData.length);
-      gpuCoordinator.invalidateChart(chartContext.chartId);      
+    void bindGroupReady;
+    if (xData && xBuffer && bindGroupReady) {
+      untrack(() => {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(xBuffer, 0, xData);
+      });
     }
   });
 
-  // // Single lightweight interaction effect
-  // $effect(() => {
-  //   if (!renderer?.resourcesCreated) return;
-    
-  //   void chartContext.xScaleState?.domain?.current;
-  //   void chartContext.yScaleState?.domain?.current;
-    
-  //   untrack(() => {
-  //     renderer.handleScaleOrRangeUpdate();
-  //     gpuCoordinator.invalidateChart(chartContext.chartId);
-  //   });
-  // });
+  $effect(() => {
+    void bindGroupReady;
+    if (yData && yBuffer && bindGroupReady) {
+      const device = webGPUContext.getDevice();
+      device?.queue.writeBuffer(yBuffer, 0, yData);
+    }
+  });
+
+  $effect(() => {
+    void bindGroupReady;
+    if (radiusData && radiusBuffer && bindGroupReady) {
+      const device = webGPUContext.getDevice();
+      device?.queue.writeBuffer(radiusBuffer, 0, radiusData);
+    }
+  });
+
+  $effect(() => {
+    void bindGroupReady;
+    if (colorData && colorBuffer && bindGroupReady) {
+      const device = webGPUContext.getDevice();
+      device?.queue.writeBuffer(colorBuffer, 0, colorData);
+    }
+  });
+
+  $effect(() => {
+    void bindGroupReady;
+    if (alphaData && alphaBuffer && bindGroupReady) {
+      const device = webGPUContext.getDevice();
+      device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
+    }
+  });
+
+  $effect(() => {
+    void bindGroupReady;
+    if (xData && yData && colorData && radiusData && alphaData && 
+        xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer &&
+        bindGroupReady) {
+      renderer.updateInstanceCount(xData.length);
+      gpuCoordinator.invalidateChart(chartContext.chartId);
+    }
+  });
 
   // Resize change
   $effect(() => {
