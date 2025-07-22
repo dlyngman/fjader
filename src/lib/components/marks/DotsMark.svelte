@@ -19,6 +19,8 @@
     preferredYScaleType = 'linear',
   } = $props();
 
+  const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
+
   const coordinator = getContext('mosaic-coordinator');
   const chartContext = getContext('chart');
   const colorScale = $derived(getScaleState('color', 'ordinal'));
@@ -62,7 +64,11 @@
     if (setup.actualXScaleType === 'band' || setup.actualXScaleType === 'point') {
       return chartContext.xScaleState.processDataForGPU(rawArray, setup.markId);
     } else {
-      return new Float32Array(rawArray); // Minimal copy for type consistency
+      if (rawArray instanceof Float32Array) {
+        return rawArray;
+      } else {
+        return new Float32Array(rawArray); // Copy only when necessary
+      }
     }
   });
 
@@ -74,7 +80,11 @@
     if (setup.actualYScaleType === 'band' || setup.actualYScaleType === 'point') {
       return chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
     } else {
-      return new Float32Array(rawArray);
+      if (rawArray instanceof Float32Array) {
+        return rawArray;
+      } else {
+        return new Float32Array(rawArray); // Copy only when necessary
+      }
     }
   });
 
@@ -147,7 +157,8 @@
       setup = new BaseMarkSetup(
         config,
         coordinator,
-        chartContext
+        chartContext,
+        markId
       );
     });
   });
