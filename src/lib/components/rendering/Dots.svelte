@@ -26,6 +26,7 @@
 
   const quadVertexCount = 6;
   
+  // ✅ UPDATED: Shader now uses @group(1) for data bindings
   const dotsShaderCode = `
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -35,14 +36,12 @@
       @location(3) alpha: f32,
     };
 
-    @group(0) @binding(0) var<uniform> resolution: vec2<f32>;
-    @group(0) @binding(1) var<storage, read> xValues: array<f32>;
-    @group(0) @binding(2) var<storage, read> yValues: array<f32>;
-    @group(0) @binding(3) var<storage, read> radiusValues: array<f32>;
-    @group(0) @binding(4) var<storage, read> alphaValues: array<f32>;
-    @group(0) @binding(5) var<storage, read> colors: array<vec4<f32>>;
-    @group(0) @binding(6) var<uniform> scaleParams: ScaleParams;
-    @group(0) @binding(7) var<uniform> devicePixelRatio: f32;
+    // ✅ UPDATED: Data storage buffers now in @group(1) with restarted binding indices
+    @group(1) @binding(0) var<storage, read> xValues: array<f32>;
+    @group(1) @binding(1) var<storage, read> yValues: array<f32>;
+    @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
+    @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
+    @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
     
     @vertex
     fn vertexMain(
@@ -97,6 +96,16 @@
     }],
   }];
 
+  // ✅ NEW: Data binding configuration for dual bind group architecture
+  const dataBindingConfig = [
+    { binding: 0, type: 'read-only-storage' }, // xValues
+    { binding: 1, type: 'read-only-storage' }, // yValues  
+    { binding: 2, type: 'read-only-storage' }, // radiusValues
+    { binding: 3, type: 'read-only-storage' }, // alphaValues
+    { binding: 4, type: 'read-only-storage' }, // colors
+  ];
+
+  // Buffer update effects
   $effect(() => {
     if (xData && renderer?.resourcesCreated) {
       xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
@@ -127,24 +136,25 @@
     }
   });
 
-  let bindGroupReady = $derived(!!renderer?.bindGroup);
+  // ✅ UPDATED: Check for per-data bind group instead of legacy bindGroup
+  let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
 
   $effect(() => {
     void renderer?.resourcesCreated;
-    void bindGroupReady;
-
+    void dataBindGroupReady;
 
     if (xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer && 
-        renderer?.resourcesCreated && !bindGroupReady) {
+        renderer?.resourcesCreated && !dataBindGroupReady) {
       untrack(() => {
-        createDotsBindGroup();
+        createDotsDataBindGroup();
       });
     }
   });
 
+  // Data writing effects
   $effect(() => {
-    void bindGroupReady;
-    if (xData && xBuffer && bindGroupReady) {
+    void dataBindGroupReady;
+    if (xData && xBuffer && dataBindGroupReady) {
       untrack(() => {
         const device = webGPUContext.getDevice();
         device?.queue.writeBuffer(xBuffer, 0, xData);
@@ -153,42 +163,42 @@
   });
 
   $effect(() => {
-    void bindGroupReady;
-    if (yData && yBuffer && bindGroupReady) {
+    void dataBindGroupReady;
+    if (yData && yBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(yBuffer, 0, yData);
     }
   });
 
   $effect(() => {
-    void bindGroupReady;
-    if (radiusData && radiusBuffer && bindGroupReady) {
+    void dataBindGroupReady;
+    if (radiusData && radiusBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(radiusBuffer, 0, radiusData);
     }
   });
 
   $effect(() => {
-    void bindGroupReady;
-    if (colorData && colorBuffer && bindGroupReady) {
+    void dataBindGroupReady;
+    if (colorData && colorBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(colorBuffer, 0, colorData);
     }
   });
 
   $effect(() => {
-    void bindGroupReady;
-    if (alphaData && alphaBuffer && bindGroupReady) {
+    void dataBindGroupReady;
+    if (alphaData && alphaBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
     }
   });
 
   $effect(() => {
-    void bindGroupReady;
+    void dataBindGroupReady;
     if (xData && yData && colorData && radiusData && alphaData && 
         xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer &&
-        bindGroupReady) {
+        dataBindGroupReady) {
       renderer.updateInstanceCount(xData.length);
       gpuCoordinator.invalidateChart(chartContext.chartId);
     }
@@ -234,48 +244,52 @@
     quadGeometryBuffer = device.createBuffer({
       size: quadVertices.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      label: 'dots-quad-geometry'
     });
     device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
   }
 
-
-  // Create dots-specific bind group
-  function createDotsBindGroup() {
+  // ✅ UPDATED: Create dots-specific data bind group using new architecture
+  function createDotsDataBindGroup() {
     // Validate all buffers exist
     if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer) {
-      console.warn('⚠️ Cannot create dots bind group - missing data buffers');
+      console.warn('⚠️ Cannot create dots data bind group - missing data buffers');
       return;
     }
 
-    // Shape-specific bindings (bindings 1-5)
-    const dotsBindings = [
-      { binding: 1, resource: { buffer: xBuffer } },
-      { binding: 2, resource: { buffer: yBuffer } },
-      { binding: 3, resource: { buffer: radiusBuffer } },
-      { binding: 4, resource: { buffer: alphaBuffer } },
-      { binding: 5, resource: { buffer: colorBuffer } },
+    // ✅ NEW: Create data bindings for @group(1) with restarted indices
+    const dataBindings = [
+      { binding: 0, resource: { buffer: xBuffer } },      // xValues
+      { binding: 1, resource: { buffer: yBuffer } },      // yValues
+      { binding: 2, resource: { buffer: radiusBuffer } }, // radiusValues
+      { binding: 3, resource: { buffer: alphaBuffer } },  // alphaValues
+      { binding: 4, resource: { buffer: colorBuffer } },  // colors
     ];
 
-    // Use base renderer to create bind group (includes common bindings)
-    renderer.createBindGroup(dotsBindings);
+    // ✅ NEW: Use new dual bind group architecture
+    renderer.createDataBindGroup(dataBindings);
+    
+    console.debug('✅ Dots data bind group created with dual bind group architecture');
   }
 
-  // Dots-specific draw function
+  // ✅ UPDATED: Dots-specific draw function for dual bind groups
   function drawDots(passEncoder) {
-    // console.log('Dots draw operation started');
-
     try {
-      if (!renderer?.pipeline || !renderer?.bindGroup || renderer.instanceCount === 0) {
+      if (!renderer?.pipeline || !renderer?.perFrameBindGroup || !renderer?.perDataBindGroup || renderer.instanceCount === 0) {
         console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
         return;
       }
 
       passEncoder.setPipeline(renderer.pipeline);
-      passEncoder.setBindGroup(0, renderer.bindGroup);
+      
+      // ✅ UPDATED: Set both bind groups for dual bind group architecture
+      passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
+      passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
+      
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
 
-      // console.log('Dots draw operation completed');
+      console.debug(`✅ Dots draw completed: ${renderer.instanceCount} instances with dual bind groups`);
       
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);
@@ -300,7 +314,7 @@
     await initializeDots();
   }
 
-  // Initialize dots renderer
+  // ✅ UPDATED: Initialize dots renderer with new dual bind group architecture
   async function initializeDots() {
     try {
       if (!gpuCoordinator) {
@@ -314,10 +328,11 @@
         yScaleType: chartContext.scaleTypes?.y || 'linear'
       });
 
-      // Initialize with dots-specific configuration using centralized shader
+      // ✅ UPDATED: Initialize with dual bind group configuration
       await renderer.initialize({
-        shaderCode, // This now includes universal scale support!
-        vertexBufferLayout,
+        shaderCode,               // Generated shader with @group annotations
+        vertexBufferLayout,       // Vertex layout for quad geometry
+        dataBindingConfig,        // ✅ NEW: Required for dual bind group architecture
       });
 
       // Initialize dots-specific geometry
@@ -325,6 +340,8 @@
       
       // Register layer with base renderer
       renderer.registerLayer(drawDots);
+
+      console.log('✅ Dots component initialized with dual bind group architecture');
 
     } catch (error) {
       console.error('❌ Dots component initialization failed:', error);
@@ -343,8 +360,6 @@
   });
 
   onDestroy(() => {
-    // console.log('🧹 Cleaning up Dots component');
-    
     try {
       // Clean up dots-specific resources
       if (quadGeometryBuffer && !quadGeometryBuffer.destroyed) {
@@ -355,8 +370,6 @@
       if (renderer) {
         renderer.destroy();
       }
-
-      // console.log('✅ Dots component cleanup complete');
       
     } catch (error) {
       console.error('❌ Error during Dots component cleanup:', error);
