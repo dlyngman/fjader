@@ -5,6 +5,8 @@
  * - Scale parameter management with universal scale support
  * - GPU coordinator integration
  * - Error handling and cleanup
+ * 
+ * UPDATED: Now supports dual bind group architecture for performance optimization
  */
 export class BaseGPURenderer {
   // Core properties
@@ -29,7 +31,17 @@ export class BaseGPURenderer {
   // GPU resources
   #device = null;
   #pipeline = $state(null);
-  #bindGroup = $state(null);
+  
+  // ✅ NEW: Dual bind group architecture
+  #perFrameBindGroup = $state(null);  // Hot path: uniforms that change every frame
+  #perDataBindGroup = $state(null);   // Cold path: data buffers that change rarely
+  
+  // ✅ NEW: Bind group layouts (stored for recreation)
+  #perFrameLayout = null;
+  #perDataLayout = null;
+  #dataBindingConfig = null;  // Store config for later use
+
+  // Existing uniform buffers
   #scaleParamsArray = new Float32Array(32);
   #scaleParamsBuffer = $state(null);
   #resolutionBuffer = $state(null);
@@ -63,6 +75,8 @@ export class BaseGPURenderer {
   /**
    * Get standardized scale shader fragment that all components can use
    * This contains the struct definition and universal scale functions
+   * 
+   * ✅ UPDATED: Updated binding indices for dual bind group architecture
    */
   static getScaleShaderFragment() {
     return `
@@ -161,21 +175,27 @@ export class BaseGPURenderer {
   }
 
   /**
-   * Get standard binding constants that all components should use
-   * This ensures consistent binding layout across all shaders
+   * Get standard binding constants for dual bind group architecture
+   * 
+   * ✅ UPDATED: New binding layout for performance optimization
    */
   static getStandardBindings() {
     return {
-      RESOLUTION: 0,
-      // Data bindings 1-5 are component-specific
-      SCALE_PARAMS: 6,
-      DEVICE_PIXEL_RATIO: 7
+      // @group(0) - Per-Frame Group (hot path - changes every frame)
+      FRAME_RESOLUTION: 0,
+      FRAME_SCALE_PARAMS: 1,
+      FRAME_DEVICE_PIXEL_RATIO: 2,
+      
+      // @group(1) - Per-Data Group (cold path - changes when data updates)
+      // Data bindings 0-N are component-specific and configured via dataBindingConfig
     };
   }
 
   /**
    * Generate complete shader code by combining scale fragment with component code
    * This is the main function components use to get their complete shader
+   * 
+   * ✅ UPDATED: Now includes proper group annotations for dual bind group architecture
    */
   static generateShader(componentSpecificCode) {
     const scaleFragment = BaseGPURenderer.getScaleShaderFragment();
@@ -183,46 +203,13 @@ export class BaseGPURenderer {
     return `
       ${scaleFragment}
       
+      // Standard per-frame uniforms (@group(0))
+      @group(0) @binding(0) var<uniform> resolution: vec2<f32>;
+      @group(0) @binding(1) var<uniform> scaleParams: ScaleParams;
+      @group(0) @binding(2) var<uniform> devicePixelRatio: f32;
+      
       ${componentSpecificCode}
     `;
-  }
-
-  // ===== DATA PROCESSING HELPERS =====
-
-  /**
-   * Process data for GPU consumption based on scale types
-   * @param {Array} data - Raw data array
-   * @param {string} axis - 'x' or 'y'
-   * @returns {Float32Array} Processed data ready for GPU
-   */
-  processDataForAxis(data, axis) {
-    const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
-    const scaleState = axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
-
-    switch (scaleType) {
-      case 'linear':
-        case 'identity':
-          // Pass through numeric values - GPU will handle scaling
-        return new Float32Array(data.map(d => d ?? 0));
-        
-      case 'band':
-      case 'point':
-        // CPU: Convert strings to indices, GPU: Convert indices to positions
-        return scaleState.processDataForGPU(data, this.#markType);
-        // return this.#convertCategoriesToIndices(data, scale, axis);  TODO: remove old method, logic moved to scaleState where it belongs!
-        
-      case 'log':
-        // Future: logarithmic scale support
-        return new Float32Array(data.map(d => Math.log(Math.max(d || 1, 1))));
-        
-      case 'time':
-        // Future: temporal scale support  
-        return new Float32Array(data.map(d => d instanceof Date ? d.getTime() : d || 0));
-        
-      default:
-        console.warn(`Unknown scale type: ${scaleType}, treating as linear`);
-        return new Float32Array(data.map(d => d ?? 0));
-    }
   }
 
   // ===== PUBLIC GETTERS =====
@@ -231,30 +218,61 @@ export class BaseGPURenderer {
   get initializationError() { return this.#initializationError; }
   get instanceCount() { return this.#instanceCount; }
   get pipeline() { return this.#pipeline; }
-  get bindGroup() { return this.#bindGroup; }
   get markType() { return this.#markType; }
+  
+  // ✅ NEW: Dual bind group getters
+  get perFrameBindGroup() { return this.#perFrameBindGroup; }
+  get perDataBindGroup() { return this.#perDataBindGroup; }
+  
+  // ✅ DEPRECATED: Legacy getter for backward compatibility during transition
+  get bindGroup() { 
+    console.warn(`❌ [${this.#markType}] bindGroup getter is deprecated. Use perFrameBindGroup and perDataBindGroup instead.`);
+    return this.#perFrameBindGroup; // Return frame group as fallback
+  }
 
   // ===== INITIALIZATION =====
 
   /**
    * Initialize the renderer with shape-specific configuration
+   * 
+   * ✅ UPDATED: Now requires dataBindingConfig for dual bind group architecture
+   * 
    * @param {Object} config - Shape-specific configuration
    * @param {string} config.shaderCode - WGSL shader code (should be generated with generateShader)
-   * @param {Array} config.vertexBufferLayout - Bind group layout configuration
+   * @param {Array} config.vertexBufferLayout - Vertex buffer layout configuration
+   * @param {Array} config.dataBindingConfig - Data binding configuration for @group(1)
    */
   async initialize(config) {
     try {
-      // console.log(`🔧 Initializing ${this.#markType} renderer`);
+      // ✅ NEW: Validate required dual bind group config
+      const { dataBindingConfig, shaderCode, vertexBufferLayout } = config;
+      
+      if (!dataBindingConfig) {
+        throw new Error(`${this.#markType} renderer requires dataBindingConfig for dual bind group architecture`);
+      }
+      
+      if (!Array.isArray(dataBindingConfig)) {
+        throw new Error(`${this.#markType} renderer dataBindingConfig must be an array`);
+      }
+
+      console.log(`🔧 Initializing ${this.#markType} renderer with dual bind group architecture`);
+      
       this.#device = this.#webGPUContext.getDevice();
       if (!this.#device) {
         throw new Error('No WebGPU device available from context');
       }
 
+      // Store config for later use
+      this.#dataBindingConfig = dataBindingConfig;
+
       await this.#createSharedResources(this.#device, config);
       await this.#createCommonBuffers(this.#device);
       
+      // ✅ NEW: Auto-create per-frame bind group (it's consistent across all marks)
+      this.#createPerFrameBindGroup();
+      
       this.#resourcesCreated = true;
-      // console.log(`✅ ${this.#markType} renderer initialized successfully`);
+      console.log(`✅ ${this.#markType} renderer initialized successfully with dual bind groups`);
       
     } catch (error) {
       console.error(`❌ ${this.#markType} renderer initialization failed:`, error);
@@ -263,44 +281,62 @@ export class BaseGPURenderer {
     }
   }
 
+  // ===== NEW: BIND GROUP LAYOUT CREATION =====
+
   /**
-   * Register this renderer as a layer with the GPU Coordinator.
-   * @param {Function} drawFunction - Shape-specific draw function.
+   * Create bind group layouts for dual bind group architecture
+   * 
+   * @param {GPUDevice} device - WebGPU device
+   * @param {Array} dataBindingConfig - Configuration for data bindings
+   * @returns {Object} Object containing perFrameLayout and perDataLayout
    */
-  registerLayer(drawFunction) {
-    try {
-        // ✅ Get the chartId from the chartContext, which is stable.
-        const chartId = this.#chartContext.chartId;
+  #createBindGroupLayouts(device, dataBindingConfig) {
+    // Per-frame bind group layout (consistent across all marks)
+    const perFrameLayout = device.createBindGroupLayout({
+      label: `${this.#markType}-per-frame-layout`,
+      entries: [
+        { 
+          binding: 0, 
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
+          buffer: { type: 'uniform' } 
+        }, // resolution
+        { 
+          binding: 1, 
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
+          buffer: { type: 'uniform' } 
+        }, // scaleParams
+        { 
+          binding: 2, 
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
+          buffer: { type: 'uniform' } 
+        }, // devicePixelRatio
+      ]
+    });
 
-        // ✅ Create the configuration object for this specific layer.
-        const layerConfig = {
-            draw: drawFunction,
-            markType: this.#markType,
-            // Pass a reference to this renderer instance. The coordinator will
-            // need this to access its state (pipeline, bindGroup) during the render loop.
-            renderer: this, 
-            componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
-        };
+    // Per-data bind group layout (varies by mark type)
+    const perDataLayout = device.createBindGroupLayout({
+      label: `${this.#markType}-per-data-layout`,
+      entries: dataBindingConfig.map(config => ({
+        binding: config.binding,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+        buffer: { type: config.type || 'read-only-storage' }
+      }))
+    });
 
-        // ✅ Call the NEW registerLayer method on the COORDINATOR, not the webgpu-canvas context.
-        this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
-
-        // console.log(`📋 ${this.#markType} layer registered directly with coordinator for chart ${chartId}`);
-        return this.#ownedResources.layerControl;
-
-    } catch (error) {
-        console.error(`❌ ${this.#markType} layer registration failed:`, error);
-        this.#initializationError = error.message;
-        throw error;
-    }
+    return { perFrameLayout, perDataLayout };
   }
 
-  // ===== SHARED RESOURCE MANAGEMENT =====
+  // ===== UPDATED: SHARED RESOURCE MANAGEMENT =====
 
   async #createSharedResources(device, config) {
     if (!this.#gpuCoordinator) {
       throw new Error('GPU coordinator not available');
     }
+
+    // ✅ NEW: Create bind group layouts
+    const { perFrameLayout, perDataLayout } = this.#createBindGroupLayouts(device, config.dataBindingConfig);
+    this.#perFrameLayout = perFrameLayout;
+    this.#perDataLayout = perDataLayout;
 
     // Create or get shared shader
     const shaderModule = await this.#gpuCoordinator.getOrCreateSharedShader(
@@ -309,14 +345,20 @@ export class BaseGPURenderer {
     );
     this.#ownedResources.shader = true;
 
-    // Create or get shared pipeline
+    // ✅ UPDATED: Create pipeline with explicit layout instead of 'auto'
+    const pipelineLayout = device.createPipelineLayout({
+      label: `${this.#markType}-pipeline-layout`,
+      bindGroupLayouts: [perFrameLayout, perDataLayout]
+    });
+
     this.#pipeline = await this.#gpuCoordinator.getOrCreateSharedPipeline(
       this.#markType, 
       async () => {
         const msaaSampleCount = this.#webGPUContext.getMsaaSampleCount();
 
         return device.createRenderPipeline({
-          layout: 'auto',
+          label: `${this.#markType}-pipeline`,
+          layout: pipelineLayout, // ✅ CHANGED: Explicit layout instead of 'auto'
           vertex: {
             module: shaderModule,
             entryPoint: 'vertexMain',
@@ -354,12 +396,14 @@ export class BaseGPURenderer {
     this.#resolutionBuffer = device.createBuffer({
       size: 8, // vec2<f32>
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      label: `${this.#markType}-resolution-buffer`
     });
     this.#ownedResources.buffers.push(this.#resolutionBuffer);
 
     this.#scaleParamsBuffer = device.createBuffer({
       size: 128, // 16 f32 values for enhanced scale parameters
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      label: `${this.#markType}-scale-params-buffer`
     });
     this.#ownedResources.buffers.push(this.#scaleParamsBuffer);
 
@@ -371,6 +415,7 @@ export class BaseGPURenderer {
       this.#dprBuffer = device.createBuffer({
         size: 4, // f32
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        label: `${this.#markType}-dpr-buffer`
       });
       device.queue.writeBuffer(this.#dprBuffer, 0, new Float32Array([this.#devicePixelRatio]));
       this.#ownedResources.buffers.push(this.#dprBuffer);
@@ -379,6 +424,111 @@ export class BaseGPURenderer {
     // Update initial values
     this.updateResolution();
     this.updateScaleParameters();
+  }
+
+  // ===== NEW: DUAL BIND GROUP CREATION =====
+
+  /**
+   * Create the per-frame bind group (internal method)
+   * This contains uniforms that change frequently (every frame during pan/zoom)
+   * Called automatically after buffer creation
+   */
+  #createPerFrameBindGroup() {
+    if (!this.#device || !this.#perFrameLayout) {
+      console.warn(`⚠️ Cannot create per-frame bind group for ${this.#markType} - missing device or layout`);
+      return;
+    }
+
+    if (!this.#resolutionBuffer || !this.#scaleParamsBuffer || !this.#dprBuffer) {
+      console.warn(`⚠️ Cannot create per-frame bind group for ${this.#markType} - missing uniform buffers`);
+      return;
+    }
+
+    try {
+      this.#perFrameBindGroup = this.#device.createBindGroup({
+        label: `${this.#markType}-per-frame-bind-group`,
+        layout: this.#perFrameLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.#resolutionBuffer } },
+          { binding: 1, resource: { buffer: this.#scaleParamsBuffer } },
+          { binding: 2, resource: { buffer: this.#dprBuffer } },
+        ]
+      });
+
+      console.debug(`✅ Per-frame bind group created for ${this.#markType}`);
+      
+    } catch (error) {
+      console.error(`❌ Failed to create per-frame bind group for ${this.#markType}:`, error);
+      this.#initializationError = error.message;
+      throw error;
+    }
+  }
+
+  /**
+   * Create the per-data bind group (public method)
+   * This contains storage buffers that change only when data updates
+   * Called by mark components when their data buffers are ready
+   * 
+   * @param {Array} dataBindings - Array of binding entries for data buffers
+   */
+  createDataBindGroup(dataBindings) {
+    if (!this.#device || !this.#perDataLayout) {
+      console.warn(`⚠️ Cannot create per-data bind group for ${this.#markType} - missing device or layout`);
+      return;
+    }
+
+    if (!Array.isArray(dataBindings) || dataBindings.length === 0) {
+      console.warn(`⚠️ Cannot create per-data bind group for ${this.#markType} - invalid dataBindings`);
+      return;
+    }
+
+    try {
+      // Validate that all required bindings are provided
+      const expectedBindings = this.#dataBindingConfig.map(config => config.binding);
+      const providedBindings = dataBindings.map(binding => binding.binding);
+      
+      for (const expectedBinding of expectedBindings) {
+        if (!providedBindings.includes(expectedBinding)) {
+          throw new Error(`Missing data binding ${expectedBinding} for ${this.#markType}`);
+        }
+      }
+
+      this.#perDataBindGroup = this.#device.createBindGroup({
+        label: `${this.#markType}-per-data-bind-group`,
+        layout: this.#perDataLayout,
+        entries: dataBindings
+      });
+
+      console.debug(`✅ Per-data bind group created for ${this.#markType} with ${dataBindings.length} bindings`);
+      
+    } catch (error) {
+      console.error(`❌ Failed to create per-data bind group for ${this.#markType}:`, error);
+      this.#initializationError = error.message;
+      throw error;
+    }
+  }
+
+  /**
+   * Recreate the per-frame bind group
+   * Called when uniform buffers are recreated or need updating
+   */
+  recreatePerFrameBindGroup() {
+    this.#createPerFrameBindGroup();
+  }
+
+  // ===== DEPRECATED: LEGACY BIND GROUP METHOD =====
+
+  /**
+   * @deprecated Legacy method for backward compatibility
+   * Use createDataBindGroup() instead for new dual bind group architecture
+   */
+  createBindGroup(additionalBindings = []) {
+    console.warn(`❌ [${this.#markType}] createBindGroup() is deprecated. Use createDataBindGroup() for dual bind group architecture.`);
+    
+    // For backward compatibility, assume additionalBindings are data bindings
+    if (additionalBindings.length > 0) {
+      this.createDataBindGroup(additionalBindings);
+    }
   }
 
   // ===== BUFFER MANAGEMENT =====
@@ -391,7 +541,6 @@ export class BaseGPURenderer {
    * @returns {GPUBuffer} New or existing buffer
    */
   createOrUpdateBuffer(existingBuffer, data, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
-    // const device = this.#webGPUContext.getDevice();
     if (!this.#device) {
       throw new Error('No WebGPU device available');
     }
@@ -419,6 +568,7 @@ export class BaseGPURenderer {
       const newBuffer = this.#device.createBuffer({
         size: bufferSize,
         usage,
+        label: `${this.#markType}-data-buffer-${this.#ownedResources.buffers.length}`
       });
       
       this.#ownedResources.buffers.push(newBuffer);
@@ -441,14 +591,14 @@ export class BaseGPURenderer {
   // ===== ENHANCED SCALE INTEGRATION =====
 
   /**
- * Updates the GPU's uniform buffer with all necessary scale parameters.
- * This function is on the "hot path" and is called on every frame during interactions.
- * It's optimized to be extremely fast by using a pre-allocated array and a
- * unified `gpuState` interface from the scale state objects.
- */
-updateScaleParameters() {
+   * Updates the GPU's uniform buffer with all necessary scale parameters.
+   * This function is on the "hot path" and is called on every frame during interactions.
+   * It's optimized to be extremely fast by using a pre-allocated array and a
+   * unified `gpuState` interface from the scale state objects.
+   */
+  updateScaleParameters() {
     if (!this.#device || !this.#scaleParamsBuffer || !this.#chartContext) {
-        return;
+      return;
     }
 
     try {
@@ -542,56 +692,58 @@ updateScaleParameters() {
     }
   }
 
-  // ===== BIND GROUP MANAGEMENT =====
+  // ===== DATA PROCESSING HELPERS =====
 
   /**
-   * Create bind group with common bindings plus shape-specific ones
-   * @param {Array} additionalBindings - Shape-specific bindings to add
+   * Process data for GPU consumption based on scale types
+   * @param {Array} data - Raw data array
+   * @param {string} axis - 'x' or 'y'
+   * @returns {Float32Array} Processed data ready for GPU
    */
-  createBindGroup(additionalBindings = []) {
-    try {
-      const device = this.#webGPUContext.getDevice();
-      if (!device || !this.#pipeline) {
-        console.warn(`⚠️ Cannot create bind group for ${this.#markType} - missing device or pipeline`);
-        return;
-      }
+  processDataForAxis(data, axis) {
+    const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
+    const scaleState = axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 
-      // Common bindings that all shapes need (matches the binding constants)
-      const commonBindings = [
-        { binding: 0, resource: { buffer: this.#resolutionBuffer } },
-        // Note: bindings 1-5 are typically reserved for shape-specific data buffers
-        { binding: 6, resource: { buffer: this.#scaleParamsBuffer } },
-        { binding: 7, resource: { buffer: this.#dprBuffer } },
-      ];
-
-      // Merge common and shape-specific bindings
-      const allBindings = [...additionalBindings, ...commonBindings];
-
-      this.#bindGroup = device.createBindGroup({
-        layout: this.#pipeline.getBindGroupLayout(0),
-        entries: allBindings,
-      });
-
-      console.debug(`✅ Bind group created for ${this.#markType}`);
-      
-    } catch (error) {
-      console.error(`❌ Failed to create bind group for ${this.#markType}:`, error);
-      this.#initializationError = error.message;
-      throw error;
+    switch (scaleType) {
+      case 'linear':
+      case 'identity':
+        // Pass through numeric values - GPU will handle scaling
+        return new Float32Array(data.map(d => d ?? 0));
+        
+      case 'band':
+      case 'point':
+        // CPU: Convert strings to indices, GPU: Convert indices to positions
+        return scaleState.processDataForGPU(data, this.#markType);
+        
+      case 'log':
+        // Future: logarithmic scale support
+        return new Float32Array(data.map(d => Math.log(Math.max(d || 1, 1))));
+        
+      case 'time':
+        // Future: temporal scale support  
+        return new Float32Array(data.map(d => d instanceof Date ? d.getTime() : d || 0));
+        
+      default:
+        console.warn(`Unknown scale type: ${scaleType}, treating as linear`);
+        return new Float32Array(data.map(d => d ?? 0));
     }
   }
 
   // ===== REACTIVE EFFECTS HELPERS =====
-    /**
+
+  /**
    * Updates the GPU buffer that contains scale parameters (domain, range, etc.).
    * This should be called whenever the scale's domain or range changes.
+   * 
+   * ✅ UPDATED: Now triggers per-frame bind group recreation if scale parameters change
+   * 
    * @param {Function} callback - Optional callback after parameters are updated.
    */
   handleScaleOrRangeUpdate(callback) {
     if (this.#resourcesCreated && !this.#initializationError) {
       this.updateScaleParameters(); // This updates the GPU buffer
+      // Note: No need to recreate bind group - we're just updating buffer contents
       if (callback) callback();
-      // DO NOT invalidate the layer here. Let the canvas handle it.
     }
   }
 
@@ -602,12 +754,44 @@ updateScaleParameters() {
   handleResolutionChange(callback) {
     if (this.#resourcesCreated && !this.#initializationError) {
       this.updateResolution();
+      // Note: No need to recreate bind group - we're just updating buffer contents
       if (callback) callback();
-      // Note: Don't invalidate for resolution changes to avoid unnecessary redraws
     }
   }
 
   // ===== LAYER MANAGEMENT =====
+
+  /**
+   * Register this renderer as a layer with the GPU Coordinator.
+   * @param {Function} drawFunction - Shape-specific draw function.
+   */
+  registerLayer(drawFunction) {
+    try {
+      // ✅ Get the chartId from the chartContext, which is stable.
+      const chartId = this.#chartContext.chartId;
+
+      // ✅ Create the configuration object for this specific layer.
+      const layerConfig = {
+        draw: drawFunction,
+        markType: this.#markType,
+        // Pass a reference to this renderer instance. The coordinator will
+        // need this to access its state (pipeline, bindGroup) during the render loop.
+        renderer: this, 
+        componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
+      };
+
+      // ✅ Call the NEW registerLayer method on the COORDINATOR, not the webgpu-canvas context.
+      this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
+
+      console.log(`📋 ${this.#markType} layer registered directly with coordinator for chart ${chartId}`);
+      return this.#ownedResources.layerControl;
+
+    } catch (error) {
+      console.error(`❌ ${this.#markType} layer registration failed:`, error);
+      this.#initializationError = error.message;
+      throw error;
+    }
+  }
 
   /**
    * Invalidate the layer's parent chart to trigger a redraw.
@@ -616,16 +800,8 @@ updateScaleParameters() {
     // We no longer call a method on the layerControl itself.
     // Instead, we tell the coordinator that our parent chart is dirty.
     if (this.#gpuCoordinator && this.#chartContext?.chartId) {
-        this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
+      this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
     }
-  }
-
-  /**
-   * Update layer properties, obsolete?
-   * @param {Object} props - Properties to update
-   */
-  updateLayer(props) {
-    this.#ownedResources.layerControl?.update(props);
   }
 
   // ===== UTILITIES =====
@@ -693,4 +869,5 @@ updateScaleParameters() {
       console.error(`❌ Error during ${this.#markType} renderer cleanup:`, error);
     }
   }
+
 }

@@ -4,6 +4,8 @@ import { setContext, getContext } from 'svelte';
  * Manages all WebGPU resources, layers, and render scheduling for the dashboard.
  * Implements a "Managed Loop" for high-performance, on-demand rendering and
  * a cached "Render Plan" to keep the per-frame render path extremely lean.
+ * 
+ * ✅ UPDATED: Now supports dual bind group architecture for optimal performance
 */
 export class GPUCoordinator {
   // WebGPU core resources
@@ -54,14 +56,11 @@ export class GPUCoordinator {
    */
   invalidateChart(chartId) {
     if (this.#registeredCharts.has(chartId)) {
-      // console.log(`🎯 Adding ${chartId} to dirty set at ${performance.now().toFixed(3)}ms`);
       this.#dirtyChartIDs.add(chartId);
 
       if (!this.#renderScheduled) {
         this.#renderScheduled = true;
         queueMicrotask(() => {
-          // console.log(`🚀 Single render for charts:`, Array.from(this.#dirtyChartIDs), 
-          //           `at ${performance.now().toFixed(3)}ms`);
           this.#renderScheduled = false;
           const chartsToRender = [];
           for (const chartId of this.#dirtyChartIDs) {
@@ -76,7 +75,6 @@ export class GPUCoordinator {
       }
     }
   }
-
 
   registerChart(chartId, canvas, config) {
     if (this.#registeredCharts.has(chartId)) {
@@ -107,7 +105,6 @@ export class GPUCoordinator {
           const config = this.#registeredCharts.get(chartId);
           if (config && config.visible !== visible) {
               config.visible = visible;
-              // Invalidate to ensure the chart is redrawn (or cleared if hidden).
               this.invalidateChart(chartId);
           }
         },
@@ -170,7 +167,6 @@ export class GPUCoordinator {
    * This is run only when a chart's layer structure changes, not on every frame.
    */
   #buildRenderPlanForChart(chartConfig) {
-    // console.debug(`🛠️ Rebuilding render plan for chart: ${chartConfig.chartId}`);
     const layers = Array.from(chartConfig.layers.values());
     if (layers.length === 0) {
         chartConfig.renderPlan = [];
@@ -201,9 +197,14 @@ export class GPUCoordinator {
         }
     }
 
-    // Enrich the plan with cached pipeline references to avoid lookups in the hot loop.
+    // ✅ UPDATED: Enrich the plan with cached dual bind group references
     for (const layer of newPlan) {
         layer.cachedPipeline = layer.renderer?.pipeline;
+        layer.cachedPerFrameBindGroup = layer.renderer?.perFrameBindGroup;
+        layer.cachedPerDataBindGroup = layer.renderer?.perDataBindGroup;
+        
+        // ✅ NEW: Validate dual bind group readiness
+        layer.isDualBindGroupReady = !!(layer.cachedPerFrameBindGroup && layer.cachedPerDataBindGroup);
     }
 
     chartConfig.renderPlan = newPlan;
@@ -213,6 +214,8 @@ export class GPUCoordinator {
   /**
    * The main render function. It is designed to be lean, performing minimal work
    * by iterating over a pre-computed "Render Plan".
+   * 
+   * ✅ UPDATED: Now supports dual bind group architecture for optimal performance
    */
   #coordinatedRender(chartsNeedingRender) {
     try {
@@ -241,23 +244,46 @@ export class GPUCoordinator {
             );
             
             let currentPipeline = null;
+            let currentPerFrameBindGroup = null;
+            let currentPerDataBindGroup = null;
+            
             for (const layer of chartConfig.renderPlan) {
                 const renderer = layer.renderer;
-                if (renderer?.bindGroup) {
-                    const pipelineToUse = layer.cachedPipeline;
-
-                    // Skip this individual layer if its pipeline isn't ready yet.
-                    if (!pipelineToUse) continue;
-
-                    // Set pipeline only if it's different from the currently active one.
-                    if (pipelineToUse !== currentPipeline) {
-                        passEncoder.setPipeline(pipelineToUse);
-                        currentPipeline = pipelineToUse;
-                    }
-                    
-                    passEncoder.setBindGroup(0, renderer.bindGroup);
-                    layer.draw(passEncoder);
+                
+                // ✅ UPDATED: Check for dual bind group readiness instead of single bindGroup
+                if (!renderer || !layer.isDualBindGroupReady) {
+                    console.debug(`⚠️ Skipping layer ${layer.id} - dual bind groups not ready`);
+                    continue;
                 }
+
+                const pipelineToUse = layer.cachedPipeline;
+                const perFrameBindGroupToUse = layer.cachedPerFrameBindGroup;
+                const perDataBindGroupToUse = layer.cachedPerDataBindGroup;
+
+                // Skip this individual layer if its pipeline isn't ready yet.
+                if (!pipelineToUse) {
+                    console.debug(`⚠️ Skipping layer ${layer.id} - pipeline not ready`);
+                    continue;
+                }
+
+                // Set pipeline only if it's different from the currently active one.
+                if (pipelineToUse !== currentPipeline) {
+                    passEncoder.setPipeline(pipelineToUse);
+                    currentPipeline = pipelineToUse;
+                }
+                
+                // ✅ UPDATED: Set both bind groups, only if they're different from currently active ones
+                if (perFrameBindGroupToUse !== currentPerFrameBindGroup) {
+                    passEncoder.setBindGroup(0, perFrameBindGroupToUse);
+                    currentPerFrameBindGroup = perFrameBindGroupToUse;
+                }
+                
+                if (perDataBindGroupToUse !== currentPerDataBindGroup) {
+                    passEncoder.setBindGroup(1, perDataBindGroupToUse);
+                    currentPerDataBindGroup = perDataBindGroupToUse;
+                }
+                
+                layer.draw(passEncoder);
             }
             passEncoder.end();
         }
@@ -270,6 +296,7 @@ export class GPUCoordinator {
     }
   }
 
+  // ✅ UPDATED: Fallback render also supports dual bind groups
   #fallbackRender(chartsNeedingRender) {
     console.warn('Using fallback render path');
     for (const chartConfig of chartsNeedingRender) {
@@ -284,9 +311,10 @@ export class GPUCoordinator {
             );
             for (const layer of chartConfig.layers.values()) {
                 const renderer = layer.renderer;
-                if (renderer?.pipeline && renderer?.bindGroup) {
+                if (renderer?.pipeline && renderer?.perFrameBindGroup && renderer?.perDataBindGroup) {
                     passEncoder.setPipeline(renderer.pipeline);
-                    passEncoder.setBindGroup(0, renderer.bindGroup);
+                    passEncoder.setBindGroup(0, renderer.perFrameBindGroup);
+                    passEncoder.setBindGroup(1, renderer.perDataBindGroup);
                     layer.draw(passEncoder);
                 }
             }
@@ -516,7 +544,6 @@ export class GPUCoordinator {
     console.log('🧹 GPUCoordinator destroyed');
   }
 }
-
 
 export function setGPUCoordinator(config = {}) {
   const coordinator = new GPUCoordinator(config);
