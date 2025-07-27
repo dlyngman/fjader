@@ -153,6 +153,8 @@
   onDestroy(() => {
     setup?.destroy();
   });
+
+  $inspect(x0Data, x1Data, y0Data, y1Data)
 </script>
 
 {#if setup?.gpuReady && x0Data && x1Data && y0Data && y1Data}
