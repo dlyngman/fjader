@@ -4,7 +4,7 @@
   import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   import { Rects } from '../rendering/index.js';
   import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-  import { processData, buildSelectFromChannels } from './utils/index.js';
+  import { getSourceType, processData, processColorData, processAlphaData, parseColor, buildSelectFromChannels } from './utils/index.js';
 
   let { 
     table, 
@@ -58,15 +58,23 @@
   let yColumn = $derived(arrowTable?.getChild('y'));
   let colorColumn = $derived(arrowTable?.getChild('color'));
 
+  let dataStrategies = $derived({
+    x1: getSourceType(x1),
+    x2: getSourceType(x2), 
+    y: getSourceType(y),
+    color: getSourceType(color),
+    alpha: getSourceType(alpha)
+  });
+
   // Process x data using utility functions
   let x0Data = $derived.by(() => {
     if (!instanceCount) return null;
-    return processData(x1, x1Column, instanceCount);
+    return processData(x1, x1Column, instanceCount, dataStrategies.x1);
   });
 
   let x1Data = $derived.by(() => {
     if (!instanceCount) return null;
-    return processData(x2, x2Column, instanceCount);
+    return processData(x2, x2Column, instanceCount, dataStrategies.x2);
   });
 
   // Process categorical y data through band scale
@@ -96,42 +104,8 @@
 
   let y0Data = $derived(yData?.y0Data);
   let y1Data = $derived(yData?.y1Data);
-
-  // Color processing (same as dots)
-  let colorData = $derived.by(() => {
-    if (!colorColumn || !instanceCount || !colorScale) return null;
-    
-    const colorArray = colorColumn.toArray();
-    const rgba = new Float32Array(instanceCount * 4);
-    
-    for (let i = 0; i < instanceCount; i++) {
-      const colorValue = colorArray[i];
-      const fillColor = colorScale(colorValue);
-      const parsed = parseColor(fillColor);
-      rgba.set(parsed, i * 4);
-    }
-    
-    return rgba;
-  });
-
-  // Alpha processing
-  let alphaData = $derived.by(() => {
-    if (!instanceCount) return null;
-    const alphas = new Float32Array(instanceCount);
-    alphas.fill(alpha);
-    return alphas;
-  });
-
-  // Helper function for color parsing
-  function parseColor(color) {
-    if (typeof color === 'string' && color.startsWith('#')) {
-      const r = parseInt(color.slice(1, 3), 16) / 255;
-      const g = parseInt(color.slice(3, 5), 16) / 255;
-      const b = parseInt(color.slice(5, 7), 16) / 255;
-      return [r, g, b, 1.0];
-    }
-    return [0.0, 0.0, 1.0, 1.0]; // Default blue
-  }
+  let colorData = $derived(processColorData(color, colorColumn, instanceCount, colorScale, dataStrategies.color));
+  let alphaData = $derived(processAlphaData(alpha, instanceCount, dataStrategies.alpha));
 
   // Setup effect
   $effect(() => {
@@ -154,7 +128,6 @@
     setup?.destroy();
   });
 
-  $inspect(x0Data, x1Data, y0Data, y1Data)
 </script>
 
 {#if setup?.gpuReady && x0Data && x1Data && y0Data && y1Data}

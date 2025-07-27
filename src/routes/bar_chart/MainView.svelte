@@ -50,10 +50,11 @@
 		  {#snippet canvasComponents()}
 			<BarMarkX
 			  table="penguins"
-			  x={max("bill_length")}
+			  x1={min("bill_length")}
+			  x2={max("bill_length")}
 			  y="species"
-			  orientation="horizontal"
-			  alpha="0.8"
+			  color="red"
+			  alpha={1}
 			  preferredYScaleType = 'band'
 			/>
 			<!-- <Rects 
