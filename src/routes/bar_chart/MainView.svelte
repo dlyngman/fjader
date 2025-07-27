@@ -13,11 +13,25 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-		BarMark
+		BarMark,
+		BarMarkX
 	} from '$lib/components';
+	import Rects from '$lib/components/rendering/Rects.svelte';
 
 	const coordinator = getContext('mosaic-coordinator');
 	const selection = Selection.crossfilter();
+
+	// Create test data
+	const x0Data = new Float32Array([10, 60, 20]);     // Left edges
+	const x1Data = new Float32Array([50, 100, 80]);    // Right edges
+	const y0Data = new Float32Array([10, 10, 30]);      // Bottom edges  
+	const y1Data = new Float32Array([50, 30, 80]);      // Top edges
+	const colorData = new Float32Array([
+	1,0,0,1,  // Red rectangle
+	0,1,0,1,  // Green rectangle
+	0,0,1,1   // Blue rectangle
+	]);
+	const alphaData = new Float32Array([0.3, 0.2, 0.3]);
 
 </script>
 
@@ -34,7 +48,7 @@
 	  {#snippet canvas()}
 		<WebGPUCanvas>
 		  {#snippet canvasComponents()}
-			<DotsMark
+			<BarMarkX
 			  table="penguins"
 			  x={max("bill_length")}
 			  y="species"
@@ -42,6 +56,11 @@
 			  alpha="0.8"
 			  preferredYScaleType = 'band'
 			/>
+			<!-- <Rects 
+				{x0Data} {x1Data} {y0Data} {y1Data} 
+				{colorData} {alphaData} 
+				dataVersion={1} 
+			/> -->
 		  {/snippet}
 		</WebGPUCanvas>
 	  {/snippet}

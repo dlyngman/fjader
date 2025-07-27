@@ -289,7 +289,7 @@
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
 
-      console.debug(`✅ Dots draw completed: ${renderer.instanceCount} instances with dual bind groups`);
+      // console.debug(`✅ Dots draw completed: ${renderer.instanceCount} instances with dual bind groups`);
       
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);

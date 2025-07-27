@@ -1,22 +1,32 @@
-import { Tween } from 'svelte/motion';
+import { Spring } from 'svelte/motion';
 import { cubicOut, cubicInOut } from 'svelte/easing';
 import { scaleLinear } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
 
-// current zoom tweens, extents, and filtering?
-const tweenOptions = {
-  duration: 300,
-  easing: cubicOut,
+// Spring options for smooth domain transitions
+const springOptions = {
+  stiffness: 0.15,
+  damping: 0.8,
+  precision: 0.01
+};
+
+// Different spring settings for different interaction types
+const springConfigs = {
+  default: { stiffness: 0.15, damping: 0.8, precision: Number.EPSILON * 1 },
+  zoom: { stiffness: 0.2, damping: 0.85, precision: Number.EPSILON * 1 },
+  pan: { stiffness: 0.2, damping: 0.7, precision: Number.EPSILON * 1 },
+  reset: { stiffness: 0.075, damping: 0.7, precision: Number.EPSILON * 1 },
+  zoomIn: { stiffness: 0.08, damping: 0.7, precision:  Number.EPSILON * 1 }
 };
 
 export class LinearScaleState {
   id = crypto.randomUUID();
-  name = $state('');  // e.g., 'x', 'y', 'color'
+  name = $state('');
 
   #initExtent = [];
   #extent = [];
-  #extents = new Map(); // Stores all extents in map by mark identifier
-  // domain = new Tween([0, 100], tweenOptions);
+  #extents = new Map();
+  
   domainLimits = {
     min: 0,
     max: 100,
@@ -32,7 +42,7 @@ export class LinearScaleState {
 
   // Freeze/debounce functionality
   #enableUpdates = $state(true);
-  #frozenExtent = null; // Stores the frozen extent when updates are disabled
+  #frozenExtent = null;
 
   constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}) {
     this.name = name;
@@ -41,14 +51,14 @@ export class LinearScaleState {
     this.type = type;
     this.zoomLimits.max = zoomLimits[0]
     this.zoomLimits.min = zoomLimits[1]
-    this.ready = $state(false);
-    this.domain = new Tween(extent, tweenOptions);
+    this.ready = $state(false);    
+    this.domain = new Spring(extent, springOptions);
 
     this.zoomInEffect = {
       enabled: options.zoomInEffect ?? true,
       factor: options.zoomInFactor ?? 5,
-      duration: options.zoomInDuration ?? 600, //need to match regular
-      easing: options.zoomInEasing ?? cubicOut
+      // duration: options.zoomInDuration ?? 600, // Still used for timing reference
+      springConfig: options.zoomInSpringConfig ?? springConfigs.zoomIn
     };
   }
 
@@ -180,7 +190,16 @@ export class LinearScaleState {
     }
   }
 
+  // Update spring physics parameters for different interaction types
+  #updateSpringConfig(config) {
+    this.domain.stiffness = config.stiffness;
+    this.domain.damping = config.damping;
+    this.domain.precision = config.precision;
+  }
+
   applyZoomDomain(innerPoint, scaleFactor) {
+    // Use snappier spring for zoom interactions
+    this.#updateSpringConfig(springConfigs.zoom);
 
     const [min, max] = this.domain.target;
     const minLimit = this.domainLimits.min;
@@ -226,10 +245,14 @@ export class LinearScaleState {
       }
     }
 
+    // Spring: just set target directly
     this.domain.target = [newMin, newMax];
   }
 
   applyPanDomain(dx) {
+    // Use even snappier spring for pan interactions
+    this.#updateSpringConfig(springConfigs.pan);
+
     const [min, max] = this.domain.current;
     let newMin = min + dx;
     let newMax = max + dx;
@@ -243,10 +266,16 @@ export class LinearScaleState {
         newMin = newMax - range;
     }
 
+    // Spring: just set target directly
     this.domain.target = [newMin, newMax];
+    console.log(this.domain)
   }
 
   setConstrainedDomain(newDomain) {
+    // Use default spring config
+    // this.#updateSpringConfig(springConfigs.default);
+    this.#updateSpringConfig(springConfigs.pan);
+
     let [newMin, newMax] = newDomain;
     
     // Reuse existing constraint logic from applyPanDomain
@@ -275,56 +304,36 @@ export class LinearScaleState {
   }
 
   resetZoom() {
-    const [currentMin, currentMax] = this.domain.target;
-    const [targetMin, targetMax] = this.effectiveExtent;
+    const targetExtent = this.effectiveExtent;
     
-    // Use the magnitude of the data to determine tolerance
-    const dataScale = Math.max(
-      Math.abs(targetMin), 
-      Math.abs(targetMax), 
-      Math.abs(targetMax - targetMin)
-    );
-    
-    // Tolerance is 0.01% of the data scale (or minimum epsilon for very small numbers)
-    const tolerance = Math.max(dataScale * 0.0001, Number.EPSILON * 1000);
-    
-    const alreadyTargetingCorrectExtent = 
-      Math.abs(currentMin - targetMin) < tolerance && 
-      Math.abs(currentMax - targetMax) < tolerance;
-      
-    if (alreadyTargetingCorrectExtent) {
+    // Handle invalid extents
+    if (targetExtent[0] === targetExtent[1] || 
+        !isFinite(targetExtent[0]) || 
+        !isFinite(targetExtent[1])) {
+      console.warn(`⚠️ Scale ${this.name} skipping zoom - invalid extent:`, targetExtent);
       return;
     }
-  
+
     if (!this.ready && this.zoomInEffect.enabled) {
-      const [min, max] = this.effectiveExtent;
+      // Zoom-in effect: start expanded, animate to target
+      this.#updateSpringConfig(this.zoomInEffect.springConfig);
       
-      if (min === max || !isFinite(min) || !isFinite(max)) {
-        console.warn(`⚠️ Scale ${this.name} skipping zoom effect - invalid extent:`, [min, max]);
-        this.domain.set(this.effectiveExtent, { duration: 0 });
-        return;
-      }
-      
-      const center = (min + max) / 2;
-      const range = max - min;
-      const expandedRange = range * this.zoomInEffect.factor;
+      const center = (targetExtent[0] + targetExtent[1]) / 2;
+      const range = targetExtent[1] - targetExtent[0];
       const expandedExtent = [
-        center - expandedRange / 2, 
-        center + expandedRange / 2
+        center - (range * this.zoomInEffect.factor) / 2,
+        center + (range * this.zoomInEffect.factor) / 2
       ];
-  
-  
-      this.domain.set(expandedExtent, { duration: 0 });
-      this.domain.set(this.effectiveExtent, { 
-        duration: this.zoomInEffect.duration,
-        easing: this.zoomInEffect.easing
-      });
       
+      this.domain.set(expandedExtent, { instant: true });
+      this.domain.target = targetExtent;
     } else if (!this.ready) {
-      this.domain.set(this.effectiveExtent, { duration: 0 });
-      
+      // Not ready, no animation
+      this.domain.set(targetExtent, { instant: true });
     } else {
-      this.domain.set(this.effectiveExtent, {duration: 600, easing: cubicInOut});
+      // Normal reset with animation
+      this.#updateSpringConfig(springConfigs.reset);
+      this.domain.target = targetExtent;
     }
   }
 
@@ -339,6 +348,7 @@ export class LinearScaleState {
   }
     
   zoomToRange([min, max]) {
+    this.#updateSpringConfig(springConfigs.default);
     this.domain.target = [min, max];
   }
 
@@ -372,7 +382,12 @@ export class LinearScaleState {
       frozenExtent: this.#frozenExtent ? [...this.#frozenExtent] : null,
       effectiveExtent: [...this.effectiveExtent],
       extentsCount: this.#extents.size,
-      extents: Object.fromEntries(this.#extents)
+      extents: Object.fromEntries(this.#extents),
+      springConfig: {
+        stiffness: this.domain.stiffness,
+        damping: this.domain.damping,
+        precision: this.domain.precision
+      }
     };
   }
 

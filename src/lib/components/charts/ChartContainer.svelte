@@ -119,23 +119,10 @@
   let initialTouchDistance = $state(0);
   let isZooming = $state(false);
 
-  // $effect.pre(() => {
-  //   void scales.xScaleState?.domain?.current;
-  //   void scales.yScaleState?.domain?.current;
-  //   if (layout.isReady) {
-  //     gpuCoordinator.invalidateChart(layout.chartId);
-  //   }
-  // });
   $effect.pre(() => {
-    // Depend on the tweened domain values from the scale states.
     void scales.xScaleState?.domain?.current;
     void scales.yScaleState?.domain?.current;
 
-    // const timestamp = performance.now();
-    // console.log(`📊 Chart ${layout.chartId} effect.pre fired at ${timestamp.toFixed(3)}ms`);
-    
-    // This effect running means the state is fresh for this frame.
-    // Tell the coordinator that this chart needs to be included in its upcoming render pass.
     untrack(() => {
         if (layout.isReady) {
             gpuCoordinator.invalidateChart(layout.chartId);
@@ -207,7 +194,7 @@
   }
 
   let panContext;
-  
+
   // PAN HANDLERS
   function handlePointerDown(event) {
     event.preventDefault();
@@ -219,18 +206,13 @@
     activePanY = y;
     isPanning = true;
     
-    // 🚀 NEW: Pre-calculate everything we need for fast math
+    // Pre-calculate point, domain and screen-data ratio on start of pan to offset from
     panContext = {
-      // Screen position where pan started
       initialScreenPos: { x: event.offsetX, y: event.offsetY },
-      
-      // Domain at start of pan (we'll offset from this)
       initialDomain: {
         x: activePanX ? [...scales.xScaleState.domain.current] : null,
         y: activePanY ? [...scales.yScaleState.domain.current] : null
       },
-      
-      // Pre-calculated screen-pixel to data-unit conversion ratios
       screenToDataRatio: {
         x: activePanX ? 
           (scales.xScaleState.domain.current[1] - scales.xScaleState.domain.current[0]) / layout.innerWidth : 0,
@@ -240,10 +222,8 @@
     };
     
     scales.clearCurrentDataPoints();
-    
-    if (event.target.setPointerCapture) {
-      event.target.setPointerCapture(event.pointerId);
-    }
+
+    event.target.setPointerCapture?.(event.pointerId);
   }
 
   function handlePointerMove(event) {
@@ -251,19 +231,16 @@
     
     event.preventDefault();
     
-    // 🚀 ULTRA-FAST: Just subtract screen coordinates (no coordinate transforms!)
     const screenDelta = {
       x: event.offsetX - panContext.initialScreenPos.x,
       y: event.offsetY - panContext.initialScreenPos.y
     };
     
-    // 🚀 ULTRA-FAST: Simple multiplication (no scale.invert()!)
     const dataDelta = {
-      x: -screenDelta.x * panContext.screenToDataRatio.x, // Negative: pan right = domain left
-      y: screenDelta.y * panContext.screenToDataRatio.y   // Positive: pan down = domain up (y-axis flipped)
+      x: -screenDelta.x * panContext.screenToDataRatio.x,
+      y: screenDelta.y * panContext.screenToDataRatio.y
     };
     
-    // 🚀 FAST: Apply to original domain (preserves "grab point" UX)
     if (activePanX) {
       const newXDomain = [
         panContext.initialDomain.x[0] + dataDelta.x,
@@ -287,7 +264,6 @@
     activePanY = false;
   }
 
-  // MOUSE TRACKING HANDLERS  
   function handleInnerMouseEnter() {
     scales.active = true;
   }
@@ -374,6 +350,8 @@
     flex: 1;
     height: 100%;
     contain: layout style paint;
+    will-change: transform, opacity;
+    transform: translateZ(0);
   }
 
   .svg-background, .canvas-layer, .svg-foreground {

@@ -32,6 +32,7 @@ export class GPUCoordinator {
 
   // Configuration
   #msaaSampleCount = 4;
+  lastRender;
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -289,6 +290,11 @@ export class GPUCoordinator {
         }
 
         this.#device.queue.submit([commandEncoder.finish()]);
+        const timeDiff = performance.now() - this.lastRender;
+        if (timeDiff > 16) {
+          console.log('Render', performance.now() - this.lastRender)
+        }
+        this.lastRender = performance.now()
         
     } catch (error) {
         console.error('Coordinated render failed:', error);
