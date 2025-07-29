@@ -53,7 +53,7 @@
 			  x1={min("bill_length")}
 			  x2={max("bill_length")}
 			  y="species"
-			  color="red"
+			  color="purple"
 			  alpha={1}
 			  preferredYScaleType = 'band'
 			/>

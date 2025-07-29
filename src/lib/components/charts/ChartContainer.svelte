@@ -202,8 +202,14 @@
     const point = { x: event.offsetX, y: event.offsetY };
     const { x, y, innerPoint } = layout.getActiveAxes(point);
     
-    activePanX = x;
-    activePanY = y;
+    // Only allow panning on linear scales
+    activePanX = x && scales.scaleTypes?.x === 'linear';
+    activePanY = y && scales.scaleTypes?.y === 'linear';
+  
+    // Only proceed if at least one axis can pan
+    if (!activePanX && !activePanY) {
+      return;
+    }
     isPanning = true;
     
     // Pre-calculate point, domain and screen-data ratio on start of pan to offset from
@@ -222,12 +228,11 @@
     };
     
     scales.clearCurrentDataPoints();
-
     event.target.setPointerCapture?.(event.pointerId);
   }
 
   function handlePointerMove(event) {
-    if (!isPanning) return;
+    if (!isPanning || !panContext) return;
     
     event.preventDefault();
     
