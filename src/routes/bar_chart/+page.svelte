@@ -57,6 +57,16 @@
       loadError = error.message;
     }
   });
+
+  import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
+  
+  // Temporarily expose for testing
+  if (typeof window !== 'undefined') {
+    window.testScaleConfig = {
+      resolveScaleConfiguration,
+      SCALE_PRIORITIES
+    };
+  }
 </script>
 
 <div class="app-container">
