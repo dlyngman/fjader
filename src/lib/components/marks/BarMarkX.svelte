@@ -17,6 +17,11 @@
     alpha = 0.8,
     limit,
     filterNulls = false,
+
+    padding,        // Simple padding (0-1)
+    paddingInner,   // Inner padding between bars (0-1) 
+    paddingOuter,   // Outer padding before/after bars (0-1)
+    align = 0.5,    // Alignment of bars within outer padding (0-1)
   } = $props();
 
   const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
@@ -29,6 +34,18 @@
   let xScaleId = $derived(chartContext.xScaleState?.id);
   let yScaleId = $derived(chartContext.yScaleState?.id);
 
+  const yScaleConfig = $derived.by(() => {
+    const config = {};
+    
+    // Only include defined values to avoid overriding defaults unnecessarily
+    if (padding != null) config.padding = padding;
+    if (paddingInner != null) config.paddingInner = paddingInner;
+    if (paddingOuter != null) config.paddingOuter = paddingOuter;
+    if (align != null) config.align = align;
+    
+    return config;
+  });
+
   const config = $derived({
     markType: 'barx',
     supportedScaleTypes: {
@@ -37,7 +54,7 @@
     },
     scaleRequirements: {
       x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
-      y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE }
+      y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
     },
     table,
     selection,

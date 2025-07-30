@@ -60,13 +60,18 @@
 
   import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
   
-  // Temporarily expose for testing
   if (typeof window !== 'undefined') {
     window.testScaleConfig = {
       resolveScaleConfiguration,
-      SCALE_PRIORITIES
+      SCALE_PRIORITIES,
+      // NEW: Add access to chart context for testing
+      getCurrentChart: () => {
+        // This would need to be set from your actual chart component
+        return window.currentChartContext;
+      }
     };
-  }
+}
+
 </script>
 
 <div class="app-container">
