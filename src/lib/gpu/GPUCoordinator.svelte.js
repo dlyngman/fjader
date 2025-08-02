@@ -62,6 +62,7 @@ export class GPUCoordinator {
       if (!this.#renderScheduled) {
         this.#renderScheduled = true;
         queueMicrotask(() => {
+        // requestAnimationFrame(() => { 
           this.#renderScheduled = false;
           const chartsToRender = [];
           for (const chartId of this.#dirtyChartIDs) {
@@ -292,7 +293,7 @@ export class GPUCoordinator {
         this.#device.queue.submit([commandEncoder.finish()]);
         const timeDiff = performance.now() - this.lastRender;
         if (timeDiff > 16) {
-          console.log('Render', performance.now() - this.lastRender)
+          // console.log('Render', performance.now() - this.lastRender)
         }
         this.lastRender = performance.now()
         

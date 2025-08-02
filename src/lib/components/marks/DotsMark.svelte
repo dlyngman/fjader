@@ -166,6 +166,63 @@
   onDestroy(() => {
     setup?.destroy();
   });
+
+
+  // $effect(() => {
+  //   console.log('🔍 DotsMark Data Processing:', {
+  //     // Setup status
+  //     setupReady: !!setup,
+  //     gpuReady: setup?.gpuReady,
+  //     scaleCompatibilityError: setup?.scaleCompatibilityError,
+      
+  //     // Raw data
+  //     arrowTable: !!arrowTable,
+  //     instanceCount,
+      
+  //     // Processed data arrays
+  //     xData: xData ? `${xData.length} items, sample: [${Array.from(xData.slice(0, 3)).join(', ')}]` : 'null',
+  //     yData: yData ? `${yData.length} items, sample: [${Array.from(yData.slice(0, 3)).join(', ')}]` : 'null',
+  //     colorData: colorData ? `${colorData.length/4} items (rgba)` : 'null',
+  //     radiusData: radiusData ? `${radiusData.length} items` : 'null',
+  //     alphaData: alphaData ? `${alphaData.length} items` : 'null',
+      
+  //     // Scale info that affects data processing
+  //     actualXScaleType: setup?.actualXScaleType,
+  //     actualYScaleType: setup?.actualYScaleType,
+      
+  //     // Chart context status
+  //     chartReady: chartContext.isReady,
+  //     scalesReady: chartContext.scalesReady,
+      
+  //     // What component will render
+  //     willRenderDots: !!(setup?.gpuReady && xData && yData),
+  //   });
+  // });
+
+  // // Add this debugging effect to DotsMark.svelte
+  // $effect(() => {
+  //   if (setup?.gpuReady && chartContext.scalesReady) {
+  //     console.log('🔍 Scale Domain Debug:', {
+  //       // X scale domain
+  //       xScaleDomain: chartContext.xScaleState?.domain?.current,
+  //       xScaleRange: [0, chartContext.innerWidth],
+        
+  //       // Y scale domain  
+  //       yScaleDomain: chartContext.yScaleState?.domain?.current,
+  //       yScaleRange: [chartContext.innerHeight, 0], // Flipped for screen coords
+        
+  //       // Sample data for comparison
+  //       xDataSample: xData ? Array.from(xData.slice(0, 5)) : 'none',
+  //       yDataSample: yData ? Array.from(yData.slice(0, 5)) : 'none',
+        
+  //       // Expected screen positions (manual calculation)
+  //       expectedScreenPositions: xData && yData ? {
+  //         xSample: Array.from(xData.slice(0, 3)),
+  //         ySample: Array.from(yData.slice(0, 3))
+  //       } : 'no data'
+  //     });
+  //   }
+  // });
 </script>
 
 

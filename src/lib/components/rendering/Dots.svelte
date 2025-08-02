@@ -106,31 +106,31 @@
   ];
 
   // Buffer update effects
-  $effect(() => {
+  $effect.pre(() => {
     if (xData && renderer?.resourcesCreated) {
       xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
     }
   });
 
-  $effect(() => {
+  $effect.pre(() => {
     if (yData && renderer?.resourcesCreated) {
       yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
     }
   });
 
-  $effect(() => {
+  $effect.pre(() => {
     if (colorData && renderer?.resourcesCreated) {
       colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
     }
   });
 
-  $effect(() => {
+  $effect.pre(() => {
     if (radiusData && renderer?.resourcesCreated) {
       radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
     }
   });
 
-  $effect(() => {
+  $effect.pre(() => {
     if (alphaData && renderer?.resourcesCreated) {
       alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
     }
@@ -138,13 +138,18 @@
 
   // ✅ UPDATED: Check for per-data bind group instead of legacy bindGroup
   let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
+  let allBindGroupsReady = $derived(
+    !!renderer?.perFrameBindGroup && 
+    !!renderer?.perDataBindGroup && 
+    !!renderer?.perScaleBindGroup
+  );
 
-  $effect(() => {
+  $effect.pre(() => {
     void renderer?.resourcesCreated;
-    void dataBindGroupReady;
+    void allBindGroupsReady;
 
     if (xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer && 
-        renderer?.resourcesCreated && !dataBindGroupReady) {
+        renderer?.resourcesCreated && !allBindGroupsReady) {
       untrack(() => {
         createDotsDataBindGroup();
       });
@@ -152,9 +157,9 @@
   });
 
   // Data writing effects
-  $effect(() => {
-    void dataBindGroupReady;
-    if (xData && xBuffer && dataBindGroupReady) {
+  $effect.pre(() => {
+    void allBindGroupsReady;
+    if (xData && xBuffer && allBindGroupsReady) {
       untrack(() => {
         const device = webGPUContext.getDevice();
         device?.queue.writeBuffer(xBuffer, 0, xData);
@@ -162,50 +167,50 @@
     }
   });
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (yData && yBuffer && dataBindGroupReady) {
+  $effect.pre(() => {
+    void allBindGroupsReady;
+    if (yData && yBuffer && allBindGroupsReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(yBuffer, 0, yData);
     }
   });
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (radiusData && radiusBuffer && dataBindGroupReady) {
+  $effect.pre(() => {
+    void allBindGroupsReady;
+    if (radiusData && radiusBuffer && allBindGroupsReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(radiusBuffer, 0, radiusData);
     }
   });
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (colorData && colorBuffer && dataBindGroupReady) {
+  $effect.pre(() => {
+    void allBindGroupsReady;
+    if (colorData && colorBuffer && allBindGroupsReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(colorBuffer, 0, colorData);
     }
   });
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (alphaData && alphaBuffer && dataBindGroupReady) {
+  $effect.pre(() => {
+    void allBindGroupsReady;
+    if (alphaData && alphaBuffer && allBindGroupsReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
     }
   });
 
-  $effect(() => {
-    void dataBindGroupReady;
+  $effect.pre(() => {
+    void allBindGroupsReady;
     if (xData && yData && colorData && radiusData && alphaData && 
         xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer &&
-        dataBindGroupReady) {
+        allBindGroupsReady) {
       renderer.updateInstanceCount(xData.length);
       gpuCoordinator.invalidateChart(chartContext.chartId);
     }
   });
 
   // Resize change
-  $effect(() => {
+  $effect.pre(() => {
     if (!renderer?.resourcesCreated) return;
     
     // Track layout changes
@@ -232,21 +237,54 @@
     ]);
   }
 
-  // Initialize dots-specific geometry
-  async function initializeDotsGeometry() {
-    const device = webGPUContext.getDevice();
-    if (!device) {
-      throw new Error('No WebGPU device available');
-    }
+  // // Initialize dots-specific geometry
+  // async function initializeDotsGeometry() {
+  //   const device = webGPUContext.getDevice();
+  //   if (!device) {
+  //     throw new Error('No WebGPU device available');
+  //   }
 
-    // Create quad geometry buffer
-    const quadVertices = createQuadGeometry();
-    quadGeometryBuffer = device.createBuffer({
-      size: quadVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      label: 'dots-quad-geometry'
-    });
-    device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+  //   // Create quad geometry buffer
+  //   const quadVertices = createQuadGeometry();
+  //   quadGeometryBuffer = device.createBuffer({
+  //     size: quadVertices.byteLength,
+  //     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  //     label: 'dots-quad-geometry'
+  //   });
+  //   device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+  // }
+  // Replace the initializeDotsGeometry function in Dots.svelte
+  async function initializeDotsGeometry() {
+    try {
+      const device = webGPUContext.getDevice();
+      if (!device) {
+        throw new Error('No WebGPU device available for quad geometry');
+      }
+
+      console.log('🔧 Creating quad geometry...');
+      
+      // Create quad geometry buffer
+      const quadVertices = createQuadGeometry();
+      console.log('📐 Quad vertices:', quadVertices);
+      
+      quadGeometryBuffer = device.createBuffer({
+        size: quadVertices.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        label: 'dots-quad-geometry'
+      });
+      
+      device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+      
+      console.log('✅ Quad geometry created successfully:', {
+        buffer: !!quadGeometryBuffer,
+        size: quadVertices.byteLength,
+        vertices: quadVertices.length
+      });
+      
+    } catch (error) {
+      console.error('❌ Failed to create quad geometry:', error);
+      throw error;
+    }
   }
 
   // ✅ UPDATED: Create dots-specific data bind group using new architecture
@@ -274,23 +312,38 @@
 
   // ✅ UPDATED: Dots-specific draw function for dual bind groups
   function drawDots(passEncoder) {
+    // console.log('🎨 drawDots called:', {
+    //   instanceCount: renderer.instanceCount,
+    //   quadBuffer: !!quadGeometryBuffer,
+    //   allBindGroups: !!(renderer.perFrameBindGroup && renderer.perDataBindGroup && renderer.perScaleBindGroup)
+    // });
+
     try {
-      if (!renderer?.pipeline || !renderer?.perFrameBindGroup || !renderer?.perDataBindGroup || renderer.instanceCount === 0) {
+      if (!renderer?.pipeline || 
+          !renderer?.perFrameBindGroup || 
+          !renderer?.perDataBindGroup || 
+          !renderer?.perScaleBindGroup ||
+          renderer.instanceCount === 0) {
         console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
         return;
       }
 
+      if (!quadGeometryBuffer) {
+        console.error('❌ Skipping dots draw - no quad geometry buffer!');
+        return;
+      }
+
+      // console.log('✅ Drawing dots:', renderer.instanceCount, 'instances');
+
       passEncoder.setPipeline(renderer.pipeline);
-      
-      // ✅ UPDATED: Set both bind groups for dual bind group architecture
       passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
       passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
-      
+      passEncoder.setBindGroup(2, renderer.perScaleBindGroup);  // ← This was missing!
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
 
-      // console.debug(`✅ Dots draw completed: ${renderer.instanceCount} instances with dual bind groups`);
-      
+      // console.log('✅ Dots draw completed successfully');
+
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);
       throw error;
@@ -299,6 +352,7 @@
 
   // Wait for WebGPU context with better error handling
   async function waitForWebGPU() {
+    console.log('⏳ waitForWebGPU - starting...');
     let attempts = 0;
     const maxAttempts = 100;
     
@@ -311,22 +365,27 @@
       throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
     }
     
+    console.log('✅ WebGPU context ready, calling initializeDots...');
     await initializeDots();
   }
 
   // ✅ UPDATED: Initialize dots renderer with new dual bind group architecture
   async function initializeDots() {
+    console.log('🔧 initializeDots - starting...');
     try {
       if (!gpuCoordinator) {
         throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
       }
 
+      console.log('📊 Creating base renderer...');
       // Create base renderer with scale type information
       renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, chartContext, { 
         zIndex,
         xScaleType: chartContext.scaleTypes?.x || 'linear',
         yScaleType: chartContext.scaleTypes?.y || 'linear'
       });
+
+      console.log('🔧 Initializing renderer...');
 
       // ✅ UPDATED: Initialize with dual bind group configuration
       await renderer.initialize({
@@ -335,9 +394,11 @@
         dataBindingConfig,        // ✅ NEW: Required for dual bind group architecture
       });
 
+      console.log('📐 Initializing dots geometry...');
       // Initialize dots-specific geometry
       await initializeDotsGeometry();
       
+      console.log('📋 Registering layer...');
       // Register layer with base renderer
       renderer.registerLayer(drawDots);
 
@@ -351,8 +412,10 @@
   }
 
   onMount(async () => {
+    console.log('🚀 Dots onMount - starting initialization...');
     try {
       await waitForWebGPU();
+      console.log('✅ Dots initialization completed successfully');
     } catch (error) {
       console.error('❌ Dots component mount failed:', error);
       initializationError = error.message;

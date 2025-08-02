@@ -99,6 +99,11 @@
     get scaleTypes() { return scales.scaleTypes; },
     get scalesReady() { return scales.scalesReady; },
     get active() { return scales.active; },
+    get xCategoryPositions() { return scales.xCategoryPositions; },
+    get yCategoryPositions() { return scales.yCategoryPositions; },
+    get categoryPositionsReady() { return scales.categoryPositionsReady; },
+    get xBandwidth() { return scales.xBandwidth; },
+    get yBandwidth() { return scales.yBandwidth; },
     
     // Scale coordinator methods
     registerScaleType: (dimension, type, priority, markId) => scales.registerScaleType(dimension, type, priority, markId),

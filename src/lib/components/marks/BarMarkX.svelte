@@ -110,7 +110,7 @@
         const categoryIndex = indices[i];
         // Each category spans from index to index+1 in band scale space
         y0Data[i] = categoryIndex;
-        y1Data[i] = categoryIndex + 1;
+        y1Data[i] = categoryIndex;
       }
       
       return { y0Data, y1Data };
@@ -144,6 +144,69 @@
   onDestroy(() => {
     setup?.destroy();
   });
+
+  // $effect(() => {
+  //   console.log('🔍 BarMarkX Data Processing:', {
+  //     setupReady: !!setup,
+  //     gpuReady: setup?.gpuReady,
+  //     arrowTable: !!arrowTable,
+  //     instanceCount,
+      
+  //     // Raw data from database
+  //     x1Column: x1Column ? `${x1Column.toArray().length} items` : 'null',
+  //     x2Column: x2Column ? `${x2Column.toArray().length} items` : 'null', 
+  //     yColumn: yColumn ? `${yColumn.toArray().length} items` : 'null',
+      
+  //     // Processed data arrays
+  //     x0Data: x0Data ? `${x0Data.length} items, sample: [${Array.from(x0Data.slice(0, 3)).join(', ')}]` : 'null',
+  //     x1Data: x1Data ? `${x1Data.length} items, sample: [${Array.from(x1Data.slice(0, 3)).join(', ')}]` : 'null',
+  //     y0Data: y0Data ? `${y0Data.length} items, sample: [${Array.from(y0Data.slice(0, 3)).join(', ')}]` : 'null',
+  //     y1Data: y1Data ? `${y1Data.length} items, sample: [${Array.from(y1Data.slice(0, 3)).join(', ')}]` : 'null',
+      
+  //     // Scale info
+  //     actualXScaleType: setup?.actualXScaleType,
+  //     actualYScaleType: setup?.actualYScaleType,
+      
+  //     willRenderRects: !!(setup?.gpuReady && x0Data && x1Data && y0Data && y1Data),
+  //   });
+  // });
+
+  // $effect(() => {
+  //   console.log('🔍 BarMarkX Actual Data Values:', {
+  //     x0Data: x0Data ? Array.from(x0Data) : null,
+  //     x1Data: x1Data ? Array.from(x1Data) : null, 
+  //     y0Data: y0Data ? Array.from(y0Data) : null,
+  //     y1Data: y1Data ? Array.from(y1Data) : null,
+  //     colorData: colorData ? Array.from(colorData.slice(0, 12)) : null, // First 3 colors
+  //     alphaData: alphaData ? Array.from(alphaData) : null,
+  //   });
+  // });
+
+  // $effect(() => {
+  //   void setup?.gpuReady
+  //   void chartContext.xScale
+  //   void chartContext.yScale
+
+  //   if (setup?.gpuReady && chartContext.xScale && chartContext.yScale) {
+  //     console.log('🔍 Scale Domains vs Data:', {
+  //       // X scale domain and data
+  //       xDomain: chartContext.xScaleState.domain.current,
+  //       xDataRange: [Math.min(...x0Data), Math.max(...x1Data)],
+  //       xScaleRange: [0, chartContext.innerWidth],
+        
+  //       // Y scale info
+  //       yDomain: chartContext.yScaleState.effectiveDomain,
+  //       yCategoryPositions: Array.from(chartContext.yCategoryPositions),
+  //       yBandwidth: chartContext.yScale.bandwidth(),
+        
+  //       // Are x values within domain?
+  //       x0InRange: x0Data.map(x => {
+  //         const scaled = chartContext.xScale(x);
+  //         return { original: x, scaled, visible: scaled >= 0 && scaled <= chartContext.innerWidth };
+  //       })
+  //     });
+  //   }
+  // });
 
 </script>
 

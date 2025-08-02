@@ -44,35 +44,63 @@
     
     @vertex
     fn vertexMain(
-      @location(0) rectCorner: vec2<f32>, // Unit square corner (0,0 to 1,1)
-      @builtin(instance_index) instanceIdx: u32,
+    @location(0) rectCorner: vec2<f32>, // Unit square corner (0,0 to 1,1)
+    @builtin(instance_index) instanceIdx: u32,
     ) -> VertexOutput {
-      // Get rectangle bounds from buffers
-      let x0 = x0Values[instanceIdx];
-      let x1 = x1Values[instanceIdx];
-      let y0 = y0Values[instanceIdx];
-      let y1 = y1Values[instanceIdx];
-      let alpha = alphaValues[instanceIdx];
-      let color = colors[instanceIdx];
-      
-      // Use centralized scale functions - works for any scale type!
-      let scaledX0 = scaleX(x0, scaleParams);
-      let scaledX1 = scaleX(x1, scaleParams);
-      let scaledY0 = scaleY(y0, scaleParams);
-      let scaledY1 = scaleY(y1, scaleParams);
-      
-      // ✅ KEY FEATURE: Interpolate between corners using unit square coordinates
-      let finalX = mix(scaledX0, scaledX1, rectCorner.x);
-      let finalY = mix(scaledY0, scaledY1, rectCorner.y);
-      
-      // Convert to normalized device coordinates
-      let worldPos = vec2<f32>(finalX * devicePixelRatio, finalY * devicePixelRatio);
-      let normalizedPos = (worldPos / resolution) * 2.0 - 1.0;
-      
-      var output: VertexOutput;
-      output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.color = vec4<f32>(color.rgb, color.a * alpha);
-      return output;
+    // Get rectangle bounds from buffers
+    let x0 = x0Values[instanceIdx];
+    let x1 = x1Values[instanceIdx];
+    let y0 = y0Values[instanceIdx];
+    let y1 = y1Values[instanceIdx];
+    let alpha = alphaValues[instanceIdx];
+    let color = colors[instanceIdx];
+    
+    // ✅ ENHANCED: Use detailed scale functions for band scale support
+    let xResult0 = scaleXDetailed(x0, scaleParams);
+    let xResult1 = scaleXDetailed(x1, scaleParams);
+    let yResult0 = scaleYDetailed(y0, scaleParams);
+    let yResult1 = scaleYDetailed(y1, scaleParams);
+    
+    // Calculate final rectangle bounds
+    var scaledX0: f32;
+    var scaledX1: f32;
+    var scaledY0: f32;
+    var scaledY1: f32;
+    
+    // Handle X axis scaling
+    if (scaleParams.scaleTypes.x == 1.0) {
+        // Band scale: use position + full bandwidth
+        scaledX0 = xResult0.position;
+        scaledX1 = xResult0.position + xResult0.bandwidth;
+    } else {
+        // Linear scale: use scaled positions
+        scaledX0 = xResult0.position;
+        scaledX1 = xResult1.position;
+    }
+    
+    // Handle Y axis scaling  
+    if (scaleParams.scaleTypes.y == 1.0) {
+        // Band scale: use position + full bandwidth (for bars)
+        scaledY0 = yResult0.position;
+        scaledY1 = yResult0.position + yResult0.bandwidth;
+    } else {
+        // Linear scale: use scaled positions
+        scaledY0 = yResult0.position;
+        scaledY1 = yResult1.position;
+    }
+    
+    // ✅ UNCHANGED: Interpolate between corners using unit square coordinates
+    let finalX = mix(scaledX0, scaledX1, rectCorner.x);
+    let finalY = mix(scaledY0, scaledY1, rectCorner.y);
+    
+    // Convert to normalized device coordinates
+    let worldPos = vec2<f32>(finalX * devicePixelRatio, finalY * devicePixelRatio);
+    let normalizedPos = (worldPos / resolution) * 2.0 - 1.0;
+    
+    var output: VertexOutput;
+    output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+    output.color = vec4<f32>(color.rgb, color.a * alpha);
+    return output;
     }
 
     @fragment
@@ -102,6 +130,172 @@
     { binding: 4, type: 'read-only-storage' }, // colors
     { binding: 5, type: 'read-only-storage' }, // alphaValues
   ];
+
+  $effect(() => {
+    console.log('🔍 Rects Renderer Status:', {
+      rendererCreated: !!renderer,
+      resourcesCreated: renderer?.resourcesCreated,
+      initializationError: initializationError,
+      
+      // Props received from BarMarkX
+      x0DataLength: x0Data?.length || 0,
+      x1DataLength: x1Data?.length || 0,
+      y0DataLength: y0Data?.length || 0,
+      y1DataLength: y1Data?.length || 0,
+      colorDataLength: colorData?.length || 0,
+      alphaDataLength: alphaData?.length || 0,
+      
+      instanceCount: renderer?.instanceCount || 0,
+      pipeline: !!renderer?.pipeline,
+      
+      // All bind groups (expect similar issue as Dots)
+      perFrameBindGroup: !!renderer?.perFrameBindGroup,
+      perDataBindGroup: !!renderer?.perDataBindGroup,
+      perScaleBindGroup: !!renderer?.perScaleBindGroup,
+      
+      // GPU buffers
+      buffers: {
+        x0Buffer: !!x0Buffer,
+        x1Buffer: !!x1Buffer,
+        y0Buffer: !!y0Buffer,
+        y1Buffer: !!y1Buffer,
+        colorBuffer: !!colorBuffer,
+        alphaBuffer: !!alphaBuffer,
+        rectGeometry: !!rectGeometryBuffer
+      }
+    });
+  });
+
+  // Add this effect to Rects.svelte to monitor when scales/layout become ready
+  $effect(() => {
+    const layoutReady = chartContext?.layout?.isReady;
+    const yScaleReady = !!chartContext?.yScale?.scale;
+    const scaleType = chartContext?.scaleTypes?.y;
+    
+    console.log('🔍 Monitoring scale/layout readiness:', {
+      layoutReady,
+      yScaleReady,
+      scaleType,
+      innerHeight: chartContext?.layout?.innerHeight,
+      bandwidth: chartContext?.yScale?.scale?.bandwidth?.()
+    });
+    
+    // Force re-access when conditions change
+    if (layoutReady && yScaleReady && scaleType === 'band') {
+      console.log('🎯 All conditions met - forcing category position recalculation');
+      const positions = chartContext?.yCategoryPositions;
+      console.log('📍 Category positions now:', positions?.length || 'still null');
+    }
+  });
+
+  // // Add this to Rects.svelte to see the full context structure
+  // $effect(() => {
+  //   console.log('🔍 Full chart context structure:', {
+  //     // Check what properties actually exist
+  //     contextKeys: Object.keys(chartContext || {}),
+      
+  //     // Check layout object
+  //     layout: chartContext?.layout,
+  //     layoutKeys: chartContext?.layout ? Object.keys(chartContext.layout) : 'no layout',
+      
+  //     // Check scale objects  
+  //     xScale: chartContext?.xScale,
+  //     yScale: chartContext?.yScale,
+      
+  //     // Check what ChartScales is providing
+  //     scaleTypes: chartContext?.scaleTypes,
+  //   });
+  // });
+
+  // Add this debugging effect to Rects.svelte
+  // $effect(() => {
+  //   console.log('🔍 Rects debug - chart context access:', {
+  //       chartContext: !!chartContext,
+  //       scaleTypes: chartContext?.scaleTypes,
+  //       xCategoryPositions: chartContext?.xCategoryPositions?.length || 'null',
+  //       yCategoryPositions: chartContext?.yCategoryPositions?.length || 'null',
+  //       categoryPositionsReady: chartContext?.categoryPositionsReady,
+  //       layout: {
+  //         isReady: chartContext?.layout?.isReady,
+  //         innerHeight: chartContext?.layout?.innerHeight,
+  //         innerWidth: chartContext?.layout?.innerWidth
+  //       },
+  //       scales: {
+  //         xScale: !!chartContext?.xScale?.scale,
+  //         yScale: !!chartContext?.yScale?.scale,
+  //         yBandwidth: chartContext?.yScale?.scale?.bandwidth?.()
+  //       },
+  //       yScaleState: {
+  //         type: chartContext?.yScaleState?.constructor?.name,
+  //         effectiveDomain: chartContext?.yScaleState?.effectiveDomain,
+  //         ready: chartContext?.yScaleState?.ready
+  //       }
+  //   });
+  // });
+
+  // $effect(() => {
+  //   console.log('🔍 Chart Context Deep Debug:', {
+  //     // Direct property access
+  //     chartContextKeys: Object.keys(chartContext),
+      
+  //     // Layout access
+  //     isReady: chartContext.isReady,
+  //     innerWidth: chartContext.innerWidth,
+  //     innerHeight: chartContext.innerHeight,
+      
+  //     // Scale access  
+  //     scaleTypes: chartContext.scaleTypes,
+  //     yScaleState: chartContext.yScaleState,
+      
+  //     // Category positions
+  //     yCategoryPositions: chartContext.yCategoryPositions,
+  //     categoryPositionsReady: chartContext.categoryPositionsReady,
+      
+  //     // Try accessing the computed property directly
+  //     yScale: chartContext.yScale,
+  //     yScaleDomain: chartContext.yScaleState?.effectiveDomain,
+  //   });
+  // });
+
+  // Category position monitoring effects
+  $effect(() => {
+    if (!renderer?.resourcesCreated) return;
+
+    // console.log('runing ')
+    const xPositions = chartContext.xCategoryPositions;
+    const yPositions = chartContext.yCategoryPositions;
+    const categoryPositionsReady = chartContext.categoryPositionsReady;
+
+    if (categoryPositionsReady) {
+      renderer.updateCategoryPositions();
+    }
+  });
+
+  // $effect(() => {
+  //   const yPositions = chartContext.yCategoryPositions;
+  //   if (yPositions && renderer?.resourcesCreated) {
+  //     renderer.updateCategoryPositions();
+  //   }
+  // });
+
+    // Scale parameter effects
+  $effect(() => {
+    const scaleTypes = chartContext.scaleTypes;
+    const xScale = chartContext.xScale;
+    const yScale = chartContext.yScale;
+    
+    if (renderer?.resourcesCreated) {
+      renderer.updateScaleParameters();
+    }
+  });
+
+  // Resolution effects
+  $effect(() => {
+    const layout = chartContext.layout;
+    if (layout?.isReady && renderer?.resourcesCreated) {
+      renderer.updateResolution();
+    }
+  });
 
   // Buffer update effects
   $effect(() => {
@@ -223,6 +417,8 @@
     // Track layout changes
     void chartContext.innerWidth;
     void chartContext.innerHeight;
+    // void chartContext.yBandwidth;
+    // void chartContext.xBandwidth;
     
     untrack(() => {
       // Update scale uniforms only
@@ -245,20 +441,51 @@
   }
 
   // Initialize rectangle-specific geometry
-  async function initializeRectGeometry() {
-    const device = webGPUContext.getDevice();
-    if (!device) {
-      throw new Error('No WebGPU device available');
-    }
+  // async function initializeRectGeometry() {
+  //   const device = webGPUContext.getDevice();
+  //   if (!device) {
+  //     throw new Error('No WebGPU device available');
+  //   }
 
-    // Create unit square geometry buffer
-    const rectVertices = createRectGeometry();
-    rectGeometryBuffer = device.createBuffer({
-      size: rectVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      label: 'rects-unit-square-geometry'
-    });
-    device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
+  //   // Create unit square geometry buffer
+  //   const rectVertices = createRectGeometry();
+  //   rectGeometryBuffer = device.createBuffer({
+  //     size: rectVertices.byteLength,
+  //     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  //     label: 'rects-unit-square-geometry'
+  //   });
+  //   device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
+  // }
+  async function initializeRectGeometry() {
+    try {
+      const device = webGPUContext.getDevice();
+      if (!device) {
+        throw new Error('No WebGPU device available');
+      }
+
+      console.log('🔧 Creating rect geometry...');
+      
+      // Create unit square geometry buffer
+      const rectVertices = createRectGeometry();
+      console.log('📐 Rect vertices:', rectVertices);
+      
+      rectGeometryBuffer = device.createBuffer({
+        size: rectVertices.byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        label: 'rects-unit-square-geometry'
+      });
+      device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
+      
+      console.log('✅ Rect geometry created successfully:', {
+        buffer: !!rectGeometryBuffer,
+        size: rectVertices.byteLength,
+        vertices: rectVertices.length
+      });
+      
+    } catch (error) {
+      console.error('❌ Failed to create rect geometry:', error);
+      throw error;
+    }
   }
 
   // ✅ NEW: Create rectangles-specific data bind group using dual bind group architecture
@@ -287,20 +514,36 @@
 
   // ✅ NEW: Rectangle-specific draw function for dual bind groups
   function drawRects(passEncoder) {
+    // console.log('🎨 drawRects called:', {
+    //   instanceCount: renderer.instanceCount,
+    //   rectBuffer: !!rectGeometryBuffer,
+    //   allBindGroups: !!(renderer.perFrameBindGroup && renderer.perDataBindGroup && renderer.perScaleBindGroup)
+    // });
     try {
-      if (!renderer?.pipeline || !renderer?.perFrameBindGroup || !renderer?.perDataBindGroup || renderer.instanceCount === 0) {
+      if (!renderer?.pipeline || 
+          !renderer?.perFrameBindGroup || 
+          !renderer?.perDataBindGroup || 
+          !renderer?.perScaleBindGroup ||
+          renderer.instanceCount === 0) {
         console.debug('⚠️ Skipping rects draw - resources not ready or no instances');
         return;
       }
 
+      if (!rectGeometryBuffer) {
+        console.error('❌ Skipping rects draw - no rect geometry buffer!');
+        return;
+      }
+
+      // console.log('✅ Drawing rects:', renderer.instanceCount, 'instances');
+
       passEncoder.setPipeline(renderer.pipeline);
-      
-      // ✅ NEW: Set both bind groups for dual bind group architecture
-      passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
-      passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
-      
+      passEncoder.setBindGroup(0, renderer.perFrameBindGroup);
+      passEncoder.setBindGroup(1, renderer.perDataBindGroup);  
+      passEncoder.setBindGroup(2, renderer.perScaleBindGroup);   
       passEncoder.setVertexBuffer(0, rectGeometryBuffer);
       passEncoder.draw(rectVertexCount, renderer.instanceCount);
+
+      // console.log('✅ Rects draw completed successfully');
 
     //   console.debug(`✅ Rects draw completed: ${renderer.instanceCount} rectangles with dual bind groups`);
       

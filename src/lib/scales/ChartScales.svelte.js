@@ -225,6 +225,154 @@ export class ChartScales {
     };
   }
 
+  xCategoryPositions = $derived.by(() => {
+    if (this.scaleTypes?.x !== 'band' || !this.xScale?.scale || !this.isReady) {  // ✅ Fixed
+      return null;
+    }
+    
+    const domain = this.xScaleState.effectiveDomain;
+    if (!domain || domain.length === 0) return null;
+    
+    const positions = domain.map(category => this.xScale.scale(category));
+    
+    console.log(`📍 Pre-computed ${domain.length} x-category positions for "${this.xLabel}":`, {
+      domain: domain.slice(0, 5),
+      positions: positions.slice(0, 5).map(p => Math.round(p)),
+      bandwidth: this.xScale.scale.bandwidth(), 
+      chartWidth: this.innerWidth  // ✅ Direct property
+    });
+    
+    return new Float32Array(positions);
+  });
+
+  // yCategoryPositions = $derived.by(() => {
+  //   // ✅ FIXED: Use direct properties, not nested layout object
+  //   const scaleTypeCheck = this.scaleTypes?.y === 'band';
+  //   const scaleAvailable = !!this.yScale?.scale;
+  //   const layoutReady = !!this.isReady;  // ✅ Direct property
+    
+  //   console.log('🔍 yCategoryPositions conditions (FIXED):', {
+  //     scaleType: this.scaleTypes?.y,
+  //     scaleTypeCheck,
+  //     scaleAvailable,
+  //     layoutReady,
+  //     innerHeight: this.innerHeight,  // ✅ Direct property
+  //     domain: this.yScaleState?.effectiveDomain
+  //   });
+
+  //   if (!scaleTypeCheck || !scaleAvailable || !layoutReady) {
+  //     console.log('❌ yCategoryPositions skipped - conditions not met');
+  //     return null;
+  //   }
+    
+  //   const domain = this.yScaleState.effectiveDomain;
+  //   if (!domain || domain.length === 0) {
+  //     console.log('❌ yCategoryPositions skipped - empty domain');
+  //     return null;
+  //   }
+    
+  //   // ✅ FIXED: Use direct properties
+  //   const positions = domain.map(category => this.yScale.scale(category));
+    
+  //   console.log(`📍 Pre-computed ${domain.length} y-category positions for "${this.yLabel}":`, {
+  //     domain: domain.slice(0, 5),
+  //     positions: positions.slice(0, 5).map(p => Math.round(p)),
+  //     bandwidth: this.yScale.scale.bandwidth(),
+  //     chartHeight: this.innerHeight  // ✅ Direct property
+  //   });
+    
+  //   return new Float32Array(positions);
+  // });
+// Add this debugging to ChartScales.svelte.js in the yCategoryPositions computed property
+  yCategoryPositions = $derived.by(() => {
+    // console.log('🔍 yCategoryPositions computation triggered:', {
+    //   scaleType: this.scaleTypes?.y,
+    //   yScale: !!this.yScale?.scale,
+    //   layoutReady: this.layout?.isReady,  // ← Check this property path
+    //   innerHeight: this.layout?.innerHeight,
+    //   yScaleState: !!this.yScaleState,
+    //   effectiveDomain: this.yScaleState?.effectiveDomain,
+    //   domainLength: this.yScaleState?.effectiveDomain?.length || 0
+    // });
+
+    // Your existing conditions
+    const scaleTypeCheck = this.scaleTypes?.y === 'band';
+    const scaleAvailable = !!this.yScale?.scale;
+    const layoutReady = !!this.layout?.isReady;  // ← This might be the issue
+    
+    // console.log('🔍 yCategoryPositions conditions:', {
+    //   scaleTypeCheck,
+    //   scaleAvailable,
+    //   layoutReady,  // ← This is probably false
+    //   allConditionsMet: scaleTypeCheck && scaleAvailable && layoutReady
+    // });
+
+    if (!scaleTypeCheck || !scaleAvailable || !layoutReady) {
+      console.log('❌ yCategoryPositions skipped - conditions not met');
+      return null;
+    }
+    
+    const domain = this.yScaleState.effectiveDomain;
+    if (!domain || domain.length === 0) {
+      console.log('❌ yCategoryPositions skipped - empty domain');
+      return null;
+    }
+    
+    const positions = domain.map(category => this.yScale.scale(category));
+    
+    // console.log(`📍 Pre-computed ${domain.length} y-category positions:`, {
+    //   domain: Array.from(domain),
+    //   positions: positions.map(p => Math.round(p)),
+    //   bandwidth: this.yScale.scale.bandwidth(),
+    //   chartHeight: this.layout?.innerHeight
+    // });
+    
+    return new Float32Array(positions);
+  });
+  // yCategoryPositions = $derived.by(() => {
+  //   if (this.scaleTypes?.y !== 'band' || !this.yScale?.scale || !this.layout.isReady) {
+  //     return null;
+  //   }
+    
+  //   const domain = this.yScaleState.effectiveDomain;
+  //   if (!domain || domain.length === 0) return null;
+    
+  //   // Use D3 scale to get exact pixel positions for each category  
+  //   const positions = domain.map(category => this.yScale.scale(category));
+    
+  //   console.log(`📍 Pre-computed ${domain.length} y-category positions for "${this.yLabel}":`, {
+  //     domain: domain.slice(0, 3),
+  //     positions: positions.slice(0, 3).map(p => Math.round(p)),
+  //     bandwidth: this.yScale.scale.bandwidth(),
+  //     chartHeight: this.layout.innerHeight
+  //   });
+    
+  //   return new Float32Array(positions);
+  // });
+  
+
+  categoryPositionsReady = $derived.by(() => {
+    const xReady = this.scaleTypes?.x !== 'band' || this.xCategoryPositions !== null;
+    const yReady = this.scaleTypes?.y !== 'band' || this.yCategoryPositions !== null;
+    return xReady && yReady;
+  }); 
+
+  // Pre-computed bandwidth for hot path access
+  xBandwidth = $derived.by(() => {
+    if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) {
+      return 0;
+    }
+    return this.baseXScale.bandwidth();
+  });
+
+  yBandwidth = $derived.by(() => {
+    if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) {
+      return 0;
+    }
+    return this.baseYScale.bandwidth();
+  });
+
+
   getContextData() {
     const coordinator = this;
     
@@ -249,9 +397,15 @@ export class ChartScales {
       get scalesReady() { return coordinator.scalesReady; },
       get active() { return coordinator.active; },
       
-      // ✅ NEW: Expose scale configurations
       get scaleConfigurations() { return coordinator.scaleConfigurations; },
       
+      get xCategoryPositions() { return coordinator.xCategoryPositions; },
+      // get yCategoryPositions() { return coordinator.yCategoryPositions; },
+      get yCategoryPositions() { return coordinator.yCategoryPositions; },
+      get categoryPositionsReady() { return coordinator.categoryPositionsReady; },
+      get xBandwidth() { return coordinator.xBandwidth; },
+      get yBandwidth() { return coordinator.yBandwidth; },
+
       registerScaleType: coordinator.registerScaleType,
       unregisterScaleType: coordinator.unregisterScaleType,
       getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary
