@@ -1,5 +1,5 @@
 <script>
-  import { setContext, onDestroy, untrack } from 'svelte';
+  import { setContext, onDestroy, untrack, onMount } from 'svelte';
   import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
   import { ChartScales } from '$lib/scales/ChartScales.svelte';
   import { getGPUContext } from '$lib/gpu';
@@ -125,18 +125,24 @@
   let isZooming = $state(false);
 
   $effect.pre(() => {
+    const timestamp = performance.now();
+    // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
+    
     void scales.xScaleState?.domain?.current;
     void scales.yScaleState?.domain?.current;
 
-    untrack(() => {
-        if (layout.isReady) {
-            gpuCoordinator.invalidateChart(layout.chartId);
-        }
-    });
+    // untrack(() => {
+    //     if (layout.isReady) {
+    //       console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
+    //       gpuCoordinator.invalidateChart(layout.chartId);
+    //     }
+    // });
   });
   
   // ZOOM HANDLERS
   function handleWheel(event) {
+    // console.log(`🖱️ Wheel event at ${performance.now().toFixed(2)}ms`);
+
     event.preventDefault();
     const point = { x: event.offsetX, y: event.offsetY };
     const { x, y, innerPoint } = layout.getActiveAxes(point);
@@ -146,6 +152,9 @@
       : 1 - Math.abs(event.deltaY) * 0.0025;
     
     scales.applyZoom(innerPoint, scaleFactor, x, y);
+
+    // console.log(`🎯 Scale update triggered at ${performance.now().toFixed(2)}ms`);
+
   }
   
   function handleDoubleClick(event) {
@@ -238,6 +247,8 @@
 
   function handlePointerMove(event) {
     if (!isPanning || !panContext) return;
+
+    // console.log(`👆 Pointer move at ${performance.now().toFixed(2)}ms`);
     
     event.preventDefault();
     
@@ -266,6 +277,9 @@
       ];
       scales.applyPanDomain(newYDomain, 'y');
     }
+
+    // console.log(`📐 Pan domain applied at ${performance.now().toFixed(2)}ms`);
+
   }
   
   function handlePointerUp() {
@@ -287,6 +301,15 @@
     const innerPoint = layout.toInnerCoordinates({ x: event.offsetX, y: event.offsetY });
     scales.updateCurrentDataPoints(innerPoint);
   }
+
+  let testRenderLoop;
+  onMount(() => {
+    function testRender() {
+      gpuCoordinator.invalidateChart(layout.chartId);
+      testRenderLoop = requestAnimationFrame(testRender);
+    }
+    testRenderLoop = requestAnimationFrame(testRender);
+  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->

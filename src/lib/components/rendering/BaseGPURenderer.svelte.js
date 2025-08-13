@@ -1035,7 +1035,6 @@ export class BaseGPURenderer {
     if (!this.#device || !this.#scaleParamsBuffer || !this.#chartContext) {
       return;
     }
-    console.log('updateScaleParameters')
 
     try {
       const c = this.#chartContext;

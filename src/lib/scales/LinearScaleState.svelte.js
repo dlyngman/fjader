@@ -11,12 +11,17 @@ const springOptions = {
 };
 
 // Different spring settings for different interaction types
-const springConfigs = {
-  default: { stiffness: 0.15, damping: 0.8, precision: Number.EPSILON * 1 },
-  zoom: { stiffness: 0.2, damping: 0.85, precision: Number.EPSILON * 1 },
-  pan: { stiffness: 0.2, damping: 0.7, precision: Number.EPSILON * 1 },
-  reset: { stiffness: 0.075, damping: 0.7, precision: Number.EPSILON * 1 },
-  zoomIn: { stiffness: 0.08, damping: 0.7, precision:  Number.EPSILON * 1 }
+const springConfigs = { 
+  default: { stiffness: 0.15, damping: 0.8, precision: 0.001 },
+  zoom: { stiffness: 0.2, damping: 0.85, precision: 0.001 },
+  pan: { stiffness: 0.2, damping: 0.7, precision: 0.001 },
+  reset: { stiffness: 0.075, damping: 0.7, precision: 0.001 },
+  zoomIn: { stiffness: 0.08, damping: 0.7, precision:  0.001 }
+  // default: { stiffness: 0.15, damping: 0.8, precision: Number.EPSILON * 1 },
+  // zoom: { stiffness: 0.2, damping: 0.85, precision: Number.EPSILON * 1 },
+  // pan: { stiffness: 0.2, damping: 0.7, precision: Number.EPSILON * 1 },
+  // reset: { stiffness: 0.075, damping: 0.7, precision: Number.EPSILON * 1 },
+  // zoomIn: { stiffness: 0.08, damping: 0.7, precision:  Number.EPSILON * 1 }
 };
 
 export class LinearScaleState {

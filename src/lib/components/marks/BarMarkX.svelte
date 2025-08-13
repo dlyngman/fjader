@@ -99,6 +99,7 @@
     if (!instanceCount || !yColumn || !setup?.actualYScaleType) return null;
     
     if (setup.actualYScaleType === 'band') {
+      console.log('bar mark x y data processing')
       const rawArray = yColumn.toArray();
       const indices = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
       
