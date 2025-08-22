@@ -4,8 +4,9 @@ import { LinearScaleState } from "./LinearScaleState.svelte.js";
 import { BandScaleState } from "./BandScaleState.svelte.js";
 import { scaleOrdinal } from 'd3-scale';
 
-// Define the Scale Registry state class
 class ScaleRegistry {
+  // #scaleUsage = $state(new Map());
+
   constructor() {
     this.registryId = Math.random().toString(36).slice(2, 8);
     console.log(`🏗️ NEW ScaleRegistry created: ${this.registryId}`);
@@ -15,10 +16,11 @@ class ScaleRegistry {
       band: new Map(),
       ordinal: new Map(),
     }
+
+    this.scaleUsage = $state(new Map());
   }
 
-  // ✅ ENHANCED: Accept configuration parameter
-  getOrCreateScale(name, type='linear', config = {}) {
+  getOrCreateScale(name, type='linear', config = {}, chartId = null) {
     // Create unique key that includes configuration
     const configKey = Object.keys(config).length > 0 ? `-${JSON.stringify(config)}` : '';
     const key = `${name}-${type}${configKey}`;
@@ -33,7 +35,7 @@ class ScaleRegistry {
       } else if (type === 'band') {
         this.scales[type].set(key, new BandScaleState(name, [], config));
       } else if (type === 'ordinal') {
-        // Default color scale - this could be made configurable
+        // TODO: fix color scale support, simple default for penguins dataset:
         this.scales[type].set(key, scaleOrdinal()
           .range(['#EFB605', '#FFF84A', '#FF0266'])
           .domain(['Adelie', 'Gentoo', 'Chinstrap']));
@@ -41,10 +43,30 @@ class ScaleRegistry {
     } else {
       console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
     }
-    
-    return this.scales[type].get(key);
+    const scale = this.scales[type].get(key);
+
+    if (chartId && scale) {
+      if (!this.scaleUsage.has(scale)) {
+        this.scaleUsage.set(scale, new Set());
+      }
+      this.scaleUsage.get(scale).add(chartId);
+    }
+
+    return scale;
+    // return this.scales[type].get(key);
+  }
+
+  removeChartUsage(chartId) {
+    for (const [scale, chartIds] of this.scaleUsage) {
+      chartIds.delete(chartId);
+      if (chartIds.size === 0) {
+        this.scaleUsage.delete(scale);
+      }
+    }
   }
 }
+
+
 
 // Create and set the Scale Registry context
 export function setScaleRegistry() {
