@@ -32,6 +32,10 @@ export class GPUCoordinator {
 
   // Configuration
   #msaaSampleCount = 4;
+  lastRender;
+
+  #frameHistory = [];
+  #renderCount = 0;
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -55,12 +59,21 @@ export class GPUCoordinator {
    * to be called many times per frame without performance penalty.
    */
   invalidateChart(chartId) {
+    const timestamp = performance.now();
+    // console.log(`🔄 invalidateChart(${chartId}) called at ${timestamp.toFixed(2)}ms`);
+
     if (this.#registeredCharts.has(chartId)) {
       this.#dirtyChartIDs.add(chartId);
 
       if (!this.#renderScheduled) {
         this.#renderScheduled = true;
-        queueMicrotask(() => {
+        // console.log(`⏰ Scheduling microtask at ${timestamp.toFixed(2)}ms`);
+
+        // queueMicrotask(() => {
+        requestAnimationFrame(() => { 
+          const microtaskTime = performance.now();
+          // console.log(`🚀 Microtask executing at ${microtaskTime.toFixed(2)}ms (delay: ${(microtaskTime - timestamp).toFixed(2)}ms)`);
+
           this.#renderScheduled = false;
           const chartsToRender = [];
           for (const chartId of this.#dirtyChartIDs) {
@@ -72,6 +85,8 @@ export class GPUCoordinator {
           this.#coordinatedRender(chartsToRender);
           this.#dirtyChartIDs.clear();
         });
+      } else {
+        console.log(`⏭️ Render already scheduled at ${timestamp.toFixed(2)}ms`);
       }
     }
   }
@@ -218,6 +233,17 @@ export class GPUCoordinator {
    * ✅ UPDATED: Now supports dual bind group architecture for optimal performance
    */
   #coordinatedRender(chartsNeedingRender) {
+    
+    const startTime = performance.now();
+  
+    // Track frame intervals
+    if (this.lastRender) {
+      const frameInterval = startTime - this.lastRender;
+      // this.#trackFrameTiming(frameInterval);
+    }
+    
+    // console.log(`🎨 Render #${this.#renderCount || 0} at ${startTime.toFixed(2)}ms (${chartsNeedingRender.length} charts)`);
+  
     try {
 
         for (const chartConfig of chartsNeedingRender) {
@@ -251,6 +277,7 @@ export class GPUCoordinator {
                 const renderer = layer.renderer;
                 
                 // ✅ UPDATED: Check for dual bind group readiness instead of single bindGroup
+                // TODO: replace isDualBindGroupReady?
                 if (!renderer || !layer.isDualBindGroupReady) {
                     console.debug(`⚠️ Skipping layer ${layer.id} - dual bind groups not ready`);
                     continue;
@@ -289,10 +316,65 @@ export class GPUCoordinator {
         }
 
         this.#device.queue.submit([commandEncoder.finish()]);
+        const endTime = performance.now();
+        const renderDuration = endTime - startTime;
+
+        // // Enhanced frame timing analysis
+        // if (this.lastRender) {
+        //   const frameInterval = startTime - this.lastRender;
+        //   const fps = 1000 / frameInterval;
+          
+        //   console.log(`⏱️ Frame interval: ${frameInterval.toFixed(1)}ms (${fps.toFixed(1)}fps) | Render duration: ${renderDuration.toFixed(2)}ms`);
+          
+        //   // Flag irregular timing
+        //   if (Math.abs(frameInterval - 8.33) > 2 && Math.abs(frameInterval - 16.67) > 2) {
+        //     console.warn(`🔥 Irregular frame timing: ${frameInterval.toFixed(1)}ms (expected ~8.3ms or ~16.7ms)`);
+        //   }
+        // }
+          
+        // console.log(`✅ Render #${this.#renderCount || 0} completed at ${endTime.toFixed(2)}ms (duration: ${renderDuration.toFixed(2)}ms)`);
+
+        // if (renderDuration > 8) {
+        //   console.warn(`🐌 Slow render: ${renderDuration.toFixed(2)}ms (target: <8ms for 120fps)`);
+        // }
+        
+        // Update tracking variables
+        this.lastRender = startTime; // Use start time for interval calculation
+        this.#renderCount = (this.#renderCount || 0) + 1;
         
     } catch (error) {
         console.error('Coordinated render failed:', error);
         this.#fallbackRender(chartsNeedingRender);
+    }
+  }
+
+  #trackFrameTiming(interval) {
+    this.#frameHistory.push(interval);
+    
+    // Keep last 30 frames for analysis
+    if (this.#frameHistory.length > 30) {
+      this.#frameHistory.shift();
+    }
+    
+    // Every 10 frames, analyze the pattern
+    if (this.#frameHistory.length >= 10 && this.#frameHistory.length % 10 === 0) {
+      const avg = this.#frameHistory.reduce((a, b) => a + b) / this.#frameHistory.length;
+      const avgFps = 1000 / avg;
+      const jitter = Math.max(...this.#frameHistory) - Math.min(...this.#frameHistory);
+      
+      console.log(`📊 Frame Analysis (last ${this.#frameHistory.length}): Avg ${avgFps.toFixed(1)}fps, Jitter ${jitter.toFixed(1)}ms`);
+      
+      // Detect specific patterns
+      const consistent60fps = this.#frameHistory.every(t => Math.abs(t - 16.67) < 2);
+      const consistent120fps = this.#frameHistory.every(t => Math.abs(t - 8.33) < 2);
+      
+      if (consistent60fps) {
+        console.info(`🔒 Locked to 60fps - browser/VSync limiting detected`);
+      } else if (consistent120fps) {
+        console.info(`🚀 Smooth 120fps - timing working correctly`);
+      } else if (jitter > 5) {
+        console.warn(`⚡ High frame jitter: ${jitter.toFixed(1)}ms - RAF/microtask mismatch likely`);
+      }
     }
   }
 

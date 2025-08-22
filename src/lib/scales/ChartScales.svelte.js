@@ -1,11 +1,11 @@
 // src/lib/scales/ChartScales.svelte.js
 import { getScaleState } from '$lib/scales';
-import { resolveScaleType, SCALE_PRIORITIES } from './ScalePriorities.js';
+import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities.js';
 
 export class ChartScales {
   scaleRequirements = $state({
-    x: [], // [{ type: 'band', priority: 3, markType: 'bar-abc123' }, ...]
-    y: []  // [{ type: 'linear', priority: 2, markType: 'dot-def456' }, ...]
+    x: [], // [{ type: 'band', priority: 3, markId: 'bar-abc123', config: {...} }, ...]
+    y: []  // [{ type: 'linear', priority: 2, markId: 'dot-def456', config: {...} }, ...]
   });
   
   active = $state(false);
@@ -19,15 +19,15 @@ export class ChartScales {
   get yLabel() { return this.config.yLabel; }
   get layout() { return this.config.layout; }
 
-  // ✅ ENHANCED: Resolve scale types with error handling
-  scaleTypes = $derived.by(() => {
+  // ✅ NEW: Enhanced resolution with configuration support
+  scaleConfigurations = $derived.by(() => {
     try {
       return {
-        x: resolveScaleType(this.scaleRequirements.x),
-        y: resolveScaleType(this.scaleRequirements.y)
+        x: resolveScaleConfiguration(this.scaleRequirements.x),
+        y: resolveScaleConfiguration(this.scaleRequirements.y)
       };
     } catch (error) {
-      console.error('❌ Scale resolution failed:', error);
+      console.error('❌ Scale configuration resolution failed:', error);
       
       // Provide helpful debugging info
       console.error('Scale requirements at time of error:', {
@@ -35,14 +35,32 @@ export class ChartScales {
         y: this.scaleRequirements.y.map(req => `${req.markId}:${req.type}(${req.priority})`)
       });
       
-      // Return safe fallback - this allows the app to continue functioning
-      return { x: 'linear', y: 'linear' };
+      // Return safe fallback
+      return { 
+        x: { type: 'linear', config: {} }, 
+        y: { type: 'linear', config: {} } 
+      };
     }
   });
 
-  // ✅ Use resolved scale types with fallback
-  xScaleState = $derived(getScaleState(this.xLabel, this.scaleTypes?.x || 'linear'));
-  yScaleState = $derived(getScaleState(this.yLabel, this.scaleTypes?.y || 'linear'));
+  // ✅ Derive types from configurations for backward compatibility
+  scaleTypes = $derived.by(() => ({
+    x: this.scaleConfigurations?.x?.type || 'linear',
+    y: this.scaleConfigurations?.y?.type || 'linear'
+  }));
+
+  // ✅ NEW: Use resolved configurations with scale states
+  xScaleState = $derived(getScaleState(
+    this.xLabel, 
+    this.scaleConfigurations?.x?.type || 'linear',
+    this.scaleConfigurations?.x?.config || {}
+  ));
+
+  yScaleState = $derived(getScaleState(
+    this.yLabel, 
+    this.scaleConfigurations?.y?.type || 'linear', 
+    this.scaleConfigurations?.y?.config || {}
+  ));
 
   // Rest of the class remains the same...
   baseXScale = $derived(
@@ -87,21 +105,24 @@ export class ChartScales {
   currentYScreenPoint = $derived(this.yScale?.scale(this.currentYDataPoint));
   scalesReady = $derived(this.xScaleState?.ready && this.yScaleState?.ready);
 
-  // Enhanced registerScaleType with better logging
-  registerScaleType = (dimension, type, priority = SCALE_PRIORITIES.PREFER, markId = 'unknown') => {
+  // ✅ ENHANCED: registerScaleType with configuration support
+  registerScaleType = (dimension, type, priority = SCALE_PRIORITIES.PREFER, markId = 'unknown', config = {}) => {
     const requirements = this.scaleRequirements[dimension];
     
     // Check if we already have this exact requirement
     const existing = requirements.find(req => 
       req.type === type && 
       req.priority === priority && 
-      req.markId === markId
+      req.markId === markId &&
+      JSON.stringify(req.config) === JSON.stringify(config)
     );
     
     if (!existing) {
-      requirements.push({ type, priority, markId });
+      requirements.push({ type, priority, markId, config });
       
-      console.log(`📊 Registered scale requirement: ${dimension} = ${type} (priority: ${priority}, mark: ${markId})`);
+      console.log(`📊 Registered scale requirement: ${dimension} = ${type} (priority: ${priority}, mark: ${markId})`, {
+        config: Object.keys(config).length > 0 ? config : 'none'
+      });
       
       // Trigger reactivity by reassigning the array
       this.scaleRequirements[dimension] = [...requirements];
@@ -118,18 +139,21 @@ export class ChartScales {
     }
   }
 
+  // ✅ ENHANCED: Summary now includes configuration info
   getScaleRequirementsSummary = () => {
     return {
       x: {
         resolved: this.scaleTypes?.x || 'unknown',
+        config: this.scaleConfigurations?.x?.config || {},
         requirements: this.scaleRequirements.x.map(req => 
-          `${req.markId}:${req.type}(${req.priority})`
+          `${req.markId}:${req.type}(${req.priority})${Object.keys(req.config || {}).length > 0 ? '+config' : ''}`
         )
       },
       y: {
-        resolved: this.scaleTypes?.y || 'unknown',
+        resolved: this.scaleTypes?.y || 'unknown', 
+        config: this.scaleConfigurations?.y?.config || {},
         requirements: this.scaleRequirements.y.map(req => 
-          `${req.markId}:${req.type}(${req.priority})`
+          `${req.markId}:${req.type}(${req.priority})${Object.keys(req.config || {}).length > 0 ? '+config' : ''}`
         )
       }
     };
@@ -178,21 +202,12 @@ export class ChartScales {
     }
   }
 
-  // applyPan = (dx, dy, activePanX, activePanY) => {
-  //   if (activePanX && this.scaleTypes?.x === 'linear') {
-  //     this.xScaleState.applyPanDomain(-dx);
-  //   }
-  //   if (activePanY && this.scaleTypes?.y === 'linear') {
-  //     this.yScaleState.applyPanDomain(-dy);
-  //   }
-  // }
-
   applyPanDomain = (newDomain, axis) => {
     if (axis === 'x' && this.scaleTypes?.x === 'linear') {
-      this.xScaleState.setConstrainedDomain(newDomain); // 🚀 Direct constraint application
+      this.xScaleState.setConstrainedDomain(newDomain);
     }
     if (axis === 'y' && this.scaleTypes?.y === 'linear') {
-      this.yScaleState.setConstrainedDomain(newDomain); // 🚀 Direct constraint application
+      this.yScaleState.setConstrainedDomain(newDomain);
     }
   }
 
@@ -209,6 +224,154 @@ export class ChartScales {
       dy: this.scaleTypes?.y === 'linear' ? this.yScale.scale.invert(innerPoint.y) - panningAnchorPoint.y : 0
     };
   }
+
+  xCategoryPositions = $derived.by(() => {
+    if (this.scaleTypes?.x !== 'band' || !this.xScale?.scale || !this.isReady) {  // ✅ Fixed
+      return null;
+    }
+    
+    const domain = this.xScaleState.effectiveDomain;
+    if (!domain || domain.length === 0) return null;
+    
+    const positions = domain.map(category => this.xScale.scale(category));
+    
+    console.log(`📍 Pre-computed ${domain.length} x-category positions for "${this.xLabel}":`, {
+      domain: domain.slice(0, 5),
+      positions: positions.slice(0, 5).map(p => Math.round(p)),
+      bandwidth: this.xScale.scale.bandwidth(), 
+      chartWidth: this.innerWidth  // ✅ Direct property
+    });
+    
+    return new Float32Array(positions);
+  });
+
+  // yCategoryPositions = $derived.by(() => {
+  //   // ✅ FIXED: Use direct properties, not nested layout object
+  //   const scaleTypeCheck = this.scaleTypes?.y === 'band';
+  //   const scaleAvailable = !!this.yScale?.scale;
+  //   const layoutReady = !!this.isReady;  // ✅ Direct property
+    
+  //   console.log('🔍 yCategoryPositions conditions (FIXED):', {
+  //     scaleType: this.scaleTypes?.y,
+  //     scaleTypeCheck,
+  //     scaleAvailable,
+  //     layoutReady,
+  //     innerHeight: this.innerHeight,  // ✅ Direct property
+  //     domain: this.yScaleState?.effectiveDomain
+  //   });
+
+  //   if (!scaleTypeCheck || !scaleAvailable || !layoutReady) {
+  //     console.log('❌ yCategoryPositions skipped - conditions not met');
+  //     return null;
+  //   }
+    
+  //   const domain = this.yScaleState.effectiveDomain;
+  //   if (!domain || domain.length === 0) {
+  //     console.log('❌ yCategoryPositions skipped - empty domain');
+  //     return null;
+  //   }
+    
+  //   // ✅ FIXED: Use direct properties
+  //   const positions = domain.map(category => this.yScale.scale(category));
+    
+  //   console.log(`📍 Pre-computed ${domain.length} y-category positions for "${this.yLabel}":`, {
+  //     domain: domain.slice(0, 5),
+  //     positions: positions.slice(0, 5).map(p => Math.round(p)),
+  //     bandwidth: this.yScale.scale.bandwidth(),
+  //     chartHeight: this.innerHeight  // ✅ Direct property
+  //   });
+    
+  //   return new Float32Array(positions);
+  // });
+// Add this debugging to ChartScales.svelte.js in the yCategoryPositions computed property
+  yCategoryPositions = $derived.by(() => {
+    // console.log('🔍 yCategoryPositions computation triggered:', {
+    //   scaleType: this.scaleTypes?.y,
+    //   yScale: !!this.yScale?.scale,
+    //   layoutReady: this.layout?.isReady,  // ← Check this property path
+    //   innerHeight: this.layout?.innerHeight,
+    //   yScaleState: !!this.yScaleState,
+    //   effectiveDomain: this.yScaleState?.effectiveDomain,
+    //   domainLength: this.yScaleState?.effectiveDomain?.length || 0
+    // });
+
+    // Your existing conditions
+    const scaleTypeCheck = this.scaleTypes?.y === 'band';
+    const scaleAvailable = !!this.yScale?.scale;
+    const layoutReady = !!this.layout?.isReady;  // ← This might be the issue
+    
+    // console.log('🔍 yCategoryPositions conditions:', {
+    //   scaleTypeCheck,
+    //   scaleAvailable,
+    //   layoutReady,  // ← This is probably false
+    //   allConditionsMet: scaleTypeCheck && scaleAvailable && layoutReady
+    // });
+
+    if (!scaleTypeCheck || !scaleAvailable || !layoutReady) {
+      console.log('❌ yCategoryPositions skipped - conditions not met');
+      return null;
+    }
+    
+    const domain = this.yScaleState.effectiveDomain;
+    if (!domain || domain.length === 0) {
+      console.log('❌ yCategoryPositions skipped - empty domain');
+      return null;
+    }
+    
+    const positions = domain.map(category => this.yScale.scale(category));
+    
+    // console.log(`📍 Pre-computed ${domain.length} y-category positions:`, {
+    //   domain: Array.from(domain),
+    //   positions: positions.map(p => Math.round(p)),
+    //   bandwidth: this.yScale.scale.bandwidth(),
+    //   chartHeight: this.layout?.innerHeight
+    // });
+    
+    return new Float32Array(positions);
+  });
+  // yCategoryPositions = $derived.by(() => {
+  //   if (this.scaleTypes?.y !== 'band' || !this.yScale?.scale || !this.layout.isReady) {
+  //     return null;
+  //   }
+    
+  //   const domain = this.yScaleState.effectiveDomain;
+  //   if (!domain || domain.length === 0) return null;
+    
+  //   // Use D3 scale to get exact pixel positions for each category  
+  //   const positions = domain.map(category => this.yScale.scale(category));
+    
+  //   console.log(`📍 Pre-computed ${domain.length} y-category positions for "${this.yLabel}":`, {
+  //     domain: domain.slice(0, 3),
+  //     positions: positions.slice(0, 3).map(p => Math.round(p)),
+  //     bandwidth: this.yScale.scale.bandwidth(),
+  //     chartHeight: this.layout.innerHeight
+  //   });
+    
+  //   return new Float32Array(positions);
+  // });
+  
+
+  categoryPositionsReady = $derived.by(() => {
+    const xReady = this.scaleTypes?.x !== 'band' || this.xCategoryPositions !== null;
+    const yReady = this.scaleTypes?.y !== 'band' || this.yCategoryPositions !== null;
+    return xReady && yReady;
+  }); 
+
+  // Pre-computed bandwidth for hot path access
+  xBandwidth = $derived.by(() => {
+    if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) {
+      return 0;
+    }
+    return this.baseXScale.bandwidth();
+  });
+
+  yBandwidth = $derived.by(() => {
+    if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) {
+      return 0;
+    }
+    return this.baseYScale.bandwidth();
+  });
+
 
   getContextData() {
     const coordinator = this;
@@ -234,6 +397,15 @@ export class ChartScales {
       get scalesReady() { return coordinator.scalesReady; },
       get active() { return coordinator.active; },
       
+      get scaleConfigurations() { return coordinator.scaleConfigurations; },
+      
+      get xCategoryPositions() { return coordinator.xCategoryPositions; },
+      // get yCategoryPositions() { return coordinator.yCategoryPositions; },
+      get yCategoryPositions() { return coordinator.yCategoryPositions; },
+      get categoryPositionsReady() { return coordinator.categoryPositionsReady; },
+      get xBandwidth() { return coordinator.xBandwidth; },
+      get yBandwidth() { return coordinator.yBandwidth; },
+
       registerScaleType: coordinator.registerScaleType,
       unregisterScaleType: coordinator.unregisterScaleType,
       getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary

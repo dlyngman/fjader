@@ -84,6 +84,7 @@
         device,
         format: presentationFormat,
         alphaMode: 'premultiplied',
+        // desynchronized: true,
       });
       
       contextConfigured = true;
@@ -291,6 +292,9 @@
     position: absolute;
     top: 0;
     left: 0;
+    contain: strict;
+    will-change: auto;
+    image-rendering: crisp-edges;
   }
 
   .webgpu-error,

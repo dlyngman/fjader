@@ -1,3 +1,4 @@
+// src/lib/scales/BandScaleState.svelte.js
 import { scaleBand } from 'd3-scale';
 
 export class BandScaleState {
@@ -9,10 +10,11 @@ export class BandScaleState {
   #domain = $state([]);
   #extents = new Map(); // Stores all domains from different marks
 
-  // Band-specific properties
+  // ✅ ENHANCED: Configuration properties from resolved config
   #padding = 0.1;
   #paddingInner = null;
   #paddingOuter = null;
+  #align = 0.5;
 
   // Freeze/debounce functionality
   #enableUpdates = $state(true);
@@ -20,7 +22,6 @@ export class BandScaleState {
 
   // ✅ NEW: Reactive category→index mapping cache
   #categoryIndexMap = $derived.by(() => {
-    // Make dependencies explicit for proper reactivity tracking
     const domain = this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
     
     const map = new Map();
@@ -30,12 +31,24 @@ export class BandScaleState {
     return map;
   });
 
-  constructor(name, domain = [], options = {}) {
+  // ✅ ENHANCED: Constructor now accepts and applies resolved configuration
+  constructor(name, domain = [], config = {}) {
     this.name = name;
     this.#domain = [...domain];
-    this.#padding = options.padding ?? 0.1;
-    this.#paddingInner = options.paddingInner ?? null;
-    this.#paddingOuter = options.paddingOuter ?? null;
+    
+    // Apply resolved configuration with defaults
+    this.#padding = config.padding ?? 0.1;
+    this.#paddingInner = config.paddingInner ?? null;
+    this.#paddingOuter = config.paddingOuter ?? null;
+    this.#align = config.align ?? 0.5;
+    
+    console.log(`🏗️ BandScaleState "${name}" created with configuration:`, {
+      padding: this.#padding,
+      paddingInner: this.#paddingInner,
+      paddingOuter: this.#paddingOuter,
+      align: this.#align,
+      resolvedFrom: Object.keys(config).length > 0 ? 'mark requirements' : 'defaults'
+    });
   }
 
   setReady() {
@@ -73,14 +86,13 @@ export class BandScaleState {
     return this.ready && 
            this.effectiveDomain.length > 0 && 
            this.#categoryIndexMap instanceof Map &&
-           this.#extents.size > 0; // Ensure we have received data from marks
+           this.#extents.size > 0;
   }
 
   /**
    * Add categorical data from a mark
    */
   addMark(categories, identifier) {
-    // Get unique categories, preserving order of first appearance
     const uniqueCategories = [...new Set(categories.filter(c => c != null))];
     
     this.#extents.set(identifier, uniqueCategories);
@@ -131,10 +143,8 @@ export class BandScaleState {
     this.#domain = allCategories;
   }
 
-  // ✅ NEW: Process categorical data for GPU consumption
   /**
    * Convert categorical data to indices for GPU processing
-   * This is the authoritative source for category→index conversion
    * @param {Array} categoryData - Array of category values from mark data
    * @param {string} markId - Identifier for the mark (for debugging)
    * @returns {Float32Array} Array of indices corresponding to categories
@@ -142,16 +152,8 @@ export class BandScaleState {
   processDataForGPU(categoryData, markId = 'unknown') {
     const categoryMap = this.#categoryIndexMap;
     
-    // Defensive check - ensure we have a valid Map
     if (!(categoryMap instanceof Map)) {
       console.error(`🚨 BandScale "${this.name}": categoryMap is not a Map:`, categoryMap);
-      console.error('Domain state:', {
-        enableUpdates: this.#enableUpdates,
-        domain: this.#domain,
-        frozenDomain: this.#frozenDomain,
-        effectiveDomain: this.effectiveDomain
-      });
-      // Fallback: create a temporary mapping
       const fallbackMap = new Map();
       this.effectiveDomain.forEach((category, index) => {
         fallbackMap.set(category, index);
@@ -179,11 +181,11 @@ export class BandScaleState {
       }
     }));
 
-    // Warn about unmapped categories in development with full context
+    // Warn about unmapped categories in development
     if (unmappedCategories.size > 0 && process.env.NODE_ENV === 'development') {
       console.warn(
         `🔶 BandScale "${this.name}": Unmapped categories for mark "${markId}":`,
-        Array.from(unmappedCategories).slice(0, 5), // Limit output for readability
+        Array.from(unmappedCategories).slice(0, 5),
         unmappedCategories.size > 5 ? `... and ${unmappedCategories.size - 5} more` : '',
         `\nValid categories:`, $state.snapshot(this.effectiveDomain)
       );
@@ -192,10 +194,6 @@ export class BandScaleState {
     return indices;
   }
 
-  /**
-   * Get the current category→index mapping (for debugging)
-   * @returns {Map} Current category→index mapping
-   */
   getCategoryIndexMap() {
     return new Map(this.#categoryIndexMap);
   }
@@ -205,18 +203,32 @@ export class BandScaleState {
   }
 
   /**
-   * Create base D3 band scale
+   * ✅ ENHANCED: Create base D3 band scale using resolved configuration
    */
   getBaseScale(axis, innerWidthOrHeight) {
     const scale = scaleBand().range(
       axis === 'x' ? [0, innerWidthOrHeight] : [innerWidthOrHeight, 0]
     );
 
-    // Apply padding configuration
+    // ✅ Apply resolved padding configuration
     if (this.#paddingInner !== null && this.#paddingOuter !== null) {
       scale.paddingInner(this.#paddingInner).paddingOuter(this.#paddingOuter);
+      console.log(`🎯 Applied fine-grained padding to ${axis}-scale "${this.name}":`, {
+        paddingInner: this.#paddingInner,
+        paddingOuter: this.#paddingOuter,
+        align: this.#align
+      });
     } else {
       scale.padding(this.#padding);
+      console.log(`🎯 Applied simple padding to ${axis}-scale "${this.name}":`, {
+        padding: this.#padding,
+        align: this.#align
+      });
+    }
+
+    // ✅ Apply alignment configuration
+    if (this.#align !== 0.5) {
+      scale.align(this.#align);
     }
 
     return scale;
@@ -231,37 +243,20 @@ export class BandScaleState {
 
   /**
    * Get positioning information for a category
-   * Used by the axis renderer for proper tick positioning
    */
   getPosition(category) {
-    // This would be used by axes to position ticks correctly
     const index = this.effectiveDomain.indexOf(category);
     if (index === -1) return { current: 0 };
     
-    // Return normalized position (0-1) - will be converted to pixels by the scale
     return { 
       current: index / Math.max(1, this.effectiveDomain.length - 1) 
     };
   }
 
-  /**
-   * Band scales don't typically support zoom/pan interactions
-   * These methods exist for API consistency but are no-ops
-   */
-  applyZoomDomain() {
-    // Bands don't zoom
-    return;
-  }
-
-  applyPanDomain() {
-    // Bands don't pan
-    return;
-  }
-
-  resetZoom() {
-    // No zoom to reset for bands
-    return;
-  }
+  // No-op methods for API consistency
+  applyZoomDomain() { return; }
+  applyPanDomain() { return; }
+  resetZoom() { return; }
 
   gpuState = $derived.by(() => {
     const categoryCount = this.#categoryIndexMap.size;
@@ -270,12 +265,12 @@ export class BandScaleState {
         domainMin: 0,
         domainMax: Math.max(0, categoryCount - 1),
         categoryCount: categoryCount,
-        domainScale: 0, // Fulfills the interface contract with a sensible default
+        domainScale: 0,
     };
   });
 
   /**
-   * Get debug information
+   * ✅ ENHANCED: Debug info now includes configuration details
    */
   getDebugInfo() {
     return {
@@ -285,8 +280,16 @@ export class BandScaleState {
       effectiveDomain: [...this.effectiveDomain],
       extentsCount: this.#extents.size,
       extents: Object.fromEntries(this.#extents),
-      padding: this.#padding,
-      categoryIndexMap: Object.fromEntries(this.#categoryIndexMap), // Show current mapping
+      
+      // ✅ NEW: Configuration details
+      configuration: {
+        padding: this.#padding,
+        paddingInner: this.#paddingInner,
+        paddingOuter: this.#paddingOuter,
+        align: this.#align
+      },
+      
+      categoryIndexMap: Object.fromEntries(this.#categoryIndexMap),
       categoryCount: this.effectiveDomain.length
     };
   }

@@ -1,10 +1,12 @@
-import { setContext, getContext, hasContext } from 'svelte';
-import { LinearScaleState } from "./LinearScaleState.svelte";
-import { BandScaleState } from "./BandScaleState.svelte";
+// src/lib/scales/ScaleRegistry.svelte.js
+import { setContext, getContext } from 'svelte';
+import { LinearScaleState } from "./LinearScaleState.svelte.js";
+import { BandScaleState } from "./BandScaleState.svelte.js";
 import { scaleOrdinal } from 'd3-scale';
 
-// Define the Scale Registry state class
 class ScaleRegistry {
+  // #scaleUsage = $state(new Map());
+
   constructor() {
     this.registryId = Math.random().toString(36).slice(2, 8);
     console.log(`🏗️ NEW ScaleRegistry created: ${this.registryId}`);
@@ -14,29 +16,57 @@ class ScaleRegistry {
       band: new Map(),
       ordinal: new Map(),
     }
+
+    this.scaleUsage = $state(new Map());
   }
 
-  getOrCreateScale(name, type='linear') {
-    // console.log(`🔍 Registry ${this.registryId} getting scale: ${name} (${type})`);
-    if (!this.scales[type].has(name)) {
-      // console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`);
+  getOrCreateScale(name, type='linear', config = {}, chartId = null) {
+    // Create unique key that includes configuration
+    const configKey = Object.keys(config).length > 0 ? `-${JSON.stringify(config)}` : '';
+    const key = `${name}-${type}${configKey}`;
+    
+    if (!this.scales[type].has(key)) {
+      console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`, {
+        config: Object.keys(config).length > 0 ? config : 'default'
+      });
+      
       if (type === 'linear') {
-        this.scales[type].set(name, new LinearScaleState(name));
+        this.scales[type].set(key, new LinearScaleState(name, undefined, type, undefined, config));
       } else if (type === 'band') {
-        this.scales[type].set(name, new BandScaleState(name));
+        this.scales[type].set(key, new BandScaleState(name, [], config));
       } else if (type === 'ordinal') {
-        // Default color scale - this could be made configurable
-        this.scales[type].set(name,  scaleOrdinal()
-      	  .range(['#EFB605', '#FFF84A', '#FF0266'])
-      	  .domain(['Adelie', 'Gentoo', 'Chinstrap']));
+        // TODO: fix color scale support, simple default for penguins dataset:
+        this.scales[type].set(key, scaleOrdinal()
+          .range(['#EFB605', '#FFF84A', '#FF0266'])
+          .domain(['Adelie', 'Gentoo', 'Chinstrap']));
       }
     } else {
-      // console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
+      console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
     }
-    return this.scales[type].get(name);
+    const scale = this.scales[type].get(key);
+
+    if (chartId && scale) {
+      if (!this.scaleUsage.has(scale)) {
+        this.scaleUsage.set(scale, new Set());
+      }
+      this.scaleUsage.get(scale).add(chartId);
+    }
+
+    return scale;
+    // return this.scales[type].get(key);
   }
-  
+
+  removeChartUsage(chartId) {
+    for (const [scale, chartIds] of this.scaleUsage) {
+      chartIds.delete(chartId);
+      if (chartIds.size === 0) {
+        this.scaleUsage.delete(scale);
+      }
+    }
+  }
 }
+
+
 
 // Create and set the Scale Registry context
 export function setScaleRegistry() {
@@ -44,8 +74,8 @@ export function setScaleRegistry() {
   return setContext('scale-registry', state);
 }
 
-// Retrieve a specific scale from the Scale Registry context
-export function getScaleState(name, type='linear') {
+// ✅ ENHANCED: Retrieve a specific scale with configuration support
+export function getScaleState(name, type='linear', config = {}) {
   const scaleRegistry = getContext('scale-registry');
   
   if (!scaleRegistry) {
@@ -53,15 +83,7 @@ export function getScaleState(name, type='linear') {
     return null;
   }
 
-  const scaleInstance = scaleRegistry.getOrCreateScale(name, type);
+  const scaleInstance = scaleRegistry.getOrCreateScale(name, type, config);
   
-  // // ✅ ADD: Debug what we're returning
-  // console.log(`🎯 getScaleState(${name}, ${type}) returning:`, {
-  //   registryId: scaleRegistry.registryId,
-  //   scaleInstance,
-  //   scaleInstanceId: scaleInstance?.name,
-  //   scaleObject: scaleInstance
-  // });
-  
-  return scaleRegistry.getOrCreateScale(name, type);
+  return scaleInstance;
 }

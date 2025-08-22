@@ -1,5 +1,7 @@
 // src/lib/scales/ScalePriorities.js
 
+import { SCALE_CONFIG_SCHEMAS, validateConfigValue } from './ScaleConfigurationSchemas.js';
+
 /**
  * Scale type priority levels for resolving conflicts between marks
  */
@@ -40,7 +42,7 @@ export function resolveScaleType(requirements) {
   const uniqueTypes = [...new Set(topRequirements.map(req => req.type))];
   
   if (uniqueTypes.length > 1) {
-    const markTypes = topRequirements.map(req => req.markType).join(', ');
+    const markTypes = topRequirements.map(req => req.markId).join(', ');
     const conflictTypes = uniqueTypes.join(' vs ');
     
     throw new Error(
@@ -50,4 +52,88 @@ export function resolveScaleType(requirements) {
   }
   
   return uniqueTypes[0];
+}
+
+/**
+ * Resolve complete scale configuration (type + config) using priority system
+ * @param {Array} requirements - Array of {type, priority, markId, config} objects
+ * @returns {Object} - {type: string, config: Object}
+ */
+export function resolveScaleConfiguration(requirements) {
+  if (!requirements || requirements.length === 0) {
+    return { type: 'linear', config: {} };
+  }
+  
+  // First resolve type using existing logic
+  const resolvedType = resolveScaleType(requirements);
+  
+  // Then resolve configuration for that type
+  const typeRequirements = requirements.filter(req => req.type === resolvedType);
+  const resolvedConfig = resolveConfigurationForType(typeRequirements, resolvedType);
+  
+  console.log(`🎯 Resolved scale configuration:`, {
+    type: resolvedType,
+    config: resolvedConfig,
+    fromRequirements: typeRequirements.length
+  });
+  
+  return { type: resolvedType, config: resolvedConfig };
+}
+
+/**
+ * Generic configuration resolver using schema-driven approach
+ * @param {Array} requirements - Requirements for a specific scale type
+ * @param {string} scaleType - Scale type to resolve configuration for
+ * @returns {Object} - Resolved configuration object
+ */
+function resolveConfigurationForType(requirements, scaleType) {
+  const schema = SCALE_CONFIG_SCHEMAS[scaleType];
+  if (!schema) {
+    console.warn(`⚠️ No configuration schema found for scale type: ${scaleType}`);
+    return {};
+  }
+  
+  const configs = requirements.map(req => req.config || {});
+  const resolvedConfig = {};
+  
+  // Process each property defined in schema
+  for (const [propName, propSchema] of Object.entries(schema)) {
+    const values = configs
+      .map(config => config[propName])
+      .filter(val => val != null);
+      
+    if (values.length === 0) continue;
+    
+    // Validate all values
+    const validValues = [];
+    for (const value of values) {
+      if (validateConfigValue(value, propSchema)) {
+        validValues.push(value);
+      } else {
+        console.warn(`❌ Invalid ${propName} value for ${scaleType} scale:`, {
+          value,
+          expected: propSchema.type,
+          range: propSchema.range,
+          description: propSchema.description
+        });
+      }
+    }
+    
+    if (validValues.length === 0) continue;
+    
+    // Apply resolution strategy
+    try {
+      resolvedConfig[propName] = propSchema.strategy(validValues);
+      console.log(`🔧 Resolved ${scaleType}.${propName}: ${resolvedConfig[propName]}`, {
+        strategy: propSchema.strategy.name || 'custom',
+        fromValues: validValues,
+        description: propSchema.description
+      });
+    } catch (error) {
+      console.error(`❌ Failed to resolve ${scaleType}.${propName}:`, error.message);
+      throw new Error(`Configuration resolution failed for ${scaleType}.${propName}: ${error.message}`);
+    }
+  }
+  
+  return resolvedConfig;
 }
