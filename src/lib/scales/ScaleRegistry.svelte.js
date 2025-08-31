@@ -20,7 +20,7 @@ class ScaleRegistry {
     this.scaleUsage = $state(new Map());
   }
 
-  getOrCreateScale(name, type='linear', config = {}, chartId = null) {
+  getOrCreateScale(name, type='linear', config = {}, chartId = null, gpuCoordinator = null) {
     // Create unique key that includes configuration
     const configKey = Object.keys(config).length > 0 ? `-${JSON.stringify(config)}` : '';
     const key = `${name}-${type}${configKey}`;
@@ -31,7 +31,7 @@ class ScaleRegistry {
       });
       
       if (type === 'linear') {
-        this.scales[type].set(key, new LinearScaleState(name, undefined, type, undefined, config));
+        this.scales[type].set(key, new LinearScaleState(name, undefined, type, undefined, config, gpuCoordinator));
       } else if (type === 'band') {
         this.scales[type].set(key, new BandScaleState(name, [], config));
       } else if (type === 'ordinal') {
@@ -50,6 +50,7 @@ class ScaleRegistry {
         this.scaleUsage.set(scale, new Set());
       }
       this.scaleUsage.get(scale).add(chartId);
+      console.log('scale usage from registration', this.scaleUsage)
     }
 
     return scale;
@@ -74,8 +75,8 @@ export function setScaleRegistry() {
   return setContext('scale-registry', state);
 }
 
-// ✅ ENHANCED: Retrieve a specific scale with configuration support
-export function getScaleState(name, type='linear', config = {}) {
+// Retrieve a specific scale with configuration support
+export function getScaleState(name, type='linear', config = {}, gpuCoordinator = null, chartId = null) {
   const scaleRegistry = getContext('scale-registry');
   
   if (!scaleRegistry) {
@@ -83,7 +84,7 @@ export function getScaleState(name, type='linear', config = {}) {
     return null;
   }
 
-  const scaleInstance = scaleRegistry.getOrCreateScale(name, type, config);
+  const scaleInstance = scaleRegistry.getOrCreateScale(name, type, config, chartId, gpuCoordinator);
   
   return scaleInstance;
 }

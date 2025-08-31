@@ -293,7 +293,9 @@
     top: 0;
     left: 0;
     contain: strict;
-    will-change: auto;
+    will-change: contents;
+    backface-visibility: hidden;
+    isolation: isolate;
     image-rendering: crisp-edges;
   }
 

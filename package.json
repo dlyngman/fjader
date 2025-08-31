@@ -30,6 +30,7 @@
 		"@uwdata/mosaic-core": "^0.16.2",
 		"@uwdata/vgplot": "^0.16.2",
 		"d3-scale": "^4.0.2",
-		"open-props": "^1.7.15"
+		"open-props": "^1.7.15",
+		"popmotion": "^11.0.5"
 	}
 }

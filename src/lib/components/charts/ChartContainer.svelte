@@ -19,13 +19,16 @@
     height: 250 
   });
 
+  const gpuCoordinator = getGPUContext();
+
+  // TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
   let scales = $derived(new ChartScales({
     xLabel,
     yLabel,
-    layout
+    layout,
+    gpuCoordinator
   }));
 
-  const gpuCoordinator = getGPUContext();
 
   $effect(() => {
       console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
@@ -124,20 +127,20 @@
   let initialTouchDistance = $state(0);
   let isZooming = $state(false);
 
-  $effect.pre(() => {
-    const timestamp = performance.now();
-    // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
+  // $effect.pre(() => {
+  //   const timestamp = performance.now();
+  //   // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
     
-    void scales.xScaleState?.domain?.current;
-    void scales.yScaleState?.domain?.current;
+  //   void scales.xScaleState?.domain?.current;
+  //   void scales.yScaleState?.domain?.current;
 
-    // untrack(() => {
-    //     if (layout.isReady) {
-    //       console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
-    //       gpuCoordinator.invalidateChart(layout.chartId);
-    //     }
-    // });
-  });
+  //   untrack(() => {
+  //       if (layout.isReady) {
+  //         console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
+  //         gpuCoordinator.invalidateChart(layout.chartId);
+  //       }
+  //   });
+  // });
   
   // ZOOM HANDLERS
   function handleWheel(event) {
@@ -151,7 +154,8 @@
       ? 1 + Math.abs(event.deltaY) * 0.0025 
       : 1 - Math.abs(event.deltaY) * 0.0025;
     
-    scales.applyZoom(innerPoint, scaleFactor, x, y);
+    // scales.applyZoom(innerPoint, scaleFactor, x, y);
+    scales.accumulateZoom(innerPoint, scaleFactor, x, y);
 
     // console.log(`🎯 Scale update triggered at ${performance.now().toFixed(2)}ms`);
 
@@ -225,67 +229,33 @@
       return;
     }
     isPanning = true;
-    
-    // Pre-calculate point, domain and screen-data ratio on start of pan to offset from
-    panContext = {
-      initialScreenPos: { x: event.offsetX, y: event.offsetY },
-      initialDomain: {
-        x: activePanX ? [...scales.xScaleState.domain.current] : null,
-        y: activePanY ? [...scales.yScaleState.domain.current] : null
-      },
-      screenToDataRatio: {
-        x: activePanX ? 
-          (scales.xScaleState.domain.current[1] - scales.xScaleState.domain.current[0]) / layout.innerWidth : 0,
-        y: activePanY ?
-          (scales.yScaleState.domain.current[1] - scales.yScaleState.domain.current[0]) / layout.innerHeight : 0
-      }
-    };
-    
+
+    scales.startPan({ x: event.offsetX, y: event.offsetY }, activePanX, activePanY);
+  
     scales.clearCurrentDataPoints();
     event.target.setPointerCapture?.(event.pointerId);
   }
 
   function handlePointerMove(event) {
-    if (!isPanning || !panContext) return;
+    if (!isPanning) return;
 
-    // console.log(`👆 Pointer move at ${performance.now().toFixed(2)}ms`);
+    // console.log(`Pointer move at ${performance.now().toFixed(2)}ms`);
     
     event.preventDefault();
     
-    const screenDelta = {
-      x: event.offsetX - panContext.initialScreenPos.x,
-      y: event.offsetY - panContext.initialScreenPos.y
-    };
+    // NEW: Ultra-minimal event handler - just store latest position
+    scales.updatePanPosition(event.offsetX, event.offsetY);
     
-    const dataDelta = {
-      x: -screenDelta.x * panContext.screenToDataRatio.x,
-      y: screenDelta.y * panContext.screenToDataRatio.y
-    };
-    
-    if (activePanX) {
-      const newXDomain = [
-        panContext.initialDomain.x[0] + dataDelta.x,
-        panContext.initialDomain.x[1] + dataDelta.x
-      ];
-      scales.applyPanDomain(newXDomain, 'x');
-    }
-    
-    if (activePanY) {
-      const newYDomain = [
-        panContext.initialDomain.y[0] + dataDelta.y,
-        panContext.initialDomain.y[1] + dataDelta.y
-      ];
-      scales.applyPanDomain(newYDomain, 'y');
-    }
-
-    // console.log(`📐 Pan domain applied at ${performance.now().toFixed(2)}ms`);
-
+    // console.log(`Pan position updated at ${performance.now().toFixed(2)}ms`);
   }
-  
+
   function handlePointerUp() {
     isPanning = false;
     activePanX = false;
     activePanY = false;
+    
+    // NEW: End pan session
+    scales.endPan();
   }
 
   function handleInnerMouseEnter() {
@@ -303,13 +273,6 @@
   }
 
   let testRenderLoop;
-  onMount(() => {
-    function testRender() {
-      gpuCoordinator.invalidateChart(layout.chartId);
-      testRenderLoop = requestAnimationFrame(testRender);
-    }
-    testRenderLoop = requestAnimationFrame(testRender);
-  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -384,7 +347,8 @@
     height: 100%;
     contain: layout style paint;
     will-change: transform, opacity;
-    transform: translateZ(0);
+    /* will-change: contents; */
+    /* transform: translateZ(0); */
   }
 
   .svg-background, .canvas-layer, .svg-foreground {

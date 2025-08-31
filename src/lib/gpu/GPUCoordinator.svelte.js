@@ -5,7 +5,6 @@ import { setContext, getContext } from 'svelte';
  * Implements a "Managed Loop" for high-performance, on-demand rendering and
  * a cached "Render Plan" to keep the per-frame render path extremely lean.
  * 
- * ✅ UPDATED: Now supports dual bind group architecture for optimal performance
 */
 export class GPUCoordinator {
   // WebGPU core resources
@@ -30,6 +29,12 @@ export class GPUCoordinator {
   #dirtyChartIDs = new Set();
   #renderScheduled = false;
 
+  // Animation system properties
+  #animatedScales = new Set();
+  #animationActive = false;
+  #animationRafId = null;
+  #scaleRegistry = null;
+
   // Configuration
   #msaaSampleCount = 4;
   lastRender;
@@ -37,8 +42,18 @@ export class GPUCoordinator {
   #frameHistory = [];
   #renderCount = 0;
 
+  #frameTimings = [];
+  #lastFrameTime = 0;
+
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
+
+    this.perf = new MinimalPerfLogger(10000);
+    if (typeof window !== 'undefined') {
+      window.exportPerf = () => this.perf.downloadJSON();
+      window.resetPerf = () => this.perf.reset();
+      window.perfStatus = () => console.log(`${this.perf.index}/${this.perf.maxSamples} samples collected`);
+    }
   }
 
   async initialize() {
@@ -54,6 +69,17 @@ export class GPUCoordinator {
     }
   }
 
+  // Method to inject scale registry reference
+  setScaleRegistry(scaleRegistry) {
+    this.#scaleRegistry = scaleRegistry;
+  }
+
+  // Helper to get charts using a scale
+  #getChartsUsingScale(scale) {
+    if (!this.#scaleRegistry?.scaleUsage) return new Set();
+    return this.#scaleRegistry.scaleUsage.get(scale) || new Set();
+  }
+
   /**
    * The single entry point for triggering a render. This method is designed
    * to be called many times per frame without performance penalty.
@@ -65,6 +91,13 @@ export class GPUCoordinator {
     if (this.#registeredCharts.has(chartId)) {
       this.#dirtyChartIDs.add(chartId);
 
+      // If animation is active, dirty charts will be processed in animation loop
+      if (this.#animationActive) {
+        // console.log(`🎬 Chart ${chartId} invalidated during animation - will render in animation loop`);
+        return;
+      }
+
+      // Otherwise use immediate render scheduling
       if (!this.#renderScheduled) {
         this.#renderScheduled = true;
         // console.log(`⏰ Scheduling microtask at ${timestamp.toFixed(2)}ms`);
@@ -88,6 +121,146 @@ export class GPUCoordinator {
       } else {
         console.log(`⏭️ Render already scheduled at ${timestamp.toFixed(2)}ms`);
       }
+    }
+  }
+
+  // Register a scale for animation
+  addAnimatingScale(scale) {
+    // console.log(`🎬 Adding scale to animation:`, scale.name || 'unnamed');
+    
+    this.#animatedScales.add(scale);
+    
+    if (!this.#animationActive) {
+      this.#startAnimationLoop();
+    }
+  }
+
+  // Unregister a scale from animation
+  removeAnimatingScale(scale) {
+    // console.log(`🎬 Removing scale from animation:`, scale.name || 'unnamed');
+    this.#animatedScales.delete(scale);
+  }
+
+  // Start the main animation loop
+  #startAnimationLoop() {
+    if (this.#animationActive) return;
+    
+    // console.log(`🎬 Starting animation loop with ${this.#animatedScales.size} scales`);
+    this.#animationActive = true;
+    this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+  }
+
+  // Main animation loop
+  #animationLoop = (timestamp) => {
+    // console.log(`🎬 Animation loop tick at ${timestamp.toFixed(2)}ms`);
+
+    // TEST START
+    // if (this.#lastFrameTime > 0) {
+    //   const frameInterval = timestamp - this.#lastFrameTime;
+    //   this.#frameTimings.push(frameInterval);
+      
+    //   // Keep only last 60 frames for analysis
+    //   if (this.#frameTimings.length > 60) {
+    //     this.#frameTimings.shift();
+    //   }
+      
+    //   // Log timing issues as they happen
+    //   const expectedInterval = 8.33; // 120fps
+    //   const tolerance = 1.0; // 1ms tolerance
+      
+    //   if (Math.abs(frameInterval - expectedInterval) > tolerance) {
+    //     console.warn(`⚡ Frame timing variance: ${frameInterval.toFixed(2)}ms (expected: ${expectedInterval}ms, deviation: ${(frameInterval - expectedInterval).toFixed(2)}ms)`);
+    //   }
+    // }
+    
+    // this.#lastFrameTime = timestamp;
+    // TEST END
+
+    const loopStart = performance.now(); 
+    const schedulingLag = loopStart - timestamp;
+    
+    let anyChanges = false;
+
+    // TODO: Process all animating scales (will implement scale.stepAnimation() later)
+    for (const scale of this.#animatedScales) {
+      if (scale.stepAnimation?.(timestamp)) {
+        // Scale is still animating - mark affected charts dirty
+        const affectedCharts = this.#getChartsUsingScale(scale);
+        affectedCharts.forEach(chartId => {
+          this.#dirtyChartIDs.add(chartId);
+        });
+        anyChanges = true;
+      } else {
+        // Scale animation is complete - remove it
+        // console.log(`🎬 Removing completed scale: ${scale.name || 'unnamed'}`);
+        this.#animatedScales.delete(scale);
+      }      
+    }
+    const scaleAnimationTime = performance.now() - loopStart
+
+    let renderTime = 0;
+    // Render all dirty charts (animation + immediate invalidations)
+    if (this.#dirtyChartIDs.size > 0) {
+      const renderStart = performance.now();
+      // console.log(`🎨 Animation render: ${this.#dirtyChartIDs.size} dirty charts`);
+      
+      const chartsToRender = [];
+      for (const chartId of this.#dirtyChartIDs) {
+        const chart = this.#registeredCharts.get(chartId);
+        if (chart?.visible && chart.contextConfigured) {
+          chartsToRender.push(chart);
+        }
+      }
+      // console.log(chartsToRender)
+      this.#coordinatedRender(chartsToRender);
+      this.#dirtyChartIDs.clear();
+
+      renderTime = performance.now() - renderStart;
+    }
+
+    // Continue animation loop or return to immediate mode
+    if (this.#animatedScales.size > 0) {
+      this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+    } else {
+      // console.log(`🎬 Animation loop ending - no more animating scales`);
+      this.#animationActive = false;
+      this.#animationRafId = null;
+      
+      // Check if any immediate invalidations are waiting
+      if (this.#dirtyChartIDs.size > 0) {
+        // console.log(`⏰ Scheduling immediate render after animation end`);
+        this.#scheduleImmediateRender();
+      }
+    }
+
+     const loopEnd = performance.now();
+
+    // Log full loop timing with breakdown
+    this.perf.log(
+      loopStart,           // Frame start (RAF callback start)
+      loopEnd,            // Frame end (RAF callback complete)
+      scaleAnimationTime, // Time spent on scale animation
+      renderTime,          // Time spent on rendering (optional additional metric)
+      schedulingLag
+    );
+  };
+
+  // Schedule immediate render (extracted for reuse)
+  #scheduleImmediateRender() {
+    if (!this.#renderScheduled) {
+      this.#renderScheduled = true;
+      requestAnimationFrame(() => {
+        this.#renderScheduled = false;
+        const chartsToRender = [];
+        for (const chartId of this.#dirtyChartIDs) {
+          const chart = this.#registeredCharts.get(chartId);
+          if (chart?.visible && chart.contextConfigured) {
+            chartsToRender.push(chart);
+          }
+        }
+        this.#coordinatedRender(chartsToRender);
+        this.#dirtyChartIDs.clear();
+      });
     }
   }
 
@@ -145,7 +318,7 @@ export class GPUCoordinator {
         console.debug(`🗑️ Destroyed cached MSAA texture for chart: ${chartId}`);
       }
 
-      console.log(`📊 Unregistered chart: ${chartId}`);
+      // console.log(`📊 Unregistered chart: ${chartId}`);
     }
   }
 
@@ -234,13 +407,13 @@ export class GPUCoordinator {
    */
   #coordinatedRender(chartsNeedingRender) {
     
-    const startTime = performance.now();
+    // const startTime = performance.now();
   
     // Track frame intervals
-    if (this.lastRender) {
-      const frameInterval = startTime - this.lastRender;
-      // this.#trackFrameTiming(frameInterval);
-    }
+    // if (this.lastRender) {
+    //   const frameInterval = startTime - this.lastRender;
+    //   // this.#trackFrameTiming(frameInterval);
+    // }
     
     // console.log(`🎨 Render #${this.#renderCount || 0} at ${startTime.toFixed(2)}ms (${chartsNeedingRender.length} charts)`);
   
@@ -316,8 +489,9 @@ export class GPUCoordinator {
         }
 
         this.#device.queue.submit([commandEncoder.finish()]);
-        const endTime = performance.now();
-        const renderDuration = endTime - startTime;
+        // const endTime = performance.now();
+        // this.perf.log(startTime, endTime);
+        // const renderDuration = endTime - startTime;
 
         // // Enhanced frame timing analysis
         // if (this.lastRender) {
@@ -339,7 +513,7 @@ export class GPUCoordinator {
         // }
         
         // Update tracking variables
-        this.lastRender = startTime; // Use start time for interval calculation
+        // this.lastRender = startTime; // Use start time for interval calculation
         this.#renderCount = (this.#renderCount || 0) + 1;
         
     } catch (error) {
@@ -348,35 +522,35 @@ export class GPUCoordinator {
     }
   }
 
-  #trackFrameTiming(interval) {
-    this.#frameHistory.push(interval);
+  // #trackFrameTiming(interval) {
+  //   this.#frameHistory.push(interval);
     
-    // Keep last 30 frames for analysis
-    if (this.#frameHistory.length > 30) {
-      this.#frameHistory.shift();
-    }
+  //   // Keep last 30 frames for analysis
+  //   if (this.#frameHistory.length > 30) {
+  //     this.#frameHistory.shift();
+  //   }
     
-    // Every 10 frames, analyze the pattern
-    if (this.#frameHistory.length >= 10 && this.#frameHistory.length % 10 === 0) {
-      const avg = this.#frameHistory.reduce((a, b) => a + b) / this.#frameHistory.length;
-      const avgFps = 1000 / avg;
-      const jitter = Math.max(...this.#frameHistory) - Math.min(...this.#frameHistory);
+  //   // Every 10 frames, analyze the pattern
+  //   if (this.#frameHistory.length >= 10 && this.#frameHistory.length % 10 === 0) {
+  //     const avg = this.#frameHistory.reduce((a, b) => a + b) / this.#frameHistory.length;
+  //     const avgFps = 1000 / avg;
+  //     const jitter = Math.max(...this.#frameHistory) - Math.min(...this.#frameHistory);
       
-      console.log(`📊 Frame Analysis (last ${this.#frameHistory.length}): Avg ${avgFps.toFixed(1)}fps, Jitter ${jitter.toFixed(1)}ms`);
+  //     console.log(`📊 Frame Analysis (last ${this.#frameHistory.length}): Avg ${avgFps.toFixed(1)}fps, Jitter ${jitter.toFixed(1)}ms`);
       
-      // Detect specific patterns
-      const consistent60fps = this.#frameHistory.every(t => Math.abs(t - 16.67) < 2);
-      const consistent120fps = this.#frameHistory.every(t => Math.abs(t - 8.33) < 2);
+  //     // Detect specific patterns
+  //     const consistent60fps = this.#frameHistory.every(t => Math.abs(t - 16.67) < 2);
+  //     const consistent120fps = this.#frameHistory.every(t => Math.abs(t - 8.33) < 2);
       
-      if (consistent60fps) {
-        console.info(`🔒 Locked to 60fps - browser/VSync limiting detected`);
-      } else if (consistent120fps) {
-        console.info(`🚀 Smooth 120fps - timing working correctly`);
-      } else if (jitter > 5) {
-        console.warn(`⚡ High frame jitter: ${jitter.toFixed(1)}ms - RAF/microtask mismatch likely`);
-      }
-    }
-  }
+  //     if (consistent60fps) {
+  //       console.info(`🔒 Locked to 60fps - browser/VSync limiting detected`);
+  //     } else if (consistent120fps) {
+  //       console.info(`🚀 Smooth 120fps - timing working correctly`);
+  //     } else if (jitter > 5) {
+  //       console.warn(`⚡ High frame jitter: ${jitter.toFixed(1)}ms - RAF/microtask mismatch likely`);
+  //     }
+  //   }
+  // }
 
   // ✅ UPDATED: Fallback render also supports dual bind groups
   #fallbackRender(chartsNeedingRender) {
@@ -598,6 +772,15 @@ export class GPUCoordinator {
   get isInitialized() { return this.#initialized; }
 
   destroy() {
+    // Stop animation loop
+    if (this.#animationRafId !== null) {
+      cancelAnimationFrame(this.#animationRafId);
+      this.#animationRafId = null;
+    }
+    
+    this.#animationActive = false;
+    this.#animatedScales.clear();
+
     for (const texture of this.#msaaTextures.values()) {
       texture.destroy();
     }
@@ -649,4 +832,84 @@ export function getGPUContext() {
   }
   
   return coordinator;
+}
+
+
+
+class MinimalPerfLogger {
+  constructor(maxSamples = 10000) {
+    // Pre-allocate arrays for better performance
+    this.timestamps = new Float64Array(maxSamples);
+    this.frameDeltas = new Float32Array(maxSamples);
+    this.cpuTimes = new Float32Array(maxSamples);
+    this.scaleAnimationTimes = new Float32Array(maxSamples);
+    this.renderTimes = new Float32Array(maxSamples);
+    this.schedulingLags = new Float32Array(maxSamples);
+    
+    this.index = 0;
+    this.maxSamples = maxSamples;
+    this.startTime = performance.now();
+    this.lastFrameTime = 0;
+    this.bufferFullWarned = false; // Track if we've warned
+  }
+  
+  // Inline, minimal frame logging
+  log(loopStart, loopEnd, scaleAnimationTime = 0, renderTime = 0, schedulingLag = 0) {
+    if (this.index >= this.maxSamples) {
+      // Warn once when buffer fills
+      if (!this.bufferFullWarned) {
+        console.warn(`PerformanceLogger: Buffer full (${this.maxSamples} samples). Data collection stopped.`);
+        this.bufferFullWarned = true;
+      }
+      return;
+    }
+    
+    const i = this.index++;
+    this.timestamps[i] = loopStart - this.startTime;
+    this.cpuTimes[i] = loopEnd - loopStart;  // Total RAF loop duration
+    this.scaleAnimationTimes[i] = scaleAnimationTime;
+    this.renderTimes[i] = renderTime;
+    this.schedulingLags[i] = schedulingLag;
+    
+    if (this.lastFrameTime > 0) {
+      this.frameDeltas[i] = loopStart - this.lastFrameTime;
+    }
+    
+    this.lastFrameTime = loopStart;
+  }
+  
+  // Export raw arrays for Python analysis
+  export() {
+    const activeLength = Math.min(this.index, this.maxSamples);
+    
+    const rows = [];
+    for (let i = 0; i < activeLength; i++) {
+      rows.push({
+        timestamp: this.timestamps[i],
+        frameDelta: this.frameDeltas[i],
+        cpuTime: this.cpuTimes[i],
+        scaleAnimationTime: this.scaleAnimationTimes[i],
+        renderTime: this.renderTimes[i],
+        schedulingLag: this.schedulingLags[i],
+      });
+    }
+    
+    return rows; // This creates an array of objects
+  }
+  
+  downloadJSON() {
+    const blob = new Blob([JSON.stringify(this.export())], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `perf-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  
+  reset() {
+    this.index = 0;
+    this.startTime = performance.now();
+    this.lastFrameTime = 0;
+  }
 }

@@ -11,6 +11,7 @@ import { setGPUCoordinator } from '$lib/gpu';
  * @param {boolean} config.enableDebugging - Enable debugging features (default: true in development)
  * @returns {Object} Coordinator instances for advanced usage
  */
+
 export function setCoordinators(config = {}) {
   const scaleRegistry = setScaleRegistry();
   const gpuCoordinator = setGPUCoordinator({
@@ -18,9 +19,13 @@ export function setCoordinators(config = {}) {
     enableDebugging: config.enableDebugging !== false
   });
   
+  if (gpuCoordinator && scaleRegistry) {
+    gpuCoordinator.setScaleRegistry(scaleRegistry);
+    console.log('✅ DivePlot coordinators connected');
+  }
+  
   console.log('✅ DivePlot coordinators initialized');
   
-  // Return coordinators for advanced usage scenarios
   return {
     scaleRegistry,
     gpuCoordinator
