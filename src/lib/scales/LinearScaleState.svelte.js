@@ -1,7 +1,3 @@
-// src/lib/scales/LinearScaleState.svelte.js
-
-// UPDATED imports - remove Spring, add popmotion and GPU context
-import { spring } from 'popmotion';
 import { getGPUContext } from '$lib/gpu';
 import { scaleLinear } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
@@ -10,8 +6,10 @@ import { extent as d3Extent } from 'd3-array';
 const springConfigs = {
   default: { stiffness: 225, damping: 25, precision: 0.0001 },
   zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
+  pan: { stiffness: 300, damping: 40, precision: 0.00000001 },
+  // damping: sqrt(stiffness) * 2 for critical damping
   // pan: { stiffness: 250, damping: 30, precision: 0.00000001 },
-  pan: { stiffness: 50, damping: 30, precision: 0.00000001 },
+  // pan: { stiffness: 150, damping: 15, precision: 0.00000001 },
   reset: { stiffness: 50, damping: 15, precision: 0.0001 },
   zoomIn: { stiffness: 75, damping: 15, precision: 0.0001 }
 };
@@ -35,18 +33,20 @@ export class LinearScaleState {
     min: 100
   };
 
-  // Syncing crosshair and labels for mouse position
   currentDataPoint = $state();
-
-  // Freeze/debounce functionality
   #enableUpdates = $state(true);
   #frozenExtent = null;
 
-  // NEW: Custom animation state (replaces Svelte Spring)
-  #current = $state([0, 100]);
+  // Custom animation state
   #target = [0, 100];
   #velocity = [0, 0];
   #isAnimating = false;
+
+  #physicsCurrent = [0, 100];
+  #physicsPrevious = [0, 100];
+  
+  #renderCurrent = $state([0, 100]);
+
   #lastUpdateTime = 0;
 
   // NEW: Frame accumulation for high-frequency input (ZOOM ONLY)
@@ -60,6 +60,8 @@ export class LinearScaleState {
     hasPanUpdates: false
   };
 
+  #inputBuffer = [];
+
   #activePanContext = null;
 
   #gpuCoordinator = null;
@@ -72,6 +74,12 @@ export class LinearScaleState {
     return Math.max(this.#currentSpringConfig.precision, domainSize * 0.0001);
   });
 
+  #gpuStateObject = {
+    domainMin: 0,
+    domainMax: 100,
+    categoryCount: 0,
+    domainScale: 0.01
+  };
 
   constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}, gpuCoordinator = null) {
     this.name = name;
@@ -84,8 +92,28 @@ export class LinearScaleState {
     this.ready = $state(false);
 
     // Initialize animation state
-    this.#current = [...extent];
+    this.#physicsCurrent = [...extent];
+    this.#physicsPrevious = [...extent];
+    this.#renderCurrent = [...extent];
     this.#target = [...extent];
+
+    const self = this;
+    this.domain = {
+      get current() { return self.#renderCurrent; },
+      get target() { return self.#target; },
+      set(newValue, options = {}) {
+        if (options.instant) {
+          self.#target = [...newValue];
+          self.#physicsCurrent = [...newValue];
+          self.#physicsPrevious = [...newValue];
+          self.#renderCurrent = [...newValue];
+          self.#velocity = [0, 0];
+        } else {
+          self.#target = [...newValue];
+          self.#ensureAnimating();
+        }
+      }
+    };
 
     this.zoomInEffect = {
       enabled: options.zoomInEffect ?? true,
@@ -94,38 +122,10 @@ export class LinearScaleState {
     };
   }
 
-  // For future GPUCoordinator optimization
-  getParentChartId() {
-    // This would need to be set when the scale is created
-    // For now, use the scale name as identifier
-    return this.name;
-  }
-
-  // NEW: Replace Spring domain with custom getter/setter that maintains API compatibility
-  get domain() {
-    return {
-      current: this.#current,
-      target: this.#target,
-      set: (newValue, options = {}) => {
-        if (options.instant) {
-          this.#current = [...newValue];
-          this.#target = [...newValue];
-          this.#velocity = [0, 0];
-        } else {
-          this.#target = [...newValue];
-          this.#ensureAnimating();
-        }
-      }
-    };
-  }
-
   setReady() {
     this.ready = true;
   }
 
-  /**
-   * Enable or disable scale updates (freeze scale when disabled)
-   */
   setUpdatesEnabled(enabled) {
     const wasEnabled = this.#enableUpdates;
     this.#enableUpdates = enabled;
@@ -232,27 +232,45 @@ export class LinearScaleState {
   }
 
   updatePanPosition(screenX, screenY) {
-    if (this.#frameAccumulator.panScreenX !== screenX || 
-        this.#frameAccumulator.panScreenY !== screenY) {
-      this.#frameAccumulator.panScreenX = screenX;
-      this.#frameAccumulator.panScreenY = screenY;
-      this.#frameAccumulator.hasPanUpdates = true;
-      this.#ensureAnimating();
+    // if (this.#frameAccumulator.panScreenX !== screenX || 
+    //     this.#frameAccumulator.panScreenY !== screenY) {
+    //   this.#frameAccumulator.panScreenX = screenX;
+    //   this.#frameAccumulator.panScreenY = screenY;
+    //   this.#frameAccumulator.hasPanUpdates = true;
+    //   this.#ensureAnimating();
+    // }
+    const now = performance.now();
+  
+    this.#inputBuffer.push({
+      screenX,
+      screenY,
+      timestamp: now,
+    });
+    
+    if (this.#inputBuffer.length > 10) {
+      this.#inputBuffer.shift();
     }
+  
+    this.#ensureAnimating();
   }
 
-  // NEW: Animation system methods
+  accumulateZoom(dataCenter, scaleFactor) {
+    this.#frameAccumulator.logZoomDelta += Math.log(scaleFactor);
+    this.#frameAccumulator.zoomCenter = dataCenter;
+    this.#frameAccumulator.hasZoomUpdates = true;
+    this.#ensureAnimating();
+  }
+
+  updateScaleDomain(scale, current = true) {
+    const targetDomain = current ? this.domain.current : this.#target;
+    return { scale: scale.domain(targetDomain) }
+  }
+  
+
   #ensureAnimating() {
     if (!this.#isAnimating) {
       this.#isAnimating = true;
-      // this.#lastUpdateTime = performance.now();
       this.#lastUpdateTime = 0;
-      
-      // console.log(`🎬 Starting animation for scale: ${this.name}`, {
-      //   current: [...this.#current],
-      //   target: [...this.#target],
-      //   config: this.#currentSpringConfig.stiffness
-      // });
       
       if (this.#gpuCoordinator) {
         this.#gpuCoordinator.addAnimatingScale(this);
@@ -266,105 +284,18 @@ export class LinearScaleState {
     this.#currentSpringConfig = config;
   }
 
-  stepAnimation(currentTime) {
-    // const deltaTime = Math.min(currentTime - this.#lastUpdateTime, 16.67);
-    let deltaTime;
-    if (!this.#lastUpdateTime) {
-      deltaTime = 8.3;  // default first animation frame timing, alternatie to skip one frame?
-      this.#lastUpdateTime = currentTime;
-    } else {
-      deltaTime = currentTime - this.#lastUpdateTime;
-      this.#lastUpdateTime = currentTime;
-    }
-    
-    let hasChanges = false;
-
-    // 1. DOMAIN CALCULATION from accumulated input (ONLY place this happens!)
-    if (this.#frameAccumulator.hasZoomUpdates) {
-      const oldTarget = [...this.#target];
-      this.#updateSpringConfig(springConfigs.zoom);
-      const totalZoomFactor = Math.exp(this.#frameAccumulator.logZoomDelta);
-      this.#target = this.#calculateZoomedDomain(
-        this.#frameAccumulator.zoomCenter, 
-        totalZoomFactor
-      );
-      hasChanges = true;
-    }
-
-    if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
-      this.#updateSpringConfig(springConfigs.pan);
-      this.#target = this.#calculatePanTarget(
-        this.#frameAccumulator.panScreenX,
-        this.#frameAccumulator.panScreenY
-      );
-      hasChanges = true;
-    }
-
-    // 2. Reset accumulator AFTER domain calculation
-    this.#resetAccumulator();
-
-    // 3. Physics toward target (unchanged)
-    const springChanges = this.#springStep(deltaTime);
-    hasChanges = hasChanges || springChanges;
-
-
-    // 4. Check completion
-    const isComplete = !hasChanges || this.#isAtTarget();
-
-    if (isComplete) {
-      this.#isAnimating = false;
-      // console.log(`✅ Animation completed for scale: ${this.name}`);
-    }
-
-    return !isComplete;
-  }
-
-  #springStep(deltaTime) {
-    const config = this.#currentSpringConfig;
-    const dt = Math.min(deltaTime / 1000, 0.033);
-    // const dt = deltaTime / 1000;
-    // const dt = deltaTime;
-    
-    const distance = [
-      this.#target[0] - this.#current[0],
-      this.#target[1] - this.#current[1]
-    ];
-
-    if (Math.abs(distance[0]) < this.#cachedPrecision && 
-        Math.abs(distance[1]) < this.#cachedPrecision &&
-        Math.abs(this.#velocity[0]) < this.#cachedPrecision * 2 &&
-        Math.abs(this.#velocity[1]) < this.#cachedPrecision * 2) {
-      // Animation complete...
-      return false;
-    }
-  
-    
-    // Rest of spring physics unchanged...
-    for (let i = 0; i < 2; i++) {
-      const springForce = distance[i] * config.stiffness;
-      const dampingForce = -this.#velocity[i] * config.damping;
-      const acceleration = springForce + dampingForce;
-      
-      this.#velocity[i] += acceleration * dt;
-      this.#current[i] += this.#velocity[i] * dt;
-    }
-    
-    return true;
-  }
-
-  // NEW: Check if animation is complete
   #isAtTarget() {
     const config = this.#currentSpringConfig;
     const domainSize = Math.abs(this.#target[1] - this.#target[0]);
+    // TODO replace this calculation with cached value?
     const dynamicPrecision = Math.max(config.precision, domainSize * 0.00001);
     
-    return Math.abs(this.#current[0] - this.#target[0]) < dynamicPrecision &&
-           Math.abs(this.#current[1] - this.#target[1]) < dynamicPrecision &&
+    return Math.abs(this.#physicsCurrent[0] - this.#target[0]) < dynamicPrecision &&
+           Math.abs(this.#physicsCurrent[1] - this.#target[1]) < dynamicPrecision &&
            Math.abs(this.#velocity[0]) < dynamicPrecision * 10 &&
            Math.abs(this.#velocity[1]) < dynamicPrecision * 10;
   }
 
-  // NEW: Reset frame accumulator
   #resetAccumulator() {
     this.#frameAccumulator.logZoomDelta = 0;
     this.#frameAccumulator.zoomCenter = 0;
@@ -374,9 +305,9 @@ export class LinearScaleState {
     this.#frameAccumulator.hasPanUpdates = false;
   }
 
-  // Helper methods for zoom calculations
-  #calculateZoomedDomain(centerPoint, scaleFactor) {
-    const [min, max] = this.#target;
+  #calculateZoomedDomain(targetArray, centerPoint, scaleFactor) {
+    // const [min, max] = this.#target;
+    const [min, max] = targetArray;
     const minLimit = this.domainLimits.min;
     const maxLimit = this.domainLimits.max;
     const limitWidth = maxLimit - minLimit;
@@ -409,11 +340,42 @@ export class LinearScaleState {
       }
     }
 
-    return [newMin, newMax];
+    // return [newMin, newMax];
+    targetArray[0] = newMin;
+    targetArray[1] = newMax;
   }
 
-  #calculatePanTarget(screenX, screenY) {
-    if (!this.#activePanContext) return this.#target;
+  _processScheduledInput(currentTime, globalDelay) {
+    if (!this.#activePanContext || this.#inputBuffer.length === 0) {
+      return false;
+    }
+    
+    // Find most recent event that's ready based on global delay
+    let readyEvent = null;
+    let readyIndex = -1;
+    
+    for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
+      const event = this.#inputBuffer[i];
+      if (currentTime >= event.timestamp + globalDelay) {
+        readyEvent = event;
+        readyIndex = i;
+        break;
+      }
+    }
+    
+    if (readyEvent) {
+      this.#updateSpringConfig(springConfigs.pan);
+      this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
+      this.#inputBuffer.splice(0, readyIndex + 1);
+      return true;
+    }
+    
+    return false;
+  }
+
+  #calculatePanTarget(targetArray, screenX, screenY) {
+    // console.trace('calculatePanTarget called');
+    if (!this.#activePanContext) return // this.#target;
     
     const { initialScreenPos, initialDomain, screenToDataRatio } = this.#activePanContext;
     
@@ -438,21 +400,132 @@ export class LinearScaleState {
         newMin = this.domainLimits.min;
       }
     }
-    return [newMin, newMax];
+
+    // Determine the smallest meaningful change
+    const domainSize = this.#activePanContext.domainWidth;
+    const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
+    const quantum = pixelEquivalent * 1;
+
+    const beforeQuantization = [newMin, newMax];
+  
+    // Quantize to avoid micro-errors
+    newMin = Math.round(newMin / quantum) * quantum;
+    newMax = Math.round(newMax / quantum) * quantum;
+
+    // console.log(`Quantum: ${quantum.toFixed(8)}, Before: [${beforeQuantization[0].toFixed(6)}, ${beforeQuantization[1].toFixed(6)}], After: [${newMin.toFixed(6)}, ${newMax.toFixed(6)}]`);
+
+    // return [newMin, newMax];
+    targetArray[0] = newMin;
+    targetArray[1] = newMax;
   }
 
+  _applyInput() {
+    // console.trace('_applyInput called');
+    let inputApplied = false;
 
-  accumulateZoom(dataCenter, scaleFactor) {
-    this.#frameAccumulator.logZoomDelta += Math.log(scaleFactor);
-    this.#frameAccumulator.zoomCenter = dataCenter;
-    this.#frameAccumulator.hasZoomUpdates = true;
-    this.#ensureAnimating();
-    // console.log('frameAccumulator', this.#frameAccumulator.logZoomDelta)
+    if (this.#frameAccumulator.hasZoomUpdates) {
+      this.#updateSpringConfig(springConfigs.zoom);
+      // this.#target = this.#calculateZoomedDomain(
+      this.#calculateZoomedDomain(
+        this.#target,
+        this.#frameAccumulator.zoomCenter,
+        Math.exp(this.#frameAccumulator.logZoomDelta)
+      );
+      inputApplied = true;
+    }
+
+    if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
+      this.#updateSpringConfig(springConfigs.pan);
+      this.#calculatePanTarget(
+        this.#target,
+        this.#frameAccumulator.panScreenX,
+        this.#frameAccumulator.panScreenY
+      );
+      inputApplied = true;
+    }
+
+    this.#resetAccumulator();
+
+    if (inputApplied) {
+      this.#ensureAnimating();
+    }
   }
 
-  updateScaleDomain(scale, current = true) {
-    const targetDomain = current ? this.#current : this.#target;
-    return { scale: scale.domain(targetDomain) }
+  _updatePhysics(fixedTimestep) {
+    const dt = fixedTimestep / 1000.0;
+
+    // Update internal physics state.
+    this.#physicsPrevious[0] = this.#physicsCurrent[0];
+    this.#physicsPrevious[1] = this.#physicsCurrent[1];
+
+    if (this.#activePanContext) {
+      // Pan: Only simulate spring for min value, calculate max from fixed width
+      const domainWidth = this.#activePanContext.domainWidth;
+      
+      // Spring simulation only for min value
+      const distance = this.#target[0] - this.#physicsCurrent[0];
+      const springForce = distance * this.#currentSpringConfig.stiffness;
+      const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+      const acceleration = springForce + dampingForce;
+      
+      this.#velocity[0] += acceleration * dt;
+      this.#physicsCurrent[0] += this.#velocity[0] * dt;
+      
+      // Max is simply min + width (no spring simulation needed)
+      this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
+      this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
+
+      // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
+      
+    } else {
+      // Zoom: Independent springs for both min and max (needed for zoom-around-point)
+      for (let i = 0; i < 2; i++) {
+        const distance = this.#target[i] - this.#physicsCurrent[i];
+        const springForce = distance * this.#currentSpringConfig.stiffness;
+        const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+        const acceleration = springForce + dampingForce;
+        
+        this.#velocity[i] += acceleration * dt;
+        this.#physicsCurrent[i] += this.#velocity[i] * dt;
+      }
+    }
+
+    // for (let i = 0; i < 2; i++) {
+    //   const distance = this.#target[i] - this.#physicsCurrent[i];
+    //   // ... spring math using #physicsCurrent and #velocity ...
+    //   const springForce = distance * this.#currentSpringConfig.stiffness;
+    //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+    //   const acceleration = springForce + dampingForce;
+      
+    //   this.#velocity[i] += acceleration * dt;
+    //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
+    // }
+    
+    if (this.#isAtTarget()) {
+      this.#isAnimating = false;
+      this.#gpuCoordinator.removeAnimatingScale(this);
+    }
+  }
+
+  _setRenderState(alpha) {
+    this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
+    // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+  
+    if (this.#activePanContext) {
+      // Maintain rigid body constraint during interpolation
+      this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
+    } else {
+      this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+    }
+    // this.#renderCurrent = [
+      // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
+      // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
+    // ];
+
+    console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+
+    // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
+    return this.#renderCurrent[0]
   }
 
   resetZoom() {
@@ -466,30 +539,50 @@ export class LinearScaleState {
       return;
     }
 
+    // This is the final state we want to animate TOWARDS.
+    this.#target[0] = targetExtent[0];
+    this.#target[1] = targetExtent[1];
+    
     if (!this.ready && this.zoomInEffect.enabled) {
-      // Zoom-in effect: start expanded, animate to target
+      // --- Initial "Zoom-In" Effect ---
       this.#updateSpringConfig(this.zoomInEffect.springConfig);
       
       const center = (targetExtent[0] + targetExtent[1]) / 2;
       const range = targetExtent[1] - targetExtent[0];
-      const expandedExtent = [
-        center - (range * this.zoomInEffect.factor) / 2,
-        center + (range * this.zoomInEffect.factor) / 2
-      ];
+      const expandedMin = center - (range * this.zoomInEffect.factor) / 2;
+      const expandedMax = center + (range * this.zoomInEffect.factor) / 2;
       
-      this.#current = [...expandedExtent];
-      this.#target = [...targetExtent];
-      this.#ensureAnimating();
+      // Instantly set the starting physics state to the expanded view.
+      this.#physicsCurrent[0] = expandedMin;
+      this.#physicsCurrent[1] = expandedMax;
+      this.#physicsPrevious[0] = expandedMin;
+      this.#physicsPrevious[1] = expandedMax;
+      this.#renderCurrent[0] = expandedMin;
+      this.#renderCurrent[1] = expandedMax;
+      
     } else if (!this.ready) {
-      // Not ready, no animation
-      this.#current = [...targetExtent];
-      this.#target = [...targetExtent];
+      // --- Not ready, no animation ---
+      // Instantly snap ALL states to the target.
+      const [min, max] = targetExtent;
+      this.#physicsCurrent[0] = min;
+      this.#physicsCurrent[1] = max;
+      this.#physicsPrevious[0] = min;
+      this.#physicsPrevious[1] = max;
+      this.#renderCurrent[0] = min;
+      this.#renderCurrent[1] = max;
+      
     } else {
-      // Normal reset with animation
+      // --- Normal animated reset ---
+      // This is called when the user double-clicks. The animation starts
+      // from wherever the physics state currently is.
       this.#updateSpringConfig(springConfigs.reset);
-      this.#target = [...targetExtent];
-      this.#ensureAnimating();
     }
+
+    // Reset velocity to ensure a smooth start and stop any current motion.
+    this.#velocity = [0, 0];
+    
+    // Ensure the animation loop starts.
+    this.#ensureAnimating();
   }
 
   resetDomainLimits() {
@@ -507,74 +600,24 @@ export class LinearScaleState {
     this.#ensureAnimating();
   }
 
-  #domainScaleFactor = $derived.by(() => {
-    const [min, max] = this.#current;
-    const range = max - min;
-    return range === 0 ? 0 : 1 / range;
-  });
-
   get gpuState() {
-      const [min, max] = this.#current;
+      const [min, max] = this.#renderCurrent;
+      const range = max - min;
 
-      return {
-          domainMin: min,
-          domainMax: max,
-          categoryCount: 0,
-          domainScale: this.#domainScaleFactor
-      };
-  }
+      const state = this.#gpuStateObject;
+      state.domainMin = min;
+      state.domainMax = max;
+      // categoryCount is already 0
+      state.domainScale = range === 0 ? 0 : 1 / range;
 
-  getDebugInfo() {
-    return {
-      updatesEnabled: this.#enableUpdates,
-      currentExtent: [...this.#extent],
-      frozenExtent: this.#frozenExtent ? [...this.#frozenExtent] : null,
-      effectiveExtent: [...this.effectiveExtent],
-      extentsCount: this.#extents.size,
-      extents: Object.fromEntries(this.#extents),
-      
-      // Animation state debug info
-      animationState: {
-        current: [...this.#current],
-        target: [...this.#target],
-        velocity: [...this.#velocity],
-        isAnimating: this.#isAnimating
-      },
-      
-      springConfig: this.#currentSpringConfig,
-      
-      frameAccumulator: {
-        logZoomDelta: this.#frameAccumulator.logZoomDelta,
-        zoomCenter: this.#frameAccumulator.zoomCenter,
-        hasZoomUpdates: this.#frameAccumulator.hasZoomUpdates
-      }
-    };
+      console.log('gpuState', state.domainMin)
+
+      return state;
   }
 
   destroy() {
     this.#frozenExtent = null;
     this.#isAnimating = false;
     this.#resetAccumulator();
-  }
-
-  // TEST: Animation debugging helper
-  testAnimation(gpuCoordinator) {
-    console.log(`🧪 Starting test animation for scale: ${this.name}`);
-    
-    // Animate to a different domain and back
-    const originalTarget = [...this.#target];
-    const [min, max] = this.#current;
-    const range = max - min;
-    const testTarget = [min + range * 0.5, max + range * 0.5];
-    
-    // First animation: pan right
-    this.#target = testTarget;
-    this.#ensureAnimating();
-    
-    // Second animation after 1 second: return to original
-    setTimeout(() => {
-      this.#target = originalTarget;
-      this.#ensureAnimating();
-    }, 1000);
   }
 }

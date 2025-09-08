@@ -15,7 +15,8 @@
       <!-- <line stroke="currentColor" x1={0} y1={innerHeight} x2={0} y2={0} /> -->
       <!-- {#each c.yScale.ticks(ticksNumber) as tick (tick)} -->
       {#if c.scaleTypes.y === 'linear'}
-        {#each c.yScale.ticks(ticksNumber) as tick (tick)}
+        <!-- {#each c.yScale.ticks(ticksNumber) as tick (tick)} -->
+        {#each c.yScale.ticks(ticksNumber) as tick, i (i)}
           <line
             x1={0}
             x2={-6}

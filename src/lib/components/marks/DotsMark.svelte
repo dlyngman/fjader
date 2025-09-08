@@ -56,6 +56,7 @@
   let colorColumn = $derived(arrowTable?.getChild('color'));
 
   let xData = $derived.by(() => {
+    console.log('DotsMark: rerunning xData derived')
     if (!xColumn || !setup?.actualXScaleType) return null;
     
     const rawArray = xColumn.toArray(); // Zero-copy Arrow extraction

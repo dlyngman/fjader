@@ -335,9 +335,9 @@
 
       // console.log('✅ Drawing dots:', renderer.instanceCount, 'instances');
 
-      passEncoder.setPipeline(renderer.pipeline);
-      passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
-      passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
+      // passEncoder.setPipeline(renderer.pipeline);
+      // passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
+      // passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
       passEncoder.setBindGroup(2, renderer.perScaleBindGroup);  // ← This was missing!
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);

@@ -1,4 +1,4 @@
-$$render<script>
+<script>
   import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
   import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
   // import { setScaleRegistry } from "$lib/scales";

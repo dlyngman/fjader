@@ -241,7 +241,7 @@
 
     // console.log(`Pointer move at ${performance.now().toFixed(2)}ms`);
     
-    event.preventDefault();
+    // event.preventDefault();
     
     // NEW: Ultra-minimal event handler - just store latest position
     scales.updatePanPosition(event.offsetX, event.offsetY);
@@ -254,6 +254,7 @@
     activePanX = false;
     activePanY = false;
     
+    event.target.releasePointerCapture?.(event.pointerId);
     // NEW: End pan session
     scales.endPan();
   }
@@ -345,10 +346,10 @@
     position: relative;
     flex: 1;
     height: 100%;
-    contain: layout style paint;
-    will-change: transform, opacity;
-    /* will-change: contents; */
-    /* transform: translateZ(0); */
+    /* contain: layout style paint; */
+    contain: strict;
+    touch-action: none;
+    overscroll-behavior: none;
   }
 
   .svg-background, .canvas-layer, .svg-foreground {

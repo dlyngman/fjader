@@ -1,5 +1,7 @@
 import { setContext, getContext } from 'svelte';
 
+const TIMESTEP = 1000 / 240; // 60Hz physics clock (~16.667ms)
+
 /**
  * Manages all WebGPU resources, layers, and render scheduling for the dashboard.
  * Implements a "Managed Loop" for high-performance, on-demand rendering and
@@ -24,7 +26,8 @@ export class GPUCoordinator {
   #registeredCharts = $state(new Map());
 
   // Map for caching MSAA textures
-  #msaaTextures = new Map();
+  #msaaTextures = new Map(); // TODO old cache remove
+  #msaaCache = new Map();
 
   #dirtyChartIDs = new Set();
   #renderScheduled = false;
@@ -35,7 +38,14 @@ export class GPUCoordinator {
   #animationRafId = null;
   #scaleRegistry = null;
 
+  #accumulator = 0;
+  #lastFrameTime = 0;
+
+  #chartsToRenderSet = new Set();
+  #chartsToRenderArray = [];
+
   // Configuration
+  // #msaaSampleCount = 4;
   #msaaSampleCount = 4;
   lastRender;
 
@@ -43,7 +53,13 @@ export class GPUCoordinator {
   #renderCount = 0;
 
   #frameTimings = [];
-  #lastFrameTime = 0;
+
+  #creatingPipelines = new Set();
+
+  #smoothedDeltaTime = 8.3; // Initialize to ideal 60fps
+  #smoothingFactor = 0.05; // Adjust this value (0.05 to 0.2 is a good range)
+
+  #globalInputDelay = 0;
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -80,189 +96,182 @@ export class GPUCoordinator {
     return this.#scaleRegistry.scaleUsage.get(scale) || new Set();
   }
 
-  /**
-   * The single entry point for triggering a render. This method is designed
-   * to be called many times per frame without performance penalty.
-   */
   invalidateChart(chartId) {
-    const timestamp = performance.now();
-    // console.log(`🔄 invalidateChart(${chartId}) called at ${timestamp.toFixed(2)}ms`);
-
     if (this.#registeredCharts.has(chartId)) {
-      this.#dirtyChartIDs.add(chartId);
-
-      // If animation is active, dirty charts will be processed in animation loop
-      if (this.#animationActive) {
-        // console.log(`🎬 Chart ${chartId} invalidated during animation - will render in animation loop`);
-        return;
-      }
-
-      // Otherwise use immediate render scheduling
-      if (!this.#renderScheduled) {
-        this.#renderScheduled = true;
-        // console.log(`⏰ Scheduling microtask at ${timestamp.toFixed(2)}ms`);
-
-        // queueMicrotask(() => {
-        requestAnimationFrame(() => { 
-          const microtaskTime = performance.now();
-          // console.log(`🚀 Microtask executing at ${microtaskTime.toFixed(2)}ms (delay: ${(microtaskTime - timestamp).toFixed(2)}ms)`);
-
-          this.#renderScheduled = false;
-          const chartsToRender = [];
-          for (const chartId of this.#dirtyChartIDs) {
-              const chart = this.#registeredCharts.get(chartId);
-              if (chart?.visible && chart.contextConfigured) {
-                  chartsToRender.push(chart);
-              }
-          }
-          this.#coordinatedRender(chartsToRender);
-          this.#dirtyChartIDs.clear();
-        });
-      } else {
-        console.log(`⏭️ Render already scheduled at ${timestamp.toFixed(2)}ms`);
-      }
+        this.#dirtyChartIDs.add(chartId);
+        this.#ensureLoopIsActive();
     }
   }
 
-  // Register a scale for animation
+  #scheduleRender() {
+    // If a frame isn't already scheduled, request one.
+    // The #animationActive flag is now just for the physics loop.
+    if (!this.#animationRafId) {
+        this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+    }
+  } 
+  
   addAnimatingScale(scale) {
-    // console.log(`🎬 Adding scale to animation:`, scale.name || 'unnamed');
-    
     this.#animatedScales.add(scale);
-    
-    if (!this.#animationActive) {
-      this.#startAnimationLoop();
-    }
+    this.#ensureLoopIsActive(); // Also ensures the loop is running
   }
 
-  // Unregister a scale from animation
   removeAnimatingScale(scale) {
-    // console.log(`🎬 Removing scale from animation:`, scale.name || 'unnamed');
     this.#animatedScales.delete(scale);
   }
 
-  // Start the main animation loop
-  #startAnimationLoop() {
-    if (this.#animationActive) return;
-    
-    // console.log(`🎬 Starting animation loop with ${this.#animatedScales.size} scales`);
-    this.#animationActive = true;
+  #ensureLoopIsActive() {
+    if (this.#animationRafId) return; // Loop already scheduled
+
+    // For the very first frame of an animation, reset timing.
+    if (this.#animatedScales.size > 0 && !this.#animationActive) {
+        this.#animationActive = true;
+        this.#accumulator = 0;
+        this.#lastFrameTime = 0;
+    }
+
     this.#animationRafId = requestAnimationFrame(this.#animationLoop);
   }
 
-  // Main animation loop
-  #animationLoop = (timestamp) => {
-    // console.log(`🎬 Animation loop tick at ${timestamp.toFixed(2)}ms`);
-
-    // TEST START
-    // if (this.#lastFrameTime > 0) {
-    //   const frameInterval = timestamp - this.#lastFrameTime;
-    //   this.#frameTimings.push(frameInterval);
-      
-    //   // Keep only last 60 frames for analysis
-    //   if (this.#frameTimings.length > 60) {
-    //     this.#frameTimings.shift();
-    //   }
-      
-    //   // Log timing issues as they happen
-    //   const expectedInterval = 8.33; // 120fps
-    //   const tolerance = 1.0; // 1ms tolerance
-      
-    //   if (Math.abs(frameInterval - expectedInterval) > tolerance) {
-    //     console.warn(`⚡ Frame timing variance: ${frameInterval.toFixed(2)}ms (expected: ${expectedInterval}ms, deviation: ${(frameInterval - expectedInterval).toFixed(2)}ms)`);
-    //   }
+  #animationLoop = (currentTime) => {
+    
+    const loopStart = performance.now();
+    
+    // 1. MEASURE REAL TIME
+    const now = performance.now(); // Using performance.now() rather than raf timing, inspired by https://github.com/sveltejs/svelte/pull/14541
+    // const now = currentTime;
+    if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
+    let deltaTime = now - this.#lastFrameTime;
+    this.#lastFrameTime = now;
+    
+    console.log('new frame', deltaTime)
+    // if (this.#animatedScales.size > 0) {
+    //   console.log(`Delta: ${deltaTime.toFixed(2)}ms (FPS: ${(1000 / deltaTime).toFixed(0)})`);
     // }
+
+    if (deltaTime < 0) deltaTime = 8.3;
+    if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
+
+    // // 1. MEASURE REAL TIME
+    // if (this.#lastFrameTime === 0) this.#lastFrameTime = currentTime;
+    // let deltaTime = currentTime - this.#lastFrameTime;
+
+    // if (this.#animatedScales.size > 0) {
+    //   console.log(`Delta: ${deltaTime.toFixed(2)}ms (FPS: ${(1000 / deltaTime).toFixed(0)})`);
+    // }
+
+
+    // this.#lastFrameTime = currentTime;
+    // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
+
     
-    // this.#lastFrameTime = timestamp;
-    // TEST END
+    // 2. ACCUMULATE TIME
+    // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
+    this.#accumulator += deltaTime;
+    // this.#accumulator += this.#smoothedDeltaTime;
 
-    const loopStart = performance.now(); 
-    const schedulingLag = loopStart - timestamp;
     
-    let anyChanges = false;
+    // 4. RUN FIXED-STEP PHYSICS LOOP
+    while (this.#accumulator >= TIMESTEP) {
+      // 3. APPLY LATEST USER INPUT (once per frame)
+      for (const scale of this.#animatedScales) {
+        // Process scheduled input first
+        const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+        
+        // Then handle immediate input (zoom) if no scheduled input was processed
+        if (!scheduledProcessed && scale._applyInput) {
+          scale._applyInput(now);
+        }
+        // if (scale._applyInput) {
+        //   scale._applyInput(now);
+        // }
+      }
 
-    // TODO: Process all animating scales (will implement scale.stepAnimation() later)
-    for (const scale of this.#animatedScales) {
-      if (scale.stepAnimation?.(timestamp)) {
-        // Scale is still animating - mark affected charts dirty
-        const affectedCharts = this.#getChartsUsingScale(scale);
-        affectedCharts.forEach(chartId => {
-          this.#dirtyChartIDs.add(chartId);
-        });
-        anyChanges = true;
-      } else {
-        // Scale animation is complete - remove it
-        // console.log(`🎬 Removing completed scale: ${scale.name || 'unnamed'}`);
-        this.#animatedScales.delete(scale);
-      }      
-    }
-    const scaleAnimationTime = performance.now() - loopStart
-
-    let renderTime = 0;
-    // Render all dirty charts (animation + immediate invalidations)
-    if (this.#dirtyChartIDs.size > 0) {
-      const renderStart = performance.now();
-      // console.log(`🎨 Animation render: ${this.#dirtyChartIDs.size} dirty charts`);
-      
-      const chartsToRender = [];
-      for (const chartId of this.#dirtyChartIDs) {
-        const chart = this.#registeredCharts.get(chartId);
-        if (chart?.visible && chart.contextConfigured) {
-          chartsToRender.push(chart);
+      for (const scale of this.#animatedScales) {
+        if (scale._updatePhysics) {
+          scale._updatePhysics(TIMESTEP);
         }
       }
-      // console.log(chartsToRender)
-      this.#coordinatedRender(chartsToRender);
-      this.#dirtyChartIDs.clear();
-
-      renderTime = performance.now() - renderStart;
+      this.#accumulator -= TIMESTEP;
     }
 
-    // Continue animation loop or return to immediate mode
+    // 5. PREPARE FOR RENDER WITH INTERPOLATION
+    const alpha = this.#accumulator / TIMESTEP;
+    const chartsToRender = this.#chartsToRenderSet;
+    chartsToRender.clear();
+    // const chartsToRender = new Set();
+    
+    let renderCurrent;
+    for (const scale of this.#animatedScales) {
+      // if (scale._setRenderState) {
+      renderCurrent = scale._setRenderState(alpha); // just write over in case several scales animting, only log one
+      console.log('renderCurrent', renderCurrent)
+      // }
+      const affectedCharts = this.#getChartsUsingScale(scale);
+      affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+    }
+
+
+    // Add any charts that were dirtied by non-animation events
+    this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
+    this.#dirtyChartIDs.clear();
+
+    // 6. RENDER
+    const renderStart = performance.now();
+    if (chartsToRender.size > 0) {
+      // const chartArray = [];
+      const chartArray = this.#chartsToRenderArray;
+      chartArray.length = 0;
+
+      for (const chartId of chartsToRender) {
+        const chart = this.#registeredCharts.get(chartId);
+        if (chart?.visible && chart.contextConfigured) {
+          chartArray.push(chart);
+        }
+      }
+      this.#coordinatedRender(chartArray);
+    }
+    const renderEnd = performance.now();
+
+    const loopEnd = performance.now();
+
+    // this.perf.log(
+    //   loopStart,
+    //   loopEnd, 
+    //   0, // scaleAnimationTime (you could measure this separately)
+    //   renderEnd - renderStart, // renderTime
+    //   0, // schedulingLag
+    //   renderCurrent[0]
+    // );
+
+
+    // 7. CONTINUE OR END LOOP
     if (this.#animatedScales.size > 0) {
       this.#animationRafId = requestAnimationFrame(this.#animationLoop);
     } else {
-      // console.log(`🎬 Animation loop ending - no more animating scales`);
       this.#animationActive = false;
       this.#animationRafId = null;
-      
-      // Check if any immediate invalidations are waiting
-      if (this.#dirtyChartIDs.size > 0) {
-        // console.log(`⏰ Scheduling immediate render after animation end`);
-        this.#scheduleImmediateRender();
-      }
     }
-
-     const loopEnd = performance.now();
-
-    // Log full loop timing with breakdown
-    this.perf.log(
-      loopStart,           // Frame start (RAF callback start)
-      loopEnd,            // Frame end (RAF callback complete)
-      scaleAnimationTime, // Time spent on scale animation
-      renderTime,          // Time spent on rendering (optional additional metric)
-      schedulingLag
-    );
   };
 
   // Schedule immediate render (extracted for reuse)
-  #scheduleImmediateRender() {
-    if (!this.#renderScheduled) {
-      this.#renderScheduled = true;
-      requestAnimationFrame(() => {
-        this.#renderScheduled = false;
-        const chartsToRender = [];
-        for (const chartId of this.#dirtyChartIDs) {
-          const chart = this.#registeredCharts.get(chartId);
-          if (chart?.visible && chart.contextConfigured) {
-            chartsToRender.push(chart);
-          }
-        }
-        this.#coordinatedRender(chartsToRender);
-        this.#dirtyChartIDs.clear();
-      });
-    }
-  }
+  // #scheduleImmediateRender() {
+  //   if (!this.#renderScheduled) {
+  //     this.#renderScheduled = true;
+  //     requestAnimationFrame(() => {
+  //       this.#renderScheduled = false;
+  //       const chartsToRender = [];
+  //       for (const chartId of this.#dirtyChartIDs) {
+  //         const chart = this.#registeredCharts.get(chartId);
+  //         if (chart?.visible && chart.contextConfigured) {
+  //           chartsToRender.push(chart);
+  //         }
+  //       }
+  //       this.#coordinatedRender(chartsToRender);
+  //       this.#dirtyChartIDs.clear();
+  //     });
+  //   }
+  // }
 
   registerChart(chartId, canvas, config) {
     if (this.#registeredCharts.has(chartId)) {
@@ -311,11 +320,11 @@ export class GPUCoordinator {
       this.#registeredCharts.delete(chartId);
 
       // Clean up the cached MSAA texture when a chart is unregistered
-      const msaaTexture = this.#msaaTextures.get(chartId);
-      if (msaaTexture) {
-        msaaTexture.destroy();
-        this.#msaaTextures.delete(chartId);
-        console.debug(`🗑️ Destroyed cached MSAA texture for chart: ${chartId}`);
+      const msaa = this.#msaaCache.get(chartId);
+      if (msaa) {
+        msaa.texture.destroy();
+        this.#msaaCache.delete(chartId);
+        console.debug(`🗑️ Destroyed cached MSAA resources for chart: ${chartId}`);
       }
 
       // console.log(`📊 Unregistered chart: ${chartId}`);
@@ -399,33 +408,22 @@ export class GPUCoordinator {
     chartConfig.needsPlanRebuild = false; // The plan is now fresh.
   }
 
-  /**
-   * The main render function. It is designed to be lean, performing minimal work
-   * by iterating over a pre-computed "Render Plan".
-   * 
-   * ✅ UPDATED: Now supports dual bind group architecture for optimal performance
-   */
-  #coordinatedRender(chartsNeedingRender) {
+  async #coordinatedRender(chartsNeedingRender) {
     
-    // const startTime = performance.now();
-  
-    // Track frame intervals
-    // if (this.lastRender) {
-    //   const frameInterval = startTime - this.lastRender;
-    //   // this.#trackFrameTiming(frameInterval);
-    // }
-    
-    // console.log(`🎨 Render #${this.#renderCount || 0} at ${startTime.toFixed(2)}ms (${chartsNeedingRender.length} charts)`);
-  
     try {
 
-        for (const chartConfig of chartsNeedingRender) {
+      await this.#device.queue.onSubmittedWorkDone();
+
+      for (const chartConfig of chartsNeedingRender) {
+          console.log(chartConfig)
           if (chartConfig.layers.size > 0) {
               for (const layer of chartConfig.layers.values()) {
                   layer.renderer?.handleScaleOrRangeUpdate();
               }
           }
         }
+
+        await this.#device.queue.onSubmittedWorkDone();
 
         const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
 
@@ -489,31 +487,9 @@ export class GPUCoordinator {
         }
 
         this.#device.queue.submit([commandEncoder.finish()]);
-        // const endTime = performance.now();
-        // this.perf.log(startTime, endTime);
-        // const renderDuration = endTime - startTime;
 
-        // // Enhanced frame timing analysis
-        // if (this.lastRender) {
-        //   const frameInterval = startTime - this.lastRender;
-        //   const fps = 1000 / frameInterval;
-          
-        //   console.log(`⏱️ Frame interval: ${frameInterval.toFixed(1)}ms (${fps.toFixed(1)}fps) | Render duration: ${renderDuration.toFixed(2)}ms`);
-          
-        //   // Flag irregular timing
-        //   if (Math.abs(frameInterval - 8.33) > 2 && Math.abs(frameInterval - 16.67) > 2) {
-        //     console.warn(`🔥 Irregular frame timing: ${frameInterval.toFixed(1)}ms (expected ~8.3ms or ~16.7ms)`);
-        //   }
-        // }
-          
-        // console.log(`✅ Render #${this.#renderCount || 0} completed at ${endTime.toFixed(2)}ms (duration: ${renderDuration.toFixed(2)}ms)`);
+        // await this.#device.queue.onSubmittedWorkDone();
 
-        // if (renderDuration > 8) {
-        //   console.warn(`🐌 Slow render: ${renderDuration.toFixed(2)}ms (target: <8ms for 120fps)`);
-        // }
-        
-        // Update tracking variables
-        // this.lastRender = startTime; // Use start time for interval calculation
         this.#renderCount = (this.#renderCount || 0) + 1;
         
     } catch (error) {
@@ -522,37 +498,6 @@ export class GPUCoordinator {
     }
   }
 
-  // #trackFrameTiming(interval) {
-  //   this.#frameHistory.push(interval);
-    
-  //   // Keep last 30 frames for analysis
-  //   if (this.#frameHistory.length > 30) {
-  //     this.#frameHistory.shift();
-  //   }
-    
-  //   // Every 10 frames, analyze the pattern
-  //   if (this.#frameHistory.length >= 10 && this.#frameHistory.length % 10 === 0) {
-  //     const avg = this.#frameHistory.reduce((a, b) => a + b) / this.#frameHistory.length;
-  //     const avgFps = 1000 / avg;
-  //     const jitter = Math.max(...this.#frameHistory) - Math.min(...this.#frameHistory);
-      
-  //     console.log(`📊 Frame Analysis (last ${this.#frameHistory.length}): Avg ${avgFps.toFixed(1)}fps, Jitter ${jitter.toFixed(1)}ms`);
-      
-  //     // Detect specific patterns
-  //     const consistent60fps = this.#frameHistory.every(t => Math.abs(t - 16.67) < 2);
-  //     const consistent120fps = this.#frameHistory.every(t => Math.abs(t - 8.33) < 2);
-      
-  //     if (consistent60fps) {
-  //       console.info(`🔒 Locked to 60fps - browser/VSync limiting detected`);
-  //     } else if (consistent120fps) {
-  //       console.info(`🚀 Smooth 120fps - timing working correctly`);
-  //     } else if (jitter > 5) {
-  //       console.warn(`⚡ High frame jitter: ${jitter.toFixed(1)}ms - RAF/microtask mismatch likely`);
-  //     }
-  //   }
-  // }
-
-  // ✅ UPDATED: Fallback render also supports dual bind groups
   #fallbackRender(chartsNeedingRender) {
     console.warn('Using fallback render path');
     for (const chartConfig of chartsNeedingRender) {
@@ -636,33 +581,37 @@ export class GPUCoordinator {
 
   #createRenderPassDescriptor(textureView, canvas, chartId) {
     if (this.#msaaSampleCount > 1) {
-      let multisampleTexture = this.#msaaTextures.get(chartId);
+      let msaa = this.#msaaCache.get(chartId);
 
       // Recreate texture if it doesn't exist or if canvas dimensions have changed.
-      if (!multisampleTexture || 
-          multisampleTexture.width !== canvas.width ||
-          multisampleTexture.height !== canvas.height) {
+      if (!msaa || 
+          msaa.texture.width !== canvas.width ||
+          msaa.texture.height !== canvas.height) {
           
           // Destroy the old texture if it exists
-          multisampleTexture?.destroy();
+          msaa?.texture.destroy();
           
           // Create the new texture
-          multisampleTexture = this.#device.createTexture({
+          const newTexture = this.#device.createTexture({
               size: { width: canvas.width, height: canvas.height },
               sampleCount: this.#msaaSampleCount,
               format: this.#presentationFormat,
               usage: GPUTextureUsage.RENDER_ATTACHMENT
           });
 
+          msaa = {
+            texture: newTexture,
+            view: newTexture.createView() 
+          };
+
           // Store the new texture in our cache
-          this.#msaaTextures.set(chartId, multisampleTexture);
-          console.debug(`✨ Created/Resized MSAA texture for chart ${chartId} to ${canvas.width}x${canvas.height}`);
+          this.#msaaCache.set(chartId, msaa);
+          console.debug(`✨ Created/Resized MSAA resources for chart ${chartId} to ${canvas.width}x${canvas.height}`);
       }
 
       return {
         colorAttachments: [{
-          // Use the cached texture's view
-          view: multisampleTexture.createView(),
+          view: msaa.view, 
           resolveTarget: textureView,
           clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
           loadOp: 'clear',
@@ -682,6 +631,8 @@ export class GPUCoordinator {
   }
 
   async getOrCreateSharedPipeline(markType, createFn) {
+    console.log(`Pipeline request for ${markType}, existing:`, !!this.#sharedResources.pipelines.get(markType));
+  
     const existing = this.#sharedResources.pipelines.get(markType);
     
     if (existing) {
@@ -689,6 +640,23 @@ export class GPUCoordinator {
       return existing.pipeline;
     }
 
+    // Check if already creating
+    if (this.#creatingPipelines.has(markType)) {
+      // Wait for the other creation to complete
+      while (this.#creatingPipelines.has(markType)) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      // Now get the created pipeline
+      const newExisting = this.#sharedResources.pipelines.get(markType);
+      newExisting.refCount++;
+      console.log(`Pipeline request for ${markType}, was reused after creation:`, !!this.#sharedResources.pipelines.get(markType));
+      return newExisting.pipeline;
+    }
+
+    // Mark as creating
+    this.#creatingPipelines.add(markType);
+
+    console.log(`Creating new pipeline for ${markType}`);
     const pipeline = await createFn();
     
     this.#sharedResources.pipelines.set(markType, {
@@ -696,6 +664,8 @@ export class GPUCoordinator {
       refCount: 1,
       createdAt: Date.now()
     });
+
+    this.#creatingPipelines.delete(markType);
 
     return pipeline;
   }
@@ -845,6 +815,7 @@ class MinimalPerfLogger {
     this.scaleAnimationTimes = new Float32Array(maxSamples);
     this.renderTimes = new Float32Array(maxSamples);
     this.schedulingLags = new Float32Array(maxSamples);
+    this.renderDomains = new Float32Array(maxSamples);
     
     this.index = 0;
     this.maxSamples = maxSamples;
@@ -854,7 +825,7 @@ class MinimalPerfLogger {
   }
   
   // Inline, minimal frame logging
-  log(loopStart, loopEnd, scaleAnimationTime = 0, renderTime = 0, schedulingLag = 0) {
+  log(loopStart, loopEnd, scaleAnimationTime = 0, renderTime = 0, schedulingLag = 0, renderDomain = []) {
     if (this.index >= this.maxSamples) {
       // Warn once when buffer fills
       if (!this.bufferFullWarned) {
@@ -870,6 +841,7 @@ class MinimalPerfLogger {
     this.scaleAnimationTimes[i] = scaleAnimationTime;
     this.renderTimes[i] = renderTime;
     this.schedulingLags[i] = schedulingLag;
+    this.renderDomains[i] = renderDomain;
     
     if (this.lastFrameTime > 0) {
       this.frameDeltas[i] = loopStart - this.lastFrameTime;
@@ -891,6 +863,7 @@ class MinimalPerfLogger {
         scaleAnimationTime: this.scaleAnimationTimes[i],
         renderTime: this.renderTimes[i],
         schedulingLag: this.schedulingLags[i],
+        renderDomain: this.renderDomains[i],
       });
     }
     

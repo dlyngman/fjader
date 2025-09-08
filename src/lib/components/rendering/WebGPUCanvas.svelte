@@ -20,7 +20,6 @@
   let initializationError = $state(null);
 
   const chartId = c.chartId;
-  const devicePixelRatio = window.devicePixelRatio || 1;  // TODO look into using svelte reactiv alternative
 
   // Enhanced initialization with comprehensive error handling
   async function initWebGPU() {
@@ -84,7 +83,7 @@
         device,
         format: presentationFormat,
         alphaMode: 'premultiplied',
-        // desynchronized: true,
+        desynchronized: true,
       });
       
       contextConfigured = true;
@@ -130,6 +129,8 @@
     
     try {
       // Calculate new dimensions
+      const devicePixelRatio = window.devicePixelRatio || 1;
+
       const canvasWidth = width * devicePixelRatio;
       const canvasHeight = height * devicePixelRatio;
       
@@ -168,6 +169,7 @@
   // Enhanced context with better state management and error handling
   setContext('webgpu-canvas', {
     getCanvasDimensions() {
+      const currentDPR = window.devicePixelRatio || 1;
       return { 
         width: width * devicePixelRatio, 
         height: height * devicePixelRatio,
@@ -252,7 +254,7 @@
     }
   });
 
-  $effect.pre(() => {
+  $effect(() => {
     // Dependencies that trigger a canvas resize/reposition.
     void width;
     void height;
@@ -293,7 +295,8 @@
     top: 0;
     left: 0;
     contain: strict;
-    will-change: contents;
+    /* will-change: auto; */
+    /* will-change: contents; */
     backface-visibility: hidden;
     isolation: isolate;
     image-rendering: crisp-edges;

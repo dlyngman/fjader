@@ -17,7 +17,8 @@
 {#if c.isReady}
   <g class="axis" transform="translate(0 , {c.innerHeight})">
     <!-- <line x1={0} y1={0} x2={innerWidth} y2={0} /> -->
-    {#each c.xScale.ticks(ticksNumber) as tick (tick)}
+    <!-- {#each c.xScale.ticks(ticksNumber) as tick (tick)} -->
+    {#each c.xScale.ticks(ticksNumber) as tick, i (i)}
       <line
         x1={c.xScale(tick)}
         x2={c.xScale(tick)}

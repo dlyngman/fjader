@@ -234,7 +234,9 @@ export class ChartScales {
       const panContext = {
         initialScreenPos,
         initialDomain: [...this.xScaleState.domain.current],
-        screenToDataRatio: (this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0]) / this.layout.innerWidth
+        screenToDataRatio: (this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0]) / this.layout.innerWidth,
+        domainWidth: this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0],
+        screenDimension: this.layout.innerWidth
       };
       this.xScaleState.setPanContext(panContext);
     }
@@ -243,7 +245,9 @@ export class ChartScales {
       const panContext = {
         initialScreenPos,
         initialDomain: [...this.yScaleState.domain.current],
-        screenToDataRatio: (this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0]) / this.layout.innerHeight
+        screenToDataRatio: (this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0]) / this.layout.innerHeight,
+        domainWidth: this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0],
+        screenDimension: this.layout.innerHeight
       };
       this.yScaleState.setPanContext(panContext);
     }
