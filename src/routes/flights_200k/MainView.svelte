@@ -84,7 +84,8 @@
 		width: 100%;
 		aspect-ratio: 4/3;
 		min-height: 200px;
-		max-height: 400px;
+		/* max-height: 400px; */
+		max-height: 800px;
 		position: relative; /* Important for containing absolutely positioned children */
 	}
 </style>
