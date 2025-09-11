@@ -15,7 +15,6 @@ const springConfigs = {
 };
 
 export class LinearScaleState {
-  id = crypto.randomUUID();
   name = $state('');
 
   // Keep all existing properties
@@ -82,6 +81,7 @@ export class LinearScaleState {
   };
 
   constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}, gpuCoordinator = null) {
+    this.id = crypto.randomUUID();
     this.name = name;
     this.#initExtent = extent;
     this.#extent = extent;
@@ -89,6 +89,12 @@ export class LinearScaleState {
     this.zoomLimits.max = zoomLimits[0];
     this.zoomLimits.min = zoomLimits[1];
     this.#gpuCoordinator = gpuCoordinator;
+
+    // Register buffer pool with coordinator
+    if (gpuCoordinator) {
+      gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
+    }
+
     this.ready = $state(false);
 
     // Initialize animation state
@@ -522,7 +528,7 @@ export class LinearScaleState {
       // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
     // ];
 
-    console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+    // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
 
     // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
     return this.#renderCurrent[0]
@@ -610,7 +616,7 @@ export class LinearScaleState {
       // categoryCount is already 0
       state.domainScale = range === 0 ? 0 : 1 / range;
 
-      console.log('gpuState', state.domainMin)
+      // console.log('gpuState', state.domainMin)
 
       return state;
   }
@@ -619,5 +625,6 @@ export class LinearScaleState {
     this.#frozenExtent = null;
     this.#isAnimating = false;
     this.#resetAccumulator();
+    this.#gpuCoordinator.destroyBufferPoolForScale(this.id)
   }
 }

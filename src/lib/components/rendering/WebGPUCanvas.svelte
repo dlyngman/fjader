@@ -266,6 +266,10 @@
         // The setupCanvas function already contains the logic to check
         // if dimensions *actually* changed before doing expensive work.
         setupCanvas();
+        //Tell the coordinator to update this chart's frame uniforms
+        if (gpuCoordinator) {
+          gpuCoordinator.updateChartFrameUniforms(chartId);
+        }
     }
   });
 </script>

@@ -1,12 +1,6 @@
-/**
- * Base class for GPU-based renderers that handles common patterns:
- * - Resource lifecycle management
- * - Buffer creation and updates
- * - Scale parameter management with universal scale support
- * - GPU coordinator integration
- * - Error handling and cleanup
- * 
- */
+// BaseGPURenderer.svelte.js - Simplified for Pipeline Factory Pattern
+// Scale management completely removed - coordinator handles all scale concerns
+
 export class BaseGPURenderer {
   // Core properties
   #markType;
@@ -16,8 +10,6 @@ export class BaseGPURenderer {
 
   // Resource tracking
   #ownedResources = {
-    pipeline: false,
-    shader: false,
     buffers: [],
     layerControl: null
   };
@@ -27,32 +19,21 @@ export class BaseGPURenderer {
   #initializationError = $state(null);
   #instanceCount = $state(0);
 
-  // GPU resources
+  // GPU resources - SIMPLIFIED: Only mark data + frame uniforms
   #device = null;
-  #pipeline = $state(null);
+  #pipeline = $state(null); // Provided by coordinator factory
   
-  #perFrameBindGroup = $state(null);  // Hot path: uniforms that change every frame
-  #perDataBindGroup = $state(null);   // Cold path: data buffers that change rarely
-  #perScaleBindGroup = $state(null);
+  #perFrameBindGroup = $state(null);  // @group(0): resolution, dpr
+  #perDataBindGroup = $state(null);   // @group(1): mark data buffers
   
   #perFrameLayout = null;
   #perDataLayout = null;
-  #perScaleLayout = null;
 
-  #xCategoryPositionsBuffer = $state(null);
-  #yCategoryPositionsBuffer = $state(null);
+  #dataBindingConfig = null;
 
-  #dataBindingConfig = null;  // Store config for later use
-
-  // Existing uniform buffers
-  #scaleParamsArray = new Float32Array(32);
-  #scaleParamsBuffer = $state(null);
+  // Per-frame uniform buffers ONLY (no scale buffers)
   #resolutionBuffer = $state(null);
   #dprBuffer = $state(null);
-
-  // Resource tracking
-  #ownedBuffers = []; 
-  #layerControl = null;
 
   // Configuration
   #zIndex;
@@ -68,211 +49,9 @@ export class BaseGPURenderer {
     this.#zIndex = options.zIndex || 0;
     this.#devicePixelRatio = window.devicePixelRatio || 1;
     
-    // Store explicit scale types passed from mark components
+    // Store scale types for coordinator pipeline factory
     this.#xScaleType = options.xScaleType || 'linear';
     this.#yScaleType = options.yScaleType || 'linear';
-  }
-
-  // ===== STATIC METHODS FOR CENTRALIZED SCALE SUPPORT =====
-
-  /**
-   * Get standardized scale shader fragment that all components can use
-   * This contains the struct definition and universal scale functions
-   * 
-   */
- 
-  static getScaleShaderFragment() {
-    return `
-      struct ScaleParams {
-        domainMin: vec2<f32>,       // [0-1] Domain minimums
-        domainMax: vec2<f32>,       // [2-3] Domain maximums
-        rangeMin: vec2<f32>,        // [4-5] Range minimums
-        rangeMax: vec2<f32>,        // [6-7] Range maximums
-        scaleTypes: vec2<f32>,      // [8-9] Scale type constants (0=linear, 1=band, 2=point, 3=identity)
-        bandwidth: vec2<f32>,       // [10-11] Band scale bandwidths (per-chart)
-        categoryCount: vec2<f32>,   // [12-13] Number of categories for band scales
-        
-        // Pre-computed optimization values
-        domainScale: vec2<f32>,     // [14-15] 1.0 / (domainMax - domainMin)
-        rangeSize: vec2<f32>,       // [16-17] rangeMax - rangeMin
-        
-        // Padding to ensure 128-byte alignment, ready for future use
-        padding_0: vec2<f32>,       // [18-19]
-        padding_1: vec2<f32>,       // [20-21]
-        padding_2: vec2<f32>,       // [22-23]
-        padding_3: vec2<f32>,       // [24-25]
-        padding_4: vec2<f32>,       // [26-27]
-        padding_5: vec2<f32>,       // [28-29]
-        padding_6: vec2<f32>,       // [30-31]
-      };
-
-      // Enhanced scale result with bandwidth info
-      struct ScaleResult {
-        position: f32,
-        bandwidth: f32,  // 0 for linear scales, actual bandwidth for band scales
-      };
-
-      // Universal scaling function with 3-bind-group support
-      // fn scaleValueDetailed(
-      //   value: f32, 
-      //   scaleType: f32,
-      //   domainMin: f32, 
-      //   domainScale: f32,
-      //   rangeMin: f32, 
-      //   rangeSize: f32,
-      //   bandwidth: f32,
-      //   categoryCount: f32,
-      //   categoryPositions: ptr<storage, array<f32>>
-      // ) -> ScaleResult {
-      //   if (scaleType == 0.0) {
-      //     // Linear scale
-      //     let normalized = (value - domainMin) * domainScale;
-      //     return ScaleResult(
-      //       rangeMin + normalized * rangeSize,
-      //       0.0  // No bandwidth for linear scales
-      //     );
-          
-      //   } else if (scaleType == 1.0) {
-      //     // Band scale: use pre-computed category positions from @group(2)
-      //     let categoryIndex = u32(floor(clamp(value, 0.0, categoryCount - 1.0)));
-      //     let position = (*categoryPositions)[categoryIndex];  // Pre-computed pixel position
-          
-      //     return ScaleResult(
-      //       position,
-      //       bandwidth
-      //     );
-          
-      //   } else if (scaleType == 2.0) {
-      //     // Point scale: use pre-computed positions (center points)
-      //     let categoryIndex = u32(floor(clamp(value, 0.0, categoryCount - 1.0)));
-      //     let position = (*categoryPositions)[categoryIndex];
-          
-      //     return ScaleResult(
-      //       position,
-      //       0.0  // Points don't have bandwidth
-      //     );
-          
-      //   } else if (scaleType == 3.0) {
-      //     // Identity scale: pass through
-      //     return ScaleResult(value, 0.0);
-      //   }
-        
-      //   // Fallback to linear
-      //   let normalized = (value - domainMin) * domainScale;
-      //   return ScaleResult(
-      //     rangeMin + normalized * rangeSize,
-      //     0.0
-      //   );
-      // }
-      fn scaleValueDetailed(
-        value: f32, 
-        scaleType: f32,
-        domainMin: f32, 
-        domainScale: f32,
-        rangeMin: f32, 
-        rangeSize: f32,
-        bandwidth: f32,
-        categoryCount: f32,
-        categoryPositions: ptr<storage, array<f32>>
-      ) -> ScaleResult {
-        // Hard-coded linear scale for testing
-        let normalized = (value - domainMin) * domainScale;
-        return ScaleResult(
-          rangeMin + normalized * rangeSize,
-          0.0
-        );
-      }
-
-      // Convenience functions accessing @group(2) category positions
-      fn scaleXDetailed(value: f32, scaleParams: ScaleParams) -> ScaleResult {
-        return scaleValueDetailed(
-          value,
-          scaleParams.scaleTypes.x,
-          scaleParams.domainMin.x,
-          scaleParams.domainScale.x,
-          scaleParams.rangeMin.x,
-          scaleParams.rangeSize.x,
-          scaleParams.bandwidth.x,
-          scaleParams.categoryCount.x,
-          &xCategoryPositions  // References @group(2) @binding(0)
-        );
-      }
-
-      fn scaleYDetailed(value: f32, scaleParams: ScaleParams) -> ScaleResult {
-        return scaleValueDetailed(
-          value,
-          scaleParams.scaleTypes.y,
-          scaleParams.domainMin.y,
-          scaleParams.domainScale.y,
-          scaleParams.rangeMin.y,
-          scaleParams.rangeSize.y,
-          scaleParams.bandwidth.y,
-          scaleParams.categoryCount.y,
-          &yCategoryPositions  // References @group(2) @binding(1)
-        );
-      }
-
-      // Simple convenience functions (return center for bands)
-      fn scaleX(value: f32, scaleParams: ScaleParams) -> f32 {
-        let result = scaleXDetailed(value, scaleParams);
-        if (scaleParams.scaleTypes.x == 1.0) {
-          return result.position + result.bandwidth * 0.5; // Center for bands
-        }
-        return result.position; // Exact position for linear
-      }
-
-      fn scaleY(value: f32, scaleParams: ScaleParams) -> f32 {
-        let result = scaleYDetailed(value, scaleParams);
-        if (scaleParams.scaleTypes.y == 1.0) {
-          return result.position + result.bandwidth * 0.5; // Center for bands
-        }
-        return result.position; // Exact position for linear
-      }
-    `;
-  }
-
-  /**
-   * Get standard binding constants for dual bind group architecture
-   */
-
-  static getStandardBindings() {
-    return {
-      // @group(0) - Per-Frame Group (hot path - changes every frame)
-      FRAME_RESOLUTION: 0,
-      FRAME_SCALE_PARAMS: 1,
-      FRAME_DEVICE_PIXEL_RATIO: 2,
-      
-      // @group(1) - Per-Data Group (cold path - changes when data updates)
-      // Data bindings 0-N are component-specific and configured via dataBindingConfig
-      
-      // @group(2) - Per-Scale Group (shared scale data)
-      SCALE_X_CATEGORY_POSITIONS: 0,
-      SCALE_Y_CATEGORY_POSITIONS: 1,
-    };
-  }
-
-  /**
-   * Generate complete shader code by combining scale fragment with component code
-   * This is the main function components use to get their complete shader   * 
-   */
-
-  static generateShader(componentSpecificCode) {
-    const scaleFragment = BaseGPURenderer.getScaleShaderFragment();
-    
-    return `
-      ${scaleFragment}
-      
-      // @group(0) - Per-frame uniforms (hot path)
-      @group(0) @binding(0) var<uniform> resolution: vec2<f32>;
-      @group(0) @binding(1) var<uniform> scaleParams: ScaleParams;
-      @group(0) @binding(2) var<uniform> devicePixelRatio: f32;
-      
-      // @group(2) - Per-scale shared data (category positions)
-      @group(2) @binding(0) var<storage, read> xCategoryPositions: array<f32>;
-      @group(2) @binding(1) var<storage, read> yCategoryPositions: array<f32>;
-      
-      ${componentSpecificCode}
-    `;
   }
 
   // ===== PUBLIC GETTERS =====
@@ -283,402 +62,190 @@ export class BaseGPURenderer {
   get pipeline() { return this.#pipeline; }
   get markType() { return this.#markType; }
   
-  // ✅ NEW: Dual bind group getters
-  get perFrameBindGroup() { return this.#perFrameBindGroup; }
+  // get perFrameBindGroup() { return this.#perFrameBindGroup; }
+  get perFrameBindGroup() { return null; }
   get perDataBindGroup() { return this.#perDataBindGroup; }
-  get perScaleBindGroup() { return this.#perScaleBindGroup; }
-  
-  // ✅ DEPRECATED: Legacy getter for backward compatibility during transition
-  get bindGroup() { 
-    console.warn(`❌ [${this.#markType}] bindGroup getter is deprecated. Use perFrameBindGroup and perDataBindGroup instead.`);
-    return this.#perFrameBindGroup; // Return frame group as fallback
-  }
 
   // ===== INITIALIZATION =====
 
-  /**
-   * Initialize the renderer with shape-specific configuration
-   * 
-   * ✅ UPDATED: Now requires dataBindingConfig for dual bind group architecture
-   * 
-   * @param {Object} config - Shape-specific configuration
-   * @param {string} config.shaderCode - WGSL shader code (should be generated with generateShader)
-   * @param {Array} config.vertexBufferLayout - Vertex buffer layout configuration
-   * @param {Array} config.dataBindingConfig - Data binding configuration for @group(1)
-   */
   async initialize(config) {
     try {
-      const { dataBindingConfig, shaderCode, vertexBufferLayout } = config;
+      const { dataBindingConfig, markShaderCode, vertexBufferLayout } = config;
       
       if (!dataBindingConfig) {
-        throw new Error(`${this.#markType} renderer requires dataBindingConfig for dual bind group architecture`);
-      }
-      
-      if (!Array.isArray(dataBindingConfig)) {
-        throw new Error(`${this.#markType} renderer dataBindingConfig must be an array`);
+        throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
       }
 
-      console.log(`🔧 Initializing ${this.#markType} renderer with dual bind group architecture`);
+      console.log(`Initializing ${this.#markType} renderer with pipeline factory pattern`);
       
       this.#device = this.#webGPUContext.getDevice();
       if (!this.#device) {
         throw new Error('No WebGPU device available from context');
       }
 
-      // Store config for later use
       this.#dataBindingConfig = dataBindingConfig;
 
-      await this.#createSharedResources(this.#device, config);
-      await this.#createCommonBuffers(this.#device);
+      // Get pipeline from coordinator factory (coordinator handles shader generation)
+      await this.#getPipelineFromCoordinator(markShaderCode, vertexBufferLayout);
       
-      // ✅ NEW: Auto-create per-frame bind group (it's consistent across all marks)
-      this.#createPerFrameBindGroup();
-      this.#createPerScaleBindGroup();
+      // Create renderer-specific resources
+      await this.#createRendererSpecificBuffers();
+      // this.#createBindGroupLayouts();
+      // this.#createPerFrameBindGroup();
       
       this.#resourcesCreated = true;
-      console.log(`✅ ${this.#markType} renderer initialized successfully with dual bind groups`);
+      console.log(`${this.#markType} renderer initialized - coordinator provides pipeline and scale management`);
       
     } catch (error) {
-      console.error(`❌ ${this.#markType} renderer initialization failed:`, error);
+      console.error(`${this.#markType} renderer initialization failed:`, error);
       this.#initializationError = error.message;
       throw error;
     }
   }
 
-  // ===== NEW: BIND GROUP LAYOUT CREATION =====
+  // ===== PIPELINE FACTORY INTEGRATION =====
 
-  /**
-   * Create bind group layouts for dual bind group architecture
-   * 
-   * @param {GPUDevice} device - WebGPU device
-   * @param {Array} dataBindingConfig - Configuration for data bindings
-   * @returns {Object} Object containing perFrameLayout and perDataLayout
-   */
-  #createBindGroupLayouts(device, dataBindingConfig) {
-    // Per-frame bind group layout (consistent across all marks)
-    const perFrameLayout = device.createBindGroupLayout({
-      label: `${this.#markType}-per-frame-layout`,
-      entries: [
-        { 
-          binding: 0, 
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-          buffer: { type: 'uniform' } 
-        }, // resolution
-        { 
-          binding: 1, 
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-          buffer: { type: 'uniform' } 
-        }, // scaleParams
-        { 
-          binding: 2, 
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-          buffer: { type: 'uniform' } 
-        }, // devicePixelRatio
-      ]
+  async #getPipelineFromCoordinator(markShaderCode, vertexBufferLayout) {
+    const scaleTypes = {
+      x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
+      y: this.#chartContext.scaleTypes?.y || this.#yScaleType
+    };
+
+    console.log(`Requesting pipeline from coordinator for ${this.#markType}:`, scaleTypes);
+
+    // Use coordinator's pipeline factory
+    // Get both pipeline and layouts from coordinator
+    const result = await this.#gpuCoordinator.createPipelineForMarkType(
+      this.#markType,
+      scaleTypes,
+      markShaderCode,
+      vertexBufferLayout,
+      this.#dataBindingConfig // Pass this so coordinator can create stable layouts
+    );
+
+    console.log('Pipeline factory result:', {
+      hasPipeline: !!result.pipeline,
+      hasFrameLayout: !!result.frameLayout,
+      hasDataLayout: !!result.dataLayout
     });
 
-    // Per-data bind group layout (varies by mark type)
-    const perDataLayout = device.createBindGroupLayout({
-      label: `${this.#markType}-per-data-layout`,
-      entries: dataBindingConfig.map(config => ({
-        binding: config.binding,
-        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-        buffer: { type: config.type || 'read-only-storage' }
-      }))
+    this.#pipeline = result.pipeline;
+    this.#perFrameLayout = result.frameLayout;    // From coordinator
+    this.#perDataLayout = result.dataLayout;     // From coordinator
+
+    console.log('After assignment:', {
+      pipeline: !!this.#pipeline,
+      frameLayout: !!this.#perFrameLayout,
+      dataLayout: !!this.#perDataLayout
     });
 
-    // Per-scale layout (shared scale data)
-    const perScaleLayout = device.createBindGroupLayout({
-      label: `${this.#markType}-per-scale-layout`,
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } }, // xCategoryPositions
-        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } }, // yCategoryPositions
-      ]
-    });
-
-    return { perFrameLayout, perDataLayout, perScaleLayout };
-  }
-
-  // ===== UPDATED: SHARED RESOURCE MANAGEMENT =====
-
-  async #createSharedResources(device, config) {
-    if (!this.#gpuCoordinator) {
-      throw new Error('GPU coordinator not available');
+    if (!this.#pipeline) {
+      throw new Error(`Coordinator failed to provide pipeline for ${this.#markType}`);
     }
 
-    // ✅ NEW: Create bind group layouts
-    const { perFrameLayout, perDataLayout, perScaleLayout } = this.#createBindGroupLayouts(device, config.dataBindingConfig);
-    this.#perFrameLayout = perFrameLayout;
-    this.#perDataLayout = perDataLayout;
-    this.#perScaleLayout = perScaleLayout;
-
-    // Create or get shared shader
-    const shaderModule = await this.#gpuCoordinator.getOrCreateSharedShader(
-      this.#markType, 
-      config.shaderCode
-    );
-    this.#ownedResources.shader = true;
-
-    // Create pipeline with 3-bind-group layout
-    const pipelineLayout = device.createPipelineLayout({
-      label: `${this.#markType}-pipeline-layout`,
-      bindGroupLayouts: [perFrameLayout, perDataLayout, perScaleLayout]
-    });
-
-    this.#pipeline = await this.#gpuCoordinator.getOrCreateSharedPipeline(
-      this.#markType, 
-      async () => {
-        const msaaSampleCount = this.#webGPUContext.getMsaaSampleCount();
-
-        return device.createRenderPipeline({
-          label: `${this.#markType}-pipeline`,
-          layout: pipelineLayout,
-          vertex: {
-            module: shaderModule,
-            entryPoint: 'vertexMain',
-            buffers: config.vertexBufferLayout || [],
-          },
-          fragment: {
-            module: shaderModule,
-            entryPoint: 'fragmentMain',
-            targets: [{
-              format: this.#webGPUContext.getPresentationFormat(),
-              blend: {
-                color: {
-                  srcFactor: 'src-alpha',
-                  dstFactor: 'one-minus-src-alpha',
-                  operation: 'add',
-                },
-                alpha: {
-                  srcFactor: 'one',
-                  dstFactor: 'one-minus-src-alpha',
-                  operation: 'add',
-                },
-              },
-            }],
-          },
-          primitive: { topology: 'triangle-list' },
-          multisample: { count: msaaSampleCount > 1 ? msaaSampleCount : 1 },
-        });
-      }
-    );
-    this.#ownedResources.pipeline = true;
+    console.log(`Pipeline received from coordinator for ${this.#markType}`);
   }
 
-  async #createCategoryPositionBuffers(device) {
-    // Create buffers with reasonable initial size (will resize as needed)
-    const initialSize = 4 * 256; // 256 categories initial capacity
+  // ===== SIMPLIFIED BIND GROUP LAYOUTS =====
 
-    this.#xCategoryPositionsBuffer = device.createBuffer({
-      size: initialSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      label: `${this.#markType}-x-category-positions`
-    });
-    this.#ownedResources.buffers.push(this.#xCategoryPositionsBuffer);
+  // #createBindGroupLayouts() {
+  //   // Per-frame bind group layout (@group(0))
+  //   this.#perFrameLayout = this.#device.createBindGroupLayout({
+  //     label: `${this.#markType}-per-frame-layout`,
+  //     entries: [
+  //       { 
+  //         binding: 0, 
+  //         visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
+  //         buffer: { type: 'uniform' } 
+  //       }, // resolution
+  //       { 
+  //         binding: 1, 
+  //         visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
+  //         buffer: { type: 'uniform' } 
+  //       }, // devicePixelRatio
+  //     ]
+  //   });
 
-    this.#yCategoryPositionsBuffer = device.createBuffer({
-      size: initialSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      label: `${this.#markType}-y-category-positions`
-    });
-    this.#ownedResources.buffers.push(this.#yCategoryPositionsBuffer);
+  //   // Per-data bind group layout (@group(1))
+  //   this.#perDataLayout = this.#device.createBindGroupLayout({
+  //     label: `${this.#markType}-per-data-layout`,
+  //     entries: this.#dataBindingConfig.map(config => ({
+  //       binding: config.binding,
+  //       visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+  //       buffer: { type: config.type || 'read-only-storage' }
+  //     }))
+  //   });
+  // }
 
-    // Write initial empty data
-    device.queue.writeBuffer(this.#xCategoryPositionsBuffer, 0, new Float32Array(256));
-    device.queue.writeBuffer(this.#yCategoryPositionsBuffer, 0, new Float32Array(256));
+  // ===== RENDERER-SPECIFIC RESOURCES =====
 
-    console.log(`📊 Created category position buffers for ${this.#markType} (256 category initial capacity)`);
-  }
-
-  async #createCommonBuffers(device) {
-    // Create chart-specific uniform buffers
-    this.#resolutionBuffer = device.createBuffer({
+  async #createRendererSpecificBuffers() {
+    // Resolution buffer
+    this.#resolutionBuffer = this.#device.createBuffer({
       size: 8, // vec2<f32>
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       label: `${this.#markType}-resolution-buffer`
     });
     this.#ownedResources.buffers.push(this.#resolutionBuffer);
 
-    this.#scaleParamsBuffer = device.createBuffer({
-      size: 128, // 16 f32 values for enhanced scale parameters
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      label: `${this.#markType}-scale-params-buffer`
-    });
-    this.#ownedResources.buffers.push(this.#scaleParamsBuffer);
-
-    // Use shared DPR buffer if available, create own if needed
+    // Use shared DPR buffer from coordinator
     this.#dprBuffer = this.#gpuCoordinator?.getSharedUniformBuffer('devicePixelRatio');
     
     if (!this.#dprBuffer) {
-      console.warn(`🔶 Creating own DPR buffer for ${this.#markType} - coordinator should provide this`);
-      this.#dprBuffer = device.createBuffer({
+      console.warn(`Creating own DPR buffer for ${this.#markType} - coordinator should provide this`);
+      this.#dprBuffer = this.#device.createBuffer({
         size: 4, // f32
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         label: `${this.#markType}-dpr-buffer`
       });
-      device.queue.writeBuffer(this.#dprBuffer, 0, new Float32Array([this.#devicePixelRatio]));
+      this.#device.queue.writeBuffer(this.#dprBuffer, 0, new Float32Array([this.#devicePixelRatio]));
       this.#ownedResources.buffers.push(this.#dprBuffer);
     }
 
-    await this.#createCategoryPositionBuffers(device);
-
     // Update initial values
     this.updateResolution();
-    this.updateScaleParameters();
-    this.updateCategoryPositions();
   }
 
-  // ===== NEW: DUAL BIND GROUP CREATION =====
+  // ===== BIND GROUP CREATION =====
 
-  /**
-   * Create the per-frame bind group (internal method)
-   * This contains uniforms that change frequently (every frame during pan/zoom)
-   * Called automatically after buffer creation
-   */
-  #createPerFrameBindGroup() {
-    if (!this.#device || !this.#perFrameLayout) {
-      console.warn(`⚠️ Cannot create per-frame bind group for ${this.#markType} - missing device or layout`);
-      return;
-    }
+  // #createPerFrameBindGroup() {
+  //   if (!this.#device || !this.#perFrameLayout) {
+  //     console.warn(`Cannot create per-frame bind group for ${this.#markType} - missing device or layout`);
+  //     return;
+  //   }
 
-    if (!this.#resolutionBuffer || !this.#scaleParamsBuffer || !this.#dprBuffer) {
-      console.warn(`⚠️ Cannot create per-frame bind group for ${this.#markType} - missing uniform buffers`);
-      return;
-    }
+  //   if (!this.#resolutionBuffer || !this.#dprBuffer) {
+  //     console.warn(`Cannot create per-frame bind group for ${this.#markType} - missing uniform buffers`);
+  //     return;
+  //   }
 
-    try {
-      this.#perFrameBindGroup = this.#device.createBindGroup({
-        label: `${this.#markType}-per-frame-bind-group`,
-        layout: this.#perFrameLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.#resolutionBuffer } },
-          { binding: 1, resource: { buffer: this.#scaleParamsBuffer } },
-          { binding: 2, resource: { buffer: this.#dprBuffer } },
-        ]
-      });
+  //   try {
+  //     this.#perFrameBindGroup = this.#device.createBindGroup({
+  //       label: `${this.#markType}-per-frame-bind-group`,
+  //       layout: this.#perFrameLayout,
+  //       entries: [
+  //         { binding: 0, resource: { buffer: this.#resolutionBuffer } },
+  //         { binding: 1, resource: { buffer: this.#dprBuffer } },
+  //       ]
+  //     });
 
-      console.debug(`✅ Per-frame bind group created for ${this.#markType}`);
+  //     console.debug(`Per-frame bind group (@group(0)) created for ${this.#markType}`);
       
-    } catch (error) {
-      console.error(`❌ Failed to create per-frame bind group for ${this.#markType}:`, error);
-      this.#initializationError = error.message;
-      throw error;
-    }
-  }
+  //   } catch (error) {
+  //     console.error(`Failed to create per-frame bind group for ${this.#markType}:`, error);
+  //     this.#initializationError = error.message;
+  //     throw error;
+  //   }
+  // }
 
-  #createPerScaleBindGroup() {
-    if (!this.#device || !this.#perScaleLayout) {
-      console.warn(`⚠️ Cannot create per-scale bind group for ${this.#markType} - missing device or layout`);
-      return;
-    }
-
-    if (!this.#xCategoryPositionsBuffer || !this.#yCategoryPositionsBuffer) {
-      console.warn(`⚠️ Cannot create per-scale bind group for ${this.#markType} - missing category position buffers`);
-      return;
-    }
-
-    try {
-      this.#perScaleBindGroup = this.#device.createBindGroup({
-        label: `${this.#markType}-per-scale-bind-group`,
-        layout: this.#perScaleLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.#xCategoryPositionsBuffer } },
-          { binding: 1, resource: { buffer: this.#yCategoryPositionsBuffer } },
-        ]
-      });
-
-      console.debug(`✅ Per-scale bind group (@group(2)) created for ${this.#markType}`);
-      
-    } catch (error) {
-      console.error(`❌ Failed to create per-scale bind group for ${this.#markType}:`, error);
-      this.#initializationError = error.message;
-      throw error;
-    }
-  }
-
-  updateCategoryPositions() {
-    if (!this.#device || !this.#xCategoryPositionsBuffer || !this.#yCategoryPositionsBuffer) {
-      return;
-    }
-
-    try {
-      const xPositions = this.#chartContext.xCategoryPositions;
-      const yPositions = this.#chartContext.yCategoryPositions;
-      
-      // ✅ FIX: Provide fallback positions for linear scales
-      const defaultPositions = new Float32Array([0]);
-
-      // Update X category positions 
-      const finalXPositions = xPositions?.length > 0 ? xPositions : defaultPositions;
-      this.#device.queue.writeBuffer(this.#xCategoryPositionsBuffer, 0, finalXPositions);
-
-      // Update Y category positions
-      const finalYPositions = yPositions?.length > 0 ? yPositions : defaultPositions;
-      this.#device.queue.writeBuffer(this.#yCategoryPositionsBuffer, 0, finalYPositions);
-
-      console.log('✅ Category positions updated:', {
-        xLength: finalXPositions.length,
-        yLength: finalYPositions.length
-      });
-      
-    } catch (error) {
-      console.error(`❌ Category positions update failed:`, error);
-    }
-  }
-
-  #resizeCategoryPositionBuffer(axis, newByteLength) {
-    const device = this.#device;
-    if (!device) return;
-
-    const isX = axis === 'x';
-    const oldBuffer = isX ? this.#xCategoryPositionsBuffer : this.#yCategoryPositionsBuffer;
-    
-    // Create larger buffer with some headroom
-    const newSize = Math.max(newByteLength * 1.5, 1024); // At least 1KB, 50% headroom
-    const newBuffer = device.createBuffer({
-      size: newSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      label: `${this.#markType}-${axis}-category-positions-resized`
-    });
-
-    // Update references
-    if (isX) {
-      this.#xCategoryPositionsBuffer = newBuffer;
-    } else {
-      this.#yCategoryPositionsBuffer = newBuffer;
-    }
-
-    // Remove old buffer from tracking and destroy it
-    const index = this.#ownedResources.buffers.indexOf(oldBuffer);
-    if (index !== -1) {
-      this.#ownedResources.buffers.splice(index, 1);
-    }
-    oldBuffer.destroy();
-
-    // Add new buffer to tracking
-    this.#ownedResources.buffers.push(newBuffer);
-
-    // Recreate per-scale bind group with new buffer
-    this.#createPerScaleBindGroup();
-
-    console.log(`📊 Resized ${axis}-category buffer for ${this.#markType}: ${newSize} bytes`);
-  }
-
-  /**
-   * Create the per-data bind group (public method)
-   * This contains storage buffers that change only when data updates
-   * Called by mark components when their data buffers are ready
-   * 
-   * @param {Array} dataBindings - Array of binding entries for data buffers
-   */
   createDataBindGroup(dataBindings) {
     if (!this.#device || !this.#perDataLayout) {
-      console.warn(`⚠️ Cannot create per-data bind group for ${this.#markType} - missing device or layout`);
+      console.warn(`Cannot create per-data bind group for ${this.#markType} - missing device or layout`);
       return;
     }
 
     if (!Array.isArray(dataBindings) || dataBindings.length === 0) {
-      console.warn(`⚠️ Cannot create per-data bind group for ${this.#markType} - invalid dataBindings`);
+      console.warn(`Cannot create per-data bind group for ${this.#markType} - invalid dataBindings`);
       return;
     }
 
@@ -699,47 +266,17 @@ export class BaseGPURenderer {
         entries: dataBindings
       });
 
-      console.debug(`✅ Per-data bind group created for ${this.#markType} with ${dataBindings.length} bindings`);
+      console.debug(`Per-data bind group (@group(1)) created for ${this.#markType} with ${dataBindings.length} bindings`);
       
     } catch (error) {
-      console.error(`❌ Failed to create per-data bind group for ${this.#markType}:`, error);
+      console.error(`Failed to create per-data bind group for ${this.#markType}:`, error);
       this.#initializationError = error.message;
       throw error;
     }
   }
 
-  /**
-   * Recreate the per-frame bind group
-   * Called when uniform buffers are recreated or need updating
-   */
-  recreatePerFrameBindGroup() {
-    this.#createPerFrameBindGroup();
-  }
-
-  // ===== DEPRECATED: LEGACY BIND GROUP METHOD =====
-
-  /**
-   * @deprecated Legacy method for backward compatibility
-   * Use createDataBindGroup() instead for new dual bind group architecture
-   */
-  createBindGroup(additionalBindings = []) {
-    console.warn(`❌ [${this.#markType}] createBindGroup() is deprecated. Use createDataBindGroup() for dual bind group architecture.`);
-    
-    // For backward compatibility, assume additionalBindings are data bindings
-    if (additionalBindings.length > 0) {
-      this.createDataBindGroup(additionalBindings);
-    }
-  }
-
   // ===== BUFFER MANAGEMENT =====
 
-  /**
-   * Create or update a buffer with smart sizing to prevent thrashing
-   * @param {GPUBuffer} existingBuffer - Existing buffer to potentially reuse
-   * @param {TypedArray} data - Data to store in buffer
-   * @param {number} usage - GPU buffer usage flags
-   * @returns {GPUBuffer} New or existing buffer
-   */
   createOrUpdateBuffer(existingBuffer, data, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
     if (!this.#device) {
       throw new Error('No WebGPU device available');
@@ -747,10 +284,9 @@ export class BaseGPURenderer {
     
     const requiredSize = data.byteLength;
     
-    // Only recreate if actually needed, with smart sizing strategy
+    // Smart buffer resizing to prevent thrashing
     if (!existingBuffer || existingBuffer.size < requiredSize) {
       if (existingBuffer) {
-        // Remove from tracking before destroying
         const index = this.#ownedResources.buffers.indexOf(existingBuffer);
         if (index !== -1) {
           this.#ownedResources.buffers.splice(index, 1);
@@ -758,12 +294,12 @@ export class BaseGPURenderer {
         existingBuffer.destroy();
       }
 
-      // Smart sizing: grow in sensible chunks to prevent thrashing
-      const MEMORY_BLOCK_SIZE = 256; // 256 bytes minimum block
-      const desiredSize = Math.ceil(requiredSize * 1.5); // 50% headroom
+      // Smart sizing with headroom
+      const MEMORY_BLOCK_SIZE = 256;
+      const desiredSize = Math.ceil(requiredSize * 1.5);
       const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
       let bufferSize = Math.max(requiredSize, roundedUpSize);
-      bufferSize = (bufferSize + 3) & ~3; // Ensure 4-byte alignment
+      bufferSize = (bufferSize + 3) & ~3; // 4-byte alignment
 
       const newBuffer = this.#device.createBuffer({
         size: bufferSize,
@@ -772,115 +308,20 @@ export class BaseGPURenderer {
       });
       
       this.#ownedResources.buffers.push(newBuffer);
-      console.debug(`📊 Created ${this.#markType} buffer of size ${bufferSize} bytes (required: ${requiredSize})`);
+      console.debug(`Created ${this.#markType} buffer of size ${bufferSize} bytes (required: ${requiredSize})`);
       return newBuffer;
     }
     
     return existingBuffer;
   }
 
-
-  /**
-   * Update instance count and trigger layer invalidation
-   * @param {number} count - New instance count
-   */
   updateInstanceCount(count) {
     this.#instanceCount = count;
     this.invalidateLayer();
   }
 
-  // ===== ENHANCED SCALE INTEGRATION =====
-  /**
- * Updates the GPU's uniform buffer with all necessary scale parameters.
- * ✅ CORRECTED: Fixed indices to match shader struct exactly
- */
-  updateScaleParameters() {
-    if (!this.#device || !this.#scaleParamsBuffer || !this.#chartContext) {
-      return;
-    }
+  // ===== RESOLUTION MANAGEMENT =====
 
-    try {
-      const c = this.#chartContext;
-      const scaleParams = this.#scaleParamsArray;
-
-      const xScaleState = c.xScaleState;
-      const yScaleState = c.yScaleState;
-      const scaleTypes = c.scaleTypes;
-
-      if (!xScaleState || !yScaleState || !scaleTypes) return;
-
-      const xGpuState = xScaleState.gpuState;
-      const yGpuState = yScaleState.gpuState;
-      
-      console.log('updateScaleParameters', xGpuState)
-
-      // ---- Indices 0-3: Domain Min/Max ----
-      scaleParams[0] = xGpuState.domainMin;              // domainMin.x
-      scaleParams[1] = yGpuState.domainMin;              // domainMin.y
-      scaleParams[2] = xGpuState.domainMax;              // domainMax.x
-      scaleParams[3] = yGpuState.domainMax;              // domainMax.y
-
-      // ---- Indices 4-7: Range Min/Max ----
-      scaleParams[4] = 0;                                // rangeMin.x
-      scaleParams[5] = c.innerHeight;                    // rangeMin.y (bottom of screen)
-      scaleParams[6] = c.innerWidth;                     // rangeMax.x
-      scaleParams[7] = 0;                                // rangeMax.y (top of screen)
-
-      // ---- Indices 8-9: Scale Types ----
-      scaleParams[8] = this.#getGPUScaleType(scaleTypes.x);  // scaleTypes.x
-      scaleParams[9] = this.#getGPUScaleType(scaleTypes.y);  // scaleTypes.y
-
-      // ---- Indices 10-11: Bandwidth (for band scales) ----
-      scaleParams[10] = c.xBandwidth ?? 0;
-      scaleParams[11] = c.yBandwidth ?? 0;
-
-      // ---- Indices 12-13: Category Count (for band scales) ----
-      scaleParams[12] = xGpuState.categoryCount ?? 0;        // categoryCount.x
-      scaleParams[13] = yGpuState.categoryCount ?? 0;        // categoryCount.y
-
-      // ---- Indices 14-15: Pre-computed Domain Scale Factors ----
-      scaleParams[14] = xGpuState.domainScale ?? (1.0 / (xGpuState.domainMax - xGpuState.domainMin)); // domainScale.x
-      scaleParams[15] = yGpuState.domainScale ?? (1.0 / (yGpuState.domainMax - yGpuState.domainMin)); // domainScale.y
-
-      // ---- Indices 16-17: Pre-computed Range Sizes ----
-      scaleParams[16] = c.innerWidth;                         // rangeSize.x
-      scaleParams[17] = -c.innerHeight;                       // rangeSize.y (negative for screen coords)
-
-      // ---- Zero out padding slots (18-31) ----
-      scaleParams.fill(0, 18);
-
-      // Write to GPU buffer
-      this.#device.queue.writeBuffer(this.#scaleParamsBuffer, 0, scaleParams);
-      // console.log('Update scaleParamsBuffer', scaleParams[0], scaleParams[1], scaleParams[2], scaleParams[3])
-      console.log('Update scaleParamsBuffer', scaleParams[0], scaleParams[14])
-        
-    } catch (error) {
-      console.error(`❌ Failed to update scale parameters for ${this.#markType}:`, error);
-    }
-  }
-
-  /**
-   * Convert scale type string to GPU constant
-   * @param {string} scaleType - Scale type ('linear', 'band', 'point', 'identity', 'log')
-   * @returns {number} GPU scale type constant
-   */
-  #getGPUScaleType(scaleType) {
-    switch (scaleType) {
-      case 'linear': return 0;
-      case 'band': return 1;
-      case 'point': return 2;
-      case 'identity': return 3;
-      case 'log': return 4;
-      case 'time': return 5;
-      default:
-        console.warn(`Unknown scale type: ${scaleType}, defaulting to linear`);
-        return 0;
-    }
-  }
-
-  /**
-   * Update resolution buffer with current canvas dimensions
-   */
   updateResolution() {
     if (!this.#resolutionBuffer) return;
 
@@ -892,18 +333,64 @@ export class BaseGPURenderer {
       device.queue.writeBuffer(this.#resolutionBuffer, 0, new Float32Array([width, height]));
       
     } catch (error) {
-      console.error(`❌ Failed to update resolution for ${this.#markType}:`, error);
+      console.error(`Failed to update resolution for ${this.#markType}:`, error);
+    }
+  }
+
+  handleResolutionChange(callback) {
+    if (this.#resourcesCreated && !this.#initializationError) {
+      this.updateResolution();
+      if (callback) callback();
+    }
+  }
+
+  // ===== DEPRECATED METHODS =====
+
+  // Scale management completely removed - coordinator handles all scale concerns
+  handleScaleOrRangeUpdate(callback) {
+    console.warn(`[${this.#markType}] handleScaleOrRangeUpdate is deprecated - coordinator manages scale updates directly`);
+    if (callback) callback();
+  }
+
+  // Legacy getter for transition period
+  get bindGroup() { 
+    console.warn(`[${this.#markType}] bindGroup getter is deprecated. Use perFrameBindGroup and perDataBindGroup instead.`);
+    return this.#perFrameBindGroup;
+  }
+
+  // ===== LAYER MANAGEMENT =====
+
+  registerLayer(drawFunction) {
+    try {
+      const chartId = this.#chartContext.chartId;
+
+      const layerConfig = {
+        draw: drawFunction,
+        markType: this.#markType,
+        renderer: this, 
+        componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
+      };
+
+      this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
+
+      console.log(`${this.#markType} layer registered with coordinator for chart ${chartId}`);
+      return this.#ownedResources.layerControl;
+
+    } catch (error) {
+      console.error(`${this.#markType} layer registration failed:`, error);
+      this.#initializationError = error.message;
+      throw error;
+    }
+  }
+
+  invalidateLayer() {
+    if (this.#gpuCoordinator && this.#chartContext?.chartId) {
+      this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
     }
   }
 
   // ===== DATA PROCESSING HELPERS =====
 
-  /**
-   * Process data for GPU consumption based on scale types
-   * @param {Array} data - Raw data array
-   * @param {string} axis - 'x' or 'y'
-   * @returns {Float32Array} Processed data ready for GPU
-   */
   processDataForAxis(data, axis) {
     const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
     const scaleState = axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
@@ -911,20 +398,16 @@ export class BaseGPURenderer {
     switch (scaleType) {
       case 'linear':
       case 'identity':
-        // Pass through numeric values - GPU will handle scaling
         return new Float32Array(data.map(d => d ?? 0));
         
       case 'band':
       case 'point':
-        // CPU: Convert strings to indices, GPU: Convert indices to positions
         return scaleState.processDataForGPU(data, this.#markType);
         
       case 'log':
-        // Future: logarithmic scale support
         return new Float32Array(data.map(d => Math.log(Math.max(d || 1, 1))));
         
       case 'time':
-        // Future: temporal scale support  
         return new Float32Array(data.map(d => d instanceof Date ? d.getTime() : d || 0));
         
       default:
@@ -933,88 +416,8 @@ export class BaseGPURenderer {
     }
   }
 
-  // ===== REACTIVE EFFECTS HELPERS =====
+  // ===== UTILITY METHODS =====
 
-  /**
-   * Updates the GPU buffer that contains scale parameters (domain, range, etc.).
-   * This should be called whenever the scale's domain or range changes.
-   * 
-   * ✅ UPDATED: Now triggers per-frame bind group recreation if scale parameters change
-   * 
-   * @param {Function} callback - Optional callback after parameters are updated.
-   */
-  handleScaleOrRangeUpdate(callback) {
-    if (this.#resourcesCreated && !this.#initializationError) {
-      this.updateScaleParameters(); // This updates the GPU buffer
-      // Note: No need to recreate bind group - we're just updating buffer contents
-      if (callback) callback();
-    }
-  }
-
-  /**
-   * Helper method to update resolution (called from component's $effect)  
-   * @param {Function} callback - Optional callback when resolution changes
-   */
-  handleResolutionChange(callback) {
-    if (this.#resourcesCreated && !this.#initializationError) {
-      this.updateResolution();
-      // Note: No need to recreate bind group - we're just updating buffer contents
-      if (callback) callback();
-    }
-  }
-
-  // ===== LAYER MANAGEMENT =====
-
-  /**
-   * Register this renderer as a layer with the GPU Coordinator.
-   * @param {Function} drawFunction - Shape-specific draw function.
-   */
-  registerLayer(drawFunction) {
-    try {
-      // ✅ Get the chartId from the chartContext, which is stable.
-      const chartId = this.#chartContext.chartId;
-
-      // ✅ Create the configuration object for this specific layer.
-      const layerConfig = {
-        draw: drawFunction,
-        markType: this.#markType,
-        // Pass a reference to this renderer instance. The coordinator will
-        // need this to access its state (pipeline, bindGroup) during the render loop.
-        renderer: this, 
-        componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
-      };
-
-      // ✅ Call the NEW registerLayer method on the COORDINATOR, not the webgpu-canvas context.
-      this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
-
-      console.log(`📋 ${this.#markType} layer registered directly with coordinator for chart ${chartId}`);
-      return this.#ownedResources.layerControl;
-
-    } catch (error) {
-      console.error(`❌ ${this.#markType} layer registration failed:`, error);
-      this.#initializationError = error.message;
-      throw error;
-    }
-  }
-
-  /**
-   * Invalidate the layer's parent chart to trigger a redraw.
-   */
-  invalidateLayer() {
-    // We no longer call a method on the layerControl itself.
-    // Instead, we tell the coordinator that our parent chart is dirty.
-    if (this.#gpuCoordinator && this.#chartContext?.chartId) {
-      this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
-    }
-  }
-
-  // ===== UTILITIES =====
-
-  /**
-   * Parse color string to RGBA array
-   * @param {string} color - Color string (hex, named, etc.)
-   * @returns {Array<number>} RGBA values [0-1]
-   */
   parseColor(color) {
     try {
       if (typeof color === 'string' && color.startsWith('#')) {
@@ -1023,24 +426,21 @@ export class BaseGPURenderer {
         const b = parseInt(color.slice(5, 7), 16) / 255;
         return [r, g, b, 1.0];
       }
-      console.warn(`⚠️ Unrecognized color format: ${color}, using default blue`);
+      console.warn(`Unrecognized color format: ${color}, using default blue`);
       return [0.0, 0.0, 1.0, 1.0];
     } catch (error) {
-      console.error(`❌ Color parsing failed for ${this.#markType}:`, error);
+      console.error(`Color parsing failed for ${this.#markType}:`, error);
       return [0.0, 0.0, 1.0, 1.0];
     }
   }
 
   // ===== CLEANUP =====
 
-  /**
-   * Clean up all resources owned by this renderer
-   */
   destroy() {
-    console.log(`🧹 Cleaning up ${this.#markType} renderer resources`);
+    console.log(`Cleaning up ${this.#markType} renderer resources`);
     
     try {
-      // Clean up chart-specific buffers
+      // Clean up owned buffers
       this.#ownedResources.buffers.forEach(buffer => {
         if (buffer && !buffer.destroyed) {
           buffer.destroy();
@@ -1048,16 +448,7 @@ export class BaseGPURenderer {
       });
       this.#ownedResources.buffers = [];
 
-      // Release shared resource references
-      if (this.#ownedResources.pipeline && this.#gpuCoordinator) {
-        this.#gpuCoordinator.releaseSharedPipeline(this.#markType);
-      }
-      
-      if (this.#ownedResources.shader && this.#gpuCoordinator) {
-        this.#gpuCoordinator.releaseSharedShader(this.#markType);
-      }
-
-      // Release shared uniform buffer reference
+      // Release shared DPR buffer reference if coordinator provided it
       if (this.#dprBuffer && !this.#ownedResources.buffers.includes(this.#dprBuffer) && this.#gpuCoordinator) {
         this.#gpuCoordinator.releaseSharedUniformBuffer('devicePixelRatio');
       }
@@ -1067,11 +458,10 @@ export class BaseGPURenderer {
         this.#ownedResources.layerControl.remove();
       }
 
-      console.log(`✅ ${this.#markType} renderer cleanup complete`);
+      console.log(`${this.#markType} renderer cleanup complete`);
       
     } catch (error) {
-      console.error(`❌ Error during ${this.#markType} renderer cleanup:`, error);
+      console.error(`Error during ${this.#markType} renderer cleanup:`, error);
     }
   }
-
 }
