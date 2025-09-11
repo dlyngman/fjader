@@ -16,8 +16,6 @@ const SCALE_FRAGMENTS = {
       struct LinearScaleParams${suffix} {
         domainMin: f32,
         domainMax: f32,
-        rangeMin: f32,
-        rangeMax: f32,
         domainScale: f32,  // Precomputed 1.0 / (domainMax - domainMin)
       };
       @group(${groupIndex}) @binding(${bindingIndex}) var<uniform> linearParams${suffix}: LinearScaleParams${suffix};
@@ -41,8 +39,8 @@ const SCALE_FRAGMENTS = {
 
 		// Buffer layout information for GPUCoordinator (this remains unchanged)
 		bufferLayout: {
-			size: 5 * 4, // 5 f32 values = 20 bytes
-			fields: ['domainMin', 'domainMax', 'rangeMin', 'rangeMax', 'domainScale']
+			size: 3 * 4, // 3 f32 values = 12 bytes
+			fields: ['domainMin', 'domainMax', 'domainScale']
 		}
 	}
 

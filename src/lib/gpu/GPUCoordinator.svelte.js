@@ -222,73 +222,6 @@ export class GPUCoordinator {
     }
   }
 
-  // async createBufferPoolForScale(scaleId, scaleType = 'linear') {
-  //   if (!this.#initialized) {
-  //     console.warn(`Cannot create buffer pool for scale ${scaleId} - coordinator not initialized`);
-  //     return;
-  //   }
-
-  //   if (this.#scaleInstancePools.has(scaleId)) {
-  //     console.debug(`Buffer pool already exists for scale instance ${scaleId}`);
-  //     return;
-  //   }
-
-  //   try {
-  //     // Get bind group layout for this scale type
-  //     let bindGroupLayout = this.#scaleBindGroupLayouts.get(scaleType);
-  //     if (!bindGroupLayout) {
-  //       console.error(`No bind group layout found for scale type: ${scaleType}`);
-  //       return;
-  //     }
-
-  //     const bufferSize = this.#getBufferSizeForScaleType(scaleType);
-
-  //     // Create 3 uniform buffers for this scale instance
-  //     const buffers = [];
-  //     for (let i = 0; i < 3; i++) {
-  //       const buffer = this.#device.createBuffer({
-  //         size: bufferSize,
-  //         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  //         label: `${scaleType}-scale-instance-${scaleId}-buffer-${i}`
-  //       });
-  //       buffers.push(buffer);
-  //     }
-
-  //     // Pre-create 3 bind groups (one for each buffer)
-  //     const bindGroups = [];
-  //     for (let i = 0; i < 3; i++) {
-  //       const bindGroup = this.#device.createBindGroup({
-  //         label: `${scaleType}-scale-instance-${scaleId}-bind-group-${i}`,
-  //         layout: bindGroupLayout,
-  //         entries: [{
-  //           binding: 0,
-  //           resource: { buffer: buffers[i] }
-  //         }]
-  //       });
-  //       bindGroups.push(bindGroup);
-  //     }
-
-  //     // Initialize all buffers with default data
-  //     const defaultData = this.#getDefaultDataForScaleType(scaleType);
-  //     for (let i = 0; i < 3; i++) {
-  //       this.#device.queue.writeBuffer(buffers[i], 0, defaultData);
-  //     }
-
-  //     // Store pool for this scale instance
-  //     this.#scaleInstancePools.set(scaleId, {
-  //       buffers,
-  //       bindGroups,
-  //       activeIndex: 0,
-  //       scaleType,
-  //       size: bufferSize
-  //     });
-
-  //     console.log(`Created buffer pool for scale instance ${scaleId} (${scaleType}): 3 x ${bufferSize} bytes`);
-
-  //   } catch (error) {
-  //     console.error(`Failed to create buffer pool for scale ${scaleId}:`, error);
-  //   }
-  // }
 
   /**
    * Destroy buffer pool for a specific scale instance
@@ -326,7 +259,7 @@ export class GPUCoordinator {
   #getBufferSizeForScaleType(scaleType) {
     switch (scaleType) {
       case 'linear':
-        return 32; // 5 x f32 values (domainMin, domainMax, rangeMin, rangeMax, domainScale) + padding
+        return 16; // 3 x f32 values (12 bytes: domainMin, domainMax, domainScale +  4 bytes padding)
       case 'band':
         return 48; // Future: more fields for band scales
       case 'log':
@@ -344,7 +277,8 @@ export class GPUCoordinator {
   #getDefaultDataForScaleType(scaleType) {
     switch (scaleType) {
       case 'linear':
-        return new Float32Array([0, 1, 0, 1, 1, 0, 0, 0]); // domain[0,1], range[0,1], scale=1, padding
+        return new Float32Array([0, 1, 1, 0]); // domain[0,1], scale=1, padding
+        // return new Float32Array([0, 1, 0, 1, 1, 0, 0, 0]); // domain[0,1], range[0,1], scale=1, padding
       case 'band':
         return new Float32Array(12); // Future: band scale defaults
       case 'log':
@@ -398,9 +332,7 @@ export class GPUCoordinator {
       const targetBuffer = instancePool.buffers[nextBufferIndex];
       
       this.#device.queue.writeBuffer(targetBuffer, 0, data);
-      
-      console.debug(`Wrote ${data.byteLength} bytes to scale instance ${scaleId} buffer slot ${nextBufferIndex}`);
-      
+            
     } catch (error) {
       console.error(`Failed to write scale data for instance ${scaleId}:`, error);
     }
@@ -427,8 +359,6 @@ export class GPUCoordinator {
         instancePool.activeIndex = this.#bufferCycle.current;
       }
     }
-
-    console.debug(`Cycled buffers for ${dirtyScaleIds.size} scale instances: current=${this.#bufferCycle.current}, next=${this.#bufferCycle.next}`);
   }
 
   /**
@@ -620,7 +550,6 @@ export class GPUCoordinator {
     // Render
     const renderStart = performance.now();
     if (chartsToRender.size > 0) {
-      console.log('🎬 Animation loop triggering render for', chartsToRender.size, 'charts');
       const chartArray = this.#chartsToRenderArray;
       chartArray.length = 0;
 
@@ -631,7 +560,6 @@ export class GPUCoordinator {
         }
       }
       this.#coordinatedRender(chartArray);
-      console.log('🎬 Render completed');
     }
     const renderEnd = performance.now();
 
@@ -666,10 +594,8 @@ export class GPUCoordinator {
         return new Float32Array([
           gpuState.domainMin,           // Domain data only (shareable across charts)
           gpuState.domainMax,           
-          0,                            // Range min (filled by renderer)
-          0,                            // Range max (filled by renderer) 
           gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin)),
-          0, 0, 0                       // Padding to 32 bytes
+          0,                            // Padding to 16 bytes
         ]);
       
       case 'band':
@@ -695,10 +621,6 @@ export class GPUCoordinator {
   // ===== UPDATED: COORDINATED RENDER WITH SCALE INSTANCE BIND GROUPS =====
 
   async #coordinatedRender(chartsNeedingRender) {
-    console.log('🎬 coordinatedRender called with:', {
-      chartCount: chartsNeedingRender.length,
-      chartIds: chartsNeedingRender.map(c => c.chartId)
-    });
 
     try {
       // NOTE: This sync point will be eliminated with pre-recorded command buffers
@@ -707,13 +629,11 @@ export class GPUCoordinator {
       const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
 
       for (const chartConfig of chartsNeedingRender) {
-        console.log('🎬 Processing chart:', chartConfig.chartId, 'with', chartConfig.renderPlan?.length, 'layers');
 
         if (chartConfig.needsPlanRebuild) {
           this.#buildRenderPlanForChart(chartConfig);
         }
         
-        console.log('🎬 Creating render pass for chart:', chartConfig.chartId);
         const passEncoder = commandEncoder.beginRenderPass(
           this.#createRenderPassDescriptor(
             chartConfig.context.getCurrentTexture().createView(),
@@ -722,7 +642,6 @@ export class GPUCoordinator {
           )
         );
         
-        console.log('About to check chartPerFrameBindGroup')
         // Get the per-frame bind group from the chart (shared by all layers)
         const chartPerFrameBindGroup = chartConfig.perFrameBindGroup;
         if (!chartPerFrameBindGroup) {
@@ -730,8 +649,6 @@ export class GPUCoordinator {
           passEncoder.end();
           continue; // Skip to next chart
         }
-        console.log('Checked chartPerFrameBindGroup')
-
 
         // Set the chart's frame bind group once (all layers in this chart will use it)
         passEncoder.setBindGroup(0, chartPerFrameBindGroup);
@@ -740,8 +657,6 @@ export class GPUCoordinator {
         let currentPerDataBindGroup = null;
         let currentXScaleBindGroup = null;
         let currentYScaleBindGroup = null;
-
-        console.log('Ready for layers:...')
 
         for (const layer of chartConfig.renderPlan) {
           const renderer = layer.renderer;
@@ -754,49 +669,14 @@ export class GPUCoordinator {
 
           const pipelineToUse = layer.cachedPipeline;
           const perDataBindGroupToUse = renderer.perDataBindGroup;
-        
-          // let currentPipeline = null;
-        // let currentPerFrameBindGroup = null;
-        // let currentPerDataBindGroup = null;
-        // let currentXScaleBindGroup = null; // Track X scale bind group
-        // let currentYScaleBindGroup = null; // Track Y scale bind group
-        
-        // for (const layer of chartConfig.renderPlan) {
-        //   const renderer = layer.renderer;
-          
-        //   // Check readiness for frame and data bind groups only
-        //   if (!renderer || !renderer.perFrameBindGroup || !renderer.perDataBindGroup) {
-        //     console.debug(`Skipping layer ${layer.id} - renderer bind groups not ready`);
-        //     continue;
-        //   }
-
-        //   const pipelineToUse = layer.cachedPipeline;
-        //   const perFrameBindGroupToUse = renderer.perFrameBindGroup;
-        //   const perDataBindGroupToUse = renderer.perDataBindGroup;
-
-          // NEW: Get scale bind groups from coordinator using scale instance IDs
-          // const chartContext = this.#getChartContextForLayer(layer);
-          // const xScaleId = chartContext?.xScaleState?.id;
-          // const yScaleId = chartContext?.yScaleState?.id;
 
           const xScaleBindGroupToUse = this.getCurrentScaleBindGroup(chartConfig.xScaleId);
           const yScaleBindGroupToUse = this.getCurrentScaleBindGroup(chartConfig.yScaleId);
-
-          console.log('Scale bind groups check:', {
-            chartId: chartConfig.chartId,
-            xScaleId: chartConfig.xScaleId,
-            yScaleId: chartConfig.yScaleId,
-            xScaleBindGroup: !!xScaleBindGroupToUse,
-            yScaleBindGroup: !!yScaleBindGroupToUse
-          });
 
           if (!xScaleBindGroupToUse || !yScaleBindGroupToUse) {
             console.warn('Missing scale bind groups - dots will not render correctly');
             continue; // Skip this layer
           }
-
-          // const xScaleBindGroupToUse = xScaleId ? this.getCurrentScaleBindGroup(xScaleId) : null;
-          // const yScaleBindGroupToUse = yScaleId ? this.getCurrentScaleBindGroup(yScaleId) : null;
 
           if (!pipelineToUse || !xScaleBindGroupToUse || !yScaleBindGroupToUse) {
             console.debug(`Skipping layer ${layer.id} - pipeline or scale bind groups not ready`);
@@ -809,24 +689,18 @@ export class GPUCoordinator {
             currentPipeline = pipelineToUse;
           }
           
-          // // Set bind groups only if different  
-          // if (perFrameBindGroupToUse !== currentPerFrameBindGroup) {
-          //   passEncoder.setBindGroup(0, perFrameBindGroupToUse);
-          //   currentPerFrameBindGroup = perFrameBindGroupToUse;
-          // }
-          
           if (perDataBindGroupToUse !== currentPerDataBindGroup) {
             passEncoder.setBindGroup(1, perDataBindGroupToUse);
             currentPerDataBindGroup = perDataBindGroupToUse;
           }
 
-          // NEW: Set X scale bind group (@group(2)) if different
+          // Set X scale bind group (@group(2)) if different
           if (xScaleBindGroupToUse !== currentXScaleBindGroup) {
             passEncoder.setBindGroup(2, xScaleBindGroupToUse);
             currentXScaleBindGroup = xScaleBindGroupToUse;
           }
 
-          // NEW: Set Y scale bind group (@group(3)) if different  
+          // Set Y scale bind group (@group(3)) if different  
           if (yScaleBindGroupToUse !== currentYScaleBindGroup) {
             passEncoder.setBindGroup(3, yScaleBindGroupToUse);
             currentYScaleBindGroup = yScaleBindGroupToUse;
@@ -837,9 +711,7 @@ export class GPUCoordinator {
         passEncoder.end();
       }
 
-      console.log('🎬 Submitting command buffer...');
       this.#device.queue.submit([commandEncoder.finish()]);
-      console.log('🎬 Command buffer submitted successfully');
       this.#renderCount = (this.#renderCount || 0) + 1;
       
     } catch (error) {
@@ -1139,12 +1011,6 @@ export class GPUCoordinator {
   }
 
   #createRenderPassDescriptor(textureView, canvas, chartId) {
-    console.log('🎬 Creating render pass descriptor for chart:', chartId, {
-      canvasSize: { width: canvas.width, height: canvas.height },
-      msaa: this.#msaaSampleCount,
-      textureView: !!textureView
-    });
-
     if (this.#msaaSampleCount > 1) {
       let msaa = this.#msaaCache.get(chartId);
 
@@ -1169,18 +1035,6 @@ export class GPUCoordinator {
         this.#msaaCache.set(chartId, msaa);
       }
 
-      const descriptor = {
-        colorAttachments: [{
-          view: msaa ? msaa.view : textureView,
-          resolveTarget: msaa ? textureView : undefined,
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-          loadOp: 'clear',
-          storeOp: 'store',
-        }],
-      };
-
-      console.log('🎬 Render pass descriptor created:', descriptor);
-
       return {
         colorAttachments: [{
           view: msaa.view, 
@@ -1201,27 +1055,6 @@ export class GPUCoordinator {
       };
     }
   }
-
-  // #getOrCreateFrameLayout() {
-  //   if (!this.#frameLayout) {
-  //     this.#frameLayout = this.#device.createBindGroupLayout({
-  //       label: 'shared-frame-layout',
-  //       entries: [
-  //         { 
-  //           binding: 0, 
-  //           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-  //           buffer: { type: 'uniform' } 
-  //         }, // resolution
-  //         { 
-  //           binding: 1, 
-  //           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-  //           buffer: { type: 'uniform' } 
-  //         }, // devicePixelRatio
-  //       ]
-  //     });
-  //   }
-  //   return this.#frameLayout;
-  // }
 
   #getOrCreateDataLayout(markType, dataBindingConfig) {
     const layoutKey = `${markType}-${JSON.stringify(dataBindingConfig)}`;

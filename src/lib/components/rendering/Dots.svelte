@@ -333,18 +333,8 @@
 
   // ✅ UPDATED: Dots-specific draw function for dual bind groups
   function drawDots(passEncoder) {
-    console.log('🎨 drawDots START - checking resources...');
-
-    // Log each resource check
-    console.log('🎨 Pipeline check:', !!renderer?.pipeline);
-    // console.log('🎨 PerFrame bindgroup check:', !!renderer?.perFrameBindGroup);  
-    console.log('🎨 PerData bindgroup check:', !!renderer?.perDataBindGroup);
-    console.log('🎨 Instance count check:', renderer.instanceCount);
-    console.log('🎨 Quad buffer check:', !!quadGeometryBuffer);
-
     try {
       if (!renderer?.pipeline || 
-          // !renderer?.perFrameBindGroup || 
           !renderer?.perDataBindGroup || 
           renderer.instanceCount === 0) {
         console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
@@ -357,29 +347,9 @@
         return;
       }
 
-      console.log('✅ All resources valid, executing WebGPU commands...');
-
-      // console.log('✅ Drawing dots:', renderer.instanceCount, 'instances');
-
-      console.log('🎨 Setting pipeline...');
       passEncoder.setPipeline(renderer.pipeline);
-
-      // console.log('🎨 Setting bind group 0 (perFrame)...');
-      // passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
-
-      // console.log('🎨 Setting bind group 1 (perData)...');
-      // passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
-      // passEncoder.setBindGroup(2, renderer.perScaleBindGroup);  // ← This was missing!
-      
-      console.log('🎨 Setting vertex buffer...');
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-
-      console.log('🎨 Issuing draw command:', { vertices: quadVertexCount, instances: renderer.instanceCount });
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
-
-      console.log('✅ Draw commands completed successfully');
-
-      // console.log('✅ Dots draw completed successfully');
 
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);
