@@ -96,7 +96,6 @@
     }],
   }];
 
-  // ✅ NEW: Data binding configuration for dual bind group architecture
   const dataBindingConfig = [
     { binding: 0, type: 'read-only-storage' }, // xValues
     { binding: 1, type: 'read-only-storage' }, // yValues  
@@ -104,27 +103,6 @@
     { binding: 3, type: 'read-only-storage' }, // alphaValues
     { binding: 4, type: 'read-only-storage' }, // colors
   ];
-
-  $effect(() => {
-    if (renderer?.resourcesCreated) {
-      console.log('Renderer debug:', {
-        pipeline: !!renderer.pipeline,
-        perFrameBindGroup: !!renderer.perFrameBindGroup,
-        perDataBindGroup: !!renderer.perDataBindGroup, 
-        perScaleBindGroup: !!renderer.perScaleBindGroup,  // ← Check this
-        instanceCount: renderer.instanceCount
-      });
-    }
-  });
-
-  $effect(() => {
-    console.log('📥 Dots received props:', {
-      xData: xData ? `${xData.length} items` : 'null',
-      yData: yData ? `${yData.length} items` : 'null',
-      colorData: colorData ? `${colorData.length/4} colors` : 'null',
-      dataVersion
-    });
-  });
 
   // Buffer update effects
   $effect.pre(() => {
@@ -334,20 +312,28 @@
   // ✅ UPDATED: Dots-specific draw function for dual bind groups
   function drawDots(passEncoder) {
     try {
-      if (!renderer?.pipeline || 
-          !renderer?.perDataBindGroup || 
-          renderer.instanceCount === 0) {
+      // if (!renderer?.pipeline || 
+      //     !renderer?.perDataBindGroup || 
+      //     renderer.instanceCount === 0) {
+      //   console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
+      //   return;
+      // }
+
+      // if (!quadGeometryBuffer) {
+      //   console.error('❌ Skipping dots draw - no quad geometry buffer!');
+      //   console.log('❌ Early return - no quad geometry buffer');
+      //   return;
+      // }
+
+      // passEncoder.setPipeline(renderer.pipeline);
+      // passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+      // passEncoder.draw(quadVertexCount, renderer.instanceCount);
+
+      if (!quadGeometryBuffer || renderer.instanceCount === 0) {
         console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
-        return;
+        return; // Safety check
       }
 
-      if (!quadGeometryBuffer) {
-        console.error('❌ Skipping dots draw - no quad geometry buffer!');
-        console.log('❌ Early return - no quad geometry buffer');
-        return;
-      }
-
-      passEncoder.setPipeline(renderer.pipeline);
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
 

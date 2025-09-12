@@ -67,6 +67,8 @@ export class GPUCoordinator {
   #pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
   #pendingFrameUpdates = new Map(); // chartId -> update params
 
+  #frameCompletionPromises = [];
+  #lastFenceTime
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -623,8 +625,12 @@ export class GPUCoordinator {
   async #coordinatedRender(chartsNeedingRender) {
 
     try {
+      if (this.#frameCompletionPromises.length >= 2) {
+        await this.#frameCompletionPromises.shift();
+      }
+
       // NOTE: This sync point will be eliminated with pre-recorded command buffers
-      await this.#device.queue.onSubmittedWorkDone();
+      // await this.#device.queue.onSubmittedWorkDone();
 
       const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
 
@@ -712,6 +718,16 @@ export class GPUCoordinator {
       }
 
       this.#device.queue.submit([commandEncoder.finish()]);
+      
+      // Track this frame's completion
+      const completionPromise = this.#device.queue.onSubmittedWorkDone();
+      completionPromise.then(() => {
+        console.log('✓ GPU work completed');
+      }).catch(error => {
+        console.error('✗ GPU work failed:', error);
+      });
+      this.#frameCompletionPromises.push(completionPromise);
+
       this.#renderCount = (this.#renderCount || 0) + 1;
       
     } catch (error) {

@@ -146,36 +146,6 @@ export class BaseGPURenderer {
     console.log(`Pipeline received from coordinator for ${this.#markType}`);
   }
 
-  // ===== SIMPLIFIED BIND GROUP LAYOUTS =====
-
-  // #createBindGroupLayouts() {
-  //   // Per-frame bind group layout (@group(0))
-  //   this.#perFrameLayout = this.#device.createBindGroupLayout({
-  //     label: `${this.#markType}-per-frame-layout`,
-  //     entries: [
-  //       { 
-  //         binding: 0, 
-  //         visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-  //         buffer: { type: 'uniform' } 
-  //       }, // resolution
-  //       { 
-  //         binding: 1, 
-  //         visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, 
-  //         buffer: { type: 'uniform' } 
-  //       }, // devicePixelRatio
-  //     ]
-  //   });
-
-  //   // Per-data bind group layout (@group(1))
-  //   this.#perDataLayout = this.#device.createBindGroupLayout({
-  //     label: `${this.#markType}-per-data-layout`,
-  //     entries: this.#dataBindingConfig.map(config => ({
-  //       binding: config.binding,
-  //       visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-  //       buffer: { type: config.type || 'read-only-storage' }
-  //     }))
-  //   });
-  // }
 
   // ===== RENDERER-SPECIFIC RESOURCES =====
 
