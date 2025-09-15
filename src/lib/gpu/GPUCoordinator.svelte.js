@@ -5,6 +5,39 @@ import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
 
 const TIMESTEP = 1000 / 240; // 60Hz physics clock
 
+
+// Add this class inside GPUCoordinator.svelte.js before the GPUCoordinator class
+class ScaleIndexManager {
+  #scaleIds = [];
+  #scaleIdToIndex = new Map();
+
+  rebuild(allCurrentScaleIds) {
+    console.log('Rebuilding scale indices:', allCurrentScaleIds);
+    this.#scaleIds = [...allCurrentScaleIds];
+    this.#scaleIdToIndex.clear();
+    
+    this.#scaleIds.forEach((scaleId, index) => {
+      this.#scaleIdToIndex.set(scaleId, index);
+    });
+    
+    console.log('Scale index mapping:', Object.fromEntries(this.#scaleIdToIndex));
+    return this.#scaleIds.length;
+  }
+
+  getIndex(scaleId) {
+    return this.#scaleIdToIndex.get(scaleId);
+  }
+
+  getCount() {
+    return this.#scaleIds.length;
+  }
+
+  getAllScaleIds() {
+    return [...this.#scaleIds];
+  }
+}
+
+
 /**
  * Enhanced GPUCoordinator with scale instance buffer pools
  * Eliminates CPU-GPU sync stalls during panning/zooming
@@ -520,11 +553,12 @@ export class GPUCoordinator {
     if (deltaTime < 0) deltaTime = 8.3;
     if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
 
-    // const MAX_FRAMES_IN_FLIGHT = 2;
-    // if (this.#frameCompletionPromises.length >= MAX_FRAMES_IN_FLIGHT) {
-    //   // console.log('in flight frame limit reached, awaiting oldest')
-    //   await this.#frameCompletionPromises.shift(); // Dequeue and await the oldest promise
-    // }
+    const MAX_FRAMES_IN_FLIGHT = 2;
+    if (this.#frameCompletionPromises.length >= MAX_FRAMES_IN_FLIGHT) {
+      // console.log('in flight frame limit reached, awaiting oldest')
+      await this.#frameCompletionPromises[0]; // Dequeue and await the oldest promise
+      this.#frameCompletionPromises.shift(); // Dequeue and await the oldest promise
+    }
     // await new Promise(resolve => setTimeout(resolve, 0)); 
 
     // Smooth delta time for better performance metrics
@@ -614,7 +648,7 @@ export class GPUCoordinator {
     //   return; // Skip the render submission
     // }
 
-    await new Promise(resolve => setTimeout(resolve, 1));
+    // await new Promise(resolve => setTimeout(resolve, 1));
 
     // Render
     const renderStart = performance.now();
