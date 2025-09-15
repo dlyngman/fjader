@@ -19,25 +19,15 @@ export class BaseGPURenderer {
   #initializationError = $state(null);
   #instanceCount = $state(0);
 
-  // GPU resources - SIMPLIFIED: Only mark data + frame uniforms
   #device = null;
   #pipeline = $state(null); // Provided by coordinator factory
   
-  #perFrameBindGroup = $state(null);  // @group(0): resolution, dpr
   #perDataBindGroup = $state(null);   // @group(1): mark data buffers
   
-  #perFrameLayout = null;
   #perDataLayout = null;
-
   #dataBindingConfig = null;
 
-  // Per-frame uniform buffers ONLY (no scale buffers)
-  #resolutionBuffer = $state(null);
-  #dprBuffer = $state(null);
-
-  // Configuration
   #zIndex;
-  #devicePixelRatio;
   #xScaleType;
   #yScaleType;
 
@@ -47,7 +37,6 @@ export class BaseGPURenderer {
     this.#gpuCoordinator = gpuCoordinator;
     this.#chartContext = chartContext;
     this.#zIndex = options.zIndex || 0;
-    this.#devicePixelRatio = window.devicePixelRatio || 1;
     
     // Store scale types for coordinator pipeline factory
     this.#xScaleType = options.xScaleType || 'linear';
@@ -60,10 +49,7 @@ export class BaseGPURenderer {
   get initializationError() { return this.#initializationError; }
   get instanceCount() { return this.#instanceCount; }
   get pipeline() { return this.#pipeline; }
-  get markType() { return this.#markType; }
-  
-  // get perFrameBindGroup() { return this.#perFrameBindGroup; }
-  get perFrameBindGroup() { return null; }
+  get markType() { return this.#markType; }  
   get perDataBindGroup() { return this.#perDataBindGroup; }
 
   // ===== INITIALIZATION =====
@@ -88,11 +74,6 @@ export class BaseGPURenderer {
       // Get pipeline from coordinator factory (coordinator handles shader generation)
       await this.#getPipelineFromCoordinator(markShaderCode, vertexBufferLayout);
       
-      // Create renderer-specific resources
-      await this.#createRendererSpecificBuffers();
-      // this.#createBindGroupLayouts();
-      // this.#createPerFrameBindGroup();
-      
       this.#resourcesCreated = true;
       console.log(`${this.#markType} renderer initialized - coordinator provides pipeline and scale management`);
       
@@ -111,8 +92,6 @@ export class BaseGPURenderer {
       y: this.#chartContext.scaleTypes?.y || this.#yScaleType
     };
 
-    console.log(`Requesting pipeline from coordinator for ${this.#markType}:`, scaleTypes);
-
     // Use coordinator's pipeline factory
     // Get both pipeline and layouts from coordinator
     const result = await this.#gpuCoordinator.createPipelineForMarkType(
@@ -130,14 +109,7 @@ export class BaseGPURenderer {
     });
 
     this.#pipeline = result.pipeline;
-    this.#perFrameLayout = result.frameLayout;    // From coordinator
     this.#perDataLayout = result.dataLayout;     // From coordinator
-
-    console.log('After assignment:', {
-      pipeline: !!this.#pipeline,
-      frameLayout: !!this.#perFrameLayout,
-      dataLayout: !!this.#perDataLayout
-    });
 
     if (!this.#pipeline) {
       throw new Error(`Coordinator failed to provide pipeline for ${this.#markType}`);
@@ -145,68 +117,6 @@ export class BaseGPURenderer {
 
     console.log(`Pipeline received from coordinator for ${this.#markType}`);
   }
-
-
-  // ===== RENDERER-SPECIFIC RESOURCES =====
-
-  async #createRendererSpecificBuffers() {
-    // Resolution buffer
-    this.#resolutionBuffer = this.#device.createBuffer({
-      size: 8, // vec2<f32>
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      label: `${this.#markType}-resolution-buffer`
-    });
-    this.#ownedResources.buffers.push(this.#resolutionBuffer);
-
-    // Use shared DPR buffer from coordinator
-    this.#dprBuffer = this.#gpuCoordinator?.getSharedUniformBuffer('devicePixelRatio');
-    
-    if (!this.#dprBuffer) {
-      console.warn(`Creating own DPR buffer for ${this.#markType} - coordinator should provide this`);
-      this.#dprBuffer = this.#device.createBuffer({
-        size: 4, // f32
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        label: `${this.#markType}-dpr-buffer`
-      });
-      this.#device.queue.writeBuffer(this.#dprBuffer, 0, new Float32Array([this.#devicePixelRatio]));
-      this.#ownedResources.buffers.push(this.#dprBuffer);
-    }
-
-    // Update initial values
-    this.updateResolution();
-  }
-
-  // ===== BIND GROUP CREATION =====
-
-  // #createPerFrameBindGroup() {
-  //   if (!this.#device || !this.#perFrameLayout) {
-  //     console.warn(`Cannot create per-frame bind group for ${this.#markType} - missing device or layout`);
-  //     return;
-  //   }
-
-  //   if (!this.#resolutionBuffer || !this.#dprBuffer) {
-  //     console.warn(`Cannot create per-frame bind group for ${this.#markType} - missing uniform buffers`);
-  //     return;
-  //   }
-
-  //   try {
-  //     this.#perFrameBindGroup = this.#device.createBindGroup({
-  //       label: `${this.#markType}-per-frame-bind-group`,
-  //       layout: this.#perFrameLayout,
-  //       entries: [
-  //         { binding: 0, resource: { buffer: this.#resolutionBuffer } },
-  //         { binding: 1, resource: { buffer: this.#dprBuffer } },
-  //       ]
-  //     });
-
-  //     console.debug(`Per-frame bind group (@group(0)) created for ${this.#markType}`);
-      
-  //   } catch (error) {
-  //     console.error(`Failed to create per-frame bind group for ${this.#markType}:`, error);
-  //     this.#initializationError = error.message;
-  //     throw error;
-  //   }
-  // }
 
   createDataBindGroup(dataBindings) {
     if (!this.#device || !this.#perDataLayout) {
@@ -289,46 +199,6 @@ export class BaseGPURenderer {
     this.#instanceCount = count;
     this.invalidateLayer();
   }
-
-  // ===== RESOLUTION MANAGEMENT =====
-
-  updateResolution() {
-    if (!this.#resolutionBuffer) return;
-
-    try {
-      const device = this.#webGPUContext.getDevice();
-      if (!device) return;
-
-      const { width, height } = this.#webGPUContext.getCanvasDimensions();
-      device.queue.writeBuffer(this.#resolutionBuffer, 0, new Float32Array([width, height]));
-      
-    } catch (error) {
-      console.error(`Failed to update resolution for ${this.#markType}:`, error);
-    }
-  }
-
-  handleResolutionChange(callback) {
-    if (this.#resourcesCreated && !this.#initializationError) {
-      this.updateResolution();
-      if (callback) callback();
-    }
-  }
-
-  // ===== DEPRECATED METHODS =====
-
-  // Scale management completely removed - coordinator handles all scale concerns
-  handleScaleOrRangeUpdate(callback) {
-    console.warn(`[${this.#markType}] handleScaleOrRangeUpdate is deprecated - coordinator manages scale updates directly`);
-    if (callback) callback();
-  }
-
-  // Legacy getter for transition period
-  get bindGroup() { 
-    console.warn(`[${this.#markType}] bindGroup getter is deprecated. Use perFrameBindGroup and perDataBindGroup instead.`);
-    return this.#perFrameBindGroup;
-  }
-
-  // ===== LAYER MANAGEMENT =====
 
   registerLayer(drawFunction) {
     try {
@@ -417,11 +287,6 @@ export class BaseGPURenderer {
         }
       });
       this.#ownedResources.buffers = [];
-
-      // Release shared DPR buffer reference if coordinator provided it
-      if (this.#dprBuffer && !this.#ownedResources.buffers.includes(this.#dprBuffer) && this.#gpuCoordinator) {
-        this.#gpuCoordinator.releaseSharedUniformBuffer('devicePixelRatio');
-      }
 
       // Clean up layer registration
       if (this.#ownedResources.layerControl) {

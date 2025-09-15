@@ -51,13 +51,17 @@ export class GPUCoordinator {
   // Race condition protection
   #creatingPipelines = new Set();
 
-  // NEW: Scale instance buffer pool system
+  // Scale instance buffer pool system
+  #BUFFER_POOL_SIZE = 3; // Configurable buffer pool size
   #scaleInstancePools = new Map(); // scaleId -> { buffers: [buf0, buf1, buf2], bindGroups: [bg0, bg1, bg2], activeIndex: 0, scaleType, size }
   #scaleBindGroupLayouts = new Map(); // scaleType -> GPUBindGroupLayout
+  // #bufferCycle = {
+  //   current: 0,    // Which buffer index is active for GPU reads
+  //   next: 1,       // Which buffer index to write to  
+  //   previous: 2    // Which buffer index was active last frame
+  // };
   #bufferCycle = {
-    current: 0,    // Which buffer index is active for GPU reads
-    next: 1,       // Which buffer index to write to  
-    previous: 2    // Which buffer index was active last frame
+    currentIndex: 0  // The only index we need to track
   };
 
   #templateSystem = scaleTemplateSystem;
@@ -68,7 +72,10 @@ export class GPUCoordinator {
   #pendingFrameUpdates = new Map(); // chartId -> update params
 
   #frameCompletionPromises = [];
+  // #frameCompletionPromises = new Map();
   #lastFenceTime
+  #lastFrameUsingBuffer = new Array(this.#BUFFER_POOL_SIZE).fill(0); // Track which frame last used each buffer
+  #nextFrameId = 0;
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -177,9 +184,9 @@ export class GPUCoordinator {
 
       const bufferSize = this.#getBufferSizeForScaleType(scaleType);
 
-      // Create 3 uniform buffers for this scale instance
+      // Create uniform buffers for this scale instance
       const buffers = [];
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
         const buffer = this.#device.createBuffer({
           size: bufferSize,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -188,9 +195,9 @@ export class GPUCoordinator {
         buffers.push(buffer);
       }
 
-      // Pre-create 3 bind groups (one for each buffer)
+      // Pre-create bind groups (one for each buffer)
       const bindGroups = [];
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
         const bindGroup = this.#device.createBindGroup({
           label: `${scaleType}-scale-instance-${scaleId}-bind-group-${i}`,
           layout: bindGroupLayout,
@@ -204,7 +211,7 @@ export class GPUCoordinator {
 
       // Initialize all buffers with default data
       const defaultData = this.#getDefaultDataForScaleType(scaleType);
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
         this.#device.queue.writeBuffer(buffers[i], 0, defaultData);
       }
 
@@ -330,9 +337,27 @@ export class GPUCoordinator {
 
     try {
       // Write to the "next" buffer using WebGPU's async writeBuffer
-      const nextBufferIndex = this.#bufferCycle.next;
-      const targetBuffer = instancePool.buffers[nextBufferIndex];
+      // const nextBufferIndex = this.#bufferCycle.next;      
+      const nextBufferIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
       
+      // // --- SAFETY CHECK ---
+      // // Check if the frame that last used this buffer is still running on GPU
+      // const lastFrameIdThatUsedThisBuffer = this.#lastFrameUsingBuffer[nextBufferIndex];
+      
+      // if (this.#frameCompletionPromises.has(lastFrameIdThatUsedThisBuffer)) {
+      //   console.error(`BUFFER HAZARD DETECTED: Attempting to write to buffer index ${nextBufferIndex}, ` +
+      //     `which was last used by frame ${lastFrameIdThatUsedThisBuffer}, ` +
+      //     `but that frame's GPU work has not yet completed. ` +
+      //     `This indicates the buffer pool is too small or the GPU is stalled.`);
+        
+      //   // In production, you might want to:
+      //   // - Skip this write operation
+      //   // - Increase buffer pool size
+      //   // - Apply additional backpressure
+      //   return; // Skip the write to prevent corruption
+      // }
+
+      const targetBuffer = instancePool.buffers[nextBufferIndex];
       this.#device.queue.writeBuffer(targetBuffer, 0, data);
             
     } catch (error) {
@@ -349,16 +374,22 @@ export class GPUCoordinator {
     if (dirtyScaleIds.size === 0) return;
 
     // Update buffer cycle indices (global)
-    const temp = this.#bufferCycle.previous;
-    this.#bufferCycle.previous = this.#bufferCycle.current;
-    this.#bufferCycle.current = this.#bufferCycle.next;
-    this.#bufferCycle.next = temp;
+    // const temp = this.#bufferCycle.previous;
+    // this.#bufferCycle.previous = this.#bufferCycle.current;
+    // this.#bufferCycle.current = this.#bufferCycle.next;
+    // this.#bufferCycle.next = temp;
+
+    // Advance to next buffer using modulo arithmetic
+    const newCurrentIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
+    this.#bufferCycle.currentIndex = newCurrentIndex;
+
 
     // Update active index only for dirty scale instances
     for (const scaleId of dirtyScaleIds) {
       const instancePool = this.#scaleInstancePools.get(scaleId);
       if (instancePool) {
-        instancePool.activeIndex = this.#bufferCycle.current;
+        // instancePool.activeIndex = this.#bufferCycle.current;
+        instancePool.activeIndex = newCurrentIndex;
       }
     }
   }
@@ -477,7 +508,7 @@ export class GPUCoordinator {
 
   // ===== UPDATED: ANIMATION LOOP WITH SCALE INSTANCE INTEGRATION =====
 
-  #animationLoop = (currentTime) => {
+  #animationLoop = async (currentTime) => {
     const loopStart = performance.now();
     
     // Enhanced timing logic with smoothing
@@ -488,7 +519,14 @@ export class GPUCoordinator {
 
     if (deltaTime < 0) deltaTime = 8.3;
     if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
-    
+
+    // const MAX_FRAMES_IN_FLIGHT = 2;
+    // if (this.#frameCompletionPromises.length >= MAX_FRAMES_IN_FLIGHT) {
+    //   // console.log('in flight frame limit reached, awaiting oldest')
+    //   await this.#frameCompletionPromises.shift(); // Dequeue and await the oldest promise
+    // }
+    // await new Promise(resolve => setTimeout(resolve, 0)); 
+
     // Smooth delta time for better performance metrics
     this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
     this.#accumulator += deltaTime;
@@ -520,6 +558,14 @@ export class GPUCoordinator {
     let renderCurrent;
     const dirtyScaleIds = new Set(); // Track which scale instances have new data
 
+    // if (this.#frameCompletionPromises.length >= 2) {
+    //   console.warn('Buffer update - queue full');
+    //   // await this.#frameCompletionPromises.shift();
+    //   // return; // Or use last values
+    // } else {
+    //   console.warn('Buffer update - queue ok!');
+    // }
+
     // NEW: Coordinator writes scale data directly to scale instance pools
     for (const scale of this.#animatedScales) {
       renderCurrent = scale._setRenderState(alpha);
@@ -544,10 +590,31 @@ export class GPUCoordinator {
     this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
     this.#dirtyChartIDs.clear();
 
-    // NEW: Cycle buffers only for dirty scale instances (efficient!)
+    // Cycle buffers only for dirty scale instances
     if (dirtyScaleIds.size > 0) {
       this.#cycleScaleBuffersForInstances(dirtyScaleIds);
     }
+
+    this.#nextFrameId++;
+
+    // // Check backpressure - if too many frames in flight, skip rendering
+    // const MAX_FRAMES_IN_FLIGHT = 2;
+    // if (this.#frameCompletionPromises.size >= MAX_FRAMES_IN_FLIGHT) {
+    //   console.debug(`Skipping render (backpressure: ${this.#frameCompletionPromises.size} frames in flight)`);
+    //   // Physics and buffer updates still occurred, just skip GPU submission
+    //   // this.perf.log(loopStart, performance.now(), 0, 0, 0, renderCurrent); // Log skipped frame
+      
+    //   // Continue animation loop
+    //   if (this.#animatedScales.size > 0) {
+    //     this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+    //   } else {
+    //     this.#animationActive = false;
+    //     this.#animationRafId = null;
+    //   }
+    //   return; // Skip the render submission
+    // }
+
+    await new Promise(resolve => setTimeout(resolve, 1));
 
     // Render
     const renderStart = performance.now();
@@ -561,21 +628,21 @@ export class GPUCoordinator {
           chartArray.push(chart);
         }
       }
-      this.#coordinatedRender(chartArray);
+      this.#coordinatedRender(chartArray, this.#nextFrameId);
     }
     const renderEnd = performance.now();
 
     const loopEnd = performance.now();
 
     // Performance logging
-    this.perf.log(
-      loopStart,
-      loopEnd, 
-      0, // scaleAnimationTime (you could measure this separately)
-      renderEnd - renderStart, // renderTime
-      0, // schedulingLag
-      renderCurrent
-    );
+    // this.perf.log(
+    //   loopStart,
+    //   loopEnd, 
+    //   0, // scaleAnimationTime (you could measure this separately)
+    //   renderEnd - renderStart, // renderTime
+    //   0, // schedulingLag
+    //   renderCurrent
+    // );
 
     // Continue or end loop
     if (this.#animatedScales.size > 0) {
@@ -622,12 +689,12 @@ export class GPUCoordinator {
 
   // ===== UPDATED: COORDINATED RENDER WITH SCALE INSTANCE BIND GROUPS =====
 
-  async #coordinatedRender(chartsNeedingRender) {
+  async #coordinatedRender(chartsNeedingRender, frameId) {
 
     try {
-      if (this.#frameCompletionPromises.length >= 2) {
-        await this.#frameCompletionPromises.shift();
-      }
+      // if (this.#frameCompletionPromises.length >= 1) {
+      // await this.#frameCompletionPromises.shift();
+      // }
 
       // NOTE: This sync point will be eliminated with pre-recorded command buffers
       // await this.#device.queue.onSubmittedWorkDone();
@@ -720,15 +787,30 @@ export class GPUCoordinator {
       this.#device.queue.submit([commandEncoder.finish()]);
       
       // Track this frame's completion
-      const completionPromise = this.#device.queue.onSubmittedWorkDone();
-      completionPromise.then(() => {
-        console.log('✓ GPU work completed');
-      }).catch(error => {
-        console.error('✗ GPU work failed:', error);
-      });
-      this.#frameCompletionPromises.push(completionPromise);
+      // const completionPromise = this.#device.queue.onSubmittedWorkDone();
+      // this.#frameCompletionPromises.push(completionPromise);
 
-      this.#renderCount = (this.#renderCount || 0) + 1;
+      // const submitTime = performance.now();
+      // this.#frameCompletionPromises.push(
+      //   this.#device.queue.onSubmittedWorkDone().then(() => {
+      //     console.log(`GPU frame took ${performance.now() - submitTime}ms`);
+      //   })
+      // );
+      // --- SAFETY TRACKING ---
+      // Record that this frameId is now using the current buffer
+      this.#lastFrameUsingBuffer[this.#bufferCycle.currentIndex] = frameId;
+      
+      // Track this frame's completion for cleanup
+      const completionPromise = this.#device.queue.onSubmittedWorkDone();
+      // completionPromise.then(() => {
+      //   // When GPU finishes this frame, remove it from tracking
+      //   this.#frameCompletionPromises.delete(frameId);
+      // });
+      
+      // Store the promise so we can check if frame is still running
+      // this.#frameCompletionPromises.set(frameId, completionPromise);
+      this.#frameCompletionPromises.push(completionPromise);
+      // this.#renderCount = (this.#renderCount || 0) + 1;
       
     } catch (error) {
       console.error('Coordinated render failed:', error);
@@ -981,7 +1063,7 @@ export class GPUCoordinator {
   }
 
   #buildRenderPlanForChart(chartConfig) {
-    console.log(`🏗️ Building render plan for chart ${chartConfig.chartId}: ${chartConfig.layers.size} layers available`);
+    // console.log(`🏗️ Building render plan for chart ${chartConfig.chartId}: ${chartConfig.layers.size} layers available`);
   
     const layers = Array.from(chartConfig.layers.values());
     if (layers.length === 0) {
@@ -1023,7 +1105,7 @@ export class GPUCoordinator {
 
     chartConfig.renderPlan = newPlan;
     chartConfig.needsPlanRebuild = false;
-    console.log(`✅ Render plan built for chart ${chartConfig.chartId}: ${newPlan.length} layers in plan`);
+    // console.log(`✅ Render plan built for chart ${chartConfig.chartId}: ${newPlan.length} layers in plan`);
   }
 
   #createRenderPassDescriptor(textureView, canvas, chartId) {
@@ -1096,8 +1178,6 @@ export class GPUCoordinator {
     // Generate shader using template system
     const templateResult = scaleTemplateSystem.generateShader(scaleTypes, markShaderCode);
     
-    console.log('🏭 Generated shader preview:', templateResult.shaderCode.slice(0, 200) + '...');
-
     // Get or create stable layouts
     const frameLayout = this.#getOrCreateFrameLayout();
     const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);

@@ -269,6 +269,7 @@
         //Tell the coordinator to update this chart's frame uniforms
         if (gpuCoordinator) {
           gpuCoordinator.updateChartFrameUniforms(chartId);
+          gpuCoordinator.invalidateChart(chartId);
         }
     }
   });

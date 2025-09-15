@@ -208,21 +208,21 @@
     }
   });
 
-  // Resize change
-  $effect.pre(() => {
-    if (!renderer?.resourcesCreated) return;
+  // // Resize change
+  // $effect.pre(() => {
+  //   if (!renderer?.resourcesCreated) return;
     
-    // Track layout changes
-    void chartContext.innerWidth;
-    void chartContext.innerHeight;
+  //   // Track layout changes
+  //   void chartContext.innerWidth;
+  //   void chartContext.innerHeight;
     
-    untrack(() => {
-      // Update scale uniforms only
-      // renderer.handleScaleOrRangeUpdate();
-      renderer.handleResolutionChange();      
-      gpuCoordinator.invalidateChart(chartContext.chartId);
-    });
-  });
+  //   untrack(() => {
+  //     // Update scale uniforms only
+  //     // renderer.handleScaleOrRangeUpdate();
+  //     renderer.handleResolutionChange();      
+  //     gpuCoordinator.invalidateChart(chartContext.chartId);
+  //   });
+  // });
 
   // Create quad geometry for dot rendering
   function createQuadGeometry() {
