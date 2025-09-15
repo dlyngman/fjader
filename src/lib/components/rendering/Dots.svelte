@@ -55,14 +55,14 @@
       let alpha = alphaValues[instanceIdx];
       let color = colors[instanceIdx];
       
-      // Use centralized scale functions - works for any scale type!
-      let scaledX = scaleX(x, scaleParams);
-      let scaledY = scaleY(y, scaleParams);
+      // Use centralized scale functions
+      let scaledX = scaleX(x);
+      let scaledY = scaleY(y);
       
-      let displayRadius = radius * devicePixelRatio;
+      let displayRadius = radius * frameUniforms.devicePixelRatio;
       let radiusWithPadding = displayRadius * 1.2;
-      let worldPos = vec2<f32>(scaledX * devicePixelRatio, scaledY * devicePixelRatio) + quadPosition * radiusWithPadding;
-      let normalizedPos = (worldPos / resolution) * 2.0 - 1.0;
+      let worldPos = vec2<f32>(scaledX * frameUniforms.devicePixelRatio, scaledY * frameUniforms.devicePixelRatio) + quadPosition * radiusWithPadding;
+      let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
       
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
@@ -77,14 +77,14 @@
     fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
       let dist = length(input.uv);
       let sdf = dist - 1.0;
-      let pixelSize = devicePixelRatio / (input.radius * 2.0);
+      let pixelSize = frameUniforms.devicePixelRatio / (input.radius * 2.0);
       let alpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
       let finalAlpha = input.color.a * alpha * input.alpha;
       return vec4<f32>(input.color.rgb, finalAlpha);
     }
   `;
 
-  const shaderCode = BaseGPURenderer.generateShader(dotsShaderCode);
+  // const shaderCode = BaseGPURenderer.generateShader(dotsShaderCode);
 
   // Dots-specific vertex buffer layout
   const vertexBufferLayout = [{
@@ -96,7 +96,6 @@
     }],
   }];
 
-  // ✅ NEW: Data binding configuration for dual bind group architecture
   const dataBindingConfig = [
     { binding: 0, type: 'read-only-storage' }, // xValues
     { binding: 1, type: 'read-only-storage' }, // yValues  
@@ -140,16 +139,16 @@
   let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
   let allBindGroupsReady = $derived(
     !!renderer?.perFrameBindGroup && 
-    !!renderer?.perDataBindGroup && 
-    !!renderer?.perScaleBindGroup
+    !!renderer?.perDataBindGroup 
+    // && !!renderer?.perScaleBindGroup
   );
 
   $effect.pre(() => {
     void renderer?.resourcesCreated;
-    void allBindGroupsReady;
+    void dataBindGroupReady;
 
     if (xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer && 
-        renderer?.resourcesCreated && !allBindGroupsReady) {
+        renderer?.resourcesCreated && !dataBindGroupReady) {
       untrack(() => {
         createDotsDataBindGroup();
       });
@@ -158,8 +157,8 @@
 
   // Data writing effects
   $effect.pre(() => {
-    void allBindGroupsReady;
-    if (xData && xBuffer && allBindGroupsReady) {
+    void dataBindGroupReady;
+    if (xData && xBuffer && dataBindGroupReady) {
       untrack(() => {
         const device = webGPUContext.getDevice();
         device?.queue.writeBuffer(xBuffer, 0, xData);
@@ -168,62 +167,62 @@
   });
 
   $effect.pre(() => {
-    void allBindGroupsReady;
-    if (yData && yBuffer && allBindGroupsReady) {
+    void dataBindGroupReady;
+    if (yData && yBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(yBuffer, 0, yData);
     }
   });
 
   $effect.pre(() => {
-    void allBindGroupsReady;
-    if (radiusData && radiusBuffer && allBindGroupsReady) {
+    void dataBindGroupReady;
+    if (radiusData && radiusBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(radiusBuffer, 0, radiusData);
     }
   });
 
   $effect.pre(() => {
-    void allBindGroupsReady;
-    if (colorData && colorBuffer && allBindGroupsReady) {
+    void dataBindGroupReady;
+    if (colorData && colorBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(colorBuffer, 0, colorData);
     }
   });
 
   $effect.pre(() => {
-    void allBindGroupsReady;
-    if (alphaData && alphaBuffer && allBindGroupsReady) {
+    void dataBindGroupReady;
+    if (alphaData && alphaBuffer && dataBindGroupReady) {
       const device = webGPUContext.getDevice();
       device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
     }
   });
 
   $effect.pre(() => {
-    void allBindGroupsReady;
+    void dataBindGroupReady;
     if (xData && yData && colorData && radiusData && alphaData && 
         xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer &&
-        allBindGroupsReady) {
+        dataBindGroupReady) {
       renderer.updateInstanceCount(xData.length);
       gpuCoordinator.invalidateChart(chartContext.chartId);
     }
   });
 
-  // Resize change
-  $effect.pre(() => {
-    if (!renderer?.resourcesCreated) return;
+  // // Resize change
+  // $effect.pre(() => {
+  //   if (!renderer?.resourcesCreated) return;
     
-    // Track layout changes
-    void chartContext.innerWidth;
-    void chartContext.innerHeight;
+  //   // Track layout changes
+  //   void chartContext.innerWidth;
+  //   void chartContext.innerHeight;
     
-    untrack(() => {
-      // Update scale uniforms only
-      renderer.handleScaleOrRangeUpdate();
-      renderer.handleResolutionChange();      
-      gpuCoordinator.invalidateChart(chartContext.chartId);
-    });
-  });
+  //   untrack(() => {
+  //     // Update scale uniforms only
+  //     // renderer.handleScaleOrRangeUpdate();
+  //     renderer.handleResolutionChange();      
+  //     gpuCoordinator.invalidateChart(chartContext.chartId);
+  //   });
+  // });
 
   // Create quad geometry for dot rendering
   function createQuadGeometry() {
@@ -312,37 +311,31 @@
 
   // ✅ UPDATED: Dots-specific draw function for dual bind groups
   function drawDots(passEncoder) {
-    // console.log('🎨 drawDots called:', {
-    //   instanceCount: renderer.instanceCount,
-    //   quadBuffer: !!quadGeometryBuffer,
-    //   allBindGroups: !!(renderer.perFrameBindGroup && renderer.perDataBindGroup && renderer.perScaleBindGroup)
-    // });
-
     try {
-      if (!renderer?.pipeline || 
-          !renderer?.perFrameBindGroup || 
-          !renderer?.perDataBindGroup || 
-          !renderer?.perScaleBindGroup ||
-          renderer.instanceCount === 0) {
-        console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
-        return;
-      }
+      // if (!renderer?.pipeline || 
+      //     !renderer?.perDataBindGroup || 
+      //     renderer.instanceCount === 0) {
+      //   console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
+      //   return;
+      // }
 
-      if (!quadGeometryBuffer) {
-        console.error('❌ Skipping dots draw - no quad geometry buffer!');
-        return;
-      }
-
-      // console.log('✅ Drawing dots:', renderer.instanceCount, 'instances');
+      // if (!quadGeometryBuffer) {
+      //   console.error('❌ Skipping dots draw - no quad geometry buffer!');
+      //   console.log('❌ Early return - no quad geometry buffer');
+      //   return;
+      // }
 
       // passEncoder.setPipeline(renderer.pipeline);
-      // passEncoder.setBindGroup(0, renderer.perFrameBindGroup);  // Per-frame uniforms
-      // passEncoder.setBindGroup(1, renderer.perDataBindGroup);   // Per-data storage buffers
-      passEncoder.setBindGroup(2, renderer.perScaleBindGroup);  // ← This was missing!
+      // passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+      // passEncoder.draw(quadVertexCount, renderer.instanceCount);
+
+      if (!quadGeometryBuffer || renderer.instanceCount === 0) {
+        console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
+        return; // Safety check
+      }
+
       passEncoder.setVertexBuffer(0, quadGeometryBuffer);
       passEncoder.draw(quadVertexCount, renderer.instanceCount);
-
-      // console.log('✅ Dots draw completed successfully');
 
     } catch (error) {
       console.error('❌ Dots draw operation failed:', error);
@@ -389,7 +382,8 @@
 
       // ✅ UPDATED: Initialize with dual bind group configuration
       await renderer.initialize({
-        shaderCode,               // Generated shader with @group annotations
+        // shaderCode,               // Generated shader with @group annotations
+        markShaderCode: dotsShaderCode, 
         vertexBufferLayout,       // Vertex layout for quad geometry
         dataBindingConfig,        // ✅ NEW: Required for dual bind group architecture
       });

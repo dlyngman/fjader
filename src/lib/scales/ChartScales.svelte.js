@@ -13,6 +13,28 @@ export class ChartScales {
   constructor(config) {
     this.config = config;
     this.gpuCoordinator = config.gpuCoordinator;
+
+    // Update gpuCoordinator scale ids 
+    $effect(() => {
+      const xScale = this.xScaleState;
+      const yScale = this.yScaleState;
+      
+      if (xScale?.id && yScale?.id && this.gpuCoordinator) {
+        const trySetMapping = () => {
+          try {
+            this.gpuCoordinator.setChartScaleMapping(this.chartId, {
+              xScaleId: xScale.id,
+              yScaleId: yScale.id
+            });
+          } catch (error) {
+            console.log('setMapping failed')
+            // Retry after chart registration
+            setTimeout(trySetMapping, 10);
+          }
+        };
+        trySetMapping();
+      }
+    });
   }
 
   // Reactive getters for config access
