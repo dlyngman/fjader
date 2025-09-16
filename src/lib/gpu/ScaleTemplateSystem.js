@@ -10,26 +10,30 @@
  * Each scale type provides: declaration, function call, and implementation
  */
 const SCALE_FRAGMENTS = {
-	linear: {
-		// MODIFIED: Accepts groupIndex and a suffix for unique variable/struct names
-		declaration: (groupIndex, bindingIndex, suffix) => `
-      struct LinearScaleParams${suffix} {
-        domainMin: f32,
-        domainMax: f32,
-        domainScale: f32,  // Precomputed 1.0 / (domainMax - domainMin)
-      };
-      @group(${groupIndex}) @binding(${bindingIndex}) var<uniform> linearParams${suffix}: LinearScaleParams${suffix};
-    `,
+  linear: {
+    // UPDATED: Generate SSBO declaration instead of individual uniforms
+    declaration: (groupIndex, bindingIndex, suffix) => {
+      // For SSBO approach, we only need the struct definition
+      // The actual storage buffer is declared once globally
+      return `
+        struct ScaleParam {
+          domainMin: f32,
+          domainMax: f32,
+          domainScale: f32,
+          _pad: f32,
+        };
+      `;
+    },
 
-		// MODIFIED: Uses the suffix to call the correct uniform variable
-		functionCall: (value, suffix) => `scaleLinear${suffix}(${value}, linearParams${suffix})`,
+    // UPDATED: Use array indexing into global SSBO
+    functionCall: (value, suffix) => `scaleLinear${suffix}(${value})`,
 
-		// MODIFIED: Becomes a function to generate the implementation with the correct types
+    // UPDATED: Read from global storage array using indices
     implementation: (suffix, axis) => `
-      fn scaleLinear${suffix}(value: f32, params: LinearScaleParams${suffix}) -> f32 {
-        let normalized = (value - params.domainMin) * params.domainScale;
+      fn scaleLinear${suffix}(value: f32, scaleIndex: u32) -> f32 {
+        let scale = scaleParams[scaleIndex];
+        let normalized = (value - scale.domainMin) * scale.domainScale;
         
-        // Use correct range values from frameUniforms instead of params
         let rangeMin = frameUniforms.rangeMin.${axis};
         let rangeMax = frameUniforms.rangeMax.${axis};
         
@@ -37,17 +41,11 @@ const SCALE_FRAGMENTS = {
       }
     `,
 
-		// Buffer layout information for GPUCoordinator (this remains unchanged)
-		bufferLayout: {
-			size: 3 * 4, // 3 f32 values = 12 bytes
-			fields: ['domainMin', 'domainMax', 'domainScale']
-		}
-	}
-
-	// Future scale types will be added here:
-	// band: { ... },
-	// log: { ... },
-	// time: { ... }
+    bufferLayout: {
+      size: 4 * 4, // Now 4 f32 values = 16 bytes (added padding)
+      fields: ['domainMin', 'domainMax', 'domainScale', '_pad']
+    }
+  }
 };
 
 /**
@@ -111,7 +109,10 @@ export class ScaleTemplateSystem {
         rangeMin: vec2<f32>,          // Chart range minimums  
         rangeMax: vec2<f32>,          // Chart range maximums
         devicePixelRatio: f32,        // Device pixel ratio
-        padding: f32,                 // Alignment padding
+        _pad0: f32,                   // Alignment padding
+        xScaleIndex: u32,             // Shared by the chart
+        yScaleIndex: u32,             // Shared by the chart
+        _pad1: vec2<u32>,             // Pad struct size to 48 bytes
       };
       @group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
       
@@ -135,15 +136,18 @@ export class ScaleTemplateSystem {
 	 * Build declarations section for scale uniforms
 	 * @private
 	 */
-	_buildDeclarations(xFragment, yFragment) {
-		// MODIFIED: X scale is now hardcoded to @group(2)
-		const xDeclaration = xFragment.declaration(2, 0, 'X');
-
-		// MODIFIED: Y scale is now hardcoded to @group(3) to match the pipeline layout
-		const yDeclaration = yFragment.declaration(3, 0, 'Y');
-
-		return `${xDeclaration}\n${yDeclaration}`;
-	}
+  _buildDeclarations(xFragment, yFragment) {
+    // Generate struct definitions
+    const structDef = xFragment.declaration(2, 0, 'X');
+    
+    // Global SSBO declaration - don't declare layerParams here
+    const globalSSBODeclaration = `
+      // Global scale storage buffer
+      @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
+    `;
+    
+    return `${structDef}\n${globalSSBODeclaration}`;
+  }
 
 	/**
 	 * Build scale function implementations
@@ -163,19 +167,18 @@ export class ScaleTemplateSystem {
 	 * Build convenience scale functions (scaleX, scaleY)
 	 * @private
 	 */
-	_buildScaleFunctions(xFragment, yFragment) {
-		// MODIFIED: Call the uniquely named scale functions with their corresponding suffixes
-		return `
-      // Convenience functions for X and Y scaling
+  _buildScaleFunctions(xFragment, yFragment) {
+    return `
+      // Convenience functions - indices will be passed from mark-specific code
       fn scaleX(value: f32) -> f32 {
-        return ${xFragment.functionCall('value', 'X')};
+        return scaleLinear${xFragment.suffix || 'X'}(value, frameUniforms.xScaleIndex);
       }
       
       fn scaleY(value: f32) -> f32 {
-        return ${yFragment.functionCall('value', 'Y')};
+        return scaleLinear${yFragment.suffix || 'Y'}(value, frameUniforms.yScaleIndex);
       }
     `;
-	}
+  }
 
 	/**
 	 * Build buffer layout specifications for GPUCoordinator

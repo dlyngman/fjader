@@ -24,7 +24,7 @@ vite.config.ts.timestamp-*
 
 #llm utils
 llm_context.ipynb
-llm_context.txt
+# llm_context.txt
 .ipynb_checkpoints
 README_MINIMAL.md
 

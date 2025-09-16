@@ -54,14 +54,14 @@
       let radius = radiusValues[instanceIdx];
       let alpha = alphaValues[instanceIdx];
       let color = colors[instanceIdx];
-      
+
       // Use centralized scale functions
       let scaledX = scaleX(x);
       let scaledY = scaleY(y);
       
       let displayRadius = radius * frameUniforms.devicePixelRatio;
       let radiusWithPadding = displayRadius * 1.2;
-      let worldPos = vec2<f32>(scaledX * frameUniforms.devicePixelRatio, scaledY * frameUniforms.devicePixelRatio) + quadPosition * radiusWithPadding;
+      let worldPos = vec2<f32>(scaledX, scaledY) + quadPosition * radiusWithPadding;
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
       
       var output: VertexOutput;
@@ -288,25 +288,20 @@
 
   // ✅ UPDATED: Create dots-specific data bind group using new architecture
   function createDotsDataBindGroup() {
-    // Validate all buffers exist
-    if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer) {
-      console.warn('⚠️ Cannot create dots data bind group - missing data buffers');
+    if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer ) {
+      console.warn('Cannot create dots data bind group - missing data buffers');
       return;
     }
 
-    // ✅ NEW: Create data bindings for @group(1) with restarted indices
     const dataBindings = [
-      { binding: 0, resource: { buffer: xBuffer } },      // xValues
-      { binding: 1, resource: { buffer: yBuffer } },      // yValues
-      { binding: 2, resource: { buffer: radiusBuffer } }, // radiusValues
-      { binding: 3, resource: { buffer: alphaBuffer } },  // alphaValues
-      { binding: 4, resource: { buffer: colorBuffer } },  // colors
+      { binding: 0, resource: { buffer: xBuffer } },
+      { binding: 1, resource: { buffer: yBuffer } },
+      { binding: 2, resource: { buffer: radiusBuffer } },
+      { binding: 3, resource: { buffer: alphaBuffer } },
+      { binding: 4, resource: { buffer: colorBuffer } },
     ];
 
-    // ✅ NEW: Use new dual bind group architecture
     renderer.createDataBindGroup(dataBindings);
-    
-    console.debug('✅ Dots data bind group created with dual bind group architecture');
   }
 
   // ✅ UPDATED: Dots-specific draw function for dual bind groups
