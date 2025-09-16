@@ -109,7 +109,10 @@ export class ScaleTemplateSystem {
         rangeMin: vec2<f32>,          // Chart range minimums  
         rangeMax: vec2<f32>,          // Chart range maximums
         devicePixelRatio: f32,        // Device pixel ratio
-        padding: f32,                 // Alignment padding
+        _pad0: f32,                   // Alignment padding
+        xScaleIndex: u32,             // Shared by the chart
+        yScaleIndex: u32,             // Shared by the chart
+        _pad1: vec2<u32>,             // Pad struct size to 48 bytes
       };
       @group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
       
@@ -167,12 +170,12 @@ export class ScaleTemplateSystem {
   _buildScaleFunctions(xFragment, yFragment) {
     return `
       // Convenience functions - indices will be passed from mark-specific code
-      fn scaleX(value: f32, scaleIndex: u32) -> f32 {
-        return scaleLinear${xFragment.suffix || 'X'}(value, scaleIndex);
+      fn scaleX(value: f32) -> f32 {
+        return scaleLinear${xFragment.suffix || 'X'}(value, frameUniforms.xScaleIndex);
       }
       
-      fn scaleY(value: f32, scaleIndex: u32) -> f32 {
-        return scaleLinear${yFragment.suffix || 'Y'}(value, scaleIndex);
+      fn scaleY(value: f32) -> f32 {
+        return scaleLinear${yFragment.suffix || 'Y'}(value, frameUniforms.yScaleIndex);
       }
     `;
   }

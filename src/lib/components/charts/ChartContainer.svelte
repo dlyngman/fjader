@@ -249,13 +249,12 @@
     // console.log(`Pan position updated at ${performance.now().toFixed(2)}ms`);
   }
 
-  function handlePointerUp() {
+  function handlePointerUp(event) {
     isPanning = false;
     activePanX = false;
     activePanY = false;
     
     event.target.releasePointerCapture?.(event.pointerId);
-    // NEW: End pan session
     scales.endPan();
   }
 

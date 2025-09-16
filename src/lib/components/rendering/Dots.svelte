@@ -42,8 +42,6 @@
     @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
     @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
     @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
-    @group(1) @binding(5) var<storage, read> xScaleIndices: array<u32>;  // Add this
-    @group(1) @binding(6) var<storage, read> yScaleIndices: array<u32>;  // Add this
     
     @vertex
     fn vertexMain(
@@ -57,19 +55,13 @@
       let alpha = alphaValues[instanceIdx];
       let color = colors[instanceIdx];
 
-      let xScaleIndex = xScaleIndices[instanceIdx];  // Get scale index per instance
-      let yScaleIndex = yScaleIndices[instanceIdx];
-      let scaledX = scaleX(x, xScaleIndex);
-      let scaledY = scaleY(y, yScaleIndex);
-
-      
       // Use centralized scale functions
-      // let scaledX = scaleX(x);
-      // let scaledY = scaleY(y);
+      let scaledX = scaleX(x);
+      let scaledY = scaleY(y);
       
       let displayRadius = radius * frameUniforms.devicePixelRatio;
       let radiusWithPadding = displayRadius * 1.2;
-      let worldPos = vec2<f32>(scaledX * frameUniforms.devicePixelRatio, scaledY * frameUniforms.devicePixelRatio) + quadPosition * radiusWithPadding;
+      let worldPos = vec2<f32>(scaledX, scaledY) + quadPosition * radiusWithPadding;
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
       
       var output: VertexOutput;
@@ -296,8 +288,7 @@
 
   // ✅ UPDATED: Create dots-specific data bind group using new architecture
   function createDotsDataBindGroup() {
-    if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer || 
-        !xScaleIndexBuffer || !yScaleIndexBuffer) {
+    if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer ) {
       console.warn('Cannot create dots data bind group - missing data buffers');
       return;
     }

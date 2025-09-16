@@ -171,11 +171,11 @@
     getCanvasDimensions() {
       const currentDPR = window.devicePixelRatio || 1;
       return { 
-        width: width * devicePixelRatio, 
-        height: height * devicePixelRatio,
+        width: width * currentDPR, 
+        height: height * currentDPR,
         cssWidth: width,
         cssHeight: height,
-        devicePixelRatio
+        currentDPR
       };
     },
 
