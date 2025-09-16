@@ -92,7 +92,8 @@ export class LinearScaleState {
 
     // Register buffer pool with coordinator
     if (gpuCoordinator) {
-      gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
+      // gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
+      gpuCoordinator.registerScale(this.id, 'linear');
     }
 
     this.ready = $state(false);
@@ -625,6 +626,6 @@ export class LinearScaleState {
     this.#frozenExtent = null;
     this.#isAnimating = false;
     this.#resetAccumulator();
-    this.#gpuCoordinator.destroyBufferPoolForScale(this.id)
+    this.#gpuCoordinator.unregisterScale(this.id)
   }
 }

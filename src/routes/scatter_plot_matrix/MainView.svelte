@@ -100,7 +100,7 @@
 										x={config.x}
 										y={config.y}
 										color={'species'}
-										alpha="0.5"
+										alpha="1.0"
 										radius="5"
 									/>
 								{/if}

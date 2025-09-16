@@ -1,9 +1,7 @@
-// src/lib/gpu/GPUCoordinator.svelte.js - Complete Scale Instance Buffer Pool Architecture
-
 import { setContext, getContext } from 'svelte';
 import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
 
-const TIMESTEP = 1000 / 240; // 60Hz physics clock
+const TIMESTEP = 1000 / 120; // 60Hz physics clock
 
 
 // Add this class inside GPUCoordinator.svelte.js before the GPUCoordinator class
@@ -73,7 +71,7 @@ export class GPUCoordinator {
   #chartsToRenderArray = [];
   #msaaSampleCount = 4;
   #globalInputDelay = 0;
-  #renderCount = 0;
+  // #renderCount = 0;
 
   // Performance tracking
   #smoothedDeltaTime = 8.3; // Initialize to ideal 60fps
@@ -85,35 +83,18 @@ export class GPUCoordinator {
   #creatingPipelines = new Set();
 
   // Scale instance buffer pool system
-  #BUFFER_POOL_SIZE = 3; // Configurable buffer pool size
-  #scaleInstancePools = new Map(); // scaleId -> { buffers: [buf0, buf1, buf2], bindGroups: [bg0, bg1, bg2], activeIndex: 0, scaleType, size }
-  #scaleBindGroupLayouts = new Map(); // scaleType -> GPUBindGroupLayout
-  // #bufferCycle = {
-  //   current: 0,    // Which buffer index is active for GPU reads
-  //   next: 1,       // Which buffer index to write to  
-  //   previous: 2    // Which buffer index was active last frame
-  // };
-  #bufferCycle = {
-    currentIndex: 0  // The only index we need to track
-  };
+  // #scaleBindGroupLayouts = new Map(); // scaleType -> GPUBindGroupLayout
+  #globalScaleLayout = null;
 
   #templateSystem = scaleTemplateSystem;
   #frameLayout = null;
   #dataLayouts = new Map(); // markType-config -> GPUBindGroupLayout
-  #pendingPoolCreations = []; // Optional: for lazy creation pattern
   #pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
   #pendingFrameUpdates = new Map(); // chartId -> update params
 
-  #frameCompletionPromises = [];
-  // #frameCompletionPromises = new Map();
-  #lastFenceTime
-  #lastFrameUsingBuffer = new Array(this.#BUFFER_POOL_SIZE).fill(0); // Track which frame last used each buffer
-  #nextFrameId = 0;
+  // #nextFrameId = 0;
 
   #scaleIndexManager = null;
-  #globalScaleBuffers = [];
-  #globalStagingBuffers = [];  
-  #globalScaleBindGroup = null;
   #maxScaleSlots = 256;
 
   #SSBO_SLOT_COUNT = 3;
@@ -124,6 +105,9 @@ export class GPUCoordinator {
   #globalScaleSSBO = null;  // Single buffer with 3 slots
   #slotByteSize = null;
   #globalScaleBindGroups = [];
+
+  #scaleIdToInstance = new Map();
+  #ssboNeedsUpload = false;
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -146,11 +130,7 @@ export class GPUCoordinator {
       await this.#createSharedResources();
       await this.#initializeScaleBindGroupLayouts();
       this.#initialized = true;
-      // Process any queued pool creations
-      for (const pending of this.#pendingPoolCreations) {
-        this.#doCreateBufferPoolForScale(pending.scaleId, pending.scaleType);
-      }
-      this.#pendingPoolCreations = [];
+      this.#handleScaleTopologyChange();
       console.log('GPUCoordinator initialized with scale instance buffer pool architecture');
     } catch (error) {
       console.error('GPUCoordinator initialization failed:', error);
@@ -158,31 +138,6 @@ export class GPUCoordinator {
     }
   }
 
-  // ===== NEW: SCALE INSTANCE BUFFER POOL MANAGEMENT =====
-
-  /**
-   * Initialize bind group layouts for different scale types
-   * @private
-   */
-  // async #initializeScaleBindGroupLayouts() {
-  //   // Linear scale bind group layout
-  //   const linearLayout = this.#device.createBindGroupLayout({
-  //     label: 'linear-scale-bind-group-layout',
-  //     entries: [{
-  //       binding: 0,
-  //       visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-  //       buffer: { type: 'uniform' }
-  //     }]
-  //   });
-    
-  //   this.#scaleBindGroupLayouts.set('linear', linearLayout);
-    
-  //   // Future scale types can be added here
-  //   // this.#scaleBindGroupLayouts.set('band', bandLayout);
-  //   // this.#scaleBindGroupLayouts.set('log', logLayout);
-    
-  //   console.log('Initialized scale bind group layouts:', Array.from(this.#scaleBindGroupLayouts.keys()));
-  // }
 
   async #initializeScaleBindGroupLayouts() {
     // Create global SSBO layout (one layout for all scale types)
@@ -197,15 +152,11 @@ export class GPUCoordinator {
       }]
     });
     
-    // Store as 'global' instead of individual scale types
-    this.#scaleBindGroupLayouts.set('global', globalScaleLayout);
-    
-    // Create the actual SSBO buffers
-    // this.#createGlobalScaleBuffers();
+    this.#globalScaleLayout = globalScaleLayout;
     this.#createGlobalScaleSSBO();
 
     for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-      const layout = this.#scaleBindGroupLayouts.get('global');
+      const layout = this.#globalScaleLayout;
       const slotOffset = slot * this.#slotByteSize;
       const bg = this.#device.createBindGroup({
         label: `global-scale-bind-group-slot-${slot}`,
@@ -214,10 +165,8 @@ export class GPUCoordinator {
       });
       this.#globalScaleBindGroups[slot] = bg;
     }
-    // this.#createGlobalScaleBindGroup();
     
     console.log('Initialized global SSBO layout, buffers, and bind group');
-
   }
 
   /**
@@ -263,101 +212,6 @@ export class GPUCoordinator {
     }
   }
 
-  // // Add this method to GPUCoordinator
-  // #createGlobalScaleBuffers() {
-  //   console.log('Creating global scale SSBO system');
-    
-  //   // Clean up existing buffers if they exist
-  //   this.#globalScaleBuffers.forEach(buffer => buffer?.destroy?.());
-  //   this.#globalStagingBuffers.forEach(staged => staged.buffer?.destroy?.());
-    
-  //   const scaleParamSize = 16; // 4 floats * 4 bytes
-  //   const totalBufferSize = this.#maxScaleSlots * scaleParamSize;
-    
-  //   for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
-  //     // Create SSBO
-  //     const storageBuffer = this.#device.createBuffer({
-  //       size: totalBufferSize,
-  //       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-  //       label: `global-scale-ssbo-${i}`
-  //     });
-      
-  //     // Create staging buffer (mapped for CPU access)
-  //     const stagingBuffer = this.#device.createBuffer({
-  //       size: totalBufferSize,
-  //       usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC,
-  //       mappedAtCreation: true,
-  //       label: `scale-staging-${i}`
-  //     });
-      
-  //     this.#globalScaleBuffers.push(storageBuffer);
-
-  //     const mappedRange = stagingBuffer.getMappedRange();
-  //     const view = new Float32Array(mappedRange);
-      
-  //     // IMPORTANT: Unmap the buffer before storing it
-  //     stagingBuffer.unmap();
-      
-  //     this.#globalStagingBuffers.push({
-  //       buffer: stagingBuffer,
-  //       view: null  // Will be remapped when needed
-  //     });
-  //     // this.#globalStagingBuffers.push({
-  //     //   buffer: stagingBuffer,
-  //     //   view: new Float32Array(stagingBuffer.getMappedRange())
-  //     // });
-  //   }
-    
-  //   console.log(`Created ${this.#BUFFER_POOL_SIZE} global scale buffers, ${totalBufferSize} bytes each`);
-  // }
-
-  // // Add this method to GPUCoordinator
-  // async #updateScaleSSBO() {
-  //   if (this.#animatedScales.size === 0) return;
-    
-  //   const currentIndex = this.#bufferCycle.currentIndex;
-  //   const stagingBuffer = this.#globalStagingBuffers[currentIndex];
-    
-  //   if (!stagingBuffer) {
-  //     console.warn('No staging buffer available for current index:', currentIndex);
-  //     return;
-  //   }
-
-  //   await stagingBuffer.buffer.mapAsync(GPUMapMode.WRITE);
-  //   const mappedRange = stagingBuffer.buffer.getMappedRange();
-  //   const view = new Float32Array(mappedRange);
-  
-    
-  //   // Fill staging buffer with current scale data
-  //   for (const scale of this.#animatedScales) {
-  //     const globalIndex = this.#scaleIndexManager.getIndex(scale.id);
-      
-  //     if (globalIndex !== undefined) {
-  //       const gpuState = scale.gpuState;
-  //       if (gpuState) {
-  //         const offset = globalIndex * 4; // 4 floats per scale
-          
-  //         stagingBuffer.view[offset + 0] = gpuState.domainMin;
-  //         stagingBuffer.view[offset + 1] = gpuState.domainMax;
-  //         stagingBuffer.view[offset + 2] = gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin));
-  //         stagingBuffer.view[offset + 3] = 0; // padding
-  //       }
-  //     }
-  //   }
-    
-  //   stagingBuffer.buffer.unmap();
-
-  //   // Single GPU copy operation
-  //   const commandEncoder = this.#device.createCommandEncoder();
-  //   commandEncoder.copyBufferToBuffer(
-  //     stagingBuffer.buffer, 0,
-  //     this.#globalScaleBuffers[currentIndex], 0,
-  //     this.#scaleIndexManager.getCount() * 16
-  //   );
-  //   this.#device.queue.submit([commandEncoder.finish()]);
-  // }
-
-  // Replace #updateScaleSSBO with synchronous staging pool access
   async #updateScaleSSBOWithStaging() {
     if (this.#animatedScales.size === 0) return;
     
@@ -386,334 +240,88 @@ export class GPUCoordinator {
   }
 
   #fillAllScales(view) {
-    for (const scale of this.#animatedScales) {
-      const globalIndex = this.#scaleIndexManager.getIndex(scale.id);
-      if (globalIndex !== undefined) {
-        const gpuState = scale.gpuState;
-        if (gpuState) {
-          const offset = globalIndex * 4; // 4 floats per scale
-          view[offset + 0] = gpuState.domainMin;
-          view[offset + 1] = gpuState.domainMax; 
-          view[offset + 2] = gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin));
-          view[offset + 3] = 0; // padding
-        }
-      }
+    view.fill(0);
+    const ids = this.#scaleIndexManager.getAllScaleIds();
+    for (const id of ids) {
+      const idx = this.#scaleIndexManager.getIndex(id);
+      const scale = this.#scaleIdToInstance.get(id);
+      if (idx === undefined || !scale) continue;
+      const s = scale.gpuState;
+      if (!s) continue;
+      const off = idx * 4;
+      view[off + 0] = s.domainMin;
+      view[off + 1] = s.domainMax;
+      view[off + 2] = s.domainScale || (1.0 / (s.domainMax - s.domainMin));
+      view[off + 3] = 0;
     }
   }
 
 
-  // #createGlobalScaleBindGroup(slot) {
-  //   const layout = this.#scaleBindGroupLayouts.get('global');
-  //   if (!layout) {
-  //     console.error('Global scale layout not found');
-  //     return null;
-  //   }
-
-  //   const slotOffset = slot * this.#slotByteSize;
-    
-  //   return this.#device.createBindGroup({
-  //     label: `global-scale-bind-group-slot-${slot}`,
-  //     layout: layout,
-  //     entries: [{
-  //       binding: 0,
-  //       resource: { 
-  //         buffer: this.#globalScaleSSBO,
-  //         offset: slotOffset,
-  //         size: this.#slotByteSize 
-  //       }
-  //     }]
-  //   });
-  // }
-
-
-
-  /**
-   * Create buffer pool for a specific scale instance
-   * Called by LinearScaleState constructor
-   */
-
-  // createBufferPoolForScale(scaleId, scaleType = 'linear') {
-  //   if (!this.#initialized) {
-  //     this.#pendingPoolCreations.push({ scaleId, scaleType });
-  //     console.debug(`Queued buffer pool creation for scale ${scaleId} - coordinator not yet initialized`);
-  //     return;
-  //   }
-  //   this.#doCreateBufferPoolForScale(scaleId, scaleType);
-  // }
-
-  createBufferPoolForScale(scaleId, scaleType = 'linear') {
+  registerScale(scaleId, scaleType = 'linear') {
     if (!this.#initialized) {
-      this.#pendingPoolCreations.push({ scaleId, scaleType });
       return;
     }
     
-    console.log(`Registering scale ${scaleId} for global SSBO`);
-    
-    // Keep a placeholder entry in the old map for compatibility during transition
-    this.#scaleInstancePools.set(scaleId, { type: scaleType, globalIndex: null });
-    
-    // Trigger topology rebuild to assign global index
     this.#handleScaleTopologyChange();
   }
 
-  destroyBufferPoolForScale(scaleId) {
-    console.log(`Unregistering scale ${scaleId} from global SSBO`);
-    
-    // Remove from old map
-    this.#scaleInstancePools.delete(scaleId);
-    
-    // Trigger topology rebuild
+  unregisterScale(scaleId) {
     this.#handleScaleTopologyChange();
   }
 
   #handleScaleTopologyChange() {
-    // TODO
+    // Build list of scale ids and a map id -> instance
+    const ids = [];
+    this.#scaleIdToInstance.clear();
 
-    // // Use existing scale instance pools to get all registered scales
-    // const allScaleIds = Array.from(this.#scaleInstancePools.keys());
-    
-    // // Add any pending scales that haven't been processed yet
-    // this.#pendingPoolCreations.forEach(p => {
-    //   if (!allScaleIds.includes(p.scaleId)) {
-    //     allScaleIds.push(p.scaleId);
-    //   }
-    // });
-    
-    // const scaleCount = this.#scaleIndexManager.rebuild(allScaleIds);
-    
-    // if (scaleCount > 0 && this.#globalScaleBuffers.length > 0) {
-    //   // Recreate bind group to point to current buffer
-    //   // TODO: fix
-    //   // this.#createGlobalScaleBindGroup();
-    // }
-    
-    // console.log(`Scale topology changed: ${scaleCount} scales registered`);
-  }
-
-  #doCreateBufferPoolForScale(scaleId, scaleType) {
-    // Move existing createBufferPoolForScale implementation here
-    if (this.#scaleInstancePools.has(scaleId)) {
-      console.debug(`Buffer pool already exists for scale instance ${scaleId}`);
-      return;
+    if (this.#scaleRegistry?.scaleUsage) {
+      for (const scale of this.#scaleRegistry.scaleUsage.keys()) {
+        if (scale?.id) {
+          ids.push(scale.id);
+          this.#scaleIdToInstance.set(scale.id, scale)
+        }
+      }
     }
 
-    try {
-      // Get bind group layout for this scale type
-      let bindGroupLayout = this.#scaleBindGroupLayouts.get(scaleType);
-      if (!bindGroupLayout) {
-        console.error(`No bind group layout found for scale type: ${scaleType}`);
-        return;
-      }
+    const count = this.#scaleIndexManager.rebuild(ids);
 
-      const bufferSize = this.#getBufferSizeForScaleType(scaleType);
+    // Grow SSBO if needed
+    if (count > this.#maxScaleSlots) {
+      let newSlots = this.#maxScaleSlots;
+      while (newSlots < count ) newSlots *= 2;
+      this.#maxScaleSlots = newSlots;
+      this.#recreateGlobalScalesSSBOAndBindGroups();
+    }
 
-      // Create uniform buffers for this scale instance
-      const buffers = [];
-      for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
-        const buffer = this.#device.createBuffer({
-          size: bufferSize,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-          label: `${scaleType}-scale-instance-${scaleId}-buffer-${i}`
-        });
-        buffers.push(buffer);
-      }
+    // Indices chnaged -> per-chart uniforms must be rewritten
+    for (const [chartid] of this.#registeredCharts) {
+      this.updateChartFrameUniforms(chartid);
+    }
 
-      // Pre-create bind groups (one for each buffer)
-      const bindGroups = [];
-      for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
-        const bindGroup = this.#device.createBindGroup({
-          label: `${scaleType}-scale-instance-${scaleId}-bind-group-${i}`,
-          layout: bindGroupLayout,
-          entries: [{
-            binding: 0,
-            resource: { buffer: buffers[i] }
-          }]
-        });
-        bindGroups.push(bindGroup);
-      }
+    // Force one full upload so SSBO has initial values
+    this.#ssboNeedsUpload = true
+  }
 
-      // Initialize all buffers with default data
-      const defaultData = this.#getDefaultDataForScaleType(scaleType);
-      for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
-        this.#device.queue.writeBuffer(buffers[i], 0, defaultData);
-      }
+  #recreateGlobalScalesSSBOAndBindGroups() {
+    try { this.#globalScaleSSBO?.destroy?.(); } catch {}
+    // Drop old staging
+    for (const s of this.#stagingPool) {
+      try { s.unmap(); } catch {}
+      try { s.destroy?.(); } catch {}
+    }
+    this.#stagingPool.length = 0;
 
-      // Store pool for this scale instance
-      this.#scaleInstancePools.set(scaleId, {
-        buffers,
-        bindGroups,
-        activeIndex: 0,
-        scaleType,
-        size: bufferSize
+    // Recreate SSBO & staging and the 3 bind groups
+    this.#createGlobalScaleSSBO();
+    this.#globalScaleBindGroups.length = 0;
+    for ( let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
+      const layout = this.#globalScaleLayout;
+      
+      const offset = slot * this.#slotByteSize;
+      this.#globalScaleBindGroups[slot] = this.#device.createBindGroup({
+        layout,
+        entries: [{ binding: 0, resource: { buffer: this.#globalScaleSSBO, offset, size: this.#slotByteSize } }]
       });
-
-      console.log(`Created buffer pool for scale instance ${scaleId} (${scaleType}): 3 x ${bufferSize} bytes`);
-
-    } catch (error) {
-      console.error(`Failed to create buffer pool for scale ${scaleId}:`, error);
-    }
-  }
-
-
-  /**
-   * Destroy buffer pool for a specific scale instance
-   * Called by LinearScaleState destructor
-   */
-  // destroyBufferPoolForScale(scaleId) {
-  //   const instancePool = this.#scaleInstancePools.get(scaleId);
-  //   if (!instancePool) {
-  //     console.debug(`No buffer pool found for scale instance ${scaleId} - already destroyed or never created`);
-  //     return;
-  //   }
-
-  //   try {
-  //     // Destroy all buffers
-  //     instancePool.buffers.forEach((buffer, index) => {
-  //       if (!buffer.destroyed) {
-  //         buffer.destroy();
-  //       }
-  //     });
-
-  //     // Remove from tracking
-  //     this.#scaleInstancePools.delete(scaleId);
-
-  //     console.log(`Destroyed buffer pool for scale instance ${scaleId}`);
-
-  //   } catch (error) {
-  //     console.error(`Failed to destroy buffer pool for scale ${scaleId}:`, error);
-  //   }
-  // }
-
-  /**
-   * Get buffer size for a scale type
-   * @private
-   */
-  #getBufferSizeForScaleType(scaleType) {
-    switch (scaleType) {
-      case 'linear':
-        return 16; // 3 x f32 values (12 bytes: domainMin, domainMax, domainScale +  4 bytes padding)
-      case 'band':
-        return 48; // Future: more fields for band scales
-      case 'log':
-        return 32; // Future: logarithmic scale parameters
-      default:
-        console.warn(`Unknown scale type: ${scaleType}, defaulting to linear size`);
-        return 32;
-    }
-  }
-
-  /**
-   * Get default data for a scale type
-   * @private
-   */
-  #getDefaultDataForScaleType(scaleType) {
-    switch (scaleType) {
-      case 'linear':
-        return new Float32Array([0, 1, 1, 0]); // domain[0,1], scale=1, padding
-        // return new Float32Array([0, 1, 0, 1, 1, 0, 0, 0]); // domain[0,1], range[0,1], scale=1, padding
-      case 'band':
-        return new Float32Array(12); // Future: band scale defaults
-      case 'log':
-        return new Float32Array([1, 10, 0, 1, 0.434, 0, 0, 0]); // Future: log scale defaults
-      default:
-        return new Float32Array(8);
-    }
-  }
-
-  /**
-   * Get current active bind group for a specific scale instance
-   * Called during render loop
-   */
-  getCurrentScaleBindGroup(scaleId) {
-    const instancePool = this.#scaleInstancePools.get(scaleId);
-    if (!instancePool) {
-      console.error(`No buffer pool found for scale instance: ${scaleId}`);
-      return null;
-    }
-    
-    return instancePool.bindGroups[instancePool.activeIndex];
-  }
-
-  /**
-   * Get scale bind group layout for renderer pipeline creation
-   * Called by BaseGPURenderer during initialization
-   */
-  getScaleBindGroupLayout(scaleType = 'linear') {
-    const layout = this.#scaleBindGroupLayouts.get(scaleType);
-    if (!layout) {
-      console.error(`No bind group layout found for scale type: ${scaleType}`);
-      return null;
-    }
-    return layout;
-  }
-
-  /**
-   * Write scale data to the "next" buffer slot for a specific scale instance
-   * Called by animation loop when scale data changes
-   */
-  writeScaleDataForInstance(scaleId, data) {
-    const instancePool = this.#scaleInstancePools.get(scaleId);
-    if (!instancePool) {
-      console.error(`No buffer pool found for scale instance: ${scaleId}`);
-      return;
-    }
-
-    try {
-      // Write to the "next" buffer using WebGPU's async writeBuffer
-      // const nextBufferIndex = this.#bufferCycle.next;      
-      const nextBufferIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
-      
-      // // --- SAFETY CHECK ---
-      // // Check if the frame that last used this buffer is still running on GPU
-      // const lastFrameIdThatUsedThisBuffer = this.#lastFrameUsingBuffer[nextBufferIndex];
-      
-      // if (this.#frameCompletionPromises.has(lastFrameIdThatUsedThisBuffer)) {
-      //   console.error(`BUFFER HAZARD DETECTED: Attempting to write to buffer index ${nextBufferIndex}, ` +
-      //     `which was last used by frame ${lastFrameIdThatUsedThisBuffer}, ` +
-      //     `but that frame's GPU work has not yet completed. ` +
-      //     `This indicates the buffer pool is too small or the GPU is stalled.`);
-        
-      //   // In production, you might want to:
-      //   // - Skip this write operation
-      //   // - Increase buffer pool size
-      //   // - Apply additional backpressure
-      //   return; // Skip the write to prevent corruption
-      // }
-
-      const targetBuffer = instancePool.buffers[nextBufferIndex];
-      this.#device.queue.writeBuffer(targetBuffer, 0, data);
-            
-    } catch (error) {
-      console.error(`Failed to write scale data for instance ${scaleId}:`, error);
-    }
-  }
-
-  /**
-   * Cycle buffer pools for specific scale instances
-   * Only cycles pools for scales that have new data
-   * @private
-   */
-  #cycleScaleBuffersForInstances(dirtyScaleIds) {
-    if (dirtyScaleIds.size === 0) return;
-
-    // Update buffer cycle indices (global)
-    // const temp = this.#bufferCycle.previous;
-    // this.#bufferCycle.previous = this.#bufferCycle.current;
-    // this.#bufferCycle.current = this.#bufferCycle.next;
-    // this.#bufferCycle.next = temp;
-
-    // Advance to next buffer using modulo arithmetic
-    const newCurrentIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
-    this.#bufferCycle.currentIndex = newCurrentIndex;
-
-
-    // Update active index only for dirty scale instances
-    for (const scaleId of dirtyScaleIds) {
-      const instancePool = this.#scaleInstancePools.get(scaleId);
-      if (instancePool) {
-        // instancePool.activeIndex = this.#bufferCycle.current;
-        instancePool.activeIndex = newCurrentIndex;
-      }
     }
   }
 
@@ -844,30 +452,6 @@ export class GPUCoordinator {
     }
   }
 
-  // Add this method to GPUCoordinator
-  #cycleScaleBuffers() {
-    // Advance to next buffer slot
-    this.#bufferCycle.currentIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
-    
-    // Update the global bind group to point to the new current buffer
-    if (this.#globalScaleBindGroup) {
-      const layout = this.#scaleBindGroupLayouts.get('global');
-      
-      this.#globalScaleBindGroup = this.#device.createBindGroup({
-        label: 'global-scale-bind-group',
-        layout: layout,
-        entries: [{
-          binding: 0,
-          resource: { buffer: this.#globalScaleBuffers[this.#bufferCycle.currentIndex] }
-        }]
-      });
-    }
-    
-    console.debug(`Cycled to scale buffer index ${this.#bufferCycle.currentIndex}`);
-  }
-
-  // ===== UPDATED: ANIMATION LOOP WITH SCALE INSTANCE INTEGRATION =====
-
   #animationLoop = async (currentTime) => {
     const loopStart = performance.now();
     
@@ -879,14 +463,6 @@ export class GPUCoordinator {
 
     if (deltaTime < 0) deltaTime = 8.3;
     if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
-
-    // const MAX_FRAMES_IN_FLIGHT = 2;
-    // if (this.#frameCompletionPromises.length >= MAX_FRAMES_IN_FLIGHT) {
-    //   // console.log('in flight frame limit reached, awaiting oldest')
-    //   await this.#frameCompletionPromises[0]; // Dequeue and await the oldest promise
-    //   this.#frameCompletionPromises.shift(); // Dequeue and await the oldest promise
-    // }
-    // await new Promise(resolve => setTimeout(resolve, 0)); 
 
     // Smooth delta time for better performance metrics
     this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
@@ -917,35 +493,6 @@ export class GPUCoordinator {
     chartsToRender.clear();
     
     let renderCurrent;
-    // const dirtyScaleIds = new Set(); // Track which scale instances have new data
-
-    // if (this.#frameCompletionPromises.length >= 2) {
-    //   console.warn('Buffer update - queue full');
-    //   // await this.#frameCompletionPromises.shift();
-    //   // return; // Or use last values
-    // } else {
-    //   console.warn('Buffer update - queue ok!');
-    // }
-
-    // // NEW: Coordinator writes scale data directly to scale instance pools
-    // for (const scale of this.#animatedScales) {
-    //   renderCurrent = scale._setRenderState(alpha);
-      
-    //   // COORDINATOR reads gpuState directly and writes to scale instance buffer pool
-    //   const gpuState = scale.gpuState;
-    //   if (gpuState) {
-    //     // Create scale data based on scale type
-    //     const scaleData = this.#createScaleDataFromGpuState(gpuState, scale.type || 'linear');
-        
-    //     // Write to "next" buffer in pool for this specific scale instance
-    //     this.writeScaleDataForInstance(scale.id, scaleData);
-    //     dirtyScaleIds.add(scale.id); // Mark this scale instance as dirty
-    //   }
-
-    //   // Add affected charts to render list
-    //   const affectedCharts = this.#getChartsUsingScale(scale);
-    //   affectedCharts.forEach(chartId => chartsToRender.add(chartId));
-    // }
 
     for (const scale of this.#animatedScales) {
       renderCurrent = scale._setRenderState(alpha);
@@ -955,42 +502,10 @@ export class GPUCoordinator {
       affectedCharts.forEach(chartId => chartsToRender.add(chartId));
     }
 
-    // Single batched SSBO update replaces individual writeScaleDataForInstance calls
-    // if (this.#animatedScales.size > 0) {
-    //   // this.#updateScaleSSBO();
-    //   this.#updateScaleSSBOWithStaging();
-    //   this.#cycleScaleBuffers(); 
-    // }
-
     // Add any charts that were dirtied by non-animation events
     this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
     this.#dirtyChartIDs.clear();
 
-    // Cycle buffers only for dirty scale instances
-    // if (dirtyScaleIds.size > 0) {
-      // this.#cycleScaleBuffersForInstances(dirtyScaleIds);
-    // }
-
-    this.#nextFrameId++;
-
-    // // Check backpressure - if too many frames in flight, skip rendering
-    // const MAX_FRAMES_IN_FLIGHT = 2;
-    // if (this.#frameCompletionPromises.size >= MAX_FRAMES_IN_FLIGHT) {
-    //   console.debug(`Skipping render (backpressure: ${this.#frameCompletionPromises.size} frames in flight)`);
-    //   // Physics and buffer updates still occurred, just skip GPU submission
-    //   // this.perf.log(loopStart, performance.now(), 0, 0, 0, renderCurrent); // Log skipped frame
-      
-    //   // Continue animation loop
-    //   if (this.#animatedScales.size > 0) {
-    //     this.#animationRafId = requestAnimationFrame(this.#animationLoop);
-    //   } else {
-    //     this.#animationActive = false;
-    //     this.#animationRafId = null;
-    //   }
-    //   return; // Skip the render submission
-    // }
-
-    // await new Promise(resolve => setTimeout(resolve, 1));
     if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
       await this.#inflightPromises[0]
       this.#inflightPromises.shift();
@@ -1008,7 +523,7 @@ export class GPUCoordinator {
           chartArray.push(chart);
         }
       }
-      this.#coordinatedRender(chartArray, this.#nextFrameId);
+      this.#coordinatedRender(chartArray);
     }
     const renderEnd = performance.now();
 
@@ -1033,60 +548,18 @@ export class GPUCoordinator {
     }
   };
 
-  /**
-   * Create scale data from GPU state based on scale type
-   * @private
-   */
-  #createScaleDataFromGpuState(gpuState, scaleType) {
-    switch (scaleType) {
-      case 'linear':
-        return new Float32Array([
-          gpuState.domainMin,           // Domain data only (shareable across charts)
-          gpuState.domainMax,           
-          gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin)),
-          0,                            // Padding to 16 bytes
-        ]);
-      
-      case 'band':
-        // Future: band scale specific data structure
-        return new Float32Array([
-          gpuState.domainMin || 0,
-          gpuState.domainMax || (gpuState.categoryCount - 1),
-          gpuState.categoryCount || 0,
-          0, 0, 0, 0, 0,                // Padding
-          0, 0, 0, 0                    // More padding to 48 bytes
-        ]);
-      
-      default:
-        console.warn(`Unknown scale type: ${scaleType}, using linear format`);
-        return new Float32Array([
-          gpuState.domainMin || 0,
-          gpuState.domainMax || 1,
-          0, 0, 1, 0, 0, 0
-        ]);
-    }
-  }
 
-  // ===== UPDATED: COORDINATED RENDER WITH SCALE INSTANCE BIND GROUPS =====
-
-  async #coordinatedRender(chartsNeedingRender, frameId) {
+  async #coordinatedRender(chartsNeedingRender) {
 
     try {
 
       let stagingResult = null;
 
       // Update scales with staging buffer
-      if (this.#animatedScales.size > 0) {
-        // TODO this should not be async, we should move that guard up much earlier in the raf loop
+      if (this.#ssboNeedsUpload || this.#animatedScales.size > 0) {
         stagingResult = await this.#updateScaleSSBOWithStaging();
+        this.#ssboNeedsUpload = false
       }
-
-      // if (this.#frameCompletionPromises.length >= 1) {
-      // await this.#frameCompletionPromises.shift();
-      // }
-
-      // NOTE: This sync point will be eliminated with pre-recorded command buffers
-      // await this.#device.queue.onSubmittedWorkDone();
 
       const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
 
@@ -1100,11 +573,8 @@ export class GPUCoordinator {
         );
       }
 
-      // TODO integrate these below instead of this.#globalScaleBindGroup
       const currentSlot = this.#frameId % this.#SSBO_SLOT_COUNT;
       const currentScaleBindGroup = this.#globalScaleBindGroups[currentSlot]
-      // const currentScaleBindGroup = this.#createGlobalScaleBindGroup(currentSlot);
-
 
       for (const chartConfig of chartsNeedingRender) {
 
@@ -1130,14 +600,8 @@ export class GPUCoordinator {
 
         // Set the chart's frame bind group once (all layers in this chart will use it)
         passEncoder.setBindGroup(0, chartPerFrameBindGroup);
-
-        // let currentPipeline = null;
-        // let currentPerDataBindGroup = null;
-        // let currentXScaleBindGroup = null;
-        // let currentYScaleBindGroup = null;
         let currentPipeline = null;
         let currentPerDataBindGroup = null;
-        // let currentGlobalScaleBindGroup = null;
 
         for (const layer of chartConfig.renderPlan) {
           const renderer = layer.renderer;
@@ -1151,24 +615,6 @@ export class GPUCoordinator {
           const pipelineToUse = layer.cachedPipeline;
           const perDataBindGroupToUse = renderer.perDataBindGroup;
 
-          // const xScaleBindGroupToUse = this.getCurrentScaleBindGroup(chartConfig.xScaleId);
-          // const yScaleBindGroupToUse = this.getCurrentScaleBindGroup(chartConfig.yScaleId);
-
-          // if (!xScaleBindGroupToUse || !yScaleBindGroupToUse) {
-          //   console.warn('Missing scale bind groups - dots will not render correctly');
-          //   continue; // Skip this layer
-          // }
-          // Check global scale bind group instead of individual ones
-          // if (!this.#globalScaleBindGroup) {
-          //   console.warn('Global scale bind group not ready - dots will not render correctly');
-          //   continue;
-          // }
-
-          // if (!pipelineToUse || !xScaleBindGroupToUse || !yScaleBindGroupToUse) {
-          //   console.debug(`Skipping layer ${layer.id} - pipeline or scale bind groups not ready`);
-          //   continue;
-          // }
-
           // Set pipeline only if different
           if (pipelineToUse !== currentPipeline) {
             passEncoder.setPipeline(pipelineToUse);
@@ -1180,23 +626,6 @@ export class GPUCoordinator {
             currentPerDataBindGroup = perDataBindGroupToUse;
           }
 
-          // // Set X scale bind group (@group(2)) if different
-          // if (xScaleBindGroupToUse !== currentXScaleBindGroup) {
-          //   passEncoder.setBindGroup(2, xScaleBindGroupToUse);
-          //   currentXScaleBindGroup = xScaleBindGroupToUse;
-          // }
-
-          // // Set Y scale bind group (@group(3)) if different  
-          // if (yScaleBindGroupToUse !== currentYScaleBindGroup) {
-          //   passEncoder.setBindGroup(3, yScaleBindGroupToUse);
-          //   currentYScaleBindGroup = yScaleBindGroupToUse;
-          // }
-
-          // Set global scale bind group (@group(2)) - single bind group for all scales
-          // if (this.#globalScaleBindGroup !== currentGlobalScaleBindGroup) {
-          //   passEncoder.setBindGroup(2, this.#globalScaleBindGroup);
-          //   currentGlobalScaleBindGroup = this.#globalScaleBindGroup;
-          // }
           passEncoder.setBindGroup(2, currentScaleBindGroup);
           
           layer.draw(passEncoder);
@@ -1224,31 +653,6 @@ export class GPUCoordinator {
       
       this.#frameId++;
       
-      // Track this frame's completion
-      // const completionPromise = this.#device.queue.onSubmittedWorkDone();
-      // this.#frameCompletionPromises.push(completionPromise);
-
-      // const submitTime = performance.now();
-      // this.#frameCompletionPromises.push(
-      //   this.#device.queue.onSubmittedWorkDone().then(() => {
-      //     console.log(`GPU frame took ${performance.now() - submitTime}ms`);
-      //   })
-      // );
-      // --- SAFETY TRACKING ---
-      // Record that this frameId is now using the current buffer
-      // this.#lastFrameUsingBuffer[this.#bufferCycle.currentIndex] = frameId;
-      
-      // Track this frame's completion for cleanup
-      // const completionPromise = this.#device.queue.onSubmittedWorkDone();
-      // completionPromise.then(() => {
-      //   // When GPU finishes this frame, remove it from tracking
-      //   this.#frameCompletionPromises.delete(frameId);
-      // });
-      
-      // Store the promise so we can check if frame is still running
-      // this.#frameCompletionPromises.set(frameId, completionPromise);
-      // this.#frameCompletionPromises.push(completionPromise);
-      // this.#renderCount = (this.#renderCount || 0) + 1;
       
     } catch (error) {
       console.error('Coordinated render failed:', error);
@@ -1279,31 +683,23 @@ export class GPUCoordinator {
           continue;
         }
 
-
         for (const layer of chartConfig.layers.values()) {
           const renderer = layer.renderer;
-          if (renderer?.pipeline && renderer?.perFrameBindGroup && renderer?.perDataBindGroup) {
-            // const xScaleId = renderer.chartContext?.xScaleState?.id;
-            // const yScaleId = renderer.chartContext?.yScaleState?.id;
-            // const xScaleBindGroup = this.getCurrentScaleBindGroup(chartConfig.xScaleId);
-            // const yScaleBindGroup = this.getCurrentScaleBindGroup(chartConfig.yScaleId);
-
-            // const xScaleBindGroup = xScaleId ? this.getCurrentScaleBindGroup(xScaleId) : null;
-            // const yScaleBindGroup = yScaleId ? this.getCurrentScaleBindGroup(yScaleId) : null;
-            
-            if (xScaleBindGroup && yScaleBindGroup) {
-              passEncoder.setPipeline(renderer.pipeline);
-              // passEncoder.setBindGroup(0, renderer.perFrameBindGroup);
-              passEncoder.setBindGroup(0, chartPerFrameBindGroup); 
-              passEncoder.setBindGroup(1, renderer.perDataBindGroup);
-              passEncoder.setBindGroup(2, xScaleBindGroup);
-              passEncoder.setBindGroup(3, yScaleBindGroup);
-              layer.draw(passEncoder);
-            }
+          if (renderer?.pipeline && renderer?.perDataBindGroup) {
+            const currentSlot = this.#frameId % this.#SSBO_SLOT_COUNT;
+            const currentScaleBG = this.#globalScaleBindGroups[currentSlot];
+            passEncoder.setPipeline(renderer.pipeline);
+            passEncoder.setBindGroup(0, chartPerFrameBindGroup); 
+            passEncoder.setBindGroup(1, renderer.perDataBindGroup);
+            passEncoder.setBindGroup(2, currentScaleBG);
+            layer.draw(passEncoder);
           }
         }
         passEncoder.end();
         this.#device.queue.submit([commandEncoder.finish()]);
+
+        this.#frameId++;
+
       } catch (error) {
         console.error(`Failed to render chart ${chartConfig.chartId}:`, error);
       }
@@ -1365,15 +761,14 @@ export class GPUCoordinator {
   }
 
   addAnimatingScale(scale) {
-    // Buffer pool should already exist from scale creation
-    // if (!this.#scaleInstancePools.has(scale.id)) {
-    //   console.error(`No buffer pool found for scale ${scale.id} - should have been created in constructor`);
-    //   return;
-    // }
-    const globalIndex = this.#scaleIndexManager.getIndex(scale.id);
-    if (globalIndex === undefined) {
-      console.error(`Scale ${scale.id} not registered in global SSBO system - call createBufferPoolForScale first`);
-      return;
+    let idx = this.#scaleIndexManager.getIndex(scale.id);
+    if (idx === undefined) {
+      this.registerScale(scale.id, 'linear');
+      idx = this.#scaleIndexManager.getIndex(scale.id);
+      if (idx === undefined) {
+        console.error(`Scale ${scale.id} still not registered after auto-register`);
+        return;
+      }
     }
     
     this.#animatedScales.add(scale);
@@ -1624,15 +1019,8 @@ export class GPUCoordinator {
     // Get or create stable layouts
     const frameLayout = this.#getOrCreateFrameLayout();
     const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);
-    // const xScaleLayout = this.#scaleBindGroupLayouts.get(scaleTypes.x);
-    // const yScaleLayout = this.#scaleBindGroupLayouts.get(scaleTypes.y);
+    const globalScaleLayout = this.#globalScaleLayout;;
 
-    // if (!xScaleLayout || !yScaleLayout) {
-    //   throw new Error(`Scale bind group layouts not found for types: ${scaleTypes.x}, ${scaleTypes.y}`);
-    // }
-
-    // Use global SSBO layout for both X and Y scales
-    const globalScaleLayout = this.#scaleBindGroupLayouts.get('global');
 
     if (!globalScaleLayout) {
       throw new Error('Global scale SSBO layout not found - ensure SSBO system is initialized');
@@ -1641,7 +1029,6 @@ export class GPUCoordinator {
     // Create pipeline layout
     const pipelineLayout = this.#device.createPipelineLayout({
       label: `${markType}-pipeline-layout`,
-      // bindGroupLayouts: [frameLayout, dataLayout, xScaleLayout, yScaleLayout]
       bindGroupLayouts: [frameLayout, dataLayout, globalScaleLayout]
     });
 
@@ -1898,16 +1285,6 @@ export class GPUCoordinator {
     this.#animationActive = false;
     this.#animatedScales.clear();
 
-    // NEW: Cleanup scale instance pools
-    for (const [scaleId, pool] of this.#scaleInstancePools) {
-      pool.buffers.forEach(buffer => {
-        if (!buffer.destroyed) {
-          buffer.destroy();
-        }
-      });
-    }
-    this.#scaleInstancePools.clear();
-
     // Cleanup MSAA textures
     for (const msaa of this.#msaaCache.values()) {
       if (msaa.texture && !msaa.texture.destroyed) {
@@ -1928,7 +1305,8 @@ export class GPUCoordinator {
     this.#sharedResources.bindGroupLayouts.clear();
 
     // Cleanup bind group layouts
-    this.#scaleBindGroupLayouts.clear();
+    // this.#scaleBindGroupLayouts.clear();
+    this.#globalScaleLayout = null;
 
     // Cleanup charts and layers
     this.#registeredCharts.clear();
