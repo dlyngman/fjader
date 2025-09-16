@@ -1,0 +1,5550 @@
+<src/lib/gpu/GPUCoordinator.svelte.js>
+  // src/lib/gpu/GPUCoordinator.svelte.js - Complete Scale Instance Buffer Pool Architecture
+  
+  import { setContext, getContext } from 'svelte';
+  import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
+  
+  const TIMESTEP = 1000 / 240; // 60Hz physics clock
+  
+  
+  // Add this class inside GPUCoordinator.svelte.js before the GPUCoordinator class
+  class ScaleIndexManager {
+    #scaleIds = [];
+    #scaleIdToIndex = new Map();
+  
+    rebuild(allCurrentScaleIds) {
+      console.log('Rebuilding scale indices:', allCurrentScaleIds);
+      this.#scaleIds = [...allCurrentScaleIds];
+      this.#scaleIdToIndex.clear();
+      
+      this.#scaleIds.forEach((scaleId, index) => {
+        this.#scaleIdToIndex.set(scaleId, index);
+      });
+      
+      console.log('Scale index mapping:', Object.fromEntries(this.#scaleIdToIndex));
+      return this.#scaleIds.length;
+    }
+  
+    getIndex(scaleId) {
+      return this.#scaleIdToIndex.get(scaleId);
+    }
+  
+    getCount() {
+      return this.#scaleIds.length;
+    }
+  
+    getAllScaleIds() {
+      return [...this.#scaleIds];
+    }
+  }
+  
+  
+  /**
+   * Enhanced GPUCoordinator with scale instance buffer pools
+   * Eliminates CPU-GPU sync stalls during panning/zooming
+   */
+  export class GPUCoordinator {
+    // Core WebGPU resources
+    #device = $state(null);
+    #presentationFormat = $state(null);
+    #initialized = $state(false);
+  
+    // Enhanced shared resources with reference counting
+    #sharedResources = $state({
+      pipelines: new Map(),           // markType -> { pipeline, refCount, createdAt }
+      uniformBuffers: new Map(),      // name -> { buffer, refCount, createdAt }
+      shaderModules: new Map(),       // markType -> { module, refCount, createdAt }
+      bindGroupLayouts: new Map()     // markType -> { layout, refCount, createdAt }
+    });
+  
+    // Chart registration and management
+    #registeredCharts = $state(new Map());
+    #msaaCache = new Map();
+    #dirtyChartIDs = new Set();
+    #renderScheduled = false;
+  
+    // Animation system properties
+    #animatedScales = new Set();
+    #animationActive = false;
+    #animationRafId = null;
+    #scaleRegistry = null;
+    #accumulator = 0;
+    #lastFrameTime = 0;
+    #chartsToRenderSet = new Set();
+    #chartsToRenderArray = [];
+    #msaaSampleCount = 4;
+    #globalInputDelay = 0;
+    #renderCount = 0;
+  
+    // Performance tracking
+    #smoothedDeltaTime = 8.3; // Initialize to ideal 60fps
+    #smoothingFactor = 0.05; // Adjust this value (0.05 to 0.2 is a good range)
+    #frameHistory = [];
+    #frameTimings = [];
+  
+    // Race condition protection
+    #creatingPipelines = new Set();
+  
+    // Scale instance buffer pool system
+    #BUFFER_POOL_SIZE = 3; // Configurable buffer pool size
+    #scaleInstancePools = new Map(); // scaleId -> { buffers: [buf0, buf1, buf2], bindGroups: [bg0, bg1, bg2], activeIndex: 0, scaleType, size }
+    #scaleBindGroupLayouts = new Map(); // scaleType -> GPUBindGroupLayout
+    // #bufferCycle = {
+    //   current: 0,    // Which buffer index is active for GPU reads
+    //   next: 1,       // Which buffer index to write to  
+    //   previous: 2    // Which buffer index was active last frame
+    // };
+    #bufferCycle = {
+      currentIndex: 0  // The only index we need to track
+    };
+  
+    #templateSystem = scaleTemplateSystem;
+    #frameLayout = null;
+    #dataLayouts = new Map(); // markType-config -> GPUBindGroupLayout
+    #pendingPoolCreations = []; // Optional: for lazy creation pattern
+    #pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
+    #pendingFrameUpdates = new Map(); // chartId -> update params
+  
+    #frameCompletionPromises = [];
+    // #frameCompletionPromises = new Map();
+    #lastFenceTime
+    #lastFrameUsingBuffer = new Array(this.#BUFFER_POOL_SIZE).fill(0); // Track which frame last used each buffer
+    #nextFrameId = 0;
+  
+    #scaleIndexManager = null;
+    #globalScaleBuffers = [];
+    #globalStagingBuffers = [];  
+    #globalScaleBindGroup = null;
+    #maxScaleSlots = 256;
+  
+    #SSBO_SLOT_COUNT = 3;
+    #MAX_FRAMES_IN_FLIGHT = 2;  
+    #frameId = 0;
+    #inflightPromises = [];
+    #stagingPool = [];
+    #globalScaleSSBO = null;  // Single buffer with 3 slots
+    #slotByteSize = null;
+  
+    constructor(config = {}) {
+      this.#msaaSampleCount = config.msaaSampleCount ?? 4;
+  
+      this.#scaleIndexManager = new ScaleIndexManager();
+  
+  
+      this.perf = new MinimalPerfLogger(10000);
+      if (typeof window !== 'undefined') {
+        window.exportPerf = () => this.perf.downloadJSON();
+        window.resetPerf = () => this.perf.reset();
+        window.perfStatus = () => console.log(`${this.perf.index}/${this.perf.maxSamples} samples collected`);
+      }
+    }
+  
+    async initialize() {
+      if (this.#initialized) return;
+      try {
+        await this.#initWebGPU();
+        await this.#createSharedResources();
+        await this.#initializeScaleBindGroupLayouts();
+        this.#initialized = true;
+        // Process any queued pool creations
+        for (const pending of this.#pendingPoolCreations) {
+          this.#doCreateBufferPoolForScale(pending.scaleId, pending.scaleType);
+        }
+        this.#pendingPoolCreations = [];
+        console.log('GPUCoordinator initialized with scale instance buffer pool architecture');
+      } catch (error) {
+        console.error('GPUCoordinator initialization failed:', error);
+        throw error;
+      }
+    }
+  
+    // ===== NEW: SCALE INSTANCE BUFFER POOL MANAGEMENT =====
+  
+    /**
+     * Initialize bind group layouts for different scale types
+     * @private
+     */
+    // async #initializeScaleBindGroupLayouts() {
+    //   // Linear scale bind group layout
+    //   const linearLayout = this.#device.createBindGroupLayout({
+    //     label: 'linear-scale-bind-group-layout',
+    //     entries: [{
+    //       binding: 0,
+    //       visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+    //       buffer: { type: 'uniform' }
+    //     }]
+    //   });
+      
+    //   this.#scaleBindGroupLayouts.set('linear', linearLayout);
+      
+    //   // Future scale types can be added here
+    //   // this.#scaleBindGroupLayouts.set('band', bandLayout);
+    //   // this.#scaleBindGroupLayouts.set('log', logLayout);
+      
+    //   console.log('Initialized scale bind group layouts:', Array.from(this.#scaleBindGroupLayouts.keys()));
+    // }
+  
+    async #initializeScaleBindGroupLayouts() {
+      // Create global SSBO layout (one layout for all scale types)
+      const globalScaleLayout = this.#device.createBindGroupLayout({
+        label: 'global-scale-ssbo-layout',
+        entries: [{
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { 
+            type: 'read-only-storage' // Changed from 'uniform' to 'read-only-storage'
+          }
+        }]
+      });
+      
+      // Store as 'global' instead of individual scale types
+      this.#scaleBindGroupLayouts.set('global', globalScaleLayout);
+      
+      // Create the actual SSBO buffers
+      // this.#createGlobalScaleBuffers();
+      this.#createGlobalScaleSSBO();
+      this.#createGlobalScaleBindGroup();
+      
+      console.log('Initialized global SSBO layout, buffers, and bind group');
+  
+    }
+  
+    /**
+     * Get or create the shared frame layout for all charts
+     * @private
+     */
+    #getOrCreateFrameLayout() {
+      if (!this.#frameLayout) {
+        this.#frameLayout = this.#device.createBindGroupLayout({
+          label: 'shared-frame-layout',
+          entries: [{
+            binding: 0,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            buffer: { type: 'uniform' }
+          }]
+        });
+        console.log('Created shared frame layout for per-chart uniforms');
+      }
+      return this.#frameLayout;
+    }
+  
+    #createGlobalScaleSSBO() {
+      const scaleParamSize = 16; // 4 floats * 4 bytes 
+      this.#slotByteSize = this.#maxScaleSlots * scaleParamSize;
+      const totalSSBOSize = this.#slotByteSize * this.#SSBO_SLOT_COUNT;
+      
+      // Single SSBO with 3 slots
+      this.#globalScaleSSBO = this.#device.createBuffer({
+        size: totalSSBOSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        label: 'global-scale-ssbo-triple-buffered'
+      });
+      
+      // Create staging buffer pool (pre-mapped)
+      for (let i = 0; i < 4; i++) { // 4 staging buffers for safety
+        const staging = this.#device.createBuffer({
+          size: this.#slotByteSize,
+          usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC,
+          mappedAtCreation: true,
+          label: `scale-staging-pool-${i}`
+        });
+        this.#stagingPool.push(staging);
+      }
+    }
+  
+    // // Add this method to GPUCoordinator
+    // #createGlobalScaleBuffers() {
+    //   console.log('Creating global scale SSBO system');
+      
+    //   // Clean up existing buffers if they exist
+    //   this.#globalScaleBuffers.forEach(buffer => buffer?.destroy?.());
+    //   this.#globalStagingBuffers.forEach(staged => staged.buffer?.destroy?.());
+      
+    //   const scaleParamSize = 16; // 4 floats * 4 bytes
+    //   const totalBufferSize = this.#maxScaleSlots * scaleParamSize;
+      
+    //   for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
+    //     // Create SSBO
+    //     const storageBuffer = this.#device.createBuffer({
+    //       size: totalBufferSize,
+    //       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    //       label: `global-scale-ssbo-${i}`
+    //     });
+        
+    //     // Create staging buffer (mapped for CPU access)
+    //     const stagingBuffer = this.#device.createBuffer({
+    //       size: totalBufferSize,
+    //       usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC,
+    //       mappedAtCreation: true,
+    //       label: `scale-staging-${i}`
+    //     });
+        
+    //     this.#globalScaleBuffers.push(storageBuffer);
+  
+    //     const mappedRange = stagingBuffer.getMappedRange();
+    //     const view = new Float32Array(mappedRange);
+        
+    //     // IMPORTANT: Unmap the buffer before storing it
+    //     stagingBuffer.unmap();
+        
+    //     this.#globalStagingBuffers.push({
+    //       buffer: stagingBuffer,
+    //       view: null  // Will be remapped when needed
+    //     });
+    //     // this.#globalStagingBuffers.push({
+    //     //   buffer: stagingBuffer,
+    //     //   view: new Float32Array(stagingBuffer.getMappedRange())
+    //     // });
+    //   }
+      
+    //   console.log(`Created ${this.#BUFFER_POOL_SIZE} global scale buffers, ${totalBufferSize} bytes each`);
+    // }
+  
+    // // Add this method to GPUCoordinator
+    // async #updateScaleSSBO() {
+    //   if (this.#animatedScales.size === 0) return;
+      
+    //   const currentIndex = this.#bufferCycle.currentIndex;
+    //   const stagingBuffer = this.#globalStagingBuffers[currentIndex];
+      
+    //   if (!stagingBuffer) {
+    //     console.warn('No staging buffer available for current index:', currentIndex);
+    //     return;
+    //   }
+  
+    //   await stagingBuffer.buffer.mapAsync(GPUMapMode.WRITE);
+    //   const mappedRange = stagingBuffer.buffer.getMappedRange();
+    //   const view = new Float32Array(mappedRange);
+    
+      
+    //   // Fill staging buffer with current scale data
+    //   for (const scale of this.#animatedScales) {
+    //     const globalIndex = this.#scaleIndexManager.getIndex(scale.id);
+        
+    //     if (globalIndex !== undefined) {
+    //       const gpuState = scale.gpuState;
+    //       if (gpuState) {
+    //         const offset = globalIndex * 4; // 4 floats per scale
+            
+    //         stagingBuffer.view[offset + 0] = gpuState.domainMin;
+    //         stagingBuffer.view[offset + 1] = gpuState.domainMax;
+    //         stagingBuffer.view[offset + 2] = gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin));
+    //         stagingBuffer.view[offset + 3] = 0; // padding
+    //       }
+    //     }
+    //   }
+      
+    //   stagingBuffer.buffer.unmap();
+  
+    //   // Single GPU copy operation
+    //   const commandEncoder = this.#device.createCommandEncoder();
+    //   commandEncoder.copyBufferToBuffer(
+    //     stagingBuffer.buffer, 0,
+    //     this.#globalScaleBuffers[currentIndex], 0,
+    //     this.#scaleIndexManager.getCount() * 16
+    //   );
+    //   this.#device.queue.submit([commandEncoder.finish()]);
+    // }
+  
+    // Replace #updateScaleSSBO with synchronous staging pool access
+    async #updateScaleSSBOWithStaging() {
+      if (this.#animatedScales.size === 0) return;
+      
+      // Wait for in-flight limit
+      while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+        await this.#inflightPromises[0];
+        this.#inflightPromises.shift();
+      }
+      
+      // Get pre-mapped staging buffer from pool
+      const staging = this.#stagingPool.pop();
+      if (!staging) {
+        console.warn('No staging buffer available in pool');
+        return;
+      }
+      
+      // Calculate destination slot  
+      const slot = this.#frameId % this.#SSBO_SLOT_COUNT;
+      const dstOffset = slot * this.#slotByteSize;
+      
+      // Write all scales synchronously to mapped staging
+      const view = new Float32Array(staging.getMappedRange());
+      this.#fillAllScales(view);
+      
+      return { staging, dstOffset, slot };
+    }
+  
+    #fillAllScales(view) {
+      for (const scale of this.#animatedScales) {
+        const globalIndex = this.#scaleIndexManager.getIndex(scale.id);
+        if (globalIndex !== undefined) {
+          const gpuState = scale.gpuState;
+          if (gpuState) {
+            const offset = globalIndex * 4; // 4 floats per scale
+            view[offset + 0] = gpuState.domainMin;
+            view[offset + 1] = gpuState.domainMax; 
+            view[offset + 2] = gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin));
+            view[offset + 3] = 0; // padding
+          }
+        }
+      }
+    }
+  
+  
+    #createGlobalScaleBindGroup(slot) {
+      const layout = this.#scaleBindGroupLayouts.get('global');
+      if (!layout) {
+        console.error('Global scale layout not found');
+        return null;
+      }
+  
+      const slotOffset = slot * this.#slotByteSize;
+      
+      return this.#device.createBindGroup({
+        label: `global-scale-bind-group-slot-${slot}`,
+        layout: layout,
+        entries: [{
+          binding: 0,
+          resource: { 
+            buffer: this.#globalScaleSSBO,
+            offset: slotOffset,
+            size: this.#slotByteSize 
+          }
+        }]
+      });
+    }
+  
+  
+  
+    /**
+     * Create buffer pool for a specific scale instance
+     * Called by LinearScaleState constructor
+     */
+  
+    // createBufferPoolForScale(scaleId, scaleType = 'linear') {
+    //   if (!this.#initialized) {
+    //     this.#pendingPoolCreations.push({ scaleId, scaleType });
+    //     console.debug(`Queued buffer pool creation for scale ${scaleId} - coordinator not yet initialized`);
+    //     return;
+    //   }
+    //   this.#doCreateBufferPoolForScale(scaleId, scaleType);
+    // }
+  
+    createBufferPoolForScale(scaleId, scaleType = 'linear') {
+      if (!this.#initialized) {
+        this.#pendingPoolCreations.push({ scaleId, scaleType });
+        return;
+      }
+      
+      console.log(`Registering scale ${scaleId} for global SSBO`);
+      
+      // Keep a placeholder entry in the old map for compatibility during transition
+      this.#scaleInstancePools.set(scaleId, { type: scaleType, globalIndex: null });
+      
+      // Trigger topology rebuild to assign global index
+      this.#handleScaleTopologyChange();
+    }
+  
+    destroyBufferPoolForScale(scaleId) {
+      console.log(`Unregistering scale ${scaleId} from global SSBO`);
+      
+      // Remove from old map
+      this.#scaleInstancePools.delete(scaleId);
+      
+      // Trigger topology rebuild
+      this.#handleScaleTopologyChange();
+    }
+  
+    #handleScaleTopologyChange() {
+      // Use existing scale instance pools to get all registered scales
+      const allScaleIds = Array.from(this.#scaleInstancePools.keys());
+      
+      // Add any pending scales that haven't been processed yet
+      this.#pendingPoolCreations.forEach(p => {
+        if (!allScaleIds.includes(p.scaleId)) {
+          allScaleIds.push(p.scaleId);
+        }
+      });
+      
+      const scaleCount = this.#scaleIndexManager.rebuild(allScaleIds);
+      
+      if (scaleCount > 0 && this.#globalScaleBuffers.length > 0) {
+        // Recreate bind group to point to current buffer
+        this.#createGlobalScaleBindGroup();
+      }
+      
+      console.log(`Scale topology changed: ${scaleCount} scales registered`);
+    }
+  
+    #doCreateBufferPoolForScale(scaleId, scaleType) {
+      // Move existing createBufferPoolForScale implementation here
+      if (this.#scaleInstancePools.has(scaleId)) {
+        console.debug(`Buffer pool already exists for scale instance ${scaleId}`);
+        return;
+      }
+  
+      try {
+        // Get bind group layout for this scale type
+        let bindGroupLayout = this.#scaleBindGroupLayouts.get(scaleType);
+        if (!bindGroupLayout) {
+          console.error(`No bind group layout found for scale type: ${scaleType}`);
+          return;
+        }
+  
+        const bufferSize = this.#getBufferSizeForScaleType(scaleType);
+  
+        // Create uniform buffers for this scale instance
+        const buffers = [];
+        for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
+          const buffer = this.#device.createBuffer({
+            size: bufferSize,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            label: `${scaleType}-scale-instance-${scaleId}-buffer-${i}`
+          });
+          buffers.push(buffer);
+        }
+  
+        // Pre-create bind groups (one for each buffer)
+        const bindGroups = [];
+        for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
+          const bindGroup = this.#device.createBindGroup({
+            label: `${scaleType}-scale-instance-${scaleId}-bind-group-${i}`,
+            layout: bindGroupLayout,
+            entries: [{
+              binding: 0,
+              resource: { buffer: buffers[i] }
+            }]
+          });
+          bindGroups.push(bindGroup);
+        }
+  
+        // Initialize all buffers with default data
+        const defaultData = this.#getDefaultDataForScaleType(scaleType);
+        for (let i = 0; i < this.#BUFFER_POOL_SIZE; i++) {
+          this.#device.queue.writeBuffer(buffers[i], 0, defaultData);
+        }
+  
+        // Store pool for this scale instance
+        this.#scaleInstancePools.set(scaleId, {
+          buffers,
+          bindGroups,
+          activeIndex: 0,
+          scaleType,
+          size: bufferSize
+        });
+  
+        console.log(`Created buffer pool for scale instance ${scaleId} (${scaleType}): 3 x ${bufferSize} bytes`);
+  
+      } catch (error) {
+        console.error(`Failed to create buffer pool for scale ${scaleId}:`, error);
+      }
+    }
+  
+  
+    /**
+     * Destroy buffer pool for a specific scale instance
+     * Called by LinearScaleState destructor
+     */
+    // destroyBufferPoolForScale(scaleId) {
+    //   const instancePool = this.#scaleInstancePools.get(scaleId);
+    //   if (!instancePool) {
+    //     console.debug(`No buffer pool found for scale instance ${scaleId} - already destroyed or never created`);
+    //     return;
+    //   }
+  
+    //   try {
+    //     // Destroy all buffers
+    //     instancePool.buffers.forEach((buffer, index) => {
+    //       if (!buffer.destroyed) {
+    //         buffer.destroy();
+    //       }
+    //     });
+  
+    //     // Remove from tracking
+    //     this.#scaleInstancePools.delete(scaleId);
+  
+    //     console.log(`Destroyed buffer pool for scale instance ${scaleId}`);
+  
+    //   } catch (error) {
+    //     console.error(`Failed to destroy buffer pool for scale ${scaleId}:`, error);
+    //   }
+    // }
+  
+    /**
+     * Get buffer size for a scale type
+     * @private
+     */
+    #getBufferSizeForScaleType(scaleType) {
+      switch (scaleType) {
+        case 'linear':
+          return 16; // 3 x f32 values (12 bytes: domainMin, domainMax, domainScale +  4 bytes padding)
+        case 'band':
+          return 48; // Future: more fields for band scales
+        case 'log':
+          return 32; // Future: logarithmic scale parameters
+        default:
+          console.warn(`Unknown scale type: ${scaleType}, defaulting to linear size`);
+          return 32;
+      }
+    }
+  
+    /**
+     * Get default data for a scale type
+     * @private
+     */
+    #getDefaultDataForScaleType(scaleType) {
+      switch (scaleType) {
+        case 'linear':
+          return new Float32Array([0, 1, 1, 0]); // domain[0,1], scale=1, padding
+          // return new Float32Array([0, 1, 0, 1, 1, 0, 0, 0]); // domain[0,1], range[0,1], scale=1, padding
+        case 'band':
+          return new Float32Array(12); // Future: band scale defaults
+        case 'log':
+          return new Float32Array([1, 10, 0, 1, 0.434, 0, 0, 0]); // Future: log scale defaults
+        default:
+          return new Float32Array(8);
+      }
+    }
+  
+    /**
+     * Get current active bind group for a specific scale instance
+     * Called during render loop
+     */
+    getCurrentScaleBindGroup(scaleId) {
+      const instancePool = this.#scaleInstancePools.get(scaleId);
+      if (!instancePool) {
+        console.error(`No buffer pool found for scale instance: ${scaleId}`);
+        return null;
+      }
+      
+      return instancePool.bindGroups[instancePool.activeIndex];
+    }
+  
+    /**
+     * Get scale bind group layout for renderer pipeline creation
+     * Called by BaseGPURenderer during initialization
+     */
+    getScaleBindGroupLayout(scaleType = 'linear') {
+      const layout = this.#scaleBindGroupLayouts.get(scaleType);
+      if (!layout) {
+        console.error(`No bind group layout found for scale type: ${scaleType}`);
+        return null;
+      }
+      return layout;
+    }
+  
+    /**
+     * Write scale data to the "next" buffer slot for a specific scale instance
+     * Called by animation loop when scale data changes
+     */
+    writeScaleDataForInstance(scaleId, data) {
+      const instancePool = this.#scaleInstancePools.get(scaleId);
+      if (!instancePool) {
+        console.error(`No buffer pool found for scale instance: ${scaleId}`);
+        return;
+      }
+  
+      try {
+        // Write to the "next" buffer using WebGPU's async writeBuffer
+        // const nextBufferIndex = this.#bufferCycle.next;      
+        const nextBufferIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
+        
+        // // --- SAFETY CHECK ---
+        // // Check if the frame that last used this buffer is still running on GPU
+        // const lastFrameIdThatUsedThisBuffer = this.#lastFrameUsingBuffer[nextBufferIndex];
+        
+        // if (this.#frameCompletionPromises.has(lastFrameIdThatUsedThisBuffer)) {
+        //   console.error(`BUFFER HAZARD DETECTED: Attempting to write to buffer index ${nextBufferIndex}, ` +
+        //     `which was last used by frame ${lastFrameIdThatUsedThisBuffer}, ` +
+        //     `but that frame's GPU work has not yet completed. ` +
+        //     `This indicates the buffer pool is too small or the GPU is stalled.`);
+          
+        //   // In production, you might want to:
+        //   // - Skip this write operation
+        //   // - Increase buffer pool size
+        //   // - Apply additional backpressure
+        //   return; // Skip the write to prevent corruption
+        // }
+  
+        const targetBuffer = instancePool.buffers[nextBufferIndex];
+        this.#device.queue.writeBuffer(targetBuffer, 0, data);
+              
+      } catch (error) {
+        console.error(`Failed to write scale data for instance ${scaleId}:`, error);
+      }
+    }
+  
+    /**
+     * Cycle buffer pools for specific scale instances
+     * Only cycles pools for scales that have new data
+     * @private
+     */
+    #cycleScaleBuffersForInstances(dirtyScaleIds) {
+      if (dirtyScaleIds.size === 0) return;
+  
+      // Update buffer cycle indices (global)
+      // const temp = this.#bufferCycle.previous;
+      // this.#bufferCycle.previous = this.#bufferCycle.current;
+      // this.#bufferCycle.current = this.#bufferCycle.next;
+      // this.#bufferCycle.next = temp;
+  
+      // Advance to next buffer using modulo arithmetic
+      const newCurrentIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
+      this.#bufferCycle.currentIndex = newCurrentIndex;
+  
+  
+      // Update active index only for dirty scale instances
+      for (const scaleId of dirtyScaleIds) {
+        const instancePool = this.#scaleInstancePools.get(scaleId);
+        if (instancePool) {
+          // instancePool.activeIndex = this.#bufferCycle.current;
+          instancePool.activeIndex = newCurrentIndex;
+        }
+      }
+    }
+  
+    /**
+     * Create frame uniform buffer and bind group for a specific chart
+     * @private
+     */
+    #createChartFrameResources(chartId) {
+      const chartConfig = this.#registeredCharts.get(chartId);
+      if (!chartConfig || chartConfig.frameUniformsBuffer) {
+        return; // Chart doesn't exist or resources already created
+      }
+  
+      try {
+        chartConfig.frameUniformsBuffer = this.#device.createBuffer({
+          size: 40, // 10 x f32 = 40 bytes 
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          label: `frame-uniforms-${chartId}`
+        });
+  
+        // Create the bind group
+        this.#createChartFrameBindGroup(chartId);
+        
+        console.log(`Created frame resources for chart ${chartId}`);
+        
+      } catch (error) {
+        console.error(`Failed to create frame resources for chart ${chartId}:`, error);
+      }
+    }
+  
+    /**
+     * Create frame bind group for a specific chart
+     * @private
+     */
+    #createChartFrameBindGroup(chartId) {
+      const chartConfig = this.#registeredCharts.get(chartId);
+      if (!chartConfig?.frameUniformsBuffer || chartConfig.perFrameBindGroup) {
+        return; // Buffer not ready or bind group already exists
+      }
+  
+      try {
+        const frameLayout = this.#getOrCreateFrameLayout();
+        
+        chartConfig.perFrameBindGroup = this.#device.createBindGroup({
+          label: `per-frame-bind-group-${chartId}`,
+          layout: frameLayout,
+          entries: [{
+            binding: 0,
+            resource: { buffer: chartConfig.frameUniformsBuffer }
+          }]
+        });
+        
+        console.log(`Created frame bind group for chart ${chartId}`);
+        
+      } catch (error) {
+        console.error(`Failed to create frame bind group for chart ${chartId}:`, error);
+      }
+    }
+  
+    /**
+     * Update frame uniforms for a specific chart
+     * Called when canvas dimensions or DPR changes
+     */
+    updateChartFrameUniforms(chartId) {
+      const chartConfig = this.#registeredCharts.get(chartId);
+      if (!chartConfig?.contextConfigured) {
+        console.debug(`Queueing frame uniforms update for unregistered chart ${chartId}`);
+        this.#pendingFrameUpdates.set(chartId, { timestamp: Date.now() });
+        return;
+      }
+  
+      try {
+        // Create resources if they don't exist yet
+        if (!chartConfig.frameUniformsBuffer) {
+          this.#createChartFrameResources(chartId);
+        }
+  
+        // Get scale indices for this chart
+        const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId) || 0;
+        const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId) || 1;
+  
+        const dpr = window.devicePixelRatio || 1;
+        const canvas = chartConfig.canvas;
+        
+        const uniformData = new Float32Array([
+          canvas.width,        // resolution.x (physical pixels)
+          canvas.height,       // resolution.y (physical pixels)
+          0,                   // rangeMin.x
+          canvas.clientHeight, // rangeMin.y (logical pixels, inverted)
+          canvas.clientWidth,  // rangeMax.x (logical pixels)
+          0,                   // rangeMax.y (inverted)
+          dpr,                 // devicePixelRatio
+          0,                    // padding
+          xScaleIndex,         // xScaleIndex (as float)
+          yScaleIndex          // yScaleIndex (as float)
+        ]);
+        
+        this.#device.queue.writeBuffer(chartConfig.frameUniformsBuffer, 0, uniformData);
+        
+        console.debug(`Updated frame uniforms for chart ${chartId}:`, {
+          resolution: [canvas.width, canvas.height],
+          range: [canvas.clientWidth, canvas.clientHeight],
+          dpr
+        });
+        
+      } catch (error) {
+        console.error(`Failed to update frame uniforms for chart ${chartId}:`, error);
+      }
+    }
+  
+    // Process pending updates when chart becomes ready
+    #processPendingFrameUpdates(chartId) {
+      const pendingUpdate = this.#pendingFrameUpdates.get(chartId);
+      if (pendingUpdate) {
+        console.debug(`Processing queued frame uniforms update for chart ${chartId}`);
+        this.updateChartFrameUniforms(chartId);
+        this.#pendingFrameUpdates.delete(chartId);
+      }
+    }
+  
+    // Add this method to GPUCoordinator
+    #cycleScaleBuffers() {
+      // Advance to next buffer slot
+      this.#bufferCycle.currentIndex = (this.#bufferCycle.currentIndex + 1) % this.#BUFFER_POOL_SIZE;
+      
+      // Update the global bind group to point to the new current buffer
+      if (this.#globalScaleBindGroup) {
+        const layout = this.#scaleBindGroupLayouts.get('global');
+        
+        this.#globalScaleBindGroup = this.#device.createBindGroup({
+          label: 'global-scale-bind-group',
+          layout: layout,
+          entries: [{
+            binding: 0,
+            resource: { buffer: this.#globalScaleBuffers[this.#bufferCycle.currentIndex] }
+          }]
+        });
+      }
+      
+      console.debug(`Cycled to scale buffer index ${this.#bufferCycle.currentIndex}`);
+    }
+  
+    // ===== UPDATED: ANIMATION LOOP WITH SCALE INSTANCE INTEGRATION =====
+  
+    #animationLoop = async (currentTime) => {
+      const loopStart = performance.now();
+      
+      // Enhanced timing logic with smoothing
+      const now = performance.now();
+      if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
+      let deltaTime = now - this.#lastFrameTime;
+      this.#lastFrameTime = now;
+  
+      if (deltaTime < 0) deltaTime = 8.3;
+      if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
+  
+      const MAX_FRAMES_IN_FLIGHT = 2;
+      if (this.#frameCompletionPromises.length >= MAX_FRAMES_IN_FLIGHT) {
+        // console.log('in flight frame limit reached, awaiting oldest')
+        await this.#frameCompletionPromises[0]; // Dequeue and await the oldest promise
+        this.#frameCompletionPromises.shift(); // Dequeue and await the oldest promise
+      }
+      // await new Promise(resolve => setTimeout(resolve, 0)); 
+  
+      // Smooth delta time for better performance metrics
+      this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
+      this.#accumulator += deltaTime;
+  
+      // Fixed-step physics loop
+      while (this.#accumulator >= TIMESTEP) {
+        // Process input
+        for (const scale of this.#animatedScales) {
+          const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+          if (!scheduledProcessed && scale._applyInput) {
+            scale._applyInput(now);
+          }
+        }
+  
+        // Update physics
+        for (const scale of this.#animatedScales) {
+          if (scale._updatePhysics) {
+            scale._updatePhysics(TIMESTEP);
+          }
+        }
+        this.#accumulator -= TIMESTEP;
+      }
+  
+      // Prepare for render with interpolation
+      const alpha = this.#accumulator / TIMESTEP;
+      const chartsToRender = this.#chartsToRenderSet;
+      chartsToRender.clear();
+      
+      let renderCurrent;
+      // const dirtyScaleIds = new Set(); // Track which scale instances have new data
+  
+      // if (this.#frameCompletionPromises.length >= 2) {
+      //   console.warn('Buffer update - queue full');
+      //   // await this.#frameCompletionPromises.shift();
+      //   // return; // Or use last values
+      // } else {
+      //   console.warn('Buffer update - queue ok!');
+      // }
+  
+      // // NEW: Coordinator writes scale data directly to scale instance pools
+      // for (const scale of this.#animatedScales) {
+      //   renderCurrent = scale._setRenderState(alpha);
+        
+      //   // COORDINATOR reads gpuState directly and writes to scale instance buffer pool
+      //   const gpuState = scale.gpuState;
+      //   if (gpuState) {
+      //     // Create scale data based on scale type
+      //     const scaleData = this.#createScaleDataFromGpuState(gpuState, scale.type || 'linear');
+          
+      //     // Write to "next" buffer in pool for this specific scale instance
+      //     this.writeScaleDataForInstance(scale.id, scaleData);
+      //     dirtyScaleIds.add(scale.id); // Mark this scale instance as dirty
+      //   }
+  
+      //   // Add affected charts to render list
+      //   const affectedCharts = this.#getChartsUsingScale(scale);
+      //   affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+      // }
+  
+      for (const scale of this.#animatedScales) {
+        renderCurrent = scale._setRenderState(alpha);
+        
+        // Add affected charts to render list
+        const affectedCharts = this.#getChartsUsingScale(scale);
+        affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+      }
+  
+      // Single batched SSBO update replaces individual writeScaleDataForInstance calls
+      if (this.#animatedScales.size > 0) {
+        // this.#updateScaleSSBO();
+        this.#updateScaleSSBOWithStaging();
+        this.#cycleScaleBuffers(); 
+      }
+  
+      // Add any charts that were dirtied by non-animation events
+      this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
+      this.#dirtyChartIDs.clear();
+  
+      // Cycle buffers only for dirty scale instances
+      // if (dirtyScaleIds.size > 0) {
+        // this.#cycleScaleBuffersForInstances(dirtyScaleIds);
+      // }
+  
+      this.#nextFrameId++;
+  
+      // // Check backpressure - if too many frames in flight, skip rendering
+      // const MAX_FRAMES_IN_FLIGHT = 2;
+      // if (this.#frameCompletionPromises.size >= MAX_FRAMES_IN_FLIGHT) {
+      //   console.debug(`Skipping render (backpressure: ${this.#frameCompletionPromises.size} frames in flight)`);
+      //   // Physics and buffer updates still occurred, just skip GPU submission
+      //   // this.perf.log(loopStart, performance.now(), 0, 0, 0, renderCurrent); // Log skipped frame
+        
+      //   // Continue animation loop
+      //   if (this.#animatedScales.size > 0) {
+      //     this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+      //   } else {
+      //     this.#animationActive = false;
+      //     this.#animationRafId = null;
+      //   }
+      //   return; // Skip the render submission
+      // }
+  
+      // await new Promise(resolve => setTimeout(resolve, 1));
+  
+      // Render
+      const renderStart = performance.now();
+      if (chartsToRender.size > 0) {
+        const chartArray = this.#chartsToRenderArray;
+        chartArray.length = 0;
+  
+        for (const chartId of chartsToRender) {
+          const chart = this.#registeredCharts.get(chartId);
+          if (chart?.visible && chart.contextConfigured) {
+            chartArray.push(chart);
+          }
+        }
+        this.#coordinatedRender(chartArray, this.#nextFrameId);
+      }
+      const renderEnd = performance.now();
+  
+      const loopEnd = performance.now();
+  
+      // Performance logging
+      // this.perf.log(
+      //   loopStart,
+      //   loopEnd, 
+      //   0, // scaleAnimationTime (you could measure this separately)
+      //   renderEnd - renderStart, // renderTime
+      //   0, // schedulingLag
+      //   renderCurrent
+      // );
+  
+      // Continue or end loop
+      if (this.#animatedScales.size > 0) {
+        this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+      } else {
+        this.#animationActive = false;
+        this.#animationRafId = null;
+      }
+    };
+  
+    /**
+     * Create scale data from GPU state based on scale type
+     * @private
+     */
+    #createScaleDataFromGpuState(gpuState, scaleType) {
+      switch (scaleType) {
+        case 'linear':
+          return new Float32Array([
+            gpuState.domainMin,           // Domain data only (shareable across charts)
+            gpuState.domainMax,           
+            gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin)),
+            0,                            // Padding to 16 bytes
+          ]);
+        
+        case 'band':
+          // Future: band scale specific data structure
+          return new Float32Array([
+            gpuState.domainMin || 0,
+            gpuState.domainMax || (gpuState.categoryCount - 1),
+            gpuState.categoryCount || 0,
+            0, 0, 0, 0, 0,                // Padding
+            0, 0, 0, 0                    // More padding to 48 bytes
+          ]);
+        
+        default:
+          console.warn(`Unknown scale type: ${scaleType}, using linear format`);
+          return new Float32Array([
+            gpuState.domainMin || 0,
+            gpuState.domainMax || 1,
+            0, 0, 1, 0, 0, 0
+          ]);
+      }
+    }
+  
+    // ===== UPDATED: COORDINATED RENDER WITH SCALE INSTANCE BIND GROUPS =====
+  
+    async #coordinatedRender(chartsNeedingRender, frameId) {
+  
+      try {
+  
+        let stagingResult = null;
+  
+        // Update scales with staging buffer
+        if (this.#animatedScales.size > 0) {
+          // TODO this should not be async, we should move that guard up much earlier in the raf loop
+          stagingResult = await this.#updateScaleSSBOWithStaging();
+        }
+  
+        // if (this.#frameCompletionPromises.length >= 1) {
+        // await this.#frameCompletionPromises.shift();
+        // }
+  
+        // NOTE: This sync point will be eliminated with pre-recorded command buffers
+        // await this.#device.queue.onSubmittedWorkDone();
+  
+        const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
+  
+  
+        // Copy staging to SSBO if we have scale updates
+        if (stagingResult) {
+          commandEncoder.copyBufferToBuffer(
+            stagingResult.staging, 0,
+            this.#globalScaleSSBO, stagingResult.dstOffset,
+            this.#slotByteSize
+          );
+        }
+  
+        // TODO integrate these below instead of this.#globalScaleBindGroup
+        const currentSlot = this.#frameId % this.#SSBO_SLOT_COUNT;
+        const currentScaleBindGroup = this.#createGlobalScaleBindGroup(currentSlot);
+  
+  
+        for (const chartConfig of chartsNeedingRender) {
+  
+          if (chartConfig.needsPlanRebuild) {
+            this.#buildRenderPlanForChart(chartConfig);
+          }
+          
+          const passEncoder = commandEncoder.beginRenderPass(
+            this.#createRenderPassDescriptor(
+              chartConfig.context.getCurrentTexture().createView(),
+              chartConfig.canvas,
+              chartConfig.chartId
+            )
+          );
+          
+          // Get the per-frame bind group from the chart (shared by all layers)
+          const chartPerFrameBindGroup = chartConfig.perFrameBindGroup;
+          if (!chartPerFrameBindGroup) {
+            console.debug(`Skipping render for chart ${chartConfig.chartId} - chart frame bind group not ready`);
+            passEncoder.end();
+            continue; // Skip to next chart
+          }
+  
+          // Set the chart's frame bind group once (all layers in this chart will use it)
+          passEncoder.setBindGroup(0, chartPerFrameBindGroup);
+  
+          // let currentPipeline = null;
+          // let currentPerDataBindGroup = null;
+          // let currentXScaleBindGroup = null;
+          // let currentYScaleBindGroup = null;
+          let currentPipeline = null;
+          let currentPerDataBindGroup = null;
+          let currentGlobalScaleBindGroup = null;
+  
+          for (const layer of chartConfig.renderPlan) {
+            const renderer = layer.renderer;
+            
+            // NEW: Only check for data bind groups (frame bind group is now chart-level)
+            if (!renderer || !renderer.perDataBindGroup) {
+              console.debug(`Skipping layer ${layer.id} - renderer data bind group not ready`);
+              continue;
+            }
+  
+            const pipelineToUse = layer.cachedPipeline;
+            const perDataBindGroupToUse = renderer.perDataBindGroup;
+  
+            // const xScaleBindGroupToUse = this.getCurrentScaleBindGroup(chartConfig.xScaleId);
+            // const yScaleBindGroupToUse = this.getCurrentScaleBindGroup(chartConfig.yScaleId);
+  
+            // if (!xScaleBindGroupToUse || !yScaleBindGroupToUse) {
+            //   console.warn('Missing scale bind groups - dots will not render correctly');
+            //   continue; // Skip this layer
+            // }
+            // Check global scale bind group instead of individual ones
+            // if (!this.#globalScaleBindGroup) {
+            //   console.warn('Global scale bind group not ready - dots will not render correctly');
+            //   continue;
+            // }
+  
+            if (!pipelineToUse || !xScaleBindGroupToUse || !yScaleBindGroupToUse) {
+              console.debug(`Skipping layer ${layer.id} - pipeline or scale bind groups not ready`);
+              continue;
+            }
+  
+            // Set pipeline only if different
+            if (pipelineToUse !== currentPipeline) {
+              passEncoder.setPipeline(pipelineToUse);
+              currentPipeline = pipelineToUse;
+            }
+            
+            if (perDataBindGroupToUse !== currentPerDataBindGroup) {
+              passEncoder.setBindGroup(1, perDataBindGroupToUse);
+              currentPerDataBindGroup = perDataBindGroupToUse;
+            }
+  
+            // // Set X scale bind group (@group(2)) if different
+            // if (xScaleBindGroupToUse !== currentXScaleBindGroup) {
+            //   passEncoder.setBindGroup(2, xScaleBindGroupToUse);
+            //   currentXScaleBindGroup = xScaleBindGroupToUse;
+            // }
+  
+            // // Set Y scale bind group (@group(3)) if different  
+            // if (yScaleBindGroupToUse !== currentYScaleBindGroup) {
+            //   passEncoder.setBindGroup(3, yScaleBindGroupToUse);
+            //   currentYScaleBindGroup = yScaleBindGroupToUse;
+            // }
+  
+            // Set global scale bind group (@group(2)) - single bind group for all scales
+            // if (this.#globalScaleBindGroup !== currentGlobalScaleBindGroup) {
+            //   passEncoder.setBindGroup(2, this.#globalScaleBindGroup);
+            //   currentGlobalScaleBindGroup = this.#globalScaleBindGroup;
+            // }
+            passEncoder.setBindGroup(2, currentScaleBindGroup);
+            
+            layer.draw(passEncoder);
+          }
+          passEncoder.end();
+        }
+  
+        // Unmap staging before submit
+        if (stagingResult) {
+          stagingResult.staging.unmap();
+        }
+  
+        this.#device.queue.submit([commandEncoder.finish()]);
+  
+  
+        // Async remap staging back to pool
+        if (stagingResult) {
+          const completionPromise = this.#device.queue.onSubmittedWorkDone().then(() => {
+            return stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
+              this.#stagingPool.push(stagingResult.staging);
+            });
+          });
+          this.#inflightPromises.push(completionPromise);
+        }
+        
+        this.#frameId++;
+        
+        // Track this frame's completion
+        // const completionPromise = this.#device.queue.onSubmittedWorkDone();
+        // this.#frameCompletionPromises.push(completionPromise);
+  
+        // const submitTime = performance.now();
+        // this.#frameCompletionPromises.push(
+        //   this.#device.queue.onSubmittedWorkDone().then(() => {
+        //     console.log(`GPU frame took ${performance.now() - submitTime}ms`);
+        //   })
+        // );
+        // --- SAFETY TRACKING ---
+        // Record that this frameId is now using the current buffer
+        // this.#lastFrameUsingBuffer[this.#bufferCycle.currentIndex] = frameId;
+        
+        // Track this frame's completion for cleanup
+        // const completionPromise = this.#device.queue.onSubmittedWorkDone();
+        // completionPromise.then(() => {
+        //   // When GPU finishes this frame, remove it from tracking
+        //   this.#frameCompletionPromises.delete(frameId);
+        // });
+        
+        // Store the promise so we can check if frame is still running
+        // this.#frameCompletionPromises.set(frameId, completionPromise);
+        // this.#frameCompletionPromises.push(completionPromise);
+        // this.#renderCount = (this.#renderCount || 0) + 1;
+        
+      } catch (error) {
+        console.error('Coordinated render failed:', error);
+        this.#fallbackRender(chartsNeedingRender);
+      }
+    }
+  
+    /**
+     * Fallback rendering when coordinated render fails
+     * @private
+     */
+    #fallbackRender(chartsNeedingRender) {
+      console.warn('Using fallback render path');
+      for (const chartConfig of chartsNeedingRender) {
+        try {
+          const commandEncoder = this.#device.createCommandEncoder();
+          const passEncoder = commandEncoder.beginRenderPass(
+            this.#createRenderPassDescriptor(
+              chartConfig.context.getCurrentTexture().createView(),
+              chartConfig.canvas,
+              chartConfig.chartId
+            )
+          );
+  
+          const chartPerFrameBindGroup = chartConfig.perFrameBindGroup;
+          if (!chartPerFrameBindGroup) {
+            passEncoder.end();
+            continue;
+          }
+  
+  
+          for (const layer of chartConfig.layers.values()) {
+            const renderer = layer.renderer;
+            if (renderer?.pipeline && renderer?.perFrameBindGroup && renderer?.perDataBindGroup) {
+              // const xScaleId = renderer.chartContext?.xScaleState?.id;
+              // const yScaleId = renderer.chartContext?.yScaleState?.id;
+              // const xScaleBindGroup = this.getCurrentScaleBindGroup(chartConfig.xScaleId);
+              // const yScaleBindGroup = this.getCurrentScaleBindGroup(chartConfig.yScaleId);
+  
+              // const xScaleBindGroup = xScaleId ? this.getCurrentScaleBindGroup(xScaleId) : null;
+              // const yScaleBindGroup = yScaleId ? this.getCurrentScaleBindGroup(yScaleId) : null;
+              
+              if (xScaleBindGroup && yScaleBindGroup) {
+                passEncoder.setPipeline(renderer.pipeline);
+                // passEncoder.setBindGroup(0, renderer.perFrameBindGroup);
+                passEncoder.setBindGroup(0, chartPerFrameBindGroup); 
+                passEncoder.setBindGroup(1, renderer.perDataBindGroup);
+                passEncoder.setBindGroup(2, xScaleBindGroup);
+                passEncoder.setBindGroup(3, yScaleBindGroup);
+                layer.draw(passEncoder);
+              }
+            }
+          }
+          passEncoder.end();
+          this.#device.queue.submit([commandEncoder.finish()]);
+        } catch (error) {
+          console.error(`Failed to render chart ${chartConfig.chartId}:`, error);
+        }
+      }
+    }
+  
+    /**
+     * Get chart context for a layer (helper method)
+     * @private
+     */
+    #getChartContextForLayer(layer) {
+      // Access chart context through the renderer
+      return layer.renderer?.chartContext || null;
+    }
+  
+    // ===== CHART MANAGEMENT =====
+  
+    setScaleRegistry(scaleRegistry) {
+      this.#scaleRegistry = scaleRegistry;
+    }
+  
+    #getChartsUsingScale(scale) {
+      if (!this.#scaleRegistry?.scaleUsage) return new Set();
+      return this.#scaleRegistry.scaleUsage.get(scale) || new Set();
+    }
+  
+    /**
+     * Update the scale ID mapping for a specific chart
+     * Called by ChartScales when scale instances are resolved or change
+     */
+    setChartScaleMapping(chartId, { xScaleId, yScaleId }) {
+      const chartConfig = this.#registeredCharts.get(chartId);
+      if (!chartConfig) {
+        // Queue the mapping for when chart is registered
+        console.debug(`Queueing scale mapping for unregistered chart ${chartId}`);
+        this.#pendingScaleMappings.set(chartId, { xScaleId, yScaleId });
+        return;
+      }
+  
+      const changed = chartConfig.xScaleId !== xScaleId || chartConfig.yScaleId !== yScaleId;
+      
+      chartConfig.xScaleId = xScaleId;
+      chartConfig.yScaleId = yScaleId;
+      
+      if (changed) {
+        console.debug(`Updated scale mapping for chart ${chartId}:`, { xScaleId, yScaleId });
+        
+        // Trigger rebuild of render plan since scale bindings may have changed
+        chartConfig.needsPlanRebuild = true;
+        this.invalidateChart(chartId);
+      }
+  }
+  
+    invalidateChart(chartId) {
+      if (this.#registeredCharts.has(chartId)) {
+        this.#dirtyChartIDs.add(chartId);
+        this.#ensureLoopIsActive();
+      }
+    }
+  
+    addAnimatingScale(scale) {
+      // Buffer pool should already exist from scale creation
+      // if (!this.#scaleInstancePools.has(scale.id)) {
+      //   console.error(`No buffer pool found for scale ${scale.id} - should have been created in constructor`);
+      //   return;
+      // }
+      const globalIndex = this.#scaleIndexManager.getIndex(scale.id);
+      if (globalIndex === undefined) {
+        console.error(`Scale ${scale.id} not registered in global SSBO system - call createBufferPoolForScale first`);
+        return;
+      }
+      
+      this.#animatedScales.add(scale);
+      this.#ensureLoopIsActive();
+    }
+  
+    removeAnimatingScale(scale) {
+      this.#animatedScales.delete(scale);
+    }
+  
+    #ensureLoopIsActive() {
+      if (this.#animationRafId) return;
+  
+      if (this.#animatedScales.size > 0 && !this.#animationActive) {
+        this.#animationActive = true;
+        this.#accumulator = 0;
+        this.#lastFrameTime = 0;
+      }
+  
+      this.#animationRafId = requestAnimationFrame(this.#animationLoop);
+    }
+  
+    registerChart(chartId, canvas, config) {
+      if (this.#registeredCharts.has(chartId)) {
+        console.warn(`Chart ${chartId} already registered, updating config`);
+      }
+  
+      const chartConfig = {
+        chartId,
+        canvas,
+        zIndex: config.zIndex || 0,
+        visible: true,
+        context: canvas.getContext('webgpu'),
+        contextConfigured: false,
+        layers: new Map(),
+        renderPlan: [],
+        needsPlanRebuild: true,
+        xScaleId: null,
+        yScaleId: null,
+        frameUniformsBuffer: null,
+        perFrameBindGroup: null,
+      };
+  
+      this.#registeredCharts.set(chartId, chartConfig);
+  
+      // Process any pending scale mappings for this chart
+      const pendingMapping = this.#pendingScaleMappings.get(chartId);
+      if (pendingMapping) {
+        console.debug(`Applying queued scale mapping for chart ${chartId}:`, pendingMapping);
+        this.setChartScaleMapping(chartId, pendingMapping);
+        this.#pendingScaleMappings.delete(chartId);
+      }
+  
+      return {
+        setContextReady: () => {
+          const chart = this.#registeredCharts.get(chartId);
+          if (chart) {
+            chart.contextConfigured = true;
+            this.#processPendingFrameUpdates(chartId);
+          }
+        },
+        setVisible: (visible) => {
+          const config = this.#registeredCharts.get(chartId);
+          if (config && config.visible !== visible) {
+            config.visible = visible;
+            this.invalidateChart(chartId);
+          }
+        },
+        invalidate: () => {
+          this.invalidateChart(chartId);
+        },
+        remove: () => {
+          this.unregisterChart(chartId);
+        }
+      };
+    }
+  
+    unregisterChart(chartId) {
+      const chartConfig = this.#registeredCharts.get(chartId);
+      if (chartConfig) {
+        // NEW: Clean up per-chart frame resources
+        if (chartConfig.frameUniformsBuffer && !chartConfig.frameUniformsBuffer.destroyed) {
+          chartConfig.frameUniformsBuffer.destroy();
+        }
+        // Note: perFrameBindGroup doesn't need explicit cleanup
+  
+        this.#registeredCharts.delete(chartId);
+  
+        // Existing MSAA cleanup
+        const msaa = this.#msaaCache.get(chartId);
+        if (msaa) {
+          msaa.texture.destroy();
+          this.#msaaCache.delete(chartId);
+          console.debug(`Destroyed cached MSAA resources for chart: ${chartId}`);
+        }
+  
+        // Existing pending mappings cleanup
+        this.#pendingScaleMappings.delete(chartId);
+  
+        console.log(`Unregistered chart: ${chartId}`);
+      }
+    }
+  
+    registerLayer(chartId, layerConfig) {
+      const chart = this.#registeredCharts.get(chartId);
+      if (!chart) {
+        console.error(`Attempted to register layer on non-existent chart: ${chartId}`);
+        return { remove: () => {} };
+      }
+  
+      const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
+      chart.layers.set(layerId, { ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
+  
+      chart.needsPlanRebuild = true;
+      console.log(`📋 Layer registered: chart ${chartId} now has ${chart.layers.size} layers, needsPlanRebuild=${chart.needsPlanRebuild}`);
+      this.invalidateChart(chartId);
+  
+      return {
+        remove: () => this.unregisterLayer(chartId, layerId)
+      };
+    }
+  
+    unregisterLayer(chartId, layerId) {
+      const chart = this.#registeredCharts.get(chartId);
+      if (chart?.layers.has(layerId)) {
+        chart.layers.delete(layerId);
+        chart.needsPlanRebuild = true;
+        this.invalidateChart(chartId);
+      }
+    }
+  
+    #buildRenderPlanForChart(chartConfig) {
+      // console.log(`🏗️ Building render plan for chart ${chartConfig.chartId}: ${chartConfig.layers.size} layers available`);
+    
+      const layers = Array.from(chartConfig.layers.values());
+      if (layers.length === 0) {
+        console.log(`⚠️ No layers to render for chart ${chartConfig.chartId}`);
+        chartConfig.renderPlan = [];
+        chartConfig.needsPlanRebuild = false;
+        return;
+      }
+  
+      const zIndexGroups = new Map();
+      for (const layer of layers) {
+        const zIndex = layer.zIndex;
+        if (!zIndexGroups.has(zIndex)) zIndexGroups.set(zIndex, []);
+        zIndexGroups.get(zIndex).push(layer);
+      }
+  
+      const sortedZLevels = Array.from(zIndexGroups.keys()).sort((a, b) => a - b);
+      const newPlan = [];
+      for (const zLevel of sortedZLevels) {
+        const layersInZLevel = zIndexGroups.get(zLevel);
+        const markTypeGroups = new Map();
+        for (const layer of layersInZLevel) {
+          const markType = layer.markType || 'unknown';
+          if (!markTypeGroups.has(markType)) markTypeGroups.set(markType, []);
+          markTypeGroups.get(markType).push(layer);
+        }
+        for (const batchedLayers of markTypeGroups.values()) {
+          newPlan.push(...batchedLayers);
+        }
+      }
+  
+      // Enrich the plan with cached references
+      for (const layer of newPlan) {
+        layer.cachedPipeline = layer.renderer?.pipeline;
+        layer.cachedPerFrameBindGroup = layer.renderer?.perFrameBindGroup;
+        layer.cachedPerDataBindGroup = layer.renderer?.perDataBindGroup;
+        layer.isDualBindGroupReady = !!(layer.cachedPerFrameBindGroup && layer.cachedPerDataBindGroup);
+      }
+  
+      chartConfig.renderPlan = newPlan;
+      chartConfig.needsPlanRebuild = false;
+      // console.log(`✅ Render plan built for chart ${chartConfig.chartId}: ${newPlan.length} layers in plan`);
+    }
+  
+    #createRenderPassDescriptor(textureView, canvas, chartId) {
+      if (this.#msaaSampleCount > 1) {
+        let msaa = this.#msaaCache.get(chartId);
+  
+        if (!msaa || 
+            msaa.texture.width !== canvas.width ||
+            msaa.texture.height !== canvas.height) {
+            
+          msaa?.texture.destroy();
+          
+          const newTexture = this.#device.createTexture({
+            size: { width: canvas.width, height: canvas.height },
+            sampleCount: this.#msaaSampleCount,
+            format: this.#presentationFormat,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT
+          });
+  
+          msaa = {
+            texture: newTexture,
+            view: newTexture.createView() 
+          };
+  
+          this.#msaaCache.set(chartId, msaa);
+        }
+  
+        return {
+          colorAttachments: [{
+            view: msaa.view, 
+            resolveTarget: textureView,
+            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          }],
+        };
+      } else {
+        return {
+          colorAttachments: [{
+            view: textureView,
+            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          }],
+        };
+      }
+    }
+  
+    #getOrCreateDataLayout(markType, dataBindingConfig) {
+      const layoutKey = `${markType}-${JSON.stringify(dataBindingConfig)}`;
+      
+      if (!this.#dataLayouts.has(layoutKey)) {
+        const layout = this.#device.createBindGroupLayout({
+          label: `${markType}-data-layout`,
+          entries: dataBindingConfig.map(config => ({
+            binding: config.binding,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            buffer: { type: config.type || 'read-only-storage' }
+          }))
+        });
+        this.#dataLayouts.set(layoutKey, layout);
+      }
+      
+      return this.#dataLayouts.get(layoutKey);
+    }
+  
+    async createPipelineForMarkType(markType, scaleTypes, markShaderCode, vertexBufferLayout, dataBindingConfig) {
+      console.log(`Creating pipeline for ${markType} with scales: ${scaleTypes.x}-${scaleTypes.y}`);
+  
+      // Generate shader using template system
+      const templateResult = scaleTemplateSystem.generateShader(scaleTypes, markShaderCode);
+      
+      // Get or create stable layouts
+      const frameLayout = this.#getOrCreateFrameLayout();
+      const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);
+      // const xScaleLayout = this.#scaleBindGroupLayouts.get(scaleTypes.x);
+      // const yScaleLayout = this.#scaleBindGroupLayouts.get(scaleTypes.y);
+  
+      // if (!xScaleLayout || !yScaleLayout) {
+      //   throw new Error(`Scale bind group layouts not found for types: ${scaleTypes.x}, ${scaleTypes.y}`);
+      // }
+  
+      // Use global SSBO layout for both X and Y scales
+      const globalScaleLayout = this.#scaleBindGroupLayouts.get('global');
+  
+      if (!globalScaleLayout) {
+        throw new Error('Global scale SSBO layout not found - ensure SSBO system is initialized');
+      }
+  
+      // Create pipeline layout
+      const pipelineLayout = this.#device.createPipelineLayout({
+        label: `${markType}-pipeline-layout`,
+        // bindGroupLayouts: [frameLayout, dataLayout, xScaleLayout, yScaleLayout]
+        bindGroupLayouts: [frameLayout, dataLayout, globalScaleLayout]
+      });
+  
+      // Create or get shared shader
+      console.log('🏭 Creating shader module...');
+      const shaderModule = await this.getOrCreateSharedShader(markType, templateResult.shaderCode);
+      console.log('🏭 Shader module created successfully');
+  
+      // Create pipeline
+      console.log('🏭 Creating render pipeline...');
+      const pipeline = await this.getOrCreateSharedPipeline(
+        `${markType}-${scaleTypes.x}-${scaleTypes.y}`, // Include scale types in cache key
+        async () => {
+          const msaaSampleCount = this.#msaaSampleCount;
+  
+          console.log('🏭 Pipeline config:', {
+            msaa: msaaSampleCount,
+            format: this.#presentationFormat,
+            vertexBuffers: vertexBufferLayout?.length || 0
+          });
+          
+          return this.#device.createRenderPipeline({
+            label: `${markType}-${scaleTypes.x}-${scaleTypes.y}-pipeline`,
+            layout: pipelineLayout,
+            vertex: {
+              module: shaderModule,
+              entryPoint: 'vertexMain',
+              buffers: vertexBufferLayout || [],
+            },
+            fragment: {
+              module: shaderModule,
+              entryPoint: 'fragmentMain',
+              targets: [{
+                format: this.#presentationFormat,
+                blend: {
+                  color: {
+                    srcFactor: 'src-alpha',
+                    dstFactor: 'one-minus-src-alpha',
+                    operation: 'add',
+                  },
+                  alpha: {
+                    srcFactor: 'one',
+                    dstFactor: 'one-minus-src-alpha',
+                    operation: 'add',
+                  },
+                },
+              }],
+            },
+            primitive: { topology: 'triangle-list' },
+            multisample: { count: msaaSampleCount > 1 ? msaaSampleCount : 1 },
+          });
+        }
+      );
+  
+       console.log('🏭 Pipeline created successfully');
+  
+      return {
+        pipeline,
+        frameLayout,
+        dataLayout
+      };
+    }
+  
+    // ===== SHARED RESOURCE METHODS WITH REFERENCE COUNTING =====
+  
+    async getOrCreateSharedPipeline(markType, createFn) {
+      console.log(`Pipeline request for ${markType}, existing:`, !!this.#sharedResources.pipelines.get(markType));
+    
+      const existing = this.#sharedResources.pipelines.get(markType);
+      
+      if (existing) {
+        existing.refCount++;
+        return existing.pipeline;
+      }
+  
+      // Check if already creating to prevent race conditions
+      if (this.#creatingPipelines.has(markType)) {
+        // Wait for the other creation to complete
+        while (this.#creatingPipelines.has(markType)) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        // Now get the created pipeline
+        const newExisting = this.#sharedResources.pipelines.get(markType);
+        if (newExisting) {
+          newExisting.refCount++;
+          console.log(`Pipeline request for ${markType}, was reused after creation:`, !!this.#sharedResources.pipelines.get(markType));
+          return newExisting.pipeline;
+        }
+      }
+  
+      // Mark as creating
+      this.#creatingPipelines.add(markType);
+  
+      try {
+        console.log(`Creating new pipeline for ${markType}`);
+        const pipeline = await createFn();
+        
+        this.#sharedResources.pipelines.set(markType, {
+          pipeline,
+          refCount: 1,
+          createdAt: Date.now()
+        });
+  
+        return pipeline;
+      } finally {
+        this.#creatingPipelines.delete(markType);
+      }
+    }
+  
+    releaseSharedPipeline(markType) {
+      const resource = this.#sharedResources.pipelines.get(markType);
+      if (!resource) return;
+  
+      resource.refCount--;
+  
+      if (resource.refCount <= 0) {
+        this.#sharedResources.pipelines.delete(markType);
+        console.log(`Released shared pipeline: ${markType}`);
+      }
+    }
+  
+    async getOrCreateSharedShader(markType, shaderCode) {
+      const existing = this.#sharedResources.shaderModules.get(markType);
+      
+      if (existing) {
+        existing.refCount++;
+        return existing.module;
+      }
+  
+      const module = this.#device.createShaderModule({ code: shaderCode });
+      
+      this.#sharedResources.shaderModules.set(markType, {
+        module,
+        refCount: 1,
+        createdAt: Date.now()
+      });
+  
+      return module;
+    }
+  
+    releaseSharedShader(markType) {
+      const resource = this.#sharedResources.shaderModules.get(markType);
+      if (!resource) return;
+  
+      resource.refCount--;
+  
+      if (resource.refCount <= 0) {
+        this.#sharedResources.shaderModules.delete(markType);
+        console.log(`Released shared shader: ${markType}`);
+      }
+    }
+  
+    getSharedUniformBuffer(name) {
+      const resource = this.#sharedResources.uniformBuffers.get(name);
+      if (resource) {
+        resource.refCount++;
+        return resource.buffer;
+      }
+      return null;
+    }
+  
+    releaseSharedUniformBuffer(name) {
+      const resource = this.#sharedResources.uniformBuffers.get(name);
+      if (resource) {
+        resource.refCount--;
+        
+        if (resource.refCount <= 0) {
+          if (resource.buffer && !resource.buffer._isDestroyed) {
+            resource.buffer.destroy();
+          }
+          this.#sharedResources.uniformBuffers.delete(name);
+          console.log(`Released shared uniform buffer: ${name}`);
+        }
+      }
+    }
+  
+    // Legacy getters for backward compatibility
+    getSharedPipeline(markType) {
+      return this.#sharedResources.pipelines.get(markType)?.pipeline;
+    }
+  
+    getSharedShaderModule(markType) {
+      return this.#sharedResources.shaderModules.get(markType)?.module;
+    }
+  
+    // Getters
+    get device() { return this.#device; }
+    get presentationFormat() { return this.#presentationFormat; }
+    get msaaSampleCount() { return this.#msaaSampleCount; }
+    get isInitialized() { return this.#initialized; }
+  
+    // ===== INITIALIZATION METHODS =====
+  
+    async #initWebGPU() {
+      if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+        throw new Error('WebGPU initialization attempted server-side');
+      }
+  
+      if (!navigator.gpu) {
+        throw new Error('WebGPU not supported');
+      }
+  
+      const adapter = await navigator.gpu.requestAdapter({
+        powerPreference: "high-performance"
+      });
+  
+      if (!adapter) {
+        throw new Error('No appropriate GPUAdapter found');
+      }
+  
+      this.#device = await adapter.requestDevice();
+      this.#presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+    }
+  
+    async #createSharedResources() {
+      const device = this.#device;
+  
+      const dprBuffer = device.createBuffer({
+        size: 4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+  
+      this.#sharedResources.uniformBuffers.set('devicePixelRatio', {
+        buffer: dprBuffer,
+        refCount: 0,
+        createdAt: Date.now()
+      });
+  
+      this.#updateSharedUniforms();
+    }
+  
+    #updateSharedUniforms() {
+      if (!this.#device) return;
+  
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      const dprResource = this.#sharedResources.uniformBuffers.get('devicePixelRatio');
+  
+      if (dprResource?.buffer) {
+        this.#device.queue.writeBuffer(dprResource.buffer, 0, new Float32Array([devicePixelRatio]));
+      }
+    }
+  
+    // ===== COMPREHENSIVE CLEANUP =====
+  
+    destroy() {
+      console.log('Destroying GPUCoordinator with comprehensive cleanup');
+      
+      // Stop animation loop
+      if (this.#animationRafId !== null) {
+        cancelAnimationFrame(this.#animationRafId);
+        this.#animationRafId = null;
+      }
+      
+      this.#animationActive = false;
+      this.#animatedScales.clear();
+  
+      // NEW: Cleanup scale instance pools
+      for (const [scaleId, pool] of this.#scaleInstancePools) {
+        pool.buffers.forEach(buffer => {
+          if (!buffer.destroyed) {
+            buffer.destroy();
+          }
+        });
+      }
+      this.#scaleInstancePools.clear();
+  
+      // Cleanup MSAA textures
+      for (const msaa of this.#msaaCache.values()) {
+        if (msaa.texture && !msaa.texture.destroyed) {
+          msaa.texture.destroy();
+        }
+      }
+      this.#msaaCache.clear();
+  
+      // Cleanup shared resources with reference counting
+      for (const [name, resource] of this.#sharedResources.uniformBuffers) {
+        if (resource.buffer && !resource.buffer._isDestroyed) {
+          resource.buffer.destroy();
+        }
+      }
+      this.#sharedResources.uniformBuffers.clear();
+      this.#sharedResources.pipelines.clear();
+      this.#sharedResources.shaderModules.clear();
+      this.#sharedResources.bindGroupLayouts.clear();
+  
+      // Cleanup bind group layouts
+      this.#scaleBindGroupLayouts.clear();
+  
+      // Cleanup charts and layers
+      this.#registeredCharts.clear();
+      this.#dirtyChartIDs.clear();
+  
+      // Cleanup performance tracking
+      this.#frameHistory = [];
+      this.#frameTimings = [];
+  
+      // Cleanup race condition protection
+      this.#creatingPipelines.clear();
+  
+      // Clean up layouts
+      this.#dataLayouts.clear();
+      this.#frameLayout = null;
+  
+      this.#pendingScaleMappings.clear();
+  
+      // Destroy device last
+      if (this.#device) {
+        this.#device.destroy();
+        this.#device = null;
+      }
+  
+      this.#initialized = false;
+      console.log('GPUCoordinator destruction complete');
+    }
+  }
+  
+  // Context functions remain unchanged...
+  export function setGPUCoordinator(config = {}) {
+    const coordinator = new GPUCoordinator(config);
+    
+    if (typeof window !== 'undefined') {
+      coordinator.initialize().catch(error => {
+        console.error('Failed to initialize GPU coordinator:', error);
+      });
+    }
+    
+    return setContext('gpu-coordinator', coordinator);
+  }
+  
+  export function getGPUContext() {
+    const coordinator = getContext('gpu-coordinator');
+    
+    if (!coordinator) {
+      console.error('GPU Coordinator context missing. Make sure to call setGPUCoordinator() in a parent component.');
+      return null;
+    }
+    
+    return coordinator;
+  }
+  
+  // MinimalPerfLogger class remains unchanged...
+  class MinimalPerfLogger {
+    constructor(maxSamples = 10000) {
+      this.timestamps = new Float64Array(maxSamples);
+      this.frameDeltas = new Float32Array(maxSamples);
+      this.cpuTimes = new Float32Array(maxSamples);
+      this.scaleAnimationTimes = new Float32Array(maxSamples);
+      this.renderTimes = new Float32Array(maxSamples);
+      this.schedulingLags = new Float32Array(maxSamples);
+      this.renderDomains = new Float32Array(maxSamples);
+      
+      this.index = 0;
+      this.maxSamples = maxSamples;
+      this.startTime = performance.now();
+      this.lastFrameTime = 0;
+      this.bufferFullWarned = false;
+    }
+    
+    log(loopStart, loopEnd, scaleAnimationTime = 0, renderTime = 0, schedulingLag = 0, renderDomain = []) {
+      if (this.index >= this.maxSamples) {
+        if (!this.bufferFullWarned) {
+          console.warn(`PerformanceLogger: Buffer full (${this.maxSamples} samples). Data collection stopped.`);
+          this.bufferFullWarned = true;
+        }
+        return;
+      }
+      
+      const i = this.index++;
+      this.timestamps[i] = loopStart - this.startTime;
+      this.cpuTimes[i] = loopEnd - loopStart;
+      this.scaleAnimationTimes[i] = scaleAnimationTime;
+      this.renderTimes[i] = renderTime;
+      this.schedulingLags[i] = schedulingLag;
+      this.renderDomains[i] = renderDomain;
+      
+      if (this.lastFrameTime > 0) {
+        this.frameDeltas[i] = loopStart - this.lastFrameTime;
+      }
+      
+      this.lastFrameTime = loopStart;
+    }
+    
+    export() {
+      const activeLength = Math.min(this.index, this.maxSamples);
+      
+      const rows = [];
+      for (let i = 0; i < activeLength; i++) {
+        rows.push({
+          timestamp: this.timestamps[i],
+          frameDelta: this.frameDeltas[i],
+          cpuTime: this.cpuTimes[i],
+          scaleAnimationTime: this.scaleAnimationTimes[i],
+          renderTime: this.renderTimes[i],
+          schedulingLag: this.schedulingLags[i],
+          renderDomain: this.renderDomains[i],
+        });
+      }
+      
+      return rows;
+    }
+    
+    downloadJSON() {
+      const blob = new Blob([JSON.stringify(this.export())], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `perf-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    
+    reset() {
+      this.index = 0;
+      this.startTime = performance.now();
+      this.lastFrameTime = 0;
+    }
+  }
+</src/lib/gpu/GPUCoordinator.svelte.js>
+
+<src/lib/scales/LinearScaleState.svelte.js>
+  import { getGPUContext } from '$lib/gpu';
+  import { scaleLinear } from 'd3-scale';
+  import { extent as d3Extent } from 'd3-array';
+  
+  // Spring configurations for different interactions
+  const springConfigs = {
+    default: { stiffness: 225, damping: 25, precision: 0.0001 },
+    zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
+    pan: { stiffness: 300, damping: 40, precision: 0.00000001 },
+    // damping: sqrt(stiffness) * 2 for critical damping
+    // pan: { stiffness: 250, damping: 30, precision: 0.00000001 },
+    // pan: { stiffness: 150, damping: 15, precision: 0.00000001 },
+    reset: { stiffness: 50, damping: 15, precision: 0.0001 },
+    zoomIn: { stiffness: 75, damping: 15, precision: 0.0001 }
+  };
+  
+  export class LinearScaleState {
+    name = $state('');
+  
+    // Keep all existing properties
+    #initExtent = [];
+    #extent = [];
+    #extents = new Map();
+    
+    domainLimits = {
+      min: 0,
+      max: 100,
+      minWidth: 1
+    };
+    zoomLimits = {
+      max: 10,
+      min: 100
+    };
+  
+    currentDataPoint = $state();
+    #enableUpdates = $state(true);
+    #frozenExtent = null;
+  
+    // Custom animation state
+    #target = [0, 100];
+    #velocity = [0, 0];
+    #isAnimating = false;
+  
+    #physicsCurrent = [0, 100];
+    #physicsPrevious = [0, 100];
+    
+    #renderCurrent = $state([0, 100]);
+  
+    #lastUpdateTime = 0;
+  
+    // NEW: Frame accumulation for high-frequency input (ZOOM ONLY)
+    #frameAccumulator = {
+      logZoomDelta: 0,      // Single value for zoom accumulation
+      zoomCenter: 0,        // Single value for zoom center
+      hasZoomUpdates: false,
+  
+      panScreenX: 0,        // Latest screen X position
+      panScreenY: 0,        // Latest screen Y position  
+      hasPanUpdates: false
+    };
+  
+    #inputBuffer = [];
+  
+    #activePanContext = null;
+  
+    #gpuCoordinator = null;
+  
+    // NEW: Current spring configuration
+    #currentSpringConfig = springConfigs.default;
+  
+    #cachedPrecision = $derived.by(() => {
+      const domainSize = Math.abs(this.#target[1] - this.#target[0]);
+      return Math.max(this.#currentSpringConfig.precision, domainSize * 0.0001);
+    });
+  
+    #gpuStateObject = {
+      domainMin: 0,
+      domainMax: 100,
+      categoryCount: 0,
+      domainScale: 0.01
+    };
+  
+    constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}, gpuCoordinator = null) {
+      this.id = crypto.randomUUID();
+      this.name = name;
+      this.#initExtent = extent;
+      this.#extent = extent;
+      this.type = type;
+      this.zoomLimits.max = zoomLimits[0];
+      this.zoomLimits.min = zoomLimits[1];
+      this.#gpuCoordinator = gpuCoordinator;
+  
+      // Register buffer pool with coordinator
+      if (gpuCoordinator) {
+        gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
+      }
+  
+      this.ready = $state(false);
+  
+      // Initialize animation state
+      this.#physicsCurrent = [...extent];
+      this.#physicsPrevious = [...extent];
+      this.#renderCurrent = [...extent];
+      this.#target = [...extent];
+  
+      const self = this;
+      this.domain = {
+        get current() { return self.#renderCurrent; },
+        get target() { return self.#target; },
+        set(newValue, options = {}) {
+          if (options.instant) {
+            self.#target = [...newValue];
+            self.#physicsCurrent = [...newValue];
+            self.#physicsPrevious = [...newValue];
+            self.#renderCurrent = [...newValue];
+            self.#velocity = [0, 0];
+          } else {
+            self.#target = [...newValue];
+            self.#ensureAnimating();
+          }
+        }
+      };
+  
+      this.zoomInEffect = {
+        enabled: options.zoomInEffect ?? true,
+        factor: options.zoomInFactor ?? 5,
+        springConfig: options.zoomInSpringConfig ?? springConfigs.zoomIn
+      };
+    }
+  
+    setReady() {
+      this.ready = true;
+    }
+  
+    setUpdatesEnabled(enabled) {
+      const wasEnabled = this.#enableUpdates;
+      this.#enableUpdates = enabled;
+      
+      if (wasEnabled && !enabled) {
+        this.#frozenExtent = [...this.#extent];
+      } else if (!wasEnabled && enabled) {
+        this.#frozenExtent = null;
+        this.updateExtentFromExtents();
+      }
+    }
+  
+    get updatesEnabled() {
+      return this.#enableUpdates;
+    }
+  
+    get effectiveExtent() {
+      return this.#enableUpdates ? this.#extent : this.#frozenExtent || this.#extent;
+    }
+  
+    addMark(range, identifier) {
+      let processedRange;
+      
+      if (range.length === 2) {
+        processedRange = [Math.min(range[0], range[1]), Math.max(range[0], range[1])];
+      } else if (range.length > 2) {
+        processedRange = d3Extent(range);
+      } else if (range.length === 1) {
+        processedRange = [range[0], range[0]];
+      } else {
+        return this;
+      }
+      
+      this.#extents.set(identifier, processedRange);
+  
+      if (this.#enableUpdates) {
+        this.updateExtentFromExtents();
+      }
+  
+      console.log(`📊 Scale ${this.name}: addMark from ${identifier}`, {
+        range,
+        oldExtent: [...this.#extent],
+        newExtent: [...this.#extent],
+        updatesEnabled: this.#enableUpdates
+      });
+  
+      return this;
+    }
+  
+    removeMark(identifier) {
+      if (this.#extents.has(identifier)) {
+        this.#extents.delete(identifier);
+  
+        if (this.#enableUpdates) {
+          this.updateExtentFromExtents();
+        }
+      }
+      return this;
+    }
+  
+    updateExtentFromExtents(nice=true) {
+      if (!this.#enableUpdates) {
+        return;
+      }
+  
+      if (this.#extents.size === 0) {
+        this.#extent = [0, 0];
+        return;
+      }
+      
+      const extents = Array.from(this.#extents.values());
+      const minStart = Math.min(...extents.map(range => range[0]));
+      const maxEnd = Math.max(...extents.map(range => range[1]));
+      
+      if (nice) {
+        this.#extent = scaleLinear().domain([minStart, maxEnd]).nice(5).domain();
+      } else {
+        this.#extent = [minStart, maxEnd];
+      }
+  
+      this.resetDomainLimits();
+      this.resetZoom();
+    }
+  
+    getExtents() {
+      return Object.fromEntries(this.#extents);
+    }
+  
+    getBaseScale(axis, innerWidthOrHeight) {
+      if (axis === 'x') {
+        return scaleLinear().range([0, innerWidthOrHeight])
+      } else if (axis === 'y') {
+        return scaleLinear().range([innerWidthOrHeight, 0])
+      }
+    }
+  
+    setPanContext(panContext) {
+      this.#activePanContext = panContext;
+      this.#ensureAnimating();
+    }
+  
+    clearPanContext() {
+      this.#activePanContext = null;
+    }
+  
+    updatePanPosition(screenX, screenY) {
+      // if (this.#frameAccumulator.panScreenX !== screenX || 
+      //     this.#frameAccumulator.panScreenY !== screenY) {
+      //   this.#frameAccumulator.panScreenX = screenX;
+      //   this.#frameAccumulator.panScreenY = screenY;
+      //   this.#frameAccumulator.hasPanUpdates = true;
+      //   this.#ensureAnimating();
+      // }
+      const now = performance.now();
+    
+      this.#inputBuffer.push({
+        screenX,
+        screenY,
+        timestamp: now,
+      });
+      
+      if (this.#inputBuffer.length > 10) {
+        this.#inputBuffer.shift();
+      }
+    
+      this.#ensureAnimating();
+    }
+  
+    accumulateZoom(dataCenter, scaleFactor) {
+      this.#frameAccumulator.logZoomDelta += Math.log(scaleFactor);
+      this.#frameAccumulator.zoomCenter = dataCenter;
+      this.#frameAccumulator.hasZoomUpdates = true;
+      this.#ensureAnimating();
+    }
+  
+    updateScaleDomain(scale, current = true) {
+      const targetDomain = current ? this.domain.current : this.#target;
+      return { scale: scale.domain(targetDomain) }
+    }
+    
+  
+    #ensureAnimating() {
+      if (!this.#isAnimating) {
+        this.#isAnimating = true;
+        this.#lastUpdateTime = 0;
+        
+        if (this.#gpuCoordinator) {
+          this.#gpuCoordinator.addAnimatingScale(this);
+        } else {
+          console.warn(`⚠️ No GPU coordinator found for scale: ${this.name}`);
+        }
+      }
+    }
+  
+    #updateSpringConfig(config) {
+      this.#currentSpringConfig = config;
+    }
+  
+    #isAtTarget() {
+      const config = this.#currentSpringConfig;
+      const domainSize = Math.abs(this.#target[1] - this.#target[0]);
+      // TODO replace this calculation with cached value?
+      const dynamicPrecision = Math.max(config.precision, domainSize * 0.00001);
+      
+      return Math.abs(this.#physicsCurrent[0] - this.#target[0]) < dynamicPrecision &&
+             Math.abs(this.#physicsCurrent[1] - this.#target[1]) < dynamicPrecision &&
+             Math.abs(this.#velocity[0]) < dynamicPrecision * 10 &&
+             Math.abs(this.#velocity[1]) < dynamicPrecision * 10;
+    }
+  
+    #resetAccumulator() {
+      this.#frameAccumulator.logZoomDelta = 0;
+      this.#frameAccumulator.zoomCenter = 0;
+      this.#frameAccumulator.hasZoomUpdates = false;
+      this.#frameAccumulator.panScreenX = 0;
+      this.#frameAccumulator.panScreenY = 0;
+      this.#frameAccumulator.hasPanUpdates = false;
+    }
+  
+    #calculateZoomedDomain(targetArray, centerPoint, scaleFactor) {
+      // const [min, max] = this.#target;
+      const [min, max] = targetArray;
+      const minLimit = this.domainLimits.min;
+      const maxLimit = this.domainLimits.max;
+      const limitWidth = maxLimit - minLimit;
+      const minDomainWidth = this.domainLimits.minWidth;
+  
+      const mouseRatio = (centerPoint - min) / (max - min);
+      const newDomainWidth = (max - min) / scaleFactor;
+      const effectiveDomainWidth = Math.max(newDomainWidth, minDomainWidth);
+  
+      let newMin = centerPoint - (mouseRatio * effectiveDomainWidth);
+      let newMax = newMin + effectiveDomainWidth;
+  
+      // Apply constraints
+      if (effectiveDomainWidth > limitWidth) {
+        newMin = minLimit;
+        newMax = maxLimit;
+      } else {
+        if (newMin < minLimit) {
+          newMin = minLimit;
+          newMax = newMin + effectiveDomainWidth;
+        }
+        
+        if (newMax > maxLimit) {
+          newMax = maxLimit;
+          newMin = newMax - effectiveDomainWidth;
+          
+          if (newMin < minLimit) {
+            newMin = minLimit;
+          }
+        }
+      }
+  
+      // return [newMin, newMax];
+      targetArray[0] = newMin;
+      targetArray[1] = newMax;
+    }
+  
+    _processScheduledInput(currentTime, globalDelay) {
+      if (!this.#activePanContext || this.#inputBuffer.length === 0) {
+        return false;
+      }
+      
+      // Find most recent event that's ready based on global delay
+      let readyEvent = null;
+      let readyIndex = -1;
+      
+      for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
+        const event = this.#inputBuffer[i];
+        if (currentTime >= event.timestamp + globalDelay) {
+          readyEvent = event;
+          readyIndex = i;
+          break;
+        }
+      }
+      
+      if (readyEvent) {
+        this.#updateSpringConfig(springConfigs.pan);
+        this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
+        this.#inputBuffer.splice(0, readyIndex + 1);
+        return true;
+      }
+      
+      return false;
+    }
+  
+    #calculatePanTarget(targetArray, screenX, screenY) {
+      // console.trace('calculatePanTarget called');
+      if (!this.#activePanContext) return // this.#target;
+      
+      const { initialScreenPos, initialDomain, screenToDataRatio } = this.#activePanContext;
+      
+      // Calculate dataDelta directly with single conditional
+      const dataDelta = screenX !== 0 
+        ? -(screenX - initialScreenPos.x) * screenToDataRatio
+        : (screenY - initialScreenPos.y) * screenToDataRatio;
+      
+      let newMin = initialDomain[0] + dataDelta;
+      let newMax = initialDomain[1] + dataDelta;
+      
+      // Apply constraints
+      const range = newMax - newMin;
+      if (newMin < this.domainLimits.min) {
+        newMin = this.domainLimits.min;
+        newMax = newMin + range;
+      } else if (newMax > this.domainLimits.max) {
+        newMax = this.domainLimits.max;
+        newMin = newMax - range;
+        
+        if (newMin < this.domainLimits.min) {
+          newMin = this.domainLimits.min;
+        }
+      }
+  
+      // Determine the smallest meaningful change
+      const domainSize = this.#activePanContext.domainWidth;
+      const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
+      const quantum = pixelEquivalent * 1;
+  
+      const beforeQuantization = [newMin, newMax];
+    
+      // Quantize to avoid micro-errors
+      newMin = Math.round(newMin / quantum) * quantum;
+      newMax = Math.round(newMax / quantum) * quantum;
+  
+      // console.log(`Quantum: ${quantum.toFixed(8)}, Before: [${beforeQuantization[0].toFixed(6)}, ${beforeQuantization[1].toFixed(6)}], After: [${newMin.toFixed(6)}, ${newMax.toFixed(6)}]`);
+  
+      // return [newMin, newMax];
+      targetArray[0] = newMin;
+      targetArray[1] = newMax;
+    }
+  
+    _applyInput() {
+      // console.trace('_applyInput called');
+      let inputApplied = false;
+  
+      if (this.#frameAccumulator.hasZoomUpdates) {
+        this.#updateSpringConfig(springConfigs.zoom);
+        // this.#target = this.#calculateZoomedDomain(
+        this.#calculateZoomedDomain(
+          this.#target,
+          this.#frameAccumulator.zoomCenter,
+          Math.exp(this.#frameAccumulator.logZoomDelta)
+        );
+        inputApplied = true;
+      }
+  
+      if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
+        this.#updateSpringConfig(springConfigs.pan);
+        this.#calculatePanTarget(
+          this.#target,
+          this.#frameAccumulator.panScreenX,
+          this.#frameAccumulator.panScreenY
+        );
+        inputApplied = true;
+      }
+  
+      this.#resetAccumulator();
+  
+      if (inputApplied) {
+        this.#ensureAnimating();
+      }
+    }
+  
+    _updatePhysics(fixedTimestep) {
+      const dt = fixedTimestep / 1000.0;
+  
+      // Update internal physics state.
+      this.#physicsPrevious[0] = this.#physicsCurrent[0];
+      this.#physicsPrevious[1] = this.#physicsCurrent[1];
+  
+      if (this.#activePanContext) {
+        // Pan: Only simulate spring for min value, calculate max from fixed width
+        const domainWidth = this.#activePanContext.domainWidth;
+        
+        // Spring simulation only for min value
+        const distance = this.#target[0] - this.#physicsCurrent[0];
+        const springForce = distance * this.#currentSpringConfig.stiffness;
+        const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+        const acceleration = springForce + dampingForce;
+        
+        this.#velocity[0] += acceleration * dt;
+        this.#physicsCurrent[0] += this.#velocity[0] * dt;
+        
+        // Max is simply min + width (no spring simulation needed)
+        this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
+        this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
+  
+        // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
+        
+      } else {
+        // Zoom: Independent springs for both min and max (needed for zoom-around-point)
+        for (let i = 0; i < 2; i++) {
+          const distance = this.#target[i] - this.#physicsCurrent[i];
+          const springForce = distance * this.#currentSpringConfig.stiffness;
+          const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+          const acceleration = springForce + dampingForce;
+          
+          this.#velocity[i] += acceleration * dt;
+          this.#physicsCurrent[i] += this.#velocity[i] * dt;
+        }
+      }
+  
+      // for (let i = 0; i < 2; i++) {
+      //   const distance = this.#target[i] - this.#physicsCurrent[i];
+      //   // ... spring math using #physicsCurrent and #velocity ...
+      //   const springForce = distance * this.#currentSpringConfig.stiffness;
+      //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+      //   const acceleration = springForce + dampingForce;
+        
+      //   this.#velocity[i] += acceleration * dt;
+      //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
+      // }
+      
+      if (this.#isAtTarget()) {
+        this.#isAnimating = false;
+        this.#gpuCoordinator.removeAnimatingScale(this);
+      }
+    }
+  
+    _setRenderState(alpha) {
+      this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
+      // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+    
+      if (this.#activePanContext) {
+        // Maintain rigid body constraint during interpolation
+        this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
+      } else {
+        this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+      }
+      // this.#renderCurrent = [
+        // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
+        // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
+      // ];
+  
+      // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+  
+      // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
+      return this.#renderCurrent[0]
+    }
+  
+    resetZoom() {
+      const targetExtent = this.effectiveExtent;
+      
+      // Handle invalid extents
+      if (targetExtent[0] === targetExtent[1] || 
+          !isFinite(targetExtent[0]) || 
+          !isFinite(targetExtent[1])) {
+        console.warn(`⚠️ Scale ${this.name} skipping zoom - invalid extent:`, targetExtent);
+        return;
+      }
+  
+      // This is the final state we want to animate TOWARDS.
+      this.#target[0] = targetExtent[0];
+      this.#target[1] = targetExtent[1];
+      
+      if (!this.ready && this.zoomInEffect.enabled) {
+        // --- Initial "Zoom-In" Effect ---
+        this.#updateSpringConfig(this.zoomInEffect.springConfig);
+        
+        const center = (targetExtent[0] + targetExtent[1]) / 2;
+        const range = targetExtent[1] - targetExtent[0];
+        const expandedMin = center - (range * this.zoomInEffect.factor) / 2;
+        const expandedMax = center + (range * this.zoomInEffect.factor) / 2;
+        
+        // Instantly set the starting physics state to the expanded view.
+        this.#physicsCurrent[0] = expandedMin;
+        this.#physicsCurrent[1] = expandedMax;
+        this.#physicsPrevious[0] = expandedMin;
+        this.#physicsPrevious[1] = expandedMax;
+        this.#renderCurrent[0] = expandedMin;
+        this.#renderCurrent[1] = expandedMax;
+        
+      } else if (!this.ready) {
+        // --- Not ready, no animation ---
+        // Instantly snap ALL states to the target.
+        const [min, max] = targetExtent;
+        this.#physicsCurrent[0] = min;
+        this.#physicsCurrent[1] = max;
+        this.#physicsPrevious[0] = min;
+        this.#physicsPrevious[1] = max;
+        this.#renderCurrent[0] = min;
+        this.#renderCurrent[1] = max;
+        
+      } else {
+        // --- Normal animated reset ---
+        // This is called when the user double-clicks. The animation starts
+        // from wherever the physics state currently is.
+        this.#updateSpringConfig(springConfigs.reset);
+      }
+  
+      // Reset velocity to ensure a smooth start and stop any current motion.
+      this.#velocity = [0, 0];
+      
+      // Ensure the animation loop starts.
+      this.#ensureAnimating();
+    }
+  
+    resetDomainLimits() {
+      const [min, max] = this.effectiveExtent;
+      const width = max - min;
+  
+      this.domainLimits.min = min - this.zoomLimits.max * width
+      this.domainLimits.max = max + this.zoomLimits.max * width
+      this.domainLimits.minWidth = width / this.zoomLimits.min;
+    }
+        
+    zoomToRange([min, max]) {
+      this.#updateSpringConfig(springConfigs.default);
+      this.#target = [min, max];
+      this.#ensureAnimating();
+    }
+  
+    get gpuState() {
+        const [min, max] = this.#renderCurrent;
+        const range = max - min;
+  
+        const state = this.#gpuStateObject;
+        state.domainMin = min;
+        state.domainMax = max;
+        // categoryCount is already 0
+        state.domainScale = range === 0 ? 0 : 1 / range;
+  
+        // console.log('gpuState', state.domainMin)
+  
+        return state;
+    }
+  
+    destroy() {
+      this.#frozenExtent = null;
+      this.#isAnimating = false;
+      this.#resetAccumulator();
+      this.#gpuCoordinator.destroyBufferPoolForScale(this.id)
+    }
+  }
+</src/lib/scales/LinearScaleState.svelte.js>
+
+<src/lib/scales/ChartScales.svelte.js>
+  // src/lib/scales/ChartScales.svelte.js
+  import { getScaleState } from '$lib/scales';
+  import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities.js';
+  
+  export class ChartScales {
+    scaleRequirements = $state({
+      x: [], // [{ type: 'band', priority: 3, markId: 'bar-abc123', config: {...} }, ...]
+      y: []  // [{ type: 'linear', priority: 2, markId: 'dot-def456', config: {...} }, ...]
+    });
+    
+    active = $state(false);
+  
+    constructor(config) {
+      this.config = config;
+      this.gpuCoordinator = config.gpuCoordinator;
+  
+      // Update gpuCoordinator scale ids 
+      $effect(() => {
+        const xScale = this.xScaleState;
+        const yScale = this.yScaleState;
+        
+        if (xScale?.id && yScale?.id && this.gpuCoordinator) {
+          const trySetMapping = () => {
+            try {
+              this.gpuCoordinator.setChartScaleMapping(this.chartId, {
+                xScaleId: xScale.id,
+                yScaleId: yScale.id
+              });
+            } catch (error) {
+              console.log('setMapping failed')
+              // Retry after chart registration
+              setTimeout(trySetMapping, 10);
+            }
+          };
+          trySetMapping();
+        }
+      });
+    }
+  
+    // Reactive getters for config access
+    get xLabel() { return this.config.xLabel; }
+    get yLabel() { return this.config.yLabel; }
+    get layout() { return this.config.layout; }
+    get chartId() { return this.config.layout.chartId; }
+  
+    // Resolution with configuration support
+    scaleConfigurations = $derived.by(() => {
+      try {
+        return {
+          x: resolveScaleConfiguration(this.scaleRequirements.x),
+          y: resolveScaleConfiguration(this.scaleRequirements.y)
+        };
+      } catch (error) {
+        console.error('❌ Scale configuration resolution failed:', error);
+        
+        // Provide helpful debugging info
+        console.error('Scale requirements at time of error:', {
+          x: this.scaleRequirements.x.map(req => `${req.markId}:${req.type}(${req.priority})`),
+          y: this.scaleRequirements.y.map(req => `${req.markId}:${req.type}(${req.priority})`)
+        });
+        
+        // Return safe fallback
+        return { 
+          x: { type: 'linear', config: {} }, 
+          y: { type: 'linear', config: {} } 
+        };
+      }
+    });
+  
+    // Derive types from configurations for backward compatibility
+    scaleTypes = $derived.by(() => ({
+      x: this.scaleConfigurations?.x?.type || 'linear',
+      y: this.scaleConfigurations?.y?.type || 'linear'
+    }));
+  
+    // Use resolved configurations with scale states
+    xScaleState = $derived(getScaleState(
+      this.xLabel, 
+      this.scaleConfigurations?.x?.type || 'linear',
+      this.scaleConfigurations?.x?.config || {},
+      this.gpuCoordinator,
+      this.chartId
+    ));
+  
+    yScaleState = $derived(getScaleState(
+      this.yLabel, 
+      this.scaleConfigurations?.y?.type || 'linear', 
+      this.scaleConfigurations?.y?.config || {},
+      this.gpuCoordinator,
+      this.chartId
+    ));
+  
+    // Rest of the class remains the same...
+    baseXScale = $derived(
+      this.layout.isReady 
+        ? this.xScaleState.getBaseScale('x', this.layout.innerWidth) 
+        : null
+    );
+  
+    baseYScale = $derived(
+      this.layout.isReady 
+        ? this.yScaleState.getBaseScale('y', this.layout.innerHeight) 
+        : null
+    );
+  
+    xScale = $derived(
+      this.layout.isReady && this.baseXScale
+        ? this.xScaleState.updateScaleDomain(this.baseXScale) 
+        : null
+    );
+  
+    yScale = $derived(
+      this.layout.isReady && this.baseYScale
+        ? this.yScaleState.updateScaleDomain(this.baseYScale) 
+        : null
+    );
+  
+    xTargetScale = $derived(
+      this.layout.isReady && this.baseXScale
+        ? this.xScaleState.updateScaleDomain(this.baseXScale, false) 
+        : null
+    );
+  
+    yTargetScale = $derived(
+      this.layout.isReady && this.baseYScale
+        ? this.yScaleState.updateScaleDomain(this.baseYScale, false) 
+        : null
+    );
+  
+    currentXDataPoint = $derived(this.xScaleState.currentDataPoint);
+    currentYDataPoint = $derived(this.yScaleState.currentDataPoint);
+    currentXScreenPoint = $derived(this.xScale?.scale(this.currentXDataPoint));
+    currentYScreenPoint = $derived(this.yScale?.scale(this.currentYDataPoint));
+    scalesReady = $derived(this.xScaleState?.ready && this.yScaleState?.ready);
+  
+    // registerScaleType with configuration support
+    registerScaleType = (dimension, type, priority = SCALE_PRIORITIES.PREFER, markId = 'unknown', config = {}) => {
+      const requirements = this.scaleRequirements[dimension];
+      
+      // Check if we already have this exact requirement
+      const existing = requirements.find(req => 
+        req.type === type && 
+        req.priority === priority && 
+        req.markId === markId &&
+        JSON.stringify(req.config) === JSON.stringify(config)
+      );
+      
+      if (!existing) {
+        requirements.push({ type, priority, markId, config });
+        
+        console.log(`📊 Registered scale requirement: ${dimension} = ${type} (priority: ${priority}, mark: ${markId})`, {
+          config: Object.keys(config).length > 0 ? config : 'none'
+        });
+        
+        // Trigger reactivity by reassigning the array
+        this.scaleRequirements[dimension] = [...requirements];
+      }
+    }
+  
+    unregisterScaleType = (dimension, markId) => {
+      const requirements = this.scaleRequirements[dimension];
+      const filtered = requirements.filter(req => req.markId !== markId);
+      
+      if (filtered.length !== requirements.length) {
+        console.log(`📊 Removed scale requirements for ${markId} on ${dimension} axis`);
+        this.scaleRequirements[dimension] = filtered;
+      }
+    }
+  
+    // Summary now includes configuration info
+    getScaleRequirementsSummary = () => {
+      return {
+        x: {
+          resolved: this.scaleTypes?.x || 'unknown',
+          config: this.scaleConfigurations?.x?.config || {},
+          requirements: this.scaleRequirements.x.map(req => 
+            `${req.markId}:${req.type}(${req.priority})${Object.keys(req.config || {}).length > 0 ? '+config' : ''}`
+          )
+        },
+        y: {
+          resolved: this.scaleTypes?.y || 'unknown', 
+          config: this.scaleConfigurations?.y?.config || {},
+          requirements: this.scaleRequirements.y.map(req => 
+            `${req.markId}:${req.type}(${req.priority})${Object.keys(req.config || {}).length > 0 ? '+config' : ''}`
+          )
+        }
+      };
+    }
+  
+    // All interaction methods remain unchanged...
+    clearCurrentDataPoints = () => {
+      this.xScaleState.currentDataPoint = null;
+      this.yScaleState.currentDataPoint = null;
+    }
+  
+    updateCurrentDataPoints = (innerPoint) => {
+      if (this.scaleTypes?.y === 'linear') {
+        this.yScaleState.currentDataPoint = this.yScale?.scale.invert(innerPoint.y);
+      }
+      if (this.scaleTypes?.x === 'linear') {
+        this.xScaleState.currentDataPoint = this.xScale?.scale.invert(innerPoint.x);
+      }
+    }
+  
+    resetZoom = (axes = { x: true, y: true }) => {
+      if (axes.x && this.scaleTypes?.x === 'linear') {
+        this.xScaleState.resetZoom();
+      }
+      if (axes.y && this.scaleTypes?.y === 'linear') {
+        this.yScaleState.resetZoom();
+      }
+    }
+  
+    // NEW: Accumulation-only methods (replace applyZoom, applyPanDomain)
+    accumulateZoom = (innerPoint, scaleFactor, doX, doY) => {
+      // console.log('accumulateZoom', scaleFactor)
+      if (doX && this.scaleTypes?.x === 'linear') {
+        const dataPoint = this.xScale.scale.invert(innerPoint.x);
+        this.xScaleState.accumulateZoom(dataPoint, scaleFactor);
+      }
+      if (doY && this.scaleTypes?.y === 'linear') {
+        const dataPoint = this.yScale.scale.invert(innerPoint.y);
+        this.yScaleState.accumulateZoom(dataPoint, scaleFactor);
+      }
+    }
+  
+  
+    applyZoom = (innerPoint, scaleFactor, doX, doY) => {
+      if (doX && this.scaleTypes?.x === 'linear') {
+        const dataPoint = this.xScale.scale.invert(innerPoint.x);
+        this.xScaleState.accumulateZoom(dataPoint, scaleFactor);
+        this.xScaleState.applyZoomDomain(
+          this.xScale.scale.invert(innerPoint.x), 
+          scaleFactor, 
+          'x', 
+          this.layout.innerWidth
+        );
+      }
+      if (doY && this.scaleTypes?.y === 'linear') {
+        this.yScaleState.applyZoomDomain(
+          this.yScale.scale.invert(innerPoint.y), 
+          scaleFactor, 
+          'y', 
+          this.layout.innerHeight
+        );
+      }
+    }
+    
+    startPan = (initialScreenPos, activePanX, activePanY) => {
+      // Store the active flags for use during updates
+      this.activePanX = activePanX;
+      this.activePanY = activePanY;
+      
+      // Only create contexts for scales that can pan
+      if (activePanX && this.scaleTypes?.x === 'linear') {
+        const panContext = {
+          initialScreenPos,
+          initialDomain: [...this.xScaleState.domain.current],
+          screenToDataRatio: (this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0]) / this.layout.innerWidth,
+          domainWidth: this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0],
+          screenDimension: this.layout.innerWidth
+        };
+        this.xScaleState.setPanContext(panContext);
+      }
+      
+      if (activePanY && this.scaleTypes?.y === 'linear') {
+        const panContext = {
+          initialScreenPos,
+          initialDomain: [...this.yScaleState.domain.current],
+          screenToDataRatio: (this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0]) / this.layout.innerHeight,
+          domainWidth: this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0],
+          screenDimension: this.layout.innerHeight
+        };
+        this.yScaleState.setPanContext(panContext);
+      }
+    }
+  
+    // endPan and updatePanPosition remain the same
+    endPan = () => {
+      this.activePanX = false;
+      this.activePanY = false;
+  
+      if (this.scaleTypes?.x === 'linear') {
+        this.xScaleState.clearPanContext();
+      }
+      if (this.scaleTypes?.y === 'linear') {
+        this.yScaleState.clearPanContext();
+      }
+    }
+  
+    updatePanPosition = (screenX, screenY) => {
+      if (this.activePanX && this.scaleTypes?.x === 'linear') {
+        this.xScaleState.updatePanPosition(screenX, 0); // Y coordinate irrelevant for X scale
+      }
+      if (this.activePanY && this.scaleTypes?.y === 'linear') {
+        this.yScaleState.updatePanPosition(0, screenY); // X coordinate irrelevant for Y scale
+      }
+    }
+  
+    xCategoryPositions = $derived.by(() => {
+      if (this.scaleTypes?.x !== 'band' || !this.xScale?.scale || !this.isReady) {  // ✅ Fixed
+        return null;
+      }
+      
+      const domain = this.xScaleState.effectiveDomain;
+      if (!domain || domain.length === 0) return null;
+      
+      const positions = domain.map(category => this.xScale.scale(category));
+      
+      console.log(`📍 Pre-computed ${domain.length} x-category positions for "${this.xLabel}":`, {
+        domain: domain.slice(0, 5),
+        positions: positions.slice(0, 5).map(p => Math.round(p)),
+        bandwidth: this.xScale.scale.bandwidth(), 
+        chartWidth: this.innerWidth  // ✅ Direct property
+      });
+      
+      return new Float32Array(positions);
+    });
+      
+    yCategoryPositions = $derived.by(() => {
+      // console.log('🔍 yCategoryPositions computation triggered:', {
+      //   scaleType: this.scaleTypes?.y,
+      //   yScale: !!this.yScale?.scale,
+      //   layoutReady: this.layout?.isReady,  // ← Check this property path
+      //   innerHeight: this.layout?.innerHeight,
+      //   yScaleState: !!this.yScaleState,
+      //   effectiveDomain: this.yScaleState?.effectiveDomain,
+      //   domainLength: this.yScaleState?.effectiveDomain?.length || 0
+      // });
+  
+      // Your existing conditions
+      const scaleTypeCheck = this.scaleTypes?.y === 'band';
+      const scaleAvailable = !!this.yScale?.scale;
+      const layoutReady = !!this.layout?.isReady;  // ← This might be the issue
+      
+      // console.log('🔍 yCategoryPositions conditions:', {
+      //   scaleTypeCheck,
+      //   scaleAvailable,
+      //   layoutReady,  // ← This is probably false
+      //   allConditionsMet: scaleTypeCheck && scaleAvailable && layoutReady
+      // });
+  
+      if (!scaleTypeCheck || !scaleAvailable || !layoutReady) {
+        console.log('❌ yCategoryPositions skipped - conditions not met');
+        return null;
+      }
+      
+      const domain = this.yScaleState.effectiveDomain;
+      if (!domain || domain.length === 0) {
+        console.log('❌ yCategoryPositions skipped - empty domain');
+        return null;
+      }
+      
+      const positions = domain.map(category => this.yScale.scale(category));
+      
+      // console.log(`📍 Pre-computed ${domain.length} y-category positions:`, {
+      //   domain: Array.from(domain),
+      //   positions: positions.map(p => Math.round(p)),
+      //   bandwidth: this.yScale.scale.bandwidth(),
+      //   chartHeight: this.layout?.innerHeight
+      // });
+      
+      return new Float32Array(positions);
+    });
+  
+    categoryPositionsReady = $derived.by(() => {
+      const xReady = this.scaleTypes?.x !== 'band' || this.xCategoryPositions !== null;
+      const yReady = this.scaleTypes?.y !== 'band' || this.yCategoryPositions !== null;
+      return xReady && yReady;
+    }); 
+  
+    // Pre-computed bandwidth for hot path access
+    xBandwidth = $derived.by(() => {
+      if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) {
+        return 0;
+      }
+      return this.baseXScale.bandwidth();
+    });
+  
+    yBandwidth = $derived.by(() => {
+      if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) {
+        return 0;
+      }
+      return this.baseYScale.bandwidth();
+    });
+  
+  
+    getContextData() {
+      const coordinator = this;
+      
+      return {
+        get xScale() { return coordinator.xScale?.scale; },
+        get yScale() { return coordinator.yScale?.scale; },
+        get xTargetScale() { return coordinator.xTargetScale?.scale; },
+        get yTargetScale() { return coordinator.yTargetScale?.scale; },
+        
+        get xLabel() { return coordinator.xLabel; },
+        get yLabel() { return coordinator.yLabel; },
+        
+        get currentXDataPoint() { return coordinator.currentXDataPoint; },
+        get currentYDataPoint() { return coordinator.currentYDataPoint; },
+        get currentXScreenPoint() { return coordinator.currentXScreenPoint; },
+        get currentYScreenPoint() { return coordinator.currentYScreenPoint; },
+        
+        get xScaleState() { return coordinator.xScaleState; },
+        get yScaleState() { return coordinator.yScaleState; },
+        
+        get scaleTypes() { return coordinator.scaleTypes; },
+        get scalesReady() { return coordinator.scalesReady; },
+        get active() { return coordinator.active; },
+        
+        get scaleConfigurations() { return coordinator.scaleConfigurations; },
+        
+        get xCategoryPositions() { return coordinator.xCategoryPositions; },
+        // get yCategoryPositions() { return coordinator.yCategoryPositions; },
+        get yCategoryPositions() { return coordinator.yCategoryPositions; },
+        get categoryPositionsReady() { return coordinator.categoryPositionsReady; },
+        get xBandwidth() { return coordinator.xBandwidth; },
+        get yBandwidth() { return coordinator.yBandwidth; },
+  
+        registerScaleType: coordinator.registerScaleType,
+        unregisterScaleType: coordinator.unregisterScaleType,
+        getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary
+      };
+    }
+  }
+</src/lib/scales/ChartScales.svelte.js>
+
+<src/lib/scales/ScaleRegistry.svelte.js>
+  // src/lib/scales/ScaleRegistry.svelte.js
+  import { setContext, getContext } from 'svelte';
+  import { LinearScaleState } from "./LinearScaleState.svelte.js";
+  import { BandScaleState } from "./BandScaleState.svelte.js";
+  import { scaleOrdinal } from 'd3-scale';
+  
+  class ScaleRegistry {
+    // #scaleUsage = $state(new Map());
+  
+    constructor() {
+      this.registryId = Math.random().toString(36).slice(2, 8);
+      console.log(`🏗️ NEW ScaleRegistry created: ${this.registryId}`);
+  
+      this.scales = {
+        linear: new Map(),
+        band: new Map(),
+        ordinal: new Map(),
+      }
+  
+      this.scaleUsage = $state(new Map());
+    }
+  
+    getOrCreateScale(name, type='linear', config = {}, chartId = null, gpuCoordinator = null) {
+      // Create unique key that includes configuration
+      const configKey = Object.keys(config).length > 0 ? `-${JSON.stringify(config)}` : '';
+      const key = `${name}-${type}${configKey}`;
+      
+      if (!this.scales[type].has(key)) {
+        console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`, {
+          config: Object.keys(config).length > 0 ? config : 'default'
+        });
+        
+        if (type === 'linear') {
+          this.scales[type].set(key, new LinearScaleState(name, undefined, type, undefined, config, gpuCoordinator));
+        } else if (type === 'band') {
+          this.scales[type].set(key, new BandScaleState(name, [], config));
+        } else if (type === 'ordinal') {
+          // TODO: fix color scale support, simple default for penguins dataset:
+          this.scales[type].set(key, scaleOrdinal()
+            .range(['#EFB605', '#FFF84A', '#FF0266'])
+            .domain(['Adelie', 'Gentoo', 'Chinstrap']));
+        }
+      } else {
+        console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
+      }
+      const scale = this.scales[type].get(key);
+  
+      if (chartId && scale) {
+        if (!this.scaleUsage.has(scale)) {
+          this.scaleUsage.set(scale, new Set());
+        }
+        this.scaleUsage.get(scale).add(chartId);
+        console.log('scale usage from registration', this.scaleUsage)
+      }
+  
+      return scale;
+      // return this.scales[type].get(key);
+    }
+  
+    removeChartUsage(chartId) {
+      for (const [scale, chartIds] of this.scaleUsage) {
+        chartIds.delete(chartId);
+        if (chartIds.size === 0) {
+          this.scaleUsage.delete(scale);
+        }
+      }
+    }
+  }
+  
+  
+  
+  // Create and set the Scale Registry context
+  export function setScaleRegistry() {
+    const state = new ScaleRegistry();
+    return setContext('scale-registry', state);
+  }
+  
+  // Retrieve a specific scale with configuration support
+  export function getScaleState(name, type='linear', config = {}, gpuCoordinator = null, chartId = null) {
+    const scaleRegistry = getContext('scale-registry');
+    
+    if (!scaleRegistry) {
+      console.error('Scale Registry context missing. Make sure to call setScaleRegistry() in a parent component.');
+      return null;
+    }
+  
+    const scaleInstance = scaleRegistry.getOrCreateScale(name, type, config, chartId, gpuCoordinator);
+    
+    return scaleInstance;
+  }
+</src/lib/scales/ScaleRegistry.svelte.js>
+
+<src/lib/components/charts/ChartContainer.svelte>
+  <script>
+    import { setContext, onDestroy, untrack, onMount } from 'svelte';
+    import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
+    import { ChartScales } from '$lib/scales/ChartScales.svelte';
+    import { getGPUContext } from '$lib/gpu';
+  
+    let {
+      xLabel,
+      yLabel,
+      background,
+      foreground,
+      canvas,
+      canvasComponents
+    } = $props();
+  
+    // Create layout and scale coordinator
+    const layout = new ChartLayout({ 
+      margin: { top: 30, right: 50, bottom: 35, left: 75 }, 
+      height: 250 
+    });
+  
+    const gpuCoordinator = getGPUContext();
+  
+    // TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
+    let scales = $derived(new ChartScales({
+      xLabel,
+      yLabel,
+      layout,
+      gpuCoordinator
+    }));
+  
+  
+    $effect(() => {
+        console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
+      });
+  
+      $effect(() => {
+      const xState = scales.xScaleState;
+      const yState = scales.yScaleState;
+      
+      console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
+        xStateId: xState?.name,
+        yStateId: yState?.name,
+        xStateObject: xState,
+        yStateObject: yState,
+        // Check if it's the same object reference
+        xStateSame: window.lastXState === xState,
+        yStateSame: window.lastYState === yState
+      });
+      
+      // Store for comparison (dev only)
+      if (typeof window !== 'undefined') {
+        window.lastXState = xState;
+        window.lastYState = yState;
+      }
+    });
+  
+    // $inspect('is ready', layout.isReady)
+  
+    const chartContext = {
+      // Layout properties and methods
+      get width() { return layout.width; },
+      get height() { return layout.height; },
+      get innerWidth() { return layout.innerWidth; },
+      get innerHeight() { return layout.innerHeight; },
+      get margin() { return layout.margin; },
+      get chartId() { return layout.chartId; },
+      get clipPathId() { return layout.clipPathId; },
+      get clipPathUrl() { return layout.clipPathUrl; },
+      get isReady() { return layout.isReady; },
+      get innerTransform() { return layout.innerTransform; },
+      get dimensions() { return layout.dimensions; },
+      
+      // Layout methods
+      updateWidth: layout.updateWidth.bind(layout),
+      updateHeight: layout.updateHeight.bind(layout),
+      updateMargin: layout.updateMargin.bind(layout),
+      toInnerCoordinates: layout.toInnerCoordinates.bind(layout),
+      toScreenCoordinates: layout.toScreenCoordinates.bind(layout),
+      isWithinInnerBounds: layout.isWithinInnerBounds.bind(layout),
+      getActiveAxes: layout.getActiveAxes.bind(layout),
+      reset: layout.reset.bind(layout),
+      getDebugInfo: layout.getDebugInfo.bind(layout),
+  
+      // Scale coordinator properties - reactive to scales changes
+      get xScale() { return scales.xScale?.scale; },
+      get yScale() { return scales.yScale?.scale; },
+      get xTargetScale() { return scales.xTargetScale?.scale; },
+      get yTargetScale() { return scales.yTargetScale?.scale; },
+      
+      get xLabel() { return scales.xLabel; },
+      get yLabel() { return scales.yLabel; },
+      
+      get currentXDataPoint() { return scales.currentXDataPoint; },
+      get currentYDataPoint() { return scales.currentYDataPoint; },
+      get currentXScreenPoint() { return scales.currentXScreenPoint; },
+      get currentYScreenPoint() { return scales.currentYScreenPoint; },
+      
+      get xScaleState() { return scales.xScaleState; },
+      get yScaleState() { return scales.yScaleState; },
+      
+      get scaleTypes() { return scales.scaleTypes; },
+      get scalesReady() { return scales.scalesReady; },
+      get active() { return scales.active; },
+      get xCategoryPositions() { return scales.xCategoryPositions; },
+      get yCategoryPositions() { return scales.yCategoryPositions; },
+      get categoryPositionsReady() { return scales.categoryPositionsReady; },
+      get xBandwidth() { return scales.xBandwidth; },
+      get yBandwidth() { return scales.yBandwidth; },
+      
+      // Scale coordinator methods
+      registerScaleType: (dimension, type, priority, markId) => scales.registerScaleType(dimension, type, priority, markId),
+      unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
+      getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
+    };
+  
+    setContext('chart', chartContext);
+    
+    // Interaction state
+    let svg = $state();
+    let isPanning = $state(false);
+    let activePanX = $state(false);
+    let activePanY = $state(false);
+    let panningAnchorPoint = { x: 0, y: 0 };
+    
+    // Touch/pinch zoom state
+    let initialTouchDistance = $state(0);
+    let isZooming = $state(false);
+  
+    // $effect.pre(() => {
+    //   const timestamp = performance.now();
+    //   // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
+      
+    //   void scales.xScaleState?.domain?.current;
+    //   void scales.yScaleState?.domain?.current;
+  
+    //   untrack(() => {
+    //       if (layout.isReady) {
+    //         console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
+    //         gpuCoordinator.invalidateChart(layout.chartId);
+    //       }
+    //   });
+    // });
+    
+    // ZOOM HANDLERS
+    function handleWheel(event) {
+      // console.log(`🖱️ Wheel event at ${performance.now().toFixed(2)}ms`);
+  
+      event.preventDefault();
+      const point = { x: event.offsetX, y: event.offsetY };
+      const { x, y, innerPoint } = layout.getActiveAxes(point);
+      
+      const scaleFactor = event.deltaY < 0 
+        ? 1 + Math.abs(event.deltaY) * 0.0025 
+        : 1 - Math.abs(event.deltaY) * 0.0025;
+      
+      // scales.applyZoom(innerPoint, scaleFactor, x, y);
+      scales.accumulateZoom(innerPoint, scaleFactor, x, y);
+  
+      // console.log(`🎯 Scale update triggered at ${performance.now().toFixed(2)}ms`);
+  
+    }
+    
+    function handleDoubleClick(event) {
+      event.preventDefault();
+      const point = { x: event.offsetX, y: event.offsetY };
+      const { x, y } = layout.getActiveAxes(point);
+      scales.resetZoom({ x, y });
+    }
+    
+    // TOUCH HANDLERS
+    function getTouchDistance(touches) {
+      if (touches.length < 2) return 0;
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+    
+    function handleTouchStart(event) {
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        isZooming = true;
+        initialTouchDistance = getTouchDistance(event.touches);
+        
+        const point = { x: event.offsetX, y: event.offsetY };
+        const { x, y } = layout.getActiveAxes(point);
+        activePanX = x;
+        activePanY = y;
+      }
+    }
+    
+    function handleTouchMove(event) {
+      if (!isZooming || event.touches.length !== 2) return;
+      
+      const currentDistance = getTouchDistance(event.touches);
+      const scaleFactor = currentDistance / initialTouchDistance;
+      
+      if (Math.abs(scaleFactor - 1) > 0.01) {
+        const point = { x: event.offsetX, y: event.offsetY };
+        const { innerPoint } = layout.getActiveAxes(point);
+        
+        scales.applyZoom(innerPoint, scaleFactor, activePanX, activePanY);
+        initialTouchDistance = currentDistance;
+      }
+    }
+    
+    function handleTouchEnd() {
+      isZooming = false;
+      isPanning = false;
+      activePanX = false;
+      activePanY = false;
+    }
+  
+    let panContext;
+  
+    // PAN HANDLERS
+    function handlePointerDown(event) {
+      event.preventDefault();
+      
+      const point = { x: event.offsetX, y: event.offsetY };
+      const { x, y, innerPoint } = layout.getActiveAxes(point);
+      
+      // Only allow panning on linear scales
+      activePanX = x && scales.scaleTypes?.x === 'linear';
+      activePanY = y && scales.scaleTypes?.y === 'linear';
+    
+      // Only proceed if at least one axis can pan
+      if (!activePanX && !activePanY) {
+        return;
+      }
+      isPanning = true;
+  
+      scales.startPan({ x: event.offsetX, y: event.offsetY }, activePanX, activePanY);
+    
+      scales.clearCurrentDataPoints();
+      event.target.setPointerCapture?.(event.pointerId);
+    }
+  
+    function handlePointerMove(event) {
+      if (!isPanning) return;
+  
+      // console.log(`Pointer move at ${performance.now().toFixed(2)}ms`);
+      
+      // event.preventDefault();
+      
+      // NEW: Ultra-minimal event handler - just store latest position
+      scales.updatePanPosition(event.offsetX, event.offsetY);
+      
+      // console.log(`Pan position updated at ${performance.now().toFixed(2)}ms`);
+    }
+  
+    function handlePointerUp() {
+      isPanning = false;
+      activePanX = false;
+      activePanY = false;
+      
+      event.target.releasePointerCapture?.(event.pointerId);
+      // NEW: End pan session
+      scales.endPan();
+    }
+  
+    function handleInnerMouseEnter() {
+      scales.active = true;
+    }
+  
+    function handleInnerMouseLeave() {
+      scales.clearCurrentDataPoints();
+      scales.active = false;
+    }
+  
+    function handleInnerMouseMove(event) {
+      const innerPoint = layout.toInnerCoordinates({ x: event.offsetX, y: event.offsetY });
+      scales.updateCurrentDataPoints(innerPoint);
+    }
+  
+    let testRenderLoop;
+  </script>
+  
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div 
+    class="chart-container" 
+    bind:clientWidth={layout.width} 
+    bind:clientHeight={layout.height}
+  >  
+    {#if layout.isReady}
+      <svg 
+        class="svg-background" 
+        width={layout.width}
+        height={layout.height}
+      >
+        <g transform={layout.innerTransform}>
+          {@render background?.()}
+        </g>
+      </svg>
+  
+      <div class="canvas-layer">
+        {@render canvas?.()}
+      </div>
+      
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <svg
+        class="svg-foreground"
+        bind:this={svg}
+        width={layout.width}
+        height={layout.height}
+        onwheel={handleWheel}
+        onpointerdown={handlePointerDown}
+        onpointermove={handlePointerMove}
+        onpointerup={handlePointerUp}
+        onpointercancel={handlePointerUp}
+        ontouchstart={handleTouchStart}
+        ontouchmove={handleTouchMove}
+        ontouchend={handleTouchEnd}
+        ontouchcancel={handleTouchEnd}
+        ondblclick={handleDoubleClick}
+      >
+        <defs>
+          <clipPath id={layout.clipPathId}>
+            <rect x={0} y={0} width={layout.innerWidth} height={layout.innerHeight} />
+          </clipPath>
+        </defs>
+        
+        <g
+          transform={layout.innerTransform}
+          clip-path={layout.clipPathUrl}
+          class="crosshair"
+          onmousemove={handleInnerMouseMove}
+          onmouseenter={handleInnerMouseEnter}
+          onmouseleave={handleInnerMouseLeave}
+        >
+          {@render foreground?.()}
+          <rect
+            x="0"
+            y="0"
+            width={layout.innerWidth}
+            height={layout.innerHeight}
+            fill="transparent"
+          />
+        </g>
+      </svg>
+    {/if}
+  </div>
+  
+  <style>
+    .chart-container {
+      position: relative;
+      flex: 1;
+      height: 100%;
+      /* contain: layout style paint; */
+      contain: strict;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+  
+    .svg-background, .canvas-layer, .svg-foreground {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+  
+    .svg-background { z-index: 1; }
+    .canvas-layer { z-index: 2; }
+    .svg-foreground { z-index: 3; }
+  
+    .crosshair {
+      cursor: crosshair;
+    }
+  </style>
+</src/lib/components/charts/ChartContainer.svelte>
+
+<src/lib/components/rendering/WebGPUCanvas.svelte>
+  <script>
+    import { onMount, onDestroy, setContext, getContext } from "svelte";
+    import { getGPUContext } from '$lib/gpu';
+  
+    let {
+      canvasComponents,
+      // msaaSampleCount = 4 
+    } = $props();
+  
+    const c = getContext('chart');
+    let width = $derived(c.innerWidth);
+    let height = $derived(c.innerHeight);
+    let margin = $derived(c.margin);
+  
+    let canvas;
+    let context;
+    let gpuCoordinator;
+    let chartControl;
+    let contextConfigured = $state(false);
+    let initializationError = $state(null);
+  
+    const chartId = c.chartId;
+  
+    // Enhanced initialization with comprehensive error handling
+    async function initWebGPU() {
+      try {      
+        // Get shared GPU coordinator
+        gpuCoordinator = getGPUContext();
+        
+        if (!gpuCoordinator) {
+          throw new Error('GPUCoordinator not found. Ensure setCoordinators() was called in a parent component.');
+        }
+  
+        // Wait for coordinator initialization with timeout
+        let attempts = 0;
+        const maxAttempts = 100; // 5 seconds at 50ms intervals
+        
+        while (!gpuCoordinator.isInitialized && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          attempts++;
+        }
+  
+        if (!gpuCoordinator.isInitialized) {
+          throw new Error(`GPUCoordinator failed to initialize within ${maxAttempts * 50}ms timeout`);
+        }
+  
+        // Configure context with proper error handling
+        await configureContext();
+        
+        // Register with coordinator after context is ready
+        registerWithCoordinator();
+        
+        console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
+      } catch (error) {
+        console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
+        initializationError = error.message;
+        throw error;
+      }
+    }
+  
+    // Separate context configuration with proper error handling
+    async function configureContext() {
+      if (!canvas) {
+        throw new Error('Canvas element not available for context configuration');
+      }
+  
+      try {
+        // Get WebGPU context
+        context = canvas.getContext('webgpu');
+        if (!context) {
+          throw new Error('Failed to get WebGPU context from canvas. WebGPU may not be supported.');
+        }
+  
+        const device = gpuCoordinator.device;
+        const presentationFormat = gpuCoordinator.presentationFormat;
+  
+        if (!device) {
+          throw new Error('No WebGPU device available from coordinator');
+        }
+  
+        // Configure context
+        context.configure({
+          device,
+          format: presentationFormat,
+          alphaMode: 'premultiplied',
+          desynchronized: true,
+        });
+        
+        contextConfigured = true;
+        
+        // Setup initial canvas size
+        setupCanvas();
+      } catch (error) {
+        console.error(`❌ Context configuration failed for chart ${chartId}:`, error);
+        contextConfigured = false;
+        throw error;
+      }
+    }
+  
+    // Clean registration with coordinator
+    function registerWithCoordinator() {
+      if (!contextConfigured) {
+        console.error(`⚠️ Attempting to register chart ${chartId} before context is configured`);
+        return;
+      }
+  
+      console.log(`📋 Registering chart ${chartId} with coordinator`);
+      
+      try {
+        chartControl = gpuCoordinator.registerChart(chartId, canvas, {
+          zIndex: 0, // zIndex might still be useful for chart-level ordering
+        });
+  
+        // Notify coordinator that context is ready
+        chartControl.setContextReady();
+        console.log(`✅ Chart ${chartId} registered and ready`);
+      } catch (error) {
+        console.error(`❌ Chart registration failed for ${chartId}:`, error);
+        throw error;
+      }
+    }
+  
+    // Robust canvas setup with dimension change detection
+    function setupCanvas() {
+      if (!canvas || !contextConfigured) {
+        console.debug(`⚠️ setupCanvas called before canvas/context ready for ${chartId}`);
+        return;
+      }
+      
+      try {
+        // Calculate new dimensions
+        const devicePixelRatio = window.devicePixelRatio || 1;
+  
+        const canvasWidth = width * devicePixelRatio;
+        const canvasHeight = height * devicePixelRatio;
+        
+        // Only update if dimensions actually changed to avoid unnecessary work
+        const dimensionsChanged = 
+          canvas.width !== canvasWidth || 
+          canvas.height !== canvasHeight;
+        
+        const positionChanged = 
+          canvas.style.transform !== `translate(${margin.left}px, ${margin.top}px)`;
+  
+        // Only proceed if there's an actual change.
+        if (!dimensionsChanged && !positionChanged) return;
+  
+        if (dimensionsChanged) {
+          canvas.width = canvasWidth;
+          canvas.height = canvasHeight;
+          canvas.style.width = width + 'px';
+          canvas.style.height = height + 'px';        
+        }
+  
+        if (positionChanged) {
+          canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
+        }
+  
+        if (chartControl) {
+          chartControl.invalidate();
+        }
+        
+      } catch (error) {
+        console.error(`❌ Canvas setup failed for ${chartId}:`, error);
+        initializationError = `Canvas setup failed: ${error.message}`;
+      }
+    }
+  
+    // Enhanced context with better state management and error handling
+    setContext('webgpu-canvas', {
+      getCanvasDimensions() {
+        const currentDPR = window.devicePixelRatio || 1;
+        return { 
+          width: width * devicePixelRatio, 
+          height: height * devicePixelRatio,
+          cssWidth: width,
+          cssHeight: height,
+          devicePixelRatio
+        };
+      },
+  
+      getMsaaSampleCount() {
+        return gpuCoordinator?.msaaSampleCount || 4;
+      },
+  
+      getDevice() {
+        return gpuCoordinator?.device;
+      },
+  
+      getPresentationFormat() {
+        return gpuCoordinator?.presentationFormat;
+      },
+  
+      isInitialized() {
+        return contextConfigured && gpuCoordinator?.isInitialized;
+      },
+      
+      invalidate() {
+        chartControl?.invalidate();
+      },
+  
+      // Enhanced debugging support
+      getDebugInfo() {
+        return {
+          chartId,
+          contextConfigured,
+          initializationError,
+          layerCount: layers.length,
+          layers: layers.map(l => ({
+            id: l.id,
+            markType: l.markType,
+            zIndex: l.zIndex,
+            visible: l.visible
+          })),
+          canvasDimensions: {
+            width: canvas?.width,
+            height: canvas?.height,
+            cssWidth: canvas?.style.width,
+            cssHeight: canvas?.style.height
+          }
+        };
+      }
+    });
+  
+    onMount(async () => {
+      try {
+        await initWebGPU();
+      } catch (error) {
+        console.error(`❌ WebGPUCanvas ${chartId} mount failed:`, error);
+        // Error is already stored in initializationError state
+      }
+    });
+  
+    onDestroy(() => {
+      console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
+      
+      try {
+        // Clean up chart registration
+        if (chartControl) {
+          chartControl.remove();
+          chartControl = null;
+        }
+        
+        // Context cleanup happens automatically when canvas is removed
+        contextConfigured = false;
+        
+        // Clear references
+        gpuCoordinator = null;
+        context = null;
+        
+        console.log(`✅ WebGPUCanvas ${chartId} destroyed successfully`);
+      } catch (error) {
+        console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
+      }
+    });
+  
+    $effect(() => {
+      // Dependencies that trigger a canvas resize/reposition.
+      void width;
+      void height;
+      void margin;
+  
+      // Only run if the canvas and context are fully ready.
+      if (canvas && contextConfigured) {
+          console.log(`[${chartId}] Canvas dimension/margin effect triggered.`);
+          // The setupCanvas function already contains the logic to check
+          // if dimensions *actually* changed before doing expensive work.
+          setupCanvas();
+          //Tell the coordinator to update this chart's frame uniforms
+          if (gpuCoordinator) {
+            gpuCoordinator.updateChartFrameUniforms(chartId);
+            gpuCoordinator.invalidateChart(chartId);
+          }
+      }
+    });
+  </script>
+  
+  {#if initializationError}
+    <div class="webgpu-error">
+      <p>WebGPU initialization failed for chart {chartId}:</p>
+      <p class="error-message">{initializationError}</p>
+      <p class="error-help">
+        Please ensure your browser supports WebGPU and try refreshing the page.
+      </p>
+    </div>
+  {:else}
+    <canvas bind:this={canvas}></canvas>
+    {#if contextConfigured}
+      {@render canvasComponents?.()}
+    {:else}
+      <div class="webgpu-loading">
+        <p>Initializing WebGPU context for chart {chartId}...</p>
+      </div>
+    {/if}
+  {/if}
+  
+  <style>
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      contain: strict;
+      /* will-change: auto; */
+      /* will-change: contents; */
+      backface-visibility: hidden;
+      isolation: isolate;
+      image-rendering: crisp-edges;
+    }
+  
+    .webgpu-error,
+    .webgpu-loading {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background-color: rgba(255, 255, 255, 0.9);
+      border: 1px dashed #ccc;
+      font-size: 12px;
+      color: #666;
+      z-index: 1000;
+    }
+  
+    .webgpu-error {
+      background-color: rgba(255, 240, 240, 0.9);
+      border-color: #ffcccb;
+      color: #d32f2f;
+    }
+  
+    .error-message {
+      font-family: monospace;
+      background-color: rgba(255, 255, 255, 0.8);
+      padding: 4px 8px;
+      border-radius: 4px;
+      margin: 8px 0;
+      font-size: 11px;
+    }
+  
+    .error-help {
+      font-style: italic;
+      margin-top: 8px;
+    }
+  
+    .webgpu-loading {
+      background-color: rgba(240, 248, 255, 0.9);
+      border-color: #bbdefb;
+      color: #1976d2;
+    }
+  </style>
+</src/lib/components/rendering/WebGPUCanvas.svelte>
+
+<src/lib/components/rendering/BaseGPURenderer.svelte.js>
+  // BaseGPURenderer.svelte.js - Simplified for Pipeline Factory Pattern
+  // Scale management completely removed - coordinator handles all scale concerns
+  
+  export class BaseGPURenderer {
+    // Core properties
+    #markType;
+    #webGPUContext;
+    #gpuCoordinator;
+    #chartContext;
+  
+    // Resource tracking
+    #ownedResources = {
+      buffers: [],
+      layerControl: null
+    };
+  
+    // State management
+    #resourcesCreated = $state(false);
+    #initializationError = $state(null);
+    #instanceCount = $state(0);
+  
+    #device = null;
+    #pipeline = $state(null); // Provided by coordinator factory
+    
+    #perDataBindGroup = $state(null);   // @group(1): mark data buffers
+    
+    #perDataLayout = null;
+    #dataBindingConfig = null;
+  
+    #zIndex;
+    #xScaleType;
+    #yScaleType;
+  
+    constructor(markType, webGPUContext, gpuCoordinator, chartContext, options = {}) {
+      this.#markType = markType;
+      this.#webGPUContext = webGPUContext;
+      this.#gpuCoordinator = gpuCoordinator;
+      this.#chartContext = chartContext;
+      this.#zIndex = options.zIndex || 0;
+      
+      // Store scale types for coordinator pipeline factory
+      this.#xScaleType = options.xScaleType || 'linear';
+      this.#yScaleType = options.yScaleType || 'linear';
+    }
+  
+    // ===== PUBLIC GETTERS =====
+  
+    get resourcesCreated() { return this.#resourcesCreated; }
+    get initializationError() { return this.#initializationError; }
+    get instanceCount() { return this.#instanceCount; }
+    get pipeline() { return this.#pipeline; }
+    get markType() { return this.#markType; }  
+    get perDataBindGroup() { return this.#perDataBindGroup; }
+  
+    // ===== INITIALIZATION =====
+  
+    async initialize(config) {
+      try {
+        const { dataBindingConfig, markShaderCode, vertexBufferLayout } = config;
+        
+        if (!dataBindingConfig) {
+          throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
+        }
+  
+        console.log(`Initializing ${this.#markType} renderer with pipeline factory pattern`);
+        
+        this.#device = this.#webGPUContext.getDevice();
+        if (!this.#device) {
+          throw new Error('No WebGPU device available from context');
+        }
+  
+        this.#dataBindingConfig = dataBindingConfig;
+  
+        // Get pipeline from coordinator factory (coordinator handles shader generation)
+        await this.#getPipelineFromCoordinator(markShaderCode, vertexBufferLayout);
+        
+        this.#resourcesCreated = true;
+        console.log(`${this.#markType} renderer initialized - coordinator provides pipeline and scale management`);
+        
+      } catch (error) {
+        console.error(`${this.#markType} renderer initialization failed:`, error);
+        this.#initializationError = error.message;
+        throw error;
+      }
+    }
+  
+    // ===== PIPELINE FACTORY INTEGRATION =====
+  
+    async #getPipelineFromCoordinator(markShaderCode, vertexBufferLayout) {
+      const scaleTypes = {
+        x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
+        y: this.#chartContext.scaleTypes?.y || this.#yScaleType
+      };
+  
+      // Use coordinator's pipeline factory
+      // Get both pipeline and layouts from coordinator
+      const result = await this.#gpuCoordinator.createPipelineForMarkType(
+        this.#markType,
+        scaleTypes,
+        markShaderCode,
+        vertexBufferLayout,
+        this.#dataBindingConfig // Pass this so coordinator can create stable layouts
+      );
+  
+      console.log('Pipeline factory result:', {
+        hasPipeline: !!result.pipeline,
+        hasFrameLayout: !!result.frameLayout,
+        hasDataLayout: !!result.dataLayout
+      });
+  
+      this.#pipeline = result.pipeline;
+      this.#perDataLayout = result.dataLayout;     // From coordinator
+  
+      if (!this.#pipeline) {
+        throw new Error(`Coordinator failed to provide pipeline for ${this.#markType}`);
+      }
+  
+      console.log(`Pipeline received from coordinator for ${this.#markType}`);
+    }
+  
+    createDataBindGroup(dataBindings) {
+      if (!this.#device || !this.#perDataLayout) {
+        console.warn(`Cannot create per-data bind group for ${this.#markType} - missing device or layout`);
+        return;
+      }
+  
+      if (!Array.isArray(dataBindings) || dataBindings.length === 0) {
+        console.warn(`Cannot create per-data bind group for ${this.#markType} - invalid dataBindings`);
+        return;
+      }
+  
+      try {
+        // Validate that all required bindings are provided
+        const expectedBindings = this.#dataBindingConfig.map(config => config.binding);
+        const providedBindings = dataBindings.map(binding => binding.binding);
+        
+        for (const expectedBinding of expectedBindings) {
+          if (!providedBindings.includes(expectedBinding)) {
+            throw new Error(`Missing data binding ${expectedBinding} for ${this.#markType}`);
+          }
+        }
+  
+        this.#perDataBindGroup = this.#device.createBindGroup({
+          label: `${this.#markType}-per-data-bind-group`,
+          layout: this.#perDataLayout,
+          entries: dataBindings
+        });
+  
+        console.debug(`Per-data bind group (@group(1)) created for ${this.#markType} with ${dataBindings.length} bindings`);
+        
+      } catch (error) {
+        console.error(`Failed to create per-data bind group for ${this.#markType}:`, error);
+        this.#initializationError = error.message;
+        throw error;
+      }
+    }
+  
+    // ===== BUFFER MANAGEMENT =====
+  
+    createOrUpdateBuffer(existingBuffer, data, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
+      if (!this.#device) {
+        throw new Error('No WebGPU device available');
+      }
+      
+      const requiredSize = data.byteLength;
+      
+      // Smart buffer resizing to prevent thrashing
+      if (!existingBuffer || existingBuffer.size < requiredSize) {
+        if (existingBuffer) {
+          const index = this.#ownedResources.buffers.indexOf(existingBuffer);
+          if (index !== -1) {
+            this.#ownedResources.buffers.splice(index, 1);
+          }
+          existingBuffer.destroy();
+        }
+  
+        // Smart sizing with headroom
+        const MEMORY_BLOCK_SIZE = 256;
+        const desiredSize = Math.ceil(requiredSize * 1.5);
+        const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
+        let bufferSize = Math.max(requiredSize, roundedUpSize);
+        bufferSize = (bufferSize + 3) & ~3; // 4-byte alignment
+  
+        const newBuffer = this.#device.createBuffer({
+          size: bufferSize,
+          usage,
+          label: `${this.#markType}-data-buffer-${this.#ownedResources.buffers.length}`
+        });
+        
+        this.#ownedResources.buffers.push(newBuffer);
+        console.debug(`Created ${this.#markType} buffer of size ${bufferSize} bytes (required: ${requiredSize})`);
+        return newBuffer;
+      }
+      
+      return existingBuffer;
+    }
+  
+    updateInstanceCount(count) {
+      this.#instanceCount = count;
+      this.invalidateLayer();
+    }
+  
+    registerLayer(drawFunction) {
+      try {
+        const chartId = this.#chartContext.chartId;
+  
+        const layerConfig = {
+          draw: drawFunction,
+          markType: this.#markType,
+          renderer: this, 
+          componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
+        };
+  
+        this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
+  
+        console.log(`${this.#markType} layer registered with coordinator for chart ${chartId}`);
+        return this.#ownedResources.layerControl;
+  
+      } catch (error) {
+        console.error(`${this.#markType} layer registration failed:`, error);
+        this.#initializationError = error.message;
+        throw error;
+      }
+    }
+  
+    invalidateLayer() {
+      if (this.#gpuCoordinator && this.#chartContext?.chartId) {
+        this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
+      }
+    }
+  
+    // ===== DATA PROCESSING HELPERS =====
+  
+    processDataForAxis(data, axis) {
+      const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
+      const scaleState = axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+  
+      switch (scaleType) {
+        case 'linear':
+        case 'identity':
+          return new Float32Array(data.map(d => d ?? 0));
+          
+        case 'band':
+        case 'point':
+          return scaleState.processDataForGPU(data, this.#markType);
+          
+        case 'log':
+          return new Float32Array(data.map(d => Math.log(Math.max(d || 1, 1))));
+          
+        case 'time':
+          return new Float32Array(data.map(d => d instanceof Date ? d.getTime() : d || 0));
+          
+        default:
+          console.warn(`Unknown scale type: ${scaleType}, treating as linear`);
+          return new Float32Array(data.map(d => d ?? 0));
+      }
+    }
+  
+    // ===== UTILITY METHODS =====
+  
+    parseColor(color) {
+      try {
+        if (typeof color === 'string' && color.startsWith('#')) {
+          const r = parseInt(color.slice(1, 3), 16) / 255;
+          const g = parseInt(color.slice(3, 5), 16) / 255;
+          const b = parseInt(color.slice(5, 7), 16) / 255;
+          return [r, g, b, 1.0];
+        }
+        console.warn(`Unrecognized color format: ${color}, using default blue`);
+        return [0.0, 0.0, 1.0, 1.0];
+      } catch (error) {
+        console.error(`Color parsing failed for ${this.#markType}:`, error);
+        return [0.0, 0.0, 1.0, 1.0];
+      }
+    }
+  
+    // ===== CLEANUP =====
+  
+    destroy() {
+      console.log(`Cleaning up ${this.#markType} renderer resources`);
+      
+      try {
+        // Clean up owned buffers
+        this.#ownedResources.buffers.forEach(buffer => {
+          if (buffer && !buffer.destroyed) {
+            buffer.destroy();
+          }
+        });
+        this.#ownedResources.buffers = [];
+  
+        // Clean up layer registration
+        if (this.#ownedResources.layerControl) {
+          this.#ownedResources.layerControl.remove();
+        }
+  
+        console.log(`${this.#markType} renderer cleanup complete`);
+        
+      } catch (error) {
+        console.error(`Error during ${this.#markType} renderer cleanup:`, error);
+      }
+    }
+  }
+</src/lib/components/rendering/BaseGPURenderer.svelte.js>
+
+<src/lib/components/rendering/Dots.svelte>
+  <script>
+    import { getContext, onMount, onDestroy, untrack } from 'svelte';
+    import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+    import { getGPUContext } from '$lib/gpu';
+  
+    let { 
+      xData,        // Float32Array - processed X positions
+      yData,        // Float32Array - processed Y positions  
+      colorData,    // Float32Array - RGBA colors (instanceCount * 4)
+      radiusData,   // Float32Array - radius values
+      alphaData,    // Float32Array - alpha values
+      dataVersion,  // number - for triggering updates
+      zIndex = 0,
+    } = $props();
+  
+    const chartContext = getContext('chart');
+    const webGPUContext = getContext('webgpu-canvas');
+    const gpuCoordinator = getGPUContext();
+  
+    // Renderer and buffer state
+    let renderer = $state(null);
+    let initializationError = $state(null);
+  
+    // GPU buffers
+    let xBuffer, yBuffer, radiusBuffer, alphaBuffer, colorBuffer, quadGeometryBuffer;
+  
+    const quadVertexCount = 6;
+    
+    // ✅ UPDATED: Shader now uses @group(1) for data bindings
+    const dotsShaderCode = `
+      struct VertexOutput {
+        @builtin(position) position: vec4<f32>,
+        @location(0) color: vec4<f32>,
+        @location(1) uv: vec2<f32>,
+        @location(2) radius: f32,
+        @location(3) alpha: f32,
+      };
+  
+      // ✅ UPDATED: Data storage buffers now in @group(1) with restarted binding indices
+      @group(1) @binding(0) var<storage, read> xValues: array<f32>;
+      @group(1) @binding(1) var<storage, read> yValues: array<f32>;
+      @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
+      @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
+      @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+      @group(1) @binding(5) var<storage, read> xScaleIndices: array<u32>;  // Add this
+      @group(1) @binding(6) var<storage, read> yScaleIndices: array<u32>;  // Add this
+      
+      @vertex
+      fn vertexMain(
+        @location(0) quadPosition: vec2<f32>,
+        @builtin(instance_index) instanceIdx: u32,
+      ) -> VertexOutput {
+        // Get values from separate buffers
+        let x = xValues[instanceIdx];
+        let y = yValues[instanceIdx];
+        let radius = radiusValues[instanceIdx];
+        let alpha = alphaValues[instanceIdx];
+        let color = colors[instanceIdx];
+  
+        let xScaleIndex = xScaleIndices[instanceIdx];  // Get scale index per instance
+        let yScaleIndex = yScaleIndices[instanceIdx];
+        let scaledX = scaleX(x, xScaleIndex);
+        let scaledY = scaleY(y, yScaleIndex);
+  
+        
+        // Use centralized scale functions
+        // let scaledX = scaleX(x);
+        // let scaledY = scaleY(y);
+        
+        let displayRadius = radius * frameUniforms.devicePixelRatio;
+        let radiusWithPadding = displayRadius * 1.2;
+        let worldPos = vec2<f32>(scaledX * frameUniforms.devicePixelRatio, scaledY * frameUniforms.devicePixelRatio) + quadPosition * radiusWithPadding;
+        let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+        
+        var output: VertexOutput;
+        output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+        output.color = color;
+        output.uv = quadPosition;
+        output.radius = displayRadius;
+        output.alpha = alpha;
+        return output;
+      }
+  
+      @fragment
+      fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+        let dist = length(input.uv);
+        let sdf = dist - 1.0;
+        let pixelSize = frameUniforms.devicePixelRatio / (input.radius * 2.0);
+        let alpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
+        let finalAlpha = input.color.a * alpha * input.alpha;
+        return vec4<f32>(input.color.rgb, finalAlpha);
+      }
+    `;
+  
+    // const shaderCode = BaseGPURenderer.generateShader(dotsShaderCode);
+  
+    // Dots-specific vertex buffer layout
+    const vertexBufferLayout = [{
+      arrayStride: 2 * 4, // 2 floats * 4 bytes
+      attributes: [{
+        shaderLocation: 0,
+        offset: 0,
+        format: 'float32x2',
+      }],
+    }];
+  
+    const dataBindingConfig = [
+      { binding: 0, type: 'read-only-storage' }, // xValues
+      { binding: 1, type: 'read-only-storage' }, // yValues  
+      { binding: 2, type: 'read-only-storage' }, // radiusValues
+      { binding: 3, type: 'read-only-storage' }, // alphaValues
+      { binding: 4, type: 'read-only-storage' }, // colors
+    ];
+  
+    // Buffer update effects
+    $effect.pre(() => {
+      if (xData && renderer?.resourcesCreated) {
+        xBuffer = renderer.createOrUpdateBuffer(xBuffer, xData);
+      }
+    });
+  
+    $effect.pre(() => {
+      if (yData && renderer?.resourcesCreated) {
+        yBuffer = renderer.createOrUpdateBuffer(yBuffer, yData);
+      }
+    });
+  
+    $effect.pre(() => {
+      if (colorData && renderer?.resourcesCreated) {
+        colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+      }
+    });
+  
+    $effect.pre(() => {
+      if (radiusData && renderer?.resourcesCreated) {
+        radiusBuffer = renderer.createOrUpdateBuffer(radiusBuffer, radiusData);
+      }
+    });
+  
+    $effect.pre(() => {
+      if (alphaData && renderer?.resourcesCreated) {
+        alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
+      }
+    });
+  
+    // ✅ UPDATED: Check for per-data bind group instead of legacy bindGroup
+    let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
+    let allBindGroupsReady = $derived(
+      !!renderer?.perFrameBindGroup && 
+      !!renderer?.perDataBindGroup 
+      // && !!renderer?.perScaleBindGroup
+    );
+  
+    $effect.pre(() => {
+      void renderer?.resourcesCreated;
+      void dataBindGroupReady;
+  
+      if (xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer && 
+          renderer?.resourcesCreated && !dataBindGroupReady) {
+        untrack(() => {
+          createDotsDataBindGroup();
+        });
+      }
+    });
+  
+    // Data writing effects
+    $effect.pre(() => {
+      void dataBindGroupReady;
+      if (xData && xBuffer && dataBindGroupReady) {
+        untrack(() => {
+          const device = webGPUContext.getDevice();
+          device?.queue.writeBuffer(xBuffer, 0, xData);
+        });
+      }
+    });
+  
+    $effect.pre(() => {
+      void dataBindGroupReady;
+      if (yData && yBuffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(yBuffer, 0, yData);
+      }
+    });
+  
+    $effect.pre(() => {
+      void dataBindGroupReady;
+      if (radiusData && radiusBuffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(radiusBuffer, 0, radiusData);
+      }
+    });
+  
+    $effect.pre(() => {
+      void dataBindGroupReady;
+      if (colorData && colorBuffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(colorBuffer, 0, colorData);
+      }
+    });
+  
+    $effect.pre(() => {
+      void dataBindGroupReady;
+      if (alphaData && alphaBuffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
+      }
+    });
+  
+    $effect.pre(() => {
+      void dataBindGroupReady;
+      if (xData && yData && colorData && radiusData && alphaData && 
+          xBuffer && yBuffer && radiusBuffer && alphaBuffer && colorBuffer &&
+          dataBindGroupReady) {
+        renderer.updateInstanceCount(xData.length);
+        gpuCoordinator.invalidateChart(chartContext.chartId);
+      }
+    });
+  
+    // // Resize change
+    // $effect.pre(() => {
+    //   if (!renderer?.resourcesCreated) return;
+      
+    //   // Track layout changes
+    //   void chartContext.innerWidth;
+    //   void chartContext.innerHeight;
+      
+    //   untrack(() => {
+    //     // Update scale uniforms only
+    //     // renderer.handleScaleOrRangeUpdate();
+    //     renderer.handleResolutionChange();      
+    //     gpuCoordinator.invalidateChart(chartContext.chartId);
+    //   });
+    // });
+  
+    // Create quad geometry for dot rendering
+    function createQuadGeometry() {
+      return new Float32Array([
+        -1, -1,  // bottom-left
+         1, -1,  // bottom-right
+        -1,  1,  // top-left
+         1, -1,  // bottom-right
+         1,  1,  // top-right
+        -1,  1,  // top-left
+      ]);
+    }
+  
+    // // Initialize dots-specific geometry
+    // async function initializeDotsGeometry() {
+    //   const device = webGPUContext.getDevice();
+    //   if (!device) {
+    //     throw new Error('No WebGPU device available');
+    //   }
+  
+    //   // Create quad geometry buffer
+    //   const quadVertices = createQuadGeometry();
+    //   quadGeometryBuffer = device.createBuffer({
+    //     size: quadVertices.byteLength,
+    //     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    //     label: 'dots-quad-geometry'
+    //   });
+    //   device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+    // }
+    // Replace the initializeDotsGeometry function in Dots.svelte
+    async function initializeDotsGeometry() {
+      try {
+        const device = webGPUContext.getDevice();
+        if (!device) {
+          throw new Error('No WebGPU device available for quad geometry');
+        }
+  
+        console.log('🔧 Creating quad geometry...');
+        
+        // Create quad geometry buffer
+        const quadVertices = createQuadGeometry();
+        console.log('📐 Quad vertices:', quadVertices);
+        
+        quadGeometryBuffer = device.createBuffer({
+          size: quadVertices.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          label: 'dots-quad-geometry'
+        });
+        
+        device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+        
+        console.log('✅ Quad geometry created successfully:', {
+          buffer: !!quadGeometryBuffer,
+          size: quadVertices.byteLength,
+          vertices: quadVertices.length
+        });
+        
+      } catch (error) {
+        console.error('❌ Failed to create quad geometry:', error);
+        throw error;
+      }
+    }
+  
+    // ✅ UPDATED: Create dots-specific data bind group using new architecture
+    function createDotsDataBindGroup() {
+      if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer || 
+          !xScaleIndexBuffer || !yScaleIndexBuffer) {
+        console.warn('Cannot create dots data bind group - missing data buffers');
+        return;
+      }
+  
+      const dataBindings = [
+        { binding: 0, resource: { buffer: xBuffer } },
+        { binding: 1, resource: { buffer: yBuffer } },
+        { binding: 2, resource: { buffer: radiusBuffer } },
+        { binding: 3, resource: { buffer: alphaBuffer } },
+        { binding: 4, resource: { buffer: colorBuffer } },
+      ];
+  
+      renderer.createDataBindGroup(dataBindings);
+    }
+  
+    // ✅ UPDATED: Dots-specific draw function for dual bind groups
+    function drawDots(passEncoder) {
+      try {
+        // if (!renderer?.pipeline || 
+        //     !renderer?.perDataBindGroup || 
+        //     renderer.instanceCount === 0) {
+        //   console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
+        //   return;
+        // }
+  
+        // if (!quadGeometryBuffer) {
+        //   console.error('❌ Skipping dots draw - no quad geometry buffer!');
+        //   console.log('❌ Early return - no quad geometry buffer');
+        //   return;
+        // }
+  
+        // passEncoder.setPipeline(renderer.pipeline);
+        // passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+        // passEncoder.draw(quadVertexCount, renderer.instanceCount);
+  
+        if (!quadGeometryBuffer || renderer.instanceCount === 0) {
+          console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
+          return; // Safety check
+        }
+  
+        passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+        passEncoder.draw(quadVertexCount, renderer.instanceCount);
+  
+      } catch (error) {
+        console.error('❌ Dots draw operation failed:', error);
+        throw error;
+      }
+    }
+  
+    // Wait for WebGPU context with better error handling
+    async function waitForWebGPU() {
+      console.log('⏳ waitForWebGPU - starting...');
+      let attempts = 0;
+      const maxAttempts = 100;
+      
+      while (!webGPUContext.isInitialized() && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        attempts++;
+      }
+      
+      if (!webGPUContext.isInitialized()) {
+        throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
+      }
+      
+      console.log('✅ WebGPU context ready, calling initializeDots...');
+      await initializeDots();
+    }
+  
+    // ✅ UPDATED: Initialize dots renderer with new dual bind group architecture
+    async function initializeDots() {
+      console.log('🔧 initializeDots - starting...');
+      try {
+        if (!gpuCoordinator) {
+          throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
+        }
+  
+        console.log('📊 Creating base renderer...');
+        // Create base renderer with scale type information
+        renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, chartContext, { 
+          zIndex,
+          xScaleType: chartContext.scaleTypes?.x || 'linear',
+          yScaleType: chartContext.scaleTypes?.y || 'linear'
+        });
+  
+        console.log('🔧 Initializing renderer...');
+  
+        // ✅ UPDATED: Initialize with dual bind group configuration
+        await renderer.initialize({
+          // shaderCode,               // Generated shader with @group annotations
+          markShaderCode: dotsShaderCode, 
+          vertexBufferLayout,       // Vertex layout for quad geometry
+          dataBindingConfig,        // ✅ NEW: Required for dual bind group architecture
+        });
+  
+        console.log('📐 Initializing dots geometry...');
+        // Initialize dots-specific geometry
+        await initializeDotsGeometry();
+        
+        console.log('📋 Registering layer...');
+        // Register layer with base renderer
+        renderer.registerLayer(drawDots);
+  
+        console.log('✅ Dots component initialized with dual bind group architecture');
+  
+      } catch (error) {
+        console.error('❌ Dots component initialization failed:', error);
+        initializationError = error.message;
+        throw error;
+      }
+    }
+  
+    onMount(async () => {
+      console.log('🚀 Dots onMount - starting initialization...');
+      try {
+        await waitForWebGPU();
+        console.log('✅ Dots initialization completed successfully');
+      } catch (error) {
+        console.error('❌ Dots component mount failed:', error);
+        initializationError = error.message;
+      }
+    });
+  
+    onDestroy(() => {
+      try {
+        // Clean up dots-specific resources
+        if (quadGeometryBuffer && !quadGeometryBuffer.destroyed) {
+          quadGeometryBuffer.destroy();
+        }
+  
+        // Base renderer handles all other cleanup
+        if (renderer) {
+          renderer.destroy();
+        }
+        
+      } catch (error) {
+        console.error('❌ Error during Dots component cleanup:', error);
+      }
+    });
+  </script>
+  
+  {#if initializationError}
+    <div class="dots-error">
+      <p>Dots component failed to initialize:</p>
+      <p class="error-message">{initializationError}</p>
+    </div>
+  {/if}
+  
+  <style>
+    .dots-error {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background-color: rgba(255, 240, 240, 0.9);
+      border: 1px solid #ffcccb;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: #d32f2f;
+      z-index: 1000;
+      max-width: 300px;
+    }
+  
+    .error-message {
+      font-family: monospace;
+      background-color: rgba(255, 255, 255, 0.8);
+      padding: 4px 6px;
+      border-radius: 2px;
+      margin-top: 4px;
+      font-size: 11px;
+    }
+  </style>
+</src/lib/components/rendering/Dots.svelte>
+
+<src/lib/components/marks/BaseMarkSetup.svelte.js>
+  // src/lib/components/marks/BaseMarkSetup.svelte.js
+  import { untrack } from 'svelte';
+  import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
+  import { Query, isNode, column as sqlColumn, isAggregateExpression, isNotNull, and } from '@uwdata/mosaic-sql';
+  import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities.js';
+  
+  /**
+   * A generic controller that handles the common lifecycle, state management,
+   * and data fetching orchestration for a mark component using reactive patterns.
+   * This class acts as the "ViewModel" or "Controller" for a mark.
+   */
+  export class BaseMarkSetup {
+    // --- Reactive State (for the View to consume) ---
+    client = $state(null);
+    categoricalDataFetched = $state(false);
+  
+    // --- Reactive Setup Progress State ---
+    #scaleStatesReady = $state(false);
+    #scaleMappingsReady = $state(false);
+    #clientCreated = $state(false);
+    #clientDataReady = $state(false);
+    #continuousDomainsSet = $state(false);
+    #categoricalFetchStarted = $state(false);
+  
+    // --- Private Properties ---
+    #config;
+    #coordinator;
+    #chartContext;
+    #markId;
+    #scaleMap = {};
+  
+    /**
+     * @param {object} config The mark's configuration object, derived from Svelte props.
+     * @param {import('@uwdata/mosaic-core').Coordinator} coordinator The Mosaic coordinator instance.
+     * @param {object} chartContext The chart's context object.
+     */
+    constructor(config, coordinator, chartContext, stableId = null) {
+      this.#config = config;
+      this.#coordinator = coordinator;
+      this.#chartContext = chartContext;
+      this.#markId =  stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
+      this.#registerScaleRequirements();
+      this.#setupReactiveEffects();
+    }
+  
+    #setupReactiveEffects() {
+  
+      // Effect 1: Wait for scale objects to be available in context
+      $effect(() => {
+        const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
+        if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
+          this.#scaleStatesReady = true;
+        }
+      });
+  
+      // Effect 2: Setup scale mappings when scale states are ready
+      $effect(() => {
+        if (this.#scaleStatesReady && !this.#scaleMappingsReady) {
+          this.#setupScaleMappings();
+          this.#scaleMappingsReady = true;
+        }
+      });
+  
+      // Effect 3: Create client when scale mappings are ready
+      $effect(() => {
+        if (this.#scaleMappingsReady && !this.#clientCreated) {
+          const fieldRequests = this.#buildFieldInfoRequests();
+          this.#createClient(fieldRequests);
+          this.#clientCreated = true;
+        }
+      });
+  
+      // Effect 4: Monitor client data readiness
+      $effect(() => {
+        if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
+          this.#clientDataReady = true;
+        }
+      });
+  
+      // Effect 5: Set initial continuous domains when client data is ready
+      $effect(() => {
+        if (this.#clientDataReady && !this.#continuousDomainsSet) {
+          this.#setInitialContinuousDomains(this.client.fieldInfo);
+          this.#continuousDomainsSet = true;
+        }
+      });
+  
+      // Effect 6: Start categorical domain fetch when continuous domains are set
+      $effect(() => {
+        if (this.#continuousDomainsSet && !this.#categoricalFetchStarted) {
+          this.#categoricalFetchStarted = true;
+          
+          // Trigger async operation without awaiting in effect
+          this.#fetchCategoricalDomains().then(() => {
+            this.categoricalDataFetched = true;
+            this.#setScalesReady();
+            console.log(`✅ Mark ${this.#markId} setup complete`);
+          }).catch(error => {
+            console.error(`❌ Categorical domain fetch failed for ${this.#markId}:`, error);
+          });
+        }
+      });
+    }
+  
+    /**
+     * Register scale requirements with the chart context
+     * This happens immediately in the constructor to ensure proper timing
+     */
+    #registerScaleRequirements() {
+      const { scaleRequirements } = this.#config;
+      
+      if (scaleRequirements?.x) {
+        this.#chartContext.registerScaleType(
+          'x', 
+          scaleRequirements.x.type, 
+          scaleRequirements.x.priority, 
+          this.#markId
+        );
+      }
+      
+      if (scaleRequirements?.y) {
+        this.#chartContext.registerScaleType(
+          'y', 
+          scaleRequirements.y.type, 
+          scaleRequirements.y.priority, 
+          this.#markId
+        );
+      }
+    }
+  
+    get actualXScaleType() {
+      return this.#chartContext.scaleTypes?.x || 'linear';
+    }
+  
+    get actualYScaleType() {
+      return this.#chartContext.scaleTypes?.y || 'linear';
+    }
+  
+    get markId() {
+      return this.#markId;
+    }
+  
+    scaleCompatibilityError = $derived.by(() => {
+      const { supportedScaleTypes, markType } = this.#config;
+      if (!this.actualXScaleType || !this.actualYScaleType) return null;
+  
+      const incompatibleX = !supportedScaleTypes.x.includes(this.actualXScaleType);
+      const incompatibleY = !supportedScaleTypes.y.includes(this.actualYScaleType);
+  
+      if (incompatibleX) return `${markType} cannot use scale type '${this.actualXScaleType}' for the x-axis.`;
+      if (incompatibleY) return `${markType} cannot use scale type '${this.actualYScaleType}' for the y-axis.`;
+  
+      return null;
+    });
+  
+    gpuReady = $derived.by(() => {
+      if (!this.#chartContext.scalesReady || !this.categoricalDataFetched) return false;
+  
+      const xReady = (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') 
+        ? this.#chartContext.xScaleState?.isReadyForGPU 
+        : this.#chartContext.xScaleState?.ready;
+        
+      const yReady = (this.actualYScaleType === 'band' || this.actualYScaleType === 'point')
+        ? this.#chartContext.yScaleState?.isReadyForGPU 
+        : this.#chartContext.yScaleState?.ready;
+        
+      return xReady && yReady;
+    });
+  
+    /**
+     * Cleans up all resources used by this mark controller.
+     */
+    destroy() {
+      // Unregister scale requirements
+      this.#chartContext.unregisterScaleType('x', this.#markId);
+      this.#chartContext.unregisterScaleType('y', this.#markId);
+      
+      // Remove from scale states
+      Object.values(this.#scaleMap).forEach(scale => scale?.removeMark?.(this.#markId));
+  
+      // Destroy data client
+      if (this.client) {
+        this.client.destroy();
+        this.client = null;
+      }
+    }
+  
+    /**
+     * @virtual
+     * Returns the `select` configuration object for the DataClient.
+     */
+    getSelectConfig() {
+      return this.#config.select || {};
+    }
+  
+    /**
+     * @virtual
+     * Builds the SQL query for the DataClient.
+     */
+    buildQuery(sourceTable, config, filter) {
+      const { select, sort, limit, _filterNulls } = config;
+  
+      const q = Query.from(sourceTable);
+      const selectDef = {};
+      const nonAggregateGroupBy = [];
+      let hasAggregates = false;
+  
+      for (const alias in select) {
+        const expr = select[alias];
+        if (expr == null) continue;
+  
+        const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
+        selectDef[alias] = exprNode;
+  
+        if (isAggregateExpression(exprNode)) {
+          hasAggregates = true;
+        } else {
+          nonAggregateGroupBy.push(exprNode);
+        }
+      }
+      q.select(selectDef);
+  
+      if (hasAggregates && nonAggregateGroupBy.length > 0) {
+        q.groupby(nonAggregateGroupBy);
+      }
+  
+      const allFilters = [...filter];
+      if (_filterNulls && Array.isArray(_filterNulls)) {
+        allFilters.push(..._filterNulls.map(col => isNotNull(col)));
+      }
+      if (allFilters.length > 0) {
+        q.where(and(allFilters));
+      }
+      
+      if (sort) q.orderby({ [sort.by]: sort.direction === 'desc' ? 'DESC' : 'ASC' });
+      if (limit) q.limit(limit);
+  
+      return q;
+    }
+  
+    #createClient(fieldRequests) {
+      if (this.client) this.client.destroy();
+      
+      this.client = new DataClient(
+        this.#config.table,
+        this.#config.selection,
+        {
+          select: this.getSelectConfig(),
+          queryBuilder: (table, config, filter) => this.buildQuery(table, config, filter),
+          dataFormat: 'arrow',
+          name: this.#markId,
+          ...this.#config.clientOptions
+        },
+        fieldRequests
+      );
+      this.#coordinator.connect(this.client);
+    }
+  
+    #setupScaleMappings() {
+      this.#scaleMap = {
+        x: this.#chartContext.xScaleState,
+        y: this.#chartContext.yScaleState
+      };
+      
+      console.log(`📊 ${this.#markId} Scale mappings setup:`, {
+        x: this.actualXScaleType,
+        y: this.actualYScaleType
+      });
+    }
+  
+    #buildFieldInfoRequests() {
+      const { select, table } = this.#config;
+      const requests = [];
+      const processedFields = new Set();
+  
+      for (const alias in select) {
+        const fieldName = select[alias];
+        if (fieldName == null || processedFields.has(fieldName.toString())) continue;
+  
+        const exprNode = isNode(fieldName) ? fieldName : sqlColumn(String(fieldName));
+        if (isAggregateExpression(exprNode)) continue;
+  
+        const scaleType = alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
+  
+        if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+          requests.push({ table, column: exprNode, stats: ['min', 'max'] });
+          processedFields.add(fieldName.toString());
+        }
+      }
+      return requests;
+    }
+    
+    #setInitialContinuousDomains(fieldInfo) {
+      if (!fieldInfo) return;
+  
+      for (const alias in this.#scaleMap) {
+        const scaleState = this.#scaleMap[alias];
+        if (!scaleState) continue;
+  
+        const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
+        
+        if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+          const fieldName = this.#config.select[alias];
+          if (fieldName == null) continue;
+  
+          const infoKey = String(fieldName).replace(/^["']|["']$/g, '');
+          const info = fieldInfo[infoKey];
+  
+          if (info && info.min != null && info.max != null) {
+            scaleState.addMark([info.min, info.max], this.#markId);
+          }
+        }
+      }
+    }
+  
+    async #fetchCategoricalDomains() {
+      const { table, selection, sort } = this.#config;
+      if (!this.#coordinator || !table) return;
+  
+      const fetches = [];
+  
+      const setupFetch = (axis, field) => {
+        if (!field) return;
+        const scaleState = this.#chartContext[`${axis}ScaleState`];
+        let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
+  
+        // Handle sorting for categorical domains
+        const sortConfig = sort;
+        if (sortConfig && sortConfig.by) {
+          const isSortingByOtherAxis = sortConfig.by === (axis === 'x' ? 'y' : 'x');
+          const otherAxisField = this.#config.select[sortConfig.by];
+          if (isSortingByOtherAxis && isAggregateExpression(otherAxisField)) {
+            q = q.groupby(field).select({ [sortConfig.by]: otherAxisField });
+          }
+          q.orderby({ [sortConfig.by]: sortConfig.direction === 'desc' ? 'DESC' : 'ASC' });
+        } else {
+          q.distinct();
+        }
+  
+        fetches.push(
+          this.#coordinator.query(q).then(result => {
+            const categories = Array.from(result).map(row => row[axis]);
+            if (categories.length > 0) {
+              scaleState.addMark(categories, this.#markId);
+            }
+          })
+        );
+      };
+  
+      if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+        setupFetch('x', this.#config.select.x);
+      }
+      if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+        setupFetch('y', this.#config.select.y);
+      }
+  
+      if (fetches.length > 0) await Promise.all(fetches);
+    }
+  
+    #setScalesReady() {
+      Object.values(this.#scaleMap).forEach(scale => scale?.setReady?.());
+    }
+  }
+</src/lib/components/marks/BaseMarkSetup.svelte.js>
+
+<src/lib/components/marks/DotsMark.svelte>
+  <script>
+    import { getContext, onMount, onDestroy, untrack } from 'svelte';
+    import { getScaleState } from '$lib/scales';
+    import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+    import { Dots } from '../rendering/index.js';
+    import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  
+    let { 
+      table, 
+      selection, 
+      x, 
+      y, 
+      color, 
+      alpha = 0.5, 
+      radius = 3,
+      limit,
+      filterNulls = false,
+      preferredXScaleType = 'linear', 
+      preferredYScaleType = 'linear',
+    } = $props();
+  
+    const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
+  
+    const coordinator = getContext('mosaic-coordinator');
+    const chartContext = getContext('chart');
+    const colorScale = $derived(getScaleState('color', 'ordinal'));
+  
+    let setup = $state(null);
+    let xScaleId = $derived(chartContext.xScaleState?.id);
+    let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+    const config = $derived({
+      markType: 'dot',
+      supportedScaleTypes: {
+        x: ['linear', 'identity', 'band', 'point', 'time', 'log'],
+        y: ['linear', 'identity', 'band', 'point', 'time', 'log']
+      },
+      scaleRequirements: {
+        x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
+        y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+      },
+      table,
+      selection,
+      select: { x, y, ...(color && { color }) },
+      clientOptions: {
+        limit,
+        filterNulls: filterNulls ? [x, y] : null
+      }
+    })
+  
+    let arrowTable = $derived(setup?.client?.arrowTable);
+    let instanceCount = $derived(arrowTable?.numRows || 0);
+  
+    let xColumn = $derived(arrowTable?.getChild('x'));
+    let yColumn = $derived(arrowTable?.getChild('y')); 
+    let colorColumn = $derived(arrowTable?.getChild('color'));
+  
+    let xData = $derived.by(() => {
+      console.log('DotsMark: rerunning xData derived')
+      if (!xColumn || !setup?.actualXScaleType) return null;
+      
+      const rawArray = xColumn.toArray(); // Zero-copy Arrow extraction
+      
+      // Scale-aware processing
+      if (setup.actualXScaleType === 'band' || setup.actualXScaleType === 'point') {
+        return chartContext.xScaleState.processDataForGPU(rawArray, setup.markId);
+      } else {
+        if (rawArray instanceof Float32Array) {
+          return rawArray;
+        } else {
+          return new Float32Array(rawArray); // Copy only when necessary
+        }
+      }
+    });
+  
+    let yData = $derived.by(() => {
+      if (!yColumn || !setup?.actualYScaleType) return null;
+      
+      const rawArray = yColumn.toArray();
+      
+      if (setup.actualYScaleType === 'band' || setup.actualYScaleType === 'point') {
+        return chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
+      } else {
+        if (rawArray instanceof Float32Array) {
+          return rawArray;
+        } else {
+          return new Float32Array(rawArray); // Copy only when necessary
+        }
+      }
+    });
+  
+    // Color Channel
+    let colorData = $derived.by(() => {
+      if (!colorColumn || !instanceCount || !colorScale) return null;
+      
+      const colorArray = colorColumn.toArray(); // Zero-copy
+      const rgba = new Float32Array(instanceCount * 4);
+      
+      for (let i = 0; i < instanceCount; i++) {
+        const colorValue = colorArray[i];
+        const fillColor = colorScale(colorValue);
+        const parsed = parseColor(fillColor);
+        rgba.set(parsed, i * 4);
+      }
+      
+      return rgba;
+    });
+  
+    // Radius Channel (prop-based, but follows same pattern)
+    let radiusData = $derived.by(() => {
+      if (!instanceCount) return null;
+      
+      const radii = new Float32Array(instanceCount);
+      
+      if (typeof radius === 'function') {
+        // Handle function-based radius (access other columns if needed)
+        const xArray = xColumn?.toArray();
+        const yArray = yColumn?.toArray();
+        
+        for (let i = 0; i < instanceCount; i++) {
+          radii[i] = radius({ x: xArray?.[i], y: yArray?.[i] });
+        }
+      } else {
+        radii.fill(radius);
+      }
+      
+      return radii;
+    });
+  
+    // Alpha Channel (simple, but consistent pattern)
+    let alphaData = $derived.by(() => {
+      if (!instanceCount) return null;
+      
+      const alphas = new Float32Array(instanceCount);
+      alphas.fill(alpha);
+      return alphas;
+    });
+  
+    // Helper function for color parsing
+    function parseColor(color) {
+      if (typeof color === 'string' && color.startsWith('#')) {
+        const r = parseInt(color.slice(1, 3), 16) / 255;
+        const g = parseInt(color.slice(3, 5), 16) / 255;
+        const b = parseInt(color.slice(5, 7), 16) / 255;
+        return [r, g, b, 1.0];
+      }
+      return [0.0, 0.0, 1.0, 1.0]; // Default blue
+    }
+  
+  
+    $effect(() => {
+      console.log('mark effect')
+      void config,  xScaleId, yScaleId; // and other relevant props
+      
+      untrack(() => {
+        setup?.destroy();
+        
+        setup = new BaseMarkSetup(
+          config,
+          coordinator,
+          chartContext,
+          markId
+        );
+      });
+    });
+  
+    onDestroy(() => {
+      setup?.destroy();
+    });
+  
+  
+    // $effect(() => {
+    //   console.log('🔍 DotsMark Data Processing:', {
+    //     // Setup status
+    //     setupReady: !!setup,
+    //     gpuReady: setup?.gpuReady,
+    //     scaleCompatibilityError: setup?.scaleCompatibilityError,
+        
+    //     // Raw data
+    //     arrowTable: !!arrowTable,
+    //     instanceCount,
+        
+    //     // Processed data arrays
+    //     xData: xData ? `${xData.length} items, sample: [${Array.from(xData.slice(0, 3)).join(', ')}]` : 'null',
+    //     yData: yData ? `${yData.length} items, sample: [${Array.from(yData.slice(0, 3)).join(', ')}]` : 'null',
+    //     colorData: colorData ? `${colorData.length/4} items (rgba)` : 'null',
+    //     radiusData: radiusData ? `${radiusData.length} items` : 'null',
+    //     alphaData: alphaData ? `${alphaData.length} items` : 'null',
+        
+    //     // Scale info that affects data processing
+    //     actualXScaleType: setup?.actualXScaleType,
+    //     actualYScaleType: setup?.actualYScaleType,
+        
+    //     // Chart context status
+    //     chartReady: chartContext.isReady,
+    //     scalesReady: chartContext.scalesReady,
+        
+    //     // What component will render
+    //     willRenderDots: !!(setup?.gpuReady && xData && yData),
+    //   });
+    // });
+  
+    // // Add this debugging effect to DotsMark.svelte
+    // $effect(() => {
+    //   if (setup?.gpuReady && chartContext.scalesReady) {
+    //     console.log('🔍 Scale Domain Debug:', {
+    //       // X scale domain
+    //       xScaleDomain: chartContext.xScaleState?.domain?.current,
+    //       xScaleRange: [0, chartContext.innerWidth],
+          
+    //       // Y scale domain  
+    //       yScaleDomain: chartContext.yScaleState?.domain?.current,
+    //       yScaleRange: [chartContext.innerHeight, 0], // Flipped for screen coords
+          
+    //       // Sample data for comparison
+    //       xDataSample: xData ? Array.from(xData.slice(0, 5)) : 'none',
+    //       yDataSample: yData ? Array.from(yData.slice(0, 5)) : 'none',
+          
+    //       // Expected screen positions (manual calculation)
+    //       expectedScreenPositions: xData && yData ? {
+    //         xSample: Array.from(xData.slice(0, 3)),
+    //         ySample: Array.from(yData.slice(0, 3))
+    //       } : 'no data'
+    //     });
+    //   }
+    // });
+  </script>
+  
+  
+  {#if setup?.gpuReady && xData && yData}
+    <Dots
+      {xData}
+      {yData}
+      {colorData}
+      {radiusData}
+      {alphaData}
+      dataVersion={setup.client.dataVersion}
+    />
+  {:else if setup?.client?.error}
+    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+      Error: {setup.client.error.message}
+    </text>
+  {:else if setup?.client?.delayedLoading}
+    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+      Loading data...
+    </text>
+  {:else}
+    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+      Initializing mark...
+    </text>
+  {/if}
+</src/lib/components/marks/DotsMark.svelte>
+
+<src/lib/gpu/ScaleTemplateSystem.js>
+  // src/lib/rendering/ScaleTemplateSystem.js
+  
+  /**
+   * Template-based shader generation for scale combinations
+   * Step 1: Foundation with linear scale only
+   */
+  
+  /**
+   * Scale fragment definitions
+   * Each scale type provides: declaration, function call, and implementation
+   */
+  const SCALE_FRAGMENTS = {
+    linear: {
+      // UPDATED: Generate SSBO declaration instead of individual uniforms
+      declaration: (groupIndex, bindingIndex, suffix) => {
+        // For SSBO approach, we only need the struct definition
+        // The actual storage buffer is declared once globally
+        return `
+          struct ScaleParam {
+            domainMin: f32,
+            domainMax: f32,
+            domainScale: f32,
+            _pad: f32,
+          };
+        `;
+      },
+  
+      // UPDATED: Use array indexing into global SSBO
+      functionCall: (value, suffix) => `scaleLinear${suffix}(${value})`,
+  
+      // UPDATED: Read from global storage array using indices
+      implementation: (suffix, axis) => `
+        fn scaleLinear${suffix}(value: f32, scaleIndex: u32) -> f32 {
+          let scale = scaleParams[scaleIndex];
+          let normalized = (value - scale.domainMin) * scale.domainScale;
+          
+          let rangeMin = frameUniforms.rangeMin.${axis};
+          let rangeMax = frameUniforms.rangeMax.${axis};
+          
+          return rangeMin + normalized * (rangeMax - rangeMin);
+        }
+      `,
+  
+      bufferLayout: {
+        size: 4 * 4, // Now 4 f32 values = 16 bytes (added padding)
+        fields: ['domainMin', 'domainMax', 'domainScale', '_pad']
+      }
+    }
+  };
+  
+  /**
+   * Main template system class
+   */
+  export class ScaleTemplateSystem {
+  	constructor() {
+  		this.shaderCache = new Map(); // Cache generated shaders by combination key
+  		this.bufferLayoutCache = new Map(); // Cache buffer layouts by combination
+  	}
+  
+  	/**
+  	 * Generate shader code for a specific scale combination
+  	 * @param {Object} scaleTypes - { x: 'linear', y: 'linear' }
+  	 * @param {string} markShaderCode - Mark-specific shader code (dots, rects, etc.)
+  	 * @returns {Object} { shaderCode: string, bufferLayouts: Object }
+  	 */
+  	generateShader(scaleTypes, markShaderCode) {
+  		const cacheKey = `${scaleTypes.x}-${scaleTypes.y}`;
+  
+  		// Return cached version if available
+  		if (this.shaderCache.has(cacheKey)) {
+  			return this.shaderCache.get(cacheKey);
+  		}
+  
+  		// Generate new shader
+  		const result = this._buildShader(scaleTypes, markShaderCode);
+  
+  		// Cache and return
+  		this.shaderCache.set(cacheKey, result);
+  		return result;
+  	}
+  
+  	/**
+  	 * Build shader from scale combination
+  	 * @private
+  	 */
+  	_buildShader(scaleTypes, markShaderCode) {
+  		// Validate scale types exist
+  		this._validateScaleTypes(scaleTypes);
+  
+  		// Get scale fragments
+  		const xFragment = SCALE_FRAGMENTS[scaleTypes.x];
+  		const yFragment = SCALE_FRAGMENTS[scaleTypes.y];
+  
+  		// Build shader sections
+  		const declarations = this._buildDeclarations(xFragment, yFragment);
+  		const implementations = this._buildImplementations(xFragment, yFragment);
+  		const scaleFunctions = this._buildScaleFunctions(xFragment, yFragment);
+  
+  		// Generate complete shader
+  		const shaderCode = `
+        // Generated shader for scales: ${scaleTypes.x}-x, ${scaleTypes.y}-y
+        // Auto-generated - do not edit directly
+        
+        ${declarations}
+        
+        // Per-frame uniforms (@group(0)) - consolidated into single buffer
+        struct FrameUniforms {
+          resolution: vec2<f32>,        // Canvas dimensions (physical pixels)
+          rangeMin: vec2<f32>,          // Chart range minimums  
+          rangeMax: vec2<f32>,          // Chart range maximums
+          devicePixelRatio: f32,        // Device pixel ratio
+          padding: f32,                 // Alignment padding
+        };
+        @group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
+        
+        ${scaleFunctions}
+        ${implementations}
+        
+        ${markShaderCode}
+      `;
+  
+  		// Build buffer layout information
+  		const bufferLayouts = this._buildBufferLayouts(scaleTypes, xFragment, yFragment);
+  
+  		return {
+  			shaderCode: shaderCode.trim(),
+  			bufferLayouts,
+  			cacheKey: `${scaleTypes.x}-${scaleTypes.y}`
+  		};
+  	}
+  
+  	/**
+  	 * Build declarations section for scale uniforms
+  	 * @private
+  	 */
+    _buildDeclarations(xFragment, yFragment) {
+      // Generate struct definitions
+      const structDef = xFragment.declaration(2, 0, 'X');
+      
+      // Global SSBO declaration - don't declare layerParams here
+      const globalSSBODeclaration = `
+        // Global scale storage buffer
+        @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
+      `;
+      
+      return `${structDef}\n${globalSSBODeclaration}`;
+    }
+  
+  	/**
+  	 * Build scale function implementations
+  	 * @private
+  	 */
+  	_buildImplementations(xFragment, yFragment) {
+  		// MODIFIED: Generate implementations with unique names to prevent redefinition errors
+  		const xImplementation = xFragment.implementation('X', 'x');
+  		const yImplementation = yFragment.implementation('Y', 'y');
+  
+  		// Even if the types are the same (e.g., linear-linear), we need both function
+  		// implementations because they operate on different struct types (LinearScaleParamsX vs LinearScaleParamsY).
+  		return `${xImplementation}\n${yImplementation}`;
+  	}
+  
+  	/**
+  	 * Build convenience scale functions (scaleX, scaleY)
+  	 * @private
+  	 */
+    _buildScaleFunctions(xFragment, yFragment) {
+      return `
+        // Convenience functions - indices will be passed from mark-specific code
+        fn scaleX(value: f32, scaleIndex: u32) -> f32 {
+          return scaleLinear${xFragment.suffix || 'X'}(value, scaleIndex);
+        }
+        
+        fn scaleY(value: f32, scaleIndex: u32) -> f32 {
+          return scaleLinear${yFragment.suffix || 'Y'}(value, scaleIndex);
+        }
+      `;
+    }
+  
+  	/**
+  	 * Build buffer layout specifications for GPUCoordinator
+  	 * @private
+  	 */
+  	_buildBufferLayouts(scaleTypes, xFragment, yFragment) {
+  		const layouts = {
+  			x: {
+  				type: scaleTypes.x,
+  				...xFragment.bufferLayout
+  			},
+  			y: {
+  				type: scaleTypes.y,
+  				...yFragment.bufferLayout
+  			}
+  		};
+  
+  		return layouts;
+  	}
+  
+  	/**
+  	 * Validate that scale types are supported
+  	 * @private
+  	 */
+  	_validateScaleTypes(scaleTypes) {
+  		const supportedTypes = Object.keys(SCALE_FRAGMENTS);
+  
+  		if (!supportedTypes.includes(scaleTypes.x)) {
+  			throw new Error(`Unsupported X scale type: ${scaleTypes.x}. Supported: ${supportedTypes.join(', ')}`);
+  		}
+  
+  		if (!supportedTypes.includes(scaleTypes.y)) {
+  			throw new Error(`Unsupported Y scale type: ${scaleTypes.y}. Supported: ${supportedTypes.join(', ')}`);
+  		}
+  	}
+  
+  	/**
+  	 * Get supported scale types
+  	 */
+  	getSupportedScaleTypes() {
+  		return Object.keys(SCALE_FRAGMENTS);
+  	}
+  
+  	/**
+  	 * Clear shader cache (useful for development)
+  	 */
+  	clearCache() {
+  		this.shaderCache.clear();
+  		this.bufferLayoutCache.clear();
+  	}
+  }
+  
+  // Export singleton instance
+  export const scaleTemplateSystem = new ScaleTemplateSystem();
+</src/lib/gpu/ScaleTemplateSystem.js>
+
