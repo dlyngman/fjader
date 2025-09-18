@@ -48,7 +48,7 @@
 	  {#snippet canvas()}
 		<WebGPUCanvas>
 		  {#snippet canvasComponents()}
-			<BarMarkX
+			<!-- <BarMarkX
 			  table="penguins"
 			  x1={min("bill_length")}
 			  x2={max("bill_length")}
@@ -56,12 +56,12 @@
 			  color="purple"
 			  alpha={1}
 			  preferredYScaleType = 'band'
-			/>
-			<!-- <Rects 
+			/> -->
+			<Rects 
 				{x0Data} {x1Data} {y0Data} {y1Data} 
 				{colorData} {alphaData} 
 				dataVersion={1} 
-			/> -->
+			/>
 		  {/snippet}
 		</WebGPUCanvas>
 	  {/snippet}

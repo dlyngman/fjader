@@ -55,6 +55,26 @@
     }
   });
 
+  $effect(() => {
+    const xScale = chartContext.xScaleState;
+    const yScale = chartContext.yScaleState;
+    
+    if (xScale && yScale && layout.isReady) {
+      // For test data, manually mark scales as ready
+      if (!xScale.ready) {
+        xScale.setReady?.();
+        console.log('Manually marked X scale ready');
+      }
+      if (!yScale.ready) {
+        yScale.setReady?.();
+        console.log('Manually marked Y scale ready');
+      }
+      
+      // Then trigger render
+      gpuCoordinator.invalidateChart(layout.chartId);
+    }
+  });
+
   // $inspect('is ready', layout.isReady)
 
   const chartContext = {

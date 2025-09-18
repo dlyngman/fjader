@@ -1,6 +1,4 @@
 <src/lib/gpu/GPUCoordinator.svelte.js>
-  // src/lib/gpu/GPUCoordinator.svelte.js - Complete Scale Instance Buffer Pool Architecture
-  
   import { setContext, getContext } from 'svelte';
   import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
   
@@ -74,7 +72,7 @@
     #chartsToRenderArray = [];
     #msaaSampleCount = 4;
     #globalInputDelay = 0;
-    #renderCount = 0;
+    // #renderCount = 0;
   
     // Performance tracking
     #smoothedDeltaTime = 8.3; // Initialize to ideal 60fps
@@ -86,22 +84,18 @@
     #creatingPipelines = new Set();
   
     // Scale instance buffer pool system
-    #BUFFER_POOL_SIZE = 3; // Configurable buffer pool size
-    #scaleBindGroupLayouts = new Map(); // scaleType -> GPUBindGroupLayout
+    // #scaleBindGroupLayouts = new Map(); // scaleType -> GPUBindGroupLayout
+    #globalScaleLayout = null;
   
     #templateSystem = scaleTemplateSystem;
     #frameLayout = null;
     #dataLayouts = new Map(); // markType-config -> GPUBindGroupLayout
-    #pendingPoolCreations = []; // Optional: for lazy creation pattern
     #pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
     #pendingFrameUpdates = new Map(); // chartId -> update params
   
-    #lastFenceTime
-    #lastFrameUsingBuffer = new Array(this.#BUFFER_POOL_SIZE).fill(0); // Track which frame last used each buffer
-    #nextFrameId = 0;
+    // #nextFrameId = 0;
   
     #scaleIndexManager = null;
-    // #globalScaleBindGroup = null;
     #maxScaleSlots = 256;
   
     #SSBO_SLOT_COUNT = 3;
@@ -137,12 +131,6 @@
         await this.#createSharedResources();
         await this.#initializeScaleBindGroupLayouts();
         this.#initialized = true;
-        // Process any queued pool creations
-        for (const pending of this.#pendingPoolCreations) {
-          this.createBufferPoolForScale(pending.scaleId, pending.scaleType)
-          // this.#doCreateBufferPoolForScale(pending.scaleId, pending.scaleType);
-        }
-        this.#pendingPoolCreations = [];
         this.#handleScaleTopologyChange();
         console.log('GPUCoordinator initialized with scale instance buffer pool architecture');
       } catch (error) {
@@ -165,11 +153,11 @@
         }]
       });
       
-      this.#scaleBindGroupLayouts.set('global', globalScaleLayout);    
+      this.#globalScaleLayout = globalScaleLayout;
       this.#createGlobalScaleSSBO();
   
       for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-        const layout = this.#scaleBindGroupLayouts.get('global');
+        const layout = this.#globalScaleLayout;
         const slotOffset = slot * this.#slotByteSize;
         const bg = this.#device.createBindGroup({
           label: `global-scale-bind-group-slot-${slot}`,
@@ -178,10 +166,8 @@
         });
         this.#globalScaleBindGroups[slot] = bg;
       }
-      // this.#createGlobalScaleBindGroup();
       
       console.log('Initialized global SSBO layout, buffers, and bind group');
-  
     }
   
     /**
@@ -272,26 +258,15 @@
     }
   
   
-    createBufferPoolForScale(scaleId, scaleType = 'linear') {
+    registerScale(scaleId, scaleType = 'linear') {
       if (!this.#initialized) {
-        this.#pendingPoolCreations.push({ scaleId, scaleType });
         return;
       }
       
-      console.log(`Registering scale ${scaleId} for global SSBO`);
-      
-      // Keep a placeholder entry in the old map for compatibility during transition
-      
-      // Trigger topology rebuild to assign global index
       this.#handleScaleTopologyChange();
     }
   
-    destroyBufferPoolForScale(scaleId) {
-      console.log(`Unregistering scale ${scaleId} from global SSBO`);
-      
-      // Remove from old map
-      
-      // Trigger topology rebuild
+    unregisterScale(scaleId) {
       this.#handleScaleTopologyChange();
     }
   
@@ -341,52 +316,15 @@
       this.#createGlobalScaleSSBO();
       this.#globalScaleBindGroups.length = 0;
       for ( let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-        const layout = this.#scaleBindGroupLayouts.get('global');
+        const layout = this.#globalScaleLayout;
+        
         const offset = slot * this.#slotByteSize;
         this.#globalScaleBindGroups[slot] = this.#device.createBindGroup({
           layout,
-          entries: [{ binding: 0, resourece: { buffer: this.#globalScaleSSBO, offset, size: this.#slotByteSize } }]
+          entries: [{ binding: 0, resource: { buffer: this.#globalScaleSSBO, offset, size: this.#slotByteSize } }]
         });
       }
     }
-  
-  
-    /**
-     * Get buffer size for a scale type
-     * @private
-     */
-    #getBufferSizeForScaleType(scaleType) {
-      switch (scaleType) {
-        case 'linear':
-          return 16; // 3 x f32 values (12 bytes: domainMin, domainMax, domainScale +  4 bytes padding)
-        case 'band':
-          return 48; // Future: more fields for band scales
-        case 'log':
-          return 32; // Future: logarithmic scale parameters
-        default:
-          console.warn(`Unknown scale type: ${scaleType}, defaulting to linear size`);
-          return 32;
-      }
-    }
-  
-    /**
-     * Get default data for a scale type
-     * @private
-     */
-    #getDefaultDataForScaleType(scaleType) {
-      switch (scaleType) {
-        case 'linear':
-          return new Float32Array([0, 1, 1, 0]); // domain[0,1], scale=1, padding
-          // return new Float32Array([0, 1, 0, 1, 1, 0, 0, 0]); // domain[0,1], range[0,1], scale=1, padding
-        case 'band':
-          return new Float32Array(12); // Future: band scale defaults
-        case 'log':
-          return new Float32Array([1, 10, 0, 1, 0.434, 0, 0, 0]); // Future: log scale defaults
-        default:
-          return new Float32Array(8);
-      }
-    }
-  
   
     /**
      * Create frame uniform buffer and bind group for a specific chart
@@ -515,11 +453,9 @@
       }
     }
   
-  
-    // ===== UPDATED: ANIMATION LOOP WITH SCALE INSTANCE INTEGRATION =====
-  
     #animationLoop = async (currentTime) => {
       const loopStart = performance.now();
+      // console.log('loopStart', loopStart)
       
       // Enhanced timing logic with smoothing
       const now = performance.now();
@@ -572,14 +508,12 @@
       this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
       this.#dirtyChartIDs.clear();
   
-  
-      this.#nextFrameId++;
-  
-      // await new Promise(resolve => setTimeout(resolve, 1));
-      if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-        await this.#inflightPromises[0]
-        this.#inflightPromises.shift();
-      }
+      // if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+        // const beforeAwait = performance.now()
+        // await this.#inflightPromises[0]
+        // this.#inflightPromises.shift();
+        // console.log('RAF awaited', performance.now() - beforeAwait);
+      // }
   
       // Render
       const renderStart = performance.now();
@@ -593,7 +527,7 @@
             chartArray.push(chart);
           }
         }
-        this.#coordinatedRender(chartArray, this.#nextFrameId);
+        this.#coordinatedRender(chartArray);
       }
       const renderEnd = performance.now();
   
@@ -618,43 +552,8 @@
       }
     };
   
-    /**
-     * Create scale data from GPU state based on scale type
-     * @private
-     */
-    #createScaleDataFromGpuState(gpuState, scaleType) {
-      switch (scaleType) {
-        case 'linear':
-          return new Float32Array([
-            gpuState.domainMin,           // Domain data only (shareable across charts)
-            gpuState.domainMax,           
-            gpuState.domainScale || (1.0 / (gpuState.domainMax - gpuState.domainMin)),
-            0,                            // Padding to 16 bytes
-          ]);
-        
-        case 'band':
-          // Future: band scale specific data structure
-          return new Float32Array([
-            gpuState.domainMin || 0,
-            gpuState.domainMax || (gpuState.categoryCount - 1),
-            gpuState.categoryCount || 0,
-            0, 0, 0, 0, 0,                // Padding
-            0, 0, 0, 0                    // More padding to 48 bytes
-          ]);
-        
-        default:
-          console.warn(`Unknown scale type: ${scaleType}, using linear format`);
-          return new Float32Array([
-            gpuState.domainMin || 0,
-            gpuState.domainMax || 1,
-            0, 0, 1, 0, 0, 0
-          ]);
-      }
-    }
   
-    // ===== UPDATED: COORDINATED RENDER WITH SCALE INSTANCE BIND GROUPS =====
-  
-    async #coordinatedRender(chartsNeedingRender, frameId) {
+    async #coordinatedRender(chartsNeedingRender) {
   
       try {
   
@@ -678,11 +577,8 @@
           );
         }
   
-        // TODO integrate these below instead of this.#globalScaleBindGroup
         const currentSlot = this.#frameId % this.#SSBO_SLOT_COUNT;
         const currentScaleBindGroup = this.#globalScaleBindGroups[currentSlot]
-        // const currentScaleBindGroup = this.#createGlobalScaleBindGroup(currentSlot);
-  
   
         for (const chartConfig of chartsNeedingRender) {
   
@@ -805,6 +701,9 @@
           }
           passEncoder.end();
           this.#device.queue.submit([commandEncoder.finish()]);
+  
+          this.#frameId++;
+  
         } catch (error) {
           console.error(`Failed to render chart ${chartConfig.chartId}:`, error);
         }
@@ -868,9 +767,7 @@
     addAnimatingScale(scale) {
       let idx = this.#scaleIndexManager.getIndex(scale.id);
       if (idx === undefined) {
-        this.createBufferPoolForScale(scale.id, 'linear');
-        this.#scaleIdToInstance.set(scale.id, scale);
-        this.#handleScaleTopologyChange();
+        this.registerScale(scale.id, 'linear');
         idx = this.#scaleIndexManager.getIndex(scale.id);
         if (idx === undefined) {
           console.error(`Scale ${scale.id} still not registered after auto-register`);
@@ -1126,15 +1023,8 @@
       // Get or create stable layouts
       const frameLayout = this.#getOrCreateFrameLayout();
       const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);
-      // const xScaleLayout = this.#scaleBindGroupLayouts.get(scaleTypes.x);
-      // const yScaleLayout = this.#scaleBindGroupLayouts.get(scaleTypes.y);
+      const globalScaleLayout = this.#globalScaleLayout;;
   
-      // if (!xScaleLayout || !yScaleLayout) {
-      //   throw new Error(`Scale bind group layouts not found for types: ${scaleTypes.x}, ${scaleTypes.y}`);
-      // }
-  
-      // Use global SSBO layout for both X and Y scales
-      const globalScaleLayout = this.#scaleBindGroupLayouts.get('global');
   
       if (!globalScaleLayout) {
         throw new Error('Global scale SSBO layout not found - ensure SSBO system is initialized');
@@ -1143,7 +1033,6 @@
       // Create pipeline layout
       const pipelineLayout = this.#device.createPipelineLayout({
         label: `${markType}-pipeline-layout`,
-        // bindGroupLayouts: [frameLayout, dataLayout, xScaleLayout, yScaleLayout]
         bindGroupLayouts: [frameLayout, dataLayout, globalScaleLayout]
       });
   
@@ -1420,7 +1309,8 @@
       this.#sharedResources.bindGroupLayouts.clear();
   
       // Cleanup bind group layouts
-      this.#scaleBindGroupLayouts.clear();
+      // this.#scaleBindGroupLayouts.clear();
+      this.#globalScaleLayout = null;
   
       // Cleanup charts and layers
       this.#registeredCharts.clear();
@@ -1648,7 +1538,8 @@
   
       // Register buffer pool with coordinator
       if (gpuCoordinator) {
-        gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
+        // gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
+        gpuCoordinator.registerScale(this.id, 'linear');
       }
   
       this.ready = $state(false);
@@ -2181,7 +2072,7 @@
       this.#frozenExtent = null;
       this.#isAnimating = false;
       this.#resetAccumulator();
-      this.#gpuCoordinator.destroyBufferPoolForScale(this.id)
+      this.#gpuCoordinator.unregisterScale(this.id)
     }
   }
 </src/lib/scales/LinearScaleState.svelte.js>
@@ -2763,6 +2654,26 @@
       if (typeof window !== 'undefined') {
         window.lastXState = xState;
         window.lastYState = yState;
+      }
+    });
+  
+    $effect(() => {
+      const xScale = chartContext.xScaleState;
+      const yScale = chartContext.yScaleState;
+      
+      if (xScale && yScale && layout.isReady) {
+        // For test data, manually mark scales as ready
+        if (!xScale.ready) {
+          xScale.setReady?.();
+          console.log('Manually marked X scale ready');
+        }
+        if (!yScale.ready) {
+          yScale.setReady?.();
+          console.log('Manually marked Y scale ready');
+        }
+        
+        // Then trigger render
+        gpuCoordinator.invalidateChart(layout.chartId);
       }
     });
   
@@ -4204,6 +4115,460 @@
   </style>
 </src/lib/components/rendering/Dots.svelte>
 
+<src/lib/components/rendering/Rects.svelte>
+  <script>
+    import { getContext, onMount, onDestroy, untrack } from 'svelte';
+    import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+    import { getGPUContext } from '$lib/gpu';
+  
+    let { 
+      x0Data,       // Float32Array - left edges
+      x1Data,       // Float32Array - right edges  
+      y0Data,       // Float32Array - bottom edges
+      y1Data,       // Float32Array - top edges
+      colorData,    // Float32Array - RGBA colors (instanceCount * 4)
+      alphaData,    // Float32Array - alpha values
+      dataVersion,  // number - for triggering updates
+      zIndex = 0,
+    } = $props();
+  
+    const chartContext = getContext('chart');
+    const webGPUContext = getContext('webgpu-canvas');
+    const gpuCoordinator = getGPUContext();
+  
+    // Renderer and buffer state
+    let renderer = $state(null);
+    let initializationError = $state(null);
+  
+    // GPU buffers
+    let x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorBuffer, alphaBuffer, rectGeometryBuffer;
+  
+    const rectVertexCount = 6;
+    
+    const rectsShaderCode = `
+      struct VertexOutput {
+        @builtin(position) position: vec4<f32>,
+        @location(0) color: vec4<f32>,
+      };
+  
+      @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
+      @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
+      @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
+      @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
+      @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+      @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+      
+      @vertex
+      fn vertexMain(
+        @location(0) rectCorner: vec2<f32>,
+        @builtin(instance_index) instanceIdx: u32,
+      ) -> VertexOutput {
+        let x0 = x0Values[instanceIdx];
+        let x1 = x1Values[instanceIdx];
+        let y0 = y0Values[instanceIdx];
+        let y1 = y1Values[instanceIdx];
+        let alpha = alphaValues[instanceIdx];
+        let color = colors[instanceIdx];
+        
+        // Use centralized scale functions
+        let scaledX0 = scaleX(x0);
+        let scaledX1 = scaleX(x1);
+        let scaledY0 = scaleY(y0);
+        let scaledY1 = scaleY(y1);
+        
+        // Interpolate rectangle corners
+        let finalX = mix(scaledX0, scaledX1, rectCorner.x);
+        let finalY = mix(scaledY0, scaledY1, rectCorner.y);
+        
+        // Convert to normalized coordinates
+        let worldPos = vec2<f32>(finalX, finalY);
+        let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+        
+        var output: VertexOutput;
+        output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+        output.color = vec4<f32>(color.rgb, color.a * alpha);
+        return output;
+      }
+  
+      @fragment
+      fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+        return input.color;
+      }
+    `;
+  
+    const vertexBufferLayout = [{
+      arrayStride: 2 * 4, // 2 floats * 4 bytes
+      attributes: [{
+        shaderLocation: 0,
+        offset: 0,
+        format: 'float32x2',
+      }],
+    }];
+  
+    const dataBindingConfig = [
+      { binding: 0, type: 'read-only-storage' }, // x0Values
+      { binding: 1, type: 'read-only-storage' }, // x1Values  
+      { binding: 2, type: 'read-only-storage' }, // y0Values
+      { binding: 3, type: 'read-only-storage' }, // y1Values
+      { binding: 4, type: 'read-only-storage' }, // colors
+      { binding: 5, type: 'read-only-storage' }, // alphaValues
+    ];
+  
+    $effect(() => {
+      console.log('🔍 Rects Renderer Status:', {
+        rendererCreated: !!renderer,
+        resourcesCreated: renderer?.resourcesCreated,
+        initializationError: initializationError,
+        
+        // Props received from BarMarkX
+        x0DataLength: x0Data?.length || 0,
+        x1DataLength: x1Data?.length || 0,
+        y0DataLength: y0Data?.length || 0,
+        y1DataLength: y1Data?.length || 0,
+        colorDataLength: colorData?.length || 0,
+        alphaDataLength: alphaData?.length || 0,
+        
+        instanceCount: renderer?.instanceCount || 0,
+        pipeline: !!renderer?.pipeline,
+        
+        // All bind groups (expect similar issue as Dots)
+        perFrameBindGroup: !!renderer?.perFrameBindGroup,
+        perDataBindGroup: !!renderer?.perDataBindGroup,
+        
+        // GPU buffers
+        buffers: {
+          x0Buffer: !!x0Buffer,
+          x1Buffer: !!x1Buffer,
+          y0Buffer: !!y0Buffer,
+          y1Buffer: !!y1Buffer,
+          colorBuffer: !!colorBuffer,
+          alphaBuffer: !!alphaBuffer,
+          rectGeometry: !!rectGeometryBuffer
+        }
+      });
+    });
+  
+    // Add this effect to Rects.svelte to monitor when scales/layout become ready
+    // $effect(() => {
+    //   const layoutReady = chartContext?.layout?.isReady;
+    //   const yScaleReady = !!chartContext?.yScale?.scale;
+    //   const scaleType = chartContext?.scaleTypes?.y;
+      
+    //   console.log('🔍 Monitoring scale/layout readiness:', {
+    //     layoutReady,
+    //     yScaleReady,
+    //     scaleType,
+    //     innerHeight: chartContext?.layout?.innerHeight,
+    //     bandwidth: chartContext?.yScale?.scale?.bandwidth?.()
+    //   });
+      
+    //   // Force re-access when conditions change
+    //   if (layoutReady && yScaleReady && scaleType === 'band') {
+    //     console.log('🎯 All conditions met - forcing category position recalculation');
+    //     const positions = chartContext?.yCategoryPositions;
+    //     console.log('📍 Category positions now:', positions?.length || 'still null');
+    //   }
+    // });
+  
+    // Buffer update effects
+    $effect(() => {
+      if (x0Data && renderer?.resourcesCreated) {
+        x0Buffer = renderer.createOrUpdateBuffer(x0Buffer, x0Data);
+      }
+    });
+  
+    $effect(() => {
+      if (x1Data && renderer?.resourcesCreated) {
+        x1Buffer = renderer.createOrUpdateBuffer(x1Buffer, x1Data);
+      }
+    });
+  
+    $effect(() => {
+      if (y0Data && renderer?.resourcesCreated) {
+        y0Buffer = renderer.createOrUpdateBuffer(y0Buffer, y0Data);
+      }
+    });
+  
+    $effect(() => {
+      if (y1Data && renderer?.resourcesCreated) {
+        y1Buffer = renderer.createOrUpdateBuffer(y1Buffer, y1Data);
+      }
+    });
+  
+    $effect(() => {
+      if (colorData && renderer?.resourcesCreated) {
+        colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+      }
+    });
+  
+    $effect(() => {
+      if (alphaData && renderer?.resourcesCreated) {
+        alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
+      }
+    });
+  
+    // Check for per-data bind group readiness
+    let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
+  
+    $effect(() => {
+      void renderer?.resourcesCreated;
+      void dataBindGroupReady;
+  
+      if (x0Buffer && x1Buffer && y0Buffer && y1Buffer && colorBuffer && alphaBuffer && 
+          renderer?.resourcesCreated && !dataBindGroupReady) {
+        untrack(() => {
+          createRectsDataBindGroup();
+        });
+      }
+    });
+  
+    // Data writing effects
+    $effect(() => {
+      void dataBindGroupReady;
+      if (x0Data && x0Buffer && dataBindGroupReady) {
+        untrack(() => {
+          const device = webGPUContext.getDevice();
+          device?.queue.writeBuffer(x0Buffer, 0, x0Data);
+        });
+      }
+    });
+  
+    $effect(() => {
+      void dataBindGroupReady;
+      if (x1Data && x1Buffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(x1Buffer, 0, x1Data);
+      }
+    });
+  
+    $effect(() => {
+      void dataBindGroupReady;
+      if (y0Data && y0Buffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(y0Buffer, 0, y0Data);
+      }
+    });
+  
+    $effect(() => {
+      void dataBindGroupReady;
+      if (y1Data && y1Buffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(y1Buffer, 0, y1Data);
+      }
+    });
+  
+    $effect(() => {
+      void dataBindGroupReady;
+      if (colorData && colorBuffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(colorBuffer, 0, colorData);
+      }
+    });
+  
+    $effect(() => {
+      void dataBindGroupReady;
+      if (alphaData && alphaBuffer && dataBindGroupReady) {
+        const device = webGPUContext.getDevice();
+        device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
+      }
+    });
+  
+    $effect(() => {
+      void dataBindGroupReady;
+      if (x0Data && x1Data && y0Data && y1Data && colorData && alphaData && 
+          x0Buffer && x1Buffer && y0Buffer && y1Buffer && colorBuffer && alphaBuffer &&
+          dataBindGroupReady) {
+        renderer.updateInstanceCount(x0Data.length);
+        gpuCoordinator.invalidateChart(chartContext.chartId);
+      }
+    });
+  
+    // Create unit square geometry for rectangle rendering
+    function createRectGeometry() {
+      return new Float32Array([
+        0, 0,  // bottom-left  (x0, y0)
+        1, 0,  // bottom-right (x1, y0)
+        0, 1,  // top-left     (x0, y1)
+        1, 0,  // bottom-right (x1, y0)
+        1, 1,  // top-right    (x1, y1)
+        0, 1,  // top-left     (x0, y1)
+      ]);
+    }
+  
+    async function initializeRectGeometry() {
+      try {
+        const device = webGPUContext.getDevice();
+        if (!device) {
+          throw new Error('No WebGPU device available');
+        }
+        
+        // Create unit square geometry buffer
+        const rectVertices = createRectGeometry();
+        console.log('📐 Rect vertices:', rectVertices);
+        
+        rectGeometryBuffer = device.createBuffer({
+          size: rectVertices.byteLength,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          label: 'rects-unit-square-geometry'
+        });
+        device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
+        
+        console.log('✅ Rect geometry created successfully:', {
+          buffer: !!rectGeometryBuffer,
+          size: rectVertices.byteLength,
+          vertices: rectVertices.length
+        });
+        
+      } catch (error) {
+        console.error('❌ Failed to create rect geometry:', error);
+        throw error;
+      }
+    }
+  
+    function createRectsDataBindGroup() {
+      if (!x0Buffer || !x1Buffer || !y0Buffer || !y1Buffer || !colorBuffer || !alphaBuffer) {
+        return;
+      }
+  
+      const dataBindings = [
+        { binding: 0, resource: { buffer: x0Buffer } },
+        { binding: 1, resource: { buffer: x1Buffer } },
+        { binding: 2, resource: { buffer: y0Buffer } },
+        { binding: 3, resource: { buffer: y1Buffer } },
+        { binding: 4, resource: { buffer: colorBuffer } },
+        { binding: 5, resource: { buffer: alphaBuffer } },
+      ];
+  
+      renderer.createDataBindGroup(dataBindings);
+    }
+  
+    function drawRects(passEncoder) {
+      try {
+        if (!rectGeometryBuffer || renderer.instanceCount === 0) {
+          return;
+        }
+  
+        passEncoder.setVertexBuffer(0, rectGeometryBuffer);
+        passEncoder.draw(rectVertexCount, renderer.instanceCount);
+        
+      } catch (error) {
+        console.error('❌ Rects draw operation failed:', error);
+        throw error;
+      }
+    }
+  
+    // Wait for WebGPU context with better error handling
+    async function waitForWebGPU() {
+      let attempts = 0;
+      const maxAttempts = 100;
+      
+      while (!webGPUContext.isInitialized() && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        attempts++;
+      }
+      
+      if (!webGPUContext.isInitialized()) {
+        throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
+      }
+      
+      await initializeRects();
+    }
+  
+    // ✅ NEW: Initialize rectangles renderer with dual bind group architecture
+    async function initializeRects() {
+      try {
+        if (!gpuCoordinator) {
+          throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
+        }
+  
+        // Create base renderer with scale type information
+        renderer = new BaseGPURenderer('rects', webGPUContext, gpuCoordinator, chartContext, { 
+          zIndex,
+          xScaleType: chartContext.scaleTypes?.x || 'linear',
+          yScaleType: chartContext.scaleTypes?.y || 'linear'
+        });
+  
+        await renderer.initialize({
+          markShaderCode: rectsShaderCode,
+          vertexBufferLayout,       
+          dataBindingConfig,        
+        });
+  
+        // Initialize rectangle-specific geometry
+        await initializeRectGeometry();
+        
+        // Register layer with base renderer
+        renderer.registerLayer(drawRects);
+  
+        console.log('✅ Rects component initialized with dual bind group architecture (6 data channels)');
+  
+      } catch (error) {
+        console.error('❌ Rects component initialization failed:', error);
+        initializationError = error.message;
+        throw error;
+      }
+    }
+  
+    onMount(async () => {
+      try {
+        await waitForWebGPU();
+      } catch (error) {
+        console.error('❌ Rects component mount failed:', error);
+        initializationError = error.message;
+      }
+    });
+  
+    onDestroy(() => {
+      try {
+        // Clean up rectangle-specific resources
+        if (rectGeometryBuffer && !rectGeometryBuffer.destroyed) {
+          rectGeometryBuffer.destroy();
+        }
+  
+        // Base renderer handles all other cleanup
+        if (renderer) {
+          renderer.destroy();
+        }
+        
+      } catch (error) {
+        console.error('❌ Error during Rects component cleanup:', error);
+      }
+    });
+  </script>
+  
+  {#if initializationError}
+    <div class="rects-error">
+      <p>Rects component failed to initialize:</p>
+      <p class="error-message">{initializationError}</p>
+    </div>
+  {/if}
+  
+  <style>
+    .rects-error {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background-color: rgba(255, 240, 240, 0.9);
+      border: 1px solid #ffcccb;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: #d32f2f;
+      z-index: 1000;
+      max-width: 300px;
+    }
+  
+    .error-message {
+      font-family: monospace;
+      background-color: rgba(255, 255, 255, 0.8);
+      padding: 4px 6px;
+      border-radius: 2px;
+      margin-top: 4px;
+      font-size: 11px;
+    }
+  </style>
+</src/lib/components/rendering/Rects.svelte>
+
 <src/lib/components/marks/BaseMarkSetup.svelte.js>
   // src/lib/components/marks/BaseMarkSetup.svelte.js
   import { untrack } from 'svelte';
@@ -4824,6 +5189,245 @@
   {/if}
 </src/lib/components/marks/DotsMark.svelte>
 
+<src/lib/components/marks/BarMarkX.svelte>
+  <script>
+    import { getContext, onDestroy, untrack } from 'svelte';
+    import { getScaleState } from '$lib/scales';
+    import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+    import { Rects } from '../rendering/index.js';
+    import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+    import { getSourceType, processData, processColorData, processAlphaData, parseColor, buildSelectFromChannels } from './utils/index.js';
+  
+    let { 
+      table, 
+      selection, 
+      x,           // shorthand for x2
+      x1 = 0,      // baseline (start of bars)
+      x2 = x,      // end of bars (the data values)
+      y,           // categorical data
+      color, 
+      alpha = 0.8,
+      limit,
+      filterNulls = false,
+  
+      padding,        // Simple padding (0-1)
+      paddingInner,   // Inner padding between bars (0-1) 
+      paddingOuter,   // Outer padding before/after bars (0-1)
+      align = 0.5,    // Alignment of bars within outer padding (0-1)
+    } = $props();
+  
+    const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
+  
+    const coordinator = getContext('mosaic-coordinator');
+    const chartContext = getContext('chart');
+    const colorScale = $derived(getScaleState('color', 'ordinal'));
+  
+    let setup = $state(null);
+    let xScaleId = $derived(chartContext.xScaleState?.id);
+    let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+    const yScaleConfig = $derived.by(() => {
+      const config = {};
+      
+      // Only include defined values to avoid overriding defaults unnecessarily
+      if (padding != null) config.padding = padding;
+      if (paddingInner != null) config.paddingInner = paddingInner;
+      if (paddingOuter != null) config.paddingOuter = paddingOuter;
+      if (align != null) config.align = align;
+      
+      return config;
+    });
+  
+    const config = $derived({
+      markType: 'barx',
+      supportedScaleTypes: {
+        x: ['linear', 'identity'],           // continuous only
+        y: ['band']                          // categorical only
+      },
+      scaleRequirements: {
+        x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
+        y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
+      },
+      table,
+      selection,
+      select: buildSelectFromChannels({ x1, x2, y, color }),
+      clientOptions: {
+        limit,
+        filterNulls: filterNulls ? [x1, x2, y] : null
+      }
+    });
+  
+    // Data processing
+    let arrowTable = $derived(setup?.client?.arrowTable);
+    let instanceCount = $derived(arrowTable?.numRows || 0);
+  
+    // Get Arrow columns (only for SQL expressions)
+    let x1Column = $derived(arrowTable?.getChild('x1'));
+    let x2Column = $derived(arrowTable?.getChild('x2')); 
+    let yColumn = $derived(arrowTable?.getChild('y'));
+    let colorColumn = $derived(arrowTable?.getChild('color'));
+  
+    let dataStrategies = $derived({
+      x1: getSourceType(x1),
+      x2: getSourceType(x2), 
+      y: getSourceType(y),
+      color: getSourceType(color),
+      alpha: getSourceType(alpha)
+    });
+  
+    // Process x data using utility functions
+    let x0Data = $derived.by(() => {
+      if (!instanceCount) return null;
+      return processData(x1, x1Column, instanceCount, dataStrategies.x1);
+    });
+  
+    let x1Data = $derived.by(() => {
+      if (!instanceCount) return null;
+      return processData(x2, x2Column, instanceCount, dataStrategies.x2);
+    });
+  
+    // Process categorical y data through band scale
+    let yData = $derived.by(() => {
+      if (!instanceCount || !yColumn || !setup?.actualYScaleType) return null;
+      
+      if (setup.actualYScaleType === 'band') {
+        console.log('bar mark x y data processing')
+        const rawArray = yColumn.toArray();
+        const indices = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
+        
+        // Convert indices to rectangle coordinates
+        const y0Data = new Float32Array(instanceCount);
+        const y1Data = new Float32Array(instanceCount);
+        
+        for (let i = 0; i < instanceCount; i++) {
+          const categoryIndex = indices[i];
+          // Each category spans from index to index+1 in band scale space
+          y0Data[i] = categoryIndex;
+          y1Data[i] = categoryIndex;
+        }
+        
+        return { y0Data, y1Data };
+      }
+      
+      return null;
+    });
+  
+    let y0Data = $derived(yData?.y0Data);
+    let y1Data = $derived(yData?.y1Data);
+    let colorData = $derived(processColorData(color, colorColumn, instanceCount, colorScale, dataStrategies.color));
+    let alphaData = $derived(processAlphaData(alpha, instanceCount, dataStrategies.alpha));
+  
+    // Setup effect
+    $effect(() => {
+      console.log('barx setup effect');
+      void config, xScaleId, yScaleId;
+      
+      untrack(() => {
+        setup?.destroy();
+        
+        setup = new BaseMarkSetup(
+          config,
+          coordinator,
+          chartContext,
+          markId
+        );
+      });
+    });
+  
+    onDestroy(() => {
+      setup?.destroy();
+    });
+  
+    // $effect(() => {
+    //   console.log('🔍 BarMarkX Data Processing:', {
+    //     setupReady: !!setup,
+    //     gpuReady: setup?.gpuReady,
+    //     arrowTable: !!arrowTable,
+    //     instanceCount,
+        
+    //     // Raw data from database
+    //     x1Column: x1Column ? `${x1Column.toArray().length} items` : 'null',
+    //     x2Column: x2Column ? `${x2Column.toArray().length} items` : 'null', 
+    //     yColumn: yColumn ? `${yColumn.toArray().length} items` : 'null',
+        
+    //     // Processed data arrays
+    //     x0Data: x0Data ? `${x0Data.length} items, sample: [${Array.from(x0Data.slice(0, 3)).join(', ')}]` : 'null',
+    //     x1Data: x1Data ? `${x1Data.length} items, sample: [${Array.from(x1Data.slice(0, 3)).join(', ')}]` : 'null',
+    //     y0Data: y0Data ? `${y0Data.length} items, sample: [${Array.from(y0Data.slice(0, 3)).join(', ')}]` : 'null',
+    //     y1Data: y1Data ? `${y1Data.length} items, sample: [${Array.from(y1Data.slice(0, 3)).join(', ')}]` : 'null',
+        
+    //     // Scale info
+    //     actualXScaleType: setup?.actualXScaleType,
+    //     actualYScaleType: setup?.actualYScaleType,
+        
+    //     willRenderRects: !!(setup?.gpuReady && x0Data && x1Data && y0Data && y1Data),
+    //   });
+    // });
+  
+    // $effect(() => {
+    //   console.log('🔍 BarMarkX Actual Data Values:', {
+    //     x0Data: x0Data ? Array.from(x0Data) : null,
+    //     x1Data: x1Data ? Array.from(x1Data) : null, 
+    //     y0Data: y0Data ? Array.from(y0Data) : null,
+    //     y1Data: y1Data ? Array.from(y1Data) : null,
+    //     colorData: colorData ? Array.from(colorData.slice(0, 12)) : null, // First 3 colors
+    //     alphaData: alphaData ? Array.from(alphaData) : null,
+    //   });
+    // });
+  
+    // $effect(() => {
+    //   void setup?.gpuReady
+    //   void chartContext.xScale
+    //   void chartContext.yScale
+  
+    //   if (setup?.gpuReady && chartContext.xScale && chartContext.yScale) {
+    //     console.log('🔍 Scale Domains vs Data:', {
+    //       // X scale domain and data
+    //       xDomain: chartContext.xScaleState.domain.current,
+    //       xDataRange: [Math.min(...x0Data), Math.max(...x1Data)],
+    //       xScaleRange: [0, chartContext.innerWidth],
+          
+    //       // Y scale info
+    //       yDomain: chartContext.yScaleState.effectiveDomain,
+    //       yCategoryPositions: Array.from(chartContext.yCategoryPositions),
+    //       yBandwidth: chartContext.yScale.bandwidth(),
+          
+    //       // Are x values within domain?
+    //       x0InRange: x0Data.map(x => {
+    //         const scaled = chartContext.xScale(x);
+    //         return { original: x, scaled, visible: scaled >= 0 && scaled <= chartContext.innerWidth };
+    //       })
+    //     });
+    //   }
+    // });
+  
+  </script>
+  
+  {#if setup?.gpuReady && x0Data && x1Data && y0Data && y1Data}
+    <Rects
+      {x0Data}
+      x1Data={x1Data}
+      {y0Data}
+      {y1Data}
+      {colorData}
+      {alphaData}
+      dataVersion={setup.client.dataVersion}
+    />
+  {:else if setup?.client?.error}
+    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+      Error: {setup.client.error.message}
+    </text>
+  {:else if setup?.client?.delayedLoading}
+    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+      Loading data...
+    </text>
+  {:else}
+    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+      Initializing bars...
+    </text>
+  {/if}
+</src/lib/components/marks/BarMarkX.svelte>
+
 <src/lib/gpu/ScaleTemplateSystem.js>
   // src/lib/rendering/ScaleTemplateSystem.js
   
@@ -5061,4 +5665,456 @@
   // Export singleton instance
   export const scaleTemplateSystem = new ScaleTemplateSystem();
 </src/lib/gpu/ScaleTemplateSystem.js>
+
+<src/routes/scatter_plot_matrix/+page.svelte>
+  <script>
+    import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
+    import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
+    // import { setScaleRegistry } from "$lib/scales";
+    import { setCoordinators } from "$lib";
+    import { onMount, onDestroy, setContext } from "svelte";
+    import MainView from "./MainView.svelte";
+    
+    // setScaleRegistry();
+    setCoordinators();
+  
+    let coord;
+    // setContext('mosaic-coordinator', coord);
+  
+    let isLoaded = $state(false);
+    let loadError = $state(null);
+  
+    const logs = [];
+    const queryLogger = {
+      ...console,
+  
+      debug(...values) {
+        if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
+          const queryLog = values[1];
+  
+          if (queryLog && queryLog.sql) {
+            const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false});
+            console.log(`[${timestamp}] \n${queryLog.sql}`);
+            logs.push({ query: queryLog.sql, time: new Date()})
+          }
+        }
+      },
+      getLogs() {
+        return logs;
+      }
+    };
+  
+    onMount(async () => {
+      try {
+        const wasm = wasmConnector();
+        coord = new Coordinator();
+        coord.databaseConnector(wasm);
+  
+        // coord.manager.logQueries(true);
+        // coord.manager.logger(queryLogger);
+      
+        setContext('mosaic-coordinator', coord);
+  
+  
+        await coord.exec(
+          loadParquet("penguins", `${window.location.origin}/data/penguins.parquet`)
+        );
+  
+        isLoaded = true
+      } catch (error) {
+        console.error("Initialization error:", error);
+        loadError = error.message;
+      }
+    });
+  </script>
+  
+  <div class="app-container">
+    {#if loadError}
+      <div class="error-container">Error loading data: {loadError}</div>
+    {:else if !isLoaded}
+      <div class="loading-container">Loading parquet data...</div>
+    {:else}
+      <MainView />
+    {/if}
+  </div>
+  
+  
+  <style>
+    .app-container {
+      width: 100%;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+  
+    .loading-container,
+    .error-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 200px;
+      padding: 2rem;
+    }
+  </style>
+</src/routes/scatter_plot_matrix/+page.svelte>
+
+<src/routes/scatter_plot_matrix/MainView.svelte>
+  <script>
+  	import { Selection } from '@uwdata/mosaic-core';
+  	import { sum, min, max } from '@uwdata/mosaic-sql';
+  	import { setContext, getContext } from 'svelte';
+  	import {
+  		ChartContainer,
+  		ColumnSelector,
+  		Grid,
+  		Frame,
+  		AxisLeft,
+  		AxisBottom,
+  		MarginLabel,
+  		Crosshair,
+  		WebGPUCanvas,
+  		DotsMark,
+  		BarMark
+  	} from '$lib/components';
+  
+  	const coordinator = getContext('mosaic-coordinator');
+  	const selection = Selection.crossfilter();
+  
+  	let chartConfig = $state([
+  		{
+  			id: '1',
+  			table: 'penguins',
+  			x: 'bill_length',
+  			y: 'bill_depth'
+  		},
+  		{
+  			id: '2',
+  			table: 'penguins',
+  			// x: 'body_mass',
+  			x: 'bill_length',
+  			y: 'bill_depth'
+  			// y: 'bill_depth'
+  		},
+  		{
+  			id: '3',
+  			table: 'penguins',
+  			x: 'bill_length',
+  			y: 'flipper_length'
+  		},
+  		{
+  			id: '4',
+  			table: 'penguins',
+  			x: 'bill_depth', //'body_mass',
+  			y: 'flipper_length'
+  		}
+  	]);
+  
+  	let gridRows = $state(2);
+  	let gridColumns = $state(1);
+  
+  	setContext('chartConfig', {
+  		get chartConfig() {
+  			return chartConfig;
+  		},
+  		set chartConfig(value) {
+  			chartConfig = value;
+  		},
+  		get gridRows() {
+  			return gridRows;
+  		},
+  		set gridRows(value) {
+  			gridRows = value;
+  		},
+  		get gridColumns() {
+  			return gridColumns;
+  		},
+  		set gridColumns(value) {
+  			gridColumns = value;
+  		}
+  	});
+  
+  	let webGPU = $state(true);
+  </script>
+  
+  <div class="main-view-container">
+  
+  	<ColumnSelector />
+  
+  	<div class="charts-container" style="--grid-rows: {gridRows}; --grid-columns: {gridColumns};">
+  		{#each chartConfig as config, i (config.id)}
+  			<div class="chart-wrapper">
+  				<ChartContainer xLabel={config.x} yLabel={config.y}>
+  					{#snippet background()}
+  						<Grid />
+  						<Frame />
+  						<AxisLeft />
+  						<AxisBottom />
+  						<MarginLabel />
+  					{/snippet}
+  
+  					{#snippet canvas()}
+  						<WebGPUCanvas>
+  							{#snippet canvasComponents()}
+  								{#if webGPU}
+  									<DotsMark
+  										table={'penguins'}
+  										x={config.x}
+  										y={config.y}
+  										color={'species'}
+  										alpha="1.0"
+  										radius="5"
+  									/>
+  								{/if}
+  							{/snippet}
+  						</WebGPUCanvas>
+  					{/snippet}
+  
+  					{#snippet foreground()}
+  						<Crosshair />
+  					{/snippet}
+  				</ChartContainer>
+  			</div>
+  		{/each}
+  	</div>
+  </div>
+  
+  <style>
+  	.main-view-container {
+  		width: 100%;
+  		display: flex;
+  		flex-direction: column;
+  		/* align-items: center; */
+  		padding-bottom: 40px; /* Ensure space at bottom */
+  	}
+  
+  	.charts-container {
+  		display: grid;
+  		grid-template-rows: repeat(var(--grid-rows), auto);
+  		grid-template-columns: repeat(var(--grid-columns), 1fr);
+  		gap: 10px;
+  		width: 80%;
+  		max-width: 1600px;
+  		margin: 20px auto;
+  	}
+  
+  	.chart-wrapper {
+  		width: 100%;
+  		aspect-ratio: 4/3;
+  		min-height: 200px;
+  		max-height: 400px;
+  		position: relative; /* Important for containing absolutely positioned children */
+  	}
+  </style>
+</src/routes/scatter_plot_matrix/MainView.svelte>
+
+<src/routes/bar_chart/+page.svelte>
+  <script>
+    import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
+    import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
+    // import { setScaleRegistry } from "$lib/scales";
+    import { setCoordinators } from "$lib";
+    import { onMount, onDestroy, setContext } from "svelte";
+    import MainView from "./MainView.svelte";
+    
+    // setScaleRegistry();
+    setCoordinators();
+  
+    let coord;
+    // setContext('mosaic-coordinator', coord);
+  
+    let isLoaded = $state(false);
+    let loadError = $state(null);
+  
+    const logs = [];
+    const queryLogger = {
+      ...console,
+  
+      debug(...values) {
+        if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
+          const queryLog = values[1];
+  
+          if (queryLog && queryLog.sql) {
+            const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false});
+            console.log(`[${timestamp}] \n${queryLog.sql}`);
+            logs.push({ query: queryLog.sql, time: new Date()})
+          }
+        }
+      },
+      getLogs() {
+        return logs;
+      }
+    };
+  
+    onMount(async () => {
+      try {
+        const wasm = wasmConnector();
+        coord = new Coordinator();
+        coord.databaseConnector(wasm);
+  
+        coord.manager.logQueries(true);
+        coord.manager.logger(queryLogger);
+      
+        setContext('mosaic-coordinator', coord);
+  
+  
+        await coord.exec(
+          loadParquet("penguins", `${window.location.origin}/data/penguins.parquet`)
+        );
+  
+        isLoaded = true
+      } catch (error) {
+        console.error("Initialization error:", error);
+        loadError = error.message;
+      }
+    });
+  
+    import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
+    
+    if (typeof window !== 'undefined') {
+      window.testScaleConfig = {
+        resolveScaleConfiguration,
+        SCALE_PRIORITIES,
+        // NEW: Add access to chart context for testing
+        getCurrentChart: () => {
+          // This would need to be set from your actual chart component
+          return window.currentChartContext;
+        }
+      };
+  }
+  
+  </script>
+  
+  <div class="app-container">
+    {#if loadError}
+      <div class="error-container">Error loading data: {loadError}</div>
+    {:else if !isLoaded}
+      <div class="loading-container">Loading parquet data...</div>
+    {:else}
+      <MainView />
+    {/if}
+  </div>
+  
+  
+  <style>
+    .app-container {
+      width: 100%;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+  
+    .loading-container,
+    .error-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 200px;
+      padding: 2rem;
+    }
+  </style>
+</src/routes/bar_chart/+page.svelte>
+
+<src/routes/bar_chart/MainView.svelte>
+  <script>
+  	import { Selection } from '@uwdata/mosaic-core';
+  	import { sum, min, max } from '@uwdata/mosaic-sql';
+  	import { setContext, getContext } from 'svelte';
+  	import {
+  		ChartContainer,
+  		ColumnSelector,
+  		Grid,
+  		Frame,
+  		AxisLeft,
+  		AxisBottom,
+  		MarginLabel,
+  		Crosshair,
+  		WebGPUCanvas,
+  		DotsMark,
+  		BarMark,
+  		BarMarkX
+  	} from '$lib/components';
+  	import Rects from '$lib/components/rendering/Rects.svelte';
+  
+  	const coordinator = getContext('mosaic-coordinator');
+  	const selection = Selection.crossfilter();
+  
+  	// Create test data
+  	const x0Data = new Float32Array([10, 60, 20]);     // Left edges
+  	const x1Data = new Float32Array([50, 100, 80]);    // Right edges
+  	const y0Data = new Float32Array([10, 10, 30]);      // Bottom edges  
+  	const y1Data = new Float32Array([50, 30, 80]);      // Top edges
+  	const colorData = new Float32Array([
+  	1,0,0,1,  // Red rectangle
+  	0,1,0,1,  // Green rectangle
+  	0,0,1,1   // Blue rectangle
+  	]);
+  	const alphaData = new Float32Array([0.3, 0.2, 0.3]);
+  
+  </script>
+  
+  <div class="chart-wrapper">
+  	<ChartContainer xLabel="bill_length" yLabel="species">
+  	  {#snippet background()}
+  		<Grid show='x'/>
+  		<Frame />
+  		<AxisLeft />
+  		<AxisBottom />
+  		<MarginLabel />
+  	  {/snippet}
+    
+  	  {#snippet canvas()}
+  		<WebGPUCanvas>
+  		  {#snippet canvasComponents()}
+  			<!-- <BarMarkX
+  			  table="penguins"
+  			  x1={min("bill_length")}
+  			  x2={max("bill_length")}
+  			  y="species"
+  			  color="purple"
+  			  alpha={1}
+  			  preferredYScaleType = 'band'
+  			/> -->
+  			<Rects 
+  				{x0Data} {x1Data} {y0Data} {y1Data} 
+  				{colorData} {alphaData} 
+  				dataVersion={1} 
+  			/>
+  		  {/snippet}
+  		</WebGPUCanvas>
+  	  {/snippet}
+    
+  	  {#snippet foreground()}
+  		<Crosshair />
+  	  {/snippet}
+  	</ChartContainer>
+    </div>
+    
+  <style>
+  	.main-view-container {
+  		width: 100%;
+  		display: flex;
+  		flex-direction: column;
+  		/* align-items: center; */
+  		padding-bottom: 40px; /* Ensure space at bottom */
+  	}
+  
+  	.charts-container {
+  		display: grid;
+  		grid-template-rows: repeat(var(--grid-rows), auto);
+  		grid-template-columns: repeat(var(--grid-columns), 1fr);
+  		gap: 10px;
+  		width: 80%;
+  		max-width: 1600px;
+  		margin: 20px auto;
+  	}
+  
+  	.chart-wrapper {
+  		width: 100%;
+  		aspect-ratio: 4/3;
+  		min-height: 200px;
+  		max-height: 400px;
+  		position: relative; /* Important for containing absolutely positioned children */
+  	}
+  </style>
+</src/routes/bar_chart/MainView.svelte>
 

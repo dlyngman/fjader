@@ -212,14 +212,14 @@ export class GPUCoordinator {
     }
   }
 
-  async #updateScaleSSBOWithStaging() {
+  #updateScaleSSBOWithStaging() {
     if (this.#animatedScales.size === 0) return;
     
-    // Wait for in-flight limit
-    while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-      await this.#inflightPromises[0];
-      this.#inflightPromises.shift();
-    }
+    // // Wait for in-flight limit
+    // while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+    //   await this.#inflightPromises[0];
+    //   this.#inflightPromises.shift();
+    // }
     
     // Get pre-mapped staging buffer from pool
     const staging = this.#stagingPool.pop();
@@ -452,8 +452,9 @@ export class GPUCoordinator {
     }
   }
 
-  #animationLoop = async (currentTime) => {
+  #animationLoop = (currentTime) => {
     const loopStart = performance.now();
+    // console.log('loopStart', loopStart)
     
     // Enhanced timing logic with smoothing
     const now = performance.now();
@@ -506,10 +507,12 @@ export class GPUCoordinator {
     this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
     this.#dirtyChartIDs.clear();
 
-    if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-      await this.#inflightPromises[0]
-      this.#inflightPromises.shift();
-    }
+    // if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+    //   const beforeAwait = performance.now()
+    //   await this.#inflightPromises[0]
+    //   this.#inflightPromises.shift();
+    //   console.log('RAF awaited', performance.now() - beforeAwait);
+    // }
 
     // Render
     const renderStart = performance.now();
@@ -549,7 +552,7 @@ export class GPUCoordinator {
   };
 
 
-  async #coordinatedRender(chartsNeedingRender) {
+  #coordinatedRender(chartsNeedingRender) {
 
     try {
 
@@ -557,7 +560,7 @@ export class GPUCoordinator {
 
       // Update scales with staging buffer
       if (this.#ssboNeedsUpload || this.#animatedScales.size > 0) {
-        stagingResult = await this.#updateScaleSSBOWithStaging();
+        stagingResult = this.#updateScaleSSBOWithStaging();
         this.#ssboNeedsUpload = false
       }
 
@@ -600,6 +603,8 @@ export class GPUCoordinator {
 
         // Set the chart's frame bind group once (all layers in this chart will use it)
         passEncoder.setBindGroup(0, chartPerFrameBindGroup);
+        passEncoder.setBindGroup(2, currentScaleBindGroup);
+
         let currentPipeline = null;
         let currentPerDataBindGroup = null;
 
@@ -626,8 +631,6 @@ export class GPUCoordinator {
             currentPerDataBindGroup = perDataBindGroupToUse;
           }
 
-          passEncoder.setBindGroup(2, currentScaleBindGroup);
-          
           layer.draw(passEncoder);
         }
         passEncoder.end();
@@ -640,16 +643,22 @@ export class GPUCoordinator {
 
       this.#device.queue.submit([commandEncoder.finish()]);
 
-
-      // Async remap staging back to pool
       if (stagingResult) {
-        const p = this.#device.queue.onSubmittedWorkDone().then(() => {
-          return stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
+        stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
             this.#stagingPool.push(stagingResult.staging);
-          });
         });
-        this.#inflightPromises.push(p);
       }
+
+
+      // // Async remap staging back to pool
+      // if (stagingResult) {
+      //   const p = this.#device.queue.onSubmittedWorkDone().then(() => {
+      //     return stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
+      //       this.#stagingPool.push(stagingResult.staging);
+      //     });
+      //   });
+      //   this.#inflightPromises.push(p);
+      // }
       
       this.#frameId++;
       
