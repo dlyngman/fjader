@@ -4,6 +4,30 @@ import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
 const TIMESTEP = 1000 / 120; // 60Hz physics clock
 
 
+// Note: We disallow negative values as this is used for timestamp queries
+// where it's possible for a query to return a beginning time greater than the
+// end time. See: https://gpuweb.github.io/gpuweb/#timestamp
+class NonNegativeRollingAverage {
+  #total = 0;
+  #samples = [];
+  #cursor = 0;
+  #numSamples;
+  constructor(numSamples = 30) {
+    this.#numSamples = numSamples;
+  }
+  addSample(v) {
+    if (!Number.isNaN(v) && Number.isFinite(v) && v >= 0) {
+      this.#total += v - (this.#samples[this.#cursor] || 0);
+      this.#samples[this.#cursor] = v;
+      this.#cursor = (this.#cursor + 1) % this.#numSamples;
+    }
+  }
+  get() {
+    return this.#total / this.#samples.length;
+  }
+}
+
+
 // Add this class inside GPUCoordinator.svelte.js before the GPUCoordinator class
 class ScaleIndexManager {
   #scaleIds = [];
@@ -43,6 +67,10 @@ class ScaleIndexManager {
 export class GPUCoordinator {
   // Core WebGPU resources
   #device = $state(null);
+  #canTimestamp = false;
+  #querySet = null;
+  #resolveBuffer = null;
+  #resultBuffer = null;
   #presentationFormat = $state(null);
   #initialized = $state(false);
 
@@ -108,6 +136,11 @@ export class GPUCoordinator {
 
   #scaleIdToInstance = new Map();
   #ssboNeedsUpload = false;
+
+  #fpsAverage = new NonNegativeRollingAverage(30);
+  #cpuAverage = new NonNegativeRollingAverage(30);
+  #gpuAverage = new NonNegativeRollingAverage(30);
+  timings = $state({});
 
   constructor(config = {}) {
     this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -215,12 +248,6 @@ export class GPUCoordinator {
   #updateScaleSSBOWithStaging() {
     if (this.#animatedScales.size === 0) return;
     
-    // // Wait for in-flight limit
-    // while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-    //   await this.#inflightPromises[0];
-    //   this.#inflightPromises.shift();
-    // }
-    
     // Get pre-mapped staging buffer from pool
     const staging = this.#stagingPool.pop();
     if (!staging) {
@@ -235,6 +262,7 @@ export class GPUCoordinator {
     // Write all scales synchronously to mapped staging
     const view = new Float32Array(staging.getMappedRange());
     this.#fillAllScales(view);
+    // console.log(view[0], view[1], view[2])
     
     return { staging, dstOffset, slot };
   }
@@ -458,50 +486,90 @@ export class GPUCoordinator {
     
     // Enhanced timing logic with smoothing
     const now = performance.now();
+    // const now = currentTime;
     if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
     let deltaTime = now - this.#lastFrameTime;
+    // console.log(deltaTime)
     this.#lastFrameTime = now;
 
-    if (deltaTime < 0) deltaTime = 8.3;
-    if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
+    
+    // Clamp to prevent issues on tab resume or frame drops
+    deltaTime = Math.min(deltaTime, 33.33); // Cap at ~30fps minimum
+    // if (deltaTime < 0) deltaTime = 8.3;
+    // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
 
     // Smooth delta time for better performance metrics
-    this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
-    this.#accumulator += deltaTime;
+    // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
 
-    // Fixed-step physics loop
-    while (this.#accumulator >= TIMESTEP) {
-      // Process input
-      for (const scale of this.#animatedScales) {
-        const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
-        if (!scheduledProcessed && scale._applyInput) {
-          scale._applyInput(now);
-        }
-      }
-
-      // Update physics
-      for (const scale of this.#animatedScales) {
-        if (scale._updatePhysics) {
-          scale._updatePhysics(TIMESTEP);
-        }
-      }
-      this.#accumulator -= TIMESTEP;
+    // Process input immediately (no accumulator needed)
+    // for (const scale of this.#animatedScales) {
+    //   // Process pan input from buffer
+    //   const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+      
+    //   // If no scheduled input was processed, apply accumulated input (zoom)
+    //   if (!scheduledProcessed && scale._applyInput) {
+    //     scale._applyInput(now);
+    //   }
+    // }
+    for (const scale of this.#animatedScales) {
+      scale._applyInput?.(now);
     }
 
-    // Prepare for render with interpolation
-    const alpha = this.#accumulator / TIMESTEP;
+    // Update physics with actual deltaTime
+    for (const scale of this.#animatedScales) {
+      scale._updatePhysics(deltaTime); // Pass actual ms, not fixed
+      // scale._updatePhysics(this.#smoothedDeltaTime); // Pass actual ms, not fixed
+    }
+
+    // Render directly - no interpolation needed
     const chartsToRender = this.#chartsToRenderSet;
     chartsToRender.clear();
     
-    let renderCurrent;
-
     for (const scale of this.#animatedScales) {
-      renderCurrent = scale._setRenderState(alpha);
+      // No alpha parameter - just set render state to current physics
+      scale._setRenderState();
       
-      // Add affected charts to render list
       const affectedCharts = this.#getChartsUsingScale(scale);
       affectedCharts.forEach(chartId => chartsToRender.add(chartId));
     }
+  
+    // // Smooth delta time for better performance metrics
+    // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
+    // this.#accumulator += deltaTime;
+
+    // // Fixed-step physics loop
+    // while (this.#accumulator >= TIMESTEP) {
+    //   // Process input
+    //   for (const scale of this.#animatedScales) {
+    //     const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+    //     if (!scheduledProcessed && scale._applyInput) {
+    //       scale._applyInput(now);
+    //     }
+    //   }
+
+    //   // Update physics
+    //   for (const scale of this.#animatedScales) {
+    //     if (scale._updatePhysics) {
+    //       scale._updatePhysics(TIMESTEP);
+    //     }
+    //   }
+    //   this.#accumulator -= TIMESTEP;
+    // }
+
+    // // Prepare for render with interpolation
+    // const alpha = this.#accumulator / TIMESTEP;
+    // const chartsToRender = this.#chartsToRenderSet;
+    // chartsToRender.clear();
+    
+    // let renderCurrent;
+
+    // for (const scale of this.#animatedScales) {
+    //   renderCurrent = scale._setRenderState(alpha);
+      
+    //   // Add affected charts to render list
+    //   const affectedCharts = this.#getChartsUsingScale(scale);
+    //   affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+    // }
 
     // Add any charts that were dirtied by non-animation events
     this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
@@ -532,6 +600,11 @@ export class GPUCoordinator {
 
     const loopEnd = performance.now();
 
+    this.#cpuAverage.addSample(loopEnd - loopStart)
+    this.#fpsAverage.addSample(1 / (0.001*deltaTime))
+    this.timings.cpu = this.#cpuAverage.get().toFixed(2);
+    this.timings.fps = this.#fpsAverage.get().toFixed(2);
+
     // Performance logging
     // this.perf.log(
     //   loopStart,
@@ -553,6 +626,15 @@ export class GPUCoordinator {
 
 
   #coordinatedRender(chartsNeedingRender) {
+
+    // await this.#device.queue.onSubmittedWorkDone()
+    // await new Promise(resolve => setTimeout(resolve, 0));
+    // console.log('In flight frames', this.#inflightPromises.length);
+
+    // if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+    //   await this.#inflightPromises[0];
+    //   this.#inflightPromises.shift();
+    // }
 
     try {
 
@@ -634,6 +716,14 @@ export class GPUCoordinator {
           layer.draw(passEncoder);
         }
         passEncoder.end();
+
+      }
+
+      if (this.#canTimestamp) {
+        commandEncoder.resolveQuerySet(this.#querySet, 0, this.#querySet.count, this.#resolveBuffer, 0);
+        if (this.#resultBuffer.mapState === 'unmapped') {
+          commandEncoder.copyBufferToBuffer(this.#resolveBuffer, 0, this.#resultBuffer, 0, this.#resultBuffer.size);
+        }
       }
 
       // Unmap staging before submit
@@ -643,12 +733,35 @@ export class GPUCoordinator {
 
       this.#device.queue.submit([commandEncoder.finish()]);
 
+      const p = this.#device.queue.onSubmittedWorkDone();
+      this.#inflightPromises.push(p);
+
+      // Remove when resolved
+      p.then(() => {
+        // console.log(`Frame presented at: ${performance.now()}`);
+        const index = this.#inflightPromises.indexOf(p);
+        if (index !== -1) {
+          this.#inflightPromises.splice(index, 1);
+        }
+      });
+
+      if (this.#canTimestamp && this.#resultBuffer.mapState === 'unmapped') {
+        this.#resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
+          const times = new BigInt64Array(this.#resultBuffer.getMappedRange());
+          const gpuTime = Number(times[1] - times[0]);
+          this.#gpuAverage.addSample(gpuTime / 1000);
+          this.timings.gpu = this.#gpuAverage.get().toFixed(2);
+          this.#resultBuffer.unmap();
+        });
+      }
+
       if (stagingResult) {
         stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
             this.#stagingPool.push(stagingResult.staging);
         });
       }
 
+    
 
       // // Async remap staging back to pool
       // if (stagingResult) {
@@ -988,6 +1101,13 @@ export class GPUCoordinator {
           loadOp: 'clear',
           storeOp: 'store',
         }],
+        ...(this.#canTimestamp && {
+          timestampWrites: {
+            querySet: this.#querySet,
+            beginningOfPassWriteIndex: 0,
+            endOfPassWriteIndex: 1,
+          },
+        }),
       };
     } else {
       return {
@@ -997,6 +1117,13 @@ export class GPUCoordinator {
           loadOp: 'clear',
           storeOp: 'store',
         }],
+        ...(this.#canTimestamp && {
+          timestampWrites: {
+            querySet: this.#querySet,
+            beginningOfPassWriteIndex: 0,
+            endOfPassWriteIndex: 1,
+          },
+        }),
       };
     }
   }
@@ -1248,8 +1375,36 @@ export class GPUCoordinator {
       throw new Error('No appropriate GPUAdapter found');
     }
 
-    this.#device = await adapter.requestDevice();
+    this.#canTimestamp = adapter.features.has('timestamp-query');
+
+    this.#device = await adapter.requestDevice({
+      requiredFeatures: [
+        ...(this.#canTimestamp ? ['timestamp-query'] : []),
+       ],
+    });
+
     this.#presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+
+    // Timestamp querying resources
+    if (!this.#canTimestamp) {
+      console.warn('Timestamp queries not supported');
+      return;
+    }
+    
+    this.#querySet = this.device.createQuerySet({
+      type: 'timestamp',
+      count: 2,
+    });
+      
+    this.#resolveBuffer = this.device.createBuffer({
+      size: this.#querySet.count * 8,
+      usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+    });
+      
+    this.#resultBuffer = this.device.createBuffer({
+      size: this.#resolveBuffer.size,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
   }
 
   async #createSharedResources() {

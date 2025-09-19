@@ -5,6 +5,30 @@
   const TIMESTEP = 1000 / 120; // 60Hz physics clock
   
   
+  // Note: We disallow negative values as this is used for timestamp queries
+  // where it's possible for a query to return a beginning time greater than the
+  // end time. See: https://gpuweb.github.io/gpuweb/#timestamp
+  class NonNegativeRollingAverage {
+    #total = 0;
+    #samples = [];
+    #cursor = 0;
+    #numSamples;
+    constructor(numSamples = 30) {
+      this.#numSamples = numSamples;
+    }
+    addSample(v) {
+      if (!Number.isNaN(v) && Number.isFinite(v) && v >= 0) {
+        this.#total += v - (this.#samples[this.#cursor] || 0);
+        this.#samples[this.#cursor] = v;
+        this.#cursor = (this.#cursor + 1) % this.#numSamples;
+      }
+    }
+    get() {
+      return this.#total / this.#samples.length;
+    }
+  }
+  
+  
   // Add this class inside GPUCoordinator.svelte.js before the GPUCoordinator class
   class ScaleIndexManager {
     #scaleIds = [];
@@ -44,6 +68,10 @@
   export class GPUCoordinator {
     // Core WebGPU resources
     #device = $state(null);
+    #canTimestamp = false;
+    #querySet = null;
+    #resolveBuffer = null;
+    #resultBuffer = null;
     #presentationFormat = $state(null);
     #initialized = $state(false);
   
@@ -109,6 +137,11 @@
   
     #scaleIdToInstance = new Map();
     #ssboNeedsUpload = false;
+  
+    #fpsAverage = new NonNegativeRollingAverage(30);
+    #cpuAverage = new NonNegativeRollingAverage(30);
+    #gpuAverage = new NonNegativeRollingAverage(30);
+    timings = $state({});
   
     constructor(config = {}) {
       this.#msaaSampleCount = config.msaaSampleCount ?? 4;
@@ -213,14 +246,14 @@
       }
     }
   
-    async #updateScaleSSBOWithStaging() {
+    #updateScaleSSBOWithStaging() {
       if (this.#animatedScales.size === 0) return;
       
-      // Wait for in-flight limit
-      while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-        await this.#inflightPromises[0];
-        this.#inflightPromises.shift();
-      }
+      // // Wait for in-flight limit
+      // while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+      //   await this.#inflightPromises[0];
+      //   this.#inflightPromises.shift();
+      // }
       
       // Get pre-mapped staging buffer from pool
       const staging = this.#stagingPool.pop();
@@ -453,66 +486,103 @@
       }
     }
   
-    #animationLoop = async (currentTime) => {
+    #animationLoop = (currentTime) => {
       const loopStart = performance.now();
-      // console.log('loopStart', loopStart)
+      console.log('loopStart', loopStart)
       
       // Enhanced timing logic with smoothing
-      const now = performance.now();
+      // const now = performance.now();
+      const now = currentTime;
       if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
       let deltaTime = now - this.#lastFrameTime;
+      console.log(deltaTime)
       this.#lastFrameTime = now;
   
-      if (deltaTime < 0) deltaTime = 8.3;
-      if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
+      
+      // Clamp to prevent issues on tab resume or frame drops
+      deltaTime = Math.min(deltaTime, 33.33); // Cap at ~30fps minimum
+      // if (deltaTime < 0) deltaTime = 8.3;
+      // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
   
       // Smooth delta time for better performance metrics
-      this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
-      this.#accumulator += deltaTime;
+      // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
   
-      // Fixed-step physics loop
-      while (this.#accumulator >= TIMESTEP) {
-        // Process input
-        for (const scale of this.#animatedScales) {
-          const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
-          if (!scheduledProcessed && scale._applyInput) {
-            scale._applyInput(now);
-          }
+      // Process input immediately (no accumulator needed)
+      for (const scale of this.#animatedScales) {
+        // Process pan input from buffer
+        const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+        
+        // If no scheduled input was processed, apply accumulated input (zoom)
+        if (!scheduledProcessed && scale._applyInput) {
+          scale._applyInput(now);
         }
-  
-        // Update physics
-        for (const scale of this.#animatedScales) {
-          if (scale._updatePhysics) {
-            scale._updatePhysics(TIMESTEP);
-          }
-        }
-        this.#accumulator -= TIMESTEP;
       }
   
-      // Prepare for render with interpolation
-      const alpha = this.#accumulator / TIMESTEP;
+      // Update physics with actual deltaTime
+      for (const scale of this.#animatedScales) {
+        scale._updatePhysics(deltaTime); // Pass actual ms, not fixed
+        // scale._updatePhysics(this.#smoothedDeltaTime); // Pass actual ms, not fixed
+      }
+  
+      // Render directly - no interpolation needed
       const chartsToRender = this.#chartsToRenderSet;
       chartsToRender.clear();
       
-      let renderCurrent;
-  
       for (const scale of this.#animatedScales) {
-        renderCurrent = scale._setRenderState(alpha);
+        // No alpha parameter - just set render state to current physics
+        scale._setRenderState();
         
-        // Add affected charts to render list
         const affectedCharts = this.#getChartsUsingScale(scale);
         affectedCharts.forEach(chartId => chartsToRender.add(chartId));
       }
+    
+      // // Smooth delta time for better performance metrics
+      // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
+      // this.#accumulator += deltaTime;
+  
+      // // Fixed-step physics loop
+      // while (this.#accumulator >= TIMESTEP) {
+      //   // Process input
+      //   for (const scale of this.#animatedScales) {
+      //     const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+      //     if (!scheduledProcessed && scale._applyInput) {
+      //       scale._applyInput(now);
+      //     }
+      //   }
+  
+      //   // Update physics
+      //   for (const scale of this.#animatedScales) {
+      //     if (scale._updatePhysics) {
+      //       scale._updatePhysics(TIMESTEP);
+      //     }
+      //   }
+      //   this.#accumulator -= TIMESTEP;
+      // }
+  
+      // // Prepare for render with interpolation
+      // const alpha = this.#accumulator / TIMESTEP;
+      // const chartsToRender = this.#chartsToRenderSet;
+      // chartsToRender.clear();
+      
+      // let renderCurrent;
+  
+      // for (const scale of this.#animatedScales) {
+      //   renderCurrent = scale._setRenderState(alpha);
+        
+      //   // Add affected charts to render list
+      //   const affectedCharts = this.#getChartsUsingScale(scale);
+      //   affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+      // }
   
       // Add any charts that were dirtied by non-animation events
       this.#dirtyChartIDs.forEach(id => chartsToRender.add(id));
       this.#dirtyChartIDs.clear();
   
       // if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-        // const beforeAwait = performance.now()
-        // await this.#inflightPromises[0]
-        // this.#inflightPromises.shift();
-        // console.log('RAF awaited', performance.now() - beforeAwait);
+      //   const beforeAwait = performance.now()
+      //   await this.#inflightPromises[0]
+      //   this.#inflightPromises.shift();
+      //   console.log('RAF awaited', performance.now() - beforeAwait);
       // }
   
       // Render
@@ -532,6 +602,11 @@
       const renderEnd = performance.now();
   
       const loopEnd = performance.now();
+  
+      this.#cpuAverage.addSample(loopEnd - loopStart)
+      this.#fpsAverage.addSample(1 / (0.001*deltaTime))
+      this.timings.cpu = this.#cpuAverage.get().toFixed(2);
+      this.timings.fps = this.#fpsAverage.get().toFixed(2);
   
       // Performance logging
       // this.perf.log(
@@ -555,13 +630,16 @@
   
     async #coordinatedRender(chartsNeedingRender) {
   
+      // await this.#device.queue.onSubmittedWorkDone()
+      await new Promise(resolve => setTimeout(resolve, 0));
+  
       try {
   
         let stagingResult = null;
   
         // Update scales with staging buffer
         if (this.#ssboNeedsUpload || this.#animatedScales.size > 0) {
-          stagingResult = await this.#updateScaleSSBOWithStaging();
+          stagingResult = this.#updateScaleSSBOWithStaging();
           this.#ssboNeedsUpload = false
         }
   
@@ -604,6 +682,8 @@
   
           // Set the chart's frame bind group once (all layers in this chart will use it)
           passEncoder.setBindGroup(0, chartPerFrameBindGroup);
+          passEncoder.setBindGroup(2, currentScaleBindGroup);
+  
           let currentPipeline = null;
           let currentPerDataBindGroup = null;
   
@@ -630,11 +710,17 @@
               currentPerDataBindGroup = perDataBindGroupToUse;
             }
   
-            passEncoder.setBindGroup(2, currentScaleBindGroup);
-            
             layer.draw(passEncoder);
           }
           passEncoder.end();
+  
+        }
+  
+        if (this.#canTimestamp) {
+          commandEncoder.resolveQuerySet(this.#querySet, 0, this.#querySet.count, this.#resolveBuffer, 0);
+          if (this.#resultBuffer.mapState === 'unmapped') {
+            commandEncoder.copyBufferToBuffer(this.#resolveBuffer, 0, this.#resultBuffer, 0, this.#resultBuffer.size);
+          }
         }
   
         // Unmap staging before submit
@@ -644,16 +730,32 @@
   
         this.#device.queue.submit([commandEncoder.finish()]);
   
-  
-        // Async remap staging back to pool
-        if (stagingResult) {
-          const p = this.#device.queue.onSubmittedWorkDone().then(() => {
-            return stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
-              this.#stagingPool.push(stagingResult.staging);
-            });
+        if (this.#canTimestamp && this.#resultBuffer.mapState === 'unmapped') {
+          this.#resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
+            const times = new BigInt64Array(this.#resultBuffer.getMappedRange());
+            const gpuTime = Number(times[1] - times[0]);
+            this.#gpuAverage.addSample(gpuTime / 1000);
+            this.timings.gpu = this.#gpuAverage.get().toFixed(2);
+            this.#resultBuffer.unmap();
           });
-          this.#inflightPromises.push(p);
         }
+  
+        if (stagingResult) {
+          stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
+              this.#stagingPool.push(stagingResult.staging);
+          });
+        }
+  
+  
+        // // Async remap staging back to pool
+        // if (stagingResult) {
+        //   const p = this.#device.queue.onSubmittedWorkDone().then(() => {
+        //     return stagingResult.staging.mapAsync(GPUMapMode.WRITE).then(() => {
+        //       this.#stagingPool.push(stagingResult.staging);
+        //     });
+        //   });
+        //   this.#inflightPromises.push(p);
+        // }
         
         this.#frameId++;
         
@@ -983,6 +1085,13 @@
             loadOp: 'clear',
             storeOp: 'store',
           }],
+          ...(this.#canTimestamp && {
+            timestampWrites: {
+              querySet: this.#querySet,
+              beginningOfPassWriteIndex: 0,
+              endOfPassWriteIndex: 1,
+            },
+          }),
         };
       } else {
         return {
@@ -992,6 +1101,13 @@
             loadOp: 'clear',
             storeOp: 'store',
           }],
+          ...(this.#canTimestamp && {
+            timestampWrites: {
+              querySet: this.#querySet,
+              beginningOfPassWriteIndex: 0,
+              endOfPassWriteIndex: 1,
+            },
+          }),
         };
       }
     }
@@ -1243,8 +1359,36 @@
         throw new Error('No appropriate GPUAdapter found');
       }
   
-      this.#device = await adapter.requestDevice();
+      this.#canTimestamp = adapter.features.has('timestamp-query');
+  
+      this.#device = await adapter.requestDevice({
+        requiredFeatures: [
+          ...(this.#canTimestamp ? ['timestamp-query'] : []),
+         ],
+      });
+  
       this.#presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+  
+      // Timestamp querying resources
+      if (!this.#canTimestamp) {
+        console.warn('Timestamp queries not supported');
+        return;
+      }
+      
+      this.#querySet = this.device.createQuerySet({
+        type: 'timestamp',
+        count: 2,
+      });
+        
+      this.#resolveBuffer = this.device.createBuffer({
+        size: this.#querySet.count * 8,
+        usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+      });
+        
+      this.#resultBuffer = this.device.createBuffer({
+        size: this.#resolveBuffer.size,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
     }
   
     async #createSharedResources() {
@@ -1525,6 +1669,7 @@
       categoryCount: 0,
       domainScale: 0.01
     };
+  
   
     constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}, gpuCoordinator = null) {
       this.id = crypto.randomUUID();
@@ -1854,16 +1999,16 @@
         }
       }
   
-      // Determine the smallest meaningful change
-      const domainSize = this.#activePanContext.domainWidth;
-      const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
-      const quantum = pixelEquivalent * 1;
+      // // Determine the smallest meaningful change
+      // const domainSize = this.#activePanContext.domainWidth;
+      // const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
+      // const quantum = pixelEquivalent * 1;
   
-      const beforeQuantization = [newMin, newMax];
+      // const beforeQuantization = [newMin, newMax];
     
-      // Quantize to avoid micro-errors
-      newMin = Math.round(newMin / quantum) * quantum;
-      newMax = Math.round(newMax / quantum) * quantum;
+      // // Quantize to avoid micro-errors
+      // newMin = Math.round(newMin / quantum) * quantum;
+      // newMax = Math.round(newMax / quantum) * quantum;
   
       // console.log(`Quantum: ${quantum.toFixed(8)}, Before: [${beforeQuantization[0].toFixed(6)}, ${beforeQuantization[1].toFixed(6)}], After: [${newMin.toFixed(6)}, ${newMax.toFixed(6)}]`);
   
@@ -1904,18 +2049,67 @@
       }
     }
   
-    _updatePhysics(fixedTimestep) {
-      const dt = fixedTimestep / 1000.0;
+    // _updatePhysics(fixedTimestep) {
+    //   const dt = fixedTimestep / 1000.0;
   
-      // Update internal physics state.
-      this.#physicsPrevious[0] = this.#physicsCurrent[0];
-      this.#physicsPrevious[1] = this.#physicsCurrent[1];
+    //   // Update internal physics state.
+    //   this.#physicsPrevious[0] = this.#physicsCurrent[0];
+    //   this.#physicsPrevious[1] = this.#physicsCurrent[1];
   
-      if (this.#activePanContext) {
-        // Pan: Only simulate spring for min value, calculate max from fixed width
-        const domainWidth = this.#activePanContext.domainWidth;
+    //   if (this.#activePanContext) {
+    //     // Pan: Only simulate spring for min value, calculate max from fixed width
+    //     const domainWidth = this.#activePanContext.domainWidth;
         
-        // Spring simulation only for min value
+    //     // Spring simulation only for min value
+    //     const distance = this.#target[0] - this.#physicsCurrent[0];
+    //     const springForce = distance * this.#currentSpringConfig.stiffness;
+    //     const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+    //     const acceleration = springForce + dampingForce;
+        
+    //     this.#velocity[0] += acceleration * dt;
+    //     this.#physicsCurrent[0] += this.#velocity[0] * dt;
+        
+    //     // Max is simply min + width (no spring simulation needed)
+    //     this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
+    //     this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
+  
+    //     // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
+        
+    //   } else {
+    //     // Zoom: Independent springs for both min and max (needed for zoom-around-point)
+    //     for (let i = 0; i < 2; i++) {
+    //       const distance = this.#target[i] - this.#physicsCurrent[i];
+    //       const springForce = distance * this.#currentSpringConfig.stiffness;
+    //       const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+    //       const acceleration = springForce + dampingForce;
+          
+    //       this.#velocity[i] += acceleration * dt;
+    //       this.#physicsCurrent[i] += this.#velocity[i] * dt;
+    //     }
+    //   }
+  
+    //   // for (let i = 0; i < 2; i++) {
+    //   //   const distance = this.#target[i] - this.#physicsCurrent[i];
+    //   //   // ... spring math using #physicsCurrent and #velocity ...
+    //   //   const springForce = distance * this.#currentSpringConfig.stiffness;
+    //   //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+    //   //   const acceleration = springForce + dampingForce;
+        
+    //   //   this.#velocity[i] += acceleration * dt;
+    //   //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
+    //   // }
+      
+    //   if (this.#isAtTarget()) {
+    //     this.#isAnimating = false;
+    //     this.#gpuCoordinator.removeAnimatingScale(this);
+    //   }
+    // }
+  
+    _updatePhysics(deltaTime) {
+      const dt = deltaTime / 1000.0; // Convert to seconds
+      
+      if (this.#activePanContext) {
+        // Pan physics - single spring for min value
         const distance = this.#target[0] - this.#physicsCurrent[0];
         const springForce = distance * this.#currentSpringConfig.stiffness;
         const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
@@ -1923,15 +2117,10 @@
         
         this.#velocity[0] += acceleration * dt;
         this.#physicsCurrent[0] += this.#velocity[0] * dt;
-        
-        // Max is simply min + width (no spring simulation needed)
-        this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
-        this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
-  
-        // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
-        
+        this.#physicsCurrent[1] = this.#physicsCurrent[0] + this.#activePanContext.domainWidth;
+        this.#velocity[1] = this.#velocity[0];
       } else {
-        // Zoom: Independent springs for both min and max (needed for zoom-around-point)
+        // Zoom physics - independent springs
         for (let i = 0; i < 2; i++) {
           const distance = this.#target[i] - this.#physicsCurrent[i];
           const springForce = distance * this.#currentSpringConfig.stiffness;
@@ -1942,43 +2131,41 @@
           this.#physicsCurrent[i] += this.#velocity[i] * dt;
         }
       }
-  
-      // for (let i = 0; i < 2; i++) {
-      //   const distance = this.#target[i] - this.#physicsCurrent[i];
-      //   // ... spring math using #physicsCurrent and #velocity ...
-      //   const springForce = distance * this.#currentSpringConfig.stiffness;
-      //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
-      //   const acceleration = springForce + dampingForce;
-        
-      //   this.#velocity[i] += acceleration * dt;
-      //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
-      // }
       
+      // Check if at target (same as before)
       if (this.#isAtTarget()) {
         this.#isAnimating = false;
         this.#gpuCoordinator.removeAnimatingScale(this);
       }
     }
   
-    _setRenderState(alpha) {
-      this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
-      // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+    // _setRenderState(alpha) {
+    //   this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
+    //   // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
     
-      if (this.#activePanContext) {
-        // Maintain rigid body constraint during interpolation
-        this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
-      } else {
-        this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
-      }
-      // this.#renderCurrent = [
-        // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
-        // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
-      // ];
+    //   if (this.#activePanContext) {
+    //     // Maintain rigid body constraint during interpolation
+    //     this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
+    //   } else {
+    //     this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+    //   }
+    //   // this.#renderCurrent = [
+    //     // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
+    //     // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
+    //   // ];
   
-      // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+    //   // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
   
-      // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
-      return this.#renderCurrent[0]
+    //   // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
+    //   return this.#renderCurrent[0]
+    // }
+  
+    _setRenderState() {
+      // No interpolation - render state IS physics state
+      this.#renderCurrent[0] = this.#physicsCurrent[0];
+      this.#renderCurrent[1] = this.#physicsCurrent[1];
+      
+      return this.#renderCurrent[0];
     }
   
     resetZoom() {
@@ -2957,10 +3144,30 @@
             height={layout.innerHeight}
             fill="transparent"
           />
+            <!-- <circle 
+              cx={xScale?.scale(50) || 0} 
+              cy={yScale?.scale(25) || 0} 
+              r="5" 
+              fill="red" 
+              opacity="0.8"
+            />
+            <rect 
+              x={xScale?.scale(0) || 0}
+              y={yScale?.scale(0) || 0} 
+              width={Math.abs((xScale?.scale(100) || 100) - (xScale?.scale(0) || 0))}
+              height={Math.abs((yScale?.scale(100) || 100) - (yScale?.scale(0) || 0))}
+              fill="blue" 
+              opacity="0.2"
+            /> -->
         </g>
       </svg>
     {/if}
   </div>
+  
+  <pre id="info">cpuTime: {gpuCoordinator.timings.cpu}
+  fps: {gpuCoordinator.timings.fps}
+  gpu: {gpuCoordinator.timings.gpu} µs
+  </pre>
   
   <style>
     .chart-container {
@@ -2986,6 +3193,16 @@
     .crosshair {
       cursor: crosshair;
     }
+  
+    #info {
+      position: absolute;
+      top: 0;
+      left: 0;
+      margin: 0;
+      padding: 0.5em;
+      background-color: rgba(0, 0, 0, 0.8);
+      color: white;
+    }
   </style>
 </src/lib/components/charts/ChartContainer.svelte>
 
@@ -3004,7 +3221,7 @@
     let height = $derived(c.innerHeight);
     let margin = $derived(c.margin);
   
-    let canvas;
+    let canvas = $state();
     let context;
     let gpuCoordinator;
     let chartControl;
@@ -3075,7 +3292,7 @@
           device,
           format: presentationFormat,
           alphaMode: 'premultiplied',
-          desynchronized: true,
+          // desynchronized: true,
         });
         
         contextConfigured = true;
@@ -3291,12 +3508,13 @@
       position: absolute;
       top: 0;
       left: 0;
-      contain: strict;
+      /* contain: strict; */
+      /* contain: layout style; */
       /* will-change: auto; */
       /* will-change: contents; */
-      backface-visibility: hidden;
-      isolation: isolate;
-      image-rendering: crisp-edges;
+      /* backface-visibility: hidden; */
+      /* isolation: isolate; */
+      /* image-rendering: crisp-edges; */
     }
   
     .webgpu-error,
@@ -5845,11 +6063,11 @@
   			<div class="chart-wrapper">
   				<ChartContainer xLabel={config.x} yLabel={config.y}>
   					{#snippet background()}
-  						<Grid />
+  						<!-- <Grid />
   						<Frame />
   						<AxisLeft />
   						<AxisBottom />
-  						<MarginLabel />
+  						<MarginLabel /> -->
   					{/snippet}
   
   					{#snippet canvas()}
@@ -5870,7 +6088,7 @@
   					{/snippet}
   
   					{#snippet foreground()}
-  						<Crosshair />
+  						<!-- <Crosshair /> -->
   					{/snippet}
   				</ChartContainer>
   			</div>

@@ -355,10 +355,30 @@
           height={layout.innerHeight}
           fill="transparent"
         />
+          <!-- <circle 
+            cx={xScale?.scale(50) || 0} 
+            cy={yScale?.scale(25) || 0} 
+            r="5" 
+            fill="red" 
+            opacity="0.8"
+          />
+          <rect 
+            x={xScale?.scale(0) || 0}
+            y={yScale?.scale(0) || 0} 
+            width={Math.abs((xScale?.scale(100) || 100) - (xScale?.scale(0) || 0))}
+            height={Math.abs((yScale?.scale(100) || 100) - (yScale?.scale(0) || 0))}
+            fill="blue" 
+            opacity="0.2"
+          /> -->
       </g>
     </svg>
   {/if}
 </div>
+
+<pre id="info">cpuTime: {gpuCoordinator.timings.cpu}
+fps: {gpuCoordinator.timings.fps}
+gpu: {gpuCoordinator.timings.gpu} µs
+</pre>
 
 <style>
   .chart-container {
@@ -383,5 +403,15 @@
 
   .crosshair {
     cursor: crosshair;
+  }
+
+  #info {
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+    padding: 0.5em;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
   }
 </style>

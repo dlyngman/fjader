@@ -6,7 +6,7 @@ import { extent as d3Extent } from 'd3-array';
 const springConfigs = {
   default: { stiffness: 225, damping: 25, precision: 0.0001 },
   zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
-  pan: { stiffness: 300, damping: 40, precision: 0.00000001 },
+  pan: { stiffness: 300, damping: 50, precision: 0.00000001 },
   // damping: sqrt(stiffness) * 2 for critical damping
   // pan: { stiffness: 250, damping: 30, precision: 0.00000001 },
   // pan: { stiffness: 150, damping: 15, precision: 0.00000001 },
@@ -59,7 +59,11 @@ export class LinearScaleState {
     hasPanUpdates: false
   };
 
-  #inputBuffer = [];
+  #latestPanScreenX = 0;
+  #latestPanScreenY = 0;
+  #hasNewPanInput = false;
+
+  // #inputBuffer = [];
 
   #activePanContext = null;
 
@@ -79,6 +83,7 @@ export class LinearScaleState {
     categoryCount: 0,
     domainScale: 0.01
   };
+
 
   constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}, gpuCoordinator = null) {
     this.id = crypto.randomUUID();
@@ -238,26 +243,32 @@ export class LinearScaleState {
     this.#activePanContext = null;
   }
 
-  updatePanPosition(screenX, screenY) {
-    // if (this.#frameAccumulator.panScreenX !== screenX || 
-    //     this.#frameAccumulator.panScreenY !== screenY) {
-    //   this.#frameAccumulator.panScreenX = screenX;
-    //   this.#frameAccumulator.panScreenY = screenY;
-    //   this.#frameAccumulator.hasPanUpdates = true;
-    //   this.#ensureAnimating();
-    // }
-    const now = performance.now();
+  // updatePanPosition(screenX, screenY) {
+  //   // if (this.#frameAccumulator.panScreenX !== screenX || 
+  //   //     this.#frameAccumulator.panScreenY !== screenY) {
+  //   //   this.#frameAccumulator.panScreenX = screenX;
+  //   //   this.#frameAccumulator.panScreenY = screenY;
+  //   //   this.#frameAccumulator.hasPanUpdates = true;
+  //   //   this.#ensureAnimating();
+  //   // }
+  //   const now = performance.now();
   
-    this.#inputBuffer.push({
-      screenX,
-      screenY,
-      timestamp: now,
-    });
+  //   this.#inputBuffer.push({
+  //     screenX,
+  //     screenY,
+  //     timestamp: now,
+  //   });
     
-    if (this.#inputBuffer.length > 10) {
-      this.#inputBuffer.shift();
-    }
+  //   if (this.#inputBuffer.length > 10) {
+  //     this.#inputBuffer.shift();
+  //   }
   
+  //   this.#ensureAnimating();
+  // }
+  updatePanPosition(screenX, screenY) {
+    this.#latestPanScreenX = screenX;
+    this.#latestPanScreenY = screenY;
+    this.#hasNewPanInput = true;
     this.#ensureAnimating();
   }
 
@@ -352,33 +363,33 @@ export class LinearScaleState {
     targetArray[1] = newMax;
   }
 
-  _processScheduledInput(currentTime, globalDelay) {
-    if (!this.#activePanContext || this.#inputBuffer.length === 0) {
-      return false;
-    }
+  // _processScheduledInput(currentTime, globalDelay) {
+  //   if (!this.#activePanContext || this.#inputBuffer.length === 0) {
+  //     return false;
+  //   }
     
-    // Find most recent event that's ready based on global delay
-    let readyEvent = null;
-    let readyIndex = -1;
+  //   // Find most recent event that's ready based on global delay
+  //   let readyEvent = null;
+  //   let readyIndex = -1;
     
-    for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
-      const event = this.#inputBuffer[i];
-      if (currentTime >= event.timestamp + globalDelay) {
-        readyEvent = event;
-        readyIndex = i;
-        break;
-      }
-    }
+  //   for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
+  //     const event = this.#inputBuffer[i];
+  //     if (currentTime >= event.timestamp + globalDelay) {
+  //       readyEvent = event;
+  //       readyIndex = i;
+  //       break;
+  //     }
+  //   }
     
-    if (readyEvent) {
-      this.#updateSpringConfig(springConfigs.pan);
-      this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
-      this.#inputBuffer.splice(0, readyIndex + 1);
-      return true;
-    }
+  //   if (readyEvent) {
+  //     this.#updateSpringConfig(springConfigs.pan);
+  //     this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
+  //     this.#inputBuffer.splice(0, readyIndex + 1);
+  //     return true;
+  //   }
     
-    return false;
-  }
+  //   return false;
+  // }
 
   #calculatePanTarget(targetArray, screenX, screenY) {
     // console.trace('calculatePanTarget called');
@@ -408,16 +419,16 @@ export class LinearScaleState {
       }
     }
 
-    // Determine the smallest meaningful change
-    const domainSize = this.#activePanContext.domainWidth;
-    const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
-    const quantum = pixelEquivalent * 1;
+    // // Determine the smallest meaningful change
+    // const domainSize = this.#activePanContext.domainWidth;
+    // const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
+    // const quantum = pixelEquivalent * 1;
 
-    const beforeQuantization = [newMin, newMax];
+    // const beforeQuantization = [newMin, newMax];
   
-    // Quantize to avoid micro-errors
-    newMin = Math.round(newMin / quantum) * quantum;
-    newMax = Math.round(newMax / quantum) * quantum;
+    // // Quantize to avoid micro-errors
+    // newMin = Math.round(newMin / quantum) * quantum;
+    // newMax = Math.round(newMax / quantum) * quantum;
 
     // console.log(`Quantum: ${quantum.toFixed(8)}, Before: [${beforeQuantization[0].toFixed(6)}, ${beforeQuantization[1].toFixed(6)}], After: [${newMin.toFixed(6)}, ${newMax.toFixed(6)}]`);
 
@@ -441,35 +452,104 @@ export class LinearScaleState {
       inputApplied = true;
     }
 
-    if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
+    // if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
+    //   this.#updateSpringConfig(springConfigs.pan);
+    //   this.#calculatePanTarget(
+    //     this.#target,
+    //     this.#frameAccumulator.panScreenX,
+    //     this.#frameAccumulator.panScreenY
+    //   );
+    //   inputApplied = true;
+    // }
+
+    // this.#resetAccumulator();
+
+    // --- NEW Pan logic ---
+    if (this.#hasNewPanInput && this.#activePanContext) {
       this.#updateSpringConfig(springConfigs.pan);
       this.#calculatePanTarget(
         this.#target,
-        this.#frameAccumulator.panScreenX,
-        this.#frameAccumulator.panScreenY
+        this.#latestPanScreenX,
+        this.#latestPanScreenY
       );
+      // Reset the flag immediately after processing the input for this frame.
+      this.#hasNewPanInput = false;
       inputApplied = true;
     }
 
-    this.#resetAccumulator();
+    // --- Cleanup ---
+    // We only need to reset the zoom accumulator now.
+    this.#frameAccumulator.logZoomDelta = 0;
+    this.#frameAccumulator.zoomCenter = 0;
+    this.#frameAccumulator.hasZoomUpdates = false;
 
     if (inputApplied) {
       this.#ensureAnimating();
     }
   }
 
-  _updatePhysics(fixedTimestep) {
-    const dt = fixedTimestep / 1000.0;
+  // _updatePhysics(fixedTimestep) {
+  //   const dt = fixedTimestep / 1000.0;
 
-    // Update internal physics state.
-    this.#physicsPrevious[0] = this.#physicsCurrent[0];
-    this.#physicsPrevious[1] = this.#physicsCurrent[1];
+  //   // Update internal physics state.
+  //   this.#physicsPrevious[0] = this.#physicsCurrent[0];
+  //   this.#physicsPrevious[1] = this.#physicsCurrent[1];
 
-    if (this.#activePanContext) {
-      // Pan: Only simulate spring for min value, calculate max from fixed width
-      const domainWidth = this.#activePanContext.domainWidth;
+  //   if (this.#activePanContext) {
+  //     // Pan: Only simulate spring for min value, calculate max from fixed width
+  //     const domainWidth = this.#activePanContext.domainWidth;
       
-      // Spring simulation only for min value
+  //     // Spring simulation only for min value
+  //     const distance = this.#target[0] - this.#physicsCurrent[0];
+  //     const springForce = distance * this.#currentSpringConfig.stiffness;
+  //     const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+  //     const acceleration = springForce + dampingForce;
+      
+  //     this.#velocity[0] += acceleration * dt;
+  //     this.#physicsCurrent[0] += this.#velocity[0] * dt;
+      
+  //     // Max is simply min + width (no spring simulation needed)
+  //     this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
+  //     this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
+
+  //     // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
+      
+  //   } else {
+  //     // Zoom: Independent springs for both min and max (needed for zoom-around-point)
+  //     for (let i = 0; i < 2; i++) {
+  //       const distance = this.#target[i] - this.#physicsCurrent[i];
+  //       const springForce = distance * this.#currentSpringConfig.stiffness;
+  //       const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+  //       const acceleration = springForce + dampingForce;
+        
+  //       this.#velocity[i] += acceleration * dt;
+  //       this.#physicsCurrent[i] += this.#velocity[i] * dt;
+  //     }
+  //   }
+
+  //   // for (let i = 0; i < 2; i++) {
+  //   //   const distance = this.#target[i] - this.#physicsCurrent[i];
+  //   //   // ... spring math using #physicsCurrent and #velocity ...
+  //   //   const springForce = distance * this.#currentSpringConfig.stiffness;
+  //   //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+  //   //   const acceleration = springForce + dampingForce;
+      
+  //   //   this.#velocity[i] += acceleration * dt;
+  //   //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
+  //   // }
+    
+  //   if (this.#isAtTarget()) {
+  //     this.#isAnimating = false;
+  //     this.#gpuCoordinator.removeAnimatingScale(this);
+  //   }
+  // }
+
+  _updatePhysics(deltaTime) {
+    // const dt = Math.min(deltaTime, 8.333) / 1000.0; 
+    const dt = deltaTime / 1000.0; // Convert to seconds
+    
+    if (this.#activePanContext) {
+      // Pan physics - single spring for min value
       const distance = this.#target[0] - this.#physicsCurrent[0];
       const springForce = distance * this.#currentSpringConfig.stiffness;
       const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
@@ -477,15 +557,10 @@ export class LinearScaleState {
       
       this.#velocity[0] += acceleration * dt;
       this.#physicsCurrent[0] += this.#velocity[0] * dt;
-      
-      // Max is simply min + width (no spring simulation needed)
-      this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
-      this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
-
-      // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
-      
+      this.#physicsCurrent[1] = this.#physicsCurrent[0] + this.#activePanContext.domainWidth;
+      this.#velocity[1] = this.#velocity[0];
     } else {
-      // Zoom: Independent springs for both min and max (needed for zoom-around-point)
+      // Zoom physics - independent springs
       for (let i = 0; i < 2; i++) {
         const distance = this.#target[i] - this.#physicsCurrent[i];
         const springForce = distance * this.#currentSpringConfig.stiffness;
@@ -496,43 +571,41 @@ export class LinearScaleState {
         this.#physicsCurrent[i] += this.#velocity[i] * dt;
       }
     }
-
-    // for (let i = 0; i < 2; i++) {
-    //   const distance = this.#target[i] - this.#physicsCurrent[i];
-    //   // ... spring math using #physicsCurrent and #velocity ...
-    //   const springForce = distance * this.#currentSpringConfig.stiffness;
-    //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
-    //   const acceleration = springForce + dampingForce;
-      
-    //   this.#velocity[i] += acceleration * dt;
-    //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
-    // }
     
+    // Check if at target (same as before)
     if (this.#isAtTarget()) {
       this.#isAnimating = false;
       this.#gpuCoordinator.removeAnimatingScale(this);
     }
   }
 
-  _setRenderState(alpha) {
-    this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
-    // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+  // _setRenderState(alpha) {
+  //   this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
+  //   // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
   
-    if (this.#activePanContext) {
-      // Maintain rigid body constraint during interpolation
-      this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
-    } else {
-      this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
-    }
-    // this.#renderCurrent = [
-      // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
-      // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
-    // ];
+  //   if (this.#activePanContext) {
+  //     // Maintain rigid body constraint during interpolation
+  //     this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
+  //   } else {
+  //     this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+  //   }
+  //   // this.#renderCurrent = [
+  //     // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
+  //     // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
+  //   // ];
 
-    // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+  //   // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
 
-    // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
-    return this.#renderCurrent[0]
+  //   // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
+  //   return this.#renderCurrent[0]
+  // }
+
+  _setRenderState() {
+    // No interpolation - render state IS physics state
+    this.#renderCurrent[0] = this.#physicsCurrent[0];
+    this.#renderCurrent[1] = this.#physicsCurrent[1];
+    
+    return this.#renderCurrent[0];
   }
 
   resetZoom() {

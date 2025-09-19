@@ -12,7 +12,7 @@
   let height = $derived(c.innerHeight);
   let margin = $derived(c.margin);
 
-  let canvas;
+  let canvas = $state();
   let context;
   let gpuCoordinator;
   let chartControl;
@@ -83,7 +83,7 @@
         device,
         format: presentationFormat,
         alphaMode: 'premultiplied',
-        desynchronized: true,
+        // desynchronized: true,
       });
       
       contextConfigured = true;
@@ -299,12 +299,16 @@
     position: absolute;
     top: 0;
     left: 0;
+    will-change: contents;
     contain: strict;
+    transform: translateZ(0);
+    /* contain: strict; */
+    /* contain: layout style; */
     /* will-change: auto; */
     /* will-change: contents; */
-    backface-visibility: hidden;
-    isolation: isolate;
-    image-rendering: crisp-edges;
+    /* backface-visibility: hidden; */
+    /* isolation: isolate; */
+    /* image-rendering: crisp-edges; */
   }
 
   .webgpu-error,

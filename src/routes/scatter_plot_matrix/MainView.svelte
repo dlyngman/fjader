@@ -84,11 +84,11 @@
 			<div class="chart-wrapper">
 				<ChartContainer xLabel={config.x} yLabel={config.y}>
 					{#snippet background()}
-						<Grid />
+						<!-- <Grid />
 						<Frame />
 						<AxisLeft />
 						<AxisBottom />
-						<MarginLabel />
+						<MarginLabel /> -->
 					{/snippet}
 
 					{#snippet canvas()}
@@ -109,7 +109,7 @@
 					{/snippet}
 
 					{#snippet foreground()}
-						<Crosshair />
+						<!-- <Crosshair /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>
