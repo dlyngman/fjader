@@ -94,6 +94,7 @@ export class GPUCoordinator {
   #animationRafId = null;
   #scaleRegistry = null;
   #accumulator = 0;
+  #TIMESTEP = 1000 / 120;
   #lastFrameTime = 0;
   #chartsToRenderSet = new Set();
   #chartsToRenderArray = [];
@@ -125,8 +126,8 @@ export class GPUCoordinator {
   #scaleIndexManager = null;
   #maxScaleSlots = 256;
 
-  #SSBO_SLOT_COUNT = 3;
-  #MAX_FRAMES_IN_FLIGHT = 2;  
+  #SSBO_SLOT_COUNT = 8;
+  #MAX_FRAMES_IN_FLIGHT = 3;  
   #frameId = 0;
   #inflightPromises = [];
   #stagingPool = [];
@@ -481,6 +482,7 @@ export class GPUCoordinator {
   }
 
   #animationLoop = (currentTime) => {
+
     const loopStart = performance.now();
     // console.log('loopStart', loopStart)
     
@@ -498,6 +500,39 @@ export class GPUCoordinator {
     // if (deltaTime < 0) deltaTime = 8.3;
     // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
 
+    this.#accumulator += deltaTime;
+
+    // Process pending inputs 
+    for (const scale of this.#animatedScales) {
+      scale._applyInput?.(now);
+    }
+
+    for (const scale of this.#animatedScales) {
+      scale._capturePhysicsStateForInterpolation?.();
+    }
+
+    while (this.#accumulator >= this.#TIMESTEP) {
+      for (const scale of this.#animatedScales) {
+        // Pass the FIXED timestep to the physics engine
+        scale._updatePhysics(this.#TIMESTEP);
+      }
+      this.#accumulator -= this.#TIMESTEP;
+    }
+
+    const alpha = this.#accumulator / this.#TIMESTEP;
+    const chartsToRender = this.#chartsToRenderSet;
+    chartsToRender.clear();
+
+    for (const scale of this.#animatedScales) {
+      // This now performs the critical interpolation step.
+      scale._setRenderState(alpha); 
+  
+      const affectedCharts = this.#getChartsUsingScale(scale);
+      affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+    }
+
+
+
     // Smooth delta time for better performance metrics
     // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
 
@@ -511,27 +546,27 @@ export class GPUCoordinator {
     //     scale._applyInput(now);
     //   }
     // }
-    for (const scale of this.#animatedScales) {
-      scale._applyInput?.(now);
-    }
+    // for (const scale of this.#animatedScales) {
+    //   scale._applyInput?.(now);
+    // }
 
-    // Update physics with actual deltaTime
-    for (const scale of this.#animatedScales) {
-      scale._updatePhysics(deltaTime); // Pass actual ms, not fixed
-      // scale._updatePhysics(this.#smoothedDeltaTime); // Pass actual ms, not fixed
-    }
+    // // Update physics with actual deltaTime
+    // for (const scale of this.#animatedScales) {
+    //   scale._updatePhysics(deltaTime); // Pass actual ms, not fixed
+    //   // scale._updatePhysics(this.#smoothedDeltaTime); // Pass actual ms, not fixed
+    // }
 
-    // Render directly - no interpolation needed
-    const chartsToRender = this.#chartsToRenderSet;
-    chartsToRender.clear();
+    // // Render directly - no interpolation needed
+    // const chartsToRender = this.#chartsToRenderSet;
+    // chartsToRender.clear();
     
-    for (const scale of this.#animatedScales) {
-      // No alpha parameter - just set render state to current physics
-      scale._setRenderState();
+    // for (const scale of this.#animatedScales) {
+    //   // No alpha parameter - just set render state to current physics
+    //   scale._setRenderState();
       
-      const affectedCharts = this.#getChartsUsingScale(scale);
-      affectedCharts.forEach(chartId => chartsToRender.add(chartId));
-    }
+    //   const affectedCharts = this.#getChartsUsingScale(scale);
+    //   affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+    // }
   
     // // Smooth delta time for better performance metrics
     // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
@@ -584,7 +619,7 @@ export class GPUCoordinator {
 
     // Render
     const renderStart = performance.now();
-    if (chartsToRender.size > 0) {
+    if (chartsToRender.size > 0 && this.#inflightPromises.length < this.#MAX_FRAMES_IN_FLIGHT) {
       const chartArray = this.#chartsToRenderArray;
       chartArray.length = 0;
 
@@ -595,6 +630,8 @@ export class GPUCoordinator {
         }
       }
       this.#coordinatedRender(chartArray);
+    } else {
+      console.log('Skipping render, frames in flight', this.#inflightPromises.length)
     }
     const renderEnd = performance.now();
 
@@ -647,7 +684,6 @@ export class GPUCoordinator {
       }
 
       const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
-
 
       // Copy staging to SSBO if we have scale updates
       if (stagingResult) {
@@ -761,7 +797,6 @@ export class GPUCoordinator {
         });
       }
 
-    
 
       // // Async remap staging back to pool
       // if (stagingResult) {

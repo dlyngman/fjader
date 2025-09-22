@@ -299,15 +299,16 @@
     position: absolute;
     top: 0;
     left: 0;
-    will-change: contents;
+    will-change: transform, contents;
     contain: strict;
     transform: translateZ(0);
+    /* will-change or transform3d(0,0,0) */
     /* contain: strict; */
     /* contain: layout style; */
     /* will-change: auto; */
     /* will-change: contents; */
     /* backface-visibility: hidden; */
-    /* isolation: isolate; */
+    isolation: isolate;
     /* image-rendering: crisp-edges; */
   }
 

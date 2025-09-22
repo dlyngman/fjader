@@ -95,6 +95,7 @@
     #animationRafId = null;
     #scaleRegistry = null;
     #accumulator = 0;
+    #TIMESTEP = 1000 / 120;
     #lastFrameTime = 0;
     #chartsToRenderSet = new Set();
     #chartsToRenderArray = [];
@@ -126,8 +127,8 @@
     #scaleIndexManager = null;
     #maxScaleSlots = 256;
   
-    #SSBO_SLOT_COUNT = 3;
-    #MAX_FRAMES_IN_FLIGHT = 2;  
+    #SSBO_SLOT_COUNT = 8;
+    #MAX_FRAMES_IN_FLIGHT = 3;  
     #frameId = 0;
     #inflightPromises = [];
     #stagingPool = [];
@@ -249,12 +250,6 @@
     #updateScaleSSBOWithStaging() {
       if (this.#animatedScales.size === 0) return;
       
-      // // Wait for in-flight limit
-      // while (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
-      //   await this.#inflightPromises[0];
-      //   this.#inflightPromises.shift();
-      // }
-      
       // Get pre-mapped staging buffer from pool
       const staging = this.#stagingPool.pop();
       if (!staging) {
@@ -269,6 +264,7 @@
       // Write all scales synchronously to mapped staging
       const view = new Float32Array(staging.getMappedRange());
       this.#fillAllScales(view);
+      // console.log(view[0], view[1], view[2])
       
       return { staging, dstOffset, slot };
     }
@@ -487,15 +483,16 @@
     }
   
     #animationLoop = (currentTime) => {
+  
       const loopStart = performance.now();
-      console.log('loopStart', loopStart)
+      // console.log('loopStart', loopStart)
       
       // Enhanced timing logic with smoothing
-      // const now = performance.now();
-      const now = currentTime;
+      const now = performance.now();
+      // const now = currentTime;
       if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
       let deltaTime = now - this.#lastFrameTime;
-      console.log(deltaTime)
+      // console.log(deltaTime)
       this.#lastFrameTime = now;
   
       
@@ -504,37 +501,73 @@
       // if (deltaTime < 0) deltaTime = 8.3;
       // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
   
+      this.#accumulator += deltaTime;
+  
+      // Process pending inputs 
+      for (const scale of this.#animatedScales) {
+        scale._applyInput?.(now);
+      }
+  
+      for (const scale of this.#animatedScales) {
+        scale._capturePhysicsStateForInterpolation?.();
+      }
+  
+      while (this.#accumulator >= this.#TIMESTEP) {
+        for (const scale of this.#animatedScales) {
+          // Pass the FIXED timestep to the physics engine
+          scale._updatePhysics(this.#TIMESTEP);
+        }
+        this.#accumulator -= this.#TIMESTEP;
+      }
+  
+      const alpha = this.#accumulator / this.#TIMESTEP;
+      const chartsToRender = this.#chartsToRenderSet;
+      chartsToRender.clear();
+  
+      for (const scale of this.#animatedScales) {
+        // This now performs the critical interpolation step.
+        scale._setRenderState(alpha); 
+    
+        const affectedCharts = this.#getChartsUsingScale(scale);
+        affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+      }
+  
+  
+  
       // Smooth delta time for better performance metrics
       // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
   
       // Process input immediately (no accumulator needed)
-      for (const scale of this.#animatedScales) {
-        // Process pan input from buffer
-        const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
+      // for (const scale of this.#animatedScales) {
+      //   // Process pan input from buffer
+      //   const scheduledProcessed = scale._processScheduledInput?.(now, this.#globalInputDelay);
         
-        // If no scheduled input was processed, apply accumulated input (zoom)
-        if (!scheduledProcessed && scale._applyInput) {
-          scale._applyInput(now);
-        }
-      }
+      //   // If no scheduled input was processed, apply accumulated input (zoom)
+      //   if (!scheduledProcessed && scale._applyInput) {
+      //     scale._applyInput(now);
+      //   }
+      // }
+      // for (const scale of this.#animatedScales) {
+      //   scale._applyInput?.(now);
+      // }
   
-      // Update physics with actual deltaTime
-      for (const scale of this.#animatedScales) {
-        scale._updatePhysics(deltaTime); // Pass actual ms, not fixed
-        // scale._updatePhysics(this.#smoothedDeltaTime); // Pass actual ms, not fixed
-      }
+      // // Update physics with actual deltaTime
+      // for (const scale of this.#animatedScales) {
+      //   scale._updatePhysics(deltaTime); // Pass actual ms, not fixed
+      //   // scale._updatePhysics(this.#smoothedDeltaTime); // Pass actual ms, not fixed
+      // }
   
-      // Render directly - no interpolation needed
-      const chartsToRender = this.#chartsToRenderSet;
-      chartsToRender.clear();
+      // // Render directly - no interpolation needed
+      // const chartsToRender = this.#chartsToRenderSet;
+      // chartsToRender.clear();
       
-      for (const scale of this.#animatedScales) {
-        // No alpha parameter - just set render state to current physics
-        scale._setRenderState();
+      // for (const scale of this.#animatedScales) {
+      //   // No alpha parameter - just set render state to current physics
+      //   scale._setRenderState();
         
-        const affectedCharts = this.#getChartsUsingScale(scale);
-        affectedCharts.forEach(chartId => chartsToRender.add(chartId));
-      }
+      //   const affectedCharts = this.#getChartsUsingScale(scale);
+      //   affectedCharts.forEach(chartId => chartsToRender.add(chartId));
+      // }
     
       // // Smooth delta time for better performance metrics
       // this.#smoothedDeltaTime = this.#smoothingFactor * deltaTime + (1 - this.#smoothingFactor) * this.#smoothedDeltaTime;
@@ -587,7 +620,7 @@
   
       // Render
       const renderStart = performance.now();
-      if (chartsToRender.size > 0) {
+      if (chartsToRender.size > 0 && this.#inflightPromises.length < this.#MAX_FRAMES_IN_FLIGHT) {
         const chartArray = this.#chartsToRenderArray;
         chartArray.length = 0;
   
@@ -598,6 +631,8 @@
           }
         }
         this.#coordinatedRender(chartArray);
+      } else {
+        console.log('Skipping render, frames in flight', this.#inflightPromises.length)
       }
       const renderEnd = performance.now();
   
@@ -628,10 +663,16 @@
     };
   
   
-    async #coordinatedRender(chartsNeedingRender) {
+    #coordinatedRender(chartsNeedingRender) {
   
       // await this.#device.queue.onSubmittedWorkDone()
-      await new Promise(resolve => setTimeout(resolve, 0));
+      // await new Promise(resolve => setTimeout(resolve, 0));
+      // console.log('In flight frames', this.#inflightPromises.length);
+  
+      // if (this.#inflightPromises.length >= this.#MAX_FRAMES_IN_FLIGHT) {
+      //   await this.#inflightPromises[0];
+      //   this.#inflightPromises.shift();
+      // }
   
       try {
   
@@ -644,7 +685,6 @@
         }
   
         const commandEncoder = this.#device.createCommandEncoder({ label: 'frame-encoder' });
-  
   
         // Copy staging to SSBO if we have scale updates
         if (stagingResult) {
@@ -729,6 +769,18 @@
         }
   
         this.#device.queue.submit([commandEncoder.finish()]);
+  
+        const p = this.#device.queue.onSubmittedWorkDone();
+        this.#inflightPromises.push(p);
+  
+        // Remove when resolved
+        p.then(() => {
+          // console.log(`Frame presented at: ${performance.now()}`);
+          const index = this.#inflightPromises.indexOf(p);
+          if (index !== -1) {
+            this.#inflightPromises.splice(index, 1);
+          }
+        });
   
         if (this.#canTimestamp && this.#resultBuffer.mapState === 'unmapped') {
           this.#resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
@@ -1593,15 +1645,23 @@
   import { extent as d3Extent } from 'd3-array';
   
   // Spring configurations for different interactions
+  // const springConfigs = {
+  //   default: { stiffness: 225, damping: 25, precision: 0.0001 },
+  //   zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
+  //   pan: { stiffness: 300, damping: 50, precision: 0.00000001 },
+  //   // pan: { stiffness: 50, damping: 15, precision: 0.001 },
+  //   // damping: sqrt(stiffness) * 2 for critical damping
+  //   // pan: { stiffness: 250, damping: 30, precision: 0.00000001 },
+  //   // pan: { stiffness: 150, damping: 15, precision: 0.00000001 },
+  //   reset: { stiffness: 50, damping: 15, precision: 0.0001 },
+  //   zoomIn: { stiffness: 75, damping: 15, precision: 0.0001 }
+  // };
   const springConfigs = {
-    default: { stiffness: 225, damping: 25, precision: 0.0001 },
-    zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
-    pan: { stiffness: 300, damping: 40, precision: 0.00000001 },
-    // damping: sqrt(stiffness) * 2 for critical damping
-    // pan: { stiffness: 250, damping: 30, precision: 0.00000001 },
-    // pan: { stiffness: 150, damping: 15, precision: 0.00000001 },
-    reset: { stiffness: 50, damping: 15, precision: 0.0001 },
-    zoomIn: { stiffness: 75, damping: 15, precision: 0.0001 }
+    default: { stiffness: 0.2, damping: 0.8, precision: 0.001 },
+    zoom: { stiffness: 0.15, damping: 0.8, precision: 0.001 },
+    pan: { stiffness: 0.25, damping: 0.9, precision: 0.001 },
+    reset: { stiffness: 0.1, damping: 0.85, precision: 0.001 },
+    zoomIn: { stiffness: 0.05, damping: 0.8, precision: 0.001 }
   };
   
   export class LinearScaleState {
@@ -1628,11 +1688,13 @@
   
     // Custom animation state
     #target = [0, 100];
-    #velocity = [0, 0];
-    #isAnimating = false;
-  
+    #smoothedTarget = [0, 100];
+    
     #physicsCurrent = [0, 100];
     #physicsPrevious = [0, 100];
+  
+    #velocity = [0, 0];
+    #isAnimating = false;
     
     #renderCurrent = $state([0, 100]);
   
@@ -1649,7 +1711,19 @@
       hasPanUpdates: false
     };
   
-    #inputBuffer = [];
+    #rawPanScreenX = 0;
+    #rawPanScreenY = 0;
+    #hasNewPanInput = false;
+  
+    #inverseMass = 1;
+    #momentum = 0;
+  
+  
+    // #latestPanScreenX = 0;
+    // #latestPanScreenY = 0;
+    // #hasNewPanInput = false;
+  
+    // #inputBuffer = [];
   
     #activePanContext = null;
   
@@ -1662,6 +1736,7 @@
       const domainSize = Math.abs(this.#target[1] - this.#target[0]);
       return Math.max(this.#currentSpringConfig.precision, domainSize * 0.0001);
     });
+  
   
     #gpuStateObject = {
       domainMin: 0,
@@ -1693,6 +1768,7 @@
       this.#physicsCurrent = [...extent];
       this.#physicsPrevious = [...extent];
       this.#renderCurrent = [...extent];
+      this.#smoothedTarget = [...extent];
       this.#target = [...extent];
   
       const self = this;
@@ -1829,28 +1905,72 @@
       this.#activePanContext = null;
     }
   
-    updatePanPosition(screenX, screenY) {
-      // if (this.#frameAccumulator.panScreenX !== screenX || 
-      //     this.#frameAccumulator.panScreenY !== screenY) {
-      //   this.#frameAccumulator.panScreenX = screenX;
-      //   this.#frameAccumulator.panScreenY = screenY;
-      //   this.#frameAccumulator.hasPanUpdates = true;
-      //   this.#ensureAnimating();
-      // }
-      const now = performance.now();
+    // updatePanPosition(screenX, screenY) {
+    //   // if (this.#frameAccumulator.panScreenX !== screenX || 
+    //   //     this.#frameAccumulator.panScreenY !== screenY) {
+    //   //   this.#frameAccumulator.panScreenX = screenX;
+    //   //   this.#frameAccumulator.panScreenY = screenY;
+    //   //   this.#frameAccumulator.hasPanUpdates = true;
+    //   //   this.#ensureAnimating();
+    //   // }
+    //   const now = performance.now();
     
-      this.#inputBuffer.push({
-        screenX,
-        screenY,
-        timestamp: now,
-      });
+    //   this.#inputBuffer.push({
+    //     screenX,
+    //     screenY,
+    //     timestamp: now,
+    //   });
       
-      if (this.#inputBuffer.length > 10) {
-        this.#inputBuffer.shift();
-      }
+    //   if (this.#inputBuffer.length > 10) {
+    //     this.#inputBuffer.shift();
+    //   }
     
+    //   this.#ensureAnimating();
+    // }
+    // updatePanPosition(screenX, screenY) {
+    //   this.#latestPanScreenX = screenX;
+    //   this.#latestPanScreenY = screenY;
+    //   this.#hasNewPanInput = true;
+    //   this.#ensureAnimating();
+    // }
+    // updatePanPosition(screenX, screenY) {
+    //   if (this.#activePanContext) {
+    //       this.#updateSpringConfig(springConfigs.pan);
+    //       this.#calculatePanTarget(this.#target, screenX, screenY);
+    //       this.#ensureAnimating();
+    //   }
+    // }
+  
+    // Add input smoothing in updatePanPosition
+    // updatePanPosition(screenX, screenY) {
+    //   if (this.#activePanContext) {
+    //     // Calculate raw target
+    //     const rawTarget = [0, 0];
+    //     this.#calculatePanTarget(rawTarget, screenX, screenY);
+        
+    //     // Smooth the target using exponential moving average
+    //     const smoothingFactor = 0.1; // Adjust for responsiveness vs smoothness
+    //     this.#target[0] = this.#target[0] * (1 - smoothingFactor) + rawTarget[0] * smoothingFactor;
+    //     this.#target[1] = this.#target[1] * (1 - smoothingFactor) + rawTarget[1] * smoothingFactor;
+        
+    //     this.#updateSpringConfig(springConfigs.pan);
+    //     this.#ensureAnimating();
+    //   }
+    // }
+  
+    updatePanPosition(screenX, screenY) { // Renamed back for clarity
+      this.#rawPanScreenX = screenX;
+      this.#rawPanScreenY = screenY;
+      this.#hasNewPanInput = true;
       this.#ensureAnimating();
     }
+  
+    // updateRawPanInput(screenX, screenY) {
+    //   this.#rawPanScreenX = screenX;
+    //   this.#rawPanScreenY = screenY;
+    //   this.#hasNewPanInput = true;
+    //   this.#ensureAnimating();
+    // }
   
     accumulateZoom(dataCenter, scaleFactor) {
       this.#frameAccumulator.logZoomDelta += Math.log(scaleFactor);
@@ -1882,17 +2002,32 @@
       this.#currentSpringConfig = config;
     }
   
-    #isAtTarget() {
-      const config = this.#currentSpringConfig;
-      const domainSize = Math.abs(this.#target[1] - this.#target[0]);
-      // TODO replace this calculation with cached value?
-      const dynamicPrecision = Math.max(config.precision, domainSize * 0.00001);
+    // #isAtTarget() {
+    //   const config = this.#currentSpringConfig;
+    //   const domainSize = Math.abs(this.#target[1] - this.#target[0]);
+    //   // TODO replace this calculation with cached value?
+    //   const dynamicPrecision = Math.max(config.precision, domainSize * 0.00001);
       
-      return Math.abs(this.#physicsCurrent[0] - this.#target[0]) < dynamicPrecision &&
-             Math.abs(this.#physicsCurrent[1] - this.#target[1]) < dynamicPrecision &&
-             Math.abs(this.#velocity[0]) < dynamicPrecision * 10 &&
-             Math.abs(this.#velocity[1]) < dynamicPrecision * 10;
-    }
+    //   return Math.abs(this.#physicsCurrent[0] - this.#target[0]) < dynamicPrecision &&
+    //          Math.abs(this.#physicsCurrent[1] - this.#target[1]) < dynamicPrecision &&
+    //          Math.abs(this.#velocity[0]) < dynamicPrecision * 10 &&
+    //          Math.abs(this.#velocity[1]) < dynamicPrecision * 10;
+    // }
+  
+    // #isAtTarget() {
+    //   const precision = this.#cachedPrecision;
+      
+    //   if (this.#activePanContext) {
+    //     // For pan, only check min value (max follows rigidly)
+    //     const distance = Math.abs(this.#target[0] - this.#physicsCurrent[0]);
+    //     return distance < precision;
+    //   } else {
+    //     // For zoom, check both min and max
+    //     const distance0 = Math.abs(this.#target[0] - this.#physicsCurrent[0]);
+    //     const distance1 = Math.abs(this.#target[1] - this.#physicsCurrent[1]);
+    //     return distance0 < precision && distance1 < precision;
+    //   }
+    // }
   
     #resetAccumulator() {
       this.#frameAccumulator.logZoomDelta = 0;
@@ -1943,33 +2078,33 @@
       targetArray[1] = newMax;
     }
   
-    _processScheduledInput(currentTime, globalDelay) {
-      if (!this.#activePanContext || this.#inputBuffer.length === 0) {
-        return false;
-      }
+    // _processScheduledInput(currentTime, globalDelay) {
+    //   if (!this.#activePanContext || this.#inputBuffer.length === 0) {
+    //     return false;
+    //   }
       
-      // Find most recent event that's ready based on global delay
-      let readyEvent = null;
-      let readyIndex = -1;
+    //   // Find most recent event that's ready based on global delay
+    //   let readyEvent = null;
+    //   let readyIndex = -1;
       
-      for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
-        const event = this.#inputBuffer[i];
-        if (currentTime >= event.timestamp + globalDelay) {
-          readyEvent = event;
-          readyIndex = i;
-          break;
-        }
-      }
+    //   for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
+    //     const event = this.#inputBuffer[i];
+    //     if (currentTime >= event.timestamp + globalDelay) {
+    //       readyEvent = event;
+    //       readyIndex = i;
+    //       break;
+    //     }
+    //   }
       
-      if (readyEvent) {
-        this.#updateSpringConfig(springConfigs.pan);
-        this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
-        this.#inputBuffer.splice(0, readyIndex + 1);
-        return true;
-      }
+    //   if (readyEvent) {
+    //     this.#updateSpringConfig(springConfigs.pan);
+    //     this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
+    //     this.#inputBuffer.splice(0, readyIndex + 1);
+    //     return true;
+    //   }
       
-      return false;
-    }
+    //   return false;
+    // }
   
     #calculatePanTarget(targetArray, screenX, screenY) {
       // console.trace('calculatePanTarget called');
@@ -2029,20 +2164,50 @@
           this.#frameAccumulator.zoomCenter,
           Math.exp(this.#frameAccumulator.logZoomDelta)
         );
+        this.#smoothedTarget[0] = this.#target[0];
+        this.#smoothedTarget[1] = this.#target[1];
         inputApplied = true;
       }
   
-      if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
+      if (this.#hasNewPanInput && this.#activePanContext) {
         this.#updateSpringConfig(springConfigs.pan);
-        this.#calculatePanTarget(
-          this.#target,
-          this.#frameAccumulator.panScreenX,
-          this.#frameAccumulator.panScreenY
-        );
+        
+        // Calculate raw target from latest mouse input
+        this.#calculatePanTarget(this.#target, this.#rawPanScreenX, this.#rawPanScreenY);
+        this.#hasNewPanInput = false;
         inputApplied = true;
       }
   
-      this.#resetAccumulator();
+      // if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
+      //   this.#updateSpringConfig(springConfigs.pan);
+      //   this.#calculatePanTarget(
+      //     this.#target,
+      //     this.#frameAccumulator.panScreenX,
+      //     this.#frameAccumulator.panScreenY
+      //   );
+      //   inputApplied = true;
+      // }
+  
+      // this.#resetAccumulator();
+  
+      // --- NEW Pan logic ---
+      // if (this.#hasNewPanInput && this.#activePanContext) {
+      //   this.#updateSpringConfig(springConfigs.pan);
+      //   this.#calculatePanTarget(
+      //     this.#target,
+      //     this.#latestPanScreenX,
+      //     this.#latestPanScreenY
+      //   );
+      //   // Reset the flag immediately after processing the input for this frame.
+      //   this.#hasNewPanInput = false;
+      //   inputApplied = true;
+      // }
+  
+      // --- Cleanup ---
+      // We only need to reset the zoom accumulator now.
+      this.#frameAccumulator.logZoomDelta = 0;
+      this.#frameAccumulator.zoomCenter = 0;
+      this.#frameAccumulator.hasZoomUpdates = false;
   
       if (inputApplied) {
         this.#ensureAnimating();
@@ -2105,68 +2270,181 @@
     //   }
     // }
   
+    // _updatePhysics(deltaTime) {
+    //   // const dt = Math.min(deltaTime, 8.333) / 1000.0; 
+    //   const dt = deltaTime / 1000.0; // Convert to seconds
+      
+    //   if (this.#activePanContext) {
+    //     // Pan physics - single spring for min value
+    //     const distance = this.#target[0] - this.#physicsCurrent[0];
+    //     const springForce = distance * this.#currentSpringConfig.stiffness;
+    //     const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+    //     const acceleration = springForce + dampingForce;
+        
+    //     this.#velocity[0] += acceleration * dt;
+    //     this.#physicsCurrent[0] += this.#velocity[0] * dt;
+    //     this.#physicsCurrent[1] = this.#physicsCurrent[0] + this.#activePanContext.domainWidth;
+    //     this.#velocity[1] = this.#velocity[0];
+    //   } else {
+    //     // Zoom physics - independent springs
+    //     for (let i = 0; i < 2; i++) {
+    //       const distance = this.#target[i] - this.#physicsCurrent[i];
+    //       const springForce = distance * this.#currentSpringConfig.stiffness;
+    //       const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+    //       const acceleration = springForce + dampingForce;
+          
+    //       this.#velocity[i] += acceleration * dt;
+    //       this.#physicsCurrent[i] += this.#velocity[i] * dt;
+    //     }
+    //   }
+      
+    //   // Check if at target (same as before)
+    //   if (this.#isAtTarget()) {
+    //     this.#isAnimating = false;
+    //     this.#gpuCoordinator.removeAnimatingScale(this);
+    //   }
+    // }
+  
+  
+    _capturePhysicsStateForInterpolation() {
+      this.#physicsPrevious[0] = this.#physicsCurrent[0];
+      this.#physicsPrevious[1] = this.#physicsCurrent[1];
+    }
+  
     _updatePhysics(deltaTime) {
-      const dt = deltaTime / 1000.0; // Convert to seconds
+  
+      // Svelte's time clamping and normalization
+      const elapsed = Math.min(deltaTime, 1000 / 30);
+      const dt = (elapsed * 60) / 1000;
+      
+      // Smooth intermediate target
+      // const smoothingFactor = 0.3; 
+      // this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor;
+      // this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor;
+      // this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor * dt;
+      // this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor * dt;
+  
+      const retainFactor = 0.5; // Adjust this for more/less rubber band
+      const smoothingFactor = 1 - Math.pow(retainFactor, dt);
+      
+      this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor;
+      this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor;
+  
+      // Svelte's inv_mass recovery (for momentum/soft animations)
+      this.#inverseMass = Math.min(this.#inverseMass + (1000 / (60 * 60)), 1);
+      
+      const ctx = {
+        inv_mass: this.#inverseMass,
+        opts: this.#currentSpringConfig,
+        settled: true,
+        dt: dt
+      };
       
       if (this.#activePanContext) {
-        // Pan physics - single spring for min value
-        const distance = this.#target[0] - this.#physicsCurrent[0];
-        const springForce = distance * this.#currentSpringConfig.stiffness;
-        const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
-        const acceleration = springForce + dampingForce;
+        // Pan physics - single value with rigid body
+        const last_value = this.#physicsPrevious[0];
+        const current_value = this.#physicsCurrent[0];
+        // const target_value = this.#target[0];
+        const target_value = this.#smoothedTarget[0]; // Chase smoothed target
+        const next_value = this.#tickSpring(ctx, last_value, current_value, target_value);
         
-        this.#velocity[0] += acceleration * dt;
-        this.#physicsCurrent[0] += this.#velocity[0] * dt;
-        this.#physicsCurrent[1] = this.#physicsCurrent[0] + this.#activePanContext.domainWidth;
-        this.#velocity[1] = this.#velocity[0];
+        // Update positions
+        // this.#physicsPrevious[0] = this.#physicsCurrent[0];
+        // this.#physicsPrevious[1] = this.#physicsCurrent[1];
+        this.#physicsCurrent[0] = next_value;
+        this.#physicsCurrent[1] = next_value + this.#activePanContext.domainWidth;
+        
       } else {
         // Zoom physics - independent springs
         for (let i = 0; i < 2; i++) {
-          const distance = this.#target[i] - this.#physicsCurrent[i];
-          const springForce = distance * this.#currentSpringConfig.stiffness;
-          const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
-          const acceleration = springForce + dampingForce;
+          const last_value = this.#physicsPrevious[i];
+          const current_value = this.#physicsCurrent[i];
+          // const target_value = this.#target[i];
+          const target_value = this.#smoothedTarget[i];
           
-          this.#velocity[i] += acceleration * dt;
-          this.#physicsCurrent[i] += this.#velocity[i] * dt;
+          const next_value = this.#tickSpring(ctx, last_value, current_value, target_value);
+          
+          // this.#physicsPrevious[i] = this.#physicsCurrent[i];
+          this.#physicsCurrent[i] = next_value;
         }
       }
+  
+      const targetDelta = Math.abs(this.#smoothedTarget[0] - this.#target[0]);
+      const targetSettled = targetDelta < ctx.opts.precision;
       
-      // Check if at target (same as before)
-      if (this.#isAtTarget()) {
+      // Stop animation if settled
+      if (ctx.settled && targetSettled) {
         this.#isAnimating = false;
         this.#gpuCoordinator.removeAnimatingScale(this);
       }
+  
+      if (this.#activePanContext && Math.random() < 0.05) { // Log 5% of frames
+        console.log('Smoothing debug:', {
+            target: this.#target[0].toFixed(2),
+            smoothed: this.#smoothedTarget[0].toFixed(2),
+            physics: this.#physicsCurrent[0].toFixed(2),
+            delta: (this.#target[0] - this.#smoothedTarget[0]).toFixed(4),
+            dt: dt.toFixed(3)
+        });
+      }
     }
   
-    // _setRenderState(alpha) {
-    //   this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
-    //   // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
-    
-    //   if (this.#activePanContext) {
-    //     // Maintain rigid body constraint during interpolation
-    //     this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
-    //   } else {
-    //     this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
-    //   }
-    //   // this.#renderCurrent = [
-    //     // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
-    //     // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
-    //   // ];
+    // Svelte's exact tick_spring function
+    #tickSpring(ctx, last_value, current_value, target_value) {
+      const delta = target_value - current_value;
+      const velocity = (current_value - last_value) / (ctx.dt || 1 / 60);
   
-    //   // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+      // if (this.#activePanContext && Math.abs(delta) > 0.001) {
+      //   console.log('Pan spring:', {
+      //     delta: delta.toFixed(6),
+      //     velocity: velocity.toFixed(6),
+      //     dt: ctx.dt.toFixed(3),
+      //     stiffness: ctx.opts.stiffness,
+      //     damping: ctx.opts.damping
+      //   });
+      // }
   
-    //   // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
-    //   return this.#renderCurrent[0]
-    // }
-  
-    _setRenderState() {
-      // No interpolation - render state IS physics state
-      this.#renderCurrent[0] = this.#physicsCurrent[0];
-      this.#renderCurrent[1] = this.#physicsCurrent[1];
+      const spring = ctx.opts.stiffness * delta;
+      const damper = ctx.opts.damping * velocity;
+      const acceleration = (spring - damper) * ctx.inv_mass;
+      const d = (velocity + acceleration) * ctx.dt;
       
-      return this.#renderCurrent[0];
+      if (Math.abs(d) < ctx.opts.precision && Math.abs(delta) < ctx.opts.precision) {
+        return target_value; // settled
+      } else {
+        ctx.settled = false; // signal to keep animating
+        return current_value + d;
+      }
     }
+  
+    _setRenderState(alpha) {
+      this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
+      // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+    
+      if (this.#activePanContext) {
+        // Maintain rigid body constraint during interpolation
+        this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
+      } else {
+        this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+      }
+      // this.#renderCurrent = [
+        // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
+        // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
+      // ];
+  
+      // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
+  
+      // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
+      // return this.#renderCurrent[0]
+    }
+  
+    // _setRenderState() {
+    //   // No interpolation - render state IS physics state
+    //   this.#renderCurrent[0] = this.#physicsCurrent[0];
+    //   this.#renderCurrent[1] = this.#physicsCurrent[1];
+      
+    //   return this.#renderCurrent[0];
+    // }
   
     resetZoom() {
       const targetExtent = this.effectiveExtent;
@@ -3137,28 +3415,93 @@
           onmouseleave={handleInnerMouseLeave}
         >
           {@render foreground?.()}
-          <rect
+            {#if scales.xScale && scales.yScale}
+              <circle 
+                cx={scales.xScale.scale(50)} 
+                cy={scales.yScale.scale(25)} 
+                r="8" 
+                fill="red" 
+                opacity="0.7"
+                stroke="darkred"
+                stroke-width="2"
+              />
+              
+              <!-- Test rectangle spanning data range (20-80, 10-40) -->
+              <rect 
+                x={scales.xScale.scale(20)}
+                y={scales.yScale.scale(40)} 
+                width={scales.xScale.scale(80) - scales.xScale.scale(20)}
+                height={scales.yScale.scale(10) - scales.yScale.scale(40)}
+                fill="blue" 
+                opacity="0.3"
+                stroke="darkblue"
+                stroke-width="1"
+              />
+              
+              <!-- Test line from (0, 0) to (100, 100) in data coordinates -->
+              <line 
+                x1={scales.xScale.scale(0)}
+                y1={scales.yScale.scale(0)}
+                x2={scales.xScale.scale(100)}
+                y2={scales.yScale.scale(100)}
+                stroke="green" 
+                stroke-width="3"
+                opacity="0.8"
+              />
+              
+              <!-- Moving crosshair that follows current data point -->
+              {#if scales.currentXDataPoint != null && scales.currentYDataPoint != null}
+                <g opacity="0.6">
+                  <!-- Vertical line -->
+                  <line 
+                    x1={scales.currentXScreenPoint}
+                    y1={0}
+                    x2={scales.currentXScreenPoint}
+                    y2={scales.innerHeight}
+                    stroke="orange" 
+                    stroke-width="1"
+                    stroke-dasharray="5,5"
+                  />
+                  <!-- Horizontal line -->
+                  <line 
+                    x1={0}
+                    y1={scales.currentYScreenPoint}
+                    x2={scales.innerWidth}
+                    y2={scales.currentYScreenPoint}
+                    stroke="orange" 
+                    stroke-width="1"
+                    stroke-dasharray="5,5"
+                  />
+                  <!-- Center dot -->
+                  <circle 
+                    cx={scales.currentXScreenPoint}
+                    cy={scales.currentYScreenPoint}
+                    r="4" 
+                    fill="orange"
+                  />
+                </g>
+              {/if}
+              
+              <!-- Grid of reference points -->
+              {#each [25, 50, 75] as xVal}
+                {#each [25, 50, 75] as yVal}
+                  <circle 
+                    cx={scales.xScale.scale(xVal)} 
+                    cy={scales.yScale.scale(yVal)} 
+                    r="3" 
+                    fill="purple" 
+                    opacity="0.5"
+                  />
+                {/each}
+              {/each}
+            {/if}
+            <rect
             x="0"
             y="0"
             width={layout.innerWidth}
             height={layout.innerHeight}
             fill="transparent"
-          />
-            <!-- <circle 
-              cx={xScale?.scale(50) || 0} 
-              cy={yScale?.scale(25) || 0} 
-              r="5" 
-              fill="red" 
-              opacity="0.8"
             />
-            <rect 
-              x={xScale?.scale(0) || 0}
-              y={yScale?.scale(0) || 0} 
-              width={Math.abs((xScale?.scale(100) || 100) - (xScale?.scale(0) || 0))}
-              height={Math.abs((yScale?.scale(100) || 100) - (yScale?.scale(0) || 0))}
-              fill="blue" 
-              opacity="0.2"
-            /> -->
         </g>
       </svg>
     {/if}
@@ -3174,10 +3517,11 @@
       position: relative;
       flex: 1;
       height: 100%;
-      /* contain: layout style paint; */
-      contain: strict;
+      contain: layout style paint;
+      /* contain: strict; */
       touch-action: none;
       overscroll-behavior: none;
+      transform: translateZ(0);
     }
   
     .svg-background, .canvas-layer, .svg-foreground {
@@ -3508,12 +3852,16 @@
       position: absolute;
       top: 0;
       left: 0;
+      will-change: transform, contents;
+      contain: strict;
+      transform: translateZ(0);
+      /* will-change or transform3d(0,0,0) */
       /* contain: strict; */
       /* contain: layout style; */
       /* will-change: auto; */
       /* will-change: contents; */
       /* backface-visibility: hidden; */
-      /* isolation: isolate; */
+      isolation: isolate;
       /* image-rendering: crisp-edges; */
     }
   
@@ -5406,933 +5754,4 @@
     </text>
   {/if}
 </src/lib/components/marks/DotsMark.svelte>
-
-<src/lib/components/marks/BarMarkX.svelte>
-  <script>
-    import { getContext, onDestroy, untrack } from 'svelte';
-    import { getScaleState } from '$lib/scales';
-    import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-    import { Rects } from '../rendering/index.js';
-    import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-    import { getSourceType, processData, processColorData, processAlphaData, parseColor, buildSelectFromChannels } from './utils/index.js';
-  
-    let { 
-      table, 
-      selection, 
-      x,           // shorthand for x2
-      x1 = 0,      // baseline (start of bars)
-      x2 = x,      // end of bars (the data values)
-      y,           // categorical data
-      color, 
-      alpha = 0.8,
-      limit,
-      filterNulls = false,
-  
-      padding,        // Simple padding (0-1)
-      paddingInner,   // Inner padding between bars (0-1) 
-      paddingOuter,   // Outer padding before/after bars (0-1)
-      align = 0.5,    // Alignment of bars within outer padding (0-1)
-    } = $props();
-  
-    const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
-  
-    const coordinator = getContext('mosaic-coordinator');
-    const chartContext = getContext('chart');
-    const colorScale = $derived(getScaleState('color', 'ordinal'));
-  
-    let setup = $state(null);
-    let xScaleId = $derived(chartContext.xScaleState?.id);
-    let yScaleId = $derived(chartContext.yScaleState?.id);
-  
-    const yScaleConfig = $derived.by(() => {
-      const config = {};
-      
-      // Only include defined values to avoid overriding defaults unnecessarily
-      if (padding != null) config.padding = padding;
-      if (paddingInner != null) config.paddingInner = paddingInner;
-      if (paddingOuter != null) config.paddingOuter = paddingOuter;
-      if (align != null) config.align = align;
-      
-      return config;
-    });
-  
-    const config = $derived({
-      markType: 'barx',
-      supportedScaleTypes: {
-        x: ['linear', 'identity'],           // continuous only
-        y: ['band']                          // categorical only
-      },
-      scaleRequirements: {
-        x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
-        y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
-      },
-      table,
-      selection,
-      select: buildSelectFromChannels({ x1, x2, y, color }),
-      clientOptions: {
-        limit,
-        filterNulls: filterNulls ? [x1, x2, y] : null
-      }
-    });
-  
-    // Data processing
-    let arrowTable = $derived(setup?.client?.arrowTable);
-    let instanceCount = $derived(arrowTable?.numRows || 0);
-  
-    // Get Arrow columns (only for SQL expressions)
-    let x1Column = $derived(arrowTable?.getChild('x1'));
-    let x2Column = $derived(arrowTable?.getChild('x2')); 
-    let yColumn = $derived(arrowTable?.getChild('y'));
-    let colorColumn = $derived(arrowTable?.getChild('color'));
-  
-    let dataStrategies = $derived({
-      x1: getSourceType(x1),
-      x2: getSourceType(x2), 
-      y: getSourceType(y),
-      color: getSourceType(color),
-      alpha: getSourceType(alpha)
-    });
-  
-    // Process x data using utility functions
-    let x0Data = $derived.by(() => {
-      if (!instanceCount) return null;
-      return processData(x1, x1Column, instanceCount, dataStrategies.x1);
-    });
-  
-    let x1Data = $derived.by(() => {
-      if (!instanceCount) return null;
-      return processData(x2, x2Column, instanceCount, dataStrategies.x2);
-    });
-  
-    // Process categorical y data through band scale
-    let yData = $derived.by(() => {
-      if (!instanceCount || !yColumn || !setup?.actualYScaleType) return null;
-      
-      if (setup.actualYScaleType === 'band') {
-        console.log('bar mark x y data processing')
-        const rawArray = yColumn.toArray();
-        const indices = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
-        
-        // Convert indices to rectangle coordinates
-        const y0Data = new Float32Array(instanceCount);
-        const y1Data = new Float32Array(instanceCount);
-        
-        for (let i = 0; i < instanceCount; i++) {
-          const categoryIndex = indices[i];
-          // Each category spans from index to index+1 in band scale space
-          y0Data[i] = categoryIndex;
-          y1Data[i] = categoryIndex;
-        }
-        
-        return { y0Data, y1Data };
-      }
-      
-      return null;
-    });
-  
-    let y0Data = $derived(yData?.y0Data);
-    let y1Data = $derived(yData?.y1Data);
-    let colorData = $derived(processColorData(color, colorColumn, instanceCount, colorScale, dataStrategies.color));
-    let alphaData = $derived(processAlphaData(alpha, instanceCount, dataStrategies.alpha));
-  
-    // Setup effect
-    $effect(() => {
-      console.log('barx setup effect');
-      void config, xScaleId, yScaleId;
-      
-      untrack(() => {
-        setup?.destroy();
-        
-        setup = new BaseMarkSetup(
-          config,
-          coordinator,
-          chartContext,
-          markId
-        );
-      });
-    });
-  
-    onDestroy(() => {
-      setup?.destroy();
-    });
-  
-    // $effect(() => {
-    //   console.log('🔍 BarMarkX Data Processing:', {
-    //     setupReady: !!setup,
-    //     gpuReady: setup?.gpuReady,
-    //     arrowTable: !!arrowTable,
-    //     instanceCount,
-        
-    //     // Raw data from database
-    //     x1Column: x1Column ? `${x1Column.toArray().length} items` : 'null',
-    //     x2Column: x2Column ? `${x2Column.toArray().length} items` : 'null', 
-    //     yColumn: yColumn ? `${yColumn.toArray().length} items` : 'null',
-        
-    //     // Processed data arrays
-    //     x0Data: x0Data ? `${x0Data.length} items, sample: [${Array.from(x0Data.slice(0, 3)).join(', ')}]` : 'null',
-    //     x1Data: x1Data ? `${x1Data.length} items, sample: [${Array.from(x1Data.slice(0, 3)).join(', ')}]` : 'null',
-    //     y0Data: y0Data ? `${y0Data.length} items, sample: [${Array.from(y0Data.slice(0, 3)).join(', ')}]` : 'null',
-    //     y1Data: y1Data ? `${y1Data.length} items, sample: [${Array.from(y1Data.slice(0, 3)).join(', ')}]` : 'null',
-        
-    //     // Scale info
-    //     actualXScaleType: setup?.actualXScaleType,
-    //     actualYScaleType: setup?.actualYScaleType,
-        
-    //     willRenderRects: !!(setup?.gpuReady && x0Data && x1Data && y0Data && y1Data),
-    //   });
-    // });
-  
-    // $effect(() => {
-    //   console.log('🔍 BarMarkX Actual Data Values:', {
-    //     x0Data: x0Data ? Array.from(x0Data) : null,
-    //     x1Data: x1Data ? Array.from(x1Data) : null, 
-    //     y0Data: y0Data ? Array.from(y0Data) : null,
-    //     y1Data: y1Data ? Array.from(y1Data) : null,
-    //     colorData: colorData ? Array.from(colorData.slice(0, 12)) : null, // First 3 colors
-    //     alphaData: alphaData ? Array.from(alphaData) : null,
-    //   });
-    // });
-  
-    // $effect(() => {
-    //   void setup?.gpuReady
-    //   void chartContext.xScale
-    //   void chartContext.yScale
-  
-    //   if (setup?.gpuReady && chartContext.xScale && chartContext.yScale) {
-    //     console.log('🔍 Scale Domains vs Data:', {
-    //       // X scale domain and data
-    //       xDomain: chartContext.xScaleState.domain.current,
-    //       xDataRange: [Math.min(...x0Data), Math.max(...x1Data)],
-    //       xScaleRange: [0, chartContext.innerWidth],
-          
-    //       // Y scale info
-    //       yDomain: chartContext.yScaleState.effectiveDomain,
-    //       yCategoryPositions: Array.from(chartContext.yCategoryPositions),
-    //       yBandwidth: chartContext.yScale.bandwidth(),
-          
-    //       // Are x values within domain?
-    //       x0InRange: x0Data.map(x => {
-    //         const scaled = chartContext.xScale(x);
-    //         return { original: x, scaled, visible: scaled >= 0 && scaled <= chartContext.innerWidth };
-    //       })
-    //     });
-    //   }
-    // });
-  
-  </script>
-  
-  {#if setup?.gpuReady && x0Data && x1Data && y0Data && y1Data}
-    <Rects
-      {x0Data}
-      x1Data={x1Data}
-      {y0Data}
-      {y1Data}
-      {colorData}
-      {alphaData}
-      dataVersion={setup.client.dataVersion}
-    />
-  {:else if setup?.client?.error}
-    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-      Error: {setup.client.error.message}
-    </text>
-  {:else if setup?.client?.delayedLoading}
-    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-      Loading data...
-    </text>
-  {:else}
-    <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-      Initializing bars...
-    </text>
-  {/if}
-</src/lib/components/marks/BarMarkX.svelte>
-
-<src/lib/gpu/ScaleTemplateSystem.js>
-  // src/lib/rendering/ScaleTemplateSystem.js
-  
-  /**
-   * Template-based shader generation for scale combinations
-   * Step 1: Foundation with linear scale only
-   */
-  
-  /**
-   * Scale fragment definitions
-   * Each scale type provides: declaration, function call, and implementation
-   */
-  const SCALE_FRAGMENTS = {
-    linear: {
-      // UPDATED: Generate SSBO declaration instead of individual uniforms
-      declaration: (groupIndex, bindingIndex, suffix) => {
-        // For SSBO approach, we only need the struct definition
-        // The actual storage buffer is declared once globally
-        return `
-          struct ScaleParam {
-            domainMin: f32,
-            domainMax: f32,
-            domainScale: f32,
-            _pad: f32,
-          };
-        `;
-      },
-  
-      // UPDATED: Use array indexing into global SSBO
-      functionCall: (value, suffix) => `scaleLinear${suffix}(${value})`,
-  
-      // UPDATED: Read from global storage array using indices
-      implementation: (suffix, axis) => `
-        fn scaleLinear${suffix}(value: f32, scaleIndex: u32) -> f32 {
-          let scale = scaleParams[scaleIndex];
-          let normalized = (value - scale.domainMin) * scale.domainScale;
-          
-          let rangeMin = frameUniforms.rangeMin.${axis};
-          let rangeMax = frameUniforms.rangeMax.${axis};
-          
-          return rangeMin + normalized * (rangeMax - rangeMin);
-        }
-      `,
-  
-      bufferLayout: {
-        size: 4 * 4, // Now 4 f32 values = 16 bytes (added padding)
-        fields: ['domainMin', 'domainMax', 'domainScale', '_pad']
-      }
-    }
-  };
-  
-  /**
-   * Main template system class
-   */
-  export class ScaleTemplateSystem {
-  	constructor() {
-  		this.shaderCache = new Map(); // Cache generated shaders by combination key
-  		this.bufferLayoutCache = new Map(); // Cache buffer layouts by combination
-  	}
-  
-  	/**
-  	 * Generate shader code for a specific scale combination
-  	 * @param {Object} scaleTypes - { x: 'linear', y: 'linear' }
-  	 * @param {string} markShaderCode - Mark-specific shader code (dots, rects, etc.)
-  	 * @returns {Object} { shaderCode: string, bufferLayouts: Object }
-  	 */
-  	generateShader(scaleTypes, markShaderCode) {
-  		const cacheKey = `${scaleTypes.x}-${scaleTypes.y}`;
-  
-  		// Return cached version if available
-  		if (this.shaderCache.has(cacheKey)) {
-  			return this.shaderCache.get(cacheKey);
-  		}
-  
-  		// Generate new shader
-  		const result = this._buildShader(scaleTypes, markShaderCode);
-  
-  		// Cache and return
-  		this.shaderCache.set(cacheKey, result);
-  		return result;
-  	}
-  
-  	/**
-  	 * Build shader from scale combination
-  	 * @private
-  	 */
-  	_buildShader(scaleTypes, markShaderCode) {
-  		// Validate scale types exist
-  		this._validateScaleTypes(scaleTypes);
-  
-  		// Get scale fragments
-  		const xFragment = SCALE_FRAGMENTS[scaleTypes.x];
-  		const yFragment = SCALE_FRAGMENTS[scaleTypes.y];
-  
-  		// Build shader sections
-  		const declarations = this._buildDeclarations(xFragment, yFragment);
-  		const implementations = this._buildImplementations(xFragment, yFragment);
-  		const scaleFunctions = this._buildScaleFunctions(xFragment, yFragment);
-  
-  		// Generate complete shader
-  		const shaderCode = `
-        // Generated shader for scales: ${scaleTypes.x}-x, ${scaleTypes.y}-y
-        // Auto-generated - do not edit directly
-        
-        ${declarations}
-        
-        // Per-frame uniforms (@group(0)) - consolidated into single buffer
-        struct FrameUniforms {
-          resolution: vec2<f32>,        // Canvas dimensions (physical pixels)
-          rangeMin: vec2<f32>,          // Chart range minimums  
-          rangeMax: vec2<f32>,          // Chart range maximums
-          devicePixelRatio: f32,        // Device pixel ratio
-          _pad0: f32,                   // Alignment padding
-          xScaleIndex: u32,             // Shared by the chart
-          yScaleIndex: u32,             // Shared by the chart
-          _pad1: vec2<u32>,             // Pad struct size to 48 bytes
-        };
-        @group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
-        
-        ${scaleFunctions}
-        ${implementations}
-        
-        ${markShaderCode}
-      `;
-  
-  		// Build buffer layout information
-  		const bufferLayouts = this._buildBufferLayouts(scaleTypes, xFragment, yFragment);
-  
-  		return {
-  			shaderCode: shaderCode.trim(),
-  			bufferLayouts,
-  			cacheKey: `${scaleTypes.x}-${scaleTypes.y}`
-  		};
-  	}
-  
-  	/**
-  	 * Build declarations section for scale uniforms
-  	 * @private
-  	 */
-    _buildDeclarations(xFragment, yFragment) {
-      // Generate struct definitions
-      const structDef = xFragment.declaration(2, 0, 'X');
-      
-      // Global SSBO declaration - don't declare layerParams here
-      const globalSSBODeclaration = `
-        // Global scale storage buffer
-        @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
-      `;
-      
-      return `${structDef}\n${globalSSBODeclaration}`;
-    }
-  
-  	/**
-  	 * Build scale function implementations
-  	 * @private
-  	 */
-  	_buildImplementations(xFragment, yFragment) {
-  		// MODIFIED: Generate implementations with unique names to prevent redefinition errors
-  		const xImplementation = xFragment.implementation('X', 'x');
-  		const yImplementation = yFragment.implementation('Y', 'y');
-  
-  		// Even if the types are the same (e.g., linear-linear), we need both function
-  		// implementations because they operate on different struct types (LinearScaleParamsX vs LinearScaleParamsY).
-  		return `${xImplementation}\n${yImplementation}`;
-  	}
-  
-  	/**
-  	 * Build convenience scale functions (scaleX, scaleY)
-  	 * @private
-  	 */
-    _buildScaleFunctions(xFragment, yFragment) {
-      return `
-        // Convenience functions - indices will be passed from mark-specific code
-        fn scaleX(value: f32) -> f32 {
-          return scaleLinear${xFragment.suffix || 'X'}(value, frameUniforms.xScaleIndex);
-        }
-        
-        fn scaleY(value: f32) -> f32 {
-          return scaleLinear${yFragment.suffix || 'Y'}(value, frameUniforms.yScaleIndex);
-        }
-      `;
-    }
-  
-  	/**
-  	 * Build buffer layout specifications for GPUCoordinator
-  	 * @private
-  	 */
-  	_buildBufferLayouts(scaleTypes, xFragment, yFragment) {
-  		const layouts = {
-  			x: {
-  				type: scaleTypes.x,
-  				...xFragment.bufferLayout
-  			},
-  			y: {
-  				type: scaleTypes.y,
-  				...yFragment.bufferLayout
-  			}
-  		};
-  
-  		return layouts;
-  	}
-  
-  	/**
-  	 * Validate that scale types are supported
-  	 * @private
-  	 */
-  	_validateScaleTypes(scaleTypes) {
-  		const supportedTypes = Object.keys(SCALE_FRAGMENTS);
-  
-  		if (!supportedTypes.includes(scaleTypes.x)) {
-  			throw new Error(`Unsupported X scale type: ${scaleTypes.x}. Supported: ${supportedTypes.join(', ')}`);
-  		}
-  
-  		if (!supportedTypes.includes(scaleTypes.y)) {
-  			throw new Error(`Unsupported Y scale type: ${scaleTypes.y}. Supported: ${supportedTypes.join(', ')}`);
-  		}
-  	}
-  
-  	/**
-  	 * Get supported scale types
-  	 */
-  	getSupportedScaleTypes() {
-  		return Object.keys(SCALE_FRAGMENTS);
-  	}
-  
-  	/**
-  	 * Clear shader cache (useful for development)
-  	 */
-  	clearCache() {
-  		this.shaderCache.clear();
-  		this.bufferLayoutCache.clear();
-  	}
-  }
-  
-  // Export singleton instance
-  export const scaleTemplateSystem = new ScaleTemplateSystem();
-</src/lib/gpu/ScaleTemplateSystem.js>
-
-<src/routes/scatter_plot_matrix/+page.svelte>
-  <script>
-    import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
-    import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
-    // import { setScaleRegistry } from "$lib/scales";
-    import { setCoordinators } from "$lib";
-    import { onMount, onDestroy, setContext } from "svelte";
-    import MainView from "./MainView.svelte";
-    
-    // setScaleRegistry();
-    setCoordinators();
-  
-    let coord;
-    // setContext('mosaic-coordinator', coord);
-  
-    let isLoaded = $state(false);
-    let loadError = $state(null);
-  
-    const logs = [];
-    const queryLogger = {
-      ...console,
-  
-      debug(...values) {
-        if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
-          const queryLog = values[1];
-  
-          if (queryLog && queryLog.sql) {
-            const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false});
-            console.log(`[${timestamp}] \n${queryLog.sql}`);
-            logs.push({ query: queryLog.sql, time: new Date()})
-          }
-        }
-      },
-      getLogs() {
-        return logs;
-      }
-    };
-  
-    onMount(async () => {
-      try {
-        const wasm = wasmConnector();
-        coord = new Coordinator();
-        coord.databaseConnector(wasm);
-  
-        // coord.manager.logQueries(true);
-        // coord.manager.logger(queryLogger);
-      
-        setContext('mosaic-coordinator', coord);
-  
-  
-        await coord.exec(
-          loadParquet("penguins", `${window.location.origin}/data/penguins.parquet`)
-        );
-  
-        isLoaded = true
-      } catch (error) {
-        console.error("Initialization error:", error);
-        loadError = error.message;
-      }
-    });
-  </script>
-  
-  <div class="app-container">
-    {#if loadError}
-      <div class="error-container">Error loading data: {loadError}</div>
-    {:else if !isLoaded}
-      <div class="loading-container">Loading parquet data...</div>
-    {:else}
-      <MainView />
-    {/if}
-  </div>
-  
-  
-  <style>
-    .app-container {
-      width: 100%;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-  
-    .loading-container,
-    .error-container {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 200px;
-      padding: 2rem;
-    }
-  </style>
-</src/routes/scatter_plot_matrix/+page.svelte>
-
-<src/routes/scatter_plot_matrix/MainView.svelte>
-  <script>
-  	import { Selection } from '@uwdata/mosaic-core';
-  	import { sum, min, max } from '@uwdata/mosaic-sql';
-  	import { setContext, getContext } from 'svelte';
-  	import {
-  		ChartContainer,
-  		ColumnSelector,
-  		Grid,
-  		Frame,
-  		AxisLeft,
-  		AxisBottom,
-  		MarginLabel,
-  		Crosshair,
-  		WebGPUCanvas,
-  		DotsMark,
-  		BarMark
-  	} from '$lib/components';
-  
-  	const coordinator = getContext('mosaic-coordinator');
-  	const selection = Selection.crossfilter();
-  
-  	let chartConfig = $state([
-  		{
-  			id: '1',
-  			table: 'penguins',
-  			x: 'bill_length',
-  			y: 'bill_depth'
-  		},
-  		{
-  			id: '2',
-  			table: 'penguins',
-  			// x: 'body_mass',
-  			x: 'bill_length',
-  			y: 'bill_depth'
-  			// y: 'bill_depth'
-  		},
-  		{
-  			id: '3',
-  			table: 'penguins',
-  			x: 'bill_length',
-  			y: 'flipper_length'
-  		},
-  		{
-  			id: '4',
-  			table: 'penguins',
-  			x: 'bill_depth', //'body_mass',
-  			y: 'flipper_length'
-  		}
-  	]);
-  
-  	let gridRows = $state(2);
-  	let gridColumns = $state(1);
-  
-  	setContext('chartConfig', {
-  		get chartConfig() {
-  			return chartConfig;
-  		},
-  		set chartConfig(value) {
-  			chartConfig = value;
-  		},
-  		get gridRows() {
-  			return gridRows;
-  		},
-  		set gridRows(value) {
-  			gridRows = value;
-  		},
-  		get gridColumns() {
-  			return gridColumns;
-  		},
-  		set gridColumns(value) {
-  			gridColumns = value;
-  		}
-  	});
-  
-  	let webGPU = $state(true);
-  </script>
-  
-  <div class="main-view-container">
-  
-  	<ColumnSelector />
-  
-  	<div class="charts-container" style="--grid-rows: {gridRows}; --grid-columns: {gridColumns};">
-  		{#each chartConfig as config, i (config.id)}
-  			<div class="chart-wrapper">
-  				<ChartContainer xLabel={config.x} yLabel={config.y}>
-  					{#snippet background()}
-  						<!-- <Grid />
-  						<Frame />
-  						<AxisLeft />
-  						<AxisBottom />
-  						<MarginLabel /> -->
-  					{/snippet}
-  
-  					{#snippet canvas()}
-  						<WebGPUCanvas>
-  							{#snippet canvasComponents()}
-  								{#if webGPU}
-  									<DotsMark
-  										table={'penguins'}
-  										x={config.x}
-  										y={config.y}
-  										color={'species'}
-  										alpha="1.0"
-  										radius="5"
-  									/>
-  								{/if}
-  							{/snippet}
-  						</WebGPUCanvas>
-  					{/snippet}
-  
-  					{#snippet foreground()}
-  						<!-- <Crosshair /> -->
-  					{/snippet}
-  				</ChartContainer>
-  			</div>
-  		{/each}
-  	</div>
-  </div>
-  
-  <style>
-  	.main-view-container {
-  		width: 100%;
-  		display: flex;
-  		flex-direction: column;
-  		/* align-items: center; */
-  		padding-bottom: 40px; /* Ensure space at bottom */
-  	}
-  
-  	.charts-container {
-  		display: grid;
-  		grid-template-rows: repeat(var(--grid-rows), auto);
-  		grid-template-columns: repeat(var(--grid-columns), 1fr);
-  		gap: 10px;
-  		width: 80%;
-  		max-width: 1600px;
-  		margin: 20px auto;
-  	}
-  
-  	.chart-wrapper {
-  		width: 100%;
-  		aspect-ratio: 4/3;
-  		min-height: 200px;
-  		max-height: 400px;
-  		position: relative; /* Important for containing absolutely positioned children */
-  	}
-  </style>
-</src/routes/scatter_plot_matrix/MainView.svelte>
-
-<src/routes/bar_chart/+page.svelte>
-  <script>
-    import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
-    import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
-    // import { setScaleRegistry } from "$lib/scales";
-    import { setCoordinators } from "$lib";
-    import { onMount, onDestroy, setContext } from "svelte";
-    import MainView from "./MainView.svelte";
-    
-    // setScaleRegistry();
-    setCoordinators();
-  
-    let coord;
-    // setContext('mosaic-coordinator', coord);
-  
-    let isLoaded = $state(false);
-    let loadError = $state(null);
-  
-    const logs = [];
-    const queryLogger = {
-      ...console,
-  
-      debug(...values) {
-        if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
-          const queryLog = values[1];
-  
-          if (queryLog && queryLog.sql) {
-            const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false});
-            console.log(`[${timestamp}] \n${queryLog.sql}`);
-            logs.push({ query: queryLog.sql, time: new Date()})
-          }
-        }
-      },
-      getLogs() {
-        return logs;
-      }
-    };
-  
-    onMount(async () => {
-      try {
-        const wasm = wasmConnector();
-        coord = new Coordinator();
-        coord.databaseConnector(wasm);
-  
-        coord.manager.logQueries(true);
-        coord.manager.logger(queryLogger);
-      
-        setContext('mosaic-coordinator', coord);
-  
-  
-        await coord.exec(
-          loadParquet("penguins", `${window.location.origin}/data/penguins.parquet`)
-        );
-  
-        isLoaded = true
-      } catch (error) {
-        console.error("Initialization error:", error);
-        loadError = error.message;
-      }
-    });
-  
-    import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
-    
-    if (typeof window !== 'undefined') {
-      window.testScaleConfig = {
-        resolveScaleConfiguration,
-        SCALE_PRIORITIES,
-        // NEW: Add access to chart context for testing
-        getCurrentChart: () => {
-          // This would need to be set from your actual chart component
-          return window.currentChartContext;
-        }
-      };
-  }
-  
-  </script>
-  
-  <div class="app-container">
-    {#if loadError}
-      <div class="error-container">Error loading data: {loadError}</div>
-    {:else if !isLoaded}
-      <div class="loading-container">Loading parquet data...</div>
-    {:else}
-      <MainView />
-    {/if}
-  </div>
-  
-  
-  <style>
-    .app-container {
-      width: 100%;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-  
-    .loading-container,
-    .error-container {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 200px;
-      padding: 2rem;
-    }
-  </style>
-</src/routes/bar_chart/+page.svelte>
-
-<src/routes/bar_chart/MainView.svelte>
-  <script>
-  	import { Selection } from '@uwdata/mosaic-core';
-  	import { sum, min, max } from '@uwdata/mosaic-sql';
-  	import { setContext, getContext } from 'svelte';
-  	import {
-  		ChartContainer,
-  		ColumnSelector,
-  		Grid,
-  		Frame,
-  		AxisLeft,
-  		AxisBottom,
-  		MarginLabel,
-  		Crosshair,
-  		WebGPUCanvas,
-  		DotsMark,
-  		BarMark,
-  		BarMarkX
-  	} from '$lib/components';
-  	import Rects from '$lib/components/rendering/Rects.svelte';
-  
-  	const coordinator = getContext('mosaic-coordinator');
-  	const selection = Selection.crossfilter();
-  
-  	// Create test data
-  	const x0Data = new Float32Array([10, 60, 20]);     // Left edges
-  	const x1Data = new Float32Array([50, 100, 80]);    // Right edges
-  	const y0Data = new Float32Array([10, 10, 30]);      // Bottom edges  
-  	const y1Data = new Float32Array([50, 30, 80]);      // Top edges
-  	const colorData = new Float32Array([
-  	1,0,0,1,  // Red rectangle
-  	0,1,0,1,  // Green rectangle
-  	0,0,1,1   // Blue rectangle
-  	]);
-  	const alphaData = new Float32Array([0.3, 0.2, 0.3]);
-  
-  </script>
-  
-  <div class="chart-wrapper">
-  	<ChartContainer xLabel="bill_length" yLabel="species">
-  	  {#snippet background()}
-  		<Grid show='x'/>
-  		<Frame />
-  		<AxisLeft />
-  		<AxisBottom />
-  		<MarginLabel />
-  	  {/snippet}
-    
-  	  {#snippet canvas()}
-  		<WebGPUCanvas>
-  		  {#snippet canvasComponents()}
-  			<!-- <BarMarkX
-  			  table="penguins"
-  			  x1={min("bill_length")}
-  			  x2={max("bill_length")}
-  			  y="species"
-  			  color="purple"
-  			  alpha={1}
-  			  preferredYScaleType = 'band'
-  			/> -->
-  			<Rects 
-  				{x0Data} {x1Data} {y0Data} {y1Data} 
-  				{colorData} {alphaData} 
-  				dataVersion={1} 
-  			/>
-  		  {/snippet}
-  		</WebGPUCanvas>
-  	  {/snippet}
-    
-  	  {#snippet foreground()}
-  		<Crosshair />
-  	  {/snippet}
-  	</ChartContainer>
-    </div>
-    
-  <style>
-  	.main-view-container {
-  		width: 100%;
-  		display: flex;
-  		flex-direction: column;
-  		/* align-items: center; */
-  		padding-bottom: 40px; /* Ensure space at bottom */
-  	}
-  
-  	.charts-container {
-  		display: grid;
-  		grid-template-rows: repeat(var(--grid-rows), auto);
-  		grid-template-columns: repeat(var(--grid-columns), 1fr);
-  		gap: 10px;
-  		width: 80%;
-  		max-width: 1600px;
-  		margin: 20px auto;
-  	}
-  
-  	.chart-wrapper {
-  		width: 100%;
-  		aspect-ratio: 4/3;
-  		min-height: 200px;
-  		max-height: 400px;
-  		position: relative; /* Important for containing absolutely positioned children */
-  	}
-  </style>
-</src/routes/bar_chart/MainView.svelte>
 

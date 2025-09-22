@@ -348,28 +348,93 @@
         onmouseleave={handleInnerMouseLeave}
       >
         {@render foreground?.()}
-        <rect
+          {#if scales.xScale && scales.yScale}
+            <circle 
+              cx={scales.xScale.scale(50)} 
+              cy={scales.yScale.scale(25)} 
+              r="8" 
+              fill="red" 
+              opacity="0.7"
+              stroke="darkred"
+              stroke-width="2"
+            />
+            
+            <!-- Test rectangle spanning data range (20-80, 10-40) -->
+            <rect 
+              x={scales.xScale.scale(20)}
+              y={scales.yScale.scale(40)} 
+              width={scales.xScale.scale(80) - scales.xScale.scale(20)}
+              height={scales.yScale.scale(10) - scales.yScale.scale(40)}
+              fill="blue" 
+              opacity="0.3"
+              stroke="darkblue"
+              stroke-width="1"
+            />
+            
+            <!-- Test line from (0, 0) to (100, 100) in data coordinates -->
+            <line 
+              x1={scales.xScale.scale(0)}
+              y1={scales.yScale.scale(0)}
+              x2={scales.xScale.scale(100)}
+              y2={scales.yScale.scale(100)}
+              stroke="green" 
+              stroke-width="3"
+              opacity="0.8"
+            />
+            
+            <!-- Moving crosshair that follows current data point -->
+            {#if scales.currentXDataPoint != null && scales.currentYDataPoint != null}
+              <g opacity="0.6">
+                <!-- Vertical line -->
+                <line 
+                  x1={scales.currentXScreenPoint}
+                  y1={0}
+                  x2={scales.currentXScreenPoint}
+                  y2={scales.innerHeight}
+                  stroke="orange" 
+                  stroke-width="1"
+                  stroke-dasharray="5,5"
+                />
+                <!-- Horizontal line -->
+                <line 
+                  x1={0}
+                  y1={scales.currentYScreenPoint}
+                  x2={scales.innerWidth}
+                  y2={scales.currentYScreenPoint}
+                  stroke="orange" 
+                  stroke-width="1"
+                  stroke-dasharray="5,5"
+                />
+                <!-- Center dot -->
+                <circle 
+                  cx={scales.currentXScreenPoint}
+                  cy={scales.currentYScreenPoint}
+                  r="4" 
+                  fill="orange"
+                />
+              </g>
+            {/if}
+            
+            <!-- Grid of reference points -->
+            {#each [25, 50, 75] as xVal}
+              {#each [25, 50, 75] as yVal}
+                <circle 
+                  cx={scales.xScale.scale(xVal)} 
+                  cy={scales.yScale.scale(yVal)} 
+                  r="3" 
+                  fill="purple" 
+                  opacity="0.5"
+                />
+              {/each}
+            {/each}
+          {/if}
+          <rect
           x="0"
           y="0"
           width={layout.innerWidth}
           height={layout.innerHeight}
           fill="transparent"
-        />
-          <!-- <circle 
-            cx={xScale?.scale(50) || 0} 
-            cy={yScale?.scale(25) || 0} 
-            r="5" 
-            fill="red" 
-            opacity="0.8"
           />
-          <rect 
-            x={xScale?.scale(0) || 0}
-            y={yScale?.scale(0) || 0} 
-            width={Math.abs((xScale?.scale(100) || 100) - (xScale?.scale(0) || 0))}
-            height={Math.abs((yScale?.scale(100) || 100) - (yScale?.scale(0) || 0))}
-            fill="blue" 
-            opacity="0.2"
-          /> -->
       </g>
     </svg>
   {/if}
@@ -385,10 +450,11 @@ gpu: {gpuCoordinator.timings.gpu} µs
     position: relative;
     flex: 1;
     height: 100%;
-    /* contain: layout style paint; */
-    contain: strict;
+    contain: layout style paint;
+    /* contain: strict; */
     touch-action: none;
     overscroll-behavior: none;
+    transform: translateZ(0);
   }
 
   .svg-background, .canvas-layer, .svg-foreground {
