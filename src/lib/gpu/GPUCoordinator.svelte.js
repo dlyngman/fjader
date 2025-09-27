@@ -523,9 +523,25 @@ export class GPUCoordinator {
     const chartsToRender = this.#chartsToRenderSet;
     chartsToRender.clear();
 
+    // TODO debugging remove later 
+    let lastRenderedXDomain = 0;
+
     for (const scale of this.#animatedScales) {
       // This now performs the critical interpolation step.
       scale._setRenderState(alpha); 
+
+      // --- New Instrumentation ---
+      if (scale.name === 'bill_length') { // Pick a consistent scale to watch
+        const currentDomain = scale.domain.current[0];
+        // console.log(currentDomain)
+        const visualDelta = currentDomain - lastRenderedXDomain;
+        if (lastRenderedXDomain !== 0) {
+          // During a smooth pan, this number should be VERY consistent.
+          // If you see it jumping around, that's your stutter!
+        }
+        console.log('Visual Delta:', visualDelta.toFixed(6));
+        lastRenderedXDomain = currentDomain;
+      }
   
       const affectedCharts = this.#getChartsUsingScale(scale);
       affectedCharts.forEach(chartId => chartsToRender.add(chartId));

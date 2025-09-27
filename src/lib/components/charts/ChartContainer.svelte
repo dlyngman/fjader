@@ -259,14 +259,13 @@
   function handlePointerMove(event) {
     if (!isPanning) return;
 
-    // console.log(`Pointer move at ${performance.now().toFixed(2)}ms`);
+    // Get coalesced events for higher resolution input data
+    const coalescedEvents = event.getCoalescedEvents?.() || [event];
+  
+    // Pass all coalesced events to the scales coordinator
+    scales.updatePanPositionWithCoalescing(coalescedEvents);
     
-    // event.preventDefault();
-    
-    // NEW: Ultra-minimal event handler - just store latest position
-    scales.updatePanPosition(event.offsetX, event.offsetY);
-    
-    // console.log(`Pan position updated at ${performance.now().toFixed(2)}ms`);
+    // scales.updatePanPosition(event.offsetX, event.offsetY);    
   }
 
   function handlePointerUp(event) {
@@ -327,10 +326,6 @@
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
       onpointercancel={handlePointerUp}
-      ontouchstart={handleTouchStart}
-      ontouchmove={handleTouchMove}
-      ontouchend={handleTouchEnd}
-      ontouchcancel={handleTouchEnd}
       ondblclick={handleDoubleClick}
     >
       <defs>
@@ -343,9 +338,9 @@
         transform={layout.innerTransform}
         clip-path={layout.clipPathUrl}
         class="crosshair"
-        onmousemove={handleInnerMouseMove}
-        onmouseenter={handleInnerMouseEnter}
-        onmouseleave={handleInnerMouseLeave}
+        onpointermove={handleInnerMouseMove}
+        onpointerenter={handleInnerMouseEnter}
+        onpointerleave={handleInnerMouseLeave}
       >
         {@render foreground?.()}
           {#if scales.xScale && scales.yScale}
@@ -381,39 +376,6 @@
               stroke-width="3"
               opacity="0.8"
             />
-            
-            <!-- Moving crosshair that follows current data point -->
-            {#if scales.currentXDataPoint != null && scales.currentYDataPoint != null}
-              <g opacity="0.6">
-                <!-- Vertical line -->
-                <line 
-                  x1={scales.currentXScreenPoint}
-                  y1={0}
-                  x2={scales.currentXScreenPoint}
-                  y2={scales.innerHeight}
-                  stroke="orange" 
-                  stroke-width="1"
-                  stroke-dasharray="5,5"
-                />
-                <!-- Horizontal line -->
-                <line 
-                  x1={0}
-                  y1={scales.currentYScreenPoint}
-                  x2={scales.innerWidth}
-                  y2={scales.currentYScreenPoint}
-                  stroke="orange" 
-                  stroke-width="1"
-                  stroke-dasharray="5,5"
-                />
-                <!-- Center dot -->
-                <circle 
-                  cx={scales.currentXScreenPoint}
-                  cy={scales.currentYScreenPoint}
-                  r="4" 
-                  fill="orange"
-                />
-              </g>
-            {/if}
             
             <!-- Grid of reference points -->
             {#each [25, 50, 75] as xVal}
@@ -461,11 +423,16 @@ gpu: {gpuCoordinator.timings.gpu} µs
     position: absolute;
     top: 0;
     left: 0;
+    touch-action: none;
   }
 
-  .svg-background { z-index: 1; }
+  .svg-background { 
+    z-index: 1; 
+  }
   .canvas-layer { z-index: 2; }
-  .svg-foreground { z-index: 3; }
+  .svg-foreground { 
+    z-index: 3; 
+  }
 
   .crosshair {
     cursor: crosshair;

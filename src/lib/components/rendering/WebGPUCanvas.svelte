@@ -66,7 +66,7 @@
 
     try {
       // Get WebGPU context
-      context = canvas.getContext('webgpu');
+      context = canvas.getContext('webgpu', {willReadFrequently: false});
       if (!context) {
         throw new Error('Failed to get WebGPU context from canvas. WebGPU may not be supported.');
       }
@@ -83,7 +83,7 @@
         device,
         format: presentationFormat,
         alphaMode: 'premultiplied',
-        // desynchronized: true,
+        desynchronized: true,
       });
       
       contextConfigured = true;

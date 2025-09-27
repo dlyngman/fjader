@@ -258,7 +258,9 @@ export class ChartScales {
         initialDomain: [...this.xScaleState.domain.current],
         screenToDataRatio: (this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0]) / this.layout.innerWidth,
         domainWidth: this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0],
-        screenDimension: this.layout.innerWidth
+        screenDimension: this.layout.innerWidth,
+        axis: 'x', // ← Add this
+        lastScreenPos: { ...initialScreenPos }
       };
       this.xScaleState.setPanContext(panContext);
     }
@@ -269,7 +271,9 @@ export class ChartScales {
         initialDomain: [...this.yScaleState.domain.current],
         screenToDataRatio: (this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0]) / this.layout.innerHeight,
         domainWidth: this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0],
-        screenDimension: this.layout.innerHeight
+        screenDimension: this.layout.innerHeight,
+        axis: 'y',
+        lastScreenPos: { ...initialScreenPos }
       };
       this.yScaleState.setPanContext(panContext);
     }
@@ -294,6 +298,28 @@ export class ChartScales {
     }
     if (this.activePanY && this.scaleTypes?.y === 'linear') {
       this.yScaleState.updatePanPosition(0, screenY); // X coordinate irrelevant for Y scale
+    }
+  }
+
+  updatePanPositionWithCoalescing(coalescedEvents) {
+    // Route coalesced events to appropriate scales with filtered coordinates
+    if (this.activePanX && this.scaleTypes?.x === 'linear') {
+      // Filter to only X coordinates for X scale
+      const xEvents = coalescedEvents.map(event => ({
+        ...event,
+        offsetX: event.offsetX,
+        offsetY: 0  // Zero out Y coordinate for X scale
+      }));
+      this.xScaleState.updatePanPositionWithCoalescing(xEvents);
+    }
+    if (this.activePanY && this.scaleTypes?.y === 'linear') {
+      // Filter to only Y coordinates for Y scale  
+      const yEvents = coalescedEvents.map(event => ({
+        ...event,
+        offsetX: 0,  // Zero out X coordinate for Y scale
+        offsetY: event.offsetY
+      }));
+      this.yScaleState.updatePanPositionWithCoalescing(yEvents);
     }
   }
 
