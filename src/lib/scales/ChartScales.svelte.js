@@ -285,10 +285,12 @@ export class ChartScales {
     this.activePanY = false;
 
     if (this.scaleTypes?.x === 'linear') {
-      this.xScaleState.clearPanContext();
+      // this.xScaleState.clearPanContext();
+      this.xScaleState.endPan();
     }
     if (this.scaleTypes?.y === 'linear') {
-      this.yScaleState.clearPanContext();
+      // this.yScaleState.clearPanContext();
+      this.yScaleState.endPan();
     }
   }
 
@@ -302,22 +304,29 @@ export class ChartScales {
   }
 
   updatePanPositionWithCoalescing(coalescedEvents) {
+    console.log('Raw coalesced events:', coalescedEvents.map(e => ({
+      offsetX: e.offsetX,
+      offsetY: e.offsetY,
+      clientX: e.clientX,
+      clientY: e.clientY
+    })));
+    
     // Route coalesced events to appropriate scales with filtered coordinates
     if (this.activePanX && this.scaleTypes?.x === 'linear') {
       // Filter to only X coordinates for X scale
       const xEvents = coalescedEvents.map(event => ({
-        ...event,
         offsetX: event.offsetX,
-        offsetY: 0  // Zero out Y coordinate for X scale
+        offsetY: 0,
+        timeStamp: event.timeStamp
       }));
       this.xScaleState.updatePanPositionWithCoalescing(xEvents);
     }
     if (this.activePanY && this.scaleTypes?.y === 'linear') {
       // Filter to only Y coordinates for Y scale  
       const yEvents = coalescedEvents.map(event => ({
-        ...event,
-        offsetX: 0,  // Zero out X coordinate for Y scale
-        offsetY: event.offsetY
+        offsetX: 0,
+        offsetY: event.offsetY,
+        timeStamp: event.timeStamp
       }));
       this.yScaleState.updatePanPositionWithCoalescing(yEvents);
     }

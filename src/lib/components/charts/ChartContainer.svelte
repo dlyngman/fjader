@@ -257,16 +257,29 @@
   }
 
   function handlePointerMove(event) {
-    if (!isPanning) return;
-
-    // Get coalesced events for higher resolution input data
-    const coalescedEvents = event.getCoalescedEvents?.() || [event];
-  
-    // Pass all coalesced events to the scales coordinator
-    scales.updatePanPositionWithCoalescing(coalescedEvents);
-    
-    // scales.updatePanPosition(event.offsetX, event.offsetY);    
+    // Single consolidated handler
+    if (isPanning) {
+      const coalescedEvents = event.getCoalescedEvents?.() || [event];
+      scales.updatePanPositionWithCoalescing(coalescedEvents);
+    } else {
+      // Check if we're in the interactive inner area
+      const point = { x: event.offsetX, y: event.offsetY };
+      if (layout.isWithinInnerBounds(point)) {
+        const innerPoint = layout.toInnerCoordinates(point);
+        scales.updateCurrentDataPoints(innerPoint);
+      }
+    }
   }
+  //   if (!isPanning) return;
+
+  //   // Get coalesced events for higher resolution input data
+  //   const coalescedEvents = event.getCoalescedEvents?.() || [event];
+  
+  //   // Pass all coalesced events to the scales coordinator
+  //   scales.updatePanPositionWithCoalescing(coalescedEvents);
+    
+  //   // scales.updatePanPosition(event.offsetX, event.offsetY);    
+  // }
 
   function handlePointerUp(event) {
     isPanning = false;
@@ -334,11 +347,11 @@
         </clipPath>
       </defs>
       
+      <!-- onpointermove={handleInnerMouseMove} -->
       <g
         transform={layout.innerTransform}
         clip-path={layout.clipPathUrl}
         class="crosshair"
-        onpointermove={handleInnerMouseMove}
         onpointerenter={handleInnerMouseEnter}
         onpointerleave={handleInnerMouseLeave}
       >
@@ -391,11 +404,12 @@
             {/each}
           {/if}
           <rect
-          x="0"
-          y="0"
-          width={layout.innerWidth}
-          height={layout.innerHeight}
-          fill="transparent"
+            x="0"
+            y="0"
+            width={layout.innerWidth}
+            height={layout.innerHeight}
+            fill="transparent"
+            class="interaction-target"
           />
       </g>
     </svg>
@@ -429,6 +443,12 @@ gpu: {gpuCoordinator.timings.gpu} µs
   .svg-background { 
     z-index: 1; 
   }
+
+  .interaction-target {
+    /* Ensure it catches all pointer events */
+    pointer-events: all;
+  }
+
   .canvas-layer { z-index: 2; }
   .svg-foreground { 
     z-index: 3; 

@@ -94,7 +94,8 @@ export class GPUCoordinator {
   #animationRafId = null;
   #scaleRegistry = null;
   #accumulator = 0;
-  #TIMESTEP = 1000 / 120;
+  // #TIMESTEP = 1000 / 120;
+  #TIMESTEP = 1000 / 60;
   #lastFrameTime = 0;
   #chartsToRenderSet = new Set();
   #chartsToRenderArray = [];
@@ -487,31 +488,30 @@ export class GPUCoordinator {
     // console.log('loopStart', loopStart)
     
     // Enhanced timing logic with smoothing
-    const now = performance.now();
-    // const now = currentTime;
+    // const now = performance.now();
+    const now = currentTime;
     if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
     let deltaTime = now - this.#lastFrameTime;
     // console.log(deltaTime)
     this.#lastFrameTime = now;
 
-    
     // Clamp to prevent issues on tab resume or frame drops
     deltaTime = Math.min(deltaTime, 33.33); // Cap at ~30fps minimum
-    // if (deltaTime < 0) deltaTime = 8.3;
-    // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
-
     this.#accumulator += deltaTime;
+
+    console.log('🎬 Loop entry', { rafId: this.#animationRafId, timestamp: currentTime, deltaTime: deltaTime });
+
 
     // Process pending inputs 
     for (const scale of this.#animatedScales) {
       scale._applyInput?.(now);
     }
 
-    for (const scale of this.#animatedScales) {
-      scale._capturePhysicsStateForInterpolation?.();
-    }
-
+    
     while (this.#accumulator >= this.#TIMESTEP) {
+      for (const scale of this.#animatedScales) {
+        scale._capturePhysicsStateForInterpolation?.();
+      }
       for (const scale of this.#animatedScales) {
         // Pass the FIXED timestep to the physics engine
         scale._updatePhysics(this.#TIMESTEP);
@@ -539,7 +539,15 @@ export class GPUCoordinator {
           // During a smooth pan, this number should be VERY consistent.
           // If you see it jumping around, that's your stutter!
         }
-        console.log('Visual Delta:', visualDelta.toFixed(6));
+        // console.log('Visual Delta:', visualDelta.toFixed(6));
+        // In your animation loop, add this:
+        const frameTime = performance.now();
+        const actualDeltaTime = frameTime - this.#lastFrameTime;
+        console.log('Frame timing:', {
+          actualDelta: actualDeltaTime.toFixed(2),  // ← This is the key metric
+          visualDelta: visualDelta.toFixed(6),
+          alpha: alpha.toFixed(3)
+        });
         lastRenderedXDomain = currentDomain;
       }
   
@@ -953,7 +961,10 @@ export class GPUCoordinator {
   }
 
   #ensureLoopIsActive() {
-    if (this.#animationRafId) return;
+    if (this.#animationRafId) {
+      console.log('⚠️ Prevented duplicate RAF scheduling');
+      return;
+    }
 
     if (this.#animatedScales.size > 0 && !this.#animationActive) {
       this.#animationActive = true;
@@ -961,6 +972,7 @@ export class GPUCoordinator {
       this.#lastFrameTime = 0;
     }
 
+    console.log('✅ Scheduling new RAF callback');
     this.#animationRafId = requestAnimationFrame(this.#animationLoop);
   }
 

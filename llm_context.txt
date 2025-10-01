@@ -95,7 +95,8 @@
     #animationRafId = null;
     #scaleRegistry = null;
     #accumulator = 0;
-    #TIMESTEP = 1000 / 120;
+    // #TIMESTEP = 1000 / 120;
+    #TIMESTEP = 1000 / 60;
     #lastFrameTime = 0;
     #chartsToRenderSet = new Set();
     #chartsToRenderArray = [];
@@ -488,31 +489,30 @@
       // console.log('loopStart', loopStart)
       
       // Enhanced timing logic with smoothing
-      const now = performance.now();
-      // const now = currentTime;
+      // const now = performance.now();
+      const now = currentTime;
       if (this.#lastFrameTime === 0) this.#lastFrameTime = now;
       let deltaTime = now - this.#lastFrameTime;
       // console.log(deltaTime)
       this.#lastFrameTime = now;
   
-      
       // Clamp to prevent issues on tab resume or frame drops
       deltaTime = Math.min(deltaTime, 33.33); // Cap at ~30fps minimum
-      // if (deltaTime < 0) deltaTime = 8.3;
-      // if (deltaTime > 250) deltaTime = 250; // Clamp to prevent spiral-of-death on tab resume
-  
       this.#accumulator += deltaTime;
+  
+      console.log('🎬 Loop entry', { rafId: this.#animationRafId, timestamp: currentTime, deltaTime: deltaTime });
+  
   
       // Process pending inputs 
       for (const scale of this.#animatedScales) {
         scale._applyInput?.(now);
       }
   
-      for (const scale of this.#animatedScales) {
-        scale._capturePhysicsStateForInterpolation?.();
-      }
-  
+      
       while (this.#accumulator >= this.#TIMESTEP) {
+        for (const scale of this.#animatedScales) {
+          scale._capturePhysicsStateForInterpolation?.();
+        }
         for (const scale of this.#animatedScales) {
           // Pass the FIXED timestep to the physics engine
           scale._updatePhysics(this.#TIMESTEP);
@@ -540,7 +540,15 @@
             // During a smooth pan, this number should be VERY consistent.
             // If you see it jumping around, that's your stutter!
           }
-          console.log('Visual Delta:', visualDelta.toFixed(6));
+          // console.log('Visual Delta:', visualDelta.toFixed(6));
+          // In your animation loop, add this:
+          const frameTime = performance.now();
+          const actualDeltaTime = frameTime - this.#lastFrameTime;
+          console.log('Frame timing:', {
+            actualDelta: actualDeltaTime.toFixed(2),  // ← This is the key metric
+            visualDelta: visualDelta.toFixed(6),
+            alpha: alpha.toFixed(3)
+          });
           lastRenderedXDomain = currentDomain;
         }
     
@@ -954,7 +962,10 @@
     }
   
     #ensureLoopIsActive() {
-      if (this.#animationRafId) return;
+      if (this.#animationRafId) {
+        console.log('⚠️ Prevented duplicate RAF scheduling');
+        return;
+      }
   
       if (this.#animatedScales.size > 0 && !this.#animationActive) {
         this.#animationActive = true;
@@ -962,6 +973,7 @@
         this.#lastFrameTime = 0;
       }
   
+      console.log('✅ Scheduling new RAF callback');
       this.#animationRafId = requestAnimationFrame(this.#animationLoop);
     }
   
@@ -1659,31 +1671,22 @@
   import { getGPUContext } from '$lib/gpu';
   import { scaleLinear } from 'd3-scale';
   import { extent as d3Extent } from 'd3-array';
+  import { PointerInputProcessor, SimplePointerProcessor } from './PointerInputProcessor.js';
   
   // Spring configurations for different interactions
-  // const springConfigs = {
-  //   default: { stiffness: 225, damping: 25, precision: 0.0001 },
-  //   zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
-  //   pan: { stiffness: 300, damping: 50, precision: 0.00000001 },
-  //   // pan: { stiffness: 50, damping: 15, precision: 0.001 },
-  //   // damping: sqrt(stiffness) * 2 for critical damping
-  //   // pan: { stiffness: 250, damping: 30, precision: 0.00000001 },
-  //   // pan: { stiffness: 150, damping: 15, precision: 0.00000001 },
-  //   reset: { stiffness: 50, damping: 15, precision: 0.0001 },
-  //   zoomIn: { stiffness: 75, damping: 15, precision: 0.0001 }
-  // };
   const springConfigs = {
-    default: { stiffness: 0.2, damping: 0.8, precision: 0.001 },
-    zoom: { stiffness: 0.15, damping: 0.8, precision: 0.001 },
-    pan: { stiffness: 0.25, damping: 0.9, precision: 0.001 },
-    reset: { stiffness: 0.1, damping: 0.85, precision: 0.001 },
-    zoomIn: { stiffness: 0.05, damping: 0.8, precision: 0.001 }
+    default: { stiffness: 225, damping: 25, precision: 0.0001 },
+    zoom: { stiffness: 225, damping: 25, precision: 0.00000001 },
+    pan: { stiffness: 300, damping: 40, precision: 0.00000001 },
+    // pan: { stiffness: 400, damping: 40, precision: 0.00000001 },
+    reset: { stiffness: 50, damping: 15, precision: 0.0001 },
+    zoomIn: { stiffness: 75, damping: 15, precision: 0.0001 }
   };
   
   export class LinearScaleState {
     name = $state('');
   
-    // Keep all existing properties
+    // Domain management
     #initExtent = [];
     #extent = [];
     #extents = new Map();
@@ -1702,69 +1705,26 @@
     #enableUpdates = $state(true);
     #frozenExtent = null;
   
-    // --- Core Animation State ---
+    // Physics state
     #target = [0, 100];
     #physicsCurrent = [0, 100];
     #physicsPrevious = [0, 100];
-    #velocity = [0, 0]; // The spring's internal velocity
-    #isAnimating = false;
+    #velocity = [0, 0];
     #renderCurrent = $state([0, 100]);
-  
-    // --- Zoom Accumulation ---
-    #frameAccumulator = { logZoomDelta: 0, zoomCenter: 0, hasZoomUpdates: false };
-  
-    // --- Input & Panning State ---
-    #inputRingBuffer = [];
-    #maxRingBufferSize = 100;
-    #jitterBufferMs = 8;
-    #panVelocity = 0; // The smoothed velocity of the pan in data units per second.
-    #activePanContext = null;
-  
-    // --- Physics Tuning Parameters ---
-    #panVelocitySmoothingFactor;
-    #panMomentumFactor;
-    #momentumBoundaryDamping;
-    #boundaryResistanceFactor;
-  
-    // Custom animation state
-    #smoothedTarget = [0, 100];
     
-  
+    #isAnimating = false;
     #lastUpdateTime = 0;
   
-    // // NEW: Frame accumulation for high-frequency input (ZOOM ONLY)
-    // #frameAccumulator = {
-    //   logZoomDelta: 0,      // Single value for zoom accumulation
-    //   zoomCenter: 0,        // Single value for zoom center
-    //   hasZoomUpdates: false,
+    // Input processing
+    #inputProcessor = null;
+    #activePanContext = null;
   
-    //   panScreenX: 0,        // Latest screen X position
-    //   panScreenY: 0,        // Latest screen Y position  
-    //   hasPanUpdates: false
-    // };
-  
-    #rawPanScreenX = 0;
-    #rawPanScreenY = 0;
-    #hasNewPanInput = false;
-  
-    #inverseMass = 1;
-    #momentum = 0;
-  
-    // Input history buffer for this scale's dimension
-    #inputHistory = [];
-    #maxHistoryMs = 100; // Keep 100ms of input history  
-  
-    #inputVelocity
-  
-    // Velocity tracking for this dimension
-    #currentVelocity = 0;
-  
-    // #inputVelocity
-  
-    // remove after debugging
-    // #lastTargetForLogging = 0;
-    // lastInputTime = 0;
-  
+    // Zoom accumulation
+    #frameAccumulator = {
+      logZoomDelta: 0,
+      zoomCenter: 0,
+      hasZoomUpdates: false
+    };
   
     #gpuCoordinator = null;
     #currentSpringConfig = springConfigs.default;
@@ -1774,7 +1734,6 @@
       return Math.max(this.#currentSpringConfig.precision, domainSize * 0.0001);
     });
   
-  
     #gpuStateObject = {
       domainMin: 0,
       domainMax: 100,
@@ -1782,6 +1741,15 @@
       domainScale: 0.01
     };
   
+    #desiredTarget = [0, 100];    // Raw target from pointer input
+    #targetVelocity = [0, 0];     // Velocity of target smoothing
+  
+    // Target smoothing spring constants (tune these for feel)
+    // #TARGET_STIFFNESS = 500;
+    #TARGET_STIFFNESS = 2000;
+    // #TARGET_DAMPING = 50;
+    #TARGET_DAMPING = 80;
+    #lastLoggedDesired = 0;
   
     constructor(name, extent = [0, 100], type = 'linear', zoomLimits = [10, 100], options = {}, gpuCoordinator = null) {
       this.id = crypto.randomUUID();
@@ -1793,15 +1761,14 @@
       this.zoomLimits.min = zoomLimits[1];
       this.#gpuCoordinator = gpuCoordinator;
   
-      this.#panVelocitySmoothingFactor = 0.15;
-      this.#panMomentumFactor = 0.93;
-      this.#momentumBoundaryDamping = 0.4;
-      this.#boundaryResistanceFactor = 4.0;
-      // this.#inputVelocity = 0; // Initialize to 0
+      // Initialize input processor with tuned parameters
+      this.#inputProcessor = new PointerInputProcessor();
+      // this.#inputProcessor = new SimplePointerProcessor();
+      // Tune for responsive tracking
+      this.#inputProcessor.tauMs = 50;   // Fast response
+      this.#inputProcessor.k = 1;       // Critical damping
   
-      // Register buffer pool with coordinator
       if (gpuCoordinator) {
-        // gpuCoordinator.createBufferPoolForScale(this.id, 'linear');
         gpuCoordinator.registerScale(this.id, 'linear');
       }
   
@@ -1811,8 +1778,9 @@
       this.#physicsCurrent = [...extent];
       this.#physicsPrevious = [...extent];
       this.#renderCurrent = [...extent];
-      this.#smoothedTarget = [...extent];
       this.#target = [...extent];
+      this.#desiredTarget = [...extent];
+      this.#targetVelocity = [0, 0];
   
       const self = this;
       this.domain = {
@@ -1931,274 +1899,33 @@
       return Object.fromEntries(this.#extents);
     }
   
-    getBaseScale(axis, innerWidthOrHeight) {
-      if (axis === 'x') {
-        return scaleLinear().range([0, innerWidthOrHeight])
-      } else if (axis === 'y') {
-        return scaleLinear().range([innerWidthOrHeight, 0])
-      }
-    }
-  
-    // setPanContext(panContext) {
-    //   this.#activePanContext = panContext;
-    //   this.#ensureAnimating();
-    // }
-  
     setPanContext(panContext) {
       this.#activePanContext = panContext;
       this.#updateSpringConfig(springConfigs.pan);
-      this.#panVelocity = 0;
-      this.#velocity = [0, 0]; // Kill any existing momentum
-      this.#inputRingBuffer = []; // Clear history on new pan
+      this.#inputProcessor.reset();
       this.#ensureAnimating();
     }
   
     endPan() {
-      if (!this.#activePanContext) return;
-      const momentum = this.#panVelocity * (1 / 60);
-      this.#velocity = [momentum, momentum];
-      this.#panVelocity = 0;
       this.#activePanContext = null;
+      this.#inputProcessor.reset();
       this.#updateSpringConfig(springConfigs.default);
-      this.#ensureAnimating();
     }
-  
-    clearPanContext() {
-      this.#activePanContext = null;
-    }
-  
-    // updatePanPosition(screenX, screenY) {
-    //   // if (this.#frameAccumulator.panScreenX !== screenX || 
-    //   //     this.#frameAccumulator.panScreenY !== screenY) {
-    //   //   this.#frameAccumulator.panScreenX = screenX;
-    //   //   this.#frameAccumulator.panScreenY = screenY;
-    //   //   this.#frameAccumulator.hasPanUpdates = true;
-    //   //   this.#ensureAnimating();
-    //   // }
-    //   const now = performance.now();
-    
-    //   this.#inputBuffer.push({
-    //     screenX,
-    //     screenY,
-    //     timestamp: now,
-    //   });
-      
-    //   if (this.#inputBuffer.length > 10) {
-    //     this.#inputBuffer.shift();
-    //   }
-    
-    //   this.#ensureAnimating();
-    // }
-    // updatePanPosition(screenX, screenY) {
-    //   this.#latestPanScreenX = screenX;
-    //   this.#latestPanScreenY = screenY;
-    //   this.#hasNewPanInput = true;
-    //   this.#ensureAnimating();
-    // }
-    // updatePanPosition(screenX, screenY) {
-    //   if (this.#activePanContext) {
-    //       this.#updateSpringConfig(springConfigs.pan);
-    //       this.#calculatePanTarget(this.#target, screenX, screenY);
-    //       this.#ensureAnimating();
-    //   }
-    // }
-  
-    // Add input smoothing in updatePanPosition
-    // updatePanPosition(screenX, screenY) {
-    //   if (this.#activePanContext) {
-    //     // Calculate raw target
-    //     const rawTarget = [0, 0];
-    //     this.#calculatePanTarget(rawTarget, screenX, screenY);
-        
-    //     // Smooth the target using exponential moving average
-    //     const smoothingFactor = 0.1; // Adjust for responsiveness vs smoothness
-    //     this.#target[0] = this.#target[0] * (1 - smoothingFactor) + rawTarget[0] * smoothingFactor;
-    //     this.#target[1] = this.#target[1] * (1 - smoothingFactor) + rawTarget[1] * smoothingFactor;
-        
-    //     this.#updateSpringConfig(springConfigs.pan);
-    //     this.#ensureAnimating();
-    //   }
-    // }
-  
-    // Store samples with consistent format
-    #addInputSample(screenX, screenY, timestamp) {
-      this.#inputRingBuffer.push({
-        t: timestamp,
-        screenX,
-        screenY
-      });
-      
-      // Trim old samples
-      if (this.#inputRingBuffer.length > this.#maxRingBufferSize) {
-        this.#inputRingBuffer.shift();
-      }
-      
-      // Also trim by time
-      const cutoffTime = timestamp - 200; // Keep 200ms of history
-      while (this.#inputRingBuffer.length > 0 && 
-            this.#inputRingBuffer[0].t < cutoffTime) {
-        this.#inputRingBuffer.shift();
-      }
-    }
-  
-  
-    updatePanPosition(screenX, screenY) { // Renamed back for clarity
-      this.#rawPanScreenX = screenX;
-      this.#rawPanScreenY = screenY;
-      this.#hasNewPanInput = true;
-      this.#ensureAnimating();
-    }
-  
-    // updatePanPositionWithCoalescing(coalescedEvents) {
-      
-    //   // TODO remove debug block
-    //   const now = performance.now();
-    //   const timeSinceLast = now - this.lastInputTime;
-    //   this.lastInputTime = now;
-      
-    //   console.log(`RAW_INPUT: count=${coalescedEvents.length}, dt=${timeSinceLast.toFixed(2)}ms`);
-  
-    //   // Store full coordinate pairs since this scale could be x or y axis in different charts
-    //   coalescedEvents.forEach(event => {
-    //     const inputSample = {
-    //       screenX: event.offsetX,
-    //       screenY: event.offsetY,
-    //       timestamp: event.timeStamp || performance.now()
-    //     };
-  
-    //     this.#inputHistory.push(inputSample);
-    //   });
-  
-    //   // Trim old entries
-    //   const cutoffTime = performance.now() - this.#maxHistoryMs;
-    //   while (this.#inputHistory.length > 0 && this.#inputHistory[0].timestamp < cutoffTime) {
-    //     this.#inputHistory.shift();
-    //   }
-  
-    //   // Update velocity estimate (using whichever coordinate is being used for panning)
-    //   this.#updateVelocityEstimate();
-  
-    //   this.#ensureAnimating();
-    // }
   
     updatePanPositionWithCoalescing(coalescedEvents) {
+      
       if (!this.#activePanContext || coalescedEvents.length === 0) return;
-      coalescedEvents.forEach(event => {
-        this.#addInputSample(event.offsetX, event.offsetY, event.timeStamp);
-      });
+  
+      for (const event of coalescedEvents) {
+        this.#inputProcessor.addSample(
+          event.offsetX, 
+          event.offsetY, 
+          event.timeStamp || performance.now()
+        );
+      }
+      
       this.#ensureAnimating();
     }
-  
-    // Velocity estimation from input history
-    #updateVelocityEstimate() {
-      if (this.#inputHistory.length < 2) return;
-  
-      const latest = this.#inputHistory[this.#inputHistory.length - 1];
-      const previous = this.#inputHistory[Math.max(0, this.#inputHistory.length - 3)];
-      
-      const dt = latest.timestamp - previous.timestamp;
-      if (dt > 0) {
-        // Calculate velocity for whichever coordinate is being used
-        // The scale doesn't know which axis it represents, so this is just for diagnostic purposes
-        const deltaX = latest.screenX - previous.screenX;
-        const deltaY = latest.screenY - previous.screenY;
-        const magnitude = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-        this.#currentVelocity = magnitude / dt;
-      }
-    }
-  
-    #interpolateInputAtTime(targetTime) {
-      if (this.#inputHistory.length === 0) return null;
-  
-      // Find samples that bracket the target time
-      let beforeSample = null;
-      let afterSample = null;
-  
-      for (let i = 0; i < this.#inputHistory.length; i++) {
-        const sample = this.#inputHistory[i];
-        
-        if (sample.timestamp <= targetTime) {
-          beforeSample = sample;
-        } else {
-          afterSample = sample;
-          break;
-        }
-      }
-  
-      // Use closest available if we don't have bracketing samples
-      if (!beforeSample && afterSample) return afterSample;
-      if (beforeSample && !afterSample) return beforeSample;
-      if (!beforeSample && !afterSample) return null;
-  
-      // Linear interpolation for both coordinates
-      const totalDt = afterSample.timestamp - beforeSample.timestamp;
-      if (totalDt === 0) return beforeSample;
-  
-      const alpha = (targetTime - beforeSample.timestamp) / totalDt;
-      
-      return {
-        screenX: beforeSample.screenX + alpha * (afterSample.screenX - beforeSample.screenX),
-        screenY: beforeSample.screenY + alpha * (afterSample.screenY - beforeSample.screenY),
-        timestamp: targetTime
-      };
-    }
-  
-    #resampleAt(targetTime) {
-      if (this.#inputRingBuffer.length < 2) return null;
-      
-      // Find samples that bracket the target time
-      let beforeSample = null;
-      let afterSample = null;
-      
-      for (let i = 0; i < this.#inputRingBuffer.length; i++) {
-        const sample = this.#inputRingBuffer[i];
-        if (sample.t <= targetTime) {
-          beforeSample = sample;
-        } else {
-          afterSample = sample;
-          break;
-        }
-      }
-      
-      // Use most recent if we don't have bracketing samples
-      if (!beforeSample && afterSample) beforeSample = afterSample;
-      if (beforeSample && !afterSample) afterSample = beforeSample;
-      if (!beforeSample && !afterSample) return null;
-      
-      // Linear interpolation
-      if (beforeSample === afterSample) {
-        return {
-          screenX: beforeSample.screenX,
-          screenY: beforeSample.screenY,
-          velocityX: 0,
-          velocityY: 0
-        };
-      }
-      
-      const dt = afterSample.t - beforeSample.t;
-      const alpha = Math.min(1, Math.max(0, (targetTime - beforeSample.t) / dt));
-      
-      const interpolatedX = beforeSample.screenX + alpha * (afterSample.screenX - beforeSample.screenX);
-      const interpolatedY = beforeSample.screenY + alpha * (afterSample.screenY - beforeSample.screenY);
-      
-      // Calculate velocity (screen pixels per millisecond)
-      const velocityX = (afterSample.screenX - beforeSample.screenX) / dt;
-      const velocityY = (afterSample.screenY - beforeSample.screenY) / dt;
-      
-      return {
-        screenX: interpolatedX,
-        screenY: interpolatedY,
-        velocityX,
-        velocityY
-      };
-    }
-  
-    // updateRawPanInput(screenX, screenY) {
-    //   this.#rawPanScreenX = screenX;
-    //   this.#rawPanScreenY = screenY;
-    //   this.#hasNewPanInput = true;
-    //   this.#ensureAnimating();
-    // }
   
     accumulateZoom(dataCenter, scaleFactor) {
       this.#frameAccumulator.logZoomDelta += Math.log(scaleFactor);
@@ -2207,12 +1934,6 @@
       this.#ensureAnimating();
     }
   
-    updateScaleDomain(scale, current = true) {
-      const targetDomain = current ? this.domain.current : this.#target;
-      return { scale: scale.domain(targetDomain) }
-    }
-    
-  
     #ensureAnimating() {
       if (!this.#isAnimating) {
         this.#isAnimating = true;
@@ -2220,8 +1941,6 @@
         
         if (this.#gpuCoordinator) {
           this.#gpuCoordinator.addAnimatingScale(this);
-        } else {
-          console.warn(`⚠️ No GPU coordinator found for scale: ${this.name}`);
         }
       }
     }
@@ -2230,44 +1949,16 @@
       this.#currentSpringConfig = config;
     }
   
-    // #isAtTarget() {
-    //   const config = this.#currentSpringConfig;
-    //   const domainSize = Math.abs(this.#target[1] - this.#target[0]);
-    //   // TODO replace this calculation with cached value?
-    //   const dynamicPrecision = Math.max(config.precision, domainSize * 0.00001);
+    #isAtTarget() {
+      const precision = this.#cachedPrecision;
       
-    //   return Math.abs(this.#physicsCurrent[0] - this.#target[0]) < dynamicPrecision &&
-    //          Math.abs(this.#physicsCurrent[1] - this.#target[1]) < dynamicPrecision &&
-    //          Math.abs(this.#velocity[0]) < dynamicPrecision * 10 &&
-    //          Math.abs(this.#velocity[1]) < dynamicPrecision * 10;
-    // }
-  
-    // #isAtTarget() {
-    //   const precision = this.#cachedPrecision;
-      
-    //   if (this.#activePanContext) {
-    //     // For pan, only check min value (max follows rigidly)
-    //     const distance = Math.abs(this.#target[0] - this.#physicsCurrent[0]);
-    //     return distance < precision;
-    //   } else {
-    //     // For zoom, check both min and max
-    //     const distance0 = Math.abs(this.#target[0] - this.#physicsCurrent[0]);
-    //     const distance1 = Math.abs(this.#target[1] - this.#physicsCurrent[1]);
-    //     return distance0 < precision && distance1 < precision;
-    //   }
-    // }
-  
-    #resetAccumulator() {
-      this.#frameAccumulator.logZoomDelta = 0;
-      this.#frameAccumulator.zoomCenter = 0;
-      this.#frameAccumulator.hasZoomUpdates = false;
-      this.#frameAccumulator.panScreenX = 0;
-      this.#frameAccumulator.panScreenY = 0;
-      this.#frameAccumulator.hasPanUpdates = false;
+      return Math.abs(this.#physicsCurrent[0] - this.#target[0]) < precision &&
+             Math.abs(this.#physicsCurrent[1] - this.#target[1]) < precision &&
+             Math.abs(this.#velocity[0]) < precision * 10 &&
+             Math.abs(this.#velocity[1]) < precision * 10;
     }
   
     #calculateZoomedDomain(targetArray, centerPoint, scaleFactor) {
-      // const [min, max] = this.#target;
       const [min, max] = targetArray;
       const minLimit = this.domainLimits.min;
       const maxLimit = this.domainLimits.max;
@@ -2301,49 +1992,31 @@
         }
       }
   
-      // return [newMin, newMax];
       targetArray[0] = newMin;
       targetArray[1] = newMax;
     }
   
-    // _processScheduledInput(currentTime, globalDelay) {
-    //   if (!this.#activePanContext || this.#inputBuffer.length === 0) {
-    //     return false;
-    //   }
-      
-    //   // Find most recent event that's ready based on global delay
-    //   let readyEvent = null;
-    //   let readyIndex = -1;
-      
-    //   for (let i = this.#inputBuffer.length - 1; i >= 0; i--) {
-    //     const event = this.#inputBuffer[i];
-    //     if (currentTime >= event.timestamp + globalDelay) {
-    //       readyEvent = event;
-    //       readyIndex = i;
-    //       break;
-    //     }
-    //   }
-      
-    //   if (readyEvent) {
-    //     this.#updateSpringConfig(springConfigs.pan);
-    //     this.#calculatePanTarget(this.#target, readyEvent.screenX, readyEvent.screenY);
-    //     this.#inputBuffer.splice(0, readyIndex + 1);
-    //     return true;
-    //   }
-      
-    //   return false;
-    // }
-  
     #calculatePanTarget(targetArray, screenX, screenY) {
-      // console.trace('calculatePanTarget called');
-      if (!this.#activePanContext) return // this.#target;
+      if (!this.#activePanContext) return;
       
       const { initialScreenPos, initialDomain, screenToDataRatio } = this.#activePanContext;
       
-      // Calculate dataDelta directly with single conditional
       const dataDelta = screenX !== 0 
         ? -(screenX - initialScreenPos.x) * screenToDataRatio
         : (screenY - initialScreenPos.y) * screenToDataRatio;
+  
+      console.log('calculatePanTarget:', {
+        screenX,
+        screenY,
+        initialScreenPos,
+        whichBranch: screenX !== 0 ? 'X' : 'Y',
+        screenDelta: screenX !== 0 ? (screenX - initialScreenPos.x) : (screenY - initialScreenPos.y),
+        dataDelta,
+        screenToDataRatio,
+        oldDomain: [...initialDomain],
+        newMin: initialDomain[0] + dataDelta,
+        newMax: initialDomain[1] + dataDelta
+      });
       
       let newMin = initialDomain[0] + dataDelta;
       let newMax = initialDomain[1] + dataDelta;
@@ -2362,90 +2035,14 @@
         }
       }
   
-      // // Determine the smallest meaningful change
-      // const domainSize = this.#activePanContext.domainWidth;
-      // const pixelEquivalent = this.#activePanContext.domainWidth / this.#activePanContext.screenDimension;
-      // const quantum = pixelEquivalent * 1;
-  
-      // const beforeQuantization = [newMin, newMax];
-    
-      // // Quantize to avoid micro-errors
-      // newMin = Math.round(newMin / quantum) * quantum;
-      // newMax = Math.round(newMax / quantum) * quantum;
-  
-      // console.log(`Quantum: ${quantum.toFixed(8)}, Before: [${beforeQuantization[0].toFixed(6)}, ${beforeQuantization[1].toFixed(6)}], After: [${newMin.toFixed(6)}, ${newMax.toFixed(6)}]`);
-  
-      // return [newMin, newMax];
       targetArray[0] = newMin;
       targetArray[1] = newMax;
     }
   
-    // _applyInput() {
-    //   // console.trace('_applyInput called');
-    //   let inputApplied = false;
-  
-    //   if (this.#frameAccumulator.hasZoomUpdates) {
-    //     this.#updateSpringConfig(springConfigs.zoom);
-    //     // this.#target = this.#calculateZoomedDomain(
-    //     this.#calculateZoomedDomain(
-    //       this.#target,
-    //       this.#frameAccumulator.zoomCenter,
-    //       Math.exp(this.#frameAccumulator.logZoomDelta)
-    //     );
-    //     this.#smoothedTarget[0] = this.#target[0];
-    //     this.#smoothedTarget[1] = this.#target[1];
-    //     inputApplied = true;
-    //   }
-  
-    //   if (this.#hasNewPanInput && this.#activePanContext) {
-    //     this.#updateSpringConfig(springConfigs.pan);
-        
-    //     // Calculate raw target from latest mouse input
-    //     this.#calculatePanTarget(this.#target, this.#rawPanScreenX, this.#rawPanScreenY);
-    //     this.#hasNewPanInput = false;
-    //     inputApplied = true;
-    //   }
-  
-    //   // if (this.#frameAccumulator.hasPanUpdates && this.#activePanContext) {
-    //   //   this.#updateSpringConfig(springConfigs.pan);
-    //   //   this.#calculatePanTarget(
-    //   //     this.#target,
-    //   //     this.#frameAccumulator.panScreenX,
-    //   //     this.#frameAccumulator.panScreenY
-    //   //   );
-    //   //   inputApplied = true;
-    //   // }
-  
-    //   // this.#resetAccumulator();
-  
-    //   // --- NEW Pan logic ---
-    //   // if (this.#hasNewPanInput && this.#activePanContext) {
-    //   //   this.#updateSpringConfig(springConfigs.pan);
-    //   //   this.#calculatePanTarget(
-    //   //     this.#target,
-    //   //     this.#latestPanScreenX,
-    //   //     this.#latestPanScreenY
-    //   //   );
-    //   //   // Reset the flag immediately after processing the input for this frame.
-    //   //   this.#hasNewPanInput = false;
-    //   //   inputApplied = true;
-    //   // }
-  
-    //   // --- Cleanup ---
-    //   // We only need to reset the zoom accumulator now.
-    //   this.#frameAccumulator.logZoomDelta = 0;
-    //   this.#frameAccumulator.zoomCenter = 0;
-    //   this.#frameAccumulator.hasZoomUpdates = false;
-  
-    //   if (inputApplied) {
-    //     this.#ensureAnimating();
-    //   }
-    // }
-  
     // _applyInput(now) {
     //   let inputApplied = false;
   
-    //   // Handle zoom accumulation (unchanged)
+    //   // Handle zoom accumulation
     //   if (this.#frameAccumulator.hasZoomUpdates) {
     //     this.#updateSpringConfig(springConfigs.zoom);
     //     this.#calculateZoomedDomain(
@@ -2453,44 +2050,30 @@
     //       this.#frameAccumulator.zoomCenter,
     //       Math.exp(this.#frameAccumulator.logZoomDelta)
     //     );
-    //     this.#smoothedTarget[0] = this.#target[0];
-    //     this.#smoothedTarget[1] = this.#target[1];
     //     inputApplied = true;
+        
+    //     // Reset zoom accumulator
+    //     this.#frameAccumulator.logZoomDelta = 0;
+    //     this.#frameAccumulator.zoomCenter = 0;
+    //     this.#frameAccumulator.hasZoomUpdates = false;
     //   }
   
-    //   // Use jitter-buffered pan input if available
-    //   if (this.#activePanContext && this.#inputHistory.length > 0) {
-    //     this.#updateSpringConfig(springConfigs.pan);
-        
-    //     // Get input from jitterBufferMs ago for stability
-    //     const targetTime = now - this.#jitterBufferMs;
-    //     const bufferedInput = this.#interpolateInputAtTime(targetTime);
-        
-    //     if (bufferedInput) {
-    //       // For LinearScaleState, we only care about one coordinate
-    //       // Pass it as screenX, with screenY as 0 (ignored by calculatePanTarget)
-    //       this.#calculatePanTarget(this.#target, bufferedInput.screenX, bufferedInput.screenY);
-    //       inputApplied = true;
+    //   // Handle pan with input processor
+    //   if (this.#activePanContext) {
+    //     const axis = this.#activePanContext.axis;
+    //     // const estimate = this.#inputProcessor.updateEstimate(now, axis);
+    //     const estimate = this.#inputProcessor.getPosition(now, axis);
   
-    //       // TODO remove debuggin
-    //       if (this.#lastTargetForLogging !== 0) {
-    //         const targetDelta = this.#target[0] - this.#lastTargetForLogging;
-    //         console.warn(`  TARGET_DELTA: ${targetDelta.toFixed(6)}`);
+    //     if (estimate && estimate.confidence > 0.3) {
+    //       if (axis === 'x') {
+    //         this.#calculatePanTarget(this.#target, estimate.cursorPosition, 0);
+    //       } else {
+    //         this.#calculatePanTarget(this.#target, 0, estimate.cursorPosition);
     //       }
-    //       this.#lastTargetForLogging = this.#target[0];
+    //       console.log('New target:', this.#target);
+    //       inputApplied = true;
     //     }
-    //   } else if (this.#activePanContext && this.#hasNewPanInput) {
-    //     // Fallback to raw input for backward compatibility
-    //     this.#updateSpringConfig(springConfigs.pan);
-    //     this.#calculatePanTarget(this.#target, this.#rawPanScreenX, this.#rawPanScreenY);
-    //     this.#hasNewPanInput = false;
-    //     inputApplied = true;
     //   }
-  
-    //   // Reset zoom accumulator
-    //   this.#frameAccumulator.logZoomDelta = 0;
-    //   this.#frameAccumulator.zoomCenter = 0;
-    //   this.#frameAccumulator.hasZoomUpdates = false;
   
     //   if (inputApplied) {
     //     this.#ensureAnimating();
@@ -2500,450 +2083,233 @@
     _applyInput(now) {
       let inputApplied = false;
   
-      //  Handle zoom accumulation
+      // Handle zoom accumulation
       if (this.#frameAccumulator.hasZoomUpdates) {
         this.#updateSpringConfig(springConfigs.zoom);
+        
+        // CHANGED: Update both target and desired target for zoom
         this.#calculateZoomedDomain(
-          this.#target,
+          this.#desiredTarget,  // Changed from this.#target
           this.#frameAccumulator.zoomCenter,
           Math.exp(this.#frameAccumulator.logZoomDelta)
         );
-        // this.#smoothedTarget[0] = this.#target[0];
-        // this.#smoothedTarget[1] = this.#target[1];
-        inputApplied = true;
-      }
-  
-      // --- Handle Pan Velocity Calculation ---
-      if (this.#activePanContext && this.#inputRingBuffer.length > 1) {
-        const sampleTime = now - this.#jitterBufferMs;
-        const resampledPoint = this.#resampleAt(sampleTime);
         
-        if (resampledPoint) {
-          const { screenToDataRatio } = this.#activePanContext;
-          
-          const screenVelocity = this.#activePanContext.activePanX
-            ? resampledPoint.velocityX
-            : resampledPoint.velocityY;
-          
-          const dataVelocity = -screenVelocity * screenToDataRatio * 1000; // data units per second
-          
-          // Smooth the clean, resampled velocity.
-          this.#panVelocity += (dataVelocity - this.#panVelocity) * this.#panVelocitySmoothingFactor;
-        }
-      } else if (this.#activePanContext) {
-        // If there's no new input, the velocity should decay.
-        this.#panVelocity *= 0.9; // Decay factor
+        // NEW: Snap target immediately for zoom (no smoothing delay)
+        this.#target[0] = this.#desiredTarget[0];
+        this.#target[1] = this.#desiredTarget[1];
+        this.#targetVelocity = [0, 0];
+        
+        inputApplied = true;
+        
+        // Reset zoom accumulator
+        this.#frameAccumulator.logZoomDelta = 0;
+        this.#frameAccumulator.zoomCenter = 0;
+        this.#frameAccumulator.hasZoomUpdates = false;
       }
   
-      // Reset zoom accumulator
-      this.#frameAccumulator.logZoomDelta = 0;
-      this.#frameAccumulator.zoomCenter = 0;
-      this.#frameAccumulator.hasZoomUpdates = false;
+      // Handle pan with input processor
+      if (this.#activePanContext) {
+        const axis = this.#activePanContext.axis;
+        const estimate = this.#inputProcessor.getPosition(now, axis);
+  
+        if (estimate && estimate.confidence > 0.3) {
+          // CHANGED: Update desiredTarget, not target
+          if (axis === 'x') {
+            this.#calculatePanTarget(this.#desiredTarget, estimate.cursorPosition, 0);
+          } else {
+            this.#calculatePanTarget(this.#desiredTarget, 0, estimate.cursorPosition);
+          }
+          inputApplied = true;
+        }
+      }
   
       if (inputApplied) {
         this.#ensureAnimating();
       }
     }
-    
-  
-    // _updatePhysics(fixedTimestep) {
-    //   const dt = fixedTimestep / 1000.0;
-  
-    //   // Update internal physics state.
-    //   this.#physicsPrevious[0] = this.#physicsCurrent[0];
-    //   this.#physicsPrevious[1] = this.#physicsCurrent[1];
-  
-    //   if (this.#activePanContext) {
-    //     // Pan: Only simulate spring for min value, calculate max from fixed width
-    //     const domainWidth = this.#activePanContext.domainWidth;
-        
-    //     // Spring simulation only for min value
-    //     const distance = this.#target[0] - this.#physicsCurrent[0];
-    //     const springForce = distance * this.#currentSpringConfig.stiffness;
-    //     const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
-    //     const acceleration = springForce + dampingForce;
-        
-    //     this.#velocity[0] += acceleration * dt;
-    //     this.#physicsCurrent[0] += this.#velocity[0] * dt;
-        
-    //     // Max is simply min + width (no spring simulation needed)
-    //     this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
-    //     this.#velocity[1] = this.#velocity[0]; // Same velocity for rigid body
-  
-    //     // console.log(`Spring: pos=${this.#physicsCurrent[0].toFixed(6)}, vel=${this.#velocity[0].toFixed(6)}, target=${this.#target[0].toFixed(6)}`);
-        
-    //   } else {
-    //     // Zoom: Independent springs for both min and max (needed for zoom-around-point)
-    //     for (let i = 0; i < 2; i++) {
-    //       const distance = this.#target[i] - this.#physicsCurrent[i];
-    //       const springForce = distance * this.#currentSpringConfig.stiffness;
-    //       const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
-    //       const acceleration = springForce + dampingForce;
-          
-    //       this.#velocity[i] += acceleration * dt;
-    //       this.#physicsCurrent[i] += this.#velocity[i] * dt;
-    //     }
-    //   }
-  
-    //   // for (let i = 0; i < 2; i++) {
-    //   //   const distance = this.#target[i] - this.#physicsCurrent[i];
-    //   //   // ... spring math using #physicsCurrent and #velocity ...
-    //   //   const springForce = distance * this.#currentSpringConfig.stiffness;
-    //   //   const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
-    //   //   const acceleration = springForce + dampingForce;
-        
-    //   //   this.#velocity[i] += acceleration * dt;
-    //   //   this.#physicsCurrent[i] += this.#velocity[i] * dt;
-    //   // }
-      
-    //   if (this.#isAtTarget()) {
-    //     this.#isAnimating = false;
-    //     this.#gpuCoordinator.removeAnimatingScale(this);
-    //   }
-    // }
-  
-    // _updatePhysics(deltaTime) {
-    //   // const dt = Math.min(deltaTime, 8.333) / 1000.0; 
-    //   const dt = deltaTime / 1000.0; // Convert to seconds
-      
-    //   if (this.#activePanContext) {
-    //     // Pan physics - single spring for min value
-    //     const distance = this.#target[0] - this.#physicsCurrent[0];
-    //     const springForce = distance * this.#currentSpringConfig.stiffness;
-    //     const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
-    //     const acceleration = springForce + dampingForce;
-        
-    //     this.#velocity[0] += acceleration * dt;
-    //     this.#physicsCurrent[0] += this.#velocity[0] * dt;
-    //     this.#physicsCurrent[1] = this.#physicsCurrent[0] + this.#activePanContext.domainWidth;
-    //     this.#velocity[1] = this.#velocity[0];
-    //   } else {
-    //     // Zoom physics - independent springs
-    //     for (let i = 0; i < 2; i++) {
-    //       const distance = this.#target[i] - this.#physicsCurrent[i];
-    //       const springForce = distance * this.#currentSpringConfig.stiffness;
-    //       const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
-    //       const acceleration = springForce + dampingForce;
-          
-    //       this.#velocity[i] += acceleration * dt;
-    //       this.#physicsCurrent[i] += this.#velocity[i] * dt;
-    //     }
-    //   }
-      
-    //   // Check if at target (same as before)
-    //   if (this.#isAtTarget()) {
-    //     this.#isAnimating = false;
-    //     this.#gpuCoordinator.removeAnimatingScale(this);
-    //   }
-    // }
-  
   
     _capturePhysicsStateForInterpolation() {
       this.#physicsPrevious[0] = this.#physicsCurrent[0];
       this.#physicsPrevious[1] = this.#physicsCurrent[1];
     }
   
-    // _updatePhysics(deltaTime) {
-  
-    //   // Svelte's time clamping and normalization
-    //   const elapsed = Math.min(deltaTime, 1000 / 30);
-    //   const dt = (elapsed * 60) / 1000;
-      
-    //   // Smooth intermediate target
-    //   // const smoothingFactor = 0.3; 
-    //   // this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor;
-    //   // this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor;
-    //   // this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor * dt;
-    //   // this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor * dt;
-  
-    //   const retainFactor = 0.5; // Adjust this for more/less rubber band
-    //   const smoothingFactor = 1 - Math.pow(retainFactor, dt);
-      
-    //   this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor;
-    //   this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor;
-  
-    //   // Svelte's inv_mass recovery (for momentum/soft animations)
-    //   this.#inverseMass = Math.min(this.#inverseMass + (1000 / (60 * 60)), 1);
-      
-    //   const ctx = {
-    //     inv_mass: this.#inverseMass,
-    //     opts: this.#currentSpringConfig,
-    //     settled: true,
-    //     dt: dt
-    //   };
-      
-    //   if (this.#activePanContext) {
-    //     // Pan physics - single value with rigid body
-    //     const last_value = this.#physicsPrevious[0];
-    //     const current_value = this.#physicsCurrent[0];
-    //     // const target_value = this.#target[0];
-    //     const target_value = this.#smoothedTarget[0]; // Chase smoothed target
-    //     const next_value = this.#tickSpring(ctx, last_value, current_value, target_value);
-        
-    //     // Update positions
-    //     // this.#physicsPrevious[0] = this.#physicsCurrent[0];
-    //     // this.#physicsPrevious[1] = this.#physicsCurrent[1];
-    //     this.#physicsCurrent[0] = next_value;
-    //     this.#physicsCurrent[1] = next_value + this.#activePanContext.domainWidth;
-        
-    //   } else {
-    //     // Zoom physics - independent springs
-    //     for (let i = 0; i < 2; i++) {
-    //       const last_value = this.#physicsPrevious[i];
-    //       const current_value = this.#physicsCurrent[i];
-    //       // const target_value = this.#target[i];
-    //       const target_value = this.#smoothedTarget[i];
-          
-    //       const next_value = this.#tickSpring(ctx, last_value, current_value, target_value);
-          
-    //       // this.#physicsPrevious[i] = this.#physicsCurrent[i];
-    //       this.#physicsCurrent[i] = next_value;
-    //     }
-    //   }
-  
-    //   const targetDelta = Math.abs(this.#smoothedTarget[0] - this.#target[0]);
-    //   const targetSettled = targetDelta < ctx.opts.precision;
-      
-    //   // Stop animation if settled
-    //   if (ctx.settled && targetSettled) {
-    //     this.#isAnimating = false;
-    //     this.#gpuCoordinator.removeAnimatingScale(this);
-    //   }
-  
-    //   // if (this.#activePanContext && Math.random() < 0.05) { // Log 5% of frames
-    //   //   console.log('Smoothing debug:', {
-    //   //       target: this.#target[0].toFixed(2),
-    //   //       smoothed: this.#smoothedTarget[0].toFixed(2),
-    //   //       physics: this.#physicsCurrent[0].toFixed(2),
-    //   //       delta: (this.#target[0] - this.#smoothedTarget[0]).toFixed(4),
-    //   //       dt: dt.toFixed(3)
-    //   //   });
-    //   // }
-    // }
-  
-    // _updatePhysics(deltaTime) {
-    //   // Svelte's time clamping and normalization
-    //   const elapsed = Math.min(deltaTime, 1000 / 30);
-    //   const dt = (elapsed * 60) / 1000;
-      
-    //   // Svelte's inv_mass recovery (for momentum/soft animations)
-    //   this.#inverseMass = Math.min(this.#inverseMass + (1000 / (60 * 60)), 1);
-      
-    //   const ctx = {
-    //     inv_mass: this.#inverseMass,
-    //     opts: this.#currentSpringConfig,
-    //     settled: true,
-    //     dt: dt
-    //   };
+    // _updatePhysics(fixedTimestep) {
+    //   const dt = fixedTimestep / 1000.0;
   
     //   if (this.#activePanContext) {
-    //     // === ACTIVE PANNING: Velocity drives target, spring chases ===
+    //     // Pan: Only simulate spring for min value, calculate max from fixed width
+    //     const domainWidth = this.#activePanContext.domainWidth;
         
-    //     // Drive target with clean, resampled velocity (no decay here)
-    //     const dtSeconds = deltaTime / 1000.0;
-    //     const displacement = this.#inputVelocity * dtSeconds;
-    //     this.#target[0] += displacement;
-    //     this.#target[1] += displacement;
+    //     const distance = this.#target[0] - this.#physicsCurrent[0];
+    //     const springForce = distance * this.#currentSpringConfig.stiffness;
+    //     const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+    //     const acceleration = springForce + dampingForce;
         
-    //     // Apply domain constraints with rubber band resistance
-    //     this.#applyBoundaryResistance(dt);
+    //     this.#velocity[0] += acceleration * dt;
+    //     this.#physicsCurrent[0] += this.#velocity[0] * dt;
         
-    //     // Smooth intermediate target for even better feel
-    //     const retainFactor = 0.5;
-    //     const smoothingFactor = 1 - Math.pow(retainFactor, dt);
-    //     this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor;
-    //     this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor;
-  
-    //     // Single spring for min value (rigid body)
-    //     const last_value = this.#physicsPrevious[0];
-    //     const current_value = this.#physicsCurrent[0];
-    //     const target_value = this.#smoothedTarget[0];
-    //     const next_value = this.#tickSpring(ctx, last_value, current_value, target_value);
-        
-    //     this.#physicsCurrent[0] = next_value;
-    //     this.#physicsCurrent[1] = next_value + this.#activePanContext.domainWidth;
-        
-    //   } else if (Math.abs(this.#velocity[0]) > 0.0001) {
-    //     // === MOMENTUM PHASE: Direct velocity integration ===
-        
-    //     const dtSeconds = deltaTime / 1000.0;
-        
-    //     // Project next position
-    //     let nextMin = this.#physicsCurrent[0] + this.#velocity[0] * dtSeconds * 60; // Scale for smooth momentum
-    //     let nextMax = this.#physicsCurrent[1] + this.#velocity[1] * dtSeconds * 60;
-    //     const currentWidth = nextMax - nextMin;
-        
-    //     // Check for boundary collision and apply damped bounce
-    //     const { min: minLimit, max: maxLimit } = this.domainLimits;
-    //     if ((nextMin < minLimit && this.#velocity[0] < 0) || (nextMax > maxLimit && this.#velocity[0] > 0)) {
-    //       // Snap to boundary
-    //       if (nextMin < minLimit) {
-    //         this.#physicsCurrent[0] = minLimit;
-    //         this.#physicsCurrent[1] = minLimit + currentWidth;
-    //       } else {
-    //         this.#physicsCurrent[1] = maxLimit;
-    //         this.#physicsCurrent[0] = maxLimit - currentWidth;
-    //       }
-    //       // Damped bounce
-    //       this.#velocity[0] *= -this.#momentumBoundaryDamping || -0.3;
-    //       this.#velocity[1] *= -this.#momentumBoundaryDamping || -0.3;
-    //     } else {
-    //       // Normal momentum decay
-    //       this.#physicsCurrent[0] = nextMin;
-    //       this.#physicsCurrent[1] = nextMax;
-    //       this.#velocity[0] *= this.#panMomentumFactor || 0.95;
-    //       this.#velocity[1] *= this.#panMomentumFactor || 0.95;
-    //     }
-        
-    //     // Keep target aligned with physics during momentum
-    //     this.#target[0] = this.#physicsCurrent[0];
-    //     this.#target[1] = this.#physicsCurrent[1];
-    //     this.#smoothedTarget[0] = this.#physicsCurrent[0];
-    //     this.#smoothedTarget[1] = this.#physicsCurrent[1];
+    //     // Rigid body: max follows min
+    //     this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
+    //     this.#velocity[1] = this.#velocity[0];
         
     //   } else {
-    //     // === ZOOM/SETTLING: Normal spring behavior ===
-        
-    //     // Smooth intermediate target
-    //     const retainFactor = 0.5;
-    //     const smoothingFactor = 1 - Math.pow(retainFactor, dt);
-    //     this.#smoothedTarget[0] += (this.#target[0] - this.#smoothedTarget[0]) * smoothingFactor;
-    //     this.#smoothedTarget[1] += (this.#target[1] - this.#smoothedTarget[1]) * smoothingFactor;
-  
-    //     // Independent springs for both min and max (needed for zoom)
+    //     // Zoom: Independent springs for both min and max
     //     for (let i = 0; i < 2; i++) {
-    //       const last_value = this.#physicsPrevious[i];
-    //       const current_value = this.#physicsCurrent[i];
-    //       const target_value = this.#smoothedTarget[i];
-    //       const next_value = this.#tickSpring(ctx, last_value, current_value, target_value);
-    //       this.#physicsCurrent[i] = next_value;
+    //       const distance = this.#target[i] - this.#physicsCurrent[i];
+    //       const springForce = distance * this.#currentSpringConfig.stiffness;
+    //       const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+    //       const acceleration = springForce + dampingForce;
+          
+    //       this.#velocity[i] += acceleration * dt;
+    //       this.#physicsCurrent[i] += this.#velocity[i] * dt;
     //     }
     //   }
-  
-    //   // Final hard clamp (safety net)
-    //   this.#applyHardClamp();
-  
-    //   // Check if animation should stop
-    //   const targetDelta = Math.abs(this.#smoothedTarget[0] - this.#target[0]);
-    //   const targetSettled = targetDelta < ctx.opts.precision;
       
-    //   if (ctx.settled && targetSettled && !this.#activePanContext && Math.abs(this.#velocity[0]) < 0.001) {
+    //   if (this.#isAtTarget()) {
     //     this.#isAnimating = false;
     //     this.#gpuCoordinator.removeAnimatingScale(this);
     //   }
     // }
   
-    _updatePhysics(deltaTime) {
-      const dt = deltaTime / 1000.0;
-      const { min: minLimit, max: maxLimit } = this.domainLimits;
+    _updatePhysics(fixedTimestep) {
+      const dt = fixedTimestep / 1000.0;
   
-      // --- 1. UPDATE TARGET (if panning) ---
+      // NEW: First layer - smooth the target towards desired target
       if (this.#activePanContext) {
-        // The target is driven by our smoothed, resampled velocity.
-        const panDelta = this.#panVelocity * dt;
-        this.#target[0] += panDelta;
-        this.#target[1] += panDelta;
-      }
-      
-      // --- 2. CALCULATE FORCES (for the spring) ---
-      this.#physicsPrevious[0] = this.#physicsCurrent[0];
-      this.#physicsPrevious[1] = this.#physicsCurrent[1];
-      
-      // Calculate distance for the main spring force
-      let distance = this.#target[0] - this.#physicsCurrent[0];
-      
-      // Calculate overpan for the boundary resistance force
-      const domainWidth = this.#physicsCurrent[1] - this.#physicsCurrent[0];
-      let overpan = 0;
-      if (this.#physicsCurrent[0] < minLimit) {
-        overpan = minLimit - this.#physicsCurrent[0];
-      } else if (this.#physicsCurrent[0] + domainWidth > maxLimit) {
-        overpan = maxLimit - (this.#physicsCurrent[0] + domainWidth);
-      }
-      
-      // --- 3. APPLY FORCES & INTEGRATE (the core physics step) ---
-      
-      // Main spring force (always active, pulls towards target)
-      const springForce = distance * this.#currentSpringConfig.stiffness;
-      
-      // Boundary resistance force (only active when overpanning)
-      const resistanceForce = overpan * this.#currentSpringConfig.stiffness * this.#boundaryResistanceFactor;
-      
-      // Damping force (always active, opposes motion)
-      const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
-      
-      // Sum forces to get acceleration
-      const acceleration = springForce + dampingForce + resistanceForce;
-      
-      // Integrate acceleration to get new velocity
-      this.#velocity[0] += acceleration * dt;
-      
-      // Integrate velocity to get new position
-      this.#physicsCurrent[0] += this.#velocity[0] * dt;
-      
-      // The other side of the domain follows rigidly
-      this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
-      this.#velocity[1] = this.#velocity[0];
-  
-      // --- 4. HANDLE MOMENTUM (after user releases) ---
-      if (!this.#activePanContext) {
-        // If coasting, apply momentum decay directly to the velocity
-        this.#velocity[0] *= this.#panMomentumFactor;
-        this.#velocity[1] *= this.#panMomentumFactor;
-  
-        // Boundary collision check for momentum
-        if ((this.#physicsCurrent[0] < minLimit && this.#velocity[0] < 0) || (this.#physicsCurrent[1] > maxLimit && this.#velocity[0] > 0)) {
-            this.#velocity[0] *= -this.#momentumBoundaryDamping; // Damp and reverse
-            this.#velocity[1] *= -this.#momentumBoundaryDamping;
+        // Pan: rigid body constraint for target smoothing
+        const domainWidth = this.#activePanContext.domainWidth;
+        
+        const targetError = this.#desiredTarget[0] - this.#target[0];
+        const targetSpringForce = targetError * this.#TARGET_STIFFNESS;
+        const targetDampingForce = -this.#targetVelocity[0] * this.#TARGET_DAMPING;
+        const targetAccel = targetSpringForce + targetDampingForce;
+        
+        this.#targetVelocity[0] += targetAccel * dt;
+        this.#target[0] += this.#targetVelocity[0] * dt;
+        
+        // Max follows min rigidly
+        this.#target[1] = this.#target[0] + domainWidth;
+        this.#targetVelocity[1] = this.#targetVelocity[0];
+        
+      } else {
+        // Zoom: independent springs for target smoothing
+        for (let i = 0; i < 2; i++) {
+          const targetError = this.#desiredTarget[i] - this.#target[i];
+          const targetSpringForce = targetError * this.#TARGET_STIFFNESS;
+          const targetDampingForce = -this.#targetVelocity[i] * this.#TARGET_DAMPING;
+          const targetAccel = targetSpringForce + targetDampingForce;
+          
+          this.#targetVelocity[i] += targetAccel * dt;
+          this.#target[i] += this.#targetVelocity[i] * dt;
         }
       }
   
-      // --- 5. CHECK SETTLING CONDITION ---
-      const isSettled = Math.abs(this.#velocity[0]) < 0.001 && Math.abs(this.#target[0] - this.#physicsCurrent[0]) < 0.001;
+      if (this.#activePanContext) {
+        const desiredJump = Math.abs(this.#desiredTarget[0] - (this.#lastLoggedDesired || this.#desiredTarget[0]));
+        const targetToDesiredGap = Math.abs(this.#target[0] - this.#desiredTarget[0]);
+        const targetVelMag = Math.abs(this.#targetVelocity[0]);
+        
+        console.log('Target smoothing:', {
+          desiredJump: desiredJump.toFixed(4),
+          gap: targetToDesiredGap.toFixed(4),
+          targetVel: targetVelMag.toFixed(4),
+          domainPos: this.#target[0].toFixed(4)
+        });
+        
+        this.#lastLoggedDesired = this.#desiredTarget[0];
+      }
   
-      if (isSettled && !this.#activePanContext) {
-        this.#velocity = [0, 0];
+      // EXISTING: Second layer - display spring tracks smoothed target
+      if (this.#activePanContext) {
+        // Pan: rigid body constraint for display spring
+        const domainWidth = this.#activePanContext.domainWidth;
+        
+        const distance = this.#target[0] - this.#physicsCurrent[0];
+        const springForce = distance * this.#currentSpringConfig.stiffness;
+        const dampingForce = -this.#velocity[0] * this.#currentSpringConfig.damping;
+        const acceleration = springForce + dampingForce;
+        
+        this.#velocity[0] += acceleration * dt;
+        this.#physicsCurrent[0] += this.#velocity[0] * dt;
+        
+        this.#physicsCurrent[1] = this.#physicsCurrent[0] + domainWidth;
+        this.#velocity[1] = this.#velocity[0];
+        
+      } else {
+        // Zoom: independent springs for display spring
+        for (let i = 0; i < 2; i++) {
+          const distance = this.#target[i] - this.#physicsCurrent[i];
+          const springForce = distance * this.#currentSpringConfig.stiffness;
+          const dampingForce = -this.#velocity[i] * this.#currentSpringConfig.damping;
+          const acceleration = springForce + dampingForce;
+          
+          this.#velocity[i] += acceleration * dt;
+          this.#physicsCurrent[i] += this.#velocity[i] * dt;
+        }
+      }
+      
+      // MODIFIED: Check if both springs are settled
+      const precision = this.#cachedPrecision;
+      
+      const physicsSettled = 
+        Math.abs(this.#physicsCurrent[0] - this.#target[0]) < precision &&
+        Math.abs(this.#physicsCurrent[1] - this.#target[1]) < precision &&
+        Math.abs(this.#velocity[0]) < precision * 10 &&
+        Math.abs(this.#velocity[1]) < precision * 10;
+        
+      const targetSettled = 
+        Math.abs(this.#target[0] - this.#desiredTarget[0]) < precision &&
+        Math.abs(this.#target[1] - this.#desiredTarget[1]) < precision &&
+        Math.abs(this.#targetVelocity[0]) < precision * 10 &&
+        Math.abs(this.#targetVelocity[1]) < precision * 10;
+      
+      if (physicsSettled && targetSettled) {
         this.#isAnimating = false;
         this.#gpuCoordinator.removeAnimatingScale(this);
       }
-    }
   
-    // Helper method for boundary resistance during active panning
-    #applyBoundaryResistance(dt) {
-      if (!this.#activePanContext) return;
-      
-      const { min: minLimit, max: maxLimit } = this.domainLimits;
-      const domainWidth = this.#target[1] - this.#target[0];
-      let overpan = 0;
-  
-      if (this.#target[0] < minLimit) {
-        overpan = minLimit - this.#target[0];
-      } else if (this.#target[0] + domainWidth > maxLimit) {
-        overpan = maxLimit - (this.#target[0] + domainWidth);
-      }
-  
-      if (Math.abs(overpan) > 0.001) {
-        // Apply resistance force scaled to spring stiffness
-        // const boundaryResistanceFactor = 3.0;
-        // const resistanceForce = overpan * this.#currentSpringConfig.stiffness * this.#boundaryResistanceFactor;
+      if (this.#activePanContext) {
+        const physicsToTargetGap = Math.abs(this.#physicsCurrent[0] - this.#target[0]);
+        const physicsVelMag = Math.abs(this.#velocity[0]);
         
-        // Apply resistance by adjusting target velocity
-        const velocityAdjustment = resistanceForce * dt;
-        this.#inputVelocity += velocityAdjustment * 0.1; // Small factor to prevent oscillation
+        console.log('Display spring:', {
+          gap: physicsToTargetGap.toFixed(4),
+          velocity: physicsVelMag.toFixed(4),
+          physicsCurrent: this.#physicsCurrent[0].toFixed(4)
+        });
       }
     }
   
-    // Helper method for final hard clamp
-    #applyHardClamp() {
-      const { min: minLimit, max: maxLimit } = this.domainLimits;
-      const currentWidth = this.#physicsCurrent[1] - this.#physicsCurrent[0];
+    _setRenderState(alpha) {
+      const before = this.#renderCurrent[0];
+      const prev0 = this.#physicsPrevious[0];
+      const curr0 = this.#physicsCurrent[0];
+      const delta = Math.abs(curr0 - prev0);
+      
+      if (delta > 1.0) {
+        console.warn('Large physics delta detected:', {
+          previous: prev0.toFixed(4),
+          current: curr0.toFixed(4),
+          delta: delta.toFixed(4),
+          alpha: alpha.toFixed(3)
+        });
+      }
   
-      if (this.#physicsCurrent[0] < minLimit) {
-        this.#physicsCurrent[0] = minLimit;
-        this.#physicsCurrent[1] = minLimit + currentWidth;
-      } else if (this.#physicsCurrent[1] > maxLimit) {
-        this.#physicsCurrent[1] = maxLimit;
-        this.#physicsCurrent[0] = maxLimit - currentWidth;
+      this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
+    
+      if (this.#activePanContext) {
+        // Maintain rigid body constraint during interpolation
+        this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
+      } else {
+        this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
+      }
+      const renderJump = Math.abs(this.#renderCurrent[0] - before);
+      if (renderJump > 0.01) {
+        console.log('Render jump:', {
+          jump: renderJump.toFixed(4),
+          alpha: alpha.toFixed(3),
+          renderPos: this.#renderCurrent[0].toFixed(4)
+        });
       }
     }
   
@@ -2975,35 +2341,6 @@
       }
     }
   
-    _setRenderState(alpha) {
-      this.#renderCurrent[0] = this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha;
-      // this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
-    
-      if (this.#activePanContext) {
-        // Maintain rigid body constraint during interpolation
-        this.#renderCurrent[1] = this.#renderCurrent[0] + this.#activePanContext.domainWidth;
-      } else {
-        this.#renderCurrent[1] = this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha;
-      }
-      // this.#renderCurrent = [
-        // this.#physicsPrevious[0] * (1.0 - alpha) + this.#physicsCurrent[0] * alpha,
-        // this.#physicsPrevious[1] * (1.0 - alpha) + this.#physicsCurrent[1] * alpha
-      // ];
-  
-      // console.log(`Alpha: ${alpha.toFixed(3)}, Prev: ${this.#physicsPrevious[0].toFixed(3)}, Curr: ${this.#physicsCurrent[0].toFixed(3)}, Render: ${this.#renderCurrent[0].toFixed(3)}`);
-  
-      // console.log(`Render state: current=${this.#renderCurrent[0].toFixed(6)}, ${this.#renderCurrent[1].toFixed(6)}`);
-      // return this.#renderCurrent[0]
-    }
-  
-    // _setRenderState() {
-    //   // No interpolation - render state IS physics state
-    //   this.#renderCurrent[0] = this.#physicsCurrent[0];
-    //   this.#renderCurrent[1] = this.#physicsCurrent[1];
-      
-    //   return this.#renderCurrent[0];
-    // }
-  
     resetZoom() {
       const targetExtent = this.effectiveExtent;
       
@@ -3019,6 +2356,10 @@
       this.#target[0] = targetExtent[0];
       this.#target[1] = targetExtent[1];
       
+      this.#desiredTarget[0] = targetExtent[0];
+      this.#desiredTarget[1] = targetExtent[1];
+      this.#targetVelocity = [0, 0];
+  
       if (!this.ready && this.zoomInEffect.enabled) {
         // --- Initial "Zoom-In" Effect ---
         this.#updateSpringConfig(this.zoomInEffect.springConfig);
@@ -3076,6 +2417,19 @@
       this.#ensureAnimating();
     }
   
+    updateScaleDomain(scale, current = true) {
+      const targetDomain = current ? this.domain.current : this.#target;
+      return { scale: scale.domain(targetDomain) }
+    }
+  
+    getBaseScale(axis, innerWidthOrHeight) {
+      if (axis === 'x') {
+        return scaleLinear().range([0, innerWidthOrHeight])
+      } else if (axis === 'y') {
+        return scaleLinear().range([innerWidthOrHeight, 0])
+      }
+    }
+  
     get gpuState() {
         const [min, max] = this.#renderCurrent;
         const range = max - min;
@@ -3094,11 +2448,189 @@
     destroy() {
       this.#frozenExtent = null;
       this.#isAnimating = false;
-      this.#resetAccumulator();
+      // this.#resetAccumulator();
       this.#gpuCoordinator.unregisterScale(this.id)
     }
   }
 </src/lib/scales/LinearScaleState.svelte.js>
+
+<src/lib/scales/PointerInputProcessor.js>
+  // PointerInputProcessor.js
+  export class PointerInputProcessor {
+    constructor() {
+      this.samples = [];
+      this.maxSamples = 100;
+      
+      // α-β filter state
+      this.x = 0;
+      this.vx = 0;
+      this.lastUpdateTime = 0;
+      this.initialized = false;
+      
+      // Tuned for responsive tracking
+      this.tauMs = 50;   // Fast response time
+      this.k = 1;      // Critical damping
+    }
+  
+    addSample(screenX, screenY, timestamp) {
+      this.samples.push({ t: timestamp, x: screenX, y: screenY });
+      
+      if (this.samples.length > this.maxSamples) {
+        this.samples.shift();
+      }
+      
+      const cutoffTime = timestamp - 200;
+      while (this.samples.length > 1 && this.samples[0].t < cutoffTime) {
+        this.samples.shift();
+      }
+  
+      console.log('Sample timing:', {
+        count: this.samples.length,
+        timestamps: this.samples.map(s => s.t),
+        gaps: this.samples.slice(1).map((s, i) => s.t - this.samples[i].t),
+        newest: this.samples[this.samples.length - 1]?.t,
+        oldest: this.samples[0]?.t,
+        span: this.samples.length > 0 ? 
+          this.samples[this.samples.length - 1].t - this.samples[0].t : 0
+      });
+    }
+  
+    getPosition(currentTime, axis) {
+      // Cap dt to prevent instability
+      const rawDt = (currentTime - this.lastUpdateTime) / 1000;
+      const dt = Math.min(rawDt, 0.1); // Cap at 100ms
+      
+      if (dt <= 0) return null;
+      
+      // Always predict forward
+      this.x = this.x + this.vx * dt;
+      
+      // Try to get measurement
+      const measurement = this.#getMeasurement(currentTime, axis);
+      
+      if (measurement) {
+        // Initialize on first measurement
+        if (!this.initialized) {
+          this.x = measurement.position;
+          this.vx = 0;
+          this.initialized = true;
+          this.lastUpdateTime = currentTime;
+          return { cursorPosition: this.x, confidence: 1.0 };
+        }
+        
+        // Correction step
+        const residual = measurement.position - this.x;
+        
+        // Calculate gains
+        const alpha = 1 - Math.exp(-dt * 1000 / this.tauMs);
+        const beta = this.k * alpha * alpha;
+        
+        // Update position
+        this.x = this.x + alpha * residual;
+        
+        // Update velocity with clamping
+        const velocityDelta = (beta * residual) / dt;
+        const maxVelDelta = 5; // px/ms per update
+        const clampedVelDelta = Math.max(-maxVelDelta, Math.min(maxVelDelta, velocityDelta));
+        this.vx = this.vx + clampedVelDelta;
+        
+        // Clamp absolute velocity
+        this.vx = Math.max(-3, Math.min(3, this.vx));
+      }
+      
+      this.lastUpdateTime = currentTime;
+      console.log('processor getting position', currentTime, this.x)
+      return {
+        cursorPosition: this.x,
+        confidence: measurement ? 1.0 : 0.5
+      };
+    }
+  
+    #getMeasurement(currentTime, axis) {
+      if (this.samples.length === 0) return null;
+      
+      const latest = this.samples[this.samples.length - 1];
+      const age = currentTime - latest.t;
+      
+      // Use latest if reasonably fresh
+      if (age < 50) {
+        return {
+          position: axis === 'x' ? latest.x : latest.y,
+          confidence: 1.0
+        };
+      }
+      
+      return null;
+    }
+  
+    reset() {
+      this.samples = [];
+      this.x = 0;
+      this.vx = 0;
+      this.lastUpdateTime = 0;
+      this.initialized = false;
+    }
+  }
+  
+  
+  export class SimplePointerProcessor {
+    samples = [];
+    maxSamples = 10;
+    
+    reset() {
+      this.samples = [];
+    }
+    
+    addSample(screenX, screenY, timestamp) {
+      this.samples.push({ x: screenX, y: screenY, t: timestamp });
+      
+      // Keep only recent samples
+      if (this.samples.length > this.maxSamples) {
+        this.samples.shift();
+      }
+      
+      // Trim by age too
+      const cutoff = timestamp - 200;
+      while (this.samples.length > 1 && this.samples[0].t < cutoff) {
+        this.samples.shift();
+      }
+    }
+    
+    getPosition(currentTime, axis) {
+      if (this.samples.length === 0) return null;
+      
+      const latest = this.samples[this.samples.length - 1];
+      
+      // If latest sample is fresh (< 50ms old), just use it
+      if (currentTime - latest.t < 50) {
+        return {
+          position: axis === 'x' ? latest.x : latest.y,
+          confidence: 1.0
+        };
+      }
+      
+      // If we only have one sample or it's very old, use it but low confidence
+      if (this.samples.length < 2 || currentTime - latest.t > 100) {
+        return {
+          position: axis === 'x' ? latest.x : latest.y,
+          confidence: 0.3
+        };
+      }
+      
+      // Simple extrapolation from last two samples
+      const prev = this.samples[this.samples.length - 2];
+      const dt = latest.t - prev.t;
+      const coord = axis === 'x' ? 'x' : 'y';
+      const velocity = (latest[coord] - prev[coord]) / dt;
+      const age = currentTime - latest.t;
+      
+      return {
+        position: latest[coord] + velocity * age,
+        confidence: 0.7
+      };
+    }
+  }
+</src/lib/scales/PointerInputProcessor.js>
 
 <src/lib/scales/ChartScales.svelte.js>
   // src/lib/scales/ChartScales.svelte.js
@@ -3388,10 +2920,12 @@
       this.activePanY = false;
   
       if (this.scaleTypes?.x === 'linear') {
-        this.xScaleState.clearPanContext();
+        // this.xScaleState.clearPanContext();
+        this.xScaleState.endPan();
       }
       if (this.scaleTypes?.y === 'linear') {
-        this.yScaleState.clearPanContext();
+        // this.yScaleState.clearPanContext();
+        this.yScaleState.endPan();
       }
     }
   
@@ -3405,22 +2939,29 @@
     }
   
     updatePanPositionWithCoalescing(coalescedEvents) {
+      console.log('Raw coalesced events:', coalescedEvents.map(e => ({
+        offsetX: e.offsetX,
+        offsetY: e.offsetY,
+        clientX: e.clientX,
+        clientY: e.clientY
+      })));
+      
       // Route coalesced events to appropriate scales with filtered coordinates
       if (this.activePanX && this.scaleTypes?.x === 'linear') {
         // Filter to only X coordinates for X scale
         const xEvents = coalescedEvents.map(event => ({
-          ...event,
           offsetX: event.offsetX,
-          offsetY: 0  // Zero out Y coordinate for X scale
+          offsetY: 0,
+          timeStamp: event.timeStamp
         }));
         this.xScaleState.updatePanPositionWithCoalescing(xEvents);
       }
       if (this.activePanY && this.scaleTypes?.y === 'linear') {
         // Filter to only Y coordinates for Y scale  
         const yEvents = coalescedEvents.map(event => ({
-          ...event,
-          offsetX: 0,  // Zero out X coordinate for Y scale
-          offsetY: event.offsetY
+          offsetX: 0,
+          offsetY: event.offsetY,
+          timeStamp: event.timeStamp
         }));
         this.yScaleState.updatePanPositionWithCoalescing(yEvents);
       }
@@ -3908,16 +3449,29 @@
     }
   
     function handlePointerMove(event) {
-      if (!isPanning) return;
-  
-      // Get coalesced events for higher resolution input data
-      const coalescedEvents = event.getCoalescedEvents?.() || [event];
-    
-      // Pass all coalesced events to the scales coordinator
-      scales.updatePanPositionWithCoalescing(coalescedEvents);
-      
-      // scales.updatePanPosition(event.offsetX, event.offsetY);    
+      // Single consolidated handler
+      if (isPanning) {
+        const coalescedEvents = event.getCoalescedEvents?.() || [event];
+        scales.updatePanPositionWithCoalescing(coalescedEvents);
+      } else {
+        // Check if we're in the interactive inner area
+        const point = { x: event.offsetX, y: event.offsetY };
+        if (layout.isWithinInnerBounds(point)) {
+          const innerPoint = layout.toInnerCoordinates(point);
+          scales.updateCurrentDataPoints(innerPoint);
+        }
+      }
     }
+    //   if (!isPanning) return;
+  
+    //   // Get coalesced events for higher resolution input data
+    //   const coalescedEvents = event.getCoalescedEvents?.() || [event];
+    
+    //   // Pass all coalesced events to the scales coordinator
+    //   scales.updatePanPositionWithCoalescing(coalescedEvents);
+      
+    //   // scales.updatePanPosition(event.offsetX, event.offsetY);    
+    // }
   
     function handlePointerUp(event) {
       isPanning = false;
@@ -3985,11 +3539,11 @@
           </clipPath>
         </defs>
         
+        <!-- onpointermove={handleInnerMouseMove} -->
         <g
           transform={layout.innerTransform}
           clip-path={layout.clipPathUrl}
           class="crosshair"
-          onpointermove={handleInnerMouseMove}
           onpointerenter={handleInnerMouseEnter}
           onpointerleave={handleInnerMouseLeave}
         >
@@ -4042,11 +3596,12 @@
               {/each}
             {/if}
             <rect
-            x="0"
-            y="0"
-            width={layout.innerWidth}
-            height={layout.innerHeight}
-            fill="transparent"
+              x="0"
+              y="0"
+              width={layout.innerWidth}
+              height={layout.innerHeight}
+              fill="transparent"
+              class="interaction-target"
             />
         </g>
       </svg>
@@ -4080,6 +3635,12 @@
     .svg-background { 
       z-index: 1; 
     }
+  
+    .interaction-target {
+      /* Ensure it catches all pointer events */
+      pointer-events: all;
+    }
+  
     .canvas-layer { z-index: 2; }
     .svg-foreground { 
       z-index: 3; 
