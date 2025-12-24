@@ -1,461 +1,544 @@
 // src/lib/scales/ChartScales.svelte.js
+import { getContext } from 'svelte';
 import { getScaleState } from '$lib/scales';
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities.js';
 
 export class ChartScales {
-  scaleRequirements = $state({
-    x: [], // [{ type: 'band', priority: 3, markId: 'bar-abc123', config: {...} }, ...]
-    y: []  // [{ type: 'linear', priority: 2, markId: 'dot-def456', config: {...} }, ...]
-  });
-  
-  active = $state(false);
+	#scaleRegistry;
+	scaleRequirements = $state({
+		x: [],
+		y: []
+	});
 
-  constructor(config) {
-    this.config = config;
-    this.gpuCoordinator = config.gpuCoordinator;
+	// Use $state instead of $derived for scale instances
+	#xScaleInstance = $state(null);
+	#yScaleInstance = $state(null);
 
-    // Update gpuCoordinator scale ids 
-    $effect(() => {
-      const xScale = this.xScaleState;
-      const yScale = this.yScaleState;
-      
-      if (xScale?.id && yScale?.id && this.gpuCoordinator) {
-        const trySetMapping = () => {
-          try {
-            this.gpuCoordinator.setChartScaleMapping(this.chartId, {
-              xScaleId: xScale.id,
-              yScaleId: yScale.id
-            });
-          } catch (error) {
-            console.log('setMapping failed')
-            // Retry after chart registration
-            setTimeout(trySetMapping, 10);
-          }
-        };
-        trySetMapping();
-      }
-    });
-  }
+	// Track previous scales for cleanup
+	#previousXScale = null;
+	#previousYScale = null;
 
-  // Reactive getters for config access
-  get xLabel() { return this.config.xLabel; }
-  get yLabel() { return this.config.yLabel; }
-  get layout() { return this.config.layout; }
-  get chartId() { return this.config.layout.chartId; }
+	active = $state(false);
 
-  // Resolution with configuration support
-  scaleConfigurations = $derived.by(() => {
-    try {
-      return {
-        x: resolveScaleConfiguration(this.scaleRequirements.x),
-        y: resolveScaleConfiguration(this.scaleRequirements.y)
-      };
-    } catch (error) {
-      console.error('❌ Scale configuration resolution failed:', error);
-      
-      // Provide helpful debugging info
-      console.error('Scale requirements at time of error:', {
-        x: this.scaleRequirements.x.map(req => `${req.markId}:${req.type}(${req.priority})`),
-        y: this.scaleRequirements.y.map(req => `${req.markId}:${req.type}(${req.priority})`)
-      });
-      
-      // Return safe fallback
-      return { 
-        x: { type: 'linear', config: {} }, 
-        y: { type: 'linear', config: {} } 
-      };
-    }
-  });
+	// --- MEMORY POOLS ---
+	// Reusable objects to avoid garbage collection during "pointerdown"
+	_xPanContext = {
+		initialScreenPos: 0,
+		initialDomain: [0, 0],
+		screenToDataRatio: 0,
+		domainWidth: 0,
+		screenDimension: 0,
+		axis: 'x',
+		lastScreenPos: 0
+	};
 
-  // Derive types from configurations for backward compatibility
-  scaleTypes = $derived.by(() => ({
-    x: this.scaleConfigurations?.x?.type || 'linear',
-    y: this.scaleConfigurations?.y?.type || 'linear'
-  }));
+	_yPanContext = {
+		initialScreenPos: 0,
+		initialDomain: [0, 0],
+		screenToDataRatio: 0,
+		domainWidth: 0,
+		screenDimension: 0,
+		axis: 'y',
+		lastScreenPos: 0
+	};
 
-  // Use resolved configurations with scale states
-  xScaleState = $derived(getScaleState(
-    this.xLabel, 
-    this.scaleConfigurations?.x?.type || 'linear',
-    this.scaleConfigurations?.x?.config || {},
-    this.gpuCoordinator,
-    this.chartId
-  ));
+	constructor(config) {
+		this.config = config;
+		this.gpuCoordinator = config.gpuCoordinator;
+		this.#scaleRegistry = config.scaleRegistry;
 
-  yScaleState = $derived(getScaleState(
-    this.yLabel, 
-    this.scaleConfigurations?.y?.type || 'linear', 
-    this.scaleConfigurations?.y?.config || {},
-    this.gpuCoordinator,
-    this.chartId
-  ));
+		if (!this.#scaleRegistry) {
+			console.error('ChartScales initialized without scaleRegistry!');
+		}
 
-  // Rest of the class remains the same...
-  baseXScale = $derived(
-    this.layout.isReady 
-      ? this.xScaleState.getBaseScale('x', this.layout.innerWidth) 
-      : null
-  );
+		// Effect: Update scale instances when requirements or labels change
+		$effect(() => {
+			const xLabel = this.xLabel;
+			const yLabel = this.yLabel;
+			const xConfig = this.scaleConfigurations.x;
+			const yConfig = this.scaleConfigurations.y;
 
-  baseYScale = $derived(
-    this.layout.isReady 
-      ? this.yScaleState.getBaseScale('y', this.layout.innerHeight) 
-      : null
-  );
+			// TODO move outside effect?
+			// const scaleRegistry = getContext('scale-registry');
 
-  xScale = $derived(
-    this.layout.isReady && this.baseXScale
-      ? this.xScaleState.updateScaleDomain(this.baseXScale) 
-      : null
-  );
+			// Get what scales SHOULD be
 
-  yScale = $derived(
-    this.layout.isReady && this.baseYScale
-      ? this.yScaleState.updateScaleDomain(this.baseYScale) 
-      : null
-  );
+			const neededXScale = this.#scaleRegistry.getOrCreateScale(
+				xLabel,
+				xConfig?.type || 'linear',
+				xConfig?.config || {},
+				this.chartId
+			);
 
-  xTargetScale = $derived(
-    this.layout.isReady && this.baseXScale
-      ? this.xScaleState.updateScaleDomain(this.baseXScale, false) 
-      : null
-  );
+			const neededYScale = this.#scaleRegistry.getOrCreateScale(
+				yLabel,
+				yConfig?.type || 'linear',
+				yConfig?.config || {},
+				this.chartId
+			);
 
-  yTargetScale = $derived(
-    this.layout.isReady && this.baseYScale
-      ? this.yScaleState.updateScaleDomain(this.baseYScale, false) 
-      : null
-  );
+			// const neededXScale = getScaleState(
+			// 	xLabel,
+			// 	xConfig?.type || 'linear',
+			// 	xConfig?.config || {},
+			// 	// this.gpuCoordinator,
+			// 	this.chartId
+			// );
 
-  currentXDataPoint = $derived(this.xScaleState.currentDataPoint);
-  currentYDataPoint = $derived(this.yScaleState.currentDataPoint);
-  currentXScreenPoint = $derived(this.xScale?.scale(this.currentXDataPoint));
-  currentYScreenPoint = $derived(this.yScale?.scale(this.currentYDataPoint));
-  scalesReady = $derived(this.xScaleState?.ready && this.yScaleState?.ready);
+			// const neededYScale = getScaleState(
+			// 	yLabel,
+			// 	yConfig?.type || 'linear',
+			// 	yConfig?.config || {},
+			// 	// this.gpuCoordinator,
+			// 	this.chartId
+			// );
 
-  // registerScaleType with configuration support
-  registerScaleType = (dimension, type, priority = SCALE_PRIORITIES.PREFER, markId = 'unknown', config = {}) => {
-    const requirements = this.scaleRequirements[dimension];
-    
-    // Check if we already have this exact requirement
-    const existing = requirements.find(req => 
-      req.type === type && 
-      req.priority === priority && 
-      req.markId === markId &&
-      JSON.stringify(req.config) === JSON.stringify(config)
-    );
-    
-    if (!existing) {
-      requirements.push({ type, priority, markId, config });
-      
-      console.log(`📊 Registered scale requirement: ${dimension} = ${type} (priority: ${priority}, mark: ${markId})`, {
-        config: Object.keys(config).length > 0 ? config : 'none'
-      });
-      
-      // Trigger reactivity by reassigning the array
-      this.scaleRequirements[dimension] = [...requirements];
-    }
-  }
+			// Check if X scale changed
+			if (this.#xScaleInstance !== neededXScale) {
+				// Cleanup old scale - REMOVE FROM THAT SCALE'S USAGE
+				if (this.#xScaleInstance) {
+          this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
+					// scaleRegistry?.deregisterChart(this.#xScaleInstance, this.chartId);
+				}
+				// const scaleRegistry = getContext('scale-registry');
+				// if (scaleRegistry && scaleRegistry.scaleUsage.has(this.#xScaleInstance)) {
+				// 	const usage = scaleRegistry.scaleUsage.get(this.#xScaleInstance);
+				// 	usage.delete(this.chartId);
+				// }
+				// Set new scale
+				this.#xScaleInstance = neededXScale;
+				this.#previousXScale = neededXScale;
+			}
 
-  unregisterScaleType = (dimension, markId) => {
-    const requirements = this.scaleRequirements[dimension];
-    const filtered = requirements.filter(req => req.markId !== markId);
-    
-    if (filtered.length !== requirements.length) {
-      console.log(`📊 Removed scale requirements for ${markId} on ${dimension} axis`);
-      this.scaleRequirements[dimension] = filtered;
-    }
-  }
+			// // Check if Y scale changed
+			// if (this.#yScaleInstance !== neededYScale) {
+			// 	// Cleanup old scale - REMOVE FROM THAT SCALE'S USAGE
+			// 	if (this.#yScaleInstance) {
+			// 		const scaleRegistry = getContext('scale-registry');
+			// 		if (scaleRegistry && scaleRegistry.scaleUsage.has(this.#yScaleInstance)) {
+			// 			const usage = scaleRegistry.scaleUsage.get(this.#yScaleInstance);
+			// 			usage.delete(this.chartId);
+			// 		}
+			// 	}
 
-  // Summary now includes configuration info
-  getScaleRequirementsSummary = () => {
-    return {
-      x: {
-        resolved: this.scaleTypes?.x || 'unknown',
-        config: this.scaleConfigurations?.x?.config || {},
-        requirements: this.scaleRequirements.x.map(req => 
-          `${req.markId}:${req.type}(${req.priority})${Object.keys(req.config || {}).length > 0 ? '+config' : ''}`
-        )
-      },
-      y: {
-        resolved: this.scaleTypes?.y || 'unknown', 
-        config: this.scaleConfigurations?.y?.config || {},
-        requirements: this.scaleRequirements.y.map(req => 
-          `${req.markId}:${req.type}(${req.priority})${Object.keys(req.config || {}).length > 0 ? '+config' : ''}`
-        )
-      }
-    };
-  }
+			// 	// Set new scale
+			// 	this.#yScaleInstance = neededYScale;
+			// 	this.#previousYScale = neededYScale;
+			// }
+			// Check if Y scale changed
+			if (this.#yScaleInstance !== neededYScale) {
+				// 3. Use proper method for cleanup
+				if (this.#yScaleInstance) {
+          this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
+					// scaleRegistry?.deregisterChart(this.#yScaleInstance, this.chartId);
+				}
 
-  // All interaction methods remain unchanged...
-  clearCurrentDataPoints = () => {
-    this.xScaleState.currentDataPoint = null;
-    this.yScaleState.currentDataPoint = null;
-  }
+				// Set new scale
+				this.#yScaleInstance = neededYScale;
+				this.#previousYScale = neededYScale;
+			}
+		});
 
-  updateCurrentDataPoints = (innerPoint) => {
-    if (this.scaleTypes?.y === 'linear') {
-      this.yScaleState.currentDataPoint = this.yScale?.scale.invert(innerPoint.y);
-    }
-    if (this.scaleTypes?.x === 'linear') {
-      this.xScaleState.currentDataPoint = this.xScale?.scale.invert(innerPoint.x);
-    }
-  }
+		// Effect: Notify GPU coordinator of scale mapping changes
+		$effect(() => {
+			const xScale = this.#xScaleInstance;
+			const yScale = this.#yScaleInstance;
 
-  resetZoom = (axes = { x: true, y: true }) => {
-    if (axes.x && this.scaleTypes?.x === 'linear') {
-      this.xScaleState.resetZoom();
-    }
-    if (axes.y && this.scaleTypes?.y === 'linear') {
-      this.yScaleState.resetZoom();
-    }
-  }
+			if (xScale?.id && yScale?.id && this.gpuCoordinator) {
+				const trySetMapping = () => {
+					try {
+						this.gpuCoordinator.setChartScaleMapping(this.chartId, {
+							xScaleId: xScale.id,
+							yScaleId: yScale.id
+						});
+					} catch (error) {
+						// Retry logic for race conditions
+						setTimeout(trySetMapping, 10);
+					}
+				};
+				trySetMapping();
+			}
+		});
+	}
 
-  // NEW: Accumulation-only methods (replace applyZoom, applyPanDomain)
-  accumulateZoom = (innerPoint, scaleFactor, doX, doY) => {
-    // console.log('accumulateZoom', scaleFactor)
-    if (doX && this.scaleTypes?.x === 'linear') {
-      const dataPoint = this.xScale.scale.invert(innerPoint.x);
-      this.xScaleState.accumulateZoom(dataPoint, scaleFactor);
-    }
-    if (doY && this.scaleTypes?.y === 'linear') {
-      const dataPoint = this.yScale.scale.invert(innerPoint.y);
-      this.yScaleState.accumulateZoom(dataPoint, scaleFactor);
-    }
-  }
+	// Getters
+	get xLabel() {
+		return this.config.xLabel;
+	}
 
+	get yLabel() {
+		return this.config.yLabel;
+	}
 
-  applyZoom = (innerPoint, scaleFactor, doX, doY) => {
-    if (doX && this.scaleTypes?.x === 'linear') {
-      const dataPoint = this.xScale.scale.invert(innerPoint.x);
-      this.xScaleState.accumulateZoom(dataPoint, scaleFactor);
-      this.xScaleState.applyZoomDomain(
-        this.xScale.scale.invert(innerPoint.x), 
-        scaleFactor, 
-        'x', 
-        this.layout.innerWidth
-      );
-    }
-    if (doY && this.scaleTypes?.y === 'linear') {
-      this.yScaleState.applyZoomDomain(
-        this.yScale.scale.invert(innerPoint.y), 
-        scaleFactor, 
-        'y', 
-        this.layout.innerHeight
-      );
-    }
-  }
-  
-  startPan = (initialScreenPos, activePanX, activePanY) => {
-    // Store the active flags for use during updates
-    this.activePanX = activePanX;
-    this.activePanY = activePanY;
-    
-    // Only create contexts for scales that can pan
-    if (activePanX && this.scaleTypes?.x === 'linear') {
-      const panContext = {
-        initialScreenPos,
-        initialDomain: [...this.xScaleState.domain.current],
-        screenToDataRatio: (this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0]) / this.layout.innerWidth,
-        domainWidth: this.xScaleState.domain.current[1] - this.xScaleState.domain.current[0],
-        screenDimension: this.layout.innerWidth,
-        axis: 'x', // ← Add this
-        lastScreenPos: { ...initialScreenPos }
-      };
-      this.xScaleState.setPanContext(panContext);
-    }
-    
-    if (activePanY && this.scaleTypes?.y === 'linear') {
-      const panContext = {
-        initialScreenPos,
-        initialDomain: [...this.yScaleState.domain.current],
-        screenToDataRatio: (this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0]) / this.layout.innerHeight,
-        domainWidth: this.yScaleState.domain.current[1] - this.yScaleState.domain.current[0],
-        screenDimension: this.layout.innerHeight,
-        axis: 'y',
-        lastScreenPos: { ...initialScreenPos }
-      };
-      this.yScaleState.setPanContext(panContext);
-    }
-  }
+	get layout() {
+		return this.config.layout;
+	}
 
-  // endPan and updatePanPosition remain the same
-  endPan = () => {
-    this.activePanX = false;
-    this.activePanY = false;
+	get chartId() {
+		return this.config.layout.chartId;
+	}
 
-    if (this.scaleTypes?.x === 'linear') {
-      // this.xScaleState.clearPanContext();
-      this.xScaleState.endPan();
-    }
-    if (this.scaleTypes?.y === 'linear') {
-      // this.yScaleState.clearPanContext();
-      this.yScaleState.endPan();
-    }
-  }
+	// Derived scale configurations
+	scaleConfigurations = $derived.by(() => {
+		try {
+			return {
+				x: resolveScaleConfiguration(this.scaleRequirements.x),
+				y: resolveScaleConfiguration(this.scaleRequirements.y)
+			};
+		} catch (error) {
+			console.error('Scale config error', error);
+			return { x: { type: 'linear', config: {} }, y: { type: 'linear', config: {} } };
+		}
+	});
 
-  updatePanPosition = (screenX, screenY) => {
-    if (this.activePanX && this.scaleTypes?.x === 'linear') {
-      this.xScaleState.updatePanPosition(screenX, 0); // Y coordinate irrelevant for X scale
-    }
-    if (this.activePanY && this.scaleTypes?.y === 'linear') {
-      this.yScaleState.updatePanPosition(0, screenY); // X coordinate irrelevant for Y scale
-    }
-  }
+	scaleTypes = $derived.by(() => ({
+		x: this.scaleConfigurations?.x?.type || 'linear',
+		y: this.scaleConfigurations?.y?.type || 'linear'
+	}));
 
-  updatePanPositionWithCoalescing(coalescedEvents) {
-    console.log('Raw coalesced events:', coalescedEvents.map(e => ({
-      offsetX: e.offsetX,
-      offsetY: e.offsetY,
-      clientX: e.clientX,
-      clientY: e.clientY
-    })));
-    
-    // Route coalesced events to appropriate scales with filtered coordinates
-    if (this.activePanX && this.scaleTypes?.x === 'linear') {
-      // Filter to only X coordinates for X scale
-      const xEvents = coalescedEvents.map(event => ({
-        offsetX: event.offsetX,
-        offsetY: 0,
-        timeStamp: event.timeStamp
-      }));
-      this.xScaleState.updatePanPositionWithCoalescing(xEvents);
-    }
-    if (this.activePanY && this.scaleTypes?.y === 'linear') {
-      // Filter to only Y coordinates for Y scale  
-      const yEvents = coalescedEvents.map(event => ({
-        offsetX: 0,
-        offsetY: event.offsetY,
-        timeStamp: event.timeStamp
-      }));
-      this.yScaleState.updatePanPositionWithCoalescing(yEvents);
-    }
-  }
+	// Expose scale instances as getters (now using $state)
+	get xScaleState() {
+		return this.#xScaleInstance;
+	}
 
-  xCategoryPositions = $derived.by(() => {
-    if (this.scaleTypes?.x !== 'band' || !this.xScale?.scale || !this.isReady) {  // ✅ Fixed
-      return null;
-    }
-    
-    const domain = this.xScaleState.effectiveDomain;
-    if (!domain || domain.length === 0) return null;
-    
-    const positions = domain.map(category => this.xScale.scale(category));
-    
-    console.log(`📍 Pre-computed ${domain.length} x-category positions for "${this.xLabel}":`, {
-      domain: domain.slice(0, 5),
-      positions: positions.slice(0, 5).map(p => Math.round(p)),
-      bandwidth: this.xScale.scale.bandwidth(), 
-      chartWidth: this.innerWidth  // ✅ Direct property
-    });
-    
-    return new Float32Array(positions);
-  });
-    
-  yCategoryPositions = $derived.by(() => {
-    // console.log('🔍 yCategoryPositions computation triggered:', {
-    //   scaleType: this.scaleTypes?.y,
-    //   yScale: !!this.yScale?.scale,
-    //   layoutReady: this.layout?.isReady,  // ← Check this property path
-    //   innerHeight: this.layout?.innerHeight,
-    //   yScaleState: !!this.yScaleState,
-    //   effectiveDomain: this.yScaleState?.effectiveDomain,
-    //   domainLength: this.yScaleState?.effectiveDomain?.length || 0
-    // });
+	get yScaleState() {
+		return this.#yScaleInstance;
+	}
 
-    // Your existing conditions
-    const scaleTypeCheck = this.scaleTypes?.y === 'band';
-    const scaleAvailable = !!this.yScale?.scale;
-    const layoutReady = !!this.layout?.isReady;  // ← This might be the issue
-    
-    // console.log('🔍 yCategoryPositions conditions:', {
-    //   scaleTypeCheck,
-    //   scaleAvailable,
-    //   layoutReady,  // ← This is probably false
-    //   allConditionsMet: scaleTypeCheck && scaleAvailable && layoutReady
-    // });
+	// Base D3 scales
+	baseXScale = $derived(
+		this.layout.isReady && this.#xScaleInstance
+			? this.#xScaleInstance.getBaseScale('x', this.layout.innerWidth)
+			: null
+	);
 
-    if (!scaleTypeCheck || !scaleAvailable || !layoutReady) {
-      console.log('❌ yCategoryPositions skipped - conditions not met');
-      return null;
-    }
-    
-    const domain = this.yScaleState.effectiveDomain;
-    if (!domain || domain.length === 0) {
-      console.log('❌ yCategoryPositions skipped - empty domain');
-      return null;
-    }
-    
-    const positions = domain.map(category => this.yScale.scale(category));
-    
-    // console.log(`📍 Pre-computed ${domain.length} y-category positions:`, {
-    //   domain: Array.from(domain),
-    //   positions: positions.map(p => Math.round(p)),
-    //   bandwidth: this.yScale.scale.bandwidth(),
-    //   chartHeight: this.layout?.innerHeight
-    // });
-    
-    return new Float32Array(positions);
-  });
+	baseYScale = $derived(
+		this.layout.isReady && this.#yScaleInstance
+			? this.#yScaleInstance.getBaseScale('y', this.layout.innerHeight)
+			: null
+	);
 
-  categoryPositionsReady = $derived.by(() => {
-    const xReady = this.scaleTypes?.x !== 'band' || this.xCategoryPositions !== null;
-    const yReady = this.scaleTypes?.y !== 'band' || this.yCategoryPositions !== null;
-    return xReady && yReady;
-  }); 
+	// D3 scales with current domains
+	get xScale() {
+		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
+		this.#xScaleInstance.domainForReactivity; // Register dependency
+		return this.#xScaleInstance.updateScaleDomain(this.baseXScale);
+	}
 
-  // Pre-computed bandwidth for hot path access
-  xBandwidth = $derived.by(() => {
-    if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) {
-      return 0;
-    }
-    return this.baseXScale.bandwidth();
-  });
+	get yScale() {
+		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
+		this.#yScaleInstance.domainForReactivity; // Register dependency
+		return this.#yScaleInstance.updateScaleDomain(this.baseYScale);
+	}
 
-  yBandwidth = $derived.by(() => {
-    if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) {
-      return 0;
-    }
-    return this.baseYScale.bandwidth();
-  });
+	get xTargetScale() {
+		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
+		return this.#xScaleInstance.updateScaleDomain(this.baseXScale, false);
+	}
 
+	get yTargetScale() {
+		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
+		return this.#yScaleInstance.updateScaleDomain(this.baseYScale, false);
+	}
 
-  getContextData() {
-    const coordinator = this;
-    
-    return {
-      get xScale() { return coordinator.xScale?.scale; },
-      get yScale() { return coordinator.yScale?.scale; },
-      get xTargetScale() { return coordinator.xTargetScale?.scale; },
-      get yTargetScale() { return coordinator.yTargetScale?.scale; },
-      
-      get xLabel() { return coordinator.xLabel; },
-      get yLabel() { return coordinator.yLabel; },
-      
-      get currentXDataPoint() { return coordinator.currentXDataPoint; },
-      get currentYDataPoint() { return coordinator.currentYDataPoint; },
-      get currentXScreenPoint() { return coordinator.currentXScreenPoint; },
-      get currentYScreenPoint() { return coordinator.currentYScreenPoint; },
-      
-      get xScaleState() { return coordinator.xScaleState; },
-      get yScaleState() { return coordinator.yScaleState; },
-      
-      get scaleTypes() { return coordinator.scaleTypes; },
-      get scalesReady() { return coordinator.scalesReady; },
-      get active() { return coordinator.active; },
-      
-      get scaleConfigurations() { return coordinator.scaleConfigurations; },
-      
-      get xCategoryPositions() { return coordinator.xCategoryPositions; },
-      // get yCategoryPositions() { return coordinator.yCategoryPositions; },
-      get yCategoryPositions() { return coordinator.yCategoryPositions; },
-      get categoryPositionsReady() { return coordinator.categoryPositionsReady; },
-      get xBandwidth() { return coordinator.xBandwidth; },
-      get yBandwidth() { return coordinator.yBandwidth; },
+	// Derived properties
+	currentXDataPoint = $derived(this.#xScaleInstance?.currentDataPoint);
+	currentYDataPoint = $derived(this.#yScaleInstance?.currentDataPoint);
+	currentXScreenPoint = $derived(this.xScale?.(this.currentXDataPoint));
+	currentYScreenPoint = $derived(this.yScale?.(this.currentYDataPoint));
+	scalesReady = $derived(this.#xScaleInstance?.ready && this.#yScaleInstance?.ready);
 
-      registerScaleType: coordinator.registerScaleType,
-      unregisterScaleType: coordinator.unregisterScaleType,
-      getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary
-    };
-  }
+	// Scale requirement registration
+	registerScaleType = (
+		dimension,
+		type,
+		priority = SCALE_PRIORITIES.PREFER,
+		markId = 'unknown',
+		config = {}
+	) => {
+		const requirements = this.scaleRequirements[dimension];
+		const existing = requirements.find(
+			(req) =>
+				req.type === type &&
+				req.priority === priority &&
+				req.markId === markId &&
+				JSON.stringify(req.config) === JSON.stringify(config)
+		);
+
+		if (!existing) {
+			requirements.push({ type, priority, markId, config });
+			this.scaleRequirements[dimension] = [...requirements];
+		}
+	};
+
+	unregisterScaleType = (dimension, markId) => {
+		const requirements = this.scaleRequirements[dimension];
+		const filtered = requirements.filter((req) => req.markId !== markId);
+		if (filtered.length !== requirements.length) {
+			this.scaleRequirements[dimension] = filtered;
+		}
+	};
+
+	getScaleRequirementsSummary = () => {
+		return {
+			x: this.scaleRequirements.x,
+			y: this.scaleRequirements.y,
+			resolvedTypes: this.scaleTypes
+		};
+	};
+
+	// Interaction methods
+	clearCurrentDataPoints = () => {
+		if (this.#xScaleInstance) this.#xScaleInstance.currentDataPoint = null;
+		if (this.#yScaleInstance) this.#yScaleInstance.currentDataPoint = null;
+	};
+
+	updateCurrentDataPoints = (innerPoint) => {
+		if (this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			this.#yScaleInstance.currentDataPoint = this.#yScaleInstance.invertScreenToData(
+				innerPoint.y,
+				this.layout.innerHeight,
+				true // isYAxis
+			);
+		}
+		if (this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			this.#xScaleInstance.currentDataPoint = this.#xScaleInstance.invertScreenToData(
+				innerPoint.x,
+				this.layout.innerWidth,
+				false
+			);
+		}
+	};
+
+	resetZoom = (resetX = true, resetY = true) => {
+		if (resetX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			this.#xScaleInstance.resetZoom();
+		}
+		if (resetY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			this.#yScaleInstance.resetZoom();
+		}
+	};
+
+	accumulateZoom = (innerPoint, scaleFactor, doX, doY) => {
+		if (doX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			const dataPoint = this.#xScaleInstance.invertScreenToData(
+				innerPoint.x,
+				this.layout.innerWidth,
+				false
+			);
+			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
+		}
+		if (doY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			const dataPoint = this.#yScaleInstance.invertScreenToData(
+				innerPoint.y,
+				this.layout.innerHeight,
+				true
+			);
+			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
+		}
+	};
+
+	applyZoom = (innerPoint, scaleFactor, doX, doY) => {
+		if (doX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			const dataPoint = this.#xScaleInstance.invertScreenToData(
+				innerPoint.x,
+				this.layout.innerWidth,
+				false
+			);
+			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
+			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', this.layout.innerWidth);
+		}
+		if (doY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			const dataPoint = this.#yScaleInstance.invertScreenToData(
+				innerPoint.y,
+				this.layout.innerHeight,
+				true
+			);
+			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
+			this.#yScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'y', this.layout.innerHeight);
+		}
+	};
+
+	startPan = (x, y, activePanX, activePanY) => {
+		this.activePanX = activePanX;
+		this.activePanY = activePanY;
+
+		// X Axis Setup
+		if (activePanX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			const currentDomain = this.#xScaleInstance.domain.current;
+
+			this._xPanContext.initialScreenPos = x;
+			this._xPanContext.initialDomain[0] = currentDomain[0];
+			this._xPanContext.initialDomain[1] = currentDomain[1];
+			this._xPanContext.screenToDataRatio =
+				(currentDomain[1] - currentDomain[0]) / this.layout.innerWidth;
+			this._xPanContext.domainWidth = currentDomain[1] - currentDomain[0];
+			this._xPanContext.screenDimension = this.layout.innerWidth;
+			this._xPanContext.lastScreenPos = x;
+
+			this.#xScaleInstance.setPanContext(this._xPanContext);
+		}
+
+		// Y Axis Setup
+		if (activePanY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			const currentDomain = this.#yScaleInstance.domain.current;
+
+			this._yPanContext.initialScreenPos = y;
+			this._yPanContext.initialDomain[0] = currentDomain[0];
+			this._yPanContext.initialDomain[1] = currentDomain[1];
+			this._yPanContext.screenToDataRatio =
+				(currentDomain[1] - currentDomain[0]) / this.layout.innerHeight;
+			this._yPanContext.domainWidth = currentDomain[1] - currentDomain[0];
+			this._yPanContext.screenDimension = this.layout.innerHeight;
+			this._yPanContext.lastScreenPos = y;
+
+			this.#yScaleInstance.setPanContext(this._yPanContext);
+		}
+	};
+
+	endPan = () => {
+		this.activePanX = false;
+		this.activePanY = false;
+
+		if (this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			this.#xScaleInstance.endPan();
+		}
+		if (this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			this.#yScaleInstance.endPan();
+		}
+	};
+
+	updatePanPosition = (screenX, screenY) => {
+		if (this.activePanX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+			this.#xScaleInstance.updatePanPosition(screenX, 0);
+		}
+		if (this.activePanY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+			this.#yScaleInstance.updatePanPosition(0, screenY);
+		}
+	};
+
+	// Band scale support
+	xCategoryPositions = $derived.by(() => {
+		if (this.scaleTypes?.x !== 'band' || !this.xScale || !this.layout.isReady) return null;
+		const domain = this.#xScaleInstance?.effectiveDomain;
+		if (!domain || domain.length === 0) return null;
+		return new Float32Array(domain.map((d) => this.xScale(d)));
+	});
+
+	yCategoryPositions = $derived.by(() => {
+		if (this.scaleTypes?.y !== 'band' || !this.yScale || !this.layout.isReady) return null;
+		const domain = this.#yScaleInstance?.effectiveDomain;
+		if (!domain || domain.length === 0) return null;
+		return new Float32Array(domain.map((d) => this.yScale(d)));
+	});
+
+	categoryPositionsReady = $derived.by(() => {
+		const xReady = this.scaleTypes?.x !== 'band' || this.xCategoryPositions !== null;
+		const yReady = this.scaleTypes?.y !== 'band' || this.yCategoryPositions !== null;
+		return xReady && yReady;
+	});
+
+	xBandwidth = $derived.by(() => {
+		if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) return 0;
+		return this.baseXScale.bandwidth();
+	});
+
+	yBandwidth = $derived.by(() => {
+		if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) return 0;
+		return this.baseYScale.bandwidth();
+	});
+
+	// Context data for child components
+	getContextData() {
+		const coordinator = this;
+		return {
+			get xScale() {
+				return coordinator.xScale;
+			},
+			get yScale() {
+				return coordinator.yScale;
+			},
+			get xTargetScale() {
+				return coordinator.xTargetScale;
+			},
+			get yTargetScale() {
+				return coordinator.yTargetScale;
+			},
+			get xLabel() {
+				return coordinator.xLabel;
+			},
+			get yLabel() {
+				return coordinator.yLabel;
+			},
+			get currentXDataPoint() {
+				return coordinator.currentXDataPoint;
+			},
+			get currentYDataPoint() {
+				return coordinator.currentYDataPoint;
+			},
+			get currentXScreenPoint() {
+				return coordinator.currentXScreenPoint;
+			},
+			get currentYScreenPoint() {
+				return coordinator.currentYScreenPoint;
+			},
+			get xScaleState() {
+				return coordinator.xScaleState;
+			},
+			get yScaleState() {
+				return coordinator.yScaleState;
+			},
+			get scaleTypes() {
+				return coordinator.scaleTypes;
+			},
+			get scalesReady() {
+				return coordinator.scalesReady;
+			},
+			get active() {
+				return coordinator.active;
+			},
+			get scaleConfigurations() {
+				return coordinator.scaleConfigurations;
+			},
+			get xCategoryPositions() {
+				return coordinator.xCategoryPositions;
+			},
+			get yCategoryPositions() {
+				return coordinator.yCategoryPositions;
+			},
+			get categoryPositionsReady() {
+				return coordinator.categoryPositionsReady;
+			},
+			get xBandwidth() {
+				return coordinator.xBandwidth;
+			},
+			get yBandwidth() {
+				return coordinator.yBandwidth;
+			},
+			registerScaleType: coordinator.registerScaleType,
+			unregisterScaleType: coordinator.unregisterScaleType,
+			getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary
+		};
+	}
+
+	destroy() {
+		console.log(`💥 ChartScales destroying for chart ${this.chartId}`);
+
+		// const scaleRegistry = getContext('scale-registry');
+		if (this.#scaleRegistry) {
+			this.#scaleRegistry.removeChartUsage(this.chartId);
+			// Remove this chart from all scales it's using
+			// if (this.#xScaleInstance && scaleRegistry.scaleUsage.has(this.#xScaleInstance)) {
+			// 	scaleRegistry.scaleUsage.get(this.#xScaleInstance).delete(this.chartId);
+			// }
+			// if (this.#yScaleInstance && scaleRegistry.scaleUsage.has(this.#yScaleInstance)) {
+			// 	scaleRegistry.scaleUsage.get(this.#yScaleInstance).delete(this.chartId);
+			// }
+		}
+
+		this.#xScaleInstance = null;
+		this.#yScaleInstance = null;
+		this.#previousXScale = null;
+		this.#previousYScale = null;
+	}
 }

@@ -9,7 +9,7 @@ export { BandScaleState } from './BandScaleState.svelte.js'
 export { 
   SCALE_PRIORITIES, 
   resolveScaleType,
-  resolveScaleConfiguration  // NEW export
+  resolveScaleConfiguration
 } from './ScalePriorities.js';
 
 // NEW exports for extensible configuration

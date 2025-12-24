@@ -1,470 +1,567 @@
 <script>
-  import { setContext, onDestroy, untrack, onMount } from 'svelte';
-  import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
-  import { ChartScales } from '$lib/scales/ChartScales.svelte';
-  import { getGPUContext } from '$lib/gpu';
+	import { setContext, onDestroy, untrack, onMount, getContext } from 'svelte';
+	import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
+	import { ChartScales } from '$lib/scales/ChartScales.svelte';
+	import { getGPUContext } from '$lib/gpu';
 
-  let {
-    xLabel,
-    yLabel,
-    background,
-    foreground,
-    canvas,
-    canvasComponents
-  } = $props();
+	let { xLabel, yLabel, background, foreground, canvas, canvasComponents } = $props();
 
-  // Create layout and scale coordinator
-  const layout = new ChartLayout({ 
-    margin: { top: 30, right: 50, bottom: 35, left: 75 }, 
-    height: 250 
-  });
+	const pointerBuffer = { x: 0, y: 0 };
+	const innerPointBuffer = { x: 0, y: 0 };
+	// If layout.getActiveAxes returns an object, we need to refactor that too,
 
-  const gpuCoordinator = getGPUContext();
+	// Create layout and scale coordinator
+	const layout = new ChartLayout({
+		margin: { top: 30, right: 50, bottom: 35, left: 75 },
+		height: 250
+	});
 
-  // TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
-  let scales = $derived(new ChartScales({
-    xLabel,
-    yLabel,
-    layout,
-    gpuCoordinator
-  }));
+  const scaleRegistry = getContext('scale-registry'); 
+	const gpuCoordinator = getGPUContext();
 
+	// TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
+	// let scales = $derived(
+	// 	new ChartScales({
+	// 		xLabel,
+	// 		yLabel,
+	// 		layout,
+	// 		gpuCoordinator
+	// 	})
+	// );
+	let scales = $state(null);
 
-  $effect(() => {
-      console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
-    });
+	$effect(() => {
+		// Explicitly track dependencies
+		const x = xLabel;
+		const y = yLabel;
+		// layout and gpuCoordinator are objects, usually stable, but we track them if they change
+		const l = layout;
+		const g = gpuCoordinator;
 
-    $effect(() => {
-    const xState = scales.xScaleState;
-    const yState = scales.yScaleState;
-    
-    console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
-      xStateId: xState?.name,
-      yStateId: yState?.name,
-      xStateObject: xState,
-      yStateObject: yState,
-      // Check if it's the same object reference
-      xStateSame: window.lastXState === xState,
-      yStateSame: window.lastYState === yState
-    });
-    
-    // Store for comparison (dev only)
-    if (typeof window !== 'undefined') {
-      window.lastXState = xState;
-      window.lastYState = yState;
-    }
-  });
+		// Create the new instance
+		// Note: We use untrack around the constructor if we don't want the constructor's
+		// internal reads to trigger this effect again (though usually safe here).
+		const newScales = new ChartScales({
+			xLabel: x,
+			yLabel: y,
+			layout: l,
+			gpuCoordinator: g,
+      scaleRegistry: scaleRegistry 
+		});
 
-  $effect(() => {
-    const xScale = chartContext.xScaleState;
-    const yScale = chartContext.yScaleState;
-    
-    if (xScale && yScale && layout.isReady) {
-      // For test data, manually mark scales as ready
-      if (!xScale.ready) {
-        xScale.setReady?.();
-        console.log('Manually marked X scale ready');
-      }
-      if (!yScale.ready) {
-        yScale.setReady?.();
-        console.log('Manually marked Y scale ready');
-      }
-      
-      // Then trigger render
-      gpuCoordinator.invalidateChart(layout.chartId);
-    }
-  });
+		scales = newScales;
 
-  // $inspect('is ready', layout.isReady)
+		// 3. CLEANUP FUNCTION (The Fix)
+		// Svelte runs this function before re-running the effect or when the component destroys.
+		return () => {
+			if (newScales) {
+				console.log(`Destroying ChartScales for ${x} / ${y}`);
+				newScales.destroy();
+			}
+		};
+	});
 
-  const chartContext = {
-    // Layout properties and methods
-    get width() { return layout.width; },
-    get height() { return layout.height; },
-    get innerWidth() { return layout.innerWidth; },
-    get innerHeight() { return layout.innerHeight; },
-    get margin() { return layout.margin; },
-    get chartId() { return layout.chartId; },
-    get clipPathId() { return layout.clipPathId; },
-    get clipPathUrl() { return layout.clipPathUrl; },
-    get isReady() { return layout.isReady; },
-    get innerTransform() { return layout.innerTransform; },
-    get dimensions() { return layout.dimensions; },
-    
-    // Layout methods
-    updateWidth: layout.updateWidth.bind(layout),
-    updateHeight: layout.updateHeight.bind(layout),
-    updateMargin: layout.updateMargin.bind(layout),
-    toInnerCoordinates: layout.toInnerCoordinates.bind(layout),
-    toScreenCoordinates: layout.toScreenCoordinates.bind(layout),
-    isWithinInnerBounds: layout.isWithinInnerBounds.bind(layout),
-    getActiveAxes: layout.getActiveAxes.bind(layout),
-    reset: layout.reset.bind(layout),
-    getDebugInfo: layout.getDebugInfo.bind(layout),
+	$effect(() => {
+		console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
+	});
 
-    // Scale coordinator properties - reactive to scales changes
-    get xScale() { return scales.xScale?.scale; },
-    get yScale() { return scales.yScale?.scale; },
-    get xTargetScale() { return scales.xTargetScale?.scale; },
-    get yTargetScale() { return scales.yTargetScale?.scale; },
-    
-    get xLabel() { return scales.xLabel; },
-    get yLabel() { return scales.yLabel; },
-    
-    get currentXDataPoint() { return scales.currentXDataPoint; },
-    get currentYDataPoint() { return scales.currentYDataPoint; },
-    get currentXScreenPoint() { return scales.currentXScreenPoint; },
-    get currentYScreenPoint() { return scales.currentYScreenPoint; },
-    
-    get xScaleState() { return scales.xScaleState; },
-    get yScaleState() { return scales.yScaleState; },
-    
-    get scaleTypes() { return scales.scaleTypes; },
-    get scalesReady() { return scales.scalesReady; },
-    get active() { return scales.active; },
-    get xCategoryPositions() { return scales.xCategoryPositions; },
-    get yCategoryPositions() { return scales.yCategoryPositions; },
-    get categoryPositionsReady() { return scales.categoryPositionsReady; },
-    get xBandwidth() { return scales.xBandwidth; },
-    get yBandwidth() { return scales.yBandwidth; },
-    
-    // Scale coordinator methods
-    registerScaleType: (dimension, type, priority, markId) => scales.registerScaleType(dimension, type, priority, markId),
-    unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
-    getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
-  };
+	$effect(() => {
+		const xState = scales.xScaleState;
+		const yState = scales.yScaleState;
 
-  setContext('chart', chartContext);
-  
-  // Interaction state
-  let svg = $state();
-  let isPanning = $state(false);
-  let activePanX = $state(false);
-  let activePanY = $state(false);
-  let panningAnchorPoint = { x: 0, y: 0 };
-  
-  // Touch/pinch zoom state
-  let initialTouchDistance = $state(0);
-  let isZooming = $state(false);
+		console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
+			xStateId: xState?.name,
+			yStateId: yState?.name,
+			xStateObject: xState,
+			yStateObject: yState,
+			// Check if it's the same object reference
+			xStateSame: window.lastXState === xState,
+			yStateSame: window.lastYState === yState
+		});
 
-  // $effect.pre(() => {
-  //   const timestamp = performance.now();
-  //   // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
-    
-  //   void scales.xScaleState?.domain?.current;
-  //   void scales.yScaleState?.domain?.current;
+		// Store for comparison (dev only)
+		if (typeof window !== 'undefined') {
+			window.lastXState = xState;
+			window.lastYState = yState;
+		}
+	});
 
-  //   untrack(() => {
-  //       if (layout.isReady) {
-  //         console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
-  //         gpuCoordinator.invalidateChart(layout.chartId);
-  //       }
-  //   });
-  // });
-  
-  // ZOOM HANDLERS
-  function handleWheel(event) {
-    // console.log(`🖱️ Wheel event at ${performance.now().toFixed(2)}ms`);
+	$effect(() => {
+		const xScale = chartContext.xScaleState;
+		const yScale = chartContext.yScaleState;
 
-    event.preventDefault();
-    const point = { x: event.offsetX, y: event.offsetY };
-    const { x, y, innerPoint } = layout.getActiveAxes(point);
-    
-    const scaleFactor = event.deltaY < 0 
-      ? 1 + Math.abs(event.deltaY) * 0.0025 
-      : 1 - Math.abs(event.deltaY) * 0.0025;
-    
-    // scales.applyZoom(innerPoint, scaleFactor, x, y);
-    scales.accumulateZoom(innerPoint, scaleFactor, x, y);
+		if (xScale && yScale && layout.isReady) {
+			// For test data, manually mark scales as ready
+			if (!xScale.ready) {
+				xScale.setReady?.();
+				console.log('Manually marked X scale ready');
+			}
+			if (!yScale.ready) {
+				yScale.setReady?.();
+				console.log('Manually marked Y scale ready');
+			}
 
-    // console.log(`🎯 Scale update triggered at ${performance.now().toFixed(2)}ms`);
+			// Then trigger render
+			gpuCoordinator.invalidateChart(layout.chartId);
+		}
+	});
 
-  }
-  
-  function handleDoubleClick(event) {
-    event.preventDefault();
-    const point = { x: event.offsetX, y: event.offsetY };
-    const { x, y } = layout.getActiveAxes(point);
-    scales.resetZoom({ x, y });
-  }
-  
-  // TOUCH HANDLERS
-  function getTouchDistance(touches) {
-    if (touches.length < 2) return 0;
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-  
-  function handleTouchStart(event) {
-    if (event.touches.length === 2) {
-      event.preventDefault();
-      isZooming = true;
-      initialTouchDistance = getTouchDistance(event.touches);
-      
-      const point = { x: event.offsetX, y: event.offsetY };
-      const { x, y } = layout.getActiveAxes(point);
-      activePanX = x;
-      activePanY = y;
-    }
-  }
-  
-  function handleTouchMove(event) {
-    if (!isZooming || event.touches.length !== 2) return;
-    
-    const currentDistance = getTouchDistance(event.touches);
-    const scaleFactor = currentDistance / initialTouchDistance;
-    
-    if (Math.abs(scaleFactor - 1) > 0.01) {
-      const point = { x: event.offsetX, y: event.offsetY };
-      const { innerPoint } = layout.getActiveAxes(point);
-      
-      scales.applyZoom(innerPoint, scaleFactor, activePanX, activePanY);
-      initialTouchDistance = currentDistance;
-    }
-  }
-  
-  function handleTouchEnd() {
-    isZooming = false;
-    isPanning = false;
-    activePanX = false;
-    activePanY = false;
-  }
+	// $inspect('is ready', layout.isReady)
 
-  let panContext;
+	const chartContext = {
+		// Layout properties and methods
+		get width() {
+			return layout.width;
+		},
+		get height() {
+			return layout.height;
+		},
+		get innerWidth() {
+			return layout.innerWidth;
+		},
+		get innerHeight() {
+			return layout.innerHeight;
+		},
+		get margin() {
+			return layout.margin;
+		},
+		get chartId() {
+			return layout.chartId;
+		},
+		get clipPathId() {
+			return layout.clipPathId;
+		},
+		get clipPathUrl() {
+			return layout.clipPathUrl;
+		},
+		get isReady() {
+			return layout.isReady;
+		},
+		get innerTransform() {
+			return layout.innerTransform;
+		},
+		get dimensions() {
+			return layout.dimensions;
+		},
 
-  // PAN HANDLERS
-  function handlePointerDown(event) {
-    event.preventDefault();
-    
-    const point = { x: event.offsetX, y: event.offsetY };
-    const { x, y, innerPoint } = layout.getActiveAxes(point);
-    
-    // Only allow panning on linear scales
-    activePanX = x && scales.scaleTypes?.x === 'linear';
-    activePanY = y && scales.scaleTypes?.y === 'linear';
-  
-    // Only proceed if at least one axis can pan
-    if (!activePanX && !activePanY) {
-      return;
-    }
-    isPanning = true;
+		// Layout methods
+		// updateWidth: layout.updateWidth.bind(layout),
+		// updateHeight: layout.updateHeight.bind(layout),
+		// toInnerCoordinates: layout.toInnerCoordinates.bind(layout),
+		// toScreenCoordinates: layout.toScreenCoordinates.bind(layout),
+		// isWithinInnerBounds: layout.isWithinInnerBounds.bind(layout),
+		// getActiveAxes: layout.getActiveAxes.bind(layout),
+		// reset: layout.reset.bind(layout),
+		// getDebugInfo: layout.getDebugInfo.bind(layout),
 
-    scales.startPan({ x: event.offsetX, y: event.offsetY }, activePanX, activePanY);
-  
-    scales.clearCurrentDataPoints();
-    event.target.setPointerCapture?.(event.pointerId);
-  }
+		updateMargin: layout.updateMargin.bind(layout),
+		updateWidth: (w) => layout.updateWidth(w),
+		updateHeight: (h) => layout.updateHeight(h),
+		updateMargin: (m) => layout.updateMargin(m),
+		toInnerCoordinates: (p) => layout.toInnerCoordinates(p),
+		toScreenCoordinates: (p) => layout.toScreenCoordinates(p),
+		isWithinInnerBounds: (p) => layout.isWithinInnerBounds(p),
+		// getActiveAxes: (p) => layout.getActiveAxes.bind(p),
+		// getActiveAxes: (p) => layout.getActiveAxes.bind(p),
+		getActiveAxes: (p) => layout.getActiveAxes(p),
+		reset: () => layout.reset(),
+		getDebugInfo: () => layout.getDebugInfo(),
 
-  function handlePointerMove(event) {
-    // Single consolidated handler
-    if (isPanning) {
-      const coalescedEvents = event.getCoalescedEvents?.() || [event];
-      scales.updatePanPositionWithCoalescing(coalescedEvents);
-    } else {
-      // Check if we're in the interactive inner area
-      const point = { x: event.offsetX, y: event.offsetY };
-      if (layout.isWithinInnerBounds(point)) {
-        const innerPoint = layout.toInnerCoordinates(point);
-        scales.updateCurrentDataPoints(innerPoint);
-      }
-    }
-  }
-  //   if (!isPanning) return;
+		// Scale coordinator properties - reactive to scales changes
+		get xScale() {
+			// return scales.xScale?.scale;
+			return scales.xScale;
+		},
+		get yScale() {
+			// return scales.yScale?.scale;
+			return scales.yScale;
+		},
+		get xTargetScale() {
+			// return scales.xTargetScale?.scale;
+			return scales.xTargetScale;
+		},
+		get yTargetScale() {
+			// return scales.yTargetScale?.scale;
+			return scales.yTargetScale;
+		},
 
-  //   // Get coalesced events for higher resolution input data
-  //   const coalescedEvents = event.getCoalescedEvents?.() || [event];
-  
-  //   // Pass all coalesced events to the scales coordinator
-  //   scales.updatePanPositionWithCoalescing(coalescedEvents);
-    
-  //   // scales.updatePanPosition(event.offsetX, event.offsetY);    
-  // }
+		get xLabel() {
+			return scales.xLabel;
+		},
+		get yLabel() {
+			return scales.yLabel;
+		},
 
-  function handlePointerUp(event) {
-    isPanning = false;
-    activePanX = false;
-    activePanY = false;
-    
-    event.target.releasePointerCapture?.(event.pointerId);
-    scales.endPan();
-  }
+		get currentXDataPoint() {
+			return scales.currentXDataPoint;
+		},
+		get currentYDataPoint() {
+			return scales.currentYDataPoint;
+		},
+		get currentXScreenPoint() {
+			return scales.currentXScreenPoint;
+		},
+		get currentYScreenPoint() {
+			return scales.currentYScreenPoint;
+		},
 
-  function handleInnerMouseEnter() {
-    scales.active = true;
-  }
+		get xScaleState() {
+			return scales.xScaleState;
+		},
+		get yScaleState() {
+			return scales.yScaleState;
+		},
 
-  function handleInnerMouseLeave() {
-    scales.clearCurrentDataPoints();
-    scales.active = false;
-  }
+		get scaleTypes() {
+			return scales.scaleTypes;
+		},
+		get scalesReady() {
+			return scales.scalesReady;
+		},
+		get active() {
+			return scales.active;
+		},
+		get xCategoryPositions() {
+			return scales.xCategoryPositions;
+		},
+		get yCategoryPositions() {
+			return scales.yCategoryPositions;
+		},
+		get categoryPositionsReady() {
+			return scales.categoryPositionsReady;
+		},
+		get xBandwidth() {
+			return scales.xBandwidth;
+		},
+		get yBandwidth() {
+			return scales.yBandwidth;
+		},
 
-  function handleInnerMouseMove(event) {
-    const innerPoint = layout.toInnerCoordinates({ x: event.offsetX, y: event.offsetY });
-    scales.updateCurrentDataPoints(innerPoint);
-  }
+		// Scale coordinator methods
+		registerScaleType: (dimension, type, priority, markId) =>
+			scales.registerScaleType(dimension, type, priority, markId),
+		unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
+		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
+	};
 
-  let testRenderLoop;
+	setContext('chart', chartContext);
+
+	// Interaction state
+	let svg = $state();
+	let isPanning = $state(false);
+	let activePanX = $state(false);
+	let activePanY = $state(false);
+	let panningAnchorPoint = { x: 0, y: 0 };
+
+	// Touch/pinch zoom state
+	let initialTouchDistance = $state(0);
+	let isZooming = $state(false);
+
+	// $effect.pre(() => {
+	//   const timestamp = performance.now();
+	//   // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
+
+	//   void scales.xScaleState?.domain?.current;
+	//   void scales.yScaleState?.domain?.current;
+
+	//   untrack(() => {
+	//       if (layout.isReady) {
+	//         console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
+	//         gpuCoordinator.invalidateChart(layout.chartId);
+	//       }
+	//   });
+	// });
+
+	// ZOOM HANDLERS
+	function handleWheel(event) {
+		event.preventDefault();
+
+		pointerBuffer.x = event.offsetX;
+		pointerBuffer.y = event.offsetY;
+
+		const { x, y, innerPoint } = layout.getActiveAxes(pointerBuffer);
+
+		const scaleFactor =
+			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
+
+		scales.accumulateZoom(innerPoint, scaleFactor, x, y);
+	}
+
+	function handleDoubleClick(event) {
+		event.preventDefault();
+		pointerBuffer.x = event.offsetX;
+		pointerBuffer.y = event.offsetY;
+
+		const { x, y } = layout.getActiveAxes(pointerBuffer);
+
+		scales.resetZoom(x, y);
+	}
+
+	// TOUCH HANDLERS
+	// function getTouchDistance(touches) {
+	// 	if (touches.length < 2) return 0;
+	// 	const dx = touches[0].clientX - touches[1].clientX;
+	// 	const dy = touches[0].clientY - touches[1].clientY;
+	// 	return Math.sqrt(dx * dx + dy * dy);
+	// }
+
+	function getTouchDistance(t1, t2) {
+		const dx = t1.clientX - t2.clientX;
+		const dy = t1.clientY - t2.clientY;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
+	function handleTouchStart(event) {
+		if (event.touches.length === 2) {
+			event.preventDefault();
+			isZooming = true;
+			// Access indices directly, don't convert List to Array
+			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
+
+			pointerBuffer.x = event.offsetX;
+			pointerBuffer.y = event.offsetY;
+
+			const { x, y } = layout.getActiveAxes(pointerBuffer);
+			activePanX = x;
+			activePanY = y;
+		}
+	}
+
+	function handleTouchMove(event) {
+		if (!isZooming || event.touches.length !== 2) return;
+
+		const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
+		const scaleFactor = currentDistance / initialTouchDistance;
+
+		if (Math.abs(scaleFactor - 1) > 0.01) {
+			pointerBuffer.x = event.offsetX;
+			pointerBuffer.y = event.offsetY;
+			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
+
+			scales.applyZoom(innerPoint, scaleFactor, activePanX, activePanY);
+			initialTouchDistance = currentDistance;
+		}
+	}
+
+	function handleTouchEnd() {
+		isZooming = false;
+		isPanning = false;
+		activePanX = false;
+		activePanY = false;
+	}
+
+	let panContext;
+
+	// PAN HANDLERS
+	// function handlePointerDown(event) {
+	// 	event.preventDefault();
+
+	// 	const point = { x: event.offsetX, y: event.offsetY };
+	// 	const { x, y, innerPoint } = layout.getActiveAxes(point);
+
+	// 	// Only allow panning on linear scales
+	// 	activePanX = x && scales.scaleTypes?.x === 'linear';
+	// 	activePanY = y && scales.scaleTypes?.y === 'linear';
+
+	// 	// Only proceed if at least one axis can pan
+	// 	if (!activePanX && !activePanY) {
+	// 		return;
+	// 	}
+	// 	isPanning = true;
+
+	// 	scales.startPan({ x: event.offsetX, y: event.offsetY }, activePanX, activePanY);
+
+	// 	scales.clearCurrentDataPoints();
+	// 	event.target.setPointerCapture?.(event.pointerId);
+	// }
+
+	function handlePointerDown(event) {
+		event.preventDefault();
+
+		// Test force focus
+		if (event.target.focus) {
+			event.target.focus({ preventScroll: true });
+		}
+
+		pointerBuffer.x = event.offsetX;
+		pointerBuffer.y = event.offsetY;
+
+		const { x, y, innerPoint } = layout.getActiveAxes(pointerBuffer);
+
+		// Store primitive booleans
+		activePanX = x && scales.scaleTypes?.x === 'linear';
+		activePanY = y && scales.scaleTypes?.y === 'linear';
+
+		if (!activePanX && !activePanY) return;
+
+		isPanning = true;
+
+		// Pass primitives to startPan
+		scales.startPan(pointerBuffer.x, pointerBuffer.y, activePanX, activePanY);
+
+		scales.clearCurrentDataPoints();
+		event.target.setPointerCapture?.(event.pointerId);
+	}
+
+	// function handlePointerMove(event) {
+	// 	// Single consolidated handler
+	// 	if (isPanning) {
+	// 		const coalescedEvents = event.getCoalescedEvents?.() || [event];
+	// 		scales.updatePanPositionWithCoalescing(coalescedEvents);
+	// 	} else {
+	// 		// Check if we're in the interactive inner area
+	// 		const point = { x: event.offsetX, y: event.offsetY };
+	// 		if (layout.isWithinInnerBounds(point)) {
+	// 			const innerPoint = layout.toInnerCoordinates(point);
+	// 			scales.updateCurrentDataPoints(innerPoint);
+	// 		}
+	// 	}
+	// }
+
+	function handlePointerMove(event) {
+		if (isPanning) {
+			scales.updatePanPosition(event.offsetX, event.offsetY);
+		} else {
+			// Update crosshair
+			pointerBuffer.x = event.offsetX;
+			pointerBuffer.y = event.offsetY;
+
+			if (layout.isWithinInnerBounds(pointerBuffer)) {
+				const innerPoint = layout.toInnerCoordinates(pointerBuffer);
+				scales.updateCurrentDataPoints(innerPoint);
+			}
+		}
+	}
+
+	function handlePointerUp(event) {
+		isPanning = false;
+		activePanX = false;
+		activePanY = false;
+
+		event.target.releasePointerCapture?.(event.pointerId);
+		scales.endPan();
+	}
+
+	function handleInnerMouseEnter() {
+		scales.active = true;
+	}
+
+	function handleInnerMouseLeave() {
+		scales.clearCurrentDataPoints();
+		scales.active = false;
+	}
+
+	let testRenderLoop;
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div 
-  class="chart-container" 
-  bind:clientWidth={layout.width} 
-  bind:clientHeight={layout.height}
->  
-  {#if layout.isReady}
-    <svg 
-      class="svg-background" 
-      width={layout.width}
-      height={layout.height}
-    >
-      <g transform={layout.innerTransform}>
-        {@render background?.()}
-      </g>
-    </svg>
+<div class="chart-container" bind:clientWidth={layout.width} bind:clientHeight={layout.height}>
+	{#if layout.isReady}
+		<svg class="svg-background" width={layout.width} height={layout.height}>
+			<g transform={layout.innerTransform}>
+				{@render background?.()}
+			</g>
+		</svg>
 
-    <div class="canvas-layer">
-      {@render canvas?.()}
-    </div>
-    
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <svg
-      class="svg-foreground"
-      bind:this={svg}
-      width={layout.width}
-      height={layout.height}
-      onwheel={handleWheel}
-      onpointerdown={handlePointerDown}
-      onpointermove={handlePointerMove}
-      onpointerup={handlePointerUp}
-      onpointercancel={handlePointerUp}
-      ondblclick={handleDoubleClick}
-    >
-      <defs>
-        <clipPath id={layout.clipPathId}>
-          <rect x={0} y={0} width={layout.innerWidth} height={layout.innerHeight} />
-        </clipPath>
-      </defs>
-      
-      <!-- onpointermove={handleInnerMouseMove} -->
-      <g
-        transform={layout.innerTransform}
-        clip-path={layout.clipPathUrl}
-        class="crosshair"
-        onpointerenter={handleInnerMouseEnter}
-        onpointerleave={handleInnerMouseLeave}
-      >
-        {@render foreground?.()}
-          {#if scales.xScale && scales.yScale}
-            <circle 
-              cx={scales.xScale.scale(50)} 
-              cy={scales.yScale.scale(25)} 
-              r="8" 
-              fill="red" 
-              opacity="0.7"
-              stroke="darkred"
-              stroke-width="2"
-            />
-            
-            <!-- Test rectangle spanning data range (20-80, 10-40) -->
-            <rect 
-              x={scales.xScale.scale(20)}
-              y={scales.yScale.scale(40)} 
-              width={scales.xScale.scale(80) - scales.xScale.scale(20)}
-              height={scales.yScale.scale(10) - scales.yScale.scale(40)}
-              fill="blue" 
-              opacity="0.3"
-              stroke="darkblue"
-              stroke-width="1"
-            />
-            
-            <!-- Test line from (0, 0) to (100, 100) in data coordinates -->
-            <line 
-              x1={scales.xScale.scale(0)}
-              y1={scales.yScale.scale(0)}
-              x2={scales.xScale.scale(100)}
-              y2={scales.yScale.scale(100)}
-              stroke="green" 
-              stroke-width="3"
-              opacity="0.8"
-            />
-            
-            <!-- Grid of reference points -->
-            {#each [25, 50, 75] as xVal}
-              {#each [25, 50, 75] as yVal}
-                <circle 
-                  cx={scales.xScale.scale(xVal)} 
-                  cy={scales.yScale.scale(yVal)} 
-                  r="3" 
-                  fill="purple" 
-                  opacity="0.5"
-                />
-              {/each}
-            {/each}
-          {/if}
-          <rect
-            x="0"
-            y="0"
-            width={layout.innerWidth}
-            height={layout.innerHeight}
-            fill="transparent"
-            class="interaction-target"
-          />
-      </g>
-    </svg>
-  {/if}
+		<div class="canvas-layer">
+			{@render canvas?.()}
+		</div>
+
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<svg
+			class="svg-foreground"
+			bind:this={svg}
+			width={layout.width}
+			height={layout.height}
+			onwheel={handleWheel}
+			onpointerdown={handlePointerDown}
+			onpointermove={handlePointerMove}
+			onpointerup={handlePointerUp}
+			onpointercancel={handlePointerUp}
+			ondblclick={handleDoubleClick}
+		>
+			<defs>
+				<clipPath id={layout.clipPathId}>
+					<rect x={0} y={0} width={layout.innerWidth} height={layout.innerHeight} />
+				</clipPath>
+			</defs>
+
+			<g
+				transform={layout.innerTransform}
+				clip-path={layout.clipPathUrl}
+				class="crosshair"
+				onpointerenter={handleInnerMouseEnter}
+				onpointerleave={handleInnerMouseLeave}
+			>
+				{@render foreground?.()}
+				<rect
+					x="0"
+					y="0"
+					width={layout.innerWidth}
+					height={layout.innerHeight}
+					fill="transparent"
+					class="interaction-target"
+				/>
+			</g>
+		</svg>
+	{/if}
 </div>
 
-<pre id="info">cpuTime: {gpuCoordinator.timings.cpu}
+<!-- <pre id="info">cpuTime: {gpuCoordinator.timings.cpu}
 fps: {gpuCoordinator.timings.fps}
 gpu: {gpuCoordinator.timings.gpu} µs
-</pre>
+</pre> -->
 
 <style>
-  .chart-container {
-    position: relative;
-    flex: 1;
-    height: 100%;
-    contain: layout style paint;
-    /* contain: strict; */
-    touch-action: none;
-    overscroll-behavior: none;
-    transform: translateZ(0);
-  }
+	.chart-container {
+		position: relative;
+		flex: 1;
+		height: 100%;
+		contain: layout style;
+		/* contain: strict; */
+		touch-action: none;
+		overscroll-behavior: none;
+		transform: translateZ(0);
+		outline: none;
+		/* will-change: transform, contents;  */
+	}
 
-  .svg-background, .canvas-layer, .svg-foreground {
-    position: absolute;
-    top: 0;
-    left: 0;
-    touch-action: none;
-  }
+	.svg-background,
+	.canvas-layer,
+	.svg-foreground {
+		position: absolute;
+		top: 0;
+		left: 0;
+		touch-action: none;
+	}
 
-  .svg-background { 
-    z-index: 1; 
-  }
+	.svg-background {
+		z-index: 1;
+	}
 
-  .interaction-target {
-    /* Ensure it catches all pointer events */
-    pointer-events: all;
-  }
+	.interaction-target {
+		/* Ensure it catches all pointer events */
+		pointer-events: all;
+	}
 
-  .canvas-layer { z-index: 2; }
-  .svg-foreground { 
-    z-index: 3; 
-  }
+	.canvas-layer {
+		z-index: 2;
+	}
+	.svg-foreground {
+		z-index: 3;
+	}
 
-  .crosshair {
-    cursor: crosshair;
-  }
+	.crosshair {
+		cursor: crosshair;
+	}
 
-  #info {
-    position: absolute;
-    top: 0;
-    left: 0;
-    margin: 0;
-    padding: 0.5em;
-    background-color: rgba(0, 0, 0, 0.8);
-    color: white;
-  }
+	#info {
+		position: absolute;
+		top: 0;
+		left: 0;
+		margin: 0;
+		padding: 0.5em;
+		background-color: rgba(0, 0, 0, 0.8);
+		color: white;
+	}
 </style>

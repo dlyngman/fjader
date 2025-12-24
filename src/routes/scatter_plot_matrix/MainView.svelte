@@ -109,7 +109,7 @@
 					{/snippet}
 
 					{#snippet foreground()}
-						<Crosshair />
+						<!-- <Crosshair /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>

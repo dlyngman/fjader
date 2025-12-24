@@ -2,82 +2,68 @@
 
 /**
  * ChartLayout manages all chart dimensions, margins, and coordinate transformations.
- * Extracted from ChartContainer.svelte to improve modularity and testability.
+ * OPTIMIZED FOR ZERO-GC INTERACTION LOOPS.
  */
 export class ChartLayout {
-  // ✅ Class field declaration pattern (from docs)
-  width = $state();
-  height = $state();
-
+  // Reactive state
+  width = $state(0);
+  height = $state(0);
+  margin = $state({ top: 0, right: 0, bottom: 0, left: 0 });
   
+  // --- ZERO-GC BUFFERS ---
+  // Reused objects to prevent allocation during high-frequency events (pointermove, wheel)
+  _axesBuffer = { 
+    x: false, 
+    y: false, 
+    innerPoint: { x: 0, y: 0 } 
+  };
+  
+  _pointBuffer = { x: 0, y: 0 };
+
   constructor(config = {}) {
-    // Default configuration
     const defaults = {
       margin: { top: 30, right: 50, bottom: 35, left: 75 },
       height: 250,
       clipPadding: 0
     };
 
-    // Merge user config with defaults
     this.config = { ...defaults, ...config };
     
-    // ✅ First assignment in constructor pattern (from docs)
+    // Initialize state
     this.height = this.config.height;
+    this.margin = this.config.margin; // Triggers reactivity
     
-    // Non-reactive properties
-    this.margin = this.config.margin;
     this.chartId = crypto.randomUUID();
   }
 
-  // Computed properties using $derived would go here if this was a .svelte file
-  // Since this is .js, we use getters that will be reactive when accessed from Svelte context
+  // --- COMPUTED PROPERTIES (Getters) ---
   
-  /**
-   * Inner chart width (total width minus left/right margins)
-   */
   get innerWidth() {
     return this.width ? Math.max(0, this.width - this.margin.left - this.margin.right) : 0;
   }
 
-  /**
-   * Inner chart height (total height minus top/bottom margins)
-   */
   get innerHeight() {
     return Math.max(0, this.height - this.margin.top - this.margin.bottom);
   }
 
-  /**
-   * Check if layout has valid dimensions for rendering
-   */
   get isReady() {
     return this.width !== null && this.width > 0 && this.height > 0 && 
            this.innerWidth > 0 && this.innerHeight > 0;
   }
 
-  /**
-   * SVG transform string for translating to inner chart area
-   */
   get innerTransform() {
     return `translate(${this.margin.left}, ${this.margin.top})`;
   }
 
-  /**
-   * Clip path ID for masking chart content to inner area
-   */
   get clipPathId() {
     return `mask-${this.chartId}`;
   }
 
-  /**
-   * CSS/SVG clip path URL reference
-   */
   get clipPathUrl() {
     return `url(#${this.clipPathId})`;
   }
 
-  /**
-   * Complete dimensions object for easy access
-   */
+  // Warning: accessing this creates a new object. Use mostly for debugging.
   get dimensions() {
     return {
       width: this.width,
@@ -88,7 +74,8 @@ export class ChartLayout {
     };
   }
 
-  // Methods (using arrow functions to preserve 'this' binding per docs)
+  // --- METHODS ---
+
   updateWidth = (newWidth) => {
     this.width = newWidth;
   }
@@ -98,6 +85,8 @@ export class ChartLayout {
   }
 
   updateMargin = (newMargin) => {
+    // Deep merge into existing state object to preserve reference if possible,
+    // but spreading is fine here as margins don't change at 60fps.
     this.margin = { ...this.margin, ...newMargin };
   }
 
@@ -107,38 +96,58 @@ export class ChartLayout {
     this.margin = { ...this.config.margin };
   }
 
+  // --- HOT PATH METHODS (Optimized) ---
+
+  // OPTIMIZED: Mutates shared buffer instead of returning new {x,y}
   toInnerCoordinates = (point) => {
-    return {
-      x: point.x - this.margin.left,
-      y: point.y - this.margin.top
-    };
+    this._pointBuffer.x = point.x - this.margin.left;
+    this._pointBuffer.y = point.y - this.margin.top;
+    return this._pointBuffer;
+  }
+
+  // Alias for converting specific x/y numbers (Better for internal use)
+  toInnerRaw = (x, y) => {
+    this._pointBuffer.x = x - this.margin.left;
+    this._pointBuffer.y = y - this.margin.top;
+    return this._pointBuffer;
   }
 
   toScreenCoordinates = (innerPoint) => {
-    return {
-      x: innerPoint.x + this.margin.left,
-      y: innerPoint.y + this.margin.top
-    };
+    // Used less frequently in hot paths, but we reuse the same buffer
+    this._pointBuffer.x = innerPoint.x + this.margin.left;
+    this._pointBuffer.y = innerPoint.y + this.margin.top;
+    return this._pointBuffer;
   }
 
-  isWithinInnerBounds = (innerPoint) => {
-    return {
-      x: innerPoint.x >= 0 && innerPoint.x <= this.innerWidth,
-      y: innerPoint.y >= 0 && innerPoint.y <= this.innerHeight,
-      both: innerPoint.x >= 0 && innerPoint.x <= this.innerWidth && 
-            innerPoint.y >= 0 && innerPoint.y <= this.innerHeight
-    };
-  }
-
-  getActiveAxes = (point) => {
-    const innerPoint = this.toInnerCoordinates(point);
-    const bounds = this.isWithinInnerBounds(innerPoint);
+  // OPTIMIZED: Returns primitive boolean
+  // Logic: Check if point (screen coords) is inside the chart area
+  isWithinInnerBounds = (point) => {
+    const x = point.x - this.margin.left;
+    const y = point.y - this.margin.top;
     
-    return {
-      x: bounds.x,
-      y: bounds.y, 
-      innerPoint
-    };
+    return x >= 0 && x <= this.innerWidth && 
+           y >= 0 && y <= this.innerHeight;
+  }
+
+  // OPTIMIZED: The heavy lifter.
+  // Calculates everything in one pass and returns a persistent buffer object.
+  getActiveAxes = (point) => {
+    // 1. Calculate Inner Coords
+    const ix = point.x - this.margin.left;
+    const iy = point.y - this.margin.top;
+    
+    // 2. Check Bounds
+    const inX = ix >= 0 && ix <= this.innerWidth;
+    const inY = iy >= 0 && iy <= this.innerHeight;
+
+    // 3. Mutate Buffer (Zero Allocation)
+    this._axesBuffer.x = inX;
+    this._axesBuffer.y = inY;
+    this._axesBuffer.innerPoint.x = ix;
+    this._axesBuffer.innerPoint.y = iy;
+    
+    // 4. Return Buffer
+    return this._axesBuffer;
   }
 
   getDebugInfo = () => {
@@ -154,19 +163,14 @@ export class ChartLayout {
     };
   }
 
-  // Context data for reactive merging
-
   /**
-   * Get context data with reactive getters for merging into chart context.
-   * This is used by mergeReactive() to create the chart context object.
-   * @returns {object} Object with getters that preserve reactivity
+   * Context data merging.
+   * Removed .bind() calls because arrow functions handles 'this' automatically.
    */
   getContextData() {
-    // Capture 'this' in closure to avoid binding issues in getters
     const layout = this;
     
     return {
-      // Reactive properties - these are getters that will be called each time accessed
       get width() { return layout.width; },
       get height() { return layout.height; },
       get innerWidth() { return layout.innerWidth; },
@@ -179,16 +183,15 @@ export class ChartLayout {
       get innerTransform() { return layout.innerTransform; },
       get dimensions() { return layout.dimensions; },
       
-      // Methods (bound to preserve 'this' context)
-      updateWidth: layout.updateWidth.bind(layout),
-      updateHeight: layout.updateHeight.bind(layout),
-      updateMargin: layout.updateMargin.bind(layout),
-      toInnerCoordinates: layout.toInnerCoordinates.bind(layout),
-      toScreenCoordinates: layout.toScreenCoordinates.bind(layout),
-      isWithinInnerBounds: layout.isWithinInnerBounds.bind(layout),
-      getActiveAxes: layout.getActiveAxes.bind(layout),
-      reset: layout.reset.bind(layout),
-      getDebugInfo: layout.getDebugInfo.bind(layout)
+      updateWidth: layout.updateWidth,
+      updateHeight: layout.updateHeight,
+      updateMargin: layout.updateMargin,
+      toInnerCoordinates: layout.toInnerCoordinates,
+      toScreenCoordinates: layout.toScreenCoordinates,
+      isWithinInnerBounds: layout.isWithinInnerBounds,
+      getActiveAxes: layout.getActiveAxes,
+      reset: layout.reset,
+      getDebugInfo: layout.getDebugInfo
     };
   }
 }

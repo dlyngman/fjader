@@ -30,11 +30,11 @@
 			yLabel = {"time"}
 		>
 		{#snippet background()}
-			<Grid />
-			<Frame />
-			<AxisLeft />
-			<AxisBottom />
-			<MarginLabel />
+			<!-- <Grid /> -->
+			<!-- <Frame /> -->
+			<!-- <AxisLeft /> -->
+			<!-- <AxisBottom /> -->
+			<!-- <MarginLabel /> -->
 		{/snippet}
 	
 		{#snippet canvas()}
