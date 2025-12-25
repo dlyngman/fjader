@@ -1,7 +1,3 @@
-// =============================================================================
-// GPUCoordinator.svelte.js - Refactored with AnimationLoop
-// =============================================================================
-
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
 import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
@@ -78,22 +74,18 @@ class ScaleIndexManager {
  *
  * Key responsibilities:
  * - WebGPU device/context management
- * - Shared pipeline and resource caching
+ * - Shared pipeline and resource caching with ref-counting
+ * - Registry pattern for tracking renderer → resource ownership
  * - Animation loop with fixed-timestep physics
  * - Scale SSBO management for GPU-based domain transforms
  * - Multi-chart render coordination
- *
- * Animation Architecture:
- * - Uses AnimationLoop for fixed-timestep physics (360Hz)
- * - Scales call step() at fixed rate, updateRenderState() with extrapolation
- * - Render extrapolation provides smooth visuals regardless of frame rate
  */
 export class GPUCoordinator {
 	// =========================================================================
-	// CORE WEBGPU RESOURCES
+	// CORE WEBGPU RESOURCES (Raw fields, no $state overhead)
 	// =========================================================================
-	#device = $state(null);
-	#presentationFormat = $state(null);
+	#device = null;
+	#presentationFormat = null;
 	#initialized = $state(false);
 
 	// Timestamp query resources (optional, for GPU timing)
@@ -103,13 +95,19 @@ export class GPUCoordinator {
 	#resultBuffer = null;
 
 	// =========================================================================
+	// RESOURCE REGISTRY (Renderer → Resources tracking)
+	// =========================================================================
+	// Maps rendererId → Map<resourceKey, {type, key}>
+	// This is the single source of truth for "who owns what"
+	#rendererRegistry = new Map();
+
+	// =========================================================================
 	// SHARED RESOURCES (Reference Counted)
 	// =========================================================================
 	#sharedResources = {
-		pipelines: new Map(), // markType -> { pipeline, refCount }
-		uniformBuffers: new Map(), // name -> { buffer, refCount }
-		shaderModules: new Map(), // markType -> { module, refCount }
-		bindGroupLayouts: new Map() // markType -> { layout, refCount }
+		pipelines: new Map(), // key -> { pipeline, refCount }
+		shaderModules: new Map(), // key -> { module, refCount }
+		bindGroupLayouts: new Map() // key -> { layout, refCount }
 	};
 
 	// =========================================================================
@@ -119,10 +117,9 @@ export class GPUCoordinator {
 	#msaaCache = new Map(); // chartId -> { texture, view }
 	#dirtyChartIDs = new Set(); // Charts needing re-render
 	#msaaSampleCount = 1;
-	// #msaaSampleCount = 4;
 
 	// =========================================================================
-	// ANIMATION SYSTEM (NEW)
+	// ANIMATION SYSTEM
 	// =========================================================================
 	#animationLoop = null;
 	#animatedScales = new Set(); // Set for O(1) membership check
@@ -155,13 +152,6 @@ export class GPUCoordinator {
 	#dataLayouts = new Map(); // markType-config -> GPUBindGroupLayout
 
 	// =========================================================================
-	// TEXTURE CACHING (Zero-Allocation)
-	// =========================================================================
-	#textureCache = new Map(); // chartId -> { texture, view, lastFrameId }
-	// Reusable array for texture acquisition (avoid allocation in hot path)
-	#acquiredTextures = [];
-
-	// =========================================================================
 	// PENDING OPERATIONS
 	// =========================================================================
 	#pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
@@ -172,6 +162,7 @@ export class GPUCoordinator {
 	// RENDER LOOP STATE (Zero-Allocation)
 	// =========================================================================
 	#chartsToRenderArray = []; // Reused array for charts to render
+	#acquiredTextures = []; // Reused array for texture acquisition
 	#encoderDescriptor = { label: 'frame-encoder' };
 	#submitArray = [null]; // Reused array for queue.submit()
 
@@ -183,7 +174,7 @@ export class GPUCoordinator {
 	#gpuAverage = new NonNegativeRollingAverage(30);
 	timings = $state({ cpu: '0', fps: '0', gpu: '0' });
 
-	// Race condition protection
+	// Race condition protection for async pipeline creation
 	#creatingPipelines = new Set();
 
 	// =========================================================================
@@ -211,13 +202,12 @@ export class GPUCoordinator {
 
 		try {
 			await this.#initWebGPU();
-			await this.#createSharedResources();
 			await this.#initializeScaleBindGroupLayouts();
 
 			this.#initialized = true;
 			this.#handleScaleTopologyChange();
 
-			console.log('GPUCoordinator initialized with AnimationLoop architecture');
+			console.log('GPUCoordinator initialized with Registry Pattern');
 		} catch (error) {
 			console.error('GPUCoordinator initialization failed:', error);
 			throw error;
@@ -265,32 +255,6 @@ export class GPUCoordinator {
 				size: this.#resolveBuffer.size,
 				usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
 			});
-		}
-	}
-
-	async #createSharedResources() {
-		const dprBuffer = this.#device.createBuffer({
-			size: 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-		});
-
-		this.#sharedResources.uniformBuffers.set('devicePixelRatio', {
-			buffer: dprBuffer,
-			refCount: 0,
-			createdAt: Date.now()
-		});
-
-		this.#updateSharedUniforms();
-	}
-
-	#updateSharedUniforms() {
-		if (!this.#device) return;
-
-		const dpr = window.devicePixelRatio || 1;
-		const dprResource = this.#sharedResources.uniformBuffers.get('devicePixelRatio');
-
-		if (dprResource?.buffer) {
-			this.#device.queue.writeBuffer(dprResource.buffer, 0, new Float32Array([dpr]));
 		}
 	}
 
@@ -366,7 +330,7 @@ export class GPUCoordinator {
 	}
 
 	// =========================================================================
-	// ANIMATION LOOP CALLBACKS (NEW)
+	// ANIMATION LOOP CALLBACKS
 	// =========================================================================
 
 	/**
@@ -401,7 +365,7 @@ export class GPUCoordinator {
 		chartArray.length = 0;
 		const currentRenderId = this.#frameId;
 
-		// Add charts affected by animated scales (while all scales still in array)
+		// Add charts affected by animated scales
 		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
 			const scale = this.#animatedScalesArray[i];
 			const affected = scale._affectedChartsArray;
@@ -433,7 +397,7 @@ export class GPUCoordinator {
 		}
 		this.#dirtyChartIDs.clear();
 
-		// 4. NOW remove scales that are at rest (backwards for safe removal)
+		// 4. Remove scales that are at rest (backwards for safe removal)
 		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
 			const scale = this.#animatedScalesArray[i];
 
@@ -468,39 +432,18 @@ export class GPUCoordinator {
 	#coordinatedRender(chartsNeedingRender) {
 		const slot = this.#frameId % this.#SSBO_SLOT_COUNT;
 
-		// ========================================================================
-		// PHASE 1: EARLY TEXTURE ACQUISITION (CRITICAL FOR PROMOTION)
-		// ========================================================================
-		// Acquire ALL textures BEFORE any CPU work or buffer uploads.
-		// This may help with compositor synchronization on VRR displays.
-
-		// Clear reusable array (doesn't deallocate backing storage)
+		// PHASE 1: EARLY TEXTURE ACQUISITION
 		this.#acquiredTextures.length = 0;
 
 		const numCharts = chartsNeedingRender.length;
 		for (let i = 0; i < numCharts; i++) {
 			const chartConfig = chartsNeedingRender[i];
-			const chartId = chartConfig.chartId;
-
-			// Get texture from context (this is the critical early call)
 			const texture = chartConfig.context.getCurrentTexture();
-
-			// IMPORTANT: Don't cache texture object itself - it changes each frame
-			// But we CAN reuse the view creation pattern
 			const view = texture.createView();
-
-			// Store in reusable array
-			this.#acquiredTextures.push({
-				chartConfig,
-				texture,
-				view
-			});
+			this.#acquiredTextures.push({ chartConfig, texture, view });
 		}
 
-		// ========================================================================
-		// PHASE 2: CPU WORK (Scale buffer updates, etc.)
-		// ========================================================================
-		// Now that textures are acquired, do CPU-side work
+		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#fillAllScales(this.#cpuScaleBuffer);
 
 		const dstOffset = slot * this.#slotByteSize;
@@ -512,13 +455,10 @@ export class GPUCoordinator {
 			this.#cpuScaleBuffer.length
 		);
 
-		// ========================================================================
 		// PHASE 3: GPU COMMAND ENCODING
-		// ========================================================================
 		const commandEncoder = this.#device.createCommandEncoder(this.#encoderDescriptor);
 		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
 
-		// Iterate using cached textures/views
 		for (let i = 0; i < this.#acquiredTextures.length; i++) {
 			const { chartConfig, texture, view } = this.#acquiredTextures[i];
 
@@ -526,7 +466,6 @@ export class GPUCoordinator {
 				this.#buildRenderPlanForChart(chartConfig);
 			}
 
-			// Use the pre-acquired texture and view
 			const passEncoder = commandEncoder.beginRenderPass(
 				this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
 			);
@@ -564,12 +503,227 @@ export class GPUCoordinator {
 			passEncoder.end();
 		}
 
-		// ========================================================================
 		// PHASE 4: SUBMIT
-		// ========================================================================
 		this.#submitArray[0] = commandEncoder.finish();
 		this.#device.queue.submit(this.#submitArray);
 		this.#frameId++;
+	}
+
+	// =========================================================================
+	// RESOURCE ACQUISITION (Registry Pattern)
+	// =========================================================================
+
+	/**
+	 * Acquire pipeline resources for a renderer.
+	 * Tracks acquisition in registry for proper cleanup.
+	 *
+	 * @param {string} rendererId - Unique renderer identifier
+	 * @param {string} markType - Mark type (dots, rects, etc.)
+	 * @param {object} scaleTypes - {x: string, y: string}
+	 * @param {string} markShaderCode - Mark-specific shader code
+	 * @param {array} vertexBufferLayout - Vertex buffer layout
+	 * @param {array} dataBindingConfig - Data binding configuration
+	 * @returns {Promise<{pipeline, frameLayout, dataLayout}>}
+	 */
+	async acquirePipeline(
+		rendererId,
+		markType,
+		scaleTypes,
+		markShaderCode,
+		vertexBufferLayout,
+		dataBindingConfig
+	) {
+		if (!rendererId) throw new Error('acquirePipeline requires a rendererId');
+
+		// Generate stable resource key (includes scale topology)
+		const topologySuffix = `${scaleTypes.x}-${scaleTypes.y}`;
+		const resourceKey = `${markType}-${topologySuffix}`;
+
+		// Prepare local registry for this renderer
+		if (!this.#rendererRegistry.has(rendererId)) {
+			this.#rendererRegistry.set(rendererId, new Map());
+		}
+		const localRegistry = this.#rendererRegistry.get(rendererId);
+
+		// --- Acquire Shader (with idempotency check) ---
+		let shaderModule;
+		const shaderLookupKey = `shader:${resourceKey}`;
+
+		if (localRegistry.has(shaderLookupKey)) {
+			// Already owned by this renderer - get reference without incrementing refCount
+			const cached = this.#sharedResources.shaderModules.get(resourceKey);
+			if (!cached) {
+				// Defensive: global cache inconsistent, clear local entry
+				localRegistry.delete(shaderLookupKey);
+			} else {
+				shaderModule = cached.module;
+			}
+		}
+
+		if (!shaderModule) {
+			// Create/Get and increment RefCount
+			const templateResult = scaleTemplateSystem.generateShader(scaleTypes, markShaderCode);
+			shaderModule = await this.#getOrCreateSharedShader(resourceKey, templateResult.shaderCode);
+			localRegistry.set(shaderLookupKey, { type: 'shader', key: resourceKey });
+		}
+
+		// --- Acquire Layouts ---
+		const frameLayout = this.#getOrCreateFrameLayout();
+		const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);
+
+		// --- Acquire Pipeline (with idempotency check) ---
+		let pipeline;
+		const pipelineLookupKey = `pipeline:${resourceKey}`;
+
+		if (localRegistry.has(pipelineLookupKey)) {
+			const cached = this.#sharedResources.pipelines.get(resourceKey);
+			if (!cached) {
+				localRegistry.delete(pipelineLookupKey);
+			} else {
+				pipeline = cached.pipeline;
+			}
+		}
+
+		if (!pipeline) {
+			// Create/Get and increment RefCount
+			// Note: pipelineLayout created inside callback to avoid waste when cached
+			pipeline = await this.#getOrCreateSharedPipeline(resourceKey, async () => {
+				const pipelineLayout = this.#device.createPipelineLayout({
+					label: `${resourceKey}-pipeline-layout`,
+					bindGroupLayouts: [frameLayout, dataLayout, this.#globalScaleLayout]
+				});
+
+				return this.#device.createRenderPipeline({
+					label: `${resourceKey}-pipeline`,
+					layout: pipelineLayout,
+					vertex: {
+						module: shaderModule,
+						entryPoint: 'vertexMain',
+						buffers: vertexBufferLayout || []
+					},
+					fragment: {
+						module: shaderModule,
+						entryPoint: 'fragmentMain',
+						targets: [
+							{
+								format: this.#presentationFormat,
+								blend: {
+									color: {
+										srcFactor: 'src-alpha',
+										dstFactor: 'one-minus-src-alpha',
+										operation: 'add'
+									},
+									alpha: {
+										srcFactor: 'one',
+										dstFactor: 'one-minus-src-alpha',
+										operation: 'add'
+									}
+								}
+							}
+						]
+					},
+					primitive: { topology: 'triangle-list' },
+					multisample: { count: this.#msaaSampleCount > 1 ? this.#msaaSampleCount : 1 }
+				});
+			});
+
+			localRegistry.set(pipelineLookupKey, { type: 'pipeline', key: resourceKey });
+		}
+
+		return { pipeline, frameLayout, dataLayout };
+	}
+
+	/**
+	 * Release all resources tracked for a specific renderer ID.
+	 * Called by BaseGPURenderer.destroy()
+	 */
+	releaseRenderer(rendererId) {
+		const localRegistry = this.#rendererRegistry.get(rendererId);
+		if (!localRegistry) return;
+
+		for (const res of localRegistry.values()) {
+			if (res.type === 'pipeline') {
+				this.#releaseSharedPipeline(res.key);
+			} else if (res.type === 'shader') {
+				this.#releaseSharedShader(res.key);
+			}
+		}
+
+		this.#rendererRegistry.delete(rendererId);
+	}
+
+	// =========================================================================
+	// INTERNAL REF-COUNTING (Private)
+	// =========================================================================
+
+	async #getOrCreateSharedPipeline(key, createFn) {
+		const existing = this.#sharedResources.pipelines.get(key);
+		if (existing) {
+			existing.refCount++;
+			return existing.pipeline;
+		}
+
+		// Async Lock to prevent double-creation
+		if (this.#creatingPipelines.has(key)) {
+			while (this.#creatingPipelines.has(key)) {
+				await new Promise((r) => setTimeout(r, 10));
+			}
+			// Check again after wait
+			const newExisting = this.#sharedResources.pipelines.get(key);
+			if (newExisting) {
+				newExisting.refCount++;
+				return newExisting.pipeline;
+			}
+		}
+
+		this.#creatingPipelines.add(key);
+		try {
+			const pipeline = await createFn();
+			this.#sharedResources.pipelines.set(key, {
+				pipeline,
+				refCount: 1,
+				createdAt: Date.now()
+			});
+			return pipeline;
+		} finally {
+			this.#creatingPipelines.delete(key);
+		}
+	}
+
+	#releaseSharedPipeline(key) {
+		const resource = this.#sharedResources.pipelines.get(key);
+		if (!resource) return;
+
+		resource.refCount--;
+		if (resource.refCount <= 0) {
+			this.#sharedResources.pipelines.delete(key);
+		}
+	}
+
+	async #getOrCreateSharedShader(key, code) {
+		const existing = this.#sharedResources.shaderModules.get(key);
+		if (existing) {
+			existing.refCount++;
+			return existing.module;
+		}
+
+		const module = this.#device.createShaderModule({ code });
+		this.#sharedResources.shaderModules.set(key, {
+			module,
+			refCount: 1,
+			createdAt: Date.now()
+		});
+		return module;
+	}
+
+	#releaseSharedShader(key) {
+		const resource = this.#sharedResources.shaderModules.get(key);
+		if (!resource) return;
+
+		resource.refCount--;
+		if (resource.refCount <= 0) {
+			this.#sharedResources.shaderModules.delete(key);
+		}
 	}
 
 	// =========================================================================
@@ -647,51 +801,27 @@ export class GPUCoordinator {
 		}
 	}
 
-	// #recreateGlobalScalesSSBOAndBindGroups() {
-	// 	this.#globalScaleSSBO?.destroy?.();
-
-	// 	this.#createGlobalScaleSSBO();
-
-	// 	this.#globalScaleBindGroups.length = 0;
-	// 	for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-	// 		const offset = slot * this.#slotByteSize;
-	// 		this.#globalScaleBindGroups[slot] = this.#device.createBindGroup({
-	// 			layout: this.#globalScaleLayout,
-	// 			entries: [
-	// 				{
-	// 					binding: 0,
-	// 					resource: { buffer: this.#globalScaleSSBO, offset, size: this.#slotByteSize }
-	// 				}
-	// 			]
-	// 		});
-	// 	}
-	// }
 	#recreateGlobalScalesSSBOAndBindGroups() {
 		console.log('Resizing Global Scale SSBO...');
 
-		// 1. Keep reference to the OLD buffer so we can destroy it later
 		const oldSSBO = this.#globalScaleSSBO;
 
-		// 2. Calculate new sizes
-		const scaleParamSize = 16; // 4 floats * 4 bytes
+		const scaleParamSize = 16;
 		this.#slotByteSize = this.#maxScaleSlots * scaleParamSize;
 		const totalSSBOSize = this.#slotByteSize * this.#SSBO_SLOT_COUNT;
 
 		try {
-			// 3. Create NEW resources (Allocating memory)
-			// If this fails (OOM), we throw here, and the OLD buffer is still alive/valid.
 			const newSSBO = this.#device.createBuffer({
 				size: totalSSBOSize,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 				label: `global-scale-ssbo-ring-v${this.#frameId}`
 			});
 
-			// 4. Create NEW Bind Groups
 			const newBindGroups = [];
 			for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
 				const offset = slot * this.#slotByteSize;
 				newBindGroups[slot] = this.#device.createBindGroup({
-					label: `global-scale-bind-group-slot-${slot}`, // Optional: add version info
+					label: `global-scale-bind-group-slot-${slot}`,
 					layout: this.#globalScaleLayout,
 					entries: [
 						{
@@ -706,22 +836,15 @@ export class GPUCoordinator {
 				});
 			}
 
-			// 5. ATOMIC SWAP: Update state only after successful creation
 			this.#globalScaleSSBO = newSSBO;
 			this.#globalScaleBindGroups = newBindGroups;
-
-			// Recreate CPU staging buffer to match new size
 			this.#cpuScaleBuffer = new Float32Array(this.#slotByteSize / 4);
 
-			// 6. SAFE DESTROY: Now it is safe to kill the old buffer
-			// WebGPU keeps it alive until pending commands using it are complete.
 			if (oldSSBO) {
 				oldSSBO.destroy();
 			}
 		} catch (error) {
 			console.error('Failed to resize Scale SSBO. Keeping old buffer.', error);
-			// We don't destroy oldSSBO here, so the app continues working with the smaller buffer
-			// (Charts might clip, but the app won't crash).
 		}
 	}
 
@@ -729,10 +852,6 @@ export class GPUCoordinator {
 	// ANIMATED SCALE MANAGEMENT
 	// =========================================================================
 
-	/**
-	 * Add a scale to the animation loop.
-	 * Called by LinearScaleState when it needs to animate.
-	 */
 	addAnimatingScale(scale) {
 		let idx = this.#scaleIndexManager.getIndex(scale.id);
 
@@ -750,17 +869,11 @@ export class GPUCoordinator {
 			this.#animatedScalesArray.push(scale);
 		}
 
-		// Start animation loop if not running
 		this.#animationLoop.requestStart();
 	}
 
-	/**
-	 * Remove a scale from animation (called when scale reaches rest).
-	 * Note: Usually handled automatically in #renderFrame via isAtRest() check.
-	 */
 	removeAnimatingScale(scale) {
 		if (this.#animatedScales.delete(scale)) {
-			// Swap and pop removal
 			const idx = this.#animatedScalesArray.indexOf(scale);
 			if (idx !== -1) {
 				const lastItem = this.#animatedScalesArray.pop();
@@ -800,7 +913,6 @@ export class GPUCoordinator {
 
 		this.#registeredCharts.set(chartId, chartConfig);
 
-		// Process pending scale mappings
 		const pendingMapping = this.#pendingScaleMappings.get(chartId);
 		if (pendingMapping) {
 			this.setChartScaleMapping(chartId, pendingMapping);
@@ -830,7 +942,7 @@ export class GPUCoordinator {
 	unregisterChart(chartId) {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (chartConfig) {
-			if (chartConfig.frameUniformsBuffer && !chartConfig.frameUniformsBuffer.destroyed) {
+			if (chartConfig.frameUniformsBuffer) {
 				chartConfig.frameUniformsBuffer.destroy();
 			}
 
@@ -889,6 +1001,24 @@ export class GPUCoordinator {
 			});
 		}
 		return this.#frameLayout;
+	}
+
+	#getOrCreateDataLayout(markType, dataBindingConfig) {
+		const layoutKey = `${markType}-${JSON.stringify(dataBindingConfig)}`;
+
+		if (!this.#dataLayouts.has(layoutKey)) {
+			const layout = this.#device.createBindGroupLayout({
+				label: `${markType}-data-layout`,
+				entries: dataBindingConfig.map((config) => ({
+					binding: config.binding,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: { type: config.type || 'read-only-storage' }
+				}))
+			});
+			this.#dataLayouts.set(layoutKey, layout);
+		}
+
+		return this.#dataLayouts.get(layoutKey);
 	}
 
 	#createChartFrameResources(chartId) {
@@ -1012,7 +1142,6 @@ export class GPUCoordinator {
 			return;
 		}
 
-		// Group by zIndex, then by markType
 		const zIndexGroups = new Map();
 		for (const layer of layers) {
 			const zIndex = layer.zIndex;
@@ -1038,7 +1167,6 @@ export class GPUCoordinator {
 			}
 		}
 
-		// Cache pipeline references
 		for (const layer of newPlan) {
 			layer.cachedPipeline = layer.renderer?.pipeline;
 		}
@@ -1115,168 +1243,6 @@ export class GPUCoordinator {
 	}
 
 	// =========================================================================
-	// PIPELINE FACTORY
-	// =========================================================================
-
-	#getOrCreateDataLayout(markType, dataBindingConfig) {
-		const layoutKey = `${markType}-${JSON.stringify(dataBindingConfig)}`;
-
-		if (!this.#dataLayouts.has(layoutKey)) {
-			const layout = this.#device.createBindGroupLayout({
-				label: `${markType}-data-layout`,
-				entries: dataBindingConfig.map((config) => ({
-					binding: config.binding,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					buffer: { type: config.type || 'read-only-storage' }
-				}))
-			});
-			this.#dataLayouts.set(layoutKey, layout);
-		}
-
-		return this.#dataLayouts.get(layoutKey);
-	}
-
-	async createPipelineForMarkType(
-		markType,
-		scaleTypes,
-		markShaderCode,
-		vertexBufferLayout,
-		dataBindingConfig
-	) {
-		const templateResult = scaleTemplateSystem.generateShader(scaleTypes, markShaderCode);
-
-		const frameLayout = this.#getOrCreateFrameLayout();
-		const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);
-		const globalScaleLayout = this.#globalScaleLayout;
-
-		if (!globalScaleLayout) {
-			throw new Error('Global scale SSBO layout not found');
-		}
-
-		const pipelineLayout = this.#device.createPipelineLayout({
-			label: `${markType}-pipeline-layout`,
-			bindGroupLayouts: [frameLayout, dataLayout, globalScaleLayout]
-		});
-
-		const shaderModule = await this.getOrCreateSharedShader(markType, templateResult.shaderCode);
-
-		const pipeline = await this.getOrCreateSharedPipeline(
-			`${markType}-${scaleTypes.x}-${scaleTypes.y}`,
-			async () => {
-				return this.#device.createRenderPipeline({
-					label: `${markType}-${scaleTypes.x}-${scaleTypes.y}-pipeline`,
-					layout: pipelineLayout,
-					vertex: {
-						module: shaderModule,
-						entryPoint: 'vertexMain',
-						buffers: vertexBufferLayout || []
-					},
-					fragment: {
-						module: shaderModule,
-						entryPoint: 'fragmentMain',
-						targets: [
-							{
-								format: this.#presentationFormat,
-								blend: {
-									color: {
-										srcFactor: 'src-alpha',
-										dstFactor: 'one-minus-src-alpha',
-										operation: 'add'
-									},
-									alpha: {
-										srcFactor: 'one',
-										dstFactor: 'one-minus-src-alpha',
-										operation: 'add'
-									}
-								}
-							}
-						]
-					},
-					primitive: { topology: 'triangle-list' },
-					multisample: { count: this.#msaaSampleCount > 1 ? this.#msaaSampleCount : 1 }
-				});
-			}
-		);
-
-		return { pipeline, frameLayout, dataLayout };
-	}
-
-	// =========================================================================
-	// SHARED RESOURCE MANAGEMENT
-	// =========================================================================
-
-	async getOrCreateSharedPipeline(markType, createFn) {
-		const existing = this.#sharedResources.pipelines.get(markType);
-		if (existing) {
-			existing.refCount++;
-			return existing.pipeline;
-		}
-
-		if (this.#creatingPipelines.has(markType)) {
-			while (this.#creatingPipelines.has(markType)) {
-				await new Promise((resolve) => setTimeout(resolve, 10));
-			}
-			const newExisting = this.#sharedResources.pipelines.get(markType);
-			if (newExisting) {
-				newExisting.refCount++;
-				return newExisting.pipeline;
-			}
-		}
-
-		this.#creatingPipelines.add(markType);
-
-		try {
-			const pipeline = await createFn();
-			this.#sharedResources.pipelines.set(markType, {
-				pipeline,
-				refCount: 1,
-				createdAt: Date.now()
-			});
-			return pipeline;
-		} finally {
-			this.#creatingPipelines.delete(markType);
-		}
-	}
-
-	async getOrCreateSharedShader(markType, shaderCode) {
-		const existing = this.#sharedResources.shaderModules.get(markType);
-		if (existing) {
-			existing.refCount++;
-			return existing.module;
-		}
-
-		const module = this.#device.createShaderModule({ code: shaderCode });
-		this.#sharedResources.shaderModules.set(markType, {
-			module,
-			refCount: 1,
-			createdAt: Date.now()
-		});
-
-		return module;
-	}
-
-	releaseSharedPipeline(markType) {
-		const resource = this.#sharedResources.pipelines.get(markType);
-		if (!resource) return;
-
-		resource.refCount--;
-		if (resource.refCount <= 0) {
-			this.#sharedResources.pipelines.delete(markType);
-		}
-	}
-
-	releaseSharedShader(markType) {
-		const resource = this.#sharedResources.shaderModules.get(markType);
-		if (!resource) return;
-
-		resource.refCount--;
-		if (resource.refCount <= 0) {
-			this.#sharedResources.shaderModules.delete(markType);
-			console.debug(`Shader module for ${markType} released.`);
-		}
-	}
-
-	// =========================================================================
 	// GETTERS
 	// =========================================================================
 
@@ -1304,29 +1270,34 @@ export class GPUCoordinator {
 		this.#animationLoop?.destroy();
 		this.#animationLoop = null;
 
+		// Cleanup timestamp query resources (FIXED: was leaking)
+		this.#resolveBuffer?.destroy();
+		this.#resultBuffer?.destroy();
+		this.#querySet = null; // QuerySet has no destroy(), just null reference
+
+		// Force release all renderer resources
+		for (const rendererId of this.#rendererRegistry.keys()) {
+			this.releaseRenderer(rendererId);
+		}
+		this.#rendererRegistry.clear();
+
 		this.#animatedScales.clear();
 		this.#animatedScalesArray.length = 0;
 
 		// Cleanup MSAA textures
 		for (const msaa of this.#msaaCache.values()) {
-			msaa.texture?.destroy?.();
+			msaa.texture?.destroy();
 		}
 		this.#msaaCache.clear();
 
-		// Cleanup shared resources
-		for (const [, resource] of this.#sharedResources.uniformBuffers) {
-			resource.buffer?.destroy?.();
-		}
-		this.#sharedResources.uniformBuffers.clear();
-		this.#sharedResources.pipelines.clear();
-		this.#sharedResources.shaderModules.clear();
-		this.#sharedResources.bindGroupLayouts.clear();
-
 		// Cleanup SSBO
-		this.#globalScaleSSBO?.destroy?.();
+		this.#globalScaleSSBO?.destroy();
 		this.#globalScaleLayout = null;
 
 		// Cleanup charts
+		for (const [, chartConfig] of this.#registeredCharts) {
+			chartConfig.frameUniformsBuffer?.destroy();
+		}
 		this.#registeredCharts.clear();
 		this.#dirtyChartIDs.clear();
 
@@ -1336,7 +1307,7 @@ export class GPUCoordinator {
 		this.#pendingScaleMappings.clear();
 
 		// Destroy device
-		this.#device?.destroy?.();
+		this.#device?.destroy();
 		this.#device = null;
 
 		this.#initialized = false;

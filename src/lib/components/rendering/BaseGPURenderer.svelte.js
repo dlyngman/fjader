@@ -1,5 +1,5 @@
-// BaseGPURenderer.svelte.js - Simplified for Pipeline Factory Pattern
-// Scale management completely removed - coordinator handles all scale concerns
+// BaseGPURenderer.svelte.js - Registry Pattern Implementation
+// Scale management delegated to coordinator - renderer just identifies itself
 
 export class BaseGPURenderer {
 	// Core properties
@@ -8,27 +8,29 @@ export class BaseGPURenderer {
 	#gpuCoordinator;
 	#chartContext;
 
-	// Resource tracking
+	// Identity & Async Control
+	#rendererId;
+	#initGeneration = 0;
+	#isDestroyed = false;
+
+	// Resource tracking (Exclusive resources only)
 	#ownedResources = {
 		buffers: [],
 		layerControl: null
 	};
 
-	// State management
+	// State management (Reactive - drives UI)
 	#resourcesCreated = $state(false);
 	#initializationError = $state(null);
 	#instanceCount = $state(0);
 
+	// GPU Objects
 	#device = null;
-	#pipeline = $state(null); // Provided by coordinator factory
-
-	#pipelineRequestKey = null;
-	#isDestroyed = false;
-
-	#perDataBindGroup = $state(null); // @group(1): mark data buffers
+	#pipeline = null;
+	#perDataBindGroup = $state(null);
 	#perDataLayout = null;
-	#dataBindingConfig = null;
 
+	#dataBindingConfig = null;
 	#zIndex;
 	#xScaleType;
 	#yScaleType;
@@ -38,9 +40,11 @@ export class BaseGPURenderer {
 		this.#webGPUContext = webGPUContext;
 		this.#gpuCoordinator = gpuCoordinator;
 		this.#chartContext = chartContext;
-		this.#zIndex = options.zIndex || 0;
 
-		// Store scale types for coordinator pipeline factory
+		// Unique ID for the Resource Registry
+		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
+
+		this.#zIndex = options.zIndex || 0;
 		this.#xScaleType = options.xScaleType || 'linear';
 		this.#yScaleType = options.yScaleType || 'linear';
 	}
@@ -71,9 +75,13 @@ export class BaseGPURenderer {
 	async initialize(config) {
 		if (this.#isDestroyed) return;
 
-    // Release existing pipeline if re-initializing
+		// Async Race Protection: Increment generation
+		// Any previous pending initialization will see mismatching generation and abort
+		const currentGen = ++this.#initGeneration;
+
+		// If re-initializing, clean up previous shared resources via Registry
 		if (this.#resourcesCreated) {
-			this.#releasePipelineResources();
+			this.#gpuCoordinator.releaseRenderer(this.#rendererId);
 			this.#resourcesCreated = false;
 		}
 
@@ -84,8 +92,6 @@ export class BaseGPURenderer {
 				throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
 			}
 
-			console.log(`Initializing ${this.#markType} renderer with pipeline factory pattern`);
-
 			this.#device = this.#webGPUContext.getDevice();
 			if (!this.#device) {
 				throw new Error('No WebGPU device available from context');
@@ -93,21 +99,36 @@ export class BaseGPURenderer {
 
 			this.#dataBindingConfig = dataBindingConfig;
 
-			this.#pipelineRequestKey = this.#markType;
+			// ACQUIRE VIA REGISTRY
+			// Coordinator handles keying, caching, and ref-counting
+			// We just identify ourselves with rendererId
+			const result = await this.#gpuCoordinator.acquirePipeline(
+				this.#rendererId,
+				this.#markType,
+				{
+					x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
+					y: this.#chartContext.scaleTypes?.y || this.#yScaleType
+				},
+				markShaderCode,
+				vertexBufferLayout,
+				dataBindingConfig
+			);
 
-			// Get pipeline from coordinator factory (coordinator handles shader generation)
-			await this.#getPipelineFromCoordinator(markShaderCode, vertexBufferLayout);
-
-			if (this.#isDestroyed) {
-				console.warn(`${this.#markType}: Initialized after destroy. Releasing immediately.`);
-				this.#releasePipelineResources();
-				return; // Stop. Do not set #resourcesCreated to true.
+			// POST-AWAIT SAFETY CHECK
+			// If destroyed or a newer init call happened while we were awaiting, abort and cleanup
+			if (this.#isDestroyed || this.#initGeneration !== currentGen) {
+				console.warn(`${this.#markType}: Stale initialization detected, discarding.`);
+				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+				return;
 			}
 
+			this.#pipeline = result.pipeline;
+			this.#perDataLayout = result.dataLayout;
 			this.#resourcesCreated = true;
-			console.log(`${this.#markType} renderer initialized.`);
+
+			console.log(`${this.#markType} renderer initialized (${this.#rendererId})`);
 		} catch (error) {
-			if (!this.#isDestroyed) {
+			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
 				console.error(`${this.#markType} initialization failed:`, error);
 				this.#initializationError = error.message;
 				throw error;
@@ -115,39 +136,7 @@ export class BaseGPURenderer {
 		}
 	}
 
-	// ===== PIPELINE FACTORY INTEGRATION =====
-
-	async #getPipelineFromCoordinator(markShaderCode, vertexBufferLayout) {
-		const scaleTypes = {
-			x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
-			y: this.#chartContext.scaleTypes?.y || this.#yScaleType
-		};
-
-		// Use coordinator's pipeline factory
-		// Get both pipeline and layouts from coordinator
-		const result = await this.#gpuCoordinator.createPipelineForMarkType(
-			this.#pipelineRequestKey, // this.#markType,
-			scaleTypes,
-			markShaderCode,
-			vertexBufferLayout,
-			this.#dataBindingConfig // Pass this so coordinator can create stable layouts
-		);
-
-		console.log('Pipeline factory result:', {
-			hasPipeline: !!result.pipeline,
-			hasFrameLayout: !!result.frameLayout,
-			hasDataLayout: !!result.dataLayout
-		});
-
-		this.#pipeline = result.pipeline;
-		this.#perDataLayout = result.dataLayout; // From coordinator
-
-		if (!this.#pipeline) {
-			throw new Error(`Coordinator failed to provide pipeline for ${this.#markType}`);
-		}
-
-		console.log(`Pipeline received from coordinator for ${this.#markType}`);
-	}
+	// ===== BIND GROUP CREATION =====
 
 	createDataBindGroup(dataBindings) {
 		if (!this.#device || !this.#perDataLayout) {
@@ -191,7 +180,7 @@ export class BaseGPURenderer {
 		}
 	}
 
-	// ===== BUFFER MANAGEMENT =====
+	// ===== BUFFER MANAGEMENT (Exclusive Resources) =====
 
 	createOrUpdateBuffer(
 		existingBuffer,
@@ -281,13 +270,6 @@ export class BaseGPURenderer {
 			case 'linear':
 			case 'identity':
 				return new Float32Array(data.map((d) => d ?? 0));
-			// const len = data.length;
-			// const result = new Float32Array(len);
-			// for (let i = 0; i < len; i++) {
-			// 	const d = data[i];
-			// 	result[i] = d ?? 0;
-			// }
-			// return result;
 
 			case 'band':
 			case 'point':
@@ -324,43 +306,38 @@ export class BaseGPURenderer {
 	}
 
 	// ===== CLEANUP =====
-	#releasePipelineResources() {
-		// Only release if we actually have a key (meaning we successfully requested one)
-		if (this.#pipelineRequestKey && this.#gpuCoordinator) {
-			// Release the Pipeline (refCount--)
-			this.#gpuCoordinator.releaseSharedPipeline(this.#pipelineRequestKey);
-
-			// Release the Shader (refCount--)
-			// Note: createPipelineForMarkType in coordinator implicitly creates a shader
-			// using the same markType key. We must release it too.
-			this.#gpuCoordinator.releaseSharedShader(this.#pipelineRequestKey);
-
-			// Clear state
-			this.#pipelineRequestKey = null;
-			this.#pipeline = null;
-		}
-	}
 
 	destroy() {
 		this.#isDestroyed = true;
-		console.log(`Cleaning up ${this.#markType} renderer resources`);
+		// Bump generation so any pending init aborts
+		this.#initGeneration++;
+
+		console.log(`Cleaning up ${this.#markType} renderer (${this.#rendererId})`);
 
 		try {
-			// Clean up owned buffers
+			// 1. Clean up EXCLUSIVE resources (buffers owned only by this renderer)
 			this.#ownedResources.buffers.forEach((buffer) => {
-				if (buffer && !buffer.destroyed) {
-					buffer.destroy();
-				}
+				if (buffer) buffer.destroy();
 			});
 			this.#ownedResources.buffers = [];
 
-			// Clean up layer registration
+			// 2. Clean up layer registration
 			if (this.#ownedResources.layerControl) {
 				this.#ownedResources.layerControl.remove();
+				this.#ownedResources.layerControl = null;
 			}
 
-			//
-			this.#releasePipelineResources();
+			// 3. Clean up SHARED resources via Registry
+			// Coordinator tracks what we acquired and decrements ref-counts
+			if (this.#gpuCoordinator) {
+				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+			}
+
+			// Clear references
+			this.#pipeline = null;
+			this.#perDataBindGroup = null;
+			this.#perDataLayout = null;
+			this.#device = null;
 
 			console.log(`${this.#markType} renderer cleanup complete`);
 		} catch (error) {
