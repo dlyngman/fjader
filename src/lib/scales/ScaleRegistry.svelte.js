@@ -1,90 +1,171 @@
-// src/lib/scales/ScaleRegistry.svelte.js
-import { setContext, getContext } from 'svelte';
-import { LinearScaleState } from "./LinearScaleState.svelte.js";
-import { BandScaleState } from "./BandScaleState.svelte.js";
+import { setContext, getContext, untrack } from 'svelte';
+import { LinearScaleState } from './LinearScaleState.svelte.js';
+import { BandScaleState } from './BandScaleState.svelte.js';
 import { scaleOrdinal } from 'd3-scale';
 
+// Helper to stringify sorted
+const stableStringify = (obj) => {
+	if (typeof obj !== 'object' || obj === null) return JSON.stringify(obj);
+	if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(',')}]`;
+	// Sort keys to ensure consistent ID regardless of prop order
+	return `{${Object.keys(obj)
+		.sort()
+		.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+		.join(',')}}`;
+};
+
 class ScaleRegistry {
-  // #scaleUsage = $state(new Map());
+	// 1. PUBLIC field (no #) to fix the "undefined" error
+	scaleUsage = $state(new Map());
+	#gpuCoordinator = null;
 
-  constructor() {
-    this.registryId = Math.random().toString(36).slice(2, 8);
-    console.log(`🏗️ NEW ScaleRegistry created: ${this.registryId}`);
+	constructor() {
+		this.registryId = Math.random().toString(36).slice(2, 8);
 
-    this.scales = {
-      linear: new Map(),
-      band: new Map(),
-      ordinal: new Map(),
-    }
+		// Initialize the storage buckets
+		this.scales = {
+			linear: new Map(),
+			band: new Map(),
+			ordinal: new Map()
+		};
+	}
 
-    this.scaleUsage = $state(new Map());
-  }
+	setGPUCoordinator(coordinator) {
+		this.#gpuCoordinator = coordinator;
+	}
 
-  getOrCreateScale(name, type='linear', config = {}, chartId = null, gpuCoordinator = null) {
-    // Create unique key that includes configuration
-    const configKey = Object.keys(config).length > 0 ? `-${JSON.stringify(config)}` : '';
-    const key = `${name}-${type}${configKey}`;
-    
-    if (!this.scales[type].has(key)) {
-      console.log(`🆕 Registry ${this.registryId} creating NEW scale: ${name} (${type})`, {
-        config: Object.keys(config).length > 0 ? config : 'default'
-      });
-      
-      if (type === 'linear') {
-        this.scales[type].set(key, new LinearScaleState(name, undefined, type, undefined, config, gpuCoordinator));
-      } else if (type === 'band') {
-        this.scales[type].set(key, new BandScaleState(name, [], config));
-      } else if (type === 'ordinal') {
-        // TODO: fix color scale support, simple default for penguins dataset:
-        this.scales[type].set(key, scaleOrdinal()
-          .range(['#EFB605', '#FFF84A', '#FF0266'])
-          .domain(['Adelie', 'Gentoo', 'Chinstrap']));
-      }
-    } else {
-      console.log(`♻️ Registry ${this.registryId} reusing existing scale: ${name} (${type})`);
-    }
-    const scale = this.scales[type].get(key);
+	#notifyTopologyChange() {
+		if (this.#gpuCoordinator) {
+			this.#gpuCoordinator.scheduleTopologyUpdate();
+		}
+	}
 
-    if (chartId && scale) {
-      if (!this.scaleUsage.has(scale)) {
-        this.scaleUsage.set(scale, new Set());
-      }
-      this.scaleUsage.get(scale).add(chartId);
-      console.log('scale usage from registration', this.scaleUsage)
-    }
+	getOrCreateScale(name, type = 'linear', config = {}, chartId = null) {
+		// const configKey = Object.keys(config).length > 0 ? `-${JSON.stringify(config)}` : '';
+		const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
+		const key = `${name}-${type}${configKey}`;
 
-    return scale;
-    // return this.scales[type].get(key);
-  }
+		// 2. Dynamic Map creation (fixes the crash on 'log', 'point', etc.)
+		if (!this.scales[type]) {
+			this.scales[type] = new Map();
+		}
 
-  removeChartUsage(chartId) {
-    for (const [scale, chartIds] of this.scaleUsage) {
-      chartIds.delete(chartId);
-      if (chartIds.size === 0) {
-        this.scaleUsage.delete(scale);
-      }
-    }
-  }
+		if (!this.scales[type].has(key)) {
+			// Factory Logic
+			if (['linear', 'log', 'time', 'pow', 'identity'].includes(type)) {
+				this.scales[type].set(
+					key,
+					new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
+				);
+			} else if (['band', 'point'].includes(type)) {
+				this.scales[type].set(key, new BandScaleState(name, [], config));
+			} else if (['ordinal', 'categorical'].includes(type)) {
+				this.scales[type].set(
+					key,
+					scaleOrdinal()
+						.range(['#EFB605', '#FFF84A', '#FF0266'])
+						.domain(['Adelie', 'Gentoo', 'Chinstrap'])
+				);
+			} else {
+				// Fallback
+				this.scales[type].set(
+					key,
+					new LinearScaleState(name, undefined, 'linear', undefined, config, this.#gpuCoordinator)
+				);
+			}
+		}
+
+		const scale = this.scales[type].get(key);
+
+		if (chartId && scale) {
+			// 3. STOP THE LOOP: Untrack the bookkeeping!
+			untrack(() => {
+				if (!this.scaleUsage.has(scale)) {
+					this.scaleUsage.set(scale, new Set());
+				}
+
+				const chartIds = this.scaleUsage.get(scale);
+				// Only write if necessary (optimization)
+				if (!chartIds.has(chartId)) {
+					chartIds.add(chartId);
+					this.#notifyTopologyChange();
+				}
+			});
+		}
+
+		return scale;
+	}
+
+	deregisterChart(scale, chartId) {
+		if (!scale || !chartId) return;
+
+		// 4. STOP THE LOOP: Untrack cleanup too
+		untrack(() => {
+			if (this.scaleUsage.has(scale)) {
+				const usage = this.scaleUsage.get(scale);
+				if (usage.delete(chartId)) {
+					if (usage.size === 0) {
+						if (scale.destroy) scale.destroy();
+						this.scaleUsage.delete(scale);
+						this._removeScaleFromStorage(scale);
+					}
+					this.#notifyTopologyChange();
+				}
+			}
+		});
+	}
+
+	removeChartUsage(chartId) {
+		if (!chartId) return;
+
+		// 🛡️ UNTRACK is vital here to prevent the 'Read -> Track -> Write -> Trigger' cycle
+		untrack(() => {
+			let changed = false;
+
+			// Iterate (Read)
+			for (const [scale, usageSet] of this.scaleUsage) {
+				if (usageSet.has(chartId)) {
+					// Mutate (Write)
+					usageSet.delete(chartId);
+					changed = true;
+
+					if (usageSet.size === 0) {
+						if (scale.destroy) scale.destroy();
+						this.scaleUsage.delete(scale); // Mutate (Write)
+						this._removeScaleFromStorage(scale);
+					}
+				}
+			}
+
+			if (changed) {
+				this.#notifyTopologyChange();
+			}
+		});
+	}
+
+	// ... removeChartUsage, _removeScaleFromStorage (copy from previous if needed, or keeping it clean)
+	_removeScaleFromStorage(scaleInstance) {
+		for (const map of Object.values(this.scales)) {
+			for (const [key, scale] of map) {
+				if (scale === scaleInstance) {
+					map.delete(key);
+					return;
+				}
+			}
+		}
+	}
 }
 
-
-
-// Create and set the Scale Registry context
 export function setScaleRegistry() {
-  const state = new ScaleRegistry();
-  return setContext('scale-registry', state);
+	const state = new ScaleRegistry();
+	return setContext('scale-registry', state);
 }
 
-// Retrieve a specific scale with configuration support
-export function getScaleState(name, type='linear', config = {}, gpuCoordinator = null, chartId = null) {
-  const scaleRegistry = getContext('scale-registry');
-  
-  if (!scaleRegistry) {
-    console.error('Scale Registry context missing. Make sure to call setScaleRegistry() in a parent component.');
-    return null;
-  }
-
-  const scaleInstance = scaleRegistry.getOrCreateScale(name, type, config, chartId, gpuCoordinator);
-  
-  return scaleInstance;
+export function getScaleState(name, type = 'linear', config = {}, chartId = null) {
+	const scaleRegistry = getContext('scale-registry');
+	if (!scaleRegistry) {
+		console.error('No Registry');
+		return null;
+	}
+	return scaleRegistry.getOrCreateScale(name, type, config, chartId);
 }
