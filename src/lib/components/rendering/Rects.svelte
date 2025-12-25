@@ -1,33 +1,36 @@
 <script>
-  import { getContext, onMount, onDestroy, untrack } from 'svelte';
-  import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
-  import { getGPUContext } from '$lib/gpu';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
+	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+	import { getGPUContext } from '$lib/gpu';
 
-  let { 
-    x0Data,       // Float32Array - left edges
-    x1Data,       // Float32Array - right edges  
-    y0Data,       // Float32Array - bottom edges
-    y1Data,       // Float32Array - top edges
-    colorData,    // Float32Array - RGBA colors (instanceCount * 4)
-    alphaData,    // Float32Array - alpha values
-    dataVersion,  // number - for triggering updates
-    zIndex = 0,
-  } = $props();
+	let {
+		x0Data, // Float32Array - left edges
+		x1Data, // Float32Array - right edges
+		y0Data, // Float32Array - bottom edges
+		y1Data, // Float32Array - top edges
+		colorData, // Float32Array - RGBA colors (instanceCount * 4)
+		alphaData, // Float32Array - alpha values
+		dataVersion, // number - for triggering updates
+		zIndex = 0
+	} = $props();
 
-  const chartContext = getContext('chart');
-  const webGPUContext = getContext('webgpu-canvas');
-  const gpuCoordinator = getGPUContext();
+	const chartContext = getContext('chart');
+	const webGPUContext = getContext('webgpu-canvas');
+	const gpuCoordinator = getGPUContext();
 
-  // Renderer and buffer state
-  let renderer = $state(null);
-  let initializationError = $state(null);
+	// Renderer and buffer state
+	let renderer = $state(null);
+	let initializationError = $state(null);
 
-  // GPU buffers
-  let x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorBuffer, alphaBuffer, rectGeometryBuffer;
+	// GPU buffers (tracked in renderer.#ownedResources)
+	let x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorBuffer, alphaBuffer;
 
-  const rectVertexCount = 6;
-  
-  const rectsShaderCode = `
+	// Geometry buffer (locally owned - NOT tracked by renderer)
+	let rectGeometryBuffer;
+
+	const rectVertexCount = 6;
+
+	const rectsShaderCode = `
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
       @location(0) color: vec4<f32>,
@@ -78,374 +81,352 @@
     }
   `;
 
-  const vertexBufferLayout = [{
-    arrayStride: 2 * 4, // 2 floats * 4 bytes
-    attributes: [{
-      shaderLocation: 0,
-      offset: 0,
-      format: 'float32x2',
-    }],
-  }];
+	const vertexBufferLayout = [
+		{
+			arrayStride: 2 * 4, // 2 floats * 4 bytes
+			attributes: [
+				{
+					shaderLocation: 0,
+					offset: 0,
+					format: 'float32x2'
+				}
+			]
+		}
+	];
 
-  const dataBindingConfig = [
-    { binding: 0, type: 'read-only-storage' }, // x0Values
-    { binding: 1, type: 'read-only-storage' }, // x1Values  
-    { binding: 2, type: 'read-only-storage' }, // y0Values
-    { binding: 3, type: 'read-only-storage' }, // y1Values
-    { binding: 4, type: 'read-only-storage' }, // colors
-    { binding: 5, type: 'read-only-storage' }, // alphaValues
-  ];
+	const dataBindingConfig = [
+		{ binding: 0, type: 'read-only-storage' }, // x0Values
+		{ binding: 1, type: 'read-only-storage' }, // x1Values
+		{ binding: 2, type: 'read-only-storage' }, // y0Values
+		{ binding: 3, type: 'read-only-storage' }, // y1Values
+		{ binding: 4, type: 'read-only-storage' }, // colors
+		{ binding: 5, type: 'read-only-storage' } // alphaValues
+	];
 
-  $effect(() => {
-    console.log('🔍 Rects Renderer Status:', {
-      rendererCreated: !!renderer,
-      resourcesCreated: renderer?.resourcesCreated,
-      initializationError: initializationError,
-      
-      // Props received from BarMarkX
-      x0DataLength: x0Data?.length || 0,
-      x1DataLength: x1Data?.length || 0,
-      y0DataLength: y0Data?.length || 0,
-      y1DataLength: y1Data?.length || 0,
-      colorDataLength: colorData?.length || 0,
-      alphaDataLength: alphaData?.length || 0,
-      
-      instanceCount: renderer?.instanceCount || 0,
-      pipeline: !!renderer?.pipeline,
-      
-      // All bind groups (expect similar issue as Dots)
-      perFrameBindGroup: !!renderer?.perFrameBindGroup,
-      perDataBindGroup: !!renderer?.perDataBindGroup,
-      
-      // GPU buffers
-      buffers: {
-        x0Buffer: !!x0Buffer,
-        x1Buffer: !!x1Buffer,
-        y0Buffer: !!y0Buffer,
-        y1Buffer: !!y1Buffer,
-        colorBuffer: !!colorBuffer,
-        alphaBuffer: !!alphaBuffer,
-        rectGeometry: !!rectGeometryBuffer
-      }
-    });
-  });
+	// Buffer update effects
+	$effect(() => {
+		if (x0Data && renderer?.resourcesCreated) {
+			x0Buffer = renderer.createOrUpdateBuffer(x0Buffer, x0Data);
+		}
+	});
 
-  // Add this effect to Rects.svelte to monitor when scales/layout become ready
-  // $effect(() => {
-  //   const layoutReady = chartContext?.layout?.isReady;
-  //   const yScaleReady = !!chartContext?.yScale?.scale;
-  //   const scaleType = chartContext?.scaleTypes?.y;
-    
-  //   console.log('🔍 Monitoring scale/layout readiness:', {
-  //     layoutReady,
-  //     yScaleReady,
-  //     scaleType,
-  //     innerHeight: chartContext?.layout?.innerHeight,
-  //     bandwidth: chartContext?.yScale?.scale?.bandwidth?.()
-  //   });
-    
-  //   // Force re-access when conditions change
-  //   if (layoutReady && yScaleReady && scaleType === 'band') {
-  //     console.log('🎯 All conditions met - forcing category position recalculation');
-  //     const positions = chartContext?.yCategoryPositions;
-  //     console.log('📍 Category positions now:', positions?.length || 'still null');
-  //   }
-  // });
+	$effect(() => {
+		if (x1Data && renderer?.resourcesCreated) {
+			x1Buffer = renderer.createOrUpdateBuffer(x1Buffer, x1Data);
+		}
+	});
 
-  // Buffer update effects
-  $effect(() => {
-    if (x0Data && renderer?.resourcesCreated) {
-      x0Buffer = renderer.createOrUpdateBuffer(x0Buffer, x0Data);
-    }
-  });
+	$effect(() => {
+		if (y0Data && renderer?.resourcesCreated) {
+			y0Buffer = renderer.createOrUpdateBuffer(y0Buffer, y0Data);
+		}
+	});
 
-  $effect(() => {
-    if (x1Data && renderer?.resourcesCreated) {
-      x1Buffer = renderer.createOrUpdateBuffer(x1Buffer, x1Data);
-    }
-  });
+	$effect(() => {
+		if (y1Data && renderer?.resourcesCreated) {
+			y1Buffer = renderer.createOrUpdateBuffer(y1Buffer, y1Data);
+		}
+	});
 
-  $effect(() => {
-    if (y0Data && renderer?.resourcesCreated) {
-      y0Buffer = renderer.createOrUpdateBuffer(y0Buffer, y0Data);
-    }
-  });
+	$effect(() => {
+		if (colorData && renderer?.resourcesCreated) {
+			colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+		}
+	});
 
-  $effect(() => {
-    if (y1Data && renderer?.resourcesCreated) {
-      y1Buffer = renderer.createOrUpdateBuffer(y1Buffer, y1Data);
-    }
-  });
+	$effect(() => {
+		if (alphaData && renderer?.resourcesCreated) {
+			alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
+		}
+	});
 
-  $effect(() => {
-    if (colorData && renderer?.resourcesCreated) {
-      colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
-    }
-  });
+	// Check for per-data bind group readiness
+	let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
 
-  $effect(() => {
-    if (alphaData && renderer?.resourcesCreated) {
-      alphaBuffer = renderer.createOrUpdateBuffer(alphaBuffer, alphaData);
-    }
-  });
+	$effect(() => {
+		void renderer?.resourcesCreated;
+		void dataBindGroupReady;
 
-  // Check for per-data bind group readiness
-  let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
+		if (
+			x0Buffer &&
+			x1Buffer &&
+			y0Buffer &&
+			y1Buffer &&
+			colorBuffer &&
+			alphaBuffer &&
+			renderer?.resourcesCreated &&
+			!dataBindGroupReady
+		) {
+			untrack(() => {
+				createRectsDataBindGroup();
+			});
+		}
+	});
 
-  $effect(() => {
-    void renderer?.resourcesCreated;
-    void dataBindGroupReady;
+	// Data writing effects
+	$effect(() => {
+		void dataBindGroupReady;
+		if (x0Data && x0Buffer && dataBindGroupReady) {
+			untrack(() => {
+				const device = webGPUContext.getDevice();
+				device?.queue.writeBuffer(x0Buffer, 0, x0Data);
+			});
+		}
+	});
 
-    if (x0Buffer && x1Buffer && y0Buffer && y1Buffer && colorBuffer && alphaBuffer && 
-        renderer?.resourcesCreated && !dataBindGroupReady) {
-      untrack(() => {
-        createRectsDataBindGroup();
-      });
-    }
-  });
+	$effect(() => {
+		void dataBindGroupReady;
+		if (x1Data && x1Buffer && dataBindGroupReady) {
+			const device = webGPUContext.getDevice();
+			device?.queue.writeBuffer(x1Buffer, 0, x1Data);
+		}
+	});
 
-  // Data writing effects
-  $effect(() => {
-    void dataBindGroupReady;
-    if (x0Data && x0Buffer && dataBindGroupReady) {
-      untrack(() => {
-        const device = webGPUContext.getDevice();
-        device?.queue.writeBuffer(x0Buffer, 0, x0Data);
-      });
-    }
-  });
+	$effect(() => {
+		void dataBindGroupReady;
+		if (y0Data && y0Buffer && dataBindGroupReady) {
+			const device = webGPUContext.getDevice();
+			device?.queue.writeBuffer(y0Buffer, 0, y0Data);
+		}
+	});
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (x1Data && x1Buffer && dataBindGroupReady) {
-      const device = webGPUContext.getDevice();
-      device?.queue.writeBuffer(x1Buffer, 0, x1Data);
-    }
-  });
+	$effect(() => {
+		void dataBindGroupReady;
+		if (y1Data && y1Buffer && dataBindGroupReady) {
+			const device = webGPUContext.getDevice();
+			device?.queue.writeBuffer(y1Buffer, 0, y1Data);
+		}
+	});
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (y0Data && y0Buffer && dataBindGroupReady) {
-      const device = webGPUContext.getDevice();
-      device?.queue.writeBuffer(y0Buffer, 0, y0Data);
-    }
-  });
+	$effect(() => {
+		void dataBindGroupReady;
+		if (colorData && colorBuffer && dataBindGroupReady) {
+			const device = webGPUContext.getDevice();
+			device?.queue.writeBuffer(colorBuffer, 0, colorData);
+		}
+	});
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (y1Data && y1Buffer && dataBindGroupReady) {
-      const device = webGPUContext.getDevice();
-      device?.queue.writeBuffer(y1Buffer, 0, y1Data);
-    }
-  });
+	$effect(() => {
+		void dataBindGroupReady;
+		if (alphaData && alphaBuffer && dataBindGroupReady) {
+			const device = webGPUContext.getDevice();
+			device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
+		}
+	});
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (colorData && colorBuffer && dataBindGroupReady) {
-      const device = webGPUContext.getDevice();
-      device?.queue.writeBuffer(colorBuffer, 0, colorData);
-    }
-  });
+	$effect(() => {
+		void dataBindGroupReady;
+		if (
+			x0Data &&
+			x1Data &&
+			y0Data &&
+			y1Data &&
+			colorData &&
+			alphaData &&
+			x0Buffer &&
+			x1Buffer &&
+			y0Buffer &&
+			y1Buffer &&
+			colorBuffer &&
+			alphaBuffer &&
+			dataBindGroupReady
+		) {
+			renderer.updateInstanceCount(x0Data.length);
+			gpuCoordinator.invalidateChart(chartContext.chartId);
+		}
+	});
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (alphaData && alphaBuffer && dataBindGroupReady) {
-      const device = webGPUContext.getDevice();
-      device?.queue.writeBuffer(alphaBuffer, 0, alphaData);
-    }
-  });
+	// Create unit square geometry for rectangle rendering
+	function createRectGeometry() {
+		return new Float32Array([
+			0,
+			0, // bottom-left  (x0, y0)
+			1,
+			0, // bottom-right (x1, y0)
+			0,
+			1, // top-left     (x0, y1)
+			1,
+			0, // bottom-right (x1, y0)
+			1,
+			1, // top-right    (x1, y1)
+			0,
+			1 // top-left     (x0, y1)
+		]);
+	}
 
-  $effect(() => {
-    void dataBindGroupReady;
-    if (x0Data && x1Data && y0Data && y1Data && colorData && alphaData && 
-        x0Buffer && x1Buffer && y0Buffer && y1Buffer && colorBuffer && alphaBuffer &&
-        dataBindGroupReady) {
-      renderer.updateInstanceCount(x0Data.length);
-      gpuCoordinator.invalidateChart(chartContext.chartId);
-    }
-  });
+	async function initializeRectGeometry() {
+		try {
+			const device = webGPUContext.getDevice();
+			if (!device) {
+				throw new Error('No WebGPU device available');
+			}
 
-  // Create unit square geometry for rectangle rendering
-  function createRectGeometry() {
-    return new Float32Array([
-      0, 0,  // bottom-left  (x0, y0)
-      1, 0,  // bottom-right (x1, y0)
-      0, 1,  // top-left     (x0, y1)
-      1, 0,  // bottom-right (x1, y0)
-      1, 1,  // top-right    (x1, y1)
-      0, 1,  // top-left     (x0, y1)
-    ]);
-  }
+			// Create unit square geometry buffer
+			const rectVertices = createRectGeometry();
+			console.log('📐 Rect vertices:', rectVertices);
 
-  async function initializeRectGeometry() {
-    try {
-      const device = webGPUContext.getDevice();
-      if (!device) {
-        throw new Error('No WebGPU device available');
-      }
-      
-      // Create unit square geometry buffer
-      const rectVertices = createRectGeometry();
-      console.log('📐 Rect vertices:', rectVertices);
-      
-      rectGeometryBuffer = device.createBuffer({
-        size: rectVertices.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        label: 'rects-unit-square-geometry'
-      });
-      device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
-      
-      console.log('✅ Rect geometry created successfully:', {
-        buffer: !!rectGeometryBuffer,
-        size: rectVertices.byteLength,
-        vertices: rectVertices.length
-      });
-      
-    } catch (error) {
-      console.error('❌ Failed to create rect geometry:', error);
-      throw error;
-    }
-  }
+			rectGeometryBuffer = device.createBuffer({
+				size: rectVertices.byteLength,
+				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+				label: 'rects-unit-square-geometry'
+			});
+			device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
 
-  function createRectsDataBindGroup() {
-    if (!x0Buffer || !x1Buffer || !y0Buffer || !y1Buffer || !colorBuffer || !alphaBuffer) {
-      return;
-    }
+			console.log('✅ Rect geometry created successfully');
+		} catch (error) {
+			console.error('❌ Failed to create rect geometry:', error);
+			throw error;
+		}
+	}
 
-    const dataBindings = [
-      { binding: 0, resource: { buffer: x0Buffer } },
-      { binding: 1, resource: { buffer: x1Buffer } },
-      { binding: 2, resource: { buffer: y0Buffer } },
-      { binding: 3, resource: { buffer: y1Buffer } },
-      { binding: 4, resource: { buffer: colorBuffer } },
-      { binding: 5, resource: { buffer: alphaBuffer } },
-    ];
+	function createRectsDataBindGroup() {
+		if (!x0Buffer || !x1Buffer || !y0Buffer || !y1Buffer || !colorBuffer || !alphaBuffer) {
+			return;
+		}
 
-    renderer.createDataBindGroup(dataBindings);
-  }
+		const dataBindings = [
+			{ binding: 0, resource: { buffer: x0Buffer } },
+			{ binding: 1, resource: { buffer: x1Buffer } },
+			{ binding: 2, resource: { buffer: y0Buffer } },
+			{ binding: 3, resource: { buffer: y1Buffer } },
+			{ binding: 4, resource: { buffer: colorBuffer } },
+			{ binding: 5, resource: { buffer: alphaBuffer } }
+		];
 
-  function drawRects(passEncoder) {
-    try {
-      if (!rectGeometryBuffer || renderer.instanceCount === 0) {
-        return;
-      }
+		renderer.createDataBindGroup(dataBindings);
+	}
 
-      passEncoder.setVertexBuffer(0, rectGeometryBuffer);
-      passEncoder.draw(rectVertexCount, renderer.instanceCount);
-      
-    } catch (error) {
-      console.error('❌ Rects draw operation failed:', error);
-      throw error;
-    }
-  }
+	function drawRects(passEncoder) {
+		try {
+			if (!rectGeometryBuffer || renderer.instanceCount === 0) {
+				return;
+			}
 
-  // Wait for WebGPU context with better error handling
-  async function waitForWebGPU() {
-    let attempts = 0;
-    const maxAttempts = 100;
-    
-    while (!webGPUContext.isInitialized() && attempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-      attempts++;
-    }
-    
-    if (!webGPUContext.isInitialized()) {
-      throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
-    }
-    
-    await initializeRects();
-  }
+			passEncoder.setVertexBuffer(0, rectGeometryBuffer);
+			passEncoder.draw(rectVertexCount, renderer.instanceCount);
+		} catch (error) {
+			console.error('❌ Rects draw operation failed:', error);
+			throw error;
+		}
+	}
 
-  // ✅ NEW: Initialize rectangles renderer with dual bind group architecture
-  async function initializeRects() {
-    try {
-      if (!gpuCoordinator) {
-        throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
-      }
+	// Wait for WebGPU context
+	async function waitForWebGPU() {
+		let attempts = 0;
+		const maxAttempts = 100;
 
-      // Create base renderer with scale type information
-      renderer = new BaseGPURenderer('rects', webGPUContext, gpuCoordinator, chartContext, { 
-        zIndex,
-        xScaleType: chartContext.scaleTypes?.x || 'linear',
-        yScaleType: chartContext.scaleTypes?.y || 'linear'
-      });
+		while (!webGPUContext.isInitialized() && attempts < maxAttempts) {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			attempts++;
+		}
 
-      await renderer.initialize({
-        markShaderCode: rectsShaderCode,
-        vertexBufferLayout,       
-        dataBindingConfig,        
-      });
+		if (!webGPUContext.isInitialized()) {
+			throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
+		}
 
-      // Initialize rectangle-specific geometry
-      await initializeRectGeometry();
-      
-      // Register layer with base renderer
-      renderer.registerLayer(drawRects);
+		await initializeRects();
+	}
 
-      console.log('✅ Rects component initialized with dual bind group architecture (6 data channels)');
+	// Initialize rectangles renderer
+	async function initializeRects() {
+		try {
+			if (!gpuCoordinator) {
+				throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
+			}
 
-    } catch (error) {
-      console.error('❌ Rects component initialization failed:', error);
-      initializationError = error.message;
-      throw error;
-    }
-  }
+			// Create base renderer with scale type information
+			renderer = new BaseGPURenderer('rects', webGPUContext, gpuCoordinator, chartContext, {
+				zIndex,
+				xScaleType: chartContext.scaleTypes?.x || 'linear',
+				yScaleType: chartContext.scaleTypes?.y || 'linear'
+			});
 
-  onMount(async () => {
-    try {
-      await waitForWebGPU();
-    } catch (error) {
-      console.error('❌ Rects component mount failed:', error);
-      initializationError = error.message;
-    }
-  });
+			await renderer.initialize({
+				markShaderCode: rectsShaderCode,
+				vertexBufferLayout,
+				dataBindingConfig
+			});
 
-  onDestroy(() => {
-    try {
-      // Clean up rectangle-specific resources
-      if (rectGeometryBuffer && !rectGeometryBuffer.destroyed) {
-        rectGeometryBuffer.destroy();
-      }
+			// Initialize rectangle-specific geometry
+			await initializeRectGeometry();
 
-      // Base renderer handles all other cleanup
-      if (renderer) {
-        renderer.destroy();
-      }
-      
-    } catch (error) {
-      console.error('❌ Error during Rects component cleanup:', error);
-    }
-  });
+			// Register layer with base renderer
+			renderer.registerLayer(drawRects);
+
+			console.log('✅ Rects component initialized');
+		} catch (error) {
+			console.error('❌ Rects component initialization failed:', error);
+			initializationError = error.message;
+			throw error;
+		}
+	}
+
+	onMount(async () => {
+		try {
+			await waitForWebGPU();
+		} catch (error) {
+			console.error('❌ Rects component mount failed:', error);
+			initializationError = error.message;
+		}
+	});
+
+	onDestroy(() => {
+		try {
+			// Clean up LOCALLY OWNED geometry buffer
+			// This buffer is created directly in initializeRectGeometry(),
+			// NOT via renderer.createOrUpdateBuffer(), so we must destroy it manually.
+			if (rectGeometryBuffer) {
+				rectGeometryBuffer.destroy();
+				rectGeometryBuffer = null;
+			}
+
+			// Data buffers (x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorBuffer, alphaBuffer)
+			// are created via renderer.createOrUpdateBuffer() and tracked in
+			// renderer.#ownedResources.buffers - they are automatically destroyed
+			// by renderer.destroy(). DO NOT destroy them here (would double-destroy).
+
+			// Base renderer handles:
+			// - Data buffer cleanup (tracked in #ownedResources)
+			// - Shared resource cleanup (via coordinator.releaseRenderer)
+			// - Layer unregistration
+			if (renderer) {
+				renderer.destroy();
+				renderer = null;
+			}
+		} catch (error) {
+			console.error('❌ Error during Rects component cleanup:', error);
+		}
+	});
 </script>
 
 {#if initializationError}
-  <div class="rects-error">
-    <p>Rects component failed to initialize:</p>
-    <p class="error-message">{initializationError}</p>
-  </div>
+	<div class="rects-error">
+		<p>Rects component failed to initialize:</p>
+		<p class="error-message">{initializationError}</p>
+	</div>
 {/if}
 
 <style>
-  .rects-error {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    background-color: rgba(255, 240, 240, 0.9);
-    border: 1px solid #ffcccb;
-    border-radius: 4px;
-    padding: 8px 12px;
-    font-size: 12px;
-    color: #d32f2f;
-    z-index: 1000;
-    max-width: 300px;
-  }
+	.rects-error {
+		position: absolute;
+		top: 10px;
+		left: 10px;
+		background-color: rgba(255, 240, 240, 0.9);
+		border: 1px solid #ffcccb;
+		border-radius: 4px;
+		padding: 8px 12px;
+		font-size: 12px;
+		color: #d32f2f;
+		z-index: 1000;
+		max-width: 300px;
+	}
 
-  .error-message {
-    font-family: monospace;
-    background-color: rgba(255, 255, 255, 0.8);
-    padding: 4px 6px;
-    border-radius: 2px;
-    margin-top: 4px;
-    font-size: 11px;
-  }
+	.error-message {
+		font-family: monospace;
+		background-color: rgba(255, 255, 255, 0.8);
+		padding: 4px 6px;
+		border-radius: 2px;
+		margin-top: 4px;
+		font-size: 11px;
+	}
 </style>

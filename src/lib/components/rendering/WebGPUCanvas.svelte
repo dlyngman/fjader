@@ -4,7 +4,6 @@
 
 	let {
 		canvasComponents
-		// msaaSampleCount = 4
 	} = $props();
 
 	const c = getContext('chart');
@@ -12,7 +11,6 @@
 	let height = $derived(c.innerHeight);
 	let margin = $derived(c.margin);
 
-	// let canvas = $state();
 	let canvas;
 	let context;
 	let gpuCoordinator;
@@ -86,10 +84,8 @@
 			context.configure({
 				device,
 				format: presentationFormat,
-				// alphaMode: 'opaque ',
 				alphaMode: 'premultiplied',
 				desynchronized: true
-				// desynchronized: false
 			});
 
 			contextConfigured = true;
@@ -114,7 +110,7 @@
 
 		try {
 			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
-				zIndex: 0 // zIndex might still be useful for chart-level ordering
+				zIndex: 0
 			});
 
 			// Notify coordinator that context is ready
@@ -145,17 +141,9 @@
 
 			const newTransform = `translate(${margin.left}px, ${margin.top}px)`;
 			const positionChanged = lastTransform !== newTransform;
-			// const positionChanged =
-			// 	canvas.style.transform !== `translate(${margin.left}px, ${margin.top}px)`;
 
-			// Only proceed if there's an actual change.
+			// Only proceed if there's an actual change
 			if (!dimensionsChanged && !positionChanged) return;
-
-			console.error('🔴 setupCanvas called DURING animation!', {
-				dimensionsChanged,
-				positionChanged,
-				transform: newTransform
-			});
 
 			if (dimensionsChanged) {
 				canvas.width = canvasWidth;
@@ -167,7 +155,6 @@
 			if (positionChanged) {
 				canvas.style.transform = newTransform;
 				lastTransform = newTransform;
-				// canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
 			}
 
 			if (chartControl) {
@@ -178,37 +165,6 @@
 			initializationError = `Canvas setup failed: ${error.message}`;
 		}
 	}
-
-	// In WebGPUCanvas.svelte - REMOVE this:
-	// canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
-
-	// Canvas stays at 0,0 but render to offset viewport
-	// function setupCanvas() {
-	// 	if (!canvas || !contextConfigured) return;
-
-	// 	const devicePixelRatio = window.devicePixelRatio || 1;
-
-	// 	// Canvas covers FULL chart area (including margins)
-	// 	const fullWidth = width + margin.left + margin.right;
-	// 	const fullHeight = height + margin.top + margin.bottom;
-
-	// 	const canvasWidth = Math.ceil(fullWidth * devicePixelRatio);
-	// 	const canvasHeight = Math.ceil(fullHeight * devicePixelRatio);
-
-	// 	if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
-	// 		canvas.width = canvasWidth;
-	// 		canvas.height = canvasHeight;
-	// 		canvas.style.width = fullWidth + 'px';
-	// 		canvas.style.height = fullHeight + 'px';
-	// 	}
-
-	// 	// NO transform - canvas at 0,0
-	// 	canvas.style.transform = 'none';
-
-	// 	if (chartControl) {
-	// 		chartControl.invalidate();
-	// 	}
-	// }
 
 	// Enhanced context with better state management and error handling
 	setContext('webgpu-canvas', {
@@ -249,13 +205,6 @@
 				chartId,
 				contextConfigured,
 				initializationError,
-				layerCount: layers.length,
-				layers: layers.map((l) => ({
-					id: l.id,
-					markType: l.markType,
-					zIndex: l.zIndex,
-					visible: l.visible
-				})),
 				canvasDimensions: {
 					width: canvas?.width,
 					height: canvas?.height,
@@ -285,7 +234,16 @@
 				chartControl = null;
 			}
 
-			// Context cleanup happens automatically when canvas is removed
+			// FIXED: Unconfigure WebGPU context to release swap chain resources
+			if (context && contextConfigured) {
+				try {
+					context.unconfigure();
+				} catch (e) {
+					// Context may already be invalid, ignore
+					console.debug(`Context unconfigure failed (may already be invalid):`, e);
+				}
+			}
+
 			contextConfigured = false;
 
 			// Clear references
@@ -299,18 +257,15 @@
 	});
 
 	$effect(() => {
-		// Dependencies that trigger a canvas resize/reposition.
+		// Dependencies that trigger a canvas resize/reposition
 		void width;
 		void height;
 		void margin;
 
-		// Only run if the canvas and context are fully ready.
+		// Only run if the canvas and context are fully ready
 		if (canvas && contextConfigured) {
-			console.log(`[${chartId}] Canvas dimension/margin effect triggered.`);
-			// The setupCanvas function already contains the logic to check
-			// if dimensions *actually* changed before doing expensive work.
 			setupCanvas();
-			//Tell the coordinator to update this chart's frame uniforms
+			// Tell the coordinator to update this chart's frame uniforms
 			if (gpuCoordinator) {
 				gpuCoordinator.updateChartFrameUniforms(chartId);
 				gpuCoordinator.invalidateChart(chartId);
@@ -339,19 +294,12 @@
 {/if}
 
 <style>
-  canvas {
+	canvas {
 		position: absolute;
 		top: 0;
 		left: 0;
-		/* will-change: transform; */
-		/* will-change: contents; */
-		/* contain: strict; */
 		transform: translateZ(0);
-		/* will-change or transform3d(0,0,0) */
 		contain: size;
-		/* contain: strict; */
-		/* contain: layout style; */
-		/* will-change: auto; */
 		will-change: contents;
 		touch-action: none;
 	}
