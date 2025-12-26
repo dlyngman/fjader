@@ -16,8 +16,10 @@
 		height: 250
 	});
 
-  const scaleRegistry = getContext('scale-registry'); 
+	const scaleRegistry = getContext('scale-registry');
 	const gpuCoordinator = getGPUContext();
+
+	const hasPointerRawUpdate = typeof window !== 'undefined' && 'onpointerrawupdate' in window;
 
 	// TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
 	// let scales = $derived(
@@ -46,7 +48,7 @@
 			yLabel: y,
 			layout: l,
 			gpuCoordinator: g,
-      scaleRegistry: scaleRegistry 
+			scaleRegistry: scaleRegistry
 		});
 
 		scales = newScales;
@@ -154,7 +156,7 @@
 		// reset: layout.reset.bind(layout),
 		// getDebugInfo: layout.getDebugInfo.bind(layout),
 
-		updateMargin: layout.updateMargin.bind(layout),
+		// updateMargin: layout.updateMargin.bind(layout),
 		updateWidth: (w) => layout.updateWidth(w),
 		updateHeight: (h) => layout.updateHeight(h),
 		updateMargin: (m) => layout.updateMargin(m),
@@ -271,6 +273,14 @@
 	//       }
 	//   });
 	// });
+
+	function handleChartPointerEnter() {
+		gpuCoordinator.setChartHovered(layout.chartId);
+	}
+
+	function handleChartPointerLeave() {
+		gpuCoordinator.setChartUnhovered(layout.chartId);
+	}
 
 	// ZOOM HANDLERS
 	function handleWheel(event) {
@@ -418,11 +428,10 @@
 	// 	}
 	// }
 
-	function handlePointerMove(event) {
+	function processPointerMove(event) {
 		if (isPanning) {
 			scales.updatePanPosition(event.offsetX, event.offsetY);
 		} else {
-			// Update crosshair
 			pointerBuffer.x = event.offsetX;
 			pointerBuffer.y = event.offsetY;
 
@@ -431,6 +440,21 @@
 				scales.updateCurrentDataPoints(innerPoint);
 			}
 		}
+	}
+
+	function handlePointerMove(event) {
+		// Skip if pointerrawupdate is handling it
+		if (hasPointerRawUpdate) return;
+		processPointerMove(event);
+	}
+
+	// function handlePointerRawUpdate(event) {
+	// 	const events = event.getCoalescedEvents?.() ?? [event];
+	// 	const last = events[events.length - 1];
+	// 	processPointerMove(last);
+	// }
+	function handlePointerRawUpdate(event) {
+		processPointerMove(event);
 	}
 
 	function handlePointerUp(event) {
@@ -455,7 +479,13 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="chart-container" bind:clientWidth={layout.width} bind:clientHeight={layout.height}>
+<div
+	class="chart-container"
+	bind:clientWidth={layout.width}
+	bind:clientHeight={layout.height}
+	onpointerenter={handleChartPointerEnter}
+	onpointerleave={handleChartPointerLeave}
+>
 	{#if layout.isReady}
 		<svg class="svg-background" width={layout.width} height={layout.height}>
 			<g transform={layout.innerTransform}>
@@ -476,6 +506,7 @@
 			onwheel={handleWheel}
 			onpointerdown={handlePointerDown}
 			onpointermove={handlePointerMove}
+			onpointerrawupdate={handlePointerRawUpdate}
 			onpointerup={handlePointerUp}
 			onpointercancel={handlePointerUp}
 			ondblclick={handleDoubleClick}

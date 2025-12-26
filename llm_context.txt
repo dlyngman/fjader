@@ -117,6 +117,7 @@
   	#registeredCharts = new Map(); // chartId -> chartConfig
   	#msaaCache = new Map(); // chartId -> { texture, view }
   	#dirtyChartIDs = new Set(); // Charts needing re-render
+  	#dirtyChartsArray = [];
   	#msaaSampleCount = 1;
   
   	// =========================================================================
@@ -349,6 +350,7 @@
   	 * Render frame - called once per RAF with extrapolation time.
   	 * Updates render state and triggers GPU render.
   	 */
+  
   	#renderFrame = (extrapolationDt) => {
   		// 1. Apply any accumulated input (zoom, etc.)
   		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
@@ -371,8 +373,9 @@
   			const scale = this.#animatedScalesArray[i];
   			const affected = scale._affectedChartsArray;
   
-  			if (affected && Array.isArray(affected)) {
-  				for (let j = 0; j < affected.length; j++) {
+  			if (affected) {
+  				const affectedLen = affected.length;
+  				for (let j = 0; j < affectedLen; j++) {
   					const chartId = affected[j];
   					const chart = this.#registeredCharts.get(chartId);
   
@@ -387,16 +390,21 @@
   		}
   
   		// Add dirty charts (from resize, data updates, etc.)
-  		for (const chartId of this.#dirtyChartIDs) {
-  			const chart = this.#registeredCharts.get(chartId);
-  			if (chart && chart._lastRenderFrame !== currentRenderId) {
+  		const dirtyLen = this.#dirtyChartsArray.length;
+  		for (let i = 0; i < dirtyLen; i++) {
+  			const chart = this.#dirtyChartsArray[i];
+  
+  			if (!chart._isDirty) continue; // Removed or already processed
+  			chart._isDirty = false;
+  
+  			if (chart._lastRenderFrame !== currentRenderId) {
   				if (chart.visible && chart.contextConfigured) {
   					chart._lastRenderFrame = currentRenderId;
   					chartArray.push(chart);
   				}
   			}
   		}
-  		this.#dirtyChartIDs.clear();
+  		this.#dirtyChartsArray.length = 0;
   
   		// 4. Remove scales that are at rest (backwards for safe removal)
   		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
@@ -418,6 +426,75 @@
   			this.#coordinatedRender(chartArray);
   		}
   	};
+  	// #renderFrame = (extrapolationDt) => {
+  	// 	// 1. Apply any accumulated input (zoom, etc.)
+  	// 	for (let i = 0; i < this.#animatedScalesArray.length; i++) {
+  	// 		this.#animatedScalesArray[i]._applyInput?.();
+  	// 	}
+  
+  	// 	// 2. Update render state with extrapolation for ALL scales first
+  	// 	const len = this.#animatedScalesArray.length;
+  	// 	for (let i = 0; i < len; i++) {
+  	// 		this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
+  	// 	}
+  
+  	// 	// 3. Gather charts to render BEFORE removing rested scales
+  	// 	const chartArray = this.#chartsToRenderArray;
+  	// 	chartArray.length = 0;
+  	// 	const currentRenderId = this.#frameId;
+  
+  	// 	// Add charts affected by animated scales
+  	// 	for (let i = 0; i < this.#animatedScalesArray.length; i++) {
+  	// 		const scale = this.#animatedScalesArray[i];
+  	// 		const affected = scale._affectedChartsArray;
+  
+  	// 		if (affected && Array.isArray(affected)) {
+  	// 			for (let j = 0; j < affected.length; j++) {
+  	// 				const chartId = affected[j];
+  	// 				const chart = this.#registeredCharts.get(chartId);
+  
+  	// 				if (chart && chart._lastRenderFrame !== currentRenderId) {
+  	// 					if (chart.visible && chart.contextConfigured) {
+  	// 						chart._lastRenderFrame = currentRenderId;
+  	// 						chartArray.push(chart);
+  	// 					}
+  	// 				}
+  	// 			}
+  	// 		}
+  	// 	}
+  
+  	// 	// Add dirty charts (from resize, data updates, etc.)
+  	// 	for (const chartId of this.#dirtyChartIDs) {
+  	// 		const chart = this.#registeredCharts.get(chartId);
+  	// 		if (chart && chart._lastRenderFrame !== currentRenderId) {
+  	// 			if (chart.visible && chart.contextConfigured) {
+  	// 				chart._lastRenderFrame = currentRenderId;
+  	// 				chartArray.push(chart);
+  	// 			}
+  	// 		}
+  	// 	}
+  	// 	this.#dirtyChartIDs.clear();
+  
+  	// 	// 4. Remove scales that are at rest (backwards for safe removal)
+  	// 	for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
+  	// 		const scale = this.#animatedScalesArray[i];
+  
+  	// 		if (scale.isAtRest()) {
+  	// 			scale._markAtRest();
+  	// 			// Swap and pop removal (O(1))
+  	// 			this.#animatedScales.delete(scale);
+  	// 			const last = this.#animatedScalesArray.pop();
+  	// 			if (i < this.#animatedScalesArray.length) {
+  	// 				this.#animatedScalesArray[i] = last;
+  	// 			}
+  	// 		}
+  	// 	}
+  
+  	// 	// 5. Render if needed
+  	// 	if (chartArray.length > 0) {
+  	// 		this.#coordinatedRender(chartArray);
+  	// 	}
+  	// };
   
   	/**
   	 * Idle check - return true if animation should stop.
@@ -437,12 +514,12 @@
   		this.#acquiredTextures.length = 0;
   
   		const numCharts = chartsNeedingRender.length;
-  		for (let i = 0; i < numCharts; i++) {
-  			const chartConfig = chartsNeedingRender[i];
-  			const texture = chartConfig.context.getCurrentTexture();
-  			const view = texture.createView();
-  			this.#acquiredTextures.push({ chartConfig, texture, view });
-  		}
+  		// for (let i = 0; i < numCharts; i++) {
+  		// 	const chartConfig = chartsNeedingRender[i];
+  		// 	const texture = chartConfig.context.getCurrentTexture();
+  		// 	const view = texture.createView();
+  		// 	this.#acquiredTextures.push({ chartConfig, texture, view });
+  		// }
   
   		// PHASE 2: CPU WORK (Scale buffer updates)
   		this.#fillAllScales(this.#cpuScaleBuffer);
@@ -460,8 +537,12 @@
   		const commandEncoder = this.#device.createCommandEncoder(this.#encoderDescriptor);
   		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
   
-  		for (let i = 0; i < this.#acquiredTextures.length; i++) {
-  			const { chartConfig, texture, view } = this.#acquiredTextures[i];
+  		// for (let i = 0; i < this.#acquiredTextures.length; i++) {
+  		for (let i = 0; i < numCharts; i++) {
+  			// const { chartConfig, texture, view } = this.#acquiredTextures[i];
+  			const chartConfig = chartsNeedingRender[i];
+  			const texture = chartConfig.context.getCurrentTexture();
+  			const view = texture.createView();
   
   			if (chartConfig.needsPlanRebuild) {
   				this.#buildRenderPlanForChart(chartConfig);
@@ -909,7 +990,8 @@
   			frameUniformsBuffer: null,
   			perFrameBindGroup: null,
   			renderPassDescriptor: null,
-  			_lastRenderFrame: -1
+  			_lastRenderFrame: -1,
+  			_isDirty: false
   		};
   
   		this.#registeredCharts.set(chartId, chartConfig);
@@ -943,6 +1025,8 @@
   	unregisterChart(chartId) {
   		const chartConfig = this.#registeredCharts.get(chartId);
   		if (chartConfig) {
+  			chartConfig._isDirty = false;
+  
   			if (chartConfig.frameUniformsBuffer) {
   				chartConfig.frameUniformsBuffer.destroy();
   			}
@@ -960,8 +1044,10 @@
   	}
   
   	invalidateChart(chartId) {
-  		if (this.#registeredCharts.has(chartId)) {
-  			this.#dirtyChartIDs.add(chartId);
+  		const chart = this.#registeredCharts.get(chartId);
+  		if (chart && !chart._isDirty) {
+  			chart._isDirty = true;
+  			this.#dirtyChartsArray.push(chart);
   			this.#animationLoop.requestStart();
   		}
   	}
@@ -1301,6 +1387,7 @@
   		}
   		this.#registeredCharts.clear();
   		this.#dirtyChartIDs.clear();
+  		this.#dirtyChartsArray.length = 0;
   
   		// Cleanup layouts
   		this.#dataLayouts.clear();
@@ -1397,6 +1484,10 @@
   	// --- Spring Physics ---
   	#springPair;
   	#springOutput = new Float64Array(2);
+  
+  	//
+  	#domainCurrentBuffer = new Float64Array(2);
+  	#clampResult = { min: 0, max: 0 };
   
   	// --- Cached Render Values (updated via updateRenderState) ---
   	#renderMin = 0;
@@ -1519,7 +1610,9 @@
   			/** Current render domain (for reactive access) */
   			get current() {
   				self._version; // Register Svelte dependency
-  				return [self.#renderMin, self.#renderMax];
+  				self.#domainCurrentBuffer[0] = self.#renderMin;
+  				self.#domainCurrentBuffer[1] = self.#renderMax;
+  				return self.#domainCurrentBuffer;
   			},
   
   			/** Target domain (what we're animating toward) */
@@ -1950,7 +2043,9 @@
   			}
   		}
   
-  		return { min, max };
+  		this.#clampResult.min = min;
+  		this.#clampResult.max = max;
+  		return this.#clampResult;
   	}
   
   	// ===========================================================================

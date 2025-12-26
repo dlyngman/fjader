@@ -85,7 +85,8 @@
 				device,
 				format: presentationFormat,
 				alphaMode: 'premultiplied',
-				desynchronized: true
+				// desynchronized: true
+				desynchronized: false
 			});
 
 			contextConfigured = true;
