@@ -114,8 +114,8 @@ export class GPUCoordinator {
 	// CHART MANAGEMENT
 	// =========================================================================
 	#registeredCharts = new Map(); // chartId -> chartConfig
-	#msaaCache = new Map(); // chartId -> { texture, view }
-	#dirtyChartIDs = new Set(); // Charts needing re-render
+	// #msaaCache = new Map(); // chartId -> { texture, view }
+	#dirtyChartsArray = [];
 	#msaaSampleCount = 1;
 
 	// =========================================================================
@@ -125,6 +125,11 @@ export class GPUCoordinator {
 	#animatedScales = new Set(); // Set for O(1) membership check
 	#animatedScalesArray = []; // Array for O(1) iteration (no allocation)
 	#scaleRegistry = null;
+
+	// =========================================================================
+	// HOVER STATE (Keep loop warm while any chart is hovered)
+	// =========================================================================
+	#hoveredCharts = new Set();
 
 	// =========================================================================
 	// SCALE SSBO SYSTEM
@@ -348,6 +353,7 @@ export class GPUCoordinator {
 	 * Render frame - called once per RAF with extrapolation time.
 	 * Updates render state and triggers GPU render.
 	 */
+
 	#renderFrame = (extrapolationDt) => {
 		// 1. Apply any accumulated input (zoom, etc.)
 		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
@@ -370,8 +376,9 @@ export class GPUCoordinator {
 			const scale = this.#animatedScalesArray[i];
 			const affected = scale._affectedChartsArray;
 
-			if (affected && Array.isArray(affected)) {
-				for (let j = 0; j < affected.length; j++) {
+			if (affected) {
+				const affectedLen = affected.length;
+				for (let j = 0; j < affectedLen; j++) {
 					const chartId = affected[j];
 					const chart = this.#registeredCharts.get(chartId);
 
@@ -386,16 +393,21 @@ export class GPUCoordinator {
 		}
 
 		// Add dirty charts (from resize, data updates, etc.)
-		for (const chartId of this.#dirtyChartIDs) {
-			const chart = this.#registeredCharts.get(chartId);
-			if (chart && chart._lastRenderFrame !== currentRenderId) {
+		const dirtyLen = this.#dirtyChartsArray.length;
+		for (let i = 0; i < dirtyLen; i++) {
+			const chart = this.#dirtyChartsArray[i];
+
+			if (!chart._isDirty) continue; // Removed or already processed
+			chart._isDirty = false;
+
+			if (chart._lastRenderFrame !== currentRenderId) {
 				if (chart.visible && chart.contextConfigured) {
 					chart._lastRenderFrame = currentRenderId;
 					chartArray.push(chart);
 				}
 			}
 		}
-		this.#dirtyChartIDs.clear();
+		this.#dirtyChartsArray.length = 0;
 
 		// 4. Remove scales that are at rest (backwards for safe removal)
 		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
@@ -422,7 +434,11 @@ export class GPUCoordinator {
 	 * Idle check - return true if animation should stop.
 	 */
 	#idleCheck = () => {
-		return this.#animatedScales.size === 0 && this.#dirtyChartIDs.size === 0;
+		return (
+			this.#animatedScales.size === 0 &&
+			this.#dirtyChartsArray.length === 0 &&
+			this.#hoveredCharts.size === 0
+		);
 	};
 
 	// =========================================================================
@@ -460,14 +476,19 @@ export class GPUCoordinator {
 		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
 
 		for (let i = 0; i < this.#acquiredTextures.length; i++) {
+			// for (let i = 0; i < numCharts; i++) {
 			const { chartConfig, texture, view } = this.#acquiredTextures[i];
+			// const chartConfig = chartsNeedingRender[i];
+			// const texture = chartConfig.context.getCurrentTexture();
+			// const view = texture.createView();
 
 			if (chartConfig.needsPlanRebuild) {
 				this.#buildRenderPlanForChart(chartConfig);
 			}
 
 			const passEncoder = commandEncoder.beginRenderPass(
-				this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
+				this.#createRenderPassDescriptor(view, chartConfig)
+				// this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
 			);
 
 			if (chartConfig.perFrameBindGroup) {
@@ -888,6 +909,24 @@ export class GPUCoordinator {
 	// CHART REGISTRATION
 	// =========================================================================
 
+	/**
+	 * Mark a chart as hovered - keeps animation loop warm for instant response.
+	 * @param {string} chartId
+	 */
+	setChartHovered(chartId) {
+		this.#hoveredCharts.add(chartId);
+		this.#animationLoop.requestStart();
+	}
+
+	/**
+	 * Mark a chart as no longer hovered.
+	 * @param {string} chartId
+	 */
+	setChartUnhovered(chartId) {
+		this.#hoveredCharts.delete(chartId);
+		// Loop will stop on its own via idle check if nothing else is active
+	}
+
 	registerChart(chartId, canvas, config) {
 		if (this.#registeredCharts.has(chartId)) {
 			console.warn(`Chart ${chartId} already registered, updating config`);
@@ -908,7 +947,9 @@ export class GPUCoordinator {
 			frameUniformsBuffer: null,
 			perFrameBindGroup: null,
 			renderPassDescriptor: null,
-			_lastRenderFrame: -1
+			msaa: null,
+			_lastRenderFrame: -1,
+			_isDirty: false
 		};
 
 		this.#registeredCharts.set(chartId, chartConfig);
@@ -942,25 +983,35 @@ export class GPUCoordinator {
 	unregisterChart(chartId) {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (chartConfig) {
+			chartConfig._isDirty = false;
+
 			if (chartConfig.frameUniformsBuffer) {
 				chartConfig.frameUniformsBuffer.destroy();
 			}
 
-			this.#registeredCharts.delete(chartId);
-
-			const msaa = this.#msaaCache.get(chartId);
-			if (msaa) {
-				msaa.texture.destroy();
-				this.#msaaCache.delete(chartId);
+			if (chartConfig.msaa) {
+				chartConfig.msaa.texture.destroy();
+				chartConfig.msaa = null;
 			}
+
+			this.#registeredCharts.delete(chartId);
+			this.#hoveredCharts.delete(chartId);
+
+			// const msaa = this.#msaaCache.get(chartId);
+			// if (msaa) {
+			// 	msaa.texture.destroy();
+			// 	this.#msaaCache.delete(chartId);
+			// }
 
 			this.#pendingScaleMappings.delete(chartId);
 		}
 	}
 
 	invalidateChart(chartId) {
-		if (this.#registeredCharts.has(chartId)) {
-			this.#dirtyChartIDs.add(chartId);
+		const chart = this.#registeredCharts.get(chartId);
+		if (chart && !chart._isDirty) {
+			chart._isDirty = true;
+			this.#dirtyChartsArray.push(chart);
 			this.#animationLoop.requestStart();
 		}
 	}
@@ -1179,11 +1230,74 @@ export class GPUCoordinator {
 	// RENDER PASS DESCRIPTOR
 	// =========================================================================
 
-	#createRenderPassDescriptor(textureView, canvas, chartId) {
-		const chart = this.#registeredCharts.get(chartId);
+	// #createRenderPassDescriptor(textureView, canvas, chartId) {
+	// 	const chart = this.#registeredCharts.get(chartId);
+
+	// 	if (this.#msaaSampleCount > 1) {
+	// 		let msaa = this.#msaaCache.get(chartId);
+
+	// 		if (!msaa || msaa.texture.width !== canvas.width || msaa.texture.height !== canvas.height) {
+	// 			msaa?.texture.destroy();
+
+	// 			const newTexture = this.#device.createTexture({
+	// 				size: { width: canvas.width, height: canvas.height },
+	// 				sampleCount: this.#msaaSampleCount,
+	// 				format: this.#presentationFormat,
+	// 				usage: GPUTextureUsage.RENDER_ATTACHMENT
+	// 			});
+
+	// 			msaa = { texture: newTexture, view: newTexture.createView() };
+	// 			this.#msaaCache.set(chartId, msaa);
+
+	// 			if (chart) chart.renderPassDescriptor = null;
+	// 		}
+
+	// 		if (chart?.renderPassDescriptor) {
+	// 			chart.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
+	// 			return chart.renderPassDescriptor;
+	// 		}
+
+	// 		const desc = {
+	// 			colorAttachments: [
+	// 				{
+	// 					view: msaa.view,
+	// 					resolveTarget: textureView,
+	// 					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+	// 					loadOp: 'clear',
+	// 					storeOp: 'store'
+	// 				}
+	// 			]
+	// 		};
+
+	// 		if (chart) chart.renderPassDescriptor = desc;
+	// 		return desc;
+	// 	} else {
+	// 		if (chart?.renderPassDescriptor) {
+	// 			chart.renderPassDescriptor.colorAttachments[0].view = textureView;
+	// 			return chart.renderPassDescriptor;
+	// 		}
+
+	// 		const desc = {
+	// 			colorAttachments: [
+	// 				{
+	// 					view: textureView,
+	// 					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+	// 					loadOp: 'clear',
+	// 					storeOp: 'store'
+	// 				}
+	// 			]
+	// 		};
+
+	// 		if (chart) chart.renderPassDescriptor = desc;
+	// 		return desc;
+	// 	}
+	// }
+
+	#createRenderPassDescriptor(textureView, chartConfig) {
+		const canvas = chartConfig.canvas;
 
 		if (this.#msaaSampleCount > 1) {
-			let msaa = this.#msaaCache.get(chartId);
+			let msaa = chartConfig.msaa;
 
 			if (!msaa || msaa.texture.width !== canvas.width || msaa.texture.height !== canvas.height) {
 				msaa?.texture.destroy();
@@ -1196,14 +1310,13 @@ export class GPUCoordinator {
 				});
 
 				msaa = { texture: newTexture, view: newTexture.createView() };
-				this.#msaaCache.set(chartId, msaa);
-
-				if (chart) chart.renderPassDescriptor = null;
+				chartConfig.msaa = msaa;
+				chartConfig.renderPassDescriptor = null;
 			}
 
-			if (chart?.renderPassDescriptor) {
-				chart.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
-				return chart.renderPassDescriptor;
+			if (chartConfig.renderPassDescriptor) {
+				chartConfig.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
+				return chartConfig.renderPassDescriptor;
 			}
 
 			const desc = {
@@ -1218,12 +1331,12 @@ export class GPUCoordinator {
 				]
 			};
 
-			if (chart) chart.renderPassDescriptor = desc;
+			chartConfig.renderPassDescriptor = desc;
 			return desc;
 		} else {
-			if (chart?.renderPassDescriptor) {
-				chart.renderPassDescriptor.colorAttachments[0].view = textureView;
-				return chart.renderPassDescriptor;
+			if (chartConfig.renderPassDescriptor) {
+				chartConfig.renderPassDescriptor.colorAttachments[0].view = textureView;
+				return chartConfig.renderPassDescriptor;
 			}
 
 			const desc = {
@@ -1237,11 +1350,10 @@ export class GPUCoordinator {
 				]
 			};
 
-			if (chart) chart.renderPassDescriptor = desc;
+			chartConfig.renderPassDescriptor = desc;
 			return desc;
 		}
 	}
-
 	// =========================================================================
 	// GETTERS
 	// =========================================================================
@@ -1283,12 +1395,13 @@ export class GPUCoordinator {
 
 		this.#animatedScales.clear();
 		this.#animatedScalesArray.length = 0;
+		this.#hoveredCharts.clear();
 
 		// Cleanup MSAA textures
-		for (const msaa of this.#msaaCache.values()) {
-			msaa.texture?.destroy();
-		}
-		this.#msaaCache.clear();
+		// for (const msaa of this.#msaaCache.values()) {
+		// 	msaa.texture?.destroy();
+		// }
+		// this.#msaaCache.clear();
 
 		// Cleanup SSBO
 		this.#globalScaleSSBO?.destroy();
@@ -1299,7 +1412,7 @@ export class GPUCoordinator {
 			chartConfig.frameUniformsBuffer?.destroy();
 		}
 		this.#registeredCharts.clear();
-		this.#dirtyChartIDs.clear();
+		this.#dirtyChartsArray.length = 0;
 
 		// Cleanup layouts
 		this.#dataLayouts.clear();

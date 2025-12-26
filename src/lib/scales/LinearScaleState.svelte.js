@@ -49,6 +49,10 @@ export class LinearScaleState {
 	#springPair;
 	#springOutput = new Float64Array(2);
 
+	//
+	#domainCurrentBuffer = new Float64Array(2);
+	#clampResult = { min: 0, max: 0 };
+
 	// --- Cached Render Values (updated via updateRenderState) ---
 	#renderMin = 0;
 	#renderMax = 1;
@@ -170,7 +174,9 @@ export class LinearScaleState {
 			/** Current render domain (for reactive access) */
 			get current() {
 				self._version; // Register Svelte dependency
-				return [self.#renderMin, self.#renderMax];
+				self.#domainCurrentBuffer[0] = self.#renderMin;
+				self.#domainCurrentBuffer[1] = self.#renderMax;
+				return self.#domainCurrentBuffer;
 			},
 
 			/** Target domain (what we're animating toward) */
@@ -583,12 +589,12 @@ export class LinearScaleState {
 		const width = max - min;
 		const limitWidth = limits.max - limits.min;
 
-		// If width exceeds limit, clamp to full range
 		if (width > limitWidth) {
-			return { min: limits.min, max: limits.max };
+			this.#clampResult.min = limits.min;
+			this.#clampResult.max = limits.max;
+			return this.#clampResult;
 		}
 
-		// Clamp to bounds
 		if (min < limits.min) {
 			min = limits.min;
 			max = min + width;
@@ -601,7 +607,9 @@ export class LinearScaleState {
 			}
 		}
 
-		return { min, max };
+		this.#clampResult.min = min;
+		this.#clampResult.max = max;
+		return this.#clampResult;
 	}
 
 	// ===========================================================================
