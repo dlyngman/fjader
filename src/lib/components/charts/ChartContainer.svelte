@@ -4,7 +4,7 @@
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
 
-	let { xLabel, yLabel, background, foreground, canvas, canvasComponents } = $props();
+	let { xLabel, yLabel, background, foreground, canvas, canvasComponents, overlay } = $props();
 
 	const pointerBuffer = { x: 0, y: 0 };
 	const innerPointBuffer = { x: 0, y: 0 };
@@ -289,22 +289,20 @@
 		pointerBuffer.x = event.offsetX;
 		pointerBuffer.y = event.offsetY;
 
-		const { x, y, innerPoint } = layout.getActiveAxes(pointerBuffer);
+		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
 
-		scales.accumulateZoom(innerPoint, scaleFactor, x, y);
+		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds);
 	}
 
 	function handleDoubleClick(event) {
 		event.preventDefault();
 		pointerBuffer.x = event.offsetX;
 		pointerBuffer.y = event.offsetY;
-
-		const { x, y } = layout.getActiveAxes(pointerBuffer);
-
-		scales.resetZoom(x, y);
+		const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
+		scales.resetZoom(xInBounds, yInBounds);
 	}
 
 	// TOUCH HANDLERS
@@ -331,9 +329,9 @@
 			pointerBuffer.x = event.offsetX;
 			pointerBuffer.y = event.offsetY;
 
-			const { x, y } = layout.getActiveAxes(pointerBuffer);
-			activePanX = x;
-			activePanY = y;
+			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
+			activePanX = xInBounds;
+			activePanY = yInBounds;
 		}
 	}
 
@@ -396,11 +394,10 @@
 		pointerBuffer.x = event.offsetX;
 		pointerBuffer.y = event.offsetY;
 
-		const { x, y, innerPoint } = layout.getActiveAxes(pointerBuffer);
+		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
-		// Store primitive booleans
-		activePanX = x && scales.scaleTypes?.x === 'linear';
-		activePanY = y && scales.scaleTypes?.y === 'linear';
+		activePanX = xInBounds && scales.scaleTypes?.x === 'linear';
+		activePanY = yInBounds && scales.scaleTypes?.y === 'linear';
 
 		if (!activePanX && !activePanY) return;
 
@@ -535,6 +532,12 @@
 				/>
 			</g>
 		</svg>
+		<!-- Overlay layer - on top of everything, outside SVG -->
+		{#if overlay}
+			<div class="overlay-layer">
+				{@render overlay()}
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -548,13 +551,16 @@ gpu: {gpuCoordinator.timings.gpu} µs
 		position: relative;
 		flex: 1;
 		height: 100%;
-		contain: layout style;
-		/* contain: strict; */
+		/* Use 'strict' contain for maximum isolation */
+		contain: strict;
 		touch-action: none;
 		overscroll-behavior: none;
+		/* Force GPU layer */
 		transform: translateZ(0);
+		will-change: contents;
 		outline: none;
-		/* will-change: transform, contents;  */
+		/* Prevent paint from bleeding */
+		isolation: isolate;
 	}
 
 	.svg-background,
@@ -577,13 +583,32 @@ gpu: {gpuCoordinator.timings.gpu} µs
 
 	.canvas-layer {
 		z-index: 2;
+		width: 100%;
+		height: 100%;
+		contain: strict;
+		will-change: contents;
 	}
+
 	.svg-foreground {
 		z-index: 3;
 	}
 
 	.crosshair {
 		cursor: crosshair;
+	}
+
+	.overlay-layer {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	.overlay-layer :global(*) {
+		pointer-events: auto;
 	}
 
 	#info {

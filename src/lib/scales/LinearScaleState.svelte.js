@@ -239,7 +239,7 @@ export class LinearScaleState {
 		this.#updateGpuState();
 
 		// Trigger Svelte reactivity
-		this._version++;
+		// this._version++;
 	}
 
 	/**
@@ -266,6 +266,10 @@ export class LinearScaleState {
 	 * @param {object} context - Pan context with initialDomain, screenToDataRatio, etc.
 	 */
 	setPanContext(context) {
+		// console.log(`=== setPanContext for ${this.name} (${this.id}) ===`);
+		// console.log('axis:', context.axis);
+		// console.log('#isAnimating before:', this.#isAnimating);
+		// console.log('#gpuCoordinator exists:', !!this.#gpuCoordinator);
 		this.#panContext = {
 			initialMin: this.#springPair.currentA,
 			initialMax: this.#springPair.currentB,
@@ -276,9 +280,11 @@ export class LinearScaleState {
 		};
 
 		// Grab springs - snaps target to current, zeros velocity
-		this.#springPair.grab();
+		// this.#springPair.grab();
 		this.#setStiffness(SCALE_SPRING_PRESETS.pan);
 		this.#ensureAnimating();
+
+		// console.log('#isAnimating after:', this.#isAnimating);
 	}
 
 	/**
