@@ -115,8 +115,7 @@
   	// CHART MANAGEMENT
   	// =========================================================================
   	#registeredCharts = new Map(); // chartId -> chartConfig
-  	#msaaCache = new Map(); // chartId -> { texture, view }
-  	#dirtyChartIDs = new Set(); // Charts needing re-render
+  	// #msaaCache = new Map(); // chartId -> { texture, view }
   	#dirtyChartsArray = [];
   	#msaaSampleCount = 1;
   
@@ -127,6 +126,11 @@
   	#animatedScales = new Set(); // Set for O(1) membership check
   	#animatedScalesArray = []; // Array for O(1) iteration (no allocation)
   	#scaleRegistry = null;
+  
+  	// =========================================================================
+  	// HOVER STATE (Keep loop warm while any chart is hovered)
+  	// =========================================================================
+  	#hoveredCharts = new Set();
   
   	// =========================================================================
   	// SCALE SSBO SYSTEM
@@ -167,6 +171,12 @@
   	#acquiredTextures = []; // Reused array for texture acquisition
   	#encoderDescriptor = { label: 'frame-encoder' };
   	#submitArray = [null]; // Reused array for queue.submit()
+  	// #gpuReady = true;
+  	#framesInFlight = 0; // TODO Test remove
+  	#maxFramesInFlight = 1; // TODO Test remove
+  
+  	#lastRenderTime = 0;
+  	#gaps = [];
   
   	// =========================================================================
   	// PERFORMANCE TRACKING
@@ -352,6 +362,20 @@
   	 */
   
   	#renderFrame = (extrapolationDt) => {
+  		// console.log('=== RENDER FRAME ===');
+  		// console.log('animatedScalesArray length:', this.#animatedScalesArray.length);
+  
+  		// const now = performance.now();
+  		// if (this.#lastRenderTime > 0 && now - this.#lastRenderTime < 8) {
+  		// 	return;
+  		// }
+  		// this.#lastRenderTime = now;
+  
+  		// if (this.#framesInFlight >= this.#maxFramesInFlight) {
+  		// 	console.log('Skipping frame - too many in flight:', this.#framesInFlight);
+  		// 	return;
+  		// }
+  
   		// 1. Apply any accumulated input (zoom, etc.)
   		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
   			this.#animatedScalesArray[i]._applyInput?.();
@@ -362,6 +386,12 @@
   		for (let i = 0; i < len; i++) {
   			this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
   		}
+  
+  		// DEBUG: Log scale values
+  		// if (this.#animatedScalesArray.length > 0) {
+  		// 	const s = this.#animatedScalesArray[0];
+  		// 	console.log('scale:', s.gpuState.domainMin.toFixed(4), s.gpuState.domainMax.toFixed(4));
+  		// }
   
   		// 3. Gather charts to render BEFORE removing rested scales
   		const chartArray = this.#chartsToRenderArray;
@@ -406,6 +436,18 @@
   		}
   		this.#dirtyChartsArray.length = 0;
   
+  		// console.log(
+  		// 	'Charts to render:',
+  		// 	chartArray.length,
+  		// 	chartArray.map((c) => c.chartId)
+  		// );
+  
+  		// // Log affected charts for each scale
+  		// for (let i = 0; i < this.#animatedScalesArray.length; i++) {
+  		// 	const scale = this.#animatedScalesArray[i];
+  		// 	console.log(`Scale ${scale.name} affected charts:`, scale._affectedChartsArray);
+  		// }
+  
   		// 4. Remove scales that are at rest (backwards for safe removal)
   		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
   			const scale = this.#animatedScalesArray[i];
@@ -426,81 +468,16 @@
   			this.#coordinatedRender(chartArray);
   		}
   	};
-  	// #renderFrame = (extrapolationDt) => {
-  	// 	// 1. Apply any accumulated input (zoom, etc.)
-  	// 	for (let i = 0; i < this.#animatedScalesArray.length; i++) {
-  	// 		this.#animatedScalesArray[i]._applyInput?.();
-  	// 	}
-  
-  	// 	// 2. Update render state with extrapolation for ALL scales first
-  	// 	const len = this.#animatedScalesArray.length;
-  	// 	for (let i = 0; i < len; i++) {
-  	// 		this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
-  	// 	}
-  
-  	// 	// 3. Gather charts to render BEFORE removing rested scales
-  	// 	const chartArray = this.#chartsToRenderArray;
-  	// 	chartArray.length = 0;
-  	// 	const currentRenderId = this.#frameId;
-  
-  	// 	// Add charts affected by animated scales
-  	// 	for (let i = 0; i < this.#animatedScalesArray.length; i++) {
-  	// 		const scale = this.#animatedScalesArray[i];
-  	// 		const affected = scale._affectedChartsArray;
-  
-  	// 		if (affected && Array.isArray(affected)) {
-  	// 			for (let j = 0; j < affected.length; j++) {
-  	// 				const chartId = affected[j];
-  	// 				const chart = this.#registeredCharts.get(chartId);
-  
-  	// 				if (chart && chart._lastRenderFrame !== currentRenderId) {
-  	// 					if (chart.visible && chart.contextConfigured) {
-  	// 						chart._lastRenderFrame = currentRenderId;
-  	// 						chartArray.push(chart);
-  	// 					}
-  	// 				}
-  	// 			}
-  	// 		}
-  	// 	}
-  
-  	// 	// Add dirty charts (from resize, data updates, etc.)
-  	// 	for (const chartId of this.#dirtyChartIDs) {
-  	// 		const chart = this.#registeredCharts.get(chartId);
-  	// 		if (chart && chart._lastRenderFrame !== currentRenderId) {
-  	// 			if (chart.visible && chart.contextConfigured) {
-  	// 				chart._lastRenderFrame = currentRenderId;
-  	// 				chartArray.push(chart);
-  	// 			}
-  	// 		}
-  	// 	}
-  	// 	this.#dirtyChartIDs.clear();
-  
-  	// 	// 4. Remove scales that are at rest (backwards for safe removal)
-  	// 	for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
-  	// 		const scale = this.#animatedScalesArray[i];
-  
-  	// 		if (scale.isAtRest()) {
-  	// 			scale._markAtRest();
-  	// 			// Swap and pop removal (O(1))
-  	// 			this.#animatedScales.delete(scale);
-  	// 			const last = this.#animatedScalesArray.pop();
-  	// 			if (i < this.#animatedScalesArray.length) {
-  	// 				this.#animatedScalesArray[i] = last;
-  	// 			}
-  	// 		}
-  	// 	}
-  
-  	// 	// 5. Render if needed
-  	// 	if (chartArray.length > 0) {
-  	// 		this.#coordinatedRender(chartArray);
-  	// 	}
-  	// };
   
   	/**
   	 * Idle check - return true if animation should stop.
   	 */
   	#idleCheck = () => {
-  		return this.#animatedScales.size === 0 && this.#dirtyChartIDs.size === 0;
+  		return (
+  			this.#animatedScales.size === 0 &&
+  			this.#dirtyChartsArray.length === 0 &&
+  			this.#hoveredCharts.size === 0
+  		);
   	};
   
   	// =========================================================================
@@ -514,12 +491,12 @@
   		this.#acquiredTextures.length = 0;
   
   		const numCharts = chartsNeedingRender.length;
-  		// for (let i = 0; i < numCharts; i++) {
-  		// 	const chartConfig = chartsNeedingRender[i];
-  		// 	const texture = chartConfig.context.getCurrentTexture();
-  		// 	const view = texture.createView();
-  		// 	this.#acquiredTextures.push({ chartConfig, texture, view });
-  		// }
+  		for (let i = 0; i < numCharts; i++) {
+  			const chartConfig = chartsNeedingRender[i];
+  			const texture = chartConfig.context.getCurrentTexture();
+  			const view = texture.createView();
+  			this.#acquiredTextures.push({ chartConfig, texture, view });
+  		}
   
   		// PHASE 2: CPU WORK (Scale buffer updates)
   		this.#fillAllScales(this.#cpuScaleBuffer);
@@ -537,19 +514,20 @@
   		const commandEncoder = this.#device.createCommandEncoder(this.#encoderDescriptor);
   		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
   
-  		// for (let i = 0; i < this.#acquiredTextures.length; i++) {
-  		for (let i = 0; i < numCharts; i++) {
-  			// const { chartConfig, texture, view } = this.#acquiredTextures[i];
-  			const chartConfig = chartsNeedingRender[i];
-  			const texture = chartConfig.context.getCurrentTexture();
-  			const view = texture.createView();
+  		for (let i = 0; i < this.#acquiredTextures.length; i++) {
+  			// for (let i = 0; i < numCharts; i++) {
+  			const { chartConfig, texture, view } = this.#acquiredTextures[i];
+  			// const chartConfig = chartsNeedingRender[i];
+  			// const texture = chartConfig.context.getCurrentTexture();
+  			// const view = texture.createView();
   
   			if (chartConfig.needsPlanRebuild) {
   				this.#buildRenderPlanForChart(chartConfig);
   			}
   
   			const passEncoder = commandEncoder.beginRenderPass(
-  				this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
+  				this.#createRenderPassDescriptor(view, chartConfig)
+  				// this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
   			);
   
   			if (chartConfig.perFrameBindGroup) {
@@ -588,6 +566,12 @@
   		// PHASE 4: SUBMIT
   		this.#submitArray[0] = commandEncoder.finish();
   		this.#device.queue.submit(this.#submitArray);
+  
+  		// this.#framesInFlight++;
+  		// this.#device.queue.onSubmittedWorkDone().then(() => {
+  		// 	this.#framesInFlight--;
+  		// });
+  
   		this.#frameId++;
   	}
   
@@ -935,20 +919,27 @@
   	// =========================================================================
   
   	addAnimatingScale(scale) {
+  		// console.log(`=== addAnimatingScale ${scale.name} (${scale.id}) ===`);
   		let idx = this.#scaleIndexManager.getIndex(scale.id);
+  		// console.log('Initial index lookup:', idx);
   
   		if (idx === undefined) {
+  			// console.log('Index undefined, calling registerScale...');
   			this.registerScale(scale.id, 'linear');
   			idx = this.#scaleIndexManager.getIndex(scale.id);
+  			// console.log('Index after registerScale:', idx);
   			if (idx === undefined) {
   				console.error(`Scale ${scale.id} still not registered after auto-register`);
   				return;
   			}
   		}
   
+  		// console.log('Already in animatedScales Set?', this.#animatedScales.has(scale));
+  
   		if (!this.#animatedScales.has(scale)) {
   			this.#animatedScales.add(scale);
   			this.#animatedScalesArray.push(scale);
+  			// console.log('Added to animatedScales, new length:', this.#animatedScalesArray.length);
   		}
   
   		this.#animationLoop.requestStart();
@@ -970,6 +961,24 @@
   	// CHART REGISTRATION
   	// =========================================================================
   
+  	/**
+  	 * Mark a chart as hovered - keeps animation loop warm for instant response.
+  	 * @param {string} chartId
+  	 */
+  	setChartHovered(chartId) {
+  		this.#hoveredCharts.add(chartId);
+  		this.#animationLoop.requestStart();
+  	}
+  
+  	/**
+  	 * Mark a chart as no longer hovered.
+  	 * @param {string} chartId
+  	 */
+  	setChartUnhovered(chartId) {
+  		this.#hoveredCharts.delete(chartId);
+  		// Loop will stop on its own via idle check if nothing else is active
+  	}
+  
   	registerChart(chartId, canvas, config) {
   		if (this.#registeredCharts.has(chartId)) {
   			console.warn(`Chart ${chartId} already registered, updating config`);
@@ -990,6 +999,7 @@
   			frameUniformsBuffer: null,
   			perFrameBindGroup: null,
   			renderPassDescriptor: null,
+  			msaa: null,
   			_lastRenderFrame: -1,
   			_isDirty: false
   		};
@@ -1031,13 +1041,19 @@
   				chartConfig.frameUniformsBuffer.destroy();
   			}
   
-  			this.#registeredCharts.delete(chartId);
-  
-  			const msaa = this.#msaaCache.get(chartId);
-  			if (msaa) {
-  				msaa.texture.destroy();
-  				this.#msaaCache.delete(chartId);
+  			if (chartConfig.msaa) {
+  				chartConfig.msaa.texture.destroy();
+  				chartConfig.msaa = null;
   			}
+  
+  			this.#registeredCharts.delete(chartId);
+  			this.#hoveredCharts.delete(chartId);
+  
+  			// const msaa = this.#msaaCache.get(chartId);
+  			// if (msaa) {
+  			// 	msaa.texture.destroy();
+  			// 	this.#msaaCache.delete(chartId);
+  			// }
   
   			this.#pendingScaleMappings.delete(chartId);
   		}
@@ -1266,13 +1282,83 @@
   	// RENDER PASS DESCRIPTOR
   	// =========================================================================
   
-  	#createRenderPassDescriptor(textureView, canvas, chartId) {
-  		const chart = this.#registeredCharts.get(chartId);
+  	// #createRenderPassDescriptor(textureView, canvas, chartId) {
+  	// 	const chart = this.#registeredCharts.get(chartId);
+  
+  	// 	if (this.#msaaSampleCount > 1) {
+  	// 		let msaa = this.#msaaCache.get(chartId);
+  
+  	// 		if (!msaa || msaa.texture.width !== canvas.width || msaa.texture.height !== canvas.height) {
+  	// 			msaa?.texture.destroy();
+  
+  	// 			const newTexture = this.#device.createTexture({
+  	// 				size: { width: canvas.width, height: canvas.height },
+  	// 				sampleCount: this.#msaaSampleCount,
+  	// 				format: this.#presentationFormat,
+  	// 				usage: GPUTextureUsage.RENDER_ATTACHMENT
+  	// 			});
+  
+  	// 			msaa = { texture: newTexture, view: newTexture.createView() };
+  	// 			this.#msaaCache.set(chartId, msaa);
+  
+  	// 			if (chart) chart.renderPassDescriptor = null;
+  	// 		}
+  
+  	// 		if (chart?.renderPassDescriptor) {
+  	// 			chart.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
+  	// 			return chart.renderPassDescriptor;
+  	// 		}
+  
+  	// 		const desc = {
+  	// 			colorAttachments: [
+  	// 				{
+  	// 					view: msaa.view,
+  	// 					resolveTarget: textureView,
+  	// 					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+  	// 					loadOp: 'clear',
+  	// 					storeOp: 'store'
+  	// 				}
+  	// 			]
+  	// 		};
+  
+  	// 		if (chart) chart.renderPassDescriptor = desc;
+  	// 		return desc;
+  	// 	} else {
+  	// 		if (chart?.renderPassDescriptor) {
+  	// 			chart.renderPassDescriptor.colorAttachments[0].view = textureView;
+  	// 			return chart.renderPassDescriptor;
+  	// 		}
+  
+  	// 		const desc = {
+  	// 			colorAttachments: [
+  	// 				{
+  	// 					view: textureView,
+  	// 					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+  	// 					loadOp: 'clear',
+  	// 					storeOp: 'store'
+  	// 				}
+  	// 			]
+  	// 		};
+  
+  	// 		if (chart) chart.renderPassDescriptor = desc;
+  	// 		return desc;
+  	// 	}
+  	// }
+  
+  	#createRenderPassDescriptor(textureView, chartConfig) {
+  		const canvas = chartConfig.canvas;
   
   		if (this.#msaaSampleCount > 1) {
-  			let msaa = this.#msaaCache.get(chartId);
+  			let msaa = chartConfig.msaa;
   
   			if (!msaa || msaa.texture.width !== canvas.width || msaa.texture.height !== canvas.height) {
+  				// console.warn('MSAA RECREATE!', {
+  				// 	hadMsaa: !!msaa,
+  				// 	oldSize: msaa ? `${msaa.texture.width}x${msaa.texture.height}` : 'none',
+  				// 	newSize: `${canvas.width}x${canvas.height}`,
+  				// 	chartId: chartConfig.chartId
+  				// });
+  
   				msaa?.texture.destroy();
   
   				const newTexture = this.#device.createTexture({
@@ -1283,14 +1369,13 @@
   				});
   
   				msaa = { texture: newTexture, view: newTexture.createView() };
-  				this.#msaaCache.set(chartId, msaa);
-  
-  				if (chart) chart.renderPassDescriptor = null;
+  				chartConfig.msaa = msaa;
+  				chartConfig.renderPassDescriptor = null;
   			}
   
-  			if (chart?.renderPassDescriptor) {
-  				chart.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
-  				return chart.renderPassDescriptor;
+  			if (chartConfig.renderPassDescriptor) {
+  				chartConfig.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
+  				return chartConfig.renderPassDescriptor;
   			}
   
   			const desc = {
@@ -1305,12 +1390,12 @@
   				]
   			};
   
-  			if (chart) chart.renderPassDescriptor = desc;
+  			chartConfig.renderPassDescriptor = desc;
   			return desc;
   		} else {
-  			if (chart?.renderPassDescriptor) {
-  				chart.renderPassDescriptor.colorAttachments[0].view = textureView;
-  				return chart.renderPassDescriptor;
+  			if (chartConfig.renderPassDescriptor) {
+  				chartConfig.renderPassDescriptor.colorAttachments[0].view = textureView;
+  				return chartConfig.renderPassDescriptor;
   			}
   
   			const desc = {
@@ -1324,11 +1409,10 @@
   				]
   			};
   
-  			if (chart) chart.renderPassDescriptor = desc;
+  			chartConfig.renderPassDescriptor = desc;
   			return desc;
   		}
   	}
-  
   	// =========================================================================
   	// GETTERS
   	// =========================================================================
@@ -1370,12 +1454,13 @@
   
   		this.#animatedScales.clear();
   		this.#animatedScalesArray.length = 0;
+  		this.#hoveredCharts.clear();
   
   		// Cleanup MSAA textures
-  		for (const msaa of this.#msaaCache.values()) {
-  			msaa.texture?.destroy();
-  		}
-  		this.#msaaCache.clear();
+  		// for (const msaa of this.#msaaCache.values()) {
+  		// 	msaa.texture?.destroy();
+  		// }
+  		// this.#msaaCache.clear();
   
   		// Cleanup SSBO
   		this.#globalScaleSSBO?.destroy();
@@ -1386,7 +1471,6 @@
   			chartConfig.frameUniformsBuffer?.destroy();
   		}
   		this.#registeredCharts.clear();
-  		this.#dirtyChartIDs.clear();
   		this.#dirtyChartsArray.length = 0;
   
   		// Cleanup layouts
@@ -1675,7 +1759,7 @@
   		this.#updateGpuState();
   
   		// Trigger Svelte reactivity
-  		this._version++;
+  		// this._version++;
   	}
   
   	/**
@@ -1702,6 +1786,10 @@
   	 * @param {object} context - Pan context with initialDomain, screenToDataRatio, etc.
   	 */
   	setPanContext(context) {
+  		// console.log(`=== setPanContext for ${this.name} (${this.id}) ===`);
+  		// console.log('axis:', context.axis);
+  		// console.log('#isAnimating before:', this.#isAnimating);
+  		// console.log('#gpuCoordinator exists:', !!this.#gpuCoordinator);
   		this.#panContext = {
   			initialMin: this.#springPair.currentA,
   			initialMax: this.#springPair.currentB,
@@ -1712,9 +1800,11 @@
   		};
   
   		// Grab springs - snaps target to current, zeros velocity
-  		this.#springPair.grab();
+  		// this.#springPair.grab();
   		this.#setStiffness(SCALE_SPRING_PRESETS.pan);
   		this.#ensureAnimating();
+  
+  		// console.log('#isAnimating after:', this.#isAnimating);
   	}
   
   	/**
@@ -2025,12 +2115,12 @@
   		const width = max - min;
   		const limitWidth = limits.max - limits.min;
   
-  		// If width exceeds limit, clamp to full range
   		if (width > limitWidth) {
-  			return { min: limits.min, max: limits.max };
+  			this.#clampResult.min = limits.min;
+  			this.#clampResult.max = limits.max;
+  			return this.#clampResult;
   		}
   
-  		// Clamp to bounds
   		if (min < limits.min) {
   			min = limits.min;
   			max = min + width;
@@ -2068,322 +2158,134 @@
   
   import { DT } from './Spring.js';
   
-  // Maximum delta time to prevent "spiral of death" after tab switch or debugger pause
-  const MAX_DELTA = 0.1; // 100ms cap
+  const MAX_DELTA = 0.1; // 100ms cap - handles tab switch, debugger pause, etc.
   
-  /**
-   * AnimationLoop manages a fixed-timestep physics simulation with variable-rate rendering.
-   *
-   * Key features:
-   * - Fixed timestep physics (deterministic, stable)
-   * - Accumulator pattern for frame-rate independence
-   * - Render extrapolation for smooth visuals
-   * - Automatic pause/resume on visibility change
-   * - Zero-allocation in hot path
-   *
-   * Usage:
-   * ```js
-   * const loop = new AnimationLoop({
-   *   onPhysicsStep: () => {
-   *     // Called at fixed rate (360Hz) - update physics state
-   *     mySpring.step();
-   *   },
-   *   onRender: (extrapolationDt) => {
-   *     // Called once per frame - render with extrapolation
-   *     const smoothValue = mySpring.getRenderable(extrapolationDt);
-   *     draw(smoothValue);
-   *   },
-   *   onIdleCheck: () => {
-   *     // Return true if animation should stop
-   *     return mySpring.isAtRest();
-   *   }
-   * });
-   *
-   * loop.start();
-   * ```
-   */
   export class AnimationLoop {
-  	// Timing state
-  	#accumulator = 0;
-  	#lastTime = 0;
+      #accumulator = 0;
+      #lastTime = 0;
+      #rafId = null;
+      #isRunning = false;
   
-  	// Loop control
-  	#rafId = null;
-  	#isRunning = false;
-  	#isPaused = false;
+      #onPhysicsStep;
+      #onRender;
+      #onIdleCheck;
   
-  	// Callbacks
-  	#onPhysicsStep;
-  	#onRender;
-  	#onIdleCheck;
+      #frameCount = 0;
+      #physicsStepsThisFrame = 0;
+      #lastDelta = 0;
   
-  	// Stats (for debugging/monitoring)
-  	#frameCount = 0;
-  	#physicsStepsThisFrame = 0;
-  	#lastDelta = 0;
+      #boundFrame;
   
-  	// Bound handlers (created once to avoid allocation)
-  	#boundFrame;
-  	#boundVisibilityHandler;
+      constructor({ onPhysicsStep, onRender, onIdleCheck = null }) {
+          if (typeof onPhysicsStep !== 'function') {
+              throw new Error('AnimationLoop requires onPhysicsStep callback');
+          }
+          if (typeof onRender !== 'function') {
+              throw new Error('AnimationLoop requires onRender callback');
+          }
   
-  	#frameStats = {
-  		allocations: 0,
-  		lastHeapSize: 0,
-  		heapGrowth: []
-  	};
+          this.#onPhysicsStep = onPhysicsStep;
+          this.#onRender = onRender;
+          this.#onIdleCheck = onIdleCheck;
   
-  	/**
-  	 * @param {Object} config
-  	 * @param {Function} config.onPhysicsStep - Called for each fixed timestep (no arguments)
-  	 * @param {Function} config.onRender - Called once per frame with extrapolation dt in seconds
-  	 * @param {Function} [config.onIdleCheck] - Optional. Return true to auto-stop the loop
-  	 */
-  	constructor({ onPhysicsStep, onRender, onIdleCheck = null }) {
-  		if (typeof onPhysicsStep !== 'function') {
-  			throw new Error('AnimationLoop requires onPhysicsStep callback');
-  		}
-  		if (typeof onRender !== 'function') {
-  			throw new Error('AnimationLoop requires onRender callback');
-  		}
+          this.#boundFrame = this.#frame.bind(this);
+      }
   
-  		this.#onPhysicsStep = onPhysicsStep;
-  		this.#onRender = onRender;
-  		this.#onIdleCheck = onIdleCheck;
+      // ===========================================================================
+      // PUBLIC API
+      // ===========================================================================
   
-  		// Pre-bind methods to avoid allocation during animation
-  		this.#boundFrame = this.#frame.bind(this);
-  		this.#boundVisibilityHandler = this.#handleVisibility.bind(this);
+      start() {
+          if (this.#rafId !== null) return;
   
-  		// Setup visibility change listener
-  		if (typeof document !== 'undefined') {
-  			document.addEventListener('visibilitychange', this.#boundVisibilityHandler);
-  		}
-  	}
+          this.#isRunning = true;
+          this.#lastTime = performance.now();
+          this.#accumulator = 0;
+          this.#rafId = requestAnimationFrame(this.#boundFrame);
+      }
   
-  	// ===========================================================================
-  	// PUBLIC API
-  	// ===========================================================================
+      requestStart() {
+          if (this.#rafId === null) {
+              this.start();
+          }
+      }
   
-  	/**
-  	 * Start the animation loop.
-  	 * If already running, this is a no-op.
-  	 */
-  	start() {
-  		if (this.#rafId !== null) {
-  			// Already have a pending frame, don't double-schedule
-  			return;
-  		}
+      stop() {
+          this.#isRunning = false;
+          if (this.#rafId !== null) {
+              cancelAnimationFrame(this.#rafId);
+              this.#rafId = null;
+          }
+      }
   
-  		this.#isRunning = true;
-  		this.#isPaused = false;
-  		this.#lastTime = performance.now();
-  		this.#accumulator = 0;
+      destroy() {
+          this.stop();
+      }
   
-  		this.#rafId = requestAnimationFrame(this.#boundFrame);
-  	}
+      // ===========================================================================
+      // GETTERS
+      // ===========================================================================
   
-  	/**
-  	 * Request the loop to start if not already running.
-  	 * Idempotent - safe to call multiple times.
-  	 */
-  	requestStart() {
-  		if (!this.#isRunning) {
-  			this.start();
-  		} else if (this.#isPaused) {
-  			this.resume();
-  		} else if (this.#rafId === null) {
-  			// Was running but stopped (idle check returned true)
-  			// Restart the loop
-  			this.#lastTime = performance.now();
-  			this.#accumulator = 0;
-  			this.#rafId = requestAnimationFrame(this.#boundFrame);
-  		}
-  	}
+      get frameCount() {
+          return this.#frameCount;
+      }
   
-  	/**
-  	 * Pause the animation loop (keeps state, can resume).
-  	 * Used when tab becomes hidden.
-  	 */
-  	pause() {
-  		this.#isPaused = true;
-  		if (this.#rafId !== null) {
-  			cancelAnimationFrame(this.#rafId);
-  			this.#rafId = null;
-  		}
-  	}
+      get physicsStepsLastFrame() {
+          return this.#physicsStepsThisFrame;
+      }
   
-  	/**
-  	 * Resume from pause.
-  	 * Resets timing to prevent large delta after resume.
-  	 */
-  	resume() {
-  		if (!this.#isRunning || !this.#isPaused) return;
+      get lastDelta() {
+          return this.#lastDelta;
+      }
   
-  		this.#isPaused = false;
-  		this.#lastTime = performance.now();
-  		this.#accumulator = 0;
+      get accumulator() {
+          return this.#accumulator;
+      }
   
-  		if (this.#rafId === null) {
-  			this.#rafId = requestAnimationFrame(this.#boundFrame);
-  		}
-  	}
+      get isRunning() {
+          return this.#isRunning && this.#rafId !== null;
+      }
   
-  	/**
-  	 * Fully stop the animation loop.
-  	 * Call start() to begin again.
-  	 */
-  	stop() {
-  		this.#isRunning = false;
-  		this.#isPaused = false;
-  		if (this.#rafId !== null) {
-  			cancelAnimationFrame(this.#rafId);
-  			this.#rafId = null;
-  		}
-  	}
+      // ===========================================================================
+      // FRAME LOOP
+      // ===========================================================================
   
-  	/**
-  	 * Clean up resources. Call when disposing of the loop.
-  	 */
-  	destroy() {
-  		this.stop();
-  		if (typeof document !== 'undefined') {
-  			document.removeEventListener('visibilitychange', this.#boundVisibilityHandler);
-  		}
-  	}
+      #frame(time) {
+        const now = time;
+          // const now = performance.now();
+          let delta = (now - this.#lastTime) / 1000;
+          this.#lastTime = now;
   
-  	// ===========================================================================
-  	// GETTERS (for debugging/monitoring)
-  	// ===========================================================================
+          // Clamp delta - handles tab switch, debugger pause, slow frames
+          if (delta > MAX_DELTA) {
+              delta = MAX_DELTA;
+          }
   
-  	/** Total frames rendered */
-  	get frameCount() {
-  		return this.#frameCount;
-  	}
+          this.#lastDelta = delta;
+          this.#accumulator += delta;
   
-  	/** Physics steps executed in the last frame */
-  	get physicsStepsLastFrame() {
-  		return this.#physicsStepsThisFrame;
-  	}
+          // Fixed timestep physics
+          this.#physicsStepsThisFrame = 0;
+          while (this.#accumulator >= DT) {
+              this.#onPhysicsStep();
+              this.#accumulator -= DT;
+              this.#physicsStepsThisFrame++;
+          }
   
-  	/** Delta time of last frame in seconds */
-  	get lastDelta() {
-  		return this.#lastDelta;
-  	}
+          // Render with extrapolation
+          this.#onRender(this.#accumulator);
   
-  	/** Current accumulator value in seconds */
-  	get accumulator() {
-  		return this.#accumulator;
-  	}
+          this.#frameCount++;
   
-  	/** Whether the loop is currently running */
-  	get isRunning() {
-  		return this.#isRunning && !this.#isPaused;
-  	}
+          // Check if we should continue
+          const shouldContinue = this.#onIdleCheck ? !this.#onIdleCheck() : true;
   
-  	/** Whether the loop is paused (e.g., tab hidden) */
-  	get isPaused() {
-  		return this.#isPaused;
-  	}
-  
-  	// ===========================================================================
-  	// PRIVATE METHODS
-  	// ===========================================================================
-  
-  	/**
-  	 * Handle document visibility changes.
-  	 * Pauses when hidden, resumes when visible.
-  	 */
-  	#handleVisibility() {
-  		if (document.hidden) {
-  			if (this.#isRunning && !this.#isPaused) {
-  				this.pause();
-  			}
-  		} else {
-  			if (this.#isRunning && this.#isPaused) {
-  				this.resume();
-  			}
-  		}
-  	}
-  
-  	/**
-  	 * Main frame callback. This is the hot path.
-  	 * @param {DOMHighResTimeStamp} time - Current timestamp from requestAnimationFrame
-  	 */
-  	#frame(time) {
-  		// Sample heap size every 60 frames
-  		// if (this.#frameCount % 60 === 0 && performance.memory) {
-  		// 	const currentHeap = performance.memory.usedJSHeapSize;
-  		// 	const growth = currentHeap - this.#frameStats.lastHeapSize;
-  		// 	this.#frameStats.heapGrowth.push(growth);
-  		// 	this.#frameStats.lastHeapSize = currentHeap;
-  
-  		// 	// If heap grows consistently, we have a leak
-  		// 	if (this.#frameStats.heapGrowth.length > 10) {
-  		// 		const avgGrowth = this.#frameStats.heapGrowth.slice(-10).reduce((a, b) => a + b, 0) / 10;
-  
-  		// 		if (avgGrowth > 100000) {
-  		// 			// 100KB/second
-  		// 			console.warn(`⚠️ Heap growing at ${(avgGrowth / 1024).toFixed(2)}KB/sec`);
-  		// 		}
-  
-  		// 		this.#frameStats.heapGrowth.shift();
-  		// 	}
-  		// }
-  		// performance.mark('frame');
-  
-  		// Calculate delta time in seconds
-  		// let delta = (time - this.#lastTime) / 1000;
-  		// this.#lastTime = time;
-  
-  		const now = performance.now();
-  		let delta = (now - this.#lastTime) / 1000;
-  		this.#lastTime = now;
-  		// Clamp delta to prevent spiral of death
-  		// (e.g., after debugger pause or slow frame)
-  		if (delta > MAX_DELTA) {
-  			delta = MAX_DELTA;
-  		}
-  
-  		this.#lastDelta = delta;
-  		this.#accumulator += delta;
-  
-  		// --- Fixed Timestep Physics ---
-  		// Run physics steps until accumulator is below one timestep
-  		this.#physicsStepsThisFrame = 0;
-  
-  		while (this.#accumulator >= DT) {
-  			this.#onPhysicsStep();
-  			this.#accumulator -= DT;
-  			this.#physicsStepsThisFrame++;
-  		}
-  
-  		// --- Render with Extrapolation ---
-  		// Pass remaining accumulator time for smooth interpolation
-  		this.#onRender(this.#accumulator);
-  
-  		this.#frameCount++;
-  
-  		// --- Check if we should continue ---
-  		let shouldContinue = true;
-  
-  		if (this.#onIdleCheck) {
-  			shouldContinue = !this.#onIdleCheck();
-  		}
-  
-  		// Schedule next frame or stop
-  		if (this.#isRunning && !this.#isPaused && shouldContinue) {
-  			this.#rafId = requestAnimationFrame(this.#boundFrame);
-  		} else {
-  			this.#rafId = null;
-  
-  			// If we stopped due to idle check, keep isRunning true
-  			// so requestStart() can restart us
-  			if (!shouldContinue) {
-  				// Loop stopped itself due to idle - this is normal
-  				// isRunning stays true, rafId is null
-  			}
-  		}
-  	}
+          if (this.#isRunning && shouldContinue) {
+              this.#rafId = requestAnimationFrame(this.#boundFrame);
+          } else {
+              this.#rafId = null;
+          }
+      }
   }
 </src/lib/animation/AnimationLoop.js>
 
@@ -3421,195 +3323,215 @@
    * OPTIMIZED FOR ZERO-GC INTERACTION LOOPS.
    */
   export class ChartLayout {
-    // Reactive state
-    width = $state(0);
-    height = $state(0);
-    margin = $state({ top: 0, right: 0, bottom: 0, left: 0 });
-    
-    // --- ZERO-GC BUFFERS ---
-    // Reused objects to prevent allocation during high-frequency events (pointermove, wheel)
-    _axesBuffer = { 
-      x: false, 
-      y: false, 
-      innerPoint: { x: 0, y: 0 } 
-    };
-    
-    _pointBuffer = { x: 0, y: 0 };
+  	// Reactive state
+  	width = $state(0);
+  	height = $state(0);
+  	margin = $state({ top: 0, right: 0, bottom: 0, left: 0 });
   
-    constructor(config = {}) {
-      const defaults = {
-        margin: { top: 30, right: 50, bottom: 35, left: 75 },
-        height: 250,
-        clipPadding: 0
-      };
+  	// --- ZERO-GC BUFFERS ---
+  	// Reused objects to prevent allocation during high-frequency events (pointermove, wheel)
+  	_axesBuffer = {
+  		xInBounds: false,
+  		yInBounds: false,
+  		innerPoint: { x: 0, y: 0 }
+  	};
   
-      this.config = { ...defaults, ...config };
-      
-      // Initialize state
-      this.height = this.config.height;
-      this.margin = this.config.margin; // Triggers reactivity
-      
-      this.chartId = crypto.randomUUID();
-    }
+  	_pointBuffer = { x: 0, y: 0 };
   
-    // --- COMPUTED PROPERTIES (Getters) ---
-    
-    get innerWidth() {
-      return this.width ? Math.max(0, this.width - this.margin.left - this.margin.right) : 0;
-    }
+  	constructor(config = {}) {
+  		const defaults = {
+  			margin: { top: 30, right: 50, bottom: 35, left: 75 },
+  			height: 250,
+  			clipPadding: 0
+  		};
   
-    get innerHeight() {
-      return Math.max(0, this.height - this.margin.top - this.margin.bottom);
-    }
+  		this.config = { ...defaults, ...config };
   
-    get isReady() {
-      return this.width !== null && this.width > 0 && this.height > 0 && 
-             this.innerWidth > 0 && this.innerHeight > 0;
-    }
+  		// Initialize state
+  		this.height = this.config.height;
+  		this.margin = this.config.margin; // Triggers reactivity
   
-    get innerTransform() {
-      return `translate(${this.margin.left}, ${this.margin.top})`;
-    }
+  		this.chartId = crypto.randomUUID();
+  	}
   
-    get clipPathId() {
-      return `mask-${this.chartId}`;
-    }
+  	// --- COMPUTED PROPERTIES (Getters) ---
   
-    get clipPathUrl() {
-      return `url(#${this.clipPathId})`;
-    }
+  	get innerWidth() {
+  		return this.width ? Math.max(0, this.width - this.margin.left - this.margin.right) : 0;
+  	}
   
-    // Warning: accessing this creates a new object. Use mostly for debugging.
-    get dimensions() {
-      return {
-        width: this.width,
-        height: this.height,
-        innerWidth: this.innerWidth,
-        innerHeight: this.innerHeight,
-        margin: this.margin
-      };
-    }
+  	get innerHeight() {
+  		return Math.max(0, this.height - this.margin.top - this.margin.bottom);
+  	}
   
-    // --- METHODS ---
+  	get isReady() {
+  		return (
+  			this.width !== null &&
+  			this.width > 0 &&
+  			this.height > 0 &&
+  			this.innerWidth > 0 &&
+  			this.innerHeight > 0
+  		);
+  	}
   
-    updateWidth = (newWidth) => {
-      this.width = newWidth;
-    }
+  	get innerTransform() {
+  		return `translate(${this.margin.left}, ${this.margin.top})`;
+  	}
   
-    updateHeight = (newHeight) => {
-      this.height = newHeight;
-    }
+  	get clipPathId() {
+  		return `mask-${this.chartId}`;
+  	}
   
-    updateMargin = (newMargin) => {
-      // Deep merge into existing state object to preserve reference if possible,
-      // but spreading is fine here as margins don't change at 60fps.
-      this.margin = { ...this.margin, ...newMargin };
-    }
+  	get clipPathUrl() {
+  		return `url(#${this.clipPathId})`;
+  	}
   
-    reset = () => {
-      this.width = null;
-      this.height = this.config.height;
-      this.margin = { ...this.config.margin };
-    }
+  	// Warning: accessing this creates a new object. Use mostly for debugging.
+  	get dimensions() {
+  		return {
+  			width: this.width,
+  			height: this.height,
+  			innerWidth: this.innerWidth,
+  			innerHeight: this.innerHeight,
+  			margin: this.margin
+  		};
+  	}
   
-    // --- HOT PATH METHODS (Optimized) ---
+  	// --- METHODS ---
   
-    // OPTIMIZED: Mutates shared buffer instead of returning new {x,y}
-    toInnerCoordinates = (point) => {
-      this._pointBuffer.x = point.x - this.margin.left;
-      this._pointBuffer.y = point.y - this.margin.top;
-      return this._pointBuffer;
-    }
+  	updateWidth = (newWidth) => {
+  		this.width = newWidth;
+  	};
   
-    // Alias for converting specific x/y numbers (Better for internal use)
-    toInnerRaw = (x, y) => {
-      this._pointBuffer.x = x - this.margin.left;
-      this._pointBuffer.y = y - this.margin.top;
-      return this._pointBuffer;
-    }
+  	updateHeight = (newHeight) => {
+  		this.height = newHeight;
+  	};
   
-    toScreenCoordinates = (innerPoint) => {
-      // Used less frequently in hot paths, but we reuse the same buffer
-      this._pointBuffer.x = innerPoint.x + this.margin.left;
-      this._pointBuffer.y = innerPoint.y + this.margin.top;
-      return this._pointBuffer;
-    }
+  	updateMargin = (newMargin) => {
+  		// Deep merge into existing state object to preserve reference if possible,
+  		// but spreading is fine here as margins don't change at 60fps.
+  		this.margin = { ...this.margin, ...newMargin };
+  	};
   
-    // OPTIMIZED: Returns primitive boolean
-    // Logic: Check if point (screen coords) is inside the chart area
-    isWithinInnerBounds = (point) => {
-      const x = point.x - this.margin.left;
-      const y = point.y - this.margin.top;
-      
-      return x >= 0 && x <= this.innerWidth && 
-             y >= 0 && y <= this.innerHeight;
-    }
+  	reset = () => {
+  		this.width = null;
+  		this.height = this.config.height;
+  		this.margin = { ...this.config.margin };
+  	};
   
-    // OPTIMIZED: The heavy lifter.
-    // Calculates everything in one pass and returns a persistent buffer object.
-    getActiveAxes = (point) => {
-      // 1. Calculate Inner Coords
-      const ix = point.x - this.margin.left;
-      const iy = point.y - this.margin.top;
-      
-      // 2. Check Bounds
-      const inX = ix >= 0 && ix <= this.innerWidth;
-      const inY = iy >= 0 && iy <= this.innerHeight;
+  	// --- HOT PATH METHODS (Optimized) ---
   
-      // 3. Mutate Buffer (Zero Allocation)
-      this._axesBuffer.x = inX;
-      this._axesBuffer.y = inY;
-      this._axesBuffer.innerPoint.x = ix;
-      this._axesBuffer.innerPoint.y = iy;
-      
-      // 4. Return Buffer
-      return this._axesBuffer;
-    }
+  	// OPTIMIZED: Mutates shared buffer instead of returning new {x,y}
+  	toInnerCoordinates = (point) => {
+  		this._pointBuffer.x = point.x - this.margin.left;
+  		this._pointBuffer.y = point.y - this.margin.top;
+  		return this._pointBuffer;
+  	};
   
-    getDebugInfo = () => {
-      return {
-        config: this.config,
-        width: this.width,
-        height: this.height,
-        margin: this.margin,
-        innerWidth: this.innerWidth,
-        innerHeight: this.innerHeight,
-        isReady: this.isReady,
-        chartId: this.chartId
-      };
-    }
+  	// Alias for converting specific x/y numbers (Better for internal use)
+  	toInnerRaw = (x, y) => {
+  		this._pointBuffer.x = x - this.margin.left;
+  		this._pointBuffer.y = y - this.margin.top;
+  		return this._pointBuffer;
+  	};
   
-    /**
-     * Context data merging.
-     * Removed .bind() calls because arrow functions handles 'this' automatically.
-     */
-    getContextData() {
-      const layout = this;
-      
-      return {
-        get width() { return layout.width; },
-        get height() { return layout.height; },
-        get innerWidth() { return layout.innerWidth; },
-        get innerHeight() { return layout.innerHeight; },
-        get margin() { return layout.margin; },
-        get chartId() { return layout.chartId; },
-        get clipPathId() { return layout.clipPathId; },
-        get clipPathUrl() { return layout.clipPathUrl; },
-        get isReady() { return layout.isReady; },
-        get innerTransform() { return layout.innerTransform; },
-        get dimensions() { return layout.dimensions; },
-        
-        updateWidth: layout.updateWidth,
-        updateHeight: layout.updateHeight,
-        updateMargin: layout.updateMargin,
-        toInnerCoordinates: layout.toInnerCoordinates,
-        toScreenCoordinates: layout.toScreenCoordinates,
-        isWithinInnerBounds: layout.isWithinInnerBounds,
-        getActiveAxes: layout.getActiveAxes,
-        reset: layout.reset,
-        getDebugInfo: layout.getDebugInfo
-      };
-    }
+  	toScreenCoordinates = (innerPoint) => {
+  		// Used less frequently in hot paths, but we reuse the same buffer
+  		this._pointBuffer.x = innerPoint.x + this.margin.left;
+  		this._pointBuffer.y = innerPoint.y + this.margin.top;
+  		return this._pointBuffer;
+  	};
+  
+  	// OPTIMIZED: Returns primitive boolean
+  	// Logic: Check if point (screen coords) is inside the chart area
+  	isWithinInnerBounds = (point) => {
+  		const x = point.x - this.margin.left;
+  		const y = point.y - this.margin.top;
+  
+  		return x >= 0 && x <= this.innerWidth && y >= 0 && y <= this.innerHeight;
+  	};
+  
+  	getActiveAxes = (point) => {
+  		const ix = point.x - this.margin.left;
+  		const iy = point.y - this.margin.top;
+  
+  		const inX = ix >= 0 && ix <= this.innerWidth;
+  		const inY = iy >= 0 && iy <= this.innerHeight;
+  
+  		this._axesBuffer.xInBounds = inX;
+  		this._axesBuffer.yInBounds = inY;
+  		this._axesBuffer.innerPoint.x = ix;
+  		this._axesBuffer.innerPoint.y = iy;
+  
+  		return this._axesBuffer;
+  	};
+  
+  	getDebugInfo = () => {
+  		return {
+  			config: this.config,
+  			width: this.width,
+  			height: this.height,
+  			margin: this.margin,
+  			innerWidth: this.innerWidth,
+  			innerHeight: this.innerHeight,
+  			isReady: this.isReady,
+  			chartId: this.chartId
+  		};
+  	};
+  
+  	/**
+  	 * Context data merging.
+  	 * Removed .bind() calls because arrow functions handles 'this' automatically.
+  	 */
+  	getContextData() {
+  		const layout = this;
+  
+  		return {
+  			get width() {
+  				return layout.width;
+  			},
+  			get height() {
+  				return layout.height;
+  			},
+  			get innerWidth() {
+  				return layout.innerWidth;
+  			},
+  			get innerHeight() {
+  				return layout.innerHeight;
+  			},
+  			get margin() {
+  				return layout.margin;
+  			},
+  			get chartId() {
+  				return layout.chartId;
+  			},
+  			get clipPathId() {
+  				return layout.clipPathId;
+  			},
+  			get clipPathUrl() {
+  				return layout.clipPathUrl;
+  			},
+  			get isReady() {
+  				return layout.isReady;
+  			},
+  			get innerTransform() {
+  				return layout.innerTransform;
+  			},
+  			get dimensions() {
+  				return layout.dimensions;
+  			},
+  
+  			updateWidth: layout.updateWidth,
+  			updateHeight: layout.updateHeight,
+  			updateMargin: layout.updateMargin,
+  			toInnerCoordinates: layout.toInnerCoordinates,
+  			toScreenCoordinates: layout.toScreenCoordinates,
+  			isWithinInnerBounds: layout.isWithinInnerBounds,
+  			getActiveAxes: layout.getActiveAxes,
+  			reset: layout.reset,
+  			getDebugInfo: layout.getDebugInfo
+  		};
+  	}
   }
 </src/lib/layout/ChartLayout.svelte.js>
 
@@ -3620,7 +3542,7 @@
   	import { ChartScales } from '$lib/scales/ChartScales.svelte';
   	import { getGPUContext } from '$lib/gpu';
   
-  	let { xLabel, yLabel, background, foreground, canvas, canvasComponents } = $props();
+  	let { xLabel, yLabel, background, foreground, canvas, canvasComponents, overlay } = $props();
   
   	const pointerBuffer = { x: 0, y: 0 };
   	const innerPointBuffer = { x: 0, y: 0 };
@@ -3632,8 +3554,10 @@
   		height: 250
   	});
   
-    const scaleRegistry = getContext('scale-registry'); 
+  	const scaleRegistry = getContext('scale-registry');
   	const gpuCoordinator = getGPUContext();
+  
+  	const hasPointerRawUpdate = typeof window !== 'undefined' && 'onpointerrawupdate' in window;
   
   	// TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
   	// let scales = $derived(
@@ -3662,7 +3586,7 @@
   			yLabel: y,
   			layout: l,
   			gpuCoordinator: g,
-        scaleRegistry: scaleRegistry 
+  			scaleRegistry: scaleRegistry
   		});
   
   		scales = newScales;
@@ -3770,7 +3694,7 @@
   		// reset: layout.reset.bind(layout),
   		// getDebugInfo: layout.getDebugInfo.bind(layout),
   
-  		updateMargin: layout.updateMargin.bind(layout),
+  		// updateMargin: layout.updateMargin.bind(layout),
   		updateWidth: (w) => layout.updateWidth(w),
   		updateHeight: (h) => layout.updateHeight(h),
   		updateMargin: (m) => layout.updateMargin(m),
@@ -3888,6 +3812,14 @@
   	//   });
   	// });
   
+  	function handleChartPointerEnter() {
+  		gpuCoordinator.setChartHovered(layout.chartId);
+  	}
+  
+  	function handleChartPointerLeave() {
+  		gpuCoordinator.setChartUnhovered(layout.chartId);
+  	}
+  
   	// ZOOM HANDLERS
   	function handleWheel(event) {
   		event.preventDefault();
@@ -3895,22 +3827,20 @@
   		pointerBuffer.x = event.offsetX;
   		pointerBuffer.y = event.offsetY;
   
-  		const { x, y, innerPoint } = layout.getActiveAxes(pointerBuffer);
+  		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
   
   		const scaleFactor =
   			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
   
-  		scales.accumulateZoom(innerPoint, scaleFactor, x, y);
+  		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds);
   	}
   
   	function handleDoubleClick(event) {
   		event.preventDefault();
   		pointerBuffer.x = event.offsetX;
   		pointerBuffer.y = event.offsetY;
-  
-  		const { x, y } = layout.getActiveAxes(pointerBuffer);
-  
-  		scales.resetZoom(x, y);
+  		const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
+  		scales.resetZoom(xInBounds, yInBounds);
   	}
   
   	// TOUCH HANDLERS
@@ -3937,9 +3867,9 @@
   			pointerBuffer.x = event.offsetX;
   			pointerBuffer.y = event.offsetY;
   
-  			const { x, y } = layout.getActiveAxes(pointerBuffer);
-  			activePanX = x;
-  			activePanY = y;
+  			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
+  			activePanX = xInBounds;
+  			activePanY = yInBounds;
   		}
   	}
   
@@ -4002,11 +3932,10 @@
   		pointerBuffer.x = event.offsetX;
   		pointerBuffer.y = event.offsetY;
   
-  		const { x, y, innerPoint } = layout.getActiveAxes(pointerBuffer);
+  		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
   
-  		// Store primitive booleans
-  		activePanX = x && scales.scaleTypes?.x === 'linear';
-  		activePanY = y && scales.scaleTypes?.y === 'linear';
+  		activePanX = xInBounds && scales.scaleTypes?.x === 'linear';
+  		activePanY = yInBounds && scales.scaleTypes?.y === 'linear';
   
   		if (!activePanX && !activePanY) return;
   
@@ -4034,11 +3963,10 @@
   	// 	}
   	// }
   
-  	function handlePointerMove(event) {
+  	function processPointerMove(event) {
   		if (isPanning) {
   			scales.updatePanPosition(event.offsetX, event.offsetY);
   		} else {
-  			// Update crosshair
   			pointerBuffer.x = event.offsetX;
   			pointerBuffer.y = event.offsetY;
   
@@ -4047,6 +3975,21 @@
   				scales.updateCurrentDataPoints(innerPoint);
   			}
   		}
+  	}
+  
+  	function handlePointerMove(event) {
+  		// Skip if pointerrawupdate is handling it
+  		if (hasPointerRawUpdate) return;
+  		processPointerMove(event);
+  	}
+  
+  	// function handlePointerRawUpdate(event) {
+  	// 	const events = event.getCoalescedEvents?.() ?? [event];
+  	// 	const last = events[events.length - 1];
+  	// 	processPointerMove(last);
+  	// }
+  	function handlePointerRawUpdate(event) {
+  		processPointerMove(event);
   	}
   
   	function handlePointerUp(event) {
@@ -4071,7 +4014,13 @@
   </script>
   
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="chart-container" bind:clientWidth={layout.width} bind:clientHeight={layout.height}>
+  <div
+  	class="chart-container"
+  	bind:clientWidth={layout.width}
+  	bind:clientHeight={layout.height}
+  	onpointerenter={handleChartPointerEnter}
+  	onpointerleave={handleChartPointerLeave}
+  >
   	{#if layout.isReady}
   		<svg class="svg-background" width={layout.width} height={layout.height}>
   			<g transform={layout.innerTransform}>
@@ -4092,6 +4041,7 @@
   			onwheel={handleWheel}
   			onpointerdown={handlePointerDown}
   			onpointermove={handlePointerMove}
+  			onpointerrawupdate={handlePointerRawUpdate}
   			onpointerup={handlePointerUp}
   			onpointercancel={handlePointerUp}
   			ondblclick={handleDoubleClick}
@@ -4120,6 +4070,12 @@
   				/>
   			</g>
   		</svg>
+  		<!-- Overlay layer - on top of everything, outside SVG -->
+  		{#if overlay}
+  			<div class="overlay-layer">
+  				{@render overlay()}
+  			</div>
+  		{/if}
   	{/if}
   </div>
   
@@ -4133,13 +4089,16 @@
   		position: relative;
   		flex: 1;
   		height: 100%;
-  		contain: layout style;
-  		/* contain: strict; */
+  		/* Use 'strict' contain for maximum isolation */
+  		contain: strict;
   		touch-action: none;
   		overscroll-behavior: none;
+  		/* Force GPU layer */
   		transform: translateZ(0);
+  		will-change: contents;
   		outline: none;
-  		/* will-change: transform, contents;  */
+  		/* Prevent paint from bleeding */
+  		isolation: isolate;
   	}
   
   	.svg-background,
@@ -4162,13 +4121,32 @@
   
   	.canvas-layer {
   		z-index: 2;
+  		width: 100%;
+  		height: 100%;
+  		contain: strict;
+  		will-change: contents;
   	}
+  
   	.svg-foreground {
   		z-index: 3;
   	}
   
   	.crosshair {
   		cursor: crosshair;
+  	}
+  
+  	.overlay-layer {
+  		position: absolute;
+  		top: 0;
+  		left: 0;
+  		width: 100%;
+  		height: 100%;
+  		z-index: 10;
+  		pointer-events: none;
+  	}
+  
+  	.overlay-layer :global(*) {
+  		pointer-events: auto;
   	}
   
   	#info {
@@ -4197,7 +4175,8 @@
   	let height = $derived(c.innerHeight);
   	let margin = $derived(c.margin);
   
-  	let canvas;
+  	// let canvas;
+    let canvas = $state();
   	let context;
   	let gpuCoordinator;
   	let chartControl;
@@ -4272,6 +4251,7 @@
   				format: presentationFormat,
   				alphaMode: 'premultiplied',
   				desynchronized: true
+  				// desynchronized: false
   			});
   
   			contextConfigured = true;
@@ -6384,6 +6364,7 @@
   	import MainView from './MainView.svelte';
   
   	// import { startProMotionFix, stopProMotionFix } from '$lib/utils/proMotionFix.js';
+  	import { startProMotionFix } from '$lib/utils/proMotionFix.js';
   
   	// setScaleRegistry();
   	setCoordinators();
@@ -6414,9 +6395,49 @@
   		}
   	};
   
+  	let frameTimes = [];
+  	let lastVsync = 0;
+  
+  	function measureRAF(time) {
+  		if (lastVsync > 0) {
+  			const delta = time - lastVsync;
+  			frameTimes.push(delta);
+  
+  			// Detect stutters in real-time
+  			if (delta > 12) {
+  				console.warn(`RAF gap: ${delta.toFixed(1)}ms at ${time.toFixed(0)}`);
+  			}
+  		}
+  		lastVsync = time;
+  
+  		if (frameTimes.length === 500) {
+  			// Analyze distribution
+  			const sorted = [...frameTimes].sort((a, b) => a - b);
+  			console.log('RAF timing analysis:');
+  			console.log(`  Min: ${sorted[0].toFixed(2)}ms`);
+  			console.log(`  Max: ${sorted[sorted.length - 1].toFixed(2)}ms`);
+  			console.log(`  Median: ${sorted[250].toFixed(2)}ms`);
+  			console.log(`  p95: ${sorted[475].toFixed(2)}ms`);
+  			console.log(`  p99: ${sorted[495].toFixed(2)}ms`);
+  			console.log(`  Stutters (>12ms): ${frameTimes.filter((t) => t > 12).length}`);
+  
+  			// Show histogram
+  			const buckets = {};
+  			frameTimes.forEach((t) => {
+  				const bucket = Math.floor(t / 2) * 2;
+  				buckets[bucket] = (buckets[bucket] || 0) + 1;
+  			});
+  			console.log('  Distribution:', buckets);
+  
+  			frameTimes = [];
+  		}
+  
+  		requestAnimationFrame(measureRAF);
+  	}
   
   	onMount(async () => {
-  		// startProMotionFix(120);
+  		// startProMotionFix();
+      // requestAnimationFrame(measureRAF);
   
   		try {
   			const wasm = wasmConnector();
@@ -6486,6 +6507,8 @@
   		BarMark
   	} from '$lib/components';
   
+  	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
+  
   	const coordinator = getContext('mosaic-coordinator');
   	const selection = Selection.crossfilter();
   
@@ -6518,7 +6541,7 @@
   		}
   	]);
   
-  	let gridRows = $state(2);
+  	let gridRows = $state(1);
   	let gridColumns = $state(1);
   
   	setContext('chartConfig', {
@@ -6546,7 +6569,6 @@
   </script>
   
   <div class="main-view-container">
-  
   	<ColumnSelector />
   
   	<div class="charts-container" style="--grid-rows: {gridRows}; --grid-columns: {gridColumns};">
@@ -6580,6 +6602,12 @@
   
   					{#snippet foreground()}
   						<!-- <Crosshair /> -->
+  					{/snippet}
+  
+  					{#snippet overlay()}
+  						{#if i === 0}
+  							<DomainTestButtons offsetPercent={20} />
+  						{/if}
   					{/snippet}
   				</ChartContainer>
   			</div>

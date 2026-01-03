@@ -170,6 +170,12 @@ export class GPUCoordinator {
 	#acquiredTextures = []; // Reused array for texture acquisition
 	#encoderDescriptor = { label: 'frame-encoder' };
 	#submitArray = [null]; // Reused array for queue.submit()
+	// #gpuReady = true;
+	#framesInFlight = 0; // TODO Test remove
+	#maxFramesInFlight = 1; // TODO Test remove
+
+	#lastRenderTime = 0;
+	#gaps = [];
 
 	// =========================================================================
 	// PERFORMANCE TRACKING
@@ -355,6 +361,20 @@ export class GPUCoordinator {
 	 */
 
 	#renderFrame = (extrapolationDt) => {
+		// console.log('=== RENDER FRAME ===');
+		// console.log('animatedScalesArray length:', this.#animatedScalesArray.length);
+
+		// const now = performance.now();
+		// if (this.#lastRenderTime > 0 && now - this.#lastRenderTime < 8) {
+		// 	return;
+		// }
+		// this.#lastRenderTime = now;
+
+		// if (this.#framesInFlight >= this.#maxFramesInFlight) {
+		// 	console.log('Skipping frame - too many in flight:', this.#framesInFlight);
+		// 	return;
+		// }
+
 		// 1. Apply any accumulated input (zoom, etc.)
 		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
 			this.#animatedScalesArray[i]._applyInput?.();
@@ -365,6 +385,12 @@ export class GPUCoordinator {
 		for (let i = 0; i < len; i++) {
 			this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
 		}
+
+		// DEBUG: Log scale values
+		// if (this.#animatedScalesArray.length > 0) {
+		// 	const s = this.#animatedScalesArray[0];
+		// 	console.log('scale:', s.gpuState.domainMin.toFixed(4), s.gpuState.domainMax.toFixed(4));
+		// }
 
 		// 3. Gather charts to render BEFORE removing rested scales
 		const chartArray = this.#chartsToRenderArray;
@@ -408,6 +434,18 @@ export class GPUCoordinator {
 			}
 		}
 		this.#dirtyChartsArray.length = 0;
+
+		// console.log(
+		// 	'Charts to render:',
+		// 	chartArray.length,
+		// 	chartArray.map((c) => c.chartId)
+		// );
+
+		// // Log affected charts for each scale
+		// for (let i = 0; i < this.#animatedScalesArray.length; i++) {
+		// 	const scale = this.#animatedScalesArray[i];
+		// 	console.log(`Scale ${scale.name} affected charts:`, scale._affectedChartsArray);
+		// }
 
 		// 4. Remove scales that are at rest (backwards for safe removal)
 		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
@@ -527,6 +565,12 @@ export class GPUCoordinator {
 		// PHASE 4: SUBMIT
 		this.#submitArray[0] = commandEncoder.finish();
 		this.#device.queue.submit(this.#submitArray);
+
+		// this.#framesInFlight++;
+		// this.#device.queue.onSubmittedWorkDone().then(() => {
+		// 	this.#framesInFlight--;
+		// });
+
 		this.#frameId++;
 	}
 
@@ -874,20 +918,27 @@ export class GPUCoordinator {
 	// =========================================================================
 
 	addAnimatingScale(scale) {
+		// console.log(`=== addAnimatingScale ${scale.name} (${scale.id}) ===`);
 		let idx = this.#scaleIndexManager.getIndex(scale.id);
+		// console.log('Initial index lookup:', idx);
 
 		if (idx === undefined) {
+			// console.log('Index undefined, calling registerScale...');
 			this.registerScale(scale.id, 'linear');
 			idx = this.#scaleIndexManager.getIndex(scale.id);
+			// console.log('Index after registerScale:', idx);
 			if (idx === undefined) {
 				console.error(`Scale ${scale.id} still not registered after auto-register`);
 				return;
 			}
 		}
 
+		// console.log('Already in animatedScales Set?', this.#animatedScales.has(scale));
+
 		if (!this.#animatedScales.has(scale)) {
 			this.#animatedScales.add(scale);
 			this.#animatedScalesArray.push(scale);
+			// console.log('Added to animatedScales, new length:', this.#animatedScalesArray.length);
 		}
 
 		this.#animationLoop.requestStart();
@@ -1300,6 +1351,13 @@ export class GPUCoordinator {
 			let msaa = chartConfig.msaa;
 
 			if (!msaa || msaa.texture.width !== canvas.width || msaa.texture.height !== canvas.height) {
+				// console.warn('MSAA RECREATE!', {
+				// 	hadMsaa: !!msaa,
+				// 	oldSize: msaa ? `${msaa.texture.width}x${msaa.texture.height}` : 'none',
+				// 	newSize: `${canvas.width}x${canvas.height}`,
+				// 	chartId: chartConfig.chartId
+				// });
+
 				msaa?.texture.destroy();
 
 				const newTexture = this.#device.createTexture({

@@ -16,6 +16,8 @@
 		BarMark
 	} from '$lib/components';
 
+	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
+
 	const coordinator = getContext('mosaic-coordinator');
 	const selection = Selection.crossfilter();
 
@@ -48,7 +50,7 @@
 		}
 	]);
 
-	let gridRows = $state(2);
+	let gridRows = $state(1);
 	let gridColumns = $state(1);
 
 	setContext('chartConfig', {
@@ -76,7 +78,6 @@
 </script>
 
 <div class="main-view-container">
-
 	<ColumnSelector />
 
 	<div class="charts-container" style="--grid-rows: {gridRows}; --grid-columns: {gridColumns};">
@@ -110,6 +111,12 @@
 
 					{#snippet foreground()}
 						<!-- <Crosshair /> -->
+					{/snippet}
+
+					{#snippet overlay()}
+						{#if i === 0}
+							<DomainTestButtons offsetPercent={20} />
+						{/if}
 					{/snippet}
 				</ChartContainer>
 			</div>

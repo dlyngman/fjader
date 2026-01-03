@@ -11,7 +11,8 @@
 	let height = $derived(c.innerHeight);
 	let margin = $derived(c.margin);
 
-	let canvas;
+	// let canvas;
+  let canvas = $state();
 	let context;
 	let gpuCoordinator;
 	let chartControl;
@@ -85,8 +86,8 @@
 				device,
 				format: presentationFormat,
 				alphaMode: 'premultiplied',
-				// desynchronized: true
-				desynchronized: false
+				desynchronized: true
+				// desynchronized: false
 			});
 
 			contextConfigured = true;

@@ -97,8 +97,8 @@ export class AnimationLoop {
     // ===========================================================================
 
     #frame(time) {
-      // const now = time;
-        const now = performance.now();
+      const now = time;
+        // const now = performance.now();
         let delta = (now - this.#lastTime) / 1000;
         this.#lastTime = now;
 

@@ -40,8 +40,8 @@
 	  {#snippet background()}
 		<Grid show='x'/>
 		<Frame />
-		<AxisLeft />
-		<AxisBottom />
+		<!-- <AxisLeft /> -->
+		<!-- <AxisBottom /> -->
 		<MarginLabel />
 	  {/snippet}
   
