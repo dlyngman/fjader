@@ -1,104 +1,109 @@
 <script>
-  import { Coordinator, coordinator, wasmConnector } from "@uwdata/mosaic-core";
-  import { loadCSV, loadParquet } from "@uwdata/mosaic-sql";
-  // import { setScaleRegistry } from "$lib/scales";
-  import { setCoordinators } from "$lib";
-  import { onMount, onDestroy, setContext } from "svelte";
-  import MainView from "./MainView.svelte";
-  
-  // setScaleRegistry();
-  setCoordinators();
+	import { Coordinator, coordinator, wasmConnector } from '@uwdata/mosaic-core';
+	import { loadCSV, loadParquet } from '@uwdata/mosaic-sql';
+	// import { setScaleRegistry } from "$lib/scales";
+	import { setCoordinators } from '$lib';
+	import { onMount, onDestroy, setContext } from 'svelte';
+	import MainView from './MainView.svelte';
 
-  let coord;
-  // setContext('mosaic-coordinator', coord);
+	// setScaleRegistry();
+	setCoordinators();
 
-  let isLoaded = $state(false);
-  let loadError = $state(null);
+	let coord;
+	// setContext('mosaic-coordinator', coord);
 
-  const logs = [];
-  const queryLogger = {
-    ...console,
+	let isLoaded = $state(false);
+	let loadError = $state(null);
 
-    debug(...values) {
-      if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
-        const queryLog = values[1];
+	const logs = [];
+	const queryLogger = {
+		...console,
 
-        if (queryLog && queryLog.sql) {
-          const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false});
-          console.log(`[${timestamp}] \n${queryLog.sql}`);
-          logs.push({ query: queryLog.sql, time: new Date()})
-        }
-      }
-    },
-    getLogs() {
-      return logs;
-    }
-  };
+		debug(...values) {
+			if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
+				const queryLog = values[1];
 
-  onMount(async () => {
-    try {
-      const wasm = wasmConnector();
-      coord = new Coordinator();
-      coord.databaseConnector(wasm);
+				if (queryLog && queryLog.sql) {
+					const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false });
+					console.log(`[${timestamp}] \n${queryLog.sql}`);
+					logs.push({ query: queryLog.sql, time: new Date() });
+				}
+			}
+		},
+		getLogs() {
+			return logs;
+		}
+	};
 
-      coord.manager.logQueries(true);
-      coord.manager.logger(queryLogger);
-    
-      setContext('mosaic-coordinator', coord);
+	onMount(async () => {
+		try {
+			const wasm = wasmConnector();
+			coord = new Coordinator();
+			coord.databaseConnector(wasm);
 
+			coord.manager.logQueries(true);
+			coord.manager.logger(queryLogger);
 
-      await coord.exec(
-        loadParquet("penguins", `${window.location.origin}/data/penguins.parquet`)
-      );
+			setContext('mosaic-coordinator', coord);
 
-      isLoaded = true
-    } catch (error) {
-      console.error("Initialization error:", error);
-      loadError = error.message;
-    }
-  });
+			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
 
-  import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
-  
-  if (typeof window !== 'undefined') {
-    window.testScaleConfig = {
-      resolveScaleConfiguration,
-      SCALE_PRIORITIES,
-      // NEW: Add access to chart context for testing
-      getCurrentChart: () => {
-        // This would need to be set from your actual chart component
-        return window.currentChartContext;
-      }
-    };
-}
+			isLoaded = true;
+		} catch (error) {
+			console.error('Initialization error:', error);
+			loadError = error.message;
+		}
+	});
 
+	import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
+
+	if (typeof window !== 'undefined') {
+		window.testScaleConfig = {
+			resolveScaleConfiguration,
+			SCALE_PRIORITIES,
+			// NEW: Add access to chart context for testing
+			getCurrentChart: () => {
+				// This would need to be set from your actual chart component
+				return window.currentChartContext;
+			}
+		};
+	}
+
+	$effect(() => {
+		if (chartContext) {
+			console.log('📐 Chart dimensions:', {
+				innerHeight: chartContext.innerHeight,
+				innerWidth: chartContext.innerWidth,
+				margin: chartContext.margin
+			});
+		}
+	});
 </script>
 
 <div class="app-container">
-  {#if loadError}
-    <div class="error-container">Error loading data: {loadError}</div>
-  {:else if !isLoaded}
-    <div class="loading-container">Loading parquet data...</div>
-  {:else}
-    <MainView />
-  {/if}
+	{#if loadError}
+		<div class="error-container">Error loading data: {loadError}</div>
+	{:else if !isLoaded}
+		<div class="loading-container">Loading parquet data...</div>
+	{:else}
+		<MainView />
+	{/if}
 </div>
 
-
 <style>
-  .app-container {
-    width: 100%;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
+	.app-container {
+		width: 100%;
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+	}
 
-  .loading-container,
-  .error-container {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 200px;
-    padding: 2rem;
-  }
+	.loading-container,
+	.error-container {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		min-height: 200px;
+		padding: 2rem;
+	}
 </style>

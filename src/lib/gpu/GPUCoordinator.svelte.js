@@ -150,6 +150,19 @@ export class GPUCoordinator {
 	#frameId = 0;
 
 	// =========================================================================
+	// COLOR BUFFER DECLARATIONS
+	// =========================================================================
+	// Color scale buffers (group 2, bindings 1-3)
+	#colorConfigBuffer = null; // 64 configs × 32 bytes = 2KB
+	#colorRampBuffer = null; // 64 ramps × 256 colors × 16 bytes = 256KB
+	#colorPaletteBuffer = null; // 64 palettes × 32 colors × 16 bytes = 32KB
+
+	// Constants
+	#maxColorSlots = 64;
+	#rampColorsPerSlot = 256;
+	#paletteColorsPerSlot = 32;
+
+	// =========================================================================
 	// LAYOUT CACHES
 	// =========================================================================
 	#templateSystem = scaleTemplateSystem;
@@ -217,6 +230,7 @@ export class GPUCoordinator {
 
 			this.#initialized = true;
 			this.#handleScaleTopologyChange();
+			// this.#createColorScaleBuffers();
 
 			console.log('GPUCoordinator initialized with Registry Pattern');
 		} catch (error) {
@@ -273,19 +287,75 @@ export class GPUCoordinator {
 	// SCALE SSBO SYSTEM
 	// =========================================================================
 
+	// async #initializeScaleBindGroupLayouts() {
+	// 	this.#globalScaleLayout = this.#device.createBindGroupLayout({
+	// 		label: 'global-scale-ssbo-layout',
+	// 		entries: [
+	// 			{
+	// 				binding: 0,
+	// 				visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+	// 				buffer: { type: 'read-only-storage' }
+	// 			}
+	// 		]
+	// 	});
+
+	// 	this.#createGlobalScaleSSBO();
+
+	// 	// Pre-create bind groups for each slot
+	// 	for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
+	// 		const slotOffset = slot * this.#slotByteSize;
+	// 		this.#globalScaleBindGroups[slot] = this.#device.createBindGroup({
+	// 			label: `global-scale-bind-group-slot-${slot}`,
+	// 			layout: this.#globalScaleLayout,
+	// 			entries: [
+	// 				{
+	// 					binding: 0,
+	// 					resource: {
+	// 						buffer: this.#globalScaleSSBO,
+	// 						offset: slotOffset,
+	// 						size: this.#slotByteSize
+	// 					}
+	// 				}
+	// 			]
+	// 		});
+	// 	}
+	// }
+
 	async #initializeScaleBindGroupLayouts() {
 		this.#globalScaleLayout = this.#device.createBindGroupLayout({
 			label: 'global-scale-ssbo-layout',
 			entries: [
 				{
+					// Binding 0: Coordinate scale params (used in vertex)
 					binding: 0,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: { type: 'read-only-storage' }
+				},
+				{
+					// Binding 1: Color scale configs (fragment only)
+					binding: 1,
+					visibility: GPUShaderStage.FRAGMENT, // ← Changed
+					buffer: { type: 'read-only-storage' }
+				},
+				{
+					// Binding 2: Color ramps (fragment only)
+					binding: 2,
+					visibility: GPUShaderStage.FRAGMENT, // ← Changed
+					buffer: { type: 'read-only-storage' }
+				},
+				{
+					// Binding 3: Ordinal palettes (fragment only)
+					binding: 3,
+					visibility: GPUShaderStage.FRAGMENT, // ← Changed
 					buffer: { type: 'read-only-storage' }
 				}
 			]
 		});
 
 		this.#createGlobalScaleSSBO();
+
+		// Create color scale buffers (must happen before bind group creation)
+		this.#createColorScaleBuffers();
 
 		// Pre-create bind groups for each slot
 		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
@@ -295,11 +365,33 @@ export class GPUCoordinator {
 				layout: this.#globalScaleLayout,
 				entries: [
 					{
+						// Coordinate scales - uses slot offset
 						binding: 0,
 						resource: {
 							buffer: this.#globalScaleSSBO,
 							offset: slotOffset,
 							size: this.#slotByteSize
+						}
+					},
+					{
+						// Color configs - full buffer, no offset
+						binding: 1,
+						resource: {
+							buffer: this.#colorConfigBuffer
+						}
+					},
+					{
+						// Color ramps - full buffer, no offset
+						binding: 2,
+						resource: {
+							buffer: this.#colorRampBuffer
+						}
+					},
+					{
+						// Ordinal palettes - full buffer, no offset
+						binding: 3,
+						resource: {
+							buffer: this.#colorPaletteBuffer
 						}
 					}
 				]
@@ -322,6 +414,31 @@ export class GPUCoordinator {
 		this.#cpuScaleBuffer = new Float32Array(this.#slotByteSize / 4);
 	}
 
+	#createColorScaleBuffers() {
+		const device = this.#device;
+
+		// ColorConfig buffer: 64 slots × 32 bytes each
+		this.#colorConfigBuffer = device.createBuffer({
+			label: 'ColorConfig SSBO',
+			size: this.#maxColorSlots * 32,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+
+		// Color ramp buffer: 64 slots × 256 colors × 4 floats × 4 bytes
+		this.#colorRampBuffer = device.createBuffer({
+			label: 'ColorRamp SSBO',
+			size: this.#maxColorSlots * this.#rampColorsPerSlot * 4 * 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+
+		// Ordinal palette buffer: 64 slots × 32 colors × 4 floats × 4 bytes
+		this.#colorPaletteBuffer = device.createBuffer({
+			label: 'OrdinalPalette SSBO',
+			size: this.#maxColorSlots * this.#paletteColorsPerSlot * 4 * 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+	}
+
 	/**
 	 * Fill CPU buffer with current scale GPU state.
 	 * Zero-allocation hot path.
@@ -330,13 +447,28 @@ export class GPUCoordinator {
 		const len = this.#scaleArray.length;
 		for (let i = 0; i < len; i++) {
 			const item = this.#scaleArray[i];
-			const s = item.instance.gpuState;
+			const scale = item.instance;
+			const off = item.index << 2;
 
-			const off = item.index << 2; // * 4 via bitshift
-			view[off] = s.domainMin;
-			view[off + 1] = s.domainMax;
-			view[off + 2] = s.domainScale;
-			view[off + 3] = 0; // padding
+			const scaleTypeName = scale.constructor.name;
+
+			if (scaleTypeName === 'BandScaleState') {
+				// BAND SCALE: Write configuration
+				const config = scale.getConfig();
+
+				view[off] = config.categoryCount;
+				view[off + 1] = config.paddingInner;
+				view[off + 2] = config.paddingOuter;
+				view[off + 3] = 0; // padding (unused)
+			} else {
+				// LINEAR SCALE: Write domain state
+				const s = scale.gpuState;
+
+				view[off] = s.domainMin;
+				view[off + 1] = s.domainMax;
+				view[off + 2] = s.domainScale;
+				view[off + 3] = 0; // padding (unused)
+			}
 		}
 	}
 
@@ -435,18 +567,6 @@ export class GPUCoordinator {
 		}
 		this.#dirtyChartsArray.length = 0;
 
-		// console.log(
-		// 	'Charts to render:',
-		// 	chartArray.length,
-		// 	chartArray.map((c) => c.chartId)
-		// );
-
-		// // Log affected charts for each scale
-		// for (let i = 0; i < this.#animatedScalesArray.length; i++) {
-		// 	const scale = this.#animatedScalesArray[i];
-		// 	console.log(`Scale ${scale.name} affected charts:`, scale._affectedChartsArray);
-		// }
-
 		// 4. Remove scales that are at rest (backwards for safe removal)
 		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
 			const scale = this.#animatedScalesArray[i];
@@ -466,6 +586,8 @@ export class GPUCoordinator {
 		if (chartArray.length > 0) {
 			this.#coordinatedRender(chartArray);
 		}
+
+		// 6. Update svelte reactivty in scales after webgpu command submission
 	};
 
 	/**
@@ -588,6 +710,7 @@ export class GPUCoordinator {
 	 * @param {string} markShaderCode - Mark-specific shader code
 	 * @param {array} vertexBufferLayout - Vertex buffer layout
 	 * @param {array} dataBindingConfig - Data binding configuration
+	 * @param {object} [rendererDefinition] - Optional declarative renderer definition
 	 * @returns {Promise<{pipeline, frameLayout, dataLayout}>}
 	 */
 	async acquirePipeline(
@@ -596,13 +719,21 @@ export class GPUCoordinator {
 		scaleTypes,
 		markShaderCode,
 		vertexBufferLayout,
-		dataBindingConfig
+		dataBindingConfig,
+		rendererDefinition
 	) {
+		if (!rendererDefinition) {
+			throw new Error(
+				`acquirePipeline requires a rendererDefinition for mark type '${markType}'. ` +
+					"Define the renderer's semantic concepts (position/extent) and placeholders."
+			);
+		}
 		if (!rendererId) throw new Error('acquirePipeline requires a rendererId');
 
-		// Generate stable resource key (includes scale topology)
+		// Generate stable resource key (includes scale topology and renderer definition)
 		const topologySuffix = `${scaleTypes.x}-${scaleTypes.y}`;
-		const resourceKey = `${markType}-${topologySuffix}`;
+		const defSuffix = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
+		const resourceKey = `${markType}-${topologySuffix}${defSuffix}`;
 
 		// Prepare local registry for this renderer
 		if (!this.#rendererRegistry.has(rendererId)) {
@@ -627,7 +758,12 @@ export class GPUCoordinator {
 
 		if (!shaderModule) {
 			// Create/Get and increment RefCount
-			const templateResult = scaleTemplateSystem.generateShader(scaleTypes, markShaderCode);
+			// Pass rendererDefinition to generateShader
+			const templateResult = scaleTemplateSystem.generateShader(
+				scaleTypes,
+				markShaderCode,
+				rendererDefinition
+			);
 			shaderModule = await this.#getOrCreateSharedShader(resourceKey, templateResult.shaderCode);
 			localRegistry.set(shaderLookupKey, { type: 'shader', key: resourceKey });
 		}
@@ -914,6 +1050,75 @@ export class GPUCoordinator {
 	}
 
 	// =========================================================================
+	// COLOR SCALE API
+	// =========================================================================
+
+	/**
+	 * Write a ColorConfig struct to the config buffer.
+	 *
+	 * @param {number} slot - Config slot index (0-63)
+	 * @param {ArrayBuffer} configData - 32-byte config struct from ColorScaleState
+	 */
+	writeColorConfig(slot, configData) {
+		if (!this.#colorConfigBuffer) {
+			console.warn('[GPUCoordinator] Color config buffer not initialized');
+			return;
+		}
+
+		if (slot < 0 || slot >= this.#maxColorSlots) {
+			console.warn(`[GPUCoordinator] Invalid color config slot: ${slot}`);
+			return;
+		}
+
+		const byteOffset = slot * 32;
+		this.#device.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
+	}
+
+	/**
+	 * Write a 256-color gradient ramp to the ramp buffer.
+	 *
+	 * @param {number} slot - Ramp slot index (0-63)
+	 * @param {Float32Array} rampData - 1024 floats (256 colors × RGBA)
+	 */
+	writeColorRamp(slot, rampData) {
+		if (!this.#colorRampBuffer) {
+			console.warn('[GPUCoordinator] Color ramp buffer not initialized');
+			return;
+		}
+
+		if (slot < 0 || slot >= this.#maxColorSlots) {
+			console.warn(`[GPUCoordinator] Invalid color ramp slot: ${slot}`);
+			return;
+		}
+
+		// Each slot = 256 colors × 4 floats × 4 bytes = 4096 bytes
+		const byteOffset = slot * this.#rampColorsPerSlot * 4 * 4;
+		this.#device.queue.writeBuffer(this.#colorRampBuffer, byteOffset, rampData);
+	}
+
+	/**
+	 * Write a 32-color ordinal palette to the palette buffer.
+	 *
+	 * @param {number} slot - Palette slot index (0-63)
+	 * @param {Float32Array} paletteData - 128 floats (32 colors × RGBA)
+	 */
+	writeColorPalette(slot, paletteData) {
+		if (!this.#colorPaletteBuffer) {
+			console.warn('[GPUCoordinator] Color palette buffer not initialized');
+			return;
+		}
+
+		if (slot < 0 || slot >= this.#maxColorSlots) {
+			console.warn(`[GPUCoordinator] Invalid color palette slot: ${slot}`);
+			return;
+		}
+
+		// Each slot = 32 colors × 4 floats × 4 bytes = 512 bytes
+		const byteOffset = slot * this.#paletteColorsPerSlot * 4 * 4;
+		this.#device.queue.writeBuffer(this.#colorPaletteBuffer, byteOffset, paletteData);
+	}
+
+	// =========================================================================
 	// ANIMATED SCALE MANAGEMENT
 	// =========================================================================
 
@@ -1113,7 +1318,10 @@ export class GPUCoordinator {
 				label: `${markType}-data-layout`,
 				entries: dataBindingConfig.map((config) => ({
 					binding: config.binding,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					// visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					visibility:  config.visibility !== undefined 
+						? config.visibility 
+						: (GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT),
 					buffer: { type: config.type || 'read-only-storage' }
 				}))
 			});
@@ -1128,7 +1336,7 @@ export class GPUCoordinator {
 		if (!chartConfig || chartConfig.frameUniformsBuffer) return;
 
 		chartConfig.frameUniformsBuffer = this.#device.createBuffer({
-			size: 48,
+			size: 64,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			label: `frame-uniforms-${chartId}`
 		});
@@ -1154,7 +1362,8 @@ export class GPUCoordinator {
 		});
 	}
 
-	updateChartFrameUniforms(chartId) {
+	// nullColor, where should we set this? per chart or per mark or theme wide?
+	updateChartFrameUniforms(chartId, nullColor = [0.5, 0.5, 0.5, 1.0]) {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (!chartConfig?.contextConfigured) {
 			this.#pendingFrameUpdates.set(chartId, { timestamp: Date.now() });
@@ -1170,15 +1379,16 @@ export class GPUCoordinator {
 
 		const resX = canvas.width;
 		const resY = canvas.height;
+
 		const rangeMinX = 0;
-		const rangeMinY = canvas.clientHeight * dpr;
 		const rangeMaxX = canvas.clientWidth * dpr;
-		const rangeMaxY = 0;
+		const rangeMinY = 0; // Top of chart (screen coords)
+		const rangeMaxY = canvas.clientHeight * dpr;
 
 		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId) ?? 0;
 		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId) ?? 1;
 
-		const buf = new ArrayBuffer(48);
+		const buf = new ArrayBuffer(64);
 		const f32 = new Float32Array(buf);
 		const u32 = new Uint32Array(buf);
 
@@ -1189,14 +1399,25 @@ export class GPUCoordinator {
 		f32[4] = rangeMaxX;
 		f32[5] = rangeMaxY;
 		f32[6] = dpr;
-		f32[7] = 0.0;
-
+		// f32[7] = padding
 		u32[8] = xScaleIndex >>> 0;
 		u32[9] = yScaleIndex >>> 0;
 		u32[10] = 0;
 		u32[11] = 0;
+		// u32[10], u32[11] = padding
+		f32[12] = nullColor[0]; // R
+		f32[13] = nullColor[1]; // G
+		f32[14] = nullColor[2]; // B
+		f32[15] = nullColor[3]; // A
 
 		this.#device.queue.writeBuffer(chartConfig.frameUniformsBuffer, 0, buf);
+
+		// console.log(`📏 Frame uniforms for chart ${chartId}:`, {
+		// 	rangeMinY: rangeMinY,
+		// 	rangeMaxY: rangeMaxY,
+		// 	rangeSize: rangeMaxY - rangeMinY,
+		// 	yScaleIndex: yScaleIndex
+		// });
 	}
 
 	#processPendingFrameUpdates(chartId) {
@@ -1429,9 +1650,31 @@ export class GPUCoordinator {
 		return this.#initialized;
 	}
 
+	get colorConfigBuffer() {
+		return this.#colorConfigBuffer;
+	}
+
+	get colorRampBuffer() {
+		return this.#colorRampBuffer;
+	}
+
+	get colorPaletteBuffer() {
+		return this.#colorPaletteBuffer;
+	}
+
 	// =========================================================================
 	// CLEANUP
 	// =========================================================================
+
+	#destroyColorScaleBuffers() {
+		this.#colorConfigBuffer?.destroy();
+		this.#colorRampBuffer?.destroy();
+		this.#colorPaletteBuffer?.destroy();
+
+		this.#colorConfigBuffer = null;
+		this.#colorRampBuffer = null;
+		this.#colorPaletteBuffer = null;
+	}
 
 	destroy() {
 		console.log('Destroying GPUCoordinator');
@@ -1464,6 +1707,8 @@ export class GPUCoordinator {
 		// Cleanup SSBO
 		this.#globalScaleSSBO?.destroy();
 		this.#globalScaleLayout = null;
+
+		this.#destroyColorScaleBuffers();
 
 		// Cleanup charts
 		for (const [, chartConfig] of this.#registeredCharts) {

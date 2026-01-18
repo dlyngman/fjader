@@ -3,6 +3,26 @@
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
 	import { getGPUContext } from '$lib/gpu';
 
+	/**
+	 * Declarative renderer definition for Rects.
+	 * Describes available data channels and the semantic concepts they represent.
+	 * The ScaleTemplateSystem uses this to generate appropriate WGSL code.
+	 */
+	const rectRendererDefinition = {
+		x: {
+			concept: 'extent',
+			channels: ['x0', 'x1']
+		},
+		y: {
+			concept: 'extent',
+			channels: ['y0', 'y1']
+		},
+		placeholders: {
+			x: '{{X_AXIS_LOGIC}}',
+			y: '{{Y_AXIS_LOGIC}}'
+		}
+	};
+
 	let {
 		x0Data, // Float32Array - left edges
 		x1Data, // Float32Array - right edges
@@ -31,55 +51,158 @@
 	const rectVertexCount = 6;
 
 	const rectsShaderCode = `
-    struct VertexOutput {
-      @builtin(position) position: vec4<f32>,
-      @location(0) color: vec4<f32>,
-    };
+  struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+  };
 
-    @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
-    @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
-    @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
-    @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
-    @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
-    @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+  @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
+  @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
+  @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
+  @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
+  @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+  @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+  
+  @vertex
+  fn vertexMain(
+    @location(0) rectCorner: vec2<f32>,
+    @builtin(instance_index) instanceIdx: u32,
+  ) -> VertexOutput {
+    let x0 = x0Values[instanceIdx];
+    let x1 = x1Values[instanceIdx];
+    let y0 = y0Values[instanceIdx];
+    let y1 = y1Values[instanceIdx];
+    let alpha = alphaValues[instanceIdx];
+    let color = colors[instanceIdx];
     
-    @vertex
-    fn vertexMain(
-      @location(0) rectCorner: vec2<f32>,
-      @builtin(instance_index) instanceIdx: u32,
-    ) -> VertexOutput {
-      let x0 = x0Values[instanceIdx];
-      let x1 = x1Values[instanceIdx];
-      let y0 = y0Values[instanceIdx];
-      let y1 = y1Values[instanceIdx];
-      let alpha = alphaValues[instanceIdx];
-      let color = colors[instanceIdx];
-      
-      // Use centralized scale functions
-      let scaledX0 = scaleX(x0);
-      let scaledX1 = scaleX(x1);
-      let scaledY0 = scaleY(y0);
-      let scaledY1 = scaleY(y1);
-      
-      // Interpolate rectangle corners
-      let finalX = mix(scaledX0, scaledX1, rectCorner.x);
-      let finalY = mix(scaledY0, scaledY1, rectCorner.y);
-      
-      // Convert to normalized coordinates
-      let worldPos = vec2<f32>(finalX, finalY);
-      let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
-      
-      var output: VertexOutput;
-      output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.color = vec4<f32>(color.rgb, color.a * alpha);
-      return output;
-    }
+    // X axis scaling (generated based on scale type)
+    {{X_AXIS_LOGIC}}
+    
+    // Y axis scaling (generated based on scale type)
+    {{Y_AXIS_LOGIC}}
+    
+    // Interpolate rectangle corners using the computed scaled values
+    let finalX = mix(scaledX0, scaledX1, rectCorner.x);
+    let finalY = mix(scaledY0, scaledY1, rectCorner.y);
+    
+    // Convert to normalized device coordinates
+    let worldPos = vec2<f32>(finalX, finalY);
+    let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+    
+    var output: VertexOutput;
+    output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+    output.color = vec4<f32>(color.rgb, color.a * alpha);
+    return output;
+  }
 
-    @fragment
-    fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
-      return input.color;
-    }
-  `;
+  @fragment
+  fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+    return input.color;
+  }
+`;
+
+	// 	const rectsShaderCode = `
+	//   struct VertexOutput {
+	//     @builtin(position) position: vec4<f32>,
+	//     @location(0) color: vec4<f32>,
+	//   };
+
+	//   @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
+	//   @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
+	//   @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
+	//   @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
+	//   @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+	//   @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+
+	//   @vertex
+	//   fn vertexMain(
+	//     @location(0) rectCorner: vec2<f32>,
+	//     @builtin(instance_index) instanceIdx: u32,
+	//   ) -> VertexOutput {
+	//     let x0 = x0Values[instanceIdx];
+	//     let x1 = x1Values[instanceIdx];
+	//     let y0 = y0Values[instanceIdx];
+	//     let y1 = y1Values[instanceIdx];
+	//     let alpha = alphaValues[instanceIdx];
+	//     let color = colors[instanceIdx];
+
+	//     // X scaling (always straightforward)
+	//     let scaledX0 = scaleX(x0);
+	//     let scaledX1 = scaleX(x1);
+
+	//     // Y scaling logic will be injected here based on scale type
+	//     {{Y_SCALE_LOGIC}}
+
+	//     // Interpolate rectangle corners using the computed scaled values
+	//     let finalX = mix(scaledX0, scaledX1, rectCorner.x);
+	//     let finalY = mix(scaledY0, scaledY1, rectCorner.y);
+
+	//     // Convert to normalized device coordinates
+	//     let worldPos = vec2<f32>(finalX, finalY);
+	//     let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+
+	//     var output: VertexOutput;
+	//     output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+	//     output.color = vec4<f32>(color.rgb, color.a * alpha);
+	//     return output;
+	//   }
+
+	//   @fragment
+	//   fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+	//     return input.color;
+	//   }
+	// `;
+
+	// const rectsShaderCode = `
+	//   struct VertexOutput {
+	//     @builtin(position) position: vec4<f32>,
+	//     @location(0) color: vec4<f32>,
+	//   };
+
+	//   @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
+	//   @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
+	//   @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
+	//   @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
+	//   @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+	//   @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+
+	//   @vertex
+	//   fn vertexMain(
+	//     @location(0) rectCorner: vec2<f32>,
+	//     @builtin(instance_index) instanceIdx: u32,
+	//   ) -> VertexOutput {
+	//     let x0 = x0Values[instanceIdx];
+	//     let x1 = x1Values[instanceIdx];
+	//     let y0 = y0Values[instanceIdx];
+	//     let y1 = y1Values[instanceIdx];
+	//     let alpha = alphaValues[instanceIdx];
+	//     let color = colors[instanceIdx];
+
+	//     // Use centralized scale functions
+	//     let scaledX0 = scaleX(x0);
+	//     let scaledX1 = scaleX(x1);
+	//     let scaledY0 = scaleY(y0);
+	//     let scaledY1 = scaleY(y1);
+
+	//     // Interpolate rectangle corners
+	//     let finalX = mix(scaledX0, scaledX1, rectCorner.x);
+	//     let finalY = mix(scaledY0, scaledY1, rectCorner.y);
+
+	//     // Convert to normalized coordinates
+	//     let worldPos = vec2<f32>(finalX, finalY);
+	//     let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+
+	//     var output: VertexOutput;
+	//     output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+	//     output.color = vec4<f32>(color.rgb, color.a * alpha);
+	//     return output;
+	//   }
+
+	//   @fragment
+	//   fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+	//     return input.color;
+	//   }
+	// `;
 
 	const vertexBufferLayout = [
 		{
@@ -192,6 +315,17 @@
 
 	$effect(() => {
 		void dataBindGroupReady;
+
+		console.log(`📐 Rects received Y data:`, {
+			y0First5: Array.from(y0Data.slice(0, 5)),
+			y1First5: Array.from(y1Data.slice(0, 5)),
+			instanceCount: y0Data.length,
+			x0First5: Array.from(x0Data.slice(0, 5)),
+			x1First5: Array.from(x1Data.slice(0, 5)),
+			colorFirst5: colorData ? Array.from(colorData.slice(0, 12)) : 'null', // ← Add this (RGBA, so 4 values per instance)
+			alphaFirst3: alphaData ? Array.from(alphaData.slice(0, 3)) : 'null' // ← Add this
+		});
+
 		if (y1Data && y1Buffer && dataBindGroupReady) {
 			const device = webGPUContext.getDevice();
 			device?.queue.writeBuffer(y1Buffer, 0, y1Data);
@@ -327,6 +461,40 @@
 		await initializeRects();
 	}
 
+	// // Initialize rectangles renderer
+	// async function initializeRects() {
+	// 	try {
+	// 		if (!gpuCoordinator) {
+	// 			throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
+	// 		}
+
+	// 		// Create base renderer with scale type information
+	// 		renderer = new BaseGPURenderer('rects', webGPUContext, gpuCoordinator, chartContext, {
+	// 			zIndex,
+	// 			xScaleType: chartContext.scaleTypes?.x || 'linear',
+	// 			yScaleType: chartContext.scaleTypes?.y || 'linear'
+	// 		});
+
+	// 		await renderer.initialize({
+	// 			markShaderCode: rectsShaderCode,
+	// 			vertexBufferLayout,
+	// 			dataBindingConfig
+	// 		});
+
+	// 		// Initialize rectangle-specific geometry
+	// 		await initializeRectGeometry();
+
+	// 		// Register layer with base renderer
+	// 		renderer.registerLayer(drawRects);
+
+	// 		console.log('✅ Rects component initialized');
+	// 	} catch (error) {
+	// 		console.error('❌ Rects component initialization failed:', error);
+	// 		initializationError = error.message;
+	// 		throw error;
+	// 	}
+	// }
+
 	// Initialize rectangles renderer
 	async function initializeRects() {
 		try {
@@ -344,7 +512,8 @@
 			await renderer.initialize({
 				markShaderCode: rectsShaderCode,
 				vertexBufferLayout,
-				dataBindingConfig
+				dataBindingConfig,
+				rendererDefinition: rectRendererDefinition // Pass the definition
 			});
 
 			// Initialize rectangle-specific geometry

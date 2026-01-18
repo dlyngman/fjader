@@ -63,23 +63,23 @@
 		};
 	});
 
-	$effect(() => {
-		console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
-	});
+	// $effect(() => {
+	// 	console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
+	// });
 
 	$effect(() => {
 		const xState = scales.xScaleState;
 		const yState = scales.yScaleState;
 
-		console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
-			xStateId: xState?.name,
-			yStateId: yState?.name,
-			xStateObject: xState,
-			yStateObject: yState,
-			// Check if it's the same object reference
-			xStateSame: window.lastXState === xState,
-			yStateSame: window.lastYState === yState
-		});
+		// console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
+		// 	xStateId: xState?.name,
+		// 	yStateId: yState?.name,
+		// 	xStateObject: xState,
+		// 	yStateObject: yState,
+		// 	// Check if it's the same object reference
+		// 	xStateSame: window.lastXState === xState,
+		// 	yStateSame: window.lastYState === yState
+		// });
 
 		// Store for comparison (dev only)
 		if (typeof window !== 'undefined') {
@@ -472,7 +472,17 @@
 		scales.active = false;
 	}
 
-	let testRenderLoop;
+	// let testRenderLoop;
+
+	$effect(() => {
+		if (chartContext) {
+			console.log('📐 Chart dimensions:', {
+				innerHeight: chartContext.innerHeight,
+				innerWidth: chartContext.innerWidth,
+				margin: chartContext.margin
+			});
+		}
+	});
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
