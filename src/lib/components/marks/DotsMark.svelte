@@ -1,251 +1,272 @@
 <script>
-  import { getContext, onMount, onDestroy, untrack } from 'svelte';
-  import { getScaleState } from '$lib/scales';
-  import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-  import { Dots } from '../rendering/index.js';
-  import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+	import { getContext, onDestroy, untrack } from 'svelte';
+	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+	import { Dots } from '../rendering/index.js';
+	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
 
-  let { 
-    table, 
-    selection, 
-    x, 
-    y, 
-    color, 
-    alpha = 0.5, 
-    radius = 3,
-    limit,
-    filterNulls = false,
-    preferredXScaleType = 'linear', 
-    preferredYScaleType = 'linear',
-  } = $props();
+	let {
+		table,
+		selection,
+		x,
+		y,
+		color = null,        // Can be: null, "#ff0000", "red", "fieldName", { field, scheme }
+		scheme = 'tableau10', // Default scheme for field-based color
+		alpha = 0.5,
+		radius = 3,
+		limit,
+		filterNulls = false,
+		preferredXScaleType = 'linear',
+		preferredYScaleType = 'linear',
+		transforms = []
+	} = $props();
 
-  const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
+	const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
+	const coordinator = getContext('mosaic-coordinator');
+	const chartContext = getContext('chart');
+	const scaleRegistry = getContext('scale-registry');
 
-  const coordinator = getContext('mosaic-coordinator');
-  const chartContext = getContext('chart');
-  const colorScale = $derived(getScaleState('color', 'ordinal'));
+	let setup = $state(null);
+	let colorScaleState = $state(null);
 
-  let setup = $state(null);
-  let xScaleId = $derived(chartContext.xScaleState?.id);
-  let yScaleId = $derived(chartContext.yScaleState?.id);
+	// Detect color type
+	const colorConfig = $derived.by(() => {
+		// No color prop → constant default
+		if (color == null) {
+			return {
+				mode: 'constant',
+				value: [0.13, 0.55, 0.13, 1.0] // Default forest green
+			};
+		}
 
-  const config = $derived({
-    markType: 'dot',
-    supportedScaleTypes: {
-      x: ['linear', 'identity', 'band', 'point', 'time', 'log'],
-      y: ['linear', 'identity', 'band', 'point', 'time', 'log']
-    },
-    scaleRequirements: {
-      x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
-      y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
-    },
-    table,
-    selection,
-    select: { x, y, ...(color && { color }) },
-    clientOptions: {
-      limit,
-      filterNulls: filterNulls ? [x, y] : null
-    }
-  })
+		// Object form: { field: 'species', scheme: 'category10' }
+		if (typeof color === 'object' && color.field) {
+			return {
+				mode: 'field',
+				field: color.field,
+				scheme: color.scheme || scheme
+			};
+		}
 
-  let arrowTable = $derived(setup?.client?.arrowTable);
-  let instanceCount = $derived(arrowTable?.numRows || 0);
+		// String: could be constant ("#ff0000", "red") or field name ("species")
+		if (typeof color === 'string') {
+			if (isColorConstant(color)) {
+				return {
+					mode: 'constant',
+					value: parseColorToRGBA(color)
+				};
+			} else {
+				// Treat as field name
+				return {
+					mode: 'field',
+					field: color,
+					scheme: scheme
+				};
+			}
+		}
 
-  let xColumn = $derived(arrowTable?.getChild('x'));
-  let yColumn = $derived(arrowTable?.getChild('y')); 
-  let colorColumn = $derived(arrowTable?.getChild('color'));
+		// Fallback
+		return {
+			mode: 'constant',
+			value: [0.13, 0.55, 0.13, 1.0]
+		};
+	});
 
-  let xData = $derived.by(() => {
-    console.log('DotsMark: rerunning xData derived')
-    if (!xColumn || !setup?.actualXScaleType) return null;
-    
-    const rawArray = xColumn.toArray(); // Zero-copy Arrow extraction
-    
-    // Scale-aware processing
-    if (setup.actualXScaleType === 'band' || setup.actualXScaleType === 'point') {
-      return chartContext.xScaleState.processDataForGPU(rawArray, setup.markId);
-    } else {
-      if (rawArray instanceof Float32Array) {
-        return rawArray;
-      } else {
-        return new Float32Array(rawArray); // Copy only when necessary
-      }
-    }
-  });
+	// Build select config based on color mode
+	const selectConfig = $derived({
+		x,
+		y,
+		...(colorConfig.mode === 'field' && { color: colorConfig.field })
+	});
 
-  let yData = $derived.by(() => {
-    if (!yColumn || !setup?.actualYScaleType) return null;
-    
-    const rawArray = yColumn.toArray();
-    
-    if (setup.actualYScaleType === 'band' || setup.actualYScaleType === 'point') {
-      return chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
-    } else {
-      if (rawArray instanceof Float32Array) {
-        return rawArray;
-      } else {
-        return new Float32Array(rawArray); // Copy only when necessary
-      }
-    }
-  });
+	const config = $derived({
+		markType: 'dot',
+		supportedScaleTypes: {
+			x: ['linear', 'identity', 'band', 'point', 'time', 'log'],
+			y: ['linear', 'identity', 'band', 'point', 'time', 'log']
+		},
+		scaleRequirements: {
+			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
+			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+		},
+		table,
+		selection,
+		select: selectConfig,
+		transforms,
+		clientOptions: {
+			limit,
+			filterNulls: filterNulls ? [x, y] : null
+		}
+	});
 
-  // Color Channel
-  let colorData = $derived.by(() => {
-    if (!colorColumn || !instanceCount || !colorScale) return null;
-    
-    const colorArray = colorColumn.toArray(); // Zero-copy
-    const rgba = new Float32Array(instanceCount * 4);
-    
-    for (let i = 0; i < instanceCount; i++) {
-      const colorValue = colorArray[i];
-      const fillColor = colorScale(colorValue);
-      const parsed = parseColor(fillColor);
-      rgba.set(parsed, i * 4);
-    }
-    
-    return rgba;
-  });
+	let xScaleId = $derived(chartContext.xScaleState?.id);
+	let yScaleId = $derived(chartContext.yScaleState?.id);
+	let instanceCount = $derived(setup?.data?.length || 0);
 
-  // Radius Channel (prop-based, but follows same pattern)
-  let radiusData = $derived.by(() => {
-    if (!instanceCount) return null;
-    
-    const radii = new Float32Array(instanceCount);
-    
-    if (typeof radius === 'function') {
-      // Handle function-based radius (access other columns if needed)
-      const xArray = xColumn?.toArray();
-      const yArray = yColumn?.toArray();
-      
-      for (let i = 0; i < instanceCount; i++) {
-        radii[i] = radius({ x: xArray?.[i], y: yArray?.[i] });
-      }
-    } else {
-      radii.fill(radius);
-    }
-    
-    return radii;
-  });
+	// Get or create color scale when in field mode
+	$effect(() => {
+		if (colorConfig.mode === 'field' && scaleRegistry) {
+			untrack(() => {
+				// Request color scale from registry
+				colorScaleState = scaleRegistry.getOrCreateScale(
+					colorConfig.field,
+					'color',
+					{ scheme: colorConfig.scheme },
+					chartContext.chartId
+				);
+			});
+		} else {
+			colorScaleState = null;
+		}
+	});
 
-  // Alpha Channel (simple, but consistent pattern)
-  let alphaData = $derived.by(() => {
-    if (!instanceCount) return null;
-    
-    const alphas = new Float32Array(instanceCount);
-    alphas.fill(alpha);
-    return alphas;
-  });
+	// Update color scale domain when data arrives
+	$effect(() => {
+		if (colorConfig.mode === 'field' && colorScaleState && setup?.data) {
+			const colorArray = setup.data.getColumn('color');
+			if (colorArray) {
+				// Extract unique categories for ordinal, or [min, max] for continuous
+				if (colorScaleState.isOrdinal) {
+					const uniqueCategories = [...new Set(colorArray)].filter(v => v != null);
+					colorScaleState.setDomain(uniqueCategories);
+				} else {
+					let min = Infinity, max = -Infinity;
+					for (let i = 0; i < colorArray.length; i++) {
+						const v = colorArray[i];
+						if (v != null && !isNaN(v)) {
+							if (v < min) min = v;
+							if (v > max) max = v;
+						}
+					}
+					if (min !== Infinity) {
+						colorScaleState.setDomain([min, max]);
+					}
+				}
+			}
+		}
+	});
 
-  // Helper function for color parsing
-  function parseColor(color) {
-    if (typeof color === 'string' && color.startsWith('#')) {
-      const r = parseInt(color.slice(1, 3), 16) / 255;
-      const g = parseInt(color.slice(3, 5), 16) / 255;
-      const b = parseInt(color.slice(5, 7), 16) / 255;
-      return [r, g, b, 1.0];
-    }
-    return [0.0, 0.0, 1.0, 1.0]; // Default blue
-  }
+	// X data
+	let xData = $derived.by(() => {
+		if (!setup?.data || setup.data.length === 0) return null;
 
+		const rawArray = setup.data.getColumn('x');
+		if (!rawArray) return null;
 
-  $effect(() => {
-    console.log('mark effect')
-    void config,  xScaleId, yScaleId; // and other relevant props
-    
-    untrack(() => {
-      setup?.destroy();
-      
-      setup = new BaseMarkSetup(
-        config,
-        coordinator,
-        chartContext,
-        markId
-      );
-    });
-  });
+		if (setup.actualXScaleType === 'band' || setup.actualXScaleType === 'point') {
+			const processed = chartContext.xScaleState.processDataForGPU(rawArray, setup.markId);
+			return processed instanceof Float32Array ? processed : new Float32Array(processed);
+		}
 
-  onDestroy(() => {
-    setup?.destroy();
-  });
+		return rawArray;
+	});
 
+	// Y data
+	let yData = $derived.by(() => {
+		if (!setup?.data || setup.data.length === 0) return null;
 
-  // $effect(() => {
-  //   console.log('🔍 DotsMark Data Processing:', {
-  //     // Setup status
-  //     setupReady: !!setup,
-  //     gpuReady: setup?.gpuReady,
-  //     scaleCompatibilityError: setup?.scaleCompatibilityError,
-      
-  //     // Raw data
-  //     arrowTable: !!arrowTable,
-  //     instanceCount,
-      
-  //     // Processed data arrays
-  //     xData: xData ? `${xData.length} items, sample: [${Array.from(xData.slice(0, 3)).join(', ')}]` : 'null',
-  //     yData: yData ? `${yData.length} items, sample: [${Array.from(yData.slice(0, 3)).join(', ')}]` : 'null',
-  //     colorData: colorData ? `${colorData.length/4} items (rgba)` : 'null',
-  //     radiusData: radiusData ? `${radiusData.length} items` : 'null',
-  //     alphaData: alphaData ? `${alphaData.length} items` : 'null',
-      
-  //     // Scale info that affects data processing
-  //     actualXScaleType: setup?.actualXScaleType,
-  //     actualYScaleType: setup?.actualYScaleType,
-      
-  //     // Chart context status
-  //     chartReady: chartContext.isReady,
-  //     scalesReady: chartContext.scalesReady,
-      
-  //     // What component will render
-  //     willRenderDots: !!(setup?.gpuReady && xData && yData),
-  //   });
-  // });
+		const rawArray = setup.data.getColumn('y');
+		if (!rawArray) return null;
 
-  // // Add this debugging effect to DotsMark.svelte
-  // $effect(() => {
-  //   if (setup?.gpuReady && chartContext.scalesReady) {
-  //     console.log('🔍 Scale Domain Debug:', {
-  //       // X scale domain
-  //       xScaleDomain: chartContext.xScaleState?.domain?.current,
-  //       xScaleRange: [0, chartContext.innerWidth],
-        
-  //       // Y scale domain  
-  //       yScaleDomain: chartContext.yScaleState?.domain?.current,
-  //       yScaleRange: [chartContext.innerHeight, 0], // Flipped for screen coords
-        
-  //       // Sample data for comparison
-  //       xDataSample: xData ? Array.from(xData.slice(0, 5)) : 'none',
-  //       yDataSample: yData ? Array.from(yData.slice(0, 5)) : 'none',
-        
-  //       // Expected screen positions (manual calculation)
-  //       expectedScreenPositions: xData && yData ? {
-  //         xSample: Array.from(xData.slice(0, 3)),
-  //         ySample: Array.from(yData.slice(0, 3))
-  //       } : 'no data'
-  //     });
-  //   }
-  // });
+		if (setup.actualYScaleType === 'band' || setup.actualYScaleType === 'point') {
+			const processed = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
+			return processed instanceof Float32Array ? processed : new Float32Array(processed);
+		}
+
+		return rawArray;
+	});
+
+	// Color value data (raw values for GPU lookup, or null for constant mode)
+	let colorValueData = $derived.by(() => {
+		if (colorConfig.mode !== 'field') return null;
+		if (!setup?.data || !instanceCount || !colorScaleState?.ready) return null;
+
+		const colorArray = setup.data.getColumn('color');
+		if (!colorArray) return null;
+
+		// Use ColorScaleState to convert to GPU-ready values
+		return colorScaleState.processDataForGPU(colorArray);
+	});
+
+	// Radius data
+	let radiusData = $derived.by(() => {
+		if (!instanceCount) return null;
+
+		const radii = new Float32Array(instanceCount);
+
+		if (typeof radius === 'function') {
+			const xArray = setup?.data?.getColumn('x');
+			const yArray = setup?.data?.getColumn('y');
+
+			if (!xArray || !yArray) return null;
+
+			for (let i = 0; i < instanceCount; i++) {
+				radii[i] = radius({ x: xArray[i], y: yArray[i] });
+			}
+		} else {
+			radii.fill(radius);
+		}
+
+		return radii;
+	});
+
+	// Alpha data
+	let alphaData = $derived.by(() => {
+		if (!instanceCount) return null;
+
+		const alphas = new Float32Array(instanceCount);
+		alphas.fill(alpha);
+		return alphas;
+	});
+
+	// Props for Dots renderer
+	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
+	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
+	let constantColor = $derived(
+		colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]
+	);
+
+	// Ready check: include color scale readiness for field mode
+	let colorReady = $derived(
+		colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false)
+	);
+
+	$effect(() => {
+		(void config, xScaleId, yScaleId);
+
+		untrack(() => {
+			setup?.destroy();
+			setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+		});
+	});
+
+	onDestroy(() => {
+		setup?.destroy();
+	});
 </script>
 
-
-{#if setup?.gpuReady && xData && yData}
-  <Dots
-    {xData}
-    {yData}
-    {colorData}
-    {radiusData}
-    {alphaData}
-    dataVersion={setup.client.dataVersion}
-  />
+{#if setup?.gpuReady && colorReady && xData && yData}
+	<Dots
+		{xData}
+		{yData}
+		{colorValueData}
+		{radiusData}
+		{alphaData}
+		{colorMode}
+		{colorScaleIndex}
+		{constantColor}
+		dataVersion={setup.client.dataVersion}
+	/>
 {:else if setup?.client?.error}
-  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-    Error: {setup.client.error.message}
-  </text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+		Error: {setup.client.error.message}
+	</text>
 {:else if setup?.client?.delayedLoading}
-  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-    Loading data...
-  </text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+		Loading data...
+	</text>
 {:else}
-  <text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-    Initializing mark...
-  </text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+		Initializing mark...
+	</text>
 {/if}

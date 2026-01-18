@@ -3,14 +3,36 @@
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
 	import { getGPUContext } from '$lib/gpu';
 
+	/**
+	 * Declarative renderer definition for Dots.
+	 */
+	const dotRendererDefinition = {
+		x: {
+			concept: 'position',
+			channels: ['x']
+		},
+		y: {
+			concept: 'position',
+			channels: ['y']
+		},
+		placeholders: {
+			x: '{{X_AXIS_LOGIC}}',
+			y: '{{Y_AXIS_LOGIC}}'
+		}
+	};
+
 	let {
 		xData, // Float32Array - processed X positions
 		yData, // Float32Array - processed Y positions
-		colorData, // Float32Array - RGBA colors (instanceCount * 4)
+		colorValueData, // Float32Array - raw color values (indices or continuous)
 		radiusData, // Float32Array - radius values
 		alphaData, // Float32Array - alpha values
 		dataVersion, // number - for triggering updates
-		zIndex = 0
+		zIndex = 0,
+		// NEW: Color configuration
+		colorMode = 0, // 0 = constant, 1 = scale
+		colorScaleIndex = 0, // Index into colorConfigs
+		constantColor = [0.13, 0.55, 0.13, 1.0] // Default green
 	} = $props();
 
 	const chartContext = getContext('chart');
@@ -21,75 +43,104 @@
 	let renderer = $state(null);
 	let initializationError = $state(null);
 
-	// GPU buffers (tracked in renderer.#ownedResources)
-	let xBuffer, yBuffer, radiusBuffer, alphaBuffer, colorBuffer;
+	// GPU buffers
+	let xBuffer, yBuffer, radiusBuffer, alphaBuffer, colorValueBuffer;
+	let markConstantsBuffer;
 
-	// Geometry buffer (locally owned - NOT tracked by renderer)
+	// Geometry buffer (locally owned)
 	let quadGeometryBuffer;
+	// let dummyColorBuffer;
 
 	const quadVertexCount = 6;
 
 	const dotsShaderCode = `
-    struct VertexOutput {
-      @builtin(position) position: vec4<f32>,
-      @location(0) color: vec4<f32>,
-      @location(1) uv: vec2<f32>,
-      @location(2) radius: f32,
-      @location(3) alpha: f32,
-    };
+  // MarkConstants uniform for per-mark configuration
+  struct MarkConstants {
+    colorMode: u32,           // 0 = constant, 1 = scale
+    colorScaleIndex: u32,     // Index into colorConfigs
+    _pad0: u32,
+    _pad1: u32,
+    constantColor: vec4<f32>, // Used when colorMode = 0
+  };
+  @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
 
-    // Data storage buffers in @group(1)
-    @group(1) @binding(0) var<storage, read> xValues: array<f32>;
-    @group(1) @binding(1) var<storage, read> yValues: array<f32>;
-    @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
-    @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
-    @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+  struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) colorValue: f32,   // Raw value for scale lookup
+    @location(1) uv: vec2<f32>,
+    @location(2) radius: f32,
+    @location(3) alpha: f32,
+  };
+
+  // Data storage buffers in @group(1)
+  @group(1) @binding(0) var<storage, read> xValues: array<f32>;
+  @group(1) @binding(1) var<storage, read> yValues: array<f32>;
+  @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
+  @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
+  @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
+  
+  @vertex
+  fn vertexMain(
+    @location(0) quadPosition: vec2<f32>,
+    @builtin(instance_index) instanceIdx: u32,
+  ) -> VertexOutput {
+    let x = xValues[instanceIdx];
+    let y = yValues[instanceIdx];
+    let radius = radiusValues[instanceIdx];
+    let alpha = alphaValues[instanceIdx];
+    let colorValue = colorValues[instanceIdx];
+
+    // X axis scaling
+    {{X_AXIS_LOGIC}}
     
-    @vertex
-    fn vertexMain(
-      @location(0) quadPosition: vec2<f32>,
-      @builtin(instance_index) instanceIdx: u32,
-    ) -> VertexOutput {
-      // Get values from separate buffers
-      let x = xValues[instanceIdx];
-      let y = yValues[instanceIdx];
-      let radius = radiusValues[instanceIdx];
-      let alpha = alphaValues[instanceIdx];
-      let color = colors[instanceIdx];
+    // Y axis scaling
+    {{Y_AXIS_LOGIC}}
+    
+    let displayRadius = radius * frameUniforms.devicePixelRatio;
+    let radiusWithPadding = displayRadius * 1.2;
+    let worldPos = vec2<f32>(scaledX, scaledY) + quadPosition * radiusWithPadding;
+    let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+    
+    var output: VertexOutput;
+    output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+    output.colorValue = colorValue;
+    output.uv = quadPosition;
+    output.radius = displayRadius;
+    output.alpha = alpha;
+    return output;
+  }
 
-      // Use centralized scale functions
-      let scaledX = scaleX(x);
-      let scaledY = scaleY(y);
-      
-      let displayRadius = radius * frameUniforms.devicePixelRatio;
-      let radiusWithPadding = displayRadius * 1.2;
-      let worldPos = vec2<f32>(scaledX, scaledY) + quadPosition * radiusWithPadding;
-      let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
-      
-      var output: VertexOutput;
-      output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.color = color;
-      output.uv = quadPosition;
-      output.radius = displayRadius;
-      output.alpha = alpha;
-      return output;
+  @fragment
+  fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+    // Get color based on mode
+    var baseColor: vec4<f32>;
+    if (markConstants.colorMode == 0u) {
+      // Constant color
+      baseColor = markConstants.constantColor;
+    } else {
+      // Scale-based color lookup
+      baseColor = getColorFromScale(
+        markConstants.colorScaleIndex,
+        input.colorValue,
+        frameUniforms.nullColor
+      );
     }
 
-    @fragment
-    fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
-      let dist = length(input.uv);
-      let sdf = dist - 1.0;
-      let pixelSize = frameUniforms.devicePixelRatio / (input.radius * 2.0);
-      let alpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
-      let finalAlpha = input.color.a * alpha * input.alpha;
-      return vec4<f32>(input.color.rgb, finalAlpha);
-    }
-  `;
+    // SDF circle with anti-aliasing
+    let dist = length(input.uv);
+    let sdf = dist - 1.0;
+    let pixelSize = frameUniforms.devicePixelRatio / (input.radius * 2.0);
+    let alpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
+    let finalAlpha = baseColor.a * alpha * input.alpha;
+    
+    return vec4<f32>(baseColor.rgb, finalAlpha);
+  }
+`;
 
-	// Vertex buffer layout for quad geometry
+	// Vertex buffer layout
 	const vertexBufferLayout = [
 		{
-			arrayStride: 2 * 4, // 2 floats * 4 bytes
+			arrayStride: 2 * 4,
 			attributes: [
 				{
 					shaderLocation: 0,
@@ -101,11 +152,12 @@
 	];
 
 	const dataBindingConfig = [
-		{ binding: 0, type: 'read-only-storage' }, // xValues
-		{ binding: 1, type: 'read-only-storage' }, // yValues
-		{ binding: 2, type: 'read-only-storage' }, // radiusValues
-		{ binding: 3, type: 'read-only-storage' }, // alphaValues
-		{ binding: 4, type: 'read-only-storage' } // colors
+		{ binding: 0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // xValues
+		{ binding: 1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // yValues
+		{ binding: 2, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // radiusValues
+		{ binding: 3, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // alphaValues
+		{ binding: 4, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // colorValues
+		{ binding: 5, type: 'uniform', visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT } // markConstants
 	];
 
 	// Buffer update effects
@@ -122,8 +174,11 @@
 	});
 
 	$effect.pre(() => {
-		if (colorData && renderer?.resourcesCreated) {
-			colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+		// Only create/update buffer if we have color data (field mode)
+		// In constant mode, colorValueData is null and we skip this entirely
+		// BaseGPURenderer will auto-fill the binding with a dummy buffer
+		if (colorValueData && renderer?.resourcesCreated) {
+			colorValueBuffer = renderer.createOrUpdateBuffer(colorValueBuffer, colorValueData);
 		}
 	});
 
@@ -139,18 +194,61 @@
 		}
 	});
 
+	// MarkConstants buffer management
+	$effect.pre(() => {
+		if (renderer?.resourcesCreated) {
+			updateMarkConstants();
+		}
+	});
+
+	function updateMarkConstants() {
+		const device = webGPUContext.getDevice();
+		if (!device) return;
+
+		// Create buffer if needed (32 bytes: 4 u32 + vec4 f32)
+		if (!markConstantsBuffer) {
+			markConstantsBuffer = device.createBuffer({
+				size: 32,
+				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+				label: 'dots-mark-constants'
+			});
+		}
+
+		// Write data using DataView for mixed types
+		const buffer = new ArrayBuffer(32);
+		const view = new DataView(buffer);
+		const LE = true;
+
+		view.setUint32(0, colorMode, LE);
+		view.setUint32(4, colorScaleIndex, LE);
+		view.setUint32(8, 0, LE); // _pad0
+		view.setUint32(12, 0, LE); // _pad1
+		view.setFloat32(16, constantColor[0], LE);
+		view.setFloat32(20, constantColor[1], LE);
+		view.setFloat32(24, constantColor[2], LE);
+		view.setFloat32(28, constantColor[3], LE);
+
+		device.queue.writeBuffer(markConstantsBuffer, 0, buffer);
+	}
+
 	let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
 
 	$effect.pre(() => {
 		void renderer?.resourcesCreated;
 		void dataBindGroupReady;
 
+		// For color, check based on mode:
+		// - Constant mode (colorMode === 0): always ready (no buffer needed)
+		// - Field mode (colorMode === 1): need colorValueBuffer
+		const isColorReady = colorMode === 0 || !!colorValueBuffer;
+
 		if (
 			xBuffer &&
 			yBuffer &&
 			radiusBuffer &&
 			alphaBuffer &&
-			colorBuffer &&
+			isColorReady &&
+			markConstantsBuffer &&
 			renderer?.resourcesCreated &&
 			!dataBindGroupReady
 		) {
@@ -188,10 +286,11 @@
 	});
 
 	$effect.pre(() => {
+		console.log('writing color value buffer')
 		void dataBindGroupReady;
-		if (colorData && colorBuffer && dataBindGroupReady) {
+		if (colorValueData && colorValueBuffer && dataBindGroupReady) {
 			const device = webGPUContext.getDevice();
-			device?.queue.writeBuffer(colorBuffer, 0, colorData);
+			device?.queue.writeBuffer(colorValueBuffer, 0, colorValueData);
 		}
 	});
 
@@ -208,14 +307,14 @@
 		if (
 			xData &&
 			yData &&
-			colorData &&
+			// colorValueData &&
 			radiusData &&
 			alphaData &&
 			xBuffer &&
 			yBuffer &&
 			radiusBuffer &&
 			alphaBuffer &&
-			colorBuffer &&
+			// colorValueBuffer &&
 			dataBindGroupReady
 		) {
 			renderer.updateInstanceCount(xData.length);
@@ -223,33 +322,16 @@
 		}
 	});
 
-	// Create quad geometry for dot rendering
 	function createQuadGeometry() {
-		return new Float32Array([
-			-1,
-			-1, // bottom-left
-			1,
-			-1, // bottom-right
-			-1,
-			1, // top-left
-			1,
-			-1, // bottom-right
-			1,
-			1, // top-right
-			-1,
-			1 // top-left
-		]);
+		return new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]);
 	}
 
-	// Initialize dots-specific geometry
 	async function initializeDotsGeometry() {
 		try {
 			const device = webGPUContext.getDevice();
 			if (!device) {
 				throw new Error('No WebGPU device available for quad geometry');
 			}
-
-			console.log('🔧 Creating quad geometry...');
 
 			const quadVertices = createQuadGeometry();
 
@@ -260,37 +342,36 @@
 			});
 
 			device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
-
-			console.log('✅ Quad geometry created successfully');
 		} catch (error) {
 			console.error('❌ Failed to create quad geometry:', error);
 			throw error;
 		}
 	}
 
-	// Create dots-specific data bind group
 	function createDotsDataBindGroup() {
-		if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !colorBuffer) {
-			console.warn('Cannot create dots data bind group - missing data buffers');
+		if (!xBuffer || !yBuffer || !radiusBuffer || !alphaBuffer || !markConstantsBuffer) {
+			console.warn('Cannot create dots data bind group - missing required buffers');
 			return;
 		}
 
+		// Pass only the bindings we have.
+		// BaseGPURenderer will auto-fill missing bindings (like colorValues in constant mode)
 		const dataBindings = [
 			{ binding: 0, resource: { buffer: xBuffer } },
 			{ binding: 1, resource: { buffer: yBuffer } },
 			{ binding: 2, resource: { buffer: radiusBuffer } },
 			{ binding: 3, resource: { buffer: alphaBuffer } },
-			{ binding: 4, resource: { buffer: colorBuffer } }
+			// Only include colorValueBuffer if it exists (field mode)
+			...(colorValueBuffer ? [{ binding: 4, resource: { buffer: colorValueBuffer } }] : []),
+			{ binding: 5, resource: { buffer: markConstantsBuffer } }
 		];
 
 		renderer.createDataBindGroup(dataBindings);
 	}
 
-	// Dots-specific draw function
 	function drawDots(passEncoder) {
 		try {
 			if (!quadGeometryBuffer || renderer.instanceCount === 0) {
-				console.debug('⚠️ Skipping dots draw - resources not ready or no instances');
 				return;
 			}
 
@@ -302,9 +383,7 @@
 		}
 	}
 
-	// Wait for WebGPU context
 	async function waitForWebGPU() {
-		console.log('⏳ waitForWebGPU - starting...');
 		let attempts = 0;
 		const maxAttempts = 100;
 
@@ -317,36 +396,33 @@
 			throw new Error(`WebGPU context failed to initialize within ${maxAttempts * 50}ms`);
 		}
 
-		console.log('✅ WebGPU context ready, calling initializeDots...');
 		await initializeDots();
 	}
 
-	// Initialize dots renderer
 	async function initializeDots() {
-		console.log('🔧 initializeDots - starting...');
 		try {
 			if (!gpuCoordinator) {
-				throw new Error('GPU Coordinator context missing. Make sure setCoordinators() was called.');
+				throw new Error('GPU Coordinator context missing.');
 			}
 
-			console.log('📊 Creating base renderer...');
 			renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, chartContext, {
 				zIndex,
 				xScaleType: chartContext.scaleTypes?.x || 'linear',
 				yScaleType: chartContext.scaleTypes?.y || 'linear'
 			});
 
-			console.log('🔧 Initializing renderer...');
 			await renderer.initialize({
 				markShaderCode: dotsShaderCode,
 				vertexBufferLayout,
-				dataBindingConfig
+				dataBindingConfig,
+				rendererDefinition: dotRendererDefinition
 			});
 
-			console.log('📐 Initializing dots geometry...');
 			await initializeDotsGeometry();
 
-			console.log('📋 Registering layer...');
+			// Initialize markConstants buffer
+			updateMarkConstants();
+
 			renderer.registerLayer(drawDots);
 
 			console.log('✅ Dots component initialized');
@@ -358,10 +434,8 @@
 	}
 
 	onMount(async () => {
-		console.log('🚀 Dots onMount - starting initialization...');
 		try {
 			await waitForWebGPU();
-			console.log('✅ Dots initialization completed successfully');
 		} catch (error) {
 			console.error('❌ Dots component mount failed:', error);
 			initializationError = error.message;
@@ -370,23 +444,17 @@
 
 	onDestroy(() => {
 		try {
-			// Clean up LOCALLY OWNED geometry buffer
-			// This buffer is created directly in initializeDotsGeometry(),
-			// NOT via renderer.createOrUpdateBuffer(), so we must destroy it manually.
 			if (quadGeometryBuffer) {
 				quadGeometryBuffer.destroy();
 				quadGeometryBuffer = null;
 			}
 
-			// Data buffers (xBuffer, yBuffer, colorBuffer, radiusBuffer, alphaBuffer)
-			// are created via renderer.createOrUpdateBuffer() and tracked in
-			// renderer.#ownedResources.buffers - they are automatically destroyed
-			// by renderer.destroy(). DO NOT destroy them here (would double-destroy).
+			if (markConstantsBuffer) {
+				markConstantsBuffer.destroy();
+				markConstantsBuffer = null;
+			}
 
-			// Base renderer handles:
-			// - Data buffer cleanup (tracked in #ownedResources)
-			// - Shared resource cleanup (via coordinator.releaseRenderer)
-			// - Layer unregistration
+
 			if (renderer) {
 				renderer.destroy();
 				renderer = null;

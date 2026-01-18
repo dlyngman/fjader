@@ -1,7 +1,7 @@
 <script>
 	import { Selection } from '@uwdata/mosaic-core';
 	import { sum, min, max } from '@uwdata/mosaic-sql';
-	import { setContext, getContext } from 'svelte';
+	import { setContext, getContext, onMount } from 'svelte';
 	import {
 		ChartContainer,
 		ColumnSelector,
@@ -15,6 +15,7 @@
 		DotsMark,
 		BarMark
 	} from '$lib/components';
+  import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 
 	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
 
@@ -121,6 +122,24 @@
 				</ChartContainer>
 			</div>
 		{/each}
+	</div>
+
+	<div class="charts-container">
+    <div class="chart-wrapper">
+      <ChartContainer xLabel="body_mass" yLabel="species">
+        {#snippet canvas()}
+          <WebGPUCanvas>
+            {#snippet canvasComponents()}
+              <BarMarkX 
+                table="penguins" 
+                x="body_mass" 
+                y="species" 
+                color="species" />
+            {/snippet}
+          </WebGPUCanvas>
+        {/snippet}
+      </ChartContainer>
+    </div>
 	</div>
 </div>
 

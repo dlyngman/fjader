@@ -1,6 +1,3 @@
-// BaseGPURenderer.svelte.js - Registry Pattern Implementation
-// Scale management delegated to coordinator - renderer just identifies itself
-
 export class BaseGPURenderer {
 	// Core properties
 	#markType;
@@ -29,6 +26,8 @@ export class BaseGPURenderer {
 	#pipeline = null;
 	#perDataBindGroup = $state(null);
 	#perDataLayout = null;
+
+	#dummyBuffer = null;
 
 	#dataBindingConfig = null;
 	#zIndex;
@@ -86,7 +85,7 @@ export class BaseGPURenderer {
 		}
 
 		try {
-			const { dataBindingConfig, markShaderCode, vertexBufferLayout } = config;
+			const { dataBindingConfig, markShaderCode, vertexBufferLayout, rendererDefinition } = config;
 
 			if (!dataBindingConfig) {
 				throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
@@ -111,7 +110,8 @@ export class BaseGPURenderer {
 				},
 				markShaderCode,
 				vertexBufferLayout,
-				dataBindingConfig
+				dataBindingConfig,
+				rendererDefinition // Pass through to coordinator
 			);
 
 			// POST-AWAIT SAFETY CHECK
@@ -135,49 +135,79 @@ export class BaseGPURenderer {
 			}
 		}
 	}
-
 	// ===== BIND GROUP CREATION =====
 
-	createDataBindGroup(dataBindings) {
-		if (!this.#device || !this.#perDataLayout) {
+	
+	/**
+	 * Create the per-data bind group.
+	 * Automatically fills missing bindings with a dummy buffer.
+	 * This allows optional buffers (like colorValues in constant mode) to be omitted.
+	 *
+	 * @param {Array<{binding: number, resource: {buffer: GPUBuffer}}>} providedBindings
+	 */
+	createDataBindGroup(providedBindings) {
+		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) {
 			console.warn(
-				`Cannot create per-data bind group for ${this.#markType} - missing device or layout`
-			);
-			return;
-		}
-
-		if (!Array.isArray(dataBindings) || dataBindings.length === 0) {
-			console.warn(
-				`Cannot create per-data bind group for ${this.#markType} - invalid dataBindings`
+				`Cannot create per-data bind group for ${this.#markType} - missing device, layout, or config`
 			);
 			return;
 		}
 
 		try {
-			// Validate that all required bindings are provided
-			const expectedBindings = this.#dataBindingConfig.map((config) => config.binding);
-			const providedBindings = dataBindings.map((binding) => binding.binding);
+			// Create a map for quick lookup of provided bindings
+			const bindingMap = new Map(providedBindings.map((entry) => [entry.binding, entry.resource]));
 
-			for (const expectedBinding of expectedBindings) {
-				if (!providedBindings.includes(expectedBinding)) {
-					throw new Error(`Missing data binding ${expectedBinding} for ${this.#markType}`);
+			// Build final entries based on config, auto-filling missing bindings
+			const finalEntries = this.#dataBindingConfig.map((config) => {
+				const suppliedResource = bindingMap.get(config.binding);
+
+				if (suppliedResource) {
+					// Component provided this binding → use it
+					return { binding: config.binding, resource: suppliedResource };
 				}
-			}
+
+				// Component didn't provide this binding → use dummy buffer
+				// This is safe when the shader conditionally skips reading (e.g., colorMode == 0)
+				console.debug(
+					`[${this.#markType}] Binding ${config.binding} not provided, using dummy buffer`
+				);
+
+				return {
+					binding: config.binding,
+					resource: { buffer: this.#sharedDummyBuffer }
+				};
+			});
 
 			this.#perDataBindGroup = this.#device.createBindGroup({
 				label: `${this.#markType}-per-data-bind-group`,
 				layout: this.#perDataLayout,
-				entries: dataBindings
+				entries: finalEntries
 			});
 
 			console.debug(
-				`Per-data bind group (@group(1)) created for ${this.#markType} with ${dataBindings.length} bindings`
+				`Per-data bind group (@group(1)) created for ${this.#markType} with ${finalEntries.length} bindings`
 			);
 		} catch (error) {
 			console.error(`Failed to create per-data bind group for ${this.#markType}:`, error);
 			this.#initializationError = error.message;
 			throw error;
 		}
+	}
+
+	/**
+	 * Lazy-loaded dummy buffer for satisfying empty bindings.
+	 * Used when a binding is optional (e.g., colorValues in constant color mode).
+	 * @private
+	 */
+	get #sharedDummyBuffer() {
+		if (!this.#dummyBuffer) {
+			this.#dummyBuffer = this.#device.createBuffer({
+				size: 4, // Minimum size, 4-byte aligned
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+				label: `${this.#markType}-dummy-fallback`
+			});
+		}
+		return this.#dummyBuffer;
 	}
 
 	// ===== BUFFER MANAGEMENT (Exclusive Resources) =====
@@ -321,14 +351,19 @@ export class BaseGPURenderer {
 			});
 			this.#ownedResources.buffers = [];
 
-			// 2. Clean up layer registration
+			// 2. Clean up dummy buffer
+			if (this.#dummyBuffer) {
+				this.#dummyBuffer.destroy();
+				this.#dummyBuffer = null;
+			}
+
+			// 3. Clean up layer registration
 			if (this.#ownedResources.layerControl) {
 				this.#ownedResources.layerControl.remove();
 				this.#ownedResources.layerControl = null;
 			}
 
-			// 3. Clean up SHARED resources via Registry
-			// Coordinator tracks what we acquired and decrements ref-counts
+			// 4. Clean up SHARED resources via Registry
 			if (this.#gpuCoordinator) {
 				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
 			}
