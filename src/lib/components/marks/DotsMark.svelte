@@ -114,35 +114,22 @@
 					{ scheme: colorConfig.scheme },
 					chartContext.chartId
 				);
+
+				// Register table with color scale for ViewManager integration
+				if (colorScaleState && table) {
+					colorScaleState.registerTable(table);
+				}
 			});
 		} else {
 			colorScaleState = null;
 		}
 	});
 
-	// Update color scale domain when data arrives
+	// Pass color scale to setup for domain discovery via DISTINCT query
+	// This must happen before categorical fetch completes
 	$effect(() => {
-		if (colorConfig.mode === 'field' && colorScaleState && setup?.data) {
-			const colorArray = setup.data.getColumn('color');
-			if (colorArray) {
-				// Extract unique categories for ordinal, or [min, max] for continuous
-				if (colorScaleState.isOrdinal) {
-					const uniqueCategories = [...new Set(colorArray)].filter(v => v != null);
-					colorScaleState.setDomain(uniqueCategories);
-				} else {
-					let min = Infinity, max = -Infinity;
-					for (let i = 0; i < colorArray.length; i++) {
-						const v = colorArray[i];
-						if (v != null && !isNaN(v)) {
-							if (v < min) min = v;
-							if (v > max) max = v;
-						}
-					}
-					if (min !== Infinity) {
-						colorScaleState.setDomain([min, max]);
-					}
-				}
-			}
+		if (setup && colorScaleState && colorConfig.mode === 'field') {
+			setup.setColorScale(colorScaleState);
 		}
 	});
 

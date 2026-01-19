@@ -6,6 +6,7 @@ import {
 	getSchemeType,
 	parseColorToRGBA
 } from './color-utils.js';
+import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
 
 /**
  * Reactive state for a GPU-backed color scale.
@@ -18,6 +19,7 @@ export class ColorScaleState {
 	#field;
 	#registry;
 	#gpuCoordinator;
+	#scaleId = crypto.randomUUID(); // Unique ID for ViewManager registration
 
 	// GPU slot indices (allocated from registry)
 	#configSlot = -1;
@@ -39,6 +41,10 @@ export class ColorScaleState {
 
 	// Ordinal category mapping (string -> 1-based index)
 	#categoryMap = new Map();
+
+	// ViewManager integration - tracks tables this scale has registered columns for
+	#registeredTables = new Set();
+	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
 
 	/**
 	 * @param {Object} config - Scale configuration
@@ -122,6 +128,21 @@ export class ColorScaleState {
 		return this.#d3Scale;
 	}
 
+	/**
+	 * The column name used in derived views for this scale's index.
+	 * Format: __dplot_{field}_color_idx
+	 */
+	get indexColumnName() {
+		return ViewManagerService.colorIndexColumn(this.#field);
+	}
+
+	/**
+	 * Unique scale ID for ViewManager registration.
+	 */
+	get scaleId() {
+		return this.#scaleId;
+	}
+
 	// ============================================================
 	// SLOT ALLOCATION
 	// ============================================================
@@ -161,23 +182,40 @@ export class ColorScaleState {
 	 * Converts raw data into GPU-ready values.
 	 * - Ordinal: string -> u32 index (1-based, 0 = null/unknown)
 	 * - Continuous: number -> f32 value (pass-through)
-	 * 
-	 * @param {Array} data - Raw data values
+	 *
+	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
+	 * returns it directly without processing.
+	 *
+	 * @param {Array|Float32Array} data - Raw data values
 	 * @returns {Float32Array} GPU-ready values
 	 */
 	processDataForGPU(data) {
+		// Fast path: already Float32Array from derived view (zero-copy)
+		if (data instanceof Float32Array) {
+			console.log(`[ColorScale:${this.#field}] ✅ FAST PATH - Float32Array indices:`, {
+				length: data.length,
+				sample: Array.from(data.slice(0, 5)),
+				isIndices: true
+			});
+			return data;
+		}
+
 		if (this.isOrdinal) {
+			console.log(`[ColorScale:${this.#field}] 🐢 JS PATH - Converting strings to indices:`, {
+				length: data.length,
+				sample: data.slice(0, 5),
+				isStrings: typeof data[0] === 'string'
+			});
 			const indices = new Float32Array(data.length);
 			for (let i = 0; i < data.length; i++) {
 				const val = data[i];
 				// 0 = null/fallback, 1..N = valid categories
-				indices[i] = (val == null) ? 0 : (this.#categoryMap.get(val) ?? 0);
+				indices[i] = val == null ? 0 : (this.#categoryMap.get(val) ?? 0);
 			}
 			return indices;
 		}
 
-		// Continuous: pass through, just ensure Float32Array
-		if (data instanceof Float32Array) return data;
+		// Continuous: convert to Float32Array
 		return new Float32Array(data);
 	}
 
@@ -292,11 +330,73 @@ export class ColorScaleState {
 	}
 
 	// ============================================================
+	// VIEWMANAGER INTEGRATION
+	// ============================================================
+
+	/**
+	 * Register this scale for a source table. After domain is set,
+	 * the view will be created with the index column (one-shot).
+	 *
+	 * @param {string} sourceTable - The database table to register for
+	 */
+	registerTable(sourceTable) {
+		this.#registeredTables.add(sourceTable);
+		this.#maybeCreateView(sourceTable);
+	}
+
+	/**
+	 * Create view for a table if both table is registered and domain is known.
+	 * Only creates once per table (one-shot).
+	 */
+	#maybeCreateView(sourceTable) {
+		// Only create once per table
+		if (this.#viewsCreated.has(sourceTable)) {
+			return;
+		}
+
+		// Need domain to be ready
+		if (!this.isOrdinal || this.domain.length === 0) {
+			return;
+		}
+
+		this.#viewsCreated.add(sourceTable);
+
+		const alias = this.indexColumnName;
+		const sql = ViewManagerService.buildCaseExpression(this.#field, this.domain, {
+			oneBased: true // Color indices are 1-based (0 = null/unknown)
+		});
+
+		viewManager.registerColumn(sourceTable, alias, {
+			sql,
+			source: this.#field,
+			scaleId: this.#scaleId
+		});
+
+		console.log(`[ColorScaleState] Created view column ${alias} for table ${sourceTable}`);
+	}
+
+	/**
+	 * Unregister this scale's columns from ViewManager.
+	 * Called during destroy().
+	 */
+	#unregisterFromViewManager() {
+		const alias = this.indexColumnName;
+
+		for (const table of this.#registeredTables) {
+			viewManager.unregisterColumn(table, alias, this.#scaleId);
+		}
+
+		this.#registeredTables.clear();
+		this.#viewsCreated.clear();
+	}
+
+	// ============================================================
 	// DOMAIN UPDATES
 	// ============================================================
 
 	/**
 	 * Update the domain. Triggers GPU re-upload.
+	 * Also triggers one-shot view creation for registered tables.
 	 * @param {Array} newDomain - New domain values
 	 */
 	setDomain(newDomain) {
@@ -304,13 +404,17 @@ export class ColorScaleState {
 
 		// Check if domain actually changed
 		const domainChanged =
-			newDomain.length !== this.domain.length ||
-			newDomain.some((v, i) => v !== this.domain[i]);
+			newDomain.length !== this.domain.length || newDomain.some((v, i) => v !== this.domain[i]);
 
 		if (!domainChanged) return;
 
 		this.domain = [...newDomain];
 		this.#uploadToGPU();
+
+		// Try to create views for registered tables (one-shot, will skip if already created)
+		for (const table of this.#registeredTables) {
+			this.#maybeCreateView(table);
+		}
 	}
 
 	/**
@@ -389,6 +493,9 @@ export class ColorScaleState {
 	// ============================================================
 
 	destroy() {
+		// Unregister from ViewManager
+		this.#unregisterFromViewManager();
+
 		// Slots are released by registry via gpuSlots getter
 		this.#d3Scale = null;
 		this.#categoryMap.clear();
