@@ -13,6 +13,7 @@ import {
 import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities.js';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler.js';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor.js';
+import { viewManager } from '$lib/data/ViewManager.svelte.js';
 
 export class BaseMarkSetup {
 	// --- Reactive State ---
@@ -33,6 +34,8 @@ export class BaseMarkSetup {
 	#chartContext;
 	#markId;
 	#scaleMap = {};
+	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
+	#currentClientTable = $state(null); // Track which table the current client queries
 
 	// --- Transform Support ---
 	#transformCompiler;
@@ -49,6 +52,12 @@ export class BaseMarkSetup {
 		this.#coordinator = coordinator;
 		this.#chartContext = chartContext;
 		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
+
+		// Ensure ViewManager has coordinator (idempotent, pragmatic initialization)
+		// TODO: Could be moved to app-level initialization where coordinator is created
+		if (coordinator) {
+			viewManager.setCoordinator(coordinator);
+		}
 
 		// NEW: Create transform compiler
 		this.#transformCompiler = new TransformCompiler(config.transforms || []);
@@ -91,44 +100,78 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 3: Create client
+		// Effect 3: Fetch categorical domains FIRST (before client creation)
+		// This populates scale domains which triggers ViewManager view creation
 		$effect(() => {
-			if (this.#scaleMappingsReady && !this.#clientCreated) {
-				const fieldRequests = this.#buildFieldInfoRequests();
-				this.#createClient(fieldRequests);
-				this.#clientCreated = true;
-			}
-		});
+			// Wait for scale mappings
+			if (!this.#scaleMappingsReady) return;
+			// If color field exists, wait for color scale to be set
+			const hasColorField = !!this.#config.select?.color;
+			if (hasColorField && !this.#colorScaleState) return;
 
-		// Effect 4: Monitor client data readiness
-		$effect(() => {
-			if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
-				this.#clientDataReady = true;
-			}
-		});
-
-		// Effect 5: Set initial continuous domains
-		$effect(() => {
-			if (this.#clientDataReady && !this.#continuousDomainsSet) {
-				this.#setInitialContinuousDomains(this.client.fieldInfo);
-				this.#continuousDomainsSet = true;
-			}
-		});
-
-		// Effect 6: Fetch categorical domains
-		$effect(() => {
-			if (this.#continuousDomainsSet && !this.#categoricalFetchStarted) {
+			if (!this.#categoricalFetchStarted) {
 				this.#categoricalFetchStarted = true;
 
 				this.#fetchCategoricalDomains()
 					.then(() => {
 						this.categoricalDataFetched = true;
 						this.#setScalesReady();
-						console.log(`✅ Mark ${this.#markId} setup complete`);
+						console.log(`✅ Mark ${this.#markId} categorical domains ready, view should be created`);
 					})
 					.catch((error) => {
 						console.error(`❌ Categorical domain fetch failed for ${this.#markId}:`, error);
 					});
+			}
+		});
+
+		// Effect 4: Create client - waits for view to be ready before creating
+		// This prevents creating a throwaway client against the source table
+		$effect(() => {
+			// Prerequisites
+			if (!this.categoricalDataFetched) return;
+
+			// Wait until ViewManager is ready (no pending view creation)
+			if (!viewManager.isReadyForClient(this.#config.table)) {
+				console.log(`[Mark ${this.#markId}] Waiting for view to be ready...`);
+				return;
+			}
+
+			// REACTIVITY: Track effectiveTable
+			const tableToQuery = this.effectiveTable;
+
+			// Check if table changed (using tracked state)
+			if (this.#currentClientTable !== tableToQuery) {
+				// Action (untracked to prevent loops)
+				untrack(() => {
+					if (this.client) {
+						console.log(
+							`[Mark ${this.#markId}] Switching source: ${this.#currentClientTable} → ${tableToQuery}`
+						);
+						this.client.destroy();
+						this.client = null;
+					}
+
+					const fieldRequests = this.#buildFieldInfoRequests();
+					console.log(`[Mark ${this.#markId}] Creating DataClient for ${tableToQuery}`);
+					this.#createClient(tableToQuery, fieldRequests);
+					this.#currentClientTable = tableToQuery;
+					this.#clientCreated = true;
+				});
+			}
+		});
+
+		// Effect 5: Monitor client data readiness
+		$effect(() => {
+			if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
+				this.#clientDataReady = true;
+			}
+		});
+
+		// Effect 6: Set initial continuous domains
+		$effect(() => {
+			if (this.#clientDataReady && !this.#continuousDomainsSet) {
+				this.#setInitialContinuousDomains(this.client.fieldInfo);
+				this.#continuousDomainsSet = true;
 			}
 		});
 	}
@@ -165,6 +208,32 @@ export class BaseMarkSetup {
 
 	get markId() {
 		return this.#markId;
+	}
+
+	/**
+	 * Reactive effective table name.
+	 * Automatically updates when ViewManager creates the derived view.
+	 */
+	effectiveTable = $derived(viewManager.getEffectiveTable(this.#config.table));
+
+	/**
+	 * Get the source table name (without ViewManager transformation).
+	 */
+	get sourceTable() {
+		return this.#config.table;
+	}
+
+	/**
+	 * Set the color scale state for ViewManager integration.
+	 * Must be called before categorical domain fetch completes.
+	 * @param {ColorScaleState} colorScaleState
+	 */
+	setColorScale(colorScaleState) {
+		this.#colorScaleState = colorScaleState;
+		// Register table with color scale
+		if (colorScaleState && this.#config.table) {
+			colorScaleState.registerTable(this.#config.table);
+		}
 	}
 
 	scaleCompatibilityError = $derived.by(() => {
@@ -279,12 +348,41 @@ export class BaseMarkSetup {
 	getSelectConfig() {
 		// Return select with AutoBinNodes unresolved
 		// They'll be resolved in buildQuery()
-		return this.#config.select;
+		// Also swap categorical fields for indexed column names if views are ready
+		const select = { ...this.#config.select };
+		const hasView = viewManager.hasView(this.#config.table);
+
+		// For band/point scales, use the indexed column name from ViewManager
+		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+			const xScale = this.#chartContext.xScaleState;
+			if (xScale?.indexColumnName && hasView) {
+				const originalField = select.x;
+				select.x = xScale.indexColumnName;
+				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
+			}
+		}
+		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+			const yScale = this.#chartContext.yScaleState;
+			if (yScale?.indexColumnName && hasView) {
+				const originalField = select.y;
+				select.y = yScale.indexColumnName;
+				console.log(`[BaseMarkSetup] Swapping y: ${originalField} → ${select.y}`);
+			}
+		}
+
+		// For color scales, use the indexed column name
+		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
+			const originalField = select.color;
+			select.color = this.#colorScaleState.indexColumnName;
+			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
+		}
+
+		return select;
 	}
 
 	buildQuery(sourceTable, config, filter) {
-		console.log('🔨 buildQuery called with filter:', filter);
-		console.log('🔨 buildQuery config:', config);
+		// console.log('🔨 buildQuery called with filter:', filter);
+		// console.log('🔨 buildQuery config:', config);
 		let select = config.select;
 
 		// NEW: Resolve auto bins if we have field info
@@ -361,11 +459,11 @@ export class BaseMarkSetup {
 		return resolved;
 	}
 
-	#createClient(fieldRequests) {
+	#createClient(tableName, fieldRequests) {
 		if (this.client) this.client.destroy();
 
 		this.client = new DataClient(
-			this.#config.table,
+			tableName,
 			this.#config.selection,
 			{
 				select: this.getSelectConfig(),
@@ -384,6 +482,16 @@ export class BaseMarkSetup {
 			x: this.#chartContext.xScaleState,
 			y: this.#chartContext.yScaleState
 		};
+
+		// Register table with band scales for ViewManager integration
+		// This must happen BEFORE categorical domain fetch so views can be created
+		const table = this.#config.table;
+		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+			this.#chartContext.xScaleState?.registerTable?.(table);
+		}
+		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+			this.#chartContext.yScaleState?.registerTable?.(table);
+		}
 
 		console.log(`📊 ${this.#markId} Scale mappings setup:`, {
 			x: this.actualXScaleType,
@@ -493,6 +601,22 @@ export class BaseMarkSetup {
 		}
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
 			setupFetch('y', this.#config.select.y);
+		}
+
+		// Fetch color domain if color scale is set and there's a color field
+		if (this.#colorScaleState && this.#config.select.color) {
+			const colorField = this.#config.select.color;
+			const q = Query.from(table).select({ color: sqlColumn(String(colorField)) }).distinct();
+
+			fetches.push(
+				this.#coordinator.query(q).then((result) => {
+					const categories = Array.from(result).map((row) => row.color);
+					if (categories.length > 0) {
+						console.log(`[BaseMarkSetup] Color domain discovered:`, categories);
+						this.#colorScaleState.setDomain(categories);
+					}
+				})
+			);
 		}
 
 		if (fetches.length > 0) await Promise.all(fetches);

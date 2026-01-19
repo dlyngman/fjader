@@ -246,7 +246,7 @@
 		setup?.destroy();
 	});
 
-  // Temp logging
+	// Temp logging
 	$effect(() => {
 		if (chartContext?.yScaleState?.isReadyForGPU && chartContext.innerHeight) {
 			console.log('📏 Band scale calculations:', {

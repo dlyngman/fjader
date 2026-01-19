@@ -1,6 +1,7 @@
 // src/lib/scales/BandScaleState.svelte.js
 
 import { scaleBand } from 'd3-scale';
+import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
 
 /**
  * BandScaleState manages categorical (band/point) scales.
@@ -22,10 +23,15 @@ export class BandScaleState {
 	// IDENTITY & TYPE
 	// =========================================================================
 	id = crypto.randomUUID();
+	#scaleId = crypto.randomUUID(); // Unique ID for ViewManager registration
 	name = $state('');
 	type = 'band';
 	ready = $state(false);
 	_version = $state(0);
+
+	// ViewManager integration - tracks tables this scale has registered columns for
+	#registeredTables = new Set();
+	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
 
 	// =========================================================================
 	// DOMAIN STATE
@@ -117,8 +123,87 @@ export class BandScaleState {
 	}
 
 	destroy() {
+		// Unregister from ViewManager
+		this.#unregisterFromViewManager();
+
 		this.#frozenDomain = null;
 		this.#extents.clear();
+	}
+
+	// =========================================================================
+	// VIEWMANAGER INTEGRATION
+	// =========================================================================
+
+	/**
+	 * The column name used in derived views for this scale's index.
+	 * Format: __dplot_{field}_idx
+	 */
+	get indexColumnName() {
+		return ViewManagerService.bandIndexColumn(this.name);
+	}
+
+	/**
+	 * Unique scale ID for ViewManager registration.
+	 */
+	get scaleId() {
+		return this.#scaleId;
+	}
+
+	/**
+	 * Register this scale for a source table. After domain is set,
+	 * the view will be created with the index column (one-shot).
+	 *
+	 * @param {string} sourceTable - The database table to register for
+	 */
+	registerTable(sourceTable) {
+		this.#registeredTables.add(sourceTable);
+		this.#maybeCreateView(sourceTable);
+	}
+
+	/**
+	 * Create view for a table if both table is registered and domain is known.
+	 * Only creates once per table (one-shot).
+	 */
+	#maybeCreateView(sourceTable) {
+		// Only create once per table
+		if (this.#viewsCreated.has(sourceTable)) {
+			return;
+		}
+
+		// Need domain to be ready
+		if (this.effectiveDomain.length === 0) {
+			return;
+		}
+
+		this.#viewsCreated.add(sourceTable);
+
+		const alias = this.indexColumnName;
+		const sql = ViewManagerService.buildCaseExpression(this.name, this.effectiveDomain, {
+			oneBased: false // Band indices are 0-based
+		});
+
+		viewManager.registerColumn(sourceTable, alias, {
+			sql,
+			source: this.name,
+			scaleId: this.#scaleId
+		});
+
+		console.log(`[BandScaleState] Created view column ${alias} for table ${sourceTable}`);
+	}
+
+	/**
+	 * Unregister this scale's columns from ViewManager.
+	 * Called during destroy().
+	 */
+	#unregisterFromViewManager() {
+		const alias = this.indexColumnName;
+
+		for (const table of this.#registeredTables) {
+			viewManager.unregisterColumn(table, alias, this.#scaleId);
+		}
+
+		this.#registeredTables.clear();
+		this.#viewsCreated.clear();
 	}
 
 	// =========================================================================
@@ -230,6 +315,11 @@ export class BandScaleState {
 		}
 		this.#domain = allCategories;
 		this._version++;
+
+		// Try to create views for registered tables (one-shot, will skip if already created)
+		for (const table of this.#registeredTables) {
+			this.#maybeCreateView(table);
+		}
 	}
 
 	// =========================================================================
@@ -239,11 +329,30 @@ export class BandScaleState {
 	/**
 	 * Convert categorical data to indices for GPU processing
 	 *
-	 * @param {Array} categoryData - Array of category values from mark data
+	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
+	 * returns it directly without processing.
+	 *
+	 * @param {Array|Float32Array} categoryData - Array of category values from mark data
 	 * @param {string} markId - Identifier for the mark (for debugging)
 	 * @returns {Float32Array} Array of indices corresponding to categories
 	 */
 	processDataForGPU(categoryData, markId = 'unknown') {
+		// Fast path: already Float32Array from derived view (zero-copy)
+		if (categoryData instanceof Float32Array) {
+			console.log(`[BandScale:${this.name}] ✅ FAST PATH - Float32Array indices:`, {
+				length: categoryData.length,
+				sample: Array.from(categoryData.slice(0, 5)),
+				isIndices: true
+			});
+			return categoryData;
+		}
+
+		console.log(`[BandScale:${this.name}] 🐢 JS PATH - Converting categories to indices:`, {
+			length: categoryData.length,
+			sample: categoryData.slice(0, 5),
+			type: typeof categoryData[0]
+		});
+
 		const categoryMap = this.#categoryIndexMap;
 
 		// Safety check - ensure map is valid

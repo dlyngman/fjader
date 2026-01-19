@@ -19,13 +19,13 @@
 			// await coord.exec(loadParquet("flights", `${window.location.origin}/data/flights-200k.parquet`));
 
 			// Spike test
-			// const result = await coord.query(`
-			// 	SELECT CAST(1.5 AS REAL) as test_float
-			// 	FROM penguins LIMIT 5
-			// `);
+			const result = await coord.query(`
+				SELECT CAST(1.5 AS REAL) as test_float
+				FROM penguins LIMIT 5
+			`);
 
-			// const col = result.getChild('test_float');
-			// const arr = col.toArray();
+			const col = result.getChild('test_float');
+			const arr = col.toArray();
 
 			console.log('Type:', arr.constructor.name); // Want: Float32Array
 			console.log('Buffer:', arr.buffer); // Want: ArrayBuffer (WASM memory)
