@@ -355,6 +355,12 @@ export class LinearScaleState {
 			// Set current position to expanded, target to actual
 			this.#springPair.set(expandedMin, expandedMax);
 			this.#springPair.setTarget(min, max);
+
+			// Initialize render values so first frame renders correctly
+			this.#renderMin = expandedMin;
+			this.#renderMax = expandedMax;
+			this.#updateGpuState();
+
 			this.#ensureAnimating();
 		} else {
 			// Normal reset
@@ -524,6 +530,14 @@ export class LinearScaleState {
 		this.domainLimits.min = min - this.zoomLimits.max * w;
 		this.domainLimits.max = max + this.zoomLimits.max * w;
 		this.domainLimits.minWidth = w / this.zoomLimits.min;
+	}
+
+	/**
+	 * Check if scale has a valid domain from marks.
+	 * Returns true if at least one mark has contributed extent data.
+	 */
+	get hasDomain() {
+		return this.#extents.size > 0;
 	}
 
 	/**

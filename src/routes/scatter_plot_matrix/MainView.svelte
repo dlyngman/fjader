@@ -102,8 +102,8 @@
 										x={config.x}
 										y={config.y}
 										color={'species'}
-										alpha="1.0"
-										radius="5"
+										alpha={0.1}
+										radius={5}
 									/>
 								{/if}
 							{/snippet}

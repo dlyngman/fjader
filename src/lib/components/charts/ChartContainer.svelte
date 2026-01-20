@@ -93,18 +93,24 @@
 		const yScale = chartContext.yScaleState;
 
 		if (xScale && yScale && layout.isReady) {
-			// For test data, manually mark scales as ready
-			if (!xScale.ready) {
+			// Only mark scales ready if they have valid domains
+			// Linear scales need hasDomain, band scales need effectiveDomain.length > 0
+			const xHasDomain = xScale.hasDomain ?? xScale.effectiveDomain?.length > 0;
+			const yHasDomain = yScale.hasDomain ?? yScale.effectiveDomain?.length > 0;
+
+			if (!xScale.ready && xHasDomain) {
 				xScale.setReady?.();
 				console.log('Manually marked X scale ready');
 			}
-			if (!yScale.ready) {
+			if (!yScale.ready && yHasDomain) {
 				yScale.setReady?.();
 				console.log('Manually marked Y scale ready');
 			}
 
-			// Then trigger render
-			gpuCoordinator.invalidateChart(layout.chartId);
+			// Only trigger render when both scales are ready
+			if (xScale.ready && yScale.ready) {
+				gpuCoordinator.invalidateChart(layout.chartId);
+			}
 		}
 	});
 

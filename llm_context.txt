@@ -2776,6 +2776,12 @@
   			// Set current position to expanded, target to actual
   			this.#springPair.set(expandedMin, expandedMax);
   			this.#springPair.setTarget(min, max);
+  
+  			// Initialize render values so first frame renders correctly
+  			this.#renderMin = expandedMin;
+  			this.#renderMax = expandedMax;
+  			this.#updateGpuState();
+  
   			this.#ensureAnimating();
   		} else {
   			// Normal reset
@@ -2948,6 +2954,14 @@
   	}
   
   	/**
+  	 * Check if scale has a valid domain from marks.
+  	 * Returns true if at least one mark has contributed extent data.
+  	 */
+  	get hasDomain() {
+  		return this.#extents.size > 0;
+  	}
+  
+  	/**
   	 * Mark scale as ready (after initial data load).
   	 */
   	setReady() {
@@ -3056,6 +3070,7 @@
   // src/lib/scales/BandScaleState.svelte.js
   
   import { scaleBand } from 'd3-scale';
+  import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
   
   /**
    * BandScaleState manages categorical (band/point) scales.
@@ -3077,10 +3092,15 @@
   	// IDENTITY & TYPE
   	// =========================================================================
   	id = crypto.randomUUID();
+  	#scaleId = crypto.randomUUID(); // Unique ID for ViewManager registration
   	name = $state('');
   	type = 'band';
   	ready = $state(false);
   	_version = $state(0);
+  
+  	// ViewManager integration - tracks tables this scale has registered columns for
+  	#registeredTables = new Set();
+  	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
   
   	// =========================================================================
   	// DOMAIN STATE
@@ -3172,8 +3192,87 @@
   	}
   
   	destroy() {
+  		// Unregister from ViewManager
+  		this.#unregisterFromViewManager();
+  
   		this.#frozenDomain = null;
   		this.#extents.clear();
+  	}
+  
+  	// =========================================================================
+  	// VIEWMANAGER INTEGRATION
+  	// =========================================================================
+  
+  	/**
+  	 * The column name used in derived views for this scale's index.
+  	 * Format: __dplot_{field}_idx
+  	 */
+  	get indexColumnName() {
+  		return ViewManagerService.bandIndexColumn(this.name);
+  	}
+  
+  	/**
+  	 * Unique scale ID for ViewManager registration.
+  	 */
+  	get scaleId() {
+  		return this.#scaleId;
+  	}
+  
+  	/**
+  	 * Register this scale for a source table. After domain is set,
+  	 * the view will be created with the index column (one-shot).
+  	 *
+  	 * @param {string} sourceTable - The database table to register for
+  	 */
+  	registerTable(sourceTable) {
+  		this.#registeredTables.add(sourceTable);
+  		this.#maybeCreateView(sourceTable);
+  	}
+  
+  	/**
+  	 * Create view for a table if both table is registered and domain is known.
+  	 * Only creates once per table (one-shot).
+  	 */
+  	#maybeCreateView(sourceTable) {
+  		// Only create once per table
+  		if (this.#viewsCreated.has(sourceTable)) {
+  			return;
+  		}
+  
+  		// Need domain to be ready
+  		if (this.effectiveDomain.length === 0) {
+  			return;
+  		}
+  
+  		this.#viewsCreated.add(sourceTable);
+  
+  		const alias = this.indexColumnName;
+  		const sql = ViewManagerService.buildCaseExpression(this.name, this.effectiveDomain, {
+  			oneBased: false // Band indices are 0-based
+  		});
+  
+  		viewManager.registerColumn(sourceTable, alias, {
+  			sql,
+  			source: this.name,
+  			scaleId: this.#scaleId
+  		});
+  
+  		console.log(`[BandScaleState] Created view column ${alias} for table ${sourceTable}`);
+  	}
+  
+  	/**
+  	 * Unregister this scale's columns from ViewManager.
+  	 * Called during destroy().
+  	 */
+  	#unregisterFromViewManager() {
+  		const alias = this.indexColumnName;
+  
+  		for (const table of this.#registeredTables) {
+  			viewManager.unregisterColumn(table, alias, this.#scaleId);
+  		}
+  
+  		this.#registeredTables.clear();
+  		this.#viewsCreated.clear();
   	}
   
   	// =========================================================================
@@ -3285,6 +3384,11 @@
   		}
   		this.#domain = allCategories;
   		this._version++;
+  
+  		// Try to create views for registered tables (one-shot, will skip if already created)
+  		for (const table of this.#registeredTables) {
+  			this.#maybeCreateView(table);
+  		}
   	}
   
   	// =========================================================================
@@ -3294,11 +3398,30 @@
   	/**
   	 * Convert categorical data to indices for GPU processing
   	 *
-  	 * @param {Array} categoryData - Array of category values from mark data
+  	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
+  	 * returns it directly without processing.
+  	 *
+  	 * @param {Array|Float32Array} categoryData - Array of category values from mark data
   	 * @param {string} markId - Identifier for the mark (for debugging)
   	 * @returns {Float32Array} Array of indices corresponding to categories
   	 */
   	processDataForGPU(categoryData, markId = 'unknown') {
+  		// Fast path: already Float32Array from derived view (zero-copy)
+  		if (categoryData instanceof Float32Array) {
+  			console.log(`[BandScale:${this.name}] ✅ FAST PATH - Float32Array indices:`, {
+  				length: categoryData.length,
+  				sample: Array.from(categoryData.slice(0, 5)),
+  				isIndices: true
+  			});
+  			return categoryData;
+  		}
+  
+  		console.log(`[BandScale:${this.name}] 🐢 JS PATH - Converting categories to indices:`, {
+  			length: categoryData.length,
+  			sample: categoryData.slice(0, 5),
+  			type: typeof categoryData[0]
+  		});
+  
   		const categoryMap = this.#categoryIndexMap;
   
   		// Safety check - ensure map is valid
@@ -3538,6 +3661,7 @@
   	getSchemeType,
   	parseColorToRGBA
   } from './color-utils.js';
+  import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
   
   /**
    * Reactive state for a GPU-backed color scale.
@@ -3550,6 +3674,7 @@
   	#field;
   	#registry;
   	#gpuCoordinator;
+  	#scaleId = crypto.randomUUID(); // Unique ID for ViewManager registration
   
   	// GPU slot indices (allocated from registry)
   	#configSlot = -1;
@@ -3571,6 +3696,10 @@
   
   	// Ordinal category mapping (string -> 1-based index)
   	#categoryMap = new Map();
+  
+  	// ViewManager integration - tracks tables this scale has registered columns for
+  	#registeredTables = new Set();
+  	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
   
   	/**
   	 * @param {Object} config - Scale configuration
@@ -3654,6 +3783,21 @@
   		return this.#d3Scale;
   	}
   
+  	/**
+  	 * The column name used in derived views for this scale's index.
+  	 * Format: __dplot_{field}_color_idx
+  	 */
+  	get indexColumnName() {
+  		return ViewManagerService.colorIndexColumn(this.#field);
+  	}
+  
+  	/**
+  	 * Unique scale ID for ViewManager registration.
+  	 */
+  	get scaleId() {
+  		return this.#scaleId;
+  	}
+  
   	// ============================================================
   	// SLOT ALLOCATION
   	// ============================================================
@@ -3693,23 +3837,40 @@
   	 * Converts raw data into GPU-ready values.
   	 * - Ordinal: string -> u32 index (1-based, 0 = null/unknown)
   	 * - Continuous: number -> f32 value (pass-through)
-  	 * 
-  	 * @param {Array} data - Raw data values
+  	 *
+  	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
+  	 * returns it directly without processing.
+  	 *
+  	 * @param {Array|Float32Array} data - Raw data values
   	 * @returns {Float32Array} GPU-ready values
   	 */
   	processDataForGPU(data) {
+  		// Fast path: already Float32Array from derived view (zero-copy)
+  		if (data instanceof Float32Array) {
+  			console.log(`[ColorScale:${this.#field}] ✅ FAST PATH - Float32Array indices:`, {
+  				length: data.length,
+  				sample: Array.from(data.slice(0, 5)),
+  				isIndices: true
+  			});
+  			return data;
+  		}
+  
   		if (this.isOrdinal) {
+  			console.log(`[ColorScale:${this.#field}] 🐢 JS PATH - Converting strings to indices:`, {
+  				length: data.length,
+  				sample: data.slice(0, 5),
+  				isStrings: typeof data[0] === 'string'
+  			});
   			const indices = new Float32Array(data.length);
   			for (let i = 0; i < data.length; i++) {
   				const val = data[i];
   				// 0 = null/fallback, 1..N = valid categories
-  				indices[i] = (val == null) ? 0 : (this.#categoryMap.get(val) ?? 0);
+  				indices[i] = val == null ? 0 : (this.#categoryMap.get(val) ?? 0);
   			}
   			return indices;
   		}
   
-  		// Continuous: pass through, just ensure Float32Array
-  		if (data instanceof Float32Array) return data;
+  		// Continuous: convert to Float32Array
   		return new Float32Array(data);
   	}
   
@@ -3824,11 +3985,73 @@
   	}
   
   	// ============================================================
+  	// VIEWMANAGER INTEGRATION
+  	// ============================================================
+  
+  	/**
+  	 * Register this scale for a source table. After domain is set,
+  	 * the view will be created with the index column (one-shot).
+  	 *
+  	 * @param {string} sourceTable - The database table to register for
+  	 */
+  	registerTable(sourceTable) {
+  		this.#registeredTables.add(sourceTable);
+  		this.#maybeCreateView(sourceTable);
+  	}
+  
+  	/**
+  	 * Create view for a table if both table is registered and domain is known.
+  	 * Only creates once per table (one-shot).
+  	 */
+  	#maybeCreateView(sourceTable) {
+  		// Only create once per table
+  		if (this.#viewsCreated.has(sourceTable)) {
+  			return;
+  		}
+  
+  		// Need domain to be ready
+  		if (!this.isOrdinal || this.domain.length === 0) {
+  			return;
+  		}
+  
+  		this.#viewsCreated.add(sourceTable);
+  
+  		const alias = this.indexColumnName;
+  		const sql = ViewManagerService.buildCaseExpression(this.#field, this.domain, {
+  			oneBased: true // Color indices are 1-based (0 = null/unknown)
+  		});
+  
+  		viewManager.registerColumn(sourceTable, alias, {
+  			sql,
+  			source: this.#field,
+  			scaleId: this.#scaleId
+  		});
+  
+  		console.log(`[ColorScaleState] Created view column ${alias} for table ${sourceTable}`);
+  	}
+  
+  	/**
+  	 * Unregister this scale's columns from ViewManager.
+  	 * Called during destroy().
+  	 */
+  	#unregisterFromViewManager() {
+  		const alias = this.indexColumnName;
+  
+  		for (const table of this.#registeredTables) {
+  			viewManager.unregisterColumn(table, alias, this.#scaleId);
+  		}
+  
+  		this.#registeredTables.clear();
+  		this.#viewsCreated.clear();
+  	}
+  
+  	// ============================================================
   	// DOMAIN UPDATES
   	// ============================================================
   
   	/**
   	 * Update the domain. Triggers GPU re-upload.
+  	 * Also triggers one-shot view creation for registered tables.
   	 * @param {Array} newDomain - New domain values
   	 */
   	setDomain(newDomain) {
@@ -3836,13 +4059,17 @@
   
   		// Check if domain actually changed
   		const domainChanged =
-  			newDomain.length !== this.domain.length ||
-  			newDomain.some((v, i) => v !== this.domain[i]);
+  			newDomain.length !== this.domain.length || newDomain.some((v, i) => v !== this.domain[i]);
   
   		if (!domainChanged) return;
   
   		this.domain = [...newDomain];
   		this.#uploadToGPU();
+  
+  		// Try to create views for registered tables (one-shot, will skip if already created)
+  		for (const table of this.#registeredTables) {
+  			this.#maybeCreateView(table);
+  		}
   	}
   
   	/**
@@ -3921,6 +4148,9 @@
   	// ============================================================
   
   	destroy() {
+  		// Unregister from ViewManager
+  		this.#unregisterFromViewManager();
+  
   		// Slots are released by registry via gpuSlots getter
   		this.#d3Scale = null;
   		this.#categoryMap.clear();
@@ -6048,18 +6278,24 @@
   		const yScale = chartContext.yScaleState;
   
   		if (xScale && yScale && layout.isReady) {
-  			// For test data, manually mark scales as ready
-  			if (!xScale.ready) {
+  			// Only mark scales ready if they have valid domains
+  			// Linear scales need hasDomain, band scales need effectiveDomain.length > 0
+  			const xHasDomain = xScale.hasDomain ?? xScale.effectiveDomain?.length > 0;
+  			const yHasDomain = yScale.hasDomain ?? yScale.effectiveDomain?.length > 0;
+  
+  			if (!xScale.ready && xHasDomain) {
   				xScale.setReady?.();
   				console.log('Manually marked X scale ready');
   			}
-  			if (!yScale.ready) {
+  			if (!yScale.ready && yHasDomain) {
   				yScale.setReady?.();
   				console.log('Manually marked Y scale ready');
   			}
   
-  			// Then trigger render
-  			gpuCoordinator.invalidateChart(layout.chartId);
+  			// Only trigger render when both scales are ready
+  			if (xScale.ready && yScale.ready) {
+  				gpuCoordinator.invalidateChart(layout.chartId);
+  			}
   		}
   	});
   
@@ -6588,746 +6824,6 @@
   </style>
 </src/lib/components/charts/ChartContainer.svelte>
 
-<src/lib/components/rendering/WebGPUCanvas.svelte>
-  <script>
-  	import { onMount, onDestroy, setContext, getContext } from 'svelte';
-  	import { getGPUContext } from '$lib/gpu';
-  
-  	let {
-  		canvasComponents
-  	} = $props();
-  
-  	const c = getContext('chart');
-  	let width = $derived(c.innerWidth);
-  	let height = $derived(c.innerHeight);
-  	let margin = $derived(c.margin);
-  
-  	// let canvas;
-    let canvas = $state();
-  	let context;
-  	let gpuCoordinator;
-  	let chartControl;
-  	let contextConfigured = $state(false);
-  	let initializationError = $state(null);
-  	let lastTransform = '';
-  
-  	const chartId = c.chartId;
-  
-  	// Enhanced initialization with comprehensive error handling
-  	async function initWebGPU() {
-  		try {
-  			// Get shared GPU coordinator
-  			gpuCoordinator = getGPUContext();
-  
-  			if (!gpuCoordinator) {
-  				throw new Error(
-  					'GPUCoordinator not found. Ensure setCoordinators() was called in a parent component.'
-  				);
-  			}
-  
-  			// Wait for coordinator initialization with timeout
-  			let attempts = 0;
-  			const maxAttempts = 100; // 5 seconds at 50ms intervals
-  
-  			while (!gpuCoordinator.isInitialized && attempts < maxAttempts) {
-  				await new Promise((resolve) => setTimeout(resolve, 50));
-  				attempts++;
-  			}
-  
-  			if (!gpuCoordinator.isInitialized) {
-  				throw new Error(`GPUCoordinator failed to initialize within ${maxAttempts * 50}ms timeout`);
-  			}
-  
-  			// Configure context with proper error handling
-  			await configureContext();
-  
-  			// Register with coordinator after context is ready
-  			registerWithCoordinator();
-  
-  			console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
-  		} catch (error) {
-  			console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
-  			initializationError = error.message;
-  			throw error;
-  		}
-  	}
-  
-  	// Separate context configuration with proper error handling
-  	async function configureContext() {
-  		if (!canvas) {
-  			throw new Error('Canvas element not available for context configuration');
-  		}
-  
-  		try {
-  			// Get WebGPU context
-  			context = canvas.getContext('webgpu');
-  			if (!context) {
-  				throw new Error('Failed to get WebGPU context from canvas. WebGPU may not be supported.');
-  			}
-  
-  			const device = gpuCoordinator.device;
-  			const presentationFormat = gpuCoordinator.presentationFormat;
-  
-  			if (!device) {
-  				throw new Error('No WebGPU device available from coordinator');
-  			}
-  
-  			// Configure context
-  			context.configure({
-  				device,
-  				format: presentationFormat,
-  				alphaMode: 'premultiplied',
-  				desynchronized: true
-  				// desynchronized: false
-  			});
-  
-  			contextConfigured = true;
-  
-  			// Setup initial canvas size
-  			setupCanvas();
-  		} catch (error) {
-  			console.error(`❌ Context configuration failed for chart ${chartId}:`, error);
-  			contextConfigured = false;
-  			throw error;
-  		}
-  	}
-  
-  	// Clean registration with coordinator
-  	function registerWithCoordinator() {
-  		if (!contextConfigured) {
-  			console.error(`⚠️ Attempting to register chart ${chartId} before context is configured`);
-  			return;
-  		}
-  
-  		console.log(`📋 Registering chart ${chartId} with coordinator`);
-  
-  		try {
-  			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
-  				zIndex: 0
-  			});
-  
-  			// Notify coordinator that context is ready
-  			chartControl.setContextReady();
-  			console.log(`✅ Chart ${chartId} registered and ready`);
-  		} catch (error) {
-  			console.error(`❌ Chart registration failed for ${chartId}:`, error);
-  			throw error;
-  		}
-  	}
-  
-  	// Robust canvas setup with dimension change detection
-  	function setupCanvas() {
-  		if (!canvas || !contextConfigured) {
-  			console.debug(`⚠️ setupCanvas called before canvas/context ready for ${chartId}`);
-  			return;
-  		}
-  
-  		try {
-  			// Calculate new dimensions
-  			const devicePixelRatio = window.devicePixelRatio || 1;
-  
-  			const canvasWidth = Math.ceil(width * devicePixelRatio);
-  			const canvasHeight = Math.ceil(height * devicePixelRatio);
-  
-  			// Only update if dimensions actually changed to avoid unnecessary work
-  			const dimensionsChanged = canvas.width !== canvasWidth || canvas.height !== canvasHeight;
-  
-  			const newTransform = `translate(${margin.left}px, ${margin.top}px)`;
-  			const positionChanged = lastTransform !== newTransform;
-  
-  			// Only proceed if there's an actual change
-  			if (!dimensionsChanged && !positionChanged) return;
-  
-  			if (dimensionsChanged) {
-  				canvas.width = canvasWidth;
-  				canvas.height = canvasHeight;
-  				canvas.style.width = width + 'px';
-  				canvas.style.height = height + 'px';
-  			}
-  
-  			if (positionChanged) {
-  				canvas.style.transform = newTransform;
-  				lastTransform = newTransform;
-  			}
-  
-  			if (chartControl) {
-  				chartControl.invalidate();
-  			}
-  		} catch (error) {
-  			console.error(`❌ Canvas setup failed for ${chartId}:`, error);
-  			initializationError = `Canvas setup failed: ${error.message}`;
-  		}
-  	}
-  
-  	// Enhanced context with better state management and error handling
-  	setContext('webgpu-canvas', {
-  		getCanvasDimensions() {
-  			const currentDPR = window.devicePixelRatio || 1;
-  			return {
-  				width: width * currentDPR,
-  				height: height * currentDPR,
-  				cssWidth: width,
-  				cssHeight: height,
-  				currentDPR
-  			};
-  		},
-  
-  		getMsaaSampleCount() {
-  			return gpuCoordinator?.msaaSampleCount || 4;
-  		},
-  
-  		getDevice() {
-  			return gpuCoordinator?.device;
-  		},
-  
-  		getPresentationFormat() {
-  			return gpuCoordinator?.presentationFormat;
-  		},
-  
-  		isInitialized() {
-  			return contextConfigured && gpuCoordinator?.isInitialized;
-  		},
-  
-  		invalidate() {
-  			chartControl?.invalidate();
-  		},
-  
-  		// Enhanced debugging support
-  		getDebugInfo() {
-  			return {
-  				chartId,
-  				contextConfigured,
-  				initializationError,
-  				canvasDimensions: {
-  					width: canvas?.width,
-  					height: canvas?.height,
-  					cssWidth: canvas?.style.width,
-  					cssHeight: canvas?.style.height
-  				}
-  			};
-  		}
-  	});
-  
-  	onMount(async () => {
-  		try {
-  			await initWebGPU();
-  		} catch (error) {
-  			console.error(`❌ WebGPUCanvas ${chartId} mount failed:`, error);
-  			// Error is already stored in initializationError state
-  		}
-  	});
-  
-  	onDestroy(() => {
-  		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
-  
-  		try {
-  			// Clean up chart registration
-  			if (chartControl) {
-  				chartControl.remove();
-  				chartControl = null;
-  			}
-  
-  			// FIXED: Unconfigure WebGPU context to release swap chain resources
-  			if (context && contextConfigured) {
-  				try {
-  					context.unconfigure();
-  				} catch (e) {
-  					// Context may already be invalid, ignore
-  					console.debug(`Context unconfigure failed (may already be invalid):`, e);
-  				}
-  			}
-  
-  			contextConfigured = false;
-  
-  			// Clear references
-  			gpuCoordinator = null;
-  			context = null;
-  
-  			console.log(`✅ WebGPUCanvas ${chartId} destroyed successfully`);
-  		} catch (error) {
-  			console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
-  		}
-  	});
-  
-  	$effect(() => {
-  		// Dependencies that trigger a canvas resize/reposition
-  		void width;
-  		void height;
-  		void margin;
-  
-  		// Only run if the canvas and context are fully ready
-  		if (canvas && contextConfigured) {
-  			setupCanvas();
-  			// Tell the coordinator to update this chart's frame uniforms
-  			if (gpuCoordinator) {
-  				gpuCoordinator.updateChartFrameUniforms(chartId);
-  				gpuCoordinator.invalidateChart(chartId);
-  			}
-  		}
-  	});
-  </script>
-  
-  {#if initializationError}
-  	<div class="webgpu-error">
-  		<p>WebGPU initialization failed for chart {chartId}:</p>
-  		<p class="error-message">{initializationError}</p>
-  		<p class="error-help">
-  			Please ensure your browser supports WebGPU and try refreshing the page.
-  		</p>
-  	</div>
-  {:else}
-  	<canvas bind:this={canvas}></canvas>
-  	{#if contextConfigured}
-  		{@render canvasComponents?.()}
-  	{:else}
-  		<div class="webgpu-loading">
-  			<p>Initializing WebGPU context for chart {chartId}...</p>
-  		</div>
-  	{/if}
-  {/if}
-  
-  <style>
-  	canvas {
-  		position: absolute;
-  		top: 0;
-  		left: 0;
-  		transform: translateZ(0);
-  		contain: size;
-  		will-change: contents;
-  		touch-action: none;
-  	}
-  
-  	.webgpu-error,
-  	.webgpu-loading {
-  		position: absolute;
-  		top: 0;
-  		left: 0;
-  		width: 100%;
-  		height: 100%;
-  		display: flex;
-  		flex-direction: column;
-  		justify-content: center;
-  		align-items: center;
-  		background-color: rgba(255, 255, 255, 0.9);
-  		border: 1px dashed #ccc;
-  		font-size: 12px;
-  		color: #666;
-  		z-index: 1000;
-  	}
-  
-  	.webgpu-error {
-  		background-color: rgba(255, 240, 240, 0.9);
-  		border-color: #ffcccb;
-  		color: #d32f2f;
-  	}
-  
-  	.error-message {
-  		font-family: monospace;
-  		background-color: rgba(255, 255, 255, 0.8);
-  		padding: 4px 8px;
-  		border-radius: 4px;
-  		margin: 8px 0;
-  		font-size: 11px;
-  	}
-  
-  	.error-help {
-  		font-style: italic;
-  		margin-top: 8px;
-  	}
-  
-  	.webgpu-loading {
-  		background-color: rgba(240, 248, 255, 0.9);
-  		border-color: #bbdefb;
-  		color: #1976d2;
-  	}
-  </style>
-</src/lib/components/rendering/WebGPUCanvas.svelte>
-
-<src/lib/components/rendering/BaseGPURenderer.svelte.js>
-  export class BaseGPURenderer {
-  	// Core properties
-  	#markType;
-  	#webGPUContext;
-  	#gpuCoordinator;
-  	#chartContext;
-  
-  	// Identity & Async Control
-  	#rendererId;
-  	#initGeneration = 0;
-  	#isDestroyed = false;
-  
-  	// Resource tracking (Exclusive resources only)
-  	#ownedResources = {
-  		buffers: [],
-  		layerControl: null
-  	};
-  
-  	// State management (Reactive - drives UI)
-  	#resourcesCreated = $state(false);
-  	#initializationError = $state(null);
-  	#instanceCount = $state(0);
-  
-  	// GPU Objects
-  	#device = null;
-  	#pipeline = null;
-  	#perDataBindGroup = $state(null);
-  	#perDataLayout = null;
-  
-  	#dummyBuffer = null;
-  
-  	#dataBindingConfig = null;
-  	#zIndex;
-  	#xScaleType;
-  	#yScaleType;
-  
-  	constructor(markType, webGPUContext, gpuCoordinator, chartContext, options = {}) {
-  		this.#markType = markType;
-  		this.#webGPUContext = webGPUContext;
-  		this.#gpuCoordinator = gpuCoordinator;
-  		this.#chartContext = chartContext;
-  
-  		// Unique ID for the Resource Registry
-  		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
-  
-  		this.#zIndex = options.zIndex || 0;
-  		this.#xScaleType = options.xScaleType || 'linear';
-  		this.#yScaleType = options.yScaleType || 'linear';
-  	}
-  
-  	// ===== PUBLIC GETTERS =====
-  
-  	get resourcesCreated() {
-  		return this.#resourcesCreated;
-  	}
-  	get initializationError() {
-  		return this.#initializationError;
-  	}
-  	get instanceCount() {
-  		return this.#instanceCount;
-  	}
-  	get pipeline() {
-  		return this.#pipeline;
-  	}
-  	get markType() {
-  		return this.#markType;
-  	}
-  	get perDataBindGroup() {
-  		return this.#perDataBindGroup;
-  	}
-  
-  	// ===== INITIALIZATION =====
-  
-  	async initialize(config) {
-  		if (this.#isDestroyed) return;
-  
-  		// Async Race Protection: Increment generation
-  		// Any previous pending initialization will see mismatching generation and abort
-  		const currentGen = ++this.#initGeneration;
-  
-  		// If re-initializing, clean up previous shared resources via Registry
-  		if (this.#resourcesCreated) {
-  			this.#gpuCoordinator.releaseRenderer(this.#rendererId);
-  			this.#resourcesCreated = false;
-  		}
-  
-  		try {
-  			const { dataBindingConfig, markShaderCode, vertexBufferLayout, rendererDefinition } = config;
-  
-  			if (!dataBindingConfig) {
-  				throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
-  			}
-  
-  			this.#device = this.#webGPUContext.getDevice();
-  			if (!this.#device) {
-  				throw new Error('No WebGPU device available from context');
-  			}
-  
-  			this.#dataBindingConfig = dataBindingConfig;
-  
-  			// ACQUIRE VIA REGISTRY
-  			// Coordinator handles keying, caching, and ref-counting
-  			// We just identify ourselves with rendererId
-  			const result = await this.#gpuCoordinator.acquirePipeline(
-  				this.#rendererId,
-  				this.#markType,
-  				{
-  					x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
-  					y: this.#chartContext.scaleTypes?.y || this.#yScaleType
-  				},
-  				markShaderCode,
-  				vertexBufferLayout,
-  				dataBindingConfig,
-  				rendererDefinition // Pass through to coordinator
-  			);
-  
-  			// POST-AWAIT SAFETY CHECK
-  			// If destroyed or a newer init call happened while we were awaiting, abort and cleanup
-  			if (this.#isDestroyed || this.#initGeneration !== currentGen) {
-  				console.warn(`${this.#markType}: Stale initialization detected, discarding.`);
-  				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
-  				return;
-  			}
-  
-  			this.#pipeline = result.pipeline;
-  			this.#perDataLayout = result.dataLayout;
-  			this.#resourcesCreated = true;
-  
-  			console.log(`${this.#markType} renderer initialized (${this.#rendererId})`);
-  		} catch (error) {
-  			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
-  				console.error(`${this.#markType} initialization failed:`, error);
-  				this.#initializationError = error.message;
-  				throw error;
-  			}
-  		}
-  	}
-  	// ===== BIND GROUP CREATION =====
-  
-  	
-  	/**
-  	 * Create the per-data bind group.
-  	 * Automatically fills missing bindings with a dummy buffer.
-  	 * This allows optional buffers (like colorValues in constant mode) to be omitted.
-  	 *
-  	 * @param {Array<{binding: number, resource: {buffer: GPUBuffer}}>} providedBindings
-  	 */
-  	createDataBindGroup(providedBindings) {
-  		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) {
-  			console.warn(
-  				`Cannot create per-data bind group for ${this.#markType} - missing device, layout, or config`
-  			);
-  			return;
-  		}
-  
-  		try {
-  			// Create a map for quick lookup of provided bindings
-  			const bindingMap = new Map(providedBindings.map((entry) => [entry.binding, entry.resource]));
-  
-  			// Build final entries based on config, auto-filling missing bindings
-  			const finalEntries = this.#dataBindingConfig.map((config) => {
-  				const suppliedResource = bindingMap.get(config.binding);
-  
-  				if (suppliedResource) {
-  					// Component provided this binding → use it
-  					return { binding: config.binding, resource: suppliedResource };
-  				}
-  
-  				// Component didn't provide this binding → use dummy buffer
-  				// This is safe when the shader conditionally skips reading (e.g., colorMode == 0)
-  				console.debug(
-  					`[${this.#markType}] Binding ${config.binding} not provided, using dummy buffer`
-  				);
-  
-  				return {
-  					binding: config.binding,
-  					resource: { buffer: this.#sharedDummyBuffer }
-  				};
-  			});
-  
-  			this.#perDataBindGroup = this.#device.createBindGroup({
-  				label: `${this.#markType}-per-data-bind-group`,
-  				layout: this.#perDataLayout,
-  				entries: finalEntries
-  			});
-  
-  			console.debug(
-  				`Per-data bind group (@group(1)) created for ${this.#markType} with ${finalEntries.length} bindings`
-  			);
-  		} catch (error) {
-  			console.error(`Failed to create per-data bind group for ${this.#markType}:`, error);
-  			this.#initializationError = error.message;
-  			throw error;
-  		}
-  	}
-  
-  	/**
-  	 * Lazy-loaded dummy buffer for satisfying empty bindings.
-  	 * Used when a binding is optional (e.g., colorValues in constant color mode).
-  	 * @private
-  	 */
-  	get #sharedDummyBuffer() {
-  		if (!this.#dummyBuffer) {
-  			this.#dummyBuffer = this.#device.createBuffer({
-  				size: 4, // Minimum size, 4-byte aligned
-  				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  				label: `${this.#markType}-dummy-fallback`
-  			});
-  		}
-  		return this.#dummyBuffer;
-  	}
-  
-  	// ===== BUFFER MANAGEMENT (Exclusive Resources) =====
-  
-  	createOrUpdateBuffer(
-  		existingBuffer,
-  		data,
-  		usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-  	) {
-  		if (!this.#device) {
-  			throw new Error('No WebGPU device available');
-  		}
-  
-  		const requiredSize = data.byteLength;
-  
-  		// Smart buffer resizing to prevent thrashing
-  		if (!existingBuffer || existingBuffer.size < requiredSize) {
-  			if (existingBuffer) {
-  				const index = this.#ownedResources.buffers.indexOf(existingBuffer);
-  				if (index !== -1) {
-  					this.#ownedResources.buffers.splice(index, 1);
-  				}
-  				existingBuffer.destroy();
-  			}
-  
-  			// Smart sizing with headroom
-  			const MEMORY_BLOCK_SIZE = 256;
-  			const desiredSize = Math.ceil(requiredSize * 1.5);
-  			const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
-  			let bufferSize = Math.max(requiredSize, roundedUpSize);
-  			bufferSize = (bufferSize + 3) & ~3; // 4-byte alignment
-  
-  			const newBuffer = this.#device.createBuffer({
-  				size: bufferSize,
-  				usage,
-  				label: `${this.#markType}-data-buffer-${this.#ownedResources.buffers.length}`
-  			});
-  
-  			this.#ownedResources.buffers.push(newBuffer);
-  			console.debug(
-  				`Created ${this.#markType} buffer of size ${bufferSize} bytes (required: ${requiredSize})`
-  			);
-  			return newBuffer;
-  		}
-  
-  		return existingBuffer;
-  	}
-  
-  	updateInstanceCount(count) {
-  		this.#instanceCount = count;
-  		this.invalidateLayer();
-  	}
-  
-  	registerLayer(drawFunction) {
-  		try {
-  			const chartId = this.#chartContext.chartId;
-  
-  			const layerConfig = {
-  				draw: drawFunction,
-  				markType: this.#markType,
-  				renderer: this,
-  				componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
-  			};
-  
-  			this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
-  
-  			console.log(`${this.#markType} layer registered with coordinator for chart ${chartId}`);
-  			return this.#ownedResources.layerControl;
-  		} catch (error) {
-  			console.error(`${this.#markType} layer registration failed:`, error);
-  			this.#initializationError = error.message;
-  			throw error;
-  		}
-  	}
-  
-  	invalidateLayer() {
-  		if (this.#gpuCoordinator && this.#chartContext?.chartId) {
-  			this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
-  		}
-  	}
-  
-  	// ===== DATA PROCESSING HELPERS =====
-  
-  	processDataForAxis(data, axis) {
-  		const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
-  		const scaleState =
-  			axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
-  
-  		switch (scaleType) {
-  			case 'linear':
-  			case 'identity':
-  				return new Float32Array(data.map((d) => d ?? 0));
-  
-  			case 'band':
-  			case 'point':
-  				return scaleState.processDataForGPU(data, this.#markType);
-  
-  			case 'log':
-  				return new Float32Array(data.map((d) => Math.log(Math.max(d || 1, 1))));
-  
-  			case 'time':
-  				return new Float32Array(data.map((d) => (d instanceof Date ? d.getTime() : d || 0)));
-  
-  			default:
-  				console.warn(`Unknown scale type: ${scaleType}, treating as linear`);
-  				return new Float32Array(data.map((d) => d ?? 0));
-  		}
-  	}
-  
-  	// ===== UTILITY METHODS =====
-  
-  	parseColor(color) {
-  		try {
-  			if (typeof color === 'string' && color.startsWith('#')) {
-  				const r = parseInt(color.slice(1, 3), 16) / 255;
-  				const g = parseInt(color.slice(3, 5), 16) / 255;
-  				const b = parseInt(color.slice(5, 7), 16) / 255;
-  				return [r, g, b, 1.0];
-  			}
-  			console.warn(`Unrecognized color format: ${color}, using default blue`);
-  			return [0.0, 0.0, 1.0, 1.0];
-  		} catch (error) {
-  			console.error(`Color parsing failed for ${this.#markType}:`, error);
-  			return [0.0, 0.0, 1.0, 1.0];
-  		}
-  	}
-  
-  	// ===== CLEANUP =====
-  
-  	destroy() {
-  		this.#isDestroyed = true;
-  		// Bump generation so any pending init aborts
-  		this.#initGeneration++;
-  
-  		console.log(`Cleaning up ${this.#markType} renderer (${this.#rendererId})`);
-  
-  		try {
-  			// 1. Clean up EXCLUSIVE resources (buffers owned only by this renderer)
-  			this.#ownedResources.buffers.forEach((buffer) => {
-  				if (buffer) buffer.destroy();
-  			});
-  			this.#ownedResources.buffers = [];
-  
-  			// 2. Clean up dummy buffer
-  			if (this.#dummyBuffer) {
-  				this.#dummyBuffer.destroy();
-  				this.#dummyBuffer = null;
-  			}
-  
-  			// 3. Clean up layer registration
-  			if (this.#ownedResources.layerControl) {
-  				this.#ownedResources.layerControl.remove();
-  				this.#ownedResources.layerControl = null;
-  			}
-  
-  			// 4. Clean up SHARED resources via Registry
-  			if (this.#gpuCoordinator) {
-  				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
-  			}
-  
-  			// Clear references
-  			this.#pipeline = null;
-  			this.#perDataBindGroup = null;
-  			this.#perDataLayout = null;
-  			this.#device = null;
-  
-  			console.log(`${this.#markType} renderer cleanup complete`);
-  		} catch (error) {
-  			console.error(`Error during ${this.#markType} renderer cleanup:`, error);
-  		}
-  	}
-  }
-</src/lib/components/rendering/BaseGPURenderer.svelte.js>
-
 <src/lib/components/rendering/Dots.svelte>
   <script>
   	import { getContext, onMount, onDestroy, untrack } from 'svelte';
@@ -7829,6 +7325,368 @@
   </style>
 </src/lib/components/rendering/Dots.svelte>
 
+<src/lib/components/rendering/index.js>
+  export { default as Canvas } from './Canvas.svelte';
+  export { default as WebGPUCanvas } from './WebGPUCanvas.svelte';
+  export { default as Dots } from './Dots.svelte';
+  export { default as Rects } from './Rects.svelte';
+</src/lib/components/rendering/index.js>
+
+<src/lib/components/rendering/WebGPUCanvas.svelte>
+  <script>
+  	import { onMount, onDestroy, setContext, getContext } from 'svelte';
+  	import { getGPUContext } from '$lib/gpu';
+  
+  	let {
+  		canvasComponents
+  	} = $props();
+  
+  	const c = getContext('chart');
+  	let width = $derived(c.innerWidth);
+  	let height = $derived(c.innerHeight);
+  	let margin = $derived(c.margin);
+  
+  	// let canvas;
+    let canvas = $state();
+  	let context;
+  	let gpuCoordinator;
+  	let chartControl;
+  	let contextConfigured = $state(false);
+  	let initializationError = $state(null);
+  	let lastTransform = '';
+  
+  	const chartId = c.chartId;
+  
+  	// Enhanced initialization with comprehensive error handling
+  	async function initWebGPU() {
+  		try {
+  			// Get shared GPU coordinator
+  			gpuCoordinator = getGPUContext();
+  
+  			if (!gpuCoordinator) {
+  				throw new Error(
+  					'GPUCoordinator not found. Ensure setCoordinators() was called in a parent component.'
+  				);
+  			}
+  
+  			// Wait for coordinator initialization with timeout
+  			let attempts = 0;
+  			const maxAttempts = 100; // 5 seconds at 50ms intervals
+  
+  			while (!gpuCoordinator.isInitialized && attempts < maxAttempts) {
+  				await new Promise((resolve) => setTimeout(resolve, 50));
+  				attempts++;
+  			}
+  
+  			if (!gpuCoordinator.isInitialized) {
+  				throw new Error(`GPUCoordinator failed to initialize within ${maxAttempts * 50}ms timeout`);
+  			}
+  
+  			// Configure context with proper error handling
+  			await configureContext();
+  
+  			// Register with coordinator after context is ready
+  			registerWithCoordinator();
+  
+  			console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
+  		} catch (error) {
+  			console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
+  			initializationError = error.message;
+  			throw error;
+  		}
+  	}
+  
+  	// Separate context configuration with proper error handling
+  	async function configureContext() {
+  		if (!canvas) {
+  			throw new Error('Canvas element not available for context configuration');
+  		}
+  
+  		try {
+  			// Get WebGPU context
+  			context = canvas.getContext('webgpu');
+  			if (!context) {
+  				throw new Error('Failed to get WebGPU context from canvas. WebGPU may not be supported.');
+  			}
+  
+  			const device = gpuCoordinator.device;
+  			const presentationFormat = gpuCoordinator.presentationFormat;
+  
+  			if (!device) {
+  				throw new Error('No WebGPU device available from coordinator');
+  			}
+  
+  			// Configure context
+  			context.configure({
+  				device,
+  				format: presentationFormat,
+  				alphaMode: 'premultiplied',
+  				desynchronized: true
+  				// desynchronized: false
+  			});
+  
+  			contextConfigured = true;
+  
+  			// Setup initial canvas size
+  			setupCanvas();
+  		} catch (error) {
+  			console.error(`❌ Context configuration failed for chart ${chartId}:`, error);
+  			contextConfigured = false;
+  			throw error;
+  		}
+  	}
+  
+  	// Clean registration with coordinator
+  	function registerWithCoordinator() {
+  		if (!contextConfigured) {
+  			console.error(`⚠️ Attempting to register chart ${chartId} before context is configured`);
+  			return;
+  		}
+  
+  		console.log(`📋 Registering chart ${chartId} with coordinator`);
+  
+  		try {
+  			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
+  				zIndex: 0
+  			});
+  
+  			// Notify coordinator that context is ready
+  			chartControl.setContextReady();
+  			console.log(`✅ Chart ${chartId} registered and ready`);
+  		} catch (error) {
+  			console.error(`❌ Chart registration failed for ${chartId}:`, error);
+  			throw error;
+  		}
+  	}
+  
+  	// Robust canvas setup with dimension change detection
+  	function setupCanvas() {
+  		if (!canvas || !contextConfigured) {
+  			console.debug(`⚠️ setupCanvas called before canvas/context ready for ${chartId}`);
+  			return;
+  		}
+  
+  		try {
+  			// Calculate new dimensions
+  			const devicePixelRatio = window.devicePixelRatio || 1;
+  
+  			const canvasWidth = Math.ceil(width * devicePixelRatio);
+  			const canvasHeight = Math.ceil(height * devicePixelRatio);
+  
+  			// Only update if dimensions actually changed to avoid unnecessary work
+  			const dimensionsChanged = canvas.width !== canvasWidth || canvas.height !== canvasHeight;
+  
+  			const newTransform = `translate(${margin.left}px, ${margin.top}px)`;
+  			const positionChanged = lastTransform !== newTransform;
+  
+  			// Only proceed if there's an actual change
+  			if (!dimensionsChanged && !positionChanged) return;
+  
+  			if (dimensionsChanged) {
+  				canvas.width = canvasWidth;
+  				canvas.height = canvasHeight;
+  				canvas.style.width = width + 'px';
+  				canvas.style.height = height + 'px';
+  			}
+  
+  			if (positionChanged) {
+  				canvas.style.transform = newTransform;
+  				lastTransform = newTransform;
+  			}
+  
+  			if (chartControl) {
+  				chartControl.invalidate();
+  			}
+  		} catch (error) {
+  			console.error(`❌ Canvas setup failed for ${chartId}:`, error);
+  			initializationError = `Canvas setup failed: ${error.message}`;
+  		}
+  	}
+  
+  	// Enhanced context with better state management and error handling
+  	setContext('webgpu-canvas', {
+  		getCanvasDimensions() {
+  			const currentDPR = window.devicePixelRatio || 1;
+  			return {
+  				width: width * currentDPR,
+  				height: height * currentDPR,
+  				cssWidth: width,
+  				cssHeight: height,
+  				currentDPR
+  			};
+  		},
+  
+  		getMsaaSampleCount() {
+  			return gpuCoordinator?.msaaSampleCount || 4;
+  		},
+  
+  		getDevice() {
+  			return gpuCoordinator?.device;
+  		},
+  
+  		getPresentationFormat() {
+  			return gpuCoordinator?.presentationFormat;
+  		},
+  
+  		isInitialized() {
+  			return contextConfigured && gpuCoordinator?.isInitialized;
+  		},
+  
+  		invalidate() {
+  			chartControl?.invalidate();
+  		},
+  
+  		// Enhanced debugging support
+  		getDebugInfo() {
+  			return {
+  				chartId,
+  				contextConfigured,
+  				initializationError,
+  				canvasDimensions: {
+  					width: canvas?.width,
+  					height: canvas?.height,
+  					cssWidth: canvas?.style.width,
+  					cssHeight: canvas?.style.height
+  				}
+  			};
+  		}
+  	});
+  
+  	onMount(async () => {
+  		try {
+  			await initWebGPU();
+  		} catch (error) {
+  			console.error(`❌ WebGPUCanvas ${chartId} mount failed:`, error);
+  			// Error is already stored in initializationError state
+  		}
+  	});
+  
+  	onDestroy(() => {
+  		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
+  
+  		try {
+  			// Clean up chart registration
+  			if (chartControl) {
+  				chartControl.remove();
+  				chartControl = null;
+  			}
+  
+  			// FIXED: Unconfigure WebGPU context to release swap chain resources
+  			if (context && contextConfigured) {
+  				try {
+  					context.unconfigure();
+  				} catch (e) {
+  					// Context may already be invalid, ignore
+  					console.debug(`Context unconfigure failed (may already be invalid):`, e);
+  				}
+  			}
+  
+  			contextConfigured = false;
+  
+  			// Clear references
+  			gpuCoordinator = null;
+  			context = null;
+  
+  			console.log(`✅ WebGPUCanvas ${chartId} destroyed successfully`);
+  		} catch (error) {
+  			console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
+  		}
+  	});
+  
+  	$effect(() => {
+  		// Dependencies that trigger a canvas resize/reposition
+  		void width;
+  		void height;
+  		void margin;
+  
+  		// Only run if the canvas and context are fully ready
+  		if (canvas && contextConfigured) {
+  			setupCanvas();
+  			// Tell the coordinator to update this chart's frame uniforms
+  			if (gpuCoordinator) {
+  				gpuCoordinator.updateChartFrameUniforms(chartId);
+  				gpuCoordinator.invalidateChart(chartId);
+  			}
+  		}
+  	});
+  </script>
+  
+  {#if initializationError}
+  	<div class="webgpu-error">
+  		<p>WebGPU initialization failed for chart {chartId}:</p>
+  		<p class="error-message">{initializationError}</p>
+  		<p class="error-help">
+  			Please ensure your browser supports WebGPU and try refreshing the page.
+  		</p>
+  	</div>
+  {:else}
+  	<canvas bind:this={canvas}></canvas>
+  	{#if contextConfigured}
+  		{@render canvasComponents?.()}
+  	{:else}
+  		<div class="webgpu-loading">
+  			<p>Initializing WebGPU context for chart {chartId}...</p>
+  		</div>
+  	{/if}
+  {/if}
+  
+  <style>
+  	canvas {
+  		position: absolute;
+  		top: 0;
+  		left: 0;
+  		transform: translateZ(0);
+  		contain: size;
+  		will-change: contents;
+  		touch-action: none;
+  	}
+  
+  	.webgpu-error,
+  	.webgpu-loading {
+  		position: absolute;
+  		top: 0;
+  		left: 0;
+  		width: 100%;
+  		height: 100%;
+  		display: flex;
+  		flex-direction: column;
+  		justify-content: center;
+  		align-items: center;
+  		background-color: rgba(255, 255, 255, 0.9);
+  		border: 1px dashed #ccc;
+  		font-size: 12px;
+  		color: #666;
+  		z-index: 1000;
+  	}
+  
+  	.webgpu-error {
+  		background-color: rgba(255, 240, 240, 0.9);
+  		border-color: #ffcccb;
+  		color: #d32f2f;
+  	}
+  
+  	.error-message {
+  		font-family: monospace;
+  		background-color: rgba(255, 255, 255, 0.8);
+  		padding: 4px 8px;
+  		border-radius: 4px;
+  		margin: 8px 0;
+  		font-size: 11px;
+  	}
+  
+  	.error-help {
+  		font-style: italic;
+  		margin-top: 8px;
+  	}
+  
+  	.webgpu-loading {
+  		background-color: rgba(240, 248, 255, 0.9);
+  		border-color: #bbdefb;
+  		color: #1976d2;
+  	}
+  </style>
+</src/lib/components/rendering/WebGPUCanvas.svelte>
+
 <src/lib/components/rendering/Rects.svelte>
   <script>
   	import { getContext, onMount, onDestroy, untrack } from 'svelte';
@@ -7860,10 +7718,14 @@
   		x1Data, // Float32Array - right edges
   		y0Data, // Float32Array - bottom edges
   		y1Data, // Float32Array - top edges
-  		colorData, // Float32Array - RGBA colors (instanceCount * 4)
+  		colorValueData, // Float32Array - raw color values (indices or continuous), null for constant mode
   		alphaData, // Float32Array - alpha values
   		dataVersion, // number - for triggering updates
-  		zIndex = 0
+  		zIndex = 0,
+  		// Color configuration
+  		colorMode = 0, // 0 = constant, 1 = scale
+  		colorScaleIndex = 0, // Index into colorConfigs
+  		constantColor = [0.2, 0.4, 0.8, 1.0] // Default blue
   	} = $props();
   
   	const chartContext = getContext('chart');
@@ -7875,7 +7737,8 @@
   	let initializationError = $state(null);
   
   	// GPU buffers (tracked in renderer.#ownedResources)
-  	let x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorBuffer, alphaBuffer;
+  	let x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorValueBuffer, alphaBuffer;
+  	let markConstantsBuffer;
   
   	// Geometry buffer (locally owned - NOT tracked by renderer)
   	let rectGeometryBuffer;
@@ -7883,18 +7746,29 @@
   	const rectVertexCount = 6;
   
   	const rectsShaderCode = `
+    // MarkConstants uniform for per-mark configuration
+    struct MarkConstants {
+      colorMode: u32,           // 0 = constant, 1 = scale
+      colorScaleIndex: u32,     // Index into colorConfigs
+      _pad0: u32,
+      _pad1: u32,
+      constantColor: vec4<f32>, // Used when colorMode = 0
+    };
+    @group(1) @binding(6) var<uniform> markConstants: MarkConstants;
+  
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
-      @location(0) color: vec4<f32>,
+      @location(0) colorValue: f32,   // Raw value for scale lookup
+      @location(1) alpha: f32,
     };
   
     @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
     @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
     @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
     @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
-    @group(1) @binding(4) var<storage, read> colors: array<vec4<f32>>;
+    @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
     @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
-    
+  
     @vertex
     fn vertexMain(
       @location(0) rectCorner: vec2<f32>,
@@ -7905,31 +7779,46 @@
       let y0 = y0Values[instanceIdx];
       let y1 = y1Values[instanceIdx];
       let alpha = alphaValues[instanceIdx];
-      let color = colors[instanceIdx];
-      
+      let colorValue = colorValues[instanceIdx];
+  
       // X axis scaling (generated based on scale type)
       {{X_AXIS_LOGIC}}
-      
+  
       // Y axis scaling (generated based on scale type)
       {{Y_AXIS_LOGIC}}
-      
+  
       // Interpolate rectangle corners using the computed scaled values
       let finalX = mix(scaledX0, scaledX1, rectCorner.x);
       let finalY = mix(scaledY0, scaledY1, rectCorner.y);
-      
+  
       // Convert to normalized device coordinates
       let worldPos = vec2<f32>(finalX, finalY);
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
-      
+  
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.color = vec4<f32>(color.rgb, color.a * alpha);
+      output.colorValue = colorValue;
+      output.alpha = alpha;
       return output;
     }
   
     @fragment
     fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
-      return input.color;
+      // Get color based on mode
+      var baseColor: vec4<f32>;
+      if (markConstants.colorMode == 0u) {
+        // Constant color
+        baseColor = markConstants.constantColor;
+      } else {
+        // Scale-based color lookup
+        baseColor = getColorFromScale(
+          markConstants.colorScaleIndex,
+          input.colorValue,
+          frameUniforms.nullColor
+        );
+      }
+  
+      return vec4<f32>(baseColor.rgb, baseColor.a * input.alpha);
     }
   `;
   
@@ -8050,12 +7939,13 @@
   	];
   
   	const dataBindingConfig = [
-  		{ binding: 0, type: 'read-only-storage' }, // x0Values
-  		{ binding: 1, type: 'read-only-storage' }, // x1Values
-  		{ binding: 2, type: 'read-only-storage' }, // y0Values
-  		{ binding: 3, type: 'read-only-storage' }, // y1Values
-  		{ binding: 4, type: 'read-only-storage' }, // colors
-  		{ binding: 5, type: 'read-only-storage' } // alphaValues
+  		{ binding: 0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // x0Values
+  		{ binding: 1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // x1Values
+  		{ binding: 2, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // y0Values
+  		{ binding: 3, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // y1Values
+  		{ binding: 4, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // colorValues
+  		{ binding: 5, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }, // alphaValues
+  		{ binding: 6, type: 'uniform', visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT } // markConstants
   	];
   
   	// Buffer update effects
@@ -8084,8 +7974,11 @@
   	});
   
   	$effect(() => {
-  		if (colorData && renderer?.resourcesCreated) {
-  			colorBuffer = renderer.createOrUpdateBuffer(colorBuffer, colorData);
+  		// Only create/update buffer if we have color data (field mode)
+  		// In constant mode, colorValueData is null and we skip this entirely
+  		// BaseGPURenderer will auto-fill the binding with a dummy buffer
+  		if (colorValueData && renderer?.resourcesCreated) {
+  			colorValueBuffer = renderer.createOrUpdateBuffer(colorValueBuffer, colorValueData);
   		}
   	});
   
@@ -8095,6 +7988,43 @@
   		}
   	});
   
+  	// MarkConstants buffer management
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) {
+  			updateMarkConstants();
+  		}
+  	});
+  
+  	function updateMarkConstants() {
+  		const device = webGPUContext.getDevice();
+  		if (!device) return;
+  
+  		// Create buffer if needed (32 bytes: 4 u32 + vec4 f32)
+  		if (!markConstantsBuffer) {
+  			markConstantsBuffer = device.createBuffer({
+  				size: 32,
+  				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  				label: 'rects-mark-constants'
+  			});
+  		}
+  
+  		// Write data using DataView for mixed types
+  		const buffer = new ArrayBuffer(32);
+  		const view = new DataView(buffer);
+  		const LE = true;
+  
+  		view.setUint32(0, colorMode, LE);
+  		view.setUint32(4, colorScaleIndex, LE);
+  		view.setUint32(8, 0, LE); // _pad0
+  		view.setUint32(12, 0, LE); // _pad1
+  		view.setFloat32(16, constantColor[0], LE);
+  		view.setFloat32(20, constantColor[1], LE);
+  		view.setFloat32(24, constantColor[2], LE);
+  		view.setFloat32(28, constantColor[3], LE);
+  
+  		device.queue.writeBuffer(markConstantsBuffer, 0, buffer);
+  	}
+  
   	// Check for per-data bind group readiness
   	let dataBindGroupReady = $derived(!!renderer?.perDataBindGroup);
   
@@ -8102,13 +8032,19 @@
   		void renderer?.resourcesCreated;
   		void dataBindGroupReady;
   
+  		// For color, check based on mode:
+  		// - Constant mode (colorMode === 0): always ready (no buffer needed)
+  		// - Field mode (colorMode === 1): need colorValueBuffer
+  		const isColorReady = colorMode === 0 || !!colorValueBuffer;
+  
   		if (
   			x0Buffer &&
   			x1Buffer &&
   			y0Buffer &&
   			y1Buffer &&
-  			colorBuffer &&
+  			isColorReady &&
   			alphaBuffer &&
+  			markConstantsBuffer &&
   			renderer?.resourcesCreated &&
   			!dataBindGroupReady
   		) {
@@ -8154,8 +8090,9 @@
   			instanceCount: y0Data.length,
   			x0First5: Array.from(x0Data.slice(0, 5)),
   			x1First5: Array.from(x1Data.slice(0, 5)),
-  			colorFirst5: colorData ? Array.from(colorData.slice(0, 12)) : 'null', // ← Add this (RGBA, so 4 values per instance)
-  			alphaFirst3: alphaData ? Array.from(alphaData.slice(0, 3)) : 'null' // ← Add this
+  			colorValueFirst5: colorValueData ? Array.from(colorValueData.slice(0, 5)) : 'null (constant mode)',
+  			alphaFirst3: alphaData ? Array.from(alphaData.slice(0, 3)) : 'null',
+  			colorMode: colorMode === 0 ? 'constant' : 'scale'
   		});
   
   		if (y1Data && y1Buffer && dataBindGroupReady) {
@@ -8166,9 +8103,9 @@
   
   	$effect(() => {
   		void dataBindGroupReady;
-  		if (colorData && colorBuffer && dataBindGroupReady) {
+  		if (colorValueData && colorValueBuffer && dataBindGroupReady) {
   			const device = webGPUContext.getDevice();
-  			device?.queue.writeBuffer(colorBuffer, 0, colorData);
+  			device?.queue.writeBuffer(colorValueBuffer, 0, colorValueData);
   		}
   	});
   
@@ -8187,13 +8124,11 @@
   			x1Data &&
   			y0Data &&
   			y1Data &&
-  			colorData &&
   			alphaData &&
   			x0Buffer &&
   			x1Buffer &&
   			y0Buffer &&
   			y1Buffer &&
-  			colorBuffer &&
   			alphaBuffer &&
   			dataBindGroupReady
   		) {
@@ -8246,17 +8181,22 @@
   	}
   
   	function createRectsDataBindGroup() {
-  		if (!x0Buffer || !x1Buffer || !y0Buffer || !y1Buffer || !colorBuffer || !alphaBuffer) {
+  		if (!x0Buffer || !x1Buffer || !y0Buffer || !y1Buffer || !alphaBuffer || !markConstantsBuffer) {
+  			console.warn('Cannot create rects data bind group - missing required buffers');
   			return;
   		}
   
+  		// Pass only the bindings we have.
+  		// BaseGPURenderer will auto-fill missing bindings (like colorValues in constant mode)
   		const dataBindings = [
   			{ binding: 0, resource: { buffer: x0Buffer } },
   			{ binding: 1, resource: { buffer: x1Buffer } },
   			{ binding: 2, resource: { buffer: y0Buffer } },
   			{ binding: 3, resource: { buffer: y1Buffer } },
-  			{ binding: 4, resource: { buffer: colorBuffer } },
-  			{ binding: 5, resource: { buffer: alphaBuffer } }
+  			// Only include colorValueBuffer if it exists (field mode)
+  			...(colorValueBuffer ? [{ binding: 4, resource: { buffer: colorValueBuffer } }] : []),
+  			{ binding: 5, resource: { buffer: alphaBuffer } },
+  			{ binding: 6, resource: { buffer: markConstantsBuffer } }
   		];
   
   		renderer.createDataBindGroup(dataBindings);
@@ -8351,6 +8291,9 @@
   			// Initialize rectangle-specific geometry
   			await initializeRectGeometry();
   
+  			// Initialize markConstants buffer
+  			updateMarkConstants();
+  
   			// Register layer with base renderer
   			renderer.registerLayer(drawRects);
   
@@ -8381,7 +8324,13 @@
   				rectGeometryBuffer = null;
   			}
   
-  			// Data buffers (x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorBuffer, alphaBuffer)
+  			// Clean up markConstantsBuffer (created directly, not via renderer)
+  			if (markConstantsBuffer) {
+  				markConstantsBuffer.destroy();
+  				markConstantsBuffer = null;
+  			}
+  
+  			// Data buffers (x0Buffer, x1Buffer, y0Buffer, y1Buffer, colorValueBuffer, alphaBuffer)
   			// are created via renderer.createOrUpdateBuffer() and tracked in
   			// renderer.#ownedResources.buffers - they are automatically destroyed
   			// by renderer.destroy(). DO NOT destroy them here (would double-destroy).
@@ -8433,6 +8382,612 @@
   </style>
 </src/lib/components/rendering/Rects.svelte>
 
+<src/lib/components/rendering/BaseGPURenderer.svelte.js>
+  export class BaseGPURenderer {
+  	// Core properties
+  	#markType;
+  	#webGPUContext;
+  	#gpuCoordinator;
+  	#chartContext;
+  
+  	// Identity & Async Control
+  	#rendererId;
+  	#initGeneration = 0;
+  	#isDestroyed = false;
+  
+  	// Resource tracking (Exclusive resources only)
+  	#ownedResources = {
+  		buffers: [],
+  		layerControl: null
+  	};
+  
+  	// State management (Reactive - drives UI)
+  	#resourcesCreated = $state(false);
+  	#initializationError = $state(null);
+  	#instanceCount = $state(0);
+  
+  	// GPU Objects
+  	#device = null;
+  	#pipeline = null;
+  	#perDataBindGroup = $state(null);
+  	#perDataLayout = null;
+  
+  	#dummyBuffer = null;
+  
+  	#dataBindingConfig = null;
+  	#zIndex;
+  	#xScaleType;
+  	#yScaleType;
+  
+  	constructor(markType, webGPUContext, gpuCoordinator, chartContext, options = {}) {
+  		this.#markType = markType;
+  		this.#webGPUContext = webGPUContext;
+  		this.#gpuCoordinator = gpuCoordinator;
+  		this.#chartContext = chartContext;
+  
+  		// Unique ID for the Resource Registry
+  		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
+  
+  		this.#zIndex = options.zIndex || 0;
+  		this.#xScaleType = options.xScaleType || 'linear';
+  		this.#yScaleType = options.yScaleType || 'linear';
+  	}
+  
+  	// ===== PUBLIC GETTERS =====
+  
+  	get resourcesCreated() {
+  		return this.#resourcesCreated;
+  	}
+  	get initializationError() {
+  		return this.#initializationError;
+  	}
+  	get instanceCount() {
+  		return this.#instanceCount;
+  	}
+  	get pipeline() {
+  		return this.#pipeline;
+  	}
+  	get markType() {
+  		return this.#markType;
+  	}
+  	get perDataBindGroup() {
+  		return this.#perDataBindGroup;
+  	}
+  
+  	// ===== INITIALIZATION =====
+  
+  	async initialize(config) {
+  		if (this.#isDestroyed) return;
+  
+  		// Async Race Protection: Increment generation
+  		// Any previous pending initialization will see mismatching generation and abort
+  		const currentGen = ++this.#initGeneration;
+  
+  		// If re-initializing, clean up previous shared resources via Registry
+  		if (this.#resourcesCreated) {
+  			this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+  			this.#resourcesCreated = false;
+  		}
+  
+  		try {
+  			const { dataBindingConfig, markShaderCode, vertexBufferLayout, rendererDefinition } = config;
+  
+  			if (!dataBindingConfig) {
+  				throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
+  			}
+  
+  			this.#device = this.#webGPUContext.getDevice();
+  			if (!this.#device) {
+  				throw new Error('No WebGPU device available from context');
+  			}
+  
+  			this.#dataBindingConfig = dataBindingConfig;
+  
+  			// ACQUIRE VIA REGISTRY
+  			// Coordinator handles keying, caching, and ref-counting
+  			// We just identify ourselves with rendererId
+  			const result = await this.#gpuCoordinator.acquirePipeline(
+  				this.#rendererId,
+  				this.#markType,
+  				{
+  					x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
+  					y: this.#chartContext.scaleTypes?.y || this.#yScaleType
+  				},
+  				markShaderCode,
+  				vertexBufferLayout,
+  				dataBindingConfig,
+  				rendererDefinition // Pass through to coordinator
+  			);
+  
+  			// POST-AWAIT SAFETY CHECK
+  			// If destroyed or a newer init call happened while we were awaiting, abort and cleanup
+  			if (this.#isDestroyed || this.#initGeneration !== currentGen) {
+  				console.warn(`${this.#markType}: Stale initialization detected, discarding.`);
+  				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+  				return;
+  			}
+  
+  			this.#pipeline = result.pipeline;
+  			this.#perDataLayout = result.dataLayout;
+  			this.#resourcesCreated = true;
+  
+  			console.log(`${this.#markType} renderer initialized (${this.#rendererId})`);
+  		} catch (error) {
+  			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
+  				console.error(`${this.#markType} initialization failed:`, error);
+  				this.#initializationError = error.message;
+  				throw error;
+  			}
+  		}
+  	}
+  	// ===== BIND GROUP CREATION =====
+  
+  	
+  	/**
+  	 * Create the per-data bind group.
+  	 * Automatically fills missing bindings with a dummy buffer.
+  	 * This allows optional buffers (like colorValues in constant mode) to be omitted.
+  	 *
+  	 * @param {Array<{binding: number, resource: {buffer: GPUBuffer}}>} providedBindings
+  	 */
+  	createDataBindGroup(providedBindings) {
+  		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) {
+  			console.warn(
+  				`Cannot create per-data bind group for ${this.#markType} - missing device, layout, or config`
+  			);
+  			return;
+  		}
+  
+  		try {
+  			// Create a map for quick lookup of provided bindings
+  			const bindingMap = new Map(providedBindings.map((entry) => [entry.binding, entry.resource]));
+  
+  			// Build final entries based on config, auto-filling missing bindings
+  			const finalEntries = this.#dataBindingConfig.map((config) => {
+  				const suppliedResource = bindingMap.get(config.binding);
+  
+  				if (suppliedResource) {
+  					// Component provided this binding → use it
+  					return { binding: config.binding, resource: suppliedResource };
+  				}
+  
+  				// Component didn't provide this binding → use dummy buffer
+  				// This is safe when the shader conditionally skips reading (e.g., colorMode == 0)
+  				console.debug(
+  					`[${this.#markType}] Binding ${config.binding} not provided, using dummy buffer`
+  				);
+  
+  				return {
+  					binding: config.binding,
+  					resource: { buffer: this.#sharedDummyBuffer }
+  				};
+  			});
+  
+  			this.#perDataBindGroup = this.#device.createBindGroup({
+  				label: `${this.#markType}-per-data-bind-group`,
+  				layout: this.#perDataLayout,
+  				entries: finalEntries
+  			});
+  
+  			console.debug(
+  				`Per-data bind group (@group(1)) created for ${this.#markType} with ${finalEntries.length} bindings`
+  			);
+  		} catch (error) {
+  			console.error(`Failed to create per-data bind group for ${this.#markType}:`, error);
+  			this.#initializationError = error.message;
+  			throw error;
+  		}
+  	}
+  
+  	/**
+  	 * Lazy-loaded dummy buffer for satisfying empty bindings.
+  	 * Used when a binding is optional (e.g., colorValues in constant color mode).
+  	 * @private
+  	 */
+  	get #sharedDummyBuffer() {
+  		if (!this.#dummyBuffer) {
+  			this.#dummyBuffer = this.#device.createBuffer({
+  				size: 4, // Minimum size, 4-byte aligned
+  				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  				label: `${this.#markType}-dummy-fallback`
+  			});
+  		}
+  		return this.#dummyBuffer;
+  	}
+  
+  	// ===== BUFFER MANAGEMENT (Exclusive Resources) =====
+  
+  	createOrUpdateBuffer(
+  		existingBuffer,
+  		data,
+  		usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  	) {
+  		if (!this.#device) {
+  			throw new Error('No WebGPU device available');
+  		}
+  
+  		const requiredSize = data.byteLength;
+  
+  		// Smart buffer resizing to prevent thrashing
+  		if (!existingBuffer || existingBuffer.size < requiredSize) {
+  			if (existingBuffer) {
+  				const index = this.#ownedResources.buffers.indexOf(existingBuffer);
+  				if (index !== -1) {
+  					this.#ownedResources.buffers.splice(index, 1);
+  				}
+  				existingBuffer.destroy();
+  			}
+  
+  			// Smart sizing with headroom
+  			const MEMORY_BLOCK_SIZE = 256;
+  			const desiredSize = Math.ceil(requiredSize * 1.5);
+  			const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
+  			let bufferSize = Math.max(requiredSize, roundedUpSize);
+  			bufferSize = (bufferSize + 3) & ~3; // 4-byte alignment
+  
+  			const newBuffer = this.#device.createBuffer({
+  				size: bufferSize,
+  				usage,
+  				label: `${this.#markType}-data-buffer-${this.#ownedResources.buffers.length}`
+  			});
+  
+  			this.#ownedResources.buffers.push(newBuffer);
+  			console.debug(
+  				`Created ${this.#markType} buffer of size ${bufferSize} bytes (required: ${requiredSize})`
+  			);
+  			return newBuffer;
+  		}
+  
+  		return existingBuffer;
+  	}
+  
+  	updateInstanceCount(count) {
+  		this.#instanceCount = count;
+  		this.invalidateLayer();
+  	}
+  
+  	registerLayer(drawFunction) {
+  		try {
+  			const chartId = this.#chartContext.chartId;
+  
+  			const layerConfig = {
+  				draw: drawFunction,
+  				markType: this.#markType,
+  				renderer: this,
+  				componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
+  			};
+  
+  			this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
+  
+  			console.log(`${this.#markType} layer registered with coordinator for chart ${chartId}`);
+  			return this.#ownedResources.layerControl;
+  		} catch (error) {
+  			console.error(`${this.#markType} layer registration failed:`, error);
+  			this.#initializationError = error.message;
+  			throw error;
+  		}
+  	}
+  
+  	invalidateLayer() {
+  		if (this.#gpuCoordinator && this.#chartContext?.chartId) {
+  			this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
+  		}
+  	}
+  
+  	// ===== DATA PROCESSING HELPERS =====
+  
+  	processDataForAxis(data, axis) {
+  		const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
+  		const scaleState =
+  			axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+  
+  		switch (scaleType) {
+  			case 'linear':
+  			case 'identity':
+  				return new Float32Array(data.map((d) => d ?? 0));
+  
+  			case 'band':
+  			case 'point':
+  				return scaleState.processDataForGPU(data, this.#markType);
+  
+  			case 'log':
+  				return new Float32Array(data.map((d) => Math.log(Math.max(d || 1, 1))));
+  
+  			case 'time':
+  				return new Float32Array(data.map((d) => (d instanceof Date ? d.getTime() : d || 0)));
+  
+  			default:
+  				console.warn(`Unknown scale type: ${scaleType}, treating as linear`);
+  				return new Float32Array(data.map((d) => d ?? 0));
+  		}
+  	}
+  
+  	// ===== UTILITY METHODS =====
+  
+  	parseColor(color) {
+  		try {
+  			if (typeof color === 'string' && color.startsWith('#')) {
+  				const r = parseInt(color.slice(1, 3), 16) / 255;
+  				const g = parseInt(color.slice(3, 5), 16) / 255;
+  				const b = parseInt(color.slice(5, 7), 16) / 255;
+  				return [r, g, b, 1.0];
+  			}
+  			console.warn(`Unrecognized color format: ${color}, using default blue`);
+  			return [0.0, 0.0, 1.0, 1.0];
+  		} catch (error) {
+  			console.error(`Color parsing failed for ${this.#markType}:`, error);
+  			return [0.0, 0.0, 1.0, 1.0];
+  		}
+  	}
+  
+  	// ===== CLEANUP =====
+  
+  	destroy() {
+  		this.#isDestroyed = true;
+  		// Bump generation so any pending init aborts
+  		this.#initGeneration++;
+  
+  		console.log(`Cleaning up ${this.#markType} renderer (${this.#rendererId})`);
+  
+  		try {
+  			// 1. Clean up EXCLUSIVE resources (buffers owned only by this renderer)
+  			this.#ownedResources.buffers.forEach((buffer) => {
+  				if (buffer) buffer.destroy();
+  			});
+  			this.#ownedResources.buffers = [];
+  
+  			// 2. Clean up dummy buffer
+  			if (this.#dummyBuffer) {
+  				this.#dummyBuffer.destroy();
+  				this.#dummyBuffer = null;
+  			}
+  
+  			// 3. Clean up layer registration
+  			if (this.#ownedResources.layerControl) {
+  				this.#ownedResources.layerControl.remove();
+  				this.#ownedResources.layerControl = null;
+  			}
+  
+  			// 4. Clean up SHARED resources via Registry
+  			if (this.#gpuCoordinator) {
+  				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+  			}
+  
+  			// Clear references
+  			this.#pipeline = null;
+  			this.#perDataBindGroup = null;
+  			this.#perDataLayout = null;
+  			this.#device = null;
+  
+  			console.log(`${this.#markType} renderer cleanup complete`);
+  		} catch (error) {
+  			console.error(`Error during ${this.#markType} renderer cleanup:`, error);
+  		}
+  	}
+  }
+</src/lib/components/rendering/BaseGPURenderer.svelte.js>
+
+<src/lib/components/rendering/Canvas.svelte>
+  <script>
+    import { onMount, onDestroy, setContext, getContext } from "svelte";
+  
+    let {
+      canvasComponents
+    } = $props();
+  
+    const c = getContext('chart');
+    let width = $derived(c.innerWidth)
+    let height = $derived(c.innerHeight)
+    let margin = $derived(c.margin)
+  
+    let canvas;
+    let ctx;
+    let rafId = null;
+    let needsRedraw = false;
+  
+    // Layer management system
+    const layers = [];
+  
+    function scaleCanvas(canvas, ctx, width, height, margin) {
+      const devicePixelRatio = window.devicePixelRatio || 1;
+  
+      canvas.width = width * devicePixelRatio;
+      canvas.height = height * devicePixelRatio;
+      canvas.style.width = width + 'px';
+      canvas.style.height = height + 'px';
+      canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
+  
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+      
+      needsRedraw = true;
+    }
+  
+    function update() {
+      if (!ctx || !needsRedraw) return;
+      
+      // Clear the canvas
+      ctx.clearRect(0, 0, width, height);
+      
+      // Draw all registered layers in order
+      for (let i = 0; i < layers.length; i++) {
+        const layer = layers[i];
+        if (layer.visible !== false) {
+          ctx.save();
+          layer.draw(ctx);
+          ctx.restore();
+        }
+      }
+      
+      needsRedraw = false;
+      rafId = null;
+    }
+  
+    function requestRedraw() {
+      if (rafId !== null) return;
+      needsRedraw = true;
+      rafId = requestAnimationFrame(update);
+    }
+  
+    // Canvas context that child components can use
+    setContext('canvas', {
+      // Register a layer that can contain multiple elements
+      registerLayer(layer) {
+        // Allow specifying a z-index for ordering
+        const zIndex = layer.zIndex || 0;
+        let insertIndex = layers.length;
+        
+        // Find the correct position to insert based on zIndex
+        for (let i = 0; i < layers.length; i++) {
+          if ((layers[i].zIndex || 0) > zIndex) {
+            insertIndex = i;
+            break;
+          }
+        }
+        
+        layers.splice(insertIndex, 0, layer);
+        requestRedraw();
+        
+        // Return functions to interact with this layer
+        return {
+          // Update layer properties
+          update(newProps) {
+            Object.assign(layer, newProps);
+            requestRedraw();
+          },
+          // Remove this layer
+          remove() {
+            const index = layers.indexOf(layer);
+            if (index !== -1) {
+              layers.splice(index, 1);
+              requestRedraw();
+            }
+          },
+          // Request a redraw (if layer content changed)
+          invalidate() {
+            requestRedraw();
+          }
+        };
+      },
+      
+      // Expose canvas dimensions
+      getCanvasDimensions() {
+        return { width, height };
+      },
+      
+      // Force a redraw
+      invalidate() {
+        requestRedraw();
+      }
+    });
+  
+    onMount(() => {
+      ctx = canvas.getContext('2d', {
+        willReadFrequently: false,  // Hint that we won't read pixel data often
+        desynchronized: true        // Lower latency rendering
+      });
+      
+      scaleCanvas(canvas, ctx, width, height, margin);
+      requestRedraw();
+    });
+  
+    onDestroy(() => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    });
+  
+    $effect(() => {
+      if (canvas && ctx) {
+        scaleCanvas(canvas, ctx, width, height, margin);
+      }
+    });
+  </script>
+  
+  <canvas bind:this={canvas}></canvas>
+  {@render canvasComponents?.()}
+  
+  
+  <!-- <script>
+    import { onMount, onDestroy, setContext, getContext } from "svelte";
+  	let {
+      canvasComponents
+  	} = $props();
+  
+  	const c = getContext('chart');
+    let width = $derived(c.innerWidth)
+    let height = $derived(c.innerHeight)
+    let margin = $derived(c.margin)
+  
+    const drawFunctions = [];
+  
+    let canvas; // state needed here?
+    let ctx;
+    let pendingInvalidation = false;
+    let frameId;
+  
+    function scaleCanvas(canvas, ctx, width, height, margin) {
+      const devicePixelRatio = window.devicePixelRatio || 1;
+  
+      canvas.width = width * devicePixelRatio;
+      canvas.height = height * devicePixelRatio;
+      canvas.style.width = width + 'px';
+      canvas.style.height = height + 'px';
+      canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
+  
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+    }
+  
+    function update() {
+      if (!ctx) return;
+  
+      ctx.clearRect(0, 0, width, height);
+  
+      drawFunctions.forEach((fn) => {
+        ctx.save();
+        fn(ctx);
+        ctx.restore();
+      });
+  
+      pendingInvalidation = false
+    }
+  
+    onMount(() => {
+      ctx = canvas.getContext('2d', {
+        // alpha: false,            // Disable transparency if not needed
+        // willReadFrequently: false, // Hint that we won't read pixel data often
+        // desynchronized: true     // Lower latency rendering
+      })
+    })
+  
+    onDestroy(() => {
+      if (frameId) {
+        cancelAnimationFrame(frameId);
+      }
+    })
+  
+    setContext('canvas', {
+      register(fn) { 
+        drawFunctions.push(fn);
+      },
+      deregister(fn) {
+        drawFunctions.splice(drawFunctions.indexOf(fn), 1);
+      },
+      invalidate() {
+        if (pendingInvalidation) return;
+        pendingInvalidation = true;
+        frameId = requestAnimationFrame(update);
+      }
+    })
+  
+    $effect(() => {
+      if (canvas && ctx) scaleCanvas(canvas, ctx, width, height, margin)
+    })
+  </script>
+  
+  <canvas bind:this={canvas}></canvas>
+  {@render canvasComponents?.()} -->
+</src/lib/components/rendering/Canvas.svelte>
+
 <src/lib/components/marks/BaseMarkSetup.svelte.js>
   // src/lib/components/marks/BaseMarkSetup.svelte.js
   
@@ -8449,6 +9004,7 @@
   import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities.js';
   import { TransformCompiler } from '$lib/transforms/TransformCompiler.js';
   import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor.js';
+  import { viewManager } from '$lib/data/ViewManager.svelte.js';
   
   export class BaseMarkSetup {
   	// --- Reactive State ---
@@ -8469,10 +9025,17 @@
   	#chartContext;
   	#markId;
   	#scaleMap = {};
+  	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
+  	#currentClientTable = $state(null); // Track which table the current client queries
   
   	// --- Transform Support ---
   	#transformCompiler;
   	#autoBinNodes = new Map(); // channel -> AutoBinNode
+  
+  	// --- Data-Derived Domain Support ---
+  	// Channels that need domain computed from query results (aggregates, transforms)
+  	#channelsNeedingDataDomain = new Set();
+  	#dataDerivedDomainsSet = $state(false);
   
   	constructor(config, coordinator, chartContext, stableId = null) {
   		console.log('🔧 BaseMarkSetup constructor:', {
@@ -8486,6 +9049,12 @@
   		this.#chartContext = chartContext;
   		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
   
+  		// Ensure ViewManager has coordinator (idempotent, pragmatic initialization)
+  		// TODO: Could be moved to app-level initialization where coordinator is created
+  		if (coordinator) {
+  			viewManager.setCoordinator(coordinator);
+  		}
+  
   		// NEW: Create transform compiler
   		this.#transformCompiler = new TransformCompiler(config.transforms || []);
   
@@ -8497,6 +9066,9 @@
   		// NEW: Detect auto bins in select
   		this.#detectAutoBins();
   
+  		// Detect which channels need data-derived domains (aggregates)
+  		this.#detectChannelsNeedingDataDomain();
+  
   		this.#registerScaleRequirements();
   		this.#setupReactiveEffects();
   	}
@@ -8507,6 +9079,58 @@
   			if (value?.isAutoBinNode) {
   				this.#autoBinNodes.set(channel, value);
   			}
+  		}
+  	}
+  
+  	/**
+  	 * Detect which channels need their domain computed from query results.
+  	 * This includes:
+  	 * - Aggregate expressions (count, sum, etc.) on linear scales
+  	 * - Channels that will be generated by transforms (x0/x1, y0/y1)
+  	 */
+  	#detectChannelsNeedingDataDomain() {
+  		const { select, scaleRequirements } = this.#config;
+  
+  		// Check each channel in select for aggregates
+  		for (const [channel, value] of Object.entries(select)) {
+  			if (value == null) continue;
+  
+  			// Skip AutoBinNodes - they have their own stats mechanism
+  			if (value.isAutoBinNode) continue;
+  
+  			// Determine if this channel maps to a linear scale
+  			const scaleType = channel === 'x' || channel === 'x1' || channel === 'x2'
+  				? scaleRequirements?.x?.type
+  				: channel === 'y' || channel === 'y1' || channel === 'y2'
+  					? scaleRequirements?.y?.type
+  					: null;
+  
+  			// Only track for linear/continuous scales
+  			if (scaleType !== 'linear' && scaleType !== 'log' && scaleType !== 'time') continue;
+  
+  			// Check if it's an aggregate expression
+  			const exprNode = isNode(value) ? value : null;
+  			if (exprNode && isAggregateExpression(exprNode)) {
+  				// Map x1/x2 variants to 'x', y1/y2 variants to 'y'
+  				const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : channel;
+  				this.#channelsNeedingDataDomain.add(baseChannel);
+  			}
+  		}
+  
+  		// Also add channels that transforms will generate
+  		if (this.#transformCompiler.hasJSTransforms()) {
+  			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+  			for (const channel of additionalChannels) {
+  				const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : null;
+  				if (baseChannel) {
+  					this.#channelsNeedingDataDomain.add(baseChannel);
+  				}
+  			}
+  		}
+  
+  		if (this.#channelsNeedingDataDomain.size > 0) {
+  			console.log(`🔧 ${this.#markId} channels needing data-derived domain:`,
+  				Array.from(this.#channelsNeedingDataDomain));
   		}
   	}
   
@@ -8527,23 +9151,74 @@
   			}
   		});
   
-  		// Effect 3: Create client
+  		// Effect 3: Fetch categorical domains FIRST (before client creation)
+  		// This populates scale domains which triggers ViewManager view creation
   		$effect(() => {
-  			if (this.#scaleMappingsReady && !this.#clientCreated) {
-  				const fieldRequests = this.#buildFieldInfoRequests();
-  				this.#createClient(fieldRequests);
-  				this.#clientCreated = true;
+  			// Wait for scale mappings
+  			if (!this.#scaleMappingsReady) return;
+  			// If color field exists, wait for color scale to be set
+  			const hasColorField = !!this.#config.select?.color;
+  			if (hasColorField && !this.#colorScaleState) return;
+  
+  			if (!this.#categoricalFetchStarted) {
+  				this.#categoricalFetchStarted = true;
+  
+  				this.#fetchCategoricalDomains()
+  					.then(() => {
+  						this.categoricalDataFetched = true;
+  						this.#setScalesReady();
+  						console.log(`✅ Mark ${this.#markId} categorical domains ready, view should be created`);
+  					})
+  					.catch((error) => {
+  						console.error(`❌ Categorical domain fetch failed for ${this.#markId}:`, error);
+  					});
   			}
   		});
   
-  		// Effect 4: Monitor client data readiness
+  		// Effect 4: Create client - waits for view to be ready before creating
+  		// This prevents creating a throwaway client against the source table
+  		$effect(() => {
+  			// Prerequisites
+  			if (!this.categoricalDataFetched) return;
+  
+  			// Wait until ViewManager is ready (no pending view creation)
+  			if (!viewManager.isReadyForClient(this.#config.table)) {
+  				console.log(`[Mark ${this.#markId}] Waiting for view to be ready...`);
+  				return;
+  			}
+  
+  			// REACTIVITY: Track effectiveTable
+  			const tableToQuery = this.effectiveTable;
+  
+  			// Check if table changed (using tracked state)
+  			if (this.#currentClientTable !== tableToQuery) {
+  				// Action (untracked to prevent loops)
+  				untrack(() => {
+  					if (this.client) {
+  						console.log(
+  							`[Mark ${this.#markId}] Switching source: ${this.#currentClientTable} → ${tableToQuery}`
+  						);
+  						this.client.destroy();
+  						this.client = null;
+  					}
+  
+  					const fieldRequests = this.#buildFieldInfoRequests();
+  					console.log(`[Mark ${this.#markId}] Creating DataClient for ${tableToQuery}`);
+  					this.#createClient(tableToQuery, fieldRequests);
+  					this.#currentClientTable = tableToQuery;
+  					this.#clientCreated = true;
+  				});
+  			}
+  		});
+  
+  		// Effect 5: Monitor client data readiness
   		$effect(() => {
   			if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
   				this.#clientDataReady = true;
   			}
   		});
   
-  		// Effect 5: Set initial continuous domains
+  		// Effect 6: Set initial continuous domains (from fieldInfo for non-aggregated fields)
   		$effect(() => {
   			if (this.#clientDataReady && !this.#continuousDomainsSet) {
   				this.#setInitialContinuousDomains(this.client.fieldInfo);
@@ -8551,22 +9226,27 @@
   			}
   		});
   
-  		// Effect 6: Fetch categorical domains
+  		// Effect 7: Register data-derived domains when data arrives
+  		// This handles aggregates and transforms that need domain computed from query results
   		$effect(() => {
-  			if (this.#continuousDomainsSet && !this.#categoricalFetchStarted) {
-  				this.#categoricalFetchStarted = true;
+  			const data = this.data;
+  			if (!data || data.length === 0) return;
+  			if (this.#dataDerivedDomainsSet) return; // Already done
   
-  				this.#fetchCategoricalDomains()
-  					.then(() => {
-  						this.categoricalDataFetched = true;
-  						this.#setScalesReady();
-  						console.log(`✅ Mark ${this.#markId} setup complete`);
-  					})
-  					.catch((error) => {
-  						console.error(`❌ Categorical domain fetch failed for ${this.#markId}:`, error);
-  					});
+  			// Get additional channels from transforms (if any)
+  			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+  			this.#registerDataDerivedDomains(data, additionalChannels);
+  		});
+  
+  		// Effect 8: Mark deferred scales ready when data-derived domains are set
+  		// This handles linear scales with aggregates/transforms that couldn't be marked
+  		// ready in #setScalesReady() because their domain wasn't known yet
+  		$effect(() => {
+  			if (this.#dataDerivedDomainsSet && this.#scaleMappingsReady) {
+  				this.#markDeferredScalesReady();
   			}
   		});
+  
   	}
   
   	#registerScaleRequirements() {
@@ -8601,6 +9281,32 @@
   
   	get markId() {
   		return this.#markId;
+  	}
+  
+  	/**
+  	 * Reactive effective table name.
+  	 * Automatically updates when ViewManager creates the derived view.
+  	 */
+  	effectiveTable = $derived(viewManager.getEffectiveTable(this.#config.table));
+  
+  	/**
+  	 * Get the source table name (without ViewManager transformation).
+  	 */
+  	get sourceTable() {
+  		return this.#config.table;
+  	}
+  
+  	/**
+  	 * Set the color scale state for ViewManager integration.
+  	 * Must be called before categorical domain fetch completes.
+  	 * @param {ColorScaleState} colorScaleState
+  	 */
+  	setColorScale(colorScaleState) {
+  		this.#colorScaleState = colorScaleState;
+  		// Register table with color scale
+  		if (colorScaleState && this.#config.table) {
+  			colorScaleState.registerTable(this.#config.table);
+  		}
   	}
   
   	scaleCompatibilityError = $derived.by(() => {
@@ -8664,27 +9370,35 @@
   
   		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
   		if (!this.#transformCompiler.hasJSTransforms()) {
-        console.log('📊 Using ArrowDataAccessor (fast path)');
+  			console.log('📊 Using ArrowDataAccessor (fast path)');
   			return new ArrowDataAccessor(this.client.arrowTable);
   		}
   
   		// Transform path: Arrow → Objects → Transform → Object accessor
-      console.log('📊 Using ObjectDataAccessor (JS transforms)');
+  		console.log('📊 Using ObjectDataAccessor (JS transforms)');
   		const objects = this.#arrowToObjects(this.client.arrowTable);
+  
+  		const transformConfig = {
+  			x: this.#getFieldName('x'),
+  			y: this.#getFieldName('y'),
+  			fill: this.#getFieldName('fill')
+  		};
+  
+  		console.log('📊 Transform config:', transformConfig);
+  		console.log('📊 Input data sample:', objects.slice(0, 3));
+  		console.log('📊 Select config:', this.#config.select);
+  
   		const transformed = this.#transformCompiler.applyToData(
   			objects,
-  			{
-  				x: this.#getFieldName('x'),
-  				y: this.#getFieldName('y'),
-  				fill: this.#getFieldName('fill')
-  			},
+  			transformConfig,
   			{
   				x: this.#chartContext.xScale,
   				y: this.#chartContext.yScale
   			}
   		);
   
-      console.log('📊 Transformed data:', transformed.length, 'rows');
+  		console.log('📊 Transformed data:', transformed.length, 'rows');
+  		console.log('📊 Transformed sample:', transformed.slice(0, 3));
   
   		return new ObjectDataAccessor(transformed);
   	});
@@ -8705,22 +9419,72 @@
   		return rows;
   	}
   
+  	/**
+  	 * Get the COLUMN NAME (alias) for a channel.
+  	 * The data uses aliases as column names, not the original field expressions.
+  	 * For transforms, we need the alias that appears in the data.
+  	 */
   	#getFieldName(channel) {
-  		const value = this.#config.select[channel];
-  		if (typeof value === 'string') return value;
-  		if (value?.field) return value.field; // AutoBinNode
+  		// First check if the channel exists directly in select
+  		if (this.#config.select[channel] != null) {
+  			// The column name in the data is the ALIAS (the key), not the value
+  			return channel;
+  		}
+  
+  		// Handle x1/x2 pattern for bar marks (horizontal stacking)
+  		if (channel === 'x') {
+  			// Try x2 first (the value field for horizontal bars), then x1
+  			if (this.#config.select.x2 != null) return 'x2';
+  			if (this.#config.select.x1 != null) return 'x1';
+  		}
+  
+  		// Handle y0/y1 pattern for bar marks (vertical stacking)
+  		if (channel === 'y') {
+  			if (this.#config.select.y2 != null) return 'y2';
+  			if (this.#config.select.y1 != null) return 'y1';
+  		}
+  
   		return channel; // fallback
   	}
   
   	getSelectConfig() {
   		// Return select with AutoBinNodes unresolved
   		// They'll be resolved in buildQuery()
-  		return this.#config.select;
+  		// Also swap categorical fields for indexed column names if views are ready
+  		const select = { ...this.#config.select };
+  		const hasView = viewManager.hasView(this.#config.table);
+  
+  		// For band/point scales, use the indexed column name from ViewManager
+  		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+  			const xScale = this.#chartContext.xScaleState;
+  			if (xScale?.indexColumnName && hasView) {
+  				const originalField = select.x;
+  				select.x = xScale.indexColumnName;
+  				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
+  			}
+  		}
+  		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+  			const yScale = this.#chartContext.yScaleState;
+  			if (yScale?.indexColumnName && hasView) {
+  				const originalField = select.y;
+  				select.y = yScale.indexColumnName;
+  				console.log(`[BaseMarkSetup] Swapping y: ${originalField} → ${select.y}`);
+  			}
+  		}
+  
+  		// For color scales, use the indexed column name
+  		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
+  			const originalField = select.color;
+  			select.color = this.#colorScaleState.indexColumnName;
+  			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
+  		}
+  
+  		return select;
   	}
   
   	buildQuery(sourceTable, config, filter) {
-  		console.log('🔨 buildQuery called with filter:', filter);
-  		console.log('🔨 buildQuery config:', config);
+  		// console.log('🔨 buildQuery called with filter:', filter);
+  		// console.log('🔨 buildQuery config:', config);
   		let select = config.select;
   
   		// NEW: Resolve auto bins if we have field info
@@ -8797,11 +9561,11 @@
   		return resolved;
   	}
   
-  	#createClient(fieldRequests) {
+  	#createClient(tableName, fieldRequests) {
   		if (this.client) this.client.destroy();
   
   		this.client = new DataClient(
-  			this.#config.table,
+  			tableName,
   			this.#config.selection,
   			{
   				select: this.getSelectConfig(),
@@ -8820,6 +9584,16 @@
   			x: this.#chartContext.xScaleState,
   			y: this.#chartContext.yScaleState
   		};
+  
+  		// Register table with band scales for ViewManager integration
+  		// This must happen BEFORE categorical domain fetch so views can be created
+  		const table = this.#config.table;
+  		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+  			this.#chartContext.xScaleState?.registerTable?.(table);
+  		}
+  		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+  			this.#chartContext.yScaleState?.registerTable?.(table);
+  		}
   
   		console.log(`📊 ${this.#markId} Scale mappings setup:`, {
   			x: this.actualXScaleType,
@@ -8891,6 +9665,113 @@
   		}
   	}
   
+  	/**
+  	 * Register domains from query result data for channels that need data-derived domains.
+  	 * This handles both:
+  	 * - Regular aggregate channels (count, sum, etc.)
+  	 * - Transform-generated channels (x0/x1, y0/y1 from stack)
+  	 *
+  	 * @param {DataAccessor|Array} data - Data accessor or array of objects
+  	 * @param {Array<string>} [additionalChannels=[]] - Extra channels from transforms
+  	 */
+  	#registerDataDerivedDomains(data, additionalChannels = []) {
+  		if (!data || (Array.isArray(data) && data.length === 0)) return;
+  		if (!Array.isArray(data) && data.length === 0) return;
+  
+  		// Skip if no channels need data-derived domains
+  		if (this.#channelsNeedingDataDomain.size === 0 && additionalChannels.length === 0) {
+  			this.#dataDerivedDomainsSet = true;
+  			return;
+  		}
+  
+  		// Build list of channels to examine for each axis
+  		const xChannelsToCheck = [];
+  		const yChannelsToCheck = [];
+  
+  		// Add base channels that need data-derived domains
+  		if (this.#channelsNeedingDataDomain.has('x')) {
+  			// Check for x, x1, x2 variants in the data
+  			xChannelsToCheck.push('x', 'x1', 'x2');
+  		}
+  		if (this.#channelsNeedingDataDomain.has('y')) {
+  			yChannelsToCheck.push('y', 'y1', 'y2');
+  		}
+  
+  		// Add transform-generated channels
+  		for (const channel of additionalChannels) {
+  			if (channel.startsWith('x')) {
+  				xChannelsToCheck.push(channel);
+  			} else if (channel.startsWith('y')) {
+  				yChannelsToCheck.push(channel);
+  			}
+  		}
+  
+  		// Compute and register X domain
+  		if (xChannelsToCheck.length > 0 && this.actualXScaleType === 'linear') {
+  			const extent = this.#computeExtentFromData(data, xChannelsToCheck);
+  			if (extent) {
+  				console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
+  				this.#chartContext.xScaleState?.addMark(extent, this.#markId);
+  			}
+  		}
+  
+  		// Compute and register Y domain
+  		if (yChannelsToCheck.length > 0 && this.actualYScaleType === 'linear') {
+  			const extent = this.#computeExtentFromData(data, yChannelsToCheck);
+  			if (extent) {
+  				console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
+  				this.#chartContext.yScaleState?.addMark(extent, this.#markId);
+  			}
+  		}
+  
+  		this.#dataDerivedDomainsSet = true;
+  	}
+  
+  	/**
+  	 * Compute min/max extent from data for given channels.
+  	 * Works with both DataAccessor (Arrow) and plain object arrays.
+  	 *
+  	 * @param {DataAccessor|Array} data - Data source
+  	 * @param {Array<string>} channels - Channel names to examine
+  	 * @returns {[number, number]|null} Extent or null if no valid data
+  	 */
+  	#computeExtentFromData(data, channels) {
+  		let min = Infinity;
+  		let max = -Infinity;
+  
+  		const isAccessor = typeof data.getColumn === 'function';
+  
+  		if (isAccessor) {
+  			// DataAccessor path - use getColumn for efficiency
+  			for (const channel of channels) {
+  				const column = data.getColumn(channel);
+  				if (!column) continue;
+  
+  				for (let i = 0; i < column.length; i++) {
+  					const value = column[i];
+  					if (typeof value === 'number' && !isNaN(value)) {
+  						if (value < min) min = value;
+  						if (value > max) max = value;
+  					}
+  				}
+  			}
+  		} else {
+  			// Plain array path
+  			for (const row of data) {
+  				for (const channel of channels) {
+  					const value = row[channel];
+  					if (typeof value === 'number' && !isNaN(value)) {
+  						if (value < min) min = value;
+  						if (value > max) max = value;
+  					}
+  				}
+  			}
+  		}
+  
+  		if (min === Infinity || max === -Infinity) return null;
+  		return [min, max];
+  	}
+  
   	async #fetchCategoricalDomains() {
   		const { table, selection, sort } = this.#config;
   		if (!this.#coordinator || !table) return;
@@ -8931,11 +9812,2200 @@
   			setupFetch('y', this.#config.select.y);
   		}
   
+  		// Fetch color domain if color scale is set and there's a color field
+  		if (this.#colorScaleState && this.#config.select.color) {
+  			const colorField = this.#config.select.color;
+  			const q = Query.from(table).select({ color: sqlColumn(String(colorField)) }).distinct();
+  
+  			fetches.push(
+  				this.#coordinator.query(q).then((result) => {
+  					const categories = Array.from(result).map((row) => row.color);
+  					if (categories.length > 0) {
+  						console.log(`[BaseMarkSetup] Color domain discovered:`, categories);
+  						this.#colorScaleState.setDomain(categories);
+  					}
+  				})
+  			);
+  		}
+  
   		if (fetches.length > 0) await Promise.all(fetches);
   	}
   
+  	/**
+  	 * Mark scales as ready, but be selective:
+  	 * - Band/categorical scales: mark ready immediately (domain from categorical fetch)
+  	 * - Linear scales without data-derived domains: mark ready immediately (domain from fieldInfo)
+  	 * - Linear scales WITH data-derived domains: only mark ready if data has been processed
+  	 */
   	#setScalesReady() {
-  		Object.values(this.#scaleMap).forEach((scale) => scale?.setReady?.());
+  		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
+  			if (!scale) continue;
+  
+  			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+  			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
+  
+  			// For categorical scales (band/point), mark ready immediately
+  			if (scaleType === 'band' || scaleType === 'point') {
+  				scale.setReady?.();
+  				continue;
+  			}
+  
+  			// For linear scales, only mark ready if they don't need data-derived domain
+  			// OR if data-derived domains have already been set
+  			if (!needsDataDomain || this.#dataDerivedDomainsSet) {
+  				scale.setReady?.();
+  			} else {
+  				console.log(`⏳ [${this.#markId}] Deferring ${axis} scale ready - waiting for data-derived domain`);
+  			}
+  		}
+  	}
+  
+  	/**
+  	 * Mark linear scales ready after data-derived domains have been set.
+  	 * Called from an effect that watches #dataDerivedDomainsSet.
+  	 */
+  	#markDeferredScalesReady() {
+  		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
+  			if (!scale) continue;
+  
+  			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+  			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
+  
+  			// Only mark linear scales that were waiting for data-derived domains
+  			if (needsDataDomain && (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')) {
+  				if (!scale.ready) {
+  					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
+  					scale.setReady?.();
+  				}
+  			}
+  		}
+  	}
+  
+  	destroy() {
+  		console.log(`💥 BaseMarkSetup destroying for ${this.#markId}`);
+  
+  		this.#chartContext.unregisterScaleType('x', this.#markId);
+  		this.#chartContext.unregisterScaleType('y', this.#markId);
+  
+  		Object.values(this.#scaleMap).forEach((scale) => scale?.removeMark?.(this.#markId));
+  
+  		if (this.client) {
+  			this.client.destroy();
+  			this.client = null;
+  		}
+  	}
+  }
+</src/lib/components/marks/BaseMarkSetup.svelte.js>
+
+<src/lib/components/marks/index.js>
+  export { default as DotsMark } from './DotsMark.svelte';
+  export { default as BarMark } from './BarMark.svelte';
+  export { default as BarMarkX } from './BarMarkX.svelte';
+</src/lib/components/marks/index.js>
+
+<src/lib/components/marks/BarMarkX.svelte>
+  <script>
+  	import { getContext, onDestroy, untrack } from 'svelte';
+  	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  	import { Rects } from '../rendering/index.js';
+  	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
+  	import {
+  		getSourceType,
+  		processData,
+  		processColorData,
+  		processAlphaData,
+  		buildSelectFromChannels
+  	} from './utils/index.js';
+  
+  	let {
+  		table,
+  		selection,
+  		x, // shorthand for x2
+  		x1 = 0, // baseline (start of bars) - overridden by stack transform
+  		x2 = x, // end of bars (the data values)
+  		y, // categorical data
+  		color = null, // Can be: null, "#ff0000", "red", "fieldName", { field, scheme }
+  		scheme = 'tableau10', // Default scheme for field-based color
+  		alpha = 0.8,
+  		limit,
+  		filterNulls = false,
+  		transforms = [], // NEW: Transform pipeline
+  
+  		padding,
+  		paddingInner,
+  		paddingOuter,
+  		align = 0.5
+  	} = $props();
+  
+  	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
+  	const coordinator = getContext('mosaic-coordinator');
+  	const chartContext = getContext('chart');
+  	const scaleRegistry = getContext('scale-registry');
+  
+  	let setup = $state(null);
+  	let colorScaleState = $state(null);
+  	let xScaleId = $derived(chartContext.xScaleState?.id);
+  	let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+  	// Detect color type
+  	const colorConfig = $derived.by(() => {
+  		// No color prop → constant default
+  		if (color == null) {
+  			return {
+  				mode: 'constant',
+  				value: [0.2, 0.4, 0.8, 1.0] // Default blue
+  			};
+  		}
+  
+  		// Object form: { field: 'species', scheme: 'category10' }
+  		if (typeof color === 'object' && color.field) {
+  			return {
+  				mode: 'field',
+  				field: color.field,
+  				scheme: color.scheme || scheme
+  			};
+  		}
+  
+  		// String: could be constant ("#ff0000", "red") or field name ("species")
+  		if (typeof color === 'string') {
+  			if (isColorConstant(color)) {
+  				return {
+  					mode: 'constant',
+  					value: parseColorToRGBA(color)
+  				};
+  			} else {
+  				// Treat as field name
+  				return {
+  					mode: 'field',
+  					field: color,
+  					scheme: scheme
+  				};
+  			}
+  		}
+  
+  		// Fallback
+  		return {
+  			mode: 'constant',
+  			value: [0.2, 0.4, 0.8, 1.0]
+  		};
+  	});
+  
+  	const yScaleConfig = $derived.by(() => {
+  		const config = {};
+  		if (padding != null) config.padding = padding;
+  		if (paddingInner != null) config.paddingInner = paddingInner;
+  		if (paddingOuter != null) config.paddingOuter = paddingOuter;
+  		if (align != null) config.align = align;
+  		return config;
+  	});
+  
+  	const config = $derived({
+  		markType: 'barx',
+  		supportedScaleTypes: {
+  			x: ['linear', 'identity'],
+  			y: ['band']
+  		},
+  		scaleRequirements: {
+  			x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
+  			y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
+  		},
+  		table,
+  		selection,
+  		select: buildSelectFromChannels({
+  			x1,
+  			x2,
+  			y,
+  			...(colorConfig.mode === 'field' && { color: colorConfig.field })
+  		}),
+  		transforms, // NEW: Pass transforms to setup
+  		clientOptions: {
+  			limit,
+  			filterNulls: filterNulls ? [x1, x2, y] : null
+  		}
+  	});
+  
+  	// NEW: Use data accessor
+  	let instanceCount = $derived(setup?.data?.length || 0);
+  
+  	$effect(() => {
+  		console.log('🔍 instanceCount changed:', {
+  			count: instanceCount,
+  			hasSetup: !!setup,
+  			hasData: !!setup?.data,
+  			dataLength: setup?.data?.length
+  		});
+  	});
+  
+  	$effect(() => {
+  		console.log('🔍 Render conditions:', {
+  			gpuReady: setup?.gpuReady,
+  			colorReady,
+  			instanceCount,
+  			hasSetup: !!setup,
+  			hasData: !!setup?.data
+  		});
+  	});
+  
+  	$effect(() => {
+  		if (setup?.client?.error) {
+  			console.log('❌ Client has error:', setup.client.error.message);
+  		} else if (setup?.client?.delayedLoading) {
+  			console.log('⏳ Client is delayed loading');
+  		} else if (!setup?.gpuReady || !colorReady) {
+  			console.log('⏸️ Waiting for conditions:', { gpuReady: setup?.gpuReady, colorReady });
+  		}
+  	});
+  
+  	// Check if transforms modified channels (e.g., stack adds x0/x1)
+  	let hasStackTransform = $derived.by(() => {
+  		const hasStack = transforms.some((t) => t.type === 'stack');
+  		console.log('📊 BarMarkX hasStackTransform:', {
+  			hasStack,
+  			transformCount: transforms.length,
+  			transformTypes: transforms.map((t) => t.type)
+  		});
+  		return hasStack;
+  	});
+  
+  	let dataStrategies = $derived({
+  		x1: getSourceType(x1),
+  		x2: getSourceType(x2),
+  		y: getSourceType(y),
+  		alpha: getSourceType(alpha)
+  	});
+  
+  	$effect(() => {
+  		console.log('🔍 Data strategies:', {
+  			alpha: dataStrategies.alpha,
+  			alphaProp: alpha,
+  			x1: dataStrategies.x1,
+  			x2: dataStrategies.x2
+  		});
+  	});
+  
+  	// Get or create color scale when in field mode
+  	$effect(() => {
+  		if (colorConfig.mode === 'field' && scaleRegistry) {
+  			untrack(() => {
+  				// Request color scale from registry
+  				colorScaleState = scaleRegistry.getOrCreateScale(
+  					colorConfig.field,
+  					'color',
+  					{ scheme: colorConfig.scheme },
+  					chartContext.chartId
+  				);
+  
+  				// Register table with color scale for ViewManager integration
+  				if (colorScaleState && table) {
+  					colorScaleState.registerTable(table);
+  				}
+  			});
+  		} else {
+  			colorScaleState = null;
+  		}
+  	});
+  
+  	// Pass color scale to setup for domain discovery via DISTINCT query
+  	$effect(() => {
+  		if (setup && colorScaleState && colorConfig.mode === 'field') {
+  			setup.setColorScale(colorScaleState);
+  		}
+  	});
+  
+  	// X data - use x0/x1 from stack transform if present
+  	let x0Data = $derived.by(() => {
+  		console.log('🔍 x0Data derived running:', {
+  			hasSetup: !!setup,
+  			hasData: !!setup?.data,
+  			instanceCount,
+  			dataLength: setup?.data?.length,
+  			dataType: setup?.data?.type
+  		});
+  
+  		if (!setup?.data || !instanceCount) return null;
+  
+  		// If stack transform provided x0, use it
+  		if (hasStackTransform) {
+  			const x0Array = setup.data.getColumn('x0');
+  			const dataType = setup.data.type;
+  			console.log('📊 BarMarkX x0Data (stack mode):', {
+  				hasX0: !!x0Array,
+  				dataType,
+  				availableColumns: setup.data.columnNames,
+  				sampleX0: x0Array ? Array.from(x0Array.slice(0, 5)) : null,
+  				rawDataSample: dataType === 'objects' ? setup.data.data?.slice(0, 3) : 'arrow'
+  			});
+  			if (x0Array) return x0Array;
+  		}
+  
+  		// Otherwise use x1 prop (baseline)
+  		console.log('📊 BarMarkX x0Data (fallback to baseline):', {
+  			hasStackTransform,
+  			x1Strategy: dataStrategies.x1
+  		});
+  		if (dataStrategies.x1 === 'constant') {
+  			const arr = new Float32Array(instanceCount);
+  			arr.fill(x1);
+  			return arr;
+  		}
+  
+  		return setup.data.getColumn('x1');
+  	});
+  
+  	let x1Data = $derived.by(() => {
+  		if (!setup?.data || !instanceCount) return null;
+  
+  		// If stack transform provided x1, use it
+  		if (hasStackTransform) {
+  			const x1Array = setup.data.getColumn('x1');
+  			console.log('📊 BarMarkX x1Data (stack mode):', {
+  				hasX1: !!x1Array,
+  				sampleX1: x1Array ? Array.from(x1Array.slice(0, 5)) : null
+  			});
+  			if (x1Array) return x1Array;
+  		}
+  
+  		// Otherwise use x2 prop (data values)
+  		if (dataStrategies.x2 === 'constant') {
+  			const arr = new Float32Array(instanceCount);
+  			arr.fill(x2);
+  			return arr;
+  		}
+  
+  		return setup.data.getColumn('x2');
+  	});
+  
+  	// Y data - categorical (band scale)
+  	let yData = $derived.by(() => {
+  		if (!setup?.data || !instanceCount || !setup?.actualYScaleType) return null;
+  
+  		if (setup.actualYScaleType === 'band') {
+  			const rawArray = setup.data.getColumn('y');
+  			if (!rawArray) return null;
+  
+  			const indices = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
+  
+  			// Convert to rectangle coordinates
+  			const y0Data = new Float32Array(instanceCount);
+  			const y1Data = new Float32Array(instanceCount);
+  
+  			for (let i = 0; i < instanceCount; i++) {
+  				const categoryIndex = indices[i];
+  				y0Data[i] = categoryIndex;
+  				y1Data[i] = categoryIndex;
+  			}
+  
+  			console.log(`📊 BarMarkX Y data for band scale:`, {
+  				instanceCount,
+  				rawCategories: Array.from(rawArray.slice(0, 5)),
+  				indices: Array.from(indices.slice(0, 5)),
+  				y0Data: Array.from(y0Data.slice(0, 5)),
+  				y1Data: Array.from(y1Data.slice(0, 5)), // ← Add this
+  				scaleReady: chartContext.yScaleState.isReadyForGPU,
+  				domain: Array.from(chartContext.yScaleState.effectiveDomain) // ← Convert to array
+  			});
+  
+  			return { y0Data, y1Data };
+  		}
+  
+  		return null;
+  	});
+  
+  	let y0Data = $derived(yData?.y0Data);
+  	let y1Data = $derived(yData?.y1Data);
+  
+  	// Color value data (raw values for GPU lookup, or null for constant mode)
+  	let colorValueData = $derived.by(() => {
+  		if (colorConfig.mode !== 'field') return null;
+  		if (!setup?.data || !instanceCount || !colorScaleState?.ready) return null;
+  
+  		const colorArray = setup.data.getColumn('color');
+  		if (!colorArray) return null;
+  
+  		// Use ColorScaleState to convert to GPU-ready values
+  		return colorScaleState.processDataForGPU(colorArray);
+  	});
+  
+  	// Props for Rects renderer
+  	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
+  	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
+  	let constantColor = $derived(colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]);
+  
+  	// Ready check: include color scale readiness for field mode
+  	let colorReady = $derived(colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false));
+  
+  	// Alpha data
+  	let alphaData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const alphas = new Float32Array(instanceCount);
+  
+  		if (dataStrategies.alpha === 'constant') {
+  			alphas.fill(alpha);
+  		} else {
+  			const alphaArray = setup.data.getColumn('alpha');
+  			if (alphaArray) {
+  				for (let i = 0; i < instanceCount; i++) {
+  					alphas[i] = alphaArray[i];
+  				}
+  			} else {
+  				alphas.fill(0.8);
+  			}
+  		}
+  
+  		return alphas;
+  	});
+  
+  	$effect(() => {
+  		(void config, xScaleId, yScaleId);
+  
+  		untrack(() => {
+  			setup?.destroy();
+  			setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  		});
+  	});
+  
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
+  
+  	// Temp logging
+  	$effect(() => {
+  		if (chartContext?.yScaleState?.isReadyForGPU && chartContext.innerHeight) {
+  			console.log('📏 Band scale calculations:', {
+  				innerHeight: chartContext.innerHeight,
+  				categoryCount: chartContext.yScaleState.effectiveDomain.length,
+  				bandwidth: chartContext.yScaleState.bandwidth(chartContext.innerHeight),
+  				step: chartContext.yScaleState.step(chartContext.innerHeight)
+  			});
+  		}
+  	});
+  
+  	// Debug X scale domain
+  	$effect(() => {
+  		if (chartContext?.xScaleState) {
+  			console.log('📏 X Scale state:', {
+  				domain: chartContext.xScaleState.effectiveDomain,
+  				ready: chartContext.xScaleState.ready,
+  				type: chartContext.scaleTypes?.x
+  			});
+  		}
+  	});
+  </script>
+  
+  {#if setup?.gpuReady && colorReady && x0Data && x1Data && y0Data && y1Data}
+  	<Rects
+  		{x0Data}
+  		{x1Data}
+  		{y0Data}
+  		{y1Data}
+  		{colorValueData}
+  		{alphaData}
+  		{colorMode}
+  		{colorScaleIndex}
+  		{constantColor}
+  		dataVersion={setup.client.dataVersion}
+  	/>
+  {:else if setup?.client?.error}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+  		Error: {setup.client.error.message}
+  	</text>
+  {:else if setup?.client?.delayedLoading}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+  		Loading data...
+  	</text>
+  {:else}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+  		Initializing bars...
+  	</text>
+  {/if}
+</src/lib/components/marks/BarMarkX.svelte>
+
+<src/lib/components/marks/DotsMark.svelte>
+  <script>
+  	import { getContext, onDestroy, untrack } from 'svelte';
+  	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  	import { Dots } from '../rendering/index.js';
+  	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
+  
+  	let {
+  		table,
+  		selection,
+  		x,
+  		y,
+  		color = null,        // Can be: null, "#ff0000", "red", "fieldName", { field, scheme }
+  		scheme = 'tableau10', // Default scheme for field-based color
+  		alpha = 0.5,
+  		radius = 3,
+  		limit,
+  		filterNulls = false,
+  		preferredXScaleType = 'linear',
+  		preferredYScaleType = 'linear',
+  		transforms = []
+  	} = $props();
+  
+  	const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
+  	const coordinator = getContext('mosaic-coordinator');
+  	const chartContext = getContext('chart');
+  	const scaleRegistry = getContext('scale-registry');
+  
+  	let setup = $state(null);
+  	let colorScaleState = $state(null);
+  
+  	// Detect color type
+  	const colorConfig = $derived.by(() => {
+  		// No color prop → constant default
+  		if (color == null) {
+  			return {
+  				mode: 'constant',
+  				value: [0.13, 0.55, 0.13, 1.0] // Default forest green
+  			};
+  		}
+  
+  		// Object form: { field: 'species', scheme: 'category10' }
+  		if (typeof color === 'object' && color.field) {
+  			return {
+  				mode: 'field',
+  				field: color.field,
+  				scheme: color.scheme || scheme
+  			};
+  		}
+  
+  		// String: could be constant ("#ff0000", "red") or field name ("species")
+  		if (typeof color === 'string') {
+  			if (isColorConstant(color)) {
+  				return {
+  					mode: 'constant',
+  					value: parseColorToRGBA(color)
+  				};
+  			} else {
+  				// Treat as field name
+  				return {
+  					mode: 'field',
+  					field: color,
+  					scheme: scheme
+  				};
+  			}
+  		}
+  
+  		// Fallback
+  		return {
+  			mode: 'constant',
+  			value: [0.13, 0.55, 0.13, 1.0]
+  		};
+  	});
+  
+  	// Build select config based on color mode
+  	const selectConfig = $derived({
+  		x,
+  		y,
+  		...(colorConfig.mode === 'field' && { color: colorConfig.field })
+  	});
+  
+  	const config = $derived({
+  		markType: 'dot',
+  		supportedScaleTypes: {
+  			x: ['linear', 'identity', 'band', 'point', 'time', 'log'],
+  			y: ['linear', 'identity', 'band', 'point', 'time', 'log']
+  		},
+  		scaleRequirements: {
+  			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
+  			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  		},
+  		table,
+  		selection,
+  		select: selectConfig,
+  		transforms,
+  		clientOptions: {
+  			limit,
+  			filterNulls: filterNulls ? [x, y] : null
+  		}
+  	});
+  
+  	let xScaleId = $derived(chartContext.xScaleState?.id);
+  	let yScaleId = $derived(chartContext.yScaleState?.id);
+  	let instanceCount = $derived(setup?.data?.length || 0);
+  
+  	// Get or create color scale when in field mode
+  	$effect(() => {
+  		if (colorConfig.mode === 'field' && scaleRegistry) {
+  			untrack(() => {
+  				// Request color scale from registry
+  				colorScaleState = scaleRegistry.getOrCreateScale(
+  					colorConfig.field,
+  					'color',
+  					{ scheme: colorConfig.scheme },
+  					chartContext.chartId
+  				);
+  
+  				// Register table with color scale for ViewManager integration
+  				if (colorScaleState && table) {
+  					colorScaleState.registerTable(table);
+  				}
+  			});
+  		} else {
+  			colorScaleState = null;
+  		}
+  	});
+  
+  	// Pass color scale to setup for domain discovery via DISTINCT query
+  	// This must happen before categorical fetch completes
+  	$effect(() => {
+  		if (setup && colorScaleState && colorConfig.mode === 'field') {
+  			setup.setColorScale(colorScaleState);
+  		}
+  	});
+  
+  	// X data
+  	let xData = $derived.by(() => {
+  		if (!setup?.data || setup.data.length === 0) return null;
+  
+  		const rawArray = setup.data.getColumn('x');
+  		if (!rawArray) return null;
+  
+  		if (setup.actualXScaleType === 'band' || setup.actualXScaleType === 'point') {
+  			const processed = chartContext.xScaleState.processDataForGPU(rawArray, setup.markId);
+  			return processed instanceof Float32Array ? processed : new Float32Array(processed);
+  		}
+  
+  		return rawArray;
+  	});
+  
+  	// Y data
+  	let yData = $derived.by(() => {
+  		if (!setup?.data || setup.data.length === 0) return null;
+  
+  		const rawArray = setup.data.getColumn('y');
+  		if (!rawArray) return null;
+  
+  		if (setup.actualYScaleType === 'band' || setup.actualYScaleType === 'point') {
+  			const processed = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
+  			return processed instanceof Float32Array ? processed : new Float32Array(processed);
+  		}
+  
+  		return rawArray;
+  	});
+  
+  	// Color value data (raw values for GPU lookup, or null for constant mode)
+  	let colorValueData = $derived.by(() => {
+  		if (colorConfig.mode !== 'field') return null;
+  		if (!setup?.data || !instanceCount || !colorScaleState?.ready) return null;
+  
+  		const colorArray = setup.data.getColumn('color');
+  		if (!colorArray) return null;
+  
+  		// Use ColorScaleState to convert to GPU-ready values
+  		return colorScaleState.processDataForGPU(colorArray);
+  	});
+  
+  	// Radius data
+  	let radiusData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const radii = new Float32Array(instanceCount);
+  
+  		if (typeof radius === 'function') {
+  			const xArray = setup?.data?.getColumn('x');
+  			const yArray = setup?.data?.getColumn('y');
+  
+  			if (!xArray || !yArray) return null;
+  
+  			for (let i = 0; i < instanceCount; i++) {
+  				radii[i] = radius({ x: xArray[i], y: yArray[i] });
+  			}
+  		} else {
+  			radii.fill(radius);
+  		}
+  
+  		return radii;
+  	});
+  
+  	// Alpha data
+  	let alphaData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const alphas = new Float32Array(instanceCount);
+  		alphas.fill(alpha);
+  		return alphas;
+  	});
+  
+  	// Props for Dots renderer
+  	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
+  	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
+  	let constantColor = $derived(
+  		colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]
+  	);
+  
+  	// Ready check: include color scale readiness for field mode
+  	let colorReady = $derived(
+  		colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false)
+  	);
+  
+  	$effect(() => {
+  		(void config, xScaleId, yScaleId);
+  
+  		untrack(() => {
+  			setup?.destroy();
+  			setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  		});
+  	});
+  
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
+  </script>
+  
+  {#if setup?.gpuReady && colorReady && xData && yData}
+  	<Dots
+  		{xData}
+  		{yData}
+  		{colorValueData}
+  		{radiusData}
+  		{alphaData}
+  		{colorMode}
+  		{colorScaleIndex}
+  		{constantColor}
+  		dataVersion={setup.client.dataVersion}
+  	/>
+  {:else if setup?.client?.error}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+  		Error: {setup.client.error.message}
+  	</text>
+  {:else if setup?.client?.delayedLoading}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+  		Loading data...
+  	</text>
+  {:else}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+  		Initializing mark...
+  	</text>
+  {/if}
+</src/lib/components/marks/DotsMark.svelte>
+
+<src/lib/components/marks/RectMarks.md>
+  // Future Bar Mark Examples with proper scale type checking
+  
+  // ===== BarXMark.svelte (Vertical bars) =====
+  /*
+  <script>
+    import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
+    import { getContext, onMount, onDestroy, untrack } from 'svelte';
+    import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+    import { Rects } from '$lib/components'; // Future Rects renderer
+  
+    let { 
+      table, 
+      selection, 
+      x,        // Categorical data (species, categories)
+      y,        // Continuous data (aggregated values)
+      color, 
+      alpha = 0.8,
+      limit = 5000 
+    } = $props();
+  
+    const coordinator = getContext('mosaic-coordinator');
+    const c = getContext('chart');
+    const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
+  
+    // Vertical bars: MANDATE categorical x, PREFER continuous y
+    c.registerScaleType('x', 'band', SCALE_PRIORITIES.MANDATE, markId);   // MUST be band
+    c.registerScaleType('y', 'linear', SCALE_PRIORITIES.PREFER, markId);  // Prefer linear
+  
+    // Check what we actually got after scale resolution
+    let actualXScaleType = $derived(c.scaleTypes?.x || 'band');
+    let actualYScaleType = $derived(c.scaleTypes?.y || 'linear');
+  
+    // Strict validation: BarX REQUIRES band scale for x-axis
+    let scaleCompatibilityError = $derived.by(() => {
+      if (actualXScaleType !== 'band') {
+        return `BarXMark requires band scale for x-axis, got: ${actualXScaleType}`;
+      }
+      
+      // Y-axis is more flexible but warn if unexpected
+      if (actualYScaleType !== 'linear' && actualYScaleType !== 'identity') {
+        return `BarXMark works best with linear y-axis, got: ${actualYScaleType}`;
+      }
+      
+      return null;
+    });
+  
+    // ... DataClient setup ...
+  </script>
+  
+  {#if scaleCompatibilityError}
+    <text fill="red">Scale Error: {scaleCompatibilityError}</text>
+  {:else if client?.arrowTable}
+    <Rects
+      data={client.arrowTable}
+      dataVersion={client.dataVersion}
+      xScaleType={actualXScaleType}  <!-- Pass ACTUAL resolved types -->
+      yScaleType={actualYScaleType}
+      alpha={alpha}
+      baseline="zero"
+    />
+  {/if}
+  */
+  
+  // ===== BarYMark.svelte (Horizontal bars) =====
+  /*
+  <script>
+    // ... similar setup ...
+  
+    // Horizontal bars: PREFER continuous x, MANDATE categorical y  
+    c.registerScaleType('x', 'linear', SCALE_PRIORITIES.PREFER, markId);
+    c.registerScaleType('y', 'band', SCALE_PRIORITIES.MANDATE, markId);
+  
+    let actualXScaleType = $derived(c.scaleTypes?.x || 'linear');
+    let actualYScaleType = $derived(c.scaleTypes?.y || 'band');
+  
+    let scaleCompatibilityError = $derived.by(() => {
+      if (actualYScaleType !== 'band') {
+        return `BarYMark requires band scale for y-axis, got: ${actualYScaleType}`;
+      }
+      return null;
+    });
+  </script>
+  
+  {#if scaleCompatibilityError}
+    <text fill="red">Scale Error: {scaleCompatibilityError}</text>
+  {:else if client?.arrowTable}
+    <Rects
+      data={client.arrowTable}
+      dataVersion={client.dataVersion}
+      xScaleType={actualXScaleType}  <!-- ACTUAL types, not requested -->
+      yScaleType={actualYScaleType}
+      alpha={alpha}
+      baseline="zero"
+      orientation="horizontal"
+    />
+  {/if}
+  */
+  
+  // ===== RectMark.svelte (General rectangles - Very flexible) =====
+  /*
+  <script>
+    // General rectangles are very flexible
+    c.registerScaleType('x', 'linear', SCALE_PRIORITIES.ACCEPT, markId);  // Accept anything
+    c.registerScaleType('y', 'linear', SCALE_PRIORITIES.ACCEPT, markId);
+  
+    let actualXScaleType = $derived(c.scaleTypes?.x || 'linear');
+    let actualYScaleType = $derived(c.scaleTypes?.y || 'linear');
+  
+    // RectMark is very flexible - can work with any scale type
+    let scaleCompatibilityError = $derived.by(() => {
+      // Only error for truly unsupported scale types (none currently)
+      return null;
+    });
+  </script>
+  
+  {#if client?.arrowTable}
+    <Rects
+      data={client.arrowTable}
+      dataVersion={client.dataVersion}
+      xScaleType={actualXScaleType}  <!-- Adapts to whatever was resolved -->
+      yScaleType={actualYScaleType}
+      alpha={alpha}
+    />
+  {/if}
+  */
+  
+  // ===== Usage Examples =====
+  
+  /*
+  <!-- This works fine - dots adapt to whatever scales are resolved -->
+  <DotsMark 
+    table="penguins" 
+    x="bill_length" 
+    y="bill_depth"
+    preferredXScaleType="linear"   <!-- Preference, not guarantee -->
+    preferredYScaleType="linear" 
+  />
+  
+  <!-- This will MANDATE band scale for x-axis -->
+  <BarXMark 
+    table="sales" 
+    x="category" 
+    y={sum("amount")}
+    <!-- No scale type props needed - BarX knows what it needs -->
+  />
+  
+  <!-- Mixing marks: BarX mandates band x-axis, dots adapt -->
+  <ChartContainer xLabel="category" yLabel="amount">
+    <!-- This mandates x must be band scale -->
+    <BarXMark table="sales" x="category" y={sum("amount")} />
+    
+    <!-- This adapts: will get band x-axis, warns in console -->
+    <DotsMark table="sales" x="category" y="individual_sales" 
+              preferredXScaleType="linear" />  <!-- Will get band instead -->
+  </ChartContainer>
+  
+  <!-- This would error - incompatible requirements -->
+  <ChartContainer xLabel="sales" yLabel="category">
+    <!-- This mandates x must be linear -->
+    <SomeLinearOnlyMark x="sales" y="category" />
+    
+    <!-- This mandates x must be band - CONFLICT! -->  
+    <BarXMark x="sales" y="category" />  <!-- Error: incompatible requirements -->
+  </ChartContainer>
+  */
+  
+  // ===== API Benefits =====
+  
+  // 1. **Explicit Requirements**
+  //    - Each mark clearly states what it needs (MANDATE/PREFER/ACCEPT)
+  //    - Clear error messages when requirements conflict
+  //    - Visible validation logic in mark components
+  
+  // 2. **Flexible Adaptation**
+  //    - Marks can adapt to resolved scale types
+  //    - Warnings when marks get something different than preferred
+  //    - Graceful degradation for compatible scale types
+  
+  // 3. **No Hidden Magic**
+  //    - All scale checking happens in mark components
+  //    - Developer can see exactly what's happening
+  //    - Easy to debug scale resolution issues
+  
+  // 4. **Clear Error Messages**
+  //    - "BarXMark requires band scale for x-axis, got: linear"
+  //    - "Scale types resolved differently than preferred"
+  //    - Helps developers understand mark requirements
+  
+  // 5. **Composable and Predictable**
+  //    - Can mix marks with different requirements
+  //    - Priority system resolves conflicts deterministically  
+  //    - Clear rules for what works together
+</src/lib/components/marks/RectMarks.md>
+
+<src/lib/components/marks/BarMark.svelte>
+  <script>
+      import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
+      import { getContext, onMount, onDestroy, untrack } from 'svelte';
+      import { getScaleState } from '$lib/scales';
+      import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+      // import { Rects } from '$lib/components';
+      import { Dots } from '$lib/components';
+    
+      let { 
+        table, 
+        selection, 
+        x, 
+        y, 
+        color, 
+        alpha = 0.8,
+        orientation = 'vertical', // 'vertical' | 'horizontal'
+        limit = 5000 
+      } = $props();
+    
+      const coordinator = getContext('mosaic-coordinator');
+      const c = getContext('chart');
+    
+      const markId = `bar-${crypto.randomUUID().slice(0, 8)}`;
+    
+      // Get color scale for the color encoding
+      let colorScale = $derived(getScaleState(color, 'ordinal'));
+      let client = $state(null);
+    
+      // Register scale types based on orientation
+      // Vertical bars: x=categorical (band), y=continuous (linear)
+      // Horizontal bars: x=continuous (linear), y=categorical (band)
+      if (orientation === 'vertical') {
+        c.registerScaleType('x', 'band', SCALE_PRIORITIES.MANDATE, markId);
+        c.registerScaleType('y', 'linear', SCALE_PRIORITIES.PREFER, markId);
+      } else {
+        c.registerScaleType('x', 'linear', SCALE_PRIORITIES.PREFER, markId);
+        c.registerScaleType('y', 'band', SCALE_PRIORITIES.MANDATE, markId);
+      }
+    
+      function createClient() {
+        if (client) {
+          client.destroy();
+          client = null;
+        }
+    
+        client = new DataClient(table, selection, {
+          select: { x, y },
+          // select: { x, y, color },
+          limit,
+          // filterNulls: [x, y],
+          dataFormat: 'array',
+          name: markId
+        });
+    
+        if (coordinator) {
+          coordinator.connect(client);
+        }
+      }
+  
+      // In BarMark.svelte or any mark needing band scales
+      async function fetchCategoricalDomain() {
+          console.log('fetching categories')
+  
+          if (c.scaleTypes?.x !== 'band' && c.scaleTypes?.y !== 'band') {
+              return; // No categorical scales needed
+          }
+          
+          // Fetch distinct values for x-axis if it's categorical
+          if (c.scaleTypes?.x === 'band') {
+              const distinctQuery = Query.from(table)
+              .select({ x: sqlColumn(x) })
+              .distinct();
+              
+              const result = await coordinator.query(distinctQuery);
+              const categories = Array.from(result).map(row => row.x);
+              
+              c.xScaleState.addMark(categories, markId);
+          }
+  
+          if (c.scaleTypes?.y === 'band') {
+              const distinctQuery = Query.from(table)
+              .select({ y: sqlColumn(y) })
+              .distinct();
+              
+              const result = await coordinator.query(distinctQuery);
+              const categories = Array.from(result).map(row => row.y);
+              
+              c.xScaleState.addMark(categories, markId);
+          }
+      }
+    
+      onMount(async () => {
+          await fetchCategoricalDomain();
+          createClient();
+      });
+    
+      $effect(() => {
+        void x; void y; void color; void table; void orientation;
+        untrack(() => {
+          if (client) createClient();
+        })
+      });
+    
+      onDestroy(() => {
+        c.unregisterScaleType('x', markId);
+        c.unregisterScaleType('y', markId);
+    
+        if (client) {
+          client.destroy();
+        }
+      });
+  
+      $inspect(client?.data)
+    
+    </script>
+    
+    {#if client?.arrowTable}
+      <Dots
+        data={client.arrowTable}
+        dataVersion={client.dataVersion}
+        alpha={alpha}
+        orientation={orientation}
+      />
+    {:else if client?.error}
+      <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="red" font-size="14">
+        Error: {client.error.message}
+      </text>
+    {:else if client?.delayedLoading}
+      <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="currentColor" font-size="14">
+        Loading...
+      </text>
+    {:else}
+      <text x={c.marginLeft ?? 20} y={c.marginTop ?? 20} fill="currentColor" font-size="14">
+        No data available
+      </text>
+    {/if}
+</src/lib/components/marks/BarMark.svelte>
+
+<src/lib/components/marks/utils/index.js>
+  // export { 
+  //   getSourceType, processData, buildSelectFromChannels } from './data-processing.js';
+  
+  export { 
+    getSourceType,
+    processData, 
+    processAlphaData, 
+    processColorData,
+    parseColor,
+    buildSelectFromChannels 
+  } from './data-processing.js';
+</src/lib/components/marks/utils/index.js>
+
+<src/lib/components/marks/utils/data-processing.js>
+  /**
+   * Determine the data source type for processing strategy
+   * @param {*} value - The value to classify
+   * @returns {string} Type: 'constant', 'array', 'float32array', or 'sql'
+   */
+  export function getSourceType(value) {
+    if (typeof value === 'number') return 'constant';
+    if (typeof value === 'string' && isColorString(value)) return 'constant-color';
+    if (Array.isArray(value)) return 'array';
+    if (value instanceof Float32Array) return 'float32array';
+    return 'sql';  // Everything else goes to database
+  }
+  
+  /**
+   * Data processors for converting various sources to GPU-ready Float32Arrays
+   */
+  const processors = {
+    constant: (value, instanceCount) => new Float32Array(instanceCount).fill(value),
+    array: (value) => new Float32Array(value),
+    float32array: (value) => value,  // Pass through - already optimized
+    sql: (column) => {
+      if (!column) return null;
+      const rawArray = column.toArray();
+      return rawArray instanceof Float32Array ? rawArray : new Float32Array(rawArray);
+    }
+  };
+  
+  
+  /**
+   * Process data with optional pre-computed strategy
+   */
+  export function processData(value, column, instanceCount, strategy = null) {
+    const type = strategy || getSourceType(value);
+    if (!type) return null;
+    
+    if (type === 'constant') return processors.constant(value, instanceCount);
+    if (type === 'sql') return processors.sql(column);
+    return processors[type](value);
+  }
+  
+  /**
+   * Process alpha data with strategy
+   */
+  export function processAlphaData(alpha, instanceCount, strategy = null) {
+    if (!instanceCount) return null;
+    
+    const type = strategy || getSourceType(alpha);
+    
+    switch (type) {
+      case 'constant':
+        const alphas = new Float32Array(instanceCount);
+        alphas.fill(alpha);
+        return alphas;
+        
+      case 'sql':
+        // Future: support alpha from database column
+        return null;
+        
+      default:
+        const defaultAlphas = new Float32Array(instanceCount);
+        defaultAlphas.fill(0.8);
+        return defaultAlphas;
+    }
+  }
+  
+  /**
+   * Helper for building select object with only SQL expressions that need database queries
+   * @param {Object} channels - Object with channel names and values
+   * @returns {Object} Select object for DataClient
+   */
+  export function buildSelectFromChannels(channels) {
+    const select = {};
+    
+    for (const [key, value] of Object.entries(channels)) {
+      if (value !== undefined && getSourceType(value) === 'sql') {
+        select[key] = value;
+      }
+    }
+    
+    return select;
+  }
+  
+  /**
+   * Check if a string represents a color value
+   */
+  function isColorString(value) {
+    return value.startsWith('#') || CSS_COLOR_NAMES.has(value.toLowerCase());
+  }
+  
+  /**
+   * Parse color string to RGBA array
+   */
+  export function parseColor(color) {
+    if (typeof color === 'string') {
+      if (color.startsWith('#')) {
+        // Hex color handling
+        const hex = color.slice(1);
+        if (hex.length === 3) {
+          const r = parseInt(hex[0] + hex[0], 16) / 255;
+          const g = parseInt(hex[1] + hex[1], 16) / 255;
+          const b = parseInt(hex[2] + hex[2], 16) / 255;
+          return [r, g, b, 1.0];
+        } else if (hex.length === 6) {
+          const r = parseInt(hex.slice(0, 2), 16) / 255;
+          const g = parseInt(hex.slice(2, 4), 16) / 255;
+          const b = parseInt(hex.slice(4, 6), 16) / 255;
+          return [r, g, b, 1.0];
+        }
+      } else {
+        // CSS color names
+        const rgb = CSS_COLOR_NAMES.get(color.toLowerCase());
+        if (rgb) return [...rgb, 1.0];
+      }
+    }
+    return [0.2, 0.4, 0.8, 1.0]; // Default blue
+  }
+  
+  /**
+   * Process color data from various sources into GPU-ready RGBA Float32Array
+   */
+  export function processColorData(value, column, instanceCount, colorScale = null, strategy = null) {
+    if (!instanceCount) return null;
+    
+    const sourceType = strategy || getSourceType(value);
+    const rgba = new Float32Array(instanceCount * 4);
+    
+    switch (sourceType) {
+      case 'constant-color':
+        // Constant color for all instances
+        const parsed = parseColor(value);
+        for (let i = 0; i < instanceCount; i++) {
+          rgba.set(parsed, i * 4);
+        }
+        return rgba;
+        
+      case 'sql':
+        // Column data with color scale
+        if (!column || !colorScale) {
+          return getDefaultColorData(instanceCount);
+        }
+        
+        const colorArray = column.toArray();
+        for (let i = 0; i < instanceCount; i++) {
+          const colorValue = colorArray[i];
+          const fillColor = colorScale(colorValue);
+          const parsed = parseColor(fillColor);
+          rgba.set(parsed, i * 4);
+        }
+        return rgba;
+        
+      default:
+        return getDefaultColorData(instanceCount);
+    }
+  }
+  
+  function getDefaultColorData(instanceCount) {
+    const rgba = new Float32Array(instanceCount * 4);
+    const defaultColor = [0.2, 0.4, 0.8, 1.0];
+    for (let i = 0; i < instanceCount; i++) {
+      rgba.set(defaultColor, i * 4);
+    }
+    return rgba;
+  }
+  
+  // CSS color names mapping
+  const CSS_COLOR_NAMES = new Map([
+    ['red', [1, 0, 0]],
+    ['green', [0, 0.5, 0]],
+    ['blue', [0, 0, 1]],
+    ['orange', [1, 0.65, 0]],
+    ['purple', [0.5, 0, 0.5]],
+    ['yellow', [1, 1, 0]],
+    ['pink', [1, 0.75, 0.8]],
+    ['brown', [0.65, 0.16, 0.16]],
+    ['gray', [0.5, 0.5, 0.5]],
+    ['grey', [0.5, 0.5, 0.5]],
+    ['black', [0, 0, 0]],
+    ['white', [1, 1, 1]],
+    // Add more as needed
+  ]);
+</src/lib/components/marks/utils/data-processing.js>
+
+<src/lib/components/marks/BaseMarkSetup.svelte.js>
+  // src/lib/components/marks/BaseMarkSetup.svelte.js
+  
+  import { untrack } from 'svelte';
+  import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
+  import {
+  	Query,
+  	isNode,
+  	column as sqlColumn,
+  	isAggregateExpression,
+  	isNotNull,
+  	and
+  } from '@uwdata/mosaic-sql';
+  import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities.js';
+  import { TransformCompiler } from '$lib/transforms/TransformCompiler.js';
+  import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor.js';
+  import { viewManager } from '$lib/data/ViewManager.svelte.js';
+  
+  export class BaseMarkSetup {
+  	// --- Reactive State ---
+  	client = $state(null);
+  	categoricalDataFetched = $state(false);
+  
+  	// --- Setup Progress ---
+  	#scaleStatesReady = $state(false);
+  	#scaleMappingsReady = $state(false);
+  	#clientCreated = $state(false);
+  	#clientDataReady = $state(false);
+  	#continuousDomainsSet = $state(false);
+  	#categoricalFetchStarted = $state(false);
+  
+  	// --- Private Properties ---
+  	#config;
+  	#coordinator;
+  	#chartContext;
+  	#markId;
+  	#scaleMap = {};
+  	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
+  	#currentClientTable = $state(null); // Track which table the current client queries
+  
+  	// --- Transform Support ---
+  	#transformCompiler;
+  	#autoBinNodes = new Map(); // channel -> AutoBinNode
+  
+  	// --- Data-Derived Domain Support ---
+  	// Channels that need domain computed from query results (aggregates, transforms)
+  	#channelsNeedingDataDomain = new Set();
+  	#dataDerivedDomainsSet = $state(false);
+  
+  	constructor(config, coordinator, chartContext, stableId = null) {
+  		console.log('🔧 BaseMarkSetup constructor:', {
+  			markType: config.markType,
+  			transforms: config.transforms,
+  			transformCount: config.transforms?.length || 0
+  		});
+  
+  		this.#config = config;
+  		this.#coordinator = coordinator;
+  		this.#chartContext = chartContext;
+  		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
+  
+  		// Ensure ViewManager has coordinator (idempotent, pragmatic initialization)
+  		// TODO: Could be moved to app-level initialization where coordinator is created
+  		if (coordinator) {
+  			viewManager.setCoordinator(coordinator);
+  		}
+  
+  		// NEW: Create transform compiler
+  		this.#transformCompiler = new TransformCompiler(config.transforms || []);
+  
+  		console.log('🔧 TransformCompiler created:', {
+  			sqlTransforms: this.#transformCompiler.sqlTransforms.length,
+  			jsTransforms: this.#transformCompiler.jsTransforms.length
+  		});
+  
+  		// NEW: Detect auto bins in select
+  		this.#detectAutoBins();
+  
+  		// Detect which channels need data-derived domains (aggregates)
+  		this.#detectChannelsNeedingDataDomain();
+  
+  		this.#registerScaleRequirements();
+  		this.#setupReactiveEffects();
+  	}
+  
+  	// NEW: Detect AutoBinNodes in config
+  	#detectAutoBins() {
+  		for (const [channel, value] of Object.entries(this.#config.select)) {
+  			if (value?.isAutoBinNode) {
+  				this.#autoBinNodes.set(channel, value);
+  			}
+  		}
+  	}
+  
+  	/**
+  	 * Detect which channels need their domain computed from query results.
+  	 * This includes:
+  	 * - Aggregate expressions (count, sum, etc.) on linear scales
+  	 * - Channels that will be generated by transforms (x0/x1, y0/y1)
+  	 */
+  	#detectChannelsNeedingDataDomain() {
+  		const { select, scaleRequirements } = this.#config;
+  
+  		// Check each channel in select for aggregates
+  		for (const [channel, value] of Object.entries(select)) {
+  			if (value == null) continue;
+  
+  			// Skip AutoBinNodes - they have their own stats mechanism
+  			if (value.isAutoBinNode) continue;
+  
+  			// Determine if this channel maps to a linear scale
+  			const scaleType = channel === 'x' || channel === 'x1' || channel === 'x2'
+  				? scaleRequirements?.x?.type
+  				: channel === 'y' || channel === 'y1' || channel === 'y2'
+  					? scaleRequirements?.y?.type
+  					: null;
+  
+  			// Only track for linear/continuous scales
+  			if (scaleType !== 'linear' && scaleType !== 'log' && scaleType !== 'time') continue;
+  
+  			// Check if it's an aggregate expression
+  			const exprNode = isNode(value) ? value : null;
+  			if (exprNode && isAggregateExpression(exprNode)) {
+  				// Map x1/x2 variants to 'x', y1/y2 variants to 'y'
+  				const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : channel;
+  				this.#channelsNeedingDataDomain.add(baseChannel);
+  			}
+  		}
+  
+  		// Also add channels that transforms will generate
+  		if (this.#transformCompiler.hasJSTransforms()) {
+  			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+  			for (const channel of additionalChannels) {
+  				const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : null;
+  				if (baseChannel) {
+  					this.#channelsNeedingDataDomain.add(baseChannel);
+  				}
+  			}
+  		}
+  
+  		if (this.#channelsNeedingDataDomain.size > 0) {
+  			console.log(`🔧 ${this.#markId} channels needing data-derived domain:`,
+  				Array.from(this.#channelsNeedingDataDomain));
+  		}
+  	}
+  
+  	#setupReactiveEffects() {
+  		// Effect 1: Wait for scale objects
+  		$effect(() => {
+  			const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
+  			if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
+  				this.#scaleStatesReady = true;
+  			}
+  		});
+  
+  		// Effect 2: Setup scale mappings
+  		$effect(() => {
+  			if (this.#scaleStatesReady && !this.#scaleMappingsReady) {
+  				this.#setupScaleMappings();
+  				this.#scaleMappingsReady = true;
+  			}
+  		});
+  
+  		// Effect 3: Fetch categorical domains FIRST (before client creation)
+  		// This populates scale domains which triggers ViewManager view creation
+  		$effect(() => {
+  			// Wait for scale mappings
+  			if (!this.#scaleMappingsReady) return;
+  			// If color field exists, wait for color scale to be set
+  			const hasColorField = !!this.#config.select?.color;
+  			if (hasColorField && !this.#colorScaleState) return;
+  
+  			if (!this.#categoricalFetchStarted) {
+  				this.#categoricalFetchStarted = true;
+  
+  				this.#fetchCategoricalDomains()
+  					.then(() => {
+  						this.categoricalDataFetched = true;
+  						this.#setScalesReady();
+  						console.log(`✅ Mark ${this.#markId} categorical domains ready, view should be created`);
+  					})
+  					.catch((error) => {
+  						console.error(`❌ Categorical domain fetch failed for ${this.#markId}:`, error);
+  					});
+  			}
+  		});
+  
+  		// Effect 4: Create client - waits for view to be ready before creating
+  		// This prevents creating a throwaway client against the source table
+  		$effect(() => {
+  			// Prerequisites
+  			if (!this.categoricalDataFetched) return;
+  
+  			// Wait until ViewManager is ready (no pending view creation)
+  			if (!viewManager.isReadyForClient(this.#config.table)) {
+  				console.log(`[Mark ${this.#markId}] Waiting for view to be ready...`);
+  				return;
+  			}
+  
+  			// REACTIVITY: Track effectiveTable
+  			const tableToQuery = this.effectiveTable;
+  
+  			// Check if table changed (using tracked state)
+  			if (this.#currentClientTable !== tableToQuery) {
+  				// Action (untracked to prevent loops)
+  				untrack(() => {
+  					if (this.client) {
+  						console.log(
+  							`[Mark ${this.#markId}] Switching source: ${this.#currentClientTable} → ${tableToQuery}`
+  						);
+  						this.client.destroy();
+  						this.client = null;
+  					}
+  
+  					const fieldRequests = this.#buildFieldInfoRequests();
+  					console.log(`[Mark ${this.#markId}] Creating DataClient for ${tableToQuery}`);
+  					this.#createClient(tableToQuery, fieldRequests);
+  					this.#currentClientTable = tableToQuery;
+  					this.#clientCreated = true;
+  				});
+  			}
+  		});
+  
+  		// Effect 5: Monitor client data readiness
+  		$effect(() => {
+  			if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
+  				this.#clientDataReady = true;
+  			}
+  		});
+  
+  		// Effect 6: Set initial continuous domains (from fieldInfo for non-aggregated fields)
+  		$effect(() => {
+  			if (this.#clientDataReady && !this.#continuousDomainsSet) {
+  				this.#setInitialContinuousDomains(this.client.fieldInfo);
+  				this.#continuousDomainsSet = true;
+  			}
+  		});
+  
+  		// Effect 7: Register data-derived domains when data arrives
+  		// This handles aggregates and transforms that need domain computed from query results
+  		$effect(() => {
+  			const data = this.data;
+  			if (!data || data.length === 0) return;
+  			if (this.#dataDerivedDomainsSet) return; // Already done
+  
+  			// Get additional channels from transforms (if any)
+  			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+  			this.#registerDataDerivedDomains(data, additionalChannels);
+  		});
+  
+  		// Effect 8: Mark deferred scales ready when data-derived domains are set
+  		// This handles linear scales with aggregates/transforms that couldn't be marked
+  		// ready in #setScalesReady() because their domain wasn't known yet
+  		$effect(() => {
+  			if (this.#dataDerivedDomainsSet && this.#scaleMappingsReady) {
+  				this.#markDeferredScalesReady();
+  			}
+  		});
+  
+  	}
+  
+  	#registerScaleRequirements() {
+  		const { scaleRequirements } = this.#config;
+  
+  		if (scaleRequirements?.x) {
+  			this.#chartContext.registerScaleType(
+  				'x',
+  				scaleRequirements.x.type,
+  				scaleRequirements.x.priority,
+  				this.#markId
+  			);
+  		}
+  
+  		if (scaleRequirements?.y) {
+  			this.#chartContext.registerScaleType(
+  				'y',
+  				scaleRequirements.y.type,
+  				scaleRequirements.y.priority,
+  				this.#markId
+  			);
+  		}
+  	}
+  
+  	get actualXScaleType() {
+  		return this.#chartContext.scaleTypes?.x || 'linear';
+  	}
+  
+  	get actualYScaleType() {
+  		return this.#chartContext.scaleTypes?.y || 'linear';
+  	}
+  
+  	get markId() {
+  		return this.#markId;
+  	}
+  
+  	/**
+  	 * Reactive effective table name.
+  	 * Automatically updates when ViewManager creates the derived view.
+  	 */
+  	effectiveTable = $derived(viewManager.getEffectiveTable(this.#config.table));
+  
+  	/**
+  	 * Get the source table name (without ViewManager transformation).
+  	 */
+  	get sourceTable() {
+  		return this.#config.table;
+  	}
+  
+  	/**
+  	 * Set the color scale state for ViewManager integration.
+  	 * Must be called before categorical domain fetch completes.
+  	 * @param {ColorScaleState} colorScaleState
+  	 */
+  	setColorScale(colorScaleState) {
+  		this.#colorScaleState = colorScaleState;
+  		// Register table with color scale
+  		if (colorScaleState && this.#config.table) {
+  			colorScaleState.registerTable(this.#config.table);
+  		}
+  	}
+  
+  	scaleCompatibilityError = $derived.by(() => {
+  		const { supportedScaleTypes, markType } = this.#config;
+  		if (!this.actualXScaleType || !this.actualYScaleType) return null;
+  
+  		const incompatibleX = !supportedScaleTypes.x.includes(this.actualXScaleType);
+  		const incompatibleY = !supportedScaleTypes.y.includes(this.actualYScaleType);
+  
+  		if (incompatibleX)
+  			return `${markType} cannot use scale type '${this.actualXScaleType}' for the x-axis.`;
+  		if (incompatibleY)
+  			return `${markType} cannot use scale type '${this.actualYScaleType}' for the y-axis.`;
+  
+  		return null;
+  	});
+  
+  	gpuReady = $derived.by(() => {
+  		if (!this.#chartContext.scalesReady || !this.categoricalDataFetched) return false;
+  
+  		const xReady =
+  			this.actualXScaleType === 'band' || this.actualXScaleType === 'point'
+  				? this.#chartContext.xScaleState?.isReadyForGPU
+  				: this.#chartContext.xScaleState?.ready;
+  
+  		const yReady =
+  			this.actualYScaleType === 'band' || this.actualYScaleType === 'point'
+  				? this.#chartContext.yScaleState?.isReadyForGPU
+  				: this.#chartContext.yScaleState?.ready;
+  
+  		return xReady && yReady;
+  	});
+  
+  	// Processed data with JS transforms applied
+  	// processedData = $derived.by(() => {
+  	// 	if (!this.client?.arrowTable) return null;
+  
+  	// 	// Convert Arrow to objects
+  	// 	const data = this.#arrowToObjects(this.client.arrowTable);
+  
+  	// 	// Apply JS transforms if any
+  	// 	if (this.#transformCompiler.hasJSTransforms()) {
+  	// 		return this.#transformCompiler.applyToData(
+  	// 			data,
+  	// 			{
+  	// 				x: this.#getFieldName('x'),
+  	// 				y: this.#getFieldName('y'),
+  	// 				fill: this.#getFieldName('fill')
+  	// 			},
+  	// 			{
+  	// 				x: this.#chartContext.xScale,
+  	// 				y: this.#chartContext.yScale
+  	// 			}
+  	// 		);
+  	// 	}
+  
+  	// 	return data;
+  	// });
+  	data = $derived.by(() => {
+  		if (!this.client?.arrowTable) return null;
+  
+  		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
+  		if (!this.#transformCompiler.hasJSTransforms()) {
+  			console.log('📊 Using ArrowDataAccessor (fast path)');
+  			return new ArrowDataAccessor(this.client.arrowTable);
+  		}
+  
+  		// Transform path: Arrow → Objects → Transform → Object accessor
+  		console.log('📊 Using ObjectDataAccessor (JS transforms)');
+  		const objects = this.#arrowToObjects(this.client.arrowTable);
+  
+  		const transformConfig = {
+  			x: this.#getFieldName('x'),
+  			y: this.#getFieldName('y'),
+  			fill: this.#getFieldName('fill')
+  		};
+  
+  		console.log('📊 Transform config:', transformConfig);
+  		console.log('📊 Input data sample:', objects.slice(0, 3));
+  		console.log('📊 Select config:', this.#config.select);
+  
+  		const transformed = this.#transformCompiler.applyToData(
+  			objects,
+  			transformConfig,
+  			{
+  				x: this.#chartContext.xScale,
+  				y: this.#chartContext.yScale
+  			}
+  		);
+  
+  		console.log('📊 Transformed data:', transformed.length, 'rows');
+  		console.log('📊 Transformed sample:', transformed.slice(0, 3));
+  
+  		return new ObjectDataAccessor(transformed);
+  	});
+  
+  	#arrowToObjects(arrowTable) {
+  		const rows = [];
+  		const numRows = arrowTable.numRows;
+  
+  		for (let i = 0; i < numRows; i++) {
+  			const row = {};
+  			for (const field of arrowTable.schema.fields) {
+  				const column = arrowTable.getChild(field.name);
+  				row[field.name] = column.get(i);
+  			}
+  			rows.push(row);
+  		}
+  
+  		return rows;
+  	}
+  
+  	/**
+  	 * Get the COLUMN NAME (alias) for a channel.
+  	 * The data uses aliases as column names, not the original field expressions.
+  	 * For transforms, we need the alias that appears in the data.
+  	 */
+  	#getFieldName(channel) {
+  		// First check if the channel exists directly in select
+  		if (this.#config.select[channel] != null) {
+  			// The column name in the data is the ALIAS (the key), not the value
+  			return channel;
+  		}
+  
+  		// Handle x1/x2 pattern for bar marks (horizontal stacking)
+  		if (channel === 'x') {
+  			// Try x2 first (the value field for horizontal bars), then x1
+  			if (this.#config.select.x2 != null) return 'x2';
+  			if (this.#config.select.x1 != null) return 'x1';
+  		}
+  
+  		// Handle y0/y1 pattern for bar marks (vertical stacking)
+  		if (channel === 'y') {
+  			if (this.#config.select.y2 != null) return 'y2';
+  			if (this.#config.select.y1 != null) return 'y1';
+  		}
+  
+  		return channel; // fallback
+  	}
+  
+  	getSelectConfig() {
+  		// Return select with AutoBinNodes unresolved
+  		// They'll be resolved in buildQuery()
+  		// Also swap categorical fields for indexed column names if views are ready
+  		const select = { ...this.#config.select };
+  		const hasView = viewManager.hasView(this.#config.table);
+  
+  		// For band/point scales, use the indexed column name from ViewManager
+  		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+  			const xScale = this.#chartContext.xScaleState;
+  			if (xScale?.indexColumnName && hasView) {
+  				const originalField = select.x;
+  				select.x = xScale.indexColumnName;
+  				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
+  			}
+  		}
+  		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+  			const yScale = this.#chartContext.yScaleState;
+  			if (yScale?.indexColumnName && hasView) {
+  				const originalField = select.y;
+  				select.y = yScale.indexColumnName;
+  				console.log(`[BaseMarkSetup] Swapping y: ${originalField} → ${select.y}`);
+  			}
+  		}
+  
+  		// For color scales, use the indexed column name
+  		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
+  			const originalField = select.color;
+  			select.color = this.#colorScaleState.indexColumnName;
+  			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
+  		}
+  
+  		return select;
+  	}
+  
+  	buildQuery(sourceTable, config, filter) {
+  		// console.log('🔨 buildQuery called with filter:', filter);
+  		// console.log('🔨 buildQuery config:', config);
+  		let select = config.select;
+  
+  		// NEW: Resolve auto bins if we have field info
+  		if (this.#autoBinNodes.size > 0 && this.client?.fieldInfo) {
+  			select = this.#resolveAutoBins(config.select);
+  		}
+  
+  		const q = Query.from(sourceTable);
+  		const selectDef = {};
+  		const nonAggregateGroupBy = [];
+  		let hasAggregates = false;
+  
+  		// Build select clause
+  		for (const alias in select) {
+  			const expr = select[alias];
+  			if (expr == null) continue;
+  
+  			const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
+  			selectDef[alias] = exprNode;
+  
+  			if (isAggregateExpression(exprNode)) {
+  				hasAggregates = true;
+  			} else {
+  				nonAggregateGroupBy.push(exprNode);
+  			}
+  		}
+  		q.select(selectDef);
+  
+  		// Add GROUP BY if needed
+  		if (hasAggregates && nonAggregateGroupBy.length > 0) {
+  			q.groupby(nonAggregateGroupBy);
+  		}
+  
+  		// NEW: Apply SQL transforms
+  		let queryWithTransforms = q;
+  		if (this.#transformCompiler.hasSQLTransforms()) {
+  			console.log('🔨 Applying SQL transforms...');
+  			console.log('🔨 Query BEFORE transforms:', q.toString());
+  			queryWithTransforms = this.#transformCompiler.applyToQuery(q);
+  
+  			console.log('🔨 Query AFTER transforms:', queryWithTransforms.toString());
+  
+  			// Validate query is still flat
+  			this.#transformCompiler.validateQuery(queryWithTransforms);
+  		}
+  
+  		// Add filters
+  		const allFilters = [...filter];
+  		if (config._filterNulls && Array.isArray(config._filterNulls)) {
+  			allFilters.push(...config._filterNulls.map((col) => isNotNull(col)));
+  		}
+  		if (allFilters.length > 0) {
+  			queryWithTransforms = queryWithTransforms.where(and(allFilters));
+  		}
+  
+  		return queryWithTransforms;
+  	}
+  
+  	// NEW: Resolve AutoBinNodes to concrete SQL
+  	#resolveAutoBins(select) {
+  		const resolved = {};
+  
+  		for (const [channel, value] of Object.entries(select)) {
+  			if (value?.isAutoBinNode) {
+  				const scaleType =
+  					channel === 'x' ? this.actualXScaleType : channel === 'y' ? this.actualYScaleType : null;
+  
+  				resolved[channel] = value.resolve(this.client.fieldInfo, scaleType);
+  			} else {
+  				resolved[channel] = value;
+  			}
+  		}
+  
+  		return resolved;
+  	}
+  
+  	#createClient(tableName, fieldRequests) {
+  		if (this.client) this.client.destroy();
+  
+  		this.client = new DataClient(
+  			tableName,
+  			this.#config.selection,
+  			{
+  				select: this.getSelectConfig(),
+  				queryBuilder: (table, config, filter) => this.buildQuery(table, config, filter),
+  				dataFormat: 'arrow',
+  				name: this.#markId,
+  				...this.#config.clientOptions
+  			},
+  			fieldRequests
+  		);
+  		this.#coordinator.connect(this.client);
+  	}
+  
+  	#setupScaleMappings() {
+  		this.#scaleMap = {
+  			x: this.#chartContext.xScaleState,
+  			y: this.#chartContext.yScaleState
+  		};
+  
+  		// Register table with band scales for ViewManager integration
+  		// This must happen BEFORE categorical domain fetch so views can be created
+  		const table = this.#config.table;
+  		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+  			this.#chartContext.xScaleState?.registerTable?.(table);
+  		}
+  		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+  			this.#chartContext.yScaleState?.registerTable?.(table);
+  		}
+  
+  		console.log(`📊 ${this.#markId} Scale mappings setup:`, {
+  			x: this.actualXScaleType,
+  			y: this.actualYScaleType
+  		});
+  	}
+  
+  	#buildFieldInfoRequests() {
+  		const { select, table } = this.#config;
+  		const requests = [];
+  		const processedFields = new Set();
+  
+  		for (const alias in select) {
+  			const fieldValue = select[alias];
+  			if (fieldValue == null) continue;
+  
+  			// NEW: Handle AutoBinNodes
+  			if (fieldValue.isAutoBinNode) {
+  				const stats = fieldValue.stats;
+  				if (!processedFields.has(stats.column)) {
+  					requests.push({ table, column: stats.column, stats: stats.stats });
+  					processedFields.add(stats.column);
+  				}
+  				continue;
+  			}
+  
+  			// Handle regular fields
+  			if (processedFields.has(fieldValue.toString())) continue;
+  
+  			const exprNode = isNode(fieldValue) ? fieldValue : sqlColumn(String(fieldValue));
+  			if (isAggregateExpression(exprNode)) continue;
+  
+  			const scaleType =
+  				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
+  
+  			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+  				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
+  				processedFields.add(fieldValue.toString());
+  			}
+  		}
+  
+  		return requests;
+  	}
+  
+  	#setInitialContinuousDomains(fieldInfo) {
+  		if (!fieldInfo) return;
+  
+  		for (const alias in this.#scaleMap) {
+  			const scaleState = this.#scaleMap[alias];
+  			if (!scaleState) continue;
+  
+  			const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
+  
+  			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+  				const fieldValue = this.#config.select[alias];
+  
+  				// Skip AutoBinNodes - they handle their own stats
+  				if (fieldValue?.isAutoBinNode) continue;
+  
+  				if (fieldValue == null) continue;
+  
+  				const infoKey = String(fieldValue).replace(/^["']|["']$/g, '');
+  				const info = fieldInfo[infoKey];
+  
+  				if (info && info.min != null && info.max != null) {
+  					scaleState.addMark([info.min, info.max], this.#markId);
+  				}
+  			}
+  		}
+  	}
+  
+  	/**
+  	 * Register domains from query result data for channels that need data-derived domains.
+  	 * This handles both:
+  	 * - Regular aggregate channels (count, sum, etc.)
+  	 * - Transform-generated channels (x0/x1, y0/y1 from stack)
+  	 *
+  	 * @param {DataAccessor|Array} data - Data accessor or array of objects
+  	 * @param {Array<string>} [additionalChannels=[]] - Extra channels from transforms
+  	 */
+  	#registerDataDerivedDomains(data, additionalChannels = []) {
+  		if (!data || (Array.isArray(data) && data.length === 0)) return;
+  		if (!Array.isArray(data) && data.length === 0) return;
+  
+  		// Skip if no channels need data-derived domains
+  		if (this.#channelsNeedingDataDomain.size === 0 && additionalChannels.length === 0) {
+  			this.#dataDerivedDomainsSet = true;
+  			return;
+  		}
+  
+  		// Build list of channels to examine for each axis
+  		const xChannelsToCheck = [];
+  		const yChannelsToCheck = [];
+  
+  		// Add base channels that need data-derived domains
+  		if (this.#channelsNeedingDataDomain.has('x')) {
+  			// Check for x, x1, x2 variants in the data
+  			xChannelsToCheck.push('x', 'x1', 'x2');
+  		}
+  		if (this.#channelsNeedingDataDomain.has('y')) {
+  			yChannelsToCheck.push('y', 'y1', 'y2');
+  		}
+  
+  		// Add transform-generated channels
+  		for (const channel of additionalChannels) {
+  			if (channel.startsWith('x')) {
+  				xChannelsToCheck.push(channel);
+  			} else if (channel.startsWith('y')) {
+  				yChannelsToCheck.push(channel);
+  			}
+  		}
+  
+  		// Compute and register X domain
+  		if (xChannelsToCheck.length > 0 && this.actualXScaleType === 'linear') {
+  			const extent = this.#computeExtentFromData(data, xChannelsToCheck);
+  			if (extent) {
+  				console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
+  				this.#chartContext.xScaleState?.addMark(extent, this.#markId);
+  			}
+  		}
+  
+  		// Compute and register Y domain
+  		if (yChannelsToCheck.length > 0 && this.actualYScaleType === 'linear') {
+  			const extent = this.#computeExtentFromData(data, yChannelsToCheck);
+  			if (extent) {
+  				console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
+  				this.#chartContext.yScaleState?.addMark(extent, this.#markId);
+  			}
+  		}
+  
+  		this.#dataDerivedDomainsSet = true;
+  	}
+  
+  	/**
+  	 * Compute min/max extent from data for given channels.
+  	 * Works with both DataAccessor (Arrow) and plain object arrays.
+  	 *
+  	 * @param {DataAccessor|Array} data - Data source
+  	 * @param {Array<string>} channels - Channel names to examine
+  	 * @returns {[number, number]|null} Extent or null if no valid data
+  	 */
+  	#computeExtentFromData(data, channels) {
+  		let min = Infinity;
+  		let max = -Infinity;
+  
+  		const isAccessor = typeof data.getColumn === 'function';
+  
+  		if (isAccessor) {
+  			// DataAccessor path - use getColumn for efficiency
+  			for (const channel of channels) {
+  				const column = data.getColumn(channel);
+  				if (!column) continue;
+  
+  				for (let i = 0; i < column.length; i++) {
+  					const value = column[i];
+  					if (typeof value === 'number' && !isNaN(value)) {
+  						if (value < min) min = value;
+  						if (value > max) max = value;
+  					}
+  				}
+  			}
+  		} else {
+  			// Plain array path
+  			for (const row of data) {
+  				for (const channel of channels) {
+  					const value = row[channel];
+  					if (typeof value === 'number' && !isNaN(value)) {
+  						if (value < min) min = value;
+  						if (value > max) max = value;
+  					}
+  				}
+  			}
+  		}
+  
+  		if (min === Infinity || max === -Infinity) return null;
+  		return [min, max];
+  	}
+  
+  	async #fetchCategoricalDomains() {
+  		const { table, selection, sort } = this.#config;
+  		if (!this.#coordinator || !table) return;
+  
+  		const fetches = [];
+  
+  		const setupFetch = (axis, field) => {
+  			if (!field) return;
+  			const scaleState = this.#chartContext[`${axis}ScaleState`];
+  			let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
+  
+  			const sortConfig = sort;
+  			if (sortConfig && sortConfig.by) {
+  				const isSortingByOtherAxis = sortConfig.by === (axis === 'x' ? 'y' : 'x');
+  				const otherAxisField = this.#config.select[sortConfig.by];
+  				if (isSortingByOtherAxis && isAggregateExpression(otherAxisField)) {
+  					q = q.groupby(field).select({ [sortConfig.by]: otherAxisField });
+  				}
+  				q.orderby({ [sortConfig.by]: sortConfig.direction === 'desc' ? 'DESC' : 'ASC' });
+  			} else {
+  				q.distinct();
+  			}
+  
+  			fetches.push(
+  				this.#coordinator.query(q).then((result) => {
+  					const categories = Array.from(result).map((row) => row[axis]);
+  					if (categories.length > 0) {
+  						scaleState.addMark(categories, this.#markId);
+  					}
+  				})
+  			);
+  		};
+  
+  		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+  			setupFetch('x', this.#config.select.x);
+  		}
+  		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+  			setupFetch('y', this.#config.select.y);
+  		}
+  
+  		// Fetch color domain if color scale is set and there's a color field
+  		if (this.#colorScaleState && this.#config.select.color) {
+  			const colorField = this.#config.select.color;
+  			const q = Query.from(table).select({ color: sqlColumn(String(colorField)) }).distinct();
+  
+  			fetches.push(
+  				this.#coordinator.query(q).then((result) => {
+  					const categories = Array.from(result).map((row) => row.color);
+  					if (categories.length > 0) {
+  						console.log(`[BaseMarkSetup] Color domain discovered:`, categories);
+  						this.#colorScaleState.setDomain(categories);
+  					}
+  				})
+  			);
+  		}
+  
+  		if (fetches.length > 0) await Promise.all(fetches);
+  	}
+  
+  	/**
+  	 * Mark scales as ready, but be selective:
+  	 * - Band/categorical scales: mark ready immediately (domain from categorical fetch)
+  	 * - Linear scales without data-derived domains: mark ready immediately (domain from fieldInfo)
+  	 * - Linear scales WITH data-derived domains: only mark ready if data has been processed
+  	 */
+  	#setScalesReady() {
+  		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
+  			if (!scale) continue;
+  
+  			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+  			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
+  
+  			// For categorical scales (band/point), mark ready immediately
+  			if (scaleType === 'band' || scaleType === 'point') {
+  				scale.setReady?.();
+  				continue;
+  			}
+  
+  			// For linear scales, only mark ready if they don't need data-derived domain
+  			// OR if data-derived domains have already been set
+  			if (!needsDataDomain || this.#dataDerivedDomainsSet) {
+  				scale.setReady?.();
+  			} else {
+  				console.log(`⏳ [${this.#markId}] Deferring ${axis} scale ready - waiting for data-derived domain`);
+  			}
+  		}
+  	}
+  
+  	/**
+  	 * Mark linear scales ready after data-derived domains have been set.
+  	 * Called from an effect that watches #dataDerivedDomainsSet.
+  	 */
+  	#markDeferredScalesReady() {
+  		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
+  			if (!scale) continue;
+  
+  			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+  			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
+  
+  			// Only mark linear scales that were waiting for data-derived domains
+  			if (needsDataDomain && (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')) {
+  				if (!scale.ready) {
+  					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
+  					scale.setReady?.();
+  				}
+  			}
+  		}
   	}
   
   	destroy() {
@@ -9071,35 +12141,22 @@
   					{ scheme: colorConfig.scheme },
   					chartContext.chartId
   				);
+  
+  				// Register table with color scale for ViewManager integration
+  				if (colorScaleState && table) {
+  					colorScaleState.registerTable(table);
+  				}
   			});
   		} else {
   			colorScaleState = null;
   		}
   	});
   
-  	// Update color scale domain when data arrives
+  	// Pass color scale to setup for domain discovery via DISTINCT query
+  	// This must happen before categorical fetch completes
   	$effect(() => {
-  		if (colorConfig.mode === 'field' && colorScaleState && setup?.data) {
-  			const colorArray = setup.data.getColumn('color');
-  			if (colorArray) {
-  				// Extract unique categories for ordinal, or [min, max] for continuous
-  				if (colorScaleState.isOrdinal) {
-  					const uniqueCategories = [...new Set(colorArray)].filter(v => v != null);
-  					colorScaleState.setDomain(uniqueCategories);
-  				} else {
-  					let min = Infinity, max = -Infinity;
-  					for (let i = 0; i < colorArray.length; i++) {
-  						const v = colorArray[i];
-  						if (v != null && !isNaN(v)) {
-  							if (v < min) min = v;
-  							if (v > max) max = v;
-  						}
-  					}
-  					if (min !== Infinity) {
-  						colorScaleState.setDomain([min, max]);
-  					}
-  				}
-  			}
+  		if (setup && colorScaleState && colorConfig.mode === 'field') {
+  			setup.setColorScale(colorScaleState);
   		}
   	});
   
@@ -9232,10 +12289,10 @@
 <src/lib/components/marks/BarMarkX.svelte>
   <script>
   	import { getContext, onDestroy, untrack } from 'svelte';
-  	import { getScaleState } from '$lib/scales';
   	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   	import { Rects } from '../rendering/index.js';
   	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
   	import {
   		getSourceType,
   		processData,
@@ -9251,7 +12308,8 @@
   		x1 = 0, // baseline (start of bars) - overridden by stack transform
   		x2 = x, // end of bars (the data values)
   		y, // categorical data
-  		color,
+  		color = null, // Can be: null, "#ff0000", "red", "fieldName", { field, scheme }
+  		scheme = 'tableau10', // Default scheme for field-based color
   		alpha = 0.8,
   		limit,
   		filterNulls = false,
@@ -9266,11 +12324,55 @@
   	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
   	const coordinator = getContext('mosaic-coordinator');
   	const chartContext = getContext('chart');
-  	const colorScale = $derived(getScaleState('color', 'ordinal'));
+  	const scaleRegistry = getContext('scale-registry');
   
   	let setup = $state(null);
+  	let colorScaleState = $state(null);
   	let xScaleId = $derived(chartContext.xScaleState?.id);
   	let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+  	// Detect color type
+  	const colorConfig = $derived.by(() => {
+  		// No color prop → constant default
+  		if (color == null) {
+  			return {
+  				mode: 'constant',
+  				value: [0.2, 0.4, 0.8, 1.0] // Default blue
+  			};
+  		}
+  
+  		// Object form: { field: 'species', scheme: 'category10' }
+  		if (typeof color === 'object' && color.field) {
+  			return {
+  				mode: 'field',
+  				field: color.field,
+  				scheme: color.scheme || scheme
+  			};
+  		}
+  
+  		// String: could be constant ("#ff0000", "red") or field name ("species")
+  		if (typeof color === 'string') {
+  			if (isColorConstant(color)) {
+  				return {
+  					mode: 'constant',
+  					value: parseColorToRGBA(color)
+  				};
+  			} else {
+  				// Treat as field name
+  				return {
+  					mode: 'field',
+  					field: color,
+  					scheme: scheme
+  				};
+  			}
+  		}
+  
+  		// Fallback
+  		return {
+  			mode: 'constant',
+  			value: [0.2, 0.4, 0.8, 1.0]
+  		};
+  	});
   
   	const yScaleConfig = $derived.by(() => {
   		const config = {};
@@ -9293,7 +12395,12 @@
   		},
   		table,
   		selection,
-  		select: buildSelectFromChannels({ x1, x2, y, color }),
+  		select: buildSelectFromChannels({
+  			x1,
+  			x2,
+  			y,
+  			...(colorConfig.mode === 'field' && { color: colorConfig.field })
+  		}),
   		transforms, // NEW: Pass transforms to setup
   		clientOptions: {
   			limit,
@@ -9304,31 +12411,125 @@
   	// NEW: Use data accessor
   	let instanceCount = $derived(setup?.data?.length || 0);
   
+  	$effect(() => {
+  		console.log('🔍 instanceCount changed:', {
+  			count: instanceCount,
+  			hasSetup: !!setup,
+  			hasData: !!setup?.data,
+  			dataLength: setup?.data?.length
+  		});
+  	});
+  
+  	$effect(() => {
+  		console.log('🔍 Render conditions:', {
+  			gpuReady: setup?.gpuReady,
+  			colorReady,
+  			instanceCount,
+  			hasSetup: !!setup,
+  			hasData: !!setup?.data
+  		});
+  	});
+  
+  	$effect(() => {
+  		if (setup?.client?.error) {
+  			console.log('❌ Client has error:', setup.client.error.message);
+  		} else if (setup?.client?.delayedLoading) {
+  			console.log('⏳ Client is delayed loading');
+  		} else if (!setup?.gpuReady || !colorReady) {
+  			console.log('⏸️ Waiting for conditions:', { gpuReady: setup?.gpuReady, colorReady });
+  		}
+  	});
+  
   	// Check if transforms modified channels (e.g., stack adds x0/x1)
-  	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
+  	let hasStackTransform = $derived.by(() => {
+  		const hasStack = transforms.some((t) => t.type === 'stack');
+  		console.log('📊 BarMarkX hasStackTransform:', {
+  			hasStack,
+  			transformCount: transforms.length,
+  			transformTypes: transforms.map((t) => t.type)
+  		});
+  		return hasStack;
+  	});
   
   	let dataStrategies = $derived({
   		x1: getSourceType(x1),
   		x2: getSourceType(x2),
   		y: getSourceType(y),
-  		color: getSourceType(color),
   		alpha: getSourceType(alpha)
+  	});
+  
+  	$effect(() => {
+  		console.log('🔍 Data strategies:', {
+  			alpha: dataStrategies.alpha,
+  			alphaProp: alpha,
+  			x1: dataStrategies.x1,
+  			x2: dataStrategies.x2
+  		});
+  	});
+  
+  	// Get or create color scale when in field mode
+  	$effect(() => {
+  		if (colorConfig.mode === 'field' && scaleRegistry) {
+  			untrack(() => {
+  				// Request color scale from registry
+  				colorScaleState = scaleRegistry.getOrCreateScale(
+  					colorConfig.field,
+  					'color',
+  					{ scheme: colorConfig.scheme },
+  					chartContext.chartId
+  				);
+  
+  				// Register table with color scale for ViewManager integration
+  				if (colorScaleState && table) {
+  					colorScaleState.registerTable(table);
+  				}
+  			});
+  		} else {
+  			colorScaleState = null;
+  		}
+  	});
+  
+  	// Pass color scale to setup for domain discovery via DISTINCT query
+  	$effect(() => {
+  		if (setup && colorScaleState && colorConfig.mode === 'field') {
+  			setup.setColorScale(colorScaleState);
+  		}
   	});
   
   	// X data - use x0/x1 from stack transform if present
   	let x0Data = $derived.by(() => {
+  		console.log('🔍 x0Data derived running:', {
+  			hasSetup: !!setup,
+  			hasData: !!setup?.data,
+  			instanceCount,
+  			dataLength: setup?.data?.length,
+  			dataType: setup?.data?.type
+  		});
+  
   		if (!setup?.data || !instanceCount) return null;
   
   		// If stack transform provided x0, use it
   		if (hasStackTransform) {
   			const x0Array = setup.data.getColumn('x0');
+  			const dataType = setup.data.type;
+  			console.log('📊 BarMarkX x0Data (stack mode):', {
+  				hasX0: !!x0Array,
+  				dataType,
+  				availableColumns: setup.data.columnNames,
+  				sampleX0: x0Array ? Array.from(x0Array.slice(0, 5)) : null,
+  				rawDataSample: dataType === 'objects' ? setup.data.data?.slice(0, 3) : 'arrow'
+  			});
   			if (x0Array) return x0Array;
   		}
   
   		// Otherwise use x1 prop (baseline)
-  		if (dataStrategies.x1.type === 'constant') {
+  		console.log('📊 BarMarkX x0Data (fallback to baseline):', {
+  			hasStackTransform,
+  			x1Strategy: dataStrategies.x1
+  		});
+  		if (dataStrategies.x1 === 'constant') {
   			const arr = new Float32Array(instanceCount);
-  			arr.fill(dataStrategies.x1.value);
+  			arr.fill(x1);
   			return arr;
   		}
   
@@ -9341,13 +12542,17 @@
   		// If stack transform provided x1, use it
   		if (hasStackTransform) {
   			const x1Array = setup.data.getColumn('x1');
+  			console.log('📊 BarMarkX x1Data (stack mode):', {
+  				hasX1: !!x1Array,
+  				sampleX1: x1Array ? Array.from(x1Array.slice(0, 5)) : null
+  			});
   			if (x1Array) return x1Array;
   		}
   
   		// Otherwise use x2 prop (data values)
-  		if (dataStrategies.x2.type === 'constant') {
+  		if (dataStrategies.x2 === 'constant') {
   			const arr = new Float32Array(instanceCount);
-  			arr.fill(dataStrategies.x2.value);
+  			arr.fill(x2);
   			return arr;
   		}
   
@@ -9393,44 +12598,25 @@
   	let y0Data = $derived(yData?.y0Data);
   	let y1Data = $derived(yData?.y1Data);
   
-  	// Color data
-  	let colorData = $derived.by(() => {
-  		if (!setup?.data || !instanceCount) return null;
-  
-  		console.log('🎨 colorData strategy:', dataStrategies.color);
-  
-  		if (dataStrategies.color === 'constant-color') {
-  			// Use the color prop directly!
-  			const rgba = new Float32Array(instanceCount * 4);
-  			const parsed = parseColor(color); // ← Use 'color' prop, not dataStrategies
-  
-  			console.log('🎨 Constant color parsed:', parsed);
-  
-  			for (let i = 0; i < instanceCount; i++) {
-  				rgba.set(parsed, i * 4);
-  			}
-  
-  			console.log('🎨 Color array created:', Array.from(rgba.slice(0, 12)));
-  
-  			return rgba;
-  		}
-  
-  		// Variable color needs colorScale
-  		if (!colorScale) return null;
+  	// Color value data (raw values for GPU lookup, or null for constant mode)
+  	let colorValueData = $derived.by(() => {
+  		if (colorConfig.mode !== 'field') return null;
+  		if (!setup?.data || !instanceCount || !colorScaleState?.ready) return null;
   
   		const colorArray = setup.data.getColumn('color');
   		if (!colorArray) return null;
   
-  		const rgba = new Float32Array(instanceCount * 4);
-  		for (let i = 0; i < instanceCount; i++) {
-  			const colorValue = colorArray[i];
-  			const fillColor = colorScale(colorValue);
-  			const parsed = parseColor(fillColor);
-  			rgba.set(parsed, i * 4);
-  		}
-  
-  		return rgba;
+  		// Use ColorScaleState to convert to GPU-ready values
+  		return colorScaleState.processDataForGPU(colorArray);
   	});
+  
+  	// Props for Rects renderer
+  	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
+  	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
+  	let constantColor = $derived(colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]);
+  
+  	// Ready check: include color scale readiness for field mode
+  	let colorReady = $derived(colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false));
   
   	// Alpha data
   	let alphaData = $derived.by(() => {
@@ -9438,8 +12624,8 @@
   
   		const alphas = new Float32Array(instanceCount);
   
-  		if (dataStrategies.alpha.type === 'constant') {
-  			alphas.fill(dataStrategies.alpha.value);
+  		if (dataStrategies.alpha === 'constant') {
+  			alphas.fill(alpha);
   		} else {
   			const alphaArray = setup.data.getColumn('alpha');
   			if (alphaArray) {
@@ -9454,17 +12640,6 @@
   		return alphas;
   	});
   
-  	// Helper to parse color
-  	function parseColor(color) {
-  		if (typeof color === 'string' && color.startsWith('#')) {
-  			const r = parseInt(color.slice(1, 3), 16) / 255;
-  			const g = parseInt(color.slice(3, 5), 16) / 255;
-  			const b = parseInt(color.slice(5, 7), 16) / 255;
-  			return [r, g, b, 1.0];
-  		}
-  		return [0.5, 0.5, 0.5, 1.0]; // Default gray
-  	}
-  
   	$effect(() => {
   		(void config, xScaleId, yScaleId);
   
@@ -9478,7 +12653,7 @@
   		setup?.destroy();
   	});
   
-    // Temp logging
+  	// Temp logging
   	$effect(() => {
   		if (chartContext?.yScaleState?.isReadyForGPU && chartContext.innerHeight) {
   			console.log('📏 Band scale calculations:', {
@@ -9489,16 +12664,30 @@
   			});
   		}
   	});
+  
+  	// Debug X scale domain
+  	$effect(() => {
+  		if (chartContext?.xScaleState) {
+  			console.log('📏 X Scale state:', {
+  				domain: chartContext.xScaleState.effectiveDomain,
+  				ready: chartContext.xScaleState.ready,
+  				type: chartContext.scaleTypes?.x
+  			});
+  		}
+  	});
   </script>
   
-  {#if setup?.gpuReady && x0Data && x1Data && y0Data && y1Data}
+  {#if setup?.gpuReady && colorReady && x0Data && x1Data && y0Data && y1Data}
   	<Rects
   		{x0Data}
   		{x1Data}
   		{y0Data}
   		{y1Data}
-  		{colorData}
+  		{colorValueData}
   		{alphaData}
+  		{colorMode}
+  		{colorScaleIndex}
+  		{constantColor}
   		dataVersion={setup.client.dataVersion}
   	/>
   {:else if setup?.client?.error}
@@ -9516,6 +12705,411 @@
   {/if}
 </src/lib/components/marks/BarMarkX.svelte>
 
+<src/lib/data/ViewManager.svelte.js>
+  // src/lib/data/ViewManager.svelte.js
+  
+  /**
+   * Escapes a value for use in SQL CASE expressions.
+   * @param {*} value - The value to escape
+   * @returns {string} SQL-safe string
+   */
+  function escapeSql(value) {
+  	if (value === null || value === undefined) return 'NULL';
+  	return `'${String(value).replace(/'/g, "''")}'`;
+  }
+  
+  /**
+   * ViewManager creates and manages DuckDB views that add computed index columns
+   * for categorical data. This moves the category-to-integer indexing from JavaScript
+   * into SQL, enabling zero-copy Float32 data flow to the GPU.
+   *
+   * Key features:
+   * - Lazy coordinator injection (setCoordinator)
+   * - Reference counting for column cleanup
+   * - Debounced view creation via queueMicrotask
+   * - Global domain (ignores crossfilters)
+   *
+   * Column naming conventions:
+   * - Color index: __dplot_{field}_color_idx (1-based, 0 = null/unknown)
+   * - Band index: __dplot_{field}_idx (0-based)
+   *
+   * View naming: {table}_derived
+   */
+  class ViewManagerService {
+  	// Map<sourceTable, Map<columnAlias, ColumnDefinition>>
+  	#tableDefinitions = new Map();
+  
+  	// Mosaic coordinator (set lazily)
+  	#coordinator = null;
+  
+  	// Map<sourceTable, Set<scaleId>> - tracks which scales use each table
+  	#referenceCount = new Map();
+  
+  	// REACTIVITY FIX: Reactive map for table states
+  	// When view is created, this triggers derivations to re-run
+  	#tableStates = $state(new Map()); // Map<sourceTable, { viewName, version }>
+  
+  	// Track tables with pending view creation - prevents eager client creation
+  	#pendingViews = $state(new Set());
+  
+  	// Global version counter - external code reads this to establish Svelte dependency
+  	// Incremented whenever any view state changes (pending or ready)
+  	version = $state(0);
+  
+  	// Pending view updates (debounced via queueMicrotask)
+  	#pendingUpdates = new Set();
+  	#updateScheduled = false;
+  
+  	// Cardinality warning threshold
+  	static CARDINALITY_WARNING = 50;
+  
+  	/**
+  	 * Set the Mosaic coordinator. Called lazily when coordinator becomes available.
+  	 * @param {Object} coordinator - Mosaic coordinator instance
+  	 */
+  	setCoordinator(coordinator) {
+  		if (this.#coordinator === coordinator) return;
+  
+  		this.#coordinator = coordinator;
+  		console.log('[ViewManager] Coordinator set');
+  
+  		// Rebuild any pending views now that we have a coordinator
+  		for (const table of this.#tableDefinitions.keys()) {
+  			this.#scheduleViewUpdate(table);
+  		}
+  	}
+  
+  	/**
+  	 * Get the Mosaic coordinator.
+  	 * @returns {Object|null}
+  	 */
+  	getCoordinator() {
+  		return this.#coordinator;
+  	}
+  
+  	/**
+  	 * Register a computed column for a source table.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @param {string} alias - Column alias (e.g., '__dplot_species_color_idx')
+  	 * @param {Object} definition - Column definition
+  	 * @param {string} definition.sql - SQL expression for the column
+  	 * @param {string} definition.source - Original source column name
+  	 * @param {string} definition.scaleId - ID of the scale registering this column
+  	 */
+  	registerColumn(sourceTable, alias, { sql, source, scaleId }) {
+  		// Get or create table definition map
+  		if (!this.#tableDefinitions.has(sourceTable)) {
+  			this.#tableDefinitions.set(sourceTable, new Map());
+  			this.#referenceCount.set(sourceTable, new Set());
+  		}
+  
+  		const columns = this.#tableDefinitions.get(sourceTable);
+  		const refs = this.#referenceCount.get(sourceTable);
+  
+  		// Check if column already exists with same SQL
+  		const existing = columns.get(alias);
+  		if (existing && existing.sql === sql) {
+  			// Same definition, just add reference
+  			refs.add(scaleId);
+  			console.log(`[ViewManager] Column ${alias} already registered for ${sourceTable}`);
+  			return;
+  		}
+  
+  		// Register the column
+  		columns.set(alias, { sql, source, scaleId });
+  		refs.add(scaleId);
+  
+  		console.log(`[ViewManager] Registered column ${alias} for ${sourceTable}:`, {
+  			sql: sql.slice(0, 100) + (sql.length > 100 ? '...' : ''),
+  			source,
+  			scaleId
+  		});
+  
+  		// Schedule view update
+  		this.#scheduleViewUpdate(sourceTable);
+  	}
+  
+  	/**
+  	 * Unregister a column when a scale is destroyed.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @param {string} alias - Column alias
+  	 * @param {string} scaleId - ID of the scale unregistering
+  	 */
+  	unregisterColumn(sourceTable, alias, scaleId) {
+  		if (!this.#tableDefinitions.has(sourceTable)) return;
+  
+  		const refs = this.#referenceCount.get(sourceTable);
+  		refs.delete(scaleId);
+  
+  		// If no more references to this table's columns from this scale, check column
+  		const columns = this.#tableDefinitions.get(sourceTable);
+  		const column = columns.get(alias);
+  
+  		if (column && column.scaleId === scaleId) {
+  			// Only remove if this scale owns the column
+  			columns.delete(alias);
+  			console.log(`[ViewManager] Unregistered column ${alias} for ${sourceTable}`);
+  
+  			// If no columns left, could potentially drop the view
+  			// For now, just schedule an update (view will have no extra columns)
+  			this.#scheduleViewUpdate(sourceTable);
+  		}
+  	}
+  
+  	/**
+  	 * Get the effective table name for queries.
+  	 * Returns the derived view name if view is ready, otherwise the source table.
+  	 * REACTIVITY: Reads version to establish Svelte dependency.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @returns {string} The table name to use in queries
+  	 */
+  	getEffectiveTable(sourceTable) {
+  		// Read version to establish reactive dependency for external callers
+  		void this.version;
+  		const state = this.#tableStates.get(sourceTable);
+  		return state ? state.viewName : sourceTable;
+  	}
+  
+  	/**
+  	 * Check if a derived view exists and is ready for a table.
+  	 * REACTIVITY: Reads version to establish Svelte dependency.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @returns {boolean}
+  	 */
+  	hasView(sourceTable) {
+  		void this.version;
+  		return this.#tableStates.has(sourceTable);
+  	}
+  
+  	/**
+  	 * Check if a view creation is pending/in-progress for a table.
+  	 * Used to prevent eager client creation before view is ready.
+  	 * REACTIVITY: Reads version to establish Svelte dependency.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @returns {boolean}
+  	 */
+  	isViewPending(sourceTable) {
+  		void this.version;
+  		return this.#pendingViews.has(sourceTable);
+  	}
+  
+  	/**
+  	 * Check if it's safe to create a client for this table.
+  	 * Returns true if either: no view is expected, or view is ready.
+  	 * Returns false if view creation is pending.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @returns {boolean}
+  	 */
+  	isReadyForClient(sourceTable) {
+  		void this.version;
+  		// If no columns registered, no view expected - safe to use source table
+  		if (!this.#tableDefinitions.has(sourceTable)) return true;
+  		// If view is pending, wait
+  		if (this.#pendingViews.has(sourceTable)) return false;
+  		// If view exists, it's ready
+  		return this.#tableStates.has(sourceTable);
+  	}
+  
+  	/**
+  	 * Get the reactive version for a table (for Svelte dependency tracking).
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @returns {number}
+  	 */
+  	getVersion(sourceTable) {
+  		const state = this.#tableStates.get(sourceTable);
+  		return state?.version ?? 0;
+  	}
+  
+  	/**
+  	 * Get registered column names for a table.
+  	 *
+  	 * @param {string} sourceTable - The base table name
+  	 * @returns {string[]} Array of column aliases
+  	 */
+  	getRegisteredColumns(sourceTable) {
+  		const columns = this.#tableDefinitions.get(sourceTable);
+  		return columns ? [...columns.keys()] : [];
+  	}
+  
+  	/**
+  	 * Build a CASE expression for categorical indexing.
+  	 * Returns CAST(...AS REAL) to ensure Float32Array from Arrow/DuckDB.
+  	 *
+  	 * @param {string} sourceColumn - The source column name
+  	 * @param {Array} domain - Array of category values
+  	 * @param {Object} options
+  	 * @param {boolean} [options.oneBased=false] - Use 1-based indexing (for colors)
+  	 * @returns {string} SQL CASE expression wrapped in CAST to REAL
+  	 */
+  	static buildCaseExpression(sourceColumn, domain, { oneBased = false } = {}) {
+  		if (!domain || domain.length === 0) {
+  			// Return float literal for empty domain
+  			return oneBased ? 'CAST(0 AS REAL)' : 'CAST(-1 AS REAL)';
+  		}
+  
+  		// Warn about high cardinality
+  		if (domain.length > ViewManagerService.CARDINALITY_WARNING) {
+  			console.warn(
+  				`[ViewManager] High cardinality warning: ${domain.length} categories for ${sourceColumn}. ` +
+  					`Consider using a continuous scale or binning.`
+  			);
+  		}
+  
+  		const offset = oneBased ? 1 : 0;
+  		const defaultValue = oneBased ? 0 : -1;
+  
+  		const whenClauses = domain
+  			.map((value, index) => `WHEN "${sourceColumn}" = ${escapeSql(value)} THEN ${index + offset}`)
+  			.join(' ');
+  
+  		// CRITICAL: Cast to REAL (Float32) so Arrow returns Float32Array, not Int32Array
+  		return `CAST(CASE ${whenClauses} ELSE ${defaultValue} END AS REAL)`;
+  	}
+  
+  	/**
+  	 * Build the column alias for a color index column.
+  	 * @param {string} field - The source field name
+  	 * @returns {string}
+  	 */
+  	static colorIndexColumn(field) {
+  		return `__dplot_${field}_color_idx`;
+  	}
+  
+  	/**
+  	 * Build the column alias for a band index column.
+  	 * @param {string} field - The source field name
+  	 * @returns {string}
+  	 */
+  	static bandIndexColumn(field) {
+  		return `__dplot_${field}_idx`;
+  	}
+  
+  	// =========================================================================
+  	// PRIVATE METHODS
+  	// =========================================================================
+  
+  	/**
+  	 * Schedule a view update for the next microtask (debounced).
+  	 */
+  	#scheduleViewUpdate(sourceTable) {
+  		this.#pendingUpdates.add(sourceTable);
+  
+  		// Mark as pending so clients know to wait
+  		this.#pendingViews.add(sourceTable);
+  		this.version++; // Trigger reactive updates
+  
+  		if (!this.#updateScheduled) {
+  			this.#updateScheduled = true;
+  			queueMicrotask(() => this.#flushUpdates());
+  		}
+  	}
+  
+  	/**
+  	 * Flush all pending view updates.
+  	 */
+  	async #flushUpdates() {
+  		this.#updateScheduled = false;
+  		const tables = [...this.#pendingUpdates];
+  		this.#pendingUpdates.clear();
+  
+  		for (const table of tables) {
+  			await this.#createOrUpdateView(table);
+  		}
+  	}
+  
+  	/**
+  	 * Create or update the derived view for a table.
+  	 */
+  	async #createOrUpdateView(sourceTable) {
+  		if (!this.#coordinator) {
+  			console.log(`[ViewManager] No coordinator, deferring view creation for ${sourceTable}`);
+  			this.#pendingViews.delete(sourceTable);
+  			this.version++;
+  			return;
+  		}
+  
+  		const columns = this.#tableDefinitions.get(sourceTable);
+  		if (!columns || columns.size === 0) {
+  			// No columns - remove from reactive state
+  			this.#tableStates.delete(sourceTable);
+  			this.#pendingViews.delete(sourceTable);
+  			this.version++;
+  			console.log(`[ViewManager] No columns for ${sourceTable}, skipping view creation`);
+  			return;
+  		}
+  
+  		// Version the view name to bust caches
+  		const currentVersion = (this.#tableStates.get(sourceTable)?.version ?? 0) + 1;
+  		const viewName = `${sourceTable}_derived_v${currentVersion}`;
+  
+  		// Build SELECT clause: all original columns + computed columns
+  		const computedColumns = [...columns.entries()]
+  			.map(([alias, def]) => `${def.sql} AS "${alias}"`)
+  			.join(',\n  ');
+  
+  		const sql = `CREATE OR REPLACE VIEW ${viewName} AS
+  SELECT *,
+    ${computedColumns}
+  FROM ${sourceTable}`;
+  
+  		console.log(`[ViewManager] Creating view ${viewName}:`, sql);
+  
+  		try {
+  			await this.#coordinator.exec(sql);
+  
+  			// Update reactive state - view is now ready
+  			this.#tableStates.set(sourceTable, { viewName, version: currentVersion });
+  			this.#pendingViews.delete(sourceTable);
+  			this.version++; // Trigger reactive updates - clients can now be created
+  
+  			console.log(`[ViewManager] View ${viewName} ready (version ${currentVersion})`);
+  		} catch (error) {
+  			console.error(`[ViewManager] Failed to create view ${viewName}:`, error);
+  			this.#pendingViews.delete(sourceTable);
+  			this.version++;
+  		}
+  	}
+  
+  	// =========================================================================
+  	// DEBUG
+  	// =========================================================================
+  
+  	/**
+  	 * Get debug information about the ViewManager state.
+  	 */
+  	getDebugInfo() {
+  		const tables = {};
+  		for (const [table, columns] of this.#tableDefinitions) {
+  			const state = this.#tableStates.get(table);
+  			tables[table] = {
+  				columns: Object.fromEntries(columns),
+  				references: [...(this.#referenceCount.get(table) || [])],
+  				version: state?.version ?? 0,
+  				viewName: state?.viewName ?? null,
+  				effectiveTable: this.getEffectiveTable(table)
+  			};
+  		}
+  		return {
+  			hasCoordinator: !!this.#coordinator,
+  			tables
+  		};
+  	}
+  }
+  
+  // Singleton instance
+  export const viewManager = new ViewManagerService();
+  
+  // Also export the class for testing
+  export { ViewManagerService };
+</src/lib/data/ViewManager.svelte.js>
+
 <src/lib/data/DataAccessor.js>
   // src/lib/data/DataAccessor.js
   
@@ -9524,39 +13118,59 @@
       this.arrowTable = arrowTable;
       this.type = 'arrow';
     }
-    
+  
     get length() {
       return this.arrowTable.numRows;
     }
-    
+  
+    get columnNames() {
+      return this.arrowTable.schema.fields.map(f => f.name);
+    }
+  
     getColumn(name) {
       const col = this.arrowTable.getChild(name);
       if (!col) return null;
-      
+  
+      // FAST PATH: Single chunk - try to return underlying buffer directly
+      if (col.data.length === 1) {
+        const raw = col.data[0].values;
+  
+        // Already Float32Array - zero copy!
+        if (raw instanceof Float32Array) {
+          return raw;
+        }
+  
+        // Numeric typed array - convert to Float32
+        if (ArrayBuffer.isView(raw) && typeof raw[0] === 'number') {
+          return new Float32Array(raw);
+        }
+      }
+  
+      // SLOW PATH: Multi-chunk or non-numeric - use toArray()
       const arr = col.toArray();
-      if (!arr) return null; // Safety check
-      
+      if (!arr) return null;
+  
       // Ensure Float32Array for numeric types
       if (arr instanceof Float32Array) {
         return arr;
       }
-      
+  
       if (arr instanceof Float64Array) {
         return new Float32Array(arr);
       }
-      
+  
       // Integer types → Float32
-      if (arr instanceof Int8Array || arr instanceof Int16Array || 
-          arr instanceof Int32Array || arr instanceof Uint8Array || 
+      if (arr instanceof Int8Array || arr instanceof Int16Array ||
+          arr instanceof Int32Array || arr instanceof Uint8Array ||
           arr instanceof Uint16Array || arr instanceof Uint32Array ||
           arr instanceof BigInt64Array || arr instanceof BigUint64Array) {
         return new Float32Array(arr);
       }
-      
+  
       // Non-numeric (strings, dates) - return as-is
       return arr;
     }
-    
+  
     toString() {
       return `ArrowDataAccessor(${this.length} rows)`;
     }
@@ -9568,9 +13182,14 @@
       this.type = 'objects';
       this._columnTypes = new Map();
     }
-    
+  
     get length() {
       return this.data.length;
+    }
+  
+    get columnNames() {
+      if (!this.data || this.data.length === 0) return [];
+      return Object.keys(this.data[0]);
     }
     
     getColumn(name) {
@@ -10125,26 +13744,49 @@
   
   export function stack(options = {}) {
     const { direction = 'vertical' } = options; // 'vertical' or 'horizontal'
-    
+  
     return {
       stage: 'js',
       type: 'stack',
       apply(data, config) {
         if (!data || data.length === 0) return data;
-        
+  
         // Determine grouping and value fields based on direction
         const groupField = direction === 'vertical' ? config.x : config.y;
         const valueField = direction === 'vertical' ? config.y : config.x;
-        
+  
+        console.log('📊 Stack transform:', {
+          direction,
+          groupField,
+          valueField,
+          config,
+          dataLength: data.length,
+          sampleRow: data[0],
+          sampleValueField: data[0]?.[valueField],
+          sampleGroupField: data[0]?.[groupField]
+        });
+  
         // Group by category
         const groups = d3.group(data, d => d[groupField]);
-        
+  
+        console.log('📊 Stack groups:', {
+          groupCount: groups.size,
+          groupKeys: Array.from(groups.keys()),
+          itemsPerGroup: Array.from(groups.entries()).map(([k, v]) => ({ key: k, count: v.length }))
+        });
+  
         const stacked = [];
         for (const [category, items] of groups) {
           let offset = 0;
-          for (const item of items) {
+          console.log(`📊 Stack group "${category}": ${items.length} items`);
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
             const value = item[valueField] || 0;
-            
+  
+            if (i < 3) {
+              console.log(`  📊 Item ${i}: valueField="${valueField}", value=${value}, offset=${offset}`);
+            }
+  
             if (direction === 'vertical') {
               stacked.push({
                 ...item,
@@ -10158,11 +13800,18 @@
                 x1: offset + value
               });
             }
-            
+  
             offset += value;
           }
         }
-        
+  
+        console.log('📊 Stack output:', {
+          outputLength: stacked.length,
+          sampleOutput: stacked.slice(0, 5),
+          x0Values: stacked.slice(0, 5).map(d => d.x0),
+          x1Values: stacked.slice(0, 5).map(d => d.x1)
+        });
+  
         return stacked;
       },
       channels: direction === 'vertical' ? ['y0', 'y1'] : ['x0', 'x1']
