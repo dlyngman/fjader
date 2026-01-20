@@ -1,30 +1,28 @@
 <script>
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { getScaleState } from '$lib/scales';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
 	import {
-		getSourceType,
-		processData,
-		processColorData,
-		processAlphaData,
-		buildSelectFromChannels
+		buildSelectFromChannels,
+		resolveChannel,
+		toFloat32
 	} from './utils/index.js';
 
 	let {
 		table,
 		selection,
 		x, // shorthand for x2
-		x1 = 0, // baseline (start of bars) - overridden by stack transform
-		x2 = x, // end of bars (the data values)
+		x1 = 0, // baseline
+		x2 = x, // end of bars
 		y, // categorical data
-		color,
+		color = null,
+		scheme = 'tableau10',
 		alpha = 0.8,
 		limit,
 		filterNulls = false,
-		transforms = [], // NEW: Transform pipeline
-
+		transforms = [],
 		padding,
 		paddingInner,
 		paddingOuter,
@@ -34,11 +32,30 @@
 	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
 	const coordinator = getContext('mosaic-coordinator');
 	const chartContext = getContext('chart');
-	const colorScale = $derived(getScaleState('color', 'ordinal'));
+	const scaleRegistry = getContext('scale-registry');
 
 	let setup = $state(null);
+	let colorScaleState = $state(null);
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
+
+	// Detect color type
+	const colorConfig = $derived.by(() => {
+		if (color == null) {
+			return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0] };
+		}
+		if (typeof color === 'object' && color.field) {
+			return { mode: 'field', field: color.field, scheme: color.scheme || scheme };
+		}
+		if (typeof color === 'string') {
+			if (isColorConstant(color)) {
+				return { mode: 'constant', value: parseColorToRGBA(color) };
+			} else {
+				return { mode: 'field', field: color, scheme: scheme };
+			}
+		}
+		return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0] };
+	});
 
 	const yScaleConfig = $derived.by(() => {
 		const config = {};
@@ -61,213 +78,187 @@
 		},
 		table,
 		selection,
-		select: buildSelectFromChannels({ x1, x2, y, color }),
-		transforms, // NEW: Pass transforms to setup
+		select: buildSelectFromChannels({
+			x1,
+			x2,
+			y,
+			...(colorConfig.mode === 'field' && { color: colorConfig.field })
+		}),
+		transforms,
 		clientOptions: {
 			limit,
 			filterNulls: filterNulls ? [x1, x2, y] : null
 		}
 	});
 
-	// NEW: Use data accessor
-	let instanceCount = $derived(setup?.data?.length || 0);
-
-	// Check if transforms modified channels (e.g., stack adds x0/x1)
-	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
-
-	let dataStrategies = $derived({
-		x1: getSourceType(x1),
-		x2: getSourceType(x2),
-		y: getSourceType(y),
-		color: getSourceType(color),
-		alpha: getSourceType(alpha)
+	// Support No-DB Mode: Determine count from DB data OR input arrays
+	let instanceCount = $derived.by(() => {
+		if (setup?.data?.length) return setup.data.length;
+		if (Array.isArray(x2)) return x2.length;
+		if (Array.isArray(y)) return y.length;
+		// @ts-ignore
+		if (ArrayBuffer.isView(x2)) return x2.length;
+		return 0;
 	});
 
-	// X data - use x0/x1 from stack transform if present
-	let x0Data = $derived.by(() => {
-		if (!setup?.data || !instanceCount) return null;
-
-		// If stack transform provided x0, use it
-		if (hasStackTransform) {
-			const x0Array = setup.data.getColumn('x0');
-			if (x0Array) return x0Array;
-		}
-
-		// Otherwise use x1 prop (baseline)
-		if (dataStrategies.x1.type === 'constant') {
-			const arr = new Float32Array(instanceCount);
-			arr.fill(dataStrategies.x1.value);
-			return arr;
-		}
-
-		return setup.data.getColumn('x1');
+	// Check if transforms modified channels
+	let hasStackTransform = $derived.by(() => {
+		return transforms.some((t) => t.type === 'stack');
 	});
 
-	let x1Data = $derived.by(() => {
-		if (!setup?.data || !instanceCount) return null;
+	// --- SETUP LIFECYCLE ---
 
-		// If stack transform provided x1, use it
-		if (hasStackTransform) {
-			const x1Array = setup.data.getColumn('x1');
-			if (x1Array) return x1Array;
-		}
-
-		// Otherwise use x2 prop (data values)
-		if (dataStrategies.x2.type === 'constant') {
-			const arr = new Float32Array(instanceCount);
-			arr.fill(dataStrategies.x2.value);
-			return arr;
-		}
-
-		return setup.data.getColumn('x2');
+	$effect(() => {
+		if (setup?.client?.error) console.error('Client Error:', setup.client.error.message);
 	});
 
-	// Y data - categorical (band scale)
-	let yData = $derived.by(() => {
-		if (!setup?.data || !instanceCount || !setup?.actualYScaleType) return null;
-
-		if (setup.actualYScaleType === 'band') {
-			const rawArray = setup.data.getColumn('y');
-			if (!rawArray) return null;
-
-			const indices = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
-
-			// Convert to rectangle coordinates
-			const y0Data = new Float32Array(instanceCount);
-			const y1Data = new Float32Array(instanceCount);
-
-			for (let i = 0; i < instanceCount; i++) {
-				const categoryIndex = indices[i];
-				y0Data[i] = categoryIndex;
-				y1Data[i] = categoryIndex;
-			}
-
-			console.log(`📊 BarMarkX Y data for band scale:`, {
-				instanceCount,
-				rawCategories: Array.from(rawArray.slice(0, 5)),
-				indices: Array.from(indices.slice(0, 5)),
-				y0Data: Array.from(y0Data.slice(0, 5)),
-				y1Data: Array.from(y1Data.slice(0, 5)), // ← Add this
-				scaleReady: chartContext.yScaleState.isReadyForGPU,
-				domain: Array.from(chartContext.yScaleState.effectiveDomain) // ← Convert to array
+	$effect(() => {
+		if (colorConfig.mode === 'field' && scaleRegistry) {
+			untrack(() => {
+				colorScaleState = scaleRegistry.getOrCreateScale(
+					colorConfig.field,
+					'color',
+					{ scheme: colorConfig.scheme },
+					chartContext.chartId
+				);
+				if (colorScaleState && table) {
+					colorScaleState.registerTable(table);
+				}
 			});
-
-			return { y0Data, y1Data };
+		} else {
+			colorScaleState = null;
 		}
+	});
 
-		return null;
+	$effect(() => {
+		if (setup && colorScaleState && colorConfig.mode === 'field') {
+			setup.setColorScale(colorScaleState);
+		}
+	});
+
+	// --- DATA RESOLUTION ---
+
+	// X0: Stack Output -> x1 prop -> 0
+	let x0Data = $derived.by(() => {
+		const raw = resolveChannel({
+			value: x1,
+			channel: 'x1',
+			tryColumns: hasStackTransform ? ['x0'] : undefined, 
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 0
+		});
+		return toFloat32(raw);
+	});
+
+	// X1: Stack Output -> x2 prop
+	let x1Data = $derived.by(() => {
+		const raw = resolveChannel({
+			value: x2,
+			channel: 'x2',
+			tryColumns: hasStackTransform ? ['x1'] : undefined,
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		return toFloat32(raw);
+	});
+
+	// Y: Categorical Resolution (Band Scale)
+	let yData = $derived.by(() => {
+		if (!instanceCount) return null;
+
+		// Pattern #3: Fallback scale type check
+		// In No-DB mode (no setup), we assume 'band' if chartContext hasn't resolved it yet
+		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y || 'band';
+		if (scaleType !== 'band') return null;
+
+		// 1. Get raw data (likely strings)
+		const raw = resolveChannel({
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+
+		if (!raw) return null;
+
+		// 2. Map to indices via scale
+		// Duck-typing check: Ensure the scale actually supports GPU data processing
+		if (!chartContext.yScaleState?.processDataForGPU) return null;
+
+		const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
+		const yArr = toFloat32(indices);
+		
+		return { y0Data: yArr, y1Data: yArr };
 	});
 
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	// Color data
-	let colorData = $derived.by(() => {
-		if (!setup?.data || !instanceCount) return null;
+	// Color: Field (Scale) vs Constant
+	let colorValueData = $derived.by(() => {
+		if (colorConfig.mode !== 'field') return null;
+		if (!colorScaleState?.ready) return null;
 
-		console.log('🎨 colorData strategy:', dataStrategies.color);
+		const raw = resolveChannel({
+			value: colorConfig.field,
+			channel: 'color',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
 
-		if (dataStrategies.color === 'constant-color') {
-			// Use the color prop directly!
-			const rgba = new Float32Array(instanceCount * 4);
-			const parsed = parseColor(color); // ← Use 'color' prop, not dataStrategies
-
-			console.log('🎨 Constant color parsed:', parsed);
-
-			for (let i = 0; i < instanceCount; i++) {
-				rgba.set(parsed, i * 4);
-			}
-
-			console.log('🎨 Color array created:', Array.from(rgba.slice(0, 12)));
-
-			return rgba;
-		}
-
-		// Variable color needs colorScale
-		if (!colorScale) return null;
-
-		const colorArray = setup.data.getColumn('color');
-		if (!colorArray) return null;
-
-		const rgba = new Float32Array(instanceCount * 4);
-		for (let i = 0; i < instanceCount; i++) {
-			const colorValue = colorArray[i];
-			const fillColor = colorScale(colorValue);
-			const parsed = parseColor(fillColor);
-			rgba.set(parsed, i * 4);
-		}
-
-		return rgba;
+		if (!raw) return null;
+		return colorScaleState.processDataForGPU(raw);
 	});
 
-	// Alpha data
+	// Alpha: Constant or Data
 	let alphaData = $derived.by(() => {
-		if (!instanceCount) return null;
-
-		const alphas = new Float32Array(instanceCount);
-
-		if (dataStrategies.alpha.type === 'constant') {
-			alphas.fill(dataStrategies.alpha.value);
-		} else {
-			const alphaArray = setup.data.getColumn('alpha');
-			if (alphaArray) {
-				for (let i = 0; i < instanceCount; i++) {
-					alphas[i] = alphaArray[i];
-				}
-			} else {
-				alphas.fill(0.8);
-			}
-		}
-
-		return alphas;
+		const raw = resolveChannel({
+			value: alpha,
+			channel: 'alpha',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 0.8
+		});
+		return toFloat32(raw);
 	});
 
-	// Helper to parse color
-	function parseColor(color) {
-		if (typeof color === 'string' && color.startsWith('#')) {
-			const r = parseInt(color.slice(1, 3), 16) / 255;
-			const g = parseInt(color.slice(3, 5), 16) / 255;
-			const b = parseInt(color.slice(5, 7), 16) / 255;
-			return [r, g, b, 1.0];
-		}
-		return [0.5, 0.5, 0.5, 1.0]; // Default gray
-	}
+	// --- RENDERER PROPS ---
+
+	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
+	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
+	let constantColor = $derived(colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]);
+	let colorReady = $derived(colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false));
 
 	$effect(() => {
 		(void config, xScaleId, yScaleId);
-
 		untrack(() => {
 			setup?.destroy();
-			setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			// Pattern #2: Conditional Setup Creation
+			if (table) {
+				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			}
 		});
 	});
 
 	onDestroy(() => {
 		setup?.destroy();
 	});
-
-	// Temp logging
-	$effect(() => {
-		if (chartContext?.yScaleState?.isReadyForGPU && chartContext.innerHeight) {
-			console.log('📏 Band scale calculations:', {
-				innerHeight: chartContext.innerHeight,
-				categoryCount: chartContext.yScaleState.effectiveDomain.length,
-				bandwidth: chartContext.yScaleState.bandwidth(chartContext.innerHeight),
-				step: chartContext.yScaleState.step(chartContext.innerHeight)
-			});
-		}
-	});
 </script>
 
-{#if setup?.gpuReady && x0Data && x1Data && y0Data && y1Data}
+<!-- Pattern #1: No-DB Render Condition -->
+{#if (setup?.gpuReady || !table) && colorReady && x0Data && x1Data && y0Data && y1Data}
 	<Rects
 		{x0Data}
 		{x1Data}
 		{y0Data}
 		{y1Data}
-		{colorData}
+		{colorValueData}
 		{alphaData}
-		dataVersion={setup.client.dataVersion}
+		{colorMode}
+		{colorScaleIndex}
+		{constantColor}
+		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">

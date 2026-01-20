@@ -10,6 +10,10 @@ export class ArrowDataAccessor {
     return this.arrowTable.numRows;
   }
 
+  get columnNames() {
+    return this.arrowTable.schema.fields.map(f => f.name);
+  }
+
   getColumn(name) {
     const col = this.arrowTable.getChild(name);
     if (!col) return null;
@@ -65,9 +69,14 @@ export class ObjectDataAccessor {
     this.type = 'objects';
     this._columnTypes = new Map();
   }
-  
+
   get length() {
     return this.data.length;
+  }
+
+  get columnNames() {
+    if (!this.data || this.data.length === 0) return [];
+    return Object.keys(this.data[0]);
   }
   
   getColumn(name) {

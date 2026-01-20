@@ -1,11 +1,13 @@
-// export { 
+// export {
 //   getSourceType, processData, buildSelectFromChannels } from './data-processing.js';
 
-export { 
+export {
   getSourceType,
-  processData, 
-  processAlphaData, 
+  processData,
+  processAlphaData,
   processColorData,
   parseColor,
-  buildSelectFromChannels 
+  buildSelectFromChannels
 } from './data-processing.js';
+
+export { resolveChannel, toFloat32 } from './channel-resolution.js';

@@ -4,14 +4,15 @@
 	import { Dots } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
+	import { buildSelectFromChannels, resolveChannel, toFloat32 } from './utils/index.js';
 
 	let {
 		table,
 		selection,
 		x,
 		y,
-		color = null,        // Can be: null, "#ff0000", "red", "fieldName", { field, scheme }
-		scheme = 'tableau10', // Default scheme for field-based color
+		color = null,
+		scheme = 'tableau10',
 		alpha = 0.5,
 		radius = 3,
 		limit,
@@ -31,52 +32,28 @@
 
 	// Detect color type
 	const colorConfig = $derived.by(() => {
-		// No color prop → constant default
 		if (color == null) {
-			return {
-				mode: 'constant',
-				value: [0.13, 0.55, 0.13, 1.0] // Default forest green
-			};
+			return { mode: 'constant', value: [0.13, 0.55, 0.13, 1.0] };
 		}
-
-		// Object form: { field: 'species', scheme: 'category10' }
 		if (typeof color === 'object' && color.field) {
-			return {
-				mode: 'field',
-				field: color.field,
-				scheme: color.scheme || scheme
-			};
+			return { mode: 'field', field: color.field, scheme: color.scheme || scheme };
 		}
-
-		// String: could be constant ("#ff0000", "red") or field name ("species")
 		if (typeof color === 'string') {
 			if (isColorConstant(color)) {
-				return {
-					mode: 'constant',
-					value: parseColorToRGBA(color)
-				};
+				return { mode: 'constant', value: parseColorToRGBA(color) };
 			} else {
-				// Treat as field name
-				return {
-					mode: 'field',
-					field: color,
-					scheme: scheme
-				};
+				return { mode: 'field', field: color, scheme: scheme };
 			}
 		}
-
-		// Fallback
-		return {
-			mode: 'constant',
-			value: [0.13, 0.55, 0.13, 1.0]
-		};
+		return { mode: 'constant', value: [0.13, 0.55, 0.13, 1.0] };
 	});
 
-	// Build select config based on color mode
+	// Build select config: Include radius if it's a string (field name)
 	const selectConfig = $derived({
 		x,
 		y,
-		...(colorConfig.mode === 'field' && { color: colorConfig.field })
+		...(colorConfig.mode === 'field' && { color: colorConfig.field }),
+		...(typeof radius === 'string' && { radius: radius })
 	});
 
 	const config = $derived({
@@ -101,21 +78,27 @@
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
-	let instanceCount = $derived(setup?.data?.length || 0);
 
-	// Get or create color scale when in field mode
+	// Support No-DB Mode: Determine count from DB data OR input arrays
+	let instanceCount = $derived.by(() => {
+		if (setup?.data?.length) return setup.data.length;
+		if (Array.isArray(x)) return x.length;
+		if (Array.isArray(y)) return y.length;
+		if (ArrayBuffer.isView(x)) return x.length;
+		return 0;
+	});
+
+	// --- SETUP LIFECYCLE ---
+
 	$effect(() => {
 		if (colorConfig.mode === 'field' && scaleRegistry) {
 			untrack(() => {
-				// Request color scale from registry
 				colorScaleState = scaleRegistry.getOrCreateScale(
 					colorConfig.field,
 					'color',
 					{ scheme: colorConfig.scheme },
 					chartContext.chartId
 				);
-
-				// Register table with color scale for ViewManager integration
 				if (colorScaleState && table) {
 					colorScaleState.registerTable(table);
 				}
@@ -125,105 +108,141 @@
 		}
 	});
 
-	// Pass color scale to setup for domain discovery via DISTINCT query
-	// This must happen before categorical fetch completes
 	$effect(() => {
 		if (setup && colorScaleState && colorConfig.mode === 'field') {
 			setup.setColorScale(colorScaleState);
 		}
 	});
 
-	// X data
+	// --- DATA RESOLUTION ---
+
+	// X Data: Handles both Numeric and Categorical (Band/Point)
 	let xData = $derived.by(() => {
-		if (!setup?.data || setup.data.length === 0) return null;
+		if (!instanceCount) return null;
 
-		const rawArray = setup.data.getColumn('x');
-		if (!rawArray) return null;
+		// 1. Resolve Raw Data
+		const raw = resolveChannel({
+			value: x,
+			channel: 'x',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
 
-		if (setup.actualXScaleType === 'band' || setup.actualXScaleType === 'point') {
-			const processed = chartContext.xScaleState.processDataForGPU(rawArray, setup.markId);
-			return processed instanceof Float32Array ? processed : new Float32Array(processed);
+		if (!raw) return null;
+
+		// 2. Check Scale Type (Categorical vs Continuous)
+		// Use setup type (DB mode) or context type (No-DB mode)
+		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
+		const isCategorical = scaleType === 'band' || scaleType === 'point';
+
+		if (isCategorical) {
+			if (!chartContext.xScaleState) return null;
+			// Map strings -> indices
+			const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
+			return toFloat32(indices);
 		}
 
-		return rawArray;
+		// Continuous (Linear, Log, Time)
+		return toFloat32(raw);
 	});
 
-	// Y data
+	// Y Data: Handles both Numeric and Categorical
 	let yData = $derived.by(() => {
-		if (!setup?.data || setup.data.length === 0) return null;
+		if (!instanceCount) return null;
 
-		const rawArray = setup.data.getColumn('y');
-		if (!rawArray) return null;
+		const raw = resolveChannel({
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
 
-		if (setup.actualYScaleType === 'band' || setup.actualYScaleType === 'point') {
-			const processed = chartContext.yScaleState.processDataForGPU(rawArray, setup.markId);
-			return processed instanceof Float32Array ? processed : new Float32Array(processed);
+		if (!raw) return null;
+
+		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y;
+		const isCategorical = scaleType === 'band' || scaleType === 'point';
+
+		if (isCategorical) {
+			if (!chartContext.yScaleState) return null;
+			const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
+			return toFloat32(indices);
 		}
 
-		return rawArray;
+		return toFloat32(raw);
 	});
 
-	// Color value data (raw values for GPU lookup, or null for constant mode)
+	// Color Data
 	let colorValueData = $derived.by(() => {
 		if (colorConfig.mode !== 'field') return null;
-		if (!setup?.data || !instanceCount || !colorScaleState?.ready) return null;
+		if (!colorScaleState?.ready) return null;
 
-		const colorArray = setup.data.getColumn('color');
-		if (!colorArray) return null;
+		const raw = resolveChannel({
+			value: colorConfig.field,
+			channel: 'color',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
 
-		// Use ColorScaleState to convert to GPU-ready values
-		return colorScaleState.processDataForGPU(colorArray);
+		if (!raw) return null;
+		return colorScaleState.processDataForGPU(raw);
 	});
 
-	// Radius data
+	// Radius Data: Function -> Field -> Constant
 	let radiusData = $derived.by(() => {
 		if (!instanceCount) return null;
 
-		const radii = new Float32Array(instanceCount);
-
+		// 1. Function Strategy (CPU calculation)
 		if (typeof radius === 'function') {
-			const xArray = setup?.data?.getColumn('x');
-			const yArray = setup?.data?.getColumn('y');
+			const xArr = setup?.data?.getColumn('x');
+			const yArr = setup?.data?.getColumn('y');
+			if (!xArr || !yArr) return null;
 
-			if (!xArray || !yArray) return null;
-
+			const radii = new Float32Array(instanceCount);
 			for (let i = 0; i < instanceCount; i++) {
-				radii[i] = radius({ x: xArray[i], y: yArray[i] });
+				radii[i] = radius({ x: xArr[i], y: yArr[i] });
 			}
-		} else {
-			radii.fill(radius);
+			return radii;
 		}
 
-		return radii;
+		// 2. Standard Resolution (Field 'radius' or Constant Prop)
+		const raw = resolveChannel({
+			value: radius,
+			channel: 'radius',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 3
+		});
+
+		return toFloat32(raw);
 	});
 
-	// Alpha data
-	let alphaData = $derived.by(() => {
-		if (!instanceCount) return null;
+	// Alpha Data
+	let alphaData = $derived(
+		toFloat32(
+			resolveChannel({
+				value: alpha,
+				channel: 'alpha',
+				dataAccessor: setup?.data,
+				instanceCount,
+				fallback: 0.5
+			})
+		)
+	);
 
-		const alphas = new Float32Array(instanceCount);
-		alphas.fill(alpha);
-		return alphas;
-	});
+	// --- RENDERER PROPS ---
 
-	// Props for Dots renderer
 	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
 	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
-	let constantColor = $derived(
-		colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]
-	);
-
-	// Ready check: include color scale readiness for field mode
-	let colorReady = $derived(
-		colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false)
-	);
+	let constantColor = $derived(colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]);
+	let colorReady = $derived(colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false));
 
 	$effect(() => {
 		(void config, xScaleId, yScaleId);
-
 		untrack(() => {
 			setup?.destroy();
-			setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			if (table) {
+				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			}
 		});
 	});
 
@@ -232,7 +251,7 @@
 	});
 </script>
 
-{#if setup?.gpuReady && colorReady && xData && yData}
+{#if (setup?.gpuReady || !table) && colorReady && xData && yData}
 	<Dots
 		{xData}
 		{yData}
@@ -242,7 +261,7 @@
 		{colorMode}
 		{colorScaleIndex}
 		{constantColor}
-		dataVersion={setup.client.dataVersion}
+		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
