@@ -13,9 +13,8 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-		BarMark
+		BarMarkX
 	} from '$lib/components';
-  import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 
 	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
 

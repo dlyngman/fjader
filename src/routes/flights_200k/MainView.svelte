@@ -15,7 +15,6 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-		BarMark
 	} from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');

@@ -12,11 +12,11 @@ export class BaseGPURenderer {
 
 	// Resource tracking (Exclusive resources only)
 	#ownedResources = {
-		buffers: [],
+		buffers: new Map(), // bindingIndex -> GPUBuffer
 		layerControl: null
 	};
 
-	// State management (Reactive - drives UI)
+	// State management
 	#resourcesCreated = $state(false);
 	#initializationError = $state(null);
 	#instanceCount = $state(0);
@@ -26,10 +26,11 @@ export class BaseGPURenderer {
 	#pipeline = null;
 	#perDataBindGroup = $state(null);
 	#perDataLayout = null;
+	#dataBindingConfig = null; // Store config for rebuilding bind groups
 
 	#dummyBuffer = null;
+	#bindGroupUpdateScheduled = false;
 
-	#dataBindingConfig = null;
 	#zIndex;
 	#xScaleType;
 	#yScaleType;
@@ -39,46 +40,22 @@ export class BaseGPURenderer {
 		this.#webGPUContext = webGPUContext;
 		this.#gpuCoordinator = gpuCoordinator;
 		this.#chartContext = chartContext;
-
-		// Unique ID for the Resource Registry
 		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
-
 		this.#zIndex = options.zIndex || 0;
 		this.#xScaleType = options.xScaleType || 'linear';
 		this.#yScaleType = options.yScaleType || 'linear';
 	}
 
-	// ===== PUBLIC GETTERS =====
-
-	get resourcesCreated() {
-		return this.#resourcesCreated;
-	}
-	get initializationError() {
-		return this.#initializationError;
-	}
-	get instanceCount() {
-		return this.#instanceCount;
-	}
-	get pipeline() {
-		return this.#pipeline;
-	}
-	get markType() {
-		return this.#markType;
-	}
-	get perDataBindGroup() {
-		return this.#perDataBindGroup;
-	}
-
-	// ===== INITIALIZATION =====
+	// ... Getters (resourcesCreated, etc.) ...
+	get resourcesCreated() { return this.#resourcesCreated; }
+	get instanceCount() { return this.#instanceCount; }
+	get pipeline() { return this.#pipeline; }
+	get perDataBindGroup() { return this.#perDataBindGroup; }
 
 	async initialize(config) {
 		if (this.#isDestroyed) return;
-
-		// Async Race Protection: Increment generation
-		// Any previous pending initialization will see mismatching generation and abort
 		const currentGen = ++this.#initGeneration;
 
-		// If re-initializing, clean up previous shared resources via Registry
 		if (this.#resourcesCreated) {
 			this.#gpuCoordinator.releaseRenderer(this.#rendererId);
 			this.#resourcesCreated = false;
@@ -87,20 +64,12 @@ export class BaseGPURenderer {
 		try {
 			const { dataBindingConfig, markShaderCode, vertexBufferLayout, rendererDefinition } = config;
 
-			if (!dataBindingConfig) {
-				throw new Error(`${this.#markType} renderer requires dataBindingConfig`);
-			}
-
-			this.#device = this.#webGPUContext.getDevice();
-			if (!this.#device) {
-				throw new Error('No WebGPU device available from context');
-			}
-
+			// 1. Store config for later use in writeAttribute/rebuildBindGroup
 			this.#dataBindingConfig = dataBindingConfig;
 
-			// ACQUIRE VIA REGISTRY
-			// Coordinator handles keying, caching, and ref-counting
-			// We just identify ourselves with rendererId
+			this.#device = this.#webGPUContext.getDevice();
+			if (!this.#device) throw new Error('No WebGPU device available');
+
 			const result = await this.#gpuCoordinator.acquirePipeline(
 				this.#rendererId,
 				this.#markType,
@@ -111,13 +80,10 @@ export class BaseGPURenderer {
 				markShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
-				rendererDefinition // Pass through to coordinator
+				rendererDefinition
 			);
 
-			// POST-AWAIT SAFETY CHECK
-			// If destroyed or a newer init call happened while we were awaiting, abort and cleanup
 			if (this.#isDestroyed || this.#initGeneration !== currentGen) {
-				console.warn(`${this.#markType}: Stale initialization detected, discarding.`);
 				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
 				return;
 			}
@@ -126,7 +92,10 @@ export class BaseGPURenderer {
 			this.#perDataLayout = result.dataLayout;
 			this.#resourcesCreated = true;
 
-			console.log(`${this.#markType} renderer initialized (${this.#rendererId})`);
+			// Initial empty bind group
+			this.#rebuildBindGroup();
+
+			console.log(`${this.#markType} renderer initialized`);
 		} catch (error) {
 			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
 				console.error(`${this.#markType} initialization failed:`, error);
@@ -135,125 +104,115 @@ export class BaseGPURenderer {
 			}
 		}
 	}
-	// ===== BIND GROUP CREATION =====
 
-	
+	// ===== HIGH-LEVEL DATA API =====
+
 	/**
-	 * Create the per-data bind group.
-	 * Automatically fills missing bindings with a dummy buffer.
-	 * This allows optional buffers (like colorValues in constant mode) to be omitted.
-	 *
-	 * @param {Array<{binding: number, resource: {buffer: GPUBuffer}}>} providedBindings
+	 * Write data to a specific shader binding.
+	 * Handles buffer creation, smart resizing, and bind group invalidation.
+	 * 
+	 * @param {number} binding - Shader binding index (use constants!)
+	 * @param {ArrayBufferView} data - Float32Array, etc.
 	 */
-	createDataBindGroup(providedBindings) {
-		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) {
-			console.warn(
-				`Cannot create per-data bind group for ${this.#markType} - missing device, layout, or config`
-			);
-			return;
-		}
+	writeAttribute(binding, data) {
+		if (!this.#device || !data) return;
 
-		try {
-			// Create a map for quick lookup of provided bindings
-			const bindingMap = new Map(providedBindings.map((entry) => [entry.binding, entry.resource]));
+		let buffer = this.#ownedResources.buffers.get(binding);
+		const requiredSize = data.byteLength;
 
-			// Build final entries based on config, auto-filling missing bindings
-			const finalEntries = this.#dataBindingConfig.map((config) => {
-				const suppliedResource = bindingMap.get(config.binding);
+		// 1. Create or Resize if needed
+		if (!buffer || buffer.size < requiredSize) {
+			if (buffer) buffer.destroy();
 
-				if (suppliedResource) {
-					// Component provided this binding → use it
-					return { binding: config.binding, resource: suppliedResource };
-				}
+			// Smart resizing (1.5x growth) to prevent thrashing
+			const MEMORY_BLOCK_SIZE = 256;
+			const desiredSize = Math.ceil(requiredSize * 1.5);
+			const size = (Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE + 3) & ~3;
 
-				// Component didn't provide this binding → use dummy buffer
-				// This is safe when the shader conditionally skips reading (e.g., colorMode == 0)
-				console.debug(
-					`[${this.#markType}] Binding ${config.binding} not provided, using dummy buffer`
-				);
-
-				return {
-					binding: config.binding,
-					resource: { buffer: this.#sharedDummyBuffer }
-				};
+			buffer = this.#device.createBuffer({
+				size,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+				label: `${this.#markType}-binding-${binding}`
 			});
 
-			this.#perDataBindGroup = this.#device.createBindGroup({
-				label: `${this.#markType}-per-data-bind-group`,
-				layout: this.#perDataLayout,
-				entries: finalEntries
-			});
-
-			console.debug(
-				`Per-data bind group (@group(1)) created for ${this.#markType} with ${finalEntries.length} bindings`
-			);
-		} catch (error) {
-			console.error(`Failed to create per-data bind group for ${this.#markType}:`, error);
-			this.#initializationError = error.message;
-			throw error;
+			this.#ownedResources.buffers.set(binding, buffer);
+			
+			// Buffer reference changed -> Rebuild BindGroup
+			this.#scheduleBindGroupUpdate();
 		}
+
+		// 2. Write Data (Fine-grained: only touches this buffer)
+		this.#device.queue.writeBuffer(buffer, 0, data);
 	}
 
 	/**
-	 * Lazy-loaded dummy buffer for satisfying empty bindings.
-	 * Used when a binding is optional (e.g., colorValues in constant color mode).
-	 * @private
+	 * Write data to a uniform binding.
+	 * @param {number} binding 
+	 * @param {ArrayBufferView} data 
 	 */
+	writeUniform(binding, data) {
+		if (!this.#device || !data) return;
+
+		let buffer = this.#ownedResources.buffers.get(binding);
+		
+		// Uniforms rarely resize, but logic is same for consistency
+		if (!buffer || buffer.size < data.byteLength) {
+			if (buffer) buffer.destroy();
+			
+			buffer = this.#device.createBuffer({
+				size: data.byteLength,
+				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+				label: `${this.#markType}-uniform-${binding}`
+			});
+			this.#ownedResources.buffers.set(binding, buffer);
+			this.#scheduleBindGroupUpdate();
+		}
+
+		this.#device.queue.writeBuffer(buffer, 0, data);
+	}
+
+	// ===== INTERNAL HELPERS =====
+
+	#scheduleBindGroupUpdate() {
+		if (this.#bindGroupUpdateScheduled) return;
+		this.#bindGroupUpdateScheduled = true;
+
+		queueMicrotask(() => {
+			this.#rebuildBindGroup();
+			this.#bindGroupUpdateScheduled = false;
+			// Invalidate layer to ensure a redraw happens with new bindings
+			this.invalidateLayer();
+		});
+	}
+
+	#rebuildBindGroup() {
+		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) return;
+
+		// Map stored buffers to config entries
+		const entries = this.#dataBindingConfig.map(config => {
+			const buffer = this.#ownedResources.buffers.get(config.binding);
+			return {
+				binding: config.binding,
+				resource: { buffer: buffer || this.#sharedDummyBuffer }
+			};
+		});
+
+		this.#perDataBindGroup = this.#device.createBindGroup({
+			label: `${this.#markType}-dynamic-bind-group`,
+			layout: this.#perDataLayout,
+			entries
+		});
+	}
+
 	get #sharedDummyBuffer() {
 		if (!this.#dummyBuffer) {
 			this.#dummyBuffer = this.#device.createBuffer({
-				size: 4, // Minimum size, 4-byte aligned
+				size: 16, // Minimum size
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-				label: `${this.#markType}-dummy-fallback`
+				label: `${this.#markType}-dummy`
 			});
 		}
 		return this.#dummyBuffer;
-	}
-
-	// ===== BUFFER MANAGEMENT (Exclusive Resources) =====
-
-	createOrUpdateBuffer(
-		existingBuffer,
-		data,
-		usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-	) {
-		if (!this.#device) {
-			throw new Error('No WebGPU device available');
-		}
-
-		const requiredSize = data.byteLength;
-
-		// Smart buffer resizing to prevent thrashing
-		if (!existingBuffer || existingBuffer.size < requiredSize) {
-			if (existingBuffer) {
-				const index = this.#ownedResources.buffers.indexOf(existingBuffer);
-				if (index !== -1) {
-					this.#ownedResources.buffers.splice(index, 1);
-				}
-				existingBuffer.destroy();
-			}
-
-			// Smart sizing with headroom
-			const MEMORY_BLOCK_SIZE = 256;
-			const desiredSize = Math.ceil(requiredSize * 1.5);
-			const roundedUpSize = Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE;
-			let bufferSize = Math.max(requiredSize, roundedUpSize);
-			bufferSize = (bufferSize + 3) & ~3; // 4-byte alignment
-
-			const newBuffer = this.#device.createBuffer({
-				size: bufferSize,
-				usage,
-				label: `${this.#markType}-data-buffer-${this.#ownedResources.buffers.length}`
-			});
-
-			this.#ownedResources.buffers.push(newBuffer);
-			console.debug(
-				`Created ${this.#markType} buffer of size ${bufferSize} bytes (required: ${requiredSize})`
-			);
-			return newBuffer;
-		}
-
-		return existingBuffer;
 	}
 
 	updateInstanceCount(count) {
@@ -262,25 +221,14 @@ export class BaseGPURenderer {
 	}
 
 	registerLayer(drawFunction) {
-		try {
-			const chartId = this.#chartContext.chartId;
-
-			const layerConfig = {
-				draw: drawFunction,
-				markType: this.#markType,
-				renderer: this,
-				componentId: `${this.#markType}-${crypto.randomUUID().slice(0, 6)}`
-			};
-
-			this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, layerConfig);
-
-			console.log(`${this.#markType} layer registered with coordinator for chart ${chartId}`);
-			return this.#ownedResources.layerControl;
-		} catch (error) {
-			console.error(`${this.#markType} layer registration failed:`, error);
-			this.#initializationError = error.message;
-			throw error;
-		}
+		const chartId = this.#chartContext.chartId;
+		this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, {
+			draw: drawFunction,
+			markType: this.#markType,
+			renderer: this,
+			componentId: this.#rendererId
+		});
+		return this.#ownedResources.layerControl;
 	}
 
 	invalidateLayer() {
@@ -289,94 +237,26 @@ export class BaseGPURenderer {
 		}
 	}
 
-	// ===== DATA PROCESSING HELPERS =====
-
-	processDataForAxis(data, axis) {
-		const scaleType = axis === 'x' ? this.#xScaleType : this.#yScaleType;
-		const scaleState =
-			axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
-
-		switch (scaleType) {
-			case 'linear':
-			case 'identity':
-				return new Float32Array(data.map((d) => d ?? 0));
-
-			case 'band':
-			case 'point':
-				return scaleState.processDataForGPU(data, this.#markType);
-
-			case 'log':
-				return new Float32Array(data.map((d) => Math.log(Math.max(d || 1, 1))));
-
-			case 'time':
-				return new Float32Array(data.map((d) => (d instanceof Date ? d.getTime() : d || 0)));
-
-			default:
-				console.warn(`Unknown scale type: ${scaleType}, treating as linear`);
-				return new Float32Array(data.map((d) => d ?? 0));
-		}
-	}
-
-	// ===== UTILITY METHODS =====
-
-	parseColor(color) {
-		try {
-			if (typeof color === 'string' && color.startsWith('#')) {
-				const r = parseInt(color.slice(1, 3), 16) / 255;
-				const g = parseInt(color.slice(3, 5), 16) / 255;
-				const b = parseInt(color.slice(5, 7), 16) / 255;
-				return [r, g, b, 1.0];
-			}
-			console.warn(`Unrecognized color format: ${color}, using default blue`);
-			return [0.0, 0.0, 1.0, 1.0];
-		} catch (error) {
-			console.error(`Color parsing failed for ${this.#markType}:`, error);
-			return [0.0, 0.0, 1.0, 1.0];
-		}
-	}
-
-	// ===== CLEANUP =====
-
 	destroy() {
 		this.#isDestroyed = true;
-		// Bump generation so any pending init aborts
 		this.#initGeneration++;
 
-		console.log(`Cleaning up ${this.#markType} renderer (${this.#rendererId})`);
-
-		try {
-			// 1. Clean up EXCLUSIVE resources (buffers owned only by this renderer)
-			this.#ownedResources.buffers.forEach((buffer) => {
-				if (buffer) buffer.destroy();
-			});
-			this.#ownedResources.buffers = [];
-
-			// 2. Clean up dummy buffer
-			if (this.#dummyBuffer) {
-				this.#dummyBuffer.destroy();
-				this.#dummyBuffer = null;
-			}
-
-			// 3. Clean up layer registration
-			if (this.#ownedResources.layerControl) {
-				this.#ownedResources.layerControl.remove();
-				this.#ownedResources.layerControl = null;
-			}
-
-			// 4. Clean up SHARED resources via Registry
-			if (this.#gpuCoordinator) {
-				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
-			}
-
-			// Clear references
-			this.#pipeline = null;
-			this.#perDataBindGroup = null;
-			this.#perDataLayout = null;
-			this.#device = null;
-
-			console.log(`${this.#markType} renderer cleanup complete`);
-		} catch (error) {
-			console.error(`Error during ${this.#markType} renderer cleanup:`, error);
+		// Clean up buffers
+		for (const buffer of this.#ownedResources.buffers.values()) {
+			buffer.destroy();
 		}
+		this.#ownedResources.buffers.clear();
+
+		if (this.#dummyBuffer) this.#dummyBuffer.destroy();
+		if (this.#ownedResources.layerControl) this.#ownedResources.layerControl.remove();
+		if (this.#gpuCoordinator) this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+
+		this.#pipeline = null;
+		this.#perDataBindGroup = null;
+		this.#device = null;
 	}
+    
+    // Legacy helper kept for compatibility if needed, but unused in new flow
+	// createDataBindGroup(bindings) { /* ... */ }
+    // createOrUpdateBuffer(buf, data) { /* ... */ }
 }
