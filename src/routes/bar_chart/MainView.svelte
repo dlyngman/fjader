@@ -1,6 +1,6 @@
 <script>
 	import { Selection } from '@uwdata/mosaic-core';
-	import { sum, min, max, count, avg } from '@uwdata/mosaic-sql';
+	import { sum, min, max, count, avg, y } from '@uwdata/mosaic-sql';
 	import { setContext, getContext } from 'svelte';
 	import {
 		ChartContainer,
@@ -14,7 +14,8 @@
 		WebGPUCanvas,
 		DotsMark,
 		BarMark,
-		BarMarkX
+		BarMarkX,
+		BarMarkY
 	} from '$lib/components';
 	import { stack, normalize } from '$lib/transforms';
 	import Rects from '$lib/components/rendering/Rects.svelte';
@@ -197,6 +198,46 @@
 								table="penguins"
 								x={count()}
 								y="species"
+								color={colorProp}
+								scheme={schemeProp}
+								alpha={1}
+								{transforms}
+							/>
+						{/if}
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet foreground()}
+				<Crosshair />
+			{/snippet}
+		</ChartContainer>
+	</div>
+	<div class="chart-wrapper">
+		<ChartContainer xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'} yLabel="species">
+			{#snippet background()}
+				<Frame />
+				<MarginLabel />
+			{/snippet}
+
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						{#if selectedStackMode === 'none'}
+							<BarMarkY
+								table="penguins"
+								y1={min('bill_length')}
+								y2={max('bill_length')}
+								x="species"
+								color={colorProp}
+								scheme={schemeProp}
+								alpha={1}
+							/>
+						{:else}
+							<BarMarkY
+								table="penguins"
+								y={count()}
+								x="species"
 								color={colorProp}
 								scheme={schemeProp}
 								alpha={1}
