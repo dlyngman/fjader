@@ -58,20 +58,24 @@ export class ChartScales {
 			const xConfig = this.scaleConfigurations.x;
 			const yConfig = this.scaleConfigurations.y;
 
+			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
+			const xKey = xLabel || xConfig?.columnName || 'x';
+			const yKey = yLabel || yConfig?.columnName || 'y';
+
 			// TODO move outside effect?
 			// const scaleRegistry = getContext('scale-registry');
 
 			// Get what scales SHOULD be
 
 			const neededXScale = this.#scaleRegistry.getOrCreateScale(
-				xLabel,
+				xKey,
 				xConfig?.type || 'linear',
 				xConfig?.config || {},
 				this.chartId
 			);
 
 			const neededYScale = this.#scaleRegistry.getOrCreateScale(
-				yLabel,
+				yKey,
 				yConfig?.type || 'linear',
 				yConfig?.config || {},
 				this.chartId
@@ -254,7 +258,8 @@ export class ChartScales {
 		type,
 		priority = SCALE_PRIORITIES.PREFER,
 		markId = 'unknown',
-		config = {}
+		config = {},
+		columnName = null
 	) => {
 		const requirements = this.scaleRequirements[dimension];
 		const existing = requirements.find(
@@ -266,7 +271,7 @@ export class ChartScales {
 		);
 
 		if (!existing) {
-			requirements.push({ type, priority, markId, config });
+			requirements.push({ type, priority, markId, config, columnName });
 			this.scaleRequirements[dimension] = [...requirements];
 		}
 	};

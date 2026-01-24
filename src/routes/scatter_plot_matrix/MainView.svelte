@@ -13,7 +13,8 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-		BarMarkX
+		BarMarkX,
+		BarMarkY
 	} from '$lib/components';
 
 	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
@@ -101,8 +102,8 @@
 										x={config.x}
 										y={config.y}
 										color={'species'}
-										alpha={0.1}
-										radius={5}
+										alpha={0.5}
+										radius={10}
 									/>
 								{/if}
 							{/snippet}
@@ -124,21 +125,31 @@
 	</div>
 
 	<div class="charts-container">
-    <div class="chart-wrapper">
-      <ChartContainer xLabel="body_mass" yLabel="species">
-        {#snippet canvas()}
-          <WebGPUCanvas>
-            {#snippet canvasComponents()}
-              <BarMarkX 
-                table="penguins" 
-                x="body_mass" 
-                y="species" 
-                color="species" />
-            {/snippet}
-          </WebGPUCanvas>
-        {/snippet}
-      </ChartContainer>
-    </div>
+		<div class="chart-wrapper">
+			<ChartContainer xLabel="body_mass" yLabel="species">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<BarMarkX table="penguins" x="body_mass" y="species" color="species" />
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+			</ChartContainer>
+		</div>
+	</div>
+	<div class="charts-container">
+		<div class="chart-wrapper">
+			<!-- <ChartContainer yLabel="body_mass" xLabel="species"> -->
+			<ChartContainer>
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<BarMarkY table="penguins" y="body_mass" x="species" color="species" />
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+			</ChartContainer>
+		</div>
 	</div>
 </div>
 

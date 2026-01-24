@@ -34,18 +34,13 @@
 				);
 			}
 
-			// Wait for coordinator initialization with timeout
-			let attempts = 0;
-			const maxAttempts = 100; // 5 seconds at 50ms intervals
+			// Wait for coordinator initialization with deterministic promise-based approach
+			// This eliminates polling and provides exact-time notification when ready
+			const timeout = new Promise((_, reject) =>
+				setTimeout(() => reject(new Error('GPUCoordinator initialization timeout (5000ms)')), 5000)
+			);
 
-			while (!gpuCoordinator.isInitialized && attempts < maxAttempts) {
-				await new Promise((resolve) => setTimeout(resolve, 50));
-				attempts++;
-			}
-
-			if (!gpuCoordinator.isInitialized) {
-				throw new Error(`GPUCoordinator failed to initialize within ${maxAttempts * 50}ms timeout`);
-			}
+			await Promise.race([gpuCoordinator.ready, timeout]);
 
 			// Configure context with proper error handling
 			await configureContext();

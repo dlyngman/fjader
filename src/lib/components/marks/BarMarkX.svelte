@@ -3,30 +3,18 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
 	import {
 		buildSelectFromChannels,
 		resolveChannel,
-		toFloat32
+		toFloat32,
+		MarkColor
 	} from './utils/index.js';
 
 	let {
-		table,
-		selection,
-		x, // shorthand for x2
-		x1 = 0, // baseline
-		x2 = x, // end of bars
-		y, // categorical data
-		color = null,
-		scheme = 'tableau10',
-		alpha = 0.8,
-		limit,
-		filterNulls = false,
-		transforms = [],
-		padding,
-		paddingInner,
-		paddingOuter,
-		align = 0.5
+		table, selection, x, x1 = 0, x2 = x, y,
+		color = null, scheme, alpha = 0.8, // No default scheme - MarkColor will infer
+		limit, filterNulls = false, transforms = [],
+		padding, paddingInner, paddingOuter, align = 0.5
 	} = $props();
 
 	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
@@ -35,27 +23,12 @@
 	const scaleRegistry = getContext('scale-registry');
 
 	let setup = $state(null);
-	let colorScaleState = $state(null);
-	let xScaleId = $derived(chartContext.xScaleState?.id);
-	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	// Detect color type
-	const colorConfig = $derived.by(() => {
-		if (color == null) {
-			return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0] };
-		}
-		if (typeof color === 'object' && color.field) {
-			return { mode: 'field', field: color.field, scheme: color.scheme || scheme };
-		}
-		if (typeof color === 'string') {
-			if (isColorConstant(color)) {
-				return { mode: 'constant', value: parseColorToRGBA(color) };
-			} else {
-				return { mode: 'field', field: color, scheme: scheme };
-			}
-		}
-		return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0] };
-	});
+	// 1. Color Logic
+	const markColor = new MarkColor(
+		() => color, () => scheme, () => table, () => setup,
+		scaleRegistry, chartContext
+	);
 
 	const yScaleConfig = $derived.by(() => {
 		const config = {};
@@ -66,32 +39,29 @@
 		return config;
 	});
 
+	// 2. Config
 	const config = $derived({
 		markType: 'barx',
-		supportedScaleTypes: {
-			x: ['linear', 'identity'],
-			y: ['band']
-		},
+		supportedScaleTypes: { x: ['linear', 'identity'], y: ['band'] },
 		scaleRequirements: {
 			x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
 			y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
 		},
-		table,
-		selection,
+		inferredScaleColumns: {
+			x: x2,  // X scale uses the value column (x2, not x1 which is baseline)
+			y: y    // Y scale uses categorical column
+		},
+		table, selection, transforms,
 		select: buildSelectFromChannels({
-			x1,
-			x2,
-			y,
-			...(colorConfig.mode === 'field' && { color: colorConfig.field })
+			x1, x2, y,
+			...(markColor.selectField && { color: markColor.selectField })
 		}),
-		transforms,
-		clientOptions: {
-			limit,
-			filterNulls: filterNulls ? [x1, x2, y] : null
-		}
+		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y] : null }
 	});
 
-	// Support No-DB Mode: Determine count from DB data OR input arrays
+	let xScaleId = $derived(chartContext.xScaleState?.id);
+	let yScaleId = $derived(chartContext.yScaleState?.id);
+
 	let instanceCount = $derived.by(() => {
 		if (setup?.data?.length) return setup.data.length;
 		if (Array.isArray(x2)) return x2.length;
@@ -101,91 +71,36 @@
 		return 0;
 	});
 
-	// Check if transforms modified channels
-	let hasStackTransform = $derived.by(() => {
-		return transforms.some((t) => t.type === 'stack');
-	});
-
-	// --- SETUP LIFECYCLE ---
-
-	$effect(() => {
-		if (setup?.client?.error) console.error('Client Error:', setup.client.error.message);
-	});
-
-	$effect(() => {
-		if (colorConfig.mode === 'field' && scaleRegistry) {
-			untrack(() => {
-				colorScaleState = scaleRegistry.getOrCreateScale(
-					colorConfig.field,
-					'color',
-					{ scheme: colorConfig.scheme },
-					chartContext.chartId
-				);
-				if (colorScaleState && table) {
-					colorScaleState.registerTable(table);
-				}
-			});
-		} else {
-			colorScaleState = null;
-		}
-	});
-
-	$effect(() => {
-		if (setup && colorScaleState && colorConfig.mode === 'field') {
-			setup.setColorScale(colorScaleState);
-		}
-	});
+	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
 
 	// --- DATA RESOLUTION ---
 
 	// X0: Stack Output -> x1 prop -> 0
-	let x0Data = $derived.by(() => {
-		const raw = resolveChannel({
-			value: x1,
-			channel: 'x1',
-			tryColumns: hasStackTransform ? ['x0'] : undefined, 
-			dataAccessor: setup?.data,
-			instanceCount,
-			fallback: 0
-		});
-		return toFloat32(raw);
-	});
+	let x0Data = $derived(toFloat32(resolveChannel({
+		value: x1, channel: 'x1',
+		tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
+		dataAccessor: setup?.data, instanceCount, fallback: 0
+	})));
 
 	// X1: Stack Output -> x2 prop
-	let x1Data = $derived.by(() => {
-		const raw = resolveChannel({
-			value: x2,
-			channel: 'x2',
-			tryColumns: hasStackTransform ? ['x1'] : undefined,
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		return toFloat32(raw);
-	});
+	let x1Data = $derived(toFloat32(resolveChannel({
+		value: x2, channel: 'x2',
+		tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
+		dataAccessor: setup?.data, instanceCount
+	})));
 
-	// Y: Categorical Resolution (Band Scale)
+	// Y: Categorical Resolution
 	let yData = $derived.by(() => {
 		if (!instanceCount) return null;
-
-		// Pattern #3: Fallback scale type check
-		// In No-DB mode (no setup), we assume 'band' if chartContext hasn't resolved it yet
+		
+		// Fallback scale type check for No-DB mode
 		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y || 'band';
 		if (scaleType !== 'band') return null;
 
-		// 1. Get raw data (likely strings)
-		const raw = resolveChannel({
-			value: y,
-			channel: 'y',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-
+		const raw = resolveChannel({ value: y, channel: 'y', dataAccessor: setup?.data, instanceCount });
 		if (!raw) return null;
 
-		// 2. Map to indices via scale
-		// Duck-typing check: Ensure the scale actually supports GPU data processing
 		if (!chartContext.yScaleState?.processDataForGPU) return null;
-
 		const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
 		const yArr = toFloat32(indices);
 		
@@ -195,81 +110,42 @@
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	// Color: Field (Scale) vs Constant
-	let colorValueData = $derived.by(() => {
-		if (colorConfig.mode !== 'field') return null;
-		if (!colorScaleState?.ready) return null;
+	let alphaData = $derived(toFloat32(resolveChannel({
+		value: alpha, channel: 'alpha',
+		dataAccessor: setup?.data, instanceCount, fallback: 0.8
+	})));
 
-		const raw = resolveChannel({
-			value: colorConfig.field,
-			channel: 'color',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-
-		if (!raw) return null;
-		return colorScaleState.processDataForGPU(raw);
-	});
-
-	// Alpha: Constant or Data
-	let alphaData = $derived.by(() => {
-		const raw = resolveChannel({
-			value: alpha,
-			channel: 'alpha',
-			dataAccessor: setup?.data,
-			instanceCount,
-			fallback: 0.8
-		});
-		return toFloat32(raw);
-	});
-
-	// --- RENDERER PROPS ---
-
-	let colorMode = $derived(colorConfig.mode === 'field' ? 1 : 0);
-	let colorScaleIndex = $derived(colorScaleState?.gpuIndex ?? 0);
-	let constantColor = $derived(colorConfig.mode === 'constant' ? colorConfig.value : [0, 0, 0, 1]);
-	let colorReady = $derived(colorConfig.mode === 'constant' || (colorScaleState?.ready ?? false));
+	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId);
+		// Track things that require setup recreation:
+		// - table, scales, transforms (data/scale changes)
+		// - markColor.selectField (color field changes like species→island)
+		// BUT NOT scheme changes (tableau10→category10 with same field)
+		(void table, xScaleId, yScaleId, transforms, markColor.selectField);
 		untrack(() => {
 			setup?.destroy();
-			// Pattern #2: Conditional Setup Creation
-			if (table) {
-				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
-			}
+			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
 		});
 	});
 
-	onDestroy(() => {
-		setup?.destroy();
-	});
+	onDestroy(() => { setup?.destroy(); });
 </script>
 
-<!-- Pattern #1: No-DB Render Condition -->
-{#if (setup?.gpuReady || !table) && colorReady && x0Data && x1Data && y0Data && y1Data}
+{#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
 	<Rects
-		{x0Data}
-		{x1Data}
-		{y0Data}
-		{y1Data}
-		{colorValueData}
+		{x0Data} {x1Data} {y0Data} {y1Data}
+		colorValueData={markColor.data}
 		{alphaData}
-		{colorMode}
-		{colorScaleIndex}
-		{constantColor}
+		colorMode={markColor.colorMode}
+		colorScaleIndex={markColor.colorScaleIndex}
+		constantColor={markColor.constantColor}
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-		Error: {setup.client.error.message}
-	</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">Error: {setup.client.error.message}</text>
 {:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-		Loading data...
-	</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Loading data...</text>
 {:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-		Initializing bars...
-	</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Initializing bars...</text>
 {/if}

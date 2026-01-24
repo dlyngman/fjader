@@ -13,7 +13,6 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-		BarMark,
 		BarMarkX,
 		BarMarkY
 	} from '$lib/components';
@@ -47,101 +46,146 @@
 	let selectedColorMode = $state('field-tableau10');
 	let selectedStackMode = $state('none');
 
-	// Derive color prop based on selection
-	const colorProp = $derived.by(() => {
+	// Use $state instead of $derived for colorProp
+	let colorProp = $state(undefined);
+
+	// Update colorProp with $effect
+	$effect(() => {
+		let newColorProp;
 		switch (selectedColorMode) {
 			case 'default':
-				return undefined;
+				newColorProp = undefined;
+				break;
 			case 'hex':
-				return '#800080';
+				newColorProp = '#800080';
+				break;
 			case 'named':
-				return 'steelblue';
+				newColorProp = 'steelblue';
+				break;
 			case 'rgb':
-				return 'rgb(255, 100, 50)';
+				newColorProp = 'rgb(255, 100, 50)';
+				break;
 			case 'field-tableau10':
-				return 'species';
+				newColorProp = 'species';
+				break;
 			case 'field-category10':
-				return { field: 'species', scheme: 'category10' };
+				newColorProp = { field: 'species', scheme: 'category10' };
+				break;
 			case 'field-dark2':
-				return { field: 'species', scheme: 'dark2' };
+				newColorProp = { field: 'species', scheme: 'dark2' };
+				break;
 			case 'field-set1':
-				return { field: 'species', scheme: 'set1' };
+				newColorProp = { field: 'species', scheme: 'set1' };
+				break;
 			case 'field-pastel1':
-				return { field: 'species', scheme: 'pastel1' };
+				newColorProp = { field: 'species', scheme: 'pastel1' };
+				break;
 			case 'field-island':
-				return 'island';
+				newColorProp = 'island';
+				break;
 			default:
-				return undefined;
+				newColorProp = undefined;
 		}
+
+		colorProp = newColorProp;
 	});
 
 	// Derive scheme prop (for string field mode)
-	const schemeProp = $derived.by(() => {
-		if (selectedColorMode === 'field-tableau10') return 'tableau10';
-		return undefined;
+	let schemeProp = $state(undefined);
+	$effect(() => {
+		schemeProp = selectedColorMode === 'field-tableau10' ? 'tableau10' : undefined;
 	});
 
 	// Description of current mode
-	const modeDescription = $derived.by(() => {
+	let modeDescription = $state('');
+	$effect(() => {
 		switch (selectedColorMode) {
 			case 'default':
-				return 'No color prop - uses default blue [0.2, 0.4, 0.8, 1.0]';
+				modeDescription = 'No color prop - uses default blue [0.2, 0.4, 0.8, 1.0]';
+				break;
 			case 'hex':
-				return 'color="#800080" - constant purple via hex';
+				modeDescription = 'color="#800080" - constant purple via hex';
+				break;
 			case 'named':
-				return 'color="steelblue" - constant via CSS named color';
+				modeDescription = 'color="steelblue" - constant via CSS named color';
+				break;
 			case 'rgb':
-				return 'color="rgb(255, 100, 50)" - constant via rgb()';
+				modeDescription = 'color="rgb(255, 100, 50)" - constant via rgb()';
+				break;
 			case 'field-tableau10':
-				return 'color="species" scheme="tableau10" - GPU color scale lookup';
+				modeDescription = 'color="species" scheme="tableau10" - GPU color scale lookup';
+				break;
 			case 'field-category10':
-				return 'color={{ field: "species", scheme: "category10" }} - object form';
+				modeDescription = 'color={{ field: "species", scheme: "category10" }} - object form';
+				break;
 			case 'field-dark2':
-				return 'color={{ field: "species", scheme: "dark2" }}';
+				modeDescription = 'color={{ field: "species", scheme: "dark2" }}';
+				break;
 			case 'field-set1':
-				return 'color={{ field: "species", scheme: "set1" }}';
+				modeDescription = 'color={{ field: "species", scheme: "set1" }}';
+				break;
 			case 'field-pastel1':
-				return 'color={{ field: "species", scheme: "pastel1" }}';
+				modeDescription = 'color={{ field: "species", scheme: "pastel1" }}';
+				break;
 			case 'field-island':
-				return 'color="island" - different categorical field';
+				modeDescription = 'color="island" - different categorical field';
+				break;
 			default:
-				return '';
+				modeDescription = '';
 		}
 	});
 
 	// Derive transforms based on stack mode
-	const transforms = $derived.by(() => {
+	let transforms = $state([]);
+	$effect(() => {
 		switch (selectedStackMode) {
 			case 'stack':
-				return [stack({ direction: 'horizontal' })];
+				transforms = [stack({ direction: 'horizontal' })];
+				break;
 			case 'stack-normalize':
-				return [stack({ direction: 'horizontal' }), normalize()];
+				transforms = [stack({ direction: 'horizontal' }), normalize()];
+				break;
 			default:
-				return [];
+				transforms = [];
 		}
 	});
 
 	// Stack mode description
-	const stackDescription = $derived.by(() => {
+	let stackDescription = $state('');
+	$effect(() => {
 		const needsIslandColor = selectedStackMode !== 'none' && !selectedColorMode.includes('island');
 		const colorWarning = needsIslandColor ? ' ⚠️ Select "island" color for visible segments!' : '';
 
 		switch (selectedStackMode) {
 			case 'none':
-				return 'x1={min("bill_length")} x2={max("bill_length")} - simple range bars';
+				stackDescription = 'x1={min("bill_length")} x2={max("bill_length")} - simple range bars';
+				break;
 			case 'stack':
-				return `x={count()} transforms={[stack()]} - stacked by color field${colorWarning}`;
+				stackDescription = `x={count()} transforms={[stack()]} - stacked by color field${colorWarning}`;
+				break;
 			case 'stack-normalize':
-				return `x={count()} transforms={[stack(), normalize()]} - 100% stacked${colorWarning}`;
+				stackDescription = `x={count()} transforms={[stack(), normalize()]} - 100% stacked${colorWarning}`;
+				break;
 			default:
-				return '';
+				stackDescription = '';
 		}
 	});
 
 	// X value depends on stack mode
-	const xValue = $derived(selectedStackMode === 'none' ? null : count());
-	const x1Value = $derived(selectedStackMode === 'none' ? min('bill_length') : undefined);
-	const x2Value = $derived(selectedStackMode === 'none' ? max('bill_length') : undefined);
+	let xValue = $state(null);
+	let x1Value = $state(null);
+	let x2Value = $state(null);
+	$effect(() => {
+		if (selectedStackMode === 'none') {
+			xValue = null;
+			x1Value = min('bill_length');
+			x2Value = max('bill_length');
+		} else {
+			xValue = count();
+			x1Value = undefined;
+			x2Value = undefined;
+		}
+	});
 </script>
 
 <div class="demo-container">
@@ -224,6 +268,46 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						{#if selectedStackMode === 'none'}
+							<BarMarkX
+								table="penguins"
+								x1={min('bill_length')}
+								x2={max('bill_length')}
+								y="species"
+								color={colorProp}
+								scheme={schemeProp}
+								alpha={1}
+							/>
+						{:else}
+							<BarMarkX
+								table="penguins"
+								x={count()}
+								y="species"
+								color={colorProp}
+								scheme={schemeProp}
+								alpha={1}
+								{transforms}
+							/>
+						{/if}
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet foreground()}
+				<Crosshair />
+			{/snippet}
+		</ChartContainer>
+	</div>
+	<!-- <div class="chart-wrapper">
+		<ChartContainer xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'} yLabel="species">
+			{#snippet background()}
+				<Frame />
+				<MarginLabel />
+			{/snippet}
+
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						{#if selectedStackMode === 'none'}
 							<BarMarkY
 								table="penguins"
 								y1={min('bill_length')}
@@ -252,7 +336,7 @@
 				<Crosshair />
 			{/snippet}
 		</ChartContainer>
-	</div>
+	</div> -->
 </div>
 
 <style>

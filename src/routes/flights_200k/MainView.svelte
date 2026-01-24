@@ -1,6 +1,6 @@
 <script>
 	import { Selection } from '@uwdata/mosaic-core';
-	import { sum, min, max } from '@uwdata/mosaic-sql';
+	import { sum, min, max, avg } from '@uwdata/mosaic-sql';
 	import { setContext, getContext } from 'svelte';
 	import Plot from './Plot.svelte';
 
@@ -42,9 +42,9 @@
 				<DotsMark
 				table="flights"
 				selection={brushSeletion}
-				x={"delay"}
+				x={min("delay")}
 				y={"time"}
-				color={"distance"}
+				color={avg("delay")}
 				alpha="0.8"
 				/>
 			{/snippet}

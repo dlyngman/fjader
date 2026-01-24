@@ -11,3 +11,4 @@ export {
 } from './data-processing.js';
 
 export { resolveChannel, toFloat32 } from './channel-resolution.js';
+export { MarkColor } from './MarkColor.svelte.js';

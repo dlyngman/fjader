@@ -27,17 +27,17 @@ export const COLOR_SCALE_BINDINGS = /* wgsl */ `
 export const COLOR_SCALE_FUNCTIONS = /* wgsl */ `
 fn normalizeValue(config: ColorConfig, value: f32) -> f32 {
     let range = config.domainMax - config.domainMin;
-    
+
     if (abs(range) < 0.0001) {
         return 0.5;
     }
-    
+
     let t_raw = (value - config.domainMin) / range;
 
     if (config.scaleType == COLOR_SCALE_CYCLICAL) {
         return fract(t_raw);
     }
-    
+
     return clamp(t_raw, 0.0, 1.0);
 }
 
@@ -47,33 +47,33 @@ fn sampleRamp(config: ColorConfig, t: f32) -> vec4<f32> {
 }
 
 fn samplePalette(config: ColorConfig, categoryIndex: u32) -> vec4<f32> {
-    let idx = (categoryIndex - 1u) % config.paletteSize;
+    // 0-based indexing: category 0 maps to palette index 0
+    let idx = categoryIndex % config.paletteSize;
     return ordinalPalettes[config.paletteOffset + idx];
 }
 
 fn getColorFromScale(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<f32> {
     let config = colorConfigs[scaleIndex];
-    
+
     if (config.scaleType == COLOR_SCALE_ORDINAL) {
-        let catIdx = u32(value);
-        if (catIdx == 0u) {
+        // 0-based indexing: -1 = null, 0+ = valid categories
+        if (value < 0.0) {
             return nullColor;
         }
+        let catIdx = u32(value);
         return samplePalette(config, catIdx);
     }
-    
+
     if (value != value) {
         return nullColor;
     }
-    
+
     let t = normalizeValue(config, value);
     return sampleRamp(config, t);
 }
 
 fn getOrdinalColor(scaleIndex: u32, categoryIndex: u32, nullColor: vec4<f32>) -> vec4<f32> {
-    if (categoryIndex == 0u) {
-        return nullColor;
-    }
+    // Note: This function expects u32, so caller must handle -1 check before casting
     let config = colorConfigs[scaleIndex];
     return samplePalette(config, categoryIndex);
 }

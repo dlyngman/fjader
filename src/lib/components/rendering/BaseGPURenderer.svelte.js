@@ -47,10 +47,18 @@ export class BaseGPURenderer {
 	}
 
 	// ... Getters (resourcesCreated, etc.) ...
-	get resourcesCreated() { return this.#resourcesCreated; }
-	get instanceCount() { return this.#instanceCount; }
-	get pipeline() { return this.#pipeline; }
-	get perDataBindGroup() { return this.#perDataBindGroup; }
+	get resourcesCreated() {
+		return this.#resourcesCreated;
+	}
+	get instanceCount() {
+		return this.#instanceCount;
+	}
+	get pipeline() {
+		return this.#pipeline;
+	}
+	get perDataBindGroup() {
+		return this.#perDataBindGroup;
+	}
 
 	async initialize(config) {
 		if (this.#isDestroyed) return;
@@ -110,7 +118,7 @@ export class BaseGPURenderer {
 	/**
 	 * Write data to a specific shader binding.
 	 * Handles buffer creation, smart resizing, and bind group invalidation.
-	 * 
+	 *
 	 * @param {number} binding - Shader binding index (use constants!)
 	 * @param {ArrayBufferView} data - Float32Array, etc.
 	 */
@@ -136,29 +144,34 @@ export class BaseGPURenderer {
 			});
 
 			this.#ownedResources.buffers.set(binding, buffer);
-			
+
 			// Buffer reference changed -> Rebuild BindGroup
 			this.#scheduleBindGroupUpdate();
 		}
 
 		// 2. Write Data (Fine-grained: only touches this buffer)
 		this.#device.queue.writeBuffer(buffer, 0, data);
+
+		// 3. Trigger Render
+		if (!this.#bindGroupUpdateScheduled) {
+			this.invalidateLayer();
+		}
 	}
 
 	/**
 	 * Write data to a uniform binding.
-	 * @param {number} binding 
-	 * @param {ArrayBufferView} data 
+	 * @param {number} binding
+	 * @param {ArrayBufferView} data
 	 */
 	writeUniform(binding, data) {
 		if (!this.#device || !data) return;
 
 		let buffer = this.#ownedResources.buffers.get(binding);
-		
+
 		// Uniforms rarely resize, but logic is same for consistency
 		if (!buffer || buffer.size < data.byteLength) {
 			if (buffer) buffer.destroy();
-			
+
 			buffer = this.#device.createBuffer({
 				size: data.byteLength,
 				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -169,6 +182,10 @@ export class BaseGPURenderer {
 		}
 
 		this.#device.queue.writeBuffer(buffer, 0, data);
+
+		if (!this.#bindGroupUpdateScheduled) {
+			this.invalidateLayer();
+		}
 	}
 
 	// ===== INTERNAL HELPERS =====
@@ -189,7 +206,7 @@ export class BaseGPURenderer {
 		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) return;
 
 		// Map stored buffers to config entries
-		const entries = this.#dataBindingConfig.map(config => {
+		const entries = this.#dataBindingConfig.map((config) => {
 			const buffer = this.#ownedResources.buffers.get(config.binding);
 			return {
 				binding: config.binding,
@@ -255,8 +272,8 @@ export class BaseGPURenderer {
 		this.#perDataBindGroup = null;
 		this.#device = null;
 	}
-    
-    // Legacy helper kept for compatibility if needed, but unused in new flow
+
+	// Legacy helper kept for compatibility if needed, but unused in new flow
 	// createDataBindGroup(bindings) { /* ... */ }
-    // createOrUpdateBuffer(buf, data) { /* ... */ }
+	// createOrUpdateBuffer(buf, data) { /* ... */ }
 }
