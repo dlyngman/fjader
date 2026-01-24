@@ -4,7 +4,7 @@
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
 
-	let { xLabel, yLabel, background, foreground, canvas, canvasComponents, overlay } = $props();
+	let { xLabel = null, yLabel = null, background, foreground, canvas, canvasComponents, overlay } = $props();
 
 	const pointerBuffer = { x: 0, y: 0 };
 	const innerPointBuffer = { x: 0, y: 0 };
@@ -246,8 +246,8 @@
 		},
 
 		// Scale coordinator methods
-		registerScaleType: (dimension, type, priority, markId) =>
-			scales.registerScaleType(dimension, type, priority, markId),
+		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
+			scales.registerScaleType(dimension, type, priority, markId, config, columnName),
 		unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
 		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
 	};

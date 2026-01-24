@@ -61,23 +61,29 @@ export function resolveScaleType(requirements) {
  */
 export function resolveScaleConfiguration(requirements) {
   if (!requirements || requirements.length === 0) {
-    return { type: 'linear', config: {} };
+    return { type: 'linear', config: {}, columnName: null };
   }
-  
+
   // First resolve type using existing logic
   const resolvedType = resolveScaleType(requirements);
-  
+
   // Then resolve configuration for that type
   const typeRequirements = requirements.filter(req => req.type === resolvedType);
   const resolvedConfig = resolveConfigurationForType(typeRequirements, resolvedType);
-  
+
+  // Extract columnName from highest-priority requirement
+  // Sort by priority descending, take first columnName found
+  const sorted = [...typeRequirements].sort((a, b) => (b.priority || 0) - (a.priority || 0));
+  const columnName = sorted.find(req => req.columnName)?.columnName || null;
+
   console.log(`🎯 Resolved scale configuration:`, {
     type: resolvedType,
     config: resolvedConfig,
+    columnName,
     fromRequirements: typeRequirements.length
   });
-  
-  return { type: resolvedType, config: resolvedConfig };
+
+  return { type: resolvedType, config: resolvedConfig, columnName };
 }
 
 /**

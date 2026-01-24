@@ -50,6 +50,7 @@ export class ColorScaleState {
 	 * @param {Object} config - Scale configuration
 	 * @param {string} config.field - Field name this scale maps
 	 * @param {string} config.scheme - D3 color scheme name (e.g., 'viridis', 'tableau10')
+	 * @param {string} [config.type] - Explicit scale type ('ordinal', 'sequential', 'diverging', 'cyclical')
 	 * @param {Array} config.domain - Domain values
 	 * @param {boolean} [config.reverse=false] - Reverse the color direction
 	 * @param {number} [config.midpoint] - Explicit midpoint for diverging scales
@@ -64,8 +65,10 @@ export class ColorScaleState {
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
 
-		// Determine scale type from scheme
-		this.#scaleType = getSchemeType(this.#scheme) || 'sequential';
+		// Explicit type wins, fallback to inference from scheme
+		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
+
+		console.log(`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, scheme=${this.#scheme}`);
 
 		// Set initial domain
 		this.domain = config.domain || [];
@@ -130,10 +133,10 @@ export class ColorScaleState {
 
 	/**
 	 * The column name used in derived views for this scale's index.
-	 * Format: __dplot_{field}_color_idx
+	 * Format: __dplot_{field}_idx (shared with band scales)
 	 */
 	get indexColumnName() {
-		return ViewManagerService.colorIndexColumn(this.#field);
+		return ViewManagerService.bandIndexColumn(this.#field);
 	}
 
 	/**
@@ -363,7 +366,7 @@ export class ColorScaleState {
 
 		const alias = this.indexColumnName;
 		const sql = ViewManagerService.buildCaseExpression(this.#field, this.domain, {
-			oneBased: true // Color indices are 1-based (0 = null/unknown)
+			oneBased: false // 0-based indices (shared with band scales, -1 = null/unknown)
 		});
 
 		viewManager.registerColumn(sourceTable, alias, {
@@ -438,6 +441,8 @@ export class ColorScaleState {
 
 		if (this.domain.length > 0) {
 			this.#uploadToGPU();
+			// Trigger re-render - registry will invalidate charts using this scale
+			this.#registry.invalidateChartsForScale(this.#field);
 		}
 	}
 

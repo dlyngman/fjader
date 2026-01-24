@@ -29,10 +29,17 @@
 	};
 
 	let {
-		x0Data, x1Data, y0Data, y1Data,
-		colorValueData, alphaData,
-		dataVersion, zIndex = 0,
-		colorMode = 0, colorScaleIndex = 0, constantColor = [0.2, 0.4, 0.8, 1.0]
+		x0Data,
+		x1Data,
+		y0Data,
+		y1Data,
+		colorValueData,
+		alphaData,
+		dataVersion,
+		zIndex = 0,
+		colorMode = 0,
+		colorScaleIndex = 0,
+		constantColor = [0.2, 0.4, 0.8, 1.0]
 	} = $props();
 
 	const chartContext = getContext('chart');
@@ -45,7 +52,7 @@
 
 	const rectVertexCount = 6;
 
-    const rectsShaderCode = `
+	const rectsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
       colorMode: u32,           // 0 = constant, 1 = scale
@@ -122,10 +129,12 @@
     }
   `;
 
-	const vertexBufferLayout = [{
-		arrayStride: 2 * 4,
-		attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
-	}];
+	const vertexBufferLayout = [
+		{
+			arrayStride: 2 * 4,
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+		}
+	];
 
 	const dataBindingConfig = [
 		{ binding: BINDINGS.X0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
@@ -134,17 +143,34 @@
 		{ binding: BINDINGS.Y1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.CONSTANTS, type: 'uniform', visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT }
+		{
+			binding: BINDINGS.CONSTANTS,
+			type: 'uniform',
+			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+		}
 	];
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X0, x0Data); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y0, y0Data); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y1, y1Data); });
-	$effect(() => { if (renderer?.resourcesCreated && colorValueData) renderer.writeAttribute(BINDINGS.COLOR, colorValueData); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData); });
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X0, x0Data);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y0, y0Data);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y1, y1Data);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && colorValueData)
+			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData);
+	});
 
 	// Uniforms
 	$effect(() => {
@@ -173,7 +199,7 @@
 	});
 
 	function createRectGeometry() {
-		return new Float32Array([0,0, 1,0, 0,1, 1,0, 1,1, 0,1]);
+		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
 	}
 
 	async function initializeRectGeometry() {
@@ -219,7 +245,7 @@
 	async function waitForWebGPU() {
 		let attempts = 0;
 		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise(r => setTimeout(r, 50));
+			await new Promise((r) => setTimeout(r, 50));
 			attempts++;
 		}
 		if (webGPUContext.isInitialized()) await initializeRects();

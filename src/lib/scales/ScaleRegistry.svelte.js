@@ -199,8 +199,17 @@ class ScaleRegistry {
 	// ============================================================
 
 	getOrCreateScale(name, type = 'linear', config = {}, chartId = null) {
-		const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
-		const key = `${name}-${type}${configKey}`;
+		let key;
+
+		if (type === 'color') {
+			// Color scales: key by field + type only (scheme is mutable state)
+			const scaleType = config.type || 'sequential';
+			key = `${name}-color-${scaleType}`;
+		} else {
+			// Other scales: key by full config (padding, align, etc. matter)
+			const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
+			key = `${name}-${type}${configKey}`;
+		}
 
 		// Dynamic Map creation
 		if (!this.scales[type]) {
@@ -224,21 +233,28 @@ class ScaleRegistry {
 						align: config.align ?? 0.5
 					})
 				);
-      } else if (type === 'color') {
-        this.scales[type].set(
-          key,
-          new ColorScaleState(
-            {
-              field: name,
-              scheme: config.scheme || 'viridis',
-              domain: config.domain || [],
-              reverse: config.reverse ?? false,
-              midpoint: config.midpoint
-            },
-            this,
-            this.#gpuCoordinator
-          )
-        );
+			} else if (type === 'color') {
+				// Apply default scheme based on explicit type
+				const scaleType = config.type || 'sequential';
+				const defaultScheme = scaleType === 'ordinal' ? 'tableau10' : 'viridis';
+
+				console.log(`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`);
+
+				this.scales[type].set(
+					key,
+					new ColorScaleState(
+						{
+							field: name,
+							type: scaleType, // Pass explicit type
+							scheme: config.scheme || defaultScheme, // Apply default based on type
+							domain: config.domain || [],
+							reverse: config.reverse ?? false,
+							midpoint: config.midpoint
+						},
+						this,
+						this.#gpuCoordinator
+					)
+				);
 			} else if (['ordinal', 'categorical'].includes(type)) {
 				this.scales[type].set(
 					key,
@@ -345,6 +361,40 @@ class ScaleRegistry {
 					return;
 				}
 			}
+		}
+	}
+
+	/**
+	 * Invalidate all charts that use a specific scale field.
+	 * Called when a color scale's scheme updates to trigger re-renders.
+	 * @param {string} field - The field name of the scale that changed
+	 */
+	invalidateChartsForScale(field) {
+		if (!this.#gpuCoordinator) return;
+
+		// Find all color scales with matching field
+		// Keys are like "species-color-{scheme:...}", so we need to search
+		const colorScales = this.scales.color;
+		if (!colorScales) return;
+
+		let foundScale = null;
+		for (const [key, scale] of colorScales) {
+			// Check if this scale's field matches
+			if (scale.field === field) {
+				foundScale = scale;
+				break;
+			}
+		}
+
+		if (!foundScale) return;
+
+		// Get all charts using this scale via scaleUsage (keyed by scale object)
+		const chartIds = this.scaleUsage.get(foundScale);
+		if (!chartIds || chartIds.size === 0) return;
+
+		// Invalidate each chart
+		for (const chartId of chartIds) {
+			this.#gpuCoordinator.invalidateChart(chartId);
 		}
 	}
 }

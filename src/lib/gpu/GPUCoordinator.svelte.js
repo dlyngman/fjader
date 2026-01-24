@@ -88,6 +88,10 @@ export class GPUCoordinator {
 	#presentationFormat = null;
 	#initialized = $state(false);
 
+	// Promise-based initialization (eliminates polling in WebGPUCanvas)
+	#readyPromise;
+	#resolveReady;
+
 	// Timestamp query resources (optional, for GPU timing)
 	#canTimestamp = false;
 	#querySet = null;
@@ -198,8 +202,8 @@ export class GPUCoordinator {
 	#gpuAverage = new NonNegativeRollingAverage(30);
 	timings = $state({ cpu: '0', fps: '0', gpu: '0' });
 
-	// Race condition protection for async pipeline creation
-	#creatingPipelines = new Set();
+	// Promise cache for pipeline creation (prevents "thundering herd")
+	#pipelineCreationPromises = new Map();
 
 	// =========================================================================
 	// CONSTRUCTOR
@@ -208,6 +212,11 @@ export class GPUCoordinator {
 	constructor(config = {}) {
 		this.#msaaSampleCount = config.msaaSampleCount ?? 4;
 		this.#scaleIndexManager = new ScaleIndexManager();
+
+		// Create ready promise (resolved when WebGPU initialization completes)
+		this.#readyPromise = new Promise((resolve) => {
+			this.#resolveReady = resolve;
+		});
 
 		// Create animation loop with callbacks
 		this.#animationLoop = new AnimationLoop({
@@ -281,6 +290,9 @@ export class GPUCoordinator {
 				usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
 			});
 		}
+
+		// Signal that initialization is complete
+		this.#resolveReady(true);
 	}
 
 	// =========================================================================
@@ -858,37 +870,45 @@ export class GPUCoordinator {
 	// =========================================================================
 
 	async #getOrCreateSharedPipeline(key, createFn) {
+		// Fast path: Check cache first
 		const existing = this.#sharedResources.pipelines.get(key);
 		if (existing) {
 			existing.refCount++;
 			return existing.pipeline;
 		}
 
-		// Async Lock to prevent double-creation
-		if (this.#creatingPipelines.has(key)) {
-			while (this.#creatingPipelines.has(key)) {
-				await new Promise((r) => setTimeout(r, 10));
+		// In-flight path: Return existing promise if creation is already in progress
+		// This eliminates the "thundering herd" problem - all concurrent requests
+		// for the same pipeline share a single creation promise
+		if (this.#pipelineCreationPromises.has(key)) {
+			const pipeline = await this.#pipelineCreationPromises.get(key);
+			// After await completes, increment refCount on the now-cached pipeline
+			const cached = this.#sharedResources.pipelines.get(key);
+			if (cached) {
+				cached.refCount++;
+				return cached.pipeline;
 			}
-			// Check again after wait
-			const newExisting = this.#sharedResources.pipelines.get(key);
-			if (newExisting) {
-				newExisting.refCount++;
-				return newExisting.pipeline;
-			}
+			return pipeline;
 		}
 
-		this.#creatingPipelines.add(key);
-		try {
-			const pipeline = await createFn();
-			this.#sharedResources.pipelines.set(key, {
-				pipeline,
-				refCount: 1,
-				createdAt: Date.now()
-			});
-			return pipeline;
-		} finally {
-			this.#creatingPipelines.delete(key);
-		}
+		// Cold path: Create new pipeline and cache the promise
+		const creationPromise = (async () => {
+			try {
+				const pipeline = await createFn();
+				this.#sharedResources.pipelines.set(key, {
+					pipeline,
+					refCount: 1,
+					createdAt: Date.now()
+				});
+				return pipeline;
+			} finally {
+				// Clean up promise cache regardless of success/failure
+				this.#pipelineCreationPromises.delete(key);
+			}
+		})();
+
+		this.#pipelineCreationPromises.set(key, creationPromise);
+		return creationPromise;
 	}
 
 	#releaseSharedPipeline(key) {
@@ -1648,6 +1668,15 @@ export class GPUCoordinator {
 	}
 	get isInitialized() {
 		return this.#initialized;
+	}
+
+	/**
+	 * Promise that resolves when WebGPU initialization completes.
+	 * Use this instead of polling isInitialized.
+	 * @returns {Promise<boolean>}
+	 */
+	get ready() {
+		return this.#readyPromise;
 	}
 
 	get colorConfigBuffer() {
