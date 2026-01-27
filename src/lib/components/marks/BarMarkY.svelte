@@ -3,12 +3,7 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import {
-		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
-		MarkColor
-	} from './utils/index.js';
+	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
 
 	let {
 		table,
@@ -38,8 +33,12 @@
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
-		() => color, () => scheme, () => table, () => setup,
-		scaleRegistry, chartContext
+		() => color,
+		() => scheme,
+		() => table,
+		() => setup,
+		scaleRegistry,
+		chartContext
 	);
 
 	const xScaleConfig = $derived.by(() => {
@@ -63,12 +62,16 @@
 			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
 		},
 		inferredScaleColumns: {
-			x: x,  // X scale uses categorical column
-			y: y2  // Y scale uses the value column (y2, not y1 which is baseline)
+			x: x, // X scale uses categorical column
+			y: y2 // Y scale uses the value column (y2, not y1 which is baseline)
 		},
-		table, selection, transforms,
+		table,
+		selection,
+		transforms,
 		select: buildSelectFromChannels({
-			x, y1, y2,
+			x,
+			y1,
+			y2,
 			...(markColor.selectField && { color: markColor.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y1, y2] : null }
@@ -109,7 +112,7 @@
 
 		const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
 		const xArr = toFloat32(indices);
-		
+
 		return { x0Data: xArr, x1Data: xArr };
 	});
 
@@ -141,10 +144,17 @@
 		return toFloat32(raw);
 	});
 
-	let alphaData = $derived(toFloat32(resolveChannel({
-		value: alpha, channel: 'alpha',
-		dataAccessor: setup?.data, instanceCount, fallback: 0.8
-	})));
+	let alphaData = $derived(
+		toFloat32(
+			resolveChannel({
+				value: alpha,
+				channel: 'alpha',
+				dataAccessor: setup?.data,
+				instanceCount,
+				fallback: 0.8
+			})
+		)
+	);
 
 	// --- SETUP LIFECYCLE ---
 
@@ -160,12 +170,17 @@
 		});
 	});
 
-	onDestroy(() => { setup?.destroy(); });
+	onDestroy(() => {
+		setup?.destroy();
+	});
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
 	<Rects
-		{x0Data} {x1Data} {y0Data} {y1Data}
+		{x0Data}
+		{x1Data}
+		{y0Data}
+		{y1Data}
 		colorValueData={markColor.data}
 		{alphaData}
 		colorMode={markColor.colorMode}
@@ -174,9 +189,15 @@
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">Error: {setup.client.error.message}</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+		>Error: {setup.client.error.message}</text
+	>
 {:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Loading data...</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+		>Loading data...</text
+	>
 {:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Initializing bars...</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+		>Initializing bars...</text
+	>
 {/if}

@@ -3,12 +3,7 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Dots } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import {
-		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
-		MarkColor
-	} from './utils/index.js';
+	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
 
 	let {
 		table,
@@ -55,8 +50,8 @@
 			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
 		},
 		inferredScaleColumns: {
-			x: x,  // X scale uses x column
-			y: y   // Y scale uses y column
+			x: x, // X scale uses x column
+			y: y // Y scale uses y column
 		},
 		table,
 		selection,

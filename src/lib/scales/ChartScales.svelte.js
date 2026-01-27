@@ -101,7 +101,7 @@ export class ChartScales {
 			if (this.#xScaleInstance !== neededXScale) {
 				// Cleanup old scale - REMOVE FROM THAT SCALE'S USAGE
 				if (this.#xScaleInstance) {
-          this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
+					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
 					// scaleRegistry?.deregisterChart(this.#xScaleInstance, this.chartId);
 				}
 				// const scaleRegistry = getContext('scale-registry');
@@ -133,7 +133,7 @@ export class ChartScales {
 			if (this.#yScaleInstance !== neededYScale) {
 				// 3. Use proper method for cleanup
 				if (this.#yScaleInstance) {
-          this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
+					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
 					// scaleRegistry?.deregisterChart(this.#yScaleInstance, this.chartId);
 				}
 

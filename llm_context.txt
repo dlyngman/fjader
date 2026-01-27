@@ -188,9 +188,10 @@
   	 * @param {Object} scaleTypes - { x: 'linear', y: 'linear' } or { x: 'linear', y: 'band' }
   	 * @param {string} markShaderCode - Mark-specific shader code (dots, rects, etc.)
   	 * @param {Object} [rendererDefinition] - Optional declarative renderer definition
+  	 * @param {string} [markType] - Mark type identifier (dots, rects, rule, etc.)
   	 * @returns {Object} { shaderCode: string, bufferLayouts: Object }
   	 */
-  	generateShader(scaleTypes, markShaderCode, rendererDefinition) {
+  	generateShader(scaleTypes, markShaderCode, rendererDefinition, markType = 'unknown') {
   		if (!rendererDefinition) {
   			throw new Error(
   				'generateShader requires a rendererDefinition. ' +
@@ -199,7 +200,7 @@
   		}
   
   		const defKey = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
-  		const cacheKey = `${scaleTypes.x}-${scaleTypes.y}${defKey}`;
+  		const cacheKey = `${markType}-${scaleTypes.x}-${scaleTypes.y}${defKey}`;
   
   		// Return cached version if available
   		if (this.shaderCache.has(cacheKey)) {
@@ -226,7 +227,12 @@
   		const declarations = this._buildDeclarations(xFragment, yFragment);
   		const bandHelpers = this._buildBandHelpers(scaleTypes);
   		const implementations = this._buildImplementations(scaleTypes, xFragment, yFragment);
-  		const scaleFunctions = this._buildScaleFunctions(scaleTypes, xFragment, yFragment);
+  		const scaleFunctions = this._buildScaleFunctions(
+  			scaleTypes,
+  			xFragment,
+  			yFragment,
+  			rendererDefinition
+  		);
   
   		// Process mark shader using declarative renderer definition
   		const processedMarkShader = this._processMarkShader(
@@ -474,24 +480,44 @@
   	/**
   	 * Build convenience scale functions (scaleX, scaleY)
   	 * Directly calls the correct scale type function - no runtime branching!
+  	 * Conditionally generates only the functions needed by the renderer definition.
   	 * @private
   	 */
-  	_buildScaleFunctions(scaleTypes, xFragment, yFragment) {
-  		// At compile time, we know which scale type to use
-  		// So we directly call the right function
-  		const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
-  		const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+  	_buildScaleFunctions(scaleTypes, xFragment, yFragment, rendererDefinition) {
+  		const functions = [];
   
-  		return `
-        // Convenience functions - specialized at compile time
+  		// Only generate scaleX if the renderer uses X axis
+  		if (rendererDefinition?.x) {
+  			const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
+  			functions.push(`
+        fn scaleX(value: f32) -> f32 {
+          return ${xFunctionName}(value, frameUniforms.xScaleIndex);
+        }`);
+  		}
+  
+  		// Only generate scaleY if the renderer uses Y axis
+  		if (rendererDefinition?.y) {
+  			const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+  			functions.push(`
+        fn scaleY(value: f32) -> f32 {
+          return ${yFunctionName}(value, frameUniforms.yScaleIndex);
+        }`);
+  		}
+  
+  		// Fallback: if no renderer definition, generate both (backward compatibility)
+  		if (functions.length === 0) {
+  			const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
+  			const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+  			functions.push(`
         fn scaleX(value: f32) -> f32 {
           return ${xFunctionName}(value, frameUniforms.xScaleIndex);
         }
-        
         fn scaleY(value: f32) -> f32 {
           return ${yFunctionName}(value, frameUniforms.yScaleIndex);
-        }
-      `;
+        }`);
+  		}
+  
+  		return `// Convenience functions - specialized at compile time${functions.join('\n')}`;
   	}
   
   	/**
@@ -555,11 +581,7 @@
 
 <src/lib/gpu/index.js>
   // Enhanced GPU coordination exports
-  export { 
-    GPUCoordinator, 
-    setGPUCoordinator, 
-    getGPUContext 
-  } from './GPUCoordinator.svelte.js';
+  export { GPUCoordinator, setGPUCoordinator, getGPUContext } from './GPUCoordinator.svelte.js';
 </src/lib/gpu/index.js>
 
 <src/lib/gpu/GPUCoordinator.svelte.js>
@@ -1335,11 +1357,12 @@
   
   		if (!shaderModule) {
   			// Create/Get and increment RefCount
-  			// Pass rendererDefinition to generateShader
+  			// Pass rendererDefinition and markType to generateShader
   			const templateResult = scaleTemplateSystem.generateShader(
   				scaleTypes,
   				markShaderCode,
-  				rendererDefinition
+  				rendererDefinition,
+  				markType
   			);
   			shaderModule = await this.#getOrCreateSharedShader(resourceKey, templateResult.shaderCode);
   			localRegistry.set(shaderLookupKey, { type: 'shader', key: resourceKey });
@@ -1904,9 +1927,10 @@
   				entries: dataBindingConfig.map((config) => ({
   					binding: config.binding,
   					// visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-  					visibility:  config.visibility !== undefined 
-  						? config.visibility 
-  						: (GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT),
+  					visibility:
+  						config.visibility !== undefined
+  							? config.visibility
+  							: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
   					buffer: { type: config.type || 'read-only-storage' }
   				}))
   			});
@@ -2190,7 +2214,8 @@
   						resolveTarget: textureView,
   						clearValue: { r: 0, g: 0, b: 0, a: 0 },
   						loadOp: 'clear',
-  						storeOp: 'store'
+  						// storeOp: 'store'
+  						storeOp: 'discard'
   					}
   				]
   			};
@@ -2689,7 +2714,7 @@
   		this.#updateGpuState();
   
   		// Trigger Svelte reactivity
-  		// this._version++;
+  		this._version++;
   	}
   
   	/**
@@ -2835,6 +2860,19 @@
   			this.#sharedScale.range([size, 0]);
   		}
   		return this.#sharedScale;
+  	}
+  
+  	/**
+  	 * Generate tick values for grid lines and axes.
+  	 * Uses current animated domain (renderMin/renderMax) for smooth updates.
+  	 *
+  	 * @param {number} count - Approximate number of ticks desired
+  	 * @returns {Array<number>} Array of tick values
+  	 */
+  	getTicks(count = 5) {
+  		this._version; // Register Svelte dependency for reactivity
+  		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
+  		return this.#sharedScale.ticks(count);
   	}
   
   	/**
@@ -3568,6 +3606,17 @@
   	}
   
   	/**
+  	 * Generate tick values for grid lines and axes.
+  	 * For band scales, returns all category values.
+  	 *
+  	 * @returns {Array} Array of category values
+  	 */
+  	getTicks() {
+  		this._version; // Register Svelte dependency for reactivity
+  		return [...this.effectiveDomain];
+  	}
+  
+  	/**
   	 * Calculate bandwidth for a given range size (CPU-side)
   	 * Useful for axes, tooltips, etc.
   	 */
@@ -3694,7 +3743,7 @@
   
   /**
    * Reactive state for a GPU-backed color scale.
-   * 
+   *
    * Handles both continuous (sequential, diverging, cyclical) and discrete (ordinal) scales.
    * Manages GPU slot allocation and buffer uploads.
    */
@@ -3707,8 +3756,8 @@
   
   	// GPU slot indices (allocated from registry)
   	#configSlot = -1;
-  	#rampSlot = -1;      // Used by continuous scales
-  	#paletteSlot = -1;   // Used by ordinal scales
+  	#rampSlot = -1; // Used by continuous scales
+  	#paletteSlot = -1; // Used by ordinal scales
   
   	// Scale configuration
   	#scheme;
@@ -3734,6 +3783,7 @@
   	 * @param {Object} config - Scale configuration
   	 * @param {string} config.field - Field name this scale maps
   	 * @param {string} config.scheme - D3 color scheme name (e.g., 'viridis', 'tableau10')
+  	 * @param {string} [config.type] - Explicit scale type ('ordinal', 'sequential', 'diverging', 'cyclical')
   	 * @param {Array} config.domain - Domain values
   	 * @param {boolean} [config.reverse=false] - Reverse the color direction
   	 * @param {number} [config.midpoint] - Explicit midpoint for diverging scales
@@ -3748,8 +3798,12 @@
   		this.#registry = registry;
   		this.#gpuCoordinator = gpuCoordinator;
   
-  		// Determine scale type from scheme
-  		this.#scaleType = getSchemeType(this.#scheme) || 'sequential';
+  		// Explicit type wins, fallback to inference from scheme
+  		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
+  
+  		console.log(
+  			`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, scheme=${this.#scheme}`
+  		);
   
   		// Set initial domain
   		this.domain = config.domain || [];
@@ -3970,18 +4024,23 @@
   	 */
   	#getScaleTypeInt() {
   		switch (this.#scaleType) {
-  			case 'ordinal': return 0;
-  			case 'sequential': return 1;
-  			case 'diverging': return 2;
-  			case 'cyclical': return 3;
-  			default: return 1;
+  			case 'ordinal':
+  				return 0;
+  			case 'sequential':
+  				return 1;
+  			case 'diverging':
+  				return 2;
+  			case 'cyclical':
+  				return 3;
+  			default:
+  				return 1;
   		}
   	}
   
   	/**
   	 * Build the ColorConfig struct as ArrayBuffer.
   	 * Uses DataView for correct binary layout (mixed f32/u32).
-  	 * 
+  	 *
   	 * MUST MATCH WGSL LAYOUT:
   	 * struct ColorConfig {
   	 *   domainMin: f32,      // byte 0
@@ -4197,59 +4256,59 @@
   import { color } from 'd3-color';
   import { scaleOrdinal, scaleSequential, scaleDiverging } from 'd3-scale';
   import {
-    // Sequential single-hue
-    interpolateBlues,
-    interpolateGreens,
-    interpolateGreys,
-    interpolateOranges,
-    interpolatePurples,
-    interpolateReds,
-    // Sequential multi-hue
-    interpolateViridis,
-    interpolateInferno,
-    interpolateMagma,
-    interpolatePlasma,
-    interpolateCividis,
-    interpolateTurbo,
-    interpolateWarm,
-    interpolateCool,
-    interpolateCubehelixDefault,
-    interpolateBuGn,
-    interpolateBuPu,
-    interpolateGnBu,
-    interpolateOrRd,
-    interpolatePuBuGn,
-    interpolatePuBu,
-    interpolatePuRd,
-    interpolateRdPu,
-    interpolateYlGnBu,
-    interpolateYlGn,
-    interpolateYlOrBr,
-    interpolateYlOrRd,
-    // Diverging
-    interpolateBrBG,
-    interpolatePRGn,
-    interpolatePiYG,
-    interpolatePuOr,
-    interpolateRdBu,
-    interpolateRdGy,
-    interpolateRdYlBu,
-    interpolateRdYlGn,
-    interpolateSpectral,
-    // Cyclical
-    interpolateRainbow,
-    interpolateSinebow,
-    // Ordinal
-    schemeCategory10,
-    schemeAccent,
-    schemeDark2,
-    schemePaired,
-    schemePastel1,
-    schemePastel2,
-    schemeSet1,
-    schemeSet2,
-    schemeSet3,
-    schemeTableau10
+  	// Sequential single-hue
+  	interpolateBlues,
+  	interpolateGreens,
+  	interpolateGreys,
+  	interpolateOranges,
+  	interpolatePurples,
+  	interpolateReds,
+  	// Sequential multi-hue
+  	interpolateViridis,
+  	interpolateInferno,
+  	interpolateMagma,
+  	interpolatePlasma,
+  	interpolateCividis,
+  	interpolateTurbo,
+  	interpolateWarm,
+  	interpolateCool,
+  	interpolateCubehelixDefault,
+  	interpolateBuGn,
+  	interpolateBuPu,
+  	interpolateGnBu,
+  	interpolateOrRd,
+  	interpolatePuBuGn,
+  	interpolatePuBu,
+  	interpolatePuRd,
+  	interpolateRdPu,
+  	interpolateYlGnBu,
+  	interpolateYlGn,
+  	interpolateYlOrBr,
+  	interpolateYlOrRd,
+  	// Diverging
+  	interpolateBrBG,
+  	interpolatePRGn,
+  	interpolatePiYG,
+  	interpolatePuOr,
+  	interpolateRdBu,
+  	interpolateRdGy,
+  	interpolateRdYlBu,
+  	interpolateRdYlGn,
+  	interpolateSpectral,
+  	// Cyclical
+  	interpolateRainbow,
+  	interpolateSinebow,
+  	// Ordinal
+  	schemeCategory10,
+  	schemeAccent,
+  	schemeDark2,
+  	schemePaired,
+  	schemePastel1,
+  	schemePastel2,
+  	schemeSet1,
+  	schemeSet2,
+  	schemeSet3,
+  	schemeTableau10
   } from 'd3-scale-chromatic';
   
   /**
@@ -4257,321 +4316,441 @@
    * Used by BaseMarkSetup to distinguish "red" (constant) from "price" (field).
    */
   export const CSS_COLOR_NAMES = new Set([
-    'aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure',
-    'beige', 'bisque', 'black', 'blanchedalmond', 'blue', 'blueviolet',
-    'brown', 'burlywood', 'cadetblue', 'chartreuse', 'chocolate',
-    'coral', 'cornflowerblue', 'cornsilk', 'crimson', 'cyan',
-    'darkblue', 'darkcyan', 'darkgoldenrod', 'darkgray', 'darkgreen',
-    'darkgrey', 'darkkhaki', 'darkmagenta', 'darkolivegreen', 'darkorange',
-    'darkorchid', 'darkred', 'darksalmon', 'darkseagreen', 'darkslateblue',
-    'darkslategray', 'darkslategrey', 'darkturquoise', 'darkviolet',
-    'deeppink', 'deepskyblue', 'dimgray', 'dimgrey', 'dodgerblue',
-    'firebrick', 'floralwhite', 'forestgreen', 'fuchsia', 'gainsboro',
-    'ghostwhite', 'gold', 'goldenrod', 'gray', 'green', 'greenyellow',
-    'grey', 'honeydew', 'hotpink', 'indianred', 'indigo', 'ivory',
-    'khaki', 'lavender', 'lavenderblush', 'lawngreen', 'lemonchiffon',
-    'lightblue', 'lightcoral', 'lightcyan', 'lightgoldenrodyellow',
-    'lightgray', 'lightgreen', 'lightgrey', 'lightpink', 'lightsalmon',
-    'lightseagreen', 'lightskyblue', 'lightslategray', 'lightslategrey',
-    'lightsteelblue', 'lightyellow', 'lime', 'limegreen', 'linen',
-    'magenta', 'maroon', 'mediumaquamarine', 'mediumblue', 'mediumorchid',
-    'mediumpurple', 'mediumseagreen', 'mediumslateblue', 'mediumspringgreen',
-    'mediumturquoise', 'mediumvioletred', 'midnightblue', 'mintcream',
-    'mistyrose', 'moccasin', 'navajowhite', 'navy', 'oldlace', 'olive',
-    'olivedrab', 'orange', 'orangered', 'orchid', 'palegoldenrod',
-    'palegreen', 'paleturquoise', 'palevioletred', 'papayawhip',
-    'peachpuff', 'peru', 'pink', 'plum', 'powderblue', 'purple',
-    'rebeccapurple', 'red', 'rosybrown', 'royalblue', 'saddlebrown',
-    'salmon', 'sandybrown', 'seagreen', 'seashell', 'sienna', 'silver',
-    'skyblue', 'slateblue', 'slategray', 'slategrey', 'snow',
-    'springgreen', 'steelblue', 'tan', 'teal', 'thistle', 'tomato',
-    'turquoise', 'violet', 'wheat', 'white', 'whitesmoke', 'yellow',
-    'yellowgreen', 'transparent'
+  	'aliceblue',
+  	'antiquewhite',
+  	'aqua',
+  	'aquamarine',
+  	'azure',
+  	'beige',
+  	'bisque',
+  	'black',
+  	'blanchedalmond',
+  	'blue',
+  	'blueviolet',
+  	'brown',
+  	'burlywood',
+  	'cadetblue',
+  	'chartreuse',
+  	'chocolate',
+  	'coral',
+  	'cornflowerblue',
+  	'cornsilk',
+  	'crimson',
+  	'cyan',
+  	'darkblue',
+  	'darkcyan',
+  	'darkgoldenrod',
+  	'darkgray',
+  	'darkgreen',
+  	'darkgrey',
+  	'darkkhaki',
+  	'darkmagenta',
+  	'darkolivegreen',
+  	'darkorange',
+  	'darkorchid',
+  	'darkred',
+  	'darksalmon',
+  	'darkseagreen',
+  	'darkslateblue',
+  	'darkslategray',
+  	'darkslategrey',
+  	'darkturquoise',
+  	'darkviolet',
+  	'deeppink',
+  	'deepskyblue',
+  	'dimgray',
+  	'dimgrey',
+  	'dodgerblue',
+  	'firebrick',
+  	'floralwhite',
+  	'forestgreen',
+  	'fuchsia',
+  	'gainsboro',
+  	'ghostwhite',
+  	'gold',
+  	'goldenrod',
+  	'gray',
+  	'green',
+  	'greenyellow',
+  	'grey',
+  	'honeydew',
+  	'hotpink',
+  	'indianred',
+  	'indigo',
+  	'ivory',
+  	'khaki',
+  	'lavender',
+  	'lavenderblush',
+  	'lawngreen',
+  	'lemonchiffon',
+  	'lightblue',
+  	'lightcoral',
+  	'lightcyan',
+  	'lightgoldenrodyellow',
+  	'lightgray',
+  	'lightgreen',
+  	'lightgrey',
+  	'lightpink',
+  	'lightsalmon',
+  	'lightseagreen',
+  	'lightskyblue',
+  	'lightslategray',
+  	'lightslategrey',
+  	'lightsteelblue',
+  	'lightyellow',
+  	'lime',
+  	'limegreen',
+  	'linen',
+  	'magenta',
+  	'maroon',
+  	'mediumaquamarine',
+  	'mediumblue',
+  	'mediumorchid',
+  	'mediumpurple',
+  	'mediumseagreen',
+  	'mediumslateblue',
+  	'mediumspringgreen',
+  	'mediumturquoise',
+  	'mediumvioletred',
+  	'midnightblue',
+  	'mintcream',
+  	'mistyrose',
+  	'moccasin',
+  	'navajowhite',
+  	'navy',
+  	'oldlace',
+  	'olive',
+  	'olivedrab',
+  	'orange',
+  	'orangered',
+  	'orchid',
+  	'palegoldenrod',
+  	'palegreen',
+  	'paleturquoise',
+  	'palevioletred',
+  	'papayawhip',
+  	'peachpuff',
+  	'peru',
+  	'pink',
+  	'plum',
+  	'powderblue',
+  	'purple',
+  	'rebeccapurple',
+  	'red',
+  	'rosybrown',
+  	'royalblue',
+  	'saddlebrown',
+  	'salmon',
+  	'sandybrown',
+  	'seagreen',
+  	'seashell',
+  	'sienna',
+  	'silver',
+  	'skyblue',
+  	'slateblue',
+  	'slategray',
+  	'slategrey',
+  	'snow',
+  	'springgreen',
+  	'steelblue',
+  	'tan',
+  	'teal',
+  	'thistle',
+  	'tomato',
+  	'turquoise',
+  	'violet',
+  	'wheat',
+  	'white',
+  	'whitesmoke',
+  	'yellow',
+  	'yellowgreen',
+  	'transparent'
   ]);
   
   // Pre-compiled regex for RGB parsing
-  const RGB_REGEX = /rgba?\(\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)(?:\s*[,\/]\s*([0-9.]+%?))?\s*\)/;
+  const RGB_REGEX =
+  	/rgba?\(\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)(?:\s*[,\/]\s*([0-9.]+%?))?\s*\)/;
   
   /**
    * Parse any CSS color string to [r, g, b, a] array with values 0-1.
    * Supports: hex (#rgb, #rrggbb, #rrggbbaa), rgb(), rgba(), hsl(), hsla(), named colors.
-   * 
+   *
    * @param {string} colorStr - CSS color string
    * @returns {[number, number, number, number]} RGBA array with values 0-1
    */
   export function parseColorToRGBA(colorStr) {
-    if (!colorStr || typeof colorStr !== 'string') {
-      return [0, 0, 0, 1]; // Default to black
-    }
+  	if (!colorStr || typeof colorStr !== 'string') {
+  		return [0, 0, 0, 1]; // Default to black
+  	}
   
-    const trimmed = colorStr.trim().toLowerCase();
+  	const trimmed = colorStr.trim().toLowerCase();
   
-    // Handle hex colors
-    if (trimmed.startsWith('#')) {
-      return parseHexColor(trimmed);
-    }
+  	// Handle hex colors
+  	if (trimmed.startsWith('#')) {
+  		return parseHexColor(trimmed);
+  	}
   
-    // Handle rgb/rgba
-    if (trimmed.startsWith('rgb')) {
-      return parseRGBColor(trimmed);
-    }
+  	// Handle rgb/rgba
+  	if (trimmed.startsWith('rgb')) {
+  		return parseRGBColor(trimmed);
+  	}
   
-    // Handle hsl/hsla and named colors using D3
-    const d3Color = color(trimmed);
-    if (d3Color) {
-      return [d3Color.r / 255, d3Color.g / 255, d3Color.b / 255, d3Color.opacity];
-    }
+  	// Handle hsl/hsla and named colors using D3
+  	const d3Color = color(trimmed);
+  	if (d3Color) {
+  		return [d3Color.r / 255, d3Color.g / 255, d3Color.b / 255, d3Color.opacity];
+  	}
   
-    // Fallback to black
-    console.warn(`Unable to parse color: ${colorStr}`);
-    return [0, 0, 0, 1];
+  	// Fallback to black
+  	console.warn(`Unable to parse color: ${colorStr}`);
+  	return [0, 0, 0, 1];
   }
   
   /**
    * Parse hex color string to RGBA array.
    */
   function parseHexColor(hex) {
-    // Remove #
-    let h = hex.slice(1);
+  	// Remove #
+  	let h = hex.slice(1);
   
-    // Expand shorthand (#rgb → #rrggbb, #rgba → #rrggbbaa)
-    if (h.length === 3) {
-      h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
-    } else if (h.length === 4) {
-      h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
-    }
+  	// Expand shorthand (#rgb → #rrggbb, #rgba → #rrggbbaa)
+  	if (h.length === 3) {
+  		h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  	} else if (h.length === 4) {
+  		h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2] + h[3] + h[3];
+  	}
   
-    const r = parseInt(h.slice(0, 2), 16) / 255;
-    const g = parseInt(h.slice(2, 4), 16) / 255;
-    const b = parseInt(h.slice(4, 6), 16) / 255;
-    const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
+  	const r = parseInt(h.slice(0, 2), 16) / 255;
+  	const g = parseInt(h.slice(2, 4), 16) / 255;
+  	const b = parseInt(h.slice(4, 6), 16) / 255;
+  	const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
   
-    return [r, g, b, a];
+  	return [r, g, b, a];
   }
   
   /**
    * Parse rgb() or rgba() color string to RGBA array.
    */
   function parseRGBColor(rgb) {
-    const match = rgb.match(RGB_REGEX);
-    
-    if (!match) {
-      return [0, 0, 0, 1];
-    }
+  	const match = rgb.match(RGB_REGEX);
   
-    const parseComponent = (val) => {
-      if (val.endsWith('%')) {
-        return parseFloat(val) / 100;
-      }
-      return parseFloat(val) / 255;
-    };
+  	if (!match) {
+  		return [0, 0, 0, 1];
+  	}
   
-    const parseAlpha = (val) => {
-      if (!val) return 1;
-      if (val.endsWith('%')) {
-        return parseFloat(val) / 100;
-      }
-      return parseFloat(val);
-    };
+  	const parseComponent = (val) => {
+  		if (val.endsWith('%')) {
+  			return parseFloat(val) / 100;
+  		}
+  		return parseFloat(val) / 255;
+  	};
   
-    return [
-      parseComponent(match[1]),
-      parseComponent(match[2]),
-      parseComponent(match[3]),
-      parseAlpha(match[4])
-    ];
+  	const parseAlpha = (val) => {
+  		if (!val) return 1;
+  		if (val.endsWith('%')) {
+  			return parseFloat(val) / 100;
+  		}
+  		return parseFloat(val);
+  	};
+  
+  	return [
+  		parseComponent(match[1]),
+  		parseComponent(match[2]),
+  		parseComponent(match[3]),
+  		parseAlpha(match[4])
+  	];
   }
   
   /**
    * D3 color scheme mappings.
    */
   const SEQUENTIAL_SCHEMES = {
-    // Single-hue
-    blues: interpolateBlues,
-    greens: interpolateGreens,
-    greys: interpolateGreys,
-    oranges: interpolateOranges,
-    purples: interpolatePurples,
-    reds: interpolateReds,
-    
-    // Multi-hue
-    viridis: interpolateViridis,
-    inferno: interpolateInferno,
-    magma: interpolateMagma,
-    plasma: interpolatePlasma,
-    cividis: interpolateCividis,
-    turbo: interpolateTurbo,
-    warm: interpolateWarm,
-    cool: interpolateCool,
-    cubehelixdefault: interpolateCubehelixDefault,
-    
-    // Multi-hue sequential
-    bugn: interpolateBuGn,
-    bupu: interpolateBuPu,
-    gnbu: interpolateGnBu,
-    orrd: interpolateOrRd,
-    pubugn: interpolatePuBuGn,
-    pubu: interpolatePuBu,
-    purd: interpolatePuRd,
-    rdpu: interpolateRdPu,
-    ylgnbu: interpolateYlGnBu,
-    ylgn: interpolateYlGn,
-    ylorbr: interpolateYlOrBr,
-    ylorrd: interpolateYlOrRd
+  	// Single-hue
+  	blues: interpolateBlues,
+  	greens: interpolateGreens,
+  	greys: interpolateGreys,
+  	oranges: interpolateOranges,
+  	purples: interpolatePurples,
+  	reds: interpolateReds,
+  
+  	// Multi-hue
+  	viridis: interpolateViridis,
+  	inferno: interpolateInferno,
+  	magma: interpolateMagma,
+  	plasma: interpolatePlasma,
+  	cividis: interpolateCividis,
+  	turbo: interpolateTurbo,
+  	warm: interpolateWarm,
+  	cool: interpolateCool,
+  	cubehelixdefault: interpolateCubehelixDefault,
+  
+  	// Multi-hue sequential
+  	bugn: interpolateBuGn,
+  	bupu: interpolateBuPu,
+  	gnbu: interpolateGnBu,
+  	orrd: interpolateOrRd,
+  	pubugn: interpolatePuBuGn,
+  	pubu: interpolatePuBu,
+  	purd: interpolatePuRd,
+  	rdpu: interpolateRdPu,
+  	ylgnbu: interpolateYlGnBu,
+  	ylgn: interpolateYlGn,
+  	ylorbr: interpolateYlOrBr,
+  	ylorrd: interpolateYlOrRd
   };
   
   const DIVERGING_SCHEMES = {
-    brbg: interpolateBrBG,
-    prgn: interpolatePRGn,
-    piyg: interpolatePiYG,
-    puor: interpolatePuOr,
-    rdbu: interpolateRdBu,
-    rdgy: interpolateRdGy,
-    rdylbu: interpolateRdYlBu,
-    rdylgn: interpolateRdYlGn,
-    spectral: interpolateSpectral
+  	brbg: interpolateBrBG,
+  	prgn: interpolatePRGn,
+  	piyg: interpolatePiYG,
+  	puor: interpolatePuOr,
+  	rdbu: interpolateRdBu,
+  	rdgy: interpolateRdGy,
+  	rdylbu: interpolateRdYlBu,
+  	rdylgn: interpolateRdYlGn,
+  	spectral: interpolateSpectral
   };
   
   const CYCLICAL_SCHEMES = {
-    rainbow: interpolateRainbow,
-    sinebow: interpolateSinebow
+  	rainbow: interpolateRainbow,
+  	sinebow: interpolateSinebow
   };
   
   const ORDINAL_SCHEMES = {
-    category10: schemeCategory10,
-    accent: schemeAccent,
-    dark2: schemeDark2,
-    paired: schemePaired,
-    pastel1: schemePastel1,
-    pastel2: schemePastel2,
-    set1: schemeSet1,
-    set2: schemeSet2,
-    set3: schemeSet3,
-    tableau10: schemeTableau10
+  	category10: schemeCategory10,
+  	accent: schemeAccent,
+  	dark2: schemeDark2,
+  	paired: schemePaired,
+  	pastel1: schemePastel1,
+  	pastel2: schemePastel2,
+  	set1: schemeSet1,
+  	set2: schemeSet2,
+  	set3: schemeSet3,
+  	tableau10: schemeTableau10
   };
   
   /**
    * Get the interpolator function for a scheme name.
    * Returns null if scheme is ordinal (discrete colors, not interpolatable).
-   * 
+   *
    * @param {string} scheme - Scheme name (case-insensitive)
    * @returns {Function|null} D3 interpolator function or null
    */
   export function getInterpolator(scheme) {
-    const key = scheme.toLowerCase();
-    return SEQUENTIAL_SCHEMES[key] || DIVERGING_SCHEMES[key] || CYCLICAL_SCHEMES[key] || null;
+  	const key = scheme.toLowerCase();
+  	return SEQUENTIAL_SCHEMES[key] || DIVERGING_SCHEMES[key] || CYCLICAL_SCHEMES[key] || null;
   }
   
   /**
    * Get the color array for an ordinal scheme.
-   * 
+   *
    * @param {string} scheme - Scheme name (case-insensitive)
    * @returns {string[]|null} Array of color strings or null
    */
   export function getOrdinalColors(scheme) {
-    const key = scheme.toLowerCase();
-    return ORDINAL_SCHEMES[key] || null;
+  	const key = scheme.toLowerCase();
+  	return ORDINAL_SCHEMES[key] || null;
   }
   
   /**
    * Determine if a scheme is ordinal (discrete) or continuous.
-   * 
+   *
    * @param {string} scheme - Scheme name
    * @returns {'ordinal'|'sequential'|'diverging'|'cyclical'|null}
    */
   export function getSchemeType(scheme) {
-    const key = scheme.toLowerCase();
-    if (ORDINAL_SCHEMES[key]) return 'ordinal';
-    if (SEQUENTIAL_SCHEMES[key]) return 'sequential';
-    if (DIVERGING_SCHEMES[key]) return 'diverging';
-    if (CYCLICAL_SCHEMES[key]) return 'cyclical';
-    return null;
+  	const key = scheme.toLowerCase();
+  	if (ORDINAL_SCHEMES[key]) return 'ordinal';
+  	if (SEQUENTIAL_SCHEMES[key]) return 'sequential';
+  	if (DIVERGING_SCHEMES[key]) return 'diverging';
+  	if (CYCLICAL_SCHEMES[key]) return 'cyclical';
+  	return null;
   }
   
   /**
    * Bake a configured D3 scale into a GPU-ready Float32Array.
    * This ensures domain asymmetry, midpoints, and clamping are correctly baked in.
-   * 
+   *
    * The scale's domain logic is preserved: for diverging scales with asymmetric
    * domains (e.g., [-10, 0, 100]), the midpoint color will appear at the correct
    * texture coordinate.
-   * 
+   *
    * @param {Function} d3Scale - Configured D3 scale (from createD3Scale)
    * @param {number} steps - Texture resolution (default 256)
    * @returns {Float32Array} steps*4 element array (steps colors × 4 components)
    */
   export function bakeGradient(d3Scale, steps = 256) {
-    const result = new Float32Array(steps * 4);
-    
-    // Get the input domain from the scale itself
-    const domain = d3Scale.domain();
-    const min = domain[0];
-    const max = domain[domain.length - 1];
+  	const result = new Float32Array(steps * 4);
   
-    for (let i = 0; i < steps; i++) {
-      // Map texture coordinate (0..1) back to data domain
-      const t = i / (steps - 1);
-      const value = min + t * (max - min);
-      
-      // Pass data value through d3Scale - this handles diverging logic, midpoints, etc.
-      const c = color(d3Scale(value));
-      
-      const idx = i * 4;
-      result[idx] = c.r / 255;
-      result[idx + 1] = c.g / 255;
-      result[idx + 2] = c.b / 255;
-      result[idx + 3] = c.opacity;
-    }
-    
-    return result;
+  	// Get the input domain from the scale itself
+  	const domain = d3Scale.domain();
+  	const min = domain[0];
+  	const max = domain[domain.length - 1];
+  
+  	for (let i = 0; i < steps; i++) {
+  		// Map texture coordinate (0..1) back to data domain
+  		const t = i / (steps - 1);
+  		const value = min + t * (max - min);
+  
+  		// Pass data value through d3Scale - this handles diverging logic, midpoints, etc.
+  		const c = color(d3Scale(value));
+  
+  		const idx = i * 4;
+  		result[idx] = c.r / 255;
+  		result[idx + 1] = c.g / 255;
+  		result[idx + 2] = c.b / 255;
+  		result[idx + 3] = c.opacity;
+  	}
+  
+  	return result;
   }
   
   /**
    * Bake an ordinal palette into a Float32Array for GPU upload.
    * Pads to exactly 32 colors (max palette size).
-   * 
+   *
    * @param {string|string[]} schemeOrColors - Scheme name or array of color strings
    * @param {Object} options - Additional options
    * @param {boolean} options.reverse - Reverse the palette order
    * @returns {Float32Array} 128-element array (32 colors × 4 components)
    */
   export function bakePalette(schemeOrColors, options = {}) {
-    const maxColors = 32;
-    const result = new Float32Array(maxColors * 4);
-    const { reverse = false } = options;
+  	const maxColors = 32;
+  	const result = new Float32Array(maxColors * 4);
+  	const { reverse = false } = options;
   
-    let colors;
-    if (typeof schemeOrColors === 'string') {
-      colors = getOrdinalColors(schemeOrColors);
-      if (!colors) {
-        console.warn(`Unknown ordinal scheme: ${schemeOrColors}, falling back to tableau10`);
-        colors = schemeTableau10;
-      }
-    } else {
-      colors = schemeOrColors;
-    }
+  	let colors;
+  	if (typeof schemeOrColors === 'string') {
+  		colors = getOrdinalColors(schemeOrColors);
+  		if (!colors) {
+  			console.warn(`Unknown ordinal scheme: ${schemeOrColors}, falling back to tableau10`);
+  			colors = schemeTableau10;
+  		}
+  	} else {
+  		colors = schemeOrColors;
+  	}
   
-    if (reverse) {
-      colors = [...colors].reverse();
-    }
+  	if (reverse) {
+  		colors = [...colors].reverse();
+  	}
   
-    // Fill palette, cycling if needed for indices beyond color count
-    for (let i = 0; i < maxColors; i++) {
-      const c = color(colors[i % colors.length]);
-      const idx = i * 4;
-      result[idx] = c.r / 255;
-      result[idx + 1] = c.g / 255;
-      result[idx + 2] = c.b / 255;
-      result[idx + 3] = c.opacity;
-    }
+  	// Fill palette, cycling if needed for indices beyond color count
+  	for (let i = 0; i < maxColors; i++) {
+  		const c = color(colors[i % colors.length]);
+  		const idx = i * 4;
+  		result[idx] = c.r / 255;
+  		result[idx + 1] = c.g / 255;
+  		result[idx + 2] = c.b / 255;
+  		result[idx + 3] = c.opacity;
+  	}
   
-    return result;
+  	return result;
   }
   
   /**
    * Create a D3 scale for a color scheme.
    * Used for legends, CPU-side color lookups, AND as input to bakeGradient.
-   * 
+   *
    * @param {string} scheme - Scheme name
    * @param {Array} domain - Domain values (2 elements for sequential, 3 for diverging with explicit midpoint)
    * @param {Object} options - Scale options
@@ -4580,59 +4759,59 @@
    * @returns {Function} D3 scale function
    */
   export function createD3Scale(scheme, domain, options = {}) {
-    const schemeType = getSchemeType(scheme);
-    const { reverse = false, midpoint } = options;
+  	const schemeType = getSchemeType(scheme);
+  	const { reverse = false, midpoint } = options;
   
-    if (schemeType === 'ordinal') {
-      let colors = getOrdinalColors(scheme);
-      if (reverse) colors = [...colors].reverse();
-      return scaleOrdinal().domain(domain).range(colors);
-    }
+  	if (schemeType === 'ordinal') {
+  		let colors = getOrdinalColors(scheme);
+  		if (reverse) colors = [...colors].reverse();
+  		return scaleOrdinal().domain(domain).range(colors);
+  	}
   
-    // Get interpolator, handle reverse
-    let interpolator = getInterpolator(scheme);
-    if (!interpolator) {
-      console.warn(`Unknown scheme: ${scheme}, falling back to viridis`);
-      interpolator = interpolateViridis;
-    }
-    
-    if (reverse) {
-      const original = interpolator;
-      interpolator = (t) => original(1 - t);
-    }
+  	// Get interpolator, handle reverse
+  	let interpolator = getInterpolator(scheme);
+  	if (!interpolator) {
+  		console.warn(`Unknown scheme: ${scheme}, falling back to viridis`);
+  		interpolator = interpolateViridis;
+  	}
   
-    // Diverging scales use scaleDiverging with 3-point domain
-    if (schemeType === 'diverging') {
-      const [min, max] = [domain[0], domain[domain.length - 1]];
-      const mid = midpoint ?? (min + max) / 2;
-      return scaleDiverging(interpolator).domain([min, mid, max]);
-    }
+  	if (reverse) {
+  		const original = interpolator;
+  		interpolator = (t) => original(1 - t);
+  	}
   
-    // Sequential and cyclical use scaleSequential
-    return scaleSequential(interpolator).domain([domain[0], domain[domain.length - 1]]);
+  	// Diverging scales use scaleDiverging with 3-point domain
+  	if (schemeType === 'diverging') {
+  		const [min, max] = [domain[0], domain[domain.length - 1]];
+  		const mid = midpoint ?? (min + max) / 2;
+  		return scaleDiverging(interpolator).domain([min, mid, max]);
+  	}
+  
+  	// Sequential and cyclical use scaleSequential
+  	return scaleSequential(interpolator).domain([domain[0], domain[domain.length - 1]]);
   }
   
   /**
    * Check if a string looks like a color value (constant) vs a field name.
-   * 
+   *
    * @param {string} value - Value to check
    * @returns {boolean} True if value appears to be a color constant
    */
   export function isColorConstant(value) {
-    if (!value || typeof value !== 'string') return false;
-    
-    const trimmed = value.trim().toLowerCase();
-    
-    // Hex color
-    if (trimmed.startsWith('#')) return true;
-    
-    // RGB/RGBA/HSL/HSLA
-    if (trimmed.startsWith('rgb') || trimmed.startsWith('hsl')) return true;
-    
-    // Named CSS color
-    if (CSS_COLOR_NAMES.has(trimmed)) return true;
-    
-    return false;
+  	if (!value || typeof value !== 'string') return false;
+  
+  	const trimmed = value.trim().toLowerCase();
+  
+  	// Hex color
+  	if (trimmed.startsWith('#')) return true;
+  
+  	// RGB/RGBA/HSL/HSLA
+  	if (trimmed.startsWith('rgb') || trimmed.startsWith('hsl')) return true;
+  
+  	// Named CSS color
+  	if (CSS_COLOR_NAMES.has(trimmed)) return true;
+  
+  	return false;
   }
 </src/lib/scales/color-utils.js>
 
@@ -4646,131 +4825,131 @@
   const MAX_DELTA = 0.1; // 100ms cap - handles tab switch, debugger pause, etc.
   
   export class AnimationLoop {
-      #accumulator = 0;
-      #lastTime = 0;
-      #rafId = null;
-      #isRunning = false;
+  	#accumulator = 0;
+  	#lastTime = 0;
+  	#rafId = null;
+  	#isRunning = false;
   
-      #onPhysicsStep;
-      #onRender;
-      #onIdleCheck;
+  	#onPhysicsStep;
+  	#onRender;
+  	#onIdleCheck;
   
-      #frameCount = 0;
-      #physicsStepsThisFrame = 0;
-      #lastDelta = 0;
+  	#frameCount = 0;
+  	#physicsStepsThisFrame = 0;
+  	#lastDelta = 0;
   
-      #boundFrame;
+  	#boundFrame;
   
-      constructor({ onPhysicsStep, onRender, onIdleCheck = null }) {
-          if (typeof onPhysicsStep !== 'function') {
-              throw new Error('AnimationLoop requires onPhysicsStep callback');
-          }
-          if (typeof onRender !== 'function') {
-              throw new Error('AnimationLoop requires onRender callback');
-          }
+  	constructor({ onPhysicsStep, onRender, onIdleCheck = null }) {
+  		if (typeof onPhysicsStep !== 'function') {
+  			throw new Error('AnimationLoop requires onPhysicsStep callback');
+  		}
+  		if (typeof onRender !== 'function') {
+  			throw new Error('AnimationLoop requires onRender callback');
+  		}
   
-          this.#onPhysicsStep = onPhysicsStep;
-          this.#onRender = onRender;
-          this.#onIdleCheck = onIdleCheck;
+  		this.#onPhysicsStep = onPhysicsStep;
+  		this.#onRender = onRender;
+  		this.#onIdleCheck = onIdleCheck;
   
-          this.#boundFrame = this.#frame.bind(this);
-      }
+  		this.#boundFrame = this.#frame.bind(this);
+  	}
   
-      // ===========================================================================
-      // PUBLIC API
-      // ===========================================================================
+  	// ===========================================================================
+  	// PUBLIC API
+  	// ===========================================================================
   
-      start() {
-          if (this.#rafId !== null) return;
+  	start() {
+  		if (this.#rafId !== null) return;
   
-          this.#isRunning = true;
-          this.#lastTime = performance.now();
-          this.#accumulator = 0;
-          this.#rafId = requestAnimationFrame(this.#boundFrame);
-      }
+  		this.#isRunning = true;
+  		this.#lastTime = performance.now();
+  		this.#accumulator = 0;
+  		this.#rafId = requestAnimationFrame(this.#boundFrame);
+  	}
   
-      requestStart() {
-          if (this.#rafId === null) {
-              this.start();
-          }
-      }
+  	requestStart() {
+  		if (this.#rafId === null) {
+  			this.start();
+  		}
+  	}
   
-      stop() {
-          this.#isRunning = false;
-          if (this.#rafId !== null) {
-              cancelAnimationFrame(this.#rafId);
-              this.#rafId = null;
-          }
-      }
+  	stop() {
+  		this.#isRunning = false;
+  		if (this.#rafId !== null) {
+  			cancelAnimationFrame(this.#rafId);
+  			this.#rafId = null;
+  		}
+  	}
   
-      destroy() {
-          this.stop();
-      }
+  	destroy() {
+  		this.stop();
+  	}
   
-      // ===========================================================================
-      // GETTERS
-      // ===========================================================================
+  	// ===========================================================================
+  	// GETTERS
+  	// ===========================================================================
   
-      get frameCount() {
-          return this.#frameCount;
-      }
+  	get frameCount() {
+  		return this.#frameCount;
+  	}
   
-      get physicsStepsLastFrame() {
-          return this.#physicsStepsThisFrame;
-      }
+  	get physicsStepsLastFrame() {
+  		return this.#physicsStepsThisFrame;
+  	}
   
-      get lastDelta() {
-          return this.#lastDelta;
-      }
+  	get lastDelta() {
+  		return this.#lastDelta;
+  	}
   
-      get accumulator() {
-          return this.#accumulator;
-      }
+  	get accumulator() {
+  		return this.#accumulator;
+  	}
   
-      get isRunning() {
-          return this.#isRunning && this.#rafId !== null;
-      }
+  	get isRunning() {
+  		return this.#isRunning && this.#rafId !== null;
+  	}
   
-      // ===========================================================================
-      // FRAME LOOP
-      // ===========================================================================
+  	// ===========================================================================
+  	// FRAME LOOP
+  	// ===========================================================================
   
-      #frame(time) {
-        const now = time;
-          // const now = performance.now();
-          let delta = (now - this.#lastTime) / 1000;
-          this.#lastTime = now;
+  	#frame(time) {
+  		const now = time;
+  		// const now = performance.now();
+  		let delta = (now - this.#lastTime) / 1000;
+  		this.#lastTime = now;
   
-          // Clamp delta - handles tab switch, debugger pause, slow frames
-          if (delta > MAX_DELTA) {
-              delta = MAX_DELTA;
-          }
+  		// Clamp delta - handles tab switch, debugger pause, slow frames
+  		if (delta > MAX_DELTA) {
+  			delta = MAX_DELTA;
+  		}
   
-          this.#lastDelta = delta;
-          this.#accumulator += delta;
+  		this.#lastDelta = delta;
+  		this.#accumulator += delta;
   
-          // Fixed timestep physics
-          this.#physicsStepsThisFrame = 0;
-          while (this.#accumulator >= DT) {
-              this.#onPhysicsStep();
-              this.#accumulator -= DT;
-              this.#physicsStepsThisFrame++;
-          }
+  		// Fixed timestep physics
+  		this.#physicsStepsThisFrame = 0;
+  		while (this.#accumulator >= DT) {
+  			this.#onPhysicsStep();
+  			this.#accumulator -= DT;
+  			this.#physicsStepsThisFrame++;
+  		}
   
-          // Render with extrapolation
-          this.#onRender(this.#accumulator);
+  		// Render with extrapolation
+  		this.#onRender(this.#accumulator);
   
-          this.#frameCount++;
+  		this.#frameCount++;
   
-          // Check if we should continue
-          const shouldContinue = this.#onIdleCheck ? !this.#onIdleCheck() : true;
+  		// Check if we should continue
+  		const shouldContinue = this.#onIdleCheck ? !this.#onIdleCheck() : true;
   
-          if (this.#isRunning && shouldContinue) {
-              this.#rafId = requestAnimationFrame(this.#boundFrame);
-          } else {
-              this.#rafId = null;
-          }
-      }
+  		if (this.#isRunning && shouldContinue) {
+  			this.#rafId = requestAnimationFrame(this.#boundFrame);
+  		} else {
+  			this.#rafId = null;
+  		}
+  	}
   }
 </src/lib/animation/AnimationLoop.js>
 
@@ -4786,8 +4965,8 @@
   // 360Hz provides smooth results while being computationally efficient.
   // Higher rates (480Hz, 960Hz) offer marginal improvement at higher CPU cost.
   export const PHYSICS_HZ = 360;
-  export const DT = 1 / PHYSICS_HZ;           // Fixed timestep in seconds (~2.78ms)
-  export const DT_MS = DT * 1000;             // Fixed timestep in milliseconds
+  export const DT = 1 / PHYSICS_HZ; // Fixed timestep in seconds (~2.78ms)
+  export const DT_MS = DT * 1000; // Fixed timestep in milliseconds
   
   // -----------------------------------------------------------------------------
   // SPRING PRESETS
@@ -4832,8 +5011,8 @@
   	velocity = 0;
   
   	// Precomputed constants (set via configure())
-  	#omega = 0;      // Natural frequency: sqrt(stiffness)
-  	#expDt = 0;      // Precomputed: exp(-omega * DT)
+  	#omega = 0; // Natural frequency: sqrt(stiffness)
+  	#expDt = 0; // Precomputed: exp(-omega * DT)
   	#precision = 1e-6;
   
   	/**
@@ -5183,7 +5362,7 @@
   			if (this.#xScaleInstance !== neededXScale) {
   				// Cleanup old scale - REMOVE FROM THAT SCALE'S USAGE
   				if (this.#xScaleInstance) {
-            this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
+  					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
   					// scaleRegistry?.deregisterChart(this.#xScaleInstance, this.chartId);
   				}
   				// const scaleRegistry = getContext('scale-registry');
@@ -5215,7 +5394,7 @@
   			if (this.#yScaleInstance !== neededYScale) {
   				// 3. Use proper method for cleanup
   				if (this.#yScaleInstance) {
-            this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
+  					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
   					// scaleRegistry?.deregisterChart(this.#yScaleInstance, this.chartId);
   				}
   
@@ -5714,13 +5893,13 @@
   		if (this.#nextColorSlot >= this.#maxColorSlots) {
   			console.warn(
   				`[ScaleRegistry] Color scale limit reached (${this.#maxColorSlots}). ` +
-  				`Active: ${this.#nextColorSlot - this.#freeColorSlots.length}, ` +
-  				`Recycled: ${this.#freeColorSlots.length}. ` +
-  				`Ensure unused charts are destroyed, or share scales by field name.`
+  					`Active: ${this.#nextColorSlot - this.#freeColorSlots.length}, ` +
+  					`Recycled: ${this.#freeColorSlots.length}. ` +
+  					`Ensure unused charts are destroyed, or share scales by field name.`
   			);
   			throw new Error(
   				`Color scale limit exceeded (${this.#maxColorSlots}). ` +
-  				`Scales are shared by field name. Ensure old charts are destroyed before creating new ones.`
+  					`Scales are shared by field name. Ensure old charts are destroyed before creating new ones.`
   			);
   		}
   
@@ -5833,8 +6012,17 @@
   	// ============================================================
   
   	getOrCreateScale(name, type = 'linear', config = {}, chartId = null) {
-  		const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
-  		const key = `${name}-${type}${configKey}`;
+  		let key;
+  
+  		if (type === 'color') {
+  			// Color scales: key by field + type only (scheme is mutable state)
+  			const scaleType = config.type || 'sequential';
+  			key = `${name}-color-${scaleType}`;
+  		} else {
+  			// Other scales: key by full config (padding, align, etc. matter)
+  			const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
+  			key = `${name}-${type}${configKey}`;
+  		}
   
   		// Dynamic Map creation
   		if (!this.scales[type]) {
@@ -5858,21 +6046,30 @@
   						align: config.align ?? 0.5
   					})
   				);
-        } else if (type === 'color') {
-          this.scales[type].set(
-            key,
-            new ColorScaleState(
-              {
-                field: name,
-                scheme: config.scheme || 'viridis',
-                domain: config.domain || [],
-                reverse: config.reverse ?? false,
-                midpoint: config.midpoint
-              },
-              this,
-              this.#gpuCoordinator
-            )
-          );
+  			} else if (type === 'color') {
+  				// Apply default scheme based on explicit type
+  				const scaleType = config.type || 'sequential';
+  				const defaultScheme = scaleType === 'ordinal' ? 'tableau10' : 'viridis';
+  
+  				console.log(
+  					`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`
+  				);
+  
+  				this.scales[type].set(
+  					key,
+  					new ColorScaleState(
+  						{
+  							field: name,
+  							type: scaleType, // Pass explicit type
+  							scheme: config.scheme || defaultScheme, // Apply default based on type
+  							domain: config.domain || [],
+  							reverse: config.reverse ?? false,
+  							midpoint: config.midpoint
+  						},
+  						this,
+  						this.#gpuCoordinator
+  					)
+  				);
   			} else if (['ordinal', 'categorical'].includes(type)) {
   				this.scales[type].set(
   					key,
@@ -5959,7 +6156,7 @@
   		// Release GPU slots if this is a color scale
   		if (scaleInstance && typeof scaleInstance.gpuSlots === 'object') {
   			const slots = scaleInstance.gpuSlots;
-  			
+  
   			if (typeof slots.configSlot === 'number') {
   				this.releaseColorSlot(slots.configSlot);
   			}
@@ -6259,7 +6456,15 @@
   	import { ChartScales } from '$lib/scales/ChartScales.svelte';
   	import { getGPUContext } from '$lib/gpu';
   
-  	let { xLabel = null, yLabel = null, background, foreground, canvas, canvasComponents, overlay } = $props();
+  	let {
+  		xLabel = null,
+  		yLabel = null,
+  		background,
+  		foreground,
+  		canvas,
+  		canvasComponents,
+  		overlay
+  	} = $props();
   
   	const pointerBuffer = { x: 0, y: 0 };
   	const innerPointBuffer = { x: 0, y: 0 };
@@ -6924,9 +7129,16 @@
   	};
   
   	let {
-  		xData, yData, colorValueData, radiusData, alphaData,
-  		dataVersion, zIndex = 0,
-  		colorMode = 0, colorScaleIndex = 0, constantColor = [0.13, 0.55, 0.13, 1.0]
+  		xData,
+  		yData,
+  		colorValueData,
+  		radiusData,
+  		alphaData,
+  		dataVersion,
+  		zIndex = 0,
+  		colorMode = 0,
+  		colorScaleIndex = 0,
+  		constantColor = [0.13, 0.55, 0.13, 1.0]
   	} = $props();
   
   	const chartContext = getContext('chart');
@@ -6939,7 +7151,7 @@
   
   	const quadVertexCount = 6;
   
-      // ... [dotsShaderCode omitted, same as before] ...
+  	// ... [dotsShaderCode omitted, same as before] ...
   	const dotsShaderCode = `
       // MarkConstants uniform for per-mark configuration
       struct MarkConstants {
@@ -7024,10 +7236,12 @@
       }
     `;
   
-  	const vertexBufferLayout = [{
-  		arrayStride: 2 * 4,
-  		attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
-  	}];
+  	const vertexBufferLayout = [
+  		{
+  			arrayStride: 2 * 4,
+  			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+  		}
+  	];
   
   	const dataBindingConfig = [
   		{ binding: BINDINGS.X, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
@@ -7035,16 +7249,31 @@
   		{ binding: BINDINGS.RADIUS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
   		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
   		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-  		{ binding: BINDINGS.CONSTANTS, type: 'uniform', visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT }
+  		{
+  			binding: BINDINGS.CONSTANTS,
+  			type: 'uniform',
+  			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+  		}
   	];
   
   	// --- WRITING EFFECTS ---
   
-  	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData); });
-  	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData); });
-  	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.RADIUS, radiusData); });
-  	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData); });
-  	$effect(() => { if (renderer?.resourcesCreated && colorValueData) renderer.writeAttribute(BINDINGS.COLOR, colorValueData); });
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.RADIUS, radiusData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && colorValueData)
+  			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+  	});
   
   	// Uniforms
   	$effect(() => {
@@ -7119,7 +7348,7 @@
   	async function waitForWebGPU() {
   		let attempts = 0;
   		while (!webGPUContext.isInitialized() && attempts < 100) {
-  			await new Promise(r => setTimeout(r, 50));
+  			await new Promise((r) => setTimeout(r, 50));
   			attempts++;
   		}
   		if (webGPUContext.isInitialized()) await initializeDots();
@@ -7138,11 +7367,213 @@
   {/if}
 </src/lib/components/rendering/Dots.svelte>
 
+<src/lib/components/rendering/RuleX.svelte>
+  <script>
+  	import { getContext, onMount, onDestroy } from 'svelte';
+  	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+  	import { getGPUContext } from '$lib/gpu';
+  
+  	// RuleX: Vertical lines (X-axis gridlines)
+  	// Only binds X scale - eliminates Y scale binding overhead
+  	const ruleXRendererDefinition = {
+  		x: { concept: 'position', channels: ['x'] },
+  		y: null, // No Y scale binding
+  		placeholders: { x: '{{X_AXIS_LOGIC}}' }
+  	};
+  
+  	const BINDINGS = {
+  		POSITIONS: 0,
+  		CONSTANTS: 6
+  	};
+  
+  	const UNIFORM_OFFSETS = {
+  		LINE_WIDTH: 0,
+  		// 4-12: padding
+  		COLOR: 16
+  	};
+  
+  	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 } = $props();
+  
+  	const chartContext = getContext('chart');
+  	const webGPUContext = getContext('webgpu-canvas');
+  	const gpuCoordinator = getGPUContext();
+  
+  	let renderer = $state(null);
+  	let initializationError = $state(null);
+  	let lineGeometryBuffer;
+  
+  	const ruleXShaderCode = `
+      struct RuleConstants {
+        lineWidth: f32,
+        _pad0: u32,
+        _pad1: u32,
+        _pad2: u32,
+        color: vec4<f32>,
+      };
+      @group(1) @binding(6) var<uniform> ruleConstants: RuleConstants;
+  
+      @group(1) @binding(0) var<storage, read> positions: array<f32>;
+  
+      struct VertexOutput {
+        @builtin(position) position: vec4<f32>,
+        @location(0) color: vec4<f32>,
+      };
+  
+      @vertex
+      fn vertexMain(
+        @location(0) lineVertex: vec2<f32>,
+        @builtin(instance_index) instanceIdx: u32,
+      ) -> VertexOutput {
+        let x = positions[instanceIdx];
+  
+        // X axis scaling (for vertical lines)
+        {{X_AXIS_LOGIC}}
+  
+        // Render vertical line as a thin quad
+        let halfWidth = ruleConstants.lineWidth * 0.5 * frameUniforms.devicePixelRatio;
+  
+        // Vertical: fixed X, span full Y
+        let screenY = mix(0.0, frameUniforms.resolution.y, lineVertex.y);
+        let offsetX = (lineVertex.x - 0.5) * 2.0 * halfWidth;
+        let worldPos = vec2<f32>(scaledX + offsetX, screenY);
+  
+        let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+  
+        var output: VertexOutput;
+        output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+        output.color = ruleConstants.color;
+        return output;
+      }
+  
+      @fragment
+      fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+        return input.color;
+      }
+    `;
+  
+  	const vertexBufferLayout = [
+  		{
+  			arrayStride: 2 * 4,
+  			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+  		}
+  	];
+  
+  	const dataBindingConfig = [
+  		{ binding: BINDINGS.POSITIONS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+  		{
+  			binding: BINDINGS.CONSTANTS,
+  			type: 'uniform',
+  			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+  		}
+  	];
+  
+  	// --- DATA WRITING EFFECTS ---
+  
+  	// Update positions buffer when positions change
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && positions) {
+  			renderer.writeAttribute(BINDINGS.POSITIONS, positions);
+  		}
+  	});
+  
+  	// Update uniform constants
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) {
+  			const buffer = new ArrayBuffer(32);
+  			const view = new DataView(buffer);
+  			const LE = true;
+  
+  			view.setFloat32(UNIFORM_OFFSETS.LINE_WIDTH, lineWidth, LE);
+  			// padding at 4-12
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 0, color[0], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 4, color[1], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 8, color[2], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 12, color[3], LE);
+  
+  			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
+  		}
+  	});
+  
+  	// Update instance count
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && positions) {
+  			renderer.updateInstanceCount(positions.length);
+  		}
+  	});
+  
+  	function createLineGeometry() {
+  		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
+  	}
+  
+  	async function initializeLineGeometry() {
+  		const device = webGPUContext.getDevice();
+  		const lineVertices = createLineGeometry();
+  		lineGeometryBuffer = device.createBuffer({
+  			size: lineVertices.byteLength,
+  			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  			label: 'ruleX-line-geometry'
+  		});
+  		device.queue.writeBuffer(lineGeometryBuffer, 0, lineVertices);
+  	}
+  
+  	function drawRules(passEncoder) {
+  		if (!lineGeometryBuffer || renderer.instanceCount === 0) return;
+  		passEncoder.setVertexBuffer(0, lineGeometryBuffer);
+  		passEncoder.draw(6, renderer.instanceCount);
+  	}
+  
+  	async function initializeRule() {
+  		try {
+  			renderer = new BaseGPURenderer('ruleX', webGPUContext, gpuCoordinator, chartContext, {
+  				zIndex,
+  				xScaleType: chartContext.scaleTypes?.x || 'linear',
+  				yScaleType: chartContext.scaleTypes?.y || 'linear'
+  			});
+  
+  			await renderer.initialize({
+  				markShaderCode: ruleXShaderCode,
+  				vertexBufferLayout,
+  				dataBindingConfig,
+  				rendererDefinition: ruleXRendererDefinition
+  			});
+  
+  			await initializeLineGeometry();
+  			renderer.registerLayer(drawRules);
+  		} catch (error) {
+  			console.error('RuleX renderer init failed:', error);
+  			initializationError = error.message;
+  		}
+  	}
+  
+  	async function waitForWebGPU() {
+  		let attempts = 0;
+  		while (!webGPUContext.isInitialized() && attempts < 100) {
+  			await new Promise((r) => setTimeout(r, 50));
+  			attempts++;
+  		}
+  		if (webGPUContext.isInitialized()) await initializeRule();
+  	}
+  
+  	onMount(() => waitForWebGPU());
+  
+  	onDestroy(() => {
+  		if (lineGeometryBuffer) lineGeometryBuffer.destroy();
+  		if (renderer) renderer.destroy();
+  	});
+  </script>
+  
+  {#if initializationError}
+  	<div class="rule-error">{initializationError}</div>
+  {/if}
+</src/lib/components/rendering/RuleX.svelte>
+
 <src/lib/components/rendering/index.js>
   export { default as Canvas } from './Canvas.svelte';
   export { default as WebGPUCanvas } from './WebGPUCanvas.svelte';
   export { default as Dots } from './Dots.svelte';
   export { default as Rects } from './Rects.svelte';
+  export { default as RuleX } from './RuleX.svelte';
+  export { default as RuleY } from './RuleY.svelte';
 </src/lib/components/rendering/index.js>
 
 <src/lib/components/rendering/WebGPUCanvas.svelte>
@@ -7150,9 +7581,7 @@
   	import { onMount, onDestroy, setContext, getContext } from 'svelte';
   	import { getGPUContext } from '$lib/gpu';
   
-  	let {
-  		canvasComponents
-  	} = $props();
+  	let { canvasComponents } = $props();
   
   	const c = getContext('chart');
   	let width = $derived(c.innerWidth);
@@ -7160,7 +7589,7 @@
   	let margin = $derived(c.margin);
   
   	// let canvas;
-    let canvas = $state();
+  	let canvas = $state();
   	let context;
   	let gpuCoordinator;
   	let chartControl;
@@ -7228,6 +7657,7 @@
   			context.configure({
   				device,
   				format: presentationFormat,
+  				// alphaMode: 'opaque',
   				alphaMode: 'premultiplied',
   				desynchronized: true
   				// desynchronized: false
@@ -8044,145 +8474,342 @@
   }
 </src/lib/components/rendering/BaseGPURenderer.svelte.js>
 
+<src/lib/components/rendering/RuleY.svelte>
+  <script>
+  	import { getContext, onMount, onDestroy } from 'svelte';
+  	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+  	import { getGPUContext } from '$lib/gpu';
+  
+  	// RuleY: Horizontal lines (Y-axis gridlines)
+  	// Only binds Y scale - eliminates X scale binding overhead
+  	const ruleYRendererDefinition = {
+  		x: null, // No X scale binding
+  		y: { concept: 'position', channels: ['y'] },
+  		placeholders: { y: '{{Y_AXIS_LOGIC}}' }
+  	};
+  
+  	const BINDINGS = {
+  		POSITIONS: 0,
+  		CONSTANTS: 6
+  	};
+  
+  	const UNIFORM_OFFSETS = {
+  		LINE_WIDTH: 0,
+  		// 4-12: padding
+  		COLOR: 16
+  	};
+  
+  	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 } = $props();
+  
+  	const chartContext = getContext('chart');
+  	const webGPUContext = getContext('webgpu-canvas');
+  	const gpuCoordinator = getGPUContext();
+  
+  	let renderer = $state(null);
+  	let initializationError = $state(null);
+  	let lineGeometryBuffer;
+  
+  	const ruleYShaderCode = `
+      struct RuleConstants {
+        lineWidth: f32,
+        _pad0: u32,
+        _pad1: u32,
+        _pad2: u32,
+        color: vec4<f32>,
+      };
+      @group(1) @binding(6) var<uniform> ruleConstants: RuleConstants;
+  
+      @group(1) @binding(0) var<storage, read> positions: array<f32>;
+  
+      struct VertexOutput {
+        @builtin(position) position: vec4<f32>,
+        @location(0) color: vec4<f32>,
+      };
+  
+      @vertex
+      fn vertexMain(
+        @location(0) lineVertex: vec2<f32>,
+        @builtin(instance_index) instanceIdx: u32,
+      ) -> VertexOutput {
+        let y = positions[instanceIdx];
+  
+        // Y axis scaling (for horizontal lines)
+        {{Y_AXIS_LOGIC}}
+  
+        // Render horizontal line as a thin quad
+        let halfWidth = ruleConstants.lineWidth * 0.5 * frameUniforms.devicePixelRatio;
+  
+        // Horizontal: span full X, fixed Y
+        let screenX = mix(0.0, frameUniforms.resolution.x, lineVertex.x);
+        let offsetY = (lineVertex.y - 0.5) * 2.0 * halfWidth;
+        let worldPos = vec2<f32>(screenX, scaledY + offsetY);
+  
+        let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+  
+        var output: VertexOutput;
+        output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+        output.color = ruleConstants.color;
+        return output;
+      }
+  
+      @fragment
+      fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+        return input.color;
+      }
+    `;
+  
+  	const vertexBufferLayout = [
+  		{
+  			arrayStride: 2 * 4,
+  			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+  		}
+  	];
+  
+  	const dataBindingConfig = [
+  		{ binding: BINDINGS.POSITIONS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+  		{
+  			binding: BINDINGS.CONSTANTS,
+  			type: 'uniform',
+  			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+  		}
+  	];
+  
+  	// --- DATA WRITING EFFECTS ---
+  
+  	// Update positions buffer when positions change
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && positions) {
+  			renderer.writeAttribute(BINDINGS.POSITIONS, positions);
+  		}
+  	});
+  
+  	// Update uniform constants
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) {
+  			const buffer = new ArrayBuffer(32);
+  			const view = new DataView(buffer);
+  			const LE = true;
+  
+  			view.setFloat32(UNIFORM_OFFSETS.LINE_WIDTH, lineWidth, LE);
+  			// padding at 4-12
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 0, color[0], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 4, color[1], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 8, color[2], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.COLOR + 12, color[3], LE);
+  
+  			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
+  		}
+  	});
+  
+  	// Update instance count
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && positions) {
+  			renderer.updateInstanceCount(positions.length);
+  		}
+  	});
+  
+  	function createLineGeometry() {
+  		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
+  	}
+  
+  	async function initializeLineGeometry() {
+  		const device = webGPUContext.getDevice();
+  		const lineVertices = createLineGeometry();
+  		lineGeometryBuffer = device.createBuffer({
+  			size: lineVertices.byteLength,
+  			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  			label: 'ruleY-line-geometry'
+  		});
+  		device.queue.writeBuffer(lineGeometryBuffer, 0, lineVertices);
+  	}
+  
+  	function drawRules(passEncoder) {
+  		if (!lineGeometryBuffer || renderer.instanceCount === 0) return;
+  		passEncoder.setVertexBuffer(0, lineGeometryBuffer);
+  		passEncoder.draw(6, renderer.instanceCount);
+  	}
+  
+  	async function initializeRule() {
+  		try {
+  			renderer = new BaseGPURenderer('ruleY', webGPUContext, gpuCoordinator, chartContext, {
+  				zIndex,
+  				xScaleType: chartContext.scaleTypes?.x || 'linear',
+  				yScaleType: chartContext.scaleTypes?.y || 'linear'
+  			});
+  
+  			await renderer.initialize({
+  				markShaderCode: ruleYShaderCode,
+  				vertexBufferLayout,
+  				dataBindingConfig,
+  				rendererDefinition: ruleYRendererDefinition
+  			});
+  
+  			await initializeLineGeometry();
+  			renderer.registerLayer(drawRules);
+  		} catch (error) {
+  			console.error('RuleY renderer init failed:', error);
+  			initializationError = error.message;
+  		}
+  	}
+  
+  	async function waitForWebGPU() {
+  		let attempts = 0;
+  		while (!webGPUContext.isInitialized() && attempts < 100) {
+  			await new Promise((r) => setTimeout(r, 50));
+  			attempts++;
+  		}
+  		if (webGPUContext.isInitialized()) await initializeRule();
+  	}
+  
+  	onMount(() => waitForWebGPU());
+  
+  	onDestroy(() => {
+  		if (lineGeometryBuffer) lineGeometryBuffer.destroy();
+  		if (renderer) renderer.destroy();
+  	});
+  </script>
+  
+  {#if initializationError}
+  	<div class="rule-error">{initializationError}</div>
+  {/if}
+</src/lib/components/rendering/RuleY.svelte>
+
 <src/lib/components/rendering/Canvas.svelte>
   <script>
-    import { onMount, onDestroy, setContext, getContext } from "svelte";
+  	import { onMount, onDestroy, setContext, getContext } from 'svelte';
   
-    let {
-      canvasComponents
-    } = $props();
+  	let { canvasComponents } = $props();
   
-    const c = getContext('chart');
-    let width = $derived(c.innerWidth)
-    let height = $derived(c.innerHeight)
-    let margin = $derived(c.margin)
+  	const c = getContext('chart');
+  	let width = $derived(c.innerWidth);
+  	let height = $derived(c.innerHeight);
+  	let margin = $derived(c.margin);
   
-    let canvas;
-    let ctx;
-    let rafId = null;
-    let needsRedraw = false;
+  	let canvas;
+  	let ctx;
+  	let rafId = null;
+  	let needsRedraw = false;
   
-    // Layer management system
-    const layers = [];
+  	// Layer management system
+  	const layers = [];
   
-    function scaleCanvas(canvas, ctx, width, height, margin) {
-      const devicePixelRatio = window.devicePixelRatio || 1;
+  	function scaleCanvas(canvas, ctx, width, height, margin) {
+  		const devicePixelRatio = window.devicePixelRatio || 1;
   
-      canvas.width = width * devicePixelRatio;
-      canvas.height = height * devicePixelRatio;
-      canvas.style.width = width + 'px';
-      canvas.style.height = height + 'px';
-      canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
+  		canvas.width = width * devicePixelRatio;
+  		canvas.height = height * devicePixelRatio;
+  		canvas.style.width = width + 'px';
+  		canvas.style.height = height + 'px';
+  		canvas.style.transform = `translate(${margin.left}px, ${margin.top}px)`;
   
-      ctx.scale(devicePixelRatio, devicePixelRatio);
-      
-      needsRedraw = true;
-    }
+  		ctx.scale(devicePixelRatio, devicePixelRatio);
   
-    function update() {
-      if (!ctx || !needsRedraw) return;
-      
-      // Clear the canvas
-      ctx.clearRect(0, 0, width, height);
-      
-      // Draw all registered layers in order
-      for (let i = 0; i < layers.length; i++) {
-        const layer = layers[i];
-        if (layer.visible !== false) {
-          ctx.save();
-          layer.draw(ctx);
-          ctx.restore();
-        }
-      }
-      
-      needsRedraw = false;
-      rafId = null;
-    }
+  		needsRedraw = true;
+  	}
   
-    function requestRedraw() {
-      if (rafId !== null) return;
-      needsRedraw = true;
-      rafId = requestAnimationFrame(update);
-    }
+  	function update() {
+  		if (!ctx || !needsRedraw) return;
   
-    // Canvas context that child components can use
-    setContext('canvas', {
-      // Register a layer that can contain multiple elements
-      registerLayer(layer) {
-        // Allow specifying a z-index for ordering
-        const zIndex = layer.zIndex || 0;
-        let insertIndex = layers.length;
-        
-        // Find the correct position to insert based on zIndex
-        for (let i = 0; i < layers.length; i++) {
-          if ((layers[i].zIndex || 0) > zIndex) {
-            insertIndex = i;
-            break;
-          }
-        }
-        
-        layers.splice(insertIndex, 0, layer);
-        requestRedraw();
-        
-        // Return functions to interact with this layer
-        return {
-          // Update layer properties
-          update(newProps) {
-            Object.assign(layer, newProps);
-            requestRedraw();
-          },
-          // Remove this layer
-          remove() {
-            const index = layers.indexOf(layer);
-            if (index !== -1) {
-              layers.splice(index, 1);
-              requestRedraw();
-            }
-          },
-          // Request a redraw (if layer content changed)
-          invalidate() {
-            requestRedraw();
-          }
-        };
-      },
-      
-      // Expose canvas dimensions
-      getCanvasDimensions() {
-        return { width, height };
-      },
-      
-      // Force a redraw
-      invalidate() {
-        requestRedraw();
-      }
-    });
+  		// Clear the canvas
+  		ctx.clearRect(0, 0, width, height);
   
-    onMount(() => {
-      ctx = canvas.getContext('2d', {
-        willReadFrequently: false,  // Hint that we won't read pixel data often
-        desynchronized: true        // Lower latency rendering
-      });
-      
-      scaleCanvas(canvas, ctx, width, height, margin);
-      requestRedraw();
-    });
+  		// Draw all registered layers in order
+  		for (let i = 0; i < layers.length; i++) {
+  			const layer = layers[i];
+  			if (layer.visible !== false) {
+  				ctx.save();
+  				layer.draw(ctx);
+  				ctx.restore();
+  			}
+  		}
   
-    onDestroy(() => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-      }
-    });
+  		needsRedraw = false;
+  		rafId = null;
+  	}
   
-    $effect(() => {
-      if (canvas && ctx) {
-        scaleCanvas(canvas, ctx, width, height, margin);
-      }
-    });
+  	function requestRedraw() {
+  		if (rafId !== null) return;
+  		needsRedraw = true;
+  		rafId = requestAnimationFrame(update);
+  	}
+  
+  	// Canvas context that child components can use
+  	setContext('canvas', {
+  		// Register a layer that can contain multiple elements
+  		registerLayer(layer) {
+  			// Allow specifying a z-index for ordering
+  			const zIndex = layer.zIndex || 0;
+  			let insertIndex = layers.length;
+  
+  			// Find the correct position to insert based on zIndex
+  			for (let i = 0; i < layers.length; i++) {
+  				if ((layers[i].zIndex || 0) > zIndex) {
+  					insertIndex = i;
+  					break;
+  				}
+  			}
+  
+  			layers.splice(insertIndex, 0, layer);
+  			requestRedraw();
+  
+  			// Return functions to interact with this layer
+  			return {
+  				// Update layer properties
+  				update(newProps) {
+  					Object.assign(layer, newProps);
+  					requestRedraw();
+  				},
+  				// Remove this layer
+  				remove() {
+  					const index = layers.indexOf(layer);
+  					if (index !== -1) {
+  						layers.splice(index, 1);
+  						requestRedraw();
+  					}
+  				},
+  				// Request a redraw (if layer content changed)
+  				invalidate() {
+  					requestRedraw();
+  				}
+  			};
+  		},
+  
+  		// Expose canvas dimensions
+  		getCanvasDimensions() {
+  			return { width, height };
+  		},
+  
+  		// Force a redraw
+  		invalidate() {
+  			requestRedraw();
+  		}
+  	});
+  
+  	onMount(() => {
+  		ctx = canvas.getContext('2d', {
+  			willReadFrequently: false, // Hint that we won't read pixel data often
+  			desynchronized: true // Lower latency rendering
+  		});
+  
+  		scaleCanvas(canvas, ctx, width, height, margin);
+  		requestRedraw();
+  	});
+  
+  	onDestroy(() => {
+  		if (rafId !== null) {
+  			cancelAnimationFrame(rafId);
+  		}
+  	});
+  
+  	$effect(() => {
+  		if (canvas && ctx) {
+  			scaleCanvas(canvas, ctx, width, height, margin);
+  		}
+  	});
   </script>
   
   <canvas bind:this={canvas}></canvas>
   {@render canvasComponents?.()}
-  
   
   <!-- <script>
     import { onMount, onDestroy, setContext, getContext } from "svelte";
@@ -8315,7 +8942,7 @@
   	// Channels that need domain computed from query results (aggregates, transforms)
   	#channelsNeedingDataDomain = new Set();
   	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
-  	#globalAggregatesSet = $state(false);   // From sidecar query (preferred)
+  	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
   
   	constructor(config, coordinator, chartContext, stableId = null) {
   		console.log('🔧 BaseMarkSetup constructor:', {
@@ -8413,8 +9040,10 @@
   		}
   
   		if (this.#channelsNeedingDataDomain.size > 0) {
-  			console.log(`🔧 ${this.#markId} channels needing data-derived domain:`,
-  				Array.from(this.#channelsNeedingDataDomain));
+  			console.log(
+  				`🔧 ${this.#markId} channels needing data-derived domain:`,
+  				Array.from(this.#channelsNeedingDataDomain)
+  			);
   		}
   	}
   
@@ -8448,15 +9077,14 @@
   				this.#categoricalFetchStarted = true;
   
   				// Fetch both categorical and aggregated domains in parallel
-  				Promise.all([
-  					this.#fetchCategoricalDomains(),
-  					this.#fetchGlobalAggregates()
-  				])
+  				Promise.all([this.#fetchCategoricalDomains(), this.#fetchGlobalAggregates()])
   					.then(([fetchCount]) => {
   						this.categoricalDataFetched = true;
   						this.#setScalesReady();
   						if (fetchCount > 0) {
-  							console.log(`✅ Mark ${this.#markId} categorical domains ready (${fetchCount} fetches), view should be created`);
+  							console.log(
+  								`✅ Mark ${this.#markId} categorical domains ready (${fetchCount} fetches), view should be created`
+  							);
   						}
   					})
   					.catch((error) => {
@@ -8536,7 +9164,6 @@
   				this.#markDeferredScalesReady();
   			}
   		});
-  
   	}
   
   	#registerScaleRequirements() {
@@ -8682,14 +9309,10 @@
   		console.log('📊 Input data sample:', objects.slice(0, 3));
   		console.log('📊 Select config:', this.#config.select);
   
-  		const transformed = this.#transformCompiler.applyToData(
-  			objects,
-  			transformConfig,
-  			{
-  				x: this.#chartContext.xScale,
-  				y: this.#chartContext.yScale
-  			}
-  		);
+  		const transformed = this.#transformCompiler.applyToData(objects, transformConfig, {
+  			x: this.#chartContext.xScale,
+  			y: this.#chartContext.yScale
+  		});
   
   		console.log('📊 Transformed data:', transformed.length, 'rows');
   		console.log('📊 Transformed sample:', transformed.slice(0, 3));
@@ -9115,7 +9738,9 @@
   
   			if (!isAggregate) {
   				// Only fetch categorical domains for non-aggregate color fields
-  				const q = Query.from(table).select({ color: sqlColumn(String(colorField)) }).distinct();
+  				const q = Query.from(table)
+  					.select({ color: sqlColumn(String(colorField)) })
+  					.distinct();
   
   				fetches.push(
   					this.#coordinator.query(q).then((result) => {
@@ -9148,8 +9773,10 @@
   			return;
   		}
   
-  		console.log(`🔍 [${this.#markId}] Building sidecar query for channels:`,
-  			Array.from(this.#channelsNeedingDataDomain));
+  		console.log(
+  			`🔍 [${this.#markId}] Building sidecar query for channels:`,
+  			Array.from(this.#channelsNeedingDataDomain)
+  		);
   
   		try {
   			// Step 1: Build the inner query using the same query builder (no filter)
@@ -9186,19 +9813,31 @@
   			console.log(`✅ [${this.#markId}] Sidecar results:`, extents);
   
   			// Step 4: Apply extents to scales
-  			if (this.#channelsNeedingDataDomain.has('x') && extents.min_x != null && extents.max_x != null) {
+  			if (
+  				this.#channelsNeedingDataDomain.has('x') &&
+  				extents.min_x != null &&
+  				extents.max_x != null
+  			) {
   				const xExtent = [extents.min_x, extents.max_x];
   				console.log(`📊 [${this.#markId}] Applying X extent from sidecar:`, xExtent);
   				this.#chartContext.xScaleState?.addMark(xExtent, this.#markId);
   			}
   
-  			if (this.#channelsNeedingDataDomain.has('y') && extents.min_y != null && extents.max_y != null) {
+  			if (
+  				this.#channelsNeedingDataDomain.has('y') &&
+  				extents.min_y != null &&
+  				extents.max_y != null
+  			) {
   				const yExtent = [extents.min_y, extents.max_y];
   				console.log(`📊 [${this.#markId}] Applying Y extent from sidecar:`, yExtent);
   				this.#chartContext.yScaleState?.addMark(yExtent, this.#markId);
   			}
   
-  			if (this.#channelsNeedingDataDomain.has('color') && extents.min_color != null && extents.max_color != null) {
+  			if (
+  				this.#channelsNeedingDataDomain.has('color') &&
+  				extents.min_color != null &&
+  				extents.max_color != null
+  			) {
   				const colorExtent = [extents.min_color, extents.max_color];
   				console.log(`📊 [${this.#markId}] Applying color extent from sidecar:`, colorExtent);
   				this.#colorScaleState?.setDomain(colorExtent);
@@ -9206,7 +9845,6 @@
   
   			// Mark that global aggregates have been set
   			this.#globalAggregatesSet = true;
-  
   		} catch (error) {
   			console.error(`❌ [${this.#markId}] Sidecar query failed:`, error);
   			// Don't set flag on failure - will fall back to data-derived domains
@@ -9255,7 +9893,10 @@
   			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
   
   			// Only mark linear scales that were waiting for data-derived domains
-  			if (needsDataDomain && (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')) {
+  			if (
+  				needsDataDomain &&
+  				(scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')
+  			) {
   				if (!scale.ready) {
   					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
   					scale.setReady?.();
@@ -9286,12 +9927,7 @@
   	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   	import { Rects } from '../rendering/index.js';
   	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-  	import {
-  		buildSelectFromChannels,
-  		resolveChannel,
-  		toFloat32,
-  		MarkColor
-  	} from './utils/index.js';
+  	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
   
   	let {
   		table,
@@ -9301,7 +9937,7 @@
   		y1 = 0, // baseline
   		y2 = y, // top of bars
   		color = null,
-  		scheme = 'tableau10',
+  		scheme, // No default scheme - MarkColor will infer
   		alpha = 0.8,
   		limit,
   		filterNulls = false,
@@ -9321,8 +9957,12 @@
   
   	// 1. Color Logic
   	const markColor = new MarkColor(
-  		() => color, () => scheme, () => table, () => setup,
-  		scaleRegistry, chartContext
+  		() => color,
+  		() => scheme,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
   	);
   
   	const xScaleConfig = $derived.by(() => {
@@ -9346,12 +9986,16 @@
   			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
   		},
   		inferredScaleColumns: {
-  			x: x,  // X scale uses categorical column
-  			y: y2  // Y scale uses the value column (y2, not y1 which is baseline)
+  			x: x, // X scale uses categorical column
+  			y: y2 // Y scale uses the value column (y2, not y1 which is baseline)
   		},
-  		table, selection, transforms,
+  		table,
+  		selection,
+  		transforms,
   		select: buildSelectFromChannels({
-  			x, y1, y2,
+  			x,
+  			y1,
+  			y2,
   			...(markColor.selectField && { color: markColor.selectField })
   		}),
   		clientOptions: { limit, filterNulls: filterNulls ? [x, y1, y2] : null }
@@ -9392,7 +10036,7 @@
   
   		const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
   		const xArr = toFloat32(indices);
-  		
+  
   		return { x0Data: xArr, x1Data: xArr };
   	});
   
@@ -9424,10 +10068,17 @@
   		return toFloat32(raw);
   	});
   
-  	let alphaData = $derived(toFloat32(resolveChannel({
-  		value: alpha, channel: 'alpha',
-  		dataAccessor: setup?.data, instanceCount, fallback: 0.8
-  	})));
+  	let alphaData = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: alpha,
+  				channel: 'alpha',
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0.8
+  			})
+  		)
+  	);
   
   	// --- SETUP LIFECYCLE ---
   
@@ -9443,12 +10094,17 @@
   		});
   	});
   
-  	onDestroy(() => { setup?.destroy(); });
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
   </script>
   
   {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
   	<Rects
-  		{x0Data} {x1Data} {y0Data} {y1Data}
+  		{x0Data}
+  		{x1Data}
+  		{y0Data}
+  		{y1Data}
   		colorValueData={markColor.data}
   		{alphaData}
   		colorMode={markColor.colorMode}
@@ -9457,11 +10113,17 @@
   		dataVersion={setup?.client?.dataVersion || 0}
   	/>
   {:else if setup?.client?.error}
-  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">Error: {setup.client.error.message}</text>
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+  		>Error: {setup.client.error.message}</text
+  	>
   {:else if setup?.client?.delayedLoading}
-  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Loading data...</text>
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Loading data...</text
+  	>
   {:else}
-  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Initializing bars...</text>
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Initializing bars...</text
+  	>
   {/if}
 </src/lib/components/marks/BarMarkY.svelte>
 
@@ -9477,18 +10139,25 @@
   	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   	import { Rects } from '../rendering/index.js';
   	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-  	import {
-  		buildSelectFromChannels,
-  		resolveChannel,
-  		toFloat32,
-  		MarkColor
-  	} from './utils/index.js';
+  	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
   
   	let {
-  		table, selection, x, x1 = 0, x2 = x, y,
-  		color = null, scheme = 'tableau10', alpha = 0.8,
-  		limit, filterNulls = false, transforms = [],
-  		padding, paddingInner, paddingOuter, align = 0.5
+  		table,
+  		selection,
+  		x,
+  		x1 = 0,
+  		x2 = x,
+  		y,
+  		color = null,
+  		scheme,
+  		alpha = 0.8, // No default scheme - MarkColor will infer
+  		limit,
+  		filterNulls = false,
+  		transforms = [],
+  		padding,
+  		paddingInner,
+  		paddingOuter,
+  		align = 0.5
   	} = $props();
   
   	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
@@ -9500,8 +10169,12 @@
   
   	// 1. Color Logic
   	const markColor = new MarkColor(
-  		() => color, () => scheme, () => table, () => setup,
-  		scaleRegistry, chartContext
+  		() => color,
+  		() => scheme,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
   	);
   
   	const yScaleConfig = $derived.by(() => {
@@ -9522,12 +10195,16 @@
   			y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
   		},
   		inferredScaleColumns: {
-  			x: x2,  // X scale uses the value column (x2, not x1 which is baseline)
-  			y: y    // Y scale uses categorical column
+  			x: x2, // X scale uses the value column (x2, not x1 which is baseline)
+  			y: y // Y scale uses categorical column
   		},
-  		table, selection, transforms,
+  		table,
+  		selection,
+  		transforms,
   		select: buildSelectFromChannels({
-  			x1, x2, y,
+  			x1,
+  			x2,
+  			y,
   			...(markColor.selectField && { color: markColor.selectField })
   		}),
   		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y] : null }
@@ -9550,44 +10227,69 @@
   	// --- DATA RESOLUTION ---
   
   	// X0: Stack Output -> x1 prop -> 0
-  	let x0Data = $derived(toFloat32(resolveChannel({
-  		value: x1, channel: 'x1',
-  		tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
-  		dataAccessor: setup?.data, instanceCount, fallback: 0
-  	})));
+  	let x0Data = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: x1,
+  				channel: 'x1',
+  				tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0
+  			})
+  		)
+  	);
   
   	// X1: Stack Output -> x2 prop
-  	let x1Data = $derived(toFloat32(resolveChannel({
-  		value: x2, channel: 'x2',
-  		tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
-  		dataAccessor: setup?.data, instanceCount
-  	})));
+  	let x1Data = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: x2,
+  				channel: 'x2',
+  				tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
+  				dataAccessor: setup?.data,
+  				instanceCount
+  			})
+  		)
+  	);
   
   	// Y: Categorical Resolution
   	let yData = $derived.by(() => {
   		if (!instanceCount) return null;
-  		
+  
   		// Fallback scale type check for No-DB mode
   		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y || 'band';
   		if (scaleType !== 'band') return null;
   
-  		const raw = resolveChannel({ value: y, channel: 'y', dataAccessor: setup?.data, instanceCount });
+  		const raw = resolveChannel({
+  			value: y,
+  			channel: 'y',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
   		if (!raw) return null;
   
   		if (!chartContext.yScaleState?.processDataForGPU) return null;
   		const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
   		const yArr = toFloat32(indices);
-  		
+  
   		return { y0Data: yArr, y1Data: yArr };
   	});
   
   	let y0Data = $derived(yData?.y0Data);
   	let y1Data = $derived(yData?.y1Data);
   
-  	let alphaData = $derived(toFloat32(resolveChannel({
-  		value: alpha, channel: 'alpha',
-  		dataAccessor: setup?.data, instanceCount, fallback: 0.8
-  	})));
+  	let alphaData = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: alpha,
+  				channel: 'alpha',
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0.8
+  			})
+  		)
+  	);
   
   	// --- SETUP LIFECYCLE ---
   
@@ -9603,12 +10305,17 @@
   		});
   	});
   
-  	onDestroy(() => { setup?.destroy(); });
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
   </script>
   
   {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
   	<Rects
-  		{x0Data} {x1Data} {y0Data} {y1Data}
+  		{x0Data}
+  		{x1Data}
+  		{y0Data}
+  		{y1Data}
   		colorValueData={markColor.data}
   		{alphaData}
   		colorMode={markColor.colorMode}
@@ -9617,11 +10324,17 @@
   		dataVersion={setup?.client?.dataVersion || 0}
   	/>
   {:else if setup?.client?.error}
-  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">Error: {setup.client.error.message}</text>
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+  		>Error: {setup.client.error.message}</text
+  	>
   {:else if setup?.client?.delayedLoading}
-  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Loading data...</text>
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Loading data...</text
+  	>
   {:else}
-  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Initializing bars...</text>
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Initializing bars...</text
+  	>
   {/if}
 </src/lib/components/marks/BarMarkX.svelte>
 
@@ -9631,12 +10344,7 @@
   	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   	import { Dots } from '../rendering/index.js';
   	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-  	import {
-  		buildSelectFromChannels,
-  		resolveChannel,
-  		toFloat32,
-  		MarkColor
-  	} from './utils/index.js';
+  	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
   
   	let {
   		table,
@@ -9644,7 +10352,7 @@
   		x,
   		y,
   		color = null,
-  		scheme = 'tableau10',
+  		scheme, // No default - MarkColor will infer based on field type
   		alpha = 0.5,
   		radius = 3,
   		limit,
@@ -9683,8 +10391,8 @@
   			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
   		},
   		inferredScaleColumns: {
-  			x: x,  // X scale uses x column
-  			y: y   // Y scale uses y column
+  			x: x, // X scale uses x column
+  			y: y // Y scale uses y column
   		},
   		table,
   		selection,
@@ -9826,7 +10534,8 @@
   // Future Bar Mark Examples with proper scale type checking
   
   // ===== BarXMark.svelte (Vertical bars) =====
-  /*
+  /\*
+  
   <script>
     import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
     import { getContext, onMount, onDestroy, untrack } from 'svelte';
@@ -9873,21 +10582,22 @@
   </script>
   
   {#if scaleCompatibilityError}
-    <text fill="red">Scale Error: {scaleCompatibilityError}</text>
+  <text fill="red">Scale Error: {scaleCompatibilityError}</text>
   {:else if client?.arrowTable}
-    <Rects
-      data={client.arrowTable}
-      dataVersion={client.dataVersion}
-      xScaleType={actualXScaleType}  <!-- Pass ACTUAL resolved types -->
-      yScaleType={actualYScaleType}
-      alpha={alpha}
-      baseline="zero"
-    />
+  <Rects
+  data={client.arrowTable}
+  dataVersion={client.dataVersion}
+  xScaleType={actualXScaleType} <!-- Pass ACTUAL resolved types -->
+  yScaleType={actualYScaleType}
+  alpha={alpha}
+  baseline="zero"
+  />
   {/if}
-  */
+  \*/
   
   // ===== BarYMark.svelte (Horizontal bars) =====
-  /*
+  /\*
+  
   <script>
     // ... similar setup ...
   
@@ -9907,22 +10617,23 @@
   </script>
   
   {#if scaleCompatibilityError}
-    <text fill="red">Scale Error: {scaleCompatibilityError}</text>
+  <text fill="red">Scale Error: {scaleCompatibilityError}</text>
   {:else if client?.arrowTable}
-    <Rects
-      data={client.arrowTable}
-      dataVersion={client.dataVersion}
-      xScaleType={actualXScaleType}  <!-- ACTUAL types, not requested -->
-      yScaleType={actualYScaleType}
-      alpha={alpha}
-      baseline="zero"
-      orientation="horizontal"
-    />
+  <Rects
+  data={client.arrowTable}
+  dataVersion={client.dataVersion}
+  xScaleType={actualXScaleType} <!-- ACTUAL types, not requested -->
+  yScaleType={actualYScaleType}
+  alpha={alpha}
+  baseline="zero"
+  orientation="horizontal"
+  />
   {/if}
-  */
+  \*/
   
   // ===== RectMark.svelte (General rectangles - Very flexible) =====
-  /*
+  /\*
+  
   <script>
     // General rectangles are very flexible
     c.registerScaleType('x', 'linear', SCALE_PRIORITIES.ACCEPT, markId);  // Accept anything
@@ -9939,34 +10650,39 @@
   </script>
   
   {#if client?.arrowTable}
-    <Rects
-      data={client.arrowTable}
-      dataVersion={client.dataVersion}
-      xScaleType={actualXScaleType}  <!-- Adapts to whatever was resolved -->
-      yScaleType={actualYScaleType}
-      alpha={alpha}
-    />
+  <Rects
+  data={client.arrowTable}
+  dataVersion={client.dataVersion}
+  xScaleType={actualXScaleType} <!-- Adapts to whatever was resolved -->
+  yScaleType={actualYScaleType}
+  alpha={alpha}
+  />
   {/if}
-  */
+  \*/
   
   // ===== Usage Examples =====
   
-  /*
+  /\*
+  
   <!-- This works fine - dots adapt to whatever scales are resolved -->
-  <DotsMark 
-    table="penguins" 
-    x="bill_length" 
-    y="bill_depth"
-    preferredXScaleType="linear"   <!-- Preference, not guarantee -->
-    preferredYScaleType="linear" 
+  
+  <DotsMark
+  table="penguins"
+  x="bill_length"
+  y="bill_depth"
+  preferredXScaleType="linear" <!-- Preference, not guarantee -->
+  preferredYScaleType="linear"
   />
   
   <!-- This will MANDATE band scale for x-axis -->
-  <BarXMark 
-    table="sales" 
-    x="category" 
-    y={sum("amount")}
+  
+  <BarXMark
+  table="sales"
+  x="category"
+  y={sum("amount")}
+  
     <!-- No scale type props needed - BarX knows what it needs -->
+  
   />
   
   <!-- Mixing marks: BarX mandates band x-axis, dots adapt -->
@@ -9992,36 +10708,36 @@
   // ===== API Benefits =====
   
   // 1. **Explicit Requirements**
-  //    - Each mark clearly states what it needs (MANDATE/PREFER/ACCEPT)
-  //    - Clear error messages when requirements conflict
-  //    - Visible validation logic in mark components
+  // - Each mark clearly states what it needs (MANDATE/PREFER/ACCEPT)
+  // - Clear error messages when requirements conflict
+  // - Visible validation logic in mark components
   
   // 2. **Flexible Adaptation**
-  //    - Marks can adapt to resolved scale types
-  //    - Warnings when marks get something different than preferred
-  //    - Graceful degradation for compatible scale types
+  // - Marks can adapt to resolved scale types
+  // - Warnings when marks get something different than preferred
+  // - Graceful degradation for compatible scale types
   
   // 3. **No Hidden Magic**
-  //    - All scale checking happens in mark components
-  //    - Developer can see exactly what's happening
-  //    - Easy to debug scale resolution issues
+  // - All scale checking happens in mark components
+  // - Developer can see exactly what's happening
+  // - Easy to debug scale resolution issues
   
   // 4. **Clear Error Messages**
-  //    - "BarXMark requires band scale for x-axis, got: linear"
-  //    - "Scale types resolved differently than preferred"
-  //    - Helps developers understand mark requirements
+  // - "BarXMark requires band scale for x-axis, got: linear"
+  // - "Scale types resolved differently than preferred"
+  // - Helps developers understand mark requirements
   
   // 5. **Composable and Predictable**
-  //    - Can mix marks with different requirements
-  //    - Priority system resolves conflicts deterministically  
-  //    - Clear rules for what works together
+  // - Can mix marks with different requirements
+  // - Priority system resolves conflicts deterministically  
+  // - Clear rules for what works together
 </src/lib/components/marks/RectMarks.md>
 
 <src/lib/components/marks/utils/MarkColor.svelte.js>
   import { untrack } from 'svelte';
   import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
   import { resolveChannel } from './channel-resolution.js';
-  import { isNode } from '@uwdata/mosaic-sql';
+  import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
   
   export class MarkColor {
   	#colorProp;
@@ -10043,11 +10759,12 @@
   		this.#scaleRegistry = scaleRegistry;
   		this.#chartContext = chartContext;
   
-  		// 1. Lifecycle: Create/Destroy Scale (only for mode/field changes, NOT scheme)
+  		// 1. Lifecycle: Create/Destroy Scale (type-based key, NOT scheme)
   		$effect(() => {
-  			// Track mode and field separately (they don't include scheme)
+  			// Track mode, field, and type separately (scheme is NOT part of the key)
   			const mode = this.#mode;
   			const field = this.#field;
+  			const type = this.config.scaleType;
   
   			if (mode === 'field' && field && this.#scaleRegistry) {
   				untrack(() => {
@@ -10055,13 +10772,15 @@
   					// This ensures each unique aggregate expression gets its own scale
   					const scaleKey = isNode(field) ? field.toString() : field;
   
-  					// Don't pass scheme in config - it's mutable and would create separate scales
-  					// All marks using the same field share one scale instance
-  					// The scheme is set/updated via Effect #2 below
+  					// Pass type and scheme in config
+  					// Registry will use only 'type' for caching, 'scheme' for initialization/updates
   					this.scaleState = this.#scaleRegistry.getOrCreateScale(
   						scaleKey,
   						'color',
-  						{}, // Empty config - scheme is NOT part of the key
+  						{
+  							type: type,
+  							scheme: this.config.scheme
+  						},
   						this.#chartContext.chartId
   					);
   
@@ -10109,31 +10828,61 @@
   		});
   	}
   
+  	// --- Internal Logic ---
+  
+  	/**
+  	 * Explicitly resolve the scale type based on the field definition.
+  	 * Priority:
+  	 * 1. Aggregates (avg, sum, count, etc.) -> 'sequential'
+  	 * 2. Bins (bin(), AutoBinNode) -> 'sequential'
+  	 * 3. Raw fields -> 'ordinal'
+  	 */
+  	#resolveScaleType(field) {
+  		if (isNode(field)) {
+  			// e.g. avg(delay), count(), sum(sales)
+  			if (isAggregateExpression(field)) return 'sequential';
+  			// e.g. bin(age) - technically ordinal bins, but usually treated sequentially in colormaps
+  			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
+  		}
+  		// Default fallback for raw columns (strings/categories)
+  		return 'ordinal';
+  	}
+  
   	// --- Derived State ---
   
   	config = $derived.by(() => {
   		const c = this.#colorProp();
   		const s = this.#schemeProp();
   
-  		if (c == null) return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0] }; // Default Blue
-  
-  		// Handle aggregate/expression nodes (e.g., avg("delay"), sum("sales"))
-  		if (isNode(c)) {
-  			return { mode: 'field', field: c, scheme: s };
+  		// Case 1: Constant / Null
+  		if (c == null) {
+  			return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0], scaleType: null, scheme: null };
   		}
   
-  		if (typeof c === 'object' && c.field) {
-  			return { mode: 'field', field: c.field, scheme: c.scheme || s };
+  		if (typeof c === 'string' && isColorConstant(c)) {
+  			return { mode: 'constant', value: parseColorToRGBA(c), scaleType: null, scheme: null };
   		}
   
-  		if (typeof c === 'string') {
-  			if (isColorConstant(c)) {
-  				return { mode: 'constant', value: parseColorToRGBA(c) };
-  			}
-  			return { mode: 'field', field: c, scheme: s };
+  		// Case 2: Field / Expression
+  		let field = c;
+  		let explicitScheme = s;
+  
+  		// Handle object wrapper format { field: "species", scheme: "dark2" }
+  		if (typeof c === 'object' && c.field && !isNode(c)) {
+  			field = c.field;
+  			explicitScheme = c.scheme || s;
   		}
   
-  		return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0] };
+  		// 1. Determine Type Explicitly from field semantics
+  		const scaleType = this.#resolveScaleType(field);
+  
+  		// 2. Pass explicit scheme if provided, otherwise undefined (registry will apply default)
+  		return {
+  			mode: 'field',
+  			field,
+  			scaleType,
+  			scheme: explicitScheme // undefined if not specified
+  		};
   	});
   
   	// Separate derived for mode (independent of scheme to avoid unnecessary tracking)
@@ -10204,12 +10953,12 @@
   //   getSourceType, processData, buildSelectFromChannels } from './data-processing.js';
   
   export {
-    getSourceType,
-    processData,
-    processAlphaData,
-    processColorData,
-    parseColor,
-    buildSelectFromChannels
+  	getSourceType,
+  	processData,
+  	processAlphaData,
+  	processColorData,
+  	parseColor,
+  	buildSelectFromChannels
   } from './data-processing.js';
   
   export { resolveChannel, toFloat32 } from './channel-resolution.js';
@@ -10365,7 +11114,6 @@
   	if (data instanceof Float32Array) return data;
   	return new Float32Array(data);
   }
-  
 </src/lib/components/marks/utils/channel-resolution.js>
 
 <src/lib/components/marks/utils/data-processing.js>
@@ -10375,63 +11123,62 @@
    * @returns {string} Type: 'constant', 'array', 'float32array', or 'sql'
    */
   export function getSourceType(value) {
-    if (typeof value === 'number') return 'constant';
-    if (typeof value === 'string' && isColorString(value)) return 'constant-color';
-    if (Array.isArray(value)) return 'array';
-    if (value instanceof Float32Array) return 'float32array';
-    return 'sql';  // Everything else goes to database
+  	if (typeof value === 'number') return 'constant';
+  	if (typeof value === 'string' && isColorString(value)) return 'constant-color';
+  	if (Array.isArray(value)) return 'array';
+  	if (value instanceof Float32Array) return 'float32array';
+  	return 'sql'; // Everything else goes to database
   }
   
   /**
    * Data processors for converting various sources to GPU-ready Float32Arrays
    */
   const processors = {
-    constant: (value, instanceCount) => new Float32Array(instanceCount).fill(value),
-    array: (value) => new Float32Array(value),
-    float32array: (value) => value,  // Pass through - already optimized
-    sql: (column) => {
-      if (!column) return null;
-      const rawArray = column.toArray();
-      return rawArray instanceof Float32Array ? rawArray : new Float32Array(rawArray);
-    }
+  	constant: (value, instanceCount) => new Float32Array(instanceCount).fill(value),
+  	array: (value) => new Float32Array(value),
+  	float32array: (value) => value, // Pass through - already optimized
+  	sql: (column) => {
+  		if (!column) return null;
+  		const rawArray = column.toArray();
+  		return rawArray instanceof Float32Array ? rawArray : new Float32Array(rawArray);
+  	}
   };
-  
   
   /**
    * Process data with optional pre-computed strategy
    */
   export function processData(value, column, instanceCount, strategy = null) {
-    const type = strategy || getSourceType(value);
-    if (!type) return null;
-    
-    if (type === 'constant') return processors.constant(value, instanceCount);
-    if (type === 'sql') return processors.sql(column);
-    return processors[type](value);
+  	const type = strategy || getSourceType(value);
+  	if (!type) return null;
+  
+  	if (type === 'constant') return processors.constant(value, instanceCount);
+  	if (type === 'sql') return processors.sql(column);
+  	return processors[type](value);
   }
   
   /**
    * Process alpha data with strategy
    */
   export function processAlphaData(alpha, instanceCount, strategy = null) {
-    if (!instanceCount) return null;
-    
-    const type = strategy || getSourceType(alpha);
-    
-    switch (type) {
-      case 'constant':
-        const alphas = new Float32Array(instanceCount);
-        alphas.fill(alpha);
-        return alphas;
-        
-      case 'sql':
-        // Future: support alpha from database column
-        return null;
-        
-      default:
-        const defaultAlphas = new Float32Array(instanceCount);
-        defaultAlphas.fill(0.8);
-        return defaultAlphas;
-    }
+  	if (!instanceCount) return null;
+  
+  	const type = strategy || getSourceType(alpha);
+  
+  	switch (type) {
+  		case 'constant':
+  			const alphas = new Float32Array(instanceCount);
+  			alphas.fill(alpha);
+  			return alphas;
+  
+  		case 'sql':
+  			// Future: support alpha from database column
+  			return null;
+  
+  		default:
+  			const defaultAlphas = new Float32Array(instanceCount);
+  			defaultAlphas.fill(0.8);
+  			return defaultAlphas;
+  	}
   }
   
   /**
@@ -10440,114 +11187,114 @@
    * @returns {Object} Select object for DataClient
    */
   export function buildSelectFromChannels(channels) {
-    const select = {};
-    
-    for (const [key, value] of Object.entries(channels)) {
-      if (value !== undefined && getSourceType(value) === 'sql') {
-        select[key] = value;
-      }
-    }
-    
-    return select;
+  	const select = {};
+  
+  	for (const [key, value] of Object.entries(channels)) {
+  		if (value !== undefined && getSourceType(value) === 'sql') {
+  			select[key] = value;
+  		}
+  	}
+  
+  	return select;
   }
   
   /**
    * Check if a string represents a color value
    */
   function isColorString(value) {
-    return value.startsWith('#') || CSS_COLOR_NAMES.has(value.toLowerCase());
+  	return value.startsWith('#') || CSS_COLOR_NAMES.has(value.toLowerCase());
   }
   
   /**
    * Parse color string to RGBA array
    */
   export function parseColor(color) {
-    if (typeof color === 'string') {
-      if (color.startsWith('#')) {
-        // Hex color handling
-        const hex = color.slice(1);
-        if (hex.length === 3) {
-          const r = parseInt(hex[0] + hex[0], 16) / 255;
-          const g = parseInt(hex[1] + hex[1], 16) / 255;
-          const b = parseInt(hex[2] + hex[2], 16) / 255;
-          return [r, g, b, 1.0];
-        } else if (hex.length === 6) {
-          const r = parseInt(hex.slice(0, 2), 16) / 255;
-          const g = parseInt(hex.slice(2, 4), 16) / 255;
-          const b = parseInt(hex.slice(4, 6), 16) / 255;
-          return [r, g, b, 1.0];
-        }
-      } else {
-        // CSS color names
-        const rgb = CSS_COLOR_NAMES.get(color.toLowerCase());
-        if (rgb) return [...rgb, 1.0];
-      }
-    }
-    return [0.2, 0.4, 0.8, 1.0]; // Default blue
+  	if (typeof color === 'string') {
+  		if (color.startsWith('#')) {
+  			// Hex color handling
+  			const hex = color.slice(1);
+  			if (hex.length === 3) {
+  				const r = parseInt(hex[0] + hex[0], 16) / 255;
+  				const g = parseInt(hex[1] + hex[1], 16) / 255;
+  				const b = parseInt(hex[2] + hex[2], 16) / 255;
+  				return [r, g, b, 1.0];
+  			} else if (hex.length === 6) {
+  				const r = parseInt(hex.slice(0, 2), 16) / 255;
+  				const g = parseInt(hex.slice(2, 4), 16) / 255;
+  				const b = parseInt(hex.slice(4, 6), 16) / 255;
+  				return [r, g, b, 1.0];
+  			}
+  		} else {
+  			// CSS color names
+  			const rgb = CSS_COLOR_NAMES.get(color.toLowerCase());
+  			if (rgb) return [...rgb, 1.0];
+  		}
+  	}
+  	return [0.2, 0.4, 0.8, 1.0]; // Default blue
   }
   
   /**
    * Process color data from various sources into GPU-ready RGBA Float32Array
    */
   export function processColorData(value, column, instanceCount, colorScale = null, strategy = null) {
-    if (!instanceCount) return null;
-    
-    const sourceType = strategy || getSourceType(value);
-    const rgba = new Float32Array(instanceCount * 4);
-    
-    switch (sourceType) {
-      case 'constant-color':
-        // Constant color for all instances
-        const parsed = parseColor(value);
-        for (let i = 0; i < instanceCount; i++) {
-          rgba.set(parsed, i * 4);
-        }
-        return rgba;
-        
-      case 'sql':
-        // Column data with color scale
-        if (!column || !colorScale) {
-          return getDefaultColorData(instanceCount);
-        }
-        
-        const colorArray = column.toArray();
-        for (let i = 0; i < instanceCount; i++) {
-          const colorValue = colorArray[i];
-          const fillColor = colorScale(colorValue);
-          const parsed = parseColor(fillColor);
-          rgba.set(parsed, i * 4);
-        }
-        return rgba;
-        
-      default:
-        return getDefaultColorData(instanceCount);
-    }
+  	if (!instanceCount) return null;
+  
+  	const sourceType = strategy || getSourceType(value);
+  	const rgba = new Float32Array(instanceCount * 4);
+  
+  	switch (sourceType) {
+  		case 'constant-color':
+  			// Constant color for all instances
+  			const parsed = parseColor(value);
+  			for (let i = 0; i < instanceCount; i++) {
+  				rgba.set(parsed, i * 4);
+  			}
+  			return rgba;
+  
+  		case 'sql':
+  			// Column data with color scale
+  			if (!column || !colorScale) {
+  				return getDefaultColorData(instanceCount);
+  			}
+  
+  			const colorArray = column.toArray();
+  			for (let i = 0; i < instanceCount; i++) {
+  				const colorValue = colorArray[i];
+  				const fillColor = colorScale(colorValue);
+  				const parsed = parseColor(fillColor);
+  				rgba.set(parsed, i * 4);
+  			}
+  			return rgba;
+  
+  		default:
+  			return getDefaultColorData(instanceCount);
+  	}
   }
   
   function getDefaultColorData(instanceCount) {
-    const rgba = new Float32Array(instanceCount * 4);
-    const defaultColor = [0.2, 0.4, 0.8, 1.0];
-    for (let i = 0; i < instanceCount; i++) {
-      rgba.set(defaultColor, i * 4);
-    }
-    return rgba;
+  	const rgba = new Float32Array(instanceCount * 4);
+  	const defaultColor = [0.2, 0.4, 0.8, 1.0];
+  	for (let i = 0; i < instanceCount; i++) {
+  		rgba.set(defaultColor, i * 4);
+  	}
+  	return rgba;
   }
   
   // CSS color names mapping
   const CSS_COLOR_NAMES = new Map([
-    ['red', [1, 0, 0]],
-    ['green', [0, 0.5, 0]],
-    ['blue', [0, 0, 1]],
-    ['orange', [1, 0.65, 0]],
-    ['purple', [0.5, 0, 0.5]],
-    ['yellow', [1, 1, 0]],
-    ['pink', [1, 0.75, 0.8]],
-    ['brown', [0.65, 0.16, 0.16]],
-    ['gray', [0.5, 0.5, 0.5]],
-    ['grey', [0.5, 0.5, 0.5]],
-    ['black', [0, 0, 0]],
-    ['white', [1, 1, 1]],
-    // Add more as needed
+  	['red', [1, 0, 0]],
+  	['green', [0, 0.5, 0]],
+  	['blue', [0, 0, 1]],
+  	['orange', [1, 0.65, 0]],
+  	['purple', [0.5, 0, 0.5]],
+  	['yellow', [1, 1, 0]],
+  	['pink', [1, 0.75, 0.8]],
+  	['brown', [0.65, 0.16, 0.16]],
+  	['gray', [0.5, 0.5, 0.5]],
+  	['grey', [0.5, 0.5, 0.5]],
+  	['black', [0, 0, 0]],
+  	['white', [1, 1, 1]]
+  	// Add more as needed
   ]);
 </src/lib/components/marks/utils/data-processing.js>
 
@@ -10960,117 +11707,123 @@
   // src/lib/data/DataAccessor.js
   
   export class ArrowDataAccessor {
-    constructor(arrowTable) {
-      this.arrowTable = arrowTable;
-      this.type = 'arrow';
-    }
+  	constructor(arrowTable) {
+  		this.arrowTable = arrowTable;
+  		this.type = 'arrow';
+  	}
   
-    get length() {
-      return this.arrowTable.numRows;
-    }
+  	get length() {
+  		return this.arrowTable.numRows;
+  	}
   
-    get columnNames() {
-      return this.arrowTable.schema.fields.map(f => f.name);
-    }
+  	get columnNames() {
+  		return this.arrowTable.schema.fields.map((f) => f.name);
+  	}
   
-    getColumn(name) {
-      const col = this.arrowTable.getChild(name);
-      if (!col) return null;
+  	getColumn(name) {
+  		const col = this.arrowTable.getChild(name);
+  		if (!col) return null;
   
-      // FAST PATH: Single chunk - try to return underlying buffer directly
-      if (col.data.length === 1) {
-        const raw = col.data[0].values;
+  		// FAST PATH: Single chunk - try to return underlying buffer directly
+  		if (col.data.length === 1) {
+  			const raw = col.data[0].values;
   
-        // Already Float32Array - zero copy!
-        if (raw instanceof Float32Array) {
-          return raw;
-        }
+  			// Already Float32Array - zero copy!
+  			if (raw instanceof Float32Array) {
+  				return raw;
+  			}
   
-        // Numeric typed array - convert to Float32
-        if (ArrayBuffer.isView(raw) && typeof raw[0] === 'number') {
-          return new Float32Array(raw);
-        }
-      }
+  			// Numeric typed array - convert to Float32
+  			if (ArrayBuffer.isView(raw) && typeof raw[0] === 'number') {
+  				return new Float32Array(raw);
+  			}
+  		}
   
-      // SLOW PATH: Multi-chunk or non-numeric - use toArray()
-      const arr = col.toArray();
-      if (!arr) return null;
+  		// SLOW PATH: Multi-chunk or non-numeric - use toArray()
+  		const arr = col.toArray();
+  		if (!arr) return null;
   
-      // Ensure Float32Array for numeric types
-      if (arr instanceof Float32Array) {
-        return arr;
-      }
+  		// Ensure Float32Array for numeric types
+  		if (arr instanceof Float32Array) {
+  			return arr;
+  		}
   
-      if (arr instanceof Float64Array) {
-        return new Float32Array(arr);
-      }
+  		if (arr instanceof Float64Array) {
+  			return new Float32Array(arr);
+  		}
   
-      // Integer types → Float32
-      if (arr instanceof Int8Array || arr instanceof Int16Array ||
-          arr instanceof Int32Array || arr instanceof Uint8Array ||
-          arr instanceof Uint16Array || arr instanceof Uint32Array ||
-          arr instanceof BigInt64Array || arr instanceof BigUint64Array) {
-        return new Float32Array(arr);
-      }
+  		// Integer types → Float32
+  		if (
+  			arr instanceof Int8Array ||
+  			arr instanceof Int16Array ||
+  			arr instanceof Int32Array ||
+  			arr instanceof Uint8Array ||
+  			arr instanceof Uint16Array ||
+  			arr instanceof Uint32Array ||
+  			arr instanceof BigInt64Array ||
+  			arr instanceof BigUint64Array
+  		) {
+  			return new Float32Array(arr);
+  		}
   
-      // Non-numeric (strings, dates) - return as-is
-      return arr;
-    }
+  		// Non-numeric (strings, dates) - return as-is
+  		return arr;
+  	}
   
-    toString() {
-      return `ArrowDataAccessor(${this.length} rows)`;
-    }
+  	toString() {
+  		return `ArrowDataAccessor(${this.length} rows)`;
+  	}
   }
   
   export class ObjectDataAccessor {
-    constructor(data) {
-      this.data = data;
-      this.type = 'objects';
-      this._columnTypes = new Map();
-    }
+  	constructor(data) {
+  		this.data = data;
+  		this.type = 'objects';
+  		this._columnTypes = new Map();
+  	}
   
-    get length() {
-      return this.data.length;
-    }
+  	get length() {
+  		return this.data.length;
+  	}
   
-    get columnNames() {
-      if (!this.data || this.data.length === 0) return [];
-      return Object.keys(this.data[0]);
-    }
-    
-    getColumn(name) {
-      if (!this.data || this.data.length === 0) return null;
-      
-      // Infer type from first non-null value
-      let columnType = this._columnTypes.get(name);
-      
-      if (!columnType) {
-        const firstValue = this.data.find(d => d[name] != null)?.[name];
-        if (firstValue === undefined) {
-          // All values are null/undefined
-          return new Float32Array(this.data.length); // Return zeros
-        }
-        columnType = typeof firstValue;
-        this._columnTypes.set(name, columnType);
-      }
-      
-      // Numeric columns → Float32Array
-      if (columnType === 'number') {
-        const arr = new Float32Array(this.data.length);
-        for (let i = 0; i < this.data.length; i++) {
-          const value = this.data[i]?.[name];
-          arr[i] = typeof value === 'number' ? value : 0;
-        }
-        return arr;
-      }
-      
-      // Non-numeric → plain array
-      return this.data.map(d => d?.[name] ?? null);
-    }
-    
-    toString() {
-      return `ObjectDataAccessor(${this.length} rows)`;
-    }
+  	get columnNames() {
+  		if (!this.data || this.data.length === 0) return [];
+  		return Object.keys(this.data[0]);
+  	}
+  
+  	getColumn(name) {
+  		if (!this.data || this.data.length === 0) return null;
+  
+  		// Infer type from first non-null value
+  		let columnType = this._columnTypes.get(name);
+  
+  		if (!columnType) {
+  			const firstValue = this.data.find((d) => d[name] != null)?.[name];
+  			if (firstValue === undefined) {
+  				// All values are null/undefined
+  				return new Float32Array(this.data.length); // Return zeros
+  			}
+  			columnType = typeof firstValue;
+  			this._columnTypes.set(name, columnType);
+  		}
+  
+  		// Numeric columns → Float32Array
+  		if (columnType === 'number') {
+  			const arr = new Float32Array(this.data.length);
+  			for (let i = 0; i < this.data.length; i++) {
+  				const value = this.data[i]?.[name];
+  				arr[i] = typeof value === 'number' ? value : 0;
+  			}
+  			return arr;
+  		}
+  
+  		// Non-numeric → plain array
+  		return this.data.map((d) => d?.[name] ?? null);
+  	}
+  
+  	toString() {
+  		return `ObjectDataAccessor(${this.length} rows)`;
+  	}
   }
 </src/lib/data/DataAccessor.js>
 
@@ -11081,12 +11834,12 @@
   
   /**
    * Bin numeric or temporal data into discrete intervals
-   * 
+   *
    * Three modes:
    * 1. Explicit numeric: bin('age', { step: 5 })
    * 2. Explicit temporal: bin('date', { interval: 'day' })
    * 3. Auto: bin('age') - uses field statistics
-   * 
+   *
    * @param {string|Expression} field - Field to bin
    * @param {object} options - Configuration
    * @param {number} options.step - Explicit bin size (numeric)
@@ -11097,23 +11850,23 @@
    * @returns {Expression|AutoBinNode}
    */
   export function bin(field, options = {}) {
-    const { step, interval, offset = 0 } = options;
-    
-    // Explicit numeric binning
-    if (step !== undefined) {
-      const col = typeof field === 'string' ? column(field) : field;
-      return sql`FLOOR((${col} - ${offset}) / ${step}) * ${step} + ${offset}`;
-    }
-    
-    // Explicit temporal binning
-    if (interval !== undefined) {
-      const col = typeof field === 'string' ? column(field) : field;
-      // Use Mosaic's binDate helper
-      return binDate(col, null, options);
-    }
-    
-    // Auto mode - defer resolution until we have field statistics
-    return new AutoBinNode(field, options);
+  	const { step, interval, offset = 0 } = options;
+  
+  	// Explicit numeric binning
+  	if (step !== undefined) {
+  		const col = typeof field === 'string' ? column(field) : field;
+  		return sql`FLOOR((${col} - ${offset}) / ${step}) * ${step} + ${offset}`;
+  	}
+  
+  	// Explicit temporal binning
+  	if (interval !== undefined) {
+  		const col = typeof field === 'string' ? column(field) : field;
+  		// Use Mosaic's binDate helper
+  		return binDate(col, null, options);
+  	}
+  
+  	// Auto mode - defer resolution until we have field statistics
+  	return new AutoBinNode(field, options);
   }
   
   /**
@@ -11121,71 +11874,71 @@
    * This allows optimal bin sizing based on actual data range
    */
   export class AutoBinNode {
-    constructor(field, options = {}) {
-      this.field = field;
-      this.options = options;
-      this.isAutoBinNode = true; // Marker for detection
-    }
-    
-    /**
-     * Get field statistics needed for this bin
-     * Called by BaseMarkSetup to build field info requests
-     */
-    get stats() {
-      const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
-      return {
-        column: fieldName,
-        stats: ['min', 'max']
-      };
-    }
-    
-    /**
-     * Resolve to concrete SQL expression once field statistics are available
-     * @param {object} fieldInfo - Field statistics from DataClient
-     * @param {string} scaleType - Scale type (linear, time, etc.)
-     * @returns {Expression} Mosaic SQL expression
-     */
-    resolve(fieldInfo, scaleType) {
-      const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
-      const info = fieldInfo[fieldName] || {};
-      const { min, max, type } = info;
-      
-      if (min === undefined || max === undefined) {
-        throw new Error(
-          `Cannot auto-bin field "${fieldName}": missing min/max statistics. ` +
-          `This may happen if the field contains only NULL values or doesn't exist in the table.`
-        );
-      }
-      
-      const col = typeof this.field === 'string' ? column(this.field) : this.field;
-      
-      // Detect if temporal
-      const isTemporal = 
-        this.options.interval !== undefined ||
-        type === 'date' ||
-        scaleType === 'time' ||
-        scaleType === 'utc';
-      
-      if (isTemporal) {
-        // Use Mosaic's binDate helper
-        return binDate(col, [min, max], this.options);
-      } else {
-        // Use Mosaic's binHistogram helper
-        return binHistogram(col, [min, max], this.options);
-      }
-    }
-    
-    /**
-     * For extent marks (rect, rule), create offset version
-     * @param {number} offset - Bin offset
-     * @returns {AutoBinNode}
-     */
-    withOffset(offset) {
-      return new AutoBinNode(this.field, {
-        ...this.options,
-        offset
-      });
-    }
+  	constructor(field, options = {}) {
+  		this.field = field;
+  		this.options = options;
+  		this.isAutoBinNode = true; // Marker for detection
+  	}
+  
+  	/**
+  	 * Get field statistics needed for this bin
+  	 * Called by BaseMarkSetup to build field info requests
+  	 */
+  	get stats() {
+  		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
+  		return {
+  			column: fieldName,
+  			stats: ['min', 'max']
+  		};
+  	}
+  
+  	/**
+  	 * Resolve to concrete SQL expression once field statistics are available
+  	 * @param {object} fieldInfo - Field statistics from DataClient
+  	 * @param {string} scaleType - Scale type (linear, time, etc.)
+  	 * @returns {Expression} Mosaic SQL expression
+  	 */
+  	resolve(fieldInfo, scaleType) {
+  		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
+  		const info = fieldInfo[fieldName] || {};
+  		const { min, max, type } = info;
+  
+  		if (min === undefined || max === undefined) {
+  			throw new Error(
+  				`Cannot auto-bin field "${fieldName}": missing min/max statistics. ` +
+  					`This may happen if the field contains only NULL values or doesn't exist in the table.`
+  			);
+  		}
+  
+  		const col = typeof this.field === 'string' ? column(this.field) : this.field;
+  
+  		// Detect if temporal
+  		const isTemporal =
+  			this.options.interval !== undefined ||
+  			type === 'date' ||
+  			scaleType === 'time' ||
+  			scaleType === 'utc';
+  
+  		if (isTemporal) {
+  			// Use Mosaic's binDate helper
+  			return binDate(col, [min, max], this.options);
+  		} else {
+  			// Use Mosaic's binHistogram helper
+  			return binHistogram(col, [min, max], this.options);
+  		}
+  	}
+  
+  	/**
+  	 * For extent marks (rect, rule), create offset version
+  	 * @param {number} offset - Bin offset
+  	 * @returns {AutoBinNode}
+  	 */
+  	withOffset(offset) {
+  		return new AutoBinNode(this.field, {
+  			...this.options,
+  			offset
+  		});
+  	}
   }
   
   /**
@@ -11194,14 +11947,14 @@
    * @returns {boolean}
    */
   export function isBinExpression(expr) {
-    if (!expr) return false;
-    
-    // Check for AutoBinNode
-    if (expr.isAutoBinNode) return true;
-    
-    // Check for explicit bin SQL (contains FLOOR)
-    const sql = expr.toString?.() || '';
-    return /FLOOR\s*\(/i.test(sql);
+  	if (!expr) return false;
+  
+  	// Check for AutoBinNode
+  	if (expr.isAutoBinNode) return true;
+  
+  	// Check for explicit bin SQL (contains FLOOR)
+  	const sql = expr.toString?.() || '';
+  	return /FLOOR\s*\(/i.test(sql);
   }
   
   /**
@@ -11212,30 +11965,30 @@
    * @returns {object} Map of channels
    */
   export function expandBinForExtent(binExpr, channel, markType) {
-    if (!isBinExpression(binExpr)) {
-      return { [channel]: binExpr };
-    }
-    
-    // Check if mark needs extent
-    const needsExtent = ['rect', 'rectX', 'rectY', 'rule', 'ruleX', 'ruleY'].includes(markType);
-    
-    if (!needsExtent) {
-      return { [channel]: binExpr };
-    }
-    
-    // Auto bin - create offset version
-    if (binExpr.isAutoBinNode) {
-      return {
-        [`${channel}1`]: binExpr,
-        [`${channel}2`]: binExpr.withOffset(1)
-      };
-    }
-    
-    // Explicit bin - add offset to SQL
-    return {
-      [`${channel}1`]: binExpr,
-      [`${channel}2`]: sql`${binExpr} + 1`
-    };
+  	if (!isBinExpression(binExpr)) {
+  		return { [channel]: binExpr };
+  	}
+  
+  	// Check if mark needs extent
+  	const needsExtent = ['rect', 'rectX', 'rectY', 'rule', 'ruleX', 'ruleY'].includes(markType);
+  
+  	if (!needsExtent) {
+  		return { [channel]: binExpr };
+  	}
+  
+  	// Auto bin - create offset version
+  	if (binExpr.isAutoBinNode) {
+  		return {
+  			[`${channel}1`]: binExpr,
+  			[`${channel}2`]: binExpr.withOffset(1)
+  		};
+  	}
+  
+  	// Explicit bin - add offset to SQL
+  	return {
+  		[`${channel}1`]: binExpr,
+  		[`${channel}2`]: sql`${binExpr} + 1`
+  	};
   }
 </src/lib/sql/bin.js>
 
@@ -11244,7 +11997,7 @@
   
   /**
    * TransformCompiler orchestrates the transform pipeline.
-   * 
+   *
    * Responsibilities:
    * - Separate SQL and JS transforms
    * - Apply SQL transforms to Query AST
@@ -11254,190 +12007,188 @@
    */
   
   export class TransformCompiler {
-    constructor(transforms = []) {
-      this.transforms = transforms;
-      
-      // Separate by stage
-      this.sqlTransforms = transforms.filter(t => t.stage === 'sql');
-      this.jsTransforms = transforms.filter(t => t.stage === 'js');
-      
-      // Validate ordering (SQL must come before JS)
-      this.#validateStaging();
-    }
-    
-    /**
-     * Ensure SQL transforms come before JS transforms
-     */
-    #validateStaging() {
-      let seenJS = false;
-      
-      for (const transform of this.transforms) {
-        if (transform.stage === 'js') {
-          seenJS = true;
-        } else if (transform.stage === 'sql' && seenJS) {
-          throw new Error(
-            `Invalid transform order: SQL transform "${transform.type}" appears after JS transform. ` +
-            `SQL transforms must come before JS transforms in the pipeline.`
-          );
-        }
-      }
-    }
-    
-    /**
-     * Apply SQL transforms to query
-     * @param {Query} query - Mosaic Query object
-     * @returns {Query} Modified query
-     */
-    applyToQuery(query) {
-      let result = query;
-      
-      for (const transform of this.sqlTransforms) {
-        try {
-          result = transform.apply(result);
-        } catch (error) {
-          throw new Error(
-            `Failed to apply ${transform.type} transform: ${error.message}`
-          );
-        }
-      }
-      
-      return result;
-    }
-    
-    /**
-     * Apply JS transforms to data
-     * @param {Array|ArrowTable} data - Data to transform
-     * @param {object} config - Mark configuration (x, y, fill fields)
-     * @param {object} scales - Scale objects for context
-     * @returns {Array} Transformed data
-     */
-    applyToData(data, config, scales = {}) {
-      let result = Array.isArray(data) ? data : this.#arrowToArray(data);
-      
-      for (const transform of this.jsTransforms) {
-        try {
-          result = transform.apply(result, config, scales);
-        } catch (error) {
-          throw new Error(
-            `Failed to apply ${transform.type} transform: ${error.message}`
-          );
-        }
-      }
-      
-      return result;
-    }
-    
-    /**
-     * Convert Arrow table to array of objects
-     */
-    #arrowToArray(arrowTable) {
-      const rows = [];
-      const numRows = arrowTable.numRows;
-      
-      for (let i = 0; i < numRows; i++) {
-        const row = {};
-        for (const field of arrowTable.schema.fields) {
-          const column = arrowTable.getChild(field.name);
-          row[field.name] = column.get(i);
-        }
-        rows.push(row);
-      }
-      
-      return rows;
-    }
-    
-    /**
-     * Get additional channels that transforms will add
-     * For example, stack() adds y0 and y1
-     * @returns {Array<string>} Channel names
-     */
-    getAdditionalChannels() {
-      const channels = [];
-      
-      for (const transform of this.jsTransforms) {
-        if (transform.channels) {
-          channels.push(...transform.channels);
-        }
-      }
-      
-      return channels;
-    }
-    
-    /**
-     * Validate that query is flat (no CTEs, no subqueries)
-     * This is critical for Mosaic's PreAggregator optimization
-     * @param {Query} query
-     * @throws {Error} If query contains CTEs or subqueries
-     */
-    validateQuery(query) {
-      const sql = query.toString();
-      
-      // Check for WITH clause (CTEs)
-      if (/\bWITH\s+/i.test(sql)) {
-        throw new Error(
-          'Transform pipeline generated a CTE (WITH clause). ' +
-          'This breaks Mosaic\'s PreAggregator optimization. ' +
-          'CTEs prevent the optimizer from recognizing GROUP BY patterns. ' +
-          'Problematic transforms: ' + this.sqlTransforms.map(t => t.type).join(', ')
-        );
-      }
-      
-      // Check for subqueries (nested SELECT)
-      if (/\(\s*SELECT\s+/i.test(sql)) {
-        throw new Error(
-          'Transform pipeline generated a subquery. ' +
-          'This breaks Mosaic\'s PreAggregator optimization. ' +
-          'Subqueries prevent the optimizer from building materialized cubes. ' +
-          'Problematic transforms: ' + this.sqlTransforms.map(t => t.type).join(', ')
-        );
-      }
-    }
-    
-    /**
-     * Get human-readable description of the pipeline
-     * Useful for debugging and documentation
-     * @returns {string}
-     */
-    describe() {
-      const parts = [];
-      
-      if (this.sqlTransforms.length > 0) {
-        parts.push('SQL Pipeline:');
-        for (const t of this.sqlTransforms) {
-          parts.push(`  - ${t.describe?.() || t.type}`);
-        }
-      }
-      
-      if (this.jsTransforms.length > 0) {
-        parts.push('JS Pipeline:');
-        for (const t of this.jsTransforms) {
-          parts.push(`  - ${t.describe?.() || t.type}`);
-        }
-      }
-      
-      return parts.join('\n');
-    }
-    
-    /**
-     * Check if pipeline has any transforms
-     */
-    isEmpty() {
-      return this.transforms.length === 0;
-    }
-    
-    /**
-     * Check if pipeline has SQL transforms
-     */
-    hasSQLTransforms() {
-      return this.sqlTransforms.length > 0;
-    }
-    
-    /**
-     * Check if pipeline has JS transforms
-     */
-    hasJSTransforms() {
-      return this.jsTransforms.length > 0;
-    }
+  	constructor(transforms = []) {
+  		this.transforms = transforms;
+  
+  		// Separate by stage
+  		this.sqlTransforms = transforms.filter((t) => t.stage === 'sql');
+  		this.jsTransforms = transforms.filter((t) => t.stage === 'js');
+  
+  		// Validate ordering (SQL must come before JS)
+  		this.#validateStaging();
+  	}
+  
+  	/**
+  	 * Ensure SQL transforms come before JS transforms
+  	 */
+  	#validateStaging() {
+  		let seenJS = false;
+  
+  		for (const transform of this.transforms) {
+  			if (transform.stage === 'js') {
+  				seenJS = true;
+  			} else if (transform.stage === 'sql' && seenJS) {
+  				throw new Error(
+  					`Invalid transform order: SQL transform "${transform.type}" appears after JS transform. ` +
+  						`SQL transforms must come before JS transforms in the pipeline.`
+  				);
+  			}
+  		}
+  	}
+  
+  	/**
+  	 * Apply SQL transforms to query
+  	 * @param {Query} query - Mosaic Query object
+  	 * @returns {Query} Modified query
+  	 */
+  	applyToQuery(query) {
+  		let result = query;
+  
+  		for (const transform of this.sqlTransforms) {
+  			try {
+  				result = transform.apply(result);
+  			} catch (error) {
+  				throw new Error(`Failed to apply ${transform.type} transform: ${error.message}`);
+  			}
+  		}
+  
+  		return result;
+  	}
+  
+  	/**
+  	 * Apply JS transforms to data
+  	 * @param {Array|ArrowTable} data - Data to transform
+  	 * @param {object} config - Mark configuration (x, y, fill fields)
+  	 * @param {object} scales - Scale objects for context
+  	 * @returns {Array} Transformed data
+  	 */
+  	applyToData(data, config, scales = {}) {
+  		let result = Array.isArray(data) ? data : this.#arrowToArray(data);
+  
+  		for (const transform of this.jsTransforms) {
+  			try {
+  				result = transform.apply(result, config, scales);
+  			} catch (error) {
+  				throw new Error(`Failed to apply ${transform.type} transform: ${error.message}`);
+  			}
+  		}
+  
+  		return result;
+  	}
+  
+  	/**
+  	 * Convert Arrow table to array of objects
+  	 */
+  	#arrowToArray(arrowTable) {
+  		const rows = [];
+  		const numRows = arrowTable.numRows;
+  
+  		for (let i = 0; i < numRows; i++) {
+  			const row = {};
+  			for (const field of arrowTable.schema.fields) {
+  				const column = arrowTable.getChild(field.name);
+  				row[field.name] = column.get(i);
+  			}
+  			rows.push(row);
+  		}
+  
+  		return rows;
+  	}
+  
+  	/**
+  	 * Get additional channels that transforms will add
+  	 * For example, stack() adds y0 and y1
+  	 * @returns {Array<string>} Channel names
+  	 */
+  	getAdditionalChannels() {
+  		const channels = [];
+  
+  		for (const transform of this.jsTransforms) {
+  			if (transform.channels) {
+  				channels.push(...transform.channels);
+  			}
+  		}
+  
+  		return channels;
+  	}
+  
+  	/**
+  	 * Validate that query is flat (no CTEs, no subqueries)
+  	 * This is critical for Mosaic's PreAggregator optimization
+  	 * @param {Query} query
+  	 * @throws {Error} If query contains CTEs or subqueries
+  	 */
+  	validateQuery(query) {
+  		const sql = query.toString();
+  
+  		// Check for WITH clause (CTEs)
+  		if (/\bWITH\s+/i.test(sql)) {
+  			throw new Error(
+  				'Transform pipeline generated a CTE (WITH clause). ' +
+  					"This breaks Mosaic's PreAggregator optimization. " +
+  					'CTEs prevent the optimizer from recognizing GROUP BY patterns. ' +
+  					'Problematic transforms: ' +
+  					this.sqlTransforms.map((t) => t.type).join(', ')
+  			);
+  		}
+  
+  		// Check for subqueries (nested SELECT)
+  		if (/\(\s*SELECT\s+/i.test(sql)) {
+  			throw new Error(
+  				'Transform pipeline generated a subquery. ' +
+  					"This breaks Mosaic's PreAggregator optimization. " +
+  					'Subqueries prevent the optimizer from building materialized cubes. ' +
+  					'Problematic transforms: ' +
+  					this.sqlTransforms.map((t) => t.type).join(', ')
+  			);
+  		}
+  	}
+  
+  	/**
+  	 * Get human-readable description of the pipeline
+  	 * Useful for debugging and documentation
+  	 * @returns {string}
+  	 */
+  	describe() {
+  		const parts = [];
+  
+  		if (this.sqlTransforms.length > 0) {
+  			parts.push('SQL Pipeline:');
+  			for (const t of this.sqlTransforms) {
+  				parts.push(`  - ${t.describe?.() || t.type}`);
+  			}
+  		}
+  
+  		if (this.jsTransforms.length > 0) {
+  			parts.push('JS Pipeline:');
+  			for (const t of this.jsTransforms) {
+  				parts.push(`  - ${t.describe?.() || t.type}`);
+  			}
+  		}
+  
+  		return parts.join('\n');
+  	}
+  
+  	/**
+  	 * Check if pipeline has any transforms
+  	 */
+  	isEmpty() {
+  		return this.transforms.length === 0;
+  	}
+  
+  	/**
+  	 * Check if pipeline has SQL transforms
+  	 */
+  	hasSQLTransforms() {
+  		return this.sqlTransforms.length > 0;
+  	}
+  
+  	/**
+  	 * Check if pipeline has JS transforms
+  	 */
+  	hasJSTransforms() {
+  		return this.jsTransforms.length > 0;
+  	}
   }
 </src/lib/transforms/TransformCompiler.js>
 
@@ -11446,11 +12197,11 @@
   
   /**
    * Transform Pipeline for Mosaic-based visualizations
-   * 
+   *
    * Transforms are divided into two stages:
    * - SQL: Modify the Query AST (WHERE, HAVING, LIMIT, ORDER BY)
    * - JS: Process Arrow table results (topN, stack, dodge, normalize)
-   * 
+   *
    * SQL transforms must maintain flat queries (no CTEs) to preserve
    * Mosaic's PreAggregator optimization.
    */
@@ -11468,16 +12219,16 @@
    * @example filter(gt('revenue', 0))
    */
   export function filter(condition) {
-    return {
-      stage: 'sql',
-      type: 'filter',
-      apply(query) {
-        return query.where(condition);
-      },
-      describe() {
-        return `Filter: ${condition.toString()}`;
-      }
-    };
+  	return {
+  		stage: 'sql',
+  		type: 'filter',
+  		apply(query) {
+  			return query.where(condition);
+  		},
+  		describe() {
+  			return `Filter: ${condition.toString()}`;
+  		}
+  	};
   }
   
   /**
@@ -11486,16 +12237,16 @@
    * @example having(gt(sum('revenue'), 10000))
    */
   export function having(condition) {
-    return {
-      stage: 'sql',
-      type: 'having',
-      apply(query) {
-        return query.having(condition);
-      },
-      describe() {
-        return `Having: ${condition.toString()}`;
-      }
-    };
+  	return {
+  		stage: 'sql',
+  		type: 'having',
+  		apply(query) {
+  			return query.having(condition);
+  		},
+  		describe() {
+  			return `Having: ${condition.toString()}`;
+  		}
+  	};
   }
   
   /**
@@ -11504,16 +12255,16 @@
    * @example limit(100)
    */
   export function limit(n) {
-    return {
-      stage: 'sql',
-      type: 'limit',
-      apply(query) {
-        return query.limit(n);
-      },
-      describe() {
-        return `Limit: ${n}`;
-      }
-    };
+  	return {
+  		stage: 'sql',
+  		type: 'limit',
+  		apply(query) {
+  			return query.limit(n);
+  		},
+  		describe() {
+  			return `Limit: ${n}`;
+  		}
+  	};
   }
   
   /**
@@ -11522,16 +12273,16 @@
    * @example orderby(desc('revenue'))
    */
   export function orderby(...expressions) {
-    return {
-      stage: 'sql',
-      type: 'orderby',
-      apply(query) {
-        return query.orderby(...expressions);
-      },
-      describe() {
-        return `Order by: ${expressions.map(e => e.toString()).join(', ')}`;
-      }
-    };
+  	return {
+  		stage: 'sql',
+  		type: 'orderby',
+  		apply(query) {
+  			return query.orderby(...expressions);
+  		},
+  		describe() {
+  			return `Order by: ${expressions.map((e) => e.toString()).join(', ')}`;
+  		}
+  	};
   }
   
   // =============================================================================
@@ -11547,121 +12298,123 @@
    * @example topN(10, { by: 'revenue', includeOthers: true })
    */
   export function topN(n, options = {}) {
-    return {
-      stage: 'js',
-      type: 'topN',
-      apply(data, config) {
-        if (!data || data.length === 0) return data;
-        
-        const by = options.by || config.y;
-        
-        // Sort descending
-        const sorted = [...data].sort((a, b) => (b[by] || 0) - (a[by] || 0));
-        
-        if (sorted.length <= n) {
-          return sorted;
-        }
-        
-        const top = sorted.slice(0, n);
-        
-        if (options.includeOthers) {
-          const others = sorted.slice(n);
-          const otherRow = { [config.x]: 'Other' };
-          
-          // Sum all numeric fields
-          for (const key of Object.keys(others[0])) {
-            if (typeof others[0][key] === 'number') {
-              otherRow[key] = others.reduce((sum, d) => sum + (d[key] || 0), 0);
-            }
-          }
-          
-          return [...top, otherRow];
-        }
-        
-        return top;
-      },
-      describe() {
-        return `Top ${n}${options.includeOthers ? ' (with Others)' : ''}`;
-      }
-    };
+  	return {
+  		stage: 'js',
+  		type: 'topN',
+  		apply(data, config) {
+  			if (!data || data.length === 0) return data;
+  
+  			const by = options.by || config.y;
+  
+  			// Sort descending
+  			const sorted = [...data].sort((a, b) => (b[by] || 0) - (a[by] || 0));
+  
+  			if (sorted.length <= n) {
+  				return sorted;
+  			}
+  
+  			const top = sorted.slice(0, n);
+  
+  			if (options.includeOthers) {
+  				const others = sorted.slice(n);
+  				const otherRow = { [config.x]: 'Other' };
+  
+  				// Sum all numeric fields
+  				for (const key of Object.keys(others[0])) {
+  					if (typeof others[0][key] === 'number') {
+  						otherRow[key] = others.reduce((sum, d) => sum + (d[key] || 0), 0);
+  					}
+  				}
+  
+  				return [...top, otherRow];
+  			}
+  
+  			return top;
+  		},
+  		describe() {
+  			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''}`;
+  		}
+  	};
   }
   
   // src/lib/transforms/index.js
   
   export function stack(options = {}) {
-    const { direction = 'vertical' } = options; // 'vertical' or 'horizontal'
+  	const { direction = 'vertical' } = options; // 'vertical' or 'horizontal'
   
-    return {
-      stage: 'js',
-      type: 'stack',
-      apply(data, config) {
-        if (!data || data.length === 0) return data;
+  	return {
+  		stage: 'js',
+  		type: 'stack',
+  		apply(data, config) {
+  			if (!data || data.length === 0) return data;
   
-        // Determine grouping and value fields based on direction
-        const groupField = direction === 'vertical' ? config.x : config.y;
-        const valueField = direction === 'vertical' ? config.y : config.x;
+  			// Determine grouping and value fields based on direction
+  			const groupField = direction === 'vertical' ? config.x : config.y;
+  			const valueField = direction === 'vertical' ? config.y : config.x;
   
-        console.log('📊 Stack transform:', {
-          direction,
-          groupField,
-          valueField,
-          config,
-          dataLength: data.length,
-          sampleRow: data[0],
-          sampleValueField: data[0]?.[valueField],
-          sampleGroupField: data[0]?.[groupField]
-        });
+  			console.log('📊 Stack transform:', {
+  				direction,
+  				groupField,
+  				valueField,
+  				config,
+  				dataLength: data.length,
+  				sampleRow: data[0],
+  				sampleValueField: data[0]?.[valueField],
+  				sampleGroupField: data[0]?.[groupField]
+  			});
   
-        // Group by category
-        const groups = d3.group(data, d => d[groupField]);
+  			// Group by category
+  			const groups = d3.group(data, (d) => d[groupField]);
   
-        console.log('📊 Stack groups:', {
-          groupCount: groups.size,
-          groupKeys: Array.from(groups.keys()),
-          itemsPerGroup: Array.from(groups.entries()).map(([k, v]) => ({ key: k, count: v.length }))
-        });
+  			console.log('📊 Stack groups:', {
+  				groupCount: groups.size,
+  				groupKeys: Array.from(groups.keys()),
+  				itemsPerGroup: Array.from(groups.entries()).map(([k, v]) => ({ key: k, count: v.length }))
+  			});
   
-        const stacked = [];
-        for (const [category, items] of groups) {
-          let offset = 0;
-          console.log(`📊 Stack group "${category}": ${items.length} items`);
-          for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            const value = item[valueField] || 0;
+  			const stacked = [];
+  			for (const [category, items] of groups) {
+  				let offset = 0;
+  				console.log(`📊 Stack group "${category}": ${items.length} items`);
+  				for (let i = 0; i < items.length; i++) {
+  					const item = items[i];
+  					const value = item[valueField] || 0;
   
-            if (i < 3) {
-              console.log(`  📊 Item ${i}: valueField="${valueField}", value=${value}, offset=${offset}`);
-            }
+  					if (i < 3) {
+  						console.log(
+  							`  📊 Item ${i}: valueField="${valueField}", value=${value}, offset=${offset}`
+  						);
+  					}
   
-            if (direction === 'vertical') {
-              stacked.push({
-                ...item,
-                y0: offset,
-                y1: offset + value
-              });
-            } else {
-              stacked.push({
-                ...item,
-                x0: offset,
-                x1: offset + value
-              });
-            }
+  					if (direction === 'vertical') {
+  						stacked.push({
+  							...item,
+  							y0: offset,
+  							y1: offset + value
+  						});
+  					} else {
+  						stacked.push({
+  							...item,
+  							x0: offset,
+  							x1: offset + value
+  						});
+  					}
   
-            offset += value;
-          }
-        }
+  					offset += value;
+  				}
+  			}
   
-        console.log('📊 Stack output:', {
-          outputLength: stacked.length,
-          sampleOutput: stacked.slice(0, 5),
-          x0Values: stacked.slice(0, 5).map(d => d.x0),
-          x1Values: stacked.slice(0, 5).map(d => d.x1)
-        });
+  			console.log('📊 Stack output:', {
+  				outputLength: stacked.length,
+  				sampleOutput: stacked.slice(0, 5),
+  				x0Values: stacked.slice(0, 5).map((d) => d.x0),
+  				x1Values: stacked.slice(0, 5).map((d) => d.x1)
+  			});
   
-        return stacked;
-      },
-      channels: direction === 'vertical' ? ['y0', 'y1'] : ['x0', 'x1']
-    };
+  			return stacked;
+  		},
+  		channels: direction === 'vertical' ? ['y0', 'y1'] : ['x0', 'x1']
+  	};
   }
   
   /**
@@ -11670,40 +12423,40 @@
    * @example normalize()
    */
   export function normalize(options = {}) {
-    return {
-      stage: 'js',
-      type: 'normalize',
-      apply(data, config) {
-        if (!data || data.length === 0) return data;
-        
-        const xField = config.x;
-        const yField = config.y;
-        
-        // Group by x dimension
-        const groups = d3.group(data, d => d[xField]);
-        
-        const normalized = [];
-        for (const [x, items] of groups) {
-          const total = d3.sum(items, d => d[yField] || 0);
-          
-          for (const item of items) {
-            const value = item[yField] || 0;
-            normalized.push({
-              ...item,
-              [yField]: total > 0 ? (value / total) * 100 : 0,
-              // Also normalize y0/y1 if they exist (from stacking)
-              ...(item.y0 !== undefined && { y0: total > 0 ? (item.y0 / total) * 100 : 0 }),
-              ...(item.y1 !== undefined && { y1: total > 0 ? (item.y1 / total) * 100 : 0 })
-            });
-          }
-        }
-        
-        return normalized;
-      },
-      describe() {
-        return 'Normalize to percentages';
-      }
-    };
+  	return {
+  		stage: 'js',
+  		type: 'normalize',
+  		apply(data, config) {
+  			if (!data || data.length === 0) return data;
+  
+  			const xField = config.x;
+  			const yField = config.y;
+  
+  			// Group by x dimension
+  			const groups = d3.group(data, (d) => d[xField]);
+  
+  			const normalized = [];
+  			for (const [x, items] of groups) {
+  				const total = d3.sum(items, (d) => d[yField] || 0);
+  
+  				for (const item of items) {
+  					const value = item[yField] || 0;
+  					normalized.push({
+  						...item,
+  						[yField]: total > 0 ? (value / total) * 100 : 0,
+  						// Also normalize y0/y1 if they exist (from stacking)
+  						...(item.y0 !== undefined && { y0: total > 0 ? (item.y0 / total) * 100 : 0 }),
+  						...(item.y1 !== undefined && { y1: total > 0 ? (item.y1 / total) * 100 : 0 })
+  					});
+  				}
+  			}
+  
+  			return normalized;
+  		},
+  		describe() {
+  			return 'Normalize to percentages';
+  		}
+  	};
   }
   
   /**
@@ -11713,43 +12466,43 @@
    * @example dodge()
    */
   export function dodge(options = {}) {
-    return {
-      stage: 'js',
-      type: 'dodge',
-      apply(data, config, scales) {
-        if (!data || data.length === 0) return data;
-        
-        const xField = config.x;
-        
-        // Get bandwidth from scale or options
-        const bandwidth = scales?.x?.bandwidth?.() || options.bandwidth || 20;
-        
-        // Group by x dimension
-        const groups = d3.group(data, d => d[xField]);
-        
-        const dodged = [];
-        for (const [x, items] of groups) {
-          const offset = bandwidth / items.length;
-          
-          items.forEach((item, i) => {
-            dodged.push({
-              ...item,
-              x0: item[xField] + (i * offset),
-              x1: item[xField] + ((i + 1) * offset)
-            });
-          });
-        }
-        
-        return dodged;
-      },
-      channels: ['x0', 'x1'],
-      describe() {
-        return 'Dodge by group';
-      }
-    };
+  	return {
+  		stage: 'js',
+  		type: 'dodge',
+  		apply(data, config, scales) {
+  			if (!data || data.length === 0) return data;
+  
+  			const xField = config.x;
+  
+  			// Get bandwidth from scale or options
+  			const bandwidth = scales?.x?.bandwidth?.() || options.bandwidth || 20;
+  
+  			// Group by x dimension
+  			const groups = d3.group(data, (d) => d[xField]);
+  
+  			const dodged = [];
+  			for (const [x, items] of groups) {
+  				const offset = bandwidth / items.length;
+  
+  				items.forEach((item, i) => {
+  					dodged.push({
+  						...item,
+  						x0: item[xField] + i * offset,
+  						x1: item[xField] + (i + 1) * offset
+  					});
+  				});
+  			}
+  
+  			return dodged;
+  		},
+  		channels: ['x0', 'x1'],
+  		describe() {
+  			return 'Dodge by group';
+  		}
+  	};
   }
   
-  export { TransformCompiler } from './TransformCompiler'
+  export { TransformCompiler } from './TransformCompiler';
 </src/lib/transforms/index.js>
 
 <src/lib/transforms/integration.test.js>
@@ -11762,86 +12515,82 @@
   import { bin } from '../sql/bin.js';
   
   describe('Transform Pipeline Integration', () => {
-    it('full pipeline: SQL + JS transforms', () => {
-      // Simulate a bar chart with stacking
-      const transforms = [
-        filter(gt('revenue', 0)),
-        topN(10, { includeOthers: true }),
-        stack()
-      ];
-      
-      const compiler = new TransformCompiler(transforms);
-      
-      // Build query
-      let query = Query.from('sales')
-        .select({
-          x: 'product',
-          y: sum('revenue'),
-          fill: 'region'
-        })
-        .groupby('product', 'region');
-      
-      // Apply SQL transforms
-      query = compiler.applyToQuery(query);
-      
-      // Validate flat query
-      expect(() => compiler.validateQuery(query)).not.toThrow();
-      
-      const sql = query.toString();
-      expect(sql).toContain('WHERE revenue > 0');
-      expect(sql).not.toContain('WITH'); // No CTE
-      
-      // Simulate query results
-      const mockData = [
-        { x: 'A', y: 1000, fill: 'North' },
-        { x: 'A', y: 500, fill: 'South' },
-        { x: 'B', y: 800, fill: 'North' },
-        // ... more data
-      ];
-      
-      // Apply JS transforms
-      const result = compiler.applyToData(mockData, {
-        x: 'x',
-        y: 'y',
-        fill: 'fill'
-      });
-      
-      // Verify stacking
-      expect(result[0]).toHaveProperty('y0');
-      expect(result[0]).toHaveProperty('y1');
-    });
-    
-    it('auto binning with transforms', () => {
-      const x = bin('age'); // Auto bin
-      const y = sum('revenue');
-      
-      // Check that AutoBinNode needs stats
-      expect(x.isAutoBinNode).toBe(true);
-      expect(x.stats).toEqual({
-        column: 'age',
-        stats: ['min', 'max']
-      });
-      
-      // Simulate getting field stats
-      const fieldInfo = {
-        age: { min: 18, max: 75, type: 'number' }
-      };
-      
-      // Resolve bin
-      const resolvedX = x.resolve(fieldInfo, 'linear');
-      
-      // Build query with resolved bin
-      const query = Query.from('sales')
-        .select({
-          x: resolvedX,
-          y: y
-        })
-        .groupby(resolvedX);
-      
-      const sql = query.toString();
-      expect(sql).toContain('FLOOR');
-      expect(sql).toContain('GROUP BY');
-    });
+  	it('full pipeline: SQL + JS transforms', () => {
+  		// Simulate a bar chart with stacking
+  		const transforms = [filter(gt('revenue', 0)), topN(10, { includeOthers: true }), stack()];
+  
+  		const compiler = new TransformCompiler(transforms);
+  
+  		// Build query
+  		let query = Query.from('sales')
+  			.select({
+  				x: 'product',
+  				y: sum('revenue'),
+  				fill: 'region'
+  			})
+  			.groupby('product', 'region');
+  
+  		// Apply SQL transforms
+  		query = compiler.applyToQuery(query);
+  
+  		// Validate flat query
+  		expect(() => compiler.validateQuery(query)).not.toThrow();
+  
+  		const sql = query.toString();
+  		expect(sql).toContain('WHERE revenue > 0');
+  		expect(sql).not.toContain('WITH'); // No CTE
+  
+  		// Simulate query results
+  		const mockData = [
+  			{ x: 'A', y: 1000, fill: 'North' },
+  			{ x: 'A', y: 500, fill: 'South' },
+  			{ x: 'B', y: 800, fill: 'North' }
+  			// ... more data
+  		];
+  
+  		// Apply JS transforms
+  		const result = compiler.applyToData(mockData, {
+  			x: 'x',
+  			y: 'y',
+  			fill: 'fill'
+  		});
+  
+  		// Verify stacking
+  		expect(result[0]).toHaveProperty('y0');
+  		expect(result[0]).toHaveProperty('y1');
+  	});
+  
+  	it('auto binning with transforms', () => {
+  		const x = bin('age'); // Auto bin
+  		const y = sum('revenue');
+  
+  		// Check that AutoBinNode needs stats
+  		expect(x.isAutoBinNode).toBe(true);
+  		expect(x.stats).toEqual({
+  			column: 'age',
+  			stats: ['min', 'max']
+  		});
+  
+  		// Simulate getting field stats
+  		const fieldInfo = {
+  			age: { min: 18, max: 75, type: 'number' }
+  		};
+  
+  		// Resolve bin
+  		const resolvedX = x.resolve(fieldInfo, 'linear');
+  
+  		// Build query with resolved bin
+  		const query = Query.from('sales')
+  			.select({
+  				x: resolvedX,
+  				y: y
+  			})
+  			.groupby(resolvedX);
+  
+  		const sql = query.toString();
+  		expect(sql).toContain('FLOOR');
+  		expect(sql).toContain('GROUP BY');
+  	});
   });
 </src/lib/transforms/integration.test.js>
 
@@ -11855,142 +12604,136 @@
   import { Query, gt, sum, column } from '@uwdata/mosaic-sql';
   
   describe('Transforms', () => {
-    describe('SQL Transforms', () => {
-      it('filter() adds WHERE clause', () => {
-        const q = Query.from('sales').select({ x: 'product', y: sum('revenue') });
-        
-        const transform = filter(gt('revenue', 0));
-        const result = transform.apply(q);
-        
-        const sql = result.toString();
-        expect(sql).toContain('WHERE');
-        expect(sql).toContain('revenue > 0');
-      });
-    });
-    
-    describe('JS Transforms', () => {
-      it('topN() takes top items', () => {
-        const data = [
-          { x: 'A', y: 100 },
-          { x: 'B', y: 200 },
-          { x: 'C', y: 50 }
-        ];
-        
-        const transform = topN(2);
-        const result = transform.apply(data, { x: 'x', y: 'y' });
-        
-        expect(result).toHaveLength(2);
-        expect(result[0].x).toBe('B'); // Highest
-        expect(result[1].x).toBe('A');
-      });
-      
-      it('topN() includes Others', () => {
-        const data = [
-          { x: 'A', y: 100 },
-          { x: 'B', y: 200 },
-          { x: 'C', y: 50 }
-        ];
-        
-        const transform = topN(2, { includeOthers: true });
-        const result = transform.apply(data, { x: 'x', y: 'y' });
-        
-        expect(result).toHaveLength(3);
-        expect(result[2].x).toBe('Other');
-        expect(result[2].y).toBe(50); // Sum of C
-      });
-      
-      it('stack() calculates y0 and y1', () => {
-        const data = [
-          { x: 'Jan', y: 10, region: 'North' },
-          { x: 'Jan', y: 20, region: 'South' },
-          { x: 'Feb', y: 15, region: 'North' }
-        ];
-        
-        const transform = stack();
-        const result = transform.apply(data, { x: 'x', y: 'y' });
-        
-        expect(result).toHaveLength(3);
-        expect(result[0]).toHaveProperty('y0', 0);
-        expect(result[0]).toHaveProperty('y1', 10);
-        expect(result[1]).toHaveProperty('y0', 10);
-        expect(result[1]).toHaveProperty('y1', 30);
-      });
-    });
-    
-    describe('TransformCompiler', () => {
-      it('separates SQL and JS transforms', () => {
-        const transforms = [
-          filter(gt('revenue', 0)),
-          topN(10),
-          stack()
-        ];
-        
-        const compiler = new TransformCompiler(transforms);
-        
-        expect(compiler.sqlTransforms).toHaveLength(1);
-        expect(compiler.jsTransforms).toHaveLength(2);
-      });
-      
-      it('throws on invalid ordering', () => {
-        const transforms = [
-          topN(10),        // JS
-          filter(gt('x', 0)) // SQL - wrong order!
-        ];
-        
-        expect(() => new TransformCompiler(transforms)).toThrow(/Invalid transform order/);
-      });
-      
-      it('applies SQL transforms to query', () => {
-        const compiler = new TransformCompiler([
-          filter(gt('revenue', 0))
-        ]);
-        
-        const q = Query.from('sales').select({ y: sum('revenue') });
-        const result = compiler.applyToQuery(q);
-        
-        expect(result.toString()).toContain('WHERE revenue > 0');
-      });
-      
-      it('detects CTEs', () => {
-        const compiler = new TransformCompiler([]);
-        
-        // Simulate a query with CTE
-        const badQuery = {
-          toString: () => 'WITH temp AS (SELECT * FROM t) SELECT * FROM temp'
-        };
-        
-        expect(() => compiler.validateQuery(badQuery)).toThrow(/CTE/);
-      });
-    });
-    
-    describe('Auto Binning', () => {
-      it('creates AutoBinNode by default', () => {
-        const result = bin('age');
-        
-        expect(result).toBeInstanceOf(AutoBinNode);
-        expect(result.isAutoBinNode).toBe(true);
-      });
-      
-      it('creates explicit SQL for step', () => {
-        const result = bin('age', { step: 5 });
-        
-        expect(result.isAutoBinNode).toBeFalsy();
-        expect(result.toString()).toContain('FLOOR');
-      });
-      
-      it('resolves AutoBinNode with field stats', () => {
-        const autoBin = bin('age');
-        
-        const fieldInfo = {
-          age: { min: 18, max: 75, type: 'number' }
-        };
-        
-        const resolved = autoBin.resolve(fieldInfo, 'linear');
-        
-        // Should return a Mosaic SQL expression
-        expect(resolved.toString()).toContain('FLOOR');
-      });
-    });
+  	describe('SQL Transforms', () => {
+  		it('filter() adds WHERE clause', () => {
+  			const q = Query.from('sales').select({ x: 'product', y: sum('revenue') });
+  
+  			const transform = filter(gt('revenue', 0));
+  			const result = transform.apply(q);
+  
+  			const sql = result.toString();
+  			expect(sql).toContain('WHERE');
+  			expect(sql).toContain('revenue > 0');
+  		});
+  	});
+  
+  	describe('JS Transforms', () => {
+  		it('topN() takes top items', () => {
+  			const data = [
+  				{ x: 'A', y: 100 },
+  				{ x: 'B', y: 200 },
+  				{ x: 'C', y: 50 }
+  			];
+  
+  			const transform = topN(2);
+  			const result = transform.apply(data, { x: 'x', y: 'y' });
+  
+  			expect(result).toHaveLength(2);
+  			expect(result[0].x).toBe('B'); // Highest
+  			expect(result[1].x).toBe('A');
+  		});
+  
+  		it('topN() includes Others', () => {
+  			const data = [
+  				{ x: 'A', y: 100 },
+  				{ x: 'B', y: 200 },
+  				{ x: 'C', y: 50 }
+  			];
+  
+  			const transform = topN(2, { includeOthers: true });
+  			const result = transform.apply(data, { x: 'x', y: 'y' });
+  
+  			expect(result).toHaveLength(3);
+  			expect(result[2].x).toBe('Other');
+  			expect(result[2].y).toBe(50); // Sum of C
+  		});
+  
+  		it('stack() calculates y0 and y1', () => {
+  			const data = [
+  				{ x: 'Jan', y: 10, region: 'North' },
+  				{ x: 'Jan', y: 20, region: 'South' },
+  				{ x: 'Feb', y: 15, region: 'North' }
+  			];
+  
+  			const transform = stack();
+  			const result = transform.apply(data, { x: 'x', y: 'y' });
+  
+  			expect(result).toHaveLength(3);
+  			expect(result[0]).toHaveProperty('y0', 0);
+  			expect(result[0]).toHaveProperty('y1', 10);
+  			expect(result[1]).toHaveProperty('y0', 10);
+  			expect(result[1]).toHaveProperty('y1', 30);
+  		});
+  	});
+  
+  	describe('TransformCompiler', () => {
+  		it('separates SQL and JS transforms', () => {
+  			const transforms = [filter(gt('revenue', 0)), topN(10), stack()];
+  
+  			const compiler = new TransformCompiler(transforms);
+  
+  			expect(compiler.sqlTransforms).toHaveLength(1);
+  			expect(compiler.jsTransforms).toHaveLength(2);
+  		});
+  
+  		it('throws on invalid ordering', () => {
+  			const transforms = [
+  				topN(10), // JS
+  				filter(gt('x', 0)) // SQL - wrong order!
+  			];
+  
+  			expect(() => new TransformCompiler(transforms)).toThrow(/Invalid transform order/);
+  		});
+  
+  		it('applies SQL transforms to query', () => {
+  			const compiler = new TransformCompiler([filter(gt('revenue', 0))]);
+  
+  			const q = Query.from('sales').select({ y: sum('revenue') });
+  			const result = compiler.applyToQuery(q);
+  
+  			expect(result.toString()).toContain('WHERE revenue > 0');
+  		});
+  
+  		it('detects CTEs', () => {
+  			const compiler = new TransformCompiler([]);
+  
+  			// Simulate a query with CTE
+  			const badQuery = {
+  				toString: () => 'WITH temp AS (SELECT * FROM t) SELECT * FROM temp'
+  			};
+  
+  			expect(() => compiler.validateQuery(badQuery)).toThrow(/CTE/);
+  		});
+  	});
+  
+  	describe('Auto Binning', () => {
+  		it('creates AutoBinNode by default', () => {
+  			const result = bin('age');
+  
+  			expect(result).toBeInstanceOf(AutoBinNode);
+  			expect(result.isAutoBinNode).toBe(true);
+  		});
+  
+  		it('creates explicit SQL for step', () => {
+  			const result = bin('age', { step: 5 });
+  
+  			expect(result.isAutoBinNode).toBeFalsy();
+  			expect(result.toString()).toContain('FLOOR');
+  		});
+  
+  		it('resolves AutoBinNode with field stats', () => {
+  			const autoBin = bin('age');
+  
+  			const fieldInfo = {
+  				age: { min: 18, max: 75, type: 'number' }
+  			};
+  
+  			const resolved = autoBin.resolve(fieldInfo, 'linear');
+  
+  			// Should return a Mosaic SQL expression
+  			expect(resolved.toString()).toContain('FLOOR');
+  		});
+  	});
   });
 </src/lib/transforms/transforms.test.js>
 
@@ -12077,7 +12820,7 @@
   
   	onMount(async () => {
   		// startProMotionFix();
-      // requestAnimationFrame(measureRAF);
+  		// requestAnimationFrame(measureRAF);
   
   		try {
   			const wasm = wasmConnector();
@@ -12137,7 +12880,7 @@
   		ChartContainer,
   		ColumnSelector,
   		Grid,
-  		Frame,
+  		// Frame,
   		AxisLeft,
   		AxisBottom,
   		MarginLabel,
@@ -12228,6 +12971,8 @@
   						<WebGPUCanvas>
   							{#snippet canvasComponents()}
   								{#if webGPU}
+  									<Grid />
+  
   									<DotsMark
   										table={'penguins'}
   										x={config.x}

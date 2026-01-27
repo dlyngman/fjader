@@ -1,0 +1,197 @@
+<script>
+	import { getContext, onMount, onDestroy } from 'svelte';
+	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+	import { getGPUContext } from '$lib/gpu';
+
+	// RuleY: Horizontal lines (Y-axis gridlines)
+	// Only binds Y scale - eliminates X scale binding overhead
+	const ruleYRendererDefinition = {
+		x: null, // No X scale binding
+		y: { concept: 'position', channels: ['y'] },
+		placeholders: { y: '{{Y_AXIS_LOGIC}}' }
+	};
+
+	const BINDINGS = {
+		POSITIONS: 0,
+		CONSTANTS: 6
+	};
+
+	const UNIFORM_OFFSETS = {
+		LINE_WIDTH: 0,
+		// 4-12: padding
+		COLOR: 16
+	};
+
+	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 } = $props();
+
+	const chartContext = getContext('chart');
+	const webGPUContext = getContext('webgpu-canvas');
+	const gpuCoordinator = getGPUContext();
+
+	let renderer = $state(null);
+	let initializationError = $state(null);
+	let lineGeometryBuffer;
+
+	const ruleYShaderCode = `
+    struct RuleConstants {
+      lineWidth: f32,
+      _pad0: u32,
+      _pad1: u32,
+      _pad2: u32,
+      color: vec4<f32>,
+    };
+    @group(1) @binding(6) var<uniform> ruleConstants: RuleConstants;
+
+    @group(1) @binding(0) var<storage, read> positions: array<f32>;
+
+    struct VertexOutput {
+      @builtin(position) position: vec4<f32>,
+      @location(0) color: vec4<f32>,
+    };
+
+    @vertex
+    fn vertexMain(
+      @location(0) lineVertex: vec2<f32>,
+      @builtin(instance_index) instanceIdx: u32,
+    ) -> VertexOutput {
+      let y = positions[instanceIdx];
+
+      // Y axis scaling (for horizontal lines)
+      {{Y_AXIS_LOGIC}}
+
+      // Render horizontal line as a thin quad
+      let halfWidth = ruleConstants.lineWidth * 0.5 * frameUniforms.devicePixelRatio;
+
+      // Horizontal: span full X, fixed Y
+      let screenX = mix(0.0, frameUniforms.resolution.x, lineVertex.x);
+      let offsetY = (lineVertex.y - 0.5) * 2.0 * halfWidth;
+      let worldPos = vec2<f32>(screenX, scaledY + offsetY);
+
+      let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+
+      var output: VertexOutput;
+      output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
+      output.color = ruleConstants.color;
+      return output;
+    }
+
+    @fragment
+    fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+      return input.color;
+    }
+  `;
+
+	const vertexBufferLayout = [
+		{
+			arrayStride: 2 * 4,
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+		}
+	];
+
+	const dataBindingConfig = [
+		{ binding: BINDINGS.POSITIONS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{
+			binding: BINDINGS.CONSTANTS,
+			type: 'uniform',
+			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+		}
+	];
+
+	// --- DATA WRITING EFFECTS ---
+
+	// Update positions buffer when positions change
+	$effect(() => {
+		if (renderer?.resourcesCreated && positions) {
+			renderer.writeAttribute(BINDINGS.POSITIONS, positions);
+		}
+	});
+
+	// Update uniform constants
+	$effect(() => {
+		if (renderer?.resourcesCreated) {
+			const buffer = new ArrayBuffer(32);
+			const view = new DataView(buffer);
+			const LE = true;
+
+			view.setFloat32(UNIFORM_OFFSETS.LINE_WIDTH, lineWidth, LE);
+			// padding at 4-12
+			view.setFloat32(UNIFORM_OFFSETS.COLOR + 0, color[0], LE);
+			view.setFloat32(UNIFORM_OFFSETS.COLOR + 4, color[1], LE);
+			view.setFloat32(UNIFORM_OFFSETS.COLOR + 8, color[2], LE);
+			view.setFloat32(UNIFORM_OFFSETS.COLOR + 12, color[3], LE);
+
+			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
+		}
+	});
+
+	// Update instance count
+	$effect(() => {
+		if (renderer?.resourcesCreated && positions) {
+			renderer.updateInstanceCount(positions.length);
+		}
+	});
+
+	function createLineGeometry() {
+		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
+	}
+
+	async function initializeLineGeometry() {
+		const device = webGPUContext.getDevice();
+		const lineVertices = createLineGeometry();
+		lineGeometryBuffer = device.createBuffer({
+			size: lineVertices.byteLength,
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			label: 'ruleY-line-geometry'
+		});
+		device.queue.writeBuffer(lineGeometryBuffer, 0, lineVertices);
+	}
+
+	function drawRules(passEncoder) {
+		if (!lineGeometryBuffer || renderer.instanceCount === 0) return;
+		passEncoder.setVertexBuffer(0, lineGeometryBuffer);
+		passEncoder.draw(6, renderer.instanceCount);
+	}
+
+	async function initializeRule() {
+		try {
+			renderer = new BaseGPURenderer('ruleY', webGPUContext, gpuCoordinator, chartContext, {
+				zIndex,
+				xScaleType: chartContext.scaleTypes?.x || 'linear',
+				yScaleType: chartContext.scaleTypes?.y || 'linear'
+			});
+
+			await renderer.initialize({
+				markShaderCode: ruleYShaderCode,
+				vertexBufferLayout,
+				dataBindingConfig,
+				rendererDefinition: ruleYRendererDefinition
+			});
+
+			await initializeLineGeometry();
+			renderer.registerLayer(drawRules);
+		} catch (error) {
+			console.error('RuleY renderer init failed:', error);
+			initializationError = error.message;
+		}
+	}
+
+	async function waitForWebGPU() {
+		let attempts = 0;
+		while (!webGPUContext.isInitialized() && attempts < 100) {
+			await new Promise((r) => setTimeout(r, 50));
+			attempts++;
+		}
+		if (webGPUContext.isInitialized()) await initializeRule();
+	}
+
+	onMount(() => waitForWebGPU());
+
+	onDestroy(() => {
+		if (lineGeometryBuffer) lineGeometryBuffer.destroy();
+		if (renderer) renderer.destroy();
+	});
+</script>
+
+{#if initializationError}
+	<div class="rule-error">{initializationError}</div>
+{/if}

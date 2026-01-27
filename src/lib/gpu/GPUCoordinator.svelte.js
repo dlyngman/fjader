@@ -770,11 +770,12 @@ export class GPUCoordinator {
 
 		if (!shaderModule) {
 			// Create/Get and increment RefCount
-			// Pass rendererDefinition to generateShader
+			// Pass rendererDefinition and markType to generateShader
 			const templateResult = scaleTemplateSystem.generateShader(
 				scaleTypes,
 				markShaderCode,
-				rendererDefinition
+				rendererDefinition,
+				markType
 			);
 			shaderModule = await this.#getOrCreateSharedShader(resourceKey, templateResult.shaderCode);
 			localRegistry.set(shaderLookupKey, { type: 'shader', key: resourceKey });
@@ -1339,9 +1340,10 @@ export class GPUCoordinator {
 				entries: dataBindingConfig.map((config) => ({
 					binding: config.binding,
 					// visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					visibility:  config.visibility !== undefined 
-						? config.visibility 
-						: (GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT),
+					visibility:
+						config.visibility !== undefined
+							? config.visibility
+							: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: config.type || 'read-only-storage' }
 				}))
 			});
@@ -1625,7 +1627,8 @@ export class GPUCoordinator {
 						resolveTarget: textureView,
 						clearValue: { r: 0, g: 0, b: 0, a: 0 },
 						loadOp: 'clear',
-						storeOp: 'store'
+						// storeOp: 'store'
+						storeOp: 'discard'
 					}
 				]
 			};

@@ -1,21 +1,15 @@
 <script>
 	import { sum } from '@uwdata/mosaic-sql';
-	import {
-		ChartContainer,
-		WebGPUCanvas,
-		DotsMark,
-		BarMarkY,
-		Crosshair
-	} from '$lib/components';
+	import { ChartContainer, WebGPUCanvas, DotsMark, BarMarkY, Crosshair, Grid } from '$lib/components';
 
 	// Color configuration state
-	let colorField = $state('origin');
+	let colorField = $state('distance');
 	let colorScheme = $state('tableau10');
 	let markType = $state('dots');
 
 	// Available options
 	const categoricalFields = [
-		{ value: 'origin', label: 'Origin (Categorical)' },
+		// { value: 'origin', label: 'Origin (Categorical)' },
 		{ value: 'carrier', label: 'Carrier (Categorical)' },
 		{ value: null, label: 'None' }
 	];
@@ -55,13 +49,9 @@
 	];
 
 	// Determine if current field is categorical
-	const isCategorical = $derived(
-		categoricalFields.some((f) => f.value === colorField)
-	);
+	const isCategorical = $derived(categoricalFields.some((f) => f.value === colorField));
 
-	const availableSchemes = $derived(
-		isCategorical ? categoricalSchemes : continuousSchemes
-	);
+	const availableSchemes = $derived(isCategorical ? categoricalSchemes : continuousSchemes);
 
 	// Auto-switch scheme when field type changes
 	$effect(() => {
@@ -120,8 +110,8 @@
 			<h3>Testing:</h3>
 			<p>
 				{#if markType === 'bar' && colorField === 'origin'}
-					✅ <strong>Deduplication Test Active!</strong><br/>
-					Both X-axis (band scale) and color use "origin".<br/>
+					✅ <strong>Deduplication Test Active!</strong><br />
+					Both X-axis (band scale) and color use "origin".<br />
 					Check console SQL - should see only ONE __dplot_origin_idx column.
 				{:else}
 					ℹ️ Set Mark Type to "Bar Chart" and Color Field to "Origin" to test column deduplication.
@@ -136,6 +126,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						{#if markType === 'dots'}
+							<Grid/>
 							<DotsMark
 								table="flights"
 								x="delay"
@@ -217,7 +208,7 @@
 		padding: 15px;
 		background: white;
 		border-radius: 4px;
-		border-left: 4px solid #4CAF50;
+		border-left: 4px solid #4caf50;
 	}
 
 	.info-panel h3 {

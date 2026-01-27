@@ -80,7 +80,7 @@
 
 	onMount(async () => {
 		// startProMotionFix();
-    // requestAnimationFrame(measureRAF);
+		// requestAnimationFrame(measureRAF);
 
 		try {
 			const wasm = wasmConnector();

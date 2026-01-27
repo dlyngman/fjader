@@ -10,7 +10,7 @@ import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js
 
 /**
  * Reactive state for a GPU-backed color scale.
- * 
+ *
  * Handles both continuous (sequential, diverging, cyclical) and discrete (ordinal) scales.
  * Manages GPU slot allocation and buffer uploads.
  */
@@ -23,8 +23,8 @@ export class ColorScaleState {
 
 	// GPU slot indices (allocated from registry)
 	#configSlot = -1;
-	#rampSlot = -1;      // Used by continuous scales
-	#paletteSlot = -1;   // Used by ordinal scales
+	#rampSlot = -1; // Used by continuous scales
+	#paletteSlot = -1; // Used by ordinal scales
 
 	// Scale configuration
 	#scheme;
@@ -68,7 +68,9 @@ export class ColorScaleState {
 		// Explicit type wins, fallback to inference from scheme
 		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
 
-		console.log(`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, scheme=${this.#scheme}`);
+		console.log(
+			`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, scheme=${this.#scheme}`
+		);
 
 		// Set initial domain
 		this.domain = config.domain || [];
@@ -289,18 +291,23 @@ export class ColorScaleState {
 	 */
 	#getScaleTypeInt() {
 		switch (this.#scaleType) {
-			case 'ordinal': return 0;
-			case 'sequential': return 1;
-			case 'diverging': return 2;
-			case 'cyclical': return 3;
-			default: return 1;
+			case 'ordinal':
+				return 0;
+			case 'sequential':
+				return 1;
+			case 'diverging':
+				return 2;
+			case 'cyclical':
+				return 3;
+			default:
+				return 1;
 		}
 	}
 
 	/**
 	 * Build the ColorConfig struct as ArrayBuffer.
 	 * Uses DataView for correct binary layout (mixed f32/u32).
-	 * 
+	 *
 	 * MUST MATCH WGSL LAYOUT:
 	 * struct ColorConfig {
 	 *   domainMin: f32,      // byte 0

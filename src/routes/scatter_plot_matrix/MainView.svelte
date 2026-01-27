@@ -6,7 +6,7 @@
 		ChartContainer,
 		ColumnSelector,
 		Grid,
-		Frame,
+		// Frame,
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
@@ -97,6 +97,8 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								{#if webGPU}
+									<Grid />
+
 									<DotsMark
 										table={'penguins'}
 										x={config.x}

@@ -2,9 +2,7 @@
 	import { onMount, onDestroy, setContext, getContext } from 'svelte';
 	import { getGPUContext } from '$lib/gpu';
 
-	let {
-		canvasComponents
-	} = $props();
+	let { canvasComponents } = $props();
 
 	const c = getContext('chart');
 	let width = $derived(c.innerWidth);
@@ -12,7 +10,7 @@
 	let margin = $derived(c.margin);
 
 	// let canvas;
-  let canvas = $state();
+	let canvas = $state();
 	let context;
 	let gpuCoordinator;
 	let chartControl;
@@ -80,6 +78,7 @@
 			context.configure({
 				device,
 				format: presentationFormat,
+				// alphaMode: 'opaque',
 				alphaMode: 'premultiplied',
 				desynchronized: true
 				// desynchronized: false

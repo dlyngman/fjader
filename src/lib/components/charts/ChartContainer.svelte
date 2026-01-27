@@ -4,7 +4,15 @@
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
 
-	let { xLabel = null, yLabel = null, background, foreground, canvas, canvasComponents, overlay } = $props();
+	let {
+		xLabel = null,
+		yLabel = null,
+		background,
+		foreground,
+		canvas,
+		canvasComponents,
+		overlay
+	} = $props();
 
 	const pointerBuffer = { x: 0, y: 0 };
 	const innerPointBuffer = { x: 0, y: 0 };
