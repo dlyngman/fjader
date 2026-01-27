@@ -146,4 +146,3 @@ export function toFloat32(data) {
 	if (data instanceof Float32Array) return data;
 	return new Float32Array(data);
 }
-

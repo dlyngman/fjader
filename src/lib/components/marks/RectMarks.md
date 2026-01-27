@@ -1,7 +1,8 @@
 // Future Bar Mark Examples with proper scale type checking
 
 // ===== BarXMark.svelte (Vertical bars) =====
-/*
+/\*
+
 <script>
   import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
   import { getContext, onMount, onDestroy, untrack } from 'svelte';
@@ -48,21 +49,22 @@
 </script>
 
 {#if scaleCompatibilityError}
-  <text fill="red">Scale Error: {scaleCompatibilityError}</text>
+<text fill="red">Scale Error: {scaleCompatibilityError}</text>
 {:else if client?.arrowTable}
-  <Rects
-    data={client.arrowTable}
-    dataVersion={client.dataVersion}
-    xScaleType={actualXScaleType}  <!-- Pass ACTUAL resolved types -->
-    yScaleType={actualYScaleType}
-    alpha={alpha}
-    baseline="zero"
-  />
+<Rects
+data={client.arrowTable}
+dataVersion={client.dataVersion}
+xScaleType={actualXScaleType} <!-- Pass ACTUAL resolved types -->
+yScaleType={actualYScaleType}
+alpha={alpha}
+baseline="zero"
+/>
 {/if}
-*/
+\*/
 
 // ===== BarYMark.svelte (Horizontal bars) =====
-/*
+/\*
+
 <script>
   // ... similar setup ...
 
@@ -82,22 +84,23 @@
 </script>
 
 {#if scaleCompatibilityError}
-  <text fill="red">Scale Error: {scaleCompatibilityError}</text>
+<text fill="red">Scale Error: {scaleCompatibilityError}</text>
 {:else if client?.arrowTable}
-  <Rects
-    data={client.arrowTable}
-    dataVersion={client.dataVersion}
-    xScaleType={actualXScaleType}  <!-- ACTUAL types, not requested -->
-    yScaleType={actualYScaleType}
-    alpha={alpha}
-    baseline="zero"
-    orientation="horizontal"
-  />
+<Rects
+data={client.arrowTable}
+dataVersion={client.dataVersion}
+xScaleType={actualXScaleType} <!-- ACTUAL types, not requested -->
+yScaleType={actualYScaleType}
+alpha={alpha}
+baseline="zero"
+orientation="horizontal"
+/>
 {/if}
-*/
+\*/
 
 // ===== RectMark.svelte (General rectangles - Very flexible) =====
-/*
+/\*
+
 <script>
   // General rectangles are very flexible
   c.registerScaleType('x', 'linear', SCALE_PRIORITIES.ACCEPT, markId);  // Accept anything
@@ -114,34 +117,39 @@
 </script>
 
 {#if client?.arrowTable}
-  <Rects
-    data={client.arrowTable}
-    dataVersion={client.dataVersion}
-    xScaleType={actualXScaleType}  <!-- Adapts to whatever was resolved -->
-    yScaleType={actualYScaleType}
-    alpha={alpha}
-  />
+<Rects
+data={client.arrowTable}
+dataVersion={client.dataVersion}
+xScaleType={actualXScaleType} <!-- Adapts to whatever was resolved -->
+yScaleType={actualYScaleType}
+alpha={alpha}
+/>
 {/if}
-*/
+\*/
 
 // ===== Usage Examples =====
 
-/*
+/\*
+
 <!-- This works fine - dots adapt to whatever scales are resolved -->
-<DotsMark 
-  table="penguins" 
-  x="bill_length" 
-  y="bill_depth"
-  preferredXScaleType="linear"   <!-- Preference, not guarantee -->
-  preferredYScaleType="linear" 
+
+<DotsMark
+table="penguins"
+x="bill_length"
+y="bill_depth"
+preferredXScaleType="linear" <!-- Preference, not guarantee -->
+preferredYScaleType="linear"
 />
 
 <!-- This will MANDATE band scale for x-axis -->
-<BarXMark 
-  table="sales" 
-  x="category" 
-  y={sum("amount")}
+
+<BarXMark
+table="sales"
+x="category"
+y={sum("amount")}
+
   <!-- No scale type props needed - BarX knows what it needs -->
+
 />
 
 <!-- Mixing marks: BarX mandates band x-axis, dots adapt -->
@@ -167,26 +175,26 @@
 // ===== API Benefits =====
 
 // 1. **Explicit Requirements**
-//    - Each mark clearly states what it needs (MANDATE/PREFER/ACCEPT)
-//    - Clear error messages when requirements conflict
-//    - Visible validation logic in mark components
+// - Each mark clearly states what it needs (MANDATE/PREFER/ACCEPT)
+// - Clear error messages when requirements conflict
+// - Visible validation logic in mark components
 
 // 2. **Flexible Adaptation**
-//    - Marks can adapt to resolved scale types
-//    - Warnings when marks get something different than preferred
-//    - Graceful degradation for compatible scale types
+// - Marks can adapt to resolved scale types
+// - Warnings when marks get something different than preferred
+// - Graceful degradation for compatible scale types
 
 // 3. **No Hidden Magic**
-//    - All scale checking happens in mark components
-//    - Developer can see exactly what's happening
-//    - Easy to debug scale resolution issues
+// - All scale checking happens in mark components
+// - Developer can see exactly what's happening
+// - Easy to debug scale resolution issues
 
 // 4. **Clear Error Messages**
-//    - "BarXMark requires band scale for x-axis, got: linear"
-//    - "Scale types resolved differently than preferred"
-//    - Helps developers understand mark requirements
+// - "BarXMark requires band scale for x-axis, got: linear"
+// - "Scale types resolved differently than preferred"
+// - Helps developers understand mark requirements
 
 // 5. **Composable and Predictable**
-//    - Can mix marks with different requirements
-//    - Priority system resolves conflicts deterministically  
-//    - Clear rules for what works together
+// - Can mix marks with different requirements
+// - Priority system resolves conflicts deterministically  
+// - Clear rules for what works together

@@ -1,0 +1,53 @@
+<script>
+	import { getContext } from 'svelte';
+	import { RuleX, RuleY } from '../rendering/index.js';
+
+	let { axis = 'both', color = [0.8, 0.8, 0.8, 0.4], lineWidth = 1, zIndex = -10 } = $props();
+
+	const chartContext = getContext('chart');
+
+	// Get scales based on axis prop
+	const xScale = $derived(axis === 'x' || axis === 'both' ? chartContext.xScaleState : null);
+	const yScale = $derived(axis === 'y' || axis === 'both' ? chartContext.yScaleState : null);
+
+	// =========================================================================
+	// ZERO-ALLOCATION TICK BUFFERS (one per axis)
+	// =========================================================================
+	const MAX_TICKS = 200;
+	const xTickBuffer = new Float32Array(MAX_TICKS);
+	const yTickBuffer = new Float32Array(MAX_TICKS);
+
+	let xTickValues = $state(null);
+	let yTickValues = $state(null);
+
+	// Helper: fill buffer from scale ticks (zero-allocation)
+	function fillTickBuffer(scale, buffer) {
+		const newTicks = scale?.getTicks ? scale.getTicks() : [];
+		const count = Math.min(newTicks.length, MAX_TICKS);
+
+		if (count > 0) {
+			for (let i = 0; i < count; i++) {
+				buffer[i] = newTicks[i];
+			}
+			return buffer.subarray(0, count);
+		}
+		return null;
+	}
+
+	// X axis ticks
+	$effect(() => {
+		xTickValues = xScale ? fillTickBuffer(xScale, xTickBuffer) : null;
+	});
+
+	// Y axis ticks
+	$effect(() => {
+		yTickValues = yScale ? fillTickBuffer(yScale, yTickBuffer) : null;
+	});
+</script>
+
+{#if xTickValues}
+	<RuleX positions={xTickValues} {color} {lineWidth} {zIndex} />
+{/if}
+{#if yTickValues}
+	<RuleY positions={yTickValues} {color} {lineWidth} {zIndex} />
+{/if}

@@ -469,6 +469,48 @@ export class BandScaleState {
 		return this.effectiveDomain;
 	}
 
+	// /**
+	//  * Generate tick values for grid lines and axes.
+	//  * For band scales, returns all category values.
+	//  *
+	//  * @returns {Array} Array of category values
+	//  */
+	// getTicks() {
+	// 	this._version; // Register Svelte dependency for reactivity
+	// 	return [...this.effectiveDomain];
+	// }
+	
+	/**
+	 * Generate tick values for grid lines and axes.
+	 *
+	 * Since the GPU shader logic (scaleBandX) expects a Float32 index (0.0, 1.0, etc.),
+	 * we must return the indices themselves, not the domain strings.
+	 *
+	 * The Axis component will then use tickFormat() to resolve index 0 -> "Label".
+	 *
+	 * @returns {Float32Array} Array of indices [0, 1, 2, ... N-1]
+	 */
+	getTicks() {
+		this._version; // Register Svelte dependency
+		const n = this.effectiveDomain.length;
+
+		// Create the sequence 0..N-1
+		const ticks = new Float32Array(n);
+		for (let i = 0; i < n; i++) ticks[i] = i;
+
+		return ticks;
+	}
+
+	/**
+	 * Get a formatter to convert tick indices back to category labels.
+	 * Used by Axis components to display the string label for the underlying GPU index.
+	 */
+	tickFormat() {
+		// Capture domain reference
+		const d = this.effectiveDomain;
+		return (index) => d[index];
+	}
+
 	/**
 	 * Calculate bandwidth for a given range size (CPU-side)
 	 * Useful for axes, tooltips, etc.

@@ -80,13 +80,13 @@ class ScaleRegistry {
 		if (this.#nextColorSlot >= this.#maxColorSlots) {
 			console.warn(
 				`[ScaleRegistry] Color scale limit reached (${this.#maxColorSlots}). ` +
-				`Active: ${this.#nextColorSlot - this.#freeColorSlots.length}, ` +
-				`Recycled: ${this.#freeColorSlots.length}. ` +
-				`Ensure unused charts are destroyed, or share scales by field name.`
+					`Active: ${this.#nextColorSlot - this.#freeColorSlots.length}, ` +
+					`Recycled: ${this.#freeColorSlots.length}. ` +
+					`Ensure unused charts are destroyed, or share scales by field name.`
 			);
 			throw new Error(
 				`Color scale limit exceeded (${this.#maxColorSlots}). ` +
-				`Scales are shared by field name. Ensure old charts are destroyed before creating new ones.`
+					`Scales are shared by field name. Ensure old charts are destroyed before creating new ones.`
 			);
 		}
 
@@ -238,7 +238,9 @@ class ScaleRegistry {
 				const scaleType = config.type || 'sequential';
 				const defaultScheme = scaleType === 'ordinal' ? 'tableau10' : 'viridis';
 
-				console.log(`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`);
+				console.log(
+					`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`
+				);
 
 				this.scales[type].set(
 					key,
@@ -341,7 +343,7 @@ class ScaleRegistry {
 		// Release GPU slots if this is a color scale
 		if (scaleInstance && typeof scaleInstance.gpuSlots === 'object') {
 			const slots = scaleInstance.gpuSlots;
-			
+
 			if (typeof slots.configSlot === 'number') {
 				this.releaseColorSlot(slots.configSlot);
 			}

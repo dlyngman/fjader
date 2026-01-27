@@ -6,7 +6,7 @@
 		ChartContainer,
 		ColumnSelector,
 		Grid,
-		Frame,
+		// Frame,
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
@@ -218,15 +218,21 @@
 	</div>
 
 	<div class="chart-wrapper">
-		<ChartContainer xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'} yLabel="species">
+		<ChartContainer
+			xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'}
+			yLabel="species"
+		>
 			{#snippet background()}
-				<Frame />
+				<!-- <Frame /> -->
 				<MarginLabel />
 			{/snippet}
 
 			{#snippet canvas()}
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
+						<!-- GPU Grid Lines (both axes, Y is band scale) -->
+						<Grid />
+
 						{#if selectedStackMode === 'none'}
 							<BarMarkX
 								table="penguins"
@@ -258,9 +264,12 @@
 		</ChartContainer>
 	</div>
 	<div class="chart-wrapper">
-		<ChartContainer xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'} yLabel="species">
+		<ChartContainer
+			xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'}
+			yLabel="species"
+		>
 			{#snippet background()}
-				<Frame />
+				<!-- <Frame /> -->
 				<MarginLabel />
 			{/snippet}
 

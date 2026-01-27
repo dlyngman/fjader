@@ -2,6 +2,7 @@ import { untrack } from 'svelte';
 import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
 import { resolveChannel } from './channel-resolution.js';
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 
 export class MarkColor {
 	#colorProp;
@@ -24,13 +25,14 @@ export class MarkColor {
 		this.#chartContext = chartContext;
 
 		// 1. Lifecycle: Create/Destroy Scale (type-based key, NOT scheme)
+		// Blocks scale creation until type is determined (schema ready)
 		$effect(() => {
 			// Track mode, field, and type separately (scheme is NOT part of the key)
 			const mode = this.#mode;
 			const field = this.#field;
 			const type = this.config.scaleType;
-
-			if (mode === 'field' && field && this.#scaleRegistry) {
+			// Only create scale when type is known (not null)
+			if (mode === 'field' && field && this.#scaleRegistry && type !== null) {
 				untrack(() => {
 					// For aggregate nodes, use the SQL string as the scale key
 					// This ensures each unique aggregate expression gets its own scale
@@ -53,6 +55,13 @@ export class MarkColor {
 						this.scaleState.registerTable(table);
 					}
 				});
+			} else if (type === null && mode === 'field') {
+				// Schema not ready yet - trigger fetch but don't create scale
+				const table = this.#tableProp();
+				if (table) {
+					tableSchemaService.getSchema(table); // Trigger fetch
+				}
+				this.scaleState = null;
 			} else {
 				this.scaleState = null;
 			}
@@ -99,16 +108,38 @@ export class MarkColor {
 	 * Priority:
 	 * 1. Aggregates (avg, sum, count, etc.) -> 'sequential'
 	 * 2. Bins (bin(), AutoBinNode) -> 'sequential'
-	 * 3. Raw fields -> 'ordinal'
+	 * 3. Schema-based inference for raw columns -> 'sequential' (numeric/date) or 'ordinal' (string)
+	 * 4. Default fallback -> 'ordinal'
+	 *
+	 * Returns null if schema info is needed but not yet available (blocking).
 	 */
 	#resolveScaleType(field) {
+		// Priority 1: SQL expression nodes (aggregates, bins)
 		if (isNode(field)) {
 			// e.g. avg(delay), count(), sum(sales)
 			if (isAggregateExpression(field)) return 'sequential';
 			// e.g. bin(age) - technically ordinal bins, but usually treated sequentially in colormaps
 			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
 		}
-		// Default fallback for raw columns (strings/categories)
+
+		// Priority 2: Schema-based inference for raw column names
+		if (typeof field === 'string') {
+			const table = this.#tableProp();
+			if (table) {
+				const columnType = tableSchemaService.getColumnType(table, field);
+
+				if (columnType === 'number' || columnType === 'date') {
+					return 'sequential';
+				}
+				if (columnType === 'string' || columnType === 'boolean') {
+					return 'ordinal';
+				}
+				// columnType is null → schema not ready, return null to block
+				return null;
+			}
+		}
+
+		// Default fallback (no table context or unknown field type)
 		return 'ordinal';
 	}
 
@@ -117,6 +148,9 @@ export class MarkColor {
 	config = $derived.by(() => {
 		const c = this.#colorProp();
 		const s = this.#schemeProp();
+
+		// Track schema service version to trigger recomputation when schema arrives
+		const _schemaVersion = tableSchemaService.version;
 
 		// Case 1: Constant / Null
 		if (c == null) {
@@ -137,14 +171,14 @@ export class MarkColor {
 			explicitScheme = c.scheme || s;
 		}
 
-		// 1. Determine Type Explicitly from field semantics
+		// 1. Determine Type from field semantics + schema (may return null if waiting for schema)
 		const scaleType = this.#resolveScaleType(field);
 
 		// 2. Pass explicit scheme if provided, otherwise undefined (registry will apply default)
 		return {
 			mode: 'field',
 			field,
-			scaleType,
+			scaleType, // Can be null if waiting for schema
 			scheme: explicitScheme // undefined if not specified
 		};
 	});

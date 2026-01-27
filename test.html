@@ -1,63 +1,63 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-    <meta charset="UTF-8">
-    <title>WebGPU 120Hz Stutter Test</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            background: #1a1a1a;
-            color: #fff;
-            font-family: monospace;
-        }
-        canvas {
-            border: 1px solid #444;
-            display: block;
-            margin: 20px 0;
-        }
-        #info {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            background: rgba(0,0,0,0.8);
-            padding: 10px;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>WebGPU 120Hz Stutter Test</h1>
-    <p>Pan by clicking and dragging. Watch for stuttering.</p>
-    <canvas id="canvas" width="1200" height="800"></canvas>
-    <div id="info">
-        <div>FPS: <span id="fps">0</span></div>
-        <div>Frame Time: <span id="frameTime">0</span>ms</div>
-        <div>Offset: <span id="offset">0</span></div>
-    </div>
+	<head>
+		<meta charset="UTF-8" />
+		<title>WebGPU 120Hz Stutter Test</title>
+		<style>
+			body {
+				margin: 0;
+				padding: 20px;
+				background: #1a1a1a;
+				color: #fff;
+				font-family: monospace;
+			}
+			canvas {
+				border: 1px solid #444;
+				display: block;
+				margin: 20px 0;
+			}
+			#info {
+				position: fixed;
+				top: 10px;
+				right: 10px;
+				background: rgba(0, 0, 0, 0.8);
+				padding: 10px;
+				border-radius: 4px;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>WebGPU 120Hz Stutter Test</h1>
+		<p>Pan by clicking and dragging. Watch for stuttering.</p>
+		<canvas id="canvas" width="1200" height="800"></canvas>
+		<div id="info">
+			<div>FPS: <span id="fps">0</span></div>
+			<div>Frame Time: <span id="frameTime">0</span>ms</div>
+			<div>Offset: <span id="offset">0</span></div>
+		</div>
 
-    <script type="module">
-        const canvas = document.getElementById('canvas');
-        
-        // WebGPU setup
-        const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter) {
-            document.body.innerHTML = '<h1>WebGPU not supported</h1>';
-            throw new Error('WebGPU not supported');
-        }
-        
-        const device = await adapter.requestDevice();
-        const context = canvas.getContext('webgpu');
-        const format = navigator.gpu.getPreferredCanvasFormat();
-        
-        context.configure({
-            device,
-            format,
-            alphaMode: 'premultiplied'
-        });
+		<script type="module">
+			const canvas = document.getElementById('canvas');
 
-        // FIXED shader - proper vertex/instance separation
-        const shaderCode = `
+			// WebGPU setup
+			const adapter = await navigator.gpu.requestAdapter();
+			if (!adapter) {
+				document.body.innerHTML = '<h1>WebGPU not supported</h1>';
+				throw new Error('WebGPU not supported');
+			}
+
+			const device = await adapter.requestDevice();
+			const context = canvas.getContext('webgpu');
+			const format = navigator.gpu.getPreferredCanvasFormat();
+
+			context.configure({
+				device,
+				format,
+				alphaMode: 'premultiplied'
+			});
+
+			// FIXED shader - proper vertex/instance separation
+			const shaderCode = `
             struct Uniforms {
                 offset: f32,
                 scale: f32,
@@ -118,147 +118,150 @@
             }
         `;
 
-        // Create shader module and pipeline
-        const shaderModule = device.createShaderModule({ code: shaderCode });
-        
-        const pipeline = device.createRenderPipeline({
-            layout: 'auto',
-            vertex: {
-                module: shaderModule,
-                entryPoint: 'vertexMain',
-            },
-            fragment: {
-                module: shaderModule,
-                entryPoint: 'fragmentMain',
-                targets: [{ format }],
-            },
-            primitive: {
-                topology: 'triangle-list',
-            },
-        });
+			// Create shader module and pipeline
+			const shaderModule = device.createShaderModule({ code: shaderCode });
 
-        // Create uniform buffer
-        const uniformBuffer = device.createBuffer({
-            size: 16,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
+			const pipeline = device.createRenderPipeline({
+				layout: 'auto',
+				vertex: {
+					module: shaderModule,
+					entryPoint: 'vertexMain'
+				},
+				fragment: {
+					module: shaderModule,
+					entryPoint: 'fragmentMain',
+					targets: [{ format }]
+				},
+				primitive: {
+					topology: 'triangle-list'
+				}
+			});
 
-        const bindGroup = device.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0),
-            entries: [{
-                binding: 0,
-                resource: { buffer: uniformBuffer }
-            }],
-        });
+			// Create uniform buffer
+			const uniformBuffer = device.createBuffer({
+				size: 16,
+				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+			});
 
-        // Animation state
-        let offset = 0;
-        let isDragging = false;
-        let lastX = 0;
+			const bindGroup = device.createBindGroup({
+				layout: pipeline.getBindGroupLayout(0),
+				entries: [
+					{
+						binding: 0,
+						resource: { buffer: uniformBuffer }
+					}
+				]
+			});
 
-        // Mouse handling
-        canvas.addEventListener('mousedown', (e) => {
-            isDragging = true;
-            lastX = e.clientX;
-        });
+			// Animation state
+			let offset = 0;
+			let isDragging = false;
+			let lastX = 0;
 
-        canvas.addEventListener('mousemove', (e) => {
-            if (isDragging) {
-                const dx = (e.clientX - lastX) / canvas.width;
-                offset += dx * 2;
-                lastX = e.clientX;
-            }
-        });
+			// Mouse handling
+			canvas.addEventListener('mousedown', (e) => {
+				isDragging = true;
+				lastX = e.clientX;
+			});
 
-        canvas.addEventListener('mouseup', () => {
-            isDragging = false;
-        });
+			canvas.addEventListener('mousemove', (e) => {
+				if (isDragging) {
+					const dx = (e.clientX - lastX) / canvas.width;
+					offset += dx * 2;
+					lastX = e.clientX;
+				}
+			});
 
-        canvas.addEventListener('mouseleave', () => {
-            isDragging = false;
-        });
+			canvas.addEventListener('mouseup', () => {
+				isDragging = false;
+			});
 
-        // Performance tracking
-        let lastFrameTime = 0;
-        let frameTimes = [];
-        let frameCount = 0;
-        let lastFpsUpdate = performance.now();
+			canvas.addEventListener('mouseleave', () => {
+				isDragging = false;
+			});
 
-        let previousFrame = null;
+			// Performance tracking
+			let lastFrameTime = 0;
+			let frameTimes = [];
+			let frameCount = 0;
+			let lastFpsUpdate = performance.now();
 
-        // Main render loop
-        async function render(currentTime) {
+			let previousFrame = null;
 
-            if (previousFrame) {
-               await previousFrame;
-            }
+			// Main render loop
+			async function render(currentTime) {
+				if (previousFrame) {
+					await previousFrame;
+				}
 
-            const frameStart = performance.now();
-            
-            // Track frame timing
-            if (lastFrameTime > 0) {
-                const delta = frameStart - lastFrameTime;
-                frameTimes.push(delta);
-                if (frameTimes.length > 120) frameTimes.shift();
-            }
-            lastFrameTime = frameStart;
+				const frameStart = performance.now();
 
-            // Update uniforms
-            const uniformData = new Float32Array([offset, 1.0, 0, 0]);
-            device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+				// Track frame timing
+				if (lastFrameTime > 0) {
+					const delta = frameStart - lastFrameTime;
+					frameTimes.push(delta);
+					if (frameTimes.length > 120) frameTimes.shift();
+				}
+				lastFrameTime = frameStart;
 
-            // Render
-            const commandEncoder = device.createCommandEncoder();
-            
-            const textureView = context.getCurrentTexture().createView();
-            
-            const renderPass = commandEncoder.beginRenderPass({
-                colorAttachments: [{
-                    view: textureView,
-                    loadOp: 'clear',
-                    clearValue: { r: 0.1, g: 0.1, b: 0.15, a: 1.0 },
-                    storeOp: 'store',
-                }],
-            });
+				// Update uniforms
+				const uniformData = new Float32Array([offset, 1.0, 0, 0]);
+				device.queue.writeBuffer(uniformBuffer, 0, uniformData);
 
-            renderPass.setPipeline(pipeline);
-            renderPass.setBindGroup(0, bindGroup);
-            renderPass.draw(6, 900); // 6 vertices, 900 instances (30x30 grid)
-            renderPass.end();
+				// Render
+				const commandEncoder = device.createCommandEncoder();
 
-            device.queue.submit([commandEncoder.finish()]);
-            previousFrame = device.queue.onSubmittedWorkDone();
+				const textureView = context.getCurrentTexture().createView();
 
-            // Update UI
-            frameCount++;
-            const now = performance.now();
-            if (now - lastFpsUpdate > 1000) {
-                const avgFrameTime = frameTimes.reduce((a,b) => a+b, 0) / frameTimes.length;
-                const fps = 1000 / avgFrameTime;
-                document.getElementById('fps').textContent = fps.toFixed(1);
-                document.getElementById('frameTime').textContent = avgFrameTime.toFixed(2);
-                document.getElementById('offset').textContent = offset.toFixed(3);
-                
-                // Log if stuttering detected
-                const maxFrameTime = Math.max(...frameTimes);
-                if (maxFrameTime > 12) {
-                    console.warn(`⚠️ Stutter: ${maxFrameTime.toFixed(2)}ms frame`);
-                }
-                
-                frameCount = 0;
-                lastFpsUpdate = now;
-            }
+				const renderPass = commandEncoder.beginRenderPass({
+					colorAttachments: [
+						{
+							view: textureView,
+							loadOp: 'clear',
+							clearValue: { r: 0.1, g: 0.1, b: 0.15, a: 1.0 },
+							storeOp: 'store'
+						}
+					]
+				});
 
-            requestAnimationFrame(render);
-        }
+				renderPass.setPipeline(pipeline);
+				renderPass.setBindGroup(0, bindGroup);
+				renderPass.draw(6, 900); // 6 vertices, 900 instances (30x30 grid)
+				renderPass.end();
 
-        // Start the render loop
-        requestAnimationFrame(render);
-        
-        console.log('✅ WebGPU test started');
-        console.log('📊 You should see a 30x30 grid of colored squares');
-        console.log('🖱️  Click and drag to pan horizontally');
-        console.log('⏱️  Expected: ~8.33ms per frame at 120Hz');
-    </script>
-</body>
+				device.queue.submit([commandEncoder.finish()]);
+				previousFrame = device.queue.onSubmittedWorkDone();
+
+				// Update UI
+				frameCount++;
+				const now = performance.now();
+				if (now - lastFpsUpdate > 1000) {
+					const avgFrameTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+					const fps = 1000 / avgFrameTime;
+					document.getElementById('fps').textContent = fps.toFixed(1);
+					document.getElementById('frameTime').textContent = avgFrameTime.toFixed(2);
+					document.getElementById('offset').textContent = offset.toFixed(3);
+
+					// Log if stuttering detected
+					const maxFrameTime = Math.max(...frameTimes);
+					if (maxFrameTime > 12) {
+						console.warn(`⚠️ Stutter: ${maxFrameTime.toFixed(2)}ms frame`);
+					}
+
+					frameCount = 0;
+					lastFpsUpdate = now;
+				}
+
+				requestAnimationFrame(render);
+			}
+
+			// Start the render loop
+			requestAnimationFrame(render);
+
+			console.log('✅ WebGPU test started');
+			console.log('📊 You should see a 30x30 grid of colored squares');
+			console.log('🖱️  Click and drag to pan horizontally');
+			console.log('⏱️  Expected: ~8.33ms per frame at 120Hz');
+		</script>
+	</body>
 </html>

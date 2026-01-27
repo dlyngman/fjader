@@ -239,7 +239,7 @@ export class LinearScaleState {
 		this.#updateGpuState();
 
 		// Trigger Svelte reactivity
-		// this._version++;
+		this._version++;
 	}
 
 	/**
@@ -385,6 +385,19 @@ export class LinearScaleState {
 			this.#sharedScale.range([size, 0]);
 		}
 		return this.#sharedScale;
+	}
+
+	/**
+	 * Generate tick values for grid lines and axes.
+	 * Uses current animated domain (renderMin/renderMax) for smooth updates.
+	 *
+	 * @param {number} count - Approximate number of ticks desired
+	 * @returns {Array<number>} Array of tick values
+	 */
+	getTicks(count = 5) {
+		this._version; // Register Svelte dependency for reactivity
+		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
+		return this.#sharedScale.ticks(count);
 	}
 
 	/**

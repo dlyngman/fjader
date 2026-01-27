@@ -3,18 +3,25 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import {
-		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
-		MarkColor
-	} from './utils/index.js';
+	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
 
 	let {
-		table, selection, x, x1 = 0, x2 = x, y,
-		color = null, scheme, alpha = 0.8, // No default scheme - MarkColor will infer
-		limit, filterNulls = false, transforms = [],
-		padding, paddingInner, paddingOuter, align = 0.5
+		table,
+		selection,
+		x,
+		x1 = 0,
+		x2 = x,
+		y,
+		color = null,
+		scheme,
+		alpha = 0.8, // No default scheme - MarkColor will infer
+		limit,
+		filterNulls = false,
+		transforms = [],
+		padding,
+		paddingInner,
+		paddingOuter,
+		align = 0.5
 	} = $props();
 
 	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
@@ -26,8 +33,12 @@
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
-		() => color, () => scheme, () => table, () => setup,
-		scaleRegistry, chartContext
+		() => color,
+		() => scheme,
+		() => table,
+		() => setup,
+		scaleRegistry,
+		chartContext
 	);
 
 	const yScaleConfig = $derived.by(() => {
@@ -48,12 +59,16 @@
 			y: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: yScaleConfig }
 		},
 		inferredScaleColumns: {
-			x: x2,  // X scale uses the value column (x2, not x1 which is baseline)
-			y: y    // Y scale uses categorical column
+			x: x2, // X scale uses the value column (x2, not x1 which is baseline)
+			y: y // Y scale uses categorical column
 		},
-		table, selection, transforms,
+		table,
+		selection,
+		transforms,
 		select: buildSelectFromChannels({
-			x1, x2, y,
+			x1,
+			x2,
+			y,
 			...(markColor.selectField && { color: markColor.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y] : null }
@@ -76,44 +91,69 @@
 	// --- DATA RESOLUTION ---
 
 	// X0: Stack Output -> x1 prop -> 0
-	let x0Data = $derived(toFloat32(resolveChannel({
-		value: x1, channel: 'x1',
-		tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
-		dataAccessor: setup?.data, instanceCount, fallback: 0
-	})));
+	let x0Data = $derived(
+		toFloat32(
+			resolveChannel({
+				value: x1,
+				channel: 'x1',
+				tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
+				dataAccessor: setup?.data,
+				instanceCount,
+				fallback: 0
+			})
+		)
+	);
 
 	// X1: Stack Output -> x2 prop
-	let x1Data = $derived(toFloat32(resolveChannel({
-		value: x2, channel: 'x2',
-		tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
-		dataAccessor: setup?.data, instanceCount
-	})));
+	let x1Data = $derived(
+		toFloat32(
+			resolveChannel({
+				value: x2,
+				channel: 'x2',
+				tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
+				dataAccessor: setup?.data,
+				instanceCount
+			})
+		)
+	);
 
 	// Y: Categorical Resolution
 	let yData = $derived.by(() => {
 		if (!instanceCount) return null;
-		
+
 		// Fallback scale type check for No-DB mode
 		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y || 'band';
 		if (scaleType !== 'band') return null;
 
-		const raw = resolveChannel({ value: y, channel: 'y', dataAccessor: setup?.data, instanceCount });
+		const raw = resolveChannel({
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
 		if (!raw) return null;
 
 		if (!chartContext.yScaleState?.processDataForGPU) return null;
 		const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
 		const yArr = toFloat32(indices);
-		
+
 		return { y0Data: yArr, y1Data: yArr };
 	});
 
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	let alphaData = $derived(toFloat32(resolveChannel({
-		value: alpha, channel: 'alpha',
-		dataAccessor: setup?.data, instanceCount, fallback: 0.8
-	})));
+	let alphaData = $derived(
+		toFloat32(
+			resolveChannel({
+				value: alpha,
+				channel: 'alpha',
+				dataAccessor: setup?.data,
+				instanceCount,
+				fallback: 0.8
+			})
+		)
+	);
 
 	// --- SETUP LIFECYCLE ---
 
@@ -129,12 +169,17 @@
 		});
 	});
 
-	onDestroy(() => { setup?.destroy(); });
+	onDestroy(() => {
+		setup?.destroy();
+	});
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
 	<Rects
-		{x0Data} {x1Data} {y0Data} {y1Data}
+		{x0Data}
+		{x1Data}
+		{y0Data}
+		{y1Data}
 		colorValueData={markColor.data}
 		{alphaData}
 		colorMode={markColor.colorMode}
@@ -143,9 +188,15 @@
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">Error: {setup.client.error.message}</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+		>Error: {setup.client.error.message}</text
+	>
 {:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Loading data...</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+		>Loading data...</text
+	>
 {:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">Initializing bars...</text>
+	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+		>Initializing bars...</text
+	>
 {/if}

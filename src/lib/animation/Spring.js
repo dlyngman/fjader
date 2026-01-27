@@ -9,8 +9,8 @@
 // 360Hz provides smooth results while being computationally efficient.
 // Higher rates (480Hz, 960Hz) offer marginal improvement at higher CPU cost.
 export const PHYSICS_HZ = 360;
-export const DT = 1 / PHYSICS_HZ;           // Fixed timestep in seconds (~2.78ms)
-export const DT_MS = DT * 1000;             // Fixed timestep in milliseconds
+export const DT = 1 / PHYSICS_HZ; // Fixed timestep in seconds (~2.78ms)
+export const DT_MS = DT * 1000; // Fixed timestep in milliseconds
 
 // -----------------------------------------------------------------------------
 // SPRING PRESETS
@@ -55,8 +55,8 @@ export class Spring {
 	velocity = 0;
 
 	// Precomputed constants (set via configure())
-	#omega = 0;      // Natural frequency: sqrt(stiffness)
-	#expDt = 0;      // Precomputed: exp(-omega * DT)
+	#omega = 0; // Natural frequency: sqrt(stiffness)
+	#expDt = 0; // Precomputed: exp(-omega * DT)
 	#precision = 1e-6;
 
 	/**

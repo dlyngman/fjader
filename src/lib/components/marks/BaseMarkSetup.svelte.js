@@ -16,6 +16,7 @@ import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities.js';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler.js';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor.js';
 import { viewManager } from '$lib/data/ViewManager.svelte.js';
+import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 
 export class BaseMarkSetup {
 	// --- Reactive State ---
@@ -47,7 +48,7 @@ export class BaseMarkSetup {
 	// Channels that need domain computed from query results (aggregates, transforms)
 	#channelsNeedingDataDomain = new Set();
 	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
-	#globalAggregatesSet = $state(false);   // From sidecar query (preferred)
+	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
 
 	constructor(config, coordinator, chartContext, stableId = null) {
 		console.log('🔧 BaseMarkSetup constructor:', {
@@ -61,10 +62,11 @@ export class BaseMarkSetup {
 		this.#chartContext = chartContext;
 		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
 
-		// Ensure ViewManager has coordinator (idempotent, pragmatic initialization)
+		// Ensure services have coordinator (idempotent, pragmatic initialization)
 		// TODO: Could be moved to app-level initialization where coordinator is created
 		if (coordinator) {
 			viewManager.setCoordinator(coordinator);
+			tableSchemaService.setCoordinator(coordinator);
 		}
 
 		// NEW: Create transform compiler
@@ -145,8 +147,10 @@ export class BaseMarkSetup {
 		}
 
 		if (this.#channelsNeedingDataDomain.size > 0) {
-			console.log(`🔧 ${this.#markId} channels needing data-derived domain:`,
-				Array.from(this.#channelsNeedingDataDomain));
+			console.log(
+				`🔧 ${this.#markId} channels needing data-derived domain:`,
+				Array.from(this.#channelsNeedingDataDomain)
+			);
 		}
 	}
 
@@ -180,15 +184,14 @@ export class BaseMarkSetup {
 				this.#categoricalFetchStarted = true;
 
 				// Fetch both categorical and aggregated domains in parallel
-				Promise.all([
-					this.#fetchCategoricalDomains(),
-					this.#fetchGlobalAggregates()
-				])
+				Promise.all([this.#fetchCategoricalDomains(), this.#fetchGlobalAggregates()])
 					.then(([fetchCount]) => {
 						this.categoricalDataFetched = true;
 						this.#setScalesReady();
 						if (fetchCount > 0) {
-							console.log(`✅ Mark ${this.#markId} categorical domains ready (${fetchCount} fetches), view should be created`);
+							console.log(
+								`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`
+							);
 						}
 					})
 					.catch((error) => {
@@ -268,7 +271,6 @@ export class BaseMarkSetup {
 				this.#markDeferredScalesReady();
 			}
 		});
-
 	}
 
 	#registerScaleRequirements() {
@@ -414,14 +416,10 @@ export class BaseMarkSetup {
 		console.log('📊 Input data sample:', objects.slice(0, 3));
 		console.log('📊 Select config:', this.#config.select);
 
-		const transformed = this.#transformCompiler.applyToData(
-			objects,
-			transformConfig,
-			{
-				x: this.#chartContext.xScale,
-				y: this.#chartContext.yScale
-			}
-		);
+		const transformed = this.#transformCompiler.applyToData(objects, transformConfig, {
+			x: this.#chartContext.xScale,
+			y: this.#chartContext.yScale
+		});
 
 		console.log('📊 Transformed data:', transformed.length, 'rows');
 		console.log('📊 Transformed sample:', transformed.slice(0, 3));
@@ -840,24 +838,48 @@ export class BaseMarkSetup {
 
 		// Fetch color domain if color scale is set and there's a color field
 		if (this.#colorScaleState && this.#config.select.color) {
-			const colorField = this.#config.select.color;
+			// Extract field from color config (handles object format { field: "x", scheme: "y" })
+			const colorValue = this.#config.select.color;
+			const colorField = typeof colorValue === 'object' && colorValue.field && !isNode(colorValue)
+				? colorValue.field
+				: colorValue;
 
-			// Skip if color is an aggregate expression (will be handled by sidecar or data-derived)
+			// Skip if color is an aggregate expression (handled by sidecar query)
 			const isAggregate = isNode(colorField) && isAggregateExpression(colorField);
 
 			if (!isAggregate) {
-				// Only fetch categorical domains for non-aggregate color fields
-				const q = Query.from(table).select({ color: sqlColumn(String(colorField)) }).distinct();
+				if (this.#colorScaleState.isOrdinal) {
+					// Ordinal: fetch distinct categories
+					const q = Query.from(table)
+						.select({ color: sqlColumn(String(colorField)) })
+						.distinct();
 
-				fetches.push(
-					this.#coordinator.query(q).then((result) => {
-						const categories = Array.from(result).map((row) => row.color);
-						if (categories.length > 0) {
-							console.log(`[BaseMarkSetup] Color domain discovered:`, categories);
-							this.#colorScaleState.setDomain(categories);
-						}
-					})
-				);
+					fetches.push(
+						this.#coordinator.query(q).then((result) => {
+							const categories = Array.from(result).map((row) => row.color);
+							if (categories.length > 0) {
+								console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
+								this.#colorScaleState.setDomain(categories);
+							}
+						})
+					);
+				} else {
+					// Sequential: fetch min/max extent
+					const q = Query.from(table).select({
+						min_color: min(sqlColumn(String(colorField))),
+						max_color: max(sqlColumn(String(colorField)))
+					});
+
+					fetches.push(
+						this.#coordinator.query(q).then((result) => {
+							const row = Array.from(result)[0];
+							if (row && row.min_color != null && row.max_color != null) {
+								console.log(`[BaseMarkSetup] Color domain (sequential):`, [row.min_color, row.max_color]);
+								this.#colorScaleState.setDomain([row.min_color, row.max_color]);
+							}
+						})
+					);
+				}
 			}
 		}
 
@@ -880,8 +902,10 @@ export class BaseMarkSetup {
 			return;
 		}
 
-		console.log(`🔍 [${this.#markId}] Building sidecar query for channels:`,
-			Array.from(this.#channelsNeedingDataDomain));
+		console.log(
+			`🔍 [${this.#markId}] Building sidecar query for channels:`,
+			Array.from(this.#channelsNeedingDataDomain)
+		);
 
 		try {
 			// Step 1: Build the inner query using the same query builder (no filter)
@@ -918,19 +942,31 @@ export class BaseMarkSetup {
 			console.log(`✅ [${this.#markId}] Sidecar results:`, extents);
 
 			// Step 4: Apply extents to scales
-			if (this.#channelsNeedingDataDomain.has('x') && extents.min_x != null && extents.max_x != null) {
+			if (
+				this.#channelsNeedingDataDomain.has('x') &&
+				extents.min_x != null &&
+				extents.max_x != null
+			) {
 				const xExtent = [extents.min_x, extents.max_x];
 				console.log(`📊 [${this.#markId}] Applying X extent from sidecar:`, xExtent);
 				this.#chartContext.xScaleState?.addMark(xExtent, this.#markId);
 			}
 
-			if (this.#channelsNeedingDataDomain.has('y') && extents.min_y != null && extents.max_y != null) {
+			if (
+				this.#channelsNeedingDataDomain.has('y') &&
+				extents.min_y != null &&
+				extents.max_y != null
+			) {
 				const yExtent = [extents.min_y, extents.max_y];
 				console.log(`📊 [${this.#markId}] Applying Y extent from sidecar:`, yExtent);
 				this.#chartContext.yScaleState?.addMark(yExtent, this.#markId);
 			}
 
-			if (this.#channelsNeedingDataDomain.has('color') && extents.min_color != null && extents.max_color != null) {
+			if (
+				this.#channelsNeedingDataDomain.has('color') &&
+				extents.min_color != null &&
+				extents.max_color != null
+			) {
 				const colorExtent = [extents.min_color, extents.max_color];
 				console.log(`📊 [${this.#markId}] Applying color extent from sidecar:`, colorExtent);
 				this.#colorScaleState?.setDomain(colorExtent);
@@ -938,7 +974,6 @@ export class BaseMarkSetup {
 
 			// Mark that global aggregates have been set
 			this.#globalAggregatesSet = true;
-
 		} catch (error) {
 			console.error(`❌ [${this.#markId}] Sidecar query failed:`, error);
 			// Don't set flag on failure - will fall back to data-derived domains
@@ -987,7 +1022,10 @@ export class BaseMarkSetup {
 			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
 
 			// Only mark linear scales that were waiting for data-derived domains
-			if (needsDataDomain && (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')) {
+			if (
+				needsDataDomain &&
+				(scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')
+			) {
 				if (!scale.ready) {
 					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
 					scale.setReady?.();

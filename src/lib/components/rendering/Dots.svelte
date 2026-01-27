@@ -27,9 +27,16 @@
 	};
 
 	let {
-		xData, yData, colorValueData, radiusData, alphaData,
-		dataVersion, zIndex = 0,
-		colorMode = 0, colorScaleIndex = 0, constantColor = [0.13, 0.55, 0.13, 1.0]
+		xData,
+		yData,
+		colorValueData,
+		radiusData,
+		alphaData,
+		dataVersion,
+		zIndex = 0,
+		colorMode = 0,
+		colorScaleIndex = 0,
+		constantColor = [0.13, 0.55, 0.13, 1.0]
 	} = $props();
 
 	const chartContext = getContext('chart');
@@ -42,7 +49,7 @@
 
 	const quadVertexCount = 6;
 
-    // ... [dotsShaderCode omitted, same as before] ...
+	// ... [dotsShaderCode omitted, same as before] ...
 	const dotsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
@@ -127,10 +134,12 @@
     }
   `;
 
-	const vertexBufferLayout = [{
-		arrayStride: 2 * 4,
-		attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
-	}];
+	const vertexBufferLayout = [
+		{
+			arrayStride: 2 * 4,
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+		}
+	];
 
 	const dataBindingConfig = [
 		{ binding: BINDINGS.X, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
@@ -138,16 +147,31 @@
 		{ binding: BINDINGS.RADIUS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.CONSTANTS, type: 'uniform', visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT }
+		{
+			binding: BINDINGS.CONSTANTS,
+			type: 'uniform',
+			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+		}
 	];
 
 	// --- WRITING EFFECTS ---
 
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.RADIUS, radiusData); });
-	$effect(() => { if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData); });
-	$effect(() => { if (renderer?.resourcesCreated && colorValueData) renderer.writeAttribute(BINDINGS.COLOR, colorValueData); });
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.RADIUS, radiusData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && colorValueData)
+			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+	});
 
 	// Uniforms
 	$effect(() => {
@@ -222,7 +246,7 @@
 	async function waitForWebGPU() {
 		let attempts = 0;
 		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise(r => setTimeout(r, 50));
+			await new Promise((r) => setTimeout(r, 50));
 			attempts++;
 		}
 		if (webGPUContext.isInitialized()) await initializeDots();

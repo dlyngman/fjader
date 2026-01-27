@@ -8,57 +8,55 @@
 		ChartContainer,
 		ColumnSelector,
 		Grid,
-		Frame,
+		// Frame,
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		DotsMark,
+		DotsMark
 	} from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');
 	const brushSeletion = Selection.crossfilter();
-
-
 </script>
+
 <div class="main-view-container">
 	<div class="chart-wrapper">
-		<ChartContainer 
-			xLabel = {"delay"}
-			yLabel = {"time"}
-		>
-		{#snippet background()}
-			<!-- <Grid /> -->
-			<!-- <Frame /> -->
-			<!-- <AxisLeft /> -->
-			<!-- <AxisBottom /> -->
-			<!-- <MarginLabel /> -->
-		{/snippet}
-	
-		{#snippet canvas()}
-			<WebGPUCanvas>
-			{#snippet canvasComponents()}
-				<DotsMark
-				table="flights"
-				selection={brushSeletion}
-				x={min("delay")}
-				y={"time"}
-				color={avg("delay")}
-				alpha="0.8"
-				/>
+		<ChartContainer xLabel={'delay'} yLabel={'time'}>
+			{#snippet background()}
+				<!-- <Grid /> -->
+				<!-- <Frame /> -->
+				<!-- <AxisLeft /> -->
+				<!-- <AxisBottom /> -->
+				<!-- <MarginLabel /> -->
 			{/snippet}
-			</WebGPUCanvas>
-		{/snippet}
-	
-		{#snippet foreground()}
-			<Crosshair />
-		{/snippet}
+
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+
+						<DotsMark
+							table="flights"
+							selection={brushSeletion}
+							x={min('delay')}
+							y={'time'}
+							color={avg('delay')}
+							alpha="0.8"
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet foreground()}
+				<Crosshair />
+			{/snippet}
 		</ChartContainer>
-  </div>  
+	</div>
 </div>
 
-<Plot selection = {brushSeletion}/>
+<Plot selection={brushSeletion} />
 
 <style>
 	.main-view-container {

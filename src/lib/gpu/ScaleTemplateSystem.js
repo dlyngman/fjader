@@ -187,9 +187,10 @@ export class ScaleTemplateSystem {
 	 * @param {Object} scaleTypes - { x: 'linear', y: 'linear' } or { x: 'linear', y: 'band' }
 	 * @param {string} markShaderCode - Mark-specific shader code (dots, rects, etc.)
 	 * @param {Object} [rendererDefinition] - Optional declarative renderer definition
+	 * @param {string} [markType] - Mark type identifier (dots, rects, rule, etc.)
 	 * @returns {Object} { shaderCode: string, bufferLayouts: Object }
 	 */
-	generateShader(scaleTypes, markShaderCode, rendererDefinition) {
+	generateShader(scaleTypes, markShaderCode, rendererDefinition, markType = 'unknown') {
 		if (!rendererDefinition) {
 			throw new Error(
 				'generateShader requires a rendererDefinition. ' +
@@ -198,7 +199,7 @@ export class ScaleTemplateSystem {
 		}
 
 		const defKey = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
-		const cacheKey = `${scaleTypes.x}-${scaleTypes.y}${defKey}`;
+		const cacheKey = `${markType}-${scaleTypes.x}-${scaleTypes.y}${defKey}`;
 
 		// Return cached version if available
 		if (this.shaderCache.has(cacheKey)) {
@@ -225,7 +226,12 @@ export class ScaleTemplateSystem {
 		const declarations = this._buildDeclarations(xFragment, yFragment);
 		const bandHelpers = this._buildBandHelpers(scaleTypes);
 		const implementations = this._buildImplementations(scaleTypes, xFragment, yFragment);
-		const scaleFunctions = this._buildScaleFunctions(scaleTypes, xFragment, yFragment);
+		const scaleFunctions = this._buildScaleFunctions(
+			scaleTypes,
+			xFragment,
+			yFragment,
+			rendererDefinition
+		);
 
 		// Process mark shader using declarative renderer definition
 		const processedMarkShader = this._processMarkShader(
@@ -473,24 +479,44 @@ export class ScaleTemplateSystem {
 	/**
 	 * Build convenience scale functions (scaleX, scaleY)
 	 * Directly calls the correct scale type function - no runtime branching!
+	 * Conditionally generates only the functions needed by the renderer definition.
 	 * @private
 	 */
-	_buildScaleFunctions(scaleTypes, xFragment, yFragment) {
-		// At compile time, we know which scale type to use
-		// So we directly call the right function
-		const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
-		const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+	_buildScaleFunctions(scaleTypes, xFragment, yFragment, rendererDefinition) {
+		const functions = [];
 
-		return `
-      // Convenience functions - specialized at compile time
+		// Only generate scaleX if the renderer uses X axis
+		if (rendererDefinition?.x) {
+			const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
+			functions.push(`
+      fn scaleX(value: f32) -> f32 {
+        return ${xFunctionName}(value, frameUniforms.xScaleIndex);
+      }`);
+		}
+
+		// Only generate scaleY if the renderer uses Y axis
+		if (rendererDefinition?.y) {
+			const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+			functions.push(`
+      fn scaleY(value: f32) -> f32 {
+        return ${yFunctionName}(value, frameUniforms.yScaleIndex);
+      }`);
+		}
+
+		// Fallback: if no renderer definition, generate both (backward compatibility)
+		if (functions.length === 0) {
+			const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
+			const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+			functions.push(`
       fn scaleX(value: f32) -> f32 {
         return ${xFunctionName}(value, frameUniforms.xScaleIndex);
       }
-      
       fn scaleY(value: f32) -> f32 {
         return ${yFunctionName}(value, frameUniforms.yScaleIndex);
-      }
-    `;
+      }`);
+		}
+
+		return `// Convenience functions - specialized at compile time${functions.join('\n')}`;
 	}
 
 	/**
