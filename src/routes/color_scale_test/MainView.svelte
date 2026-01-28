@@ -1,6 +1,13 @@
 <script>
 	import { sum } from '@uwdata/mosaic-sql';
-	import { ChartContainer, WebGPUCanvas, DotsMark, BarMarkY, Crosshair, Grid } from '$lib/components';
+	import {
+		ChartContainer,
+		WebGPUCanvas,
+		DotsMark,
+		BarMarkY,
+		Crosshair,
+		Grid
+	} from '$lib/components';
 
 	// Color configuration state
 	let colorField = $state('distance');
@@ -126,7 +133,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						{#if markType === 'dots'}
-							<Grid/>
+							<Grid />
 							<DotsMark
 								table="flights"
 								x="delay"

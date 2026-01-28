@@ -18,8 +18,17 @@ export class ArrowDataAccessor {
 		const col = this.arrowTable.getChild(name);
 		if (!col) return null;
 
-		// FAST PATH: Single chunk - try to return underlying buffer directly
-		if (col.data.length === 1) {
+		// Check if this is a string/dictionary column - must use toArray() for proper decoding
+		const dtype = col.type;
+		const isStringType =
+			dtype?.typeId === 5 || // Utf8
+			dtype?.typeId === 6 || // Binary
+			dtype?.typeId === 13 || // Dictionary (often used for categorical strings)
+			dtype?.toString?.().includes('Utf8') ||
+			dtype?.toString?.().includes('Dictionary');
+
+		// FAST PATH: Single chunk numeric - try to return underlying buffer directly
+		if (!isStringType && col.data.length === 1) {
 			const raw = col.data[0].values;
 
 			// Already Float32Array - zero copy!
@@ -33,7 +42,7 @@ export class ArrowDataAccessor {
 			}
 		}
 
-		// SLOW PATH: Multi-chunk or non-numeric - use toArray()
+		// SLOW PATH: Multi-chunk, string columns, or non-numeric - use toArray()
 		const arr = col.toArray();
 		if (!arr) return null;
 

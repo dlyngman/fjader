@@ -12,3 +12,4 @@ export {
 
 export { resolveChannel, toFloat32 } from './channel-resolution.js';
 export { MarkColor } from './MarkColor.svelte.js';
+export { MarkSeries } from './MarkSeries.svelte.js';

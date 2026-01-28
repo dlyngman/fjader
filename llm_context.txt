@@ -290,7 +290,8 @@
         ${bandHelpers}
         ${implementations}
         ${scaleFunctions}
-        
+        ${this._buildProjectHelpers(rendererDefinition)}
+  
         // Color scale helper functions
         ${COLOR_SCALE_FUNCTIONS}
         
@@ -415,7 +416,8 @@
   			const placeholder = rendererDefinition.placeholders?.[axis];
   
   			if (!placeholder) {
-  				console.warn(`No placeholder defined for axis '${axis}' in renderer definition`);
+  				// No placeholder defined - this is valid for renderers that handle
+  				// scaling manually (e.g., Lines uses projectToPixels directly)
   				continue;
   			}
   
@@ -518,6 +520,36 @@
   		}
   
   		return `// Convenience functions - specialized at compile time${functions.join('\n')}`;
+  	}
+  
+  	/**
+  	 * Build projection helper functions for connected topology marks (lines, areas).
+  	 * These helpers work in screen-space pixels for proper geometry expansion.
+  	 * @param {Object} rendererDefinition - Renderer definition to check if helpers are needed
+  	 * @private
+  	 */
+  	_buildProjectHelpers(rendererDefinition) {
+  		// Only include if both X and Y axes are defined (connected marks need both)
+  		if (!rendererDefinition?.x || !rendererDefinition?.y) {
+  			return '';
+  		}
+  
+  		return `
+        // ===== PROJECTION HELPERS (for connected topology) =====
+  
+        // Project raw data values to screen pixels using axis scales
+        fn projectToPixels(val: vec2<f32>) -> vec2<f32> {
+          return vec2<f32>(scaleX(val.x), scaleY(val.y));
+        }
+  
+        // Convert screen pixels to clip space for vertex output
+        // WebGPU clip space: X [-1, 1] left-to-right, Y [-1, 1] bottom-to-top
+        fn pixelsToClip(pixels: vec2<f32>) -> vec4<f32> {
+          let ndc = (pixels / frameUniforms.resolution) * 2.0 - 1.0;
+          // Flip Y: screen Y increases downward, clip Y increases upward
+          return vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+        }
+      `;
   	}
   
   	/**
@@ -3605,15 +3637,46 @@
   		return this.effectiveDomain;
   	}
   
+  	// /**
+  	//  * Generate tick values for grid lines and axes.
+  	//  * For band scales, returns all category values.
+  	//  *
+  	//  * @returns {Array} Array of category values
+  	//  */
+  	// getTicks() {
+  	// 	this._version; // Register Svelte dependency for reactivity
+  	// 	return [...this.effectiveDomain];
+  	// }
+  
   	/**
   	 * Generate tick values for grid lines and axes.
-  	 * For band scales, returns all category values.
   	 *
-  	 * @returns {Array} Array of category values
+  	 * Since the GPU shader logic (scaleBandX) expects a Float32 index (0.0, 1.0, etc.),
+  	 * we must return the indices themselves, not the domain strings.
+  	 *
+  	 * The Axis component will then use tickFormat() to resolve index 0 -> "Label".
+  	 *
+  	 * @returns {Float32Array} Array of indices [0, 1, 2, ... N-1]
   	 */
   	getTicks() {
-  		this._version; // Register Svelte dependency for reactivity
-  		return [...this.effectiveDomain];
+  		this._version; // Register Svelte dependency
+  		const n = this.effectiveDomain.length;
+  
+  		// Create the sequence 0..N-1
+  		const ticks = new Float32Array(n);
+  		for (let i = 0; i < n; i++) ticks[i] = i;
+  
+  		return ticks;
+  	}
+  
+  	/**
+  	 * Get a formatter to convert tick indices back to category labels.
+  	 * Used by Axis components to display the string label for the underlying GPU index.
+  	 */
+  	tickFormat() {
+  		// Capture domain reference
+  		const d = this.effectiveDomain;
+  		return (index) => d[index];
   	}
   
   	/**
@@ -7571,6 +7634,7 @@
   export { default as Canvas } from './Canvas.svelte';
   export { default as WebGPUCanvas } from './WebGPUCanvas.svelte';
   export { default as Dots } from './Dots.svelte';
+  export { default as Lines } from './Lines.svelte';
   export { default as Rects } from './Rects.svelte';
   export { default as RuleX } from './RuleX.svelte';
   export { default as RuleY } from './RuleY.svelte';
@@ -8191,6 +8255,437 @@
   	<div class="rects-error">{initializationError}</div>
   {/if}
 </src/lib/components/rendering/Rects.svelte>
+
+<src/lib/components/rendering/Lines.svelte>
+  <script>
+  	import { getContext, onMount, onDestroy } from 'svelte';
+  	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+  	import { getGPUContext } from '$lib/gpu';
+  
+  	// Lines uses projectToPixels() directly, so we don't need placeholder replacement.
+  	// We still define x/y so that scaleX/scaleY functions are generated.
+  	const lineRendererDefinition = {
+  		x: { concept: 'position', channels: ['x'] },
+  		y: { concept: 'position', channels: ['y'] }
+  		// No placeholders - Lines calls projectToPixels() which uses scaleX/scaleY internally
+  	};
+  
+  	const BINDINGS = {
+  		X: 0,
+  		Y: 1,
+  		SERIES: 2,
+  		COLOR: 3,
+  		CONSTANTS: 4
+  	};
+  
+  	// Uniform struct offsets (matching WGSL MarkConstants layout)
+  	const UNIFORM_OFFSETS = {
+  		STROKE_WIDTH: 0, // f32
+  		MITER_LIMIT: 4, // f32
+  		COLOR_MODE: 8, // u32
+  		COLOR_SCALE_INDEX: 12, // u32
+  		CONSTANT_COLOR: 16 // vec4<f32>
+  	};
+  
+  	let {
+  		xData,
+  		yData,
+  		seriesData = null,
+  		colorValueData = null,
+  		dataVersion = 0,
+  		zIndex = 0,
+  		strokeWidth = 2,
+  		miterLimit = 4,
+  		colorMode = 0, // 0 = constant, 1 = scale
+  		colorScaleIndex = 0,
+  		constantColor = [0.13, 0.55, 0.13, 1.0]
+  	} = $props();
+  
+  	const chartContext = getContext('chart');
+  	const webGPUContext = getContext('webgpu-canvas');
+  	const gpuCoordinator = getGPUContext();
+  
+  	let renderer = $state(null);
+  	let initializationError = $state(null);
+  	let quadGeometryBuffer;
+  
+  	const quadVertexCount = 6; // 2 triangles per segment
+  
+  	// Line shader with miter joins and series boundary detection
+  	const linesShaderCode = `
+      // MarkConstants uniform for per-mark configuration
+      struct MarkConstants {
+        strokeWidth: f32,        // Line thickness in logical pixels
+        miterLimit: f32,         // Max miter length (prevents spikes)
+        colorMode: u32,          // 0 = constant, 1 = scale
+        colorScaleIndex: u32,    // Index into colorConfigs
+        constantColor: vec4<f32> // Used when colorMode = 0
+      };
+      @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
+  
+      struct VertexOutput {
+        @builtin(position) position: vec4<f32>,
+        @location(0) colorValue: f32,
+        @location(1) alpha: f32
+      };
+  
+      // Data storage buffers
+      @group(1) @binding(0) var<storage, read> xValues: array<f32>;
+      @group(1) @binding(1) var<storage, read> yValues: array<f32>;
+      @group(1) @binding(2) var<storage, read> seriesValues: array<f32>;
+      @group(1) @binding(3) var<storage, read> colorValues: array<f32>;
+  
+      // Helper to check if value is NaN
+      fn isNaN(v: f32) -> bool {
+        return v != v;
+      }
+  
+      // Get data point count from buffer
+      fn getPointCount() -> u32 {
+        return arrayLength(&xValues);
+      }
+  
+      @vertex
+      fn vertexMain(
+        @location(0) quadPosition: vec2<f32>,
+        @builtin(instance_index) instanceIdx: u32,
+        @builtin(vertex_index) vertexIdx: u32
+      ) -> VertexOutput {
+        let pointCount = getPointCount();
+  
+        // Instance i draws segment from point[i] to point[i+1]
+        let currIdx = instanceIdx;
+        let nextIdx = instanceIdx + 1u;
+  
+        // Bounds check - discard if we don't have enough points
+        if (nextIdx >= pointCount) {
+          var output: VertexOutput;
+          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); // Behind camera
+          output.colorValue = 0.0;
+          output.alpha = 0.0;
+          return output;
+        }
+  
+        // Fetch current and next point data
+        let xCurr = xValues[currIdx];
+        let yCurr = yValues[currIdx];
+        let xNext = xValues[nextIdx];
+        let yNext = yValues[nextIdx];
+        let seriesCurr = seriesValues[currIdx];
+        let seriesNext = seriesValues[nextIdx];
+        let colorValue = colorValues[currIdx];
+  
+        // Series boundary check - discard segment if crossing series
+        if (seriesCurr != seriesNext) {
+          var output: VertexOutput;
+          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+          output.colorValue = 0.0;
+          output.alpha = 0.0;
+          return output;
+        }
+  
+        // NaN check - discard segment if any coordinate is invalid
+        if (isNaN(xCurr) || isNaN(yCurr) || isNaN(xNext) || isNaN(yNext)) {
+          var output: VertexOutput;
+          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+          output.colorValue = 0.0;
+          output.alpha = 0.0;
+          return output;
+        }
+  
+        // Project points to screen pixels (uses scaleX/scaleY internally)
+        let pCurr = projectToPixels(vec2<f32>(xCurr, yCurr));
+        let pNext = projectToPixels(vec2<f32>(xNext, yNext));
+  
+        // Calculate segment direction and normal
+        let segmentDir = pNext - pCurr;
+        let segmentLen = length(segmentDir);
+  
+        // Handle degenerate segments (zero length)
+        if (segmentLen < 0.001) {
+          var output: VertexOutput;
+          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+          output.colorValue = 0.0;
+          output.alpha = 0.0;
+          return output;
+        }
+  
+        let tangent = segmentDir / segmentLen;
+        let normal = vec2<f32>(-tangent.y, tangent.x);
+  
+        // Calculate miter vectors for start and end of segment
+        var miterStart = normal;
+        var miterEnd = normal;
+  
+        // Prev point for start miter (if available and same series)
+        if (currIdx > 0u) {
+          let prevIdx = currIdx - 1u;
+          let seriesPrev = seriesValues[prevIdx];
+          if (seriesPrev == seriesCurr) {
+            let xPrev = xValues[prevIdx];
+            let yPrev = yValues[prevIdx];
+            if (!isNaN(xPrev) && !isNaN(yPrev)) {
+              let pPrev = projectToPixels(vec2<f32>(xPrev, yPrev));
+              let prevDir = pCurr - pPrev;
+              let prevLen = length(prevDir);
+              if (prevLen > 0.001) {
+                let prevTangent = prevDir / prevLen;
+                let prevNormal = vec2<f32>(-prevTangent.y, prevTangent.x);
+                // Average normals for miter
+                miterStart = normalize(prevNormal + normal);
+                // Clamp miter length
+                let miterLen = 1.0 / max(dot(miterStart, normal), 1.0 / markConstants.miterLimit);
+                miterStart = miterStart * min(miterLen, markConstants.miterLimit);
+              }
+            }
+          }
+        }
+  
+        // Next-next point for end miter (if available and same series)
+        let nextNextIdx = nextIdx + 1u;
+        if (nextNextIdx < pointCount) {
+          let seriesNextNext = seriesValues[nextNextIdx];
+          if (seriesNextNext == seriesNext) {
+            let xNextNext = xValues[nextNextIdx];
+            let yNextNext = yValues[nextNextIdx];
+            if (!isNaN(xNextNext) && !isNaN(yNextNext)) {
+              let pNextNext = projectToPixels(vec2<f32>(xNextNext, yNextNext));
+              let nextDir = pNextNext - pNext;
+              let nextLen = length(nextDir);
+              if (nextLen > 0.001) {
+                let nextTangent = nextDir / nextLen;
+                let nextNormal = vec2<f32>(-nextTangent.y, nextTangent.x);
+                // Average normals for miter
+                miterEnd = normalize(normal + nextNormal);
+                // Clamp miter length
+                let miterLen = 1.0 / max(dot(miterEnd, normal), 1.0 / markConstants.miterLimit);
+                miterEnd = miterEnd * min(miterLen, markConstants.miterLimit);
+              }
+            }
+          }
+        }
+  
+        // Stroke thickness in physical pixels
+        let halfWidth = markConstants.strokeWidth * frameUniforms.devicePixelRatio * 0.5;
+  
+        // Quad vertex positions: quadPosition.x is along segment (0=start, 1=end)
+        //                        quadPosition.y is perpendicular (-1=left, 1=right)
+        let t = quadPosition.x * 0.5 + 0.5; // Map [-1,1] to [0,1]
+        let side = quadPosition.y;
+  
+        // Interpolate position along segment
+        let basePos = mix(pCurr, pNext, t);
+  
+        // Interpolate miter vector
+        let miter = mix(miterStart, miterEnd, t);
+  
+        // Expand perpendicular to segment
+        let finalPos = basePos + miter * side * halfWidth;
+  
+        // Anti-crack overlap: extend slightly along tangent at segment ends
+        let overlapAmount = frameUniforms.devicePixelRatio * 0.5;
+        if (t < 0.01) {
+          // Start of segment - extend backward
+          let adjustedPos = finalPos - tangent * overlapAmount;
+          var output: VertexOutput;
+          output.position = pixelsToClip(adjustedPos);
+          output.colorValue = colorValue;
+          output.alpha = 1.0;
+          return output;
+        } else if (t > 0.99) {
+          // End of segment - extend forward
+          let adjustedPos = finalPos + tangent * overlapAmount;
+          var output: VertexOutput;
+          output.position = pixelsToClip(adjustedPos);
+          output.colorValue = colorValue;
+          output.alpha = 1.0;
+          return output;
+        }
+  
+        var output: VertexOutput;
+        output.position = pixelsToClip(finalPos);
+        output.colorValue = colorValue;
+        output.alpha = 1.0;
+        return output;
+      }
+  
+      @fragment
+      fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+        // Get color based on mode
+        var baseColor: vec4<f32>;
+        if (markConstants.colorMode == 0u) {
+          baseColor = markConstants.constantColor;
+        } else {
+          baseColor = getColorFromScale(
+            markConstants.colorScaleIndex,
+            input.colorValue,
+            frameUniforms.nullColor
+          );
+        }
+  
+        return vec4<f32>(baseColor.rgb, baseColor.a * input.alpha);
+      }
+    `;
+  
+  	const vertexBufferLayout = [
+  		{
+  			arrayStride: 2 * 4, // 2 floats per vertex
+  			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+  		}
+  	];
+  
+  	const dataBindingConfig = [
+  		{ binding: BINDINGS.X, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+  		{ binding: BINDINGS.Y, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+  		{ binding: BINDINGS.SERIES, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+  		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+  		{
+  			binding: BINDINGS.CONSTANTS,
+  			type: 'uniform',
+  			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+  		}
+  	];
+  
+  	// --- WRITING EFFECTS ---
+  
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && seriesData)
+  			renderer.writeAttribute(BINDINGS.SERIES, seriesData);
+  	});
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && colorValueData)
+  			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+  	});
+  
+  	// Write uniforms when configuration changes
+  	$effect(() => {
+  		if (renderer?.resourcesCreated) {
+  			const buffer = new ArrayBuffer(32);
+  			const view = new DataView(buffer);
+  			const LE = true;
+  
+  			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
+  			view.setFloat32(UNIFORM_OFFSETS.MITER_LIMIT, miterLimit, LE);
+  			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
+  			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+  			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
+  			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
+  
+  			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
+  		}
+  	});
+  
+  	// Instance count = number of segments = points - 1
+  	$effect(() => {
+  		if (renderer?.resourcesCreated && xData && xData.length > 1) {
+  			renderer.updateInstanceCount(xData.length - 1);
+  		}
+  	});
+  
+  	// Quad geometry for line segments
+  	// Each vertex has (x, y) where:
+  	//   x: position along segment (-1 = start, 1 = end)
+  	//   y: perpendicular offset (-1 = left, 1 = right)
+  	function createQuadGeometry() {
+  		return new Float32Array([
+  			// Triangle 1
+  			-1,
+  			-1, // Start, left
+  			1,
+  			-1, // End, left
+  			-1,
+  			1, // Start, right
+  			// Triangle 2
+  			1,
+  			-1, // End, left
+  			1,
+  			1, // End, right
+  			-1,
+  			1 // Start, right
+  		]);
+  	}
+  
+  	async function initializeGeometry() {
+  		const device = webGPUContext.getDevice();
+  		const quadVertices = createQuadGeometry();
+  		quadGeometryBuffer = device.createBuffer({
+  			size: quadVertices.byteLength,
+  			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  			label: 'lines-geometry'
+  		});
+  		device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
+  	}
+  
+  	function drawLines(passEncoder) {
+  		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
+  		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+  		passEncoder.draw(quadVertexCount, renderer.instanceCount);
+  	}
+  
+  	async function initializeLines() {
+  		try {
+  			renderer = new BaseGPURenderer('lines', webGPUContext, gpuCoordinator, chartContext, {
+  				zIndex,
+  				xScaleType: chartContext.scaleTypes?.x || 'linear',
+  				yScaleType: chartContext.scaleTypes?.y || 'linear'
+  			});
+  
+  			await renderer.initialize({
+  				markShaderCode: linesShaderCode,
+  				vertexBufferLayout,
+  				dataBindingConfig,
+  				rendererDefinition: lineRendererDefinition
+  			});
+  
+  			await initializeGeometry();
+  			renderer.registerLayer(drawLines);
+  
+  			// Initialize series buffer with zeros if not provided
+  			if (!seriesData && xData) {
+  				const defaultSeries = new Float32Array(xData.length);
+  				renderer.writeAttribute(BINDINGS.SERIES, defaultSeries);
+  			}
+  
+  			// Initialize color buffer with zeros if not provided
+  			if (!colorValueData && xData) {
+  				const defaultColor = new Float32Array(xData.length);
+  				renderer.writeAttribute(BINDINGS.COLOR, defaultColor);
+  			}
+  		} catch (error) {
+  			console.error('Lines init failed:', error);
+  			initializationError = error.message;
+  		}
+  	}
+  
+  	async function waitForWebGPU() {
+  		let attempts = 0;
+  		while (!webGPUContext.isInitialized() && attempts < 100) {
+  			await new Promise((r) => setTimeout(r, 50));
+  			attempts++;
+  		}
+  		if (webGPUContext.isInitialized()) await initializeLines();
+  	}
+  
+  	onMount(() => waitForWebGPU());
+  
+  	onDestroy(() => {
+  		if (quadGeometryBuffer) quadGeometryBuffer.destroy();
+  		if (renderer) renderer.destroy();
+  	});
+  </script>
+  
+  {#if initializationError}
+  	<div class="lines-error">{initializationError}</div>
+  {/if}
+</src/lib/components/rendering/Lines.svelte>
 
 <src/lib/components/rendering/BaseGPURenderer.svelte.js>
   export class BaseGPURenderer {
@@ -8911,6 +9406,7 @@
   import { TransformCompiler } from '$lib/transforms/TransformCompiler.js';
   import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor.js';
   import { viewManager } from '$lib/data/ViewManager.svelte.js';
+  import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
   
   export class BaseMarkSetup {
   	// --- Reactive State ---
@@ -8932,6 +9428,7 @@
   	#markId;
   	#scaleMap = {};
   	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
+  	#seriesScaleState = $state(null); // Optional series scale for connected topology marks
   	#currentClientTable = $state(null); // Track which table the current client queries
   
   	// --- Transform Support ---
@@ -8956,10 +9453,11 @@
   		this.#chartContext = chartContext;
   		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
   
-  		// Ensure ViewManager has coordinator (idempotent, pragmatic initialization)
+  		// Ensure services have coordinator (idempotent, pragmatic initialization)
   		// TODO: Could be moved to app-level initialization where coordinator is created
   		if (coordinator) {
   			viewManager.setCoordinator(coordinator);
+  			tableSchemaService.setCoordinator(coordinator);
   		}
   
   		// NEW: Create transform compiler
@@ -9072,6 +9570,9 @@
   			// If color field exists, wait for color scale to be set
   			const hasColorField = !!this.#config.select?.color;
   			if (hasColorField && !this.#colorScaleState) return;
+  			// If stroke field exists, wait for series scale to be set
+  			const hasStrokeField = !!this.#config.select?.stroke;
+  			if (hasStrokeField && !this.#seriesScaleState) return;
   
   			if (!this.#categoricalFetchStarted) {
   				this.#categoricalFetchStarted = true;
@@ -9082,9 +9583,7 @@
   						this.categoricalDataFetched = true;
   						this.#setScalesReady();
   						if (fetchCount > 0) {
-  							console.log(
-  								`✅ Mark ${this.#markId} categorical domains ready (${fetchCount} fetches), view should be created`
-  							);
+  							console.log(`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`);
   						}
   					})
   					.catch((error) => {
@@ -9227,6 +9726,18 @@
   		// Register table with color scale
   		if (colorScaleState && this.#config.table) {
   			colorScaleState.registerTable(this.#config.table);
+  		}
+  	}
+  
+  	/**
+  	 * Register a series scale for connected topology marks (Lines, Areas).
+  	 * Enables domain discovery for the stroke/series field.
+  	 * @param {ColorScaleState} seriesScaleState
+  	 */
+  	setSeriesScale(seriesScaleState) {
+  		this.#seriesScaleState = seriesScaleState;
+  		if (seriesScaleState && this.#config.table) {
+  			seriesScaleState.registerTable(this.#config.table);
   		}
   	}
   
@@ -9455,6 +9966,35 @@
   		}
   		if (allFilters.length > 0) {
   			queryWithTransforms = queryWithTransforms.where(and(allFilters));
+  		}
+  
+  		// Connected topology marks (lines, areas) require strict ordering
+  		// Order by series first, then dimension to ensure buffer contiguity
+  		if (this.#config._connectedConfig) {
+  			const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
+  
+  			// Get column expressions for ordering
+  			const orderCols = [];
+  
+  			// Series column (optional - single-series lines don't have this)
+  			if (seriesChannel && select[seriesChannel]) {
+  				const seriesExpr = select[seriesChannel];
+  				orderCols.push(isNode(seriesExpr) ? seriesExpr : sqlColumn(String(seriesExpr)));
+  			}
+  
+  			// Dimension column (required - typically x for time series)
+  			if (dimensionChannel && select[dimensionChannel]) {
+  				const dimExpr = select[dimensionChannel];
+  				orderCols.push(isNode(dimExpr) ? dimExpr : sqlColumn(String(dimExpr)));
+  			}
+  
+  			if (orderCols.length > 0) {
+  				console.log(
+  					`🔗 [${this.#markId}] Connected mark ordering by:`,
+  					orderCols.map((c) => c.toString())
+  				);
+  				queryWithTransforms = queryWithTransforms.orderby(...orderCols);
+  			}
   		}
   
   		return queryWithTransforms;
@@ -9731,27 +10271,70 @@
   
   		// Fetch color domain if color scale is set and there's a color field
   		if (this.#colorScaleState && this.#config.select.color) {
-  			const colorField = this.#config.select.color;
+  			// Extract field from color config (handles object format { field: "x", scheme: "y" })
+  			const colorValue = this.#config.select.color;
+  			const colorField =
+  				typeof colorValue === 'object' && colorValue.field && !isNode(colorValue)
+  					? colorValue.field
+  					: colorValue;
   
-  			// Skip if color is an aggregate expression (will be handled by sidecar or data-derived)
+  			// Skip if color is an aggregate expression (handled by sidecar query)
   			const isAggregate = isNode(colorField) && isAggregateExpression(colorField);
   
   			if (!isAggregate) {
-  				// Only fetch categorical domains for non-aggregate color fields
-  				const q = Query.from(table)
-  					.select({ color: sqlColumn(String(colorField)) })
-  					.distinct();
+  				if (this.#colorScaleState.isOrdinal) {
+  					// Ordinal: fetch distinct categories
+  					const q = Query.from(table)
+  						.select({ color: sqlColumn(String(colorField)) })
+  						.distinct();
   
-  				fetches.push(
-  					this.#coordinator.query(q).then((result) => {
-  						const categories = Array.from(result).map((row) => row.color);
-  						if (categories.length > 0) {
-  							console.log(`[BaseMarkSetup] Color domain discovered:`, categories);
-  							this.#colorScaleState.setDomain(categories);
-  						}
-  					})
-  				);
+  					fetches.push(
+  						this.#coordinator.query(q).then((result) => {
+  							const categories = Array.from(result).map((row) => row.color);
+  							if (categories.length > 0) {
+  								console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
+  								this.#colorScaleState.setDomain(categories);
+  							}
+  						})
+  					);
+  				} else {
+  					// Sequential: fetch min/max extent
+  					const q = Query.from(table).select({
+  						min_color: min(sqlColumn(String(colorField))),
+  						max_color: max(sqlColumn(String(colorField)))
+  					});
+  
+  					fetches.push(
+  						this.#coordinator.query(q).then((result) => {
+  							const row = Array.from(result)[0];
+  							if (row && row.min_color != null && row.max_color != null) {
+  								console.log(`[BaseMarkSetup] Color domain (sequential):`, [
+  									row.min_color,
+  									row.max_color
+  								]);
+  								this.#colorScaleState.setDomain([row.min_color, row.max_color]);
+  							}
+  						})
+  					);
+  				}
   			}
+  		}
+  
+  		// Fetch series domain if series scale is set and there's a stroke field
+  		if (this.#seriesScaleState && this.#config.select.stroke) {
+  			const strokeField = this.#config.select.stroke;
+  			const q = Query.from(table)
+  				.select({ stroke: sqlColumn(String(strokeField)) })
+  				.distinct();
+  
+  			fetches.push(
+  				this.#coordinator.query(q).then((result) => {
+  					const categories = Array.from(result).map((row) => row.stroke);
+  					if (categories.length > 0) {
+  						this.#seriesScaleState.setDomain(categories);
+  					}
+  				})
+  			);
   		}
   
   		if (fetches.length > 0) await Promise.all(fetches);
@@ -9920,6 +10503,180 @@
   	}
   }
 </src/lib/components/marks/BaseMarkSetup.svelte.js>
+
+<src/lib/components/marks/LineMark.svelte>
+  <script>
+  	import { getContext, onDestroy, untrack } from 'svelte';
+  	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  	import { Lines } from '../rendering/index.js';
+  	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import {
+  		buildSelectFromChannels,
+  		resolveChannel,
+  		toFloat32,
+  		MarkColor,
+  		MarkSeries
+  	} from './utils/index.js';
+  
+  	let {
+  		table,
+  		selection,
+  		x,
+  		y,
+  		stroke = null, // Series grouping field (for multi-series lines)
+  		color = null, // Color encoding (can be same as stroke or different)
+  		scheme, // Color scheme
+  		strokeWidth = 2, // Line thickness in logical pixels
+  		miterLimit = 4, // Max miter length to prevent spikes
+  		limit,
+  		filterNulls = false,
+  		preferredXScaleType = 'linear',
+  		preferredYScaleType = 'linear',
+  		transforms = []
+  	} = $props();
+  
+  	const markId = `line-${crypto.randomUUID().slice(0, 8)}`;
+  	const coordinator = getContext('mosaic-coordinator');
+  	const chartContext = getContext('chart');
+  	const scaleRegistry = getContext('scale-registry');
+  
+  	let setup = $state(null);
+  
+  	// Series grouping - uses scale infrastructure for categorical → index mapping
+  	const markSeries = new MarkSeries(
+  		() => stroke,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
+  	);
+  
+  	// Color logic - only uses explicit color prop
+  	// To color by series, set color={stroke} explicitly
+  	const markColor = new MarkColor(
+  		() => color,
+  		() => scheme,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
+  	);
+  
+  	// Config with _connectedConfig for automatic ORDER BY
+  	const config = $derived({
+  		markType: 'line',
+  		supportedScaleTypes: {
+  			x: ['linear', 'time', 'log'],
+  			y: ['linear', 'time', 'log']
+  		},
+  		scaleRequirements: {
+  			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
+  			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  		},
+  		inferredScaleColumns: {
+  			x: x,
+  			y: y
+  		},
+  		table,
+  		selection,
+  		transforms,
+  		select: buildSelectFromChannels({
+  			x,
+  			y,
+  			...(markSeries.selectField && { stroke: markSeries.selectField }),
+  			...(markColor.selectField && { color: markColor.selectField })
+  		}),
+  		// Connected topology config - ensures data is ordered for line connectivity
+  		_connectedConfig: {
+  			seriesChannel: markSeries.selectField ? 'stroke' : null,
+  			dimensionChannel: 'x'
+  		},
+  		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null }
+  	});
+  
+  	let xScaleId = $derived(chartContext.xScaleState?.id);
+  	let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+  	let instanceCount = $derived.by(() => {
+  		if (setup?.data?.length) return setup.data.length;
+  		if (Array.isArray(x)) return x.length;
+  		if (Array.isArray(y)) return y.length;
+  		// @ts-ignore
+  		if (ArrayBuffer.isView(x)) return x.length;
+  		return 0;
+  	});
+  
+  	// --- DATA RESOLUTION ---
+  
+  	let xData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  		const raw = resolveChannel({
+  			value: x,
+  			channel: 'x',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		return raw ? toFloat32(raw) : null;
+  	});
+  
+  	let yData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  		const raw = resolveChannel({
+  			value: y,
+  			channel: 'y',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		return raw ? toFloat32(raw) : null;
+  	});
+  
+  	// Series data comes from MarkSeries (uses scale infrastructure)
+  	let seriesData = $derived(markSeries.data);
+  
+  	// --- SETUP LIFECYCLE ---
+  
+  	$effect(() => {
+  		(void config, xScaleId, yScaleId);
+  		untrack(() => {
+  			setup?.destroy();
+  			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  		});
+  	});
+  
+  	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
+  
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
+  </script>
+  
+  {#if (setup?.gpuReady || !table) && markColor.ready && markSeries.ready && xData && yData}
+  	<Lines
+  		{xData}
+  		{yData}
+  		{seriesData}
+  		colorValueData={markColor.data}
+  		colorMode={markColor.colorMode}
+  		colorScaleIndex={markColor.colorScaleIndex}
+  		constantColor={markColor.constantColor}
+  		{strokeWidth}
+  		{miterLimit}
+  		dataVersion={setup?.client?.dataVersion || 0}
+  	/>
+  {:else if setup?.client?.error}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
+  		Error: {setup.client.error.message}
+  	</text>
+  {:else if setup?.client?.delayedLoading}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+  		Loading data...
+  	</text>
+  {:else}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
+  		Initializing mark...
+  	</text>
+  {/if}
+</src/lib/components/marks/LineMark.svelte>
 
 <src/lib/components/marks/BarMarkY.svelte>
   <script>
@@ -10129,6 +10886,7 @@
 
 <src/lib/components/marks/index.js>
   export { default as DotsMark } from './DotsMark.svelte';
+  export { default as LineMark } from './LineMark.svelte';
   export { default as BarMarkX } from './BarMarkX.svelte';
   export { default as BarMarkY } from './BarMarkY.svelte';
 </src/lib/components/marks/index.js>
@@ -10738,6 +11496,7 @@
   import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
   import { resolveChannel } from './channel-resolution.js';
   import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+  import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
   
   export class MarkColor {
   	#colorProp;
@@ -10760,13 +11519,14 @@
   		this.#chartContext = chartContext;
   
   		// 1. Lifecycle: Create/Destroy Scale (type-based key, NOT scheme)
+  		// Blocks scale creation until type is determined (schema ready)
   		$effect(() => {
   			// Track mode, field, and type separately (scheme is NOT part of the key)
   			const mode = this.#mode;
   			const field = this.#field;
   			const type = this.config.scaleType;
-  
-  			if (mode === 'field' && field && this.#scaleRegistry) {
+  			// Only create scale when type is known (not null)
+  			if (mode === 'field' && field && this.#scaleRegistry && type !== null) {
   				untrack(() => {
   					// For aggregate nodes, use the SQL string as the scale key
   					// This ensures each unique aggregate expression gets its own scale
@@ -10789,6 +11549,13 @@
   						this.scaleState.registerTable(table);
   					}
   				});
+  			} else if (type === null && mode === 'field') {
+  				// Schema not ready yet - trigger fetch but don't create scale
+  				const table = this.#tableProp();
+  				if (table) {
+  					tableSchemaService.getSchema(table); // Trigger fetch
+  				}
+  				this.scaleState = null;
   			} else {
   				this.scaleState = null;
   			}
@@ -10835,16 +11602,38 @@
   	 * Priority:
   	 * 1. Aggregates (avg, sum, count, etc.) -> 'sequential'
   	 * 2. Bins (bin(), AutoBinNode) -> 'sequential'
-  	 * 3. Raw fields -> 'ordinal'
+  	 * 3. Schema-based inference for raw columns -> 'sequential' (numeric/date) or 'ordinal' (string)
+  	 * 4. Default fallback -> 'ordinal'
+  	 *
+  	 * Returns null if schema info is needed but not yet available (blocking).
   	 */
   	#resolveScaleType(field) {
+  		// Priority 1: SQL expression nodes (aggregates, bins)
   		if (isNode(field)) {
   			// e.g. avg(delay), count(), sum(sales)
   			if (isAggregateExpression(field)) return 'sequential';
   			// e.g. bin(age) - technically ordinal bins, but usually treated sequentially in colormaps
   			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
   		}
-  		// Default fallback for raw columns (strings/categories)
+  
+  		// Priority 2: Schema-based inference for raw column names
+  		if (typeof field === 'string') {
+  			const table = this.#tableProp();
+  			if (table) {
+  				const columnType = tableSchemaService.getColumnType(table, field);
+  
+  				if (columnType === 'number' || columnType === 'date') {
+  					return 'sequential';
+  				}
+  				if (columnType === 'string' || columnType === 'boolean') {
+  					return 'ordinal';
+  				}
+  				// columnType is null → schema not ready, return null to block
+  				return null;
+  			}
+  		}
+  
+  		// Default fallback (no table context or unknown field type)
   		return 'ordinal';
   	}
   
@@ -10853,6 +11642,9 @@
   	config = $derived.by(() => {
   		const c = this.#colorProp();
   		const s = this.#schemeProp();
+  
+  		// Track schema service version to trigger recomputation when schema arrives
+  		const _schemaVersion = tableSchemaService.version;
   
   		// Case 1: Constant / Null
   		if (c == null) {
@@ -10873,14 +11665,14 @@
   			explicitScheme = c.scheme || s;
   		}
   
-  		// 1. Determine Type Explicitly from field semantics
+  		// 1. Determine Type from field semantics + schema (may return null if waiting for schema)
   		const scaleType = this.#resolveScaleType(field);
   
   		// 2. Pass explicit scheme if provided, otherwise undefined (registry will apply default)
   		return {
   			mode: 'field',
   			field,
-  			scaleType,
+  			scaleType, // Can be null if waiting for schema
   			scheme: explicitScheme // undefined if not specified
   		};
   	});
@@ -10963,6 +11755,7 @@
   
   export { resolveChannel, toFloat32 } from './channel-resolution.js';
   export { MarkColor } from './MarkColor.svelte.js';
+  export { MarkSeries } from './MarkSeries.svelte.js';
 </src/lib/components/marks/utils/index.js>
 
 <src/lib/components/marks/utils/channel-resolution.js>
@@ -11115,6 +11908,116 @@
   	return new Float32Array(data);
   }
 </src/lib/components/marks/utils/channel-resolution.js>
+
+<src/lib/components/marks/utils/MarkSeries.svelte.js>
+  import { untrack } from 'svelte';
+  import { resolveChannel } from './channel-resolution.js';
+  import { isNode } from '@uwdata/mosaic-sql';
+  
+  /**
+   * MarkSeries - Handles series grouping for connected topology marks (Lines, Areas)
+   *
+   * Registers an ordinal color scale for the stroke field via the scale registry.
+   * When stroke and color reference the same field, the registry deduplicates
+   * and they share the same scale (same domain, same indices, same legend).
+   */
+  export class MarkSeries {
+  	#seriesProp;
+  	#tableProp;
+  	#setupState;
+  	#scaleRegistry;
+  	#chartContext;
+  
+  	scaleState = $state(null);
+  
+  	constructor(getSeries, getTable, getSetup, scaleRegistry, chartContext) {
+  		this.#seriesProp = getSeries;
+  		this.#tableProp = getTable;
+  		this.#setupState = getSetup;
+  		this.#scaleRegistry = scaleRegistry;
+  		this.#chartContext = chartContext;
+  
+  		// Lifecycle: Create/Destroy Scale
+  		// Series grouping is always ordinal
+  		$effect(() => {
+  			const field = this.#field;
+  			if (field && this.#scaleRegistry) {
+  				untrack(() => {
+  					// Use raw field name - registry deduplicates automatically
+  					// when stroke and color share the same field
+  					const scaleName = isNode(field) ? field.toString() : field;
+  
+  					this.scaleState = this.#scaleRegistry.getOrCreateScale(
+  						scaleName,
+  						'color',
+  						{ type: 'ordinal' },
+  						this.#chartContext.chartId
+  					);
+  
+  					const table = this.#tableProp();
+  					if (this.scaleState && table) {
+  						this.scaleState.registerTable(table);
+  					}
+  				});
+  			} else {
+  				this.scaleState = null;
+  			}
+  		});
+  
+  		// Lifecycle: Connect to Setup (Domain Discovery)
+  		$effect(() => {
+  			const setup = this.#setupState();
+  			if (setup && this.scaleState && this.#field) {
+  				setup.setSeriesScale(this.scaleState);
+  			}
+  		});
+  	}
+  
+  	// The series field (null if not set)
+  	#field = $derived.by(() => {
+  		const s = this.#seriesProp();
+  		if (s == null) return null;
+  		if (isNode(s)) return s;
+  		if (typeof s === 'string') return s;
+  		return null;
+  	});
+  
+  	// Field for BaseMarkSetup select
+  	selectField = $derived(this.#field);
+  
+  	// Resolved Data for GPU - Float32Array of series indices
+  	data = $derived.by(() => {
+  		const field = this.#field;
+  		const setup = this.#setupState();
+  
+  		// No series field - return zeros (single series)
+  		if (!field) {
+  			if (!setup?.data?.length) return null;
+  			return new Float32Array(setup.data.length);
+  		}
+  
+  		// Wait for scale and data
+  		if (!this.scaleState?.ready) return null;
+  		if (!setup?.data) return null;
+  
+  		const raw = resolveChannel({
+  			value: field,
+  			channel: 'stroke',
+  			dataAccessor: setup.data,
+  			instanceCount: setup.data.length
+  		});
+  
+  		if (!raw) {
+  			return new Float32Array(setup.data.length);
+  		}
+  
+  		return this.scaleState.processDataForGPU(raw);
+  	});
+  
+  	// Ready when: no field (single series) or scale is ready
+  	ready = $derived(!this.#field || (this.scaleState?.ready ?? false));
+  }
+</src/lib/components/marks/utils/MarkSeries.svelte.js>
 
 <src/lib/components/marks/utils/data-processing.js>
   /**
@@ -11724,8 +12627,17 @@
   		const col = this.arrowTable.getChild(name);
   		if (!col) return null;
   
-  		// FAST PATH: Single chunk - try to return underlying buffer directly
-  		if (col.data.length === 1) {
+  		// Check if this is a string/dictionary column - must use toArray() for proper decoding
+  		const dtype = col.type;
+  		const isStringType =
+  			dtype?.typeId === 5 || // Utf8
+  			dtype?.typeId === 6 || // Binary
+  			dtype?.typeId === 13 || // Dictionary (often used for categorical strings)
+  			dtype?.toString?.().includes('Utf8') ||
+  			dtype?.toString?.().includes('Dictionary');
+  
+  		// FAST PATH: Single chunk numeric - try to return underlying buffer directly
+  		if (!isStringType && col.data.length === 1) {
   			const raw = col.data[0].values;
   
   			// Already Float32Array - zero copy!
@@ -11739,7 +12651,7 @@
   			}
   		}
   
-  		// SLOW PATH: Multi-chunk or non-numeric - use toArray()
+  		// SLOW PATH: Multi-chunk, string columns, or non-numeric - use toArray()
   		const arr = col.toArray();
   		if (!arr) return null;
   
@@ -11826,6 +12738,158 @@
   	}
   }
 </src/lib/data/DataAccessor.js>
+
+<src/lib/data/TableSchemaService.svelte.js>
+  // src/lib/data/TableSchemaService.svelte.js
+  
+  /**
+   * TableSchemaService caches table schemas from DuckDB.
+   * Used for inferring column types (numeric vs categorical) for scale type detection.
+   *
+   * Pattern follows ViewManager:
+   * - Singleton with lazy coordinator injection
+   * - Reactive state for Svelte integration
+   * - One DESCRIBE query per unique table
+   */
+  class TableSchemaServiceImpl {
+  	#coordinator = null;
+  	#schemas = $state(new Map()); // Map<tableName, Map<columnName, { sqlType, jsType }>>
+  	#pending = new Set(); // Tables currently being fetched
+  	#deferredRequests = new Set(); // Tables requested before coordinator was available
+  
+  	// Reactive version counter - external code reads this to establish dependency
+  	version = $state(0);
+  
+  	/**
+  	 * Set the Mosaic coordinator. Called lazily when available.
+  	 * @param {Object} coordinator - Mosaic coordinator instance
+  	 */
+  	setCoordinator(coordinator) {
+  		if (this.#coordinator === coordinator) return;
+  		this.#coordinator = coordinator;
+  
+  		// Fetch schemas for tables that were requested before coordinator was available
+  		for (const tableName of this.#deferredRequests) {
+  			this.#fetchSchema(tableName);
+  		}
+  		this.#deferredRequests.clear();
+  	}
+  
+  	/**
+  	 * Get the Mosaic coordinator.
+  	 * @returns {Object|null}
+  	 */
+  	getCoordinator() {
+  		return this.#coordinator;
+  	}
+  
+  	/**
+  	 * Request schema for a table. Triggers async fetch if not cached.
+  	 * Returns cached schema or null if not yet available.
+  	 * @param {string} tableName
+  	 * @returns {Map<string, {sqlType: string, jsType: string}>|null}
+  	 */
+  	getSchema(tableName) {
+  		if (this.#schemas.has(tableName)) {
+  			return this.#schemas.get(tableName);
+  		}
+  
+  		// Trigger fetch if coordinator available, otherwise defer
+  		if (this.#coordinator) {
+  			if (!this.#pending.has(tableName)) {
+  				this.#fetchSchema(tableName);
+  			}
+  		} else {
+  			// Coordinator not yet available - remember this request for later
+  			this.#deferredRequests.add(tableName);
+  		}
+  
+  		return null;
+  	}
+  
+  	/**
+  	 * Get the JavaScript type for a specific column.
+  	 * Returns null if schema not yet available.
+  	 * @param {string} tableName
+  	 * @param {string} columnName
+  	 * @returns {'number'|'string'|'date'|'boolean'|null}
+  	 */
+  	getColumnType(tableName, columnName) {
+  		const schema = this.#schemas.get(tableName);
+  		return schema?.get(columnName)?.jsType ?? null;
+  	}
+  
+  	/**
+  	 * Check if schema is ready for a table.
+  	 * @param {string} tableName
+  	 * @returns {boolean}
+  	 */
+  	isReady(tableName) {
+  		return this.#schemas.has(tableName);
+  	}
+  
+  	/**
+  	 * Fetch schema from DuckDB using DESCRIBE query.
+  	 * @param {string} tableName
+  	 */
+  	async #fetchSchema(tableName) {
+  		if (this.#pending.has(tableName)) return;
+  		this.#pending.add(tableName);
+  
+  		try {
+  			// DuckDB DESCRIBE returns: column_name, column_type, null, key, default, extra
+  			const result = await this.#coordinator.query(`DESCRIBE "${tableName}"`);
+  
+  			const schema = new Map();
+  			for (const row of result) {
+  				schema.set(row.column_name, {
+  					sqlType: row.column_type,
+  					jsType: this.#mapSqlTypeToJs(row.column_type)
+  				});
+  			}
+  
+  			this.#schemas.set(tableName, schema);
+  			this.version++; // Trigger reactive updates
+  		} catch (e) {
+  			console.warn(`[TableSchemaService] Failed to query schema for ${tableName}:`, e);
+  			// Mark as attempted with empty schema to avoid retry loops
+  			this.#schemas.set(tableName, new Map());
+  			this.version++;
+  		} finally {
+  			this.#pending.delete(tableName);
+  		}
+  	}
+  
+  	/**
+  	 * Map DuckDB SQL type to simplified JavaScript type.
+  	 * @param {string} sqlType - DuckDB column type
+  	 * @returns {'number'|'string'|'date'|'boolean'}
+  	 */
+  	#mapSqlTypeToJs(sqlType) {
+  		const upper = (sqlType || '').toUpperCase();
+  
+  		// Numeric types
+  		if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper)) {
+  			return 'number';
+  		}
+  
+  		// Temporal types
+  		if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(upper)) {
+  			return 'date';
+  		}
+  
+  		// Boolean
+  		if (/BOOL/.test(upper)) {
+  			return 'boolean';
+  		}
+  
+  		// Default: string (VARCHAR, CHAR, BLOB, UUID, etc.)
+  		return 'string';
+  	}
+  }
+  
+  export const tableSchemaService = new TableSchemaServiceImpl();
+</src/lib/data/TableSchemaService.svelte.js>
 
 <src/lib/sql/bin.js>
   // src/lib/sql/bin.js

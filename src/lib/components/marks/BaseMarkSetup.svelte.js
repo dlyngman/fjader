@@ -38,6 +38,7 @@ export class BaseMarkSetup {
 	#markId;
 	#scaleMap = {};
 	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
+	#seriesScaleState = $state(null); // Optional series scale for connected topology marks
 	#currentClientTable = $state(null); // Track which table the current client queries
 
 	// --- Transform Support ---
@@ -179,6 +180,9 @@ export class BaseMarkSetup {
 			// If color field exists, wait for color scale to be set
 			const hasColorField = !!this.#config.select?.color;
 			if (hasColorField && !this.#colorScaleState) return;
+			// If stroke field exists, wait for series scale to be set
+			const hasStrokeField = !!this.#config.select?.stroke;
+			if (hasStrokeField && !this.#seriesScaleState) return;
 
 			if (!this.#categoricalFetchStarted) {
 				this.#categoricalFetchStarted = true;
@@ -189,9 +193,7 @@ export class BaseMarkSetup {
 						this.categoricalDataFetched = true;
 						this.#setScalesReady();
 						if (fetchCount > 0) {
-							console.log(
-								`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`
-							);
+							console.log(`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`);
 						}
 					})
 					.catch((error) => {
@@ -334,6 +336,18 @@ export class BaseMarkSetup {
 		// Register table with color scale
 		if (colorScaleState && this.#config.table) {
 			colorScaleState.registerTable(this.#config.table);
+		}
+	}
+
+	/**
+	 * Register a series scale for connected topology marks (Lines, Areas).
+	 * Enables domain discovery for the stroke/series field.
+	 * @param {ColorScaleState} seriesScaleState
+	 */
+	setSeriesScale(seriesScaleState) {
+		this.#seriesScaleState = seriesScaleState;
+		if (seriesScaleState && this.#config.table) {
+			seriesScaleState.registerTable(this.#config.table);
 		}
 	}
 
@@ -562,6 +576,35 @@ export class BaseMarkSetup {
 		}
 		if (allFilters.length > 0) {
 			queryWithTransforms = queryWithTransforms.where(and(allFilters));
+		}
+
+		// Connected topology marks (lines, areas) require strict ordering
+		// Order by series first, then dimension to ensure buffer contiguity
+		if (this.#config._connectedConfig) {
+			const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
+
+			// Get column expressions for ordering
+			const orderCols = [];
+
+			// Series column (optional - single-series lines don't have this)
+			if (seriesChannel && select[seriesChannel]) {
+				const seriesExpr = select[seriesChannel];
+				orderCols.push(isNode(seriesExpr) ? seriesExpr : sqlColumn(String(seriesExpr)));
+			}
+
+			// Dimension column (required - typically x for time series)
+			if (dimensionChannel && select[dimensionChannel]) {
+				const dimExpr = select[dimensionChannel];
+				orderCols.push(isNode(dimExpr) ? dimExpr : sqlColumn(String(dimExpr)));
+			}
+
+			if (orderCols.length > 0) {
+				console.log(
+					`🔗 [${this.#markId}] Connected mark ordering by:`,
+					orderCols.map((c) => c.toString())
+				);
+				queryWithTransforms = queryWithTransforms.orderby(...orderCols);
+			}
 		}
 
 		return queryWithTransforms;
@@ -840,9 +883,10 @@ export class BaseMarkSetup {
 		if (this.#colorScaleState && this.#config.select.color) {
 			// Extract field from color config (handles object format { field: "x", scheme: "y" })
 			const colorValue = this.#config.select.color;
-			const colorField = typeof colorValue === 'object' && colorValue.field && !isNode(colorValue)
-				? colorValue.field
-				: colorValue;
+			const colorField =
+				typeof colorValue === 'object' && colorValue.field && !isNode(colorValue)
+					? colorValue.field
+					: colorValue;
 
 			// Skip if color is an aggregate expression (handled by sidecar query)
 			const isAggregate = isNode(colorField) && isAggregateExpression(colorField);
@@ -874,13 +918,33 @@ export class BaseMarkSetup {
 						this.#coordinator.query(q).then((result) => {
 							const row = Array.from(result)[0];
 							if (row && row.min_color != null && row.max_color != null) {
-								console.log(`[BaseMarkSetup] Color domain (sequential):`, [row.min_color, row.max_color]);
+								console.log(`[BaseMarkSetup] Color domain (sequential):`, [
+									row.min_color,
+									row.max_color
+								]);
 								this.#colorScaleState.setDomain([row.min_color, row.max_color]);
 							}
 						})
 					);
 				}
 			}
+		}
+
+		// Fetch series domain if series scale is set and there's a stroke field
+		if (this.#seriesScaleState && this.#config.select.stroke) {
+			const strokeField = this.#config.select.stroke;
+			const q = Query.from(table)
+				.select({ stroke: sqlColumn(String(strokeField)) })
+				.distinct();
+
+			fetches.push(
+				this.#coordinator.query(q).then((result) => {
+					const categories = Array.from(result).map((row) => row.stroke);
+					if (categories.length > 0) {
+						this.#seriesScaleState.setDomain(categories);
+					}
+				})
+			);
 		}
 
 		if (fetches.length > 0) await Promise.all(fetches);
