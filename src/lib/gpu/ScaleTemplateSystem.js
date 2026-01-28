@@ -289,7 +289,8 @@ export class ScaleTemplateSystem {
       ${bandHelpers}
       ${implementations}
       ${scaleFunctions}
-      
+      ${this._buildProjectHelpers(rendererDefinition)}
+
       // Color scale helper functions
       ${COLOR_SCALE_FUNCTIONS}
       
@@ -414,7 +415,8 @@ export class ScaleTemplateSystem {
 			const placeholder = rendererDefinition.placeholders?.[axis];
 
 			if (!placeholder) {
-				console.warn(`No placeholder defined for axis '${axis}' in renderer definition`);
+				// No placeholder defined - this is valid for renderers that handle
+				// scaling manually (e.g., Lines uses projectToPixels directly)
 				continue;
 			}
 
@@ -517,6 +519,36 @@ export class ScaleTemplateSystem {
 		}
 
 		return `// Convenience functions - specialized at compile time${functions.join('\n')}`;
+	}
+
+	/**
+	 * Build projection helper functions for connected topology marks (lines, areas).
+	 * These helpers work in screen-space pixels for proper geometry expansion.
+	 * @param {Object} rendererDefinition - Renderer definition to check if helpers are needed
+	 * @private
+	 */
+	_buildProjectHelpers(rendererDefinition) {
+		// Only include if both X and Y axes are defined (connected marks need both)
+		if (!rendererDefinition?.x || !rendererDefinition?.y) {
+			return '';
+		}
+
+		return `
+      // ===== PROJECTION HELPERS (for connected topology) =====
+
+      // Project raw data values to screen pixels using axis scales
+      fn projectToPixels(val: vec2<f32>) -> vec2<f32> {
+        return vec2<f32>(scaleX(val.x), scaleY(val.y));
+      }
+
+      // Convert screen pixels to clip space for vertex output
+      // WebGPU clip space: X [-1, 1] left-to-right, Y [-1, 1] bottom-to-top
+      fn pixelsToClip(pixels: vec2<f32>) -> vec4<f32> {
+        let ndc = (pixels / frameUniforms.resolution) * 2.0 - 1.0;
+        // Flip Y: screen Y increases downward, clip Y increases upward
+        return vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+      }
+    `;
 	}
 
 	/**

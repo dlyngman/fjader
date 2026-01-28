@@ -479,7 +479,7 @@ export class BandScaleState {
 	// 	this._version; // Register Svelte dependency for reactivity
 	// 	return [...this.effectiveDomain];
 	// }
-	
+
 	/**
 	 * Generate tick values for grid lines and axes.
 	 *
