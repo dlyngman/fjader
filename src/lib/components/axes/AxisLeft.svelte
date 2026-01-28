@@ -5,22 +5,26 @@
 	let { ticksNumber = 5 } = $props();
 	const c = getContext('chart');
 
-	const formatter = $derived(c.yScale.tickFormat());
+	const isTimeScale = $derived(c.scaleTypes?.y === 'time');
+	// For time scales, use scaleState.getTicks() for calendar-nice ticks
+	const continuousTicks = $derived(
+		isTimeScale && c.yScaleState?.getTicks
+			? c.yScaleState.getTicks(ticksNumber)
+			: c.yScale?.ticks(ticksNumber) ?? []
+	);
+	const tickFormatter = $derived(
+		isTimeScale && c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : format('~s')
+	);
 </script>
 
-<!-- {#if c.yScale && c.innerHeight && c.scalesReady} -->
 {#if c.isReady}
 	<g class="axis">
-		<!-- <line stroke="currentColor" x1={0} y1={innerHeight} x2={0} y2={0} /> -->
-		<!-- {#each c.yScale.ticks(ticksNumber) as tick (tick)} -->
-		{#if c.scaleTypes.y === 'linear'}
-			<!-- {#each c.yScale.ticks(ticksNumber) as tick (tick)} -->
-			{#each c.yScale.ticks(ticksNumber) as tick, i (i)}
+		{#if c.scaleTypes.y === 'linear' || c.scaleTypes.y === 'time'}
+			{#each continuousTicks as tick, i (i)}
 				<line x1={0} x2={-6} y1={c.yScale(tick)} y2={c.yScale(tick)} />
 
 				<text text-anchor="end" dominant-baseline="middle" x={-9} y={c.yScale(tick)}>
-					<!-- {formatter(tick)} -->
-					{format('~s')(tick)}
+					{tickFormatter(tick)}
 				</text>
 			{/each}
 

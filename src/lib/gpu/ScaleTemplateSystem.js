@@ -15,6 +15,9 @@ import {
  * Scale fragment definitions
  * Each scale type provides: declaration, function call, and implementation
  */
+// Time scales use identical GPU math to linear (data is float offsets from t0)
+const TIME_SCALE_ALIAS = 'linear';
+
 const SCALE_FRAGMENTS = {
 	linear: {
 		declaration: () => {
@@ -114,6 +117,9 @@ const SCALE_FRAGMENTS = {
 	}
 };
 
+// Time scales reuse linear GPU math — offsets from t0 are plain floats
+SCALE_FRAGMENTS.time = SCALE_FRAGMENTS[TIME_SCALE_ALIAS];
+
 /**
  * Semantic logic generators for mark rendering.
  * Maps [concept][scaleType] → { inputs, generate }
@@ -157,6 +163,12 @@ const SEMANTIC_LOGIC_MAP = {
 
 	extent: {
 		linear: {
+			inputs: 2,
+			generate: (axis, channel0, channel1) => `
+      let scaled${axis.toUpperCase()}0 = scale${axis.toUpperCase()}(${channel0});
+      let scaled${axis.toUpperCase()}1 = scale${axis.toUpperCase()}(${channel1});`
+		},
+		time: {
 			inputs: 2,
 			generate: (axis, channel0, channel1) => `
       let scaled${axis.toUpperCase()}0 = scale${axis.toUpperCase()}(${channel0});

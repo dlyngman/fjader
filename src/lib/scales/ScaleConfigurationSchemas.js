@@ -88,11 +88,23 @@ export const SCALE_CONFIG_SCHEMAS = {
 			strategy: RESOLUTION_STRATEGIES.AVERAGE,
 			description: 'Alignment within padding'
 		}
+	},
+
+	time: {
+		nice: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			description: 'Extend domain to nice calendar boundaries'
+		},
+		clamp: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			description: 'Clamp values outside domain'
+		}
 	}
 
 	// Future scale types can be added here:
 	// log: { ... },
-	// time: { ... },
 	// ordinal: { ... }
 };
 

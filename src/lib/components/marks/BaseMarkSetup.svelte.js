@@ -510,6 +510,24 @@ export class BaseMarkSetup {
 			}
 		}
 
+		// For time scales, use the offset column name from ViewManager
+		if (this.actualXScaleType === 'time') {
+			const xScale = this.#chartContext.xScaleState;
+			if (xScale?.offsetColumnName && hasView) {
+				const originalField = select.x;
+				select.x = xScale.offsetColumnName;
+				console.log(`[BaseMarkSetup] Swapping x (time): ${originalField} → ${select.x}`);
+			}
+		}
+		if (this.actualYScaleType === 'time') {
+			const yScale = this.#chartContext.yScaleState;
+			if (yScale?.offsetColumnName && hasView) {
+				const originalField = select.y;
+				select.y = yScale.offsetColumnName;
+				console.log(`[BaseMarkSetup] Swapping y (time): ${originalField} → ${select.y}`);
+			}
+		}
+
 		// For color scales, use the indexed column name
 		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
 			const originalField = select.color;
@@ -652,13 +670,19 @@ export class BaseMarkSetup {
 			y: this.#chartContext.yScaleState
 		};
 
-		// Register table with band scales for ViewManager integration
+		// Register table with band/time scales for ViewManager integration
 		// This must happen BEFORE categorical domain fetch so views can be created
 		const table = this.#config.table;
 		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
 			this.#chartContext.xScaleState?.registerTable?.(table);
 		}
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+			this.#chartContext.yScaleState?.registerTable?.(table);
+		}
+		if (this.actualXScaleType === 'time') {
+			this.#chartContext.xScaleState?.registerTable?.(table);
+		}
+		if (this.actualYScaleType === 'time') {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
 
@@ -696,7 +720,9 @@ export class BaseMarkSetup {
 			const scaleType =
 				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
 
-			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
+			// not from fieldInfo (which would return values from the offset column)
+			if (scaleType === 'linear' || scaleType === 'log') {
 				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
 				processedFields.add(fieldValue.toString());
 			}
@@ -714,7 +740,8 @@ export class BaseMarkSetup {
 
 			const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
 
-			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+			// Time scales get their domain from sidecar query, skip fieldInfo path
+			if (scaleType === 'linear' || scaleType === 'log') {
 				const fieldValue = this.#config.select[alias];
 
 				// Skip AutoBinNodes - they handle their own stats
@@ -877,6 +904,38 @@ export class BaseMarkSetup {
 		}
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
 			setupFetch('y', this.#config.select.y);
+		}
+
+		// Time scale sidecar queries: fetch MIN/MAX datetime for offset computation
+		const setupTimeFetch = (axis, field) => {
+			if (!field) return;
+			const scaleState = this.#chartContext[`${axis}ScaleState`];
+			if (!scaleState?.addDatetimeExtent) return;
+
+			const q = Query.from(table).select({
+				min_time: min(sqlColumn(String(field))),
+				max_time: max(sqlColumn(String(field)))
+			});
+
+			fetches.push(
+				this.#coordinator.query(q).then((result) => {
+					const row = Array.from(result)[0];
+					if (row && row.min_time != null && row.max_time != null) {
+						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [
+							row.min_time,
+							row.max_time
+						]);
+						scaleState.addDatetimeExtent([row.min_time, row.max_time], this.#markId);
+					}
+				})
+			);
+		};
+
+		if (this.actualXScaleType === 'time') {
+			setupTimeFetch('x', this.#config.select.x);
+		}
+		if (this.actualYScaleType === 'time') {
+			setupTimeFetch('y', this.#config.select.y);
 		}
 
 		// Fetch color domain if color scale is set and there's a color field
@@ -1057,8 +1116,9 @@ export class BaseMarkSetup {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
 
-			// For categorical scales (band/point), mark ready immediately
-			if (scaleType === 'band' || scaleType === 'point') {
+			// For categorical scales (band/point) and time scales, mark ready immediately
+			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
+			if (scaleType === 'band' || scaleType === 'point' || scaleType === 'time') {
 				scale.setReady?.();
 				continue;
 			}

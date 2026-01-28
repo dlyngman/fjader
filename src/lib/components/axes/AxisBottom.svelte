@@ -8,20 +8,26 @@
 	const labelsNumber = 4;
 	const ticksNumber = 5;
 
-	const formatter = $derived(c.xScale.tickFormat());
-	// tick labels vs ticks, major vs minor?
+	const isTimeScale = $derived(c.scaleTypes?.x === 'time');
+	// For time scales, use scaleState.getTicks() for calendar-nice ticks
+	// For linear, use d3 scale's ticks()
+	const ticks = $derived(
+		isTimeScale && c.xScaleState?.getTicks
+			? c.xScaleState.getTicks(ticksNumber)
+			: c.xScale?.ticks(ticksNumber) ?? []
+	);
+	const tickFormatter = $derived(
+		isTimeScale && c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : format('~s')
+	);
 </script>
 
-<!-- {#if c.xScale && c.innerHeight && c.innerWidth && c.scalesReady} -->
 {#if c.isReady}
 	<g class="axis" transform="translate(0 , {c.innerHeight})">
-		<!-- <line x1={0} y1={0} x2={innerWidth} y2={0} /> -->
-		<!-- {#each c.xScale.ticks(ticksNumber) as tick (tick)} -->
-		{#each c.xScale.ticks(ticksNumber) as tick, i (i)}
+		{#each ticks as tick, i (i)}
 			<line x1={c.xScale(tick)} x2={c.xScale(tick)} y1={0} y2={5} />
 
 			<text text-anchor="middle" x={c.xScale(tick)} y={16}>
-				{format('~s')(tick)}
+				{tickFormatter(tick)}
 			</text>
 		{/each}
 

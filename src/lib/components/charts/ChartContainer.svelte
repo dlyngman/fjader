@@ -410,8 +410,10 @@
 
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
-		activePanX = xInBounds && scales.scaleTypes?.x === 'linear';
-		activePanY = yInBounds && scales.scaleTypes?.y === 'linear';
+		const xType = scales.scaleTypes?.x;
+		const yType = scales.scaleTypes?.y;
+		activePanX = xInBounds && (xType === 'linear' || xType === 'time');
+		activePanY = yInBounds && (yType === 'linear' || yType === 'time');
 
 		if (!activePanX && !activePanY) return;
 
