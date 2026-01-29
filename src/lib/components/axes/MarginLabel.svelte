@@ -6,16 +6,25 @@
 
 	const c = getContext('chart');
 
-	const formatter = format('.3s');
+	const numericFormatter = format('.3s');
+	const xFormatter = $derived(
+		c.scaleTypes?.x === 'time' && c.xScaleState?.tickFormat
+			? c.xScaleState.tickFormat()
+			: numericFormatter
+	);
+	const yFormatter = $derived(
+		c.scaleTypes?.y === 'time' && c.yScaleState?.tickFormat
+			? c.yScaleState.tickFormat()
+			: numericFormatter
+	);
 </script>
 
 {#if c.xScale && c.yScale && c.innerHeight && c.innerWidth}
 	<g class="margin-label">
 		{#if c.currentXScreenPoint && c.currentXDataPoint && (show === 'both' || show === 'x') && c.active}
 			<text text-anchor="middle" x={c.currentXScreenPoint} y={-5}>
-				{formatter(c.currentXDataPoint)}
+				{xFormatter(c.currentXDataPoint)}
 			</text>
-			<!-- <line x1={c.currentXPos} y1={c.innerHeight} x2={c.currentXPos} y2={0} /> -->
 		{/if}
 		{#if c.currentYScreenPoint && c.currentYDataPoint && (show === 'both' || show === 'y') && c.active}
 			<text
@@ -24,7 +33,7 @@
 				x={c.innerWidth + 5}
 				y={c.currentYScreenPoint}
 			>
-				{formatter(c.currentYDataPoint)}
+				{yFormatter(c.currentYDataPoint)}
 			</text>
 		{/if}
 	</g>

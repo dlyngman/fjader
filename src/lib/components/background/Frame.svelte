@@ -1,7 +1,6 @@
 <script>
 	import { getContext } from 'svelte';
 
-	let { ticksNumber = 5 } = $props();
 	const c = getContext('chart');
 </script>
 

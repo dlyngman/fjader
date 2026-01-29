@@ -1,6 +1,7 @@
 // src/lib/scales/ScaleRegistry.svelte.js
 import { setContext, getContext, untrack } from 'svelte';
 import { LinearScaleState } from './LinearScaleState.svelte.js';
+import { TimeScaleState } from './TimeScaleState.svelte.js';
 import { BandScaleState } from './BandScaleState.svelte.js';
 import { ColorScaleState } from './ColorScaleState.svelte.js';
 import { scaleOrdinal } from 'd3-scale';
@@ -218,10 +219,15 @@ class ScaleRegistry {
 
 		if (!this.scales[type].has(key)) {
 			// Factory Logic
-			if (['linear', 'log', 'time', 'pow', 'identity'].includes(type)) {
+			if (['linear', 'log', 'pow', 'identity'].includes(type)) {
 				this.scales[type].set(
 					key,
 					new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
+				);
+			} else if (type === 'time') {
+				this.scales[type].set(
+					key,
+					new TimeScaleState(name, undefined, 'time', undefined, config, this.#gpuCoordinator)
 				);
 			} else if (['band', 'point'].includes(type)) {
 				this.scales[type].set(

@@ -61,7 +61,9 @@ export function resolveScaleType(requirements) {
  */
 export function resolveScaleConfiguration(requirements) {
 	if (!requirements || requirements.length === 0) {
-		return { type: 'linear', config: {}, columnName: null };
+		// No marks registered yet — return null to prevent premature scale creation.
+		// ChartScales will wait until at least one mark registers requirements.
+		return null;
 	}
 
 	// First resolve type using existing logic

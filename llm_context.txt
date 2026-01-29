@@ -16,6 +16,9 @@
    * Scale fragment definitions
    * Each scale type provides: declaration, function call, and implementation
    */
+  // Time scales use identical GPU math to linear (data is float offsets from t0)
+  const TIME_SCALE_ALIAS = 'linear';
+  
   const SCALE_FRAGMENTS = {
   	linear: {
   		declaration: () => {
@@ -115,6 +118,9 @@
   	}
   };
   
+  // Time scales reuse linear GPU math — offsets from t0 are plain floats
+  SCALE_FRAGMENTS.time = SCALE_FRAGMENTS[TIME_SCALE_ALIAS];
+  
   /**
    * Semantic logic generators for mark rendering.
    * Maps [concept][scaleType] → { inputs, generate }
@@ -158,6 +164,12 @@
   
   	extent: {
   		linear: {
+  			inputs: 2,
+  			generate: (axis, channel0, channel1) => `
+        let scaled${axis.toUpperCase()}0 = scale${axis.toUpperCase()}(${channel0});
+        let scaled${axis.toUpperCase()}1 = scale${axis.toUpperCase()}(${channel1});`
+  		},
+  		time: {
   			inputs: 2,
   			generate: (axis, channel0, channel1) => `
         let scaled${axis.toUpperCase()}0 = scale${axis.toUpperCase()}(${channel0});
@@ -3153,6 +3165,20 @@
   	}
   
   	// ===========================================================================
+  	// PROTECTED METHODS (for subclass access)
+  	// ===========================================================================
+  
+  	/**
+  	 * Set the extent values directly. Used by TimeScaleState for time-aware nice rounding.
+  	 * @param {number} min
+  	 * @param {number} max
+  	 */
+  	_setExtent(min, max) {
+  		this.#extent[0] = min;
+  		this.#extent[1] = max;
+  	}
+  
+  	// ===========================================================================
   	// CLEANUP
   	// ===========================================================================
   
@@ -5382,26 +5408,27 @@
   			const xConfig = this.scaleConfigurations.x;
   			const yConfig = this.scaleConfigurations.y;
   
-  			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
-  			const xKey = xLabel || xConfig?.columnName || 'x';
-  			const yKey = yLabel || yConfig?.columnName || 'y';
+  			// Wait for at least one mark to register on each axis.
+  			// When scale inference is pending, configurations are null.
+  			if (!xConfig || !yConfig) return;
   
-  			// TODO move outside effect?
-  			// const scaleRegistry = getContext('scale-registry');
+  			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
+  			const xKey = xLabel || xConfig.columnName || 'x';
+  			const yKey = yLabel || yConfig.columnName || 'y';
   
   			// Get what scales SHOULD be
   
   			const neededXScale = this.#scaleRegistry.getOrCreateScale(
   				xKey,
-  				xConfig?.type || 'linear',
-  				xConfig?.config || {},
+  				xConfig.type,
+  				xConfig.config || {},
   				this.chartId
   			);
   
   			const neededYScale = this.#scaleRegistry.getOrCreateScale(
   				yKey,
-  				yConfig?.type || 'linear',
-  				yConfig?.config || {},
+  				yConfig.type,
+  				yConfig.config || {},
   				this.chartId
   			);
   
@@ -5622,15 +5649,21 @@
   		if (this.#yScaleInstance) this.#yScaleInstance.currentDataPoint = null;
   	};
   
+  	/** Check if axis has a continuous scale that supports pan/zoom/hover. */
+  	#isContinuous(axis) {
+  		const type = this.scaleTypes?.[axis];
+  		return type === 'linear' || type === 'time';
+  	}
+  
   	updateCurrentDataPoints = (innerPoint) => {
-  		if (this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (this.#isContinuous('y') && this.#yScaleInstance) {
   			this.#yScaleInstance.currentDataPoint = this.#yScaleInstance.invertScreenToData(
   				innerPoint.y,
   				this.layout.innerHeight,
   				true // isYAxis
   			);
   		}
-  		if (this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (this.#isContinuous('x') && this.#xScaleInstance) {
   			this.#xScaleInstance.currentDataPoint = this.#xScaleInstance.invertScreenToData(
   				innerPoint.x,
   				this.layout.innerWidth,
@@ -5640,16 +5673,16 @@
   	};
   
   	resetZoom = (resetX = true, resetY = true) => {
-  		if (resetX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (resetX && this.#isContinuous('x') && this.#xScaleInstance) {
   			this.#xScaleInstance.resetZoom();
   		}
-  		if (resetY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (resetY && this.#isContinuous('y') && this.#yScaleInstance) {
   			this.#yScaleInstance.resetZoom();
   		}
   	};
   
   	accumulateZoom = (innerPoint, scaleFactor, doX, doY) => {
-  		if (doX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
   			const dataPoint = this.#xScaleInstance.invertScreenToData(
   				innerPoint.x,
   				this.layout.innerWidth,
@@ -5657,7 +5690,7 @@
   			);
   			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
   		}
-  		if (doY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
   			const dataPoint = this.#yScaleInstance.invertScreenToData(
   				innerPoint.y,
   				this.layout.innerHeight,
@@ -5668,7 +5701,7 @@
   	};
   
   	applyZoom = (innerPoint, scaleFactor, doX, doY) => {
-  		if (doX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
   			const dataPoint = this.#xScaleInstance.invertScreenToData(
   				innerPoint.x,
   				this.layout.innerWidth,
@@ -5677,7 +5710,7 @@
   			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
   			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', this.layout.innerWidth);
   		}
-  		if (doY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
   			const dataPoint = this.#yScaleInstance.invertScreenToData(
   				innerPoint.y,
   				this.layout.innerHeight,
@@ -5693,7 +5726,7 @@
   		this.activePanY = activePanY;
   
   		// X Axis Setup
-  		if (activePanX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
   			const currentDomain = this.#xScaleInstance.domain.current;
   
   			this._xPanContext.initialScreenPos = x;
@@ -5709,7 +5742,7 @@
   		}
   
   		// Y Axis Setup
-  		if (activePanY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
   			const currentDomain = this.#yScaleInstance.domain.current;
   
   			this._yPanContext.initialScreenPos = y;
@@ -5729,19 +5762,19 @@
   		this.activePanX = false;
   		this.activePanY = false;
   
-  		if (this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (this.#isContinuous('x') && this.#xScaleInstance) {
   			this.#xScaleInstance.endPan();
   		}
-  		if (this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (this.#isContinuous('y') && this.#yScaleInstance) {
   			this.#yScaleInstance.endPan();
   		}
   	};
   
   	updatePanPosition = (screenX, screenY) => {
-  		if (this.activePanX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+  		if (this.activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
   			this.#xScaleInstance.updatePanPosition(screenX, 0);
   		}
-  		if (this.activePanY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+  		if (this.activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
   			this.#yScaleInstance.updatePanPosition(0, screenY);
   		}
   	};
@@ -5877,6 +5910,7 @@
   // src/lib/scales/ScaleRegistry.svelte.js
   import { setContext, getContext, untrack } from 'svelte';
   import { LinearScaleState } from './LinearScaleState.svelte.js';
+  import { TimeScaleState } from './TimeScaleState.svelte.js';
   import { BandScaleState } from './BandScaleState.svelte.js';
   import { ColorScaleState } from './ColorScaleState.svelte.js';
   import { scaleOrdinal } from 'd3-scale';
@@ -6094,10 +6128,15 @@
   
   		if (!this.scales[type].has(key)) {
   			// Factory Logic
-  			if (['linear', 'log', 'time', 'pow', 'identity'].includes(type)) {
+  			if (['linear', 'log', 'pow', 'identity'].includes(type)) {
   				this.scales[type].set(
   					key,
   					new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
+  				);
+  			} else if (type === 'time') {
+  				this.scales[type].set(
+  					key,
+  					new TimeScaleState(name, undefined, 'time', undefined, config, this.#gpuCoordinator)
   				);
   			} else if (['band', 'point'].includes(type)) {
   				this.scales[type].set(
@@ -6925,8 +6964,10 @@
   
   		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
   
-  		activePanX = xInBounds && scales.scaleTypes?.x === 'linear';
-  		activePanY = yInBounds && scales.scaleTypes?.y === 'linear';
+  		const xType = scales.scaleTypes?.x;
+  		const yType = scales.scaleTypes?.y;
+  		activePanX = xInBounds && (xType === 'linear' || xType === 'time');
+  		activePanY = yInBounds && (yType === 'linear' || yType === 'time');
   
   		if (!activePanX && !activePanY) return;
   
@@ -8312,219 +8353,224 @@
   	const quadVertexCount = 6; // 2 triangles per segment
   
   	// Line shader with miter joins and series boundary detection
-  	const linesShaderCode = `
-      // MarkConstants uniform for per-mark configuration
-      struct MarkConstants {
-        strokeWidth: f32,        // Line thickness in logical pixels
-        miterLimit: f32,         // Max miter length (prevents spikes)
-        colorMode: u32,          // 0 = constant, 1 = scale
-        colorScaleIndex: u32,    // Index into colorConfigs
-        constantColor: vec4<f32> // Used when colorMode = 0
-      };
-      @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
+    const linesShaderCode = `
+    struct MarkConstants {
+      strokeWidth: f32,
+      miterLimit: f32,
+      colorMode: u32,
+      colorScaleIndex: u32,
+      constantColor: vec4<f32>
+    };
+    @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
   
-      struct VertexOutput {
-        @builtin(position) position: vec4<f32>,
-        @location(0) colorValue: f32,
-        @location(1) alpha: f32
-      };
+    struct VertexOutput {
+      @builtin(position) position: vec4<f32>,
+      @location(0) colorValue: f32,
+      @location(1) alpha: f32
+    };
   
-      // Data storage buffers
-      @group(1) @binding(0) var<storage, read> xValues: array<f32>;
-      @group(1) @binding(1) var<storage, read> yValues: array<f32>;
-      @group(1) @binding(2) var<storage, read> seriesValues: array<f32>;
-      @group(1) @binding(3) var<storage, read> colorValues: array<f32>;
+    @group(1) @binding(0) var<storage, read> xValues: array<f32>;
+    @group(1) @binding(1) var<storage, read> yValues: array<f32>;
+    @group(1) @binding(2) var<storage, read> seriesValues: array<f32>;
+    @group(1) @binding(3) var<storage, read> colorValues: array<f32>;
   
-      // Helper to check if value is NaN
-      fn isNaN(v: f32) -> bool {
-        return v != v;
-      }
+    fn isNaN(v: f32) -> bool {
+      return v != v;
+    }
   
-      // Get data point count from buffer
-      fn getPointCount() -> u32 {
-        return arrayLength(&xValues);
-      }
+    fn getPointCount() -> u32 {
+      return arrayLength(&xValues);
+    }
   
-      @vertex
-      fn vertexMain(
-        @location(0) quadPosition: vec2<f32>,
-        @builtin(instance_index) instanceIdx: u32,
-        @builtin(vertex_index) vertexIdx: u32
-      ) -> VertexOutput {
-        let pointCount = getPointCount();
+    @vertex
+    fn vertexMain(
+      @location(0) quadPosition: vec2<f32>,
+      @builtin(instance_index) instanceIdx: u32,
+      @builtin(vertex_index) vertexIdx: u32
+    ) -> VertexOutput {
+      let pointCount = getPointCount();
+      let currIdx = instanceIdx;
+      let nextIdx = instanceIdx + 1u;
   
-        // Instance i draws segment from point[i] to point[i+1]
-        let currIdx = instanceIdx;
-        let nextIdx = instanceIdx + 1u;
-  
-        // Bounds check - discard if we don't have enough points
-        if (nextIdx >= pointCount) {
-          var output: VertexOutput;
-          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); // Behind camera
-          output.colorValue = 0.0;
-          output.alpha = 0.0;
-          return output;
-        }
-  
-        // Fetch current and next point data
-        let xCurr = xValues[currIdx];
-        let yCurr = yValues[currIdx];
-        let xNext = xValues[nextIdx];
-        let yNext = yValues[nextIdx];
-        let seriesCurr = seriesValues[currIdx];
-        let seriesNext = seriesValues[nextIdx];
-        let colorValue = colorValues[currIdx];
-  
-        // Series boundary check - discard segment if crossing series
-        if (seriesCurr != seriesNext) {
-          var output: VertexOutput;
-          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
-          output.colorValue = 0.0;
-          output.alpha = 0.0;
-          return output;
-        }
-  
-        // NaN check - discard segment if any coordinate is invalid
-        if (isNaN(xCurr) || isNaN(yCurr) || isNaN(xNext) || isNaN(yNext)) {
-          var output: VertexOutput;
-          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
-          output.colorValue = 0.0;
-          output.alpha = 0.0;
-          return output;
-        }
-  
-        // Project points to screen pixels (uses scaleX/scaleY internally)
-        let pCurr = projectToPixels(vec2<f32>(xCurr, yCurr));
-        let pNext = projectToPixels(vec2<f32>(xNext, yNext));
-  
-        // Calculate segment direction and normal
-        let segmentDir = pNext - pCurr;
-        let segmentLen = length(segmentDir);
-  
-        // Handle degenerate segments (zero length)
-        if (segmentLen < 0.001) {
-          var output: VertexOutput;
-          output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
-          output.colorValue = 0.0;
-          output.alpha = 0.0;
-          return output;
-        }
-  
-        let tangent = segmentDir / segmentLen;
-        let normal = vec2<f32>(-tangent.y, tangent.x);
-  
-        // Calculate miter vectors for start and end of segment
-        var miterStart = normal;
-        var miterEnd = normal;
-  
-        // Prev point for start miter (if available and same series)
-        if (currIdx > 0u) {
-          let prevIdx = currIdx - 1u;
-          let seriesPrev = seriesValues[prevIdx];
-          if (seriesPrev == seriesCurr) {
-            let xPrev = xValues[prevIdx];
-            let yPrev = yValues[prevIdx];
-            if (!isNaN(xPrev) && !isNaN(yPrev)) {
-              let pPrev = projectToPixels(vec2<f32>(xPrev, yPrev));
-              let prevDir = pCurr - pPrev;
-              let prevLen = length(prevDir);
-              if (prevLen > 0.001) {
-                let prevTangent = prevDir / prevLen;
-                let prevNormal = vec2<f32>(-prevTangent.y, prevTangent.x);
-                // Average normals for miter
-                miterStart = normalize(prevNormal + normal);
-                // Clamp miter length
-                let miterLen = 1.0 / max(dot(miterStart, normal), 1.0 / markConstants.miterLimit);
-                miterStart = miterStart * min(miterLen, markConstants.miterLimit);
-              }
-            }
-          }
-        }
-  
-        // Next-next point for end miter (if available and same series)
-        let nextNextIdx = nextIdx + 1u;
-        if (nextNextIdx < pointCount) {
-          let seriesNextNext = seriesValues[nextNextIdx];
-          if (seriesNextNext == seriesNext) {
-            let xNextNext = xValues[nextNextIdx];
-            let yNextNext = yValues[nextNextIdx];
-            if (!isNaN(xNextNext) && !isNaN(yNextNext)) {
-              let pNextNext = projectToPixels(vec2<f32>(xNextNext, yNextNext));
-              let nextDir = pNextNext - pNext;
-              let nextLen = length(nextDir);
-              if (nextLen > 0.001) {
-                let nextTangent = nextDir / nextLen;
-                let nextNormal = vec2<f32>(-nextTangent.y, nextTangent.x);
-                // Average normals for miter
-                miterEnd = normalize(normal + nextNormal);
-                // Clamp miter length
-                let miterLen = 1.0 / max(dot(miterEnd, normal), 1.0 / markConstants.miterLimit);
-                miterEnd = miterEnd * min(miterLen, markConstants.miterLimit);
-              }
-            }
-          }
-        }
-  
-        // Stroke thickness in physical pixels
-        let halfWidth = markConstants.strokeWidth * frameUniforms.devicePixelRatio * 0.5;
-  
-        // Quad vertex positions: quadPosition.x is along segment (0=start, 1=end)
-        //                        quadPosition.y is perpendicular (-1=left, 1=right)
-        let t = quadPosition.x * 0.5 + 0.5; // Map [-1,1] to [0,1]
-        let side = quadPosition.y;
-  
-        // Interpolate position along segment
-        let basePos = mix(pCurr, pNext, t);
-  
-        // Interpolate miter vector
-        let miter = mix(miterStart, miterEnd, t);
-  
-        // Expand perpendicular to segment
-        let finalPos = basePos + miter * side * halfWidth;
-  
-        // Anti-crack overlap: extend slightly along tangent at segment ends
-        let overlapAmount = frameUniforms.devicePixelRatio * 0.5;
-        if (t < 0.01) {
-          // Start of segment - extend backward
-          let adjustedPos = finalPos - tangent * overlapAmount;
-          var output: VertexOutput;
-          output.position = pixelsToClip(adjustedPos);
-          output.colorValue = colorValue;
-          output.alpha = 1.0;
-          return output;
-        } else if (t > 0.99) {
-          // End of segment - extend forward
-          let adjustedPos = finalPos + tangent * overlapAmount;
-          var output: VertexOutput;
-          output.position = pixelsToClip(adjustedPos);
-          output.colorValue = colorValue;
-          output.alpha = 1.0;
-          return output;
-        }
-  
+      // --- BOUNDS CHECK ---
+      if (nextIdx >= pointCount) {
         var output: VertexOutput;
-        output.position = pixelsToClip(finalPos);
-        output.colorValue = colorValue;
-        output.alpha = 1.0;
+        output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); 
         return output;
       }
   
-      @fragment
-      fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
-        // Get color based on mode
-        var baseColor: vec4<f32>;
-        if (markConstants.colorMode == 0u) {
-          baseColor = markConstants.constantColor;
-        } else {
-          baseColor = getColorFromScale(
-            markConstants.colorScaleIndex,
-            input.colorValue,
-            frameUniforms.nullColor
-          );
-        }
+      let xCurr = xValues[currIdx];
+      let yCurr = yValues[currIdx];
+      let xNext = xValues[nextIdx];
+      let yNext = yValues[nextIdx];
+      let seriesCurr = seriesValues[currIdx];
+      let seriesNext = seriesValues[nextIdx];
+      let colorValue = colorValues[currIdx];
   
-        return vec4<f32>(baseColor.rgb, baseColor.a * input.alpha);
+      if (seriesCurr != seriesNext || isNaN(xCurr) || isNaN(yCurr) || isNaN(xNext) || isNaN(yNext)) {
+        var output: VertexOutput;
+        output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); 
+        return output;
       }
+  
+      // --- TOPOLOGY ---
+      let isStartOfSeries = (currIdx == 0u) || (seriesValues[currIdx - 1u] != seriesCurr);
+      let isEndOfSeries = ((nextIdx + 1u) >= pointCount) || (seriesValues[nextIdx + 1u] != seriesNext);
+  
+      // --- PROJECTION ---
+      let pCurr = projectToPixels(vec2<f32>(xCurr, yCurr));
+      let pNext = projectToPixels(vec2<f32>(xNext, yNext));
+      let segmentDir = pNext - pCurr;
+      let segmentLen = length(segmentDir);
+  
+      if (segmentLen < 0.001) {
+        var output: VertexOutput;
+        output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); 
+        return output;
+      }
+  
+      let tangent = segmentDir / segmentLen;
+      // Normal points "Right" relative to direction
+      let normal = vec2<f32>(-tangent.y, tangent.x);
+  
+      // side: -1 = Left/Outer(RightTurn), 1 = Right/Inner(RightTurn)
+      let side = quadPosition.y;
+  
+      var miterStart = normal;
+      var miterEnd = normal;
+  
+      // --- START JOIN ---
+      if (!isStartOfSeries) {
+          let prevIdx = currIdx - 1u;
+          let xPrev = xValues[prevIdx];
+          let yPrev = yValues[prevIdx];
+          if (!isNaN(xPrev) && !isNaN(yPrev)) {
+              let pPrev = projectToPixels(vec2<f32>(xPrev, yPrev));
+              let prevDir = pCurr - pPrev;
+              if (length(prevDir) > 0.001) {
+                  let prevTangent = normalize(prevDir);
+                  let prevNormal = vec2<f32>(-prevTangent.y, prevTangent.x);
+                  let sumNormals = prevNormal + normal;
+                  
+                  if (length(sumNormals) > 0.001) {
+                      let bisector = normalize(sumNormals);
+                      let dotProd = dot(bisector, normal);
+                      let miterLen = 1.0 / max(dotProd, 0.0001);
+                      
+                      // Turn Direction (2D Cross Product)
+                      // > 0: Right Turn (CW)
+                      // < 0: Left Turn (CCW)
+                      let cross = prevTangent.x * tangent.y - prevTangent.y * tangent.x;
+                      
+                      // Determine if this side is on the "Outer" (sharp) side of the turn
+                      var isOuter = false;
+                      if (cross > 0.0) {
+                          // Right Turn: Left side (-1) is Outer
+                          isOuter = (side < 0.0);
+                      } else {
+                          // Left Turn: Right side (+1) is Outer
+                          isOuter = (side > 0.0);
+                      }
+                      
+                      var finalLen = miterLen;
+                      if (isOuter) {
+                          // Outer: Strict clamp to avoid spikes
+                          finalLen = min(miterLen, markConstants.miterLimit);
+                      } else {
+                          // Inner: Allow extension to close the gap...
+                          // ...BUT cap it at a safety limit (100.0) to prevent 
+                          // infinite explosion on near-180 hairpins.
+                          finalLen = min(miterLen, 100.0);
+                      }
+                      
+                      miterStart = bisector * finalLen;
+                  }
+              }
+          }
+      }
+  
+      // --- END JOIN ---
+      if (!isEndOfSeries) {
+          let nextNextIdx = nextIdx + 1u;
+          let xNextNext = xValues[nextNextIdx];
+          let yNextNext = yValues[nextNextIdx];
+          if (!isNaN(xNextNext) && !isNaN(yNextNext)) {
+              let pNextNext = projectToPixels(vec2<f32>(xNextNext, yNextNext));
+              let nextDir = pNextNext - pNext;
+              if (length(nextDir) > 0.001) {
+                  let nextTangent = normalize(nextDir);
+                  let nextNormal = vec2<f32>(-nextTangent.y, nextTangent.x);
+                  let sumNormals = normal + nextNormal;
+                  
+                  if (length(sumNormals) > 0.001) {
+                      let bisector = normalize(sumNormals);
+                      let dotProd = dot(bisector, normal);
+                      let miterLen = 1.0 / max(dotProd, 0.0001);
+                      
+                      let cross = tangent.x * nextTangent.y - tangent.y * nextTangent.x;
+                      
+                      var isOuter = false;
+                      if (cross > 0.0) {
+                          isOuter = (side < 0.0);
+                      } else {
+                          isOuter = (side > 0.0);
+                      }
+                      
+                      var finalLen = miterLen;
+                      if (isOuter) {
+                          finalLen = min(miterLen, markConstants.miterLimit);
+                      } else {
+                          // Safety Cap: 100x thickness is plenty to look "filled" 
+                          // but small enough to avoid rendering artifacts.
+                          finalLen = min(miterLen, 100.0);
+                      }
+                      
+                      miterEnd = bisector * finalLen;
+                  }
+              }
+          }
+      }
+  
+      // --- EXTRUSION ---
+      let halfWidth = markConstants.strokeWidth * frameUniforms.devicePixelRatio * 0.5;
+      let t = quadPosition.x * 0.5 + 0.5; 
+  
+      let basePos = mix(pCurr, pNext, t);
+      let miter = mix(miterStart, miterEnd, t);
+      let finalPos = basePos + miter * side * halfWidth;
+  
+      // --- OVERLAP LOGIC ---
+      // Only extend TRUE endpoints
+      let overlap = frameUniforms.devicePixelRatio * 0.5;
+      var adjustedPos = finalPos;
+      
+      if (t < 0.01 && isStartOfSeries) {
+            adjustedPos = finalPos - tangent * overlap;
+      } else if (t > 0.99 && isEndOfSeries) {
+            adjustedPos = finalPos + tangent * overlap;
+      }
+  
+      var output: VertexOutput;
+      output.position = pixelsToClip(adjustedPos);
+      output.colorValue = colorValue;
+      output.alpha = 1.0;
+      return output;
+    }
+  
+    @fragment
+    fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+      var baseColor: vec4<f32>;
+      if (markConstants.colorMode == 0u) {
+        baseColor = markConstants.constantColor;
+      } else {
+        baseColor = getColorFromScale(
+          markConstants.colorScaleIndex,
+          input.colorValue,
+          frameUniforms.nullColor
+        );
+      }
+      return vec4<f32>(baseColor.rgb, baseColor.a * input.alpha);
+    }
     `;
   
   	const vertexBufferLayout = [
@@ -9414,6 +9460,7 @@
   	categoricalDataFetched = $state(false);
   
   	// --- Setup Progress ---
+  	#scaleRequirementsRegistered = $state(false);
   	#scaleStatesReady = $state(false);
   	#scaleMappingsReady = $state(false);
   	#clientCreated = $state(false);
@@ -9441,6 +9488,18 @@
   	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
   	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
   
+  	/**
+  	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
+  	 * Call this before inference so schema lookups can proceed.
+  	 * Idempotent — safe to call multiple times.
+  	 */
+  	static ensureServices(coordinator) {
+  		if (coordinator) {
+  			viewManager.setCoordinator(coordinator);
+  			tableSchemaService.setCoordinator(coordinator);
+  		}
+  	}
+  
   	constructor(config, coordinator, chartContext, stableId = null) {
   		console.log('🔧 BaseMarkSetup constructor:', {
   			markType: config.markType,
@@ -9453,12 +9512,8 @@
   		this.#chartContext = chartContext;
   		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
   
-  		// Ensure services have coordinator (idempotent, pragmatic initialization)
-  		// TODO: Could be moved to app-level initialization where coordinator is created
-  		if (coordinator) {
-  			viewManager.setCoordinator(coordinator);
-  			tableSchemaService.setCoordinator(coordinator);
-  		}
+  		// Ensure services have coordinator (idempotent)
+  		BaseMarkSetup.ensureServices(coordinator);
   
   		// NEW: Create transform compiler
   		this.#transformCompiler = new TransformCompiler(config.transforms || []);
@@ -9547,7 +9602,10 @@
   
   	#setupReactiveEffects() {
   		// Effect 1: Wait for scale objects
+  		// Gated on #scaleRequirementsRegistered — when inference is pending (null types),
+  		// the entire effect chain is blocked until the mark is recreated with resolved types.
   		$effect(() => {
+  			if (!this.#scaleRequirementsRegistered) return;
   			const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
   			if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
   				this.#scaleStatesReady = true;
@@ -9689,6 +9747,13 @@
   				inferredScaleColumns?.y
   			);
   		}
+  
+  		// Gate: both axes must have resolved types before the effect chain proceeds.
+  		// When inference is pending (null scaleRequirements), this stays false,
+  		// preventing premature DataClient creation and domain queries.
+  		this.#scaleRequirementsRegistered = !!(
+  			scaleRequirements?.x?.type && scaleRequirements?.y?.type
+  		);
   	}
   
   	get actualXScaleType() {
@@ -9900,6 +9965,24 @@
   			}
   		}
   
+  		// For time scales, use the offset column name from ViewManager
+  		if (this.actualXScaleType === 'time') {
+  			const xScale = this.#chartContext.xScaleState;
+  			if (xScale?.offsetColumnName && hasView) {
+  				const originalField = select.x;
+  				select.x = xScale.offsetColumnName;
+  				console.log(`[BaseMarkSetup] Swapping x (time): ${originalField} → ${select.x}`);
+  			}
+  		}
+  		if (this.actualYScaleType === 'time') {
+  			const yScale = this.#chartContext.yScaleState;
+  			if (yScale?.offsetColumnName && hasView) {
+  				const originalField = select.y;
+  				select.y = yScale.offsetColumnName;
+  				console.log(`[BaseMarkSetup] Swapping y (time): ${originalField} → ${select.y}`);
+  			}
+  		}
+  
   		// For color scales, use the indexed column name
   		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
   			const originalField = select.color;
@@ -10042,13 +10125,19 @@
   			y: this.#chartContext.yScaleState
   		};
   
-  		// Register table with band scales for ViewManager integration
+  		// Register table with band/time scales for ViewManager integration
   		// This must happen BEFORE categorical domain fetch so views can be created
   		const table = this.#config.table;
   		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
   			this.#chartContext.xScaleState?.registerTable?.(table);
   		}
   		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+  			this.#chartContext.yScaleState?.registerTable?.(table);
+  		}
+  		if (this.actualXScaleType === 'time') {
+  			this.#chartContext.xScaleState?.registerTable?.(table);
+  		}
+  		if (this.actualYScaleType === 'time') {
   			this.#chartContext.yScaleState?.registerTable?.(table);
   		}
   
@@ -10086,7 +10175,9 @@
   			const scaleType =
   				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
   
-  			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+  			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
+  			// not from fieldInfo (which would return values from the offset column)
+  			if (scaleType === 'linear' || scaleType === 'log') {
   				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
   				processedFields.add(fieldValue.toString());
   			}
@@ -10104,7 +10195,8 @@
   
   			const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
   
-  			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+  			// Time scales get their domain from sidecar query, skip fieldInfo path
+  			if (scaleType === 'linear' || scaleType === 'log') {
   				const fieldValue = this.#config.select[alias];
   
   				// Skip AutoBinNodes - they handle their own stats
@@ -10267,6 +10359,35 @@
   		}
   		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
   			setupFetch('y', this.#config.select.y);
+  		}
+  
+  		// Time scale sidecar queries: fetch MIN/MAX datetime for offset computation
+  		const setupTimeFetch = (axis, field) => {
+  			if (!field) return;
+  			const scaleState = this.#chartContext[`${axis}ScaleState`];
+  			if (!scaleState?.addDatetimeExtent) return;
+  
+  			const q = Query.from(table).select({
+  				min_time: min(sqlColumn(String(field))),
+  				max_time: max(sqlColumn(String(field)))
+  			});
+  
+  			fetches.push(
+  				this.#coordinator.query(q).then((result) => {
+  					const row = Array.from(result)[0];
+  					if (row && row.min_time != null && row.max_time != null) {
+  						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [row.min_time, row.max_time]);
+  						scaleState.addDatetimeExtent([row.min_time, row.max_time], this.#markId);
+  					}
+  				})
+  			);
+  		};
+  
+  		if (this.actualXScaleType === 'time') {
+  			setupTimeFetch('x', this.#config.select.x);
+  		}
+  		if (this.actualYScaleType === 'time') {
+  			setupTimeFetch('y', this.#config.select.y);
   		}
   
   		// Fetch color domain if color scale is set and there's a color field
@@ -10447,8 +10568,9 @@
   			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
   			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
   
-  			// For categorical scales (band/point), mark ready immediately
-  			if (scaleType === 'band' || scaleType === 'point') {
+  			// For categorical scales (band/point) and time scales, mark ready immediately
+  			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
+  			if (scaleType === 'band' || scaleType === 'point' || scaleType === 'time') {
   				scale.setReady?.();
   				continue;
   			}
@@ -10510,6 +10632,8 @@
   	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   	import { Lines } from '../rendering/index.js';
   	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { inferScaleType } from '$lib/scales/scale-inference.js';
+  	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
   	import {
   		buildSelectFromChannels,
   		resolveChannel,
@@ -10530,8 +10654,8 @@
   		miterLimit = 4, // Max miter length to prevent spikes
   		limit,
   		filterNulls = false,
-  		preferredXScaleType = 'linear',
-  		preferredYScaleType = 'linear',
+  		preferredXScaleType = null,
+  		preferredYScaleType = null,
   		transforms = []
   	} = $props();
   
@@ -10540,7 +10664,35 @@
   	const chartContext = getContext('chart');
   	const scaleRegistry = getContext('scale-registry');
   
+  	// Ensure services are ready before inference (idempotent)
+  	BaseMarkSetup.ensureServices(coordinator);
+  
   	let setup = $state(null);
+  
+  	// 0. Scale Type Inference
+  	const effectiveXScaleType = $derived.by(() => {
+  		if (preferredXScaleType != null) return preferredXScaleType;
+  		if (!x || typeof x !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, x);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field: x, schemaType: colType, context: 'axis' });
+  	});
+  
+  	const effectiveYScaleType = $derived.by(() => {
+  		if (preferredYScaleType != null) return preferredYScaleType;
+  		if (!y || typeof y !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, y);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field: y, schemaType: colType, context: 'axis' });
+  	});
   
   	// Series grouping - uses scale infrastructure for categorical → index mapping
   	const markSeries = new MarkSeries(
@@ -10570,8 +10722,12 @@
   			y: ['linear', 'time', 'log']
   		},
   		scaleRequirements: {
-  			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
-  			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  			x: effectiveXScaleType
+  				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+  				: null,
+  			y: effectiveYScaleType
+  				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  				: null
   		},
   		inferredScaleColumns: {
   			x: x,
@@ -10639,7 +10795,11 @@
   		(void config, xScaleId, yScaleId);
   		untrack(() => {
   			setup?.destroy();
-  			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			setup = null;
+  			// Don't create BaseMarkSetup until scale type inference has resolved.
+  			if (table && effectiveXScaleType && effectiveYScaleType) {
+  				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			}
   		});
   	});
   
@@ -11102,6 +11262,8 @@
   	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
   	import { Dots } from '../rendering/index.js';
   	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { inferScaleType } from '$lib/scales/scale-inference.js';
+  	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
   	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
   
   	let {
@@ -11115,8 +11277,8 @@
   		radius = 3,
   		limit,
   		filterNulls = false,
-  		preferredXScaleType = 'linear',
-  		preferredYScaleType = 'linear',
+  		preferredXScaleType = null,
+  		preferredYScaleType = null,
   		transforms = []
   	} = $props();
   
@@ -11125,7 +11287,37 @@
   	const chartContext = getContext('chart');
   	const scaleRegistry = getContext('scale-registry');
   
+  	// Ensure services are ready before inference (idempotent)
+  	BaseMarkSetup.ensureServices(coordinator);
+  
   	let setup = $state(null);
+  
+  	// 0. Scale Type Inference
+  	// When preferredXScaleType/preferredYScaleType is null, infer from column schema.
+  	// Returns null while schema is loading (gates downstream registration).
+  	const effectiveXScaleType = $derived.by(() => {
+  		if (preferredXScaleType != null) return preferredXScaleType;
+  		if (!x || typeof x !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, x);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field: x, schemaType: colType, context: 'axis' });
+  	});
+  
+  	const effectiveYScaleType = $derived.by(() => {
+  		if (preferredYScaleType != null) return preferredYScaleType;
+  		if (!y || typeof y !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, y);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field: y, schemaType: colType, context: 'axis' });
+  	});
   
   	// 1. Color Logic
   	const markColor = new MarkColor(
@@ -11145,8 +11337,12 @@
   			y: ['linear', 'identity', 'band', 'point', 'time', 'log']
   		},
   		scaleRequirements: {
-  			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
-  			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  			x: effectiveXScaleType
+  				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+  				: null,
+  			y: effectiveYScaleType
+  				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  				: null
   		},
   		inferredScaleColumns: {
   			x: x, // X scale uses x column
@@ -11252,7 +11448,14 @@
   		(void config, xScaleId, yScaleId);
   		untrack(() => {
   			setup?.destroy();
-  			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			setup = null;
+  			// Don't create BaseMarkSetup until scale type inference has resolved.
+  			// When effectiveXScaleType or effectiveYScaleType is null (schema pending),
+  			// config.scaleRequirements will have null entries — skip creation to avoid
+  			// a throwaway instance that gets immediately destroyed when schema arrives.
+  			if (table && effectiveXScaleType && effectiveYScaleType) {
+  				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			}
   		});
   	});
   
@@ -11497,6 +11700,7 @@
   import { resolveChannel } from './channel-resolution.js';
   import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
   import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+  import { inferScaleType } from '$lib/scales/scale-inference.js';
   
   export class MarkColor {
   	#colorProp;
@@ -11598,38 +11802,28 @@
   	// --- Internal Logic ---
   
   	/**
-  	 * Explicitly resolve the scale type based on the field definition.
-  	 * Priority:
-  	 * 1. Aggregates (avg, sum, count, etc.) -> 'sequential'
-  	 * 2. Bins (bin(), AutoBinNode) -> 'sequential'
-  	 * 3. Schema-based inference for raw columns -> 'sequential' (numeric/date) or 'ordinal' (string)
-  	 * 4. Default fallback -> 'ordinal'
+  	 * Resolve the color scale type based on the field definition.
+  	 * Delegates to the shared inferScaleType() for schema-based inference.
   	 *
+  	 * For SQL nodes that aren't aggregates/bins, falls back to 'ordinal' (safe for color).
   	 * Returns null if schema info is needed but not yet available (blocking).
   	 */
   	#resolveScaleType(field) {
-  		// Priority 1: SQL expression nodes (aggregates, bins)
+  		// SQL expression nodes: aggregates and bins are always sequential
   		if (isNode(field)) {
-  			// e.g. avg(delay), count(), sum(sales)
   			if (isAggregateExpression(field)) return 'sequential';
-  			// e.g. bin(age) - technically ordinal bins, but usually treated sequentially in colormaps
   			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
+  			// Other SQL nodes: can't look up in schema, safe fallback for color
+  			return 'ordinal';
   		}
   
-  		// Priority 2: Schema-based inference for raw column names
+  		// Raw column names: use shared inference with 'visual' context
   		if (typeof field === 'string') {
   			const table = this.#tableProp();
   			if (table) {
-  				const columnType = tableSchemaService.getColumnType(table, field);
-  
-  				if (columnType === 'number' || columnType === 'date') {
-  					return 'sequential';
-  				}
-  				if (columnType === 'string' || columnType === 'boolean') {
-  					return 'ordinal';
-  				}
-  				// columnType is null → schema not ready, return null to block
-  				return null;
+  				const colType = tableSchemaService.getColumnType(table, field);
+  				if (!colType) return null; // Schema not ready — block
+  				return inferScaleType({ field, schemaType: colType, context: 'visual' });
   			}
   		}
   
@@ -12485,6 +12679,15 @@
   	 */
   	static bandIndexColumn(field) {
   		return `__dplot_${field}_idx`;
+  	}
+  
+  	/**
+  	 * Build the column alias for a time offset column.
+  	 * @param {string} field - The source field name
+  	 * @returns {string}
+  	 */
+  	static timeOffsetColumn(field) {
+  		return `__dplot_${field}_time_offset`;
   	}
   
   	// =========================================================================

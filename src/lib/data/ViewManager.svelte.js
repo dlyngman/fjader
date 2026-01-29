@@ -283,6 +283,15 @@ class ViewManagerService {
 		return `__dplot_${field}_idx`;
 	}
 
+	/**
+	 * Build the column alias for a time offset column.
+	 * @param {string} field - The source field name
+	 * @returns {string}
+	 */
+	static timeOffsetColumn(field) {
+		return `__dplot_${field}_time_offset`;
+	}
+
 	// =========================================================================
 	// PRIVATE METHODS
 	// =========================================================================

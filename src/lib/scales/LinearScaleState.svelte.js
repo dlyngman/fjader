@@ -646,6 +646,20 @@ export class LinearScaleState {
 	}
 
 	// ===========================================================================
+	// PROTECTED METHODS (for subclass access)
+	// ===========================================================================
+
+	/**
+	 * Set the extent values directly. Used by TimeScaleState for time-aware nice rounding.
+	 * @param {number} min
+	 * @param {number} max
+	 */
+	_setExtent(min, max) {
+		this.#extent[0] = min;
+		this.#extent[1] = max;
+	}
+
+	// ===========================================================================
 	// CLEANUP
 	// ===========================================================================
 

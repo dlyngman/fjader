@@ -24,6 +24,7 @@ export class BaseMarkSetup {
 	categoricalDataFetched = $state(false);
 
 	// --- Setup Progress ---
+	#scaleRequirementsRegistered = $state(false);
 	#scaleStatesReady = $state(false);
 	#scaleMappingsReady = $state(false);
 	#clientCreated = $state(false);
@@ -51,6 +52,18 @@ export class BaseMarkSetup {
 	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
 	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
 
+	/**
+	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
+	 * Call this before inference so schema lookups can proceed.
+	 * Idempotent — safe to call multiple times.
+	 */
+	static ensureServices(coordinator) {
+		if (coordinator) {
+			viewManager.setCoordinator(coordinator);
+			tableSchemaService.setCoordinator(coordinator);
+		}
+	}
+
 	constructor(config, coordinator, chartContext, stableId = null) {
 		console.log('🔧 BaseMarkSetup constructor:', {
 			markType: config.markType,
@@ -63,12 +76,8 @@ export class BaseMarkSetup {
 		this.#chartContext = chartContext;
 		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
 
-		// Ensure services have coordinator (idempotent, pragmatic initialization)
-		// TODO: Could be moved to app-level initialization where coordinator is created
-		if (coordinator) {
-			viewManager.setCoordinator(coordinator);
-			tableSchemaService.setCoordinator(coordinator);
-		}
+		// Ensure services have coordinator (idempotent)
+		BaseMarkSetup.ensureServices(coordinator);
 
 		// NEW: Create transform compiler
 		this.#transformCompiler = new TransformCompiler(config.transforms || []);
@@ -157,7 +166,10 @@ export class BaseMarkSetup {
 
 	#setupReactiveEffects() {
 		// Effect 1: Wait for scale objects
+		// Gated on #scaleRequirementsRegistered — when inference is pending (null types),
+		// the entire effect chain is blocked until the mark is recreated with resolved types.
 		$effect(() => {
+			if (!this.#scaleRequirementsRegistered) return;
 			const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
 			if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
 				this.#scaleStatesReady = true;
@@ -299,6 +311,13 @@ export class BaseMarkSetup {
 				inferredScaleColumns?.y
 			);
 		}
+
+		// Gate: both axes must have resolved types before the effect chain proceeds.
+		// When inference is pending (null scaleRequirements), this stays false,
+		// preventing premature DataClient creation and domain queries.
+		this.#scaleRequirementsRegistered = !!(
+			scaleRequirements?.x?.type && scaleRequirements?.y?.type
+		);
 	}
 
 	get actualXScaleType() {
@@ -510,6 +529,24 @@ export class BaseMarkSetup {
 			}
 		}
 
+		// For time scales, use the offset column name from ViewManager
+		if (this.actualXScaleType === 'time') {
+			const xScale = this.#chartContext.xScaleState;
+			if (xScale?.offsetColumnName && hasView) {
+				const originalField = select.x;
+				select.x = xScale.offsetColumnName;
+				console.log(`[BaseMarkSetup] Swapping x (time): ${originalField} → ${select.x}`);
+			}
+		}
+		if (this.actualYScaleType === 'time') {
+			const yScale = this.#chartContext.yScaleState;
+			if (yScale?.offsetColumnName && hasView) {
+				const originalField = select.y;
+				select.y = yScale.offsetColumnName;
+				console.log(`[BaseMarkSetup] Swapping y (time): ${originalField} → ${select.y}`);
+			}
+		}
+
 		// For color scales, use the indexed column name
 		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
 			const originalField = select.color;
@@ -652,13 +689,19 @@ export class BaseMarkSetup {
 			y: this.#chartContext.yScaleState
 		};
 
-		// Register table with band scales for ViewManager integration
+		// Register table with band/time scales for ViewManager integration
 		// This must happen BEFORE categorical domain fetch so views can be created
 		const table = this.#config.table;
 		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
 			this.#chartContext.xScaleState?.registerTable?.(table);
 		}
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+			this.#chartContext.yScaleState?.registerTable?.(table);
+		}
+		if (this.actualXScaleType === 'time') {
+			this.#chartContext.xScaleState?.registerTable?.(table);
+		}
+		if (this.actualYScaleType === 'time') {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
 
@@ -696,7 +739,9 @@ export class BaseMarkSetup {
 			const scaleType =
 				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
 
-			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
+			// not from fieldInfo (which would return values from the offset column)
+			if (scaleType === 'linear' || scaleType === 'log') {
 				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
 				processedFields.add(fieldValue.toString());
 			}
@@ -714,7 +759,8 @@ export class BaseMarkSetup {
 
 			const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
 
-			if (scaleType === 'linear' || scaleType === 'time' || scaleType === 'log') {
+			// Time scales get their domain from sidecar query, skip fieldInfo path
+			if (scaleType === 'linear' || scaleType === 'log') {
 				const fieldValue = this.#config.select[alias];
 
 				// Skip AutoBinNodes - they handle their own stats
@@ -877,6 +923,35 @@ export class BaseMarkSetup {
 		}
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
 			setupFetch('y', this.#config.select.y);
+		}
+
+		// Time scale sidecar queries: fetch MIN/MAX datetime for offset computation
+		const setupTimeFetch = (axis, field) => {
+			if (!field) return;
+			const scaleState = this.#chartContext[`${axis}ScaleState`];
+			if (!scaleState?.addDatetimeExtent) return;
+
+			const q = Query.from(table).select({
+				min_time: min(sqlColumn(String(field))),
+				max_time: max(sqlColumn(String(field)))
+			});
+
+			fetches.push(
+				this.#coordinator.query(q).then((result) => {
+					const row = Array.from(result)[0];
+					if (row && row.min_time != null && row.max_time != null) {
+						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [row.min_time, row.max_time]);
+						scaleState.addDatetimeExtent([row.min_time, row.max_time], this.#markId);
+					}
+				})
+			);
+		};
+
+		if (this.actualXScaleType === 'time') {
+			setupTimeFetch('x', this.#config.select.x);
+		}
+		if (this.actualYScaleType === 'time') {
+			setupTimeFetch('y', this.#config.select.y);
 		}
 
 		// Fetch color domain if color scale is set and there's a color field
@@ -1057,8 +1132,9 @@ export class BaseMarkSetup {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
 
-			// For categorical scales (band/point), mark ready immediately
-			if (scaleType === 'band' || scaleType === 'point') {
+			// For categorical scales (band/point) and time scales, mark ready immediately
+			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
+			if (scaleType === 'band' || scaleType === 'point' || scaleType === 'time') {
 				scale.setReady?.();
 				continue;
 			}

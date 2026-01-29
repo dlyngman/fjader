@@ -58,26 +58,27 @@ export class ChartScales {
 			const xConfig = this.scaleConfigurations.x;
 			const yConfig = this.scaleConfigurations.y;
 
-			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
-			const xKey = xLabel || xConfig?.columnName || 'x';
-			const yKey = yLabel || yConfig?.columnName || 'y';
+			// Wait for at least one mark to register on each axis.
+			// When scale inference is pending, configurations are null.
+			if (!xConfig || !yConfig) return;
 
-			// TODO move outside effect?
-			// const scaleRegistry = getContext('scale-registry');
+			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
+			const xKey = xLabel || xConfig.columnName || 'x';
+			const yKey = yLabel || yConfig.columnName || 'y';
 
 			// Get what scales SHOULD be
 
 			const neededXScale = this.#scaleRegistry.getOrCreateScale(
 				xKey,
-				xConfig?.type || 'linear',
-				xConfig?.config || {},
+				xConfig.type,
+				xConfig.config || {},
 				this.chartId
 			);
 
 			const neededYScale = this.#scaleRegistry.getOrCreateScale(
 				yKey,
-				yConfig?.type || 'linear',
-				yConfig?.config || {},
+				yConfig.type,
+				yConfig.config || {},
 				this.chartId
 			);
 
@@ -298,15 +299,21 @@ export class ChartScales {
 		if (this.#yScaleInstance) this.#yScaleInstance.currentDataPoint = null;
 	};
 
+	/** Check if axis has a continuous scale that supports pan/zoom/hover. */
+	#isContinuous(axis) {
+		const type = this.scaleTypes?.[axis];
+		return type === 'linear' || type === 'time';
+	}
+
 	updateCurrentDataPoints = (innerPoint) => {
-		if (this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (this.#isContinuous('y') && this.#yScaleInstance) {
 			this.#yScaleInstance.currentDataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
 				this.layout.innerHeight,
 				true // isYAxis
 			);
 		}
-		if (this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (this.#isContinuous('x') && this.#xScaleInstance) {
 			this.#xScaleInstance.currentDataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
 				this.layout.innerWidth,
@@ -316,16 +323,16 @@ export class ChartScales {
 	};
 
 	resetZoom = (resetX = true, resetY = true) => {
-		if (resetX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (resetX && this.#isContinuous('x') && this.#xScaleInstance) {
 			this.#xScaleInstance.resetZoom();
 		}
-		if (resetY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (resetY && this.#isContinuous('y') && this.#yScaleInstance) {
 			this.#yScaleInstance.resetZoom();
 		}
 	};
 
 	accumulateZoom = (innerPoint, scaleFactor, doX, doY) => {
-		if (doX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
 			const dataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
 				this.layout.innerWidth,
@@ -333,7 +340,7 @@ export class ChartScales {
 			);
 			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 		}
-		if (doY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
 			const dataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
 				this.layout.innerHeight,
@@ -344,7 +351,7 @@ export class ChartScales {
 	};
 
 	applyZoom = (innerPoint, scaleFactor, doX, doY) => {
-		if (doX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
 			const dataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
 				this.layout.innerWidth,
@@ -353,7 +360,7 @@ export class ChartScales {
 			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', this.layout.innerWidth);
 		}
-		if (doY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
 			const dataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
 				this.layout.innerHeight,
@@ -369,7 +376,7 @@ export class ChartScales {
 		this.activePanY = activePanY;
 
 		// X Axis Setup
-		if (activePanX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
 			const currentDomain = this.#xScaleInstance.domain.current;
 
 			this._xPanContext.initialScreenPos = x;
@@ -385,7 +392,7 @@ export class ChartScales {
 		}
 
 		// Y Axis Setup
-		if (activePanY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
 			const currentDomain = this.#yScaleInstance.domain.current;
 
 			this._yPanContext.initialScreenPos = y;
@@ -405,19 +412,19 @@ export class ChartScales {
 		this.activePanX = false;
 		this.activePanY = false;
 
-		if (this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (this.#isContinuous('x') && this.#xScaleInstance) {
 			this.#xScaleInstance.endPan();
 		}
-		if (this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (this.#isContinuous('y') && this.#yScaleInstance) {
 			this.#yScaleInstance.endPan();
 		}
 	};
 
 	updatePanPosition = (screenX, screenY) => {
-		if (this.activePanX && this.scaleTypes?.x === 'linear' && this.#xScaleInstance) {
+		if (this.activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
 			this.#xScaleInstance.updatePanPosition(screenX, 0);
 		}
-		if (this.activePanY && this.scaleTypes?.y === 'linear' && this.#yScaleInstance) {
+		if (this.activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
 			this.#yScaleInstance.updatePanPosition(0, screenY);
 		}
 	};
