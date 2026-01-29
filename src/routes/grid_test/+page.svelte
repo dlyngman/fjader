@@ -5,10 +5,11 @@
 	import { onMount, setContext } from 'svelte';
 	import {
 		ChartContainer,
-		// Frame,
+		Frame,
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
+		Crosshair,
 		WebGPUCanvas,
 		DotsMark
 	} from '$lib/components';
@@ -50,8 +51,10 @@
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="Bill Length (mm)" yLabel="Bill Depth (mm)">
 					{#snippet background()}
-						<!-- <Frame /> -->
+						<Frame />
 						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
 					{/snippet}
 
 					{#snippet canvas()}
@@ -76,6 +79,7 @@
 					{#snippet foreground()}
 						<!-- <AxisLeft /> -->
 						<!-- <AxisBottom /> -->
+						<Crosshair />
 					{/snippet}
 				</ChartContainer>
 			</div>

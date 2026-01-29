@@ -3,6 +3,8 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Lines } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+	import { inferScaleType } from '$lib/scales/scale-inference.js';
+	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import {
 		buildSelectFromChannels,
 		resolveChannel,
@@ -23,8 +25,8 @@
 		miterLimit = 4, // Max miter length to prevent spikes
 		limit,
 		filterNulls = false,
-		preferredXScaleType = 'linear',
-		preferredYScaleType = 'linear',
+		preferredXScaleType = null,
+		preferredYScaleType = null,
 		transforms = []
 	} = $props();
 
@@ -33,7 +35,35 @@
 	const chartContext = getContext('chart');
 	const scaleRegistry = getContext('scale-registry');
 
+	// Ensure services are ready before inference (idempotent)
+	BaseMarkSetup.ensureServices(coordinator);
+
 	let setup = $state(null);
+
+	// 0. Scale Type Inference
+	const effectiveXScaleType = $derived.by(() => {
+		if (preferredXScaleType != null) return preferredXScaleType;
+		if (!x || typeof x !== 'string') return 'linear';
+		const _v = tableSchemaService.version;
+		const colType = tableSchemaService.getColumnType(table, x);
+		if (!colType) {
+			tableSchemaService.getSchema(table);
+			return null;
+		}
+		return inferScaleType({ field: x, schemaType: colType, context: 'axis' });
+	});
+
+	const effectiveYScaleType = $derived.by(() => {
+		if (preferredYScaleType != null) return preferredYScaleType;
+		if (!y || typeof y !== 'string') return 'linear';
+		const _v = tableSchemaService.version;
+		const colType = tableSchemaService.getColumnType(table, y);
+		if (!colType) {
+			tableSchemaService.getSchema(table);
+			return null;
+		}
+		return inferScaleType({ field: y, schemaType: colType, context: 'axis' });
+	});
 
 	// Series grouping - uses scale infrastructure for categorical → index mapping
 	const markSeries = new MarkSeries(
@@ -63,8 +93,12 @@
 			y: ['linear', 'time', 'log']
 		},
 		scaleRequirements: {
-			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
-			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+			x: effectiveXScaleType
+				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+				: null,
+			y: effectiveYScaleType
+				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+				: null
 		},
 		inferredScaleColumns: {
 			x: x,
@@ -132,7 +166,11 @@
 		(void config, xScaleId, yScaleId);
 		untrack(() => {
 			setup?.destroy();
-			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			setup = null;
+			// Don't create BaseMarkSetup until scale type inference has resolved.
+			if (table && effectiveXScaleType && effectiveYScaleType) {
+				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			}
 		});
 	});
 

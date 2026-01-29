@@ -8,7 +8,7 @@
 		ChartContainer,
 		ColumnSelector,
 		Grid,
-		// Frame,
+		Frame,
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
@@ -26,10 +26,10 @@
 		<ChartContainer xLabel={'delay'} yLabel={'time'}>
 			{#snippet background()}
 				<!-- <Grid /> -->
-				<!-- <Frame /> -->
-				<!-- <AxisLeft /> -->
-				<!-- <AxisBottom /> -->
-				<!-- <MarginLabel /> -->
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
 			{/snippet}
 
 			{#snippet canvas()}

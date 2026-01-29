@@ -3,6 +3,7 @@ import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
 import { resolveChannel } from './channel-resolution.js';
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+import { inferScaleType } from '$lib/scales/scale-inference.js';
 
 export class MarkColor {
 	#colorProp;
@@ -104,38 +105,28 @@ export class MarkColor {
 	// --- Internal Logic ---
 
 	/**
-	 * Explicitly resolve the scale type based on the field definition.
-	 * Priority:
-	 * 1. Aggregates (avg, sum, count, etc.) -> 'sequential'
-	 * 2. Bins (bin(), AutoBinNode) -> 'sequential'
-	 * 3. Schema-based inference for raw columns -> 'sequential' (numeric/date) or 'ordinal' (string)
-	 * 4. Default fallback -> 'ordinal'
+	 * Resolve the color scale type based on the field definition.
+	 * Delegates to the shared inferScaleType() for schema-based inference.
 	 *
+	 * For SQL nodes that aren't aggregates/bins, falls back to 'ordinal' (safe for color).
 	 * Returns null if schema info is needed but not yet available (blocking).
 	 */
 	#resolveScaleType(field) {
-		// Priority 1: SQL expression nodes (aggregates, bins)
+		// SQL expression nodes: aggregates and bins are always sequential
 		if (isNode(field)) {
-			// e.g. avg(delay), count(), sum(sales)
 			if (isAggregateExpression(field)) return 'sequential';
-			// e.g. bin(age) - technically ordinal bins, but usually treated sequentially in colormaps
 			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
+			// Other SQL nodes: can't look up in schema, safe fallback for color
+			return 'ordinal';
 		}
 
-		// Priority 2: Schema-based inference for raw column names
+		// Raw column names: use shared inference with 'visual' context
 		if (typeof field === 'string') {
 			const table = this.#tableProp();
 			if (table) {
-				const columnType = tableSchemaService.getColumnType(table, field);
-
-				if (columnType === 'number' || columnType === 'date') {
-					return 'sequential';
-				}
-				if (columnType === 'string' || columnType === 'boolean') {
-					return 'ordinal';
-				}
-				// columnType is null → schema not ready, return null to block
-				return null;
+				const colType = tableSchemaService.getColumnType(table, field);
+				if (!colType) return null; // Schema not ready — block
+				return inferScaleType({ field, schemaType: colType, context: 'visual' });
 			}
 		}
 

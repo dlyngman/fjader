@@ -24,6 +24,7 @@ export class BaseMarkSetup {
 	categoricalDataFetched = $state(false);
 
 	// --- Setup Progress ---
+	#scaleRequirementsRegistered = $state(false);
 	#scaleStatesReady = $state(false);
 	#scaleMappingsReady = $state(false);
 	#clientCreated = $state(false);
@@ -51,6 +52,18 @@ export class BaseMarkSetup {
 	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
 	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
 
+	/**
+	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
+	 * Call this before inference so schema lookups can proceed.
+	 * Idempotent — safe to call multiple times.
+	 */
+	static ensureServices(coordinator) {
+		if (coordinator) {
+			viewManager.setCoordinator(coordinator);
+			tableSchemaService.setCoordinator(coordinator);
+		}
+	}
+
 	constructor(config, coordinator, chartContext, stableId = null) {
 		console.log('🔧 BaseMarkSetup constructor:', {
 			markType: config.markType,
@@ -63,12 +76,8 @@ export class BaseMarkSetup {
 		this.#chartContext = chartContext;
 		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
 
-		// Ensure services have coordinator (idempotent, pragmatic initialization)
-		// TODO: Could be moved to app-level initialization where coordinator is created
-		if (coordinator) {
-			viewManager.setCoordinator(coordinator);
-			tableSchemaService.setCoordinator(coordinator);
-		}
+		// Ensure services have coordinator (idempotent)
+		BaseMarkSetup.ensureServices(coordinator);
 
 		// NEW: Create transform compiler
 		this.#transformCompiler = new TransformCompiler(config.transforms || []);
@@ -157,7 +166,10 @@ export class BaseMarkSetup {
 
 	#setupReactiveEffects() {
 		// Effect 1: Wait for scale objects
+		// Gated on #scaleRequirementsRegistered — when inference is pending (null types),
+		// the entire effect chain is blocked until the mark is recreated with resolved types.
 		$effect(() => {
+			if (!this.#scaleRequirementsRegistered) return;
 			const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
 			if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
 				this.#scaleStatesReady = true;
@@ -299,6 +311,13 @@ export class BaseMarkSetup {
 				inferredScaleColumns?.y
 			);
 		}
+
+		// Gate: both axes must have resolved types before the effect chain proceeds.
+		// When inference is pending (null scaleRequirements), this stays false,
+		// preventing premature DataClient creation and domain queries.
+		this.#scaleRequirementsRegistered = !!(
+			scaleRequirements?.x?.type && scaleRequirements?.y?.type
+		);
 	}
 
 	get actualXScaleType() {
@@ -921,10 +940,7 @@ export class BaseMarkSetup {
 				this.#coordinator.query(q).then((result) => {
 					const row = Array.from(result)[0];
 					if (row && row.min_time != null && row.max_time != null) {
-						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [
-							row.min_time,
-							row.max_time
-						]);
+						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [row.min_time, row.max_time]);
 						scaleState.addDatetimeExtent([row.min_time, row.max_time], this.#markId);
 					}
 				})

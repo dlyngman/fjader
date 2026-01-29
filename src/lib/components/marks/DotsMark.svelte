@@ -3,6 +3,8 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Dots } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+	import { inferScaleType } from '$lib/scales/scale-inference.js';
+	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
 
 	let {
@@ -16,8 +18,8 @@
 		radius = 3,
 		limit,
 		filterNulls = false,
-		preferredXScaleType = 'linear',
-		preferredYScaleType = 'linear',
+		preferredXScaleType = null,
+		preferredYScaleType = null,
 		transforms = []
 	} = $props();
 
@@ -26,7 +28,37 @@
 	const chartContext = getContext('chart');
 	const scaleRegistry = getContext('scale-registry');
 
+	// Ensure services are ready before inference (idempotent)
+	BaseMarkSetup.ensureServices(coordinator);
+
 	let setup = $state(null);
+
+	// 0. Scale Type Inference
+	// When preferredXScaleType/preferredYScaleType is null, infer from column schema.
+	// Returns null while schema is loading (gates downstream registration).
+	const effectiveXScaleType = $derived.by(() => {
+		if (preferredXScaleType != null) return preferredXScaleType;
+		if (!x || typeof x !== 'string') return 'linear';
+		const _v = tableSchemaService.version;
+		const colType = tableSchemaService.getColumnType(table, x);
+		if (!colType) {
+			tableSchemaService.getSchema(table);
+			return null;
+		}
+		return inferScaleType({ field: x, schemaType: colType, context: 'axis' });
+	});
+
+	const effectiveYScaleType = $derived.by(() => {
+		if (preferredYScaleType != null) return preferredYScaleType;
+		if (!y || typeof y !== 'string') return 'linear';
+		const _v = tableSchemaService.version;
+		const colType = tableSchemaService.getColumnType(table, y);
+		if (!colType) {
+			tableSchemaService.getSchema(table);
+			return null;
+		}
+		return inferScaleType({ field: y, schemaType: colType, context: 'axis' });
+	});
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
@@ -46,8 +78,12 @@
 			y: ['linear', 'identity', 'band', 'point', 'time', 'log']
 		},
 		scaleRequirements: {
-			x: { type: preferredXScaleType, priority: SCALE_PRIORITIES.PREFER },
-			y: { type: preferredYScaleType, priority: SCALE_PRIORITIES.PREFER }
+			x: effectiveXScaleType
+				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+				: null,
+			y: effectiveYScaleType
+				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+				: null
 		},
 		inferredScaleColumns: {
 			x: x, // X scale uses x column
@@ -153,7 +189,14 @@
 		(void config, xScaleId, yScaleId);
 		untrack(() => {
 			setup?.destroy();
-			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			setup = null;
+			// Don't create BaseMarkSetup until scale type inference has resolved.
+			// When effectiveXScaleType or effectiveYScaleType is null (schema pending),
+			// config.scaleRequirements will have null entries — skip creation to avoid
+			// a throwaway instance that gets immediately destroyed when schema arrives.
+			if (table && effectiveXScaleType && effectiveYScaleType) {
+				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			}
 		});
 	});
 

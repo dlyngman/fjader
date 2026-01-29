@@ -33,8 +33,7 @@
 							y="value"
 							color="sensor"
 							alpha={0.6}
-							radius={4}
-							preferredXScaleType="time"
+							radius={5}
 						/>
 					{/snippet}
 				</WebGPUCanvas>

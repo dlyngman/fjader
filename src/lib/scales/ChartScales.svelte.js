@@ -58,26 +58,27 @@ export class ChartScales {
 			const xConfig = this.scaleConfigurations.x;
 			const yConfig = this.scaleConfigurations.y;
 
-			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
-			const xKey = xLabel || xConfig?.columnName || 'x';
-			const yKey = yLabel || yConfig?.columnName || 'y';
+			// Wait for at least one mark to register on each axis.
+			// When scale inference is pending, configurations are null.
+			if (!xConfig || !yConfig) return;
 
-			// TODO move outside effect?
-			// const scaleRegistry = getContext('scale-registry');
+			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
+			const xKey = xLabel || xConfig.columnName || 'x';
+			const yKey = yLabel || yConfig.columnName || 'y';
 
 			// Get what scales SHOULD be
 
 			const neededXScale = this.#scaleRegistry.getOrCreateScale(
 				xKey,
-				xConfig?.type || 'linear',
-				xConfig?.config || {},
+				xConfig.type,
+				xConfig.config || {},
 				this.chartId
 			);
 
 			const neededYScale = this.#scaleRegistry.getOrCreateScale(
 				yKey,
-				yConfig?.type || 'linear',
-				yConfig?.config || {},
+				yConfig.type,
+				yConfig.config || {},
 				this.chartId
 			);
 
