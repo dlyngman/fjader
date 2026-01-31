@@ -14,7 +14,7 @@
 	const ticks = $derived(
 		isTimeScale && c.xScaleState?.getTicks
 			? c.xScaleState.getTicks(ticksNumber)
-			: c.xScale?.ticks(ticksNumber) ?? []
+			: (c.xScale?.ticks(ticksNumber) ?? [])
 	);
 	const tickFormatter = $derived(
 		isTimeScale && c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : format('~s')

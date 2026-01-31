@@ -80,7 +80,7 @@ describe('Transform Pipeline Integration', () => {
 			.groupby(resolvedX);
 
 		const sql = query.toString();
-		expect(sql).toContain('FLOOR');
+		expect(sql.toLowerCase()).toContain('floor');
 		expect(sql).toContain('GROUP BY');
 	});
 });

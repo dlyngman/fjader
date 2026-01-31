@@ -53,7 +53,7 @@
 	const quadVertexCount = 6; // 2 triangles per segment
 
 	// Line shader with miter joins and series boundary detection
-  const linesShaderCode = `
+	const linesShaderCode = `
   struct MarkConstants {
     strokeWidth: f32,
     miterLimit: f32,
