@@ -82,6 +82,24 @@ export class TimeScaleState extends LinearScaleState {
 	}
 
 	/**
+	 * Register a mark's extent using offset values (seconds from t0).
+	 * Useful when data is already in offset form (e.g., from binned queries).
+	 * Converts offsets back to datetimes and delegates to addDatetimeExtent.
+	 *
+	 * @param {[number, number]} offsetRange - [minOffset, maxOffset] in seconds from t0
+	 * @param {string} markId - Mark identifier
+	 */
+	addOffsetExtent(offsetRange, markId) {
+		if (!this.#t0) {
+			console.warn(`[TimeScaleState] Cannot add offset extent: t0 not set yet`);
+			return;
+		}
+		const minDate = this.offsetToDate(offsetRange[0]);
+		const maxDate = this.offsetToDate(offsetRange[1]);
+		this.addDatetimeExtent([minDate, maxDate], markId);
+	}
+
+	/**
 	 * Remove a mark's datetime extent.
 	 * @param {string} markId
 	 */
@@ -124,10 +142,8 @@ export class TimeScaleState extends LinearScaleState {
 				.domain([new Date(allMinMs), new Date(allMaxMs)])
 				.nice();
 			const [niceMin, niceMax] = niceScale.domain();
-			const niceMinOffset =
-				(niceMin.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
-			const niceMaxOffset =
-				(niceMax.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
+			const niceMinOffset = (niceMin.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
+			const niceMaxOffset = (niceMax.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
 			this._setExtent(niceMinOffset, niceMaxOffset);
 		} else {
 			const minOffset = (allMinMs - this.#t0.getTime()) / (this.#unit * 1000);
@@ -195,6 +211,31 @@ export class TimeScaleState extends LinearScaleState {
 		}
 		this.#registeredTables.clear();
 		this.#viewsCreated.clear();
+	}
+
+	// ===========================================================================
+	// CONVERSION UTILITIES
+	// ===========================================================================
+
+	/**
+	 * Convert an offset (seconds from t0) to a Date object.
+	 * @param {number} offset - Offset in seconds from t0
+	 * @returns {Date|null} Date object or null if t0 not set
+	 */
+	offsetToDate(offset) {
+		if (!this.#t0) return null;
+		return new Date(this.#t0.getTime() + offset * this.#unit * 1000);
+	}
+
+	/**
+	 * Convert a Date object to an offset (seconds from t0).
+	 * @param {Date} date - Date object
+	 * @returns {number|null} Offset in seconds or null if t0 not set
+	 */
+	dateToOffset(date) {
+		if (!this.#t0) return null;
+		const dateMs = toDate(date).getTime();
+		return (dateMs - this.#t0.getTime()) / (this.#unit * 1000);
 	}
 
 	// ===========================================================================

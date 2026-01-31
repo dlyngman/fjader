@@ -24,6 +24,7 @@ file_list = [
     'src/lib/components/charts/ChartContainer.svelte',
     'src/lib/components/rendering/*',
     'src/lib/components/marks/*',
+    'src/lib/components/guides/*',
     # 'src/lib/components/marks/BaseMarkSetup.svelte.js',
     # 'src/lib/components/marks/DotsMark.svelte',
     # 'src/lib/components/marks/BarMarkX.svelte',

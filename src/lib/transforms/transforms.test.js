@@ -117,11 +117,12 @@ describe('Transforms', () => {
 			expect(result.isAutoBinNode).toBe(true);
 		});
 
-		it('creates explicit SQL for step', () => {
+		it('creates AutoBinNode for explicit step', () => {
 			const result = bin('age', { step: 5 });
 
-			expect(result.isAutoBinNode).toBeFalsy();
-			expect(result.toString()).toContain('FLOOR');
+			expect(result).toBeInstanceOf(AutoBinNode);
+			expect(result.isAutoBinNode).toBe(true);
+			expect(result.options.step).toBe(5);
 		});
 
 		it('resolves AutoBinNode with field stats', () => {
@@ -133,8 +134,25 @@ describe('Transforms', () => {
 
 			const resolved = autoBin.resolve(fieldInfo, 'linear');
 
-			// Should return a Mosaic SQL expression
-			expect(resolved.toString()).toContain('FLOOR');
+			// Should return a Mosaic SQL expression (binHistogram uses floor)
+			expect(resolved.toString().toLowerCase()).toContain('floor');
+		});
+
+		it('resolves explicit step with correct offset for extent', () => {
+			const autoBin = bin('age', { step: 5 });
+			const offset1 = autoBin.withOffset(1);
+
+			const fieldInfo = {
+				age: { min: 18, max: 75, type: 'number' }
+			};
+
+			const base = autoBin.resolve(fieldInfo, 'linear').toString();
+			const upper = offset1.resolve(fieldInfo, 'linear').toString();
+
+			// Both should use floor, but offset version should differ
+			expect(base.toLowerCase()).toContain('floor');
+			expect(upper.toLowerCase()).toContain('floor');
+			expect(base).not.toBe(upper);
 		});
 	});
 });

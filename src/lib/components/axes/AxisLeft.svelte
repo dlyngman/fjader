@@ -10,7 +10,7 @@
 	const continuousTicks = $derived(
 		isTimeScale && c.yScaleState?.getTicks
 			? c.yScaleState.getTicks(ticksNumber)
-			: c.yScale?.ticks(ticksNumber) ?? []
+			: (c.yScale?.ticks(ticksNumber) ?? [])
 	);
 	const tickFormatter = $derived(
 		isTimeScale && c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : format('~s')

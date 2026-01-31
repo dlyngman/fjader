@@ -8353,7 +8353,7 @@
   	const quadVertexCount = 6; // 2 triangles per segment
   
   	// Line shader with miter joins and series boundary detection
-    const linesShaderCode = `
+  	const linesShaderCode = `
     struct MarkConstants {
       strokeWidth: f32,
       miterLimit: f32,
@@ -9433,6 +9433,262 @@
   {@render canvasComponents?.()} -->
 </src/lib/components/rendering/Canvas.svelte>
 
+<src/lib/components/marks/RectXMark.svelte>
+  <script>
+  	import { getContext, onDestroy, untrack } from 'svelte';
+  	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  	import { Rects } from '../rendering/index.js';
+  	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { inferScaleType } from '$lib/scales/scale-inference.js';
+  	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+  	import { expandBinForExtent } from '$lib/sql/bin.js';
+  	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
+  
+  	let {
+  		table,
+  		selection,
+  		x,
+  		x1 = 0,
+  		x2 = x,
+  		y = null,
+  		y1: y1Prop = null,
+  		y2: y2Prop = null,
+  		color = null,
+  		scheme,
+  		alpha = 0.8,
+  		limit,
+  		filterNulls = false,
+  		preferredYScaleType = null,
+  		transforms = []
+  	} = $props();
+  
+  	const markId = `rectx-${crypto.randomUUID().slice(0, 8)}`;
+  	const coordinator = getContext('mosaic-coordinator');
+  	const chartContext = getContext('chart');
+  	const scaleRegistry = getContext('scale-registry');
+  
+  	// Ensure services are ready before inference (idempotent)
+  	BaseMarkSetup.ensureServices(coordinator);
+  
+  	let setup = $state(null);
+  
+  	// --- INTERNAL BIN EXPANSION ---
+  	// If user provides singular y (e.g. bin('field')), expand internally to y1/y2
+  	const expandedY = $derived.by(() => {
+  		if (y != null) return expandBinForExtent(y, 'y', 'rectX');
+  		return { y1: y1Prop, y2: y2Prop };
+  	});
+  	const ey1 = $derived(expandedY.y1);
+  	const ey2 = $derived(expandedY.y2);
+  
+  	// --- SCALE TYPE INFERENCE (DotsMark pattern) ---
+  	const effectiveYScaleType = $derived.by(() => {
+  		if (preferredYScaleType != null) return preferredYScaleType;
+  		const field = ey1;
+  		if (!field) return 'linear';
+  		// Unwrap AutoBinNode to get underlying column for schema lookup
+  		if (field.isAutoBinNode) {
+  			const colName = typeof field.field === 'string' ? field.field : null;
+  			if (!colName) return 'linear';
+  			const _v = tableSchemaService.version;
+  			const colType = tableSchemaService.getColumnType(table, colName);
+  			if (!colType) {
+  				tableSchemaService.getSchema(table);
+  				return null;
+  			}
+  			return inferScaleType({ field: colName, schemaType: colType, context: 'axis' });
+  		}
+  		if (typeof field !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, field);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field, schemaType: colType, context: 'axis' });
+  	});
+  
+  	// 1. Color Logic
+  	const markColor = new MarkColor(
+  		() => color,
+  		() => scheme,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
+  	);
+  
+  	// 2. Config
+  	const config = $derived({
+  		markType: 'rectx',
+  		supportedScaleTypes: {
+  			x: ['linear', 'identity'],
+  			y: ['linear', 'band', 'point', 'time', 'log']
+  		},
+  		scaleRequirements: {
+  			x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
+  			y: effectiveYScaleType
+  				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+  				: null
+  		},
+  		inferredScaleColumns: {
+  			x: x2,
+  			y: ey1
+  		},
+  		table,
+  		selection,
+  		transforms,
+  		select: buildSelectFromChannels({
+  			x1,
+  			x2,
+  			y1: ey1,
+  			y2: ey2,
+  			...(markColor.selectField && { color: markColor.selectField })
+  		}),
+  		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, ey1, ey2] : null }
+  	});
+  
+  	let xScaleId = $derived(chartContext.xScaleState?.id);
+  	let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+  	let instanceCount = $derived.by(() => {
+  		if (setup?.data?.length) return setup.data.length;
+  		if (Array.isArray(x2)) return x2.length;
+  		// @ts-ignore
+  		if (ArrayBuffer.isView(x2)) return x2.length;
+  		return 0;
+  	});
+  
+  	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
+  
+  	// --- DATA RESOLUTION ---
+  
+  	// X0: Stack Output -> x1 prop -> 0
+  	let x0Data = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: x1,
+  				channel: 'x1',
+  				tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0
+  			})
+  		)
+  	);
+  
+  	// X1: Stack Output -> x2 prop
+  	let x1Data = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: x2,
+  				channel: 'x2',
+  				tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
+  				dataAccessor: setup?.data,
+  				instanceCount
+  			})
+  		)
+  	);
+  
+  	// Y Data: Extent channels with band/linear branching
+  	let yData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y;
+  		if (scaleType === 'band' || scaleType === 'point') {
+  			// Categorical: resolve ey1 via processDataForGPU, same array for both extents
+  			const raw = resolveChannel({
+  				value: ey1,
+  				channel: 'y1',
+  				dataAccessor: setup?.data,
+  				instanceCount
+  			});
+  			if (!raw) return null;
+  			if (!chartContext.yScaleState?.processDataForGPU) return null;
+  			const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
+  			const arr = toFloat32(indices);
+  			return { y0Data: arr, y1Data: arr };
+  		}
+  
+  		// Continuous: resolve y1 and y2 separately
+  		const rawY1 = resolveChannel({
+  			value: ey1,
+  			channel: 'y1',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		const rawY2 = resolveChannel({
+  			value: ey2,
+  			channel: 'y2',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		if (!rawY1 || !rawY2) return null;
+  		return { y0Data: toFloat32(rawY1), y1Data: toFloat32(rawY2) };
+  	});
+  
+  	let y0Data = $derived(yData?.y0Data);
+  	let y1Data = $derived(yData?.y1Data);
+  
+  	let alphaData = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: alpha,
+  				channel: 'alpha',
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0.8
+  			})
+  		)
+  	);
+  
+  	// --- SETUP LIFECYCLE ---
+  
+  	$effect(() => {
+  		(void config, xScaleId, yScaleId, transforms, markColor.selectField);
+  		untrack(() => {
+  			setup?.destroy();
+  			setup = null;
+  			// Gate on effectiveYScaleType (blocks while schema loads)
+  			if (table && effectiveYScaleType) {
+  				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			}
+  		});
+  	});
+  
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
+  </script>
+  
+  {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
+  	<Rects
+  		{x0Data}
+  		{x1Data}
+  		{y0Data}
+  		{y1Data}
+  		colorValueData={markColor.data}
+  		{alphaData}
+  		colorMode={markColor.colorMode}
+  		colorScaleIndex={markColor.colorScaleIndex}
+  		constantColor={markColor.constantColor}
+  		dataVersion={setup?.client?.dataVersion || 0}
+  	/>
+  {:else if setup?.client?.error}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+  		>Error: {setup.client.error.message}</text
+  	>
+  {:else if setup?.client?.delayedLoading}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Loading data...</text
+  	>
+  {:else}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Initializing rects...</text
+  	>
+  {/if}
+</src/lib/components/marks/RectXMark.svelte>
+
 <src/lib/components/marks/BaseMarkSetup.svelte.js>
   // src/lib/components/marks/BaseMarkSetup.svelte.js
   
@@ -9552,12 +9808,21 @@
   	#detectChannelsNeedingDataDomain() {
   		const { select, scaleRequirements } = this.#config;
   
-  		// Check each channel in select for aggregates
+  		// Check each channel in select for aggregates and bins
   		for (const [channel, value] of Object.entries(select)) {
   			if (value == null) continue;
   
-  			// Skip AutoBinNodes - they have their own stats mechanism
-  			if (value.isAutoBinNode) continue;
+  			// AutoBinNodes need data-derived domains: bin boundaries depend on
+  			// nice rounding and can't be known until the query results arrive.
+  			// The sidecar query can't run before fieldInfo resolves bins to SQL.
+  			if (value.isAutoBinNode) {
+  				if (channel === 'x' || channel === 'x1' || channel === 'x2') {
+  					this.#channelsNeedingDataDomain.add('x');
+  				} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
+  					this.#channelsNeedingDataDomain.add('y');
+  				}
+  				continue;
+  			}
   
   			// Check if it's an aggregate expression
   			const exprNode = isNode(value) ? value : null;
@@ -10083,14 +10348,18 @@
   		return queryWithTransforms;
   	}
   
-  	// NEW: Resolve AutoBinNodes to concrete SQL
+  	// Resolve AutoBinNodes to concrete SQL expressions
   	#resolveAutoBins(select) {
   		const resolved = {};
   
   		for (const [channel, value] of Object.entries(select)) {
   			if (value?.isAutoBinNode) {
   				const scaleType =
-  					channel === 'x' ? this.actualXScaleType : channel === 'y' ? this.actualYScaleType : null;
+  					channel === 'x' || channel === 'x1' || channel === 'x2'
+  						? this.actualXScaleType
+  						: channel === 'y' || channel === 'y1' || channel === 'y2'
+  							? this.actualYScaleType
+  							: null;
   
   				resolved[channel] = value.resolve(this.client.fieldInfo, scaleType);
   			} else {
@@ -10173,7 +10442,11 @@
   			if (isAggregateExpression(exprNode)) continue;
   
   			const scaleType =
-  				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
+  				alias === 'x' || alias === 'x1' || alias === 'x2'
+  					? this.actualXScaleType
+  					: alias === 'y' || alias === 'y1' || alias === 'y2'
+  						? this.actualYScaleType
+  						: null;
   
   			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
   			// not from fieldInfo (which would return values from the offset column)
@@ -10197,18 +10470,34 @@
   
   			// Time scales get their domain from sidecar query, skip fieldInfo path
   			if (scaleType === 'linear' || scaleType === 'log') {
-  				const fieldValue = this.#config.select[alias];
+  				const select = this.#config.select;
+  				// Try direct alias first, then extent variants (x1/x2, y1/y2)
+  				const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
+  					(f) => f != null && !f.isAutoBinNode
+  				);
   
-  				// Skip AutoBinNodes - they handle their own stats
-  				if (fieldValue?.isAutoBinNode) continue;
+  				if (candidates.length === 0) continue;
   
-  				if (fieldValue == null) continue;
+  				// Compute combined min/max across all extent fields for this axis
+  				let combinedMin = Infinity;
+  				let combinedMax = -Infinity;
+  				let found = false;
   
-  				const infoKey = String(fieldValue).replace(/^["']|["']$/g, '');
-  				const info = fieldInfo[infoKey];
+  				for (const fieldValue of candidates) {
+  					const infoKey = String(fieldValue).replace(/^["']|["']$/g, '');
+  					const info = fieldInfo[infoKey];
+  					if (info && info.min != null && info.max != null) {
+  						combinedMin = Math.min(combinedMin, info.min);
+  						combinedMax = Math.max(combinedMax, info.max);
+  						found = true;
+  					}
+  				}
   
-  				if (info && info.min != null && info.max != null) {
-  					scaleState.addMark([info.min, info.max], this.#markId);
+  				if (found) {
+  					console.log(
+  						`📐 [${this.#markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
+  					);
+  					scaleState.addMark([combinedMin, combinedMax], this.#markId);
   				}
   			}
   		}
@@ -10477,6 +10766,14 @@
   			return;
   		}
   
+  		// Skip sidecar when AutoBinNodes exist — they can't be resolved to SQL
+  		// until fieldInfo is available (which requires the DataClient created later).
+  		// Domains will be set from query results via #registerDataDerivedDomains.
+  		if (this.#autoBinNodes.size > 0) {
+  			console.log(`[${this.#markId}] Skipping sidecar: bin domains derived from query results`);
+  			return;
+  		}
+  
   		console.log(
   			`🔍 [${this.#markId}] Building sidecar query for channels:`,
   			Array.from(this.#channelsNeedingDataDomain)
@@ -10492,13 +10789,27 @@
   			const outerSelect = {};
   
   			if (this.#channelsNeedingDataDomain.has('x')) {
-  				outerSelect.min_x = min('x');
-  				outerSelect.max_x = max('x');
+  				const select = this.#config.select;
+  				if ('x' in select) {
+  					outerSelect.min_x = min('x');
+  					outerSelect.max_x = max('x');
+  				} else {
+  					// Extent channels: use x1 for min, x2 for max
+  					if ('x1' in select) outerSelect.min_x = min('x1');
+  					if ('x2' in select) outerSelect.max_x = max('x2');
+  				}
   			}
   
   			if (this.#channelsNeedingDataDomain.has('y')) {
-  				outerSelect.min_y = min('y');
-  				outerSelect.max_y = max('y');
+  				const select = this.#config.select;
+  				if ('y' in select) {
+  					outerSelect.min_y = min('y');
+  					outerSelect.max_y = max('y');
+  				} else {
+  					// Extent channels: use y1 for min, y2 for max
+  					if ('y1' in select) outerSelect.min_y = min('y1');
+  					if ('y2' in select) outerSelect.max_y = max('y2');
+  				}
   			}
   
   			if (this.#channelsNeedingDataDomain.has('color')) {
@@ -11044,12 +11355,561 @@
   {/if}
 </src/lib/components/marks/BarMarkY.svelte>
 
+<src/lib/components/marks/RectMark.svelte>
+  <script>
+  	import { getContext, onDestroy, untrack } from 'svelte';
+  	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  	import { Rects } from '../rendering/index.js';
+  	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { inferScaleType } from '$lib/scales/scale-inference.js';
+  	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+  	import { expandBinForExtent } from '$lib/sql/bin.js';
+  	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
+  
+  	let {
+  		table,
+  		selection,
+  		x = null,
+  		x1: x1Prop = null,
+  		x2: x2Prop = null,
+  		y = null,
+  		y1: y1Prop = null,
+  		y2: y2Prop = null,
+  		color = null,
+  		scheme,
+  		alpha = 0.8,
+  		limit,
+  		filterNulls = false,
+  		preferredXScaleType = null,
+  		preferredYScaleType = null,
+  		transforms = [],
+  		padding,
+  		paddingInner,
+  		paddingOuter,
+  		align = 0.5
+  	} = $props();
+  
+  	const markId = `rect-${crypto.randomUUID().slice(0, 8)}`;
+  	const coordinator = getContext('mosaic-coordinator');
+  	const chartContext = getContext('chart');
+  	const scaleRegistry = getContext('scale-registry');
+  
+  	// Ensure services are ready before inference (idempotent)
+  	BaseMarkSetup.ensureServices(coordinator);
+  
+  	let setup = $state(null);
+  
+  	// --- INTERNAL BIN EXPANSION ---
+  	const expandedX = $derived.by(() => {
+  		if (x != null) return expandBinForExtent(x, 'x', 'rect');
+  		return { x1: x1Prop, x2: x2Prop };
+  	});
+  	const ex1 = $derived(expandedX.x1);
+  	const ex2 = $derived(expandedX.x2);
+  
+  	const expandedY = $derived.by(() => {
+  		if (y != null) return expandBinForExtent(y, 'y', 'rect');
+  		return { y1: y1Prop, y2: y2Prop };
+  	});
+  	const ey1 = $derived(expandedY.y1);
+  	const ey2 = $derived(expandedY.y2);
+  
+  	// --- SCALE TYPE INFERENCE (DotsMark pattern) ---
+  	function inferAxisScaleType(field, preferredType) {
+  		if (preferredType != null) return preferredType;
+  		if (!field) return 'linear';
+  		if (field.isAutoBinNode) {
+  			const colName = typeof field.field === 'string' ? field.field : null;
+  			if (!colName) return 'linear';
+  			const _v = tableSchemaService.version;
+  			const colType = tableSchemaService.getColumnType(table, colName);
+  			if (!colType) {
+  				tableSchemaService.getSchema(table);
+  				return null;
+  			}
+  			return inferScaleType({ field: colName, schemaType: colType, context: 'axis' });
+  		}
+  		if (typeof field !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, field);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field, schemaType: colType, context: 'axis' });
+  	}
+  
+  	const effectiveXScaleType = $derived.by(() => inferAxisScaleType(ex1, preferredXScaleType));
+  	const effectiveYScaleType = $derived.by(() => inferAxisScaleType(ey1, preferredYScaleType));
+  
+  	// 1. Color Logic
+  	const markColor = new MarkColor(
+  		() => color,
+  		() => scheme,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
+  	);
+  
+  	// Band scale config (applies only when axis resolves to band)
+  	const bandScaleConfig = $derived.by(() => {
+  		const config = {};
+  		if (padding != null) config.padding = padding;
+  		if (paddingInner != null) config.paddingInner = paddingInner;
+  		if (paddingOuter != null) config.paddingOuter = paddingOuter;
+  		if (align != null) config.align = align;
+  		return config;
+  	});
+  
+  	// 2. Config
+  	const config = $derived({
+  		markType: 'rect',
+  		supportedScaleTypes: {
+  			x: ['linear', 'band', 'point', 'time', 'log'],
+  			y: ['linear', 'band', 'point', 'time', 'log']
+  		},
+  		scaleRequirements: {
+  			x: effectiveXScaleType
+  				? {
+  						type: effectiveXScaleType,
+  						priority: SCALE_PRIORITIES.PREFER,
+  						...(effectiveXScaleType === 'band' && { config: bandScaleConfig })
+  					}
+  				: null,
+  			y: effectiveYScaleType
+  				? {
+  						type: effectiveYScaleType,
+  						priority: SCALE_PRIORITIES.PREFER,
+  						...(effectiveYScaleType === 'band' && { config: bandScaleConfig })
+  					}
+  				: null
+  		},
+  		inferredScaleColumns: {
+  			x: ex1,
+  			y: ey1
+  		},
+  		table,
+  		selection,
+  		transforms,
+  		select: buildSelectFromChannels({
+  			x1: ex1,
+  			x2: ex2,
+  			y1: ey1,
+  			y2: ey2,
+  			...(markColor.selectField && { color: markColor.selectField })
+  		}),
+  		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null }
+  	});
+  
+  	let xScaleId = $derived(chartContext.xScaleState?.id);
+  	let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+  	let instanceCount = $derived.by(() => {
+  		if (setup?.data?.length) return setup.data.length;
+  		return 0;
+  	});
+  
+  	// --- DATA RESOLUTION ---
+  
+  	// X Data: Extent channels with band/linear branching
+  	let xData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
+  		if (scaleType === 'band' || scaleType === 'point') {
+  			const raw = resolveChannel({
+  				value: ex1,
+  				channel: 'x1',
+  				dataAccessor: setup?.data,
+  				instanceCount
+  			});
+  			if (!raw) return null;
+  			if (!chartContext.xScaleState?.processDataForGPU) return null;
+  			const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
+  			const arr = toFloat32(indices);
+  			return { x0Data: arr, x1Data: arr };
+  		}
+  
+  		const rawX1 = resolveChannel({
+  			value: ex1,
+  			channel: 'x1',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		const rawX2 = resolveChannel({
+  			value: ex2,
+  			channel: 'x2',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		if (!rawX1 || !rawX2) return null;
+  		return { x0Data: toFloat32(rawX1), x1Data: toFloat32(rawX2) };
+  	});
+  
+  	let x0Data = $derived(xData?.x0Data);
+  	let x1Data = $derived(xData?.x1Data);
+  
+  	// Y Data: Extent channels with band/linear branching
+  	let yData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y;
+  		if (scaleType === 'band' || scaleType === 'point') {
+  			const raw = resolveChannel({
+  				value: ey1,
+  				channel: 'y1',
+  				dataAccessor: setup?.data,
+  				instanceCount
+  			});
+  			if (!raw) return null;
+  			if (!chartContext.yScaleState?.processDataForGPU) return null;
+  			const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
+  			const arr = toFloat32(indices);
+  			return { y0Data: arr, y1Data: arr };
+  		}
+  
+  		const rawY1 = resolveChannel({
+  			value: ey1,
+  			channel: 'y1',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		const rawY2 = resolveChannel({
+  			value: ey2,
+  			channel: 'y2',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		if (!rawY1 || !rawY2) return null;
+  		return { y0Data: toFloat32(rawY1), y1Data: toFloat32(rawY2) };
+  	});
+  
+  	let y0Data = $derived(yData?.y0Data);
+  	let y1Data = $derived(yData?.y1Data);
+  
+  	let alphaData = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: alpha,
+  				channel: 'alpha',
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0.8
+  			})
+  		)
+  	);
+  
+  	// --- SETUP LIFECYCLE ---
+  
+  	$effect(() => {
+  		(void config, xScaleId, yScaleId, transforms, markColor.selectField);
+  		untrack(() => {
+  			setup?.destroy();
+  			setup = null;
+  			// Gate on BOTH scale types being resolved
+  			if (table && effectiveXScaleType && effectiveYScaleType) {
+  				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			}
+  		});
+  	});
+  
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
+  </script>
+  
+  {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
+  	<Rects
+  		{x0Data}
+  		{x1Data}
+  		{y0Data}
+  		{y1Data}
+  		colorValueData={markColor.data}
+  		{alphaData}
+  		colorMode={markColor.colorMode}
+  		colorScaleIndex={markColor.colorScaleIndex}
+  		constantColor={markColor.constantColor}
+  		dataVersion={setup?.client?.dataVersion || 0}
+  	/>
+  {:else if setup?.client?.error}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+  		>Error: {setup.client.error.message}</text
+  	>
+  {:else if setup?.client?.delayedLoading}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Loading data...</text
+  	>
+  {:else}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Initializing rects...</text
+  	>
+  {/if}
+</src/lib/components/marks/RectMark.svelte>
+
 <src/lib/components/marks/index.js>
   export { default as DotsMark } from './DotsMark.svelte';
   export { default as LineMark } from './LineMark.svelte';
   export { default as BarMarkX } from './BarMarkX.svelte';
   export { default as BarMarkY } from './BarMarkY.svelte';
+  export { default as RectMark } from './RectMark.svelte';
+  export { default as RectXMark } from './RectXMark.svelte';
+  export { default as RectYMark } from './RectYMark.svelte';
 </src/lib/components/marks/index.js>
+
+<src/lib/components/marks/RectYMark.svelte>
+  <script>
+  	import { getContext, onDestroy, untrack } from 'svelte';
+  	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+  	import { Rects } from '../rendering/index.js';
+  	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+  	import { inferScaleType } from '$lib/scales/scale-inference.js';
+  	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+  	import { expandBinForExtent } from '$lib/sql/bin.js';
+  	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
+  
+  	let {
+  		table,
+  		selection,
+  		x = null,
+  		x1: x1Prop = null,
+  		x2: x2Prop = null,
+  		y,
+  		y1 = 0,
+  		y2 = y,
+  		color = null,
+  		scheme,
+  		alpha = 0.8,
+  		limit,
+  		filterNulls = false,
+  		preferredXScaleType = null,
+  		transforms = []
+  	} = $props();
+  
+  	const markId = `recty-${crypto.randomUUID().slice(0, 8)}`;
+  	const coordinator = getContext('mosaic-coordinator');
+  	const chartContext = getContext('chart');
+  	const scaleRegistry = getContext('scale-registry');
+  
+  	// Ensure services are ready before inference (idempotent)
+  	BaseMarkSetup.ensureServices(coordinator);
+  
+  	let setup = $state(null);
+  
+  	// --- INTERNAL BIN EXPANSION ---
+  	// If user provides singular x (e.g. bin('field')), expand internally to x1/x2
+  	const expandedX = $derived.by(() => {
+  		if (x != null) return expandBinForExtent(x, 'x', 'rectY');
+  		return { x1: x1Prop, x2: x2Prop };
+  	});
+  	const x1 = $derived(expandedX.x1);
+  	const x2 = $derived(expandedX.x2);
+  
+  	// --- SCALE TYPE INFERENCE (DotsMark pattern) ---
+  	const effectiveXScaleType = $derived.by(() => {
+  		if (preferredXScaleType != null) return preferredXScaleType;
+  		const field = x1;
+  		if (!field) return 'linear';
+  		// Unwrap AutoBinNode to get underlying column for schema lookup
+  		if (field.isAutoBinNode) {
+  			const colName = typeof field.field === 'string' ? field.field : null;
+  			if (!colName) return 'linear';
+  			const _v = tableSchemaService.version;
+  			const colType = tableSchemaService.getColumnType(table, colName);
+  			if (!colType) {
+  				tableSchemaService.getSchema(table);
+  				return null;
+  			}
+  			return inferScaleType({ field: colName, schemaType: colType, context: 'axis' });
+  		}
+  		if (typeof field !== 'string') return 'linear';
+  		const _v = tableSchemaService.version;
+  		const colType = tableSchemaService.getColumnType(table, field);
+  		if (!colType) {
+  			tableSchemaService.getSchema(table);
+  			return null;
+  		}
+  		return inferScaleType({ field, schemaType: colType, context: 'axis' });
+  	});
+  
+  	// 1. Color Logic
+  	const markColor = new MarkColor(
+  		() => color,
+  		() => scheme,
+  		() => table,
+  		() => setup,
+  		scaleRegistry,
+  		chartContext
+  	);
+  
+  	// 2. Config
+  	const config = $derived({
+  		markType: 'recty',
+  		supportedScaleTypes: {
+  			x: ['linear', 'band', 'point', 'time', 'log'],
+  			y: ['linear', 'identity']
+  		},
+  		scaleRequirements: {
+  			x: effectiveXScaleType
+  				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+  				: null,
+  			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
+  		},
+  		inferredScaleColumns: {
+  			x: x1,
+  			y: y2
+  		},
+  		table,
+  		selection,
+  		transforms,
+  		select: buildSelectFromChannels({
+  			x1,
+  			x2,
+  			y1,
+  			y2,
+  			...(markColor.selectField && { color: markColor.selectField })
+  		}),
+  		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y1, y2] : null }
+  	});
+  
+  	let xScaleId = $derived(chartContext.xScaleState?.id);
+  	let yScaleId = $derived(chartContext.yScaleState?.id);
+  
+  	let instanceCount = $derived.by(() => {
+  		if (setup?.data?.length) return setup.data.length;
+  		if (Array.isArray(y2)) return y2.length;
+  		// @ts-ignore
+  		if (ArrayBuffer.isView(y2)) return y2.length;
+  		return 0;
+  	});
+  
+  	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
+  
+  	// --- DATA RESOLUTION ---
+  
+  	// X Data: Extent channels with band/linear branching
+  	let xData = $derived.by(() => {
+  		if (!instanceCount) return null;
+  
+  		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
+  		if (scaleType === 'band' || scaleType === 'point') {
+  			// Categorical: resolve x1 via processDataForGPU, same array for both extents
+  			const raw = resolveChannel({
+  				value: x1,
+  				channel: 'x1',
+  				dataAccessor: setup?.data,
+  				instanceCount
+  			});
+  			if (!raw) return null;
+  			if (!chartContext.xScaleState?.processDataForGPU) return null;
+  			const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
+  			const arr = toFloat32(indices);
+  			return { x0Data: arr, x1Data: arr };
+  		}
+  
+  		// Continuous: resolve x1 and x2 separately
+  		const rawX1 = resolveChannel({
+  			value: x1,
+  			channel: 'x1',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		const rawX2 = resolveChannel({
+  			value: x2,
+  			channel: 'x2',
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		if (!rawX1 || !rawX2) return null;
+  		return { x0Data: toFloat32(rawX1), x1Data: toFloat32(rawX2) };
+  	});
+  
+  	let x0Data = $derived(xData?.x0Data);
+  	let x1Data = $derived(xData?.x1Data);
+  
+  	// Y0: Stack Output -> y1 prop -> 0
+  	let y0Data = $derived.by(() => {
+  		const raw = resolveChannel({
+  			value: y1,
+  			channel: 'y1',
+  			tryColumns: hasStackTransform ? ['y0'] : undefined,
+  			dataAccessor: setup?.data,
+  			instanceCount,
+  			fallback: 0
+  		});
+  		return toFloat32(raw);
+  	});
+  
+  	// Y1: Stack Output -> y2 prop
+  	let y1Data = $derived.by(() => {
+  		const raw = resolveChannel({
+  			value: y2,
+  			channel: 'y2',
+  			tryColumns: hasStackTransform ? ['y1'] : undefined,
+  			dataAccessor: setup?.data,
+  			instanceCount
+  		});
+  		return toFloat32(raw);
+  	});
+  
+  	let alphaData = $derived(
+  		toFloat32(
+  			resolveChannel({
+  				value: alpha,
+  				channel: 'alpha',
+  				dataAccessor: setup?.data,
+  				instanceCount,
+  				fallback: 0.8
+  			})
+  		)
+  	);
+  
+  	// --- SETUP LIFECYCLE ---
+  
+  	$effect(() => {
+  		(void config, xScaleId, yScaleId, transforms, markColor.selectField);
+  		untrack(() => {
+  			setup?.destroy();
+  			setup = null;
+  			// Gate on effectiveXScaleType (blocks while schema loads)
+  			if (table && effectiveXScaleType) {
+  				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+  			}
+  		});
+  	});
+  
+  	onDestroy(() => {
+  		setup?.destroy();
+  	});
+  </script>
+  
+  {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
+  	<Rects
+  		{x0Data}
+  		{x1Data}
+  		{y0Data}
+  		{y1Data}
+  		colorValueData={markColor.data}
+  		{alphaData}
+  		colorMode={markColor.colorMode}
+  		colorScaleIndex={markColor.colorScaleIndex}
+  		constantColor={markColor.constantColor}
+  		dataVersion={setup?.client?.dataVersion || 0}
+  	/>
+  {:else if setup?.client?.error}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
+  		>Error: {setup.client.error.message}</text
+  	>
+  {:else if setup?.client?.delayedLoading}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Loading data...</text
+  	>
+  {:else}
+  	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
+  		>Initializing rects...</text
+  	>
+  {/if}
+</src/lib/components/marks/RectYMark.svelte>
 
 <src/lib/components/marks/BarMarkX.svelte>
   <script>
@@ -11490,209 +12350,6 @@
   	>
   {/if}
 </src/lib/components/marks/DotsMark.svelte>
-
-<src/lib/components/marks/RectMarks.md>
-  // Future Bar Mark Examples with proper scale type checking
-  
-  // ===== BarXMark.svelte (Vertical bars) =====
-  /\*
-  
-  <script>
-    import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
-    import { getContext, onMount, onDestroy, untrack } from 'svelte';
-    import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-    import { Rects } from '$lib/components'; // Future Rects renderer
-  
-    let { 
-      table, 
-      selection, 
-      x,        // Categorical data (species, categories)
-      y,        // Continuous data (aggregated values)
-      color, 
-      alpha = 0.8,
-      limit = 5000 
-    } = $props();
-  
-    const coordinator = getContext('mosaic-coordinator');
-    const c = getContext('chart');
-    const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
-  
-    // Vertical bars: MANDATE categorical x, PREFER continuous y
-    c.registerScaleType('x', 'band', SCALE_PRIORITIES.MANDATE, markId);   // MUST be band
-    c.registerScaleType('y', 'linear', SCALE_PRIORITIES.PREFER, markId);  // Prefer linear
-  
-    // Check what we actually got after scale resolution
-    let actualXScaleType = $derived(c.scaleTypes?.x || 'band');
-    let actualYScaleType = $derived(c.scaleTypes?.y || 'linear');
-  
-    // Strict validation: BarX REQUIRES band scale for x-axis
-    let scaleCompatibilityError = $derived.by(() => {
-      if (actualXScaleType !== 'band') {
-        return `BarXMark requires band scale for x-axis, got: ${actualXScaleType}`;
-      }
-      
-      // Y-axis is more flexible but warn if unexpected
-      if (actualYScaleType !== 'linear' && actualYScaleType !== 'identity') {
-        return `BarXMark works best with linear y-axis, got: ${actualYScaleType}`;
-      }
-      
-      return null;
-    });
-  
-    // ... DataClient setup ...
-  </script>
-  
-  {#if scaleCompatibilityError}
-  <text fill="red">Scale Error: {scaleCompatibilityError}</text>
-  {:else if client?.arrowTable}
-  <Rects
-  data={client.arrowTable}
-  dataVersion={client.dataVersion}
-  xScaleType={actualXScaleType} <!-- Pass ACTUAL resolved types -->
-  yScaleType={actualYScaleType}
-  alpha={alpha}
-  baseline="zero"
-  />
-  {/if}
-  \*/
-  
-  // ===== BarYMark.svelte (Horizontal bars) =====
-  /\*
-  
-  <script>
-    // ... similar setup ...
-  
-    // Horizontal bars: PREFER continuous x, MANDATE categorical y  
-    c.registerScaleType('x', 'linear', SCALE_PRIORITIES.PREFER, markId);
-    c.registerScaleType('y', 'band', SCALE_PRIORITIES.MANDATE, markId);
-  
-    let actualXScaleType = $derived(c.scaleTypes?.x || 'linear');
-    let actualYScaleType = $derived(c.scaleTypes?.y || 'band');
-  
-    let scaleCompatibilityError = $derived.by(() => {
-      if (actualYScaleType !== 'band') {
-        return `BarYMark requires band scale for y-axis, got: ${actualYScaleType}`;
-      }
-      return null;
-    });
-  </script>
-  
-  {#if scaleCompatibilityError}
-  <text fill="red">Scale Error: {scaleCompatibilityError}</text>
-  {:else if client?.arrowTable}
-  <Rects
-  data={client.arrowTable}
-  dataVersion={client.dataVersion}
-  xScaleType={actualXScaleType} <!-- ACTUAL types, not requested -->
-  yScaleType={actualYScaleType}
-  alpha={alpha}
-  baseline="zero"
-  orientation="horizontal"
-  />
-  {/if}
-  \*/
-  
-  // ===== RectMark.svelte (General rectangles - Very flexible) =====
-  /\*
-  
-  <script>
-    // General rectangles are very flexible
-    c.registerScaleType('x', 'linear', SCALE_PRIORITIES.ACCEPT, markId);  // Accept anything
-    c.registerScaleType('y', 'linear', SCALE_PRIORITIES.ACCEPT, markId);
-  
-    let actualXScaleType = $derived(c.scaleTypes?.x || 'linear');
-    let actualYScaleType = $derived(c.scaleTypes?.y || 'linear');
-  
-    // RectMark is very flexible - can work with any scale type
-    let scaleCompatibilityError = $derived.by(() => {
-      // Only error for truly unsupported scale types (none currently)
-      return null;
-    });
-  </script>
-  
-  {#if client?.arrowTable}
-  <Rects
-  data={client.arrowTable}
-  dataVersion={client.dataVersion}
-  xScaleType={actualXScaleType} <!-- Adapts to whatever was resolved -->
-  yScaleType={actualYScaleType}
-  alpha={alpha}
-  />
-  {/if}
-  \*/
-  
-  // ===== Usage Examples =====
-  
-  /\*
-  
-  <!-- This works fine - dots adapt to whatever scales are resolved -->
-  
-  <DotsMark
-  table="penguins"
-  x="bill_length"
-  y="bill_depth"
-  preferredXScaleType="linear" <!-- Preference, not guarantee -->
-  preferredYScaleType="linear"
-  />
-  
-  <!-- This will MANDATE band scale for x-axis -->
-  
-  <BarXMark
-  table="sales"
-  x="category"
-  y={sum("amount")}
-  
-    <!-- No scale type props needed - BarX knows what it needs -->
-  
-  />
-  
-  <!-- Mixing marks: BarX mandates band x-axis, dots adapt -->
-  <ChartContainer xLabel="category" yLabel="amount">
-    <!-- This mandates x must be band scale -->
-    <BarXMark table="sales" x="category" y={sum("amount")} />
-    
-    <!-- This adapts: will get band x-axis, warns in console -->
-    <DotsMark table="sales" x="category" y="individual_sales" 
-              preferredXScaleType="linear" />  <!-- Will get band instead -->
-  </ChartContainer>
-  
-  <!-- This would error - incompatible requirements -->
-  <ChartContainer xLabel="sales" yLabel="category">
-    <!-- This mandates x must be linear -->
-    <SomeLinearOnlyMark x="sales" y="category" />
-    
-    <!-- This mandates x must be band - CONFLICT! -->  
-    <BarXMark x="sales" y="category" />  <!-- Error: incompatible requirements -->
-  </ChartContainer>
-  */
-  
-  // ===== API Benefits =====
-  
-  // 1. **Explicit Requirements**
-  // - Each mark clearly states what it needs (MANDATE/PREFER/ACCEPT)
-  // - Clear error messages when requirements conflict
-  // - Visible validation logic in mark components
-  
-  // 2. **Flexible Adaptation**
-  // - Marks can adapt to resolved scale types
-  // - Warnings when marks get something different than preferred
-  // - Graceful degradation for compatible scale types
-  
-  // 3. **No Hidden Magic**
-  // - All scale checking happens in mark components
-  // - Developer can see exactly what's happening
-  // - Easy to debug scale resolution issues
-  
-  // 4. **Clear Error Messages**
-  // - "BarXMark requires band scale for x-axis, got: linear"
-  // - "Scale types resolved differently than preferred"
-  // - Helps developers understand mark requirements
-  
-  // 5. **Composable and Predictable**
-  // - Can mix marks with different requirements
-  // - Priority system resolves conflicts deterministically  
-  // - Clear rules for what works together
-</src/lib/components/marks/RectMarks.md>
 
 <src/lib/components/marks/utils/MarkColor.svelte.js>
   import { untrack } from 'svelte';
@@ -12394,6 +13051,66 @@
   	// Add more as needed
   ]);
 </src/lib/components/marks/utils/data-processing.js>
+
+<src/lib/components/guides/index.js>
+  export { default as Grid } from './Grid.svelte';
+</src/lib/components/guides/index.js>
+
+<src/lib/components/guides/Grid.svelte>
+  <script>
+  	import { getContext } from 'svelte';
+  	import { RuleX, RuleY } from '../rendering/index.js';
+  
+  	let { axis = 'both', color = [0.8, 0.8, 0.8, 0.4], lineWidth = 1, zIndex = -10 } = $props();
+  
+  	const chartContext = getContext('chart');
+  
+  	// Get scales based on axis prop
+  	const xScale = $derived(axis === 'x' || axis === 'both' ? chartContext.xScaleState : null);
+  	const yScale = $derived(axis === 'y' || axis === 'both' ? chartContext.yScaleState : null);
+  
+  	// =========================================================================
+  	// ZERO-ALLOCATION TICK BUFFERS (one per axis)
+  	// =========================================================================
+  	const MAX_TICKS = 200;
+  	const xTickBuffer = new Float32Array(MAX_TICKS);
+  	const yTickBuffer = new Float32Array(MAX_TICKS);
+  
+  	let xTickValues = $state(null);
+  	let yTickValues = $state(null);
+  
+  	// Helper: fill buffer from scale ticks (zero-allocation)
+  	function fillTickBuffer(scale, buffer) {
+  		const newTicks = scale?.getTicks ? scale.getTicks() : [];
+  		const count = Math.min(newTicks.length, MAX_TICKS);
+  
+  		if (count > 0) {
+  			for (let i = 0; i < count; i++) {
+  				buffer[i] = newTicks[i];
+  			}
+  			return buffer.subarray(0, count);
+  		}
+  		return null;
+  	}
+  
+  	// X axis ticks
+  	$effect(() => {
+  		xTickValues = xScale ? fillTickBuffer(xScale, xTickBuffer) : null;
+  	});
+  
+  	// Y axis ticks
+  	$effect(() => {
+  		yTickValues = yScale ? fillTickBuffer(yScale, yTickBuffer) : null;
+  	});
+  </script>
+  
+  {#if xTickValues}
+  	<RuleX positions={xTickValues} {color} {lineWidth} {zIndex} />
+  {/if}
+  {#if yTickValues}
+  	<RuleY positions={yTickValues} {color} {lineWidth} {zIndex} />
+  {/if}
+</src/lib/components/guides/Grid.svelte>
 
 <src/lib/data/ViewManager.svelte.js>
   // src/lib/data/ViewManager.svelte.js
@@ -13097,48 +13814,34 @@
 <src/lib/sql/bin.js>
   // src/lib/sql/bin.js
   
-  import { binDate, binHistogram, sql, column } from '@uwdata/mosaic-sql';
+  import { binDate, binHistogram, column } from '@uwdata/mosaic-sql';
   
   /**
-   * Bin numeric or temporal data into discrete intervals
+   * Bin numeric or temporal data into discrete intervals.
    *
-   * Three modes:
-   * 1. Explicit numeric: bin('age', { step: 5 })
-   * 2. Explicit temporal: bin('date', { interval: 'day' })
-   * 3. Auto: bin('age') - uses field statistics
+   * Always returns an AutoBinNode that defers SQL generation until field
+   * statistics (min/max) are available. This follows the vgplot pattern where
+   * all binning goes through Mosaic's binHistogram/binDate helpers, ensuring
+   * correct nice rounding, step calculation, and offset handling.
    *
    * @param {string|Expression} field - Field to bin
    * @param {object} options - Configuration
    * @param {number} options.step - Explicit bin size (numeric)
    * @param {string} options.interval - Explicit interval (temporal: day, week, month, year)
-   * @param {number} options.offset - Offset for bin boundaries
-   * @param {number} options.thresholds - Target number of bins (auto mode)
-   * @param {boolean} options.nice - Use nice round numbers (auto mode)
-   * @returns {Expression|AutoBinNode}
+   * @param {number} options.steps - Target number of bins (hint, default ~25)
+   * @param {number} options.minstep - Minimum bin size
+   * @param {boolean} options.nice - Use nice round numbers (default true)
+   * @param {number} options.offset - Bin offset in steps (used by extent expansion)
+   * @returns {AutoBinNode}
    */
   export function bin(field, options = {}) {
-  	const { step, interval, offset = 0 } = options;
-  
-  	// Explicit numeric binning
-  	if (step !== undefined) {
-  		const col = typeof field === 'string' ? column(field) : field;
-  		return sql`FLOOR((${col} - ${offset}) / ${step}) * ${step} + ${offset}`;
-  	}
-  
-  	// Explicit temporal binning
-  	if (interval !== undefined) {
-  		const col = typeof field === 'string' ? column(field) : field;
-  		// Use Mosaic's binDate helper
-  		return binDate(col, null, options);
-  	}
-  
-  	// Auto mode - defer resolution until we have field statistics
   	return new AutoBinNode(field, options);
   }
   
   /**
-   * Auto-binning node that defers SQL generation until field statistics are available
-   * This allows optimal bin sizing based on actual data range
+   * Deferred bin node that generates SQL once field statistics are available.
+   * Modeled after vgplot's BinTransformNode — always delegates to Mosaic's
+   * binHistogram() or binDate() for correct bin boundary computation.
    */
   export class AutoBinNode {
   	constructor(field, options = {}) {
@@ -13148,8 +13851,8 @@
   	}
   
   	/**
-  	 * Get field statistics needed for this bin
-  	 * Called by BaseMarkSetup to build field info requests
+  	 * Get field statistics needed for this bin.
+  	 * Called by BaseMarkSetup to build field info requests.
   	 */
   	get stats() {
   		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
@@ -13160,7 +13863,12 @@
   	}
   
   	/**
-  	 * Resolve to concrete SQL expression once field statistics are available
+  	 * Resolve to concrete SQL expression once field statistics are available.
+  	 * Always delegates to Mosaic's binHistogram or binDate, which handle:
+  	 * - Nice rounding of bin boundaries
+  	 * - Step calculation from desired bin count
+  	 * - Correct offset handling (shifts inside floor() for extent marks)
+  	 *
   	 * @param {object} fieldInfo - Field statistics from DataClient
   	 * @param {string} scaleType - Scale type (linear, time, etc.)
   	 * @returns {Expression} Mosaic SQL expression
@@ -13187,17 +13895,18 @@
   			scaleType === 'utc';
   
   		if (isTemporal) {
-  			// Use Mosaic's binDate helper
   			return binDate(col, [min, max], this.options);
   		} else {
-  			// Use Mosaic's binHistogram helper
   			return binHistogram(col, [min, max], this.options);
   		}
   	}
   
   	/**
-  	 * For extent marks (rect, rule), create offset version
-  	 * @param {number} offset - Bin offset
+  	 * Create a copy with a bin offset (in step units).
+  	 * Used by expandBinForExtent to produce the upper bound of each bin:
+  	 * offset=1 shifts by one bin width via binHistogram's offset parameter.
+  	 *
+  	 * @param {number} offset - Bin offset in steps
   	 * @returns {AutoBinNode}
   	 */
   	withOffset(offset) {
@@ -13209,52 +13918,39 @@
   }
   
   /**
-   * Helper to check if an expression is a bin
+   * Check if an expression is a bin node.
    * @param {*} expr
    * @returns {boolean}
    */
   export function isBinExpression(expr) {
   	if (!expr) return false;
-  
-  	// Check for AutoBinNode
-  	if (expr.isAutoBinNode) return true;
-  
-  	// Check for explicit bin SQL (contains FLOOR)
-  	const sql = expr.toString?.() || '';
-  	return /FLOOR\s*\(/i.test(sql);
+  	return expr.isAutoBinNode === true;
   }
   
   /**
-   * Expand bin to extent (x1/x2 or y1/y2) for rect/rule marks
-   * @param {Expression|AutoBinNode} binExpr
+   * Expand a bin expression to extent channels (x1/x2 or y1/y2) for rect/rule marks.
+   * For extent marks, creates two bin nodes: one at offset 0 (bin start) and one
+   * at offset 1 (bin end), following the vgplot pattern.
+   *
+   * @param {AutoBinNode|*} binExpr - Bin expression or other channel value
    * @param {string} channel - 'x' or 'y'
-   * @param {string} markType - 'rect', 'rule', etc.
-   * @returns {object} Map of channels
+   * @param {string} markType - 'rect', 'rectX', 'rectY', etc.
+   * @returns {object} Map of channel names to expressions
    */
   export function expandBinForExtent(binExpr, channel, markType) {
   	if (!isBinExpression(binExpr)) {
   		return { [channel]: binExpr };
   	}
   
-  	// Check if mark needs extent
   	const needsExtent = ['rect', 'rectX', 'rectY', 'rule', 'ruleX', 'ruleY'].includes(markType);
   
   	if (!needsExtent) {
   		return { [channel]: binExpr };
   	}
   
-  	// Auto bin - create offset version
-  	if (binExpr.isAutoBinNode) {
-  		return {
-  			[`${channel}1`]: binExpr,
-  			[`${channel}2`]: binExpr.withOffset(1)
-  		};
-  	}
-  
-  	// Explicit bin - add offset to SQL
   	return {
   		[`${channel}1`]: binExpr,
-  		[`${channel}2`]: sql`${binExpr} + 1`
+  		[`${channel}2`]: binExpr.withOffset(1)
   	};
   }
 </src/lib/sql/bin.js>
@@ -13855,7 +14551,7 @@
   			.groupby(resolvedX);
   
   		const sql = query.toString();
-  		expect(sql).toContain('FLOOR');
+  		expect(sql.toLowerCase()).toContain('floor');
   		expect(sql).toContain('GROUP BY');
   	});
   });
@@ -13981,11 +14677,12 @@
   			expect(result.isAutoBinNode).toBe(true);
   		});
   
-  		it('creates explicit SQL for step', () => {
+  		it('creates AutoBinNode for explicit step', () => {
   			const result = bin('age', { step: 5 });
   
-  			expect(result.isAutoBinNode).toBeFalsy();
-  			expect(result.toString()).toContain('FLOOR');
+  			expect(result).toBeInstanceOf(AutoBinNode);
+  			expect(result.isAutoBinNode).toBe(true);
+  			expect(result.options.step).toBe(5);
   		});
   
   		it('resolves AutoBinNode with field stats', () => {
@@ -13997,8 +14694,25 @@
   
   			const resolved = autoBin.resolve(fieldInfo, 'linear');
   
-  			// Should return a Mosaic SQL expression
-  			expect(resolved.toString()).toContain('FLOOR');
+  			// Should return a Mosaic SQL expression (binHistogram uses floor)
+  			expect(resolved.toString().toLowerCase()).toContain('floor');
+  		});
+  
+  		it('resolves explicit step with correct offset for extent', () => {
+  			const autoBin = bin('age', { step: 5 });
+  			const offset1 = autoBin.withOffset(1);
+  
+  			const fieldInfo = {
+  				age: { min: 18, max: 75, type: 'number' }
+  			};
+  
+  			const base = autoBin.resolve(fieldInfo, 'linear').toString();
+  			const upper = offset1.resolve(fieldInfo, 'linear').toString();
+  
+  			// Both should use floor, but offset version should differ
+  			expect(base.toLowerCase()).toContain('floor');
+  			expect(upper.toLowerCase()).toContain('floor');
+  			expect(base).not.toBe(upper);
   		});
   	});
   });
@@ -14147,7 +14861,7 @@
   		ChartContainer,
   		ColumnSelector,
   		Grid,
-  		// Frame,
+  		Frame,
   		AxisLeft,
   		AxisBottom,
   		MarginLabel,
@@ -14227,11 +14941,11 @@
   			<div class="chart-wrapper">
   				<ChartContainer xLabel={config.x} yLabel={config.y}>
   					{#snippet background()}
-  						<!-- <Grid />
+  						<!-- <Grid /> -->
   						<Frame />
   						<AxisLeft />
   						<AxisBottom />
-  						<MarginLabel /> -->
+  						<MarginLabel />
   					{/snippet}
   
   					{#snippet canvas()}
@@ -14254,7 +14968,7 @@
   					{/snippet}
   
   					{#snippet foreground()}
-  						<!-- <Crosshair /> -->
+  						<Crosshair />
   					{/snippet}
   
   					{#snippet overlay()}

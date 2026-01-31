@@ -116,12 +116,21 @@ export class BaseMarkSetup {
 	#detectChannelsNeedingDataDomain() {
 		const { select, scaleRequirements } = this.#config;
 
-		// Check each channel in select for aggregates
+		// Check each channel in select for aggregates and bins
 		for (const [channel, value] of Object.entries(select)) {
 			if (value == null) continue;
 
-			// Skip AutoBinNodes - they have their own stats mechanism
-			if (value.isAutoBinNode) continue;
+			// AutoBinNodes need data-derived domains: bin boundaries depend on
+			// nice rounding and can't be known until the query results arrive.
+			// The sidecar query can't run before fieldInfo resolves bins to SQL.
+			if (value.isAutoBinNode) {
+				if (channel === 'x' || channel === 'x1' || channel === 'x2') {
+					this.#channelsNeedingDataDomain.add('x');
+				} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
+					this.#channelsNeedingDataDomain.add('y');
+				}
+				continue;
+			}
 
 			// Check if it's an aggregate expression
 			const exprNode = isNode(value) ? value : null;
@@ -530,9 +539,12 @@ export class BaseMarkSetup {
 		}
 
 		// For time scales, use the offset column name from ViewManager
+		// BUT: Skip if we have extent channels (x1/x2 or y1/y2) from bin expansion,
+		// since those already resolve to offset values via bin.resolve()
 		if (this.actualXScaleType === 'time') {
 			const xScale = this.#chartContext.xScaleState;
-			if (xScale?.offsetColumnName && hasView) {
+			const hasExtentChannels = 'x1' in select || 'x2' in select;
+			if (xScale?.offsetColumnName && hasView && select.x && !hasExtentChannels) {
 				const originalField = select.x;
 				select.x = xScale.offsetColumnName;
 				console.log(`[BaseMarkSetup] Swapping x (time): ${originalField} → ${select.x}`);
@@ -540,7 +552,8 @@ export class BaseMarkSetup {
 		}
 		if (this.actualYScaleType === 'time') {
 			const yScale = this.#chartContext.yScaleState;
-			if (yScale?.offsetColumnName && hasView) {
+			const hasExtentChannels = 'y1' in select || 'y2' in select;
+			if (yScale?.offsetColumnName && hasView && select.y && !hasExtentChannels) {
 				const originalField = select.y;
 				select.y = yScale.offsetColumnName;
 				console.log(`[BaseMarkSetup] Swapping y (time): ${originalField} → ${select.y}`);
@@ -647,16 +660,55 @@ export class BaseMarkSetup {
 		return queryWithTransforms;
 	}
 
-	// NEW: Resolve AutoBinNodes to concrete SQL
+	// Resolve AutoBinNodes to concrete SQL expressions
+	// #resolveAutoBins(select) {
+	// 	const resolved = {};
+
+	// 	for (const [channel, value] of Object.entries(select)) {
+	// 		if (value?.isAutoBinNode) {
+	// 			const scaleType =
+	// 				channel === 'x' || channel === 'x1' || channel === 'x2'
+	// 					? this.actualXScaleType
+	// 					: channel === 'y' || channel === 'y1' || channel === 'y2'
+	// 						? this.actualYScaleType
+	// 						: null;
+
+	// 			resolved[channel] = value.resolve(this.client.fieldInfo, scaleType);
+	// 		} else {
+	// 			resolved[channel] = value;
+	// 		}
+	// 	}
+
+	// 	return resolved;
+	// }
+
+	// src/lib/components/marks/BaseMarkSetup.svelte.js
+
 	#resolveAutoBins(select) {
 		const resolved = {};
 
 		for (const [channel, value] of Object.entries(select)) {
 			if (value?.isAutoBinNode) {
-				const scaleType =
-					channel === 'x' ? this.actualXScaleType : channel === 'y' ? this.actualYScaleType : null;
+				const axis = channel.startsWith('x') ? 'x' : 'y';
+				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 
-				resolved[channel] = value.resolve(this.client.fieldInfo, scaleType);
+				let t0 = null;
+
+				// Only lookup t0 for time scales
+				if (scaleType === 'time' || scaleType === 'utc') {
+					const scaleState = this.#chartContext[`${axis}ScaleState`];
+
+					// Get the actual origin datetime (t0) from the time scale
+					// and convert to epoch seconds for offset calculation in binDate.
+					// This matches the offset calculation in TimeScaleState's derived column.
+					if (scaleState && scaleState.t0) {
+						// Convert t0 (Date object) to epoch seconds
+						t0 = Math.floor(scaleState.t0.getTime() / 1000);
+					}
+				}
+
+				// Pass t0 to the resolver
+				resolved[channel] = value.resolve(this.client.fieldInfo, scaleType, t0);
 			} else {
 				resolved[channel] = value;
 			}
@@ -737,7 +789,11 @@ export class BaseMarkSetup {
 			if (isAggregateExpression(exprNode)) continue;
 
 			const scaleType =
-				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : null;
+				alias === 'x' || alias === 'x1' || alias === 'x2'
+					? this.actualXScaleType
+					: alias === 'y' || alias === 'y1' || alias === 'y2'
+						? this.actualYScaleType
+						: null;
 
 			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
 			// not from fieldInfo (which would return values from the offset column)
@@ -761,18 +817,34 @@ export class BaseMarkSetup {
 
 			// Time scales get their domain from sidecar query, skip fieldInfo path
 			if (scaleType === 'linear' || scaleType === 'log') {
-				const fieldValue = this.#config.select[alias];
+				const select = this.#config.select;
+				// Try direct alias first, then extent variants (x1/x2, y1/y2)
+				const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
+					(f) => f != null && !f.isAutoBinNode
+				);
 
-				// Skip AutoBinNodes - they handle their own stats
-				if (fieldValue?.isAutoBinNode) continue;
+				if (candidates.length === 0) continue;
 
-				if (fieldValue == null) continue;
+				// Compute combined min/max across all extent fields for this axis
+				let combinedMin = Infinity;
+				let combinedMax = -Infinity;
+				let found = false;
 
-				const infoKey = String(fieldValue).replace(/^["']|["']$/g, '');
-				const info = fieldInfo[infoKey];
+				for (const fieldValue of candidates) {
+					const infoKey = String(fieldValue).replace(/^["']|["']$/g, '');
+					const info = fieldInfo[infoKey];
+					if (info && info.min != null && info.max != null) {
+						combinedMin = Math.min(combinedMin, info.min);
+						combinedMax = Math.max(combinedMax, info.max);
+						found = true;
+					}
+				}
 
-				if (info && info.min != null && info.max != null) {
-					scaleState.addMark([info.min, info.max], this.#markId);
+				if (found) {
+					console.log(
+						`📐 [${this.#markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
+					);
+					scaleState.addMark([combinedMin, combinedMax], this.#markId);
 				}
 			}
 		}
@@ -820,20 +892,46 @@ export class BaseMarkSetup {
 		}
 
 		// Compute and register X domain
-		if (xChannelsToCheck.length > 0 && this.actualXScaleType === 'linear') {
-			const extent = this.#computeExtentFromData(data, xChannelsToCheck);
+		if (xChannelsToCheck.length > 0 && (this.actualXScaleType === 'linear' || this.actualXScaleType === 'time')) {
+			let extent = this.#computeExtentFromData(data, xChannelsToCheck);
 			if (extent) {
-				console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
-				this.#chartContext.xScaleState?.addMark(extent, this.#markId);
+				// Apply zero baseline if mark requests it
+				if (this.#config.zeroBaseline?.x) {
+					extent = [Math.min(0, extent[0]), extent[1]];
+				}
+
+				const scaleState = this.#chartContext.xScaleState;
+				if (this.actualXScaleType === 'time' && scaleState?.addOffsetExtent) {
+					// Time scale: data is in offset form, use addOffsetExtent
+					console.log(`📊 [${this.#markId}] Registering X domain from data (time offsets):`, extent);
+					scaleState.addOffsetExtent(extent, this.#markId);
+				} else if (scaleState?.addMark) {
+					// Linear scale: use standard addMark
+					console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
+					scaleState.addMark(extent, this.#markId);
+				}
 			}
 		}
 
 		// Compute and register Y domain
-		if (yChannelsToCheck.length > 0 && this.actualYScaleType === 'linear') {
-			const extent = this.#computeExtentFromData(data, yChannelsToCheck);
+		if (yChannelsToCheck.length > 0 && (this.actualYScaleType === 'linear' || this.actualYScaleType === 'time')) {
+			let extent = this.#computeExtentFromData(data, yChannelsToCheck);
 			if (extent) {
-				console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
-				this.#chartContext.yScaleState?.addMark(extent, this.#markId);
+				// Apply zero baseline if mark requests it
+				if (this.#config.zeroBaseline?.y) {
+					extent = [Math.min(0, extent[0]), extent[1]];
+				}
+
+				const scaleState = this.#chartContext.yScaleState;
+				if (this.actualYScaleType === 'time' && scaleState?.addOffsetExtent) {
+					// Time scale: data is in offset form, use addOffsetExtent
+					console.log(`📊 [${this.#markId}] Registering Y domain from data (time offsets):`, extent);
+					scaleState.addOffsetExtent(extent, this.#markId);
+				} else if (scaleState?.addMark) {
+					// Linear scale: use standard addMark
+					console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
+					scaleState.addMark(extent, this.#markId);
+				}
 			}
 		}
 
@@ -925,15 +1023,23 @@ export class BaseMarkSetup {
 			setupFetch('y', this.#config.select.y);
 		}
 
-		// Time scale sidecar queries: fetch MIN/MAX datetime for offset computation
+		// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
 		const setupTimeFetch = (axis, field) => {
 			if (!field) return;
 			const scaleState = this.#chartContext[`${axis}ScaleState`];
 			if (!scaleState?.addDatetimeExtent) return;
 
+			// Unwrap AutoBinNode to get the underlying column name
+			// For bins: fetch raw column min/max to establish t0, then actual bin
+			// boundaries from query results will update the extent later
+			const rawField = field.isAutoBinNode ? field.field : field;
+
+			// Ensure we have a valid string or SQL node
+			const colExpr = isNode(rawField) ? rawField : sqlColumn(String(rawField));
+
 			const q = Query.from(table).select({
-				min_time: min(sqlColumn(String(field))),
-				max_time: max(sqlColumn(String(field)))
+				min_time: min(colExpr),
+				max_time: max(colExpr)
 			});
 
 			fetches.push(
@@ -948,10 +1054,13 @@ export class BaseMarkSetup {
 		};
 
 		if (this.actualXScaleType === 'time') {
-			setupTimeFetch('x', this.#config.select.x);
+			// Check x1 if x is missing (standard pattern for Rect/Rule marks)
+			setupTimeFetch('x', this.#config.select.x || this.#config.select.x1);
+			// setupTimeFetch('x', this.#config.select.x);
 		}
 		if (this.actualYScaleType === 'time') {
-			setupTimeFetch('y', this.#config.select.y);
+			setupTimeFetch('y', this.#config.select.y || this.#config.select.y1);
+			// setupTimeFetch('y', this.#config.select.y);
 		}
 
 		// Fetch color domain if color scale is set and there's a color field
@@ -1041,6 +1150,14 @@ export class BaseMarkSetup {
 			return;
 		}
 
+		// Skip sidecar when AutoBinNodes exist — they can't be resolved to SQL
+		// until fieldInfo is available (which requires the DataClient created later).
+		// Domains will be set from query results via #registerDataDerivedDomains.
+		if (this.#autoBinNodes.size > 0) {
+			console.log(`[${this.#markId}] Skipping sidecar: bin domains derived from query results`);
+			return;
+		}
+
 		console.log(
 			`🔍 [${this.#markId}] Building sidecar query for channels:`,
 			Array.from(this.#channelsNeedingDataDomain)
@@ -1056,13 +1173,27 @@ export class BaseMarkSetup {
 			const outerSelect = {};
 
 			if (this.#channelsNeedingDataDomain.has('x')) {
-				outerSelect.min_x = min('x');
-				outerSelect.max_x = max('x');
+				const select = this.#config.select;
+				if ('x' in select) {
+					outerSelect.min_x = min('x');
+					outerSelect.max_x = max('x');
+				} else {
+					// Extent channels: use x1 for min, x2 for max
+					if ('x1' in select) outerSelect.min_x = min('x1');
+					if ('x2' in select) outerSelect.max_x = max('x2');
+				}
 			}
 
 			if (this.#channelsNeedingDataDomain.has('y')) {
-				outerSelect.min_y = min('y');
-				outerSelect.max_y = max('y');
+				const select = this.#config.select;
+				if ('y' in select) {
+					outerSelect.min_y = min('y');
+					outerSelect.max_y = max('y');
+				} else {
+					// Extent channels: use y1 for min, y2 for max
+					if ('y1' in select) outerSelect.min_y = min('y1');
+					if ('y2' in select) outerSelect.max_y = max('y2');
+				}
 			}
 
 			if (this.#channelsNeedingDataDomain.has('color')) {

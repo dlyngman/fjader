@@ -262,6 +262,14 @@ export class ChartScales {
 		config = {},
 		columnName = null
 	) => {
+		let rawColumn = columnName;
+		if (rawColumn?.isAutoBinNode) {
+			rawColumn = rawColumn.field;
+		}
+		if (rawColumn && typeof rawColumn !== 'string') {
+			rawColumn = rawColumn.toString();
+		}
+
 		const requirements = this.scaleRequirements[dimension];
 		const existing = requirements.find(
 			(req) =>
@@ -272,8 +280,12 @@ export class ChartScales {
 		);
 
 		if (!existing) {
-			requirements.push({ type, priority, markId, config, columnName });
+
+			requirements.push({ type, priority, markId, config, columnName: rawColumn });
 			this.scaleRequirements[dimension] = [...requirements];
+
+			// requirements.push({ type, priority, markId, config, columnName });
+			// this.scaleRequirements[dimension] = [...requirements];
 		}
 	};
 
