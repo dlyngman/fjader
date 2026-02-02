@@ -103,7 +103,11 @@
 			x: effectiveXScaleType
 				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
 				: null,
-			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
+			y: {
+				type: 'linear',
+				priority: SCALE_PRIORITIES.PREFER,
+				config: isHistogram ? { disableZoom: true } : {}
+			}
 		},
 		inferredScaleColumns: {
 			x: x1,

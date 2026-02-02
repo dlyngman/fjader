@@ -351,8 +351,6 @@ export class BaseMarkSetup {
 			const xDomain = this.#chartContext.xScaleState?.domain?.target;
 			const yDomain = this.#chartContext.yScaleState?.domain?.target;
 
-			console.log(`🔍 [${this.#markId}] Effect running: multiplier=${multiplier.toFixed(2)}, prev=${this.#prevBinMultiplier}, autoBinNodes=${this.#autoBinNodes.size}, client=${!!this.client}`);
-
 			if (this.#autoBinNodes.size === 0 || !this.client) {
 				// Early return, but reactive values were already read above
 				return;
@@ -368,6 +366,21 @@ export class BaseMarkSetup {
 					`🎛️ [${this.#markId}] Re-binning: Multiplier ${this.#prevBinMultiplier.toFixed(1)}x → ${multiplier.toFixed(1)}x`
 				);
 				this.#prevBinMultiplier = multiplier;
+
+				// Determine which axis has bins (should preserve user zoom on that axis)
+				const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+				const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+
+				// Skip domain update for binned axis (user zoomed there intentionally)
+				// But DO update the aggregate axis domain (counts changed)
+				if (xHasBin) this.#skipDomainUpdateForAxis = 'x';
+				if (yHasBin) this.#skipDomainUpdateForAxis = 'y';
+
+				// Track current dataVersion - we'll wait for it to increment before updating domains
+				this.#rebinPendingDataVersion = this.client?.dataVersion;
+
+				// Reset data-derived domain flag so aggregate extent updates from new data
+				this.#dataDerivedDomainsSet = false;
 
 				// Immediate update. Since this changes the query definition via
 				// resolveAutoBins -> buildQuery, requestUpdate will re-run the pipeline.

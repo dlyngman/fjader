@@ -72,6 +72,11 @@ export const SCALE_CONFIG_SCHEMAS = {
 			type: 'number',
 			strategy: RESOLUTION_STRATEGIES.MAX,
 			description: 'Explicit maximum domain value'
+		},
+		disableZoom: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			description: 'Disable user zoom/pan interactions (for auto-scaling axes)'
 		}
 	},
 

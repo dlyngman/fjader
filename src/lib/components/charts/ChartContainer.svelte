@@ -307,10 +307,9 @@
 
 		// Shift+Wheel controls bin density
 		if (event.shiftKey) {
-			// Scroll UP (negative delta) = Increase density (add 0.1)
-			// Scroll DOWN (positive delta) = Decrease density (subtract 0.1)
+			// Scroll UP (negative delta) = Increase density by 5%
+			// Scroll DOWN (positive delta) = Decrease density by 5%
 			const delta = event.deltaY < 0 ? 0.05 : -0.05;
-			console.log(`🖱️ Shift+scroll on chart ${layout.chartId}, delta=${delta}`);
 			scales.adjustBinMultiplier(delta);
 			return;
 		}

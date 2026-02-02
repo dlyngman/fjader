@@ -476,12 +476,15 @@ export class ChartScales {
 	adjustBinMultiplier(delta) {
 		// Clamp between 0.1x (coarse) and 20x (fine)
 		const current = this.binStepMultiplier;
-		const newValue = Math.max(0.1, Math.min(20.0, current + delta));
+
+		// Multiplicative: delta is a percentage of current value
+		// e.g., delta=0.2 means 20% change relative to current
+		const absoluteDelta = current * delta;
+		const newValue = Math.max(0.1, Math.min(20.0, current + absoluteDelta));
 
 		// Only update if changed significantly
 		if (Math.abs(newValue - current) > 0.001) {
 			this.binStepMultiplier = newValue;
-			console.log(`🎛️ Bin multiplier: ${current.toFixed(2)} → ${newValue.toFixed(2)}, stored value: ${this.binStepMultiplier.toFixed(2)}`);
 		}
 	}
 

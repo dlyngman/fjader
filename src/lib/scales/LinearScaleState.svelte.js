@@ -76,6 +76,7 @@ export class LinearScaleState {
 	// --- Constraints ---
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
 	zoomLimits = { max: 10, min: 100 }; // max = pan multiplier, min = zoom divisor
+	disableZoom = false; // When true, user zoom/pan is ignored (for auto-scaling axes)
 
 	// --- Mark Extent Tracking ---
 	#extents = new Map();
@@ -125,6 +126,11 @@ export class LinearScaleState {
 		this.id = crypto.randomUUID();
 		this.name = name;
 		this.#gpuCoordinator = gpuCoordinator;
+
+		// Apply options
+		if (options.disableZoom !== undefined) {
+			this.disableZoom = options.disableZoom;
+		}
 
 		// Store initial extent
 		this.#initExtent[0] = extent[0];
@@ -268,6 +274,8 @@ export class LinearScaleState {
 	 * @param {object} context - Pan context with initialDomain, screenToDataRatio, etc.
 	 */
 	setPanContext(context) {
+		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
+
 		// console.log(`=== setPanContext for ${this.name} (${this.id}) ===`);
 		// console.log('axis:', context.axis);
 		// console.log('#isAnimating before:', this.#isAnimating);
@@ -330,6 +338,8 @@ export class LinearScaleState {
 	 * @param {number} scaleFactor - Zoom scale factor (>1 = zoom in)
 	 */
 	accumulateZoom(dataCenter, scaleFactor) {
+		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
+
 		this.#zoomAccumulator.logScale += Math.log(scaleFactor);
 		this.#zoomAccumulator.center = dataCenter;
 		this.#zoomAccumulator.hasUpdates = true;

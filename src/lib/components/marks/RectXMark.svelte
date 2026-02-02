@@ -100,7 +100,11 @@
 			y: ['linear', 'band', 'point', 'time', 'log']
 		},
 		scaleRequirements: {
-			x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
+			x: {
+				type: 'linear',
+				priority: SCALE_PRIORITIES.PREFER,
+				config: isHistogram ? { disableZoom: true } : {}
+			},
 			y: effectiveYScaleType
 				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
 				: null
