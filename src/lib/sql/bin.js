@@ -58,9 +58,10 @@ export class AutoBinNode {
 	 * @param {object} fieldInfo - Field statistics from DataClient
 	 * @param {string} scaleType - Scale type (linear, time, etc.)
 	 * @param {number|null} timeOffset - Global t0 (ms) for time offset optimization
+	 * @param {[number, number]|null} currentDomain - Current viewport domain for adaptive binning
 	 * @returns {Expression} Mosaic SQL expression
 	 */
-	resolve(fieldInfo, scaleType, timeOffset = null) {
+	resolve(fieldInfo, scaleType, timeOffset = null, currentDomain = null, binStepMultiplier = 1.0) {
 		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
 		const info = fieldInfo[fieldName] || {};
 		const { min, max, type } = info;
@@ -81,10 +82,38 @@ export class AutoBinNode {
 			scaleType === 'time' ||
 			scaleType === 'utc';
 
+		// Adaptive binning: scale step count based on viewport
+		let binOptions = { ...this.options };
+		if (currentDomain && binOptions.steps && !binOptions.step && !binOptions.interval) {
+			const viewportWidth = currentDomain[1] - currentDomain[0];
+			const globalWidth = isTemporal
+				? (new Date(max).getTime() - new Date(min).getTime()) / 1000 // seconds
+				: max - min;
+
+			if (viewportWidth > 0 && globalWidth > 0) {
+				const viewportFraction = viewportWidth / globalWidth;
+				const scaledSteps = Math.max(1, Math.round(binOptions.steps / viewportFraction));
+				binOptions = { ...binOptions, steps: scaledSteps };
+			}
+		}
+
+		// Apply user bin multiplier (Shift+Scroll)
+		if (binStepMultiplier !== 1.0) {
+			if (binOptions.steps) {
+				// Higher multiplier = More bins
+				binOptions.steps = Math.max(1, Math.round(binOptions.steps * binStepMultiplier));
+			}
+			if (binOptions.step) {
+				// Higher multiplier = Smaller bin width
+				binOptions.step = binOptions.step / binStepMultiplier;
+			}
+			// Note: We ignore 'interval' (strings like 'month') as strictly multiplying them is ambiguous
+		}
+
 		// 1. Generate the standard binning expression (TIMESTAMP or NUMBER)
 		const binExpr = isTemporal
-			? binDate(col, [min, max], this.options)
-			: binHistogram(col, [min, max], this.options);
+			? binDate(col, [min, max], binOptions)
+			: binHistogram(col, [min, max], binOptions);
 
 		// 2. Apply Time Offset Injection
 		// If this is a time scale and we have a valid t0, shift the reference frame

@@ -23,7 +23,8 @@
 		limit,
 		filterNulls = false,
 		preferredYScaleType = null,
-		transforms = []
+		transforms = [],
+		viewportLocalDomain = false
 	} = $props();
 
 	const markId = `rectx-${crypto.randomUUID().slice(0, 8)}`;
@@ -120,7 +121,9 @@
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, ey1, ey2] : null },
 		// Histograms should start at zero baseline for the aggregate dimension
-		zeroBaseline: isHistogram ? { x: true } : null
+		zeroBaseline: isHistogram ? { x: true } : null,
+		// Viewport-local domain: compute X extent from visible Y range only
+		viewportLocalDomain
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);

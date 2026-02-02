@@ -42,6 +42,8 @@ export class ChartScales {
 		lastScreenPos: 0
 	};
 
+	binStepMultiplier = $state(1.0);
+
 	constructor(config) {
 		this.config = config;
 		this.gpuCoordinator = config.gpuCoordinator;
@@ -280,7 +282,6 @@ export class ChartScales {
 		);
 
 		if (!existing) {
-
 			requirements.push({ type, priority, markId, config, columnName: rawColumn });
 			this.scaleRequirements[dimension] = [...requirements];
 
@@ -472,6 +473,18 @@ export class ChartScales {
 		return this.baseYScale.bandwidth();
 	});
 
+	adjustBinMultiplier(delta) {
+		// Clamp between 0.1x (coarse) and 20x (fine)
+		const current = this.binStepMultiplier;
+		const newValue = Math.max(0.1, Math.min(20.0, current + delta));
+
+		// Only update if changed significantly
+		if (Math.abs(newValue - current) > 0.001) {
+			this.binStepMultiplier = newValue;
+			console.log(`🎛️ Bin multiplier: ${current.toFixed(2)} → ${newValue.toFixed(2)}, stored value: ${this.binStepMultiplier.toFixed(2)}`);
+		}
+	}
+
 	// Context data for child components
 	getContextData() {
 		const coordinator = this;
@@ -541,7 +554,11 @@ export class ChartScales {
 			},
 			registerScaleType: coordinator.registerScaleType,
 			unregisterScaleType: coordinator.unregisterScaleType,
-			getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary
+			getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary,
+			get binStepMultiplier() {
+				return coordinator.binStepMultiplier;
+			},
+			adjustBinMultiplier: (d) => coordinator.adjustBinMultiplier(d)
 		};
 	}
 

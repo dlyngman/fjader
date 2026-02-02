@@ -41,6 +41,7 @@ export class LinearScaleState {
 
 	// Reactivity trigger - bump when render state changes
 	_version = $state(0);
+	_targetVersion = $state(0); // Increments only when target changes, not every frame
 
 	// --- Identity ---
 	id;
@@ -181,6 +182,7 @@ export class LinearScaleState {
 
 			/** Target domain (what we're animating toward) */
 			get target() {
+				self._targetVersion; // Register Svelte dependency (only changes on user input)
 				return [self.#springPair.targetA, self.#springPair.targetB];
 			},
 
@@ -311,7 +313,7 @@ export class LinearScaleState {
 
 		// Clamp to domain limits
 		const clamped = this.#clampDomain(newMin, newMax);
-		this.#springPair.setTarget(clamped.min, clamped.max);
+		this.#setTarget(clamped.min, clamped.max);
 	}
 
 	/**
@@ -337,12 +339,16 @@ export class LinearScaleState {
 
 	/**
 	 * Reset zoom to show full extent.
+	 * @param {boolean} instant - Apply instantly without animation
 	 */
-	resetZoom() {
+	resetZoom(instant = false) {
 		const [min, max] = this.effectiveExtent;
 		if (!isFinite(min) || !isFinite(max) || min === max) return;
 
-		if (!this.ready && this.zoomInEffect.enabled) {
+		if (instant) {
+			// Instant update - skip animation entirely
+			this.#setInstant(min, max);
+		} else if (!this.ready && this.zoomInEffect.enabled) {
 			// First time - do zoom-in effect from expanded view
 			this.#setStiffness(this.zoomInEffect.stiffness);
 
@@ -354,7 +360,7 @@ export class LinearScaleState {
 
 			// Set current position to expanded, target to actual
 			this.#springPair.set(expandedMin, expandedMax);
-			this.#springPair.setTarget(min, max);
+			this.#setTarget(min, max);
 
 			// Initialize render values so first frame renders correctly
 			this.#renderMin = expandedMin;
@@ -365,8 +371,7 @@ export class LinearScaleState {
 		} else {
 			// Normal reset
 			this.#setStiffness(SCALE_SPRING_PRESETS.reset);
-			this.#springPair.setTarget(min, max);
-			this.#ensureAnimating();
+			this.#setTarget(min, max);
 		}
 	}
 
@@ -465,8 +470,12 @@ export class LinearScaleState {
 
 	/**
 	 * Register a mark's data extent with this scale.
+	 * @param {Array<number>} range - Data extent
+	 * @param {string} identifier - Mark identifier
+	 * @param {object} options - Options
+	 * @param {boolean} options.instant - Apply domain instantly without spring animation
 	 */
-	addMark(range, identifier) {
+	addMark(range, identifier, options = {}) {
 		let processedRange;
 
 		if (range.length === 2) {
@@ -482,7 +491,7 @@ export class LinearScaleState {
 		this.#extents.set(identifier, processedRange);
 
 		if (this.#enableUpdates) {
-			this.updateExtentFromExtents();
+			this.updateExtentFromExtents(true, options.instant);
 		}
 
 		return this;
@@ -504,8 +513,10 @@ export class LinearScaleState {
 
 	/**
 	 * Recompute extent from all registered marks.
+	 * @param {boolean} nice - Apply nice rounding to domain
+	 * @param {boolean} instant - Apply domain instantly without spring animation
 	 */
-	updateExtentFromExtents(nice = true) {
+	updateExtentFromExtents(nice = true, instant = false) {
 		if (!this.#enableUpdates || this.#extents.size === 0) return;
 
 		const extents = Array.from(this.#extents.values());
@@ -522,7 +533,7 @@ export class LinearScaleState {
 		}
 
 		this.resetDomainLimits();
-		this.resetZoom();
+		this.resetZoom(instant);
 	}
 
 	/**
@@ -566,6 +577,7 @@ export class LinearScaleState {
 
 	#setTarget(min, max) {
 		this.#springPair.setTarget(min, max);
+		this._targetVersion++; // Trigger reactivity for target watchers
 		this.#ensureAnimating();
 	}
 
@@ -575,6 +587,7 @@ export class LinearScaleState {
 		this.#renderMax = max;
 		this.#updateGpuState();
 		this._version++;
+		this._targetVersion++; // Trigger reactivity for target watchers
 	}
 
 	#setStiffness(stiffness) {
@@ -614,7 +627,7 @@ export class LinearScaleState {
 
 		// Clamp to domain limits
 		const clamped = this.#clampDomain(newMin, newMax);
-		this.#springPair.setTarget(clamped.min, clamped.max);
+		this.#setTarget(clamped.min, clamped.max);
 	}
 
 	#clampDomain(min, max) {
