@@ -42,9 +42,10 @@
 
 						<RectYMark
 							table="flights"
-							x={bin('delay', { step: 2 })}
+							x={bin('delay', { steps: 50 })}
 							y={count()}
 							color="steelblue"
+							viewportLocalDomain={true}
 						/>
 					{/snippet}
 				</WebGPUCanvas>

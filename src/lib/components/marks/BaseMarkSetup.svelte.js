@@ -46,6 +46,17 @@ export class BaseMarkSetup {
 	#transformCompiler;
 	#autoBinNodes = new Map(); // channel -> AutoBinNode
 
+	// --- Adaptive Binning Support ---
+	#lastBinningDomain = { x: null, y: null }; // Track domains used for binning
+	#rebinTimeout = null;
+	#binningThreshold = 1.25; // Re-bin when domain changes by this factor
+	#skipDomainUpdateForAxis = null; // Skip domain update for this axis after re-bin
+	#rebinPendingDataVersion = null; // Track which dataVersion we're waiting for
+	#prevBinMultiplier = 1.0;
+
+	// --- Viewport-Local Domain Support ---
+	#viewportDomainUpdateTimeout = null;
+
 	// --- Data-Derived Domain Support ---
 	// Channels that need domain computed from query results (aggregates, transforms)
 	#channelsNeedingDataDomain = new Set();
@@ -277,13 +288,31 @@ export class BaseMarkSetup {
 		// Effect 7: Register data-derived domains when data arrives
 		// This handles aggregates and transforms that need domain computed from query results
 		$effect(() => {
+			// Watch dataVersion to ensure we only process NEW data
+			const dataVersion = this.client?.dataVersion;
+			if (dataVersion === undefined) return;
+
 			const data = this.data;
 			if (!data || data.length === 0) return;
 			if (this.#dataDerivedDomainsSet) return; // Already done
 
+			// If we're waiting for new data from a re-bin, skip until dataVersion increments
+			if (this.#rebinPendingDataVersion !== null && dataVersion <= this.#rebinPendingDataVersion) {
+				console.log(
+					`⏳ [${this.#markId}] Waiting for new data (current: ${dataVersion}, pending: ${this.#rebinPendingDataVersion})`
+				);
+				return;
+			}
+
+			// Check if this is a rebinning update before clearing the flag
+			const isRebinning = this.#rebinPendingDataVersion !== null;
+
+			// Clear pending state - we have new data
+			this.#rebinPendingDataVersion = null;
+
 			// Get additional channels from transforms (if any)
 			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-			this.#registerDataDerivedDomains(data, additionalChannels);
+			this.#registerDataDerivedDomains(data, additionalChannels, isRebinning);
 		});
 
 		// Effect 8: Mark deferred scales ready when data-derived domains are set
@@ -292,6 +321,118 @@ export class BaseMarkSetup {
 		$effect(() => {
 			if (this.#dataDerivedDomainsSet && this.#scaleMappingsReady) {
 				this.#markDeferredScalesReady();
+			}
+		});
+
+		// // Effect 9: Adaptive binning - re-query when domain changes significantly
+		// $effect(() => {
+		// 	if (this.#autoBinNodes.size === 0 || !this.client) return;
+
+		// 	// Watch X domain TARGET (immediate user input, not animated current)
+		// 	const xDomain = this.#chartContext.xScaleState?.domain?.target;
+		// 	const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+		// 	if (xHasBin && xDomain && this.#shouldReBin(xDomain, 'x')) {
+		// 		this.#scheduleReBin('x', xDomain);
+		// 	}
+
+		// 	// Watch Y domain TARGET (immediate user input, not animated current)
+		// 	const yDomain = this.#chartContext.yScaleState?.domain?.target;
+		// 	const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+		// 	if (yHasBin && yDomain && this.#shouldReBin(yDomain, 'y')) {
+		// 		this.#scheduleReBin('y', yDomain);
+		// 	}
+		// });
+
+		// Effect 9: Adaptive Binning & User Resolution Control
+		$effect(() => {
+			// IMPORTANT: Read reactive values FIRST to establish dependencies
+			// Even if we early-return, Svelte needs to track these for reactivity
+			const multiplier = this.#chartContext.binStepMultiplier ?? 1.0;
+			const xDomain = this.#chartContext.xScaleState?.domain?.target;
+			const yDomain = this.#chartContext.yScaleState?.domain?.target;
+
+			if (this.#autoBinNodes.size === 0 || !this.client) {
+				// Early return, but reactive values were already read above
+				return;
+			}
+
+			// --- A. User Resolution Control (Shift+Scroll) ---
+			if (this.#prevBinMultiplier === undefined) {
+				this.#prevBinMultiplier = multiplier;
+			}
+
+			if (multiplier !== this.#prevBinMultiplier) {
+				console.log(
+					`🎛️ [${this.#markId}] Re-binning: Multiplier ${this.#prevBinMultiplier.toFixed(1)}x → ${multiplier.toFixed(1)}x`
+				);
+				this.#prevBinMultiplier = multiplier;
+
+				// Determine which axis has bins (should preserve user zoom on that axis)
+				const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+				const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+
+				// Skip domain update for binned axis (user zoomed there intentionally)
+				// But DO update the aggregate axis domain (counts changed)
+				if (xHasBin) this.#skipDomainUpdateForAxis = 'x';
+				if (yHasBin) this.#skipDomainUpdateForAxis = 'y';
+
+				// Track current dataVersion - we'll wait for it to increment before updating domains
+				this.#rebinPendingDataVersion = this.client?.dataVersion;
+
+				// Reset data-derived domain flag so aggregate extent updates from new data
+				this.#dataDerivedDomainsSet = false;
+
+				// Immediate update. Since this changes the query definition via
+				// resolveAutoBins -> buildQuery, requestUpdate will re-run the pipeline.
+				this.client.requestUpdate();
+
+				// Return early - skip adaptive check this frame
+				return;
+			}
+
+			// --- B. Adaptive Binning (Viewport changes) ---
+			const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+			if (xHasBin && xDomain && this.#shouldReBin(xDomain, 'x')) {
+				this.#scheduleReBin('x', xDomain);
+			}
+
+			const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+			if (yHasBin && yDomain && this.#shouldReBin(yDomain, 'y')) {
+				this.#scheduleReBin('y', yDomain);
+			}
+		});
+
+		// Effect 10: Viewport-local domain - update aggregate axis when viewport pans
+		$effect(() => {
+			if (!this.#config.viewportLocalDomain) return;
+			if (!this.data || !this.#dataDerivedDomainsSet) return;
+
+			// Determine which axis has bins (vs aggregates)
+			const xHasBins = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+			const yHasBins = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+
+			// For RectYMark: X has bins, Y has aggregate → watch X TARGET, update Y
+			if (xHasBins && !yHasBins) {
+				const xDomain = this.#chartContext.xScaleState?.domain?.target;
+				if (xDomain && this.actualXScaleType !== 'band') {
+					// Skip viewport update if we're about to re-bin anyway
+					if (this.#shouldReBin(xDomain, 'x')) {
+						return; // Re-binning will update Y with new data
+					}
+					this.#updateViewportLocalDomain('y', xDomain);
+				}
+			}
+
+			// For RectXMark: Y has bins, X has aggregate → watch Y TARGET, update X
+			if (yHasBins && !xHasBins) {
+				const yDomain = this.#chartContext.yScaleState?.domain?.target;
+				if (yDomain && this.actualYScaleType !== 'band') {
+					// Skip viewport update if we're about to re-bin anyway
+					if (this.#shouldReBin(yDomain, 'y')) {
+						return; // Re-binning will update X with new data
+					}
+					this.#updateViewportLocalDomain('x', yDomain);
+				}
 			}
 		});
 	}
@@ -571,8 +712,6 @@ export class BaseMarkSetup {
 	}
 
 	buildQuery(sourceTable, config, filter) {
-		// console.log('🔨 buildQuery called with filter:', filter);
-		// console.log('🔨 buildQuery config:', config);
 		let select = config.select;
 
 		// NEW: Resolve auto bins if we have field info
@@ -687,28 +826,59 @@ export class BaseMarkSetup {
 	#resolveAutoBins(select) {
 		const resolved = {};
 
+		const binStepMultiplier = this.#chartContext.binStepMultiplier || 1.0;
+
 		for (const [channel, value] of Object.entries(select)) {
 			if (value?.isAutoBinNode) {
 				const axis = channel.startsWith('x') ? 'x' : 'y';
 				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+				const scaleState = this.#chartContext[`${axis}ScaleState`];
 
 				let t0 = null;
+				let currentDomain = null;
 
-				// Only lookup t0 for time scales
+				// For time scales, get t0 and frozen binning domain
 				if (scaleType === 'time' || scaleType === 'utc') {
-					const scaleState = this.#chartContext[`${axis}ScaleState`];
-
 					// Get the actual origin datetime (t0) from the time scale
 					// and convert to epoch seconds for offset calculation in binDate.
 					// This matches the offset calculation in TimeScaleState's derived column.
-					if (scaleState && scaleState.t0) {
+					if (scaleState?.t0) {
 						// Convert t0 (Date object) to epoch seconds
 						t0 = Math.floor(scaleState.t0.getTime() / 1000);
 					}
+
+					// Use frozen domain from last re-bin decision, not live domain
+					// This prevents using a moving target during zoom/pan
+					currentDomain = this.#lastBinningDomain[axis];
+
+					// Initialize baseline on first resolution
+					if (!currentDomain) {
+						currentDomain = scaleState?.domain?.current;
+						if (currentDomain) {
+							this.#lastBinningDomain[axis] = [...currentDomain];
+						}
+					}
+				} else if (scaleType === 'linear') {
+					// Linear scales: use frozen domain from last re-bin decision
+					currentDomain = this.#lastBinningDomain[axis];
+
+					// Initialize baseline on first resolution
+					if (!currentDomain) {
+						currentDomain = scaleState?.domain?.current;
+						if (currentDomain) {
+							this.#lastBinningDomain[axis] = [...currentDomain];
+						}
+					}
 				}
 
-				// Pass t0 to the resolver
-				resolved[channel] = value.resolve(this.client.fieldInfo, scaleType, t0);
+				// Pass t0 and currentDomain to the resolver
+				resolved[channel] = value.resolve(
+					this.client.fieldInfo,
+					scaleType,
+					t0,
+					currentDomain,
+					binStepMultiplier
+				);
 			} else {
 				resolved[channel] = value;
 			}
@@ -858,8 +1028,9 @@ export class BaseMarkSetup {
 	 *
 	 * @param {DataAccessor|Array} data - Data accessor or array of objects
 	 * @param {Array<string>} [additionalChannels=[]] - Extra channels from transforms
+	 * @param {boolean} [isRebinning=false] - Whether this update is from a rebinning operation
 	 */
-	#registerDataDerivedDomains(data, additionalChannels = []) {
+	#registerDataDerivedDomains(data, additionalChannels = [], isRebinning = false) {
 		if (!data || (Array.isArray(data) && data.length === 0)) return;
 		if (!Array.isArray(data) && data.length === 0) return;
 
@@ -892,8 +1063,25 @@ export class BaseMarkSetup {
 		}
 
 		// Compute and register X domain
-		if (xChannelsToCheck.length > 0 && (this.actualXScaleType === 'linear' || this.actualXScaleType === 'time')) {
-			let extent = this.#computeExtentFromData(data, xChannelsToCheck);
+		// Skip if this axis triggered the re-bin (user zoomed here, don't override)
+		if (
+			this.#skipDomainUpdateForAxis !== 'x' &&
+			xChannelsToCheck.length > 0 &&
+			(this.actualXScaleType === 'linear' || this.actualXScaleType === 'time')
+		) {
+			// For viewport-local domains, filter to visible Y range
+			let filterOptions = {};
+			if (this.#config.viewportLocalDomain && this.actualYScaleType !== 'band') {
+				const yDomain = this.#chartContext.yScaleState?.domain?.current;
+				if (yDomain) {
+					filterOptions = { filterAxis: 'y', filterDomain: yDomain };
+					console.log(
+						`🔍 [${this.#markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`
+					);
+				}
+			}
+
+			let extent = this.#computeExtentFromData(data, xChannelsToCheck, filterOptions);
 			if (extent) {
 				// Apply zero baseline if mark requests it
 				if (this.#config.zeroBaseline?.x) {
@@ -901,21 +1089,48 @@ export class BaseMarkSetup {
 				}
 
 				const scaleState = this.#chartContext.xScaleState;
+
+				// Use instant domain update when rebinning to avoid confusing grow/shrink effect
+				// Keep spring animation for viewport panning (smooth bin entry/exit)
 				if (this.actualXScaleType === 'time' && scaleState?.addOffsetExtent) {
 					// Time scale: data is in offset form, use addOffsetExtent
-					console.log(`📊 [${this.#markId}] Registering X domain from data (time offsets):`, extent);
+					console.log(
+						`📊 [${this.#markId}] Registering X domain from data (time offsets):`,
+						extent
+					);
 					scaleState.addOffsetExtent(extent, this.#markId);
 				} else if (scaleState?.addMark) {
-					// Linear scale: use standard addMark
-					console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
-					scaleState.addMark(extent, this.#markId);
+					// Linear scale: use addMark with instant flag when rebinning
+					if (isRebinning) {
+						console.log(`⚡ [${this.#markId}] Instant X domain update (rebinning):`, extent);
+					} else {
+						console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
+					}
+					scaleState.addMark(extent, this.#markId, { instant: isRebinning });
 				}
 			}
 		}
 
 		// Compute and register Y domain
-		if (yChannelsToCheck.length > 0 && (this.actualYScaleType === 'linear' || this.actualYScaleType === 'time')) {
-			let extent = this.#computeExtentFromData(data, yChannelsToCheck);
+		// Skip if this axis triggered the re-bin (user zoomed here, don't override)
+		if (
+			this.#skipDomainUpdateForAxis !== 'y' &&
+			yChannelsToCheck.length > 0 &&
+			(this.actualYScaleType === 'linear' || this.actualYScaleType === 'time')
+		) {
+			// For viewport-local domains, filter to visible X range
+			let filterOptions = {};
+			if (this.#config.viewportLocalDomain && this.actualXScaleType !== 'band') {
+				const xDomain = this.#chartContext.xScaleState?.domain?.current;
+				if (xDomain) {
+					filterOptions = { filterAxis: 'x', filterDomain: xDomain };
+					console.log(
+						`🔍 [${this.#markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`
+					);
+				}
+			}
+
+			let extent = this.#computeExtentFromData(data, yChannelsToCheck, filterOptions);
 			if (extent) {
 				// Apply zero baseline if mark requests it
 				if (this.#config.zeroBaseline?.y) {
@@ -923,17 +1138,30 @@ export class BaseMarkSetup {
 				}
 
 				const scaleState = this.#chartContext.yScaleState;
+
+				// Use instant domain update when rebinning to avoid confusing grow/shrink effect
+				// Keep spring animation for viewport panning (smooth bin entry/exit)
 				if (this.actualYScaleType === 'time' && scaleState?.addOffsetExtent) {
 					// Time scale: data is in offset form, use addOffsetExtent
-					console.log(`📊 [${this.#markId}] Registering Y domain from data (time offsets):`, extent);
+					console.log(
+						`📊 [${this.#markId}] Registering Y domain from data (time offsets):`,
+						extent
+					);
 					scaleState.addOffsetExtent(extent, this.#markId);
 				} else if (scaleState?.addMark) {
-					// Linear scale: use standard addMark
-					console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
-					scaleState.addMark(extent, this.#markId);
+					// Linear scale: use addMark with instant flag when rebinning
+					if (isRebinning) {
+						console.log(`⚡ [${this.#markId}] Instant Y domain update (rebinning):`, extent);
+					} else {
+						console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
+					}
+					scaleState.addMark(extent, this.#markId, { instant: isRebinning });
 				}
 			}
 		}
+
+		// Clear the skip flag after processing
+		this.#skipDomainUpdateForAxis = null;
 
 		this.#dataDerivedDomainsSet = true;
 	}
@@ -944,21 +1172,47 @@ export class BaseMarkSetup {
 	 *
 	 * @param {DataAccessor|Array} data - Data source
 	 * @param {Array<string>} channels - Channel names to examine
+	 * @param {Object} options - Filtering options
+	 * @param {string} options.filterAxis - 'x' or 'y' - axis to filter on
+	 * @param {[number, number]} options.filterDomain - Domain range to filter to
 	 * @returns {[number, number]|null} Extent or null if no valid data
 	 */
-	#computeExtentFromData(data, channels) {
+	#computeExtentFromData(data, channels, options = {}) {
+		const { filterAxis, filterDomain } = options;
+
 		let min = Infinity;
 		let max = -Infinity;
 
 		const isAccessor = typeof data.getColumn === 'function';
 
+		// Performance guard: skip viewport filtering for large datasets
+		const dataLength = isAccessor ? data.length : data.length;
+		const shouldFilter = filterAxis && filterDomain && dataLength < 10000;
+
 		if (isAccessor) {
 			// DataAccessor path - use getColumn for efficiency
+			// Get filter columns if needed
+			let filterCol1, filterCol2;
+			if (shouldFilter) {
+				filterCol1 = data.getColumn(`${filterAxis}1`);
+				filterCol2 = data.getColumn(`${filterAxis}2`);
+			}
+
 			for (const channel of channels) {
 				const column = data.getColumn(channel);
 				if (!column) continue;
 
 				for (let i = 0; i < column.length; i++) {
+					// Viewport filtering: skip rows outside viewport
+					if (shouldFilter && filterCol1 && filterCol2) {
+						const v1 = filterCol1[i];
+						const v2 = filterCol2[i];
+						// Check if bin [v1, v2] intersects viewport [filterDomain[0], filterDomain[1]]
+						if (v2 < filterDomain[0] || v1 > filterDomain[1]) {
+							continue; // Outside viewport
+						}
+					}
+
 					const value = column[i];
 					if (typeof value === 'number' && !isNaN(value)) {
 						if (value < min) min = value;
@@ -969,6 +1223,16 @@ export class BaseMarkSetup {
 		} else {
 			// Plain array path
 			for (const row of data) {
+				// Viewport filtering: skip rows outside viewport
+				if (shouldFilter) {
+					const v1 = row[`${filterAxis}1`];
+					const v2 = row[`${filterAxis}2`];
+					// Check if bin [v1, v2] intersects viewport
+					if (v2 < filterDomain[0] || v1 > filterDomain[1]) {
+						continue; // Outside viewport
+					}
+				}
+
 				for (const channel of channels) {
 					const value = row[channel];
 					if (typeof value === 'number' && !isNaN(value)) {
@@ -1305,8 +1569,115 @@ export class BaseMarkSetup {
 		}
 	}
 
+	// ===========================================================================
+	// VIEWPORT-LOCAL DOMAIN
+	// ===========================================================================
+
+	/**
+	 * Update the aggregate axis domain based on current viewport.
+	 * Called when panning (without re-querying data).
+	 * Debounced to avoid excessive updates during active pan/zoom.
+	 *
+	 * @param {string} aggregateAxis - 'x' or 'y' - the axis to update
+	 * @param {Array<number>} viewportDomain - Current viewport domain of the binned axis
+	 */
+	#updateViewportLocalDomain(aggregateAxis, viewportDomain) {
+		clearTimeout(this.#viewportDomainUpdateTimeout);
+		this.#viewportDomainUpdateTimeout = setTimeout(() => {
+			if (!this.data) return;
+
+			const scaleType = aggregateAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType !== 'linear' && scaleType !== 'time') return;
+
+			// Determine which axis is binned (opposite of aggregate)
+			const binnedAxis = aggregateAxis === 'x' ? 'y' : 'x';
+
+			// Build channel list for aggregate axis
+			const channels = aggregateAxis === 'x' ? ['x', 'x1', 'x2'] : ['y', 'y1', 'y2'];
+
+			// Compute extent with viewport filtering
+			const filterOptions = {
+				filterAxis: binnedAxis,
+				filterDomain: viewportDomain
+			};
+
+			let extent = this.#computeExtentFromData(this.data, channels, filterOptions);
+			if (!extent) return;
+
+			// Apply zero baseline if configured
+			if (this.#config.zeroBaseline?.[aggregateAxis]) {
+				extent = [Math.min(0, extent[0]), extent[1]];
+			}
+
+			const scaleState = this.#chartContext[`${aggregateAxis}ScaleState`];
+			if (scaleType === 'time' && scaleState?.addOffsetExtent) {
+				scaleState.addOffsetExtent(extent, this.#markId);
+			} else if (scaleState?.addMark) {
+				scaleState.addMark(extent, this.#markId);
+			}
+		}, 16); // One frame (~60fps) - very responsive for in-memory computation
+	}
+
+	// ===========================================================================
+	// ADAPTIVE BINNING
+	// ===========================================================================
+
+	/**
+	 * Check if domain change is significant enough to trigger re-binning.
+	 * @param {Array<number>} currentDomain - Current domain [min, max]
+	 * @param {string} axis - 'x' or 'y'
+	 * @returns {boolean}
+	 */
+	#shouldReBin(currentDomain, axis) {
+		const lastDomain = this.#lastBinningDomain[axis];
+		if (!lastDomain) return false; // First run, no baseline
+		if (!currentDomain || currentDomain.length !== 2) return false;
+
+		const lastWidth = lastDomain[1] - lastDomain[0];
+		const currentWidth = currentDomain[1] - currentDomain[0];
+
+		if (lastWidth <= 0 || currentWidth <= 0) return false;
+
+		const ratio = lastWidth / currentWidth;
+
+		// Re-bin if zoomed in/out beyond threshold
+		return ratio > this.#binningThreshold || ratio < 1 / this.#binningThreshold;
+	}
+
+	/**
+	 * Schedule a re-bin operation (debounced).
+	 * @param {string} axis - 'x' or 'y'
+	 * @param {Array<number>} domain - New domain to bin with
+	 */
+	#scheduleReBin(axis, domain) {
+		clearTimeout(this.#rebinTimeout);
+		this.#rebinTimeout = setTimeout(() => {
+			console.log(`🔄 [${this.#markId}] Re-binning ${axis} axis with domain:`, domain);
+			this.#lastBinningDomain[axis] = [...domain];
+
+			// Skip updating the binned axis domain (user zoomed there intentionally)
+			// But DO update the aggregate axis domain (counts changed)
+			this.#skipDomainUpdateForAxis = axis;
+
+			// Track current dataVersion - we'll wait for it to increment before updating domains
+			this.#rebinPendingDataVersion = this.client?.dataVersion;
+
+			// Reset data-derived domain flag so aggregate extent updates from new data
+			this.#dataDerivedDomainsSet = false;
+
+			// Trigger re-query using Mosaic's requestUpdate (throttled)
+			// This will cause buildQuery to be called again with new domain context
+			if (this.client) {
+				this.client.requestUpdate();
+			}
+		}, 16); // Snappy re-query (Mosaic has its own throttling)
+	}
+
 	destroy() {
 		console.log(`💥 BaseMarkSetup destroying for ${this.#markId}`);
+
+		clearTimeout(this.#rebinTimeout);
+		clearTimeout(this.#viewportDomainUpdateTimeout);
 
 		this.#chartContext.unregisterScaleType('x', this.#markId);
 		this.#chartContext.unregisterScaleType('y', this.#markId);

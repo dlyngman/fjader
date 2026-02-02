@@ -257,7 +257,12 @@
 		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
 			scales.registerScaleType(dimension, type, priority, markId, config, columnName),
 		unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
-		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
+		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary(),
+
+		// Bin step multiplier for adaptive resolution
+		get binStepMultiplier() {
+			return scales.binStepMultiplier;
+		}
 	};
 
 	setContext('chart', chartContext);
@@ -299,6 +304,15 @@
 	// ZOOM HANDLERS
 	function handleWheel(event) {
 		event.preventDefault();
+
+		// Shift+Wheel controls bin density
+		if (event.shiftKey) {
+			// Scroll UP (negative delta) = Increase density by 5%
+			// Scroll DOWN (positive delta) = Decrease density by 5%
+			const delta = event.deltaY < 0 ? 0.05 : -0.05;
+			scales.adjustBinMultiplier(delta);
+			return;
+		}
 
 		pointerBuffer.x = event.offsetX;
 		pointerBuffer.y = event.offsetY;

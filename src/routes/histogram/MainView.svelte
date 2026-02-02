@@ -21,7 +21,7 @@
 <div class="demo-container">
 	<h2>RectYMark Histogram</h2>
 
-	<!-- <div class="chart-wrapper">
+	<div class="chart-wrapper">
 		<ChartContainer xLabel="bill_length" yLabel="count">
 			{#snippet background()}
 				<MarginLabel />
@@ -34,7 +34,7 @@
 
 						<RectYMark
 							table="penguins"
-							x={bin('bill_length', { step: 2 })}
+							x={bin('bill_length', { steps: 50 })}
 							y={count()}
 							color="steelblue"
 						/>
@@ -46,7 +46,7 @@
 				<Crosshair />
 			{/snippet}
 		</ChartContainer>
-	</div> -->
+	</div>
 	<div class="chart-wrapper">
 		<ChartContainer>
 			{#snippet background()}
