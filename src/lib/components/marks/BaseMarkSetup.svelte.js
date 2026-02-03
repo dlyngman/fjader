@@ -63,6 +63,9 @@ export class BaseMarkSetup {
 	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
 	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
 
+	// --- Client Registration ---
+	#unregisterClient = null; // Cleanup function for chart context registration
+
 	/**
 	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
 	 * Call this before inference so schema lookups can proceed.
@@ -903,6 +906,13 @@ export class BaseMarkSetup {
 			fieldRequests
 		);
 		this.#coordinator.connect(this.client);
+
+		// Register with chart context for crossfilter
+		if (this.#chartContext?.registerClient) {
+			// Unregister previous client if any
+			this.#unregisterClient?.();
+			this.#unregisterClient = this.#chartContext.registerClient(this.client);
+		}
 	}
 
 	#setupScaleMappings() {
@@ -1678,6 +1688,10 @@ export class BaseMarkSetup {
 
 		clearTimeout(this.#rebinTimeout);
 		clearTimeout(this.#viewportDomainUpdateTimeout);
+
+		// Unregister client from chart context
+		this.#unregisterClient?.();
+		this.#unregisterClient = null;
 
 		this.#chartContext.unregisterScaleType('x', this.#markId);
 		this.#chartContext.unregisterScaleType('y', this.#markId);
