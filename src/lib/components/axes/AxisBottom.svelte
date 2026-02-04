@@ -1,39 +1,56 @@
 <script>
-	import { format } from 'd3-format';
 	import { getContext } from 'svelte';
 
-	let { ticksSpace = 100, labelsSpace = 100 } = $props();
+	let { ticksNumber = 5 } = $props();
 	const c = getContext('chart');
 
-	const labelsNumber = 4;
-	const ticksNumber = 5;
+	// Continuous scales (linear, time): use scaleState.getTicks()
+	const continuousTicks = $derived(
+		c.xScaleState?.getTicks ? c.xScaleState.getTicks(ticksNumber) : []
+	);
 
-	const isTimeScale = $derived(c.scaleTypes?.x === 'time');
-	// For time scales, use scaleState.getTicks() for calendar-nice ticks
-	// For linear, use d3 scale's ticks()
-	const ticks = $derived(
-		isTimeScale && c.xScaleState?.getTicks
-			? c.xScaleState.getTicks(ticksNumber)
-			: (c.xScale?.ticks(ticksNumber) ?? [])
-	);
-	const tickFormatter = $derived(
-		isTimeScale && c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : format('~s')
-	);
+	// Band scales: use D3 scale's domain() for category strings (needed for positioning)
+	const bandTicks = $derived(c.xScale?.domain ? c.xScale.domain() : []);
+
+	// Unified formatter interface - all scale states have tickFormat()
+	const tickFormatter = $derived(c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : String);
 </script>
 
 {#if c.isReady}
 	<g class="axis" transform="translate(0 , {c.innerHeight})">
-		{#each ticks as tick, i (i)}
-			<line x1={c.xScale(tick)} x2={c.xScale(tick)} y1={0} y2={5} />
+		{#if c.scaleTypes.x === 'linear' || c.scaleTypes.x === 'time'}
+			<!-- Continuous scales: direct positioning -->
+			{#each continuousTicks as tick, i (i)}
+				<line x1={c.xScale(tick)} x2={c.xScale(tick)} y1={0} y2={5} />
 
-			<text text-anchor="middle" x={c.xScale(tick)} y={16}>
-				{tickFormatter(tick)}
+				<text text-anchor="middle" x={c.xScale(tick)} y={16}>
+					{tickFormatter(tick)}
+				</text>
+			{/each}
+
+			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
+				{c.xLabel}
 			</text>
-		{/each}
+		{:else if c.scaleTypes.x === 'band' && c.xScale}
+			<!-- Band scales: centered positioning -->
+			{#each bandTicks as tick (tick)}
+				{@const tickX = c.xScale(tick)}
+				<line
+					x1={tickX + c.xScale.bandwidth() / 2}
+					x2={tickX + c.xScale.bandwidth() / 2}
+					y1={0}
+					y2={5}
+				/>
 
-		<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
-			{c.xLabel}
-		</text>
+				<text text-anchor="middle" x={tickX + c.xScale.bandwidth() / 2} y={16}>
+					{tick}
+				</text>
+			{/each}
+
+			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
+				{c.xLabel}
+			</text>
+		{/if}
 	</g>
 {/if}
 

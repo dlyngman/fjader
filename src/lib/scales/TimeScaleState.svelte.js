@@ -288,6 +288,17 @@ export class TimeScaleState extends LinearScaleState {
 		};
 	}
 
+	/**
+	 * Format a single offset value to a datetime string.
+	 * Useful for tooltips, labels, etc.
+	 *
+	 * @param {number} offset - Time offset value
+	 * @returns {string} Formatted datetime string
+	 */
+	formatValue(offset) {
+		return this.tickFormat()(offset);
+	}
+
 	// ===========================================================================
 	// PRIVATE
 	// ===========================================================================

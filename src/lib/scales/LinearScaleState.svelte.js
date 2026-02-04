@@ -416,6 +416,30 @@ export class LinearScaleState {
 	}
 
 	/**
+	 * Get a formatter function for tick values.
+	 * Uses D3's smart number formatting (SI prefixes, precision handling).
+	 *
+	 * @param {number} count - Number of ticks (helps determine precision)
+	 * @returns {Function} Formatter function (value) => string
+	 */
+	tickFormat(count = 5) {
+		this._version; // Register Svelte dependency for reactivity
+		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
+		return this.#sharedScale.tickFormat(count);
+	}
+
+	/**
+	 * Format a single value according to the scale's formatter.
+	 * Useful for tooltips, labels, etc.
+	 *
+	 * @param {number} value - Value to format
+	 * @returns {string} Formatted string
+	 */
+	formatValue(value) {
+		return this.tickFormat()(value);
+	}
+
+	/**
 	 * Update a D3 scale's domain with current render values.
 	 * Registers Svelte dependency via _version.
 	 */

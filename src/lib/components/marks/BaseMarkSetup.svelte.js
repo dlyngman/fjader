@@ -1095,7 +1095,7 @@ export class BaseMarkSetup {
 			if (extent) {
 				// Apply zero baseline if mark requests it
 				if (this.#config.zeroBaseline?.x) {
-					extent = [Math.min(0, extent[0]), extent[1]];
+					extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
 				}
 
 				const scaleState = this.#chartContext.xScaleState;
@@ -1144,7 +1144,7 @@ export class BaseMarkSetup {
 			if (extent) {
 				// Apply zero baseline if mark requests it
 				if (this.#config.zeroBaseline?.y) {
-					extent = [Math.min(0, extent[0]), extent[1]];
+					extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
 				}
 
 				const scaleState = this.#chartContext.yScaleState;
@@ -1616,7 +1616,7 @@ export class BaseMarkSetup {
 
 			// Apply zero baseline if configured
 			if (this.#config.zeroBaseline?.[aggregateAxis]) {
-				extent = [Math.min(0, extent[0]), extent[1]];
+				extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
 			}
 
 			const scaleState = this.#chartContext[`${aggregateAxis}ScaleState`];

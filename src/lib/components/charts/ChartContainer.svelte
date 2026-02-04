@@ -3,6 +3,7 @@
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl.js';
 
 	let {
 		xLabel = null,
@@ -12,11 +13,17 @@
 		canvas,
 		canvasComponents,
 		overlay,
-		interactors
+		interactors,
+		wheelInteraction = {
+			dwellTimeMs: 250,
+			momentumThreshold: 150,
+			enabled: true
+		}
 	} = $props();
 
 	const pointerBuffer = { x: 0, y: 0 };
 	const innerPointBuffer = { x: 0, y: 0 };
+	const wheelControl = new WheelInteractionControl(wheelInteraction);
 	// If layout.getActiveAxes returns an object, we need to refactor that too,
 
 	// Create layout and scale coordinator
@@ -309,14 +316,21 @@
 
 	function handleChartPointerEnter() {
 		gpuCoordinator.setChartHovered(layout.chartId);
+		wheelControl.handlePointerEnter();
 	}
 
 	function handleChartPointerLeave() {
 		gpuCoordinator.setChartUnhovered(layout.chartId);
+		wheelControl.handlePointerLeave();
 	}
 
 	// ZOOM HANDLERS
 	function handleWheel(event) {
+		// Check if wheel should be captured for chart interaction
+		if (!wheelControl.shouldCaptureWheel(event)) {
+			return; // Let event propagate for page scroll
+		}
+
 		event.preventDefault();
 
 		// Shift+Wheel controls bin density
