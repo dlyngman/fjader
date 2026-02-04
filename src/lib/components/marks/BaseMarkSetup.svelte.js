@@ -63,6 +63,9 @@ export class BaseMarkSetup {
 	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
 	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
 
+	// --- Client Registration ---
+	#unregisterClient = null; // Cleanup function for chart context registration
+
 	/**
 	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
 	 * Call this before inference so schema lookups can proceed.
@@ -581,12 +584,12 @@ export class BaseMarkSetup {
 
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
-			console.log('📊 Using ArrowDataAccessor (fast path)');
+			// console.log('📊 Using ArrowDataAccessor (fast path)');
 			return new ArrowDataAccessor(this.client.arrowTable);
 		}
 
 		// Transform path: Arrow → Objects → Transform → Object accessor
-		console.log('📊 Using ObjectDataAccessor (JS transforms)');
+		// console.log('📊 Using ObjectDataAccessor (JS transforms)');
 		const objects = this.#arrowToObjects(this.client.arrowTable);
 
 		const transformConfig = {
@@ -595,17 +598,17 @@ export class BaseMarkSetup {
 			fill: this.#getFieldName('fill')
 		};
 
-		console.log('📊 Transform config:', transformConfig);
-		console.log('📊 Input data sample:', objects.slice(0, 3));
-		console.log('📊 Select config:', this.#config.select);
+		// console.log('📊 Transform config:', transformConfig);
+		// console.log('📊 Input data sample:', objects.slice(0, 3));
+		// console.log('📊 Select config:', this.#config.select);
 
 		const transformed = this.#transformCompiler.applyToData(objects, transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale
 		});
 
-		console.log('📊 Transformed data:', transformed.length, 'rows');
-		console.log('📊 Transformed sample:', transformed.slice(0, 3));
+		// console.log('📊 Transformed data:', transformed.length, 'rows');
+		// console.log('📊 Transformed sample:', transformed.slice(0, 3));
 
 		return new ObjectDataAccessor(transformed);
 	});
@@ -903,6 +906,13 @@ export class BaseMarkSetup {
 			fieldRequests
 		);
 		this.#coordinator.connect(this.client);
+
+		// Register with chart context for crossfilter
+		if (this.#chartContext?.registerClient) {
+			// Unregister previous client if any
+			this.#unregisterClient?.();
+			this.#unregisterClient = this.#chartContext.registerClient(this.client);
+		}
 	}
 
 	#setupScaleMappings() {
@@ -1678,6 +1688,10 @@ export class BaseMarkSetup {
 
 		clearTimeout(this.#rebinTimeout);
 		clearTimeout(this.#viewportDomainUpdateTimeout);
+
+		// Unregister client from chart context
+		this.#unregisterClient?.();
+		this.#unregisterClient = null;
 
 		this.#chartContext.unregisterScaleType('x', this.#markId);
 		this.#chartContext.unregisterScaleType('y', this.#markId);

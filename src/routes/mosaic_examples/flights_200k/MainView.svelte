@@ -15,18 +15,23 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-		RectYMark
+		RectYMark,
+		IntervalX,
+		FilterBridge
 	} from '$lib/components';
 	import LineMark from '$lib/components/marks/LineMark.svelte';
 	import { bin } from '$lib/sql/bin.js';
 
 	const coordinator = getContext('mosaic-coordinator');
 	const brushSeletion = Selection.crossfilter();
+
+	const filterBridge = new FilterBridge(Selection, null);
+
 </script>
 
 <div class="main-view-container">
 	<div class="chart-wrapper">
-		<ChartContainer>
+		<ChartContainer xLabel="delay" yLabel="Count">
 			{#snippet background()}
 				<!-- <Grid /> -->
 				<Frame />
@@ -46,6 +51,7 @@
 							y={count()}
 							color="steelblue"
 							viewportLocalDomain={true}
+							selection={filterBridge.filterSel}
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -53,6 +59,83 @@
 
 			{#snippet foreground()}
 				<Crosshair />
+			{/snippet}
+
+			{#snippet interactors()}
+				<IntervalX bridge={filterBridge} />
+			{/snippet}
+		</ChartContainer>
+	</div>
+	<div class="chart-wrapper">
+		<ChartContainer xLabel="time" yLabel="Count per time">
+			{#snippet background()}
+				<!-- <Grid /> -->
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
+			{/snippet}
+
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+
+						<RectYMark
+							table="flights"
+							x={bin('time', { steps: 50 })}
+							y={count()}
+							color="steelblue"
+							viewportLocalDomain={true}
+							selection={filterBridge.filterSel}
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet foreground()}
+				<Crosshair />
+			{/snippet}
+
+			{#snippet interactors()}
+				<IntervalX bridge={filterBridge} />
+			{/snippet}
+		</ChartContainer>
+	</div>
+	<div class="chart-wrapper">
+		<ChartContainer xLabel="distance" yLabel="Count per distance">
+			{#snippet background()}
+				<!-- <Grid /> -->
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
+			{/snippet}
+
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+
+						<RectYMark
+							table="flights"
+							x={bin('distance', { steps: 50 })}
+							y={count()}
+							color="steelblue"
+							viewportLocalDomain={true}
+							selection={filterBridge.filterSel}
+
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet foreground()}
+				<Crosshair />
+			{/snippet}
+
+			{#snippet interactors()}
+				<IntervalX bridge={filterBridge} />
 			{/snippet}
 		</ChartContainer>
 	</div>
@@ -82,9 +165,9 @@
 	.chart-wrapper {
 		width: 100%;
 		aspect-ratio: 4/3;
-		min-height: 200px;
+		min-height: 100px;
 		/* max-height: 400px; */
-		max-height: 800px;
+		max-height: 300px;
 		position: relative; /* Important for containing absolutely positioned children */
 	}
 </style>

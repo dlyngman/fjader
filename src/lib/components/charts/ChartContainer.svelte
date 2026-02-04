@@ -11,7 +11,8 @@
 		foreground,
 		canvas,
 		canvasComponents,
-		overlay
+		overlay,
+		interactors
 	} = $props();
 
 	const pointerBuffer = { x: 0, y: 0 };
@@ -123,6 +124,9 @@
 	});
 
 	// $inspect('is ready', layout.isReady)
+
+	// Client registration for crossfilter
+	const markClients = new Set();
 
 	const chartContext = {
 		// Layout properties and methods
@@ -262,6 +266,16 @@
 		// Bin step multiplier for adaptive resolution
 		get binStepMultiplier() {
 			return scales.binStepMultiplier;
+		},
+
+		// Client registration for crossfilter exclusion
+		registerClient(client) {
+			if (!client) return () => {};
+			markClients.add(client);
+			return () => markClients.delete(client);
+		},
+		get markClients() {
+			return markClients;
 		}
 	};
 
@@ -570,6 +584,7 @@
 					fill="transparent"
 					class="interaction-target"
 				/>
+				{@render interactors?.()}
 			</g>
 		</svg>
 		<!-- Overlay layer - on top of everything, outside SVG -->

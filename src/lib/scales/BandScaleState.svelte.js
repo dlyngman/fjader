@@ -339,19 +339,19 @@ export class BandScaleState {
 	processDataForGPU(categoryData, markId = 'unknown') {
 		// Fast path: already Float32Array from derived view (zero-copy)
 		if (categoryData instanceof Float32Array) {
-			console.log(`[BandScale:${this.name}] ✅ FAST PATH - Float32Array indices:`, {
-				length: categoryData.length,
-				sample: Array.from(categoryData.slice(0, 5)),
-				isIndices: true
-			});
+			// console.log(`[BandScale:${this.name}] ✅ FAST PATH - Float32Array indices:`, {
+			// 	length: categoryData.length,
+			// 	sample: Array.from(categoryData.slice(0, 5)),
+			// 	isIndices: true
+			// });
 			return categoryData;
 		}
 
-		console.log(`[BandScale:${this.name}] 🐢 JS PATH - Converting categories to indices:`, {
-			length: categoryData.length,
-			sample: categoryData.slice(0, 5),
-			type: typeof categoryData[0]
-		});
+		// console.log(`[BandScale:${this.name}] 🐢 JS PATH - Converting categories to indices:`, {
+		// 	length: categoryData.length,
+		// 	sample: categoryData.slice(0, 5),
+		// 	type: typeof categoryData[0]
+		// });
 
 		const categoryMap = this.#categoryIndexMap;
 

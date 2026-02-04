@@ -2595,6 +2595,7 @@
   	// --- Constraints ---
   	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
   	zoomLimits = { max: 10, min: 100 }; // max = pan multiplier, min = zoom divisor
+  	disableZoom = false; // When true, user zoom/pan is ignored (for auto-scaling axes)
   
   	// --- Mark Extent Tracking ---
   	#extents = new Map();
@@ -2644,6 +2645,11 @@
   		this.id = crypto.randomUUID();
   		this.name = name;
   		this.#gpuCoordinator = gpuCoordinator;
+  
+  		// Apply options
+  		if (options.disableZoom !== undefined) {
+  			this.disableZoom = options.disableZoom;
+  		}
   
   		// Store initial extent
   		this.#initExtent[0] = extent[0];
@@ -2787,6 +2793,8 @@
   	 * @param {object} context - Pan context with initialDomain, screenToDataRatio, etc.
   	 */
   	setPanContext(context) {
+  		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
+  
   		// console.log(`=== setPanContext for ${this.name} (${this.id}) ===`);
   		// console.log('axis:', context.axis);
   		// console.log('#isAnimating before:', this.#isAnimating);
@@ -2849,6 +2857,8 @@
   	 * @param {number} scaleFactor - Zoom scale factor (>1 = zoom in)
   	 */
   	accumulateZoom(dataCenter, scaleFactor) {
+  		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
+  
   		this.#zoomAccumulator.logScale += Math.log(scaleFactor);
   		this.#zoomAccumulator.center = dataCenter;
   		this.#zoomAccumulator.hasUpdates = true;
@@ -5405,6 +5415,8 @@
   		lastScreenPos: 0
   	};
   
+  	binStepMultiplier = $state(1.0);
+  
   	constructor(config) {
   		this.config = config;
   		this.gpuCoordinator = config.gpuCoordinator;
@@ -5643,7 +5655,6 @@
   		);
   
   		if (!existing) {
-  
   			requirements.push({ type, priority, markId, config, columnName: rawColumn });
   			this.scaleRequirements[dimension] = [...requirements];
   
@@ -5835,6 +5846,21 @@
   		return this.baseYScale.bandwidth();
   	});
   
+  	adjustBinMultiplier(delta) {
+  		// Clamp between 0.1x (coarse) and 20x (fine)
+  		const current = this.binStepMultiplier;
+  
+  		// Multiplicative: delta is a percentage of current value
+  		// e.g., delta=0.2 means 20% change relative to current
+  		const absoluteDelta = current * delta;
+  		const newValue = Math.max(0.1, Math.min(20.0, current + absoluteDelta));
+  
+  		// Only update if changed significantly
+  		if (Math.abs(newValue - current) > 0.001) {
+  			this.binStepMultiplier = newValue;
+  		}
+  	}
+  
   	// Context data for child components
   	getContextData() {
   		const coordinator = this;
@@ -5904,7 +5930,11 @@
   			},
   			registerScaleType: coordinator.registerScaleType,
   			unregisterScaleType: coordinator.unregisterScaleType,
-  			getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary
+  			getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary,
+  			get binStepMultiplier() {
+  				return coordinator.binStepMultiplier;
+  			},
+  			adjustBinMultiplier: (d) => coordinator.adjustBinMultiplier(d)
   		};
   	}
   
@@ -6590,7 +6620,8 @@
   		foreground,
   		canvas,
   		canvasComponents,
-  		overlay
+  		overlay,
+  		interactors
   	} = $props();
   
   	const pointerBuffer = { x: 0, y: 0 };
@@ -6702,6 +6733,9 @@
   	});
   
   	// $inspect('is ready', layout.isReady)
+  
+  	// Client registration for crossfilter
+  	const markClients = new Set();
   
   	const chartContext = {
   		// Layout properties and methods
@@ -6836,7 +6870,22 @@
   		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
   			scales.registerScaleType(dimension, type, priority, markId, config, columnName),
   		unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
-  		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary()
+  		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary(),
+  
+  		// Bin step multiplier for adaptive resolution
+  		get binStepMultiplier() {
+  			return scales.binStepMultiplier;
+  		},
+  
+  		// Client registration for crossfilter exclusion
+  		registerClient(client) {
+  			if (!client) return () => {};
+  			markClients.add(client);
+  			return () => markClients.delete(client);
+  		},
+  		get markClients() {
+  			return markClients;
+  		}
   	};
   
   	setContext('chart', chartContext);
@@ -6878,6 +6927,15 @@
   	// ZOOM HANDLERS
   	function handleWheel(event) {
   		event.preventDefault();
+  
+  		// Shift+Wheel controls bin density
+  		if (event.shiftKey) {
+  			// Scroll UP (negative delta) = Increase density by 5%
+  			// Scroll DOWN (positive delta) = Decrease density by 5%
+  			const delta = event.deltaY < 0 ? 0.05 : -0.05;
+  			scales.adjustBinMultiplier(delta);
+  			return;
+  		}
   
   		pointerBuffer.x = event.offsetX;
   		pointerBuffer.y = event.offsetY;
@@ -7135,6 +7193,7 @@
   					fill="transparent"
   					class="interaction-target"
   				/>
+  				{@render interactors?.()}
   			</g>
   		</svg>
   		<!-- Overlay layer - on top of everything, outside SVG -->
@@ -9561,7 +9620,11 @@
   			y: ['linear', 'band', 'point', 'time', 'log']
   		},
   		scaleRequirements: {
-  			x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER },
+  			x: {
+  				type: 'linear',
+  				priority: SCALE_PRIORITIES.PREFER,
+  				config: isHistogram ? { disableZoom: true } : {}
+  			},
   			y: effectiveYScaleType
   				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
   				: null
@@ -9783,6 +9846,7 @@
   	#binningThreshold = 1.25; // Re-bin when domain changes by this factor
   	#skipDomainUpdateForAxis = null; // Skip domain update for this axis after re-bin
   	#rebinPendingDataVersion = null; // Track which dataVersion we're waiting for
+  	#prevBinMultiplier = 1.0;
   
   	// --- Viewport-Local Domain Support ---
   	#viewportDomainUpdateTimeout = null;
@@ -9792,6 +9856,9 @@
   	#channelsNeedingDataDomain = new Set();
   	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
   	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
+  
+  	// --- Client Registration ---
+  	#unregisterClient = null; // Cleanup function for chart context registration
   
   	/**
   	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
@@ -10054,19 +10121,78 @@
   			}
   		});
   
-  		// Effect 9: Adaptive binning - re-query when domain changes significantly
-  		$effect(() => {
-  			if (this.#autoBinNodes.size === 0 || !this.client) return;
+  		// // Effect 9: Adaptive binning - re-query when domain changes significantly
+  		// $effect(() => {
+  		// 	if (this.#autoBinNodes.size === 0 || !this.client) return;
   
-  			// Watch X domain TARGET (immediate user input, not animated current)
+  		// 	// Watch X domain TARGET (immediate user input, not animated current)
+  		// 	const xDomain = this.#chartContext.xScaleState?.domain?.target;
+  		// 	const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+  		// 	if (xHasBin && xDomain && this.#shouldReBin(xDomain, 'x')) {
+  		// 		this.#scheduleReBin('x', xDomain);
+  		// 	}
+  
+  		// 	// Watch Y domain TARGET (immediate user input, not animated current)
+  		// 	const yDomain = this.#chartContext.yScaleState?.domain?.target;
+  		// 	const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+  		// 	if (yHasBin && yDomain && this.#shouldReBin(yDomain, 'y')) {
+  		// 		this.#scheduleReBin('y', yDomain);
+  		// 	}
+  		// });
+  
+  		// Effect 9: Adaptive Binning & User Resolution Control
+  		$effect(() => {
+  			// IMPORTANT: Read reactive values FIRST to establish dependencies
+  			// Even if we early-return, Svelte needs to track these for reactivity
+  			const multiplier = this.#chartContext.binStepMultiplier ?? 1.0;
   			const xDomain = this.#chartContext.xScaleState?.domain?.target;
+  			const yDomain = this.#chartContext.yScaleState?.domain?.target;
+  
+  			if (this.#autoBinNodes.size === 0 || !this.client) {
+  				// Early return, but reactive values were already read above
+  				return;
+  			}
+  
+  			// --- A. User Resolution Control (Shift+Scroll) ---
+  			if (this.#prevBinMultiplier === undefined) {
+  				this.#prevBinMultiplier = multiplier;
+  			}
+  
+  			if (multiplier !== this.#prevBinMultiplier) {
+  				console.log(
+  					`🎛️ [${this.#markId}] Re-binning: Multiplier ${this.#prevBinMultiplier.toFixed(1)}x → ${multiplier.toFixed(1)}x`
+  				);
+  				this.#prevBinMultiplier = multiplier;
+  
+  				// Determine which axis has bins (should preserve user zoom on that axis)
+  				const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+  				const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+  
+  				// Skip domain update for binned axis (user zoomed there intentionally)
+  				// But DO update the aggregate axis domain (counts changed)
+  				if (xHasBin) this.#skipDomainUpdateForAxis = 'x';
+  				if (yHasBin) this.#skipDomainUpdateForAxis = 'y';
+  
+  				// Track current dataVersion - we'll wait for it to increment before updating domains
+  				this.#rebinPendingDataVersion = this.client?.dataVersion;
+  
+  				// Reset data-derived domain flag so aggregate extent updates from new data
+  				this.#dataDerivedDomainsSet = false;
+  
+  				// Immediate update. Since this changes the query definition via
+  				// resolveAutoBins -> buildQuery, requestUpdate will re-run the pipeline.
+  				this.client.requestUpdate();
+  
+  				// Return early - skip adaptive check this frame
+  				return;
+  			}
+  
+  			// --- B. Adaptive Binning (Viewport changes) ---
   			const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
   			if (xHasBin && xDomain && this.#shouldReBin(xDomain, 'x')) {
   				this.#scheduleReBin('x', xDomain);
   			}
   
-  			// Watch Y domain TARGET (immediate user input, not animated current)
-  			const yDomain = this.#chartContext.yScaleState?.domain?.target;
   			const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
   			if (yHasBin && yDomain && this.#shouldReBin(yDomain, 'y')) {
   				this.#scheduleReBin('y', yDomain);
@@ -10497,6 +10623,8 @@
   	#resolveAutoBins(select) {
   		const resolved = {};
   
+  		const binStepMultiplier = this.#chartContext.binStepMultiplier || 1.0;
+  
   		for (const [channel, value] of Object.entries(select)) {
   			if (value?.isAutoBinNode) {
   				const axis = channel.startsWith('x') ? 'x' : 'y';
@@ -10541,7 +10669,13 @@
   				}
   
   				// Pass t0 and currentDomain to the resolver
-  				resolved[channel] = value.resolve(this.client.fieldInfo, scaleType, t0, currentDomain);
+  				resolved[channel] = value.resolve(
+  					this.client.fieldInfo,
+  					scaleType,
+  					t0,
+  					currentDomain,
+  					binStepMultiplier
+  				);
   			} else {
   				resolved[channel] = value;
   			}
@@ -10566,6 +10700,13 @@
   			fieldRequests
   		);
   		this.#coordinator.connect(this.client);
+  
+  		// Register with chart context for crossfilter
+  		if (this.#chartContext?.registerClient) {
+  			// Unregister previous client if any
+  			this.#unregisterClient?.();
+  			this.#unregisterClient = this.#chartContext.registerClient(this.client);
+  		}
   	}
   
   	#setupScaleMappings() {
@@ -10738,7 +10879,9 @@
   				const yDomain = this.#chartContext.yScaleState?.domain?.current;
   				if (yDomain) {
   					filterOptions = { filterAxis: 'y', filterDomain: yDomain };
-  					console.log(`🔍 [${this.#markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`);
+  					console.log(
+  						`🔍 [${this.#markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`
+  					);
   				}
   			}
   
@@ -10755,7 +10898,10 @@
   				// Keep spring animation for viewport panning (smooth bin entry/exit)
   				if (this.actualXScaleType === 'time' && scaleState?.addOffsetExtent) {
   					// Time scale: data is in offset form, use addOffsetExtent
-  					console.log(`📊 [${this.#markId}] Registering X domain from data (time offsets):`, extent);
+  					console.log(
+  						`📊 [${this.#markId}] Registering X domain from data (time offsets):`,
+  						extent
+  					);
   					scaleState.addOffsetExtent(extent, this.#markId);
   				} else if (scaleState?.addMark) {
   					// Linear scale: use addMark with instant flag when rebinning
@@ -10782,7 +10928,9 @@
   				const xDomain = this.#chartContext.xScaleState?.domain?.current;
   				if (xDomain) {
   					filterOptions = { filterAxis: 'x', filterDomain: xDomain };
-  					console.log(`🔍 [${this.#markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`);
+  					console.log(
+  						`🔍 [${this.#markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`
+  					);
   				}
   			}
   
@@ -10799,7 +10947,10 @@
   				// Keep spring animation for viewport panning (smooth bin entry/exit)
   				if (this.actualYScaleType === 'time' && scaleState?.addOffsetExtent) {
   					// Time scale: data is in offset form, use addOffsetExtent
-  					console.log(`📊 [${this.#markId}] Registering Y domain from data (time offsets):`, extent);
+  					console.log(
+  						`📊 [${this.#markId}] Registering Y domain from data (time offsets):`,
+  						extent
+  					);
   					scaleState.addOffsetExtent(extent, this.#markId);
   				} else if (scaleState?.addMark) {
   					// Linear scale: use addMark with instant flag when rebinning
@@ -11246,9 +11397,7 @@
   			const binnedAxis = aggregateAxis === 'x' ? 'y' : 'x';
   
   			// Build channel list for aggregate axis
-  			const channels = aggregateAxis === 'x'
-  				? ['x', 'x1', 'x2']
-  				: ['y', 'y1', 'y2'];
+  			const channels = aggregateAxis === 'x' ? ['x', 'x1', 'x2'] : ['y', 'y1', 'y2'];
   
   			// Compute extent with viewport filtering
   			const filterOptions = {
@@ -11333,6 +11482,10 @@
   
   		clearTimeout(this.#rebinTimeout);
   		clearTimeout(this.#viewportDomainUpdateTimeout);
+  
+  		// Unregister client from chart context
+  		this.#unregisterClient?.();
+  		this.#unregisterClient = null;
   
   		this.#chartContext.unregisterScaleType('x', this.#markId);
   		this.#chartContext.unregisterScaleType('y', this.#markId);
@@ -12175,7 +12328,11 @@
   			x: effectiveXScaleType
   				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
   				: null,
-  			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
+  			y: {
+  				type: 'linear',
+  				priority: SCALE_PRIORITIES.PREFER,
+  				config: isHistogram ? { disableZoom: true } : {}
+  			}
   		},
   		inferredScaleColumns: {
   			x: x1,
@@ -13538,6 +13695,1243 @@
   {/if}
 </src/lib/components/guides/Grid.svelte>
 
+<src/lib/interactors/Interval2D.svelte>
+  <script>
+  	import { getContext } from 'svelte';
+  	import { clauseIntervals } from '@uwdata/mosaic-core';
+  	import { column, sql } from '@uwdata/mosaic-sql';
+  	import { BrushState2D } from './brush-state.svelte.js';
+  	import BrushOverlay from './BrushOverlay.svelte';
+  
+  	let { bridge, xField, yField, dimUnselected = true } = $props();
+  
+  	const chart = getContext('chart');
+  	const brush = new BrushState2D();
+  
+  	const resolvedXField = $derived(xField ?? chart.xLabel);
+  	const resolvedYField = $derived(yField ?? chart.yLabel);
+  
+  	const { sel: selection, off: unregister } = bridge.createLocal('single', {
+  		source: `interval-2d-${chart.chartId}`,
+  		augment: (clause) => ({
+  			kind: 'range',
+  			label: `${resolvedXField} × ${resolvedYField}`,
+  			// Store both X and Y ranges in metadata
+  			xColumn: resolvedXField,
+  			yColumn: resolvedYField,
+  			xValues: clause?.value?.[0],
+  			yValues: clause?.value?.[1]
+  		}),
+  		onVisualClear: () => brush.clear() // Two-way sync
+  	});
+  
+  	// Pointer state (reused to avoid GC)
+  	let anchorX = 0;
+  	let anchorY = 0;
+  	let currentX = 0;
+  	let currentY = 0;
+  	let isCapturing = false;
+  
+  	// Deduplication (skip redundant updates)
+  	let lastEmittedMinX = null;
+  	let lastEmittedMaxX = null;
+  	let lastEmittedMinY = null;
+  	let lastEmittedMaxY = null;
+  	const EPS = 1e-12;
+  
+  	function closeTo(a, b) {
+  		return a === b || (a != null && b != null && Math.abs(a - b) < EPS);
+  	}
+  
+  	// Scale validation for both dimensions
+  	$effect(() => {
+  		const xScaleType = chart.xScaleState?.scaleType;
+  		const yScaleType = chart.yScaleState?.scaleType;
+  
+  		let invalid = false;
+  		if (brush.active && xScaleType && !brush.x.validate(chart.xScale, xScaleType)) {
+  			invalid = true;
+  		}
+  		if (brush.active && yScaleType && !brush.y.validate(chart.yScale, yScaleType)) {
+  			invalid = true;
+  		}
+  		if (invalid) {
+  			clearBrush();
+  		}
+  	});
+  
+  	// Derived screen coordinates
+  	const brushScreen = $derived.by(() => {
+  		if (!brush.active) return null;
+  		const [xMin, xMax] = brush.x.screenExtent(chart.xScale);
+  		const [yMin, yMax] = brush.y.screenExtent(chart.yScale);
+  		return { x: xMin, y: yMin, width: xMax - xMin, height: yMax - yMin };
+  	});
+  
+  	// Emit Mosaic clause
+  	function emitClause() {
+  		if (!brush.active) return;
+  
+  		// Normalize ranges (ensure min < max) to handle inverted brushes from corner resize
+  		const xMin = Math.min(brush.x.dataMin, brush.x.dataMax);
+  		const xMax = Math.max(brush.x.dataMin, brush.x.dataMax);
+  		const yMin = Math.min(brush.y.dataMin, brush.y.dataMax);
+  		const yMax = Math.max(brush.y.dataMin, brush.y.dataMax);
+  
+  		// Deduplication: skip if values haven't changed significantly
+  		if (
+  			closeTo(xMin, lastEmittedMinX) &&
+  			closeTo(xMax, lastEmittedMaxX) &&
+  			closeTo(yMin, lastEmittedMinY) &&
+  			closeTo(yMax, lastEmittedMaxY)
+  		) {
+  			return;
+  		}
+  
+  		lastEmittedMinX = xMin;
+  		lastEmittedMaxX = xMax;
+  		lastEmittedMinY = yMin;
+  		lastEmittedMaxY = yMax;
+  
+  		const clause = clauseIntervals(
+  			[column(resolvedXField), column(resolvedYField)],
+  			[
+  				[xMin, xMax],
+  				[yMin, yMax]
+  			],
+  			{
+  				source: `interval-2d-${chart.chartId}`,
+  				clients: chart.markClients,
+  				scales: [
+  					{
+  						type: chart.xScaleState?.scaleType || 'linear',
+  						domain: chart.xScale.domain(),
+  						range: chart.xScale.range()
+  					},
+  					{
+  						type: chart.yScaleState?.scaleType || 'linear',
+  						domain: chart.yScale.domain(),
+  						range: chart.yScale.range()
+  					}
+  				]
+  			}
+  		);
+  
+  		selection.update(clause);
+  	}
+  
+  	// Pre-aggregation on pointer enter
+  	function handlePointerEnter() {
+  		if (!selection.activate) return;
+  
+  		// Normalize ranges for activate call too
+  		const xRange = brush.x.active
+  			? [Math.min(brush.x.dataMin, brush.x.dataMax), Math.max(brush.x.dataMin, brush.x.dataMax)]
+  			: [0, 1];
+  		const yRange = brush.y.active
+  			? [Math.min(brush.y.dataMin, brush.y.dataMax), Math.max(brush.y.dataMin, brush.y.dataMax)]
+  			: [0, 1];
+  
+  		selection.activate(
+  			clauseIntervals(
+  				[column(resolvedXField), column(resolvedYField)],
+  				[xRange, yRange],
+  				{
+  					source: `interval-2d-${chart.chartId}`,
+  					clients: chart.markClients,
+  					scales: [
+  						{
+  							type: chart.xScaleState?.scaleType || 'linear',
+  							domain: chart.xScale.domain(),
+  							range: chart.xScale.range()
+  						},
+  						{
+  							type: chart.yScaleState?.scaleType || 'linear',
+  							domain: chart.yScale.domain(),
+  							range: chart.yScale.range()
+  						}
+  					]
+  				}
+  			)
+  		);
+  	}
+  
+  	function clearBrush() {
+  		brush.clear();
+  		selection.update({ predicate: sql`TRUE`, source: `interval-2d-${chart.chartId}` });
+  	}
+  
+  	// --- Pointer Event Handlers ---
+  
+  	function handleBackgroundPointerDown(event) {
+  		if (brush.phase !== 'idle') return;
+  
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  
+  		anchorX = innerPoint.x;
+  		anchorY = innerPoint.y;
+  		currentX = innerPoint.x;
+  		currentY = innerPoint.y;
+  		brush.phase = 'creating';
+  		brush.x.setFromScreen(anchorX, currentX, chart.xScale);
+  		brush.y.setFromScreen(anchorY, currentY, chart.yScale);
+  	}
+  
+  	function handlePointerMove(event) {
+  		if (!isCapturing) return;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		currentX = innerPoint.x;
+  		currentY = innerPoint.y;
+  
+  		if (brush.phase === 'creating') {
+  			brush.x.setFromScreen(anchorX, currentX, chart.xScale);
+  			brush.y.setFromScreen(anchorY, currentY, chart.yScale);
+  		} else if (brush.phase === 'moving') {
+  			const deltaX = currentX - anchorX;
+  			const deltaY = currentY - anchorY;
+  			brush.x.shiftByScreen(deltaX, chart.xScale);
+  			brush.y.shiftByScreen(deltaY, chart.yScale);
+  			anchorX = currentX;
+  			anchorY = currentY;
+  		} else if (brush.phase === 'resizing') {
+  			// Handle corner resizing - use anchor point approach
+  			const corner = brush.resizeCorner;
+  			if (corner) {
+  				// Store the opposite corner as anchor (stays fixed)
+  				const anchorXData = corner.includes('e') ? brush.x.dataMin : brush.x.dataMax;
+  				const anchorYData = corner.includes('s') ? brush.y.dataMin : brush.y.dataMax;
+  
+  				// Set the moving corner to current position
+  				const currentXData = chart.xScale.invert(currentX);
+  				const currentYData = chart.yScale.invert(currentY);
+  
+  				// Update min/max based on which is smaller (use setExtent to batch updates)
+  				brush.x.setExtent(Math.min(anchorXData, currentXData), Math.max(anchorXData, currentXData));
+  				brush.y.setExtent(Math.min(anchorYData, currentYData), Math.max(anchorYData, currentYData));
+  			} else {
+  				// Handle edge resizing
+  				const edge = brush.x.resizeEdge || brush.y.resizeEdge;
+  				if (edge === 'left' || edge === 'right') {
+  					const anchorXData = edge === 'left' ? brush.x.dataMax : brush.x.dataMin;
+  					const currentXData = chart.xScale.invert(currentX);
+  					brush.x.setExtent(Math.min(anchorXData, currentXData), Math.max(anchorXData, currentXData));
+  				} else if (edge === 'top' || edge === 'bottom') {
+  					const anchorYData = edge === 'top' ? brush.y.dataMax : brush.y.dataMin;
+  					const currentYData = chart.yScale.invert(currentY);
+  					brush.y.setExtent(Math.min(anchorYData, currentYData), Math.max(anchorYData, currentYData));
+  				}
+  			}
+  		}
+  
+  		// Continuous updates during drag
+  		emitClause();
+  	}
+  
+  	function handlePointerUp(event) {
+  		if (!isCapturing) return;
+  
+  		event.target.releasePointerCapture(event.pointerId);
+  		isCapturing = false;
+  
+  		if (brush.phase !== 'idle') {
+  			emitClause();
+  			brush.phase = 'idle';
+  			brush.resizeCorner = null;
+  			brush.x.resizeEdge = null;
+  			brush.y.resizeEdge = null;
+  		}
+  	}
+  
+  	function handleMoveStart(event) {
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		anchorX = innerPoint.x;
+  		anchorY = innerPoint.y;
+  		currentX = innerPoint.x;
+  		currentY = innerPoint.y;
+  		brush.phase = 'moving';
+  	}
+  
+  	function handleResizeStart(edge, event) {
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		anchorX = innerPoint.x;
+  		anchorY = innerPoint.y;
+  		currentX = innerPoint.x;
+  		currentY = innerPoint.y;
+  		brush.phase = 'resizing';
+  
+  		// Check if it's a corner or edge
+  		if (edge === 'nw' || edge === 'ne' || edge === 'sw' || edge === 'se') {
+  			brush.resizeCorner = edge;
+  			brush.x.resizeEdge = null;
+  			brush.y.resizeEdge = null;
+  		} else {
+  			brush.resizeCorner = null;
+  			if (edge === 'left' || edge === 'right') {
+  				brush.x.resizeEdge = edge;
+  				brush.y.resizeEdge = null;
+  			} else {
+  				brush.x.resizeEdge = null;
+  				brush.y.resizeEdge = edge;
+  			}
+  		}
+  	}
+  
+  	function handleDoubleClick(event) {
+  		event.stopPropagation();
+  		clearBrush();
+  	}
+  
+  	// Cleanup
+  	$effect(() => {
+  		return () => unregister();
+  	});
+  </script>
+  
+  <g
+  	class="interval-2d-interactor"
+  	onpointerenter={handlePointerEnter}
+  	onpointermove={handlePointerMove}
+  	onpointerup={handlePointerUp}
+  	ondblclick={handleDoubleClick}
+  >
+  	<!-- Full-area background for creating new brushes -->
+  	<rect
+  		class="brush-background"
+  		x={0}
+  		y={0}
+  		width={chart.innerWidth}
+  		height={chart.innerHeight}
+  		fill="transparent"
+  		style="cursor: crosshair;"
+  		onpointerdown={handleBackgroundPointerDown}
+  	/>
+  
+  	<!-- Brush overlay when active -->
+  	{#if brush.active && brushScreen}
+  		<BrushOverlay
+  			x={brushScreen.x}
+  			y={brushScreen.y}
+  			width={brushScreen.width}
+  			height={brushScreen.height}
+  			orientation="2d"
+  			{dimUnselected}
+  			onMoveStart={handleMoveStart}
+  			onResizeStart={handleResizeStart}
+  		/>
+  	{/if}
+  </g>
+</src/lib/interactors/Interval2D.svelte>
+
+<src/lib/interactors/IntervalX.svelte>
+  <script>
+  	import { getContext, onMount } from 'svelte';
+  	import { clauseInterval } from '@uwdata/mosaic-core';
+  	import { column, sql } from '@uwdata/mosaic-sql';
+  	import { BrushState1D } from './brush-state.svelte.js';
+  	import BrushOverlay from './BrushOverlay.svelte';
+  
+  	let { bridge, field, dimUnselected = true } = $props();
+  
+  	const chart = getContext('chart');
+  	const brush = new BrushState1D();
+  
+  	// Field to filter (default to chart's x axis)
+  	const resolvedField = $derived(field ?? chart.xLabel);
+  
+  	// Register with FilterBridge to get a local Selection
+  	const { sel: selection, off: unregister } = bridge.createLocal('single', {
+  		source: `interval-x-${chart.chartId}`,
+  		augment: (clause) => ({
+  			kind: 'range',
+  			column: resolvedField,
+  			label: resolvedField,
+  			values: clause?.value ? [clause.value[0], clause.value[1]] : []
+  		}),
+  		onVisualClear: () => brush.clear() // Two-way sync
+  	});
+  
+  	// Pointer state (reused to avoid GC)
+  	let anchorX = 0;
+  	let currentX = 0;
+  	let isCapturing = false;
+  	let isPanModeActive = $state(false); // Space key for temporary pan
+  
+  	// Deduplication (skip redundant updates)
+  	let lastEmittedMin = null;
+  	let lastEmittedMax = null;
+  	const EPS = 1e-12;
+  
+  	function closeTo(a, b) {
+  		return a === b || (a != null && b != null && Math.abs(a - b) < EPS);
+  	}
+  
+  	// Keyboard handlers for Space key
+  	function handleKeyDown(event) {
+  		if (event.code === 'Space' && !isPanModeActive) {
+  			isPanModeActive = true;
+  		}
+  	}
+  
+  	function handleKeyUp(event) {
+  		if (event.code === 'Space') {
+  			isPanModeActive = false;
+  		}
+  	}
+  
+  	// Scale validation
+  	$effect(() => {
+  		const scaleType = chart.xScaleState?.scaleType;
+  		if (brush.active && scaleType && !brush.validate(chart.xScale, scaleType)) {
+  			clearBrush();
+  		}
+  	});
+  
+  	// Derived screen coordinates
+  	const brushScreenX = $derived.by(() => {
+  		if (!brush.active) return null;
+  		const [min, max] = brush.screenExtent(chart.xScale);
+  		return { x: min, width: max - min };
+  	});
+  
+  	// Emit Mosaic clause
+  	function emitClause() {
+  		if (!brush.active) return;
+  
+  		// Normalize range (ensure min < max) to handle inverted brushes from edge resize
+  		const dataMin = Math.min(brush.dataMin, brush.dataMax);
+  		const dataMax = Math.max(brush.dataMin, brush.dataMax);
+  
+  		// Deduplication: skip if values haven't changed significantly
+  		if (closeTo(dataMin, lastEmittedMin) && closeTo(dataMax, lastEmittedMax)) {
+  			return;
+  		}
+  
+  		lastEmittedMin = dataMin;
+  		lastEmittedMax = dataMax;
+  
+  		const clause = clauseInterval(
+  			column(resolvedField),
+  			[dataMin, dataMax],
+  			{
+  				source: `interval-x-${chart.chartId}`,
+  				clients: chart.markClients, // Crossfilter exclusion
+  				scale: {
+  					type: chart.xScaleState?.scaleType || 'linear',
+  					domain: chart.xScale.domain(),
+  					range: chart.xScale.range()
+  				}
+  			}
+  		);
+  
+  		selection.update(clause);
+  	}
+  
+  	// Pre-aggregation on pointer enter
+  	function handlePointerEnter() {
+  		if (!selection.activate) return;
+  
+  		const range = brush.active
+  			? [Math.min(brush.dataMin, brush.dataMax), Math.max(brush.dataMin, brush.dataMax)]
+  			: [0, 1];
+  
+  		selection.activate(
+  			clauseInterval(
+  				column(resolvedField),
+  				range,
+  				{
+  					source: `interval-x-${chart.chartId}`,
+  					clients: chart.markClients,
+  					scale: {
+  						type: chart.xScaleState?.scaleType || 'linear',
+  						domain: chart.xScale.domain(),
+  						range: chart.xScale.range()
+  					}
+  				}
+  			)
+  		);
+  	}
+  
+  	function clearBrush() {
+  		brush.clear();
+  		selection.update({ predicate: sql`TRUE`, source: `interval-x-${chart.chartId}` });
+  	}
+  
+  	// --- Pointer Event Handlers ---
+  
+  	function handleBackgroundPointerDown(event) {
+  		if (brush.phase !== 'idle') return;
+  
+  		// Allow pan if Space key held
+  		if (isPanModeActive) return;
+  
+  		event.stopPropagation(); // Prevent pan
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  
+  		anchorX = innerPoint.x;
+  		currentX = innerPoint.x;
+  		brush.phase = 'creating';
+  		brush.setFromScreen(anchorX, currentX, chart.xScale);
+  	}
+  
+  	function handlePointerMove(event) {
+  		if (!isCapturing) return;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		currentX = innerPoint.x;
+  
+  		if (brush.phase === 'creating') {
+  			brush.setFromScreen(anchorX, currentX, chart.xScale);
+  		} else if (brush.phase === 'moving') {
+  			const delta = currentX - anchorX;
+  			brush.shiftByScreen(delta, chart.xScale);
+  			anchorX = currentX;
+  		} else if (brush.phase === 'resizing') {
+  			// Use anchor point approach - opposite edge stays fixed
+  			const anchorData = brush.resizeEdge === 'left' ? brush.dataMax : brush.dataMin;
+  			const currentData = chart.xScale.invert(currentX);
+  			brush.setExtent(Math.min(anchorData, currentData), Math.max(anchorData, currentData));
+  		}
+  
+  		// Continuous updates during drag (matches vgplot behavior)
+  		emitClause();
+  	}
+  
+  	function handlePointerUp(event) {
+  		if (!isCapturing) return;
+  
+  		event.target.releasePointerCapture(event.pointerId);
+  		isCapturing = false;
+  
+  		if (brush.phase !== 'idle') {
+  			emitClause();
+  			brush.phase = 'idle';
+  		}
+  	}
+  
+  	function handleMoveStart(event) {
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		anchorX = innerPoint.x;
+  		brush.phase = 'moving';
+  	}
+  
+  	function handleResizeStart(edge, event) {
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		anchorX = innerPoint.x;
+  		brush.phase = 'resizing';
+  		brush.resizeEdge = edge === 'left' ? 'left' : 'right';
+  	}
+  
+  	function handleDoubleClick(event) {
+  		event.stopPropagation();
+  		clearBrush();
+  	}
+  
+  	// Cleanup
+  	$effect(() => {
+  		return () => unregister();
+  	});
+  
+  	// Mount keyboard listeners
+  	onMount(() => {
+  		window.addEventListener('keydown', handleKeyDown);
+  		window.addEventListener('keyup', handleKeyUp);
+  		return () => {
+  			window.removeEventListener('keydown', handleKeyDown);
+  			window.removeEventListener('keyup', handleKeyUp);
+  		};
+  	});
+  </script>
+  
+  <g
+  	class="interval-x-interactor"
+  	onpointerenter={handlePointerEnter}
+  	onpointermove={handlePointerMove}
+  	onpointerup={handlePointerUp}
+  	ondblclick={handleDoubleClick}
+  >
+  	<!-- Full-area background for creating new brushes -->
+  	<rect
+  		class="brush-background"
+  		x={0}
+  		y={0}
+  		width={chart.innerWidth}
+  		height={chart.innerHeight}
+  		fill="transparent"
+  		style="cursor: crosshair;"
+  		onpointerdown={handleBackgroundPointerDown}
+  	/>
+  
+  	<!-- Brush overlay when active -->
+  	{#if brush.active && brushScreenX}
+  		<BrushOverlay
+  			x={brushScreenX.x}
+  			y={0}
+  			width={brushScreenX.width}
+  			height={chart.innerHeight}
+  			orientation="x"
+  			{dimUnselected}
+  			onMoveStart={handleMoveStart}
+  			onResizeStart={handleResizeStart}
+  		/>
+  	{/if}
+  </g>
+</src/lib/interactors/IntervalX.svelte>
+
+<src/lib/interactors/index.js>
+  export { BrushState1D, BrushState2D } from './brush-state.svelte.js';
+  export { default as BrushOverlay } from './BrushOverlay.svelte';
+  export { default as IntervalX } from './IntervalX.svelte';
+  export { default as IntervalY } from './IntervalY.svelte';
+  export { default as Interval2D } from './Interval2D.svelte';
+</src/lib/interactors/index.js>
+
+<src/lib/interactors/BrushOverlay.svelte>
+  <script>
+  	import { getContext } from 'svelte';
+  
+  	let {
+  		x,
+  		y,
+  		width,
+  		height, // Screen coordinates
+  		orientation, // 'x' | 'y' | '2d'
+  		onMoveStart, // (event) => void
+  		onResizeStart, // (edge: string, event) => void
+  		dimUnselected = true
+  	} = $props();
+  
+  	const chart = getContext('chart');
+  
+  	// Normalize to ensure positive dimensions (avoid GC by using primitives)
+  	const nx = $derived(width < 0 ? x + width : x);
+  	const ny = $derived(height < 0 ? y + height : y);
+  	const nw = $derived(Math.abs(width));
+  	const nh = $derived(Math.abs(height));
+  </script>
+  
+  <g class="brush-overlay">
+  	<!-- Dimmed unselected regions -->
+  	{#if dimUnselected}
+  		{#if orientation === 'x' || orientation === '2d'}
+  			<rect
+  				x={0}
+  				y={0}
+  				width={Math.max(0, nx)}
+  				height={chart.innerHeight}
+  				fill="rgba(0,0,0,0.05)"
+  				pointer-events="none"
+  			/>
+  			<rect
+  				x={Math.max(0, nx + nw)}
+  				y={0}
+  				width={Math.max(0, chart.innerWidth - nx - nw)}
+  				height={chart.innerHeight}
+  				fill="rgba(0,0,0,0.05)"
+  				pointer-events="none"
+  			/>
+  		{/if}
+  		{#if orientation === 'y' || orientation === '2d'}
+  			<rect
+  				x={0}
+  				y={0}
+  				width={chart.innerWidth}
+  				height={Math.max(0, ny)}
+  				fill="rgba(0,0,0,0.05)"
+  				pointer-events="none"
+  			/>
+  			<rect
+  				x={0}
+  				y={Math.max(0, ny + nh)}
+  				width={chart.innerWidth}
+  				height={Math.max(0, chart.innerHeight - ny - nh)}
+  				fill="rgba(0,0,0,0.05)"
+  				pointer-events="none"
+  			/>
+  		{/if}
+  	{/if}
+  
+  	<!-- Selected region -->
+  	<rect
+  		class="brush-selection"
+  		x={nx}
+  		y={ny}
+  		width={nw}
+  		height={nh}
+  		fill="var(--brush-fill, rgba(100, 150, 255, 0.15))"
+  		stroke="var(--brush-stroke, rgba(100, 150, 255, 0.7))"
+  		stroke-width="1.5"
+  		onpointerdown={onMoveStart}
+  		style="cursor: move;"
+  	/>
+  
+  	<!-- Resize handles (visible + invisible hit areas) -->
+  	{#if orientation === 'x' || orientation === '2d'}
+  		<!-- Left edge handle - visible part -->
+  		<rect
+  			class="handle-visual handle-left-visual"
+  			x={nx - 3}
+  			y={ny}
+  			width={6}
+  			height={nh}
+  			fill="rgba(100, 150, 255, 0.3)"
+  			stroke="rgba(100, 150, 255, 0.7)"
+  			stroke-width="1.5"
+  			pointer-events="none"
+  		/>
+  		<!-- Left edge handle - hit area (larger, invisible) -->
+  		<rect
+  			class="handle-hit handle-left-hit"
+  			x={nx - 10}
+  			y={ny}
+  			width={20}
+  			height={nh}
+  			fill="transparent"
+  			style="cursor: ew-resize;"
+  			onpointerdown={(e) => onResizeStart('left', e)}
+  		/>
+  
+  		<!-- Right edge handle - visible part -->
+  		<rect
+  			class="handle-visual handle-right-visual"
+  			x={nx + nw - 3}
+  			y={ny}
+  			width={6}
+  			height={nh}
+  			fill="rgba(100, 150, 255, 0.3)"
+  			stroke="rgba(100, 150, 255, 0.7)"
+  			stroke-width="1.5"
+  			pointer-events="none"
+  		/>
+  		<!-- Right edge handle - hit area (larger, invisible) -->
+  		<rect
+  			class="handle-hit handle-right-hit"
+  			x={nx + nw - 10}
+  			y={ny}
+  			width={20}
+  			height={nh}
+  			fill="transparent"
+  			style="cursor: ew-resize;"
+  			onpointerdown={(e) => onResizeStart('right', e)}
+  		/>
+  	{/if}
+  
+  	{#if orientation === 'y' || orientation === '2d'}
+  		<!-- Top edge handle - visible part -->
+  		<rect
+  			class="handle-visual handle-top-visual"
+  			x={nx}
+  			y={ny - 3}
+  			width={nw}
+  			height={6}
+  			fill="rgba(100, 150, 255, 0.3)"
+  			stroke="rgba(100, 150, 255, 0.7)"
+  			stroke-width="1.5"
+  			pointer-events="none"
+  		/>
+  		<!-- Top edge handle - hit area (larger, invisible) -->
+  		<rect
+  			class="handle-hit handle-top-hit"
+  			x={nx}
+  			y={ny - 10}
+  			width={nw}
+  			height={20}
+  			fill="transparent"
+  			style="cursor: ns-resize;"
+  			onpointerdown={(e) => onResizeStart('top', e)}
+  		/>
+  
+  		<!-- Bottom edge handle - visible part -->
+  		<rect
+  			class="handle-visual handle-bottom-visual"
+  			x={nx}
+  			y={ny + nh - 3}
+  			width={nw}
+  			height={6}
+  			fill="rgba(100, 150, 255, 0.3)"
+  			stroke="rgba(100, 150, 255, 0.7)"
+  			stroke-width="1.5"
+  			pointer-events="none"
+  		/>
+  		<!-- Bottom edge handle - hit area (larger, invisible) -->
+  		<rect
+  			class="handle-hit handle-bottom-hit"
+  			x={nx}
+  			y={ny + nh - 10}
+  			width={nw}
+  			height={20}
+  			fill="transparent"
+  			style="cursor: ns-resize;"
+  			onpointerdown={(e) => onResizeStart('bottom', e)}
+  		/>
+  	{/if}
+  
+  	{#if orientation === '2d'}
+  		<!-- Corner handles for 2D -->
+  		{#each ['nw', 'ne', 'sw', 'se'] as corner}
+  			<!-- Visible corner handle -->
+  			<circle
+  				class="handle-visual handle-corner-visual handle-{corner}-visual"
+  				cx={corner.includes('e') ? nx + nw : nx}
+  				cy={corner.includes('s') ? ny + nh : ny}
+  				r={4}
+  				fill="rgba(100, 150, 255, 0.5)"
+  				stroke="rgba(100, 150, 255, 0.9)"
+  				stroke-width="2"
+  				pointer-events="none"
+  			/>
+  			<!-- Invisible corner hit area (larger) -->
+  			<circle
+  				class="handle-hit handle-corner-hit handle-{corner}-hit"
+  				cx={corner.includes('e') ? nx + nw : nx}
+  				cy={corner.includes('s') ? ny + nh : ny}
+  				r={12}
+  				fill="transparent"
+  				style="cursor: {corner === 'nw' || corner === 'se' ? 'nwse' : 'nesw'}-resize;"
+  				onpointerdown={(e) => onResizeStart(corner, e)}
+  			/>
+  		{/each}
+  	{/if}
+  </g>
+  
+  <style>
+  	.brush-selection {
+  		transition: fill 0.15s ease;
+  	}
+  
+  	.brush-selection:hover {
+  		fill: var(--brush-fill-hover, rgba(100, 150, 255, 0.2));
+  	}
+  
+  	/* Visual feedback on handle hover */
+  	.handle-hit:hover {
+  		/* Uncomment to visualize hit areas during development */
+  		/* fill: rgba(255, 0, 0, 0.1) !important; */
+  	}
+  </style>
+</src/lib/interactors/BrushOverlay.svelte>
+
+<src/lib/interactors/IntervalY.svelte>
+  <script>
+  	import { getContext, onMount } from 'svelte';
+  	import { clauseInterval } from '@uwdata/mosaic-core';
+  	import { column, sql } from '@uwdata/mosaic-sql';
+  	import { BrushState1D } from './brush-state.svelte.js';
+  	import BrushOverlay from './BrushOverlay.svelte';
+  
+  	let { bridge, field, dimUnselected = true } = $props();
+  
+  	const chart = getContext('chart');
+  	const brush = new BrushState1D();
+  
+  	// Field to filter (default to chart's y axis)
+  	const resolvedField = $derived(field ?? chart.yLabel);
+  
+  	// Register with FilterBridge to get a local Selection
+  	const { sel: selection, off: unregister } = bridge.createLocal('single', {
+  		source: `interval-y-${chart.chartId}`,
+  		augment: (clause) => ({
+  			kind: 'range',
+  			column: resolvedField,
+  			label: resolvedField,
+  			values: clause?.value ? [clause.value[0], clause.value[1]] : []
+  		}),
+  		onVisualClear: () => brush.clear() // Two-way sync
+  	});
+  
+  	// Pointer state (reused to avoid GC)
+  	let anchorY = 0;
+  	let currentY = 0;
+  	let isCapturing = false;
+  	let isPanModeActive = $state(false); // Space key for temporary pan
+  
+  	// Deduplication (skip redundant updates)
+  	let lastEmittedMin = null;
+  	let lastEmittedMax = null;
+  	const EPS = 1e-12;
+  
+  	function closeTo(a, b) {
+  		return a === b || (a != null && b != null && Math.abs(a - b) < EPS);
+  	}
+  
+  	// Keyboard handlers for Space key
+  	function handleKeyDown(event) {
+  		if (event.code === 'Space' && !isPanModeActive) {
+  			isPanModeActive = true;
+  		}
+  	}
+  
+  	function handleKeyUp(event) {
+  		if (event.code === 'Space') {
+  			isPanModeActive = false;
+  		}
+  	}
+  
+  	// Scale validation
+  	$effect(() => {
+  		const scaleType = chart.yScaleState?.scaleType;
+  		if (brush.active && scaleType && !brush.validate(chart.yScale, scaleType)) {
+  			clearBrush();
+  		}
+  	});
+  
+  	// Derived screen coordinates
+  	const brushScreenY = $derived.by(() => {
+  		if (!brush.active) return null;
+  		const [min, max] = brush.screenExtent(chart.yScale);
+  		return { y: min, height: max - min };
+  	});
+  
+  	// Emit Mosaic clause
+  	function emitClause() {
+  		if (!brush.active) return;
+  
+  		// Normalize range (ensure min < max) to handle inverted brushes from edge resize
+  		const dataMin = Math.min(brush.dataMin, brush.dataMax);
+  		const dataMax = Math.max(brush.dataMin, brush.dataMax);
+  
+  		// Deduplication: skip if values haven't changed significantly
+  		if (closeTo(dataMin, lastEmittedMin) && closeTo(dataMax, lastEmittedMax)) {
+  			return;
+  		}
+  
+  		lastEmittedMin = dataMin;
+  		lastEmittedMax = dataMax;
+  
+  		const clause = clauseInterval(
+  			column(resolvedField),
+  			[dataMin, dataMax],
+  			{
+  				source: `interval-y-${chart.chartId}`,
+  				clients: chart.markClients, // Crossfilter exclusion
+  				scale: {
+  					type: chart.yScaleState?.scaleType || 'linear',
+  					domain: chart.yScale.domain(),
+  					range: chart.yScale.range()
+  				}
+  			}
+  		);
+  
+  		selection.update(clause);
+  	}
+  
+  	// Pre-aggregation on pointer enter
+  	function handlePointerEnter() {
+  		if (!selection.activate) return;
+  
+  		const range = brush.active
+  			? [Math.min(brush.dataMin, brush.dataMax), Math.max(brush.dataMin, brush.dataMax)]
+  			: [0, 1];
+  
+  		selection.activate(
+  			clauseInterval(
+  				column(resolvedField),
+  				range,
+  				{
+  					source: `interval-y-${chart.chartId}`,
+  					clients: chart.markClients,
+  					scale: {
+  						type: chart.yScaleState?.scaleType || 'linear',
+  						domain: chart.yScale.domain(),
+  						range: chart.yScale.range()
+  					}
+  				}
+  			)
+  		);
+  	}
+  
+  	function clearBrush() {
+  		brush.clear();
+  		selection.update({ predicate: sql`TRUE`, source: `interval-y-${chart.chartId}` });
+  	}
+  
+  	// --- Pointer Event Handlers ---
+  
+  	function handleBackgroundPointerDown(event) {
+  		if (brush.phase !== 'idle') return;
+  
+  		// Allow pan if Space key held
+  		if (isPanModeActive) return;
+  
+  		event.stopPropagation(); // Prevent pan
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  
+  		anchorY = innerPoint.y;
+  		currentY = innerPoint.y;
+  		brush.phase = 'creating';
+  		brush.setFromScreen(anchorY, currentY, chart.yScale);
+  	}
+  
+  	function handlePointerMove(event) {
+  		if (!isCapturing) return;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		currentY = innerPoint.y;
+  
+  		if (brush.phase === 'creating') {
+  			brush.setFromScreen(anchorY, currentY, chart.yScale);
+  		} else if (brush.phase === 'moving') {
+  			const delta = currentY - anchorY;
+  			brush.shiftByScreen(delta, chart.yScale);
+  			anchorY = currentY;
+  		} else if (brush.phase === 'resizing') {
+  			// Use anchor point approach - opposite edge stays fixed
+  			const anchorData = brush.resizeEdge === 'top' ? brush.dataMax : brush.dataMin;
+  			const currentData = chart.yScale.invert(currentY);
+  			brush.setExtent(Math.min(anchorData, currentData), Math.max(anchorData, currentData));
+  		}
+  
+  		// Continuous updates during drag (matches vgplot behavior)
+  		emitClause();
+  	}
+  
+  	function handlePointerUp(event) {
+  		if (!isCapturing) return;
+  
+  		event.target.releasePointerCapture(event.pointerId);
+  		isCapturing = false;
+  
+  		if (brush.phase !== 'idle') {
+  			emitClause();
+  			brush.phase = 'idle';
+  		}
+  	}
+  
+  	function handleMoveStart(event) {
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		anchorY = innerPoint.y;
+  		brush.phase = 'moving';
+  	}
+  
+  	function handleResizeStart(edge, event) {
+  		event.stopPropagation();
+  		event.target.setPointerCapture(event.pointerId);
+  		isCapturing = true;
+  
+  		const point = { x: event.offsetX, y: event.offsetY };
+  		const innerPoint = chart.toInnerCoordinates(point);
+  		anchorY = innerPoint.y;
+  		brush.phase = 'resizing';
+  		brush.resizeEdge = edge === 'top' ? 'top' : 'bottom';
+  	}
+  
+  	function handleDoubleClick(event) {
+  		event.stopPropagation();
+  		clearBrush();
+  	}
+  
+  	// Cleanup
+  	$effect(() => {
+  		return () => unregister();
+  	});
+  
+  	// Mount keyboard listeners
+  	onMount(() => {
+  		window.addEventListener('keydown', handleKeyDown);
+  		window.addEventListener('keyup', handleKeyUp);
+  		return () => {
+  			window.removeEventListener('keydown', handleKeyDown);
+  			window.removeEventListener('keyup', handleKeyUp);
+  		};
+  	});
+  </script>
+  
+  <g
+  	class="interval-y-interactor"
+  	onpointerenter={handlePointerEnter}
+  	onpointermove={handlePointerMove}
+  	onpointerup={handlePointerUp}
+  	ondblclick={handleDoubleClick}
+  >
+  	<!-- Full-area background for creating new brushes -->
+  	<rect
+  		class="brush-background"
+  		x={0}
+  		y={0}
+  		width={chart.innerWidth}
+  		height={chart.innerHeight}
+  		fill="transparent"
+  		style="cursor: crosshair;"
+  		onpointerdown={handleBackgroundPointerDown}
+  	/>
+  
+  	<!-- Brush overlay when active -->
+  	{#if brush.active && brushScreenY}
+  		<BrushOverlay
+  			x={0}
+  			y={brushScreenY.y}
+  			width={chart.innerWidth}
+  			height={brushScreenY.height}
+  			orientation="y"
+  			{dimUnselected}
+  			onMoveStart={handleMoveStart}
+  			onResizeStart={handleResizeStart}
+  		/>
+  	{/if}
+  </g>
+</src/lib/interactors/IntervalY.svelte>
+
+<src/lib/interactors/brush-state.svelte.js>
+  export class BrushState1D {
+  	// Data-space bounds (source of truth)
+  	dataMin = $state(null);
+  	dataMax = $state(null);
+  
+  	// Interaction phase
+  	phase = $state('idle'); // 'idle' | 'creating' | 'moving' | 'resizing'
+  	resizeEdge = $state(null); // 'start' | 'end' | null
+  
+  	// Derived
+  	active = $derived(this.dataMin != null && this.dataMax != null);
+  
+  	// Screen coordinate conversions (using D3 scale)
+  	screenMin(scale) {
+  		return scale(this.dataMin);
+  	}
+  
+  	screenMax(scale) {
+  		return scale(this.dataMax);
+  	}
+  
+  	screenExtent(scale) {
+  		return [this.screenMin(scale), this.screenMax(scale)].sort((a, b) => a - b);
+  	}
+  
+  	// Set from screen coordinates (during gesture)
+  	setFromScreen(screenMin, screenMax, scale) {
+  		// Convert to data space first, then sort data values
+  		// This handles inverted scales (like Y-axis) correctly
+  		const data1 = scale.invert(screenMin);
+  		const data2 = scale.invert(screenMax);
+  		const sorted = [data1, data2].sort((a, b) => a - b);
+  		this.dataMin = sorted[0];
+  		this.dataMax = sorted[1];
+  	}
+  
+  	// Shift by delta (for move gesture)
+  	shiftByScreen(screenDelta, scale) {
+  		const dataDelta = scale.invert(screenDelta) - scale.invert(0);
+  		this.dataMin += dataDelta;
+  		this.dataMax += dataDelta;
+  	}
+  
+  	clear() {
+  		this.dataMin = null;
+  		this.dataMax = null;
+  		this.phase = 'idle';
+  		this.resizeEdge = null;
+  	}
+  
+  	// Normalize to ensure dataMin <= dataMax (swap if needed)
+  	normalize() {
+  		if (this.dataMin != null && this.dataMax != null && this.dataMin > this.dataMax) {
+  			const temp = this.dataMin;
+  			this.dataMin = this.dataMax;
+  			this.dataMax = temp;
+  		}
+  	}
+  
+  	// Set both values (Svelte 5 batches these updates automatically)
+  	setExtent(min, max) {
+  		this.dataMin = min;
+  		this.dataMax = max;
+  	}
+  
+  	// Validate brush for current scale
+  	validate(scale, scaleType) {
+  		if (!this.active) return true;
+  
+  		// Log scales require positive values
+  		if (scaleType === 'log' || scaleType === 'log10') {
+  			if (this.dataMin <= 0 || this.dataMax <= 0) {
+  				this.clear();
+  				return false;
+  			}
+  		}
+  
+  		// Time scales require Date objects
+  		if (scaleType === 'time' || scaleType === 'utc') {
+  			if (!(this.dataMin instanceof Date) || !(this.dataMax instanceof Date)) {
+  				this.clear();
+  				return false;
+  			}
+  		}
+  
+  		// Clamp to domain bounds
+  		const [domainMin, domainMax] = scale.domain();
+  		this.dataMin = Math.max(this.dataMin, domainMin);
+  		this.dataMax = Math.min(this.dataMax, domainMax);
+  
+  		// Clear if collapsed
+  		if (this.dataMin >= this.dataMax) {
+  			this.clear();
+  			return false;
+  		}
+  
+  		return true;
+  	}
+  }
+  
+  export class BrushState2D {
+  	// X and Y dimensions
+  	x = new BrushState1D();
+  	y = new BrushState1D();
+  
+  	phase = $state('idle');
+  	resizeCorner = $state(null); // 'nw' | 'ne' | 'sw' | 'se' | null
+  
+  	active = $derived(this.x.active && this.y.active);
+  
+  	clear() {
+  		this.x.clear();
+  		this.y.clear();
+  		this.phase = 'idle';
+  		this.resizeCorner = null;
+  	}
+  }
+</src/lib/interactors/brush-state.svelte.js>
+
 <src/lib/data/ViewManager.svelte.js>
   // src/lib/data/ViewManager.svelte.js
   
@@ -14301,7 +15695,7 @@
   	 * @param {[number, number]|null} currentDomain - Current viewport domain for adaptive binning
   	 * @returns {Expression} Mosaic SQL expression
   	 */
-  	resolve(fieldInfo, scaleType, timeOffset = null, currentDomain = null) {
+  	resolve(fieldInfo, scaleType, timeOffset = null, currentDomain = null, binStepMultiplier = 1.0) {
   		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
   		const info = fieldInfo[fieldName] || {};
   		const { min, max, type } = info;
@@ -14335,6 +15729,19 @@
   				const scaledSteps = Math.max(1, Math.round(binOptions.steps / viewportFraction));
   				binOptions = { ...binOptions, steps: scaledSteps };
   			}
+  		}
+  
+  		// Apply user bin multiplier (Shift+Scroll)
+  		if (binStepMultiplier !== 1.0) {
+  			if (binOptions.steps) {
+  				// Higher multiplier = More bins
+  				binOptions.steps = Math.max(1, Math.round(binOptions.steps * binStepMultiplier));
+  			}
+  			if (binOptions.step) {
+  				// Higher multiplier = Smaller bin width
+  				binOptions.step = binOptions.step / binStepMultiplier;
+  			}
+  			// Note: We ignore 'interval' (strings like 'month') as strictly multiplying them is ambiguous
   		}
   
   		// 1. Generate the standard binning expression (TIMESTAMP or NUMBER)
@@ -15172,6 +16579,274 @@
   	});
   });
 </src/lib/transforms/transforms.test.js>
+
+<src/lib/selection/filter-bridge.svelte.js>
+  import { createSelectionRegistry } from './selection-registry.js';
+  
+  export class FilterBridge {
+  	items = $state([]);
+  	activeCount = $derived(this.items.length);
+  
+  	registry; // Underlying non-reactive registry
+  
+  	constructor(Selection, baseSel) {
+  		this.registry = createSelectionRegistry({
+  			Selection,
+  			base: baseSel,
+  			makeFilterSel: (base) => Selection.intersect({ cross: true, include: base })
+  		});
+  
+  		// Sync reactive state
+  		const sync = () => {
+  			this.items = this.registry.snapshot();
+  		};
+  		this.registry.subscribe(sync);
+  		sync();
+  	}
+  
+  	get filterSel() {
+  		return this.registry.filterSel;
+  	}
+  
+  	createLocal(kind, opts) {
+  		return this.registry.createLocal(kind, opts);
+  	}
+  
+  	clear(source) {
+  		this.registry.clear(source);
+  	}
+  
+  	remove(source) {
+  		this.registry.remove(source);
+  	}
+  
+  	upsertManual(key, clause, schema) {
+  		this.registry.upsertManual(key, clause, schema);
+  	}
+  
+  	isNeutral(clause) {
+  		return this.registry.isNeutral(clause);
+  	}
+  }
+</src/lib/selection/filter-bridge.svelte.js>
+
+<src/lib/selection/index.js>
+  export { createSelectionRegistry, isNeutral } from './selection-registry.js';
+  export { FilterBridge } from './filter-bridge.svelte.js';
+</src/lib/selection/index.js>
+
+<src/lib/selection/selection-registry.js>
+  import { sql } from '@uwdata/mosaic-sql';
+  
+  const TRUE_PREDICATE = sql`TRUE`;
+  
+  // Neutral clause detection
+  export function isNeutral(clause) {
+  	if (!clause) return true;
+  	if (clause.predicate === TRUE_PREDICATE) return true;
+  	if (clause.predicate?.type === 'TRUE') return true;
+  
+  	// Check schema if present
+  	const schema = clause.schema;
+  	if (!schema) return false;
+  
+  	if (schema.kind === 'eq') {
+  		return !schema.values || schema.values.length === 0 || schema.values[0] == null;
+  	}
+  	if (schema.kind === 'in') {
+  		return !schema.values || schema.values.length === 0;
+  	}
+  	if (schema.kind === 'range') {
+  		// Handle 1D range (values) or 2D range (xValues/yValues)
+  		if (schema.xValues !== undefined && schema.yValues !== undefined) {
+  			// 2D range - check if both dimensions have valid values
+  			const xEmpty = !schema.xValues || schema.xValues.length === 0 || (schema.xValues[0] == null && schema.xValues[1] == null);
+  			const yEmpty = !schema.yValues || schema.yValues.length === 0 || (schema.yValues[0] == null && schema.yValues[1] == null);
+  			return xEmpty || yEmpty;
+  		} else {
+  			// 1D range - check values array
+  			const [a, b] = Array.isArray(schema.values) ? schema.values : [undefined, undefined];
+  			return a == null && b == null;
+  		}
+  	}
+  
+  	return false;
+  }
+  
+  export function createSelectionRegistry(opts) {
+  	const { Selection } = opts;
+  	const base = Array.isArray(opts.base) ? opts.base : opts.base ? [opts.base] : [];
+  	const filterSel =
+  		opts.makeFilterSel?.(base) ?? Selection.intersect({ cross: true, include: base });
+  
+  	// Track registered selections and their metadata
+  	const listeners = new Map(); // Selection -> { sel, onValue, onActivate, source, augment, onVisualClear }
+  	const entries = new Map(); // source -> { clause, enabled }
+  
+  	// Reactive pub/sub for UI updates
+  	const subs = new Set();
+  	let notifyTimer;
+  	const notify = () => {
+  		clearTimeout(notifyTimer);
+  		notifyTimer = setTimeout(() => {
+  			subs.forEach((fn) => fn());
+  		}, 0);
+  	};
+  
+  	function snapshot(opts) {
+  		const includeDisabled = !!opts?.includeDisabled;
+  		const list = Array.from(entries.entries()).map(([source, { clause, enabled }]) => ({
+  			source,
+  			enabled,
+  			clause,
+  			schema: clause?.schema
+  		}));
+  		return includeDisabled ? list : list.filter((it) => it.enabled && !isNeutral(it.clause));
+  	}
+  
+  	function subscribe(fn) {
+  		subs.add(fn);
+  		return () => subs.delete(fn);
+  	}
+  
+  	function unregister(sel) {
+  		const rec = listeners.get(sel);
+  		if (!rec) return;
+  
+  		const { sel: s, onValue, onActivate, source } = rec;
+  		s.removeEventListener?.('value', onValue);
+  		s.removeEventListener?.('activate', onActivate);
+  		listeners.delete(sel);
+  
+  		// Neutralize & hide
+  		if (entries.has(source)) {
+  			const e = entries.get(source);
+  			e.enabled = false;
+  			e.clause = {
+  				source,
+  				predicate: TRUE_PREDICATE,
+  				clients: new Set(),
+  				schema: { kind: 'custom', label: 'neutralized' }
+  			};
+  			filterSel.update(e.clause);
+  			notify();
+  		}
+  	}
+  
+  	function register(sel, opts) {
+  		if (listeners.has(sel)) return () => unregister(sel);
+  
+  		const source = opts?.source ?? sel;
+  		const { augment, onVisualClear } = opts || {};
+  
+  		const onValue = () => {
+  			let clause = sel.active;
+  
+  			// Apply augment if provided
+  			if (clause && augment) {
+  				const schema = augment(clause);
+  				if (schema) {
+  					clause = { ...clause, schema };
+  				}
+  			}
+  
+  			if (clause && !isNeutral(clause)) {
+  				// Forward real clause
+  				entries.set(source, { clause, enabled: true });
+  				filterSel.update(clause);
+  			} else {
+  				// Selection cleared or neutral: hide it
+  				const neutral = {
+  					source,
+  					predicate: TRUE_PREDICATE,
+  					clients: new Set(),
+  					schema: { kind: 'custom', label: '(cleared)' }
+  				};
+  				entries.set(source, { clause: neutral, enabled: false });
+  				filterSel.update(neutral);
+  
+  				// Sync visual state (e.g., clear brush overlay)
+  				onVisualClear?.();
+  			}
+  			notify();
+  		};
+  
+  		const onActivate = () => {
+  			const clause = sel.active;
+  			if (clause && !isNeutral({ ...clause, schema: augment?.(clause) ?? clause?.schema })) {
+  				filterSel.activate?.({ ...clause, source });
+  			}
+  		};
+  
+  		sel.addEventListener?.('value', onValue);
+  		sel.addEventListener?.('activate', onActivate);
+  		listeners.set(sel, { sel, onValue, onActivate, source, augment, onVisualClear });
+  
+  		return () => unregister(sel);
+  	}
+  
+  	function createLocal(kind = 'single', opts) {
+  		const sel =
+  			kind === 'union'
+  				? Selection.union()
+  				: kind === 'intersect'
+  					? Selection.intersect()
+  					: Selection.single();
+  		const off = register(sel, opts);
+  		return { sel, off };
+  	}
+  
+  	function clear(source) {
+  		// Clear any registered selection(s) associated with this source
+  		for (const rec of listeners.values()) {
+  			if (rec.source === source) {
+  				// Mosaic selections typically expose clear(); fallback to pushing TRUE
+  				rec.sel.clear?.() ?? rec.sel.update?.({ predicate: TRUE_PREDICATE });
+  			}
+  		}
+  
+  		// Neutralize & hide in registry regardless
+  		const neutral = {
+  			source,
+  			predicate: TRUE_PREDICATE,
+  			clients: new Set(),
+  			schema: { kind: 'custom', label: '(cleared)' }
+  		};
+  		entries.set(source, { clause: neutral, enabled: false });
+  		filterSel.update(neutral);
+  		notify();
+  	}
+  
+  	function remove(source) {
+  		// Clear first so downstream predicate is TRUE
+  		clear(source);
+  		// Then drop it from the list
+  		entries.delete(source);
+  		notify();
+  	}
+  
+  	function upsertManual(sourceKey, clause, schema) {
+  		const source = `manual:${sourceKey}`;
+  		const c = { ...clause, source, schema };
+  		entries.set(source, { clause: c, enabled: true });
+  		filterSel.update(c);
+  		notify();
+  	}
+  
+  	return {
+  		filterSel,
+  		register,
+  		unregister,
+  		createLocal,
+  		clear,
+  		remove,
+  		upsertManual,
+  		subscribe,
+  		snapshot,
+  		isNeutral
+  	};
+  }
+</src/lib/selection/selection-registry.js>
 
 <src/routes/scatter_plot_matrix/+page.svelte>
   <script>
