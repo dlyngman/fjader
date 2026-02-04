@@ -197,20 +197,20 @@ export class ColorScaleState {
 	processDataForGPU(data) {
 		// Fast path: already Float32Array from derived view (zero-copy)
 		if (data instanceof Float32Array) {
-			console.log(`[ColorScale:${this.#field}] ✅ FAST PATH - Float32Array indices:`, {
-				length: data.length,
-				sample: Array.from(data.slice(0, 5)),
-				isIndices: true
-			});
+			// console.log(`[ColorScale:${this.#field}] ✅ FAST PATH - Float32Array indices:`, {
+			// 	length: data.length,
+			// 	sample: Array.from(data.slice(0, 5)),
+			// 	isIndices: true
+			// });
 			return data;
 		}
 
 		if (this.isOrdinal) {
-			console.log(`[ColorScale:${this.#field}] 🐢 JS PATH - Converting strings to indices:`, {
-				length: data.length,
-				sample: data.slice(0, 5),
-				isStrings: typeof data[0] === 'string'
-			});
+			// console.log(`[ColorScale:${this.#field}] 🐢 JS PATH - Converting strings to indices:`, {
+			// 	length: data.length,
+			// 	sample: data.slice(0, 5),
+			// 	isStrings: typeof data[0] === 'string'
+			// });
 			const indices = new Float32Array(data.length);
 			for (let i = 0; i < data.length; i++) {
 				const val = data[i];

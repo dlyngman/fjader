@@ -17,11 +17,13 @@
 	} from '$lib/components';
 
 	const filterBridge = new FilterBridge(Selection, null);
+	globalThis.filterBridge = filterBridge;
 
-	// Reactive filter count
-	$effect(() => {
-		console.log('Active filters:', filterBridge.activeCount, $state.snapshot(filterBridge.items));
-	});
+
+	// // Reactive filter count
+	// $effect(() => {
+	// 	console.log('Active filters:', filterBridge.activeCount, $state.snapshot(filterBridge.items));
+	// });
 </script>
 
 <div class="demo-container">
@@ -29,8 +31,8 @@
 
 	<p class="instructions">
 		<strong>Instructions:</strong> Drag in the scatter plot to create a 2D brush. The bar chart
-		will update to show only filtered data. Hold Space to temporarily enable pan. Double-click to
-		clear the brush.
+		will update to show only filtered data. Click outside the brush to clear it, or drag to create
+		a new one. Hold <kbd>Shift</kbd> and scroll to scale the brush.
 	</p>
 
 	<div class="charts-wrapper">

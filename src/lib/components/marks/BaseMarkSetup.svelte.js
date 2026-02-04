@@ -584,12 +584,12 @@ export class BaseMarkSetup {
 
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
-			console.log('📊 Using ArrowDataAccessor (fast path)');
+			// console.log('📊 Using ArrowDataAccessor (fast path)');
 			return new ArrowDataAccessor(this.client.arrowTable);
 		}
 
 		// Transform path: Arrow → Objects → Transform → Object accessor
-		console.log('📊 Using ObjectDataAccessor (JS transforms)');
+		// console.log('📊 Using ObjectDataAccessor (JS transforms)');
 		const objects = this.#arrowToObjects(this.client.arrowTable);
 
 		const transformConfig = {
@@ -598,17 +598,17 @@ export class BaseMarkSetup {
 			fill: this.#getFieldName('fill')
 		};
 
-		console.log('📊 Transform config:', transformConfig);
-		console.log('📊 Input data sample:', objects.slice(0, 3));
-		console.log('📊 Select config:', this.#config.select);
+		// console.log('📊 Transform config:', transformConfig);
+		// console.log('📊 Input data sample:', objects.slice(0, 3));
+		// console.log('📊 Select config:', this.#config.select);
 
 		const transformed = this.#transformCompiler.applyToData(objects, transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale
 		});
 
-		console.log('📊 Transformed data:', transformed.length, 'rows');
-		console.log('📊 Transformed sample:', transformed.slice(0, 3));
+		// console.log('📊 Transformed data:', transformed.length, 'rows');
+		// console.log('📊 Transformed sample:', transformed.slice(0, 3));
 
 		return new ObjectDataAccessor(transformed);
 	});

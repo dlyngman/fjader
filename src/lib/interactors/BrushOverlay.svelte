@@ -9,7 +9,7 @@
 		orientation, // 'x' | 'y' | '2d'
 		onMoveStart, // (event) => void
 		onResizeStart, // (edge: string, event) => void
-		dimUnselected = true
+		onWheel // (event) => void - Shift+scroll to scale brush
 	} = $props();
 
 	const chart = getContext('chart');
@@ -21,105 +21,38 @@
 	const nh = $derived(Math.abs(height));
 </script>
 
-<g class="brush-overlay">
-	<!-- Dimmed unselected regions -->
-	{#if dimUnselected}
-		{#if orientation === 'x' || orientation === '2d'}
-			<rect
-				x={0}
-				y={0}
-				width={Math.max(0, nx)}
-				height={chart.innerHeight}
-				fill="rgba(0,0,0,0.05)"
-				pointer-events="none"
-			/>
-			<rect
-				x={Math.max(0, nx + nw)}
-				y={0}
-				width={Math.max(0, chart.innerWidth - nx - nw)}
-				height={chart.innerHeight}
-				fill="rgba(0,0,0,0.05)"
-				pointer-events="none"
-			/>
-		{/if}
-		{#if orientation === 'y' || orientation === '2d'}
-			<rect
-				x={0}
-				y={0}
-				width={chart.innerWidth}
-				height={Math.max(0, ny)}
-				fill="rgba(0,0,0,0.05)"
-				pointer-events="none"
-			/>
-			<rect
-				x={0}
-				y={Math.max(0, ny + nh)}
-				width={chart.innerWidth}
-				height={Math.max(0, chart.innerHeight - ny - nh)}
-				fill="rgba(0,0,0,0.05)"
-				pointer-events="none"
-			/>
-		{/if}
-	{/if}
-
-	<!-- Selected region -->
+<g class="brush-overlay" onwheel={onWheel}>
+	<!-- Selection box - minimal style like D3 defaults -->
 	<rect
 		class="brush-selection"
 		x={nx}
 		y={ny}
 		width={nw}
 		height={nh}
-		fill="var(--brush-fill, rgba(100, 150, 255, 0.15))"
-		stroke="var(--brush-stroke, rgba(100, 150, 255, 0.7))"
-		stroke-width="1.5"
+		fill="rgba(128, 128, 128, 0.1)"
+		stroke="rgba(96, 96, 96, 0.8)"
+		stroke-width="1"
 		onpointerdown={onMoveStart}
 		style="cursor: move;"
 	/>
 
-	<!-- Resize handles (visible + invisible hit areas) -->
+	<!-- Invisible resize handles - no visual, just hit areas for interaction -->
 	{#if orientation === 'x' || orientation === '2d'}
-		<!-- Left edge handle - visible part -->
+		<!-- Left edge -->
 		<rect
-			class="handle-visual handle-left-visual"
-			x={nx - 3}
+			x={nx - 5}
 			y={ny}
-			width={6}
-			height={nh}
-			fill="rgba(100, 150, 255, 0.3)"
-			stroke="rgba(100, 150, 255, 0.7)"
-			stroke-width="1.5"
-			pointer-events="none"
-		/>
-		<!-- Left edge handle - hit area (larger, invisible) -->
-		<rect
-			class="handle-hit handle-left-hit"
-			x={nx - 10}
-			y={ny}
-			width={20}
+			width={10}
 			height={nh}
 			fill="transparent"
 			style="cursor: ew-resize;"
 			onpointerdown={(e) => onResizeStart('left', e)}
 		/>
-
-		<!-- Right edge handle - visible part -->
+		<!-- Right edge -->
 		<rect
-			class="handle-visual handle-right-visual"
-			x={nx + nw - 3}
+			x={nx + nw - 5}
 			y={ny}
-			width={6}
-			height={nh}
-			fill="rgba(100, 150, 255, 0.3)"
-			stroke="rgba(100, 150, 255, 0.7)"
-			stroke-width="1.5"
-			pointer-events="none"
-		/>
-		<!-- Right edge handle - hit area (larger, invisible) -->
-		<rect
-			class="handle-hit handle-right-hit"
-			x={nx + nw - 10}
-			y={ny}
-			width={20}
+			width={10}
 			height={nh}
 			fill="transparent"
 			style="cursor: ew-resize;"
@@ -128,49 +61,22 @@
 	{/if}
 
 	{#if orientation === 'y' || orientation === '2d'}
-		<!-- Top edge handle - visible part -->
+		<!-- Top edge -->
 		<rect
-			class="handle-visual handle-top-visual"
 			x={nx}
-			y={ny - 3}
+			y={ny - 5}
 			width={nw}
-			height={6}
-			fill="rgba(100, 150, 255, 0.3)"
-			stroke="rgba(100, 150, 255, 0.7)"
-			stroke-width="1.5"
-			pointer-events="none"
-		/>
-		<!-- Top edge handle - hit area (larger, invisible) -->
-		<rect
-			class="handle-hit handle-top-hit"
-			x={nx}
-			y={ny - 10}
-			width={nw}
-			height={20}
+			height={10}
 			fill="transparent"
 			style="cursor: ns-resize;"
 			onpointerdown={(e) => onResizeStart('top', e)}
 		/>
-
-		<!-- Bottom edge handle - visible part -->
+		<!-- Bottom edge -->
 		<rect
-			class="handle-visual handle-bottom-visual"
 			x={nx}
-			y={ny + nh - 3}
+			y={ny + nh - 5}
 			width={nw}
-			height={6}
-			fill="rgba(100, 150, 255, 0.3)"
-			stroke="rgba(100, 150, 255, 0.7)"
-			stroke-width="1.5"
-			pointer-events="none"
-		/>
-		<!-- Bottom edge handle - hit area (larger, invisible) -->
-		<rect
-			class="handle-hit handle-bottom-hit"
-			x={nx}
-			y={ny + nh - 10}
-			width={nw}
-			height={20}
+			height={10}
 			fill="transparent"
 			style="cursor: ns-resize;"
 			onpointerdown={(e) => onResizeStart('bottom', e)}
@@ -178,25 +84,12 @@
 	{/if}
 
 	{#if orientation === '2d'}
-		<!-- Corner handles for 2D -->
+		<!-- Corner handles -->
 		{#each ['nw', 'ne', 'sw', 'se'] as corner}
-			<!-- Visible corner handle -->
 			<circle
-				class="handle-visual handle-corner-visual handle-{corner}-visual"
 				cx={corner.includes('e') ? nx + nw : nx}
 				cy={corner.includes('s') ? ny + nh : ny}
-				r={4}
-				fill="rgba(100, 150, 255, 0.5)"
-				stroke="rgba(100, 150, 255, 0.9)"
-				stroke-width="2"
-				pointer-events="none"
-			/>
-			<!-- Invisible corner hit area (larger) -->
-			<circle
-				class="handle-hit handle-corner-hit handle-{corner}-hit"
-				cx={corner.includes('e') ? nx + nw : nx}
-				cy={corner.includes('s') ? ny + nh : ny}
-				r={12}
+				r={8}
 				fill="transparent"
 				style="cursor: {corner === 'nw' || corner === 'se' ? 'nwse' : 'nesw'}-resize;"
 				onpointerdown={(e) => onResizeStart(corner, e)}
@@ -206,17 +99,7 @@
 </g>
 
 <style>
-	.brush-selection {
-		transition: fill 0.15s ease;
-	}
-
 	.brush-selection:hover {
-		fill: var(--brush-fill-hover, rgba(100, 150, 255, 0.2));
-	}
-
-	/* Visual feedback on handle hover */
-	.handle-hit:hover {
-		/* Uncomment to visualize hit areas during development */
-		/* fill: rgba(255, 0, 0, 0.1) !important; */
+		fill: rgba(128, 128, 128, 0.15);
 	}
 </style>
