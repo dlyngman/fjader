@@ -50,6 +50,11 @@
 		return config;
 	});
 
+	// Detect if x2 is an aggregate expression (count, sum, mean, etc.)
+	const hasAggregateX = $derived.by(() => {
+		return x2?.aggregate || (typeof x2 === 'object' && x2?.constructor?.name === '_AggregateNode');
+	});
+
 	// 2. Config
 	const config = $derived({
 		markType: 'barx',
@@ -71,7 +76,9 @@
 			y,
 			...(markColor.selectField && { color: markColor.selectField })
 		}),
-		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y] : null }
+		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y] : null },
+		// Bar charts with aggregates should start at zero baseline
+		zeroBaseline: hasAggregateX ? { x: true } : null
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);

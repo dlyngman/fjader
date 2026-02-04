@@ -1,12 +1,10 @@
 <script>
 	import { Selection } from '@uwdata/mosaic-core';
-	import { sum, min, max, avg, count } from '@uwdata/mosaic-sql';
-	import { setContext, getContext } from 'svelte';
-	// import Plot from './Plot.svelte';
+	import { count } from '@uwdata/mosaic-sql';
+	import { getContext } from 'svelte';
 
 	import {
 		ChartContainer,
-		ColumnSelector,
 		Grid,
 		Frame,
 		AxisLeft,
@@ -14,16 +12,11 @@
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		DotsMark,
 		RectYMark,
 		IntervalX,
 		FilterBridge
 	} from '$lib/components';
-	import LineMark from '$lib/components/marks/LineMark.svelte';
 	import { bin } from '$lib/sql/bin.js';
-
-	const coordinator = getContext('mosaic-coordinator');
-	const brushSeletion = Selection.crossfilter();
 
 	const filterBridge = new FilterBridge(Selection, null);
 
