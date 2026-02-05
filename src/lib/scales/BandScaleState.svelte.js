@@ -34,6 +34,11 @@ export class BandScaleState {
 	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
 
 	// =========================================================================
+	// POINTER STATE
+	// =========================================================================
+	currentDataPoint = $state(null); // Band index under cursor (integer), or null
+
+	// =========================================================================
 	// DOMAIN STATE
 	// =========================================================================
 	#domain = $state([]);
@@ -535,6 +540,39 @@ export class BandScaleState {
 		if (n === 0) return 0;
 
 		return rangeSize / Math.max(1, n - config.paddingInner + config.paddingOuter * 2);
+	}
+
+	// =========================================================================
+	// POINTER / INVERSION
+	// =========================================================================
+
+	/**
+	 * Convert screen position to band index.
+	 * Returns the 0-based index of the band under the cursor, or null if
+	 * no bands exist.
+	 *
+	 * @param {number} screenVal - Screen coordinate (pixels from chart origin)
+	 * @param {number} rangeSize - Total range size (innerWidth or innerHeight)
+	 * @param {boolean} isYAxis - True if y-axis (range is flipped)
+	 * @returns {number|null} Band index, or null
+	 */
+	invertScreenToData(screenVal, rangeSize, isYAxis = false) {
+		const config = this.getConfig();
+		const n = config.categoryCount;
+		if (n === 0) return null;
+
+		const stepSize = this.step(rangeSize);
+		if (stepSize === 0) return null;
+
+		const offset = config.paddingOuter * stepSize;
+
+		// For y-axis, range is [rangeSize, 0] so flip the coordinate
+		const pos = isYAxis ? rangeSize - screenVal : screenVal;
+
+		const bandIndex = Math.floor((pos - offset) / stepSize);
+
+		// Clamp to valid range
+		return Math.max(0, Math.min(n - 1, bandIndex));
 	}
 
 	// =========================================================================

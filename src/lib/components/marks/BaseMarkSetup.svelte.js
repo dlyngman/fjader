@@ -46,6 +46,12 @@ export class BaseMarkSetup {
 	#transformCompiler;
 	#autoBinNodes = new Map(); // channel -> AutoBinNode
 
+	// --- Tooltip Write-Back ---
+	#tooltipEnabled;
+	#tooltipSortTable;
+	#tooltipTableName;
+	#lastQuery = null; // Captured from queryBuilder callback
+
 	// --- Adaptive Binning Support ---
 	#lastBinningDomain = { x: null, y: null }; // Track domains used for binning
 	#rebinTimeout = null;
@@ -89,6 +95,12 @@ export class BaseMarkSetup {
 		this.#coordinator = coordinator;
 		this.#chartContext = chartContext;
 		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
+
+		// Tooltip write-back
+		this.#tooltipEnabled = config.tooltip !== false;
+		this.#tooltipSortTable =
+			typeof config.tooltip === 'object' ? config.tooltip.sortTable !== false : true;
+		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
 
 		// Ensure services have coordinator (idempotent)
 		BaseMarkSetup.ensureServices(coordinator);
@@ -405,7 +417,18 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 10: Viewport-local domain - update aggregate axis when viewport pans
+		// Effect 10: Write tooltip table when data updates
+		$effect(() => {
+			if (!this.#tooltipEnabled) return;
+			const data = this.data;
+			if (!data || data.length === 0) return;
+
+			untrack(() => {
+				this.#writeTooltipTable(data);
+			});
+		});
+
+		// Effect 11: Viewport-local domain - update aggregate axis when viewport pans
 		$effect(() => {
 			if (!this.#config.viewportLocalDomain) return;
 			if (!this.data || !this.#dataDerivedDomainsSet) return;
@@ -898,7 +921,11 @@ export class BaseMarkSetup {
 			this.#config.selection,
 			{
 				select: this.getSelectConfig(),
-				queryBuilder: (table, config, filter) => this.buildQuery(table, config, filter),
+				queryBuilder: (table, config, filter) => {
+					const query = this.buildQuery(table, config, filter);
+					this.#lastQuery = query;
+					return query;
+				},
 				dataFormat: 'arrow',
 				name: this.#markId,
 				...this.#config.clientOptions
@@ -1683,11 +1710,86 @@ export class BaseMarkSetup {
 		}, 16); // Snappy re-query (Mosaic has its own throttling)
 	}
 
+	// ===========================================================================
+	// TOOLTIP WRITE-BACK
+	// ===========================================================================
+
+	get tooltipTableName() {
+		return this.#tooltipTableName;
+	}
+
+	get tooltipEnabled() {
+		return this.#tooltipEnabled;
+	}
+
+	async #writeTooltipTable(data) {
+		const tableName = this.#tooltipTableName;
+
+		try {
+			if (!this.#transformCompiler.hasJSTransforms() && this.#lastQuery) {
+				// Path A: Re-execute the mark's query into a temp table.
+				// Pre-cast x/y to DOUBLE (avoids DECIMAL overflow in distance math).
+				// Optional ORDER BY x enables zone-map skipping for bounding-box queries.
+				const orderClause = this.#tooltipSortTable ? ' ORDER BY x' : '';
+				await this.#coordinator.exec([
+					`DROP TABLE IF EXISTS "${tableName}"`,
+					`CREATE TEMP TABLE "${tableName}" AS SELECT * REPLACE (CAST(x AS DOUBLE) AS x, CAST(y AS DOUBLE) AS y) FROM (${this.#lastQuery.toString()})${orderClause}`
+				]);
+			} else {
+				// Path B: Serialize transformed data via SQL VALUES.
+				// JS transforms produce small datasets (tens of rows).
+				const columns = data.columnNames.filter((c) => !c.startsWith('__dplot_'));
+				if (columns.length === 0) return;
+
+				const columnArrays = {};
+				for (const col of columns) {
+					columnArrays[col] = data.getColumn(col);
+				}
+
+				// Infer schema from first row
+				const schemaDef = columns
+					.map((col) => {
+						const sample = columnArrays[col][0];
+						const sqlType = typeof sample === 'number' ? 'DOUBLE' : 'VARCHAR';
+						return `"${col}" ${sqlType}`;
+					})
+					.join(', ');
+
+				// Build VALUES rows
+				const valueRows = [];
+				for (let i = 0; i < data.length; i++) {
+					const vals = columns.map((col) => {
+						const v = columnArrays[col][i];
+						if (v == null || (typeof v === 'number' && isNaN(v))) return 'NULL';
+						if (typeof v === 'number') return v.toString();
+						return `'${String(v).replace(/'/g, "''")}'`;
+					});
+					valueRows.push(`(${vals.join(', ')})`);
+				}
+
+				await this.#coordinator.exec([
+					`DROP TABLE IF EXISTS "${tableName}"`,
+					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
+					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
+				]);
+			}
+		} catch (error) {
+			console.error(`Failed to write tooltip table "${tableName}":`, error);
+		}
+	}
+
 	destroy() {
 		console.log(`💥 BaseMarkSetup destroying for ${this.#markId}`);
 
 		clearTimeout(this.#rebinTimeout);
 		clearTimeout(this.#viewportDomainUpdateTimeout);
+
+		// Drop tooltip temp table
+		if (this.#tooltipEnabled && this.#coordinator) {
+			this.#coordinator
+				.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`)
+				.catch(() => {});
+		}
 
 		// Unregister client from chart context
 		this.#unregisterClient?.();

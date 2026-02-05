@@ -20,7 +20,8 @@
 		filterNulls = false,
 		preferredXScaleType = null,
 		preferredYScaleType = null,
-		transforms = []
+		transforms = [],
+		tooltip = true
 	} = $props();
 
 	const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
@@ -98,7 +99,8 @@
 			...(markColor.selectField && { color: markColor.selectField }),
 			...(typeof radius === 'string' && { radius })
 		}),
-		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null }
+		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
+		tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -198,6 +200,38 @@
 				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
 			}
 		});
+	});
+
+	// Tooltip registration
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		const id = markId;
+
+		tm.registerMark(id, {
+			tempTable: setup.tooltipTableName,
+			markType: 'dot',
+			scaleTypes: {
+				x: chartContext.scaleTypes?.x,
+				y: chartContext.scaleTypes?.y
+			},
+			channelFields: {
+				x: typeof x === 'string' ? x : 'x',
+				y: typeof y === 'string' ? y : 'y',
+				...(color && { color: typeof color === 'string' ? color : 'color' })
+			},
+			bandDomains: {
+				...(chartContext.scaleTypes?.x === 'band' && {
+					x: chartContext.xScaleState?.effectiveDomain
+				}),
+				...(chartContext.scaleTypes?.y === 'band' && {
+					y: chartContext.yScaleState?.effectiveDomain
+				})
+			},
+			enabled: true
+		});
+
+		return () => tm.unregisterMark(id);
 	});
 
 	onDestroy(() => {

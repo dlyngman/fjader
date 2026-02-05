@@ -4,6 +4,9 @@
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl.js';
+	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte.js';
+	import Tooltip from '$lib/interactors/Tooltip.svelte';
+	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
 
 	let {
 		xLabel = null,
@@ -82,6 +85,26 @@
 	// $effect(() => {
 	// 	console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
 	// });
+
+	// Tooltip manager
+	const coordinator = getContext('mosaic-coordinator');
+	let tooltipManager = $state(null);
+
+	$effect(() => {
+		if (!scales || !coordinator) return;
+
+		const tm = new TooltipManager(coordinator, scales);
+		tooltipManager = tm;
+
+		// Drive tooltip scheduling from the animation loop — no separate RAF
+		const frameCallback = (isAnimating) => tm.tick(isAnimating);
+		gpuCoordinator.addFrameCallback(frameCallback);
+
+		return () => {
+			gpuCoordinator.removeFrameCallback(frameCallback);
+			tm.destroy();
+		};
+	});
 
 	$effect(() => {
 		const xState = scales.xScaleState;
@@ -283,6 +306,11 @@
 		},
 		get markClients() {
 			return markClients;
+		},
+
+		// Tooltip manager
+		get tooltipManager() {
+			return tooltipManager;
 		}
 	};
 
@@ -322,6 +350,7 @@
 	function handleChartPointerLeave() {
 		gpuCoordinator.setChartUnhovered(layout.chartId);
 		wheelControl.handlePointerLeave();
+		tooltipManager?.updatePosition(null, null);
 	}
 
 	// ZOOM HANDLERS
@@ -351,6 +380,7 @@
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
 
 		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds);
+		tooltipManager?.updatePosition(null, null);
 	}
 
 	function handleDoubleClick(event) {
@@ -486,6 +516,7 @@
 	function processPointerMove(event) {
 		if (isPanning) {
 			scales.updatePanPosition(event.offsetX, event.offsetY);
+			tooltipManager?.updatePosition(null, null);
 		} else {
 			pointerBuffer.x = event.offsetX;
 			pointerBuffer.y = event.offsetY;
@@ -493,6 +524,11 @@
 			if (layout.isWithinInnerBounds(pointerBuffer)) {
 				const innerPoint = layout.toInnerCoordinates(pointerBuffer);
 				scales.updateCurrentDataPoints(innerPoint);
+				tooltipManager?.updatePointerScreen(event.offsetX, event.offsetY);
+				tooltipManager?.updatePosition(
+					scales.currentXDataPoint,
+					scales.currentYDataPoint
+				);
 			}
 		}
 	}
@@ -528,6 +564,7 @@
 	function handleInnerMouseLeave() {
 		scales.clearCurrentDataPoints();
 		scales.active = false;
+		tooltipManager?.updatePosition(null, null);
 	}
 
 	// let testRenderLoop;
@@ -590,6 +627,7 @@
 				onpointerleave={handleInnerMouseLeave}
 			>
 				{@render foreground?.()}
+				<HoverIndicator />
 				<rect
 					x="0"
 					y="0"
@@ -606,6 +644,11 @@
 			<div class="overlay-layer">
 				{@render overlay()}
 			</div>
+		{/if}
+
+		<!-- Tooltip -->
+		{#if tooltipManager}
+			<Tooltip />
 		{/if}
 	{/if}
 </div>
