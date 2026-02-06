@@ -1728,12 +1728,26 @@ export class BaseMarkSetup {
 		try {
 			if (!this.#transformCompiler.hasJSTransforms() && this.#lastQuery) {
 				// Path A: Re-execute the mark's query into a temp table.
-				// Pre-cast x/y to DOUBLE (avoids DECIMAL overflow in distance math).
-				// Optional ORDER BY x enables zone-map skipping for bounding-box queries.
-				const orderClause = this.#tooltipSortTable ? ' ORDER BY x' : '';
+				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow in distance math).
+				// Build REPLACE clause dynamically — bar marks have x1/x2 or y1/y2 instead of x/y.
+				const select = this.#config.select;
+				const castCols = ['x', 'x1', 'x2', 'y', 'y1', 'y2'].filter((c) => c in select);
+				const replaceClause =
+					castCols.length > 0
+						? ` REPLACE (${castCols.map((c) => `CAST(${c} AS DOUBLE) AS ${c}`).join(', ')})`
+						: '';
+
+				// Optional ORDER BY for zone-map skipping in bounding-box queries.
+				// Use the first available continuous-axis column.
+				let orderClause = '';
+				if (this.#tooltipSortTable) {
+					const orderCol = ['x', 'x1', 'x2'].find((c) => c in select);
+					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
+				}
+
 				await this.#coordinator.exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
-					`CREATE TEMP TABLE "${tableName}" AS SELECT * REPLACE (CAST(x AS DOUBLE) AS x, CAST(y AS DOUBLE) AS y) FROM (${this.#lastQuery.toString()})${orderClause}`
+					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${this.#lastQuery.toString()})${orderClause}`
 				]);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.

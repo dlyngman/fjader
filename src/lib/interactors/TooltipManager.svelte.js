@@ -53,6 +53,7 @@ export class TooltipManager {
 		}
 		this.#cursorActive = true;
 		this.#latestPosition = { xData, yData };
+		console.log(`[TT updatePos] x=${xData}, y=${yData}, pending=${this.#queryPending}`);
 	}
 
 	/**
@@ -159,7 +160,9 @@ export class TooltipManager {
 			}
 
 			if (bestResult && bestConfig) {
-				this.currentPoint = this.#resolveLabels(bestResult, bestConfig);
+				const resolved = this.#resolveLabels(bestResult, bestConfig);
+				console.log('[TT result]', JSON.stringify(resolved), 'bandDomains=', JSON.stringify(bestConfig.bandDomains));
+				this.currentPoint = resolved;
 				this.currentMarkId = bestMarkId;
 				this.currentMarkType = bestConfig.markType;
 				this.visible = true;
@@ -167,10 +170,14 @@ export class TooltipManager {
 				// Compute matched point screen position from raw data-space values
 				const xScale = this.#chartScales.xScale;
 				const yScale = this.#chartScales.yScale;
-				this.matchedScreenX =
-					bestResult.x != null && xScale ? xScale(bestResult.x) : null;
-				this.matchedScreenY =
-					bestResult.y != null && yScale ? yScale(bestResult.y) : null;
+				const cols = bestConfig.columns;
+
+				this.matchedScreenX = this.#resolveScreenPos(
+					'x', bestResult, bestConfig, xScale, cols
+				);
+				this.matchedScreenY = this.#resolveScreenPos(
+					'y', bestResult, bestConfig, yScale, cols
+				);
 			} else {
 				this.visible = false;
 				this.currentPoint = null;
@@ -206,24 +213,34 @@ export class TooltipManager {
 	}
 
 	#buildHitTestQuery(config, xData, yData) {
-		const { tempTable, scaleTypes } = config;
+		const { tempTable, scaleTypes, columns } = config;
 		const conditions = [];
 
 		// Y axis
 		if (scaleTypes.y === 'band' && yData != null) {
-			conditions.push(`CAST(y AS INTEGER) = ${Math.round(yData)}`);
+			const col = columns?.y || 'y';
+			conditions.push(`CAST(${col} AS INTEGER) = ${Math.round(yData)}`);
 		} else if (yData != null) {
+			const low = columns?.yLow ?? 'y0';
+			const high = columns?.yHigh ?? 'y1';
+			const lowExpr = typeof low === 'number' ? low : `CAST(${low} AS DOUBLE)`;
+			const highExpr = typeof high === 'number' ? high : `CAST(${high} AS DOUBLE)`;
 			conditions.push(
-				`CAST(${yData} AS DOUBLE) BETWEEN COALESCE(CAST(y0 AS DOUBLE), y, 0) AND COALESCE(CAST(y1 AS DOUBLE), y)`
+				`CAST(${yData} AS DOUBLE) BETWEEN ${lowExpr} AND ${highExpr}`
 			);
 		}
 
 		// X axis
 		if (scaleTypes.x === 'band' && xData != null) {
-			conditions.push(`CAST(x AS INTEGER) = ${Math.round(xData)}`);
+			const col = columns?.x || 'x';
+			conditions.push(`CAST(${col} AS INTEGER) = ${Math.round(xData)}`);
 		} else if (xData != null) {
+			const low = columns?.xLow ?? 'x0';
+			const high = columns?.xHigh ?? 'x1';
+			const lowExpr = typeof low === 'number' ? low : `CAST(${low} AS DOUBLE)`;
+			const highExpr = typeof high === 'number' ? high : `CAST(${high} AS DOUBLE)`;
 			conditions.push(
-				`CAST(${xData} AS DOUBLE) BETWEEN COALESCE(CAST(x0 AS DOUBLE), x, 0) AND COALESCE(CAST(x1 AS DOUBLE), x)`
+				`CAST(${xData} AS DOUBLE) BETWEEN ${lowExpr} AND ${highExpr}`
 			);
 		}
 
@@ -302,6 +319,46 @@ export class TooltipManager {
 			return `SELECT * FROM (${inner}) WHERE _distance <= ${dismissPxSq} ORDER BY _distance LIMIT 1`;
 		}
 		return `${inner} ORDER BY _distance LIMIT 1`;
+	}
+
+	// =========================================================================
+	// SCREEN POSITION RESOLUTION
+	// =========================================================================
+
+	/**
+	 * Resolve screen position for one axis from a query result row.
+	 * Handles band scales (index → category string) and range columns (x1/x2 midpoint).
+	 */
+	#resolveScreenPos(axis, row, config, scale, columns) {
+		if (!scale) return null;
+
+		// Band scale: convert integer index to category string, center in band
+		if (config.scaleTypes[axis] === 'band' && config.bandDomains?.[axis]) {
+			const col = columns?.[axis] || axis;
+			const index = row[col];
+			if (index == null) return null;
+			const category = config.bandDomains[axis][index];
+			if (category == null) return null;
+			const pos = scale(category);
+			const bandwidth = scale.bandwidth ? scale.bandwidth() : 0;
+			return pos != null ? pos + bandwidth / 2 : null;
+		}
+
+		// Range columns (bars): use midpoint of low/high
+		const lowKey = axis === 'x' ? 'xLow' : 'yLow';
+		const highKey = axis === 'x' ? 'xHigh' : 'yHigh';
+		if (columns?.[lowKey] && columns?.[highKey]) {
+			const low = row[columns[lowKey]];
+			const high = row[columns[highKey]];
+			if (low != null && high != null) {
+				return scale((low + high) / 2);
+			}
+			return null;
+		}
+
+		// Single value column (dots)
+		const val = row[axis];
+		return val != null ? scale(val) : null;
 	}
 
 	// =========================================================================

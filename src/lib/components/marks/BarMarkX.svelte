@@ -191,6 +191,7 @@
 				x: chartContext.scaleTypes?.x,
 				y: chartContext.scaleTypes?.y
 			},
+			columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', y: 'y' },
 			channelFields: {
 				x: typeof x2 === 'string' ? x2 : 'x',
 				y: typeof y === 'string' ? y : 'y',
