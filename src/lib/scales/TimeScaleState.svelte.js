@@ -290,13 +290,44 @@ export class TimeScaleState extends LinearScaleState {
 
 	/**
 	 * Format a single offset value to a datetime string.
-	 * Useful for tooltips, labels, etc.
+	 * Uses d3's multi-resolution tick format (adapts to zoom level).
 	 *
 	 * @param {number} offset - Time offset value
 	 * @returns {string} Formatted datetime string
 	 */
 	formatValue(offset) {
 		return this.tickFormat()(offset);
+	}
+
+	// Cached Intl formatters for tooltip (created once, reused)
+	static #tooltipFmtDate = new Intl.DateTimeFormat(undefined, {
+		year: 'numeric', month: 'short', day: 'numeric'
+	});
+	static #tooltipFmtDateTime = new Intl.DateTimeFormat(undefined, {
+		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+	});
+	static #tooltipFmtDateTimeSec = new Intl.DateTimeFormat(undefined, {
+		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+	});
+
+	/**
+	 * Format an offset for tooltip display.
+	 * Shows all precision present in the data — never drops detail.
+	 *
+	 * @param {number} offset - Time offset value
+	 * @returns {string} Formatted datetime string
+	 */
+	formatTooltipValue(offset) {
+		const date = this.offsetToDate(offset);
+		if (!date) return String(offset);
+
+		const s = date.getSeconds();
+		const m = date.getMinutes();
+		const h = date.getHours();
+
+		if (s !== 0) return TimeScaleState.#tooltipFmtDateTimeSec.format(date);
+		if (h !== 0 || m !== 0) return TimeScaleState.#tooltipFmtDateTime.format(date);
+		return TimeScaleState.#tooltipFmtDate.format(date);
 	}
 
 	// ===========================================================================

@@ -228,6 +228,8 @@
 					y: chartContext.yScaleState?.effectiveDomain
 				})
 			},
+			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
+			colorScaleState: markColor.scaleState ?? null,
 			enabled: true
 		});
 
