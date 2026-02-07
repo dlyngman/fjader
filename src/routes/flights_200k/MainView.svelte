@@ -1,6 +1,6 @@
 <script>
 	import { Selection } from '@uwdata/mosaic-core';
-	import { sum, min, max, avg } from '@uwdata/mosaic-sql';
+	import { sum, min, max, avg, count } from '@uwdata/mosaic-sql';
 	import { setContext, getContext } from 'svelte';
 	import Plot from './Plot.svelte';
 
@@ -14,11 +14,18 @@
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		DotsMark
+		DotsMark,
+		RectYMark,
+		FilterBridge,
+		IntervalX
 	} from '$lib/components';
+	import { bin } from '$lib/sql/bin.js';
+
 
 	const coordinator = getContext('mosaic-coordinator');
-	const brushSeletion = Selection.crossfilter();
+	// const brushSeletion = Selection.crossfilter();
+	const filterBridge = new FilterBridge(Selection, null);
+
 </script>
 
 <div class="main-view-container">
@@ -39,7 +46,7 @@
 
 						<DotsMark
 							table="flights"
-							selection={brushSeletion}
+							selection={filterBridge.filterSel}
 							x={min('delay')}
 							y={'time'}
 							color={avg('delay')}
@@ -56,7 +63,46 @@
 	</div>
 </div>
 
-<Plot selection={brushSeletion} />
+<div class="main-view-container">
+	<div class="chart-wrapper" style="max-height: 300px;">
+		<ChartContainer xLabel="distance">
+			{#snippet background()}
+				<!-- <Grid /> -->
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
+			{/snippet}
+
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+
+						<RectYMark
+							table="flights"
+							x={bin('distance', { steps: 50 })}
+							y={count()}
+							color="red"
+							viewportLocalDomain={true}
+							selection={filterBridge.filterSel}
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet foreground()}
+				<Crosshair />
+			{/snippet}
+
+			{#snippet interactors()}
+				<IntervalX bridge={filterBridge} />
+			{/snippet}
+		</ChartContainer>
+	</div>
+</div>
+
+<!-- <Plot selection={brushSeletion} /> -->
 
 <style>
 	.main-view-container {
@@ -82,7 +128,7 @@
 		aspect-ratio: 4/3;
 		min-height: 200px;
 		/* max-height: 400px; */
-		max-height: 800px;
+		max-height: 600px;
 		position: relative; /* Important for containing absolutely positioned children */
 	}
 </style>

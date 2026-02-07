@@ -24,7 +24,8 @@
 		filterNulls = false,
 		preferredYScaleType = null,
 		transforms = [],
-		viewportLocalDomain = false
+		viewportLocalDomain = false,
+		tooltip = true
 	} = $props();
 
 	const markId = `rectx-${crypto.randomUUID().slice(0, 8)}`;
@@ -127,7 +128,8 @@
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { x: true } : null,
 		// Viewport-local domain: compute X extent from visible Y range only
-		viewportLocalDomain
+		viewportLocalDomain,
+		tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -236,6 +238,38 @@
 				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
 			}
 		});
+	});
+
+	// Tooltip registration
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		const id = markId;
+
+		tm.registerMark(id, {
+			tempTable: setup.tooltipTableName,
+			markType: 'rectx',
+			scaleTypes: {
+				x: chartContext.scaleTypes?.x,
+				y: chartContext.scaleTypes?.y
+			},
+			columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
+			channelFields: {
+				x: typeof x2 === 'string' ? x2 : (typeof x === 'string' ? x : 'x'),
+				y: typeof ey1 === 'string' ? ey1 : (typeof y === 'string' ? y : 'y'),
+				...(color && { color: typeof color === 'string' ? color : 'color' })
+			},
+			bandDomains: {
+				...(chartContext.scaleTypes?.y === 'band' && {
+					y: chartContext.yScaleState?.effectiveDomain
+				})
+			},
+			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
+			colorScaleState: markColor.scaleState ?? null,
+			enabled: true
+		});
+
+		return () => tm.unregisterMark(id);
 	});
 
 	onDestroy(() => {
