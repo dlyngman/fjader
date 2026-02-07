@@ -97,7 +97,7 @@
 		tooltipManager = tm;
 
 		// Drive tooltip scheduling from the animation loop — no separate RAF
-		const frameCallback = (isAnimating) => tm.tick(isAnimating);
+		const frameCallback = () => tm.tick();
 		gpuCoordinator.addFrameCallback(frameCallback);
 
 		return () => {
@@ -380,7 +380,7 @@
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
 
 		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds);
-		tooltipManager?.updatePosition(null, null);
+		tooltipManager?.suppress(100);
 	}
 
 	function handleDoubleClick(event) {
@@ -389,6 +389,7 @@
 		pointerBuffer.y = event.offsetY;
 		const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
 		scales.resetZoom(xInBounds, yInBounds);
+		tooltipManager?.suppress(300);
 	}
 
 	// TOUCH HANDLERS
@@ -516,7 +517,7 @@
 	function processPointerMove(event) {
 		if (isPanning) {
 			scales.updatePanPosition(event.offsetX, event.offsetY);
-			tooltipManager?.updatePosition(null, null);
+			tooltipManager?.suppress(150);
 		} else {
 			pointerBuffer.x = event.offsetX;
 			pointerBuffer.y = event.offsetY;

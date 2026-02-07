@@ -50,7 +50,7 @@ export class BaseMarkSetup {
 	#tooltipEnabled;
 	#tooltipSortTable;
 	#tooltipTableName;
-	#lastQuery = null; // Captured from queryBuilder callback
+	#tooltipWriteTimeout = null;
 
 	// --- Adaptive Binning Support ---
 	#lastBinningDomain = { x: null, y: null }; // Track domains used for binning
@@ -417,14 +417,15 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 10: Write tooltip table when data updates
+		// Effect 10: Write tooltip table when data updates (debounced)
 		$effect(() => {
 			if (!this.#tooltipEnabled) return;
 			const data = this.data;
 			if (!data || data.length === 0) return;
 
 			untrack(() => {
-				this.#writeTooltipTable(data);
+				clearTimeout(this.#tooltipWriteTimeout);
+				this.#tooltipWriteTimeout = setTimeout(() => this.#writeTooltipTable(data), 300);
 			});
 		});
 
@@ -922,9 +923,7 @@ export class BaseMarkSetup {
 			{
 				select: this.getSelectConfig(),
 				queryBuilder: (table, config, filter) => {
-					const query = this.buildQuery(table, config, filter);
-					this.#lastQuery = query;
-					return query;
+					return this.buildQuery(table, config, filter);
 				},
 				dataFormat: 'arrow',
 				name: this.#markId,
@@ -1726,12 +1725,32 @@ export class BaseMarkSetup {
 		const tableName = this.#tooltipTableName;
 
 		try {
-			if (!this.#transformCompiler.hasJSTransforms() && this.#lastQuery) {
-				// Path A: Re-execute the mark's query into a temp table.
+			if (!this.#transformCompiler.hasJSTransforms()) {
+				// Path A: Build a fresh query from the original select config.
+				// We cannot reuse a captured query object because Mosaic's pre-aggregation
+				// mutates it in-place (setSelect), replacing x/y aliases with pre_* hashes.
+				// Instead, rebuild from getSelectConfig() which is never mutated.
+				const selectConfig = this.getSelectConfig();
+
+				// Get current crossfilter predicate (original column names, not preagg).
+				// selection.predicate(client) returns an array of SQL expression nodes,
+				// or undefined if client is the active cross-filter source (skip self).
+				let filter = [];
+				const selection = this.#config.selection;
+				if (selection && this.client) {
+					const predicate = selection.predicate(this.client);
+					if (Array.isArray(predicate)) filter = predicate;
+				}
+
+				const tooltipQuery = this.buildQuery(
+					this.effectiveTable,
+					{ select: selectConfig, _filterNulls: this.#config._filterNulls },
+					filter
+				);
+
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow in distance math).
 				// Build REPLACE clause dynamically — bar marks have x1/x2 or y1/y2 instead of x/y.
-				const select = this.#config.select;
-				const castCols = ['x', 'x1', 'x2', 'y', 'y1', 'y2'].filter((c) => c in select);
+				const castCols = ['x', 'x1', 'x2', 'y', 'y1', 'y2'].filter((c) => c in selectConfig);
 				const replaceClause =
 					castCols.length > 0
 						? ` REPLACE (${castCols.map((c) => `CAST(${c} AS DOUBLE) AS ${c}`).join(', ')})`
@@ -1741,13 +1760,13 @@ export class BaseMarkSetup {
 				// Use the first available continuous-axis column.
 				let orderClause = '';
 				if (this.#tooltipSortTable) {
-					const orderCol = ['x', 'x1', 'x2'].find((c) => c in select);
+					const orderCol = ['x', 'x1', 'x2'].find((c) => c in selectConfig);
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
 				}
 
 				await this.#coordinator.exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
-					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${this.#lastQuery.toString()})${orderClause}`
+					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
@@ -1797,6 +1816,7 @@ export class BaseMarkSetup {
 
 		clearTimeout(this.#rebinTimeout);
 		clearTimeout(this.#viewportDomainUpdateTimeout);
+		clearTimeout(this.#tooltipWriteTimeout);
 
 		// Drop tooltip temp table
 		if (this.#tooltipEnabled && this.#coordinator) {

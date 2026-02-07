@@ -19,6 +19,7 @@ export class TooltipManager {
 	#queryPending = false;
 	#latestPosition = null; // { xData, yData } — always the most recent cursor position
 	#cursorActive = false; // True when cursor is over the chart, false when it leaves
+	#suppressUntil = 0; // Timestamp before which tooltip queries are blocked
 
 	// Reactive state
 	currentPoint = $state(null);
@@ -56,6 +57,17 @@ export class TooltipManager {
 		}
 		this.#cursorActive = true;
 		this.#latestPosition = { xData, yData };
+	}
+
+	/**
+	 * Suppress tooltip queries for the given duration.
+	 * Call from interaction handlers (pan, zoom, reset) to block tooltips
+	 * during active interaction. Each call extends the suppression window.
+	 * @param {number} durationMs - How long to suppress from now
+	 */
+	suppress(durationMs) {
+		this.#suppressUntil = performance.now() + durationMs;
+		this.visible = false;
 	}
 
 	/**
@@ -101,11 +113,10 @@ export class TooltipManager {
 
 	/**
 	 * Called once per animation frame by GPUCoordinator's render loop.
-	 * @param {boolean} isAnimating - true when scales are actively animating (pan/zoom)
 	 */
-	tick(isAnimating) {
-		// Hide tooltip during pan/zoom — screen positions become stale
-		if (isAnimating) {
+	tick() {
+		// Suppressed by active interaction (pan, zoom, reset)
+		if (performance.now() < this.#suppressUntil) {
 			this.visible = false;
 			return;
 		}
