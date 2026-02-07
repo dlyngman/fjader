@@ -62,7 +62,6 @@
 								stroke="series"
 								color="#2196f3"
 								strokeWidth={5}
-								miterLimit={2}
 							/>
 						{/snippet}
 					</WebGPUCanvas>

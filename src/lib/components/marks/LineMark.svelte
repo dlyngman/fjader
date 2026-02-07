@@ -22,7 +22,7 @@
 		color = null, // Color encoding (can be same as stroke or different)
 		scheme, // Color scheme
 		strokeWidth = 2, // Line thickness in logical pixels
-		miterLimit = 4, // Max miter length to prevent spikes
+		dotRadius = 0, // 0 = strokeWidth/2 (gap-filling only), >0 = explicit radius in px
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -191,7 +191,7 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		{strokeWidth}
-		{miterLimit}
+		{dotRadius}
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
