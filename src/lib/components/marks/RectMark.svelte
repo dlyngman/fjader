@@ -28,7 +28,8 @@
 		padding,
 		paddingInner,
 		paddingOuter,
-		align = 0.5
+		align = 0.5,
+		tooltip = true
 	} = $props();
 
 	const markId = `rect-${crypto.randomUUID().slice(0, 8)}`;
@@ -141,9 +142,10 @@
 			y2: ey2,
 			...(markColor.selectField && { color: markColor.selectField })
 		}),
-		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null }
+		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null },
 		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
 		// (could be heatmap, 2D histogram, etc.). Use RectXMark/RectYMark for histograms.
+		tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -256,6 +258,44 @@
 				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
 			}
 		});
+	});
+
+	// Tooltip registration
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		const id = markId;
+
+		const xField = typeof x === 'string' ? x : (typeof ex1 === 'string' ? ex1 : 'x');
+		const yField = typeof y === 'string' ? y : (typeof ey1 === 'string' ? ey1 : 'y');
+
+		tm.registerMark(id, {
+			tempTable: setup.tooltipTableName,
+			markType: 'rect',
+			scaleTypes: {
+				x: chartContext.scaleTypes?.x,
+				y: chartContext.scaleTypes?.y
+			},
+			columns: { xLow: 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
+			channelFields: {
+				x: xField,
+				y: yField,
+				...(color && { color: typeof color === 'string' ? color : 'color' })
+			},
+			bandDomains: {
+				...(chartContext.scaleTypes?.x === 'band' && {
+					x: chartContext.xScaleState?.effectiveDomain
+				}),
+				...(chartContext.scaleTypes?.y === 'band' && {
+					y: chartContext.yScaleState?.effectiveDomain
+				})
+			},
+			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
+			colorScaleState: markColor.scaleState ?? null,
+			enabled: true
+		});
+
+		return () => tm.unregisterMark(id);
 	});
 
 	onDestroy(() => {

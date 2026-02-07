@@ -27,7 +27,8 @@
 		filterNulls = false,
 		preferredXScaleType = null,
 		preferredYScaleType = null,
-		transforms = []
+		transforms = [],
+		tooltip = true
 	} = $props();
 
 	const markId = `line-${crypto.randomUUID().slice(0, 8)}`;
@@ -118,7 +119,8 @@
 			seriesChannel: markSeries.selectField ? 'stroke' : null,
 			dimensionChannel: 'x'
 		},
-		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null }
+		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
+		tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -175,6 +177,37 @@
 	});
 
 	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
+
+	// Tooltip registration
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		const id = markId;
+
+		// Use color channel if set, otherwise fall back to stroke for series identification
+		const colorChannelField = color
+			? (typeof color === 'string' ? color : 'color')
+			: (stroke ? (typeof stroke === 'string' ? stroke : 'stroke') : null);
+
+		tm.registerMark(id, {
+			tempTable: setup.tooltipTableName,
+			markType: 'line',
+			scaleTypes: {
+				x: chartContext.scaleTypes?.x,
+				y: chartContext.scaleTypes?.y
+			},
+			channelFields: {
+				x: typeof x === 'string' ? x : 'x',
+				y: typeof y === 'string' ? y : 'y',
+				...(colorChannelField && { color: colorChannelField })
+			},
+			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
+			colorScaleState: markColor.scaleState ?? null,
+			enabled: true
+		});
+
+		return () => tm.unregisterMark(id);
+	});
 
 	onDestroy(() => {
 		setup?.destroy();

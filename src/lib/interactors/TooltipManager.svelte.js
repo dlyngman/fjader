@@ -228,7 +228,8 @@ export class TooltipManager {
 	#buildQuery(config, xData, yData) {
 		const { markType } = config;
 
-		if (markType === 'barX' || markType === 'bar' || markType === 'rect') {
+		const hitTestMarks = ['barx', 'bary', 'rect', 'rectx', 'recty'];
+		if (hitTestMarks.includes(markType)) {
 			return this.#buildHitTestQuery(config, xData, yData);
 		}
 		return this.#buildNearestQuery(config, xData, yData);
@@ -241,12 +242,12 @@ export class TooltipManager {
 		// Y axis
 		if (scaleTypes.y === 'band' && yData != null) {
 			const col = columns?.y || 'y';
-			conditions.push(`CAST(${col} AS INTEGER) = ${Math.round(yData)}`);
+			conditions.push(`CAST("${col}" AS INTEGER) = ${Math.round(yData)}`);
 		} else if (yData != null) {
 			const low = columns?.yLow ?? 'y0';
 			const high = columns?.yHigh ?? 'y1';
-			const lowExpr = typeof low === 'number' ? low : `CAST(${low} AS DOUBLE)`;
-			const highExpr = typeof high === 'number' ? high : `CAST(${high} AS DOUBLE)`;
+			const lowExpr = typeof low === 'number' ? low : `CAST("${low}" AS DOUBLE)`;
+			const highExpr = typeof high === 'number' ? high : `CAST("${high}" AS DOUBLE)`;
 			conditions.push(
 				`CAST(${yData} AS DOUBLE) BETWEEN LEAST(${lowExpr}, ${highExpr}) AND GREATEST(${lowExpr}, ${highExpr})`
 			);
@@ -255,12 +256,12 @@ export class TooltipManager {
 		// X axis
 		if (scaleTypes.x === 'band' && xData != null) {
 			const col = columns?.x || 'x';
-			conditions.push(`CAST(${col} AS INTEGER) = ${Math.round(xData)}`);
+			conditions.push(`CAST("${col}" AS INTEGER) = ${Math.round(xData)}`);
 		} else if (xData != null) {
 			const low = columns?.xLow ?? 'x0';
 			const high = columns?.xHigh ?? 'x1';
-			const lowExpr = typeof low === 'number' ? low : `CAST(${low} AS DOUBLE)`;
-			const highExpr = typeof high === 'number' ? high : `CAST(${high} AS DOUBLE)`;
+			const lowExpr = typeof low === 'number' ? low : `CAST("${low}" AS DOUBLE)`;
+			const highExpr = typeof high === 'number' ? high : `CAST("${high}" AS DOUBLE)`;
 			conditions.push(
 				`CAST(${xData} AS DOUBLE) BETWEEN LEAST(${lowExpr}, ${highExpr}) AND GREATEST(${lowExpr}, ${highExpr})`
 			);

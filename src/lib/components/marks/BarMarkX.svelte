@@ -186,7 +186,7 @@
 
 		tm.registerMark(id, {
 			tempTable: setup.tooltipTableName,
-			markType: 'barX',
+			markType: 'barx',
 			scaleTypes: {
 				x: chartContext.scaleTypes?.x,
 				y: chartContext.scaleTypes?.y
