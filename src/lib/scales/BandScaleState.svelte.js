@@ -566,10 +566,9 @@ export class BandScaleState {
 
 		const offset = config.paddingOuter * stepSize;
 
-		// GPU band scale renders categories top-to-bottom on Y axis
-		// (index 0 at top, index n-1 at bottom), so screenVal maps
-		// directly to band position without flipping.
-		const pos = screenVal;
+		// GPU band scale renders Y categories bottom-to-top (matching D3),
+		// so flip screen coordinate for Y axis inversion.
+		const pos = isYAxis ? rangeSize - screenVal : screenVal;
 
 		const bandIndex = Math.floor((pos - offset) / stepSize);
 

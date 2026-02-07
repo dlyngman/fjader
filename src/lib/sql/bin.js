@@ -110,23 +110,12 @@ export class AutoBinNode {
 			// Note: We ignore 'interval' (strings like 'month') as strictly multiplying them is ambiguous
 		}
 
-		// 1. Generate the standard binning expression (TIMESTAMP or NUMBER)
-		const binExpr = isTemporal
+		// Generate the standard binning expression (TIMESTAMP or NUMBER).
+		// Temporal bins return DATE/TIMESTAMP; offset conversion to GPU floats
+		// is handled centrally by BaseMarkSetup's time-scale swap section.
+		return isTemporal
 			? binDate(col, [min, max], binOptions)
 			: binHistogram(col, [min, max], binOptions);
-
-		// 2. Apply Time Offset Injection
-		// If this is a time scale and we have a valid t0, shift the reference frame
-		// BEFORE leaving the database to preserve float32 precision.
-		if (isTemporal && timeOffset != null) {
-			// DuckDB Logic:
-			// 1. epoch(binExpr) -> Converts TIMESTAMP to BIGINT (seconds since 1970)
-			// 2. - timeOffset    -> Subtracts global start time (t0 in epoch seconds)
-			// 3. CAST(... AS REAL) -> Converts to Float32 for GPU
-			return sql`CAST((epoch(${binExpr}) - ${timeOffset}) AS REAL)`;
-		}
-
-		return binExpr;
 	}
 
 	/**

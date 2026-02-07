@@ -1,6 +1,6 @@
 <script>
 	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { loadParquet, count } from '@uwdata/mosaic-sql';
+	import { loadParquet, count, dateMonthDay } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
 	import {
@@ -63,10 +63,11 @@
 								<Grid />
 								 <DotsMark 
 								 	table="weather"
-									x="date"
+									x={dateMonthDay("date")}
 									y="temp_max"
 									color="weather"
 									radius="precipitation"
+									preferredXScaleType="time"
 								 />
 							{/snippet}
 						</WebGPUCanvas>

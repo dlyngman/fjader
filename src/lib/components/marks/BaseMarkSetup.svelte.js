@@ -5,6 +5,7 @@ import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
 import {
 	Query,
 	isNode,
+	sql,
 	column as sqlColumn,
 	isAggregateExpression,
 	isNotNull,
@@ -706,27 +707,9 @@ export class BaseMarkSetup {
 			}
 		}
 
-		// For time scales, use the offset column name from ViewManager
-		// BUT: Skip if we have extent channels (x1/x2 or y1/y2) from bin expansion,
-		// since those already resolve to offset values via bin.resolve()
-		if (this.actualXScaleType === 'time') {
-			const xScale = this.#chartContext.xScaleState;
-			const hasExtentChannels = 'x1' in select || 'x2' in select;
-			if (xScale?.offsetColumnName && hasView && select.x && !hasExtentChannels) {
-				const originalField = select.x;
-				select.x = xScale.offsetColumnName;
-				console.log(`[BaseMarkSetup] Swapping x (time): ${originalField} → ${select.x}`);
-			}
-		}
-		if (this.actualYScaleType === 'time') {
-			const yScale = this.#chartContext.yScaleState;
-			const hasExtentChannels = 'y1' in select || 'y2' in select;
-			if (yScale?.offsetColumnName && hasView && select.y && !hasExtentChannels) {
-				const originalField = select.y;
-				select.y = yScale.offsetColumnName;
-				console.log(`[BaseMarkSetup] Swapping y (time): ${originalField} → ${select.y}`);
-			}
-		}
+		// Time scale offset wrapping is handled in buildQuery() after bin resolution.
+		// Raw column strings get swapped to ViewManager offset column there.
+		// Expression nodes get inline epoch offset wrapping there.
 
 		// For color scales, use the indexed column name
 		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
@@ -741,10 +724,17 @@ export class BaseMarkSetup {
 	buildQuery(sourceTable, config, filter) {
 		let select = config.select;
 
-		// NEW: Resolve auto bins if we have field info
+		// Resolve auto bins if we have field info
 		if (this.#autoBinNodes.size > 0 && this.client?.fieldInfo) {
 			select = this.#resolveAutoBins(config.select);
 		}
+
+		// Convert temporal values to float offsets from t0.
+		// Must run AFTER bin resolution so expression nodes are available.
+		// Raw column strings → swap to ViewManager offset column.
+		// Expression nodes (bins, dateMonthDay, etc.) → inline epoch offset.
+		const hasView = viewManager.hasView(this.#config.table);
+		select = this.#applyTimeOffsets(select, hasView);
 
 		const q = Query.from(sourceTable);
 		const selectDef = {};
@@ -861,35 +851,12 @@ export class BaseMarkSetup {
 				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 				const scaleState = this.#chartContext[`${axis}ScaleState`];
 
-				let t0 = null;
 				let currentDomain = null;
 
-				// For time scales, get t0 and frozen binning domain
-				if (scaleType === 'time' || scaleType === 'utc') {
-					// Get the actual origin datetime (t0) from the time scale
-					// and convert to epoch seconds for offset calculation in binDate.
-					// This matches the offset calculation in TimeScaleState's derived column.
-					if (scaleState?.t0) {
-						// Convert t0 (Date object) to epoch seconds
-						t0 = Math.floor(scaleState.t0.getTime() / 1000);
-					}
-
-					// Use frozen domain from last re-bin decision, not live domain
-					// This prevents using a moving target during zoom/pan
+				// Get frozen binning domain for adaptive bin count
+				if (scaleType === 'time' || scaleType === 'utc' || scaleType === 'linear') {
 					currentDomain = this.#lastBinningDomain[axis];
 
-					// Initialize baseline on first resolution
-					if (!currentDomain) {
-						currentDomain = scaleState?.domain?.current;
-						if (currentDomain) {
-							this.#lastBinningDomain[axis] = [...currentDomain];
-						}
-					}
-				} else if (scaleType === 'linear') {
-					// Linear scales: use frozen domain from last re-bin decision
-					currentDomain = this.#lastBinningDomain[axis];
-
-					// Initialize baseline on first resolution
 					if (!currentDomain) {
 						currentDomain = scaleState?.domain?.current;
 						if (currentDomain) {
@@ -898,11 +865,12 @@ export class BaseMarkSetup {
 					}
 				}
 
-				// Pass t0 and currentDomain to the resolver
+				// Resolve bin to SQL expression (temporal bins return DATE/TIMESTAMP;
+				// offset conversion is handled by the time-scale swap section downstream)
 				resolved[channel] = value.resolve(
 					this.client.fieldInfo,
 					scaleType,
-					t0,
+					null, // t0 no longer needed here — offset wrapping is centralized
 					currentDomain,
 					binStepMultiplier
 				);
@@ -912,6 +880,37 @@ export class BaseMarkSetup {
 		}
 
 		return resolved;
+	}
+
+	#applyTimeOffsets(select, hasView) {
+		const result = { ...select };
+
+		for (const [axis, channels] of [
+			['x', ['x', 'x1', 'x2']],
+			['y', ['y', 'y1', 'y2']]
+		]) {
+			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType !== 'time') continue;
+
+			const scaleState = this.#chartContext[`${axis}ScaleState`];
+			if (!scaleState?.t0) continue;
+
+			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
+
+			for (const ch of channels) {
+				if (!(ch in result)) continue;
+				const val = result[ch];
+				if (typeof val === 'string' && scaleState.offsetColumnName && hasView) {
+					console.log(`[BaseMarkSetup] Swapping ${ch} (time): ${val} → ${scaleState.offsetColumnName}`);
+					result[ch] = scaleState.offsetColumnName;
+				} else if (isNode(val)) {
+					console.log(`[BaseMarkSetup] Wrapping ${ch} (time expr) with epoch offset`);
+					result[ch] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
+				}
+			}
+		}
+
+		return result;
 	}
 
 	#createClient(tableName, fieldRequests) {
@@ -956,10 +955,13 @@ export class BaseMarkSetup {
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
-		if (this.actualXScaleType === 'time') {
+		// Only register time scale tables for view column creation when the field
+		// is a raw column name (string). Expression nodes (dateMonthDay, etc.) are
+		// handled inline by #applyTimeOffsets and don't need a ViewManager column.
+		if (this.actualXScaleType === 'time' && typeof this.#config.select.x === 'string') {
 			this.#chartContext.xScaleState?.registerTable?.(table);
 		}
-		if (this.actualYScaleType === 'time') {
+		if (this.actualYScaleType === 'time' && typeof this.#config.select.y === 'string') {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
 

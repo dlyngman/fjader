@@ -104,9 +104,9 @@ const SCALE_FRAGMENTS = {
 				);
 				
 				// Return center of band
-				// Categories flow in natural screen direction:
-				// X: left to right, Y: top to bottom
-				return rangeMin + bandLayout.x + bandLayout.y * 0.5;
+				// X: left to right (index 0 at left)
+				// Y: bottom to top (index 0 at bottom, matching D3 convention)
+				${axis === 'y' ? 'return rangeMax - bandLayout.x - bandLayout.y * 0.5;' : 'return rangeMin + bandLayout.x + bandLayout.y * 0.5;'}
 			}
   	`,
 
