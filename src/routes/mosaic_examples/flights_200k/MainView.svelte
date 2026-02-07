@@ -20,9 +20,14 @@
 
 	const filterBridge = new FilterBridge(Selection, null);
 
+	let viewportLocal = $state(true);
 </script>
 
 <div class="main-view-container">
+	<label>
+		<input type="checkbox" bind:checked={viewportLocal} />
+		viewportLocalDomain
+	</label>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="delay" yLabel="Count">
 			{#snippet background()}
@@ -43,7 +48,7 @@
 							x={bin('delay', { steps: 50 })}
 							y={count()}
 							color="steelblue"
-							viewportLocalDomain={true}
+							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
 						/>
 					{/snippet}
@@ -79,7 +84,7 @@
 							x={bin('time', { steps: 50 })}
 							y={count()}
 							color="steelblue"
-							viewportLocalDomain={true}
+							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
 						/>
 					{/snippet}
@@ -115,7 +120,7 @@
 							x={bin('distance', { steps: 50 })}
 							y={count()}
 							color="steelblue"
-							viewportLocalDomain={true}
+							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
 
 						/>
