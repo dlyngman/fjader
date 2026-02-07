@@ -136,6 +136,12 @@ export class GPUCoordinator {
 	#hoveredCharts = new Set();
 
 	// =========================================================================
+	// PER-FRAME CALLBACKS (for tooltip scheduling, etc.)
+	// =========================================================================
+	#frameCallbacks = [];
+	#isAnimating = false; // True when scales are actively animating (pan/zoom)
+
+	// =========================================================================
 	// SCALE SSBO SYSTEM
 	// =========================================================================
 	#scaleIndexManager = new ScaleIndexManager();
@@ -599,7 +605,12 @@ export class GPUCoordinator {
 			this.#coordinatedRender(chartArray);
 		}
 
-		// 6. Update svelte reactivty in scales after webgpu command submission
+		// 6. Per-frame callbacks (tooltip scheduling, etc.)
+		this.#isAnimating = this.#animatedScales.size > 0;
+		const cbLen = this.#frameCallbacks.length;
+		for (let i = 0; i < cbLen; i++) {
+			this.#frameCallbacks[i](this.#isAnimating);
+		}
 	};
 
 	/**
@@ -1202,6 +1213,20 @@ export class GPUCoordinator {
 	setChartUnhovered(chartId) {
 		this.#hoveredCharts.delete(chartId);
 		// Loop will stop on its own via idle check if nothing else is active
+	}
+
+	/**
+	 * Register a callback to be called once per animation frame.
+	 * Callback receives { isAnimating: boolean } — true when scales are actively
+	 * animating (pan/zoom), useful for skipping non-essential work like tooltips.
+	 */
+	addFrameCallback(fn) {
+		this.#frameCallbacks.push(fn);
+	}
+
+	removeFrameCallback(fn) {
+		const idx = this.#frameCallbacks.indexOf(fn);
+		if (idx !== -1) this.#frameCallbacks.splice(idx, 1);
 	}
 
 	registerChart(chartId, canvas, config) {

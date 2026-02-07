@@ -319,14 +319,14 @@ export class ChartScales {
 	}
 
 	updateCurrentDataPoints = (innerPoint) => {
-		if (this.#isContinuous('y') && this.#yScaleInstance) {
+		if (this.#yScaleInstance?.invertScreenToData) {
 			this.#yScaleInstance.currentDataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
 				this.layout.innerHeight,
 				true // isYAxis
 			);
 		}
-		if (this.#isContinuous('x') && this.#xScaleInstance) {
+		if (this.#xScaleInstance?.invertScreenToData) {
 			this.#xScaleInstance.currentDataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
 				this.layout.innerWidth,

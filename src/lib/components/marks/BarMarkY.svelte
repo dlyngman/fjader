@@ -21,7 +21,8 @@
 		padding,
 		paddingInner,
 		paddingOuter,
-		align = 0.5
+		align = 0.5,
+		tooltip = true
 	} = $props();
 
 	const markId = `bary-${crypto.randomUUID().slice(0, 8)}`;
@@ -81,7 +82,8 @@
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y1, y2] : null },
 		// Bar charts with aggregates should start at zero baseline
-		zeroBaseline: hasAggregateY ? { y: true } : null
+		zeroBaseline: hasAggregateY ? { y: true } : null,
+		tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -175,6 +177,36 @@
 			setup?.destroy();
 			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
 		});
+	});
+
+	// Tooltip registration
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		const id = markId;
+
+		tm.registerMark(id, {
+			tempTable: setup.tooltipTableName,
+			markType: 'bar',
+			scaleTypes: {
+				x: chartContext.scaleTypes?.x,
+				y: chartContext.scaleTypes?.y
+			},
+			columns: { x: 'x', yLow: typeof y1 === 'number' ? y1 : 'y1', yHigh: 'y2' },
+			channelFields: {
+				x: typeof x === 'string' ? x : 'x',
+				y: typeof y2 === 'string' ? y2 : 'y',
+				...(color && { color: typeof color === 'string' ? color : 'color' })
+			},
+			bandDomains: {
+				...(chartContext.scaleTypes?.x === 'band' && {
+					x: chartContext.xScaleState?.effectiveDomain
+				})
+			},
+			enabled: true
+		});
+
+		return () => tm.unregisterMark(id);
 	});
 
 	onDestroy(() => {

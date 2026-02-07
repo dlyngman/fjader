@@ -8,7 +8,7 @@
 		ChartContainer,
 		WebGPUCanvas,
 		DotsMark,
-		BarMark,
+		// BarMark,
 		Grid,
 		AxisLeft,
 		AxisBottom,

@@ -38,8 +38,10 @@
 					{#snippet canvasComponents()}
 						<Grid />
 
-						<LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" />
-						<DotsMark table="travelers" x="date" y="previous" alpha="1" color="red" />
+						<!-- <LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" /> -->
+						<LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" dotRadius={10}/>
+
+						<!-- <DotsMark table="travelers" x="date" y="previous" alpha="1" color="red" /> -->
 						<LineMark table="travelers" x="date" y="current" alpha="0.8" color="blue" />
 						<DotsMark table="travelers" x="date" y="current" alpha="1" color="blue" />
 					{/snippet}
