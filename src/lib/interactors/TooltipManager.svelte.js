@@ -19,11 +19,15 @@ export class TooltipManager {
 	#queryPending = false;
 	#latestPosition = null; // { xData, yData } — always the most recent cursor position
 	#cursorActive = false; // True when cursor is over the chart, false when it leaves
+	#suppressUntil = 0; // Timestamp before which tooltip queries are blocked
 
 	// Reactive state
 	currentPoint = $state(null);
 	currentMarkId = $state(null);
 	currentMarkType = $state(null);
+	currentColor = $state(null);
+	currentColorField = $state(null);
+	currentChannelFields = $state(null); // { x: 'bill_length', y: 'species', color: 'species' }
 	visible = $state(false);
 	pointerScreenX = $state(0);
 	pointerScreenY = $state(0);
@@ -53,7 +57,17 @@ export class TooltipManager {
 		}
 		this.#cursorActive = true;
 		this.#latestPosition = { xData, yData };
-		console.log(`[TT updatePos] x=${xData}, y=${yData}, pending=${this.#queryPending}`);
+	}
+
+	/**
+	 * Suppress tooltip queries for the given duration.
+	 * Call from interaction handlers (pan, zoom, reset) to block tooltips
+	 * during active interaction. Each call extends the suppression window.
+	 * @param {number} durationMs - How long to suppress from now
+	 */
+	suppress(durationMs) {
+		this.#suppressUntil = performance.now() + durationMs;
+		this.visible = false;
 	}
 
 	/**
@@ -64,9 +78,11 @@ export class TooltipManager {
 	 * @param {string} config.tempTable - DuckDB temp table name
 	 * @param {string} config.markType - 'dot', 'barX', 'bar', 'rect', etc.
 	 * @param {object} config.scaleTypes - { x: 'linear'|'band'|'time', y: ... }
-	 * @param {object} config.channelFields - Original field names { x: 'bill_length', y: 'species' }
+	 * @param {object} config.channelFields - Channel → field name { x: 'bill_length', y: 'species' }
+	 * @param {object} [config.columns] - Column aliases for hit testing { xLow, xHigh, yLow, yHigh, x, y }
 	 * @param {object} [config.bandDomains] - { y: ['Adelie', 'Gentoo', ...] } for band scales
-	 * @param {string[]} [config.colorDomain] - Color category labels
+	 * @param {string[]} [config.colorDomain] - Color category labels (ordinal)
+	 * @param {object} [config.colorScaleState] - ColorScaleState for CSS color lookup via getColor()
 	 * @param {boolean} [config.enabled=true]
 	 */
 	registerMark(markId, config) {
@@ -97,11 +113,13 @@ export class TooltipManager {
 
 	/**
 	 * Called once per animation frame by GPUCoordinator's render loop.
-	 * @param {boolean} isAnimating - true when scales are actively animating (pan/zoom)
 	 */
-	tick(isAnimating) {
-		// Skip tooltip queries during pan/zoom — scales are in flux
-		if (isAnimating) return;
+	tick() {
+		// Suppressed by active interaction (pan, zoom, reset)
+		if (performance.now() < this.#suppressUntil) {
+			this.visible = false;
+			return;
+		}
 
 		// If there's a new position and no query in flight, execute
 		if (this.#latestPosition && !this.#queryPending) {
@@ -161,11 +179,20 @@ export class TooltipManager {
 
 			if (bestResult && bestConfig) {
 				const resolved = this.#resolveLabels(bestResult, bestConfig);
-				console.log('[TT result]', JSON.stringify(resolved), 'bandDomains=', JSON.stringify(bestConfig.bandDomains));
 				this.currentPoint = resolved;
 				this.currentMarkId = bestMarkId;
 				this.currentMarkType = bestConfig.markType;
 				this.visible = true;
+
+				this.currentChannelFields = bestConfig.channelFields ?? null;
+
+				// Resolve color swatch
+				const colorFieldName = bestConfig.channelFields?.color || 'color';
+				const colorValue = resolved[colorFieldName];
+				this.currentColorField = colorValue != null ? colorFieldName : null;
+				this.currentColor = colorValue != null
+					? bestConfig.colorScaleState?.getColor(colorValue) ?? null
+					: null;
 
 				// Compute matched point screen position from raw data-space values
 				const xScale = this.#chartScales.xScale;
@@ -180,11 +207,6 @@ export class TooltipManager {
 				);
 			} else {
 				this.visible = false;
-				this.currentPoint = null;
-				this.currentMarkId = null;
-				this.currentMarkType = null;
-				this.matchedScreenX = null;
-				this.matchedScreenY = null;
 			}
 		} catch (error) {
 			console.error('Tooltip query failed:', error);
@@ -226,7 +248,7 @@ export class TooltipManager {
 			const lowExpr = typeof low === 'number' ? low : `CAST(${low} AS DOUBLE)`;
 			const highExpr = typeof high === 'number' ? high : `CAST(${high} AS DOUBLE)`;
 			conditions.push(
-				`CAST(${yData} AS DOUBLE) BETWEEN ${lowExpr} AND ${highExpr}`
+				`CAST(${yData} AS DOUBLE) BETWEEN LEAST(${lowExpr}, ${highExpr}) AND GREATEST(${lowExpr}, ${highExpr})`
 			);
 		}
 
@@ -240,7 +262,7 @@ export class TooltipManager {
 			const lowExpr = typeof low === 'number' ? low : `CAST(${low} AS DOUBLE)`;
 			const highExpr = typeof high === 'number' ? high : `CAST(${high} AS DOUBLE)`;
 			conditions.push(
-				`CAST(${xData} AS DOUBLE) BETWEEN ${lowExpr} AND ${highExpr}`
+				`CAST(${xData} AS DOUBLE) BETWEEN LEAST(${lowExpr}, ${highExpr}) AND GREATEST(${lowExpr}, ${highExpr})`
 			);
 		}
 
@@ -366,7 +388,7 @@ export class TooltipManager {
 	// =========================================================================
 
 	/**
-	 * Resolve band indices and color indices back to human-readable labels.
+	 * Resolve band indices, time offsets, and color indices back to human-readable labels.
 	 * Renames columns from aliases (x, y, color) to original field names.
 	 */
 	#resolveLabels(row, config) {
@@ -387,6 +409,26 @@ export class TooltipManager {
 			) {
 				const label = bandDomains[key][value];
 				point[fieldName] = label ?? value;
+				continue;
+			}
+
+			// Resolve time offset to formatted datetime string
+			if (
+				(key === 'x' || key === 'x1' || key === 'x2') &&
+				scaleTypes.x === 'time' &&
+				typeof value === 'number'
+			) {
+				const scaleState = this.#chartScales.xScaleState;
+				point[fieldName] = scaleState?.formatTooltipValue?.(value) ?? value;
+				continue;
+			}
+			if (
+				(key === 'y' || key === 'y1' || key === 'y2') &&
+				scaleTypes.y === 'time' &&
+				typeof value === 'number'
+			) {
+				const scaleState = this.#chartScales.yScaleState;
+				point[fieldName] = scaleState?.formatTooltipValue?.(value) ?? value;
 				continue;
 			}
 
@@ -413,6 +455,9 @@ export class TooltipManager {
 		this.currentPoint = null;
 		this.currentMarkId = null;
 		this.currentMarkType = null;
+		this.currentColor = null;
+		this.currentColorField = null;
+		this.currentChannelFields = null;
 		this.matchedScreenX = null;
 		this.matchedScreenY = null;
 	}
