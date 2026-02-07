@@ -13,14 +13,16 @@
 }
 
 /* Dark Mode */
-.dark {
-	--bg-color: var(--gray-10);
-	--text-color: var(--gray-0);
-	--text-secondary: var(--gray-3);
-	--text-muted: var(--gray-8);
-	--primary-color: var(--blue-3);
-	--secondary-color: var(--blue-1);
-	color-scheme: dark;
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg-color: var(--gray-10);
+		--text-color: var(--gray-0);
+		--text-secondary: var(--gray-3);
+		--text-muted: var(--gray-8);
+		--primary-color: var(--blue-3);
+		--secondary-color: var(--blue-1);
+		color-scheme: dark;
+	}
 }
 
 /* Apply to body */
