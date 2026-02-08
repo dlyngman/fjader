@@ -1,5 +1,5 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
+	import { Coordinator, wasmConnector, Selection } from '@uwdata/mosaic-core';
 	import { loadParquet, count, dateMonthDay } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
@@ -11,7 +11,9 @@
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		DotsMark
+		DotsMark,
+		IntervalX,
+		FilterBridge
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
@@ -22,6 +24,8 @@
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
+	const filterBridge = new FilterBridge(Selection, null);
+
 	onMount(async () => {
 		try {
 			const wasm = wasmConnector();
@@ -29,7 +33,9 @@
 			coord.databaseConnector(wasm);
 			setContext('mosaic-coordinator', coord);
 
-			await coord.exec(loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`));
+			await coord.exec(
+				loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`)
+			);
 
 			isLoaded = true;
 		} catch (error) {
@@ -61,20 +67,25 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								 <DotsMark 
-								 	table="weather"
-									x={dateMonthDay("date")}
+								<DotsMark
+									table="weather"
+									x={dateMonthDay('date')}
 									y="temp_max"
 									color="weather"
 									radius="precipitation"
 									preferredXScaleType="time"
-								 />
+									selection={filterBridge.filterSel}
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
 						<Crosshair />
+					{/snippet}
+
+					{#snippet interactors()}
+						<IntervalX bridge={filterBridge} field={dateMonthDay('date')} />
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -97,6 +108,7 @@
 									x={count()}
 									y="weather"
 									color="weather"
+									selection={filterBridge.filterSel}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

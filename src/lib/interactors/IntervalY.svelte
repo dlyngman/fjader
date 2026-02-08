@@ -20,13 +20,31 @@
 	// Field to filter (default to chart's y axis)
 	const resolvedField = $derived(field ?? chart.yLabel);
 
+	// Column reference for Mosaic clauses.
+	// For time scales, match the offset formula used by BaseMarkSetup (#applyTimeOffsets)
+	const columnRef = $derived.by(() => {
+		if (!resolvedField) return null;
+
+		const scaleState = chart.yScaleState;
+		const isTimeScale = scaleState?.t0 != null;
+
+		if (isTimeScale) {
+			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
+			const expr =
+				typeof resolvedField === 'string' ? column(resolvedField) : resolvedField;
+			return sql`CAST((epoch(${expr}) - ${t0Epoch}) AS REAL)`;
+		}
+
+		return typeof resolvedField === 'string' ? column(resolvedField) : resolvedField;
+	});
+
 	// Register with FilterBridge to get a local Selection
 	const { sel: selection, off: unregister } = bridge.createLocal('single', {
 		source: `interval-y-${chart.chartId}`,
 		augment: (clause) => ({
 			kind: 'range',
 			column: resolvedField,
-			label: resolvedField,
+			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
 			values: clause?.value ? [clause.value[0], clause.value[1]] : []
 		}),
 		onVisualClear: () => brush.clear() // Two-way sync
@@ -68,7 +86,7 @@
 
 	// Emit Mosaic clause
 	function emitClause() {
-		if (!brush.active) return;
+		if (!brush.active || !columnRef) return;
 
 		// Normalize range (ensure min < max) to handle inverted brushes from edge resize
 		const dataMin = Math.min(brush.dataMin, brush.dataMax);
@@ -83,7 +101,7 @@
 		lastEmittedMax = dataMax;
 
 		const clause = clauseInterval(
-			column(resolvedField),
+			columnRef,
 			[dataMin, dataMax],
 			{
 				source: `interval-y-${chart.chartId}`,
@@ -101,7 +119,7 @@
 
 	// Pre-aggregation on pointer enter
 	function handlePointerEnter() {
-		if (!selection.activate || !chart.yScale || !resolvedField) return;
+		if (!selection.activate || !chart.yScale || !columnRef) return;
 
 		const range = brush.active
 			? [Math.min(brush.dataMin, brush.dataMax), Math.max(brush.dataMin, brush.dataMax)]
@@ -109,7 +127,7 @@
 
 		selection.activate(
 			clauseInterval(
-				column(resolvedField),
+				columnRef,
 				range,
 				{
 					source: `interval-y-${chart.chartId}`,

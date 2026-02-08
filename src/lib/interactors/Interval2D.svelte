@@ -19,11 +19,27 @@
 	const resolvedXField = $derived(xField ?? chart.xLabel);
 	const resolvedYField = $derived(yField ?? chart.yLabel);
 
+	// Column references for Mosaic clauses.
+	// For time scales, match the offset formula used by BaseMarkSetup (#applyTimeOffsets)
+	function buildColumnRef(field, scaleState) {
+		if (!field) return null;
+		const isTimeScale = scaleState?.t0 != null;
+		if (isTimeScale) {
+			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
+			const expr = typeof field === 'string' ? column(field) : field;
+			return sql`CAST((epoch(${expr}) - ${t0Epoch}) AS REAL)`;
+		}
+		return typeof field === 'string' ? column(field) : field;
+	}
+
+	const xColumnRef = $derived(buildColumnRef(resolvedXField, chart.xScaleState));
+	const yColumnRef = $derived(buildColumnRef(resolvedYField, chart.yScaleState));
+
 	const { sel: selection, off: unregister } = bridge.createLocal('single', {
 		source: `interval-2d-${chart.chartId}`,
 		augment: (clause) => ({
 			kind: 'range',
-			label: `${resolvedXField} × ${resolvedYField}`,
+			label: `${typeof resolvedXField === 'string' ? resolvedXField : resolvedXField?.toString()} × ${typeof resolvedYField === 'string' ? resolvedYField : resolvedYField?.toString()}`,
 			// Store both X and Y ranges in metadata
 			xColumn: resolvedXField,
 			yColumn: resolvedYField,
@@ -77,7 +93,7 @@
 
 	// Emit Mosaic clause
 	function emitClause() {
-		if (!brush.active) return;
+		if (!brush.active || !xColumnRef || !yColumnRef) return;
 
 		// Normalize ranges (ensure min < max) to handle inverted brushes from corner resize
 		const xMin = Math.min(brush.x.dataMin, brush.x.dataMax);
@@ -101,7 +117,7 @@
 		lastEmittedMaxY = yMax;
 
 		const clause = clauseIntervals(
-			[column(resolvedXField), column(resolvedYField)],
+			[xColumnRef, yColumnRef],
 			[
 				[xMin, xMax],
 				[yMin, yMax]
@@ -129,7 +145,7 @@
 
 	// Pre-aggregation on pointer enter
 	function handlePointerEnter() {
-		if (!selection.activate || !chart.xScale || !chart.yScale || !resolvedXField || !resolvedYField) return;
+		if (!selection.activate || !chart.xScale || !chart.yScale || !xColumnRef || !yColumnRef) return;
 
 		// Normalize ranges for activate call too
 		const xRange = brush.x.active
@@ -141,7 +157,7 @@
 
 		selection.activate(
 			clauseIntervals(
-				[column(resolvedXField), column(resolvedYField)],
+				[xColumnRef, yColumnRef],
 				[xRange, yRange],
 				{
 					source: `interval-2d-${chart.chartId}`,

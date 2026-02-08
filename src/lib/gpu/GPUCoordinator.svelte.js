@@ -167,6 +167,10 @@ export class GPUCoordinator {
 	#colorRampBuffer = null; // 64 ramps × 256 colors × 16 bytes = 256KB
 	#colorPaletteBuffer = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
+	// Size scale buffer (group 2, binding 4)
+	#sizeConfigBuffer = null; // 64 configs × 16 bytes = 1KB
+	#maxSizeSlots = 64;
+
 	// Constants
 	#maxColorSlots = 64;
 	#rampColorsPerSlot = 256;
@@ -366,6 +370,12 @@ export class GPUCoordinator {
 					binding: 3,
 					visibility: GPUShaderStage.FRAGMENT, // ← Changed
 					buffer: { type: 'read-only-storage' }
+				},
+				{
+					// Binding 4: Size scale configs (vertex only)
+					binding: 4,
+					visibility: GPUShaderStage.VERTEX,
+					buffer: { type: 'read-only-storage' }
 				}
 			]
 		});
@@ -411,6 +421,13 @@ export class GPUCoordinator {
 						resource: {
 							buffer: this.#colorPaletteBuffer
 						}
+					},
+					{
+						// Size configs - full buffer, no offset
+						binding: 4,
+						resource: {
+							buffer: this.#sizeConfigBuffer
+						}
 					}
 				]
 			});
@@ -453,6 +470,13 @@ export class GPUCoordinator {
 		this.#colorPaletteBuffer = device.createBuffer({
 			label: 'OrdinalPalette SSBO',
 			size: this.#maxColorSlots * this.#paletteColorsPerSlot * 4 * 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+
+		// Size config buffer: 64 slots × 16 bytes each
+		this.#sizeConfigBuffer = device.createBuffer({
+			label: 'SizeConfig SSBO',
+			size: this.#maxSizeSlots * 16,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 	}
@@ -1064,6 +1088,22 @@ export class GPUCoordinator {
 								offset,
 								size: this.#slotByteSize
 							}
+						},
+						{
+							binding: 1,
+							resource: { buffer: this.#colorConfigBuffer }
+						},
+						{
+							binding: 2,
+							resource: { buffer: this.#colorRampBuffer }
+						},
+						{
+							binding: 3,
+							resource: { buffer: this.#colorPaletteBuffer }
+						},
+						{
+							binding: 4,
+							resource: { buffer: this.#sizeConfigBuffer }
 						}
 					]
 				});
@@ -1148,6 +1188,27 @@ export class GPUCoordinator {
 		// Each slot = 32 colors × 4 floats × 4 bytes = 512 bytes
 		const byteOffset = slot * this.#paletteColorsPerSlot * 4 * 4;
 		this.#device.queue.writeBuffer(this.#colorPaletteBuffer, byteOffset, paletteData);
+	}
+
+	/**
+	 * Write a SizeConfig struct to the size config buffer.
+	 *
+	 * @param {number} slot - Config slot index (0-63)
+	 * @param {ArrayBuffer} configData - 16-byte config struct from SizeScaleState
+	 */
+	writeSizeConfig(slot, configData) {
+		if (!this.#sizeConfigBuffer) {
+			console.warn('[GPUCoordinator] Size config buffer not initialized');
+			return;
+		}
+
+		if (slot < 0 || slot >= this.#maxSizeSlots) {
+			console.warn(`[GPUCoordinator] Invalid size config slot: ${slot}`);
+			return;
+		}
+
+		const byteOffset = slot * 16;
+		this.#device.queue.writeBuffer(this.#sizeConfigBuffer, byteOffset, configData);
 	}
 
 	// =========================================================================
@@ -1727,10 +1788,12 @@ export class GPUCoordinator {
 		this.#colorConfigBuffer?.destroy();
 		this.#colorRampBuffer?.destroy();
 		this.#colorPaletteBuffer?.destroy();
+		this.#sizeConfigBuffer?.destroy();
 
 		this.#colorConfigBuffer = null;
 		this.#colorRampBuffer = null;
 		this.#colorPaletteBuffer = null;
+		this.#sizeConfigBuffer = null;
 	}
 
 	destroy() {

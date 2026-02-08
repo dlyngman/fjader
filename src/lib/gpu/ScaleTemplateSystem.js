@@ -11,6 +11,12 @@ import {
 	COLOR_SCALE_FUNCTIONS
 } from './ColorScaleShaderLib.js';
 
+import {
+	SIZE_SCALE_STRUCTS,
+	SIZE_SCALE_BINDINGS,
+	SIZE_SCALE_FUNCTIONS
+} from './SizeScaleShaderLib.js';
+
 /**
  * Scale fragment definitions
  * Each scale type provides: declaration, function call, and implementation
@@ -263,7 +269,10 @@ export class ScaleTemplateSystem {
       
       // Color scale structs
       ${COLOR_SCALE_STRUCTS}
-      
+
+      // Size scale structs
+      ${SIZE_SCALE_STRUCTS}
+
       // ===== 2. UNIFORM & STORAGE BINDINGS =====
       
       // Per-frame uniforms (@group(0))
@@ -295,6 +304,9 @@ export class ScaleTemplateSystem {
       
       // Color scale bindings (@group(2) bindings 1-3)
       ${COLOR_SCALE_BINDINGS}
+
+      // Size scale bindings (@group(2) binding 4)
+      ${SIZE_SCALE_BINDINGS}
       
       // ===== 3. HELPER FUNCTIONS =====
       
@@ -305,6 +317,9 @@ export class ScaleTemplateSystem {
 
       // Color scale helper functions
       ${COLOR_SCALE_FUNCTIONS}
+
+      // Size scale helper functions
+      ${SIZE_SCALE_FUNCTIONS}
       
       // ===== 4. MARK-SPECIFIC CODE =====
       ${processedMarkShader}
