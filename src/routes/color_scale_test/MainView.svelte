@@ -6,7 +6,8 @@
 		DotsMark,
 		BarMarkY,
 		Crosshair,
-		Grid
+		Grid,
+		Legend
 	} from '$lib/components';
 
 	// Color configuration state
@@ -129,6 +130,10 @@
 
 	<div class="chart-container">
 		<ChartContainer>
+			{#snippet legend()}
+				<Legend color={colorField} />
+			{/snippet}
+
 			{#snippet canvas()}
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}

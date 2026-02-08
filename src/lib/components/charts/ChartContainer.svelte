@@ -17,12 +17,17 @@
 		canvasComponents,
 		overlay,
 		interactors,
+		legend,
+		legendPosition = 'top',
 		wheelInteraction = {
 			dwellTimeMs: 250,
 			momentumThreshold: 150,
 			enabled: true
-		}
+		},
+		margin: marginOverride = {}
 	} = $props();
+
+	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
 
 	const pointerBuffer = { x: 0, y: 0 };
 	const innerPointBuffer = { x: 0, y: 0 };
@@ -31,7 +36,7 @@
 
 	// Create layout and scale coordinator
 	const layout = new ChartLayout({
-		margin: { top: 30, right: 50, bottom: 35, left: 75 },
+		margin: { ...defaultMargin, ...marginOverride },
 		height: 250
 	});
 
@@ -315,6 +320,7 @@
 	};
 
 	setContext('chart', chartContext);
+	setContext('legend-position', () => legendPosition);
 
 	// Interaction state
 	let svg = $state();
@@ -581,6 +587,12 @@
 	});
 </script>
 
+<div class="figure-container">
+{#if legend && legendPosition === 'top'}
+	<div class="legend-container legend-top" style:padding-left="{layout.margin.left}px" style:padding-right="{layout.margin.right}px">
+		{@render legend()}
+	</div>
+{/if}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="chart-container"
@@ -653,6 +665,12 @@
 		{/if}
 	{/if}
 </div>
+{#if legend && legendPosition === 'right'}
+	<div class="legend-container legend-right" style:top="{layout.margin.top}px" style:left="{layout.margin.left + layout.innerWidth + 8}px">
+		{@render legend()}
+	</div>
+{/if}
+</div>
 
 <!-- <pre id="info">cpuTime: {gpuCoordinator.timings.cpu}
 fps: {gpuCoordinator.timings.fps}
@@ -660,10 +678,37 @@ gpu: {gpuCoordinator.timings.gpu} µs
 </pre> -->
 
 <style>
+	.figure-container {
+		display: flex;
+		flex-direction: column;
+		flex: 1;
+		height: 100%;
+		position: relative;
+		overflow: visible;
+	}
+
+	.legend-container {
+		pointer-events: none;
+	}
+
+	.legend-top {
+		flex-shrink: 0;
+		margin-bottom: -20px;
+		position: relative;
+		z-index: 4;
+	}
+
+	.legend-right {
+		position: absolute;
+		z-index: 4;
+		overflow-y: auto;
+		max-height: calc(100% - 60px);
+	}
+
 	.chart-container {
 		position: relative;
 		flex: 1;
-		height: 100%;
+		min-height: 0;
 		/* Use 'strict' contain for maximum isolation */
 		contain: strict;
 		touch-action: none;
