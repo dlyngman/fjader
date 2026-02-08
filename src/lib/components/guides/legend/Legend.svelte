@@ -4,6 +4,7 @@
 
 	let {
 		color = null,
+		bridge = null,
 		title = null,
 		columns = null,
 		swatchSize = 15,
@@ -31,6 +32,8 @@
 {#if colorScaleState?.ready && colorScaleState.isOrdinal}
 	<OrdinalColorLegend
 		scaleState={colorScaleState}
+		{bridge}
+		field={color}
 		{title}
 		{columns}
 		{swatchSize}

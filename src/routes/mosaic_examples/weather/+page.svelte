@@ -56,9 +56,9 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="right">
+				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" />
+						<Legend color="weather" bridge={filterBridge} />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -96,6 +96,9 @@
 
 			<div class="chart-wrapper">
 				<ChartContainer>
+					{#snippet legend()}
+						<Legend color="weather" bridge={filterBridge} />
+					{/snippet}
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
