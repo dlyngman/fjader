@@ -41,6 +41,7 @@ export class BaseMarkSetup {
 	#scaleMap = {};
 	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
 	#seriesScaleState = $state(null); // Optional series scale for connected topology marks
+	#sizeScaleState = $state(null); // Optional size scale for radius mapping
 	#currentClientTable = $state(null); // Track which table the current client queries
 
 	// --- Transform Support ---
@@ -546,6 +547,14 @@ export class BaseMarkSetup {
 		if (seriesScaleState && this.#config.table) {
 			seriesScaleState.registerTable(this.#config.table);
 		}
+	}
+
+	/**
+	 * Set the size scale state for radius domain discovery.
+	 * @param {SizeScaleState} sizeScaleState
+	 */
+	setSizeScale(sizeScaleState) {
+		this.#sizeScaleState = sizeScaleState;
 	}
 
 	scaleCompatibilityError = $derived.by(() => {
@@ -1414,6 +1423,24 @@ export class BaseMarkSetup {
 					);
 				}
 			}
+		}
+
+		// Fetch size domain if size scale is set and there's a radius field
+		if (this.#sizeScaleState && this.#config.select.radius) {
+			const radiusField = this.#config.select.radius;
+			const q = Query.from(table).select({
+				min_radius: min(sqlColumn(String(radiusField))),
+				max_radius: max(sqlColumn(String(radiusField)))
+			});
+
+			fetches.push(
+				this.#coordinator.query(q).then((result) => {
+					const row = Array.from(result)[0];
+					if (row && row.min_radius != null && row.max_radius != null) {
+						this.#sizeScaleState.setDomain([row.min_radius, row.max_radius]);
+					}
+				})
+			);
 		}
 
 		// Fetch series domain if series scale is set and there's a stroke field

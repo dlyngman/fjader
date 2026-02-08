@@ -4,6 +4,7 @@ import { LinearScaleState } from './LinearScaleState.svelte.js';
 import { TimeScaleState } from './TimeScaleState.svelte.js';
 import { BandScaleState } from './BandScaleState.svelte.js';
 import { ColorScaleState } from './ColorScaleState.svelte.js';
+import { SizeScaleState } from './SizeScaleState.svelte.js';
 import { scaleOrdinal } from 'd3-scale';
 
 // Helper to stringify sorted
@@ -39,6 +40,11 @@ class ScaleRegistry {
 	#maxRampSlots = 64;
 	#maxPaletteSlots = 64;
 
+	// Size scale slot management
+	#freeSizeSlots = [];
+	#nextSizeSlot = 0;
+	#maxSizeSlots = 64;
+
 	constructor() {
 		this.registryId = Math.random().toString(36).slice(2, 8);
 
@@ -47,7 +53,8 @@ class ScaleRegistry {
 			linear: new Map(),
 			band: new Map(),
 			ordinal: new Map(),
-			color: new Map() // NEW: Color scales bucket
+			color: new Map(),
+			size: new Map()
 		};
 	}
 
@@ -164,6 +171,32 @@ class ScaleRegistry {
 		}
 	}
 
+	/**
+	 * Allocate a size config slot index.
+	 * @returns {number} Slot index (0-63)
+	 */
+	allocateSizeSlot() {
+		if (this.#freeSizeSlots.length > 0) {
+			return this.#freeSizeSlots.pop();
+		}
+
+		if (this.#nextSizeSlot >= this.#maxSizeSlots) {
+			throw new Error(`Size scale limit exceeded (${this.#maxSizeSlots}).`);
+		}
+
+		return this.#nextSizeSlot++;
+	}
+
+	/**
+	 * Release a size config slot back to the free list.
+	 * @param {number} slot - Slot index to release
+	 */
+	releaseSizeSlot(slot) {
+		if (typeof slot === 'number' && slot >= 0 && slot < this.#nextSizeSlot) {
+			this.#freeSizeSlots.push(slot);
+		}
+	}
+
 	// ============================================================
 	// DEBUG STATS
 	// ============================================================
@@ -263,6 +296,19 @@ class ScaleRegistry {
 						this.#gpuCoordinator
 					)
 				);
+			} else if (type === 'size') {
+				this.scales[type].set(
+					key,
+					new SizeScaleState(
+						{
+							field: name,
+							domain: config.domain || [],
+							range: config.range || [2, 12]
+						},
+						this,
+						this.#gpuCoordinator
+					)
+				);
 			} else if (['ordinal', 'categorical'].includes(type)) {
 				this.scales[type].set(
 					key,
@@ -346,7 +392,7 @@ class ScaleRegistry {
 	 * @param {Object} scaleInstance - Scale to remove
 	 */
 	_removeScaleFromStorage(scaleInstance) {
-		// Release GPU slots if this is a color scale
+		// Release GPU slots if this is a color or size scale
 		if (scaleInstance && typeof scaleInstance.gpuSlots === 'object') {
 			const slots = scaleInstance.gpuSlots;
 
@@ -358,6 +404,9 @@ class ScaleRegistry {
 			}
 			if (typeof slots.paletteSlot === 'number') {
 				this.releasePaletteSlot(slots.paletteSlot);
+			}
+			if (typeof slots.sizeConfigSlot === 'number') {
+				this.releaseSizeSlot(slots.sizeConfigSlot);
 			}
 		}
 

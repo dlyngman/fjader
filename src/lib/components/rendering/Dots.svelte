@@ -22,7 +22,8 @@
 	const UNIFORM_OFFSETS = {
 		COLOR_MODE: 0,
 		COLOR_SCALE_INDEX: 4,
-		// 8-12: padding (_pad0, _pad1)
+		SIZE_MODE: 8,
+		SIZE_SCALE_INDEX: 12,
 		CONSTANT_COLOR: 16
 	};
 
@@ -36,7 +37,9 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
-		constantColor = [0.13, 0.55, 0.13, 1.0]
+		constantColor = [0.13, 0.55, 0.13, 1.0],
+		sizeMode = 0,
+		sizeScaleIndex = 0
 	} = $props();
 
 	const chartContext = getContext('chart');
@@ -55,8 +58,8 @@
     struct MarkConstants {
       colorMode: u32,           // 0 = constant, 1 = scale
       colorScaleIndex: u32,     // Index into colorConfigs
-      _pad0: u32,
-      _pad1: u32,
+      sizeMode: u32,            // 0 = raw value, 1 = scale
+      sizeScaleIndex: u32,      // Index into sizeConfigs
       constantColor: vec4<f32>, // Used when colorMode = 0
     };
     @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
@@ -83,9 +86,17 @@
     ) -> VertexOutput {
       let x = xValues[instanceIdx];
       let y = yValues[instanceIdx];
-      let radius = radiusValues[instanceIdx];
+      let rawRadius = radiusValues[instanceIdx];
       let alpha = alphaValues[instanceIdx];
       let colorValue = colorValues[instanceIdx];
+
+      // Size scale: when sizeMode == 1, map raw value through sqrt scale
+      var radius: f32;
+      if (markConstants.sizeMode == 1u) {
+        radius = getSizeFromScale(markConstants.sizeScaleIndex, rawRadius);
+      } else {
+        radius = rawRadius;
+      }
   
       // X axis scaling
       {{X_AXIS_LOGIC}}
@@ -182,7 +193,8 @@
 
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
-			// padding at 8-12 handled by struct alignment
+			view.setUint32(UNIFORM_OFFSETS.SIZE_MODE, sizeMode, LE);
+			view.setUint32(UNIFORM_OFFSETS.SIZE_SCALE_INDEX, sizeScaleIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

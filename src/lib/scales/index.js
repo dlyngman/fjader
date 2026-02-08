@@ -4,6 +4,7 @@ export { setScaleRegistry, getScaleState } from './ScaleRegistry.svelte.js';
 export { LinearScaleState } from './LinearScaleState.svelte.js';
 export { TimeScaleState } from './TimeScaleState.svelte.js';
 export { BandScaleState } from './BandScaleState.svelte.js';
+export { SizeScaleState } from './SizeScaleState.svelte.js';
 export {
 	SCALE_PRIORITIES,
 	resolveScaleType,

@@ -5,7 +5,13 @@
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { inferScaleType } from '$lib/scales/scale-inference.js';
 	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
-	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
+	import {
+		buildSelectFromChannels,
+		resolveChannel,
+		toFloat32,
+		MarkColor,
+		MarkSize
+	} from './utils/index.js';
 
 	let {
 		table,
@@ -16,6 +22,7 @@
 		scheme, // No default - MarkColor will infer based on field type
 		alpha = 0.5,
 		radius = 3,
+		radiusRange = [2, 12],
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -71,6 +78,16 @@
 		chartContext
 	);
 
+	// 1b. Size Logic
+	const markSize = new MarkSize(
+		() => radius,
+		() => radiusRange,
+		() => table,
+		() => setup,
+		scaleRegistry,
+		chartContext
+	);
+
 	// 2. Config
 	const config = $derived({
 		markType: 'dot',
@@ -97,7 +114,7 @@
 			x,
 			y,
 			...(markColor.selectField && { color: markColor.selectField }),
-			...(typeof radius === 'string' && { radius })
+			...(markSize.selectField && { radius: markSize.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		tooltip
@@ -155,6 +172,11 @@
 
 	let radiusData = $derived.by(() => {
 		if (!instanceCount) return null;
+		// Field mode: data comes from MarkSize (raw values, shader does scaling)
+		if (markSize.sizeMode === 1) {
+			return markSize.data;
+		}
+		// Function mode
 		if (typeof radius === 'function') {
 			const xArr = setup?.data?.getColumn('x');
 			const yArr = setup?.data?.getColumn('y');
@@ -163,6 +185,7 @@
 			for (let i = 0; i < instanceCount; i++) radii[i] = radius({ x: xArr[i], y: yArr[i] });
 			return radii;
 		}
+		// Constant or column name (existing behavior)
 		const raw = resolveChannel({
 			value: radius,
 			channel: 'radius',
@@ -241,7 +264,7 @@
 	});
 </script>
 
-{#if (setup?.gpuReady || !table) && markColor.ready && xData && yData}
+{#if (setup?.gpuReady || !table) && markColor.ready && markSize.ready && xData && yData}
 	<Dots
 		{xData}
 		{yData}
@@ -251,6 +274,8 @@
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
+		sizeMode={markSize.sizeMode}
+		sizeScaleIndex={markSize.sizeScaleIndex}
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}
