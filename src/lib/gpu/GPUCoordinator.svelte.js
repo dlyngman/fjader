@@ -197,12 +197,8 @@ export class GPUCoordinator {
 	#acquiredTextures = []; // Reused array for texture acquisition
 	#encoderDescriptor = { label: 'frame-encoder' };
 	#submitArray = [null]; // Reused array for queue.submit()
-	// #gpuReady = true;
-	#framesInFlight = 0; // TODO Test remove
-	#maxFramesInFlight = 1; // TODO Test remove
-
-	#lastRenderTime = 0;
-	#gaps = [];
+	#framesInFlight = 0;
+	#maxFramesInFlight = 2; // Double-buffering: allow 2 frames in flight
 
 	// =========================================================================
 	// PERFORMANCE TRACKING
@@ -535,19 +531,10 @@ export class GPUCoordinator {
 	 */
 
 	#renderFrame = (extrapolationDt) => {
-		// console.log('=== RENDER FRAME ===');
-		// console.log('animatedScalesArray length:', this.#animatedScalesArray.length);
-
-		// const now = performance.now();
-		// if (this.#lastRenderTime > 0 && now - this.#lastRenderTime < 8) {
-		// 	return;
-		// }
-		// this.#lastRenderTime = now;
-
-		// if (this.#framesInFlight >= this.#maxFramesInFlight) {
-		// 	console.log('Skipping frame - too many in flight:', this.#framesInFlight);
-		// 	return;
-		// }
+		// GPU back-pressure: skip render if too many frames are queued
+		if (this.#framesInFlight >= this.#maxFramesInFlight) {
+			return;
+		}
 
 		// 1. Apply any accumulated input (zoom, etc.)
 		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
@@ -735,10 +722,10 @@ export class GPUCoordinator {
 		this.#submitArray[0] = commandEncoder.finish();
 		this.#device.queue.submit(this.#submitArray);
 
-		// this.#framesInFlight++;
-		// this.#device.queue.onSubmittedWorkDone().then(() => {
-		// 	this.#framesInFlight--;
-		// });
+		this.#framesInFlight++;
+		this.#device.queue.onSubmittedWorkDone().then(() => {
+			this.#framesInFlight--;
+		});
 
 		this.#frameId++;
 	}

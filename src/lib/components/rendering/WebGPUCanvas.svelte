@@ -296,7 +296,7 @@
 		left: 0;
 		transform: translateZ(0);
 		contain: size;
-		will-change: contents;
+		will-change: transform;
 		touch-action: none;
 	}
 

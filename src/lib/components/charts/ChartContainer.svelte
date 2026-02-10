@@ -670,7 +670,7 @@ gpu: {gpuCoordinator.timings.gpu} µs
 		overscroll-behavior: none;
 		/* Force GPU layer */
 		transform: translateZ(0);
-		will-change: contents;
+		will-change: transform;
 		outline: none;
 		/* Prevent paint from bleeding */
 		isolation: isolate;
@@ -699,7 +699,7 @@ gpu: {gpuCoordinator.timings.gpu} µs
 		width: 100%;
 		height: 100%;
 		contain: strict;
-		will-change: contents;
+		will-change: transform;
 	}
 
 	.svg-foreground {

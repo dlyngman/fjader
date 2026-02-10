@@ -6,9 +6,6 @@
 	import { onMount, onDestroy, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	// import { startProMotionFix, stopProMotionFix } from '$lib/utils/proMotionFix.js';
-	import { startProMotionFix } from '$lib/utils/proMotionFix.js';
-
 	// setScaleRegistry();
 	setCoordinators();
 
@@ -79,7 +76,6 @@
 	}
 
 	onMount(async () => {
-		// startProMotionFix();
 		// requestAnimationFrame(measureRAF);
 
 		try {
