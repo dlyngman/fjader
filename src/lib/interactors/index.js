@@ -6,3 +6,4 @@ export { default as Interval2D } from './Interval2D.svelte';
 export { TooltipManager } from './TooltipManager.svelte.js';
 export { default as Tooltip } from './Tooltip.svelte';
 export { default as HoverIndicator } from './HoverIndicator.svelte';
+export { default as Toggle } from './Toggle.svelte';
