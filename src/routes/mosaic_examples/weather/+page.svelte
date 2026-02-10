@@ -13,7 +13,8 @@
 		WebGPUCanvas,
 		DotsMark,
 		IntervalX,
-		FilterBridge
+		FilterBridge,
+		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
@@ -55,7 +56,10 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer>
+				<ChartContainer legendPosition="top">
+					{#snippet legend()}
+						<Legend color="weather" bridge={filterBridge} />
+					{/snippet}
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -92,6 +96,9 @@
 
 			<div class="chart-wrapper">
 				<ChartContainer>
+					{#snippet legend()}
+						<Legend color="weather" bridge={filterBridge} />
+					{/snippet}
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

@@ -1,5 +1,6 @@
 // src/lib/scales/ScaleRegistry.svelte.js
 import { setContext, getContext, untrack } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
 import { LinearScaleState } from './LinearScaleState.svelte.js';
 import { TimeScaleState } from './TimeScaleState.svelte.js';
 import { BandScaleState } from './BandScaleState.svelte.js';
@@ -48,13 +49,13 @@ class ScaleRegistry {
 	constructor() {
 		this.registryId = Math.random().toString(36).slice(2, 8);
 
-		// Initialize the storage buckets
+		// Initialize the storage buckets (SvelteMap for reactive legend lookups)
 		this.scales = {
-			linear: new Map(),
-			band: new Map(),
-			ordinal: new Map(),
-			color: new Map(),
-			size: new Map()
+			linear: new SvelteMap(),
+			band: new SvelteMap(),
+			ordinal: new SvelteMap(),
+			color: new SvelteMap(),
+			size: new SvelteMap()
 		};
 	}
 
@@ -233,99 +234,103 @@ class ScaleRegistry {
 	// ============================================================
 
 	getOrCreateScale(name, type = 'linear', config = {}, chartId = null) {
-		let key;
+		// Wrap map operations in untrack() to prevent SvelteMap reads from creating
+		// reactive dependencies when called from $effect blocks (MarkColor, MarkSize, etc.)
+		const scale = untrack(() => {
+			let key;
 
-		if (type === 'color') {
-			// Color scales: key by field + type only (scheme is mutable state)
-			const scaleType = config.type || 'sequential';
-			key = `${name}-color-${scaleType}`;
-		} else {
-			// Other scales: key by full config (padding, align, etc. matter)
-			const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
-			key = `${name}-${type}${configKey}`;
-		}
-
-		// Dynamic Map creation
-		if (!this.scales[type]) {
-			this.scales[type] = new Map();
-		}
-
-		if (!this.scales[type].has(key)) {
-			// Factory Logic
-			if (['linear', 'log', 'pow', 'identity'].includes(type)) {
-				this.scales[type].set(
-					key,
-					new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
-				);
-			} else if (type === 'time') {
-				this.scales[type].set(
-					key,
-					new TimeScaleState(name, undefined, 'time', undefined, config, this.#gpuCoordinator)
-				);
-			} else if (['band', 'point'].includes(type)) {
-				this.scales[type].set(
-					key,
-					new BandScaleState(name, [], {
-						paddingInner: config.paddingInner ?? (type === 'point' ? 1 : 0.1),
-						paddingOuter: config.paddingOuter ?? 0.1,
-						padding: config.padding ?? 0.1,
-						align: config.align ?? 0.5
-					})
-				);
-			} else if (type === 'color') {
-				// Apply default scheme based on explicit type
+			if (type === 'color') {
+				// Color scales: key by field + type only (scheme is mutable state)
 				const scaleType = config.type || 'sequential';
-				const defaultScheme = scaleType === 'ordinal' ? 'tableau10' : 'viridis';
-
-				console.log(
-					`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`
-				);
-
-				this.scales[type].set(
-					key,
-					new ColorScaleState(
-						{
-							field: name,
-							type: scaleType, // Pass explicit type
-							scheme: config.scheme || defaultScheme, // Apply default based on type
-							domain: config.domain || [],
-							reverse: config.reverse ?? false,
-							midpoint: config.midpoint
-						},
-						this,
-						this.#gpuCoordinator
-					)
-				);
-			} else if (type === 'size') {
-				this.scales[type].set(
-					key,
-					new SizeScaleState(
-						{
-							field: name,
-							domain: config.domain || [],
-							range: config.range || [2, 12]
-						},
-						this,
-						this.#gpuCoordinator
-					)
-				);
-			} else if (['ordinal', 'categorical'].includes(type)) {
-				this.scales[type].set(
-					key,
-					scaleOrdinal()
-						.range(['#EFB605', '#FFF84A', '#FF0266'])
-						.domain(['Adelie', 'Gentoo', 'Chinstrap'])
-				);
+				key = `${name}-color-${scaleType}`;
 			} else {
-				// Fallback
-				this.scales[type].set(
-					key,
-					new LinearScaleState(name, undefined, 'linear', undefined, config, this.#gpuCoordinator)
-				);
+				// Other scales: key by full config (padding, align, etc. matter)
+				const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
+				key = `${name}-${type}${configKey}`;
 			}
-		}
 
-		const scale = this.scales[type].get(key);
+			// Dynamic Map creation
+			if (!this.scales[type]) {
+				this.scales[type] = new SvelteMap();
+			}
+
+			if (!this.scales[type].has(key)) {
+				// Factory Logic
+				if (['linear', 'log', 'pow', 'identity'].includes(type)) {
+					this.scales[type].set(
+						key,
+						new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
+					);
+				} else if (type === 'time') {
+					this.scales[type].set(
+						key,
+						new TimeScaleState(name, undefined, 'time', undefined, config, this.#gpuCoordinator)
+					);
+				} else if (['band', 'point'].includes(type)) {
+					this.scales[type].set(
+						key,
+						new BandScaleState(name, [], {
+							paddingInner: config.paddingInner ?? (type === 'point' ? 1 : 0.1),
+							paddingOuter: config.paddingOuter ?? 0.1,
+							padding: config.padding ?? 0.1,
+							align: config.align ?? 0.5
+						})
+					);
+				} else if (type === 'color') {
+					// Apply default scheme based on explicit type
+					const scaleType = config.type || 'sequential';
+					const defaultScheme = scaleType === 'ordinal' ? 'tableau10' : 'viridis';
+
+					console.log(
+						`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`
+					);
+
+					this.scales[type].set(
+						key,
+						new ColorScaleState(
+							{
+								field: name,
+								type: scaleType, // Pass explicit type
+								scheme: config.scheme || defaultScheme, // Apply default based on type
+								domain: config.domain || [],
+								reverse: config.reverse ?? false,
+								midpoint: config.midpoint
+							},
+							this,
+							this.#gpuCoordinator
+						)
+					);
+				} else if (type === 'size') {
+					this.scales[type].set(
+						key,
+						new SizeScaleState(
+							{
+								field: name,
+								domain: config.domain || [],
+								range: config.range || [2, 12]
+							},
+							this,
+							this.#gpuCoordinator
+						)
+					);
+				} else if (['ordinal', 'categorical'].includes(type)) {
+					this.scales[type].set(
+						key,
+						scaleOrdinal()
+							.range(['#EFB605', '#FFF84A', '#FF0266'])
+							.domain(['Adelie', 'Gentoo', 'Chinstrap'])
+					);
+				} else {
+					// Fallback
+					this.scales[type].set(
+						key,
+						new LinearScaleState(name, undefined, 'linear', undefined, config, this.#gpuCoordinator)
+					);
+				}
+			}
+
+			return this.scales[type].get(key);
+		});
 
 		if (chartId && scale) {
 			untrack(() => {
@@ -429,30 +434,47 @@ class ScaleRegistry {
 	invalidateChartsForScale(field) {
 		if (!this.#gpuCoordinator) return;
 
-		// Find all color scales with matching field
-		// Keys are like "species-color-{scheme:...}", so we need to search
-		const colorScales = this.scales.color;
-		if (!colorScales) return;
+		// Wrap in untrack() to prevent SvelteMap iteration from creating
+		// reactive dependencies (this is called from MarkColor's $effect via setScheme)
+		untrack(() => {
+			const colorScales = this.scales.color;
+			if (!colorScales) return;
 
-		let foundScale = null;
-		for (const [key, scale] of colorScales) {
-			// Check if this scale's field matches
-			if (scale.field === field) {
-				foundScale = scale;
-				break;
+			let foundScale = null;
+			for (const [key, scale] of colorScales) {
+				if (scale.field === field) {
+					foundScale = scale;
+					break;
+				}
 			}
+
+			if (!foundScale) return;
+
+			const chartIds = this.scaleUsage.get(foundScale);
+			if (!chartIds || chartIds.size === 0) return;
+
+			for (const chartId of chartIds) {
+				this.#gpuCoordinator.invalidateChart(chartId);
+			}
+		});
+	}
+
+	/**
+	 * Look up a scale by field name and type.
+	 * Used by Legend components to find active scales.
+	 * Intentionally reactive (no untrack) -- reads from SvelteMap trigger
+	 * re-evaluation when scales are created or destroyed.
+	 * @param {string} field - The data field name
+	 * @param {string} type - Scale type bucket ('color' or 'size')
+	 * @returns {Object|null} The scale state instance, or null
+	 */
+	getScaleByField(field, type) {
+		const scaleMap = this.scales[type];
+		if (!scaleMap) return null;
+		for (const [key, scale] of scaleMap) {
+			if (scale.field === field) return scale;
 		}
-
-		if (!foundScale) return;
-
-		// Get all charts using this scale via scaleUsage (keyed by scale object)
-		const chartIds = this.scaleUsage.get(foundScale);
-		if (!chartIds || chartIds.size === 0) return;
-
-		// Invalidate each chart
-		for (const chartId of chartIds) {
-			this.#gpuCoordinator.invalidateChart(chartId);
-		}
+		return null;
 	}
 }
 

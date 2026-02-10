@@ -65,6 +65,14 @@ export class SizeScaleState {
 	}
 
 	/**
+	 * The pixel range [minPx, maxPx] for this size scale.
+	 * Used by legends to render reference circles at correct sizes.
+	 */
+	get range() {
+		return this.#range;
+	}
+
+	/**
 	 * GPU slot information for registry cleanup.
 	 */
 	get gpuSlots() {
