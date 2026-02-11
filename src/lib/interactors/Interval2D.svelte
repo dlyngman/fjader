@@ -1,10 +1,10 @@
 <script>
-	import { getContext } from 'svelte';
+	import { getContext, onMount } from 'svelte';
 	import { clauseIntervals } from '@uwdata/mosaic-core';
-	import { column, sql } from '@uwdata/mosaic-sql';
 	import { BrushState2D } from './brush-state.svelte.js';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import {
+		buildColumnRef,
 		closeTo,
 		isDragging,
 		scaleBrushExtent2D,
@@ -19,34 +19,22 @@
 	const resolvedXField = $derived(xField ?? chart.xLabel);
 	const resolvedYField = $derived(yField ?? chart.yLabel);
 
-	// Column references for Mosaic clauses.
-	// For time scales, match the offset formula used by BaseMarkSetup (#applyTimeOffsets)
-	function buildColumnRef(field, scaleState) {
-		if (!field) return null;
-		const isTimeScale = scaleState?.t0 != null;
-		if (isTimeScale) {
-			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
-			const expr = typeof field === 'string' ? column(field) : field;
-			return sql`CAST((epoch(${expr}) - ${t0Epoch}) AS REAL)`;
-		}
-		return typeof field === 'string' ? column(field) : field;
-	}
-
 	const xColumnRef = $derived(buildColumnRef(resolvedXField, chart.xScaleState));
 	const yColumnRef = $derived(buildColumnRef(resolvedYField, chart.yScaleState));
 
+	const source = `interval-2d-${chart.chartId}`;
+
 	const { sel: selection, off: unregister } = bridge.createLocal('single', {
-		source: `interval-2d-${chart.chartId}`,
+		source,
 		augment: (clause) => ({
 			kind: 'range',
 			label: `${typeof resolvedXField === 'string' ? resolvedXField : resolvedXField?.toString()} × ${typeof resolvedYField === 'string' ? resolvedYField : resolvedYField?.toString()}`,
-			// Store both X and Y ranges in metadata
 			xColumn: resolvedXField,
 			yColumn: resolvedYField,
 			xValues: clause?.value?.[0],
 			yValues: clause?.value?.[1]
 		}),
-		onVisualClear: () => brush.clear() // Two-way sync
+		onVisualClear: () => brush.clear()
 	});
 
 	// Pointer state (reused to avoid GC)
@@ -55,9 +43,9 @@
 	let currentX = 0;
 	let currentY = 0;
 	let isCapturing = false;
-	let hasDragged = false; // Track if user dragged vs clicked
+	let hasDragged = false;
 
-	// Reusable point object to reduce GC pressure (50% reduction)
+	// Reusable point object to reduce GC pressure
 	const point = { x: 0, y: 0 };
 
 	// Deduplication (skip redundant updates)
@@ -95,13 +83,11 @@
 	function emitClause() {
 		if (!brush.active || !xColumnRef || !yColumnRef) return;
 
-		// Normalize ranges (ensure min < max) to handle inverted brushes from corner resize
 		const xMin = Math.min(brush.x.dataMin, brush.x.dataMax);
 		const xMax = Math.max(brush.x.dataMin, brush.x.dataMax);
 		const yMin = Math.min(brush.y.dataMin, brush.y.dataMax);
 		const yMax = Math.max(brush.y.dataMin, brush.y.dataMax);
 
-		// Deduplication: skip if values haven't changed significantly
 		if (
 			closeTo(xMin, lastEmittedMinX) &&
 			closeTo(xMax, lastEmittedMaxX) &&
@@ -123,7 +109,7 @@
 				[yMin, yMax]
 			],
 			{
-				source: `interval-2d-${chart.chartId}`,
+				source,
 				clients: chart.markClients,
 				scales: [
 					{
@@ -147,7 +133,6 @@
 	function handlePointerEnter() {
 		if (!selection.activate || !chart.xScale || !chart.yScale || !xColumnRef || !yColumnRef) return;
 
-		// Normalize ranges for activate call too
 		const xRange = brush.x.active
 			? [Math.min(brush.x.dataMin, brush.x.dataMax), Math.max(brush.x.dataMin, brush.x.dataMax)]
 			: [0, 1];
@@ -160,7 +145,7 @@
 				[xColumnRef, yColumnRef],
 				[xRange, yRange],
 				{
-					source: `interval-2d-${chart.chartId}`,
+					source,
 					clients: chart.markClients,
 					scales: [
 						{
@@ -180,22 +165,18 @@
 	}
 
 	function handleWheel(event) {
-		// Only handle with Shift key (brush is active since we're over the overlay)
 		if (!event.shiftKey) return;
 
-		event.preventDefault(); // Prevent page scroll
-		event.stopPropagation(); // Prevent passing through to underlying layers
+		event.preventDefault();
+		event.stopPropagation();
 
-		// Calculate scale factor from wheel delta (negative = zoom in, positive = zoom out)
 		const scaleFactor = 1 + event.deltaY * WHEEL_SENSITIVITY;
 
-		// Get current brush extents (reuse vars to avoid GC)
 		const xMin = Math.min(brush.x.dataMin, brush.x.dataMax);
 		const xMax = Math.max(brush.x.dataMin, brush.x.dataMax);
 		const yMin = Math.min(brush.y.dataMin, brush.y.dataMax);
 		const yMax = Math.max(brush.y.dataMin, brush.y.dataMax);
 
-		// Scale around center
 		const { x: [newXMin, newXMax], y: [newYMin, newYMax] } = scaleBrushExtent2D(
 			xMin,
 			xMax,
@@ -204,63 +185,50 @@
 			scaleFactor
 		);
 
-		// Update brush extents
 		brush.x.setExtent(newXMin, newXMax);
 		brush.y.setExtent(newYMin, newYMax);
 
-		// Emit updated clause
 		emitClause();
 	}
 
 	function clearBrush() {
 		brush.clear();
 		selection.update({
-			predicate: null, // null = no filter (Mosaic standard)
-			source: `interval-2d-${chart.chartId}`,
+			predicate: null,
+			source,
 			clients: chart.markClients,
 			value: null
 		});
 	}
 
-	// --- Pointer Event Handlers ---
+	// --- Pointer Event Handlers (registered as chart context callbacks) ---
 
-	function handleBackgroundPointerDown(event) {
-		if (brush.phase !== 'idle') return;
+	function handlePointerDown(event, innerPoint) {
+		if (brush.phase !== 'idle') return false;
 
-		event.stopPropagation();
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;
 		hasDragged = false;
 
-		// Reuse point object to reduce GC (toInnerCoordinates returns new object)
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-
-		anchorX = innerCoords.x;
-		anchorY = innerCoords.y;
-		currentX = innerCoords.x;
-		currentY = innerCoords.y;
-
-		// Don't start creating yet - wait for pointermove to detect drag vs click
+		anchorX = innerPoint.x;
+		anchorY = innerPoint.y;
+		currentX = innerPoint.x;
+		currentY = innerPoint.y;
+		return true;
 	}
 
 	function handlePointerMove(event) {
-		if (!isCapturing) return;
+		if (!isCapturing) return false;
 
-		// Reuse point object to reduce GC (toInnerCoordinates returns new object)
 		point.x = event.offsetX;
 		point.y = event.offsetY;
 		const innerCoords = chart.toInnerCoordinates(point);
 		currentX = innerCoords.x;
 		currentY = innerCoords.y;
 
-		// Detect drag vs click
 		if (!hasDragged && isDragging(anchorX, currentX, anchorY, currentY)) {
 			hasDragged = true;
-			// Start creating on first drag
 			if (brush.phase === 'idle') {
-				// Clear existing brush before creating new one
 				if (brush.active) {
 					clearBrush();
 				}
@@ -279,29 +247,23 @@
 			anchorX = currentX;
 			anchorY = currentY;
 		} else if (brush.phase === 'resizing') {
-			// Handle corner resizing - use anchor point approach
 			const corner = brush.resizeCorner;
 			if (corner) {
-				// Store the opposite corner as anchor (stays fixed)
 				const anchorXData = corner.includes('e') ? brush.x.dataMin : brush.x.dataMax;
 				const anchorYData = corner.includes('s') ? brush.y.dataMax : brush.y.dataMin;
 
-				// Set the moving corner to current position
 				const currentXData = chart.xScale.invert(currentX);
 				const currentYData = chart.yScale.invert(currentY);
 
-				// Update min/max based on which is smaller (use setExtent to batch updates)
 				brush.x.setExtent(Math.min(anchorXData, currentXData), Math.max(anchorXData, currentXData));
 				brush.y.setExtent(Math.min(anchorYData, currentYData), Math.max(anchorYData, currentYData));
 			} else {
-				// Handle edge resizing
 				const edge = brush.x.resizeEdge || brush.y.resizeEdge;
 				if (edge === 'left' || edge === 'right') {
 					const anchorXData = edge === 'left' ? brush.x.dataMax : brush.x.dataMin;
 					const currentXData = chart.xScale.invert(currentX);
 					brush.x.setExtent(Math.min(anchorXData, currentXData), Math.max(anchorXData, currentXData));
 				} else if (edge === 'top' || edge === 'bottom') {
-					// Anchor to OPPOSITE edge: top drags → anchor bottom, bottom drags → anchor top
 					const anchorYData = edge === 'top' ? brush.y.dataMin : brush.y.dataMax;
 					const currentYData = chart.yScale.invert(currentY);
 					brush.y.setExtent(Math.min(anchorYData, currentYData), Math.max(anchorYData, currentYData));
@@ -309,20 +271,19 @@
 			}
 		}
 
-		// Continuous updates during drag
 		emitClause();
+		return true;
 	}
 
 	function handlePointerUp(event) {
-		if (!isCapturing) return;
+		if (!isCapturing) return false;
 
 		event.target.releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
-		// If it was a click (not drag) and there's an active brush, clear it
 		if (!hasDragged && brush.active && brush.phase === 'idle') {
 			clearBrush();
-			return;
+			return true;
 		}
 
 		if (brush.phase !== 'idle') {
@@ -334,6 +295,7 @@
 		}
 
 		hasDragged = false;
+		return true;
 	}
 
 	function handleMoveStart(event) {
@@ -341,7 +303,6 @@
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;
 
-		// Reuse point object to reduce GC (toInnerCoordinates returns new object)
 		point.x = event.offsetX;
 		point.y = event.offsetY;
 		const innerCoords = chart.toInnerCoordinates(point);
@@ -357,7 +318,6 @@
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;
 
-		// Reuse point object to reduce GC (toInnerCoordinates returns new object)
 		point.x = event.offsetX;
 		point.y = event.offsetY;
 		const innerCoords = chart.toInnerCoordinates(point);
@@ -367,7 +327,6 @@
 		currentY = innerCoords.y;
 		brush.phase = 'resizing';
 
-		// Check if it's a corner or edge
 		if (edge === 'nw' || edge === 'ne' || edge === 'sw' || edge === 'se') {
 			brush.resizeCorner = edge;
 			brush.x.resizeEdge = null;
@@ -384,43 +343,32 @@
 		}
 	}
 
-	// Removed double-click handler - single click outside brush now clears it
+	// Register callbacks
+	onMount(() => {
+		chart.onInteractorPointerDown = handlePointerDown;
+		chart.onInteractorPointerMove = handlePointerMove;
+		chart.onInteractorPointerUp = handlePointerUp;
+		chart.onInteractorPointerEnter = handlePointerEnter;
 
-	// Cleanup
-	$effect(() => {
-		return () => unregister();
+		return () => {
+			chart.onInteractorPointerDown = null;
+			chart.onInteractorPointerMove = null;
+			chart.onInteractorPointerUp = null;
+			chart.onInteractorPointerEnter = null;
+			unregister();
+		};
 	});
 </script>
 
-<g
-	class="interval-2d-interactor"
-	onpointerenter={handlePointerEnter}
-	onpointermove={handlePointerMove}
-	onpointerup={handlePointerUp}
->
-	<!-- Full-area background for creating new brushes -->
-	<rect
-		class="brush-background"
-		x={0}
-		y={0}
-		width={chart.innerWidth}
-		height={chart.innerHeight}
-		fill="transparent"
-		style="cursor: crosshair;"
-		onpointerdown={handleBackgroundPointerDown}
+{#if brush.active && brushScreen}
+	<BrushOverlay
+		x={brushScreen.x}
+		y={brushScreen.y}
+		width={brushScreen.width}
+		height={brushScreen.height}
+		orientation="2d"
+		onMoveStart={handleMoveStart}
+		onResizeStart={handleResizeStart}
+		onWheel={handleWheel}
 	/>
-
-	<!-- Brush overlay when active -->
-	{#if brush.active && brushScreen}
-		<BrushOverlay
-			x={brushScreen.x}
-			y={brushScreen.y}
-			width={brushScreen.width}
-			height={brushScreen.height}
-			orientation="2d"
-			onMoveStart={handleMoveStart}
-			onResizeStart={handleResizeStart}
-			onWheel={handleWheel}
-		/>
-	{/if}
-</g>
+{/if}

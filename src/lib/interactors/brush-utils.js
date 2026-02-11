@@ -1,6 +1,8 @@
 /**
- * Shared utilities for brush interactors (IntervalX, IntervalY, Interval2D)
+ * Shared utilities for brush interactors (Interval1D, Interval2D)
  */
+
+import { column, sql } from '@uwdata/mosaic-sql';
 
 /**
  * Relative epsilon for floating point comparison (0.01% tolerance)
@@ -99,6 +101,26 @@ export function scaleBrushExtent2D(xMin, xMax, yMin, yMax, scaleFactor) {
 		x: [newXMin, newXMax],
 		y: [newYMin, newYMax]
 	};
+}
+
+/**
+ * Build a Mosaic column reference for interval clauses.
+ * For time scales, applies the same epoch offset formula as BaseMarkSetup (#applyTimeOffsets):
+ *   CAST((epoch(expr) - t0_epoch) AS REAL)
+ *
+ * @param {string|object} field - Column name or SQL expression
+ * @param {object|null} scaleState - Scale state (checked for t0 time offset)
+ * @returns {object|null} - Mosaic column reference or SQL expression
+ */
+export function buildColumnRef(field, scaleState) {
+	if (!field) return null;
+	const isTimeScale = scaleState?.t0 != null;
+	if (isTimeScale) {
+		const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
+		const expr = typeof field === 'string' ? column(field) : field;
+		return sql`CAST((epoch(${expr}) - ${t0Epoch}) AS REAL)`;
+	}
+	return typeof field === 'string' ? column(field) : field;
 }
 
 /**
