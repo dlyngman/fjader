@@ -11,7 +11,6 @@
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
 	const columnRefs = fields.map((f) => column(f));
-	const source = `toggle-${chart.chartId}`;
 
 	// Key helpers — identity for single field, JSON for multi
 	const toKey = fields.length === 1 ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple);
@@ -26,17 +25,9 @@
 		return [band, color].filter(Boolean);
 	}
 
-	// Register with FilterBridge, passing lazy getter for scale state refs
-	const { sel: selection, off: unregister } = bridge.createLocal('single', {
-		source,
-		scaleStates: getToggleScaleStates,
-		augment: (clause) => ({
-			kind: 'toggle',
-			column: fields[0],
-			fields,
-			label: fields.join(', '),
-			values: clause?.value?.map(toKey) ?? []
-		})
+	// Shared toggle Selection — deduplicated by column across Toggle + Legend
+	const { sel: selection, source, off: unregister } = bridge.createToggle(fields[0], {
+		scaleStates: getToggleScaleStates
 	});
 
 	// Derive selected set reactively from scale state (projected by FilterBridge)
@@ -69,22 +60,59 @@
 			newValues = [tuple];
 		}
 
-		selection.update(clausePoints(columnRefs, newValues, { source }));
+		if (newValues === null) {
+			bridge.clearToggle(fields[0]);
+		} else {
+			selection.update(clausePoints(columnRefs, newValues, { source }));
+		}
 	}
 
-	// Click callback — reads tooltip hit detection result (only when visible,
-	// since currentPoint persists during fade-out for tooltip display)
+	// Resolve category from a click in the band axis margin area.
+	// Uses the same getActiveAxes pattern as wheel/pan handlers in ChartContainer.
+	function resolveMarginCategory(event) {
+		const point = { x: event.offsetX, y: event.offsetY };
+		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
+
+		// Y-axis margin: click left of inner area, Y within chart range
+		if (!xInBounds && yInBounds && chart.scaleTypes?.y === 'band') {
+			const index = chart.yScaleState.invertScreenToData(
+				innerPoint.y, chart.innerHeight, true
+			);
+			return chart.yScaleState.effectiveDomain[index] ?? null;
+		}
+
+		// X-axis margin: click below inner area, X within chart range
+		if (xInBounds && !yInBounds && chart.scaleTypes?.x === 'band') {
+			const index = chart.xScaleState.invertScreenToData(
+				innerPoint.x, chart.innerWidth, false
+			);
+			return chart.xScaleState.effectiveDomain[index] ?? null;
+		}
+
+		return null;
+	}
+
 	chart.onChartClick = (event) => {
+		// Path 1: Inner area click — use tooltip hit data
 		const tm = chart.tooltipManager;
-		if (!tm?.visible || !tm.currentPoint) {
-			if (selectedSet) {
-				bridge.clearByColumn(fields[0]);
-			}
+		if (tm?.visible && tm.currentPoint) {
+			const tuple = fields.map((f) => tm.currentPoint[f]);
+			if (tuple.some((v) => v == null)) return;
+			toggle(tuple, event);
 			return;
 		}
-		const tuple = fields.map((f) => tm.currentPoint[f]);
-		if (tuple.some((v) => v == null)) return;
-		toggle(tuple, event);
+
+		// Path 2: Band axis margin click — invert position to find category
+		const category = resolveMarginCategory(event);
+		if (category != null) {
+			toggle([category], event);
+			return;
+		}
+
+		// Path 3: Click on empty space — clear
+		if (selectedSet) {
+			bridge.clearToggle(fields[0]);
+		}
 	};
 
 	onDestroy(() => {

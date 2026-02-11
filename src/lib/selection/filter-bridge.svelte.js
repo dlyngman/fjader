@@ -18,6 +18,9 @@ export class FilterBridge {
 	// Scale states that have been projected to (for cleanup on clear)
 	#projectedScales = new Set();
 
+	// Shared toggle selections keyed by column (deduplicated, ref-counted)
+	#toggleSelections = new Map();
+
 	constructor(Selection, baseSel) {
 		this.Selection = Selection;
 		const base = Array.isArray(baseSel) ? baseSel : baseSel ? [baseSel] : [];
@@ -157,16 +160,51 @@ export class FilterBridge {
 	}
 
 	/**
-	 * Clear all toggle entries matching a column name.
-	 * Used by Toggle's click-outside to clear selections regardless of source
-	 * (e.g., clearing a Legend-initiated selection from the bar chart).
+	 * Get or create a shared toggle Selection for a column.
+	 * Multiple components (Toggle, Legend) on the same field share one Selection,
+	 * avoiding conflicting entries in filterSel.intersect().
 	 */
-	clearByColumn(column) {
-		for (const [source, entry] of this.#entries) {
-			if (entry.clause?.schema?.column === column) {
-				this.clear(source);
-			}
+	createToggle(column, opts = {}) {
+		const { scaleStates } = opts;
+
+		if (this.#toggleSelections.has(column)) {
+			const entry = this.#toggleSelections.get(column);
+			entry.refCount++;
+			return { sel: entry.sel, source: `toggle-${column}`, off: this.#toggleOff(column) };
 		}
+
+		const source = `toggle-${column}`;
+		const { sel, off } = this.createLocal('single', {
+			source,
+			scaleStates,
+			augment: (clause) => ({
+				kind: 'toggle',
+				column,
+				label: column,
+				values: clause?.value?.map((v) => v[0]) ?? []
+			})
+		});
+
+		this.#toggleSelections.set(column, { sel, off, refCount: 1 });
+		return { sel, source, off: this.#toggleOff(column) };
+	}
+
+	#toggleOff(column) {
+		return () => {
+			const entry = this.#toggleSelections.get(column);
+			if (!entry) return;
+			if (--entry.refCount === 0) {
+				entry.off();
+				this.#toggleSelections.delete(column);
+			}
+		};
+	}
+
+	/**
+	 * Clear the shared toggle Selection for a column.
+	 */
+	clearToggle(column) {
+		this.clear(`toggle-${column}`);
 	}
 
 	/**

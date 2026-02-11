@@ -1,5 +1,5 @@
 <script>
-	import { getContext } from 'svelte';
+	import { getContext, onDestroy } from 'svelte';
 	import { clausePoints } from '@uwdata/mosaic-core';
 	import { column } from '@uwdata/mosaic-sql';
 
@@ -27,7 +27,6 @@
 
 	// --- Toggle interaction ---
 	const isInteractive = $derived(bridge != null && field != null);
-	const source = `legend-toggle-${field}`;
 	const columnRef = field ? column(field) : null;
 
 	// Getter for scale states — includes color scale + any band scale for same field
@@ -36,21 +35,15 @@
 		return [scaleState, band].filter(Boolean);
 	}
 
-	// Register with FilterBridge when interactive
+	// Shared toggle Selection — deduplicated by column across Toggle + Legend
 	const toggle = bridge && field
-		? bridge.createLocal('single', {
-				source,
-				scaleStates: getLegendScaleStates,
-				augment: (clause) => ({
-					kind: 'toggle',
-					column: field,
-					label: field,
-					values: clause?.value?.map((v) => v[0]) ?? []
-				})
-			})
+		? bridge.createToggle(field, { scaleStates: getLegendScaleStates })
 		: null;
 
 	const selection = toggle?.sel;
+	const source = toggle?.source;
+
+	onDestroy(() => toggle?.off());
 
 	// Derive visual state from scale's activeValues (projected by FilterBridge)
 	const selectedSet = $derived(scaleState.activeValues);
@@ -84,7 +77,7 @@
 		}
 
 		if (newValues === null) {
-			bridge.clearByColumn(field);
+			bridge.clearToggle(field);
 		} else {
 			selection.update(clausePoints([columnRef], newValues, { source }));
 		}
