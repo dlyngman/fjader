@@ -1,6 +1,4 @@
 <script>
-	import { getContext } from 'svelte';
-
 	let {
 		x,
 		y,
@@ -11,8 +9,6 @@
 		onResizeStart, // (edge: string, event) => void
 		onWheel // (event) => void - Shift+scroll to scale brush
 	} = $props();
-
-	const chart = getContext('chart');
 
 	// Normalize to ensure positive dimensions (avoid GC by using primitives)
 	const nx = $derived(width < 0 ? x + width : x);

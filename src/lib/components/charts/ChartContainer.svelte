@@ -318,8 +318,14 @@
 			return tooltipManager;
 		},
 
-		// Click callback slot — set by interactors like ToggleY
-		onChartClick: null
+		// Click callback slot — set by interactors like Toggle
+		onChartClick: null,
+
+		// Pointer hooks — set by interval/brush interactors
+		onInteractorPointerDown: null, // (event, innerPoint) => bool
+		onInteractorPointerMove: null, // (event) => bool
+		onInteractorPointerUp: null, // (event) => bool
+		onInteractorPointerEnter: null // () => void
 	};
 
 	setContext('chart', chartContext);
@@ -458,35 +464,9 @@
 		activePanY = false;
 	}
 
-	let panContext;
-
-	// PAN HANDLERS
-	// function handlePointerDown(event) {
-	// 	event.preventDefault();
-
-	// 	const point = { x: event.offsetX, y: event.offsetY };
-	// 	const { x, y, innerPoint } = layout.getActiveAxes(point);
-
-	// 	// Only allow panning on linear scales
-	// 	activePanX = x && scales.scaleTypes?.x === 'linear';
-	// 	activePanY = y && scales.scaleTypes?.y === 'linear';
-
-	// 	// Only proceed if at least one axis can pan
-	// 	if (!activePanX && !activePanY) {
-	// 		return;
-	// 	}
-	// 	isPanning = true;
-
-	// 	scales.startPan({ x: event.offsetX, y: event.offsetY }, activePanX, activePanY);
-
-	// 	scales.clearCurrentDataPoints();
-	// 	event.target.setPointerCapture?.(event.pointerId);
-	// }
-
 	function handlePointerDown(event) {
 		event.preventDefault();
 
-		// Test force focus
 		if (event.target.focus) {
 			event.target.focus({ preventScroll: true });
 		}
@@ -495,6 +475,11 @@
 		pointerBuffer.y = event.offsetY;
 
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
+
+		// Let interactor handle first (inner area only)
+		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) {
+			return;
+		}
 
 		const xType = scales.scaleTypes?.x;
 		const yType = scales.scaleTypes?.y;
@@ -505,32 +490,18 @@
 
 		isPanning = true;
 
-		// Pass primitives to startPan
 		scales.startPan(pointerBuffer.x, pointerBuffer.y, activePanX, activePanY);
 
 		scales.clearCurrentDataPoints();
 		event.target.setPointerCapture?.(event.pointerId);
 	}
 
-	// function handlePointerMove(event) {
-	// 	// Single consolidated handler
-	// 	if (isPanning) {
-	// 		const coalescedEvents = event.getCoalescedEvents?.() || [event];
-	// 		scales.updatePanPositionWithCoalescing(coalescedEvents);
-	// 	} else {
-	// 		// Check if we're in the interactive inner area
-	// 		const point = { x: event.offsetX, y: event.offsetY };
-	// 		if (layout.isWithinInnerBounds(point)) {
-	// 			const innerPoint = layout.toInnerCoordinates(point);
-	// 			scales.updateCurrentDataPoints(innerPoint);
-	// 		}
-	// 	}
-	// }
-
 	function processPointerMove(event) {
 		if (isPanning) {
 			scales.updatePanPosition(event.offsetX, event.offsetY);
 			tooltipManager?.suppress(150);
+		} else if (chartContext.onInteractorPointerMove?.(event)) {
+			tooltipManager?.suppress(100);
 		} else {
 			pointerBuffer.x = event.offsetX;
 			pointerBuffer.y = event.offsetY;
@@ -553,16 +524,15 @@
 		processPointerMove(event);
 	}
 
-	// function handlePointerRawUpdate(event) {
-	// 	const events = event.getCoalescedEvents?.() ?? [event];
-	// 	const last = events[events.length - 1];
-	// 	processPointerMove(last);
-	// }
 	function handlePointerRawUpdate(event) {
 		processPointerMove(event);
 	}
 
 	function handlePointerUp(event) {
+		if (chartContext.onInteractorPointerUp?.(event)) {
+			return;
+		}
+
 		isPanning = false;
 		activePanX = false;
 		activePanY = false;
@@ -573,6 +543,7 @@
 
 	function handleInnerMouseEnter() {
 		scales.active = true;
+		chartContext.onInteractorPointerEnter?.();
 	}
 
 	function handleInnerMouseLeave() {
@@ -581,17 +552,6 @@
 		tooltipManager?.updatePosition(null, null);
 	}
 
-	// let testRenderLoop;
-
-	$effect(() => {
-		if (chartContext) {
-			console.log('📐 Chart dimensions:', {
-				innerHeight: chartContext.innerHeight,
-				innerWidth: chartContext.innerWidth,
-				margin: chartContext.margin
-			});
-		}
-	});
 </script>
 
 <div class="figure-container">
