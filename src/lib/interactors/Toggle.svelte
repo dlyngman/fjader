@@ -6,6 +6,7 @@
 	let { bridge, field } = $props();
 
 	const chart = getContext('chart');
+	const scaleRegistry = getContext('scale-registry');
 
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
@@ -16,9 +17,19 @@
 	const toKey = fields.length === 1 ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple);
 	const fromKey = fields.length === 1 ? (key) => [key] : (key) => JSON.parse(key);
 
-	// Register with FilterBridge (same pattern as OrdinalColorLegend)
+	// Getter for scale states — resolved lazily since scales may not be ready at init
+	function getToggleScaleStates() {
+		const yIsBand = chart.scaleTypes?.y === 'band';
+		const xIsBand = chart.scaleTypes?.x === 'band';
+		const band = yIsBand ? chart.yScaleState : xIsBand ? chart.xScaleState : null;
+		const color = scaleRegistry?.getScaleByField(fields[0], 'color');
+		return [band, color].filter(Boolean);
+	}
+
+	// Register with FilterBridge, passing lazy getter for scale state refs
 	const { sel: selection, off: unregister } = bridge.createLocal('single', {
 		source,
+		scaleStates: getToggleScaleStates,
 		augment: (clause) => ({
 			kind: 'toggle',
 			column: fields[0],
@@ -28,14 +39,11 @@
 		})
 	});
 
-	// Derive selected set from bridge.items (bidirectional with legend)
+	// Derive selected set reactively from scale state (projected by FilterBridge)
 	const selectedSet = $derived.by(() => {
-		if (!bridge || !fields.length) return null;
-		for (const item of bridge.items) {
-			if (item.schema?.column === fields[0] && item.clause?.meta?.type === 'point') {
-				const vals = item.clause?.value;
-				if (vals?.length) return new Set(vals.map(toKey));
-			}
+		const scales = getToggleScaleStates();
+		for (const s of scales) {
+			if (s?.activeValues) return s.activeValues;
 		}
 		return null;
 	});
@@ -70,7 +78,7 @@
 		const tm = chart.tooltipManager;
 		if (!tm?.visible || !tm.currentPoint) {
 			if (selectedSet) {
-				selection.update(clausePoints(columnRefs, null, { source }));
+				bridge.clearByColumn(fields[0]);
 			}
 			return;
 		}

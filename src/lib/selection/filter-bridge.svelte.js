@@ -15,6 +15,9 @@ export class FilterBridge {
 	items = $state([]);
 	activeCount = $derived(this.items.length);
 
+	// Scale states that have been projected to (for cleanup on clear)
+	#projectedScales = new Set();
+
 	constructor(Selection, baseSel) {
 		this.Selection = Selection;
 		const base = Array.isArray(baseSel) ? baseSel : baseSel ? [baseSel] : [];
@@ -31,10 +34,48 @@ export class FilterBridge {
 				clause,
 				schema: clause?.schema
 			}));
+
+		this.#projectToScales();
+	}
+
+	/**
+	 * Project toggle selection state onto scale activeValues.
+	 * Reads selected values directly from clause.value (array of tuples from clausePoints).
+	 * Scale state refs are resolved lazily via getter functions passed at registration.
+	 */
+	#projectToScales() {
+		const activeByScale = new Map();
+
+		for (const entry of this.#entries.values()) {
+			if (!entry.scaleStates || !entry.enabled || isNeutral(entry.clause)) continue;
+
+			const tuples = entry.clause?.value;
+			if (!tuples?.length) continue;
+
+			for (const scale of entry.scaleStates()) {
+				if (!activeByScale.has(scale)) {
+					activeByScale.set(scale, new Set());
+				}
+				const set = activeByScale.get(scale);
+				for (const t of tuples) set.add(t[0]);
+			}
+		}
+
+		for (const [scale, values] of activeByScale) {
+			scale.setActiveValues(values);
+		}
+
+		for (const scale of this.#projectedScales) {
+			if (!activeByScale.has(scale)) {
+				scale.clearActiveValues();
+			}
+		}
+
+		this.#projectedScales = new Set(activeByScale.keys());
 	}
 
 	createLocal(kind = 'single', opts = {}) {
-		const { source, augment, onVisualClear } = opts;
+		const { source, augment, onVisualClear, scaleStates } = opts;
 
 		const sel =
 			kind === 'union'
@@ -66,7 +107,8 @@ export class FilterBridge {
 						source,
 						sel,
 						clause,
-						enabled: false
+						enabled: false,
+						scaleStates: scaleStates || null
 					});
 				}
 
@@ -81,7 +123,8 @@ export class FilterBridge {
 					source,
 					sel,
 					clause,
-					enabled: true
+					enabled: true,
+					scaleStates: scaleStates || null
 				});
 
 				this.filterSel.update(clause);
@@ -111,6 +154,19 @@ export class FilterBridge {
 				this.remove(source);
 			}
 		};
+	}
+
+	/**
+	 * Clear all toggle entries matching a column name.
+	 * Used by Toggle's click-outside to clear selections regardless of source
+	 * (e.g., clearing a Legend-initiated selection from the bar chart).
+	 */
+	clearByColumn(column) {
+		for (const [source, entry] of this.#entries) {
+			if (entry.clause?.schema?.column === column) {
+				this.clear(source);
+			}
+		}
 	}
 
 	/**
@@ -150,7 +206,8 @@ export class FilterBridge {
 			source,
 			sel: null,
 			clause: c,
-			enabled: true
+			enabled: true,
+			scaleStates: null
 		});
 
 		this.filterSel.update(c);

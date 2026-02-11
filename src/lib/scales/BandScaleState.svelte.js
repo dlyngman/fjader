@@ -34,6 +34,11 @@ export class BandScaleState {
 	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
 
 	// =========================================================================
+	// SELECTION STATE
+	// =========================================================================
+	#activeValues = $state(null); // null = all active, Set = only these active
+
+	// =========================================================================
 	// POINTER STATE
 	// =========================================================================
 	currentDataPoint = $state(null); // Band index under cursor (integer), or null
@@ -127,10 +132,31 @@ export class BandScaleState {
 		console.log(`✅ BandScaleState "${this.name}" marked as ready`);
 	}
 
+	// =========================================================================
+	// ACTIVE VALUES (selection feedback)
+	// =========================================================================
+
+	get activeValues() {
+		return this.#activeValues;
+	}
+
+	setActiveValues(values) {
+		this.#activeValues = values instanceof Set ? values : new Set(values);
+	}
+
+	clearActiveValues() {
+		this.#activeValues = null;
+	}
+
+	isActive(value) {
+		return this.#activeValues == null || this.#activeValues.has(value);
+	}
+
 	destroy() {
 		// Unregister from ViewManager
 		this.#unregisterFromViewManager();
 
+		this.#activeValues = null;
 		this.#frozenDomain = null;
 		this.#extents.clear();
 	}

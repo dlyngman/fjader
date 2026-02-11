@@ -472,7 +472,7 @@ class ScaleRegistry {
 		const scaleMap = this.scales[type];
 		if (!scaleMap) return null;
 		for (const [key, scale] of scaleMap) {
-			if (scale.field === field) return scale;
+			if ((scale.field ?? scale.name) === field) return scale;
 		}
 		return null;
 	}

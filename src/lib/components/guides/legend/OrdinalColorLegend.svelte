@@ -1,4 +1,5 @@
 <script>
+	import { getContext } from 'svelte';
 	import { clausePoints } from '@uwdata/mosaic-core';
 	import { column } from '@uwdata/mosaic-sql';
 
@@ -14,6 +15,8 @@
 		orientation = 'horizontal'
 	} = $props();
 
+	const scaleRegistry = getContext('scale-registry');
+
 	// Reactive: re-renders when domain or scheme changes
 	const items = $derived(
 		scaleState.domain.map((value) => ({
@@ -27,10 +30,17 @@
 	const source = `legend-toggle-${field}`;
 	const columnRef = field ? column(field) : null;
 
+	// Getter for scale states — includes color scale + any band scale for same field
+	function getLegendScaleStates() {
+		const band = scaleRegistry?.getScaleByField(field, 'band');
+		return [scaleState, band].filter(Boolean);
+	}
+
 	// Register with FilterBridge when interactive
 	const toggle = bridge && field
 		? bridge.createLocal('single', {
 				source,
+				scaleStates: getLegendScaleStates,
 				augment: (clause) => ({
 					kind: 'toggle',
 					column: field,
@@ -42,17 +52,8 @@
 
 	const selection = toggle?.sel;
 
-	// Derive visual state from bridge.items (bidirectional)
-	const selectedSet = $derived.by(() => {
-		if (!bridge || !field) return null;
-		for (const item of bridge.items) {
-			if (item.schema?.column === field && item.clause?.meta?.type === 'point') {
-				const vals = item.clause?.value;
-				if (vals?.length) return new Set(vals.map((v) => v[0]));
-			}
-		}
-		return null;
-	});
+	// Derive visual state from scale's activeValues (projected by FilterBridge)
+	const selectedSet = $derived(scaleState.activeValues);
 
 	function handleClick(value, event) {
 		if (!selection || !columnRef) return;
@@ -82,7 +83,11 @@
 			newValues = [[value]];
 		}
 
-		selection.update(clausePoints([columnRef], newValues, { source }));
+		if (newValues === null) {
+			bridge.clearByColumn(field);
+		} else {
+			selection.update(clausePoints([columnRef], newValues, { source }));
+		}
 	}
 </script>
 

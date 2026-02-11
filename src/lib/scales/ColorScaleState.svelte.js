@@ -35,6 +35,7 @@ export class ColorScaleState {
 	// Reactive state
 	domain = $state([]);
 	ready = $state(false);
+	#activeValues = $state(null); // null = all active, Set = only these active
 
 	// D3 scale instance (for legends and CPU lookups)
 	#d3Scale = null;
@@ -98,6 +99,10 @@ export class ColorScaleState {
 
 	get scaleType() {
 		return this.#scaleType;
+	}
+
+	get activeValues() {
+		return this.#activeValues;
 	}
 
 	get isOrdinal() {
@@ -501,6 +506,22 @@ export class ColorScaleState {
 	}
 
 	// ============================================================
+	// ACTIVE VALUES (selection feedback)
+	// ============================================================
+
+	setActiveValues(values) {
+		this.#activeValues = values instanceof Set ? values : new Set(values);
+	}
+
+	clearActiveValues() {
+		this.#activeValues = null;
+	}
+
+	isActive(value) {
+		return this.#activeValues == null || this.#activeValues.has(value);
+	}
+
+	// ============================================================
 	// CLEANUP
 	// ============================================================
 
@@ -509,6 +530,7 @@ export class ColorScaleState {
 		this.#unregisterFromViewManager();
 
 		// Slots are released by registry via gpuSlots getter
+		this.#activeValues = null;
 		this.#d3Scale = null;
 		this.#categoryMap.clear();
 		this.ready = false;
