@@ -1,4 +1,5 @@
 <script>
+	import { getContext, onDestroy } from 'svelte';
 	import { clausePoints } from '@uwdata/mosaic-core';
 	import { column } from '@uwdata/mosaic-sql';
 
@@ -14,6 +15,8 @@
 		orientation = 'horizontal'
 	} = $props();
 
+	const scaleRegistry = getContext('scale-registry');
+
 	// Reactive: re-renders when domain or scheme changes
 	const items = $derived(
 		scaleState.domain.map((value) => ({
@@ -24,35 +27,26 @@
 
 	// --- Toggle interaction ---
 	const isInteractive = $derived(bridge != null && field != null);
-	const source = `legend-toggle-${field}`;
 	const columnRef = field ? column(field) : null;
 
-	// Register with FilterBridge when interactive
+	// Getter for scale states — includes color scale + any band scale for same field
+	function getLegendScaleStates() {
+		const band = scaleRegistry?.getScaleByField(field, 'band');
+		return [scaleState, band].filter(Boolean);
+	}
+
+	// Shared toggle Selection — deduplicated by column across Toggle + Legend
 	const toggle = bridge && field
-		? bridge.createLocal('single', {
-				source,
-				augment: (clause) => ({
-					kind: 'toggle',
-					column: field,
-					label: field,
-					values: clause?.value?.map((v) => v[0]) ?? []
-				})
-			})
+		? bridge.createToggle(field, { scaleStates: getLegendScaleStates })
 		: null;
 
 	const selection = toggle?.sel;
+	const source = toggle?.source;
 
-	// Derive visual state from bridge.items (bidirectional)
-	const selectedSet = $derived.by(() => {
-		if (!bridge || !field) return null;
-		for (const item of bridge.items) {
-			if (item.schema?.column === field && item.clause?.meta?.type === 'point') {
-				const vals = item.clause?.value;
-				if (vals?.length) return new Set(vals.map((v) => v[0]));
-			}
-		}
-		return null;
-	});
+	onDestroy(() => toggle?.off());
+
+	// Derive visual state from scale's activeValues (projected by FilterBridge)
+	const selectedSet = $derived(scaleState.activeValues);
 
 	function handleClick(value, event) {
 		if (!selection || !columnRef) return;
@@ -82,7 +76,11 @@
 			newValues = [[value]];
 		}
 
-		selection.update(clausePoints([columnRef], newValues, { source }));
+		if (newValues === null) {
+			bridge.clearToggle(field);
+		} else {
+			selection.update(clausePoints([columnRef], newValues, { source }));
+		}
 	}
 </script>
 

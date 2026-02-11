@@ -316,7 +316,10 @@
 		// Tooltip manager
 		get tooltipManager() {
 			return tooltipManager;
-		}
+		},
+
+		// Click callback slot — set by interactors like ToggleY
+		onChartClick: null
 	};
 
 	setContext('chart', chartContext);
@@ -387,6 +390,10 @@
 
 		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds);
 		tooltipManager?.suppress(100);
+	}
+
+	function handleClick(event) {
+		chartContext.onChartClick?.(event);
 	}
 
 	function handleDoubleClick(event) {
@@ -625,6 +632,7 @@
 			onpointerup={handlePointerUp}
 			onpointercancel={handlePointerUp}
 			ondblclick={handleDoubleClick}
+			onclick={handleClick}
 		>
 			<defs>
 				<clipPath id={layout.clipPathId}>

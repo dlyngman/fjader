@@ -18,6 +18,7 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
+	import Toggle from '$lib/interactors/Toggle.svelte';
 
 	setCoordinators();
 
@@ -96,9 +97,9 @@
 
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet legend()}
+					<!-- {#snippet legend()}
 						<Legend color="weather" bridge={filterBridge} />
-					{/snippet}
+					{/snippet} -->
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -123,6 +124,10 @@
 
 					{#snippet foreground()}
 						<Crosshair />
+					{/snippet}
+
+					{#snippet interactors()}
+						<Toggle bridge={filterBridge} field="weather" />
 					{/snippet}
 				</ChartContainer>
 			</div>

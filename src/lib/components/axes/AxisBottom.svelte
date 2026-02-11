@@ -35,16 +35,18 @@
 			<!-- Band scales: centered positioning -->
 			{#each bandTicks as tick (tick)}
 				{@const tickX = c.xScale(tick)}
-				<line
-					x1={tickX + c.xScale.bandwidth() / 2}
-					x2={tickX + c.xScale.bandwidth() / 2}
-					y1={0}
-					y2={5}
-				/>
+				<g class:tick-dimmed={c.xScaleState.activeValues != null && !c.xScaleState.isActive(tick)}>
+					<line
+						x1={tickX + c.xScale.bandwidth() / 2}
+						x2={tickX + c.xScale.bandwidth() / 2}
+						y1={0}
+						y2={5}
+					/>
 
-				<text text-anchor="middle" x={tickX + c.xScale.bandwidth() / 2} y={16}>
-					{tick}
-				</text>
+					<text text-anchor="middle" x={tickX + c.xScale.bandwidth() / 2} y={16}>
+						{tick}
+					</text>
+				</g>
 			{/each}
 
 			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
@@ -62,5 +64,10 @@
 	text {
 		fill: var(--text-secondary);
 		font-size: 10px;
+	}
+
+	.tick-dimmed {
+		opacity: 0.25;
+		transition: opacity 0.15s ease;
 	}
 </style>
