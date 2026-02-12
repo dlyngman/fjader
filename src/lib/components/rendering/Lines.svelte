@@ -2,6 +2,7 @@
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
 	import { getGPUContext } from '$lib/gpu';
+	import { CURVE_LINEAR } from '$lib/gpu/CurveShaderLib.js';
 
 	// Lines uses projectToPixels() directly, so we don't need placeholder replacement.
 	// We still define x/y so that scaleX/scaleY functions are generated.
@@ -54,7 +55,12 @@
 	const quadVertexCount = 12; // 6 for segment + 6 for join circle
 
 	// Line shader: bevel segments + round join circles
+	// evaluateCurve() is prepended from CurveShaderLib for curve-ready architecture.
+	// With CURVE_LINEAR, evaluateCurve(p0,p1,p2,p3,t) = mix(p1,p2,t), identical to
+	// the original direct interpolation.
 	const linesShaderCode = `
+  ${CURVE_LINEAR}
+
   struct MarkConstants {
     strokeWidth: f32,
     pointCount: u32,
@@ -142,9 +148,25 @@
       return output;
     }
 
+    // Compute neighbor indices with series-aware boundary clamping.
+    // Clamp to segment endpoints at series boundaries or array edges.
+    let prevIdx = select(currIdx - 1u, currIdx,
+      currIdx == 0u || seriesValues[currIdx - 1u] != seriesCurr);
+    let afterIdx = select(nextIdx + 1u, nextIdx,
+      nextIdx + 1u >= pointCount || seriesValues[nextIdx + 1u] != seriesNext);
+
+    // Project all 4 control points to pixel space for screen-space interpolation
+    let pPrev = projectToPixels(vec2<f32>(xValues[prevIdx], yValues[prevIdx]));
     let pCurr = projectToPixels(vec2<f32>(xCurr, yCurr));
     let pNext = projectToPixels(vec2<f32>(xNext, yNext));
-    let segmentDir = pNext - pCurr;
+    let pAfter = projectToPixels(vec2<f32>(xValues[afterIdx], yValues[afterIdx]));
+
+    // Evaluate curve at segment start and end.
+    // For linear: evaluateCurve returns mix(p1,p2,t), so segStart=pCurr, segEnd=pNext.
+    let segStart = evaluateCurve(pPrev, pCurr, pNext, pAfter, 0.0);
+    let segEnd = evaluateCurve(pPrev, pCurr, pNext, pAfter, 1.0);
+
+    let segmentDir = segEnd - segStart;
     let segmentLen = length(segmentDir);
 
     if (segmentLen < 0.001) {
@@ -158,8 +180,8 @@
     let side = quadPosition.y;
     let t = quadPosition.x * 0.5 + 0.5;
 
-    // Pure bevel: each segment is a simple rectangle
-    let basePos = mix(pCurr, pNext, t);
+    // Each segment is a rectangle between segStart and segEnd
+    let basePos = mix(segStart, segEnd, t);
     let finalPos = basePos + normal * side * halfWidth;
 
     var output: VertexOutput;
