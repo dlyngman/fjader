@@ -116,8 +116,12 @@ export class MarkColor {
 		if (isNode(field)) {
 			if (isAggregateExpression(field)) return 'sequential';
 			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
-			// Other SQL nodes: can't look up in schema, safe fallback for color
-			return 'ordinal';
+			// Other SQL expression nodes (e.g., SIGN(...), arithmetic) produce computed values.
+			// Default to sequential since most expressions return continuous numeric results.
+			// TODO: ordinal + expression node breaks ViewManager (uses expression string as
+			// column name for __dplot_*_idx). If we ever need ordinal for expressions, fix
+			// ViewManager.colorIndexColumn / bandIndexColumn to sanitize expression fields.
+			return 'sequential';
 		}
 
 		// Raw column names: use shared inference with 'visual' context

@@ -1,21 +1,15 @@
 <script>
-	import { format } from 'd3-format';
 	import { getContext } from 'svelte';
 
 	let { show = 'both' } = $props();
 
 	const c = getContext('chart');
 
-	const numericFormatter = format('.3s');
 	const xFormatter = $derived(
-		c.scaleTypes?.x === 'time' && c.xScaleState?.tickFormat
-			? c.xScaleState.tickFormat()
-			: numericFormatter
+		c.xScaleState?.formatValue ? (v) => c.xScaleState.formatValue(v) : String
 	);
 	const yFormatter = $derived(
-		c.scaleTypes?.y === 'time' && c.yScaleState?.tickFormat
-			? c.yScaleState.tickFormat()
-			: numericFormatter
+		c.yScaleState?.formatValue ? (v) => c.yScaleState.formatValue(v) : String
 	);
 </script>
 

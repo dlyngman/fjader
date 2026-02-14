@@ -78,7 +78,6 @@
 			context.configure({
 				device,
 				format: presentationFormat,
-				// alphaMode: 'opaque',
 				alphaMode: 'premultiplied',
 				desynchronized: true
 				// desynchronized: false

@@ -243,7 +243,8 @@ export class BaseGPURenderer {
 			draw: drawFunction,
 			markType: this.#markType,
 			renderer: this,
-			componentId: this.#rendererId
+			componentId: this.#rendererId,
+			zIndex: this.#zIndex
 		});
 		return this.#ownedResources.layerControl;
 	}

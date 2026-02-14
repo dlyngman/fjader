@@ -32,6 +32,7 @@ export class BaseMarkSetup {
 	#clientDataReady = $state(false);
 	#continuousDomainsSet = $state(false);
 	#categoricalFetchStarted = $state(false);
+	#colorDomainFetched = $state(false);
 
 	// --- Private Properties ---
 	#config;
@@ -223,23 +224,24 @@ export class BaseMarkSetup {
 
 		// Effect 3: Fetch categorical domains FIRST (before client creation)
 		// This populates scale domains which triggers ViewManager view creation
+		// Band/time domains are fetched immediately; color/series domains are fetched
+		// when their scale states become available (they may resolve asynchronously).
 		$effect(() => {
 			// Wait for scale mappings
 			if (!this.#scaleMappingsReady) return;
-			// If color field exists, wait for color scale to be set
-			const hasColorField = !!this.#config.select?.color;
-			if (hasColorField && !this.#colorScaleState) return;
-			// If stroke field exists, wait for series scale to be set
-			const hasStrokeField = !!this.#config.select?.stroke;
-			if (hasStrokeField && !this.#seriesScaleState) return;
 
-			if (!this.#categoricalFetchStarted) {
+			// Track color/series scale states for reactive re-entry
+			const colorReady = !this.#config.select?.color || !!this.#colorScaleState;
+			const seriesReady = !this.#config.select?.stroke || !!this.#seriesScaleState;
+
+			if (!this.#categoricalFetchStarted || (colorReady && !this.#colorDomainFetched)) {
 				this.#categoricalFetchStarted = true;
 
 				// Fetch both categorical and aggregated domains in parallel
 				Promise.all([this.#fetchCategoricalDomains(), this.#fetchGlobalAggregates()])
 					.then(([fetchCount]) => {
 						this.categoricalDataFetched = true;
+						if (colorReady) this.#colorDomainFetched = true;
 						this.#setScalesReady();
 						if (fetchCount > 0) {
 							console.log(`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`);
@@ -622,9 +624,18 @@ export class BaseMarkSetup {
 			return new ArrowDataAccessor(this.client.arrowTable);
 		}
 
-		// Transform path: Arrow → Objects → Transform → Object accessor
-		// console.log('📊 Using ObjectDataAccessor (JS transforms)');
+		// Transform path: Arrow → Objects → Inject constants → Transform → Object accessor
 		const objects = this.#arrowToObjects(this.client.arrowTable);
+
+		// Inject constant channel values that were excluded from SQL
+		const constants = this.#config.constants;
+		if (constants) {
+			for (const obj of objects) {
+				for (const key in constants) {
+					if (obj[key] === undefined) obj[key] = constants[key];
+				}
+			}
+		}
 
 		const transformConfig = {
 			x: this.#getFieldName('x'),
@@ -675,17 +686,27 @@ export class BaseMarkSetup {
 			return channel;
 		}
 
+		// Check constants (numeric values excluded from SQL but injected into data objects)
+		const constants = this.#config.constants;
+		if (constants && constants[channel] != null) {
+			return channel;
+		}
+
 		// Handle x1/x2 pattern for bar marks (horizontal stacking)
 		if (channel === 'x') {
 			// Try x2 first (the value field for horizontal bars), then x1
 			if (this.#config.select.x2 != null) return 'x2';
 			if (this.#config.select.x1 != null) return 'x1';
+			if (constants?.x2 != null) return 'x2';
+			if (constants?.x1 != null) return 'x1';
 		}
 
 		// Handle y0/y1 pattern for bar marks (vertical stacking)
 		if (channel === 'y') {
 			if (this.#config.select.y2 != null) return 'y2';
 			if (this.#config.select.y1 != null) return 'y1';
+			if (constants?.y2 != null) return 'y2';
+			if (constants?.y1 != null) return 'y1';
 		}
 
 		return channel; // fallback
@@ -720,8 +741,9 @@ export class BaseMarkSetup {
 		// Raw column strings get swapped to ViewManager offset column there.
 		// Expression nodes get inline epoch offset wrapping there.
 
-		// For color scales, use the indexed column name
-		if (this.#colorScaleState?.indexColumnName && hasView && select.color) {
+		// For ordinal color scales, use the indexed column name
+		// Sequential/continuous color scales pass raw numeric values directly
+		if (this.#colorScaleState?.isOrdinal && this.#colorScaleState?.indexColumnName && hasView && select.color) {
 			const originalField = select.color;
 			select.color = this.#colorScaleState.indexColumnName;
 			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
@@ -1306,13 +1328,29 @@ export class BaseMarkSetup {
 			let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
 
 			const sortConfig = sort;
-			if (sortConfig && sortConfig.by) {
-				const isSortingByOtherAxis = sortConfig.by === (axis === 'x' ? 'y' : 'x');
-				const otherAxisField = this.#config.select[sortConfig.by];
-				if (isSortingByOtherAxis && isAggregateExpression(otherAxisField)) {
-					q = q.groupby(field).select({ [sortConfig.by]: otherAxisField });
+			if (sortConfig) {
+				const sortField = this.#config.select[sortConfig.channel];
+				if (sortField) {
+					if (isAggregateExpression(sortField)) {
+						// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
+						q = q.groupby(field).select({ _sort: sortField });
+						if (sortConfig.direction === 'desc') {
+							q.orderby(sql`${sqlColumn('_sort')} DESC`);
+						} else {
+							q.orderby(sqlColumn('_sort'));
+						}
+					} else {
+						// Raw field or expression: ORDER BY directly
+						const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
+						if (sortConfig.direction === 'desc') {
+							q.orderby(sql`${sortExpr} DESC`);
+						} else {
+							q.orderby(sortExpr);
+						}
+					}
+				} else {
+					q.distinct();
 				}
-				q.orderby({ [sortConfig.by]: sortConfig.direction === 'desc' ? 'DESC' : 'ASC' });
 			} else {
 				q.distinct();
 			}
@@ -1321,7 +1359,7 @@ export class BaseMarkSetup {
 				this.#coordinator.query(q).then((result) => {
 					const categories = Array.from(result).map((row) => row[axis]);
 					if (categories.length > 0) {
-						scaleState.addMark(categories, this.#markId);
+						scaleState.addMark(categories, this.#markId, { sorted: !!sortConfig });
 					}
 				})
 			);
@@ -1389,8 +1427,9 @@ export class BaseMarkSetup {
 			if (!isAggregate) {
 				if (this.#colorScaleState.isOrdinal) {
 					// Ordinal: fetch distinct categories
+					const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
 					const q = Query.from(table)
-						.select({ color: sqlColumn(String(colorField)) })
+						.select({ color: colExpr })
 						.distinct();
 
 					fetches.push(
@@ -1404,9 +1443,10 @@ export class BaseMarkSetup {
 					);
 				} else {
 					// Sequential: fetch min/max extent
+					const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
 					const q = Query.from(table).select({
-						min_color: min(sqlColumn(String(colorField))),
-						max_color: max(sqlColumn(String(colorField)))
+						min_color: min(colExpr),
+						max_color: max(colExpr)
 					});
 
 					fetches.push(
@@ -1528,6 +1568,12 @@ export class BaseMarkSetup {
 			if (this.#channelsNeedingDataDomain.has('color')) {
 				outerSelect.min_color = min('color');
 				outerSelect.max_color = max('color');
+			}
+
+			// Skip if no aggregation expressions were generated (e.g., all channels are constants)
+			if (Object.keys(outerSelect).length === 0) {
+				console.log(`📊 [${this.#markId}] Skipping sidecar: no SQL channels to aggregate`);
+				return;
 			}
 
 			const sidecarQuery = Query.from(innerQuery).select(outerSelect);

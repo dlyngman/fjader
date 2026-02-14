@@ -1,8 +1,13 @@
 <script>
 	import { getContext } from 'svelte';
 
-	let { ticksNumber = 5 } = $props();
+	let { ticksNumber = 5, tickFormat = null } = $props();
 	const c = getContext('chart');
+
+	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
+	$effect(() => {
+		if (tickFormat && c.yScaleState?.setCustomFormat) c.yScaleState.setCustomFormat(tickFormat);
+	});
 
 	// Continuous scales (linear, time): use scaleState.getTicks()
 	const continuousTicks = $derived(

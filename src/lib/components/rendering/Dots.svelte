@@ -141,7 +141,7 @@
       let alpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
       let finalAlpha = baseColor.a * alpha * input.alpha;
       
-      return vec4<f32>(baseColor.rgb, finalAlpha);
+      return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
   `;
 

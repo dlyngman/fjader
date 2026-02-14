@@ -64,6 +64,7 @@ export class LinearScaleState {
 
 	// --- D3 Scale (reused to avoid allocation) ---
 	#sharedScale = scaleLinear();
+	#customFormat = $state(null);
 
 	// --- GPU State (mutated in place for zero-alloc) ---
 	gpuState = {
@@ -416,8 +417,19 @@ export class LinearScaleState {
 	}
 
 	/**
+	 * Set a custom format for tick labels, margin labels, and tooltips.
+	 * String specifiers (e.g., "+%", ".2f") get dynamic precision from D3's scale.
+	 * Functions are used as-is with fixed behavior.
+	 * @param {string|Function|null} format - D3 format specifier, function, or null to reset
+	 */
+	setCustomFormat(format) {
+		this.#customFormat = format ?? null;
+	}
+
+	/**
 	 * Get a formatter function for tick values.
-	 * Uses D3's smart number formatting (SI prefixes, precision handling).
+	 * String specifiers are passed to D3's scale.tickFormat(count, specifier)
+	 * which adapts precision to the current zoom level / tick step.
 	 *
 	 * @param {number} count - Number of ticks (helps determine precision)
 	 * @returns {Function} Formatter function (value) => string
@@ -425,7 +437,8 @@ export class LinearScaleState {
 	tickFormat(count = 5) {
 		this._version; // Register Svelte dependency for reactivity
 		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
-		return this.#sharedScale.tickFormat(count);
+		if (typeof this.#customFormat === 'function') return this.#customFormat;
+		return this.#sharedScale.tickFormat(count, this.#customFormat ?? undefined);
 	}
 
 	/**

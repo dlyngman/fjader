@@ -39,7 +39,7 @@
 						<Grid />
 
 						<!-- <LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" /> -->
-						<LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" dotRadius={10}/>
+						<LineMark table="travelers" x="date" y="previous" curve="monotone" alpha="0.8" color="red" dotRadius={4}/>
 
 						<!-- <DotsMark table="travelers" x="date" y="previous" alpha="1" color="red" /> -->
 						<LineMark table="travelers" x="date" y="current" alpha="0.8" color="blue" />

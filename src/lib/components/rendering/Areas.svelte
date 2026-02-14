@@ -1,0 +1,467 @@
+<script>
+	import { getContext, onMount, onDestroy } from 'svelte';
+	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+	import { getGPUContext } from '$lib/gpu';
+	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib.js';
+
+	// Areas uses projectToPixels() directly (like Lines, not like Rects).
+	// We define x/y so scaleX/scaleY functions are generated.
+	const areaRendererDefinition = {
+		x: { concept: 'position', channels: ['x'] },
+		y: { concept: 'position', channels: ['y'] }
+		// No placeholders - Areas calls projectToPixels() via makePoint() internally
+	};
+
+	const BINDINGS = {
+		DIM: 0, // Primary dimension (x for vertical, y for horizontal)
+		TOP: 1, // Top/right boundary (y2 for vertical, x2 for horizontal)
+		BOTTOM: 2, // Bottom/left boundary (y1 for vertical, x1 for horizontal)
+		SERIES: 3,
+		COLOR: 4,
+		CONSTANTS: 5
+	};
+
+	// Uniform struct offsets (matching WGSL MarkConstants layout, 48 bytes)
+	const UNIFORM_OFFSETS = {
+		POINT_COUNT: 0, // u32
+		COLOR_MODE: 4, // u32
+		COLOR_SCALE_INDEX: 8, // u32
+		ORIENTATION: 12, // u32 (0=vertical, 1=horizontal)
+		CONSTANT_COLOR: 16, // vec4<f32>
+		FILL_OPACITY: 32, // f32
+		DOT_RADIUS: 36, // f32
+		SHOW_BOTTOM_DOTS: 40 // u32 (0 or 1)
+	};
+
+	let {
+		dimData,
+		topData,
+		bottomData,
+		seriesData = null,
+		colorValueData = null,
+		dataVersion = 0,
+		zIndex = 0,
+		curve = 'linear',
+		fillOpacity = 0.5,
+		dotRadius = 0, // 0 = no dots, >0 = dot radius in px
+		showBottomDots = false, // true = dots on both boundaries
+		orientation = 'vertical', // 'vertical' (AreaY) or 'horizontal' (AreaX)
+		colorMode = 0, // 0 = constant, 1 = scale
+		colorScaleIndex = 0,
+		constantColor = [0.2, 0.4, 0.8, 1.0]
+	} = $props();
+
+	const chartContext = getContext('chart');
+	const webGPUContext = getContext('webgpu-canvas');
+	const gpuCoordinator = getGPUContext();
+
+	let renderer = $state(null);
+	let initializationError = $state(null);
+	let areaGeometryBuffer;
+
+	// Resolution and vertex count derived from curve type
+	const resolution = getCurveResolution(curve);
+	const areaVertexCount = 6 * resolution + 12; // 6N area + 6 top dot + 6 bottom dot
+	// Pipeline variant key includes curve type for separate shader compilation
+	const effectiveMarkType = curve === 'linear' ? 'areas' : `areas-${curve}`;
+
+	// Area shader: filled quads between top and bottom boundaries along a dimension.
+	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
+	// Orientation handled via uniform flag — all vertices take the same branch (zero divergence).
+	function buildShaderCode() {
+		return `
+  ${getCurveWGSL(curve)}
+
+  struct MarkConstants {
+    pointCount: u32,
+    colorMode: u32,
+    colorScaleIndex: u32,
+    orientation: u32,
+    constantColor: vec4<f32>,
+    fillOpacity: f32,
+    dotRadius: f32,
+    showBottomDots: u32
+  };
+  @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
+
+  struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) colorValue: f32,
+    @location(1) alpha: f32,
+    @location(2) circleUV: vec2<f32>
+  };
+
+  @group(1) @binding(0) var<storage, read> dimValues: array<f32>;
+  @group(1) @binding(1) var<storage, read> topValues: array<f32>;
+  @group(1) @binding(2) var<storage, read> bottomValues: array<f32>;
+  @group(1) @binding(3) var<storage, read> seriesValues: array<f32>;
+  @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
+
+  fn isNaN(v: f32) -> bool {
+    return v != v;
+  }
+
+  // Map (dimension, boundary) to (x, y) based on orientation
+  fn makePoint(dimVal: f32, boundaryVal: f32) -> vec2<f32> {
+    if (markConstants.orientation == 0u) {
+      // Vertical: dim is X, boundary is Y
+      return vec2<f32>(dimVal, boundaryVal);
+    } else {
+      // Horizontal: dim is Y, boundary is X
+      return vec2<f32>(boundaryVal, dimVal);
+    }
+  }
+
+  const DISCARD_POS = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+
+  @vertex
+  fn vertexMain(
+    @location(0) quadCorner: vec2<f32>,
+    @builtin(instance_index) instanceIdx: u32,
+    @builtin(vertex_index) vertexIdx: u32
+  ) -> VertexOutput {
+    let pointCount = markConstants.pointCount;
+    let circleStart = CURVE_RESOLUTION * 6u;
+    let isTopCircle = vertexIdx >= circleStart && vertexIdx < circleStart + 6u;
+    let isBottomCircle = vertexIdx >= circleStart + 6u;
+    let isCircle = isTopCircle || isBottomCircle;
+
+    // === DOT CIRCLES (vertices 6N..6N+5 top, 6N+6..6N+11 bottom) ===
+    if (isCircle) {
+      if (markConstants.dotRadius <= 0.0 || instanceIdx >= pointCount) {
+        var output: VertexOutput;
+        output.position = DISCARD_POS;
+        return output;
+      }
+      if (isBottomCircle && markConstants.showBottomDots == 0u) {
+        var output: VertexOutput;
+        output.position = DISCARD_POS;
+        return output;
+      }
+      let dim = dimValues[instanceIdx];
+      let boundary = select(topValues[instanceIdx], bottomValues[instanceIdx], isBottomCircle);
+      if (isNaN(dim) || isNaN(boundary)) {
+        var output: VertexOutput;
+        output.position = DISCARD_POS;
+        return output;
+      }
+      let center = projectToPixels(makePoint(dim, boundary));
+      let circleR = markConstants.dotRadius * frameUniforms.devicePixelRatio;
+      let pos = center + quadCorner * circleR * 1.2;
+
+      var output: VertexOutput;
+      output.position = pixelsToClip(pos);
+      output.colorValue = colorValues[instanceIdx];
+      output.alpha = 1.0;
+      output.circleUV = quadCorner;
+      return output;
+    }
+
+    // === AREA FILL SUB-QUADS (vertices 0 .. 6N-1) ===
+    let currIdx = instanceIdx;
+    let nextIdx = instanceIdx + 1u;
+
+    // Last point in data has no next segment
+    if (nextIdx >= pointCount) {
+      var output: VertexOutput;
+      output.position = DISCARD_POS;
+      return output;
+    }
+
+    // Series boundary check
+    let seriesCurr = seriesValues[currIdx];
+    let seriesNext = seriesValues[nextIdx];
+    if (seriesCurr != seriesNext) {
+      var output: VertexOutput;
+      output.position = DISCARD_POS;
+      return output;
+    }
+
+    // Read current and next data
+    let dimCurr = dimValues[currIdx];
+    let dimNext = dimValues[nextIdx];
+    let topCurr = topValues[currIdx];
+    let topNext = topValues[nextIdx];
+    let botCurr = bottomValues[currIdx];
+    let botNext = bottomValues[nextIdx];
+
+    // NaN check
+    if (isNaN(dimCurr) || isNaN(dimNext) ||
+        isNaN(topCurr) || isNaN(topNext) ||
+        isNaN(botCurr) || isNaN(botNext)) {
+      var output: VertexOutput;
+      output.position = DISCARD_POS;
+      return output;
+    }
+
+    // Project segment endpoints for adaptive resolution
+    let topPxCurr = projectToPixels(makePoint(dimCurr, topCurr));
+    let topPxNext = projectToPixels(makePoint(dimNext, topNext));
+    let botPxCurr = projectToPixels(makePoint(dimCurr, botCurr));
+    let botPxNext = projectToPixels(makePoint(dimNext, botNext));
+
+    // Adaptive sub-segment resolution: more segments for longer pixel spans.
+    // Use the longer of top/bottom chord for resolution calculation.
+    let subSegIdx = vertexIdx / 6u;
+    var effectiveRes: u32;
+    if (CURVE_RESOLUTION > 3u) {
+      let chordPixelLen = max(length(topPxNext - topPxCurr), length(botPxNext - botPxCurr));
+      effectiveRes = clamp(u32(ceil(chordPixelLen / 4.0)), 1u, CURVE_RESOLUTION);
+    } else {
+      effectiveRes = CURVE_RESOLUTION;
+    }
+
+    if (subSegIdx >= effectiveRes) {
+      var output: VertexOutput;
+      output.position = DISCARD_POS;
+      return output;
+    }
+
+    // Compute neighbor indices with series-aware boundary clamping
+    let prevIdx = select(currIdx - 1u, currIdx,
+      currIdx == 0u || seriesValues[currIdx - 1u] != seriesCurr);
+    let afterIdx = select(nextIdx + 1u, nextIdx,
+      nextIdx + 1u >= pointCount || seriesValues[nextIdx + 1u] != seriesNext);
+
+    // Read neighbor dimension values and project control points
+    let dimPrev = dimValues[prevIdx];
+    let dimAfter = dimValues[afterIdx];
+
+    let topPxPrev = projectToPixels(makePoint(dimPrev, topValues[prevIdx]));
+    let topPxAfter = projectToPixels(makePoint(dimAfter, topValues[afterIdx]));
+    let botPxPrev = projectToPixels(makePoint(dimPrev, bottomValues[prevIdx]));
+    let botPxAfter = projectToPixels(makePoint(dimAfter, bottomValues[afterIdx]));
+
+    // Compute t for this vertex from effective resolution (not geometry buffer)
+    let subSegSize = 1.0 / f32(effectiveRes);
+    let tLeft = f32(subSegIdx) * subSegSize;
+    let tRight = tLeft + subSegSize;
+    let localVert = vertexIdx % 6u;
+    let isRight = localVert == 1u || localVert == 3u || localVert == 4u;
+    let t = select(tLeft, tRight, isRight);
+
+    // Evaluate both boundary curves at t
+    let topPos = evaluateCurve(topPxPrev, topPxCurr, topPxNext, topPxAfter, t);
+    let botPos = evaluateCurve(botPxPrev, botPxCurr, botPxNext, botPxAfter, t);
+
+    // Interpolate between bottom and top: quadCorner.y = 0 (bottom) or 1 (top)
+    let finalPos = mix(botPos, topPos, quadCorner.y);
+
+    var output: VertexOutput;
+    output.position = pixelsToClip(finalPos);
+    output.colorValue = colorValues[currIdx];
+    output.alpha = markConstants.fillOpacity;
+    output.circleUV = vec2<f32>(-2.0, -2.0);
+    return output;
+  }
+
+  @fragment
+  fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+    var baseColor: vec4<f32>;
+    if (markConstants.colorMode == 0u) {
+      baseColor = markConstants.constantColor;
+    } else {
+      baseColor = getColorFromScale(
+        markConstants.colorScaleIndex,
+        input.colorValue,
+        frameUniforms.nullColor
+      );
+    }
+
+    var finalAlpha = baseColor.a * input.alpha;
+
+    // Circle SDF: circleUV is (-2,-2) for area fragments, (-1..1) for dots
+    if (input.circleUV.x > -1.5) {
+      let dist = length(input.circleUV);
+      let sdf = dist - (1.0 / 1.2);
+      let circleR = markConstants.dotRadius * frameUniforms.devicePixelRatio;
+      let pixelSize = frameUniforms.devicePixelRatio / (circleR * 2.0);
+      let circleAlpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
+      finalAlpha *= circleAlpha;
+      if (finalAlpha < 0.01) { discard; }
+    }
+
+    return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
+  }
+  `;
+	}
+
+	const areasShaderCode = buildShaderCode();
+
+	const vertexBufferLayout = [
+		{
+			arrayStride: 2 * 4, // 2 floats per vertex
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+		}
+	];
+
+	const dataBindingConfig = [
+		{ binding: BINDINGS.DIM, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.TOP, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.BOTTOM, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.SERIES, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{
+			binding: BINDINGS.CONSTANTS,
+			type: 'uniform',
+			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+		}
+	];
+
+	// --- DATA WRITING EFFECTS ---
+
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.DIM, dimData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.TOP, topData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.BOTTOM, bottomData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && seriesData)
+			renderer.writeAttribute(BINDINGS.SERIES, seriesData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && colorValueData)
+			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+	});
+
+	// Write uniforms when configuration changes
+	$effect(() => {
+		if (renderer?.resourcesCreated) {
+			const buffer = new ArrayBuffer(48);
+			const view = new DataView(buffer);
+			const LE = true;
+
+			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, dimData ? dimData.length : 0, LE);
+			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
+			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.ORIENTATION, orientation === 'horizontal' ? 1 : 0, LE);
+			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
+			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
+			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
+			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
+			view.setFloat32(UNIFORM_OFFSETS.FILL_OPACITY, fillOpacity, LE);
+			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
+			view.setUint32(UNIFORM_OFFSETS.SHOW_BOTTOM_DOTS, showBottomDots ? 1 : 0, LE);
+
+			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
+		}
+	});
+
+	// Instance count = number of data points (last instance per series discards)
+	$effect(() => {
+		if (renderer?.resourcesCreated && dimData && dimData.length > 1) {
+			renderer.updateInstanceCount(dimData.length);
+		}
+	});
+
+	// Geometry: N sub-segment quads (6N vertices) + 2 dot circle quads (12 vertices).
+	// Sub-segment quads: quadCorner.x = t value [0..1], .y = boundary {0=bottom, 1=top}
+	// Circle quads: quadCorner = [-1..1] for SDF (top at 6N, bottom at 6N+6)
+	function createAreaGeometry(res) {
+		const verts = [];
+		for (let i = 0; i < res; i++) {
+			const tLeft = i / res;
+			const tRight = (i + 1) / res;
+			// prettier-ignore
+			verts.push(
+				tLeft, 0,   tRight, 0,   tLeft, 1,
+				tRight, 0,  tRight, 1,   tLeft, 1
+			);
+		}
+		// Top circle quad (vertices 6N to 6N+5)
+		// prettier-ignore
+		verts.push(
+			-1, -1,   1, -1,  -1,  1,
+			 1, -1,   1,  1,  -1,  1
+		);
+		// Bottom circle quad (vertices 6N+6 to 6N+11)
+		// prettier-ignore
+		verts.push(
+			-1, -1,   1, -1,  -1,  1,
+			 1, -1,   1,  1,  -1,  1
+		);
+		return new Float32Array(verts);
+	}
+
+	async function initializeGeometry() {
+		const device = webGPUContext.getDevice();
+		const areaVertices = createAreaGeometry(resolution);
+		areaGeometryBuffer = device.createBuffer({
+			size: areaVertices.byteLength,
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+			label: `areas-geometry-${curve}`
+		});
+		device.queue.writeBuffer(areaGeometryBuffer, 0, areaVertices);
+	}
+
+	function drawAreas(passEncoder) {
+		if (!areaGeometryBuffer || renderer.instanceCount === 0) return;
+		passEncoder.setVertexBuffer(0, areaGeometryBuffer);
+		passEncoder.draw(areaVertexCount, renderer.instanceCount);
+	}
+
+	async function initializeAreas() {
+		try {
+			renderer = new BaseGPURenderer(
+				effectiveMarkType,
+				webGPUContext,
+				gpuCoordinator,
+				chartContext,
+				{
+					zIndex,
+					xScaleType: chartContext.scaleTypes?.x || 'linear',
+					yScaleType: chartContext.scaleTypes?.y || 'linear'
+				}
+			);
+
+			await renderer.initialize({
+				markShaderCode: areasShaderCode,
+				vertexBufferLayout,
+				dataBindingConfig,
+				rendererDefinition: areaRendererDefinition
+			});
+
+			await initializeGeometry();
+			renderer.registerLayer(drawAreas);
+
+			// Initialize series buffer with zeros if not provided
+			if (!seriesData && dimData) {
+				const defaultSeries = new Float32Array(dimData.length);
+				renderer.writeAttribute(BINDINGS.SERIES, defaultSeries);
+			}
+
+			// Initialize color buffer with zeros if not provided
+			if (!colorValueData && dimData) {
+				const defaultColor = new Float32Array(dimData.length);
+				renderer.writeAttribute(BINDINGS.COLOR, defaultColor);
+			}
+		} catch (error) {
+			console.error('Areas init failed:', error);
+			initializationError = error.message;
+		}
+	}
+
+	async function waitForWebGPU() {
+		let attempts = 0;
+		while (!webGPUContext.isInitialized() && attempts < 100) {
+			await new Promise((r) => setTimeout(r, 50));
+			attempts++;
+		}
+		if (webGPUContext.isInitialized()) await initializeAreas();
+	}
+
+	onMount(() => waitForWebGPU());
+
+	onDestroy(() => {
+		if (areaGeometryBuffer) areaGeometryBuffer.destroy();
+		if (renderer) renderer.destroy();
+	});
+</script>
+
+{#if initializationError}
+	<div class="areas-error">{initializationError}</div>
+{/if}

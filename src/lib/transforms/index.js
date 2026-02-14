@@ -153,68 +153,26 @@ export function stack(options = {}) {
 		apply(data, config) {
 			if (!data || data.length === 0) return data;
 
-			// Determine grouping and value fields based on direction
 			const groupField = direction === 'vertical' ? config.x : config.y;
 			const valueField = direction === 'vertical' ? config.y : config.x;
 
-			console.log('📊 Stack transform:', {
-				direction,
-				groupField,
-				valueField,
-				config,
-				dataLength: data.length,
-				sampleRow: data[0],
-				sampleValueField: data[0]?.[valueField],
-				sampleGroupField: data[0]?.[groupField]
-			});
-
-			// Group by category
 			const groups = d3.group(data, (d) => d[groupField]);
-
-			console.log('📊 Stack groups:', {
-				groupCount: groups.size,
-				groupKeys: Array.from(groups.keys()),
-				itemsPerGroup: Array.from(groups.entries()).map(([k, v]) => ({ key: k, count: v.length }))
-			});
 
 			const stacked = [];
 			for (const [category, items] of groups) {
 				let offset = 0;
-				console.log(`📊 Stack group "${category}": ${items.length} items`);
-				for (let i = 0; i < items.length; i++) {
-					const item = items[i];
+				for (const item of items) {
 					const value = item[valueField] || 0;
 
-					if (i < 3) {
-						console.log(
-							`  📊 Item ${i}: valueField="${valueField}", value=${value}, offset=${offset}`
-						);
-					}
-
 					if (direction === 'vertical') {
-						stacked.push({
-							...item,
-							y0: offset,
-							y1: offset + value
-						});
+						stacked.push({ ...item, y0: offset, y1: offset + value });
 					} else {
-						stacked.push({
-							...item,
-							x0: offset,
-							x1: offset + value
-						});
+						stacked.push({ ...item, x0: offset, x1: offset + value });
 					}
 
 					offset += value;
 				}
 			}
-
-			console.log('📊 Stack output:', {
-				outputLength: stacked.length,
-				sampleOutput: stacked.slice(0, 5),
-				x0Values: stacked.slice(0, 5).map((d) => d.x0),
-				x1Values: stacked.slice(0, 5).map((d) => d.x1)
-			});
 
 			return stacked;
 		},
