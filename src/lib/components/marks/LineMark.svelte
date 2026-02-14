@@ -10,7 +10,8 @@
 		resolveChannel,
 		toFloat32,
 		MarkColor,
-		MarkSeries
+		MarkSeries,
+		normalizeSortConfig
 	} from './utils/index.js';
 
 	let {
@@ -21,6 +22,7 @@
 		stroke = null, // Series grouping field (for multi-series lines)
 		color = null, // Color encoding (can be same as stroke or different)
 		scheme, // Color scheme
+		curve = 'linear', // Curve type: 'linear', 'step', 'step-after', 'step-before', 'catmull-rom', 'monotone', 'bump'
 		strokeWidth = 2, // Line thickness in logical pixels
 		dotRadius = 0, // 0 = strokeWidth/2 (gap-filling only), >0 = explicit radius in px
 		limit,
@@ -28,8 +30,15 @@
 		preferredXScaleType = null,
 		preferredYScaleType = null,
 		transforms = [],
+		sort = null,
 		tooltip = true
 	} = $props();
+
+	// Map user-facing 'monotone' to the correct axis-specific variant
+	// Map user-facing aliases to axis-specific variants
+	const effectiveCurve = $derived(
+		curve === 'monotone' ? 'monotone-x' : curve === 'bump' ? 'bump-x' : curve
+	);
 
 	const markId = `line-${crypto.randomUUID().slice(0, 8)}`;
 	const coordinator = getContext('mosaic-coordinator');
@@ -120,6 +129,7 @@
 			dimensionChannel: 'x'
 		},
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
+		sort: normalizeSortConfig(sort),
 		tooltip
 	});
 
@@ -215,18 +225,21 @@
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && markSeries.ready && xData && yData}
-	<Lines
-		{xData}
-		{yData}
-		{seriesData}
-		colorValueData={markColor.data}
-		colorMode={markColor.colorMode}
-		colorScaleIndex={markColor.colorScaleIndex}
-		constantColor={markColor.constantColor}
-		{strokeWidth}
-		{dotRadius}
-		dataVersion={setup?.client?.dataVersion || 0}
-	/>
+	{#key effectiveCurve}
+		<Lines
+			{xData}
+			{yData}
+			{seriesData}
+			curve={effectiveCurve}
+			colorValueData={markColor.data}
+			colorMode={markColor.colorMode}
+			colorScaleIndex={markColor.colorScaleIndex}
+			constantColor={markColor.constantColor}
+			{strokeWidth}
+			{dotRadius}
+			dataVersion={setup?.client?.dataVersion || 0}
+		/>
+	{/key}
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
 		Error: {setup.client.error.message}

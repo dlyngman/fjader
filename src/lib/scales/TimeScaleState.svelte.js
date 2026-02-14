@@ -272,8 +272,8 @@ export class TimeScaleState extends LinearScaleState {
 	 * @returns {(offset: number) => string}
 	 */
 	tickFormat() {
+		this._version; // Svelte reactivity dependency (must be before #t0 check)
 		if (!this.#t0) return (v) => String(v);
-
 		const [renderMin, renderMax] = this.domainForReactivity;
 		const minDate = new Date(this.#t0.getTime() + renderMin * this.#unit * 1000);
 		const maxDate = new Date(this.#t0.getTime() + renderMax * this.#unit * 1000);
@@ -296,7 +296,7 @@ export class TimeScaleState extends LinearScaleState {
 	 * @returns {string} Formatted datetime string
 	 */
 	formatValue(offset) {
-		return this.tickFormat()(offset);
+		return this.formatTooltipValue(offset);
 	}
 
 	// Cached Intl formatters for tooltip (created once, reused)

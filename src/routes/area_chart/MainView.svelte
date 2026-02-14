@@ -19,12 +19,12 @@
 
 <div class="main-view-container">
 	<h2>Area Chart Test</h2>
-	<p>Testing: AreaMarkY with single series, multi-series, stacked areas, and line+area overlay</p>
+	<p>Testing: AreaMarkY with curve types, stroke outlines, and line overlay</p>
 
 	<div class="charts-grid">
-		<!-- Simple single-series area -->
+		<!-- Linear (default) -->
 		<div class="chart-wrapper">
-			<h3>Single Series Area</h3>
+			<h3>Linear (default)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
 				{#snippet canvas()}
 					<WebGPUCanvas>
@@ -48,9 +48,231 @@
 			</ChartContainer>
 		</div>
 
-		<!-- Multi-series areas (overlapping, not stacked) -->
+		<!-- Monotone area (recommended for data viz) -->
 		<div class="chart-wrapper">
-			<h3>Multi-Series Areas (color by series)</h3>
+			<h3>Monotone Area (no overshoot)</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<AreaMarkY
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Alpha')))]}
+								curve="monotone"
+								fillOpacity={0.4}
+								color="#4e79a7"
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Catmull-Rom area (may overshoot) -->
+		<div class="chart-wrapper">
+			<h3>Catmull-Rom Area (overshoots)</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<AreaMarkY
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Alpha')))]}
+								curve="catmull-rom"
+								fillOpacity={0.4}
+								color="#4e79a7"
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Bump area -->
+		<div class="chart-wrapper">
+			<h3>Bump Area</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<AreaMarkY
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Alpha')))]}
+								curve="bump"
+								fillOpacity={0.4}
+								color="#76b7b2"
+								dotRadius={4}
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Bump line -->
+		<div class="chart-wrapper">
+			<h3>Bump Line</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<LineMark
+								table="area_data"
+								x="x"
+								y="y"
+								stroke="series"
+								color="series"
+								curve="bump"
+								strokeWidth={2}
+								dotRadius={4}
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Step area -->
+		<div class="chart-wrapper">
+			<h3>Step Area</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<AreaMarkY
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Beta')))]}
+								curve="step"
+								fillOpacity={0.4}
+								color="#e15759"
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Monotone area with stroke outline -->
+		<div class="chart-wrapper">
+			<h3>Monotone + Stroke Outline</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<AreaMarkY
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Alpha')))]}
+								curve="monotone"
+								fillOpacity={0.3}
+								color="#59a14f"
+								strokeWidth={2}
+								strokeColor="#2d5a27"
+								dotRadius={5}
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Monotone line -->
+		<div class="chart-wrapper">
+			<h3>Monotone Line</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<LineMark
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Gamma')))]}
+								curve="monotone"
+								strokeWidth={2}
+								color="#f28e2b"
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Step line -->
+		<div class="chart-wrapper">
+			<h3>Step Line</h3>
+			<ChartContainer xLabel="x" yLabel="y">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<LineMark
+								table="area_data"
+								x="x"
+								y="y"
+								transforms={[filter(eq('series', literal('Gamma')))]}
+								curve="step"
+								strokeWidth={2}
+								color="#f28e2b"
+								dotRadius={3}
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<!-- Multi-series with monotone -->
+		<div class="chart-wrapper">
+			<h3>Multi-Series Monotone</h3>
 			<ChartContainer xLabel="x" yLabel="y">
 				{#snippet canvas()}
 					<WebGPUCanvas>
@@ -62,6 +284,7 @@
 								y="y"
 								stroke="series"
 								color="series"
+								curve="monotone"
 								fillOpacity={0.3}
 							/>
 						{/snippet}
@@ -74,9 +297,9 @@
 			</ChartContainer>
 		</div>
 
-		<!-- Stacked areas
+		<!-- Multi-series stroke outline inheriting color -->
 		<div class="chart-wrapper">
-			<h3>Stacked Areas</h3>
+			<h3>Multi-Series + Stroke (inherit color)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
 				{#snippet canvas()}
 					<WebGPUCanvas>
@@ -88,42 +311,9 @@
 								y="y"
 								stroke="series"
 								color="series"
-								transforms={[stack()]}
-								fillOpacity={0.7}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
-
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
-			</ChartContainer>
-		</div> -->
-
-		<!-- Area + Line overlay -->
-		<div class="chart-wrapper">
-			<h3>Area + Line Overlay</h3>
-			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<AreaMarkY
-								table="area_data"
-								x="x"
-								y="y"
-								transforms={[filter(eq('series', literal('Beta')))]}
+								curve="monotone"
 								fillOpacity={0.2}
-								color="#e15759"
-							/>
-							<LineMark
-								table="area_data"
-								x="x"
-								y="y"
-								transforms={[filter(eq('series', literal('Beta')))]}
 								strokeWidth={2}
-								color="#e15759"
 							/>
 						{/snippet}
 					</WebGPUCanvas>

@@ -77,7 +77,7 @@
 
     @fragment
     fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
-      return input.color;
+      return vec4<f32>(input.color.rgb * input.color.a, input.color.a);
     }
   `;
 

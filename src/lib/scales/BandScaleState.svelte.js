@@ -48,6 +48,8 @@ export class BandScaleState {
 	// =========================================================================
 	#domain = $state([]);
 	#extents = new Map(); // Stores domains from different marks
+	#sortOrder = null; // Preferred category ordering from a mark with sort config
+	#domainUpdateScheduled = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
 	// CONFIGURATION (D3 band scale parameters)
@@ -294,13 +296,17 @@ export class BandScaleState {
 	 * @param {Array} categories - Array of category values
 	 * @param {string} identifier - Mark identifier
 	 */
-	addMark(categories, identifier) {
+	addMark(categories, identifier, { sorted = false } = {}) {
 		const uniqueCategories = [...new Set(categories.filter((c) => c != null))];
 
 		this.#extents.set(identifier, uniqueCategories);
 
+		if (sorted) {
+			this.#sortOrder = uniqueCategories;
+		}
+
 		if (this.#enableUpdates) {
-			this.updateDomainFromExtents();
+			this.#scheduleDomainUpdate();
 		}
 
 		return this;
@@ -315,10 +321,23 @@ export class BandScaleState {
 			this.#extents.delete(identifier);
 
 			if (this.#enableUpdates) {
-				this.updateDomainFromExtents();
+				this.#scheduleDomainUpdate();
 			}
 		}
 		return this;
+	}
+
+	/**
+	 * Debounce domain updates via microtask so multiple marks registering
+	 * in the same tick (e.g. sorted + unsorted) settle before views are created.
+	 */
+	#scheduleDomainUpdate() {
+		if (this.#domainUpdateScheduled) return;
+		this.#domainUpdateScheduled = true;
+		queueMicrotask(() => {
+			this.#domainUpdateScheduled = false;
+			this.updateDomainFromExtents();
+		});
 	}
 
 	/**
@@ -334,8 +353,27 @@ export class BandScaleState {
 			this._version++;
 			return;
 		}
+
+		// Collect all valid categories across all extents
+		const validCategories = new Set();
+		for (const categories of this.#extents.values()) {
+			for (const cat of categories) validCategories.add(cat);
+		}
+
 		const allCategories = [];
 		const seen = new Set();
+
+		// If a sort order exists, use it as the base (filtering to valid categories)
+		if (this.#sortOrder) {
+			for (const cat of this.#sortOrder) {
+				if (validCategories.has(cat) && !seen.has(cat)) {
+					seen.add(cat);
+					allCategories.push(cat);
+				}
+			}
+		}
+
+		// Append remaining categories from extents (first-appearance order)
 		for (const categories of this.#extents.values()) {
 			for (const category of categories) {
 				if (!seen.has(category)) {
@@ -344,10 +382,21 @@ export class BandScaleState {
 				}
 			}
 		}
+
+		// Check if domain order actually changed
+		const oldDomain = this.#domain;
+		const domainChanged =
+			oldDomain.length !== allCategories.length ||
+			allCategories.some((cat, i) => cat !== oldDomain[i]);
+
 		this.#domain = allCategories;
 		this._version++;
 
-		// Try to create views for registered tables (one-shot, will skip if already created)
+		if (domainChanged) {
+			// Domain order changed — clear one-shot guard to force view recreation
+			this.#viewsCreated.clear();
+		}
+
 		for (const table of this.#registeredTables) {
 			this.#maybeCreateView(table);
 		}

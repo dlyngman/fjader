@@ -47,6 +47,7 @@
 							table="flights"
 							x={bin('delay', { steps: 50 })}
 							y={count()}
+							inset={0.5}
 							color="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
@@ -83,6 +84,7 @@
 							table="flights"
 							x={bin('time', { steps: 50 })}
 							y={count()}
+							inset={0.5}
 							color="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
@@ -119,6 +121,7 @@
 							table="flights"
 							x={bin('distance', { steps: 50 })}
 							y={count()}
+							inset={0.5}
 							color="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}

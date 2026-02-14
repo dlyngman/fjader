@@ -3,7 +3,13 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
+	import {
+		buildSelectFromChannels,
+		resolveChannel,
+		toFloat32,
+		MarkColor,
+		normalizeSortConfig
+	} from './utils/index.js';
 
 	let {
 		table,
@@ -14,7 +20,7 @@
 		y2 = y, // top of bars
 		color = null,
 		scheme, // No default scheme - MarkColor will infer
-		alpha = 0.8,
+		alpha = 1,
 		limit,
 		filterNulls = false,
 		transforms = [],
@@ -22,6 +28,10 @@
 		paddingInner,
 		paddingOuter,
 		align = 0.5,
+		inset = 0,
+		dx = 0,
+		dy = 0,
+		sort = null,
 		tooltip = true
 	} = $props();
 
@@ -83,6 +93,7 @@
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y1, y2] : null },
 		// Bar charts with aggregates should start at zero baseline
 		zeroBaseline: hasAggregateY ? { y: true } : null,
+		sort: normalizeSortConfig(sort),
 		tooltip
 	});
 
@@ -192,7 +203,11 @@
 				x: chartContext.scaleTypes?.x,
 				y: chartContext.scaleTypes?.y
 			},
-			columns: { x: 'x', yLow: typeof y1 === 'number' ? y1 : 'y1', yHigh: 'y2' },
+			columns: {
+				x: 'x',
+				yLow: hasStackTransform ? 'y0' : typeof y1 === 'number' ? y1 : 'y1',
+				yHigh: hasStackTransform ? 'y1' : 'y2'
+			},
 			channelFields: {
 				x: typeof x === 'string' ? x : 'x',
 				y: typeof y2 === 'string' ? y2 : 'y',
@@ -228,6 +243,9 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		dataVersion={setup?.client?.dataVersion || 0}
+		{inset}
+		{dx}
+		{dy}
 	/>
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"

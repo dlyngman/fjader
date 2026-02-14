@@ -1,7 +1,8 @@
 <script>
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-	import { Areas } from '../rendering/index.js';
+	import { Areas, Lines } from '../rendering/index.js';
+	import { parseColorToRGBA } from '$lib/scales/color-utils.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { inferScaleType } from '$lib/scales/scale-inference.js';
 	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
@@ -10,7 +11,8 @@
 		resolveChannel,
 		toFloat32,
 		MarkColor,
-		MarkSeries
+		MarkSeries,
+		normalizeSortConfig
 	} from './utils/index.js';
 
 	let {
@@ -24,14 +26,24 @@
 		stroke = null, // Series grouping field (for multi-series areas)
 		color = null, // Color encoding (fill ?? color for color scale)
 		scheme, // Color scheme
+		curve = 'linear', // Curve type: 'linear', 'step', 'step-after', 'step-before', 'catmull-rom', 'monotone', 'bump'
 		fillOpacity = 0.5, // Area fill opacity
+		dotRadius = 0, // 0 = no dots, >0 = dot radius in px on the top boundary
+		strokeWidth = 0, // Stroke outline width (0 = no stroke)
+		strokeColor = null, // Stroke color (CSS string or null to inherit from fill/color)
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
 		preferredYScaleType = null,
 		transforms = [],
+		sort = null,
 		tooltip = true
 	} = $props();
+
+	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)
+	const effectiveCurve = $derived(
+		curve === 'monotone' ? 'monotone-y' : curve === 'bump' ? 'bump-y' : curve
+	);
 
 	const markId = `areax-${crypto.randomUUID().slice(0, 8)}`;
 	const coordinator = getContext('mosaic-coordinator');
@@ -96,6 +108,7 @@
 	});
 
 	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
+	let showBothBoundaries = $derived(typeof x1 === 'string' && !hasStackTransform);
 
 	// Config with _connectedConfig for automatic ORDER BY (dimension is y)
 	const config = $derived({
@@ -135,6 +148,7 @@
 		clientOptions: { limit, filterNulls: filterNulls ? [y, x1, x2] : null },
 		// Area charts with aggregates should include zero in the domain
 		zeroBaseline: hasAggregateX ? { x: true } : null,
+		sort: normalizeSortConfig(sort),
 		tooltip
 	});
 
@@ -194,6 +208,12 @@
 	// Series data comes from MarkSeries (uses scale infrastructure)
 	let seriesData = $derived(markSeries.data);
 
+	// Stroke outline color: parse CSS color string, or inherit from fill/color
+	const strokeConstantColor = $derived.by(() => {
+		if (strokeColor) return parseColorToRGBA(strokeColor);
+		return markColor.constantColor;
+	});
+
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
@@ -249,19 +269,54 @@
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && markSeries.ready && yData && xRightData && xLeftData}
-	<Areas
-		dimData={yData}
-		topData={xRightData}
-		bottomData={xLeftData}
-		{seriesData}
-		colorValueData={markColor.data}
-		colorMode={markColor.colorMode}
-		colorScaleIndex={markColor.colorScaleIndex}
-		constantColor={markColor.constantColor}
-		{fillOpacity}
-		orientation="horizontal"
-		dataVersion={setup?.client?.dataVersion || 0}
-	/>
+	{#key effectiveCurve}
+		<Areas
+			dimData={yData}
+			topData={xRightData}
+			bottomData={xLeftData}
+			{seriesData}
+			curve={effectiveCurve}
+			colorValueData={markColor.data}
+			colorMode={markColor.colorMode}
+			colorScaleIndex={markColor.colorScaleIndex}
+			constantColor={markColor.constantColor}
+			{fillOpacity}
+			{dotRadius}
+			showBottomDots={showBothBoundaries}
+			orientation="horizontal"
+			dataVersion={setup?.client?.dataVersion || 0}
+		/>
+		{#if strokeWidth > 0}
+			<Lines
+				xData={xRightData}
+				yData={yData}
+				{seriesData}
+				curve={effectiveCurve}
+				colorValueData={strokeColor ? null : markColor.data}
+				colorMode={strokeColor ? 0 : markColor.colorMode}
+				colorScaleIndex={strokeColor ? 0 : markColor.colorScaleIndex}
+				constantColor={strokeConstantColor}
+				{strokeWidth}
+				zIndex={1}
+				dataVersion={setup?.client?.dataVersion || 0}
+			/>
+			{#if showBothBoundaries}
+				<Lines
+					xData={xLeftData}
+					yData={yData}
+					{seriesData}
+					curve={effectiveCurve}
+					colorValueData={strokeColor ? null : markColor.data}
+					colorMode={strokeColor ? 0 : markColor.colorMode}
+					colorScaleIndex={strokeColor ? 0 : markColor.colorScaleIndex}
+					constantColor={strokeConstantColor}
+					{strokeWidth}
+					zIndex={1}
+					dataVersion={setup?.client?.dataVersion || 0}
+				/>
+			{/if}
+		{/if}
+	{/key}
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
 		Error: {setup.client.error.message}

@@ -6,7 +6,13 @@
 	import { inferScaleType } from '$lib/scales/scale-inference.js';
 	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import { expandBinForExtent } from '$lib/sql/bin.js';
-	import { buildSelectFromChannels, resolveChannel, toFloat32, MarkColor } from './utils/index.js';
+	import {
+		buildSelectFromChannels,
+		resolveChannel,
+		toFloat32,
+		MarkColor,
+		normalizeSortConfig
+	} from './utils/index.js';
 
 	let {
 		table,
@@ -19,12 +25,16 @@
 		y2 = y,
 		color = null,
 		scheme,
-		alpha = 0.8,
+		alpha = 1,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
 		transforms = [],
 		viewportLocalDomain = false,
+		inset = 0,
+		dx = 0,
+		dy = 0,
+		sort = null,
 		tooltip = true
 	} = $props();
 
@@ -129,6 +139,7 @@
 		zeroBaseline: isHistogram ? { y: true } : null,
 		// Viewport-local domain: compute Y extent from visible X range only
 		viewportLocalDomain,
+		sort: normalizeSortConfig(sort),
 		tooltip
 	});
 
@@ -287,6 +298,9 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		dataVersion={setup?.client?.dataVersion || 0}
+		{inset}
+		{dx}
+		{dy}
 	/>
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"

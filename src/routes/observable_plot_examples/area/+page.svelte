@@ -12,6 +12,8 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
+        AreaMarkY,
+        LineMark,
 		IntervalX,
 		FilterBridge,
 		Legend
@@ -19,6 +21,9 @@
 	import { Grid } from '$lib/components/guides';
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 	import Toggle from '$lib/interactors/Toggle.svelte';
+	import { eq, literal, sql } from '@uwdata/mosaic-sql';
+	import { filter, stack } from '$lib/transforms';
+
 
 	setCoordinators();
 
@@ -35,10 +40,11 @@
 			coord.databaseConnector(wasm);
 			setContext('mosaic-coordinator', coord);
 
-			await coord.exec(
+			await coord.exec([
 				// loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`)
-				loadCSV('aapl', `${window.location.origin}/data/aapl.csv`)
-			);
+				loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
+				loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`)
+            ]);
 
 			isLoaded = true;
 		} catch (error) {
@@ -73,10 +79,13 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<DotsMark
+								<AreaMarkY
 									table="aapl"
 									x="Date"
 									y="Close"
+                                    dotRadius={3}
+                                    curve="monotone"
+                                    strokeWidth={2}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -87,7 +96,51 @@
 					{/snippet}
 
 					{#snippet interactors()}
-						<IntervalX bridge={filterBridge} field={dateMonthDay('date')} />
+						<!-- <IntervalX bridge={filterBridge} field={dateMonthDay('date')} /> -->
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+    <div class="container">
+		<h1>SF temp</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer legendPosition="top">
+					{#snippet legend()}
+						<Legend color="weather" bridge={filterBridge} />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="sftemp"
+									x="date"
+									y1="low"
+									y2="high"
+                                    dotRadius={3}
+                                    curve="monotone"
+                                    strokeWidth={2}
+                                />
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+
+					{#snippet interactors()}
+						<!-- <IntervalX bridge={filterBridge} field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -97,7 +150,7 @@
 
 <style>
 	.container {
-		max-width: 1200px;
+		/* max-width: 1400px; */
 		margin: 0 auto;
 		padding: 2rem 1.5rem;
 	}
@@ -118,7 +171,7 @@
 		width: 100%;
 		aspect-ratio: 2 / 1;
 		min-height: 200px;
-		max-height: 400px;
+		max-height: 600px;
 		position: relative;
 	}
 

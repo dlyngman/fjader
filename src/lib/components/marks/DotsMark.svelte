@@ -10,7 +10,8 @@
 		resolveChannel,
 		toFloat32,
 		MarkColor,
-		MarkSize
+		MarkSize,
+		normalizeSortConfig
 	} from './utils/index.js';
 
 	let {
@@ -28,6 +29,7 @@
 		preferredXScaleType = null,
 		preferredYScaleType = null,
 		transforms = [],
+		sort = null,
 		tooltip = true
 	} = $props();
 
@@ -117,6 +119,7 @@
 			...(markSize.selectField && { radius: markSize.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
+		sort: normalizeSortConfig(sort),
 		tooltip
 	});
 

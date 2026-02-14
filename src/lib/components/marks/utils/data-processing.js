@@ -80,6 +80,22 @@ export function buildSelectFromChannels(channels) {
 }
 
 /**
+ * Extract constant numeric channel values (excluded from SQL but needed by JS transforms).
+ * @param {object} channels - Channel definitions (e.g., { x1: 0, x2: 1, y: 'species' })
+ * @returns {object|null} Map of channel name → constant value, or null if none
+ */
+export function buildConstantsFromChannels(channels) {
+	let constants = null;
+	for (const [key, value] of Object.entries(channels)) {
+		if (typeof value === 'number') {
+			if (!constants) constants = {};
+			constants[key] = value;
+		}
+	}
+	return constants;
+}
+
+/**
  * Check if a string represents a color value
  */
 function isColorString(value) {

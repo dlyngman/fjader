@@ -845,7 +845,7 @@ export class GPUCoordinator {
 								format: this.#presentationFormat,
 								blend: {
 									color: {
-										srcFactor: 'src-alpha',
+										srcFactor: 'one',
 										dstFactor: 'one-minus-src-alpha',
 										operation: 'add'
 									},

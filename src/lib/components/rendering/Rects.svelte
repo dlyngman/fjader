@@ -24,8 +24,12 @@
 	const UNIFORM_OFFSETS = {
 		COLOR_MODE: 0,
 		COLOR_SCALE_INDEX: 4,
-		// 8-12: padding (_pad0, _pad1)
-		CONSTANT_COLOR: 16
+		INSET: 8,
+		_PAD0: 12,
+		CONSTANT_COLOR: 16,
+		DX: 32,
+		DY: 36
+		// 40-47: padding for 16-byte alignment
 	};
 
 	let {
@@ -39,7 +43,10 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
-		constantColor = [0.2, 0.4, 0.8, 1.0]
+		constantColor = [0.2, 0.4, 0.8, 1.0],
+		inset = 0,
+		dx = 0,
+		dy = 0
 	} = $props();
 
 	const chartContext = getContext('chart');
@@ -57,25 +64,29 @@
     struct MarkConstants {
       colorMode: u32,           // 0 = constant, 1 = scale
       colorScaleIndex: u32,     // Index into colorConfigs
+      inset: f32,               // Pixel inset on all sides
       _pad0: u32,
-      _pad1: u32,
       constantColor: vec4<f32>, // Used when colorMode = 0
+      dx: f32,                  // Horizontal pixel offset
+      dy: f32,                  // Vertical pixel offset
+      _pad1: f32,
+      _pad2: f32,
     };
     @group(1) @binding(6) var<uniform> markConstants: MarkConstants;
-  
+
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
       @location(0) colorValue: f32,   // Raw value for scale lookup
       @location(1) alpha: f32,
     };
-  
+
     @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
     @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
     @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
     @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
     @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
     @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
-  
+
     @vertex
     fn vertexMain(
       @location(0) rectCorner: vec2<f32>,
@@ -87,21 +98,25 @@
       let y1 = y1Values[instanceIdx];
       let alpha = alphaValues[instanceIdx];
       let colorValue = colorValues[instanceIdx];
-  
+
       // X axis scaling (generated based on scale type)
       {{X_AXIS_LOGIC}}
-  
+
       // Y axis scaling (generated based on scale type)
       {{Y_AXIS_LOGIC}}
-  
-      // Interpolate rectangle corners using the computed scaled values
-      let finalX = mix(scaledX0, scaledX1, rectCorner.x);
-      let finalY = mix(scaledY0, scaledY1, rectCorner.y);
-  
+
+      // Apply inset (shrink rect inward on all sides)
+      let ix = markConstants.inset * sign(scaledX1 - scaledX0);
+      let iy = markConstants.inset * sign(scaledY1 - scaledY0);
+
+      // Interpolate rectangle corners and apply pixel offsets
+      let finalX = mix(scaledX0 + ix, scaledX1 - ix, rectCorner.x) + markConstants.dx;
+      let finalY = mix(scaledY0 + iy, scaledY1 - iy, rectCorner.y) + markConstants.dy;
+
       // Convert to normalized device coordinates
       let worldPos = vec2<f32>(finalX, finalY);
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
-  
+
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
@@ -125,7 +140,8 @@
         );
       }
   
-      return vec4<f32>(baseColor.rgb, baseColor.a * input.alpha);
+      let finalAlpha = baseColor.a * input.alpha;
+      return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
   `;
 
@@ -175,17 +191,21 @@
 	// Uniforms
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
-			const buffer = new ArrayBuffer(32);
+			const buffer = new ArrayBuffer(48);
 			const view = new DataView(buffer);
 			const LE = true;
 
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
-			// padding at 8-12 handled by struct alignment
+			view.setFloat32(UNIFORM_OFFSETS.INSET, inset, LE);
+			// padding at 12
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
+			view.setFloat32(UNIFORM_OFFSETS.DX, dx, LE);
+			view.setFloat32(UNIFORM_OFFSETS.DY, dy, LE);
+			// padding at 40-47
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 		}
