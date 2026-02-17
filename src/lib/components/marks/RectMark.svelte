@@ -325,6 +325,7 @@
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
+		facetData={setup?.facetData}
 		dataVersion={setup?.client?.dataVersion || 0}
 		{inset}
 		{dx}

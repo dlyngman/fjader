@@ -14,7 +14,7 @@
  */
 export class TooltipManager {
 	#coordinator;
-	#chartScales;
+	#scaleProvider;
 	#marks = new Map(); // markId → config
 	#queryPending = false;
 	#latestPosition = null; // { xData, yData } — always the most recent cursor position
@@ -36,11 +36,11 @@ export class TooltipManager {
 
 	/**
 	 * @param {object} coordinator - Mosaic coordinator for DB queries
-	 * @param {object} chartScales - ChartScales instance (provides currentXDataPoint, etc.)
+	 * @param {object} scaleProvider - { xScale, yScale, xScaleState, yScaleState }
 	 */
-	constructor(coordinator, chartScales) {
+	constructor(coordinator, scaleProvider) {
 		this.#coordinator = coordinator;
-		this.#chartScales = chartScales;
+		this.#scaleProvider = scaleProvider;
 	}
 
 	/**
@@ -195,8 +195,8 @@ export class TooltipManager {
 					: null;
 
 				// Compute matched point screen position from raw data-space values
-				const xScale = this.#chartScales.xScale;
-				const yScale = this.#chartScales.yScale;
+				const xScale = this.#scaleProvider.xScale;
+				const yScale = this.#scaleProvider.yScale;
 				const cols = bestConfig.columns;
 
 				this.matchedScreenX = this.#resolveScreenPos(
@@ -279,8 +279,8 @@ export class TooltipManager {
 		const boundingBoxPx = 50;
 		const dismissPxSq = 30 * 30;
 
-		const xScale = this.#chartScales.xScale;
-		const yScale = this.#chartScales.yScale;
+		const xScale = this.#scaleProvider.xScale;
+		const yScale = this.#scaleProvider.yScale;
 
 		// X axis (x/y are pre-cast to DOUBLE during tooltip table creation)
 		if (scaleTypes.x === 'band' && xData != null) {
@@ -419,7 +419,7 @@ export class TooltipManager {
 				scaleTypes.x === 'time' &&
 				typeof value === 'number'
 			) {
-				const scaleState = this.#chartScales.xScaleState;
+				const scaleState = this.#scaleProvider.xScaleState;
 				point[fieldName] = scaleState?.formatTooltipValue?.(value) ?? value;
 				continue;
 			}
@@ -428,7 +428,7 @@ export class TooltipManager {
 				scaleTypes.y === 'time' &&
 				typeof value === 'number'
 			) {
-				const scaleState = this.#chartScales.yScaleState;
+				const scaleState = this.#scaleProvider.yScaleState;
 				point[fieldName] = scaleState?.formatTooltipValue?.(value) ?? value;
 				continue;
 			}

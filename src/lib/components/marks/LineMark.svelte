@@ -237,6 +237,7 @@
 			constantColor={markColor.constantColor}
 			{strokeWidth}
 			{dotRadius}
+			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 		/>
 	{/key}

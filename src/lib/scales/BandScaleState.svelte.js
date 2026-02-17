@@ -58,6 +58,7 @@ export class BandScaleState {
 	#paddingInner = null;
 	#paddingOuter = null;
 	#align = 0.5;
+	#sourceColumn = null; // Actual SQL column name (defaults to this.name if null)
 
 	// =========================================================================
 	// FREEZE/DEBOUNCE FUNCTIONALITY
@@ -115,6 +116,7 @@ export class BandScaleState {
 		this.#paddingInner = config.paddingInner ?? null;
 		this.#paddingOuter = config.paddingOuter ?? null;
 		this.#align = config.align ?? 0.5;
+		this.#sourceColumn = config.sourceColumn ?? null;
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
 			initialDomain: domain.length,
@@ -168,6 +170,15 @@ export class BandScaleState {
 	// =========================================================================
 
 	/**
+	 * The actual SQL column name in the source table.
+	 * Defaults to this.name, but can be overridden (e.g. for facet scales
+	 * where name is "__facet__species" but sourceColumn is "species").
+	 */
+	get sourceColumn() {
+		return this.#sourceColumn ?? this.name;
+	}
+
+	/**
 	 * The column name used in derived views for this scale's index.
 	 * Format: __dplot_{field}_idx
 	 */
@@ -211,13 +222,13 @@ export class BandScaleState {
 		this.#viewsCreated.add(sourceTable);
 
 		const alias = this.indexColumnName;
-		const sql = ViewManagerService.buildCaseExpression(this.name, this.effectiveDomain, {
+		const sql = ViewManagerService.buildCaseExpression(this.sourceColumn, this.effectiveDomain, {
 			oneBased: false // Band indices are 0-based
 		});
 
 		viewManager.registerColumn(sourceTable, alias, {
 			sql,
-			source: this.name,
+			source: this.sourceColumn,
 			scaleId: this.#scaleId
 		});
 

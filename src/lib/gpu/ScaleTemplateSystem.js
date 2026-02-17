@@ -284,7 +284,8 @@ export class ScaleTemplateSystem {
       //   _pad0: f32,                   // Alignment padding
       //   xScaleIndex: u32,             // Index into scale SSBO
       //   yScaleIndex: u32,             // Index into scale SSBO
-      //   _pad1: vec2<u32>,             // Pad struct size to 48 bytes
+      //   activeFacetIdx: u32,           // Facet cell index for shader filtering
+      //   _pad1: u32,                    // Pad struct size to 48 bytes
       // };
       // @group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
 
@@ -297,7 +298,8 @@ export class ScaleTemplateSystem {
 				_pad0: f32,                   // bytes 28-32
 				xScaleIndex: u32,             // bytes 32-36
 				yScaleIndex: u32,             // bytes 36-40
-				_pad1: vec2<u32>,             // bytes 40-48
+				activeFacetIdx: u32,          // bytes 40-44 (facet cell index for shader filtering)
+				_pad1: u32,                   // bytes 44-48
 				nullColor: vec4<f32>,         // bytes 48-64
 			};
 			@group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;

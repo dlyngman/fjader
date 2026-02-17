@@ -17,7 +17,8 @@
 		Y1: 3,
 		COLOR: 4,
 		ALPHA: 5,
-		CONSTANTS: 6
+		CONSTANTS: 6,
+		FACET: 7
 	};
 
 	// Uniform struct offsets (matching WGSL MarkConstants layout)
@@ -39,6 +40,7 @@
 		y1Data,
 		colorValueData,
 		alphaData,
+		facetData = null,
 		dataVersion,
 		zIndex = 0,
 		colorMode = 0,
@@ -52,6 +54,17 @@
 	const chartContext = getContext('chart');
 	const webGPUContext = getContext('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
+	const faceted = !!chartContext.fx;
+
+	// --- Facet compile-time specialization ---
+	const FACET_BINDING_WGSL = `\n    @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
+	const FACET_DISCARD_WGSL = `
+      // Facet filtering: discard vertices not belonging to this cell
+      if (u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx) {
+        var degen: VertexOutput;
+        degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return degen;
+      }`;
 
 	let renderer = $state(null);
 	let initializationError = $state(null);
@@ -86,12 +99,14 @@
     @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
     @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
     @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+    {{FACET_BINDING}}
 
     @vertex
     fn vertexMain(
       @location(0) rectCorner: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
     ) -> VertexOutput {
+      {{FACET_DISCARD}}
       let x0 = x0Values[instanceIdx];
       let x1 = x1Values[instanceIdx];
       let y0 = y0Values[instanceIdx];
@@ -143,7 +158,9 @@
       let finalAlpha = baseColor.a * input.alpha;
       return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
-  `;
+  `
+		.replace('{{FACET_BINDING}}', faceted ? FACET_BINDING_WGSL : '')
+		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
 
 	const vertexBufferLayout = [
 		{
@@ -152,7 +169,7 @@
 		}
 	];
 
-	const dataBindingConfig = [
+	const baseDataBindingConfig = [
 		{ binding: BINDINGS.X0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.X1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.Y0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
@@ -165,6 +182,15 @@
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
 		}
 	];
+
+	const dataBindingConfig = faceted
+		? [
+				...baseDataBindingConfig,
+				{ binding: BINDINGS.FACET, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }
+			]
+		: baseDataBindingConfig;
+
+	const effectiveMarkType = faceted ? 'rects-faceted' : 'rects';
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
@@ -186,6 +212,10 @@
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && facetData)
+			renderer.writeAttribute(BINDINGS.FACET, facetData);
 	});
 
 	// Uniforms
@@ -218,6 +248,14 @@
 		}
 	});
 
+	// Facet layer registration (reactive — fires when FacetCells resolve)
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !faceted) return;
+		const ids = chartContext.facetChartIds;
+		if (!ids?.length) return;
+		renderer.registerFacetLayers(ids, drawRects);
+	});
+
 	function createRectGeometry() {
 		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
 	}
@@ -241,7 +279,7 @@
 
 	async function initializeRects() {
 		try {
-			renderer = new BaseGPURenderer('rects', webGPUContext, gpuCoordinator, chartContext, {
+			renderer = new BaseGPURenderer(effectiveMarkType, webGPUContext, gpuCoordinator, chartContext, {
 				zIndex,
 				xScaleType: chartContext.scaleTypes?.x || 'linear',
 				yScaleType: chartContext.scaleTypes?.y || 'linear'
@@ -255,7 +293,12 @@
 			});
 
 			await initializeRectGeometry();
-			renderer.registerLayer(drawRects);
+
+			// Non-faceted: register with the single chart canvas
+			// Faceted: registration handled by reactive $effect above
+			if (!faceted) {
+				renderer.registerLayer(drawRects);
+			}
 		} catch (error) {
 			console.error('Rects init failed:', error);
 			initializationError = error.message;

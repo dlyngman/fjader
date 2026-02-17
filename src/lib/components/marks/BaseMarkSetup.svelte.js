@@ -658,6 +658,14 @@ export class BaseMarkSetup {
 		return new ObjectDataAccessor(transformed);
 	});
 
+	/** Facet index data (Float32Array) for GPU upload. Null when not faceted. */
+	facetData = $derived.by(() => {
+		if (!this.#chartContext.fx || !this.data) return null;
+		const raw = this.data.getColumn('__facet');
+		if (!raw) return null;
+		return raw instanceof Float32Array ? raw : new Float32Array(raw);
+	});
+
 	#arrowToObjects(arrowTable) {
 		const rows = [];
 		const numRows = arrowTable.numRows;
@@ -749,6 +757,13 @@ export class BaseMarkSetup {
 			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
 		}
 
+		// For faceting, include the facet index column
+		const facetBandScale = this.#chartContext.facetBandScale;
+		if (facetBandScale?.indexColumnName && hasView) {
+			select.__facet = facetBandScale.indexColumnName;
+			console.log(`[BaseMarkSetup] Adding facet column: ${select.__facet}`);
+		}
+
 		return select;
 	}
 
@@ -816,12 +831,17 @@ export class BaseMarkSetup {
 		}
 
 		// Connected topology marks (lines, areas) require strict ordering
-		// Order by series first, then dimension to ensure buffer contiguity
+		// Order by facet first (if faceted), then series, then dimension to ensure buffer contiguity
 		if (this.#config._connectedConfig) {
 			const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
 
 			// Get column expressions for ordering
 			const orderCols = [];
+
+			// Facet column first — ensures all points per facet cell are contiguous
+			if (select.__facet) {
+				orderCols.push(isNode(select.__facet) ? select.__facet : sqlColumn(String(select.__facet)));
+			}
 
 			// Series column (optional - single-series lines don't have this)
 			if (seriesChannel && select[seriesChannel]) {
@@ -994,6 +1014,10 @@ export class BaseMarkSetup {
 		}
 		if (this.actualYScaleType === 'time' && typeof this.#config.select.y === 'string') {
 			this.#chartContext.yScaleState?.registerTable?.(table);
+		}
+		// Register table with facet band scale for ViewManager index column
+		if (this.#chartContext.facetBandScale) {
+			this.#chartContext.facetBandScale.registerTable(table);
 		}
 
 		console.log(`📊 ${this.#markId} Scale mappings setup:`, {
@@ -1370,6 +1394,22 @@ export class BaseMarkSetup {
 		}
 		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
 			setupFetch('y', this.#config.select.y);
+		}
+
+		// Facet: register categories with the facet BandScaleState
+		const facetBandScale = this.#chartContext.facetBandScale;
+		const fxField = this.#chartContext.fx;
+		if (facetBandScale && fxField) {
+			const fxExpr = isNode(fxField) ? fxField : sqlColumn(String(fxField));
+			const q = Query.from(table).select({ fx: fxExpr }).distinct();
+			fetches.push(
+				this.#coordinator.query(q).then((result) => {
+					const categories = Array.from(result).map((row) => row.fx);
+					if (categories.length > 0) {
+						facetBandScale.addMark(categories, this.#markId);
+					}
+				})
+			);
 		}
 
 		// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation

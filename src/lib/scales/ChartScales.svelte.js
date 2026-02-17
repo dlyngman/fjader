@@ -44,10 +44,16 @@ export class ChartScales {
 
 	binStepMultiplier = $state(1.0);
 
+	// Mark client tracking (moved from ChartContainer)
+	markClients = new Set();
+
+	#getFacetChartIds;
+
 	constructor(config) {
 		this.config = config;
 		this.gpuCoordinator = config.gpuCoordinator;
 		this.#scaleRegistry = config.scaleRegistry;
+		this.#getFacetChartIds = config.getFacetChartIds ?? null;
 
 		if (!this.#scaleRegistry) {
 			console.error('ChartScales initialized without scaleRegistry!');
@@ -84,63 +90,30 @@ export class ChartScales {
 				this.chartId
 			);
 
-			// const neededXScale = getScaleState(
-			// 	xLabel,
-			// 	xConfig?.type || 'linear',
-			// 	xConfig?.config || {},
-			// 	// this.gpuCoordinator,
-			// 	this.chartId
-			// );
-
-			// const neededYScale = getScaleState(
-			// 	yLabel,
-			// 	yConfig?.type || 'linear',
-			// 	yConfig?.config || {},
-			// 	// this.gpuCoordinator,
-			// 	this.chartId
-			// );
+			// Register facet cell chart IDs with the same scales so the
+			// animation loop knows to redraw them when scales change.
+			const facetIds = this.#getFacetChartIds?.();
+			if (facetIds) {
+				for (const cellId of facetIds) {
+					this.#scaleRegistry.getOrCreateScale(xKey, xConfig.type, xConfig.config || {}, cellId);
+					this.#scaleRegistry.getOrCreateScale(yKey, yConfig.type, yConfig.config || {}, cellId);
+				}
+			}
 
 			// Check if X scale changed
 			if (this.#xScaleInstance !== neededXScale) {
-				// Cleanup old scale - REMOVE FROM THAT SCALE'S USAGE
 				if (this.#xScaleInstance) {
 					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
-					// scaleRegistry?.deregisterChart(this.#xScaleInstance, this.chartId);
 				}
-				// const scaleRegistry = getContext('scale-registry');
-				// if (scaleRegistry && scaleRegistry.scaleUsage.has(this.#xScaleInstance)) {
-				// 	const usage = scaleRegistry.scaleUsage.get(this.#xScaleInstance);
-				// 	usage.delete(this.chartId);
-				// }
-				// Set new scale
 				this.#xScaleInstance = neededXScale;
 				this.#previousXScale = neededXScale;
 			}
 
-			// // Check if Y scale changed
-			// if (this.#yScaleInstance !== neededYScale) {
-			// 	// Cleanup old scale - REMOVE FROM THAT SCALE'S USAGE
-			// 	if (this.#yScaleInstance) {
-			// 		const scaleRegistry = getContext('scale-registry');
-			// 		if (scaleRegistry && scaleRegistry.scaleUsage.has(this.#yScaleInstance)) {
-			// 			const usage = scaleRegistry.scaleUsage.get(this.#yScaleInstance);
-			// 			usage.delete(this.chartId);
-			// 		}
-			// 	}
-
-			// 	// Set new scale
-			// 	this.#yScaleInstance = neededYScale;
-			// 	this.#previousYScale = neededYScale;
-			// }
 			// Check if Y scale changed
 			if (this.#yScaleInstance !== neededYScale) {
-				// 3. Use proper method for cleanup
 				if (this.#yScaleInstance) {
 					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
-					// scaleRegistry?.deregisterChart(this.#yScaleInstance, this.chartId);
 				}
-
-				// Set new scale
 				this.#yScaleInstance = neededYScale;
 				this.#previousYScale = neededYScale;
 			}
@@ -152,12 +125,17 @@ export class ChartScales {
 			const yScale = this.#yScaleInstance;
 
 			if (xScale?.id && yScale?.id && this.gpuCoordinator) {
+				const mapping = { xScaleId: xScale.id, yScaleId: yScale.id };
 				const trySetMapping = () => {
 					try {
-						this.gpuCoordinator.setChartScaleMapping(this.chartId, {
-							xScaleId: xScale.id,
-							yScaleId: yScale.id
-						});
+						this.gpuCoordinator.setChartScaleMapping(this.chartId, mapping);
+						// Propagate to facet cell charts (pending mechanism handles timing)
+						const facetIds = this.#getFacetChartIds?.();
+						if (facetIds) {
+							for (const cellId of facetIds) {
+								this.gpuCoordinator.setChartScaleMapping(cellId, mapping);
+							}
+						}
 					} catch (error) {
 						// Retry logic for race conditions
 						setTimeout(trySetMapping, 10);
@@ -318,18 +296,23 @@ export class ChartScales {
 		return type === 'linear' || type === 'time';
 	}
 
-	updateCurrentDataPoints = (innerPoint) => {
+	registerClient = (client) => {
+		this.markClients.add(client);
+		return () => this.markClients.delete(client);
+	};
+
+	updateCurrentDataPoints = (innerPoint, innerWidth, innerHeight) => {
 		if (this.#yScaleInstance?.invertScreenToData) {
 			this.#yScaleInstance.currentDataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
-				this.layout.innerHeight,
+				innerHeight,
 				true // isYAxis
 			);
 		}
 		if (this.#xScaleInstance?.invertScreenToData) {
 			this.#xScaleInstance.currentDataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
-				this.layout.innerWidth,
+				innerWidth,
 				false
 			);
 		}
@@ -344,11 +327,11 @@ export class ChartScales {
 		}
 	};
 
-	accumulateZoom = (innerPoint, scaleFactor, doX, doY) => {
+	accumulateZoom = (innerPoint, scaleFactor, doX, doY, innerWidth, innerHeight) => {
 		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
 			const dataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
-				this.layout.innerWidth,
+				innerWidth,
 				false
 			);
 			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
@@ -356,35 +339,35 @@ export class ChartScales {
 		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
 			const dataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
-				this.layout.innerHeight,
+				innerHeight,
 				true
 			);
 			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 		}
 	};
 
-	applyZoom = (innerPoint, scaleFactor, doX, doY) => {
+	applyZoom = (innerPoint, scaleFactor, doX, doY, innerWidth, innerHeight) => {
 		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
 			const dataPoint = this.#xScaleInstance.invertScreenToData(
 				innerPoint.x,
-				this.layout.innerWidth,
+				innerWidth,
 				false
 			);
 			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
-			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', this.layout.innerWidth);
+			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', innerWidth);
 		}
 		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
 			const dataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
-				this.layout.innerHeight,
+				innerHeight,
 				true
 			);
 			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
-			this.#yScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'y', this.layout.innerHeight);
+			this.#yScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'y', innerHeight);
 		}
 	};
 
-	startPan = (x, y, activePanX, activePanY) => {
+	startPan = (x, y, activePanX, activePanY, innerWidth, innerHeight) => {
 		this.activePanX = activePanX;
 		this.activePanY = activePanY;
 
@@ -396,9 +379,9 @@ export class ChartScales {
 			this._xPanContext.initialDomain[0] = currentDomain[0];
 			this._xPanContext.initialDomain[1] = currentDomain[1];
 			this._xPanContext.screenToDataRatio =
-				(currentDomain[1] - currentDomain[0]) / this.layout.innerWidth;
+				(currentDomain[1] - currentDomain[0]) / innerWidth;
 			this._xPanContext.domainWidth = currentDomain[1] - currentDomain[0];
-			this._xPanContext.screenDimension = this.layout.innerWidth;
+			this._xPanContext.screenDimension = innerWidth;
 			this._xPanContext.lastScreenPos = x;
 
 			this.#xScaleInstance.setPanContext(this._xPanContext);
@@ -412,9 +395,9 @@ export class ChartScales {
 			this._yPanContext.initialDomain[0] = currentDomain[0];
 			this._yPanContext.initialDomain[1] = currentDomain[1];
 			this._yPanContext.screenToDataRatio =
-				(currentDomain[1] - currentDomain[0]) / this.layout.innerHeight;
+				(currentDomain[1] - currentDomain[0]) / innerHeight;
 			this._yPanContext.domainWidth = currentDomain[1] - currentDomain[0];
-			this._yPanContext.screenDimension = this.layout.innerHeight;
+			this._yPanContext.screenDimension = innerHeight;
 			this._yPanContext.lastScreenPos = y;
 
 			this.#yScaleInstance.setPanContext(this._yPanContext);

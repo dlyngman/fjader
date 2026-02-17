@@ -21,9 +21,9 @@
 	const tickFormatter = $derived(c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : String);
 </script>
 
-{#if c.isReady}
+{#if c.isReady && c.scaleTypes}
 	<g class="axis" transform="translate(0 , {c.innerHeight})">
-		{#if c.scaleTypes.x === 'linear' || c.scaleTypes.x === 'time'}
+		{#if (c.scaleTypes.x === 'linear' || c.scaleTypes.x === 'time') && c.xScale}
 			<!-- Continuous scales: direct positioning -->
 			{#each continuousTicks as tick, i (i)}
 				<line x1={c.xScale(tick)} x2={c.xScale(tick)} y1={0} y2={5} />
