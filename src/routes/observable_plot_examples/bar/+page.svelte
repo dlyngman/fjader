@@ -7,6 +7,7 @@
 		ChartContainer,
 		Frame,
 		AxisLeft,
+		AxisCenter,
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
@@ -190,7 +191,7 @@
 		<h1>Population change, 2010–2019</h1>
 
 		<div class="charts">
-			<div class="chart-wrapper" style="max-height:700px;">
+			<div class="chart-wrapper" style="max-height:1000px;">
 				<ChartContainer legendPosition="top">
 					{#snippet background()}
 						<AxisBottom tickFormat="+%" />
@@ -215,6 +216,7 @@
 					{/snippet}
 
 					{#snippet foreground()}
+						<AxisCenter/>
 						<Crosshair />
 					{/snippet}
 				</ChartContainer>
@@ -246,7 +248,7 @@
 		width: 100%;
 		aspect-ratio: 2 / 1;
 		min-height: 200px;
-		max-height: 600px;
+		max-height: 1000px;
 		position: relative;
 	}
 

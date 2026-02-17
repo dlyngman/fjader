@@ -285,6 +285,7 @@
 			{dotRadius}
 			showBottomDots={showBothBoundaries}
 			orientation="vertical"
+			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 		/>
 		{#if strokeWidth > 0}
@@ -299,6 +300,7 @@
 				constantColor={strokeConstantColor}
 				{strokeWidth}
 				zIndex={1}
+				facetData={setup?.facetData}
 				dataVersion={setup?.client?.dataVersion || 0}
 			/>
 			{#if showBothBoundaries}
@@ -313,6 +315,7 @@
 					constantColor={strokeConstantColor}
 					{strokeWidth}
 					zIndex={1}
+					facetData={setup?.facetData}
 					dataVersion={setup?.client?.dataVersion || 0}
 				/>
 			{/if}

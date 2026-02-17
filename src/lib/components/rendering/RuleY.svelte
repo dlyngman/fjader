@@ -27,6 +27,7 @@
 	const chartContext = getContext('chart');
 	const webGPUContext = getContext('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
+	const faceted = !!chartContext.fx;
 
 	let renderer = $state(null);
 	let initializationError = $state(null);
@@ -131,6 +132,14 @@
 		}
 	});
 
+	// Facet layer registration (reactive — fires when FacetCells resolve)
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !faceted) return;
+		const ids = chartContext.facetChartIds;
+		if (!ids?.length) return;
+		renderer.registerFacetLayers(ids, drawRules);
+	});
+
 	function createLineGeometry() {
 		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
 	}
@@ -168,7 +177,12 @@
 			});
 
 			await initializeLineGeometry();
-			renderer.registerLayer(drawRules);
+
+			// Non-faceted: register with the single chart canvas
+			// Faceted: registration handled by reactive $effect above
+			if (!faceted) {
+				renderer.registerLayer(drawRules);
+			}
 		} catch (error) {
 			console.error('RuleY renderer init failed:', error);
 			initializationError = error.message;
@@ -176,6 +190,7 @@
 	}
 
 	async function waitForWebGPU() {
+		if (!webGPUContext) return;
 		let attempts = 0;
 		while (!webGPUContext.isInitialized() && attempts < 100) {
 			await new Promise((r) => setTimeout(r, 50));

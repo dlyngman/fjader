@@ -16,6 +16,9 @@ export class BaseGPURenderer {
 		layerControl: null
 	};
 
+	// Vertex buffers (separate from bind group storage buffers)
+	#vertexBuffers = new Map(); // slot -> GPUBuffer
+
 	// State management
 	#resourcesCreated = $state(false);
 	#initializationError = $state(null);
@@ -34,6 +37,10 @@ export class BaseGPURenderer {
 	#zIndex;
 	#xScaleType;
 	#yScaleType;
+
+	// Facet support: one renderer registered across multiple facet cell charts
+	#facetLayerControls = []; // { chartId, control }[]
+	#facetChartIds = [];
 
 	constructor(markType, webGPUContext, gpuCoordinator, chartContext, options = {}) {
 		this.#markType = markType;
@@ -188,6 +195,49 @@ export class BaseGPURenderer {
 		}
 	}
 
+	/**
+	 * Write data to a vertex buffer slot (not part of bind group).
+	 * Used for per-instance data like facet indices that should use
+	 * stepMode: 'instance' instead of storage buffers.
+	 *
+	 * @param {number} slot - Vertex buffer slot index
+	 * @param {ArrayBufferView} data - Float32Array, etc.
+	 */
+	writeVertexBuffer(slot, data) {
+		if (!this.#device || !data) return;
+
+		let buffer = this.#vertexBuffers.get(slot);
+		const requiredSize = data.byteLength;
+
+		if (!buffer || buffer.size < requiredSize) {
+			if (buffer) buffer.destroy();
+
+			const MEMORY_BLOCK_SIZE = 256;
+			const desiredSize = Math.ceil(requiredSize * 1.5);
+			const size = (Math.ceil(desiredSize / MEMORY_BLOCK_SIZE) * MEMORY_BLOCK_SIZE + 3) & ~3;
+
+			buffer = this.#device.createBuffer({
+				size,
+				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+				label: `${this.#markType}-vertex-slot-${slot}`
+			});
+
+			this.#vertexBuffers.set(slot, buffer);
+		}
+
+		this.#device.queue.writeBuffer(buffer, 0, data);
+		this.invalidateLayer();
+	}
+
+	/**
+	 * Get a vertex buffer by slot index (for use in draw callbacks).
+	 * @param {number} slot
+	 * @returns {GPUBuffer|undefined}
+	 */
+	getVertexBuffer(slot) {
+		return this.#vertexBuffers.get(slot);
+	}
+
 	// ===== INTERNAL HELPERS =====
 
 	#scheduleBindGroupUpdate() {
@@ -249,8 +299,43 @@ export class BaseGPURenderer {
 		return this.#ownedResources.layerControl;
 	}
 
+	/**
+	 * Register the same draw function across multiple facet cell charts.
+	 * Idempotent — cleans up previous registrations before re-registering.
+	 */
+	registerFacetLayers(chartIds, drawFunction) {
+		// Clean up previous facet registrations
+		for (const { control } of this.#facetLayerControls) {
+			control.remove();
+		}
+		this.#facetLayerControls = [];
+		this.#facetChartIds = [];
+
+		for (const chartId of chartIds) {
+			const control = this.#gpuCoordinator.registerLayer(chartId, {
+				draw: drawFunction,
+				markType: this.#markType,
+				renderer: this,
+				componentId: this.#rendererId,
+				zIndex: this.#zIndex
+			});
+			this.#facetLayerControls.push({ chartId, control });
+			this.#facetChartIds.push(chartId);
+		}
+
+		// Trigger initial render — data was likely written before facet IDs resolved,
+		// so earlier invalidateLayer() calls went to the parent chartId (no canvas).
+		this.invalidateLayer();
+	}
+
 	invalidateLayer() {
-		if (this.#gpuCoordinator && this.#chartContext?.chartId) {
+		if (!this.#gpuCoordinator) return;
+
+		if (this.#facetChartIds.length > 0) {
+			for (const chartId of this.#facetChartIds) {
+				this.#gpuCoordinator.invalidateChart(chartId);
+			}
+		} else if (this.#chartContext?.chartId) {
 			this.#gpuCoordinator.invalidateChart(this.#chartContext.chartId);
 		}
 	}
@@ -265,8 +350,16 @@ export class BaseGPURenderer {
 		}
 		this.#ownedResources.buffers.clear();
 
+		for (const buffer of this.#vertexBuffers.values()) {
+			buffer.destroy();
+		}
+		this.#vertexBuffers.clear();
+
 		if (this.#dummyBuffer) this.#dummyBuffer.destroy();
 		if (this.#ownedResources.layerControl) this.#ownedResources.layerControl.remove();
+		for (const { control } of this.#facetLayerControls) control.remove();
+		this.#facetLayerControls = [];
+		this.#facetChartIds = [];
 		if (this.#gpuCoordinator) this.#gpuCoordinator.releaseRenderer(this.#rendererId);
 
 		this.#pipeline = null;

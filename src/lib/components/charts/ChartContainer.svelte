@@ -1,16 +1,15 @@
 <script>
-	import { setContext, onDestroy, untrack, onMount, getContext } from 'svelte';
+	import { setContext, getContext } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
-	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl.js';
-	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte.js';
-	import Tooltip from '$lib/interactors/Tooltip.svelte';
-	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
+	import ChartCell from './ChartCell.svelte';
 
 	let {
 		xLabel = null,
 		yLabel = null,
+		fx = null,
+		columns: facetColumns = null,
 		background,
 		foreground,
 		canvas,
@@ -28,622 +27,221 @@
 	} = $props();
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
+	const cellMargin = { ...defaultMargin, ...marginOverride };
 
-	const pointerBuffer = { x: 0, y: 0 };
-	const innerPointBuffer = { x: 0, y: 0 };
-	const wheelControl = new WheelInteractionControl(wheelInteraction);
-	// If layout.getActiveAxes returns an object, we need to refactor that too,
-
-	// Create layout and scale coordinator
+	// Layout — used for chartId (stable UUID) and legend positioning
 	const layout = new ChartLayout({
-		margin: { ...defaultMargin, ...marginOverride },
+		margin: cellMargin,
 		height: 250
 	});
 
 	const scaleRegistry = getContext('scale-registry');
 	const gpuCoordinator = getGPUContext();
+	const coordinator = getContext('mosaic-coordinator');
 
-	const hasPointerRawUpdate = typeof window !== 'undefined' && 'onpointerrawupdate' in window;
+	// --- Faceting ---
+	const facetBandScale = fx
+		? scaleRegistry.getOrCreateScale(`__facet__${fx}`, 'band', { sourceColumn: fx }, layout.chartId)
+		: null;
+	const facetCategories = $derived(facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null);
+	const isFaceted = $derived(!!facetCategories);
+	const effectiveColumns = $derived(facetColumns ?? facetCategories?.length ?? 1);
+	const facetChartIds = $derived(facetCategories?.map((_, i) => `${layout.chartId}-fx-${i}`) ?? []);
 
-	// TODO: change to effect? We are registrating and possibly de-registrating side effects inside, resolving charts?
-	// let scales = $derived(
-	// 	new ChartScales({
-	// 		xLabel,
-	// 		yLabel,
-	// 		layout,
-	// 		gpuCoordinator
-	// 	})
-	// );
+	const facetingProps = {
+		fx,
+		get isFaceted() { return isFaceted; },
+		get facetChartIds() { return facetChartIds; },
+		get facetBandScale() { return facetBandScale; }
+	};
+
+	// --- ChartScales ---
 	let scales = $state(null);
 
+	// Queue for scale registrations that arrive before ChartScales is created.
+	// Marks mount synchronously during render, but ChartScales is created in an
+	// $effect (which runs after render). Without queuing, registerScaleType calls
+	// from mark constructors silently fail via optional chaining on null.
+	let pendingScaleRegistrations = [];
+
 	$effect(() => {
-		// Explicitly track dependencies
 		const x = xLabel;
 		const y = yLabel;
-		// layout and gpuCoordinator are objects, usually stable, but we track them if they change
 		const l = layout;
 		const g = gpuCoordinator;
 
-		// Create the new instance
-		// Note: We use untrack around the constructor if we don't want the constructor's
-		// internal reads to trigger this effect again (though usually safe here).
 		const newScales = new ChartScales({
 			xLabel: x,
 			yLabel: y,
 			layout: l,
 			gpuCoordinator: g,
-			scaleRegistry: scaleRegistry
+			scaleRegistry: scaleRegistry,
+			getFacetChartIds: () => facetChartIds
 		});
+
+		// Replay any scale registrations that were queued before scales existed
+		for (const reg of pendingScaleRegistrations) {
+			newScales.registerScaleType(reg.dimension, reg.type, reg.priority, reg.markId, reg.config, reg.columnName);
+		}
+		pendingScaleRegistrations = [];
 
 		scales = newScales;
 
-		// 3. CLEANUP FUNCTION (The Fix)
-		// Svelte runs this function before re-running the effect or when the component destroys.
 		return () => {
 			if (newScales) {
-				console.log(`Destroying ChartScales for ${x} / ${y}`);
 				newScales.destroy();
 			}
 		};
 	});
 
-	// $effect(() => {
-	// 	console.log(`🎯 ChartContainer scales object changed for ${xLabel}x${yLabel}:`, scales);
-	// });
+	// --- Marks-only context for hidden container (faceted mode) ---
+	// In non-faceted mode, ChartCell overrides this with a full context.
+	// In faceted mode, marks in the hidden container use this minimal context.
+	const marksContext = {
+		get width() { return layout.width; },
+		get height() { return layout.height; },
+		get innerWidth() { return layout.innerWidth; },
+		get innerHeight() { return layout.innerHeight; },
+		get margin() { return layout.margin; },
+		get chartId() { return layout.chartId; },
+		get clipPathId() { return layout.clipPathId; },
+		get clipPathUrl() { return layout.clipPathUrl; },
+		get isReady() { return layout.isReady; },
+		get innerTransform() { return layout.innerTransform; },
+		get dimensions() { return layout.dimensions; },
 
-	// Tooltip manager
-	const coordinator = getContext('mosaic-coordinator');
-	let tooltipManager = $state(null);
-
-	$effect(() => {
-		if (!scales || !coordinator) return;
-
-		const tm = new TooltipManager(coordinator, scales);
-		tooltipManager = tm;
-
-		// Drive tooltip scheduling from the animation loop — no separate RAF
-		const frameCallback = () => tm.tick();
-		gpuCoordinator.addFrameCallback(frameCallback);
-
-		return () => {
-			gpuCoordinator.removeFrameCallback(frameCallback);
-			tm.destroy();
-		};
-	});
-
-	$effect(() => {
-		const xState = scales.xScaleState;
-		const yState = scales.yScaleState;
-
-		// console.log(`🎯 Chart ${xLabel}x${yLabel} scale state instances:`, {
-		// 	xStateId: xState?.name,
-		// 	yStateId: yState?.name,
-		// 	xStateObject: xState,
-		// 	yStateObject: yState,
-		// 	// Check if it's the same object reference
-		// 	xStateSame: window.lastXState === xState,
-		// 	yStateSame: window.lastYState === yState
-		// });
-
-		// Store for comparison (dev only)
-		if (typeof window !== 'undefined') {
-			window.lastXState = xState;
-			window.lastYState = yState;
-		}
-	});
-
-	$effect(() => {
-		const xScale = chartContext.xScaleState;
-		const yScale = chartContext.yScaleState;
-
-		if (xScale && yScale && layout.isReady) {
-			// Only mark scales ready if they have valid domains
-			// Linear scales need hasDomain, band scales need effectiveDomain.length > 0
-			const xHasDomain = xScale.hasDomain ?? xScale.effectiveDomain?.length > 0;
-			const yHasDomain = yScale.hasDomain ?? yScale.effectiveDomain?.length > 0;
-
-			if (!xScale.ready && xHasDomain) {
-				xScale.setReady?.();
-				console.log('Manually marked X scale ready');
-			}
-			if (!yScale.ready && yHasDomain) {
-				yScale.setReady?.();
-				console.log('Manually marked Y scale ready');
-			}
-
-			// Only trigger render when both scales are ready
-			if (xScale.ready && yScale.ready) {
-				gpuCoordinator.invalidateChart(layout.chartId);
-			}
-		}
-	});
-
-	// $inspect('is ready', layout.isReady)
-
-	// Client registration for crossfilter
-	const markClients = new Set();
-
-	const chartContext = {
-		// Layout properties and methods
-		get width() {
-			return layout.width;
-		},
-		get height() {
-			return layout.height;
-		},
-		get innerWidth() {
-			return layout.innerWidth;
-		},
-		get innerHeight() {
-			return layout.innerHeight;
-		},
-		get margin() {
-			return layout.margin;
-		},
-		get chartId() {
-			return layout.chartId;
-		},
-		get clipPathId() {
-			return layout.clipPathId;
-		},
-		get clipPathUrl() {
-			return layout.clipPathUrl;
-		},
-		get isReady() {
-			return layout.isReady;
-		},
-		get innerTransform() {
-			return layout.innerTransform;
-		},
-		get dimensions() {
-			return layout.dimensions;
-		},
-
-		// Layout methods
-		// updateWidth: layout.updateWidth.bind(layout),
-		// updateHeight: layout.updateHeight.bind(layout),
-		// toInnerCoordinates: layout.toInnerCoordinates.bind(layout),
-		// toScreenCoordinates: layout.toScreenCoordinates.bind(layout),
-		// isWithinInnerBounds: layout.isWithinInnerBounds.bind(layout),
-		// getActiveAxes: layout.getActiveAxes.bind(layout),
-		// reset: layout.reset.bind(layout),
-		// getDebugInfo: layout.getDebugInfo.bind(layout),
-
-		// updateMargin: layout.updateMargin.bind(layout),
 		updateWidth: (w) => layout.updateWidth(w),
 		updateHeight: (h) => layout.updateHeight(h),
 		updateMargin: (m) => layout.updateMargin(m),
 		toInnerCoordinates: (p) => layout.toInnerCoordinates(p),
 		toScreenCoordinates: (p) => layout.toScreenCoordinates(p),
 		isWithinInnerBounds: (p) => layout.isWithinInnerBounds(p),
-		// getActiveAxes: (p) => layout.getActiveAxes.bind(p),
-		// getActiveAxes: (p) => layout.getActiveAxes.bind(p),
 		getActiveAxes: (p) => layout.getActiveAxes(p),
 		reset: () => layout.reset(),
 		getDebugInfo: () => layout.getDebugInfo(),
 
-		// Scale coordinator properties - reactive to scales changes
-		get xScale() {
-			// return scales.xScale?.scale;
-			return scales.xScale;
-		},
-		get yScale() {
-			// return scales.yScale?.scale;
-			return scales.yScale;
-		},
-		get xTargetScale() {
-			// return scales.xTargetScale?.scale;
-			return scales.xTargetScale;
-		},
-		get yTargetScale() {
-			// return scales.yTargetScale?.scale;
-			return scales.yTargetScale;
-		},
+		get xScale() { return scales?.xScale; },
+		get yScale() { return scales?.yScale; },
+		get xTargetScale() { return scales?.xTargetScale; },
+		get yTargetScale() { return scales?.yTargetScale; },
 
-		get xLabel() {
-			return scales.xLabel;
-		},
-		get yLabel() {
-			return scales.yLabel;
-		},
+		get xLabel() { return scales?.xLabel; },
+		get yLabel() { return scales?.yLabel; },
 
-		get currentXDataPoint() {
-			return scales.currentXDataPoint;
-		},
-		get currentYDataPoint() {
-			return scales.currentYDataPoint;
-		},
-		get currentXScreenPoint() {
-			return scales.currentXScreenPoint;
-		},
-		get currentYScreenPoint() {
-			return scales.currentYScreenPoint;
-		},
+		get currentXDataPoint() { return scales?.currentXDataPoint; },
+		get currentYDataPoint() { return scales?.currentYDataPoint; },
+		get currentXScreenPoint() { return scales?.currentXScreenPoint; },
+		get currentYScreenPoint() { return scales?.currentYScreenPoint; },
 
-		get xScaleState() {
-			return scales.xScaleState;
-		},
-		get yScaleState() {
-			return scales.yScaleState;
-		},
+		get xScaleState() { return scales?.xScaleState; },
+		get yScaleState() { return scales?.yScaleState; },
+		get scaleTypes() { return scales?.scaleTypes; },
+		get scalesReady() { return scales?.scalesReady; },
+		get active() { return scales?.active; },
 
-		get scaleTypes() {
-			return scales.scaleTypes;
-		},
-		get scalesReady() {
-			return scales.scalesReady;
-		},
-		get active() {
-			return scales.active;
-		},
-		get xCategoryPositions() {
-			return scales.xCategoryPositions;
-		},
-		get yCategoryPositions() {
-			return scales.yCategoryPositions;
-		},
-		get categoryPositionsReady() {
-			return scales.categoryPositionsReady;
-		},
-		get xBandwidth() {
-			return scales.xBandwidth;
-		},
-		get yBandwidth() {
-			return scales.yBandwidth;
-		},
+		get xCategoryPositions() { return scales?.xCategoryPositions; },
+		get yCategoryPositions() { return scales?.yCategoryPositions; },
+		get categoryPositionsReady() { return scales?.categoryPositionsReady; },
+		get xBandwidth() { return scales?.xBandwidth; },
+		get yBandwidth() { return scales?.yBandwidth; },
 
-		// Scale coordinator methods
-		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
-			scales.registerScaleType(dimension, type, priority, markId, config, columnName),
-		unregisterScaleType: (dimension, markId) => scales.unregisterScaleType(dimension, markId),
-		getScaleRequirementsSummary: () => scales.getScaleRequirementsSummary(),
-
-		// Bin step multiplier for adaptive resolution
-		get binStepMultiplier() {
-			return scales.binStepMultiplier;
+		registerScaleType: (dimension, type, priority, markId, config, columnName) => {
+			if (scales) {
+				scales.registerScaleType(dimension, type, priority, markId, config, columnName);
+			} else {
+				pendingScaleRegistrations.push({ dimension, type, priority, markId, config, columnName });
+			}
 		},
+		unregisterScaleType: (dimension, markId) => scales?.unregisterScaleType(dimension, markId),
+		getScaleRequirementsSummary: () => scales?.getScaleRequirementsSummary(),
 
-		// Client registration for crossfilter exclusion
+		get binStepMultiplier() { return scales?.binStepMultiplier; },
+
 		registerClient(client) {
-			if (!client) return () => {};
-			markClients.add(client);
-			return () => markClients.delete(client);
+			if (!client || !scales) return () => {};
+			return scales.registerClient(client);
 		},
-		get markClients() {
-			return markClients;
-		},
+		get markClients() { return scales?.markClients; },
 
-		// Tooltip manager
-		get tooltipManager() {
-			return tooltipManager;
-		},
+		get tooltipManager() { return null; },
 
-		// Click callback slot — set by interactors like Toggle
+		fx,
+		get isFaceted() { return isFaceted; },
+		get facetChartIds() { return facetChartIds; },
+		get facetBandScale() { return facetBandScale; },
+
 		onChartClick: null,
-
-		// Pointer hooks — set by interval/brush interactors
-		onInteractorPointerDown: null, // (event, innerPoint) => bool
-		onInteractorPointerMove: null, // (event) => bool
-		onInteractorPointerUp: null, // (event) => bool
-		onInteractorPointerEnter: null // () => void
+		onInteractorPointerDown: null,
+		onInteractorPointerMove: null,
+		onInteractorPointerUp: null,
+		onInteractorPointerEnter: null
 	};
 
-	setContext('chart', chartContext);
+	setContext('chart', marksContext);
 	setContext('legend-position', () => legendPosition);
-
-	// Interaction state
-	let svg = $state();
-	let isPanning = $state(false);
-	let activePanX = $state(false);
-	let activePanY = $state(false);
-	let panningAnchorPoint = { x: 0, y: 0 };
-
-	// Touch/pinch zoom state
-	let initialTouchDistance = $state(0);
-	let isZooming = $state(false);
-
-	// $effect.pre(() => {
-	//   const timestamp = performance.now();
-	//   // console.log(`⚡ $effect.pre triggered at ${timestamp.toFixed(2)}ms`);
-
-	//   void scales.xScaleState?.domain?.current;
-	//   void scales.yScaleState?.domain?.current;
-
-	//   untrack(() => {
-	//       if (layout.isReady) {
-	//         console.log(`📊 Invalidating chart at ${timestamp.toFixed(2)}ms`);
-	//         gpuCoordinator.invalidateChart(layout.chartId);
-	//       }
-	//   });
-	// });
-
-	function handleChartPointerEnter() {
-		gpuCoordinator.setChartHovered(layout.chartId);
-		wheelControl.handlePointerEnter();
-	}
-
-	function handleChartPointerLeave() {
-		gpuCoordinator.setChartUnhovered(layout.chartId);
-		wheelControl.handlePointerLeave();
-		tooltipManager?.updatePosition(null, null);
-	}
-
-	// ZOOM HANDLERS
-	function handleWheel(event) {
-		// Check if wheel should be captured for chart interaction
-		if (!wheelControl.shouldCaptureWheel(event)) {
-			return; // Let event propagate for page scroll
-		}
-
-		event.preventDefault();
-
-		// Shift+Wheel controls bin density
-		if (event.shiftKey) {
-			// Scroll UP (negative delta) = Increase density by 5%
-			// Scroll DOWN (positive delta) = Decrease density by 5%
-			const delta = event.deltaY < 0 ? 0.05 : -0.05;
-			scales.adjustBinMultiplier(delta);
-			return;
-		}
-
-		pointerBuffer.x = event.offsetX;
-		pointerBuffer.y = event.offsetY;
-
-		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
-
-		const scaleFactor =
-			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
-
-		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds);
-		tooltipManager?.suppress(100);
-	}
-
-	function handleClick(event) {
-		chartContext.onChartClick?.(event);
-	}
-
-	function handleDoubleClick(event) {
-		event.preventDefault();
-		pointerBuffer.x = event.offsetX;
-		pointerBuffer.y = event.offsetY;
-		const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
-		scales.resetZoom(xInBounds, yInBounds);
-		tooltipManager?.suppress(300);
-	}
-
-	// TOUCH HANDLERS
-	// function getTouchDistance(touches) {
-	// 	if (touches.length < 2) return 0;
-	// 	const dx = touches[0].clientX - touches[1].clientX;
-	// 	const dy = touches[0].clientY - touches[1].clientY;
-	// 	return Math.sqrt(dx * dx + dy * dy);
-	// }
-
-	function getTouchDistance(t1, t2) {
-		const dx = t1.clientX - t2.clientX;
-		const dy = t1.clientY - t2.clientY;
-		return Math.sqrt(dx * dx + dy * dy);
-	}
-
-	function handleTouchStart(event) {
-		if (event.touches.length === 2) {
-			event.preventDefault();
-			isZooming = true;
-			// Access indices directly, don't convert List to Array
-			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
-
-			pointerBuffer.x = event.offsetX;
-			pointerBuffer.y = event.offsetY;
-
-			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
-			activePanX = xInBounds;
-			activePanY = yInBounds;
-		}
-	}
-
-	function handleTouchMove(event) {
-		if (!isZooming || event.touches.length !== 2) return;
-
-		const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
-		const scaleFactor = currentDistance / initialTouchDistance;
-
-		if (Math.abs(scaleFactor - 1) > 0.01) {
-			pointerBuffer.x = event.offsetX;
-			pointerBuffer.y = event.offsetY;
-			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
-
-			scales.applyZoom(innerPoint, scaleFactor, activePanX, activePanY);
-			initialTouchDistance = currentDistance;
-		}
-	}
-
-	function handleTouchEnd() {
-		isZooming = false;
-		isPanning = false;
-		activePanX = false;
-		activePanY = false;
-	}
-
-	function handlePointerDown(event) {
-		event.preventDefault();
-
-		if (event.target.focus) {
-			event.target.focus({ preventScroll: true });
-		}
-
-		pointerBuffer.x = event.offsetX;
-		pointerBuffer.y = event.offsetY;
-
-		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
-
-		// Let interactor handle first (inner area only)
-		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) {
-			return;
-		}
-
-		const xType = scales.scaleTypes?.x;
-		const yType = scales.scaleTypes?.y;
-		activePanX = xInBounds && (xType === 'linear' || xType === 'time');
-		activePanY = yInBounds && (yType === 'linear' || yType === 'time');
-
-		if (!activePanX && !activePanY) return;
-
-		isPanning = true;
-
-		scales.startPan(pointerBuffer.x, pointerBuffer.y, activePanX, activePanY);
-
-		scales.clearCurrentDataPoints();
-		event.target.setPointerCapture?.(event.pointerId);
-	}
-
-	function processPointerMove(event) {
-		if (isPanning) {
-			scales.updatePanPosition(event.offsetX, event.offsetY);
-			tooltipManager?.suppress(150);
-		} else if (chartContext.onInteractorPointerMove?.(event)) {
-			tooltipManager?.suppress(100);
-		} else {
-			pointerBuffer.x = event.offsetX;
-			pointerBuffer.y = event.offsetY;
-
-			if (layout.isWithinInnerBounds(pointerBuffer)) {
-				const innerPoint = layout.toInnerCoordinates(pointerBuffer);
-				scales.updateCurrentDataPoints(innerPoint);
-				tooltipManager?.updatePointerScreen(event.offsetX, event.offsetY);
-				tooltipManager?.updatePosition(
-					scales.currentXDataPoint,
-					scales.currentYDataPoint
-				);
-			}
-		}
-	}
-
-	function handlePointerMove(event) {
-		// Skip if pointerrawupdate is handling it
-		if (hasPointerRawUpdate) return;
-		processPointerMove(event);
-	}
-
-	function handlePointerRawUpdate(event) {
-		processPointerMove(event);
-	}
-
-	function handlePointerUp(event) {
-		if (chartContext.onInteractorPointerUp?.(event)) {
-			return;
-		}
-
-		isPanning = false;
-		activePanX = false;
-		activePanY = false;
-
-		event.target.releasePointerCapture?.(event.pointerId);
-		scales.endPan();
-	}
-
-	function handleInnerMouseEnter() {
-		scales.active = true;
-		chartContext.onInteractorPointerEnter?.();
-	}
-
-	function handleInnerMouseLeave() {
-		scales.clearCurrentDataPoints();
-		scales.active = false;
-		tooltipManager?.updatePosition(null, null);
-	}
-
 </script>
 
-<div class="figure-container">
+<div class="figure-container" bind:clientWidth={layout.width}>
 {#if legend && legendPosition === 'top'}
-	<div class="legend-container legend-top" style:padding-left="{layout.margin.left}px" style:padding-right="{layout.margin.right}px">
+	<div class="legend-container legend-top" style:padding-left="{cellMargin.left}px" style:padding-right="{cellMargin.right}px">
 		{@render legend()}
 	</div>
 {/if}
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-	class="chart-container"
-	bind:clientWidth={layout.width}
-	bind:clientHeight={layout.height}
-	onpointerenter={handleChartPointerEnter}
-	onpointerleave={handleChartPointerLeave}
->
-	{#if layout.isReady}
-		<svg class="svg-background" width={layout.width} height={layout.height}>
-			<g transform={layout.innerTransform}>
-				{@render background?.()}
-			</g>
-		</svg>
 
-		<div class="canvas-layer">
-			{@render canvas?.()}
-		</div>
+{#if fx}
+	<!-- Faceted mode -->
+	<div class="facet-marks-container">
+		{@render canvas?.()}
+	</div>
 
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<svg
-			class="svg-foreground"
-			bind:this={svg}
-			width={layout.width}
-			height={layout.height}
-			onwheel={handleWheel}
-			onpointerdown={handlePointerDown}
-			onpointermove={handlePointerMove}
-			onpointerrawupdate={handlePointerRawUpdate}
-			onpointerup={handlePointerUp}
-			onpointercancel={handlePointerUp}
-			ondblclick={handleDoubleClick}
-			onclick={handleClick}
-		>
-			<defs>
-				<clipPath id={layout.clipPathId}>
-					<rect x={0} y={0} width={layout.innerWidth} height={layout.innerHeight} />
-				</clipPath>
-			</defs>
-
-			<g
-				transform={layout.innerTransform}
-				clip-path={layout.clipPathUrl}
-				class="crosshair"
-				onpointerenter={handleInnerMouseEnter}
-				onpointerleave={handleInnerMouseLeave}
-			>
-				{@render foreground?.()}
-				<HoverIndicator />
-				<rect
-					x="0"
-					y="0"
-					width={layout.innerWidth}
-					height={layout.innerHeight}
-					fill="transparent"
-					class="interaction-target"
+	{#if facetCategories}
+		<div class="facet-grid" style:grid-template-columns="repeat({effectiveColumns}, 1fr)">
+			{#each facetCategories as cat, i}
+				<ChartCell
+					cellChartId={facetChartIds[i]}
+					facetIndex={i}
+					facetLabel={cat}
+					margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
+					{scales}
+					{facetingProps}
+					{gpuCoordinator}
+					{coordinator}
+					{wheelInteraction}
+					{background}
+					{foreground}
+					canvas={null}
+					{interactors}
+					{overlay}
 				/>
-				{@render interactors?.()}
-			</g>
-		</svg>
-		<!-- Overlay layer - on top of everything, outside SVG -->
-		{#if overlay}
-			<div class="overlay-layer">
-				{@render overlay()}
-			</div>
-		{/if}
-
-		<!-- Tooltip -->
-		{#if tooltipManager}
-			<Tooltip />
-		{/if}
+			{/each}
+		</div>
+	{:else}
+		<div class="facet-loading">Discovering facet categories...</div>
 	{/if}
-</div>
+{:else}
+	<!-- Normal (non-faceted) mode -->
+	<ChartCell
+		cellChartId={layout.chartId}
+		margin={cellMargin}
+		{scales}
+		{facetingProps}
+		{gpuCoordinator}
+		{coordinator}
+		{wheelInteraction}
+		{background}
+		{foreground}
+		{canvas}
+		{interactors}
+		{overlay}
+	/>
+{/if}
+
 {#if legend && legendPosition === 'right'}
-	<div class="legend-container legend-right" style:top="{layout.margin.top}px" style:left="{layout.margin.left + layout.innerWidth + 8}px">
+	<div class="legend-container legend-right" style:top="{cellMargin.top}px" style:left="{cellMargin.left + layout.innerWidth + 8}px">
 		{@render legend()}
 	</div>
 {/if}
 </div>
-
-<!-- <pre id="info">cpuTime: {gpuCoordinator.timings.cpu}
-fps: {gpuCoordinator.timings.fps}
-gpu: {gpuCoordinator.timings.gpu} µs
-</pre> -->
 
 <style>
 	.figure-container {
@@ -673,77 +271,27 @@ gpu: {gpuCoordinator.timings.gpu} µs
 		max-height: calc(100% - 60px);
 	}
 
-	.chart-container {
-		position: relative;
-		flex: 1;
-		min-height: 0;
-		/* Use 'strict' contain for maximum isolation */
-		contain: strict;
-		touch-action: none;
-		overscroll-behavior: none;
-		/* Force GPU layer */
-		transform: translateZ(0);
-		will-change: transform;
-		outline: none;
-		/* Prevent paint from bleeding */
-		isolation: isolate;
-	}
-
-	.svg-background,
-	.canvas-layer,
-	.svg-foreground {
+	.facet-marks-container {
 		position: absolute;
-		top: 0;
-		left: 0;
-		touch-action: none;
-	}
-
-	.svg-background {
-		z-index: 1;
-	}
-
-	.interaction-target {
-		/* Ensure it catches all pointer events */
-		pointer-events: all;
-	}
-
-	.canvas-layer {
-		z-index: 2;
-		width: 100%;
-		height: 100%;
-		contain: strict;
-		will-change: transform;
-	}
-
-	.svg-foreground {
-		z-index: 3;
-	}
-
-	.crosshair {
-		cursor: crosshair;
-	}
-
-	.overlay-layer {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 100%;
-		height: 100%;
-		z-index: 10;
+		width: 0;
+		height: 0;
+		overflow: hidden;
 		pointer-events: none;
 	}
 
-	.overlay-layer :global(*) {
-		pointer-events: auto;
+	.facet-grid {
+		display: grid;
+		flex: 1;
+		min-height: 0;
+		gap: 4px;
 	}
 
-	#info {
-		position: absolute;
-		top: 0;
-		left: 0;
-		margin: 0;
-		padding: 0.5em;
-		background-color: rgba(0, 0, 0, 0.8);
-		color: white;
+	.facet-loading {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #999;
+		font-size: 13px;
 	}
 </style>

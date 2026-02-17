@@ -18,6 +18,9 @@
 		CONSTANTS: 5
 	};
 
+	// Facet uses vertex buffer slot 1 (not a storage binding)
+	const FACET_VERTEX_SLOT = 1;
+
 	// Uniform struct offsets (matching WGSL MarkConstants layout)
 	const UNIFORM_OFFSETS = {
 		COLOR_MODE: 0,
@@ -33,6 +36,7 @@
 		colorValueData,
 		radiusData,
 		alphaData,
+		facetData = null,
 		dataVersion,
 		zIndex = 0,
 		colorMode = 0,
@@ -46,13 +50,24 @@
 	const webGPUContext = getContext('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 
+	const faceted = !!chartContext.fx;
+
 	let renderer = $state(null);
 	let initializationError = $state(null);
 	let quadGeometryBuffer;
 
 	const quadVertexCount = 6;
 
-	// ... [dotsShaderCode omitted, same as before] ...
+	// --- Facet compile-time specialization ---
+	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
+	const FACET_DISCARD_WGSL = `
+      // Facet filtering: discard vertices not belonging to this cell
+      if (u32(facetIdx) != frameUniforms.activeFacetIdx) {
+        var degen: VertexOutput;
+        degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return degen;
+      }`;
+
 	const dotsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
@@ -63,7 +78,7 @@
       constantColor: vec4<f32>, // Used when colorMode = 0
     };
     @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
-  
+
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
       @location(0) colorValue: f32,   // Raw value for scale lookup
@@ -71,19 +86,21 @@
       @location(2) radius: f32,
       @location(3) alpha: f32,
     };
-  
+
     // Data storage buffers in @group(1)
     @group(1) @binding(0) var<storage, read> xValues: array<f32>;
     @group(1) @binding(1) var<storage, read> yValues: array<f32>;
     @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
     @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
     @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
-    
+
     @vertex
     fn vertexMain(
       @location(0) quadPosition: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
+      {{FACET_PARAM}}
     ) -> VertexOutput {
+      {{FACET_DISCARD}}
       let x = xValues[instanceIdx];
       let y = yValues[instanceIdx];
       let rawRadius = radiusValues[instanceIdx];
@@ -97,18 +114,18 @@
       } else {
         radius = rawRadius;
       }
-  
+
       // X axis scaling
       {{X_AXIS_LOGIC}}
-      
+
       // Y axis scaling
       {{Y_AXIS_LOGIC}}
-      
+
       let displayRadius = radius * frameUniforms.devicePixelRatio;
       let radiusWithPadding = displayRadius * 1.2;
       let worldPos = vec2<f32>(scaledX, scaledY) + quadPosition * radiusWithPadding;
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
-      
+
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
@@ -117,7 +134,7 @@
       output.alpha = alpha;
       return output;
     }
-  
+
     @fragment
     fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
       // Get color based on mode
@@ -133,23 +150,35 @@
           frameUniforms.nullColor
         );
       }
-  
+
       // SDF circle with anti-aliasing
       let dist = length(input.uv);
       let sdf = dist - 1.0;
       let pixelSize = frameUniforms.devicePixelRatio / (input.radius * 2.0);
       let alpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
       let finalAlpha = baseColor.a * alpha * input.alpha;
-      
+
       return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
-  `;
+  `
+		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
+		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
 
 	const vertexBufferLayout = [
 		{
 			arrayStride: 2 * 4,
 			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
-		}
+		},
+		// Facet index: per-instance f32 via vertex attribute (not a storage buffer)
+		...(faceted
+			? [
+					{
+						arrayStride: 4,
+						stepMode: 'instance',
+						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' }]
+					}
+				]
+			: [])
 	];
 
 	const dataBindingConfig = [
@@ -164,6 +193,8 @@
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
 		}
 	];
+
+	const effectiveMarkType = faceted ? 'dots-faceted' : 'dots';
 
 	// --- WRITING EFFECTS ---
 
@@ -182,6 +213,10 @@
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)
 			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && facetData)
+			renderer.writeVertexBuffer(FACET_VERTEX_SLOT, facetData);
 	});
 
 	// Uniforms
@@ -211,6 +246,14 @@
 		}
 	});
 
+	// Facet layer registration (reactive — fires when FacetCells resolve)
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !faceted) return;
+		const ids = chartContext.facetChartIds;
+		if (!ids?.length) return;
+		renderer.registerFacetLayers(ids, drawDots);
+	});
+
 	function createQuadGeometry() {
 		return new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]);
 	}
@@ -229,12 +272,16 @@
 	function drawDots(passEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+		if (faceted) {
+			const facetBuffer = renderer.getVertexBuffer(FACET_VERTEX_SLOT);
+			if (facetBuffer) passEncoder.setVertexBuffer(1, facetBuffer);
+		}
 		passEncoder.draw(quadVertexCount, renderer.instanceCount);
 	}
 
 	async function initializeDots() {
 		try {
-			renderer = new BaseGPURenderer('dots', webGPUContext, gpuCoordinator, chartContext, {
+			renderer = new BaseGPURenderer(effectiveMarkType, webGPUContext, gpuCoordinator, chartContext, {
 				zIndex,
 				xScaleType: chartContext.scaleTypes?.x || 'linear',
 				yScaleType: chartContext.scaleTypes?.y || 'linear'
@@ -248,7 +295,12 @@
 			});
 
 			await initializeDotsGeometry();
-			renderer.registerLayer(drawDots);
+
+			// Non-faceted: register with the single chart canvas
+			// Faceted: registration handled by reactive $effect above
+			if (!faceted) {
+				renderer.registerLayer(drawDots);
+			}
 		} catch (error) {
 			console.error('Dots init failed:', error);
 			initializationError = error.message;

@@ -188,6 +188,7 @@ export class GPUCoordinator {
 	// =========================================================================
 	#pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
 	#pendingFrameUpdates = new Map(); // chartId -> update params
+	#pendingLayers = new Map(); // chartId -> [{ layerConfig, layerId }]
 	#topologyUpdateScheduled = false;
 
 	// =========================================================================
@@ -546,12 +547,6 @@ export class GPUCoordinator {
 		for (let i = 0; i < len; i++) {
 			this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
 		}
-
-		// DEBUG: Log scale values
-		// if (this.#animatedScalesArray.length > 0) {
-		// 	const s = this.#animatedScalesArray[0];
-		// 	console.log('scale:', s.gpuState.domainMin.toFixed(4), s.gpuState.domainMax.toFixed(4));
-		// }
 
 		// 3. Gather charts to render BEFORE removing rested scales
 		const chartArray = this.#chartsToRenderArray;
@@ -1286,6 +1281,7 @@ export class GPUCoordinator {
 			chartId,
 			canvas,
 			zIndex: config.zIndex || 0,
+			facetIndex: config.facetIndex ?? 0,
 			visible: true,
 			context: canvas.getContext('webgpu'),
 			contextConfigured: false,
@@ -1310,12 +1306,26 @@ export class GPUCoordinator {
 			this.#pendingScaleMappings.delete(chartId);
 		}
 
+		const pendingLayerList = this.#pendingLayers.get(chartId);
+		if (pendingLayerList) {
+			for (const layerConfig of pendingLayerList) {
+				chartConfig.layers.set(layerConfig.id, layerConfig);
+			}
+			chartConfig.needsPlanRebuild = true;
+			this.#pendingLayers.delete(chartId);
+		}
+
 		return {
 			setContextReady: () => {
 				const chart = this.#registeredCharts.get(chartId);
 				if (chart) {
 					chart.contextConfigured = true;
 					this.#processPendingFrameUpdates(chartId);
+					// Ensure frame resources exist and trigger initial render.
+					// Pending layers/mappings were applied in registerChart, but
+					// earlier invalidateChart calls were no-ops (chart not ready).
+					this.updateChartFrameUniforms(chartId);
+					this.invalidateChart(chartId);
 				}
 			},
 			setVisible: (visible) => {
@@ -1497,9 +1507,8 @@ export class GPUCoordinator {
 		// f32[7] = padding
 		u32[8] = xScaleIndex >>> 0;
 		u32[9] = yScaleIndex >>> 0;
-		u32[10] = 0;
-		u32[11] = 0;
-		// u32[10], u32[11] = padding
+		u32[10] = chartConfig.facetIndex ?? 0; // activeFacetIdx
+		u32[11] = 0; // padding
 		f32[12] = nullColor[0]; // R
 		f32[13] = nullColor[1]; // G
 		f32[14] = nullColor[2]; // B
@@ -1527,13 +1536,29 @@ export class GPUCoordinator {
 	// =========================================================================
 
 	registerLayer(chartId, layerConfig) {
+		const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
 		const chart = this.#registeredCharts.get(chartId);
+
 		if (!chart) {
-			console.error(`Attempted to register layer on non-existent chart: ${chartId}`);
-			return { remove: () => {} };
+			// Queue for when the chart registers (e.g. facet cells registering async)
+			if (!this.#pendingLayers.has(chartId)) {
+				this.#pendingLayers.set(chartId, []);
+			}
+			this.#pendingLayers.get(chartId).push({ ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
+
+			return {
+				remove: () => {
+					const pending = this.#pendingLayers.get(chartId);
+					if (pending) {
+						const idx = pending.findIndex((l) => l.id === layerId);
+						if (idx !== -1) pending.splice(idx, 1);
+					} else {
+						this.unregisterLayer(chartId, layerId);
+					}
+				}
+			};
 		}
 
-		const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
 		chart.layers.set(layerId, { ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
 		chart.needsPlanRebuild = true;
 		this.invalidateChart(chartId);
@@ -1828,6 +1853,7 @@ export class GPUCoordinator {
 		this.#dataLayouts.clear();
 		this.#frameLayout = null;
 		this.#pendingScaleMappings.clear();
+		this.#pendingLayers.clear();
 
 		// Destroy device
 		this.#device?.destroy();

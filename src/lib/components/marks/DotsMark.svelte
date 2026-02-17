@@ -279,6 +279,7 @@
 		constantColor={markColor.constantColor}
 		sizeMode={markSize.sizeMode}
 		sizeScaleIndex={markSize.sizeScaleIndex}
+		facetData={setup?.facetData}
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
 {:else if setup?.client?.error}

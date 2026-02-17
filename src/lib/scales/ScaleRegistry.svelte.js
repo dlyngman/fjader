@@ -273,7 +273,8 @@ class ScaleRegistry {
 							paddingInner: config.paddingInner ?? (type === 'point' ? 1 : 0.1),
 							paddingOuter: config.paddingOuter ?? 0.1,
 							padding: config.padding ?? 0.1,
-							align: config.align ?? 0.5
+							align: config.align ?? 0.5,
+							sourceColumn: config.sourceColumn
 						})
 					);
 				} else if (type === 'color') {

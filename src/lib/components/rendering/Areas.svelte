@@ -18,7 +18,8 @@
 		BOTTOM: 2, // Bottom/left boundary (y1 for vertical, x1 for horizontal)
 		SERIES: 3,
 		COLOR: 4,
-		CONSTANTS: 5
+		CONSTANTS: 5,
+		FACET: 6
 	};
 
 	// Uniform struct offsets (matching WGSL MarkConstants layout, 48 bytes)
@@ -39,6 +40,7 @@
 		bottomData,
 		seriesData = null,
 		colorValueData = null,
+		facetData = null,
 		dataVersion = 0,
 		zIndex = 0,
 		curve = 'linear',
@@ -54,6 +56,29 @@
 	const chartContext = getContext('chart');
 	const webGPUContext = getContext('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
+	const faceted = !!chartContext.fx;
+
+	// --- Facet compile-time specialization ---
+	// Areas uses a storage buffer (not a vertex attribute) for facet indices because
+	// the boundary check needs random access: facetIndices[nextIdx] to detect when
+	// consecutive points span different facet cells. Vertex attributes only provide
+	// the current instance's value. (Dots/Rects use vertex attributes since they
+	// only need their own instance's facet index.)
+	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
+	const FACET_DISCARD_WGSL = `
+    // Facet filtering: discard vertices not belonging to this cell
+    if (u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx) {
+      var degen: VertexOutput;
+      degen.position = DISCARD_POS;
+      return degen;
+    }`;
+	const FACET_BOUNDARY_WGSL = `
+    // Facet boundary: discard segment if next point is in a different facet
+    if (u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx) {
+      var output: VertexOutput;
+      output.position = DISCARD_POS;
+      return output;
+    }`;
 
 	let renderer = $state(null);
 	let initializationError = $state(null);
@@ -63,7 +88,8 @@
 	const resolution = getCurveResolution(curve);
 	const areaVertexCount = 6 * resolution + 12; // 6N area + 6 top dot + 6 bottom dot
 	// Pipeline variant key includes curve type for separate shader compilation
-	const effectiveMarkType = curve === 'linear' ? 'areas' : `areas-${curve}`;
+	const baseMarkType = curve === 'linear' ? 'areas' : `areas-${curve}`;
+	const effectiveMarkType = faceted ? `${baseMarkType}-faceted` : baseMarkType;
 
 	// Area shader: filled quads between top and bottom boundaries along a dimension.
 	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
@@ -96,6 +122,7 @@
   @group(1) @binding(2) var<storage, read> bottomValues: array<f32>;
   @group(1) @binding(3) var<storage, read> seriesValues: array<f32>;
   @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
+  {{FACET_BINDING}}
 
   fn isNaN(v: f32) -> bool {
     return v != v;
@@ -120,6 +147,7 @@
     @builtin(instance_index) instanceIdx: u32,
     @builtin(vertex_index) vertexIdx: u32
   ) -> VertexOutput {
+    {{FACET_DISCARD}}
     let pointCount = markConstants.pointCount;
     let circleStart = CURVE_RESOLUTION * 6u;
     let isTopCircle = vertexIdx >= circleStart && vertexIdx < circleStart + 6u;
@@ -167,6 +195,7 @@
       output.position = DISCARD_POS;
       return output;
     }
+    {{FACET_BOUNDARY}}
 
     // Series boundary check
     let seriesCurr = seriesValues[currIdx];
@@ -286,7 +315,10 @@
   `;
 	}
 
-	const areasShaderCode = buildShaderCode();
+	const areasShaderCode = buildShaderCode()
+		.replace('{{FACET_BINDING}}', faceted ? FACET_BINDING_WGSL : '')
+		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '')
+		.replace('{{FACET_BOUNDARY}}', faceted ? FACET_BOUNDARY_WGSL : '');
 
 	const vertexBufferLayout = [
 		{
@@ -295,7 +327,7 @@
 		}
 	];
 
-	const dataBindingConfig = [
+	const baseDataBindingConfig = [
 		{ binding: BINDINGS.DIM, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.TOP, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.BOTTOM, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
@@ -307,6 +339,13 @@
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
 		}
 	];
+
+	const dataBindingConfig = faceted
+		? [
+				...baseDataBindingConfig,
+				{ binding: BINDINGS.FACET, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }
+			]
+		: baseDataBindingConfig;
 
 	// --- DATA WRITING EFFECTS ---
 
@@ -326,6 +365,10 @@
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)
 			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && facetData)
+			renderer.writeAttribute(BINDINGS.FACET, facetData);
 	});
 
 	// Write uniforms when configuration changes
@@ -356,6 +399,14 @@
 		if (renderer?.resourcesCreated && dimData && dimData.length > 1) {
 			renderer.updateInstanceCount(dimData.length);
 		}
+	});
+
+	// Facet layer registration (reactive — fires when FacetCells resolve)
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !faceted) return;
+		const ids = chartContext.facetChartIds;
+		if (!ids?.length) return;
+		renderer.registerFacetLayers(ids, drawAreas);
 	});
 
 	// Geometry: N sub-segment quads (6N vertices) + 2 dot circle quads (12 vertices).
@@ -426,7 +477,12 @@
 			});
 
 			await initializeGeometry();
-			renderer.registerLayer(drawAreas);
+
+			// Non-faceted: register with the single chart canvas
+			// Faceted: registration handled by reactive $effect above
+			if (!faceted) {
+				renderer.registerLayer(drawAreas);
+			}
 
 			// Initialize series buffer with zeros if not provided
 			if (!seriesData && dimData) {

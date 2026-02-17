@@ -20,6 +20,9 @@
 		CONSTANTS: 6
 	};
 
+	// Facet uses vertex buffer slot 1 (not a storage binding)
+	const FACET_VERTEX_SLOT = 1;
+
 	// Uniform struct offsets (matching WGSL MarkConstants layout)
 	const UNIFORM_OFFSETS = {
 		COLOR_MODE: 0,
@@ -39,6 +42,7 @@
 		y1Data,
 		colorValueData,
 		alphaData,
+		facetData = null,
 		dataVersion,
 		zIndex = 0,
 		colorMode = 0,
@@ -52,6 +56,17 @@
 	const chartContext = getContext('chart');
 	const webGPUContext = getContext('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
+	const faceted = !!chartContext.fx;
+
+	// --- Facet compile-time specialization ---
+	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
+	const FACET_DISCARD_WGSL = `
+      // Facet filtering: discard vertices not belonging to this cell
+      if (u32(facetIdx) != frameUniforms.activeFacetIdx) {
+        var degen: VertexOutput;
+        degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return degen;
+      }`;
 
 	let renderer = $state(null);
 	let initializationError = $state(null);
@@ -91,7 +106,9 @@
     fn vertexMain(
       @location(0) rectCorner: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
+      {{FACET_PARAM}}
     ) -> VertexOutput {
+      {{FACET_DISCARD}}
       let x0 = x0Values[instanceIdx];
       let x1 = x1Values[instanceIdx];
       let y0 = y0Values[instanceIdx];
@@ -143,13 +160,25 @@
       let finalAlpha = baseColor.a * input.alpha;
       return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
-  `;
+  `
+		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
+		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
 
 	const vertexBufferLayout = [
 		{
 			arrayStride: 2 * 4,
 			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
-		}
+		},
+		// Facet index: per-instance f32 via vertex attribute (not a storage buffer)
+		...(faceted
+			? [
+					{
+						arrayStride: 4,
+						stepMode: 'instance',
+						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' }]
+					}
+				]
+			: [])
 	];
 
 	const dataBindingConfig = [
@@ -165,6 +194,8 @@
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
 		}
 	];
+
+	const effectiveMarkType = faceted ? 'rects-faceted' : 'rects';
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
@@ -186,6 +217,10 @@
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.ALPHA, alphaData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && facetData)
+			renderer.writeVertexBuffer(FACET_VERTEX_SLOT, facetData);
 	});
 
 	// Uniforms
@@ -218,6 +253,14 @@
 		}
 	});
 
+	// Facet layer registration (reactive — fires when FacetCells resolve)
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !faceted) return;
+		const ids = chartContext.facetChartIds;
+		if (!ids?.length) return;
+		renderer.registerFacetLayers(ids, drawRects);
+	});
+
 	function createRectGeometry() {
 		return new Float32Array([0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1]);
 	}
@@ -236,12 +279,16 @@
 	function drawRects(passEncoder) {
 		if (!rectGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, rectGeometryBuffer);
+		if (faceted) {
+			const facetBuffer = renderer.getVertexBuffer(FACET_VERTEX_SLOT);
+			if (facetBuffer) passEncoder.setVertexBuffer(1, facetBuffer);
+		}
 		passEncoder.draw(rectVertexCount, renderer.instanceCount);
 	}
 
 	async function initializeRects() {
 		try {
-			renderer = new BaseGPURenderer('rects', webGPUContext, gpuCoordinator, chartContext, {
+			renderer = new BaseGPURenderer(effectiveMarkType, webGPUContext, gpuCoordinator, chartContext, {
 				zIndex,
 				xScaleType: chartContext.scaleTypes?.x || 'linear',
 				yScaleType: chartContext.scaleTypes?.y || 'linear'
@@ -255,7 +302,12 @@
 			});
 
 			await initializeRectGeometry();
-			renderer.registerLayer(drawRects);
+
+			// Non-faceted: register with the single chart canvas
+			// Faceted: registration handled by reactive $effect above
+			if (!faceted) {
+				renderer.registerLayer(drawRects);
+			}
 		} catch (error) {
 			console.error('Rects init failed:', error);
 			initializationError = error.message;

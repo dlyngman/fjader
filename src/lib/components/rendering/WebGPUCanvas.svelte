@@ -2,9 +2,10 @@
 	import { onMount, onDestroy, setContext, getContext } from 'svelte';
 	import { getGPUContext } from '$lib/gpu';
 
-	let { canvasComponents } = $props();
+	let { canvasComponents, facetIndex } = $props();
 
 	const c = getContext('chart');
+	const isFaceted = !!c.fx && facetIndex == null;
 	let width = $derived(c.innerWidth);
 	let height = $derived(c.innerHeight);
 	let margin = $derived(c.margin);
@@ -12,9 +13,9 @@
 	// let canvas;
 	let canvas = $state();
 	let context;
-	let gpuCoordinator;
+	let gpuCoordinator = isFaceted ? getGPUContext() : undefined;
 	let chartControl;
-	let contextConfigured = $state(false);
+	let contextConfigured = $state(isFaceted);
 	let initializationError = $state(null);
 	let lastTransform = '';
 
@@ -105,7 +106,8 @@
 
 		try {
 			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
-				zIndex: 0
+				zIndex: 0,
+				facetIndex: facetIndex ?? 0
 			});
 
 			// Notify coordinator that context is ready
@@ -211,6 +213,7 @@
 	});
 
 	onMount(async () => {
+		if (isFaceted) return; // Pass-through mode: no canvas to initialize
 		try {
 			await initWebGPU();
 		} catch (error) {
@@ -220,6 +223,7 @@
 	});
 
 	onDestroy(() => {
+		if (isFaceted) return; // Pass-through mode: nothing to clean up
 		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
 
 		try {
@@ -252,6 +256,7 @@
 	});
 
 	$effect(() => {
+		if (isFaceted) return; // Pass-through mode: no canvas to resize
 		// Dependencies that trigger a canvas resize/reposition
 		void width;
 		void height;
@@ -269,7 +274,10 @@
 	});
 </script>
 
-{#if initializationError}
+{#if isFaceted}
+	<!-- Pass-through: marks render here but real canvases live in FacetCells -->
+	{@render canvasComponents?.()}
+{:else if initializationError}
 	<div class="webgpu-error">
 		<p>WebGPU initialization failed for chart {chartId}:</p>
 		<p class="error-message">{initializationError}</p>
