@@ -22,11 +22,9 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-#llm utils
-llm_context.ipynb
-# llm_context.txt
+# LLM utils
+llm_context.*
 .ipynb_checkpoints
-README_MINIMAL.md
 
 # Static data
 /static/data

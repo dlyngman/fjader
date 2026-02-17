@@ -53,6 +53,11 @@
 	const faceted = !!chartContext.fx;
 
 	// --- Facet compile-time specialization ---
+	// Lines uses a storage buffer (not a vertex attribute) for facet indices because
+	// the boundary check needs random access: facetIndices[nextIdx] to detect when
+	// consecutive points span different facet cells. Vertex attributes only provide
+	// the current instance's value. (Dots/Rects use vertex attributes since they
+	// only need their own instance's facet index.)
 	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
 	const FACET_DISCARD_WGSL = `
     // Facet filtering: discard vertices not belonging to this cell

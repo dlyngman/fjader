@@ -15,9 +15,11 @@
 		RADIUS: 2,
 		ALPHA: 3,
 		COLOR: 4,
-		CONSTANTS: 5,
-		FACET: 6
+		CONSTANTS: 5
 	};
+
+	// Facet uses vertex buffer slot 1 (not a storage binding)
+	const FACET_VERTEX_SLOT = 1;
 
 	// Uniform struct offsets (matching WGSL MarkConstants layout)
 	const UNIFORM_OFFSETS = {
@@ -57,10 +59,10 @@
 	const quadVertexCount = 6;
 
 	// --- Facet compile-time specialization ---
-	const FACET_BINDING_WGSL = `\n    @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
+	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
 	const FACET_DISCARD_WGSL = `
       // Facet filtering: discard vertices not belonging to this cell
-      if (u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx) {
+      if (u32(facetIdx) != frameUniforms.activeFacetIdx) {
         var degen: VertexOutput;
         degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return degen;
@@ -91,12 +93,12 @@
     @group(1) @binding(2) var<storage, read> radiusValues: array<f32>;
     @group(1) @binding(3) var<storage, read> alphaValues: array<f32>;
     @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
-    {{FACET_BINDING}}
 
     @vertex
     fn vertexMain(
       @location(0) quadPosition: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
+      {{FACET_PARAM}}
     ) -> VertexOutput {
       {{FACET_DISCARD}}
       let x = xValues[instanceIdx];
@@ -159,17 +161,27 @@
       return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
   `
-		.replace('{{FACET_BINDING}}', faceted ? FACET_BINDING_WGSL : '')
+		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
 
 	const vertexBufferLayout = [
 		{
 			arrayStride: 2 * 4,
 			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
-		}
+		},
+		// Facet index: per-instance f32 via vertex attribute (not a storage buffer)
+		...(faceted
+			? [
+					{
+						arrayStride: 4,
+						stepMode: 'instance',
+						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' }]
+					}
+				]
+			: [])
 	];
 
-	const baseDataBindingConfig = [
+	const dataBindingConfig = [
 		{ binding: BINDINGS.X, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.Y, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.RADIUS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
@@ -181,13 +193,6 @@
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
 		}
 	];
-
-	const dataBindingConfig = faceted
-		? [
-				...baseDataBindingConfig,
-				{ binding: BINDINGS.FACET, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }
-			]
-		: baseDataBindingConfig;
 
 	const effectiveMarkType = faceted ? 'dots-faceted' : 'dots';
 
@@ -211,7 +216,7 @@
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && facetData)
-			renderer.writeAttribute(BINDINGS.FACET, facetData);
+			renderer.writeVertexBuffer(FACET_VERTEX_SLOT, facetData);
 	});
 
 	// Uniforms
@@ -267,6 +272,10 @@
 	function drawDots(passEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
+		if (faceted) {
+			const facetBuffer = renderer.getVertexBuffer(FACET_VERTEX_SLOT);
+			if (facetBuffer) passEncoder.setVertexBuffer(1, facetBuffer);
+		}
 		passEncoder.draw(quadVertexCount, renderer.instanceCount);
 	}
 

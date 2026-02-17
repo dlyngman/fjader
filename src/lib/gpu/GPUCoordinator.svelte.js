@@ -548,12 +548,6 @@ export class GPUCoordinator {
 			this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
 		}
 
-		// DEBUG: Log scale values
-		// if (this.#animatedScalesArray.length > 0) {
-		// 	const s = this.#animatedScalesArray[0];
-		// 	console.log('scale:', s.gpuState.domainMin.toFixed(4), s.gpuState.domainMax.toFixed(4));
-		// }
-
 		// 3. Gather charts to render BEFORE removing rested scales
 		const chartArray = this.#chartsToRenderArray;
 		chartArray.length = 0;
