@@ -88,7 +88,7 @@ export function resolveChannel({
 	// Supports both JS arrays ([1, 2, 3]) and TypedArrays (new Float32Array([1, 2, 3]))
 	if (Array.isArray(value) || ArrayBuffer.isView(value)) {
 		// Dev-mode validation: ensure array length matches instance count
-		if (import.meta.env?.MODE !== 'production' && value.length !== instanceCount) {
+		if (value.length !== instanceCount) {
 			throw new Error(
 				`Channel array length mismatch: expected ${instanceCount} items, got ${value.length}. ` +
 					`Each channel must have the same length as the instance count.`
