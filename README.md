@@ -82,7 +82,7 @@ See `docs/architecture/` for detailed documentation.
 
 **GPUCoordinator** (`src/lib/gpu/GPUCoordinator.svelte.js`) manages:
 - WebGPU device/queue and shared pipeline caching
-- Fixed-timestep animation loop (16.67ms physics steps, spring-based)
+- Fixed-timestep animation loop (360Hz physics, spring-based, with render extrapolation)
 - SSBO management for scale parameters (linear, color, size configs)
 - Render batching via `queueMicrotask` invalidation
 
@@ -104,15 +104,17 @@ src/lib/
   components/
     marks/          Mark components and BaseMarkSetup
     rendering/      WebGPU renderers (Dots, Rects, Lines, Areas)
-    guides/         Axes, legends
+    axes/           AxisBottom, AxisLeft, AxisCenter
+    guides/         Grid, legends
+    charts/         ChartContainer, ChartCell (faceting)
   scales/           Scale system (ChartScales, ScaleRegistry, state classes)
   gpu/              GPUCoordinator, shader libraries
   data-clients/     Mosaic/DataClient bridge
   transforms/       Transform pipeline (SQL + JS)
   interactors/      Tooltip, brush, interval selection
   animation/        Spring physics, fixed-timestep loop
-  sql/              SQL helpers (bin, aggregates)
-  data/             DataAccessor (Arrow + Object)
+  sql/              SQL helpers (bin)
+  data/             DataAccessor, ViewManager
 docs/
   architecture/     Implementation documentation
 ```
