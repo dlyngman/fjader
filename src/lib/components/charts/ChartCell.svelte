@@ -18,12 +18,12 @@
 		gpuCoordinator,
 		coordinator,
 		wheelInteraction = { dwellTimeMs: 250, momentumThreshold: 150, enabled: true },
-		background,
-		foreground,
-		canvas,
-		canvasComponents,
-		interactors,
-		overlay
+		background = undefined,
+		foreground = undefined,
+		canvas = undefined,
+		canvasComponents = undefined,
+		interactors = undefined,
+		overlay = undefined
 	} = $props();
 
 	// --- Layout ---

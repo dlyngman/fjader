@@ -17,7 +17,7 @@
 
 	let {
 		table,
-		selection,
+		selection = undefined,
 		x,
 		y, // Shorthand for y2 (the value)
 		y1 = 0, // Baseline (default 0, or from stack transform)

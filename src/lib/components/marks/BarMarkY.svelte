@@ -13,7 +13,7 @@
 
 	let {
 		table,
-		selection,
+		selection = undefined,
 		x, // categorical data
 		y, // shorthand for y2 (value)
 		y1 = 0, // baseline
