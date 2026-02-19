@@ -2,7 +2,7 @@
 // TimeScaleState.svelte.js - Time scale with derived offset columns
 // =============================================================================
 
-import { scaleTime } from 'd3-scale';
+import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte.js';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
 
@@ -138,7 +138,7 @@ export class TimeScaleState extends LinearScaleState {
 
 		if (nice) {
 			// Time-aware nice: round to calendar boundaries
-			const niceScale = scaleTime()
+			const niceScale = scaleUtc()
 				.domain([new Date(allMinMs), new Date(allMaxMs)])
 				.nice();
 			const [niceMin, niceMax] = niceScale.domain();
@@ -256,7 +256,7 @@ export class TimeScaleState extends LinearScaleState {
 		const minDate = new Date(this.#t0.getTime() + renderMin * this.#unit * 1000);
 		const maxDate = new Date(this.#t0.getTime() + renderMax * this.#unit * 1000);
 
-		const timeScale = scaleTime().domain([minDate, maxDate]);
+		const timeScale = scaleUtc().domain([minDate, maxDate]);
 		const dateTicks = timeScale.ticks(count);
 
 		// Convert Date ticks back to offsets
@@ -278,7 +278,7 @@ export class TimeScaleState extends LinearScaleState {
 		const minDate = new Date(this.#t0.getTime() + renderMin * this.#unit * 1000);
 		const maxDate = new Date(this.#t0.getTime() + renderMax * this.#unit * 1000);
 
-		const d3Formatter = scaleTime().domain([minDate, maxDate]).tickFormat();
+		const d3Formatter = scaleUtc().domain([minDate, maxDate]).tickFormat();
 		const t0Ms = this.#t0.getTime();
 		const unitMs = this.#unit * 1000;
 
@@ -301,13 +301,13 @@ export class TimeScaleState extends LinearScaleState {
 
 	// Cached Intl formatters for tooltip (created once, reused)
 	static #tooltipFmtDate = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric', month: 'short', day: 'numeric'
+		year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'
 	});
 	static #tooltipFmtDateTime = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC'
 	});
 	static #tooltipFmtDateTimeSec = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'
+		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC'
 	});
 
 	/**
@@ -321,9 +321,9 @@ export class TimeScaleState extends LinearScaleState {
 		const date = this.offsetToDate(offset);
 		if (!date) return String(offset);
 
-		const s = date.getSeconds();
-		const m = date.getMinutes();
-		const h = date.getHours();
+		const s = date.getUTCSeconds();
+		const m = date.getUTCMinutes();
+		const h = date.getUTCHours();
 
 		if (s !== 0) return TimeScaleState.#tooltipFmtDateTimeSec.format(date);
 		if (h !== 0 || m !== 0) return TimeScaleState.#tooltipFmtDateTime.format(date);
