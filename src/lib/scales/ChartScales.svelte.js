@@ -117,6 +117,20 @@ export class ChartScales {
 				this.#yScaleInstance = neededYScale;
 				this.#previousYScale = neededYScale;
 			}
+
+			// Apply zoom/pan limits from chart config
+			if (this.config.xZoomLimit !== undefined) {
+				this.#xScaleInstance?.setZoomLimit?.(this.config.xZoomLimit);
+			}
+			if (this.config.yZoomLimit !== undefined) {
+				this.#yScaleInstance?.setZoomLimit?.(this.config.yZoomLimit);
+			}
+			if (this.config.xPanLimit !== undefined) {
+				this.#xScaleInstance?.setPanLimit?.(this.config.xPanLimit);
+			}
+			if (this.config.yPanLimit !== undefined) {
+				this.#yScaleInstance?.setPanLimit?.(this.config.yPanLimit);
+			}
 		});
 
 		// Effect: Notify GPU coordinator of scale mapping changes

@@ -30,7 +30,7 @@
 
 <div class="main-view-container">
 	<div class="chart-wrapper">
-		<ChartContainer xLabel={'delay'} yLabel={'time'}>
+		<ChartContainer xLabel={'delay'} yLabel={'time'} xZoomLimit={10000} yZoomLimit={10000}>
 			{#snippet background()}
 				<!-- <Grid /> -->
 				<Frame />
