@@ -146,3 +146,52 @@ export function toFloat32(data) {
 	if (data instanceof Float32Array) return data;
 	return new Float32Array(data);
 }
+
+/**
+ * Resolve channel data for GPU rendering in one call.
+ *
+ * Combines resolveChannel() + optional band/point scale mapping + toFloat32().
+ * Use this from $derived.by() blocks in mark components.
+ *
+ * @param {object} params - All resolveChannel params, plus:
+ * @param {object} [params.scaleState] - Band/point scale state (e.g., chartContext.xScaleState)
+ * @param {string} [params.scaleType] - Scale type string ('band', 'point', 'linear', 'time', etc.)
+ * @param {string} [params.markId] - Mark ID for processDataForGPU registration
+ * @returns {Float32Array|null}
+ */
+export function resolveChannelData({
+	value,
+	channel,
+	dataAccessor,
+	tryColumns,
+	instanceCount,
+	fallback,
+	scaleState,
+	scaleType,
+	markId
+}) {
+	if (!instanceCount) return null;
+	const raw = resolveChannel({ value, channel, dataAccessor, tryColumns, instanceCount, fallback });
+	if (!raw) return null;
+
+	if ((scaleType === 'band' || scaleType === 'point') && scaleState?.processDataForGPU) {
+		return toFloat32(scaleState.processDataForGPU(raw, markId));
+	}
+
+	return toFloat32(raw);
+}
+
+/**
+ * Compute instance count from setup data or fallback array props.
+ *
+ * @param {object|null} data - setup?.data (DataAccessor with .length)
+ * @param {...any} fallbackArrays - Array/TypedArray props to check length from
+ * @returns {number}
+ */
+export function computeInstanceCount(data, ...fallbackArrays) {
+	if (data?.length) return data.length;
+	for (const arr of fallbackArrays) {
+		if (Array.isArray(arr) || ArrayBuffer.isView(arr)) return arr.length;
+	}
+	return 0;
+}

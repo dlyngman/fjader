@@ -3,15 +3,15 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { inferScaleType } from '$lib/scales/scale-inference.js';
-	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import { expandBinForExtent } from '$lib/sql/bin.js';
 	import {
 		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
+		resolveChannelData,
+		computeInstanceCount,
+		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig
+		normalizeSortConfig,
+		inferMarkScaleType
 	} from './utils/index.js';
 
 	let {
@@ -57,32 +57,8 @@
 	const ey1 = $derived(expandedY.y1);
 	const ey2 = $derived(expandedY.y2);
 
-	// --- SCALE TYPE INFERENCE (DotsMark pattern) ---
-	const effectiveYScaleType = $derived.by(() => {
-		if (preferredYScaleType != null) return preferredYScaleType;
-		const field = ey1;
-		if (!field) return 'linear';
-		// Unwrap AutoBinNode to get underlying column for schema lookup
-		if (field.isAutoBinNode) {
-			const colName = typeof field.field === 'string' ? field.field : null;
-			if (!colName) return 'linear';
-			const _v = tableSchemaService.version;
-			const colType = tableSchemaService.getColumnType(table, colName);
-			if (!colType) {
-				tableSchemaService.getSchema(table);
-				return null;
-			}
-			return inferScaleType({ field: colName, schemaType: colType, context: 'axis' });
-		}
-		if (typeof field !== 'string') return 'linear';
-		const _v = tableSchemaService.version;
-		const colType = tableSchemaService.getColumnType(table, field);
-		if (!colType) {
-			tableSchemaService.getSchema(table);
-			return null;
-		}
-		return inferScaleType({ field, schemaType: colType, context: 'axis' });
-	});
+	// --- SCALE TYPE INFERENCE ---
+	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(ey1, table, preferredYScaleType));
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
@@ -146,96 +122,46 @@
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived.by(() => {
-		if (setup?.data?.length) return setup.data.length;
-		if (Array.isArray(x2)) return x2.length;
-		// @ts-ignore
-		if (ArrayBuffer.isView(x2)) return x2.length;
-		return 0;
-	});
+	let instanceCount = $derived(computeInstanceCount(setup?.data, x2));
 
 	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
 
 	// --- DATA RESOLUTION ---
 
 	// X0: Stack Output -> x1 prop -> 0
-	let x0Data = $derived(
-		toFloat32(
-			resolveChannel({
-				value: x1,
-				channel: 'x1',
-				tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
-				dataAccessor: setup?.data,
-				instanceCount,
-				fallback: 0
-			})
-		)
-	);
+	let x0Data = $derived(resolveChannelData({
+		value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'], fallback: 0
+	}));
 
 	// X1: Stack Output -> x2 prop
-	let x1Data = $derived(
-		toFloat32(
-			resolveChannel({
-				value: x2,
-				channel: 'x2',
-				tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2'],
-				dataAccessor: setup?.data,
-				instanceCount
-			})
-		)
-	);
+	let x1Data = $derived(resolveChannelData({
+		value: x2, channel: 'x2', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2']
+	}));
 
 	// Y Data: Extent channels with band/linear branching
 	let yData = $derived.by(() => {
-		if (!instanceCount) return null;
-
 		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y;
 		if (scaleType === 'band' || scaleType === 'point') {
-			// Categorical: resolve ey1 via processDataForGPU, same array for both extents
-			const raw = resolveChannel({
-				value: ey1,
-				channel: 'y1',
-				dataAccessor: setup?.data,
-				instanceCount
+			const arr = resolveChannelData({
+				value: ey1, channel: 'y1', dataAccessor: setup?.data, instanceCount,
+				scaleState: chartContext.yScaleState, scaleType, markId
 			});
-			if (!raw) return null;
-			if (!chartContext.yScaleState?.processDataForGPU) return null;
-			const indices = chartContext.yScaleState.processDataForGPU(raw, markId);
-			const arr = toFloat32(indices);
-			return { y0Data: arr, y1Data: arr };
+			return arr ? { y0Data: arr, y1Data: arr } : null;
 		}
-
-		// Continuous: resolve y1 and y2 separately
-		const rawY1 = resolveChannel({
-			value: ey1,
-			channel: 'y1',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		const rawY2 = resolveChannel({
-			value: ey2,
-			channel: 'y2',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		if (!rawY1 || !rawY2) return null;
-		return { y0Data: toFloat32(rawY1), y1Data: toFloat32(rawY2) };
+		const y0 = resolveChannelData({ value: ey1, channel: 'y1', dataAccessor: setup?.data, instanceCount });
+		const y1 = resolveChannelData({ value: ey2, channel: 'y2', dataAccessor: setup?.data, instanceCount });
+		return (y0 && y1) ? { y0Data: y0, y1Data: y1 } : null;
 	});
 
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	let alphaData = $derived(
-		toFloat32(
-			resolveChannel({
-				value: alpha,
-				channel: 'alpha',
-				dataAccessor: setup?.data,
-				instanceCount,
-				fallback: 0.8
-			})
-		)
-	);
+	let alphaData = $derived(resolveChannelData({
+		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
+		instanceCount, fallback: 0.8
+	}));
 
 	// --- SETUP LIFECYCLE ---
 
@@ -255,32 +181,20 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		const id = markId;
-
-		tm.registerMark(id, {
+		tm.registerMark(markId, buildTooltipConfig({
 			tempTable: setup.tooltipTableName,
 			markType: 'rectx',
-			scaleTypes: {
-				x: chartContext.scaleTypes?.x,
-				y: chartContext.scaleTypes?.y
-			},
+			chartContext,
 			columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
 			channelFields: {
 				x: typeof x2 === 'string' ? x2 : (typeof x === 'string' ? x : 'x'),
 				y: typeof ey1 === 'string' ? ey1 : (typeof y === 'string' ? y : 'y'),
 				...(color && { color: typeof color === 'string' ? color : 'color' })
 			},
-			bandDomains: {
-				...(chartContext.scaleTypes?.y === 'band' && {
-					y: chartContext.yScaleState?.effectiveDomain
-				})
-			},
-			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
-			colorScaleState: markColor.scaleState ?? null,
-			enabled: true
-		});
-
-		return () => tm.unregisterMark(id);
+			bandAxes: { y: true },
+			markColorScaleState: markColor.scaleState
+		}));
+		return () => tm.unregisterMark(markId);
 	});
 
 	onDestroy(() => {

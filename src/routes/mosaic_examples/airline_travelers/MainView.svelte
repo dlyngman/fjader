@@ -16,6 +16,7 @@
 		WebGPUCanvas,
 		DotsMark
 	} from '$lib/components';
+	import { bin } from '$lib'
 	import LineMark from '$lib/components/marks/LineMark.svelte';
 
 	const coordinator = getContext('mosaic-coordinator');
@@ -39,7 +40,33 @@
 						<Grid />
 
 						<!-- <LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" /> -->
-						<LineMark table="travelers" x="date" y="previous" curve="monotone" alpha="0.8" color="red" dotRadius={4}/>
+						<LineMark 
+							table="travelers" 
+							x={bin("date")}
+							y={max("previous")}
+							curve="monotone" 
+							alpha="0.8" 
+							color="red" 
+							dotRadius={5}
+						/>
+						<LineMark 
+							table="travelers" 
+							x={bin("date")}
+							y={min("previous")}
+							curve="monotone" 
+							alpha="0.8" 
+							color="red" 
+							dotRadius={5}
+						/>
+						<LineMark 
+							table="travelers" 
+							x="date"
+							y="previous" 
+							curve="monotone" 
+							alpha="0.8" 
+							color="green" 
+							dotRadius={4}
+						/>
 
 						<!-- <DotsMark table="travelers" x="date" y="previous" alpha="1" color="red" /> -->
 						<LineMark table="travelers" x="date" y="current" alpha="0.8" color="blue" />

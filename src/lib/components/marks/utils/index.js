@@ -11,10 +11,17 @@ export {
 	buildConstantsFromChannels
 } from './data-processing.js';
 
-export { resolveChannel, toFloat32 } from './channel-resolution.js';
+export {
+	resolveChannel,
+	toFloat32,
+	resolveChannelData,
+	computeInstanceCount
+} from './channel-resolution.js';
+export { buildTooltipConfig } from './tooltip-helpers.js';
 export { MarkColor } from './MarkColor.svelte.js';
 export { MarkSize } from './MarkSize.svelte.js';
 export { MarkSeries } from './MarkSeries.svelte.js';
+export { inferMarkScaleType } from './inferMarkScaleType.js';
 
 /**
  * Normalize user-facing sort prop to internal config shape.
