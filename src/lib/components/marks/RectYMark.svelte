@@ -3,15 +3,15 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { inferScaleType } from '$lib/scales/scale-inference.js';
-	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import { expandBinForExtent } from '$lib/sql/bin.js';
 	import {
 		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
+		resolveChannelData,
+		computeInstanceCount,
+		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig
+		normalizeSortConfig,
+		inferMarkScaleType
 	} from './utils/index.js';
 
 	let {
@@ -57,32 +57,8 @@
 	const x1 = $derived(expandedX.x1);
 	const x2 = $derived(expandedX.x2);
 
-	// --- SCALE TYPE INFERENCE (DotsMark pattern) ---
-	const effectiveXScaleType = $derived.by(() => {
-		if (preferredXScaleType != null) return preferredXScaleType;
-		const field = x1;
-		if (!field) return 'linear';
-		// Unwrap AutoBinNode to get underlying column for schema lookup
-		if (field.isAutoBinNode) {
-			const colName = typeof field.field === 'string' ? field.field : null;
-			if (!colName) return 'linear';
-			const _v = tableSchemaService.version;
-			const colType = tableSchemaService.getColumnType(table, colName);
-			if (!colType) {
-				tableSchemaService.getSchema(table);
-				return null;
-			}
-			return inferScaleType({ field: colName, schemaType: colType, context: 'axis' });
-		}
-		if (typeof field !== 'string') return 'linear';
-		const _v = tableSchemaService.version;
-		const colType = tableSchemaService.getColumnType(table, field);
-		if (!colType) {
-			tableSchemaService.getSchema(table);
-			return null;
-		}
-		return inferScaleType({ field, schemaType: colType, context: 'axis' });
-	});
+	// --- SCALE TYPE INFERENCE ---
+	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x1, table, preferredXScaleType));
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
@@ -146,13 +122,7 @@
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived.by(() => {
-		if (setup?.data?.length) return setup.data.length;
-		if (Array.isArray(y2)) return y2.length;
-		// @ts-ignore
-		if (ArrayBuffer.isView(y2)) return y2.length;
-		return 0;
-	});
+	let instanceCount = $derived(computeInstanceCount(setup?.data, y2));
 
 	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
 
@@ -160,80 +130,38 @@
 
 	// X Data: Extent channels with band/linear branching
 	let xData = $derived.by(() => {
-		if (!instanceCount) return null;
-
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
 		if (scaleType === 'band' || scaleType === 'point') {
-			// Categorical: resolve x1 via processDataForGPU, same array for both extents
-			const raw = resolveChannel({
-				value: x1,
-				channel: 'x1',
-				dataAccessor: setup?.data,
-				instanceCount
+			const arr = resolveChannelData({
+				value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
+				scaleState: chartContext.xScaleState, scaleType, markId
 			});
-			if (!raw) return null;
-			if (!chartContext.xScaleState?.processDataForGPU) return null;
-			const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
-			const arr = toFloat32(indices);
-			return { x0Data: arr, x1Data: arr };
+			return arr ? { x0Data: arr, x1Data: arr } : null;
 		}
-
-		// Continuous: resolve x1 and x2 separately
-		const rawX1 = resolveChannel({
-			value: x1,
-			channel: 'x1',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		const rawX2 = resolveChannel({
-			value: x2,
-			channel: 'x2',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		if (!rawX1 || !rawX2) return null;
-		return { x0Data: toFloat32(rawX1), x1Data: toFloat32(rawX2) };
+		const lo = resolveChannelData({ value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount });
+		const hi = resolveChannelData({ value: x2, channel: 'x2', dataAccessor: setup?.data, instanceCount });
+		return (lo && hi) ? { x0Data: lo, x1Data: hi } : null;
 	});
 
 	let x0Data = $derived(xData?.x0Data);
 	let x1Data = $derived(xData?.x1Data);
 
 	// Y0: Stack Output -> y1 prop -> 0
-	let y0Data = $derived.by(() => {
-		const raw = resolveChannel({
-			value: y1,
-			channel: 'y1',
-			tryColumns: hasStackTransform ? ['y0'] : undefined,
-			dataAccessor: setup?.data,
-			instanceCount,
-			fallback: 0
-		});
-		return toFloat32(raw);
-	});
+	let y0Data = $derived(resolveChannelData({
+		value: y1, channel: 'y1', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['y0'] : undefined, fallback: 0
+	}));
 
 	// Y1: Stack Output -> y2 prop
-	let y1Data = $derived.by(() => {
-		const raw = resolveChannel({
-			value: y2,
-			channel: 'y2',
-			tryColumns: hasStackTransform ? ['y1'] : undefined,
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		return toFloat32(raw);
-	});
+	let y1Data = $derived(resolveChannelData({
+		value: y2, channel: 'y2', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['y1'] : undefined
+	}));
 
-	let alphaData = $derived(
-		toFloat32(
-			resolveChannel({
-				value: alpha,
-				channel: 'alpha',
-				dataAccessor: setup?.data,
-				instanceCount,
-				fallback: 0.8
-			})
-		)
-	);
+	let alphaData = $derived(resolveChannelData({
+		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
+		instanceCount, fallback: 0.8
+	}));
 
 	// --- SETUP LIFECYCLE ---
 
@@ -253,32 +181,20 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		const id = markId;
-
-		tm.registerMark(id, {
+		tm.registerMark(markId, buildTooltipConfig({
 			tempTable: setup.tooltipTableName,
 			markType: 'recty',
-			scaleTypes: {
-				x: chartContext.scaleTypes?.x,
-				y: chartContext.scaleTypes?.y
-			},
+			chartContext,
 			columns: { xLow: 'x1', xHigh: 'x2', yLow: typeof y1 === 'number' ? y1 : 'y1', yHigh: 'y2' },
 			channelFields: {
 				x: typeof x1 === 'string' ? x1 : (typeof x === 'string' ? x : 'x'),
 				y: typeof y2 === 'string' ? y2 : (typeof y === 'string' ? y : 'y'),
 				...(color && { color: typeof color === 'string' ? color : 'color' })
 			},
-			bandDomains: {
-				...(chartContext.scaleTypes?.x === 'band' && {
-					x: chartContext.xScaleState?.effectiveDomain
-				})
-			},
-			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
-			colorScaleState: markColor.scaleState ?? null,
-			enabled: true
-		});
-
-		return () => tm.unregisterMark(id);
+			bandAxes: { x: true },
+			markColorScaleState: markColor.scaleState
+		}));
+		return () => tm.unregisterMark(markId);
 	});
 
 	onDestroy(() => {

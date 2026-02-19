@@ -2,14 +2,15 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { inferScaleType } from '$lib/scales/scale-inference.js';
-	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import { isColorConstant } from '$lib/scales/color-utils.js';
 	import {
 		buildSelectFromChannels,
 		resolveChannel,
+		computeInstanceCount,
+		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig
+		normalizeSortConfig,
+		inferMarkScaleType
 	} from './utils/index.js';
 
 	const FADE_THRESHOLD = 100;
@@ -50,30 +51,8 @@
 	let setup = $state(null);
 
 	// --- Scale Type Inference ---
-
-	const effectiveXScaleType = $derived.by(() => {
-		if (preferredXScaleType != null) return preferredXScaleType;
-		if (!x || typeof x !== 'string') return 'linear';
-		const _v = tableSchemaService.version;
-		const colType = tableSchemaService.getColumnType(table, x);
-		if (!colType) {
-			tableSchemaService.getSchema(table);
-			return null;
-		}
-		return inferScaleType({ field: x, schemaType: colType, context: 'axis' });
-	});
-
-	const effectiveYScaleType = $derived.by(() => {
-		if (preferredYScaleType != null) return preferredYScaleType;
-		if (!y || typeof y !== 'string') return 'linear';
-		const _v = tableSchemaService.version;
-		const colType = tableSchemaService.getColumnType(table, y);
-		if (!colType) {
-			tableSchemaService.getSchema(table);
-			return null;
-		}
-		return inferScaleType({ field: y, schemaType: colType, context: 'axis' });
-	});
+	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
+	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
 
 	// --- Color ---
 
@@ -120,13 +99,7 @@
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived.by(() => {
-		if (setup?.data?.length) return setup.data.length;
-		if (Array.isArray(x)) return x.length;
-		if (Array.isArray(y)) return y.length;
-		if (ArrayBuffer.isView(x)) return x.length;
-		return 0;
-	});
+	let instanceCount = $derived(computeInstanceCount(setup?.data, x, y));
 
 	// --- Data Resolution (raw values, not Float32) ---
 
@@ -303,34 +276,19 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		const id = markId;
-
-		tm.registerMark(id, {
+		tm.registerMark(markId, buildTooltipConfig({
 			tempTable: setup.tooltipTableName,
 			markType: 'text',
-			scaleTypes: {
-				x: chartContext.scaleTypes?.x,
-				y: chartContext.scaleTypes?.y
-			},
+			chartContext,
 			channelFields: {
 				x: typeof x === 'string' ? x : 'x',
 				y: typeof y === 'string' ? y : 'y',
 				...(color && typeof color === 'string' && !isColorConstant(color) && { color })
 			},
-			bandDomains: {
-				...(chartContext.scaleTypes?.x === 'band' && {
-					x: chartContext.xScaleState?.effectiveDomain
-				}),
-				...(chartContext.scaleTypes?.y === 'band' && {
-					y: chartContext.yScaleState?.effectiveDomain
-				})
-			},
-			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
-			colorScaleState: markColor.scaleState ?? null,
-			enabled: true
-		});
-
-		return () => tm.unregisterMark(id);
+			bandAxes: { x: true, y: true },
+			markColorScaleState: markColor.scaleState
+		}));
+		return () => tm.unregisterMark(markId);
 	});
 
 	onDestroy(() => {

@@ -4,15 +4,15 @@
 	import { Areas, Lines } from '../rendering/index.js';
 	import { parseColorToRGBA } from '$lib/scales/color-utils.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { inferScaleType } from '$lib/scales/scale-inference.js';
-	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 	import {
 		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
+		resolveChannelData,
+		computeInstanceCount,
+		buildTooltipConfig,
 		MarkColor,
 		MarkSeries,
-		normalizeSortConfig
+		normalizeSortConfig,
+		inferMarkScaleType
 	} from './utils/index.js';
 
 	let {
@@ -56,31 +56,9 @@
 	let setup = $state(null);
 
 	// 0. Scale Type Inference
-	const effectiveXScaleType = $derived.by(() => {
-		if (preferredXScaleType != null) return preferredXScaleType;
-		// x2 is the value column for X scale inference
-		const xField = typeof x2 === 'string' ? x2 : typeof x === 'string' ? x : null;
-		if (!xField) return 'linear';
-		const _v = tableSchemaService.version;
-		const colType = tableSchemaService.getColumnType(table, xField);
-		if (!colType) {
-			tableSchemaService.getSchema(table);
-			return null;
-		}
-		return inferScaleType({ field: xField, schemaType: colType, context: 'axis' });
-	});
-
-	const effectiveYScaleType = $derived.by(() => {
-		if (preferredYScaleType != null) return preferredYScaleType;
-		if (!y || typeof y !== 'string') return 'linear';
-		const _v = tableSchemaService.version;
-		const colType = tableSchemaService.getColumnType(table, y);
-		if (!colType) {
-			tableSchemaService.getSchema(table);
-			return null;
-		}
-		return inferScaleType({ field: y, schemaType: colType, context: 'axis' });
-	});
+	// x2 is the value column for X scale inference (x1 is baseline)
+	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x2 ?? x, table, preferredXScaleType));
+	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
 
 	// Series grouping - uses scale infrastructure for categorical → index mapping
 	const markSeries = new MarkSeries(
@@ -155,55 +133,26 @@
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived.by(() => {
-		if (setup?.data?.length) return setup.data.length;
-		if (Array.isArray(y)) return y.length;
-		if (Array.isArray(x2)) return x2.length;
-		// @ts-ignore
-		if (ArrayBuffer.isView(y)) return y.length;
-		return 0;
-	});
+	let instanceCount = $derived(computeInstanceCount(setup?.data, y, x2));
 
 	// --- DATA RESOLUTION ---
 
 	// Y data: the independent dimension
-	let yData = $derived.by(() => {
-		if (!instanceCount) return null;
-		const raw = resolveChannel({
-			value: y,
-			channel: 'y',
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		return raw ? toFloat32(raw) : null;
-	});
+	let yData = $derived.by(() => resolveChannelData({
+		value: y, channel: 'y', dataAccessor: setup?.data, instanceCount
+	}));
 
 	// X right (x2): Stack output 'x1' -> x2 prop -> default column
-	let xRightData = $derived.by(() => {
-		if (!instanceCount) return null;
-		const raw = resolveChannel({
-			value: x2,
-			channel: 'x2',
-			tryColumns: hasStackTransform ? ['x1'] : undefined,
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		return raw ? toFloat32(raw) : null;
-	});
+	let xRightData = $derived.by(() => resolveChannelData({
+		value: x2, channel: 'x2', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['x1'] : undefined
+	}));
 
 	// X left (x1): Stack output 'x0' -> x1 prop -> 0
-	let xLeftData = $derived.by(() => {
-		if (!instanceCount) return null;
-		const raw = resolveChannel({
-			value: x1,
-			channel: 'x1',
-			tryColumns: hasStackTransform ? ['x0'] : undefined,
-			dataAccessor: setup?.data,
-			instanceCount,
-			fallback: 0
-		});
-		return raw ? toFloat32(raw) : null;
-	});
+	let xLeftData = $derived.by(() => resolveChannelData({
+		value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['x0'] : undefined, fallback: 0
+	}));
 
 	// Series data comes from MarkSeries (uses scale infrastructure)
 	let seriesData = $derived(markSeries.data);
@@ -231,36 +180,25 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		const id = markId;
 
 		const colorChannelField = effectiveColorField
-			? typeof effectiveColorField === 'string'
-				? effectiveColorField
-				: 'color'
+			? typeof effectiveColorField === 'string' ? effectiveColorField : 'color'
 			: stroke
-				? typeof stroke === 'string'
-					? stroke
-					: 'stroke'
+				? typeof stroke === 'string' ? stroke : 'stroke'
 				: null;
 
-		tm.registerMark(id, {
+		tm.registerMark(markId, buildTooltipConfig({
 			tempTable: setup.tooltipTableName,
 			markType: 'areax',
-			scaleTypes: {
-				x: chartContext.scaleTypes?.x,
-				y: chartContext.scaleTypes?.y
-			},
+			chartContext,
 			channelFields: {
 				x: typeof x2 === 'string' ? x2 : 'x',
 				y: typeof y === 'string' ? y : 'y',
 				...(colorChannelField && { color: colorChannelField })
 			},
-			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
-			colorScaleState: markColor.scaleState ?? null,
-			enabled: true
-		});
-
-		return () => tm.unregisterMark(id);
+			markColorScaleState: markColor.scaleState
+		}));
+		return () => tm.unregisterMark(markId);
 	});
 
 	onDestroy(() => {

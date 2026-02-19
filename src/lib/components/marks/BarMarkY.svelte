@@ -5,8 +5,9 @@
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
 		buildSelectFromChannels,
-		resolveChannel,
-		toFloat32,
+		resolveChannelData,
+		computeInstanceCount,
+		buildTooltipConfig,
 		MarkColor,
 		normalizeSortConfig
 	} from './utils/index.js';
@@ -100,81 +101,42 @@
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived.by(() => {
-		if (setup?.data?.length) return setup.data.length;
-		if (Array.isArray(y2)) return y2.length;
-		if (Array.isArray(x)) return x.length;
-		// @ts-ignore
-		if (ArrayBuffer.isView(y2)) return y2.length;
-		return 0;
-	});
+	let instanceCount = $derived(computeInstanceCount(setup?.data, y2, x));
 
 	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
 
 	// --- DATA RESOLUTION ---
 
-	// X Data: Categorical (Band Scale)
+	// X Data: Categorical (Band Scale) — both x0/x1 share same band indices
 	let xData = $derived.by(() => {
-		if (!instanceCount) return null;
-
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x || 'band';
 		if (scaleType !== 'band') return null;
-
-		const raw = resolveChannel({
-			value: x,
-			channel: 'x',
-			dataAccessor: setup?.data,
-			instanceCount
+		const arr = resolveChannelData({
+			value: x, channel: 'x', dataAccessor: setup?.data, instanceCount,
+			scaleState: chartContext.xScaleState, scaleType, markId
 		});
-
-		if (!raw) return null;
-		if (!chartContext.xScaleState?.processDataForGPU) return null;
-
-		const indices = chartContext.xScaleState.processDataForGPU(raw, markId);
-		const xArr = toFloat32(indices);
-
-		return { x0Data: xArr, x1Data: xArr };
+		return arr ? { x0Data: arr, x1Data: arr } : null;
 	});
 
 	let x0Data = $derived(xData?.x0Data);
 	let x1Data = $derived(xData?.x1Data);
 
 	// Y0: Stack Output -> y1 prop -> 0
-	let y0Data = $derived.by(() => {
-		const raw = resolveChannel({
-			value: y1,
-			channel: 'y1',
-			tryColumns: hasStackTransform ? ['y0'] : undefined, // Stack 'vertical' output
-			dataAccessor: setup?.data,
-			instanceCount,
-			fallback: 0
-		});
-		return toFloat32(raw);
-	});
+	let y0Data = $derived(resolveChannelData({
+		value: y1, channel: 'y1', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['y0'] : undefined, fallback: 0
+	}));
 
 	// Y1: Stack Output -> y2 prop
-	let y1Data = $derived.by(() => {
-		const raw = resolveChannel({
-			value: y2,
-			channel: 'y2',
-			tryColumns: hasStackTransform ? ['y1'] : undefined, // Stack 'vertical' output
-			dataAccessor: setup?.data,
-			instanceCount
-		});
-		return toFloat32(raw);
-	});
+	let y1Data = $derived(resolveChannelData({
+		value: y2, channel: 'y2', dataAccessor: setup?.data, instanceCount,
+		tryColumns: hasStackTransform ? ['y1'] : undefined
+	}));
 
-	let alphaData = $derived(
-		toFloat32(
-			resolveChannel({
-				value: alpha,
-				channel: 'alpha',
-				dataAccessor: setup?.data,
-				instanceCount,
-				fallback: 0.8
-			})
-		)
-	);
+	let alphaData = $derived(resolveChannelData({
+		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
+		instanceCount, fallback: 0.8
+	}));
 
 	// --- SETUP LIFECYCLE ---
 
@@ -194,15 +156,10 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		const id = markId;
-
-		tm.registerMark(id, {
+		tm.registerMark(markId, buildTooltipConfig({
 			tempTable: setup.tooltipTableName,
 			markType: 'bary',
-			scaleTypes: {
-				x: chartContext.scaleTypes?.x,
-				y: chartContext.scaleTypes?.y
-			},
+			chartContext,
 			columns: {
 				x: 'x',
 				yLow: hasStackTransform ? 'y0' : typeof y1 === 'number' ? y1 : 'y1',
@@ -213,17 +170,10 @@
 				y: typeof y2 === 'string' ? y2 : 'y',
 				...(color && { color: typeof color === 'string' ? color : 'color' })
 			},
-			bandDomains: {
-				...(chartContext.scaleTypes?.x === 'band' && {
-					x: chartContext.xScaleState?.effectiveDomain
-				})
-			},
-			colorDomain: markColor.scaleState?.isOrdinal ? markColor.scaleState?.domain : null,
-			colorScaleState: markColor.scaleState ?? null,
-			enabled: true
-		});
-
-		return () => tm.unregisterMark(id);
+			bandAxes: { x: true },
+			markColorScaleState: markColor.scaleState
+		}));
+		return () => tm.unregisterMark(markId);
 	});
 
 	onDestroy(() => {
