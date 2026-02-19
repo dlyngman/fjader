@@ -40,3 +40,4 @@ export function setCoordinators(config = {}) {
 export * from './components';
 export * from './transforms';
 export * from './sql/bin';
+export * from './types';
