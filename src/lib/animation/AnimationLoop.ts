@@ -1,28 +1,30 @@
-// =============================================================================
-// AnimationLoop.js - Fixed timestep animation loop with render extrapolation
-// =============================================================================
-
 import { DT } from './Spring';
 
-const MAX_DELTA = 0.1; // 100ms cap - handles tab switch, debugger pause, etc.
+const MAX_DELTA = 0.1;
+
+interface AnimationLoopConfig {
+	onPhysicsStep: () => void;
+	onRender: (accumulator: number) => void;
+	onIdleCheck?: (() => boolean) | null;
+}
 
 export class AnimationLoop {
 	#accumulator = 0;
 	#lastTime = 0;
-	#rafId = null;
+	#rafId: number | null = null;
 	#isRunning = false;
 
-	#onPhysicsStep;
-	#onRender;
-	#onIdleCheck;
+	#onPhysicsStep: () => void;
+	#onRender: (accumulator: number) => void;
+	#onIdleCheck: (() => boolean) | null;
 
 	#frameCount = 0;
 	#physicsStepsThisFrame = 0;
 	#lastDelta = 0;
 
-	#boundFrame;
+	#boundFrame: (time: number) => void;
 
-	constructor({ onPhysicsStep, onRender, onIdleCheck = null }) {
+	constructor({ onPhysicsStep, onRender, onIdleCheck = null }: AnimationLoopConfig) {
 		if (typeof onPhysicsStep !== 'function') {
 			throw new Error('AnimationLoop requires onPhysicsStep callback');
 		}
@@ -37,11 +39,7 @@ export class AnimationLoop {
 		this.#boundFrame = this.#frame.bind(this);
 	}
 
-	// ===========================================================================
-	// PUBLIC API
-	// ===========================================================================
-
-	start() {
+	start(): void {
 		if (this.#rafId !== null) return;
 
 		this.#isRunning = true;
@@ -50,13 +48,13 @@ export class AnimationLoop {
 		this.#rafId = requestAnimationFrame(this.#boundFrame);
 	}
 
-	requestStart() {
+	requestStart(): void {
 		if (this.#rafId === null) {
 			this.start();
 		}
 	}
 
-	stop() {
+	stop(): void {
 		this.#isRunning = false;
 		if (this.#rafId !== null) {
 			cancelAnimationFrame(this.#rafId);
@@ -64,45 +62,35 @@ export class AnimationLoop {
 		}
 	}
 
-	destroy() {
+	destroy(): void {
 		this.stop();
 	}
 
-	// ===========================================================================
-	// GETTERS
-	// ===========================================================================
-
-	get frameCount() {
+	get frameCount(): number {
 		return this.#frameCount;
 	}
 
-	get physicsStepsLastFrame() {
+	get physicsStepsLastFrame(): number {
 		return this.#physicsStepsThisFrame;
 	}
 
-	get lastDelta() {
+	get lastDelta(): number {
 		return this.#lastDelta;
 	}
 
-	get accumulator() {
+	get accumulator(): number {
 		return this.#accumulator;
 	}
 
-	get isRunning() {
+	get isRunning(): boolean {
 		return this.#isRunning && this.#rafId !== null;
 	}
 
-	// ===========================================================================
-	// FRAME LOOP
-	// ===========================================================================
-
-	#frame(time) {
+	#frame(time: number): void {
 		const now = time;
-		// const now = performance.now();
 		let delta = (now - this.#lastTime) / 1000;
 		this.#lastTime = now;
 
-		// Clamp delta - handles tab switch, debugger pause, slow frames
 		if (delta > MAX_DELTA) {
 			delta = MAX_DELTA;
 		}
@@ -110,7 +98,6 @@ export class AnimationLoop {
 		this.#lastDelta = delta;
 		this.#accumulator += delta;
 
-		// Fixed timestep physics
 		this.#physicsStepsThisFrame = 0;
 		while (this.#accumulator >= DT) {
 			this.#onPhysicsStep();
@@ -118,12 +105,10 @@ export class AnimationLoop {
 			this.#physicsStepsThisFrame++;
 		}
 
-		// Render with extrapolation
 		this.#onRender(this.#accumulator);
 
 		this.#frameCount++;
 
-		// Check if we should continue
 		const shouldContinue = this.#onIdleCheck ? !this.#onIdleCheck() : true;
 
 		if (this.#isRunning && shouldContinue) {

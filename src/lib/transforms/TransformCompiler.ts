@@ -1,22 +1,6 @@
+import type { Table } from '@uwdata/flechette';
 import type { SelectQuery } from '@uwdata/mosaic-sql';
 import type { Transform, SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
-
-/**
- * TransformCompiler orchestrates the transform pipeline.
- *
- * Responsibilities:
- * - Separate SQL and JS transforms
- * - Apply SQL transforms to Query AST
- * - Validate queries remain flat (no CTEs)
- * - Apply JS transforms to Arrow data
- * - Extract additional channels (y0/y1, x0/x1)
- */
-
-interface ArrowTable {
-	numRows: number;
-	schema: { fields: { name: string }[] };
-	getChild(name: string): { get(index: number): unknown } | null;
-}
 
 export class TransformCompiler {
 	transforms: Transform[];
@@ -66,7 +50,7 @@ export class TransformCompiler {
 	}
 
 	applyToData(
-		data: Record<string, unknown>[] | ArrowTable,
+		data: Record<string, unknown>[] | Table,
 		config: MarkConfig,
 		scales: ScaleMap = {}
 	): Record<string, unknown>[] {
@@ -85,7 +69,7 @@ export class TransformCompiler {
 		return result;
 	}
 
-	#arrowToArray(arrowTable: ArrowTable): Record<string, unknown>[] {
+	#arrowToArray(arrowTable: Table): Record<string, unknown>[] {
 		const rows: Record<string, unknown>[] = [];
 		const numRows = arrowTable.numRows;
 

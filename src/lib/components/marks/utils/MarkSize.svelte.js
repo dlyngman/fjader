@@ -1,5 +1,5 @@
 import { untrack } from 'svelte';
-import { resolveChannel } from './channel-resolution.js';
+import { resolveChannel } from './channel-resolution';
 
 export class MarkSize {
 	#sizeProp;
