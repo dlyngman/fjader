@@ -1,6 +1,6 @@
 import { untrack } from 'svelte';
 import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils';
-import { resolveChannel } from './channel-resolution.js';
+import { resolveChannel } from './channel-resolution';
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 import { inferScaleType } from '$lib/scales/scale-inference';

@@ -1,6 +1,3 @@
-// export {
-//   getSourceType, processData, buildSelectFromChannels } from './data-processing.js';
-
 export {
 	getSourceType,
 	processData,
@@ -9,19 +6,19 @@ export {
 	parseColor,
 	buildSelectFromChannels,
 	buildConstantsFromChannels
-} from './data-processing.js';
+} from './data-processing';
 
 export {
 	resolveChannel,
 	toFloat32,
 	resolveChannelData,
 	computeInstanceCount
-} from './channel-resolution.js';
-export { buildTooltipConfig } from './tooltip-helpers.js';
+} from './channel-resolution';
+export { buildTooltipConfig } from './tooltip-helpers';
 export { MarkColor } from './MarkColor.svelte.js';
 export { MarkSize } from './MarkSize.svelte.js';
 export { MarkSeries } from './MarkSeries.svelte.js';
-export { inferMarkScaleType } from './inferMarkScaleType.js';
+export { inferMarkScaleType } from './inferMarkScaleType';
 
 /**
  * Normalize user-facing sort prop to internal config shape.

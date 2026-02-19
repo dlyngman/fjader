@@ -1,7 +1,7 @@
 <script>
 	import { setContext, getContext, onMount } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
-	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl.js';
+	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte.js';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';

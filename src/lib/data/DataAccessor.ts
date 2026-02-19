@@ -1,21 +1,10 @@
-// Minimal interface for Arrow tables from @uwdata/flechette
-interface ArrowColumn {
-	type: { typeId?: number; toString?(): string };
-	data: { values: ArrayBufferView }[];
-	toArray(): ArrayLike<unknown> | null;
-}
-
-interface ArrowTable {
-	numRows: number;
-	schema: { fields: { name: string }[] };
-	getChild(name: string): ArrowColumn | null;
-}
+import type { Table } from '@uwdata/flechette';
 
 export class ArrowDataAccessor {
-	arrowTable: ArrowTable;
+	arrowTable: Table;
 	type = 'arrow' as const;
 
-	constructor(arrowTable: ArrowTable) {
+	constructor(arrowTable: Table) {
 		this.arrowTable = arrowTable;
 	}
 

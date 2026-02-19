@@ -12,7 +12,7 @@
 		WebGPUCanvas,
 		RectYMark
 	} from '$lib/components';
-	import { bin } from '$lib/sql/bin.js';
+	import { bin } from '$lib/sql/bin';
 
 	const coordinator = getContext('mosaic-coordinator');
 	const selection = Selection.crossfilter();

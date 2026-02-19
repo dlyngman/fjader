@@ -3,7 +3,7 @@
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { expandBinForExtent } from '$lib/sql/bin.js';
+	import { expandBinForExtent } from '$lib/sql/bin';
 	import {
 		buildSelectFromChannels,
 		resolveChannelData,

@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { filter, topN, stack, normalize } from './index';
 import { TransformCompiler } from './TransformCompiler';
-import { bin, AutoBinNode } from '../sql/bin.js';
+import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column } from '@uwdata/mosaic-sql';
 
 describe('Transforms', () => {

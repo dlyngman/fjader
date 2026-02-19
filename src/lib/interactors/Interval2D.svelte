@@ -9,7 +9,7 @@
 		isDragging,
 		scaleBrushExtent2D,
 		WHEEL_SENSITIVITY
-	} from './brush-utils.js';
+	} from './brush-utils';
 
 	let { bridge, xField, yField } = $props();
 

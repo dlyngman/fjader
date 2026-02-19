@@ -10,7 +10,7 @@
 		scaleBrushExtent1D,
 		createPanModeHandlers,
 		WHEEL_SENSITIVITY
-	} from './brush-utils.js';
+	} from './brush-utils';
 
 	let { bridge, field, axis = 'x' } = $props();
 

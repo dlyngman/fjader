@@ -16,7 +16,7 @@
 		IntervalX,
 		FilterBridge
 	} from '$lib/components';
-	import { bin } from '$lib/sql/bin.js';
+	import { bin } from '$lib/sql/bin';
 
 	const filterBridge = new FilterBridge(Selection, null);
 
