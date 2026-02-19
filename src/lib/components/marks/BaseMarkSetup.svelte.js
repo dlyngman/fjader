@@ -1352,28 +1352,33 @@ export class BaseMarkSetup {
 			let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
 
 			const sortConfig = sort;
-			if (sortConfig) {
-				const sortField = this.#config.select[sortConfig.channel];
-				if (sortField) {
-					if (isAggregateExpression(sortField)) {
-						// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
-						q = q.groupby(field).select({ _sort: sortField });
-						if (sortConfig.direction === 'desc') {
-							q.orderby(sql`${sqlColumn('_sort')} DESC`);
-						} else {
-							q.orderby(sqlColumn('_sort'));
-						}
+			// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
+			// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
+			// 'x1'/'x2'/'y1'/'y2'. Fall back to channel+'2' then channel+'1' for those.
+			// TODO: A cleaner approach would be mark-owned sortChannelMaps, where each mark
+			// explicitly declares the mapping (e.g. BarMarkX: { x: 'x2' }), avoiding heuristics.
+			const sortField = sortConfig
+				? this.#config.select[sortConfig.channel] ||
+					this.#config.select[sortConfig.channel + '2'] ||
+					this.#config.select[sortConfig.channel + '1']
+				: null;
+			if (sortField) {
+				if (isAggregateExpression(sortField)) {
+					// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
+					q = q.groupby(field).select({ _sort: sortField });
+					if (sortConfig.direction === 'desc') {
+						q.orderby(sql`${sqlColumn('_sort')} DESC`);
 					} else {
-						// Raw field or expression: ORDER BY directly
-						const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
-						if (sortConfig.direction === 'desc') {
-							q.orderby(sql`${sortExpr} DESC`);
-						} else {
-							q.orderby(sortExpr);
-						}
+						q.orderby(sqlColumn('_sort'));
 					}
 				} else {
-					q.distinct();
+					// Raw field or expression: ORDER BY directly
+					const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
+					if (sortConfig.direction === 'desc') {
+						q.orderby(sql`${sortExpr} DESC`);
+					} else {
+						q.orderby(sortExpr);
+					}
 				}
 			} else {
 				q.distinct();
@@ -1382,8 +1387,14 @@ export class BaseMarkSetup {
 			fetches.push(
 				this.#coordinator.query(q).then((result) => {
 					const categories = Array.from(result).map((row) => row[axis]);
+					// Y band scale maps index 0 → bottom, index N → top (bottom-to-top),
+					// but users read top-to-bottom. Reverse so SQL sort order matches
+					// the visual reading direction (e.g. 'desc' → largest at top).
+					if (axis === 'y' && sortField) {
+						categories.reverse();
+					}
 					if (categories.length > 0) {
-						scaleState.addMark(categories, this.#markId, { sorted: !!sortConfig });
+						scaleState.addMark(categories, this.#markId, { sorted: !!sortField });
 					}
 				})
 			);

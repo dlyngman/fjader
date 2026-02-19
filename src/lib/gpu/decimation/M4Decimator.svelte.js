@@ -96,7 +96,10 @@ export class M4Decimator {
 	 * Only reallocates GPU buffers when dimensions change (not for xScaleIndex-only changes).
 	 */
 	configure(numBins, numSeries, xScaleIndex) {
-		const dimsChanged = numBins !== this.#numBins || numSeries !== this.#numSeries;
+		// +2 boundary bins: bin 0 (left) and bin N-1 (right) capture off-screen
+		// points for line connectivity at viewport edges.
+		const internalBins = numBins + 2;
+		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
 		const scaleChanged = xScaleIndex !== this.#xScaleIndex;
 
 		if (!dimsChanged && !scaleChanged) return;
@@ -104,10 +107,10 @@ export class M4Decimator {
 		this.#xScaleIndex = xScaleIndex;
 
 		if (dimsChanged) {
-			this.#numBins = numBins;
+			this.#numBins = internalBins;
 			this.#numSeries = numSeries;
 
-			const totalBins = numBins * numSeries;
+			const totalBins = internalBins * numSeries;
 			const outputCount = totalBins * 4;
 
 			// Reallocate bin buffer

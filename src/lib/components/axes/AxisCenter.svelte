@@ -32,7 +32,7 @@
 	const tickFormatter = $derived(c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : String);
 </script>
 
-{#if c.isReady && visible}
+{#if c.isReady && c.scaleTypes && visible}
 	<g class="axis axis-center" clip-path={c.clipPathUrl}>
 		<!-- Axis line -->
 		<line class="axis-line" x1={axisX} x2={axisX} y1={0} y2={c.innerHeight} />
