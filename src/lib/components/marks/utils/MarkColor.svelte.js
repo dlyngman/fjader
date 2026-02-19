@@ -3,7 +3,7 @@ import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils.js';
 import { resolveChannel } from './channel-resolution.js';
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
-import { inferScaleType } from '$lib/scales/scale-inference.js';
+import { inferScaleType } from '$lib/scales/scale-inference';
 
 export class MarkColor {
 	#colorProp;

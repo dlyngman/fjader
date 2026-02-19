@@ -3,7 +3,7 @@
 // Shared type definitions for DivePlot.
 // This file is the single source of truth for types that cross module boundaries.
 
-import type { ExprNode, Query } from '@uwdata/mosaic-sql';
+import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -29,7 +29,7 @@ export type FieldRef = string | ExprNode;
 export interface SqlTransform {
 	stage: 'sql';
 	type: string;
-	apply(query: Query): Query;
+	apply(query: SelectQuery): SelectQuery;
 	describe?(): string;
 }
 

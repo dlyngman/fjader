@@ -1,14 +1,23 @@
+export interface PropertySchema {
+	type: 'number' | 'boolean' | 'string';
+	range?: [number, number];
+	strategy: (values: unknown[]) => unknown;
+	description: string;
+}
+
+export type ScaleConfigSchema = Record<string, PropertySchema>;
+
 /**
  * Resolution strategies for conflicting configuration values
  */
 export const RESOLUTION_STRATEGIES = {
-	MAX: (values) => Math.max(...values),
-	MIN: (values) => Math.min(...values),
-	AVERAGE: (values) => values.reduce((sum, val) => sum + val, 0) / values.length,
-	BOOLEAN_OR: (values) => values.some((v) => v === true),
-	BOOLEAN_AND: (values) => values.every((v) => v === true),
-	FIRST_WINS: (values) => values[0],
-	MUST_MATCH: (values) => {
+	MAX: (values: number[]) => Math.max(...values),
+	MIN: (values: number[]) => Math.min(...values),
+	AVERAGE: (values: number[]) => values.reduce((sum, val) => sum + val, 0) / values.length,
+	BOOLEAN_OR: (values: boolean[]) => values.some((v) => v === true),
+	BOOLEAN_AND: (values: boolean[]) => values.every((v) => v === true),
+	FIRST_WINS: (values: unknown[]) => values[0],
+	MUST_MATCH: (values: unknown[]) => {
 		const first = values[0];
 		if (values.every((v) => v === first)) return first;
 		throw new Error(`Conflicting configuration values: ${values.join(', ')}`);
@@ -16,33 +25,33 @@ export const RESOLUTION_STRATEGIES = {
 };
 
 /**
- * Configuration schemas for different scale types
- * Each property defines: type, validation, resolution strategy, and description
+ * Configuration schemas for different scale types.
+ * Each property defines: type, validation, resolution strategy, and description.
  */
-export const SCALE_CONFIG_SCHEMAS = {
+export const SCALE_CONFIG_SCHEMAS: Record<string, ScaleConfigSchema> = {
 	band: {
 		padding: {
 			type: 'number',
 			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.MAX,
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Overall padding between category groups'
 		},
 		paddingInner: {
 			type: 'number',
 			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.MAX,
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Space between bars within a group'
 		},
 		paddingOuter: {
 			type: 'number',
 			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.MAX,
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Space before first and after last group'
 		},
 		align: {
 			type: 'number',
 			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.AVERAGE,
+			strategy: RESOLUTION_STRATEGIES.AVERAGE as (values: unknown[]) => unknown,
 			description: 'Alignment within outer padding (0=left, 0.5=center, 1=right)'
 		}
 	},
@@ -50,32 +59,32 @@ export const SCALE_CONFIG_SCHEMAS = {
 	linear: {
 		nice: {
 			type: 'boolean',
-			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Extend domain to nice round numbers'
 		},
 		clamp: {
 			type: 'boolean',
-			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Clamp values outside domain'
 		},
 		zero: {
 			type: 'boolean',
-			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Include zero in domain'
 		},
 		domainMin: {
 			type: 'number',
-			strategy: RESOLUTION_STRATEGIES.MIN,
+			strategy: RESOLUTION_STRATEGIES.MIN as (values: unknown[]) => unknown,
 			description: 'Explicit minimum domain value'
 		},
 		domainMax: {
 			type: 'number',
-			strategy: RESOLUTION_STRATEGIES.MAX,
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Explicit maximum domain value'
 		},
 		disableZoom: {
 			type: 'boolean',
-			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Disable user zoom/pan interactions (for auto-scaling axes)'
 		}
 	},
@@ -84,13 +93,13 @@ export const SCALE_CONFIG_SCHEMAS = {
 		padding: {
 			type: 'number',
 			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.MAX,
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Padding around point scale range'
 		},
 		align: {
 			type: 'number',
 			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.AVERAGE,
+			strategy: RESOLUTION_STRATEGIES.AVERAGE as (values: unknown[]) => unknown,
 			description: 'Alignment within padding'
 		}
 	},
@@ -98,12 +107,12 @@ export const SCALE_CONFIG_SCHEMAS = {
 	time: {
 		nice: {
 			type: 'boolean',
-			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Extend domain to nice calendar boundaries'
 		},
 		clamp: {
 			type: 'boolean',
-			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR,
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Clamp values outside domain'
 		}
 	}
@@ -114,12 +123,9 @@ export const SCALE_CONFIG_SCHEMAS = {
 };
 
 /**
- * Validate a configuration value against its schema
- * @param {*} value - Value to validate
- * @param {Object} schema - Property schema
- * @returns {boolean} Whether value is valid
+ * Validate a configuration value against its schema.
  */
-export function validateConfigValue(value, schema) {
+export function validateConfigValue(value: unknown, schema: PropertySchema): boolean {
 	// Type validation
 	if (schema.type === 'number' && typeof value !== 'number') {
 		return false;
@@ -138,11 +144,6 @@ export function validateConfigValue(value, schema) {
 			return false;
 		}
 	}
-
-	// Could add more validation rules here:
-	// - enum validation
-	// - custom validators
-	// - etc.
 
 	return true;
 }

@@ -1,8 +1,8 @@
 // src/lib/transforms/transforms.test.js
 
 import { describe, it, expect } from 'vitest';
-import { filter, topN, stack, normalize } from './index.js';
-import { TransformCompiler } from './TransformCompiler.js';
+import { filter, topN, stack, normalize } from './index';
+import { TransformCompiler } from './TransformCompiler';
 import { bin, AutoBinNode } from '../sql/bin.js';
 import { Query, gt, sum, column } from '@uwdata/mosaic-sql';
 

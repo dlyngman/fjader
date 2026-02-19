@@ -1,20 +1,33 @@
-// src/lib/data/DataAccessor.js
+// Minimal interface for Arrow tables from @uwdata/flechette
+interface ArrowColumn {
+	type: { typeId?: number; toString?(): string };
+	data: { values: ArrayBufferView }[];
+	toArray(): ArrayLike<unknown> | null;
+}
+
+interface ArrowTable {
+	numRows: number;
+	schema: { fields: { name: string }[] };
+	getChild(name: string): ArrowColumn | null;
+}
 
 export class ArrowDataAccessor {
-	constructor(arrowTable) {
+	arrowTable: ArrowTable;
+	type = 'arrow' as const;
+
+	constructor(arrowTable: ArrowTable) {
 		this.arrowTable = arrowTable;
-		this.type = 'arrow';
 	}
 
-	get length() {
+	get length(): number {
 		return this.arrowTable.numRows;
 	}
 
-	get columnNames() {
+	get columnNames(): string[] {
 		return this.arrowTable.schema.fields.map((f) => f.name);
 	}
 
-	getColumn(name) {
+	getColumn(name: string): Float32Array | ArrayLike<unknown> | null {
 		const col = this.arrowTable.getChild(name);
 		if (!col) return null;
 
@@ -37,7 +50,15 @@ export class ArrowDataAccessor {
 			}
 
 			// Numeric typed array - convert to Float32
-			if (ArrayBuffer.isView(raw) && typeof raw[0] === 'number') {
+			if (
+				raw instanceof Float64Array ||
+				raw instanceof Int8Array ||
+				raw instanceof Int16Array ||
+				raw instanceof Int32Array ||
+				raw instanceof Uint8Array ||
+				raw instanceof Uint16Array ||
+				raw instanceof Uint32Array
+			) {
 				return new Float32Array(raw);
 			}
 		}
@@ -62,9 +83,7 @@ export class ArrowDataAccessor {
 			arr instanceof Int32Array ||
 			arr instanceof Uint8Array ||
 			arr instanceof Uint16Array ||
-			arr instanceof Uint32Array ||
-			arr instanceof BigInt64Array ||
-			arr instanceof BigUint64Array
+			arr instanceof Uint32Array
 		) {
 			return new Float32Array(arr);
 		}
@@ -73,28 +92,30 @@ export class ArrowDataAccessor {
 		return arr;
 	}
 
-	toString() {
+	toString(): string {
 		return `ArrowDataAccessor(${this.length} rows)`;
 	}
 }
 
 export class ObjectDataAccessor {
-	constructor(data) {
+	data: Record<string, unknown>[];
+	type = 'objects' as const;
+	_columnTypes: Map<string, string> = new Map();
+
+	constructor(data: Record<string, unknown>[]) {
 		this.data = data;
-		this.type = 'objects';
-		this._columnTypes = new Map();
 	}
 
-	get length() {
+	get length(): number {
 		return this.data.length;
 	}
 
-	get columnNames() {
+	get columnNames(): string[] {
 		if (!this.data || this.data.length === 0) return [];
 		return Object.keys(this.data[0]);
 	}
 
-	getColumn(name) {
+	getColumn(name: string): Float32Array | unknown[] | null {
 		if (!this.data || this.data.length === 0) return null;
 
 		// Infer type from first non-null value
@@ -124,7 +145,7 @@ export class ObjectDataAccessor {
 		return this.data.map((d) => d?.[name] ?? null);
 	}
 
-	toString() {
+	toString(): string {
 		return `ObjectDataAccessor(${this.length} rows)`;
 	}
 }

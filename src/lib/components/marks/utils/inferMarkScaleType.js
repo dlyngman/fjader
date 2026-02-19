@@ -1,6 +1,6 @@
 // src/lib/components/marks/utils/inferMarkScaleType.js
 
-import { inferScaleType } from '$lib/scales/scale-inference.js';
+import { inferScaleType } from '$lib/scales/scale-inference';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 
 /**

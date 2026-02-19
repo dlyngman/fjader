@@ -1,44 +1,49 @@
-// src/lib/scales/ScalePriorities.js
+import {
+	SCALE_CONFIG_SCHEMAS,
+	validateConfigValue,
+	type PropertySchema
+} from './ScaleConfigurationSchemas';
 
-import { SCALE_CONFIG_SCHEMAS, validateConfigValue } from './ScaleConfigurationSchemas.js';
-
-/**
- * Scale type priority levels for resolving conflicts between marks
- */
 export const SCALE_PRIORITIES = {
-	MANDATE: 3, // Mark absolutely requires this type (e.g., barY needs band)
-	PREFER: 2, // Mark works best with this type (e.g., dot prefers linear)
-	ACCEPT: 1, // Mark can work with this type (fallback compatibility)
-	DEFAULT: 0 // System fallback when no specific requirements
-};
+	MANDATE: 3,
+	PREFER: 2,
+	ACCEPT: 1,
+	DEFAULT: 0
+} as const;
 
-/**
- * Resolve scale type conflicts using priority system
- * @param {Array} requirements - Array of {type, priority, markType} objects
- * @returns {string} - Resolved scale type
- */
-export function resolveScaleType(requirements) {
+export interface ScaleRequirement {
+	type: string;
+	priority?: number;
+	markId?: string;
+	columnName?: string;
+	config?: Record<string, unknown>;
+}
+
+export interface ResolvedScaleConfiguration {
+	type: string;
+	config: Record<string, unknown>;
+	columnName: string | null;
+}
+
+export function resolveScaleType(requirements: ScaleRequirement[] | null): string {
 	if (!requirements || requirements.length === 0) {
-		return 'linear'; // Default fallback
+		return 'linear';
 	}
 
-	// Group by priority level (highest first)
-	const byPriority = requirements.reduce((acc, req) => {
+	const byPriority: Record<number, ScaleRequirement[]> = {};
+	for (const req of requirements) {
 		const priority = req.priority || SCALE_PRIORITIES.DEFAULT;
-		if (!acc[priority]) acc[priority] = [];
-		acc[priority].push(req);
-		return acc;
-	}, {});
+		if (!byPriority[priority]) byPriority[priority] = [];
+		byPriority[priority].push(req);
+	}
 
-	// Get highest priority level
 	const priorities = Object.keys(byPriority)
 		.map((p) => parseInt(p))
-		.sort((a, b) => b - a); // Descending
+		.sort((a, b) => b - a);
 
 	const highestPriority = priorities[0];
 	const topRequirements = byPriority[highestPriority];
 
-	// Check for conflicts at highest priority level
 	const uniqueTypes = [...new Set(topRequirements.map((req) => req.type))];
 
 	if (uniqueTypes.length > 1) {
@@ -54,27 +59,18 @@ export function resolveScaleType(requirements) {
 	return uniqueTypes[0];
 }
 
-/**
- * Resolve complete scale configuration (type + config) using priority system
- * @param {Array} requirements - Array of {type, priority, markId, config} objects
- * @returns {Object} - {type: string, config: Object}
- */
-export function resolveScaleConfiguration(requirements) {
+export function resolveScaleConfiguration(
+	requirements: ScaleRequirement[] | null
+): ResolvedScaleConfiguration | null {
 	if (!requirements || requirements.length === 0) {
-		// No marks registered yet — return null to prevent premature scale creation.
-		// ChartScales will wait until at least one mark registers requirements.
 		return null;
 	}
 
-	// First resolve type using existing logic
 	const resolvedType = resolveScaleType(requirements);
 
-	// Then resolve configuration for that type
 	const typeRequirements = requirements.filter((req) => req.type === resolvedType);
 	const resolvedConfig = resolveConfigurationForType(typeRequirements, resolvedType);
 
-	// Extract columnName from highest-priority requirement
-	// Sort by priority descending, take first columnName found
 	const sorted = [...typeRequirements].sort((a, b) => (b.priority || 0) - (a.priority || 0));
 	const columnName = sorted.find((req) => req.columnName)?.columnName || null;
 
@@ -88,13 +84,10 @@ export function resolveScaleConfiguration(requirements) {
 	return { type: resolvedType, config: resolvedConfig, columnName };
 }
 
-/**
- * Generic configuration resolver using schema-driven approach
- * @param {Array} requirements - Requirements for a specific scale type
- * @param {string} scaleType - Scale type to resolve configuration for
- * @returns {Object} - Resolved configuration object
- */
-function resolveConfigurationForType(requirements, scaleType) {
+function resolveConfigurationForType(
+	requirements: ScaleRequirement[],
+	scaleType: string
+): Record<string, unknown> {
 	const schema = SCALE_CONFIG_SCHEMAS[scaleType];
 	if (!schema) {
 		console.warn(`⚠️ No configuration schema found for scale type: ${scaleType}`);
@@ -102,16 +95,14 @@ function resolveConfigurationForType(requirements, scaleType) {
 	}
 
 	const configs = requirements.map((req) => req.config || {});
-	const resolvedConfig = {};
+	const resolvedConfig: Record<string, unknown> = {};
 
-	// Process each property defined in schema
-	for (const [propName, propSchema] of Object.entries(schema)) {
+	for (const [propName, propSchema] of Object.entries(schema) as [string, PropertySchema][]) {
 		const values = configs.map((config) => config[propName]).filter((val) => val != null);
 
 		if (values.length === 0) continue;
 
-		// Validate all values
-		const validValues = [];
+		const validValues: unknown[] = [];
 		for (const value of values) {
 			if (validateConfigValue(value, propSchema)) {
 				validValues.push(value);
@@ -127,7 +118,6 @@ function resolveConfigurationForType(requirements, scaleType) {
 
 		if (validValues.length === 0) continue;
 
-		// Apply resolution strategy
 		try {
 			resolvedConfig[propName] = propSchema.strategy(validValues);
 			console.log(`🔧 Resolved ${scaleType}.${propName}: ${resolvedConfig[propName]}`, {
@@ -136,9 +126,12 @@ function resolveConfigurationForType(requirements, scaleType) {
 				description: propSchema.description
 			});
 		} catch (error) {
-			console.error(`❌ Failed to resolve ${scaleType}.${propName}:`, error.message);
+			console.error(
+				`❌ Failed to resolve ${scaleType}.${propName}:`,
+				(error as Error).message
+			);
 			throw new Error(
-				`Configuration resolution failed for ${scaleType}.${propName}: ${error.message}`
+				`Configuration resolution failed for ${scaleType}.${propName}: ${(error as Error).message}`
 			);
 		}
 	}

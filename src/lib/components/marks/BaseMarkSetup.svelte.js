@@ -13,9 +13,9 @@ import {
 	min,
 	max
 } from '@uwdata/mosaic-sql';
-import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities.js';
-import { TransformCompiler } from '$lib/transforms/TransformCompiler.js';
-import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor.js';
+import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
 import { viewManager } from '$lib/data/ViewManager.svelte.js';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
 

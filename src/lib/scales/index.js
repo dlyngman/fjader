@@ -9,11 +9,11 @@ export {
 	SCALE_PRIORITIES,
 	resolveScaleType,
 	resolveScaleConfiguration
-} from './ScalePriorities.js';
+} from './ScalePriorities';
 
 // NEW exports for extensible configuration
 export {
 	RESOLUTION_STRATEGIES,
 	SCALE_CONFIG_SCHEMAS,
 	validateConfigValue
-} from './ScaleConfigurationSchemas.js';
+} from './ScaleConfigurationSchemas';
