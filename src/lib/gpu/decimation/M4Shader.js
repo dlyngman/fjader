@@ -108,12 +108,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let domainMax = scale.p2;
 
 	let t = (x - domainMin) / (domainMax - domainMin);
-	if (t < 0.0 || t > 1.0) { return; }
 
-	let bin = min(u32(floor(t * f32(config.numBins))), config.numBins - 1u);
-
-	// ColorScaleState uses 1-indexed series (0=null, 1..N=categories).
-	// Convert to 0-indexed for bin partitioning. Single-series data is already 0.
+	// Series computation (before bin assignment — needed for boundary bins)
 	let rawSeries = u32(seriesValues[idx]);
 	var series = rawSeries;
 	if (config.numSeries > 1u) {
@@ -121,6 +117,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 		series = rawSeries - 1u;
 	}
 	if (series >= config.numSeries) { return; }
+
+	// Bin assignment: boundary bins capture off-screen points for line connectivity.
+	// Bins 0 and numBins-1 are boundary bins; bins 1..numBins-2 map to viewport pixels.
+	var bin: u32;
+	if (t < 0.0) {
+		bin = 0u;
+	} else if (t > 1.0) {
+		bin = config.numBins - 1u;
+	} else {
+		let innerBins = config.numBins - 2u;
+		bin = 1u + min(u32(floor(t * f32(innerBins))), innerBins - 1u);
+	}
 	let binKey = series * config.numBins + bin;
 
 	atomicMin(&bins[binKey].firstIdx, idx);
@@ -162,11 +170,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let domainMax = scale.p2;
 
 	let t = (x - domainMin) / (domainMax - domainMin);
-	if (t < 0.0 || t > 1.0) { return; }
 
-	let bin = min(u32(floor(t * f32(config.numBins))), config.numBins - 1u);
-
-	// Same 1-indexed → 0-indexed conversion as binPoints pass
+	// Series computation (before bin assignment — matches binPoints pass)
 	let rawSeries = u32(seriesValues[idx]);
 	var series = rawSeries;
 	if (config.numSeries > 1u) {
@@ -174,6 +179,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 		series = rawSeries - 1u;
 	}
 	if (series >= config.numSeries) { return; }
+
+	// Boundary bin clamping (matches binPoints pass)
+	var bin: u32;
+	if (t < 0.0) {
+		bin = 0u;
+	} else if (t > 1.0) {
+		bin = config.numBins - 1u;
+	} else {
+		let innerBins = config.numBins - 2u;
+		bin = 1u + min(u32(floor(t * f32(innerBins))), innerBins - 1u);
+	}
 	let binKey = series * config.numBins + bin;
 
 	let ySortable = floatToSortableUint(y);

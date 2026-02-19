@@ -162,7 +162,7 @@
 									x2="end"
 									y="civilization"
 									inset={0.5}
-									sort={{ y: "x1", order: "desc" }}
+									sort={{ y: "x1", order: "asc" }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
