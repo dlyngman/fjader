@@ -2,7 +2,7 @@
 	import { onMount, onDestroy, setContext, getContext } from 'svelte';
 	import { getGPUContext } from '$lib/gpu';
 
-	let { canvasComponents, facetIndex } = $props();
+	let { canvasComponents = undefined, facetIndex } = $props();
 
 	const c = getContext('chart');
 	const isFaceted = !!c.fx && facetIndex == null;

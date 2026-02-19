@@ -16,7 +16,7 @@
 
 	let {
 		table,
-		selection,
+		selection = undefined,
 		x,
 		x1 = 0,
 		x2 = x,

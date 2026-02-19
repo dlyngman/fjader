@@ -16,7 +16,7 @@
 
 	let {
 		table,
-		selection,
+		selection = undefined,
 		x,
 		y,
 		text,

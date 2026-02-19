@@ -17,7 +17,7 @@
 
 	let {
 		table,
-		selection,
+		selection = undefined,
 		y, // Independent dimension (goes up)
 		x, // Shorthand for x2 (the value)
 		x1 = 0, // Left baseline (default 0, or from stack transform)
