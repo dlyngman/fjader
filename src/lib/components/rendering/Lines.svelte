@@ -44,7 +44,8 @@
 		dotRadius = 0, // 0 = strokeWidth/2 (gap-filling only), >0 = explicit radius in px
 		colorMode = 0, // 0 = constant, 1 = scale
 		colorScaleIndex = 0,
-		constantColor = [0.13, 0.55, 0.13, 1.0]
+		constantColor = [0.13, 0.55, 0.13, 1.0],
+		m4Decimator = null
 	} = $props();
 
 	const chartContext = getContext('chart');
@@ -77,6 +78,7 @@
 	let renderer = $state(null);
 	let initializationError = $state(null);
 	let quadGeometryBuffer;
+	const m4ComputeKey = `m4-${crypto.randomUUID()}`;
 
 	// Resolution and vertex count derived from curve type
 	const resolution = getCurveResolution(curve);
@@ -349,8 +351,13 @@
 			const view = new DataView(buffer);
 			const LE = true;
 
+			const pointCount = m4Decimator?.configured
+				? m4Decimator.outputSize
+				: xData
+					? xData.length
+					: 0;
 			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
-			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, xData ? xData.length : 0, LE);
+			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, pointCount, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
@@ -360,14 +367,52 @@
 			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
+
+			// Rebuild M4 render bind group (references current output buffers + markConstants)
+			if (m4Decimator?.configured) {
+				const perDataLayout = renderer.pipeline.getBindGroupLayout(1);
+				const markConstantsBuffer = renderer.getBuffer(BINDINGS.CONSTANTS);
+				if (perDataLayout && markConstantsBuffer) {
+					m4Decimator.createRenderBindGroup(perDataLayout, markConstantsBuffer);
+				}
+			}
 		}
 	});
 
-	// Instance count = number of points (segments use pairs, circles use each point)
+	// Instance count = number of points (or M4 output size when decimating)
 	$effect(() => {
 		if (renderer?.resourcesCreated && xData && xData.length > 1) {
-			renderer.updateInstanceCount(xData.length);
+			const count = m4Decimator?.configured ? m4Decimator.outputSize : xData.length;
+			renderer.updateInstanceCount(count);
 		}
+	});
+
+	// M4 compute work: register/unregister with GPUCoordinator
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !m4Decimator?.configured) {
+			gpuCoordinator.removeComputeWork(m4ComputeKey);
+			return;
+		}
+
+		gpuCoordinator.registerComputeWork(m4ComputeKey, (commandEncoder, scaleBindGroup) => {
+			const xBuf = renderer.getBuffer(BINDINGS.X);
+			const yBuf = renderer.getBuffer(BINDINGS.Y);
+			const seriesBuf = renderer.getBuffer(BINDINGS.SERIES);
+			const colorBuf = renderer.getBuffer(BINDINGS.COLOR);
+
+			if (!xBuf || !yBuf || !seriesBuf || !colorBuf) return;
+
+			m4Decimator.encode(
+				commandEncoder,
+				{ x: xBuf, y: yBuf, series: seriesBuf, color: colorBuf },
+				scaleBindGroup,
+				xData?.length ?? 0
+			);
+		});
+
+		return () => {
+			gpuCoordinator.removeComputeWork(m4ComputeKey);
+		};
 	});
 
 	// Facet layer registration (reactive — fires when FacetCells resolve)
@@ -414,6 +459,9 @@
 
 	function drawLines(passEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
+		if (m4Decimator?.renderBindGroup) {
+			passEncoder.setBindGroup(1, m4Decimator.renderBindGroup);
+		}
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
 		passEncoder.draw(quadVertexCount, renderer.instanceCount);
 	}
@@ -476,6 +524,7 @@
 	onMount(() => waitForWebGPU());
 
 	onDestroy(() => {
+		gpuCoordinator.removeComputeWork(m4ComputeKey);
 		if (quadGeometryBuffer) quadGeometryBuffer.destroy();
 		if (renderer) renderer.destroy();
 	});

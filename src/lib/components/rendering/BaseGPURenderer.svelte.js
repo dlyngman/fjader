@@ -238,6 +238,17 @@ export class BaseGPURenderer {
 		return this.#vertexBuffers.get(slot);
 	}
 
+	/**
+	 * Get a storage/uniform buffer by binding index.
+	 * Used by compute passes (e.g. M4 decimation) to read from
+	 * renderer data buffers or include markConstants in alternate bind groups.
+	 * @param {number} binding
+	 * @returns {GPUBuffer|undefined}
+	 */
+	getBuffer(binding) {
+		return this.#ownedResources.buffers.get(binding);
+	}
+
 	// ===== INTERNAL HELPERS =====
 
 	#scheduleBindGroupUpdate() {
