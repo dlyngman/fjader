@@ -5,7 +5,7 @@ import {
 	bakePalette,
 	getSchemeType,
 	parseColorToRGBA
-} from './color-utils.js';
+} from './color-utils';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
 
 /**

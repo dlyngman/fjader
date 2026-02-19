@@ -1,8 +1,10 @@
-// src/lib/scales/color-utils.js
+// src/lib/scales/color-utils.ts
 // Pure utility functions for color parsing and D3 scale creation
 
 import { color } from 'd3-color';
+import type { RGBColor, HSLColor } from 'd3-color';
 import { scaleOrdinal, scaleSequential, scaleDiverging } from 'd3-scale';
+import type { ScaleOrdinal, ScaleSequential, ScaleDiverging } from 'd3-scale';
 import {
 	// Sequential single-hue
 	interpolateBlues,
@@ -58,12 +60,18 @@ import {
 	schemeSet3,
 	schemeTableau10
 } from 'd3-scale-chromatic';
+import type { ColorScaleType } from '$lib/types';
+
+/** RGBA tuple with values in the 0–1 range. */
+export type RGBA = [number, number, number, number];
+
+type Interpolator = (t: number) => string;
 
 /**
  * Set of valid CSS named colors for constant color detection.
  * Used by BaseMarkSetup to distinguish "red" (constant) from "price" (field).
  */
-export const CSS_COLOR_NAMES = new Set([
+export const CSS_COLOR_NAMES: Set<string> = new Set([
 	'aliceblue',
 	'antiquewhite',
 	'aqua',
@@ -222,11 +230,8 @@ const RGB_REGEX =
 /**
  * Parse any CSS color string to [r, g, b, a] array with values 0-1.
  * Supports: hex (#rgb, #rrggbb, #rrggbbaa), rgb(), rgba(), hsl(), hsla(), named colors.
- *
- * @param {string} colorStr - CSS color string
- * @returns {[number, number, number, number]} RGBA array with values 0-1
  */
-export function parseColorToRGBA(colorStr) {
+export function parseColorToRGBA(colorStr: string): RGBA {
 	if (!colorStr || typeof colorStr !== 'string') {
 		return [0, 0, 0, 1]; // Default to black
 	}
@@ -244,9 +249,10 @@ export function parseColorToRGBA(colorStr) {
 	}
 
 	// Handle hsl/hsla and named colors using D3
-	const d3Color = color(trimmed);
+	const d3Color = color(trimmed) as (RGBColor | HSLColor | null);
 	if (d3Color) {
-		return [d3Color.r / 255, d3Color.g / 255, d3Color.b / 255, d3Color.opacity];
+		const rgb = d3Color.rgb();
+		return [rgb.r / 255, rgb.g / 255, rgb.b / 255, rgb.opacity];
 	}
 
 	// Fallback to black
@@ -257,7 +263,7 @@ export function parseColorToRGBA(colorStr) {
 /**
  * Parse hex color string to RGBA array.
  */
-function parseHexColor(hex) {
+function parseHexColor(hex: string): RGBA {
 	// Remove #
 	let h = hex.slice(1);
 
@@ -279,21 +285,21 @@ function parseHexColor(hex) {
 /**
  * Parse rgb() or rgba() color string to RGBA array.
  */
-function parseRGBColor(rgb) {
+function parseRGBColor(rgb: string): RGBA {
 	const match = rgb.match(RGB_REGEX);
 
 	if (!match) {
 		return [0, 0, 0, 1];
 	}
 
-	const parseComponent = (val) => {
+	const parseComponent = (val: string): number => {
 		if (val.endsWith('%')) {
 			return parseFloat(val) / 100;
 		}
 		return parseFloat(val) / 255;
 	};
 
-	const parseAlpha = (val) => {
+	const parseAlpha = (val: string | undefined): number => {
 		if (!val) return 1;
 		if (val.endsWith('%')) {
 			return parseFloat(val) / 100;
@@ -312,7 +318,7 @@ function parseRGBColor(rgb) {
 /**
  * D3 color scheme mappings.
  */
-const SEQUENTIAL_SCHEMES = {
+const SEQUENTIAL_SCHEMES: Record<string, Interpolator> = {
 	// Single-hue
 	blues: interpolateBlues,
 	greens: interpolateGreens,
@@ -347,7 +353,7 @@ const SEQUENTIAL_SCHEMES = {
 	ylorrd: interpolateYlOrRd
 };
 
-const DIVERGING_SCHEMES = {
+const DIVERGING_SCHEMES: Record<string, Interpolator> = {
 	brbg: interpolateBrBG,
 	prgn: interpolatePRGn,
 	piyg: interpolatePiYG,
@@ -359,12 +365,12 @@ const DIVERGING_SCHEMES = {
 	spectral: interpolateSpectral
 };
 
-const CYCLICAL_SCHEMES = {
+const CYCLICAL_SCHEMES: Record<string, Interpolator> = {
 	rainbow: interpolateRainbow,
 	sinebow: interpolateSinebow
 };
 
-const ORDINAL_SCHEMES = {
+const ORDINAL_SCHEMES: Record<string, readonly string[]> = {
 	category10: schemeCategory10,
 	accent: schemeAccent,
 	dark2: schemeDark2,
@@ -380,39 +386,36 @@ const ORDINAL_SCHEMES = {
 /**
  * Get the interpolator function for a scheme name.
  * Returns null if scheme is ordinal (discrete colors, not interpolatable).
- *
- * @param {string} scheme - Scheme name (case-insensitive)
- * @returns {Function|null} D3 interpolator function or null
  */
-export function getInterpolator(scheme) {
+export function getInterpolator(scheme: string): Interpolator | null {
 	const key = scheme.toLowerCase();
 	return SEQUENTIAL_SCHEMES[key] || DIVERGING_SCHEMES[key] || CYCLICAL_SCHEMES[key] || null;
 }
 
 /**
  * Get the color array for an ordinal scheme.
- *
- * @param {string} scheme - Scheme name (case-insensitive)
- * @returns {string[]|null} Array of color strings or null
  */
-export function getOrdinalColors(scheme) {
+export function getOrdinalColors(scheme: string): readonly string[] | null {
 	const key = scheme.toLowerCase();
 	return ORDINAL_SCHEMES[key] || null;
 }
 
 /**
  * Determine if a scheme is ordinal (discrete) or continuous.
- *
- * @param {string} scheme - Scheme name
- * @returns {'ordinal'|'sequential'|'diverging'|'cyclical'|null}
  */
-export function getSchemeType(scheme) {
+export function getSchemeType(scheme: string): ColorScaleType | null {
 	const key = scheme.toLowerCase();
 	if (ORDINAL_SCHEMES[key]) return 'ordinal';
 	if (SEQUENTIAL_SCHEMES[key]) return 'sequential';
 	if (DIVERGING_SCHEMES[key]) return 'diverging';
 	if (CYCLICAL_SCHEMES[key]) return 'cyclical';
 	return null;
+}
+
+/** A D3 scale that maps numeric input to color strings and exposes its domain. */
+interface GradientScale {
+	(value: number): string;
+	domain(): number[];
 }
 
 /**
@@ -422,12 +425,8 @@ export function getSchemeType(scheme) {
  * The scale's domain logic is preserved: for diverging scales with asymmetric
  * domains (e.g., [-10, 0, 100]), the midpoint color will appear at the correct
  * texture coordinate.
- *
- * @param {Function} d3Scale - Configured D3 scale (from createD3Scale)
- * @param {number} steps - Texture resolution (default 256)
- * @returns {Float32Array} steps*4 element array (steps colors × 4 components)
  */
-export function bakeGradient(d3Scale, steps = 256) {
+export function bakeGradient(d3Scale: GradientScale, steps: number = 256): Float32Array {
 	const result = new Float32Array(steps * 4);
 
 	// Get the input domain from the scale itself
@@ -441,7 +440,7 @@ export function bakeGradient(d3Scale, steps = 256) {
 		const value = min + t * (max - min);
 
 		// Pass data value through d3Scale - this handles diverging logic, midpoints, etc.
-		const c = color(d3Scale(value));
+		const c = color(d3Scale(value))!.rgb();
 
 		const idx = i * 4;
 		result[idx] = c.r / 255;
@@ -453,26 +452,30 @@ export function bakeGradient(d3Scale, steps = 256) {
 	return result;
 }
 
+interface BakePaletteOptions {
+	reverse?: boolean;
+}
+
 /**
  * Bake an ordinal palette into a Float32Array for GPU upload.
  * Pads to exactly 32 colors (max palette size).
- *
- * @param {string|string[]} schemeOrColors - Scheme name or array of color strings
- * @param {Object} options - Additional options
- * @param {boolean} options.reverse - Reverse the palette order
- * @returns {Float32Array} 128-element array (32 colors × 4 components)
  */
-export function bakePalette(schemeOrColors, options = {}) {
+export function bakePalette(
+	schemeOrColors: string | readonly string[],
+	options: BakePaletteOptions = {}
+): Float32Array {
 	const maxColors = 32;
 	const result = new Float32Array(maxColors * 4);
 	const { reverse = false } = options;
 
-	let colors;
+	let colors: readonly string[];
 	if (typeof schemeOrColors === 'string') {
-		colors = getOrdinalColors(schemeOrColors);
-		if (!colors) {
+		const looked = getOrdinalColors(schemeOrColors);
+		if (!looked) {
 			console.warn(`Unknown ordinal scheme: ${schemeOrColors}, falling back to tableau10`);
 			colors = schemeTableau10;
+		} else {
+			colors = looked;
 		}
 	} else {
 		colors = schemeOrColors;
@@ -484,7 +487,7 @@ export function bakePalette(schemeOrColors, options = {}) {
 
 	// Fill palette, cycling if needed for indices beyond color count
 	for (let i = 0; i < maxColors; i++) {
-		const c = color(colors[i % colors.length]);
+		const c = color(colors[i % colors.length])!.rgb();
 		const idx = i * 4;
 		result[idx] = c.r / 255;
 		result[idx + 1] = c.g / 255;
@@ -495,25 +498,32 @@ export function bakePalette(schemeOrColors, options = {}) {
 	return result;
 }
 
+type D3ColorScale =
+	| ScaleOrdinal<string, string>
+	| ScaleSequential<string>
+	| ScaleDiverging<string>;
+
+interface CreateD3ScaleOptions {
+	reverse?: boolean;
+	midpoint?: number;
+}
+
 /**
  * Create a D3 scale for a color scheme.
  * Used for legends, CPU-side color lookups, AND as input to bakeGradient.
- *
- * @param {string} scheme - Scheme name
- * @param {Array} domain - Domain values (2 elements for sequential, 3 for diverging with explicit midpoint)
- * @param {Object} options - Scale options
- * @param {boolean} options.reverse - Reverse the scale
- * @param {number} options.midpoint - Explicit midpoint for diverging scales (default: domain center)
- * @returns {Function} D3 scale function
  */
-export function createD3Scale(scheme, domain, options = {}) {
+export function createD3Scale(
+	scheme: string,
+	domain: number[],
+	options: CreateD3ScaleOptions = {}
+): D3ColorScale {
 	const schemeType = getSchemeType(scheme);
 	const { reverse = false, midpoint } = options;
 
 	if (schemeType === 'ordinal') {
-		let colors = getOrdinalColors(scheme);
+		let colors = getOrdinalColors(scheme)!;
 		if (reverse) colors = [...colors].reverse();
-		return scaleOrdinal().domain(domain).range(colors);
+		return scaleOrdinal<string, string>().domain(domain.map(String)).range(colors as string[]);
 	}
 
 	// Get interpolator, handle reverse
@@ -525,7 +535,7 @@ export function createD3Scale(scheme, domain, options = {}) {
 
 	if (reverse) {
 		const original = interpolator;
-		interpolator = (t) => original(1 - t);
+		interpolator = (t: number) => original(1 - t);
 	}
 
 	// Diverging scales use scaleDiverging with 3-point domain
@@ -541,11 +551,8 @@ export function createD3Scale(scheme, domain, options = {}) {
 
 /**
  * Check if a string looks like a color value (constant) vs a field name.
- *
- * @param {string} value - Value to check
- * @returns {boolean} True if value appears to be a color constant
  */
-export function isColorConstant(value) {
+export function isColorConstant(value: string): boolean {
 	if (!value || typeof value !== 'string') return false;
 
 	const trimmed = value.trim().toLowerCase();

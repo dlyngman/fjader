@@ -2,7 +2,7 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Areas, Lines } from '../rendering/index.js';
-	import { parseColorToRGBA } from '$lib/scales/color-utils.js';
+	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
 		buildSelectFromChannels,
