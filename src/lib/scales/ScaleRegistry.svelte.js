@@ -1,11 +1,11 @@
 // src/lib/scales/ScaleRegistry.svelte.js
 import { setContext, getContext, untrack } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
-import { LinearScaleState } from './LinearScaleState.svelte.js';
-import { TimeScaleState } from './TimeScaleState.svelte.js';
-import { BandScaleState } from './BandScaleState.svelte.js';
-import { ColorScaleState } from './ColorScaleState.svelte.js';
-import { SizeScaleState } from './SizeScaleState.svelte.js';
+import { LinearScaleState } from './LinearScaleState.svelte';
+import { TimeScaleState } from './TimeScaleState.svelte';
+import { BandScaleState } from './BandScaleState.svelte';
+import { ColorScaleState } from './ColorScaleState.svelte';
+import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
 
 // Helper to stringify sorted

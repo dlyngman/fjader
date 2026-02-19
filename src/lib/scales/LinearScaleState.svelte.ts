@@ -1,8 +1,9 @@
 // =============================================================================
-// LinearScaleState.svelte.js - Refactored with SpringPair physics
+// LinearScaleState.svelte.ts - Refactored with SpringPair physics
 // =============================================================================
 
 import { scaleLinear } from 'd3-scale';
+import type { ScaleLinear } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
 import { SpringPair, SPRING_PRESETS } from '$lib/animation';
 
@@ -16,6 +17,32 @@ const SCALE_SPRING_PRESETS = {
 	reset: SPRING_PRESETS.reset.stiffness, // 150 - gentle reset animation
 	zoomIn: 200 // Initial zoom-in effect
 };
+
+// =============================================================================
+// TYPES
+// =============================================================================
+
+interface LinearScaleOptions {
+	disableZoom?: boolean;
+	zoomInEffect?: boolean;
+	zoomInFactor?: number;
+	zoomInSpringConfig?: { stiffness?: number };
+}
+
+interface PanContext {
+	initialMin: number;
+	initialMax: number;
+	domainWidth: number;
+	screenToDataRatio: number;
+	axis: 'x' | 'y';
+	startScreenPos: number;
+}
+
+interface DomainAccessor {
+	readonly current: Float64Array;
+	readonly target: [number, number];
+	set(newValue: [number, number], options?: { instant?: boolean }): void;
+}
 
 // =============================================================================
 // LINEAR SCALE STATE CLASS
@@ -35,36 +62,36 @@ const SCALE_SPRING_PRESETS = {
  */
 export class LinearScaleState {
 	// --- Svelte Reactive State ---
-	name = $state('');
-	ready = $state(false);
-	currentDataPoint = $state(null);
+	name: string = $state('');
+	ready: boolean = $state(false);
+	currentDataPoint: number | null = $state(null);
 
 	// Reactivity trigger - bump when render state changes
-	_version = $state(0);
-	_targetVersion = $state(0); // Increments only when target changes, not every frame
+	_version: number = $state(0);
+	_targetVersion: number = $state(0); // Increments only when target changes, not every frame
 
 	// --- Identity ---
-	id;
+	id: string;
 
 	// --- Spring Physics ---
-	#springPair;
-	#springOutput = new Float64Array(2);
+	#springPair: SpringPair;
+	#springOutput: Float64Array = new Float64Array(2);
 
 	//
-	#domainCurrentBuffer = new Float64Array(2);
+	#domainCurrentBuffer: Float64Array = new Float64Array(2);
 	#clampResult = { min: 0, max: 0 };
 
 	// --- Cached Render Values (updated via updateRenderState) ---
-	#renderMin = 0;
-	#renderMax = 1;
+	#renderMin: number = 0;
+	#renderMax: number = 1;
 
 	// --- Initial/Base Extent ---
-	#initExtent = new Float64Array(2);
-	#extent = new Float64Array(2);
+	#initExtent: Float64Array = new Float64Array(2);
+	#extent: Float64Array = new Float64Array(2);
 
 	// --- D3 Scale (reused to avoid allocation) ---
-	#sharedScale = scaleLinear();
-	#customFormat = $state(null);
+	#sharedScale: ScaleLinear<number, number> = scaleLinear();
+	#customFormat: string | ((value: number) => string) | null = $state(null);
 
 	// --- GPU State (mutated in place for zero-alloc) ---
 	gpuState = {
@@ -77,19 +104,19 @@ export class LinearScaleState {
 	// --- Constraints ---
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
 	zoomLimits = { max: 10, min: 100 }; // max = pan multiplier, min = zoom divisor
-	disableZoom = false; // When true, user zoom/pan is ignored (for auto-scaling axes)
+	disableZoom: boolean = false; // When true, user zoom/pan is ignored (for auto-scaling axes)
 
 	// --- Mark Extent Tracking ---
-	#extents = new Map();
-	#enableUpdates = $state(true);
-	#frozenExtent = null;
+	#extents: Map<string, [number, number]> = new Map();
+	#enableUpdates: boolean = $state(true);
+	#frozenExtent: [number, number] | null = null;
 
 	// --- Animation State ---
-	#isAnimating = false;
-	#gpuCoordinator = null;
+	#isAnimating: boolean = false;
+	#gpuCoordinator: any = null;
 
 	// --- Pan Context ---
-	#panContext = null;
+	#panContext: PanContext | null = null;
 
 	// --- Zoom Accumulator (for coalesced wheel events) ---
 	#zoomAccumulator = {
@@ -106,23 +133,18 @@ export class LinearScaleState {
 	};
 
 	// --- Affected Charts Cache (set by GPUCoordinator) ---
-	_affectedChartsArray = [];
+	_affectedChartsArray: string[] = [];
 
-	/**
-	 * @param {string} name - Scale name (used for sharing)
-	 * @param {[number, number]} extent - Initial domain extent
-	 * @param {string} type - Scale type (currently only 'linear' supported here)
-	 * @param {[number, number]} zoomLimits - [maxPanMultiplier, minZoomDivisor]
-	 * @param {object} options - Additional options
-	 * @param {object} gpuCoordinator - GPUCoordinator instance
-	 */
+	// --- Domain Accessor ---
+	domain!: DomainAccessor;
+
 	constructor(
-		name,
-		extent = [0, 100],
-		type = 'linear',
-		zoomLimits = [10, 100],
-		options = {},
-		gpuCoordinator = null
+		name: string,
+		extent: [number, number] = [0, 100],
+		type: string = 'linear',
+		zoomLimits: [number, number] = [10, 100],
+		options: LinearScaleOptions = {},
+		gpuCoordinator: any = null
 	) {
 		this.id = crypto.randomUUID();
 		this.name = name;
@@ -176,7 +198,7 @@ export class LinearScaleState {
 	// DOMAIN ACCESSOR
 	// ===========================================================================
 
-	#createDomainAccessor() {
+	#createDomainAccessor(): DomainAccessor {
 		const self = this;
 		return {
 			/** Current render domain (for reactive access) */
@@ -188,13 +210,13 @@ export class LinearScaleState {
 			},
 
 			/** Target domain (what we're animating toward) */
-			get target() {
+			get target(): [number, number] {
 				self._targetVersion; // Register Svelte dependency (only changes on user input)
 				return [self.#springPair.targetA, self.#springPair.targetB];
 			},
 
 			/** Set domain with optional instant mode */
-			set(newValue, options = {}) {
+			set(newValue: [number, number], options: { instant?: boolean } = {}) {
 				if (options.instant) {
 					self.#setInstant(newValue[0], newValue[1]);
 				} else {
@@ -212,7 +234,7 @@ export class LinearScaleState {
 	 * Process accumulated input before physics step.
 	 * Called by GPUCoordinator at the start of each frame.
 	 */
-	_applyInput() {
+	_applyInput(): void {
 		// Process accumulated zoom
 		if (this.#zoomAccumulator.hasUpdates) {
 			const scaleFactor = Math.exp(this.#zoomAccumulator.logScale);
@@ -228,17 +250,15 @@ export class LinearScaleState {
 	 * Advance physics by one fixed timestep.
 	 * Called by AnimationLoop at fixed rate (360Hz).
 	 */
-	step() {
+	step(): void {
 		this.#springPair.step();
 	}
 
 	/**
 	 * Update render state with extrapolation.
 	 * Called once per frame by AnimationLoop.
-	 *
-	 * @param {number} extrapolationDt - Time to extrapolate in seconds
 	 */
-	updateRenderState(extrapolationDt) {
+	updateRenderState(extrapolationDt: number): void {
 		// const rendered = this.#springPair.getRenderable(extrapolationDt);
 		this.#springPair.getRenderableInto(extrapolationDt, this.#springOutput);
 		this.#renderMin = this.#springOutput[0];
@@ -255,14 +275,14 @@ export class LinearScaleState {
 	 * Check if spring is at rest.
 	 * Used by AnimationLoop to determine when to stop.
 	 */
-	isAtRest() {
+	isAtRest(): boolean {
 		return this.#springPair.isAtRest();
 	}
 
 	/**
 	 * Called by GPUCoordinator when this scale stops animating.
 	 */
-	_markAtRest() {
+	_markAtRest(): void {
 		this.#isAnimating = false;
 	}
 
@@ -272,15 +292,14 @@ export class LinearScaleState {
 
 	/**
 	 * Start a pan interaction.
-	 * @param {object} context - Pan context with initialDomain, screenToDataRatio, etc.
 	 */
-	setPanContext(context) {
+	setPanContext(context: {
+		screenToDataRatio: number;
+		axis: 'x' | 'y';
+		initialScreenPos: number;
+	}): void {
 		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
 
-		// console.log(`=== setPanContext for ${this.name} (${this.id}) ===`);
-		// console.log('axis:', context.axis);
-		// console.log('#isAnimating before:', this.#isAnimating);
-		// console.log('#gpuCoordinator exists:', !!this.#gpuCoordinator);
 		this.#panContext = {
 			initialMin: this.#springPair.currentA,
 			initialMax: this.#springPair.currentB,
@@ -290,20 +309,14 @@ export class LinearScaleState {
 			startScreenPos: context.initialScreenPos
 		};
 
-		// Grab springs - snaps target to current, zeros velocity
-		// this.#springPair.grab();
 		this.#setStiffness(SCALE_SPRING_PRESETS.pan);
 		this.#ensureAnimating();
-
-		// console.log('#isAnimating after:', this.#isAnimating);
 	}
 
 	/**
 	 * Update pan position.
-	 * @param {number} screenX - Current screen X position
-	 * @param {number} screenY - Current screen Y position
 	 */
-	updatePanPosition(screenX, screenY) {
+	updatePanPosition(screenX: number, screenY: number): void {
 		if (!this.#panContext) return;
 
 		const ctx = this.#panContext;
@@ -328,17 +341,15 @@ export class LinearScaleState {
 	/**
 	 * End pan interaction.
 	 */
-	endPan() {
+	endPan(): void {
 		this.#panContext = null;
 		this.#setStiffness(SCALE_SPRING_PRESETS.default);
 	}
 
 	/**
 	 * Accumulate zoom input (for coalesced wheel events).
-	 * @param {number} dataCenter - Zoom center in data coordinates
-	 * @param {number} scaleFactor - Zoom scale factor (>1 = zoom in)
 	 */
-	accumulateZoom(dataCenter, scaleFactor) {
+	accumulateZoom(dataCenter: number, scaleFactor: number): void {
 		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
 
 		this.#zoomAccumulator.logScale += Math.log(scaleFactor);
@@ -350,9 +361,8 @@ export class LinearScaleState {
 
 	/**
 	 * Reset zoom to show full extent.
-	 * @param {boolean} instant - Apply instantly without animation
 	 */
-	resetZoom(instant = false) {
+	resetZoom(instant: boolean = false): void {
 		const [min, max] = this.effectiveExtent;
 		if (!isFinite(min) || !isFinite(max) || min === max) return;
 
@@ -394,7 +404,7 @@ export class LinearScaleState {
 	 * Get a D3 scale configured for the given axis and size.
 	 * Reuses internal scale object to avoid allocation.
 	 */
-	getBaseScale(axis, size) {
+	getBaseScale(axis: string, size: number): ScaleLinear<number, number> {
 		if (axis === 'x') {
 			this.#sharedScale.range([0, size]);
 		} else {
@@ -406,11 +416,8 @@ export class LinearScaleState {
 	/**
 	 * Generate tick values for grid lines and axes.
 	 * Uses current animated domain (renderMin/renderMax) for smooth updates.
-	 *
-	 * @param {number} count - Approximate number of ticks desired
-	 * @returns {Array<number>} Array of tick values
 	 */
-	getTicks(count = 5) {
+	getTicks(count: number = 5): number[] {
 		this._version; // Register Svelte dependency for reactivity
 		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
 		return this.#sharedScale.ticks(count);
@@ -420,9 +427,8 @@ export class LinearScaleState {
 	 * Set a custom format for tick labels, margin labels, and tooltips.
 	 * String specifiers (e.g., "+%", ".2f") get dynamic precision from D3's scale.
 	 * Functions are used as-is with fixed behavior.
-	 * @param {string|Function|null} format - D3 format specifier, function, or null to reset
 	 */
-	setCustomFormat(format) {
+	setCustomFormat(format: string | ((value: number) => string) | null): void {
 		this.#customFormat = format ?? null;
 	}
 
@@ -430,25 +436,21 @@ export class LinearScaleState {
 	 * Get a formatter function for tick values.
 	 * String specifiers are passed to D3's scale.tickFormat(count, specifier)
 	 * which adapts precision to the current zoom level / tick step.
-	 *
-	 * @param {number} count - Number of ticks (helps determine precision)
-	 * @returns {Function} Formatter function (value) => string
 	 */
-	tickFormat(count = 5) {
+	tickFormat(count: number = 5): (value: number) => string {
 		this._version; // Register Svelte dependency for reactivity
 		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
 		if (typeof this.#customFormat === 'function') return this.#customFormat;
-		return this.#sharedScale.tickFormat(count, this.#customFormat ?? undefined);
+		return this.#sharedScale.tickFormat(count, this.#customFormat ?? undefined) as (
+			value: number
+		) => string;
 	}
 
 	/**
 	 * Format a single value according to the scale's formatter.
 	 * Useful for tooltips, labels, etc.
-	 *
-	 * @param {number} value - Value to format
-	 * @returns {string} Formatted string
 	 */
-	formatValue(value) {
+	formatValue(value: number): string {
 		return this.tickFormat()(value);
 	}
 
@@ -456,7 +458,7 @@ export class LinearScaleState {
 	 * Update a D3 scale's domain with current render values.
 	 * Registers Svelte dependency via _version.
 	 */
-	updateScaleDomain(scale) {
+	updateScaleDomain(scale: ScaleLinear<number, number>): ScaleLinear<number, number> {
 		this._version; // Register dependency
 		scale.domain([this.#renderMin, this.#renderMax]);
 		return scale;
@@ -465,7 +467,7 @@ export class LinearScaleState {
 	/**
 	 * Reactive getter for domain (triggers Svelte updates).
 	 */
-	get domainForReactivity() {
+	get domainForReactivity(): [number, number] {
 		this._version;
 		return [this.#renderMin, this.#renderMax];
 	}
@@ -477,7 +479,7 @@ export class LinearScaleState {
 	/**
 	 * Convert data value to screen position.
 	 */
-	scaleDataToScreen(dataVal, rangeSize, isYAxis = false) {
+	scaleDataToScreen(dataVal: number, rangeSize: number, isYAxis: boolean = false): number {
 		const min = this.#renderMin;
 		const max = this.#renderMax;
 		const domainSpan = max - min;
@@ -496,7 +498,7 @@ export class LinearScaleState {
 	/**
 	 * Convert screen position to data value.
 	 */
-	invertScreenToData(screenVal, rangeSize, isYAxis = false) {
+	invertScreenToData(screenVal: number, rangeSize: number, isYAxis: boolean = false): number {
 		const min = this.#renderMin;
 		const max = this.#renderMax;
 
@@ -517,18 +519,14 @@ export class LinearScaleState {
 
 	/**
 	 * Register a mark's data extent with this scale.
-	 * @param {Array<number>} range - Data extent
-	 * @param {string} identifier - Mark identifier
-	 * @param {object} options - Options
-	 * @param {boolean} options.instant - Apply domain instantly without spring animation
 	 */
-	addMark(range, identifier, options = {}) {
-		let processedRange;
+	addMark(range: number[], identifier: string, options: { instant?: boolean } = {}): this {
+		let processedRange: [number, number];
 
 		if (range.length === 2) {
 			processedRange = [Math.min(range[0], range[1]), Math.max(range[0], range[1])];
 		} else if (range.length > 2) {
-			processedRange = d3Extent(range);
+			processedRange = d3Extent(range) as [number, number];
 		} else if (range.length === 1) {
 			processedRange = [range[0], range[0]];
 		} else {
@@ -547,7 +545,7 @@ export class LinearScaleState {
 	/**
 	 * Remove a mark's extent from this scale.
 	 */
-	removeMark(identifier) {
+	removeMark(identifier: string): this {
 		if (this.#extents.has(identifier)) {
 			this.#extents.delete(identifier);
 
@@ -560,10 +558,8 @@ export class LinearScaleState {
 
 	/**
 	 * Recompute extent from all registered marks.
-	 * @param {boolean} nice - Apply nice rounding to domain
-	 * @param {boolean} instant - Apply domain instantly without spring animation
 	 */
-	updateExtentFromExtents(nice = true, instant = false) {
+	updateExtentFromExtents(nice: boolean = true, instant: boolean = false): void {
 		if (!this.#enableUpdates || this.#extents.size === 0) return;
 
 		const extents = Array.from(this.#extents.values());
@@ -586,7 +582,7 @@ export class LinearScaleState {
 	/**
 	 * Get the effective extent (respects frozen state).
 	 */
-	get effectiveExtent() {
+	get effectiveExtent(): [number, number] {
 		return this.#enableUpdates
 			? [this.#extent[0], this.#extent[1]]
 			: this.#frozenExtent || [this.#extent[0], this.#extent[1]];
@@ -595,7 +591,7 @@ export class LinearScaleState {
 	/**
 	 * Reset domain limits based on current extent and zoom limits.
 	 */
-	resetDomainLimits() {
+	resetDomainLimits(): void {
 		const [min, max] = this.effectiveExtent;
 		const w = max - min;
 		this.domainLimits.min = min - this.zoomLimits.max * w;
@@ -605,9 +601,8 @@ export class LinearScaleState {
 
 	/**
 	 * Set the zoom depth limit (how many times user can zoom into the data extent).
-	 * @param {number} zoomDivisor - e.g., 10000 means zoom to 1/10000th of extent
 	 */
-	setZoomLimit(zoomDivisor) {
+	setZoomLimit(zoomDivisor: number): void {
 		this.zoomLimits.min = zoomDivisor;
 		if (this.#extents.size > 0) {
 			this.resetDomainLimits();
@@ -616,9 +611,8 @@ export class LinearScaleState {
 
 	/**
 	 * Set the pan boundary limit (how far past data edges user can pan).
-	 * @param {number} panMultiplier - e.g., 20 means pan up to 20x the extent past edges
 	 */
-	setPanLimit(panMultiplier) {
+	setPanLimit(panMultiplier: number): void {
 		this.zoomLimits.max = panMultiplier;
 		if (this.#extents.size > 0) {
 			this.resetDomainLimits();
@@ -629,14 +623,14 @@ export class LinearScaleState {
 	 * Check if scale has a valid domain from marks.
 	 * Returns true if at least one mark has contributed extent data.
 	 */
-	get hasDomain() {
+	get hasDomain(): boolean {
 		return this.#extents.size > 0;
 	}
 
 	/**
 	 * Mark scale as ready (after initial data load).
 	 */
-	setReady() {
+	setReady(): void {
 		this.ready = true;
 	}
 
@@ -644,13 +638,13 @@ export class LinearScaleState {
 	// PRIVATE METHODS
 	// ===========================================================================
 
-	#setTarget(min, max) {
+	#setTarget(min: number, max: number): void {
 		this.#springPair.setTarget(min, max);
 		this._targetVersion++; // Trigger reactivity for target watchers
 		this.#ensureAnimating();
 	}
 
-	#setInstant(min, max) {
+	#setInstant(min: number, max: number): void {
 		this.#springPair.set(min, max);
 		this.#renderMin = min;
 		this.#renderMax = max;
@@ -659,11 +653,11 @@ export class LinearScaleState {
 		this._targetVersion++; // Trigger reactivity for target watchers
 	}
 
-	#setStiffness(stiffness) {
+	#setStiffness(stiffness: number): void {
 		this.#springPair.configure(stiffness);
 	}
 
-	#updateGpuState() {
+	#updateGpuState(): void {
 		const min = this.#renderMin;
 		const max = this.#renderMax;
 		const range = max - min;
@@ -673,14 +667,14 @@ export class LinearScaleState {
 		this.gpuState.domainScale = range === 0 ? 0 : 1 / range;
 	}
 
-	#ensureAnimating() {
+	#ensureAnimating(): void {
 		if (!this.#isAnimating && this.#gpuCoordinator) {
 			this.#isAnimating = true;
 			this.#gpuCoordinator.addAnimatingScale(this);
 		}
 	}
 
-	#applyZoomToTarget(center, scaleFactor) {
+	#applyZoomToTarget(center: number, scaleFactor: number): void {
 		const min = this.#springPair.targetA;
 		const max = this.#springPair.targetB;
 		const curWidth = max - min;
@@ -699,7 +693,7 @@ export class LinearScaleState {
 		this.#setTarget(clamped.min, clamped.max);
 	}
 
-	#clampDomain(min, max) {
+	#clampDomain(min: number, max: number): { min: number; max: number } {
 		const limits = this.domainLimits;
 		const width = max - min;
 		const limitWidth = limits.max - limits.min;
@@ -733,10 +727,8 @@ export class LinearScaleState {
 
 	/**
 	 * Set the extent values directly. Used by TimeScaleState for time-aware nice rounding.
-	 * @param {number} min
-	 * @param {number} max
 	 */
-	_setExtent(min, max) {
+	_setExtent(min: number, max: number): void {
 		this.#extent[0] = min;
 		this.#extent[1] = max;
 	}
@@ -745,7 +737,7 @@ export class LinearScaleState {
 	// CLEANUP
 	// ===========================================================================
 
-	destroy() {
+	destroy(): void {
 		this.#isAnimating = false;
 		if (this.#gpuCoordinator?.removeAnimatingScale) {
 			this.#gpuCoordinator.removeAnimatingScale(this);
