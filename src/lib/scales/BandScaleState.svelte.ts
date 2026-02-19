@@ -1,7 +1,23 @@
-// src/lib/scales/BandScaleState.svelte.js
+// src/lib/scales/BandScaleState.svelte.ts
 
 import { scaleBand } from 'd3-scale';
+import type { ScaleBand } from 'd3-scale';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
+
+interface BandScaleConfig {
+	padding?: number;
+	paddingInner?: number | null;
+	paddingOuter?: number | null;
+	align?: number;
+	sourceColumn?: string | null;
+}
+
+interface BandGpuConfig {
+	categoryCount: number;
+	paddingInner: number;
+	paddingOuter: number;
+	align: number;
+}
 
 /**
  * BandScaleState manages categorical (band/point) scales.
@@ -22,54 +38,54 @@ export class BandScaleState {
 	// =========================================================================
 	// IDENTITY & TYPE
 	// =========================================================================
-	id = crypto.randomUUID();
-	#scaleId = crypto.randomUUID(); // Unique ID for ViewManager registration
-	name = $state('');
-	type = 'band';
-	ready = $state(false);
-	_version = $state(0);
+	id: string = crypto.randomUUID();
+	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
+	name: string = $state('');
+	type: string = 'band';
+	ready: boolean = $state(false);
+	_version: number = $state(0);
 
 	// ViewManager integration - tracks tables this scale has registered columns for
-	#registeredTables = new Set();
-	#viewsCreated = new Set(); // Tables that have had their view column created (one-shot)
+	#registeredTables: Set<string> = new Set();
+	#viewsCreated: Set<string> = new Set(); // Tables that have had their view column created (one-shot)
 
 	// =========================================================================
 	// SELECTION STATE
 	// =========================================================================
-	#activeValues = $state(null); // null = all active, Set = only these active
+	#activeValues: Set<string> | null = $state(null); // null = all active, Set = only these active
 
 	// =========================================================================
 	// POINTER STATE
 	// =========================================================================
-	currentDataPoint = $state(null); // Band index under cursor (integer), or null
+	currentDataPoint: number | null = $state(null); // Band index under cursor (integer), or null
 
 	// =========================================================================
 	// DOMAIN STATE
 	// =========================================================================
-	#domain = $state([]);
-	#extents = new Map(); // Stores domains from different marks
-	#sortOrder = null; // Preferred category ordering from a mark with sort config
-	#domainUpdateScheduled = false; // Microtask debounce for updateDomainFromExtents
+	#domain: string[] = $state([]);
+	#extents: Map<string, string[]> = new Map(); // Stores domains from different marks
+	#sortOrder: string[] | null = null; // Preferred category ordering from a mark with sort config
+	#domainUpdateScheduled: boolean = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
 	// CONFIGURATION (D3 band scale parameters)
 	// =========================================================================
-	#padding = 0.1;
-	#paddingInner = null;
-	#paddingOuter = null;
-	#align = 0.5;
-	#sourceColumn = null; // Actual SQL column name (defaults to this.name if null)
+	#padding: number = 0.1;
+	#paddingInner: number | null = null;
+	#paddingOuter: number | null = null;
+	#align: number = 0.5;
+	#sourceColumn: string | null = null; // Actual SQL column name (defaults to this.name if null)
 
 	// =========================================================================
 	// FREEZE/DEBOUNCE FUNCTIONALITY
 	// =========================================================================
-	#enableUpdates = $state(true);
-	#frozenDomain = null;
+	#enableUpdates: boolean = $state(true);
+	#frozenDomain: string[] | null = null;
 
 	// =========================================================================
 	// D3 SCALE INSTANCE (Reused for performance)
 	// =========================================================================
-	#sharedScale = scaleBand();
+	#sharedScale: ScaleBand<string> = scaleBand();
 
 	// =========================================================================
 	// DERIVED STATE
@@ -79,10 +95,10 @@ export class BandScaleState {
 	 * Category-to-index mapping (derived)
 	 * Used by marks to convert category strings to GPU indices
 	 */
-	#categoryIndexMap = $derived.by(() => {
+	#categoryIndexMap: Map<string, number> = $derived.by(() => {
 		const domain = this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
 
-		const map = new Map();
+		const map = new Map<string, number>();
 		domain.forEach((category, index) => {
 			map.set(category, index);
 		});
@@ -92,22 +108,23 @@ export class BandScaleState {
 	/**
 	 * GPU state (derived) - for compatibility with coordinator
 	 */
-	gpuState = $derived.by(() => {
-		const categoryCount = this.#categoryIndexMap.size;
+	gpuState: { domainMin: number; domainMax: number; categoryCount: number; domainScale: number } =
+		$derived.by(() => {
+			const categoryCount = this.#categoryIndexMap.size;
 
-		return {
-			domainMin: 0,
-			domainMax: Math.max(0, categoryCount - 1),
-			categoryCount: categoryCount,
-			domainScale: 0
-		};
-	});
+			return {
+				domainMin: 0,
+				domainMax: Math.max(0, categoryCount - 1),
+				categoryCount: categoryCount,
+				domainScale: 0
+			};
+		});
 
 	// =========================================================================
 	// CONSTRUCTOR
 	// =========================================================================
 
-	constructor(name, domain = [], config = {}) {
+	constructor(name: string, domain: string[] = [], config: BandScaleConfig = {}) {
 		this.name = name;
 		this.#domain = [...domain];
 
@@ -131,7 +148,7 @@ export class BandScaleState {
 	// LIFECYCLE
 	// =========================================================================
 
-	setReady() {
+	setReady(): void {
 		this.ready = true;
 		console.log(`✅ BandScaleState "${this.name}" marked as ready`);
 	}
@@ -140,23 +157,23 @@ export class BandScaleState {
 	// ACTIVE VALUES (selection feedback)
 	// =========================================================================
 
-	get activeValues() {
+	get activeValues(): Set<string> | null {
 		return this.#activeValues;
 	}
 
-	setActiveValues(values) {
+	setActiveValues(values: Iterable<string>): void {
 		this.#activeValues = values instanceof Set ? values : new Set(values);
 	}
 
-	clearActiveValues() {
+	clearActiveValues(): void {
 		this.#activeValues = null;
 	}
 
-	isActive(value) {
+	isActive(value: string): boolean {
 		return this.#activeValues == null || this.#activeValues.has(value);
 	}
 
-	destroy() {
+	destroy(): void {
 		// Unregister from ViewManager
 		this.#unregisterFromViewManager();
 
@@ -174,7 +191,7 @@ export class BandScaleState {
 	 * Defaults to this.name, but can be overridden (e.g. for facet scales
 	 * where name is "__facet__species" but sourceColumn is "species").
 	 */
-	get sourceColumn() {
+	get sourceColumn(): string {
 		return this.#sourceColumn ?? this.name;
 	}
 
@@ -182,24 +199,22 @@ export class BandScaleState {
 	 * The column name used in derived views for this scale's index.
 	 * Format: __dplot_{field}_idx
 	 */
-	get indexColumnName() {
+	get indexColumnName(): string {
 		return ViewManagerService.bandIndexColumn(this.name);
 	}
 
 	/**
 	 * Unique scale ID for ViewManager registration.
 	 */
-	get scaleId() {
+	get scaleId(): string {
 		return this.#scaleId;
 	}
 
 	/**
 	 * Register this scale for a source table. After domain is set,
 	 * the view will be created with the index column (one-shot).
-	 *
-	 * @param {string} sourceTable - The database table to register for
 	 */
-	registerTable(sourceTable) {
+	registerTable(sourceTable: string): void {
 		this.#registeredTables.add(sourceTable);
 		this.#maybeCreateView(sourceTable);
 	}
@@ -208,7 +223,7 @@ export class BandScaleState {
 	 * Create view for a table if both table is registered and domain is known.
 	 * Only creates once per table (one-shot).
 	 */
-	#maybeCreateView(sourceTable) {
+	#maybeCreateView(sourceTable: string): void {
 		// Only create once per table
 		if (this.#viewsCreated.has(sourceTable)) {
 			return;
@@ -239,7 +254,7 @@ export class BandScaleState {
 	 * Unregister this scale's columns from ViewManager.
 	 * Called during destroy().
 	 */
-	#unregisterFromViewManager() {
+	#unregisterFromViewManager(): void {
 		const alias = this.indexColumnName;
 
 		for (const table of this.#registeredTables) {
@@ -258,7 +273,7 @@ export class BandScaleState {
 	 * Enable or disable scale updates
 	 * When disabled, domain is frozen at current state
 	 */
-	setUpdatesEnabled(enabled) {
+	setUpdatesEnabled(enabled: boolean): void {
 		const wasEnabled = this.#enableUpdates;
 		this.#enableUpdates = enabled;
 
@@ -274,11 +289,11 @@ export class BandScaleState {
 		}
 	}
 
-	get updatesEnabled() {
+	get updatesEnabled(): boolean {
 		return this.#enableUpdates;
 	}
 
-	get effectiveDomain() {
+	get effectiveDomain(): string[] {
 		return this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
 	}
 
@@ -289,7 +304,7 @@ export class BandScaleState {
 	/**
 	 * Check if the scale is ready for GPU processing
 	 */
-	get isReadyForGPU() {
+	get isReadyForGPU(): boolean {
 		return (
 			this.ready &&
 			this.effectiveDomain.length > 0 &&
@@ -304,10 +319,12 @@ export class BandScaleState {
 
 	/**
 	 * Add categorical data from a mark
-	 * @param {Array} categories - Array of category values
-	 * @param {string} identifier - Mark identifier
 	 */
-	addMark(categories, identifier, { sorted = false } = {}) {
+	addMark(
+		categories: string[],
+		identifier: string,
+		{ sorted = false }: { sorted?: boolean } = {}
+	): this {
 		const uniqueCategories = [...new Set(categories.filter((c) => c != null))];
 
 		this.#extents.set(identifier, uniqueCategories);
@@ -325,9 +342,8 @@ export class BandScaleState {
 
 	/**
 	 * Remove a mark's categories from domain calculation
-	 * @param {string} identifier - Mark identifier
 	 */
-	removeMark(identifier) {
+	removeMark(identifier: string): this {
 		if (this.#extents.has(identifier)) {
 			this.#extents.delete(identifier);
 
@@ -342,7 +358,7 @@ export class BandScaleState {
 	 * Debounce domain updates via microtask so multiple marks registering
 	 * in the same tick (e.g. sorted + unsorted) settle before views are created.
 	 */
-	#scheduleDomainUpdate() {
+	#scheduleDomainUpdate(): void {
 		if (this.#domainUpdateScheduled) return;
 		this.#domainUpdateScheduled = true;
 		queueMicrotask(() => {
@@ -355,7 +371,7 @@ export class BandScaleState {
 	 * Update domain based on all categories from all marks
 	 * Preserves order of first appearance
 	 */
-	updateDomainFromExtents() {
+	updateDomainFromExtents(): void {
 		if (!this.#enableUpdates) {
 			return;
 		}
@@ -366,13 +382,13 @@ export class BandScaleState {
 		}
 
 		// Collect all valid categories across all extents
-		const validCategories = new Set();
+		const validCategories = new Set<string>();
 		for (const categories of this.#extents.values()) {
 			for (const cat of categories) validCategories.add(cat);
 		}
 
-		const allCategories = [];
-		const seen = new Set();
+		const allCategories: string[] = [];
+		const seen = new Set<string>();
 
 		// If a sort order exists, use it as the base (filtering to valid categories)
 		if (this.#sortOrder) {
@@ -422,34 +438,19 @@ export class BandScaleState {
 	 *
 	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
 	 * returns it directly without processing.
-	 *
-	 * @param {Array|Float32Array} categoryData - Array of category values from mark data
-	 * @param {string} markId - Identifier for the mark (for debugging)
-	 * @returns {Float32Array} Array of indices corresponding to categories
 	 */
-	processDataForGPU(categoryData, markId = 'unknown') {
+	processDataForGPU(categoryData: string[] | Float32Array, markId: string = 'unknown'): Float32Array {
 		// Fast path: already Float32Array from derived view (zero-copy)
 		if (categoryData instanceof Float32Array) {
-			// console.log(`[BandScale:${this.name}] ✅ FAST PATH - Float32Array indices:`, {
-			// 	length: categoryData.length,
-			// 	sample: Array.from(categoryData.slice(0, 5)),
-			// 	isIndices: true
-			// });
 			return categoryData;
 		}
-
-		// console.log(`[BandScale:${this.name}] 🐢 JS PATH - Converting categories to indices:`, {
-		// 	length: categoryData.length,
-		// 	sample: categoryData.slice(0, 5),
-		// 	type: typeof categoryData[0]
-		// });
 
 		const categoryMap = this.#categoryIndexMap;
 
 		// Safety check - ensure map is valid
 		if (!(categoryMap instanceof Map)) {
 			console.error(`🚨 BandScale "${this.name}": categoryMap is not a Map:`, categoryMap);
-			const fallbackMap = new Map();
+			const fallbackMap = new Map<string, number>();
 			this.effectiveDomain.forEach((category, index) => {
 				fallbackMap.set(category, index);
 			});
@@ -461,10 +462,13 @@ export class BandScaleState {
 
 	/**
 	 * Helper method to process data with a given category map
-	 * @private
 	 */
-	#processWithMap(categoryData, categoryMap, markId) {
-		const unmappedCategories = new Set();
+	#processWithMap(
+		categoryData: string[],
+		categoryMap: Map<string, number>,
+		markId: string
+	): Float32Array {
+		const unmappedCategories = new Set<string>();
 
 		const indices = new Float32Array(
 			categoryData.map((category) => {
@@ -495,10 +499,8 @@ export class BandScaleState {
 	/**
 	 * Get configuration for GPU coordinator to write to SSBO
 	 * This is called by GPUCoordinator.fillAllScales()
-	 *
-	 * @returns {Object} Configuration for GPU band scale calculations
 	 */
-	getConfig() {
+	getConfig(): BandGpuConfig {
 		// Resolve effective padding values
 		const paddingInner = this.#paddingInner !== null ? this.#paddingInner : this.#padding;
 
@@ -518,11 +520,8 @@ export class BandScaleState {
 
 	/**
 	 * Get D3 band scale configured for rendering
-	 * @param {string} axis - 'x' or 'y'
-	 * @param {number} innerWidthOrHeight - Chart inner dimension
-	 * @returns {Function} D3 band scale
 	 */
-	getBaseScale(axis, innerWidthOrHeight) {
+	getBaseScale(axis: string, innerWidthOrHeight: number): ScaleBand<string> {
 		this.#sharedScale.range(axis === 'x' ? [0, innerWidthOrHeight] : [innerWidthOrHeight, 0]);
 
 		if (this.#paddingInner !== null && this.#paddingOuter !== null) {
@@ -540,9 +539,8 @@ export class BandScaleState {
 
 	/**
 	 * Update scale domain (for D3 scale)
-	 * @param {Function} scale - D3 scale to update
 	 */
-	updateScaleDomain(scale) {
+	updateScaleDomain(scale: ScaleBand<string>): ScaleBand<string> {
 		this._version; // Register svelte dependency
 		scale.domain(this.effectiveDomain);
 		return scale; // Return the function itself
@@ -551,25 +549,14 @@ export class BandScaleState {
 	/**
 	 * Get the current domain (array of categories)
 	 */
-	domain() {
+	domain(): string[] {
 		return [...this.effectiveDomain];
 	}
 
-	get domainForReactivity() {
+	get domainForReactivity(): string[] {
 		this._version;
 		return this.effectiveDomain;
 	}
-
-	// /**
-	//  * Generate tick values for grid lines and axes.
-	//  * For band scales, returns all category values.
-	//  *
-	//  * @returns {Array} Array of category values
-	//  */
-	// getTicks() {
-	// 	this._version; // Register Svelte dependency for reactivity
-	// 	return [...this.effectiveDomain];
-	// }
 
 	/**
 	 * Generate tick values for grid lines and axes.
@@ -578,10 +565,8 @@ export class BandScaleState {
 	 * we must return the indices themselves, not the domain strings.
 	 *
 	 * The Axis component will then use tickFormat() to resolve index 0 -> "Label".
-	 *
-	 * @returns {Float32Array} Array of indices [0, 1, 2, ... N-1]
 	 */
-	getTicks() {
+	getTicks(): Float32Array {
 		this._version; // Register Svelte dependency
 		const n = this.effectiveDomain.length;
 
@@ -596,17 +581,17 @@ export class BandScaleState {
 	 * Get a formatter to convert tick indices back to category labels.
 	 * Used by Axis components to display the string label for the underlying GPU index.
 	 */
-	tickFormat() {
+	tickFormat(): (index: number) => string {
 		// Capture domain reference
 		const d = this.effectiveDomain;
-		return (index) => d[index];
+		return (index: number) => d[index];
 	}
 
 	/**
 	 * Calculate bandwidth for a given range size (CPU-side)
 	 * Useful for axes, tooltips, etc.
 	 */
-	bandwidth(rangeSize) {
+	bandwidth(rangeSize: number): number {
 		const config = this.getConfig();
 		const n = config.categoryCount;
 
@@ -619,7 +604,7 @@ export class BandScaleState {
 	/**
 	 * Calculate step size for a given range size (CPU-side)
 	 */
-	step(rangeSize) {
+	step(rangeSize: number): number {
 		const config = this.getConfig();
 		const n = config.categoryCount;
 
@@ -636,13 +621,12 @@ export class BandScaleState {
 	 * Convert screen position to band index.
 	 * Returns the 0-based index of the band under the cursor, or null if
 	 * no bands exist.
-	 *
-	 * @param {number} screenVal - Screen coordinate (pixels from chart origin)
-	 * @param {number} rangeSize - Total range size (innerWidth or innerHeight)
-	 * @param {boolean} isYAxis - True if y-axis (range is flipped)
-	 * @returns {number|null} Band index, or null
 	 */
-	invertScreenToData(screenVal, rangeSize, isYAxis = false) {
+	invertScreenToData(
+		screenVal: number,
+		rangeSize: number,
+		isYAxis: boolean = false
+	): number | null {
 		const config = this.getConfig();
 		const n = config.categoryCount;
 		if (n === 0) return null;
@@ -669,7 +653,7 @@ export class BandScaleState {
 	/**
 	 * Get positioning information for a category (for compatibility)
 	 */
-	getPosition(category) {
+	getPosition(category: string): { current: number } {
 		const index = this.effectiveDomain.indexOf(category);
 		if (index === -1) return { current: 0 };
 
@@ -681,25 +665,25 @@ export class BandScaleState {
 	/**
 	 * Get category index map (for debugging)
 	 */
-	getCategoryIndexMap() {
+	getCategoryIndexMap(): Map<string, number> {
 		return new Map(this.#categoryIndexMap);
 	}
 
 	/**
 	 * Get all mark extents (for debugging)
 	 */
-	getExtents() {
+	getExtents(): Record<string, string[]> {
 		return Object.fromEntries(this.#extents);
 	}
 
 	// No-op methods for API consistency with LinearScaleState
-	applyZoomDomain() {
+	applyZoomDomain(): void {
 		return;
 	}
-	applyPanDomain() {
+	applyPanDomain(): void {
 		return;
 	}
-	resetZoom() {
+	resetZoom(): void {
 		return;
 	}
 
@@ -710,7 +694,7 @@ export class BandScaleState {
 	/**
 	 * Get comprehensive debug information
 	 */
-	getDebugInfo() {
+	getDebugInfo(): Record<string, unknown> {
 		return {
 			name: this.name,
 			id: this.id,

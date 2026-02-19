@@ -2,7 +2,7 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { isColorConstant } from '$lib/scales/color-utils.js';
+	import { isColorConstant } from '$lib/scales/color-utils';
 	import {
 		buildSelectFromChannels,
 		resolveChannel,

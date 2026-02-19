@@ -1,9 +1,9 @@
 // =============================================================================
-// TimeScaleState.svelte.js - Time scale with derived offset columns
+// TimeScaleState.svelte.ts - Time scale with derived offset columns
 // =============================================================================
 
 import { scaleUtc } from 'd3-scale';
-import { LinearScaleState } from './LinearScaleState.svelte.js';
+import { LinearScaleState } from './LinearScaleState.svelte';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
 
 /**
@@ -18,20 +18,27 @@ import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js
  */
 export class TimeScaleState extends LinearScaleState {
 	// --- Time Metadata ---
-	#t0 = null; // Origin Date (raw global min datetime)
-	#unit = 1; // Seconds per offset unit (1 = seconds)
+	#t0: Date | null = null; // Origin Date (raw global min datetime)
+	#unit: number = 1; // Seconds per offset unit (1 = seconds)
 
 	// --- Datetime Extent Tracking ---
-	#datetimeExtents = new Map(); // Map<markId, [minDate, maxDate]>
+	#datetimeExtents: Map<string, [Date, Date]> = new Map(); // Map<markId, [minDate, maxDate]>
 
 	// --- ViewManager Integration ---
-	#registeredTables = new Set();
-	#viewsCreated = new Set();
+	#registeredTables: Set<string> = new Set();
+	#viewsCreated: Set<string> = new Set();
 
 	// --- Batching ---
-	#suppressUpdate = false;
+	#suppressUpdate: boolean = false;
 
-	constructor(name, extent, type, zoomLimits, options, gpuCoordinator) {
+	constructor(
+		name: string,
+		extent: [number, number],
+		type: string,
+		zoomLimits: [number, number],
+		options: any,
+		gpuCoordinator: any
+	) {
 		super(name, extent, type ?? 'time', zoomLimits, options, gpuCoordinator);
 	}
 
@@ -40,12 +47,12 @@ export class TimeScaleState extends LinearScaleState {
 	// ===========================================================================
 
 	/** The origin datetime. All offsets are relative to this. */
-	get t0() {
+	get t0(): Date | null {
 		return this.#t0;
 	}
 
 	/** Seconds per offset unit. */
-	get unit() {
+	get unit(): number {
 		return this.#unit;
 	}
 
@@ -56,11 +63,8 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Register a mark's datetime extent.
 	 * Computes t0, converts all extents to offsets, updates parent.
-	 *
-	 * @param {[Date, Date]} datetimeRange - [minDate, maxDate]
-	 * @param {string} markId - Mark identifier
 	 */
-	addDatetimeExtent(datetimeRange, markId) {
+	addDatetimeExtent(datetimeRange: [Date | number | bigint | string, Date | number | bigint | string], markId: string): void {
 		const minDate = toDate(datetimeRange[0]);
 		const maxDate = toDate(datetimeRange[1]);
 		this.#datetimeExtents.set(markId, [minDate, maxDate]);
@@ -71,8 +75,8 @@ export class TimeScaleState extends LinearScaleState {
 		// Recompute ALL parent offsets with current t0, suppress intermediate updates
 		this.#suppressUpdate = true;
 		for (const [id, [min, max]] of this.#datetimeExtents) {
-			const offMin = (min.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
-			const offMax = (max.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
+			const offMin = (min.getTime() - this.#t0!.getTime()) / (this.#unit * 1000);
+			const offMax = (max.getTime() - this.#t0!.getTime()) / (this.#unit * 1000);
 			super.addMark([offMin, offMax], id);
 		}
 		this.#suppressUpdate = false;
@@ -85,25 +89,21 @@ export class TimeScaleState extends LinearScaleState {
 	 * Register a mark's extent using offset values (seconds from t0).
 	 * Useful when data is already in offset form (e.g., from binned queries).
 	 * Converts offsets back to datetimes and delegates to addDatetimeExtent.
-	 *
-	 * @param {[number, number]} offsetRange - [minOffset, maxOffset] in seconds from t0
-	 * @param {string} markId - Mark identifier
 	 */
-	addOffsetExtent(offsetRange, markId) {
+	addOffsetExtent(offsetRange: [number, number], markId: string): void {
 		if (!this.#t0) {
 			console.warn(`[TimeScaleState] Cannot add offset extent: t0 not set yet`);
 			return;
 		}
-		const minDate = this.offsetToDate(offsetRange[0]);
-		const maxDate = this.offsetToDate(offsetRange[1]);
+		const minDate = this.offsetToDate(offsetRange[0])!;
+		const maxDate = this.offsetToDate(offsetRange[1])!;
 		this.addDatetimeExtent([minDate, maxDate], markId);
 	}
 
 	/**
 	 * Remove a mark's datetime extent.
-	 * @param {string} markId
 	 */
-	removeDatetimeExtent(markId) {
+	removeDatetimeExtent(markId: string): void {
 		this.#datetimeExtents.delete(markId);
 
 		if (this.#datetimeExtents.size === 0) {
@@ -119,7 +119,7 @@ export class TimeScaleState extends LinearScaleState {
 	 * Override: apply time-aware nice instead of linear nice.
 	 * Called by super.addMark via polymorphism.
 	 */
-	updateExtentFromExtents(nice = true) {
+	updateExtentFromExtents(nice: boolean = true): void {
 		if (this.#suppressUpdate) return;
 
 		// If no datetime extents, fall through to linear behavior
@@ -142,12 +142,12 @@ export class TimeScaleState extends LinearScaleState {
 				.domain([new Date(allMinMs), new Date(allMaxMs)])
 				.nice();
 			const [niceMin, niceMax] = niceScale.domain();
-			const niceMinOffset = (niceMin.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
-			const niceMaxOffset = (niceMax.getTime() - this.#t0.getTime()) / (this.#unit * 1000);
+			const niceMinOffset = (niceMin.getTime() - this.#t0!.getTime()) / (this.#unit * 1000);
+			const niceMaxOffset = (niceMax.getTime() - this.#t0!.getTime()) / (this.#unit * 1000);
 			this._setExtent(niceMinOffset, niceMaxOffset);
 		} else {
-			const minOffset = (allMinMs - this.#t0.getTime()) / (this.#unit * 1000);
-			const maxOffset = (allMaxMs - this.#t0.getTime()) / (this.#unit * 1000);
+			const minOffset = (allMinMs - this.#t0!.getTime()) / (this.#unit * 1000);
+			const maxOffset = (allMaxMs - this.#t0!.getTime()) / (this.#unit * 1000);
 			this._setExtent(minOffset, maxOffset);
 		}
 
@@ -160,17 +160,15 @@ export class TimeScaleState extends LinearScaleState {
 	// ===========================================================================
 
 	/** The derived column name for this time scale's offsets. */
-	get offsetColumnName() {
+	get offsetColumnName(): string {
 		return ViewManagerService.timeOffsetColumn(this.name);
 	}
 
 	/**
 	 * Register a source table for derived view column creation.
 	 * View is created once t0 is known.
-	 *
-	 * @param {string} sourceTable
 	 */
-	registerTable(sourceTable) {
+	registerTable(sourceTable: string): void {
 		this.#registeredTables.add(sourceTable);
 		if (this.#t0) {
 			this.#maybeCreateView(sourceTable);
@@ -180,7 +178,7 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Create derived offset column in DuckDB view if not already created.
 	 */
-	#maybeCreateView(sourceTable) {
+	#maybeCreateView(sourceTable: string): void {
 		if (this.#viewsCreated.has(sourceTable)) return;
 		if (!this.#t0) return;
 
@@ -204,7 +202,7 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Unregister from ViewManager. Called during destroy.
 	 */
-	#unregisterFromViewManager() {
+	#unregisterFromViewManager(): void {
 		const alias = this.offsetColumnName;
 		for (const table of this.#registeredTables) {
 			viewManager.unregisterColumn(table, alias, this.id);
@@ -219,20 +217,16 @@ export class TimeScaleState extends LinearScaleState {
 
 	/**
 	 * Convert an offset (seconds from t0) to a Date object.
-	 * @param {number} offset - Offset in seconds from t0
-	 * @returns {Date|null} Date object or null if t0 not set
 	 */
-	offsetToDate(offset) {
+	offsetToDate(offset: number): Date | null {
 		if (!this.#t0) return null;
 		return new Date(this.#t0.getTime() + offset * this.#unit * 1000);
 	}
 
 	/**
 	 * Convert a Date object to an offset (seconds from t0).
-	 * @param {Date} date - Date object
-	 * @returns {number|null} Offset in seconds or null if t0 not set
 	 */
-	dateToOffset(date) {
+	dateToOffset(date: Date | number | bigint | string): number | null {
 		if (!this.#t0) return null;
 		const dateMs = toDate(date).getTime();
 		return (dateMs - this.#t0.getTime()) / (this.#unit * 1000);
@@ -244,11 +238,8 @@ export class TimeScaleState extends LinearScaleState {
 
 	/**
 	 * Generate calendar-nice tick values in offset space.
-	 *
-	 * @param {number} count - Approximate number of ticks
-	 * @returns {Array<number>} Tick offsets
 	 */
-	getTicks(count = 5) {
+	getTicks(count: number = 5): number[] {
 		this._version; // Svelte reactivity dependency
 		if (!this.#t0) return [];
 
@@ -268,12 +259,10 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Returns a formatter function that converts offsets to datetime strings.
 	 * Uses d3's multi-resolution time format (adapts to zoom level).
-	 *
-	 * @returns {(offset: number) => string}
 	 */
-	tickFormat() {
+	tickFormat(): (offset: number) => string {
 		this._version; // Svelte reactivity dependency (must be before #t0 check)
-		if (!this.#t0) return (v) => String(v);
+		if (!this.#t0) return (v: number) => String(v);
 		const [renderMin, renderMax] = this.domainForReactivity;
 		const minDate = new Date(this.#t0.getTime() + renderMin * this.#unit * 1000);
 		const maxDate = new Date(this.#t0.getTime() + renderMax * this.#unit * 1000);
@@ -282,7 +271,7 @@ export class TimeScaleState extends LinearScaleState {
 		const t0Ms = this.#t0.getTime();
 		const unitMs = this.#unit * 1000;
 
-		return (offset) => {
+		return (offset: number) => {
 			const date = new Date(t0Ms + offset * unitMs);
 			return d3Formatter(date);
 		};
@@ -291,11 +280,8 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Format a single offset value to a datetime string.
 	 * Uses d3's multi-resolution tick format (adapts to zoom level).
-	 *
-	 * @param {number} offset - Time offset value
-	 * @returns {string} Formatted datetime string
 	 */
-	formatValue(offset) {
+	formatValue(offset: number): string {
 		return this.formatTooltipValue(offset);
 	}
 
@@ -313,11 +299,8 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Format an offset for tooltip display.
 	 * Shows all precision present in the data — never drops detail.
-	 *
-	 * @param {number} offset - Time offset value
-	 * @returns {string} Formatted datetime string
 	 */
-	formatTooltipValue(offset) {
+	formatTooltipValue(offset: number): string {
 		const date = this.offsetToDate(offset);
 		if (!date) return String(offset);
 
@@ -338,7 +321,7 @@ export class TimeScaleState extends LinearScaleState {
 	 * Recompute t0 from all datetime extents.
 	 * If t0 changes, recreate all views with new offset expression.
 	 */
-	#recomputeT0() {
+	#recomputeT0(): void {
 		let minMs = Infinity;
 		for (const [minDate] of this.#datetimeExtents.values()) {
 			minMs = Math.min(minMs, minDate.getTime());
@@ -361,7 +344,7 @@ export class TimeScaleState extends LinearScaleState {
 	// CLEANUP
 	// ===========================================================================
 
-	destroy() {
+	destroy(): void {
 		this.#unregisterFromViewManager();
 		super.destroy();
 	}
@@ -375,7 +358,7 @@ export class TimeScaleState extends LinearScaleState {
  * Convert various datetime representations to a Date object.
  * Handles: Date, number (ms), BigInt (microseconds from Arrow), string.
  */
-function toDate(value) {
+function toDate(value: Date | number | bigint | string): Date {
 	if (value instanceof Date) return value;
 	if (typeof value === 'number') return new Date(value);
 	if (typeof value === 'bigint') return new Date(Number(value / 1000n)); // microseconds → ms

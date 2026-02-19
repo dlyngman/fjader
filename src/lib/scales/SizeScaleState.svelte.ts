@@ -1,4 +1,10 @@
-// src/lib/scales/SizeScaleState.svelte.js
+// src/lib/scales/SizeScaleState.svelte.ts
+
+interface SizeScaleConfig {
+	field: string;
+	domain?: number[];
+	range?: [number, number];
+}
 
 /**
  * Reactive state for a GPU-backed size scale.
@@ -9,29 +15,21 @@
  */
 export class SizeScaleState {
 	// Identity
-	#field;
-	#registry;
-	#gpuCoordinator;
+	#field: string;
+	#registry: any;
+	#gpuCoordinator: any;
 
 	// GPU slot index (allocated from registry)
-	#configSlot = -1;
+	#configSlot: number = -1;
 
 	// Scale configuration
-	#range; // [minPx, maxPx]
+	#range: [number, number]; // [minPx, maxPx]
 
 	// Reactive state
-	domain = $state([]);
-	ready = $state(false);
+	domain: number[] = $state([]);
+	ready: boolean = $state(false);
 
-	/**
-	 * @param {Object} config - Scale configuration
-	 * @param {string} config.field - Field name this scale maps
-	 * @param {Array<number>} [config.domain] - Domain [min, max]
-	 * @param {Array<number>} [config.range=[2, 12]] - Pixel range [minPx, maxPx]
-	 * @param {Object} registry - ScaleRegistry instance (for slot allocation)
-	 * @param {Object} gpuCoordinator - GPUCoordinator instance (for buffer writes)
-	 */
-	constructor(config, registry, gpuCoordinator) {
+	constructor(config: SizeScaleConfig, registry: any, gpuCoordinator: any) {
 		this.#field = config.field;
 		this.#range = config.range || [2, 12];
 		this.#registry = registry;
@@ -53,14 +51,14 @@ export class SizeScaleState {
 	// GETTERS
 	// ============================================================
 
-	get field() {
+	get field(): string {
 		return this.#field;
 	}
 
 	/**
 	 * The config slot index (used by marks for sizeScaleIndex).
 	 */
-	get gpuIndex() {
+	get gpuIndex(): number {
 		return this.#configSlot;
 	}
 
@@ -68,14 +66,14 @@ export class SizeScaleState {
 	 * The pixel range [minPx, maxPx] for this size scale.
 	 * Used by legends to render reference circles at correct sizes.
 	 */
-	get range() {
+	get range(): [number, number] {
 		return this.#range;
 	}
 
 	/**
 	 * GPU slot information for registry cleanup.
 	 */
-	get gpuSlots() {
+	get gpuSlots(): { sizeConfigSlot: number } {
 		return { sizeConfigSlot: this.#configSlot };
 	}
 
@@ -86,11 +84,8 @@ export class SizeScaleState {
 	/**
 	 * Pass-through: raw data goes to GPU unchanged.
 	 * The vertex shader does the normalization and sqrt scaling.
-	 *
-	 * @param {Array|Float32Array} data - Raw data values
-	 * @returns {Float32Array} GPU-ready values
 	 */
-	processDataForGPU(data) {
+	processDataForGPU(data: ArrayLike<number>): Float32Array {
 		if (data instanceof Float32Array) return data;
 		return new Float32Array(data);
 	}
@@ -99,7 +94,7 @@ export class SizeScaleState {
 	// GPU UPLOAD
 	// ============================================================
 
-	#uploadToGPU() {
+	#uploadToGPU(): void {
 		if (!this.#gpuCoordinator) return;
 		if (this.domain.length === 0) return;
 
@@ -119,7 +114,7 @@ export class SizeScaleState {
 	 *   rangeMax: f32,    // byte 12 (CSS pixels)
 	 * }; // 16 bytes total
 	 */
-	#buildSizeConfig() {
+	#buildSizeConfig(): ArrayBuffer {
 		const buffer = new ArrayBuffer(16);
 		const view = new DataView(buffer);
 		const LE = true;
@@ -138,9 +133,8 @@ export class SizeScaleState {
 
 	/**
 	 * Update the domain. Triggers GPU re-upload.
-	 * @param {Array<number>} newDomain - [min, max]
 	 */
-	setDomain(newDomain) {
+	setDomain(newDomain: number[]): void {
 		if (!newDomain || newDomain.length === 0) return;
 
 		const domainChanged =
@@ -154,9 +148,8 @@ export class SizeScaleState {
 
 	/**
 	 * Update the pixel range. Triggers GPU re-upload.
-	 * @param {Array<number>} newRange - [minPx, maxPx]
 	 */
-	setRange(newRange) {
+	setRange(newRange: [number, number]): void {
 		if (!newRange || newRange.length !== 2) return;
 		if (newRange[0] === this.#range[0] && newRange[1] === this.#range[1]) return;
 
@@ -170,7 +163,7 @@ export class SizeScaleState {
 	// CLEANUP
 	// ============================================================
 
-	destroy() {
+	destroy(): void {
 		this.ready = false;
 	}
 }
