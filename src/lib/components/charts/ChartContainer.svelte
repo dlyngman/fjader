@@ -23,6 +23,10 @@
 			momentumThreshold: 150,
 			enabled: true
 		},
+		xZoomLimit = undefined,
+		yZoomLimit = undefined,
+		xPanLimit = undefined,
+		yPanLimit = undefined,
 		margin: marginOverride = {}
 	} = $props();
 
@@ -76,7 +80,11 @@
 			layout: l,
 			gpuCoordinator: g,
 			scaleRegistry: scaleRegistry,
-			getFacetChartIds: () => facetChartIds
+			getFacetChartIds: () => facetChartIds,
+			xZoomLimit,
+			yZoomLimit,
+			xPanLimit,
+			yPanLimit
 		});
 
 		// Replay any scale registrations that were queued before scales existed

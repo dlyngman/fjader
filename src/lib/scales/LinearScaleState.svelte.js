@@ -604,6 +604,28 @@ export class LinearScaleState {
 	}
 
 	/**
+	 * Set the zoom depth limit (how many times user can zoom into the data extent).
+	 * @param {number} zoomDivisor - e.g., 10000 means zoom to 1/10000th of extent
+	 */
+	setZoomLimit(zoomDivisor) {
+		this.zoomLimits.min = zoomDivisor;
+		if (this.#extents.size > 0) {
+			this.resetDomainLimits();
+		}
+	}
+
+	/**
+	 * Set the pan boundary limit (how far past data edges user can pan).
+	 * @param {number} panMultiplier - e.g., 20 means pan up to 20x the extent past edges
+	 */
+	setPanLimit(panMultiplier) {
+		this.zoomLimits.max = panMultiplier;
+		if (this.#extents.size > 0) {
+			this.resetDomainLimits();
+		}
+	}
+
+	/**
 	 * Check if scale has a valid domain from marks.
 	 * Returns true if at least one mark has contributed extent data.
 	 */
