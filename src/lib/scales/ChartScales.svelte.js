@@ -1,7 +1,7 @@
 // src/lib/scales/ChartScales.svelte.js
 import { getContext } from 'svelte';
 import { getScaleState } from '$lib/scales';
-import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities.js';
+import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
 
 export class ChartScales {
 	#scaleRegistry;

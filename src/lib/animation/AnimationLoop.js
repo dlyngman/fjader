@@ -2,7 +2,7 @@
 // AnimationLoop.js - Fixed timestep animation loop with render extrapolation
 // =============================================================================
 
-import { DT } from './Spring.js';
+import { DT } from './Spring';
 
 const MAX_DELTA = 0.1; // 100ms cap - handles tab switch, debugger pause, etc.
 

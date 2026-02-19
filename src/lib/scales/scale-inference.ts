@@ -1,6 +1,12 @@
-// src/lib/scales/scale-inference.js
-
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+
+export type InferenceContext = 'axis' | 'visual' | 'size';
+
+interface InferScaleTypeOptions {
+	field: unknown;
+	schemaType: string | null;
+	context: InferenceContext;
+}
 
 /**
  * Infer the optimal scale type from a field definition, its database schema type,
@@ -10,17 +16,12 @@ import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
  * - SQL expression nodes (aggregates, bins) → always continuous
  * - Raw column names → schema-based inference (date→time, number→linear, string→band)
  * - Context-dependent mapping (axis vs visual vs size channels)
- *
- * @param {Object} opts
- * @param {*} opts.field - Column name (string), SQL expression node, or null
- * @param {string|null} opts.schemaType - Simplified JS type: 'number'|'date'|'string'|'boolean'|null
- * @param {'axis'|'visual'|'size'} opts.context - Where this scale is used:
- *   - 'axis': position channels (x, y) — maps to time/linear/band
- *   - 'visual': appearance channels (color, fill, opacity) — maps to sequential/ordinal
- *   - 'size': size channels (radius, strokeWidth) — maps to sqrt/linear/ordinal
- * @returns {string|null} Scale type string, or null if schema is needed but unavailable (caller should block)
  */
-export function inferScaleType({ field, schemaType, context }) {
+export function inferScaleType({
+	field,
+	schemaType,
+	context
+}: InferScaleTypeOptions): string | null {
 	// SQL expression nodes: infer from expression semantics, not schema
 	if (isNode(field)) {
 		if (isAggregateExpression(field)) {
@@ -28,19 +29,18 @@ export function inferScaleType({ field, schemaType, context }) {
 			if (context === 'visual') return 'sequential';
 			return 'sqrt'; // size context
 		}
-		if (field.isAutoBinNode || field.type === 'Bin') {
+		const node = field as unknown as Record<string, unknown>;
+		if (node.isAutoBinNode || node.type === 'Bin') {
 			if (context === 'axis') return 'linear';
 			return 'sequential'; // visual or size
 		}
 		// Other SQL nodes (column refs, functions): can't look up in schema
-		// Return null so caller provides its own fallback
 		return null;
 	}
 
 	// Raw column name — needs schema to infer
 	if (typeof field === 'string') {
 		if (!schemaType) {
-			// Schema not available yet — signal caller to block
 			return null;
 		}
 
@@ -62,7 +62,7 @@ export function inferScaleType({ field, schemaType, context }) {
 		}
 	}
 
-	// Fallback for unknown field types (arrays, typed arrays, etc.)
+	// Fallback for unknown field types
 	if (context === 'axis') return 'linear';
 	if (context === 'visual') return 'ordinal';
 	return 'linear'; // size fallback

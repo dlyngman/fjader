@@ -1,4 +1,5 @@
-// src/lib/transforms/TransformCompiler.js
+import type { SelectQuery } from '@uwdata/mosaic-sql';
+import type { Transform, SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
 
 /**
  * TransformCompiler orchestrates the transform pipeline.
@@ -11,22 +12,29 @@
  * - Extract additional channels (y0/y1, x0/x1)
  */
 
+interface ArrowTable {
+	numRows: number;
+	schema: { fields: { name: string }[] };
+	getChild(name: string): { get(index: number): unknown } | null;
+}
+
 export class TransformCompiler {
-	constructor(transforms = []) {
+	transforms: Transform[];
+	sqlTransforms: SqlTransform[];
+	jsTransforms: JsTransform[];
+
+	constructor(transforms: Transform[] = []) {
 		this.transforms = transforms;
 
 		// Separate by stage
-		this.sqlTransforms = transforms.filter((t) => t.stage === 'sql');
-		this.jsTransforms = transforms.filter((t) => t.stage === 'js');
+		this.sqlTransforms = transforms.filter((t): t is SqlTransform => t.stage === 'sql');
+		this.jsTransforms = transforms.filter((t): t is JsTransform => t.stage === 'js');
 
 		// Validate ordering (SQL must come before JS)
 		this.#validateStaging();
 	}
 
-	/**
-	 * Ensure SQL transforms come before JS transforms
-	 */
-	#validateStaging() {
+	#validateStaging(): void {
 		let seenJS = false;
 
 		for (const transform of this.transforms) {
@@ -41,58 +49,51 @@ export class TransformCompiler {
 		}
 	}
 
-	/**
-	 * Apply SQL transforms to query
-	 * @param {Query} query - Mosaic Query object
-	 * @returns {Query} Modified query
-	 */
-	applyToQuery(query) {
+	applyToQuery(query: SelectQuery): SelectQuery {
 		let result = query;
 
 		for (const transform of this.sqlTransforms) {
 			try {
 				result = transform.apply(result);
 			} catch (error) {
-				throw new Error(`Failed to apply ${transform.type} transform: ${error.message}`);
+				throw new Error(
+					`Failed to apply ${transform.type} transform: ${(error as Error).message}`
+				);
 			}
 		}
 
 		return result;
 	}
 
-	/**
-	 * Apply JS transforms to data
-	 * @param {Array|ArrowTable} data - Data to transform
-	 * @param {object} config - Mark configuration (x, y, fill fields)
-	 * @param {object} scales - Scale objects for context
-	 * @returns {Array} Transformed data
-	 */
-	applyToData(data, config, scales = {}) {
+	applyToData(
+		data: Record<string, unknown>[] | ArrowTable,
+		config: MarkConfig,
+		scales: ScaleMap = {}
+	): Record<string, unknown>[] {
 		let result = Array.isArray(data) ? data : this.#arrowToArray(data);
 
 		for (const transform of this.jsTransforms) {
 			try {
 				result = transform.apply(result, config, scales);
 			} catch (error) {
-				throw new Error(`Failed to apply ${transform.type} transform: ${error.message}`);
+				throw new Error(
+					`Failed to apply ${transform.type} transform: ${(error as Error).message}`
+				);
 			}
 		}
 
 		return result;
 	}
 
-	/**
-	 * Convert Arrow table to array of objects
-	 */
-	#arrowToArray(arrowTable) {
-		const rows = [];
+	#arrowToArray(arrowTable: ArrowTable): Record<string, unknown>[] {
+		const rows: Record<string, unknown>[] = [];
 		const numRows = arrowTable.numRows;
 
 		for (let i = 0; i < numRows; i++) {
-			const row = {};
+			const row: Record<string, unknown> = {};
 			for (const field of arrowTable.schema.fields) {
 				const column = arrowTable.getChild(field.name);
-				row[field.name] = column.get(i);
+				row[field.name] = column?.get(i);
 			}
 			rows.push(row);
 		}
@@ -100,13 +101,8 @@ export class TransformCompiler {
 		return rows;
 	}
 
-	/**
-	 * Get additional channels that transforms will add
-	 * For example, stack() adds y0 and y1
-	 * @returns {Array<string>} Channel names
-	 */
-	getAdditionalChannels() {
-		const channels = [];
+	getAdditionalChannels(): string[] {
+		const channels: string[] = [];
 
 		for (const transform of this.jsTransforms) {
 			if (transform.channels) {
@@ -117,16 +113,9 @@ export class TransformCompiler {
 		return channels;
 	}
 
-	/**
-	 * Validate that query is flat (no CTEs, no subqueries)
-	 * This is critical for Mosaic's PreAggregator optimization
-	 * @param {Query} query
-	 * @throws {Error} If query contains CTEs or subqueries
-	 */
-	validateQuery(query) {
+	validateQuery(query: SelectQuery): void {
 		const sql = query.toString();
 
-		// Check for WITH clause (CTEs)
 		if (/\bWITH\s+/i.test(sql)) {
 			throw new Error(
 				'Transform pipeline generated a CTE (WITH clause). ' +
@@ -137,7 +126,6 @@ export class TransformCompiler {
 			);
 		}
 
-		// Check for subqueries (nested SELECT)
 		if (/\(\s*SELECT\s+/i.test(sql)) {
 			throw new Error(
 				'Transform pipeline generated a subquery. ' +
@@ -149,13 +137,8 @@ export class TransformCompiler {
 		}
 	}
 
-	/**
-	 * Get human-readable description of the pipeline
-	 * Useful for debugging and documentation
-	 * @returns {string}
-	 */
-	describe() {
-		const parts = [];
+	describe(): string {
+		const parts: string[] = [];
 
 		if (this.sqlTransforms.length > 0) {
 			parts.push('SQL Pipeline:');
@@ -174,24 +157,15 @@ export class TransformCompiler {
 		return parts.join('\n');
 	}
 
-	/**
-	 * Check if pipeline has any transforms
-	 */
-	isEmpty() {
+	isEmpty(): boolean {
 		return this.transforms.length === 0;
 	}
 
-	/**
-	 * Check if pipeline has SQL transforms
-	 */
-	hasSQLTransforms() {
+	hasSQLTransforms(): boolean {
 		return this.sqlTransforms.length > 0;
 	}
 
-	/**
-	 * Check if pipeline has JS transforms
-	 */
-	hasJSTransforms() {
+	hasJSTransforms(): boolean {
 		return this.jsTransforms.length > 0;
 	}
 }

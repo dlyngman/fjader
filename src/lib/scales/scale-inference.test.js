@@ -1,7 +1,7 @@
 // src/lib/scales/scale-inference.test.js
 
 import { describe, it, expect } from 'vitest';
-import { inferScaleType } from './scale-inference.js';
+import { inferScaleType } from './scale-inference';
 import { count, sum, avg, column } from '@uwdata/mosaic-sql';
 
 describe('inferScaleType', () => {

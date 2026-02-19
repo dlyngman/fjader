@@ -1,5 +1,3 @@
-// src/lib/transforms/index.js
-
 /**
  * Transform Pipeline for Mosaic-based visualizations
  *
@@ -11,23 +9,23 @@
  * Mosaic's PreAggregator optimization.
  */
 
-import { and, or } from '@uwdata/mosaic-sql';
+import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import * as d3 from 'd3-array';
+import type { SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
+
+type Query = SelectQuery;
+
+type DataRow = Record<string, unknown>;
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
 // =============================================================================
 
-/**
- * Add WHERE clause filter to query
- * @param {Expression} condition - Mosaic SQL expression
- * @example filter(gt('revenue', 0))
- */
-export function filter(condition) {
+export function filter(condition: ExprNode): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'filter',
-		apply(query) {
+		apply(query: Query) {
 			return query.where(condition);
 		},
 		describe() {
@@ -36,16 +34,11 @@ export function filter(condition) {
 	};
 }
 
-/**
- * Add HAVING clause (post-aggregation filter)
- * @param {Expression} condition - Mosaic SQL expression
- * @example having(gt(sum('revenue'), 10000))
- */
-export function having(condition) {
+export function having(condition: ExprNode): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'having',
-		apply(query) {
+		apply(query: Query) {
 			return query.having(condition);
 		},
 		describe() {
@@ -54,16 +47,11 @@ export function having(condition) {
 	};
 }
 
-/**
- * Limit number of rows returned
- * @param {number} n - Maximum rows
- * @example limit(100)
- */
-export function limit(n) {
+export function limit(n: number): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'limit',
-		apply(query) {
+		apply(query: Query) {
 			return query.limit(n);
 		},
 		describe() {
@@ -72,16 +60,11 @@ export function limit(n) {
 	};
 }
 
-/**
- * Order results by expression(s)
- * @param {...Expression} expressions - Mosaic SQL expressions
- * @example orderby(desc('revenue'))
- */
-export function orderby(...expressions) {
+export function orderby(...expressions: ExprNode[]): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'orderby',
-		apply(query) {
+		apply(query: Query) {
 			return query.orderby(...expressions);
 		},
 		describe() {
@@ -94,25 +77,23 @@ export function orderby(...expressions) {
 // JS TRANSFORMS (Data Processors)
 // =============================================================================
 
-/**
- * Take top N items by a field, optionally grouping rest as "Other"
- * @param {number} n - Number of top items to keep
- * @param {object} options - Configuration
- * @param {string} options.by - Field to sort by (defaults to y)
- * @param {boolean} options.includeOthers - Group remaining as "Other"
- * @example topN(10, { by: 'revenue', includeOthers: true })
- */
-export function topN(n, options = {}) {
+interface TopNOptions {
+	by?: string;
+	includeOthers?: boolean;
+}
+
+export function topN(n: number, options: TopNOptions = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'topN',
-		apply(data, config) {
+		apply(data: DataRow[], config: MarkConfig) {
 			if (!data || data.length === 0) return data;
 
 			const by = options.by || config.y;
 
-			// Sort descending
-			const sorted = [...data].sort((a, b) => (b[by] || 0) - (a[by] || 0));
+			const sorted = [...data].sort(
+				(a, b) => ((b[by!] as number) || 0) - ((a[by!] as number) || 0)
+			);
 
 			if (sorted.length <= n) {
 				return sorted;
@@ -122,12 +103,11 @@ export function topN(n, options = {}) {
 
 			if (options.includeOthers) {
 				const others = sorted.slice(n);
-				const otherRow = { [config.x]: 'Other' };
+				const otherRow: DataRow = { [config.x!]: 'Other' };
 
-				// Sum all numeric fields
 				for (const key of Object.keys(others[0])) {
 					if (typeof others[0][key] === 'number') {
-						otherRow[key] = others.reduce((sum, d) => sum + (d[key] || 0), 0);
+						otherRow[key] = others.reduce((sum, d) => sum + ((d[key] as number) || 0), 0);
 					}
 				}
 
@@ -142,27 +122,29 @@ export function topN(n, options = {}) {
 	};
 }
 
-// src/lib/transforms/index.js
+interface StackOptions {
+	direction?: 'vertical' | 'horizontal';
+}
 
-export function stack(options = {}) {
-	const { direction = 'vertical' } = options; // 'vertical' or 'horizontal'
+export function stack(options: StackOptions = {}): JsTransform {
+	const { direction = 'vertical' } = options;
 
 	return {
 		stage: 'js',
 		type: 'stack',
-		apply(data, config) {
+		apply(data: DataRow[], config: MarkConfig) {
 			if (!data || data.length === 0) return data;
 
 			const groupField = direction === 'vertical' ? config.x : config.y;
 			const valueField = direction === 'vertical' ? config.y : config.x;
 
-			const groups = d3.group(data, (d) => d[groupField]);
+			const groups = d3.group(data, (d) => d[groupField!]);
 
-			const stacked = [];
-			for (const [category, items] of groups) {
+			const stacked: DataRow[] = [];
+			for (const [_category, items] of groups) {
 				let offset = 0;
 				for (const item of items) {
-					const value = item[valueField] || 0;
+					const value = (item[valueField!] as number) || 0;
 
 					if (direction === 'vertical') {
 						stacked.push({ ...item, y0: offset, y1: offset + value });
@@ -180,36 +162,33 @@ export function stack(options = {}) {
 	};
 }
 
-/**
- * Normalize values to percentages within each x group
- * @param {object} options - Configuration
- * @example normalize()
- */
-export function normalize(options = {}) {
+export function normalize(_options: Record<string, unknown> = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'normalize',
-		apply(data, config) {
+		apply(data: DataRow[], config: MarkConfig) {
 			if (!data || data.length === 0) return data;
 
-			const xField = config.x;
-			const yField = config.y;
+			const xField = config.x!;
+			const yField = config.y!;
 
-			// Group by x dimension
 			const groups = d3.group(data, (d) => d[xField]);
 
-			const normalized = [];
-			for (const [x, items] of groups) {
-				const total = d3.sum(items, (d) => d[yField] || 0);
+			const normalized: DataRow[] = [];
+			for (const [_x, items] of groups) {
+				const total = d3.sum(items, (d) => (d[yField] as number) || 0);
 
 				for (const item of items) {
-					const value = item[yField] || 0;
+					const value = (item[yField] as number) || 0;
 					normalized.push({
 						...item,
 						[yField]: total > 0 ? (value / total) * 100 : 0,
-						// Also normalize y0/y1 if they exist (from stacking)
-						...(item.y0 !== undefined && { y0: total > 0 ? (item.y0 / total) * 100 : 0 }),
-						...(item.y1 !== undefined && { y1: total > 0 ? (item.y1 / total) * 100 : 0 })
+						...(item.y0 !== undefined && {
+							y0: total > 0 ? ((item.y0 as number) / total) * 100 : 0
+						}),
+						...(item.y1 !== undefined && {
+							y1: total > 0 ? ((item.y1 as number) / total) * 100 : 0
+						})
 					});
 				}
 			}
@@ -222,36 +201,32 @@ export function normalize(options = {}) {
 	};
 }
 
-/**
- * Dodge (offset) items horizontally for grouped bar charts
- * @param {object} options - Configuration
- * @param {number} options.bandwidth - Override bandwidth calculation
- * @example dodge()
- */
-export function dodge(options = {}) {
+interface DodgeOptions {
+	bandwidth?: number;
+}
+
+export function dodge(options: DodgeOptions = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'dodge',
-		apply(data, config, scales) {
+		apply(data: DataRow[], config: MarkConfig, scales?: ScaleMap) {
 			if (!data || data.length === 0) return data;
 
-			const xField = config.x;
+			const xField = config.x!;
 
-			// Get bandwidth from scale or options
 			const bandwidth = scales?.x?.bandwidth?.() || options.bandwidth || 20;
 
-			// Group by x dimension
 			const groups = d3.group(data, (d) => d[xField]);
 
-			const dodged = [];
-			for (const [x, items] of groups) {
+			const dodged: DataRow[] = [];
+			for (const [_x, items] of groups) {
 				const offset = bandwidth / items.length;
 
 				items.forEach((item, i) => {
 					dodged.push({
 						...item,
-						x0: item[xField] + i * offset,
-						x1: item[xField] + (i + 1) * offset
+						x0: (item[xField] as number) + i * offset,
+						x1: (item[xField] as number) + (i + 1) * offset
 					});
 				});
 			}

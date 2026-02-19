@@ -2,8 +2,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { Query, sum, count, gt, column } from '@uwdata/mosaic-sql';
-import { filter, topN, stack } from './index.js';
-import { TransformCompiler } from './TransformCompiler.js';
+import { filter, topN, stack } from './index';
+import { TransformCompiler } from './TransformCompiler';
 import { bin } from '../sql/bin.js';
 
 describe('Transform Pipeline Integration', () => {
