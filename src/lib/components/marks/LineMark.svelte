@@ -13,6 +13,8 @@
 		MarkSeries,
 		normalizeSortConfig
 	} from './utils/index.js';
+	import { getGPUContext } from '$lib/gpu';
+	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte.js';
 
 	let {
 		table,
@@ -31,7 +33,8 @@
 		preferredYScaleType = null,
 		transforms = [],
 		sort = null,
-		tooltip = true
+		tooltip = true,
+		optimize = 'auto' // M4 decimation: true | false | 'auto'
 	} = $props();
 
 	// Map user-facing 'monotone' to the correct axis-specific variant
@@ -188,6 +191,55 @@
 
 	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
 
+	// --- M4 DECIMATION ---
+	const gpuCoordinator = getGPUContext();
+	const faceted = !!chartContext.fx;
+
+	const m4Active = $derived.by(() => {
+		if (optimize === false || faceted) return false;
+		if (optimize === true) return true;
+		// 'auto': activate when points exceed 10x pixel width
+		const pixels = chartContext.innerWidth;
+		const points = instanceCount;
+		return points > 0 && pixels > 0 && points > pixels * 10;
+	});
+
+	let m4Decimator = $state(null);
+
+	$effect(() => {
+		if (m4Active && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
+			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
+			m4Decimator = decimator;
+			return () => {
+				decimator.destroy();
+				m4Decimator = null;
+			};
+		} else {
+			m4Decimator = null;
+		}
+	});
+
+	// Configure M4 decimator when chart dimensions or series count change.
+	// When stroke is set, wait for the series domain to be populated (async fetch).
+	$effect(() => {
+		if (!m4Decimator || !chartContext.innerWidth) return;
+
+		let numSeries;
+		if (stroke) {
+			const domain = markSeries.scaleState?.domain;
+			if (!domain || domain.length === 0) return;
+			numSeries = domain.length;
+		} else {
+			numSeries = 1;
+		}
+
+		const numBins = Math.ceil(chartContext.innerWidth);
+		const xScaleIndex = chartContext.xScaleState
+			? gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0
+			: 0;
+		m4Decimator.configure(numBins, numSeries, xScaleIndex);
+	});
+
 	// Tooltip registration
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
@@ -220,6 +272,7 @@
 	});
 
 	onDestroy(() => {
+		m4Decimator?.destroy();
 		setup?.destroy();
 	});
 </script>
@@ -239,6 +292,7 @@
 			{dotRadius}
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
+			m4Decimator={m4Active ? m4Decimator : null}
 		/>
 	{/key}
 {:else if setup?.client?.error}

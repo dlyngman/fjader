@@ -142,6 +142,11 @@ export class GPUCoordinator {
 	#isAnimating = false; // True when scales are actively animating (pan/zoom)
 
 	// =========================================================================
+	// PRE-RENDER COMPUTE WORK (M4 decimation, etc.)
+	// =========================================================================
+	#computeWork = new Map(); // key -> computeFn(commandEncoder, scaleBindGroup)
+
+	// =========================================================================
 	// SCALE SSBO SYSTEM
 	// =========================================================================
 	#scaleIndexManager = new ScaleIndexManager();
@@ -345,9 +350,9 @@ export class GPUCoordinator {
 			label: 'global-scale-ssbo-layout',
 			entries: [
 				{
-					// Binding 0: Coordinate scale params (used in vertex)
+					// Binding 0: Coordinate scale params (vertex + fragment + compute for M4 decimation)
 					binding: 0,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					buffer: { type: 'read-only-storage' }
 				},
 				{
@@ -663,6 +668,13 @@ export class GPUCoordinator {
 		// PHASE 3: GPU COMMAND ENCODING
 		const commandEncoder = this.#device.createCommandEncoder(this.#encoderDescriptor);
 		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
+
+		// PHASE 3a: PRE-RENDER COMPUTE (M4 decimation, etc.)
+		if (this.#computeWork.size > 0) {
+			for (const computeFn of this.#computeWork.values()) {
+				computeFn(commandEncoder, currentScaleBindGroup);
+			}
+		}
 
 		for (let i = 0; i < this.#acquiredTextures.length; i++) {
 			// for (let i = 0; i < numCharts; i++) {
@@ -1790,6 +1802,32 @@ export class GPUCoordinator {
 
 	get colorPaletteBuffer() {
 		return this.#colorPaletteBuffer;
+	}
+
+	get globalScaleLayout() {
+		return this.#globalScaleLayout;
+	}
+
+	getScaleIndex(scaleId) {
+		return this.#scaleIndexManager.getIndex(scaleId);
+	}
+
+	// =========================================================================
+	// PRE-RENDER COMPUTE WORK
+	// =========================================================================
+
+	/**
+	 * Register a compute function to run before render passes each frame.
+	 * Used by M4 decimation and other GPU compute optimizations.
+	 * @param {string} key - Unique identifier for this compute work
+	 * @param {function(GPUCommandEncoder, GPUBindGroup): void} computeFn
+	 */
+	registerComputeWork(key, computeFn) {
+		this.#computeWork.set(key, computeFn);
+	}
+
+	removeComputeWork(key) {
+		this.#computeWork.delete(key);
 	}
 
 	// =========================================================================
