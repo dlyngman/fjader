@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-	import { Dots } from '../rendering/index.js';
+	import { Dots } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
 		buildSelectFromChannels,
@@ -14,7 +14,7 @@
 		MarkSize,
 		normalizeSortConfig,
 		inferMarkScaleType
-	} from './utils/index.js';
+	} from './utils';
 	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, Coordinator } from '$lib/types';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {

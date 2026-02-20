@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-	import { Lines } from '../rendering/index.js';
+	import { Lines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
 		buildSelectFromChannels,
@@ -12,7 +12,7 @@
 		MarkSeries,
 		normalizeSortConfig,
 		inferMarkScaleType
-	} from './utils/index.js';
+	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import type {

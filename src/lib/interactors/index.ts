@@ -1,10 +1,10 @@
-export { BrushState1D, BrushState2D } from './brush-state.svelte.js';
+export { BrushState1D, BrushState2D } from './brush-state.svelte';
 export { default as BrushOverlay } from './BrushOverlay.svelte';
 export { default as Interval1D } from './Interval1D.svelte';
 export { default as IntervalX } from './IntervalX.svelte';
 export { default as IntervalY } from './IntervalY.svelte';
 export { default as Interval2D } from './Interval2D.svelte';
-export { TooltipManager } from './TooltipManager.svelte.js';
+export { TooltipManager } from './TooltipManager.svelte';
 export { default as Tooltip } from './Tooltip.svelte';
 export { default as HoverIndicator } from './HoverIndicator.svelte';
 export { default as Toggle } from './Toggle.svelte';

@@ -1,7 +1,7 @@
 <script>
 	import { getContext, onMount } from 'svelte';
 	import { clauseInterval } from '@uwdata/mosaic-core';
-	import { BrushState1D } from './brush-state.svelte.js';
+	import { BrushState1D } from './brush-state.svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import {
 		buildColumnRef,

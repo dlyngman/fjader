@@ -1,18 +1,26 @@
 import { untrack } from 'svelte';
 import { resolveChannel } from './channel-resolution';
+import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 
 export class MarkSize {
-	#sizeProp;
-	#rangeProp;
-	#tableProp;
-	#setupState;
-	#scaleRegistry;
-	#chartContext;
+	#sizeProp: () => number | string | ((point: { x: number; y: number }) => number) | null;
+	#rangeProp: () => [number, number];
+	#tableProp: () => string | null;
+	#setupState: () => any;
+	#scaleRegistry: any;
+	#chartContext: any;
 
 	// Managed State
-	scaleState = $state(null);
+	scaleState: SizeScaleState | null = $state(null);
 
-	constructor(getSize, getRange, getTable, getSetup, scaleRegistry, chartContext) {
+	constructor(
+		getSize: () => number | string | ((point: { x: number; y: number }) => number) | null,
+		getRange: () => [number, number],
+		getTable: () => string | null,
+		getSetup: () => any,
+		scaleRegistry: any,
+		chartContext: any
+	) {
 		this.#sizeProp = getSize;
 		this.#rangeProp = getRange;
 		this.#tableProp = getTable;
@@ -58,7 +66,7 @@ export class MarkSize {
 
 	// --- Internal Logic ---
 
-	#mode = $derived.by(() => {
+	#mode: 'constant' | 'field' = $derived.by(() => {
 		const s = this.#sizeProp();
 		if (s == null) return 'constant';
 		if (typeof s === 'number') return 'constant';
@@ -67,17 +75,17 @@ export class MarkSize {
 		return 'constant';
 	});
 
-	#field = $derived.by(() => {
+	#field: string | null = $derived.by(() => {
 		const s = this.#sizeProp();
 		if (typeof s === 'string') return s;
 		return null;
 	});
 
 	// Field/expression for BaseMarkSetup select (or null)
-	selectField = $derived(this.#mode === 'field' ? this.#field : null);
+	selectField: string | null = $derived(this.#mode === 'field' ? this.#field : null);
 
 	// Resolved Data for GPU
-	data = $derived.by(() => {
+	data: Float32Array | null = $derived.by(() => {
 		if (this.#mode !== 'field') return null;
 		if (!this.scaleState?.ready) return null;
 
@@ -95,9 +103,9 @@ export class MarkSize {
 		return this.scaleState.processDataForGPU(raw);
 	});
 
-	sizeMode = $derived(this.#mode === 'field' ? 1 : 0);
+	sizeMode: number = $derived(this.#mode === 'field' ? 1 : 0);
 
-	sizeScaleIndex = $derived(this.scaleState?.gpuIndex ?? 0);
+	sizeScaleIndex: number = $derived(this.scaleState?.gpuIndex ?? 0);
 
-	ready = $derived(this.#mode === 'constant' || (this.scaleState?.ready ?? false));
+	ready: boolean = $derived(this.#mode === 'constant' || (this.scaleState?.ready ?? false));
 }

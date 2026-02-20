@@ -15,9 +15,9 @@ export {
 	computeInstanceCount
 } from './channel-resolution';
 export { buildTooltipConfig } from './tooltip-helpers';
-export { MarkColor } from './MarkColor.svelte.js';
-export { MarkSize } from './MarkSize.svelte.js';
-export { MarkSeries } from './MarkSeries.svelte.js';
+export { MarkColor } from './MarkColor.svelte';
+export { MarkSize } from './MarkSize.svelte';
+export { MarkSeries } from './MarkSeries.svelte';
 export { inferMarkScaleType } from './inferMarkScaleType';
 
 import type { SortConfig, NormalizedSortConfig } from '$lib/types';

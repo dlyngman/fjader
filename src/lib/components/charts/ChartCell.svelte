@@ -2,7 +2,7 @@
 	import { setContext, getContext, onMount } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl';
-	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte.js';
+	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
