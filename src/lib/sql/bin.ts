@@ -99,8 +99,7 @@ export class AutoBinNode {
 }
 
 export function isBinExpression(expr: unknown): expr is AutoBinNode {
-	if (!expr) return false;
-	return (expr as AutoBinNode).isAutoBinNode === true;
+	return typeof expr === 'object' && expr !== null && 'isAutoBinNode' in expr && expr.isAutoBinNode === true;
 }
 
 export function expandBinForExtent(

@@ -4,6 +4,7 @@ import { isNode } from '@uwdata/mosaic-sql';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ChartContext } from '$lib/types';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+import type { MarkSetupState } from './mark-types';
 
 /**
  * MarkSeries - Handles series grouping for connected topology marks (Lines, Areas)
@@ -15,7 +16,7 @@ import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 export class MarkSeries {
 	#seriesProp: () => string | object | null;
 	#tableProp: () => string | null;
-	#setupState: () => any;
+	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
 	#chartContext: ChartContext;
 
@@ -24,7 +25,7 @@ export class MarkSeries {
 	constructor(
 		getSeries: () => string | object | null,
 		getTable: () => string | null,
-		getSetup: () => any,
+		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
 		chartContext: ChartContext
 	) {

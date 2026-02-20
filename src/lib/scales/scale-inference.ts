@@ -1,4 +1,5 @@
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+import { isBinExpression } from '$lib/sql/bin';
 
 export type InferenceContext = 'axis' | 'visual' | 'size';
 
@@ -29,8 +30,7 @@ export function inferScaleType({
 			if (context === 'visual') return 'sequential';
 			return 'sqrt'; // size context
 		}
-		const node = field as unknown as Record<string, unknown>;
-		if (node.isAutoBinNode || node.type === 'Bin') {
+		if (isBinExpression(field) || ('type' in (field as object) && (field as { type: string }).type === 'Bin')) {
 			if (context === 'axis') return 'linear';
 			return 'sequential'; // visual or size
 		}

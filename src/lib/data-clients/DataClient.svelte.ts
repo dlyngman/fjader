@@ -16,7 +16,7 @@ export type QueryBuilder = (
 	sourceTable: string,
 	config: DataClientConfig,
 	filter: unknown[]
-) => any | null;
+) => Query | null;
 
 export interface DataClientOptions {
 	name?: string;
@@ -26,7 +26,7 @@ export interface DataClientOptions {
 	[key: string]: unknown;
 }
 
-interface DataClientConfig {
+export interface DataClientConfig {
 	_filterNulls: unknown[] | null;
 	_dataFormat: DataFormat;
 	select?: Record<string, unknown>;
@@ -35,7 +35,7 @@ interface DataClientConfig {
 	[key: string]: unknown;
 }
 
-interface FieldInfoEntry {
+export interface FieldInfoEntry {
 	column: string;
 	[key: string]: unknown;
 }
@@ -118,7 +118,7 @@ export class DataClient extends MosaicClient {
 		}
 	}
 
-	query(filter: unknown[] = []): any | null {
+	query(filter: unknown[] = []): Query | null {
 		if (!this._sourceTable) {
 			this.error = new Error('Source table is not defined.');
 			this.setLoading(false);
@@ -165,7 +165,7 @@ export class DataClient extends MosaicClient {
 	// ==  DEFAULT QUERY BUILDER                                      ==
 	// =================================================================
 
-	_defaultQueryBuilder(sourceTable: string, config: DataClientConfig, filter: unknown[]): any {
+	_defaultQueryBuilder(sourceTable: string, config: DataClientConfig, filter: unknown[]): Query {
 		const { select, sort, limit, _filterNulls } = config;
 
 		const q = Query.from(sourceTable);

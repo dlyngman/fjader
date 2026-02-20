@@ -7,6 +7,7 @@ import { inferScaleType } from '$lib/scales/scale-inference';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ColorProp, ChartContext } from '$lib/types';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+import type { MarkSetupState } from './mark-types';
 
 interface ColorConfig {
 	mode: 'constant' | 'field';
@@ -20,7 +21,7 @@ export class MarkColor {
 	#colorProp: () => ColorProp;
 	#schemeProp: () => string | null | undefined;
 	#tableProp: () => string | null;
-	#setupState: () => any;
+	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
 	#chartContext: ChartContext;
 
@@ -32,7 +33,7 @@ export class MarkColor {
 		getColor: () => ColorProp,
 		getScheme: () => string | null | undefined,
 		getTable: () => string | null,
-		getSetup: () => any,
+		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
 		chartContext: ChartContext
 	) {

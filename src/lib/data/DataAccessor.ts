@@ -86,6 +86,8 @@ export class ArrowDataAccessor {
 	}
 }
 
+export type DataAccessor = ArrowDataAccessor | ObjectDataAccessor;
+
 export class ObjectDataAccessor {
 	data: Record<string, unknown>[];
 	type = 'objects' as const;

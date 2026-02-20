@@ -3,6 +3,8 @@
 import type { Coordinator } from '@uwdata/mosaic-core';
 import type { D3Scale, ScaleStateInstance } from '$lib/types';
 
+type DataRow = Record<string, unknown>;
+
 interface TooltipMarkRegistration {
 	tempTable: string;
 	markType: string;
@@ -37,7 +39,7 @@ interface CursorPosition {
 interface QueryResult {
 	markId: string;
 	config: TooltipMarkRegistration;
-	row: Record<string, any>;
+	row: DataRow;
 }
 
 /**
@@ -62,7 +64,7 @@ export class TooltipManager {
 	#suppressUntil: number = 0;
 
 	// Reactive state
-	currentPoint: Record<string, any> | null = $state(null);
+	currentPoint: DataRow | null = $state(null);
 	currentMarkId: string | null = $state(null);
 	currentMarkType: string | null = $state(null);
 	currentColor: string | null = $state(null);
@@ -186,7 +188,7 @@ export class TooltipManager {
 			// Only discard if cursor left the chart entirely
 			if (!this.#cursorActive) return;
 
-			let bestResult: Record<string, any> | null = null;
+			let bestResult: DataRow | null = null;
 			let bestDistance = Infinity;
 			let bestMarkId: string | null = null;
 			let bestConfig: TooltipMarkRegistration | null = null;
@@ -372,7 +374,7 @@ export class TooltipManager {
 	 */
 	#resolveScreenPos(
 		axis: 'x' | 'y',
-		row: Record<string, any>,
+		row: DataRow,
 		config: TooltipMarkRegistration,
 		scale: D3Scale | null,
 		columns: TooltipMarkRegistration['columns']
@@ -416,9 +418,9 @@ export class TooltipManager {
 	 * Resolve band indices, time offsets, and color indices back to human-readable labels.
 	 * Renames columns from aliases (x, y, color) to original field names.
 	 */
-	#resolveLabels(row: Record<string, any>, config: TooltipMarkRegistration): Record<string, any> {
+	#resolveLabels(row: DataRow, config: TooltipMarkRegistration): DataRow {
 		const { scaleTypes, channelFields, bandDomains, colorDomain } = config;
-		const point: Record<string, any> = {};
+		const point: DataRow = {};
 
 		for (const [key, value] of Object.entries(row)) {
 			// Skip internal columns
