@@ -1,4 +1,5 @@
 import { isColorConstant, type RGBA } from '$lib/scales/color-utils';
+import type { Column } from '@uwdata/flechette';
 
 export type SourceType = 'constant' | 'constant-color' | 'array' | 'float32array' | 'sql';
 
@@ -12,20 +13,21 @@ export function getSourceType(value: unknown): SourceType {
 	return 'sql';
 }
 
-const processors: Record<string, (value: any, instanceCount?: number) => Float32Array | null> = {
-	constant: (value: number, instanceCount?: number) => new Float32Array(instanceCount!).fill(value),
-	array: (value: number[]) => new Float32Array(value),
-	float32array: (value: Float32Array) => value,
-	sql: (column: any) => {
+const processors: Record<string, (value: unknown, instanceCount?: number) => Float32Array | null> = {
+	constant: (value: unknown, instanceCount?: number) =>
+		new Float32Array(instanceCount!).fill(value as number),
+	array: (value: unknown) => new Float32Array(value as number[]),
+	float32array: (value: unknown) => value as Float32Array,
+	sql: (column: unknown) => {
 		if (!column) return null;
-		const rawArray = column.toArray();
-		return rawArray instanceof Float32Array ? rawArray : new Float32Array(rawArray);
+		const rawArray = (column as Column<unknown>).toArray();
+		return rawArray instanceof Float32Array ? rawArray : new Float32Array(rawArray as number[]);
 	}
 };
 
 export function processData(
 	value: unknown,
-	column: any,
+	column: Column<unknown> | null,
 	instanceCount: number,
 	strategy: SourceType | null = null
 ): Float32Array | null {
@@ -114,9 +116,9 @@ export function parseColor(color: string): RGBA {
 
 export function processColorData(
 	value: unknown,
-	column: any,
+	column: Column<unknown> | null,
 	instanceCount: number,
-	colorScale: ((value: any) => string) | null = null,
+	colorScale: ((value: unknown) => string) | null = null,
 	strategy: SourceType | null = null
 ): Float32Array | null {
 	if (!instanceCount) return null;

@@ -16,7 +16,7 @@ export type AnyScaleState =
 	| ColorScaleState
 	| SizeScaleState;
 
-type ScaleMapBucket = SvelteMap<string, any>;
+type ScaleMapBucket = SvelteMap<string, AnyScaleState>;
 
 interface GPUSlots {
 	configSlot?: number;
@@ -211,7 +211,7 @@ export class ScaleRegistry {
 	getOrCreateScale(
 		name: string,
 		type: string = 'linear',
-		config: Record<string, any> = {},
+		config: Record<string, unknown> = {},
 		chartId: string | null = null
 	): AnyScaleState {
 		// Wrap map operations in untrack() to prevent SvelteMap reads from creating
@@ -448,7 +448,7 @@ export function setScaleRegistry(): ScaleRegistry {
 export function getScaleState(
 	name: string,
 	type: string = 'linear',
-	config: Record<string, any> = {},
+	config: Record<string, unknown> = {},
 	chartId: string | null = null
 ): AnyScaleState | null {
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');

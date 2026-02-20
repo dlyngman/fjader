@@ -2,7 +2,11 @@
 	import { getContext } from 'svelte';
 	import GridSizeSelector from './GridSizeSelector.svelte';
 
-	let c = getContext<any>('chartConfig');
+	let c = getContext<{
+		gridRows: number;
+		gridColumns: number;
+		chartConfig: { id: string; table: string; x: string; y: string }[];
+	}>('chartConfig');
 
 	// let gridRows = $state(2);
 	// let gridColumns = $state(2);

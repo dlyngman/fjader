@@ -23,7 +23,7 @@ const SCALE_SPRING_PRESETS = {
 // TYPES
 // =============================================================================
 
-interface LinearScaleOptions {
+export interface LinearScaleOptions {
 	disableZoom?: boolean;
 	zoomInEffect?: boolean;
 	zoomInFactor?: number;

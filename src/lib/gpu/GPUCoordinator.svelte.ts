@@ -75,7 +75,7 @@ interface ChartRegistrationConfig {
 	facetIndex?: number;
 }
 
-interface ChartRegistrationResult {
+export interface ChartRegistrationResult {
 	setContextReady: () => void;
 	setVisible: (visible: boolean) => void;
 	invalidate: () => void;

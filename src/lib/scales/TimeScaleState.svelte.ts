@@ -4,6 +4,8 @@
 
 import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte';
+import type { LinearScaleOptions } from './LinearScaleState.svelte';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
 
 /**
@@ -36,8 +38,8 @@ export class TimeScaleState extends LinearScaleState {
 		extent: [number, number],
 		type: string,
 		zoomLimits: [number, number],
-		options: any,
-		gpuCoordinator: any
+		options: LinearScaleOptions,
+		gpuCoordinator: GPUCoordinator | null
 	) {
 		super(name, extent, type ?? 'time', zoomLimits, options, gpuCoordinator);
 	}

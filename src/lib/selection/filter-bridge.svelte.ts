@@ -1,46 +1,54 @@
 // No need for TRUE_PREDICATE - use null for cleared states
 
-interface FilterClause {
-	predicate: any;
-	source?: string;
-	clients?: any[];
-	value?: any[][];
-	schema?: FilterSchema;
-	[key: string]: any;
+import type { Selection, SelectionClause } from '@uwdata/mosaic-core';
+import type { ExprNode } from '@uwdata/mosaic-sql';
+
+/**
+ * Narrow protocol for scale states that support active-value projection.
+ * Implemented by ColorScaleState and BandScaleState.
+ */
+interface ActiveValueScale {
+	setActiveValues(values: Set<unknown>): void;
+	clearActiveValues(): void;
 }
 
 interface FilterSchema {
 	kind?: string;
 	column?: string;
 	label?: string;
-	values?: any[];
-	[key: string]: any;
+	values?: unknown[];
+	[key: string]: unknown;
+}
+
+/** A clause augmented with DivePlot-specific schema metadata. */
+interface AugmentedClause extends SelectionClause {
+	schema?: FilterSchema;
 }
 
 interface FilterEntry {
 	source: string;
-	sel: any;
-	clause: FilterClause | null;
+	sel: Selection;
+	clause: AugmentedClause | null;
 	enabled: boolean;
-	scaleStates: (() => any[]) | null;
+	scaleStates: (() => ActiveValueScale[]) | null;
 }
 
 interface FilterItem {
 	source: string;
 	enabled: boolean;
-	clause: FilterClause | null;
+	clause: AugmentedClause | null;
 	schema?: FilterSchema;
 }
 
 interface CreateLocalOpts {
 	source?: string;
-	augment?: (clause: FilterClause) => FilterSchema | null;
+	augment?: (clause: SelectionClause) => FilterSchema | null;
 	onVisualClear?: () => void;
-	scaleStates?: () => any[];
+	scaleStates?: () => ActiveValueScale[];
 }
 
 interface ToggleEntry {
-	sel: any;
+	sel: Selection;
 	off: () => void;
 	refCount: number;
 }
@@ -48,13 +56,13 @@ interface ToggleEntry {
 /**
  * Checks if a clause is neutral/cleared (Mosaic standard: predicate is null).
  */
-export function isNeutral(clause: FilterClause | null | undefined): boolean {
+export function isNeutral(clause: SelectionClause | AugmentedClause | null | undefined): boolean {
 	return !clause || clause.predicate == null;
 }
 
 export class FilterBridge {
-	Selection: any;
-	filterSel: any;
+	Selection: typeof Selection;
+	filterSel: Selection;
 
 	// Reactive storage - Map tracks all filter sources
 	#entries: Map<string, FilterEntry> = $state(new Map());
@@ -64,15 +72,15 @@ export class FilterBridge {
 	activeCount: number = $derived(this.items.length);
 
 	// Scale states that have been projected to (for cleanup on clear)
-	#projectedScales: Set<any> = new Set();
+	#projectedScales: Set<ActiveValueScale> = new Set();
 
 	// Shared toggle selections keyed by column (deduplicated, ref-counted)
 	#toggleSelections: Map<string, ToggleEntry> = new Map();
 
-	constructor(Selection: any, baseSel: any | any[]) {
-		this.Selection = Selection;
+	constructor(SelectionClass: typeof Selection, baseSel: Selection | Selection[] | null) {
+		this.Selection = SelectionClass;
 		const base = Array.isArray(baseSel) ? baseSel : baseSel ? [baseSel] : [];
-		this.filterSel = Selection.intersect({ cross: true, include: base });
+		this.filterSel = SelectionClass.intersect({ cross: true, include: base });
 	}
 
 	// Sync items from entries to public state
@@ -95,12 +103,12 @@ export class FilterBridge {
 	 * Scale state refs are resolved lazily via getter functions passed at registration.
 	 */
 	#projectToScales(): void {
-		const activeByScale = new Map<any, Set<any>>();
+		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();
 
 		for (const entry of this.#entries.values()) {
 			if (!entry.scaleStates || !entry.enabled || isNeutral(entry.clause)) continue;
 
-			const tuples = entry.clause?.value;
+			const tuples = entry.clause?.value as unknown[][] | undefined;
 			if (!tuples?.length) continue;
 
 			for (const scale of entry.scaleStates()) {
@@ -128,7 +136,7 @@ export class FilterBridge {
 	createLocal(
 		kind: 'single' | 'union' | 'intersect' = 'single',
 		opts: CreateLocalOpts = {}
-	): { sel: any; off: () => void } {
+	): { sel: Selection; off: () => void } {
 		const { source, augment, onVisualClear, scaleStates } = opts;
 
 		const sel =
@@ -140,7 +148,7 @@ export class FilterBridge {
 
 		// Listener: Mosaic Selection -> Svelte State
 		const onValue = (): void => {
-			let clause = sel.active;
+			let clause: AugmentedClause = sel.active;
 
 			// Augment with metadata for UI display
 			if (clause && augment) {
@@ -188,9 +196,9 @@ export class FilterBridge {
 			this.#syncItems();
 		};
 
-		const onActivate = (clause: FilterClause): void => {
+		const onActivate = (clause: SelectionClause): void => {
 			if (clause && !isNeutral(clause)) {
-				this.filterSel.activate?.({ ...clause, source });
+				this.filterSel.activate?.({ ...clause, source: source as unknown as SelectionClause['source'] });
 			}
 		};
 
@@ -217,8 +225,8 @@ export class FilterBridge {
 	 */
 	createToggle(
 		column: string,
-		opts: { scaleStates?: () => any[] } = {}
-	): { sel: any; source: string; off: () => void } {
+		opts: { scaleStates?: () => ActiveValueScale[] } = {}
+	): { sel: Selection; source: string; off: () => void } {
 		const { scaleStates } = opts;
 
 		if (this.#toggleSelections.has(column)) {
@@ -235,7 +243,7 @@ export class FilterBridge {
 				kind: 'toggle',
 				column,
 				label: column,
-				values: clause?.value?.map((v: any[]) => v[0]) ?? []
+				values: clause?.value ? (clause.value as unknown[][]).map((v) => v[0]) : []
 			})
 		});
 
@@ -272,10 +280,10 @@ export class FilterBridge {
 		// Send neutral clause to Mosaic - onValue callback handles our state
 		entry.sel.update({
 			predicate: null,
-			source,
+			source: source as unknown as SelectionClause['source'],
 			clients: entry.clause?.clients,
 			value: null
-		});
+		} as SelectionClause);
 	}
 
 	/**
@@ -290,13 +298,13 @@ export class FilterBridge {
 	/**
 	 * For manual clauses (not attached to a Mosaic Selection object)
 	 */
-	upsertManual(key: string, clause: FilterClause, schema: FilterSchema): void {
+	upsertManual(key: string, clause: SelectionClause, schema: FilterSchema): void {
 		const source = `manual:${key}`;
-		const c = { ...clause, source, schema };
+		const c: AugmentedClause = { ...clause, source: source as unknown as SelectionClause['source'], schema };
 
 		this.#entries.set(source, {
 			source,
-			sel: null,
+			sel: null as unknown as Selection,
 			clause: c,
 			enabled: true,
 			scaleStates: null

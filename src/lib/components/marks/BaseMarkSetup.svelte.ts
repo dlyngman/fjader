@@ -2,6 +2,7 @@
 
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data-clients/DataClient.svelte';
+import type { DataClientConfig, FieldInfoEntry } from '$lib/data-clients/DataClient.svelte';
 import {
 	Query,
 	isNode,
@@ -19,6 +20,7 @@ import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
+import type { DataAccessor } from '$lib/data/DataAccessor';
 import { viewManager } from '$lib/data/ViewManager.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import type {
@@ -32,6 +34,7 @@ import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
+import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 
 // ---------------------------------------------------------------------------
 // Local interfaces
@@ -40,19 +43,6 @@ import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 interface ConnectedConfig {
 	seriesChannel: string | null;
 	dimensionChannel: string;
-}
-
-interface AutoBinNode {
-	isAutoBinNode: true;
-	field: string;
-	stats: { column: string; stats: string[] };
-	resolve(
-		fieldInfo: Record<string, unknown>,
-		scaleType: string | null,
-		t0?: number | null,
-		currentDomain?: number[] | null,
-		binStepMultiplier?: number
-	): ExprNode;
 }
 
 export interface BaseMarkSetupConfig {
@@ -81,8 +71,6 @@ interface ExtentFilterOptions {
 	filterAxis?: string;
 	filterDomain?: [number, number];
 }
-
-type DataAccessor = ArrowDataAccessor | ObjectDataAccessor;
 
 export class BaseMarkSetup {
 	// --- Reactive State ---
@@ -198,8 +186,8 @@ export class BaseMarkSetup {
 	// NEW: Detect AutoBinNodes in config
 	#detectAutoBins(): void {
 		for (const [channel, value] of Object.entries(this.#config.select)) {
-			if ((value as AutoBinNode)?.isAutoBinNode) {
-				this.#autoBinNodes.set(channel, value as AutoBinNode);
+			if (isBinExpression(value)) {
+				this.#autoBinNodes.set(channel, value);
 			}
 		}
 	}
@@ -221,7 +209,7 @@ export class BaseMarkSetup {
 			// AutoBinNodes need data-derived domains: bin boundaries depend on
 			// nice rounding and can't be known until the query results arrive.
 			// The sidecar query can't run before fieldInfo resolves bins to SQL.
-			if ((value as AutoBinNode).isAutoBinNode) {
+			if (isBinExpression(value)) {
 				if (channel === 'x' || channel === 'x1' || channel === 'x2') {
 					this.#channelsNeedingDataDomain.add('x');
 				} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
@@ -787,7 +775,7 @@ export class BaseMarkSetup {
 		return select;
 	}
 
-	buildQuery(sourceTable: string, config: Record<string, any>, filter: unknown[]): any {
+	buildQuery(sourceTable: string, config: DataClientConfig, filter: unknown[]): Query {
 		let select: Record<string, unknown> = config.select;
 
 		// Resolve auto bins if we have field info
@@ -878,7 +866,7 @@ export class BaseMarkSetup {
 			if (orderCols.length > 0) {
 				console.log(
 					`🔗 [${this.#markId}] Connected mark ordering by:`,
-					orderCols.map((c: any) => c.toString())
+					orderCols.map((c: ExprNode) => c.toString())
 				);
 				queryWithTransforms = queryWithTransforms.orderby(...orderCols);
 			}
@@ -893,8 +881,8 @@ export class BaseMarkSetup {
 		const binStepMultiplier: number = this.#chartContext.binStepMultiplier || 1.0;
 
 		for (const [channel, value] of Object.entries(select)) {
-			if ((value as AutoBinNode)?.isAutoBinNode) {
-				const autoBin = value as AutoBinNode;
+			if (isBinExpression(value)) {
+				const autoBin = value;
 				const axis = channel.startsWith('x') ? 'x' : 'y';
 				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 				const scaleState = this.#chartContext[`${axis}ScaleState`];
@@ -971,7 +959,7 @@ export class BaseMarkSetup {
 			this.#config.selection ?? null,
 			{
 				select: this.getSelectConfig(),
-				queryBuilder: (table: string, config: any, filter: unknown[]) => {
+				queryBuilder: (table: string, config: DataClientConfig, filter: unknown[]) => {
 					return this.buildQuery(table, config, filter);
 				},
 				dataFormat: 'arrow',
@@ -1035,8 +1023,8 @@ export class BaseMarkSetup {
 			if (fieldValue == null) continue;
 
 			// NEW: Handle AutoBinNodes
-			if ((fieldValue as AutoBinNode).isAutoBinNode) {
-				const stats = (fieldValue as AutoBinNode).stats;
+			if (isBinExpression(fieldValue)) {
+				const stats = fieldValue.stats;
 				if (!processedFields.has(stats.column)) {
 					requests.push({ table, column: stats.column, stats: stats.stats });
 					processedFields.add(stats.column);
@@ -1068,7 +1056,7 @@ export class BaseMarkSetup {
 		return requests;
 	}
 
-	#setInitialContinuousDomains(fieldInfo: Record<string, any> | null): void {
+	#setInitialContinuousDomains(fieldInfo: Record<string, FieldInfoEntry> | null): void {
 		if (!fieldInfo) return;
 
 		for (const alias in this.#scaleMap) {
@@ -1082,7 +1070,7 @@ export class BaseMarkSetup {
 				const select = this.#config.select;
 				// Try direct alias first, then extent variants (x1/x2, y1/y2)
 				const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
-					(f) => f != null && !(f as AutoBinNode).isAutoBinNode
+					(f) => f != null && !isBinExpression(f)
 				);
 
 				if (candidates.length === 0) continue;
@@ -1274,7 +1262,7 @@ export class BaseMarkSetup {
 		const isAccessor = typeof (data as DataAccessor).getColumn === 'function';
 
 		// Performance guard: skip viewport filtering for large datasets
-		const dataLength = (data as any).length;
+		const dataLength = (data as DataAccessor).length;
 		const shouldFilter = filterAxis && filterDomain && dataLength < 10000;
 
 		if (isAccessor) {
@@ -1427,7 +1415,7 @@ export class BaseMarkSetup {
 			// Unwrap AutoBinNode to get the underlying column name
 			// For bins: fetch raw column min/max to establish t0, then actual bin
 			// boundaries from query results will update the extent later
-			const rawField = (field as AutoBinNode).isAutoBinNode ? (field as AutoBinNode).field : field;
+			const rawField = isBinExpression(field) ? field.field : field;
 
 			// Ensure we have a valid string or SQL node
 			const colExpr = isNode(rawField) ? rawField : sqlColumn(String(rawField));

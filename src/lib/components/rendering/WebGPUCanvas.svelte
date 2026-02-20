@@ -3,7 +3,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import type { Snippet } from 'svelte';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
-	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
@@ -21,7 +21,7 @@
 	let canvas = $state<HTMLCanvasElement>();
 	let context: GPUCanvasContext | null = null;
 	let gpuCoordinator: GPUCoordinator | null | undefined = isFaceted ? getGPUContext() : undefined;
-	let chartControl: any = null;
+	let chartControl: ChartRegistrationResult | null = null;
 	let contextConfigured = $state(isFaceted);
 	let initializationError = $state<string | null>(null);
 	let lastTransform = '';

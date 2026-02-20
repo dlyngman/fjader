@@ -1,16 +1,19 @@
+import type { DataAccessor } from '$lib/data/DataAccessor';
+import type { AnyScaleState } from '$lib/scales';
+
 type ArrayLike = Float32Array | Int32Array | Uint32Array | number[] | string[];
 
 interface ResolveChannelParams {
 	value: unknown;
 	channel?: string;
-	dataAccessor?: any;
+	dataAccessor?: DataAccessor;
 	tryColumns?: string[];
 	instanceCount: number;
 	fallback?: number;
 }
 
 interface ResolveChannelDataParams extends ResolveChannelParams {
-	scaleState?: any;
+	scaleState?: AnyScaleState;
 	scaleType?: string;
 	markId?: string;
 }
