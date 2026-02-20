@@ -1,6 +1,6 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
-import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
+import { scaleTemplateSystem } from './ScaleTemplateSystem';
 
 // =============================================================================
 // HELPER CLASSES
@@ -1556,7 +1556,9 @@ export class GPUCoordinator {
 			if (!this.#pendingLayers.has(chartId)) {
 				this.#pendingLayers.set(chartId, []);
 			}
-			this.#pendingLayers.get(chartId).push({ ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
+			this.#pendingLayers
+				.get(chartId)
+				.push({ ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
 
 			return {
 				remove: () => {
