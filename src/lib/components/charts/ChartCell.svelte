@@ -2,7 +2,7 @@
 	import { setContext, getContext, onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
-	import type { Margin } from '$lib/layout/ChartLayout.svelte';
+	import type { Margin } from '$lib/types';
 	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 	import type { ChartContext, Coordinator } from '$lib/types';

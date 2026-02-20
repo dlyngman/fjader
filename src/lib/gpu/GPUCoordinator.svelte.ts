@@ -1,6 +1,8 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
 import { scaleTemplateSystem } from './ScaleTemplateSystem';
+import type { RendererDefinition } from './ScaleTemplateSystem';
+import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 // =============================================================================
 // TYPE INTERFACES
@@ -37,16 +39,10 @@ interface LayerConfig {
 	cachedPipeline?: GPURenderPipeline | null;
 }
 
-interface DataBindingEntry {
+export interface DataBindingEntry {
 	binding: number;
 	visibility?: number;
 	type?: string;
-}
-
-interface RendererDefinition {
-	x?: { concept: string; channels: string[] };
-	y?: { concept: string; channels: string[] };
-	placeholders?: { x?: string; y?: string };
 }
 
 interface ScaleInstance {
@@ -86,7 +82,7 @@ interface ChartRegistrationResult {
 	remove: () => void;
 }
 
-interface LayerRegistrationResult {
+export interface LayerRegistrationResult {
 	remove: () => void;
 }
 
@@ -228,7 +224,7 @@ export class GPUCoordinator {
 	#animationLoop: AnimationLoop | null = null;
 	#animatedScales = new Set<ScaleInstance>(); // Set for O(1) membership check
 	#animatedScalesArray: ScaleInstance[] = []; // Array for O(1) iteration (no allocation)
-	#scaleRegistry: any = null;
+	#scaleRegistry: ScaleRegistry | null = null;
 
 	// =========================================================================
 	// HOVER STATE (Keep loop warm while any chart is hovered)
@@ -1084,7 +1080,7 @@ export class GPUCoordinator {
 	// SCALE REGISTRATION
 	// =========================================================================
 
-	setScaleRegistry(scaleRegistry: any): void {
+	setScaleRegistry(scaleRegistry: ScaleRegistry): void {
 		this.#scaleRegistry = scaleRegistry;
 	}
 

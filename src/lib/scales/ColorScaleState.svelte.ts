@@ -6,9 +6,11 @@ import {
 	getSchemeType,
 	parseColorToRGBA
 } from './color-utils';
-import type { RGBA } from './color-utils';
+import type { RGBA, D3ColorScale } from './color-utils';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
 import type { ColorScaleType } from '$lib/types';
+import type { ScaleRegistry } from './ScaleRegistry.svelte';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 interface ColorScaleConfig {
 	field: string;
@@ -37,8 +39,8 @@ interface ColorConfigParams {
 export class ColorScaleState {
 	// Identity
 	#field: string;
-	#registry: any;
-	#gpuCoordinator: any;
+	#registry: ScaleRegistry;
+	#gpuCoordinator: GPUCoordinator | null;
 	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
 
 	// GPU slot indices (allocated from registry)
@@ -58,7 +60,7 @@ export class ColorScaleState {
 	#activeValues: Set<string | number> | null = $state(null); // null = all active, Set = only these active
 
 	// D3 scale instance (for legends and CPU lookups)
-	#d3Scale: any = null;
+	#d3Scale: D3ColorScale | null = null;
 
 	// Ordinal category mapping (string -> 1-based index)
 	#categoryMap: Map<string | number, number> = new Map();
@@ -67,7 +69,7 @@ export class ColorScaleState {
 	#registeredTables: Set<string> = new Set();
 	#viewsCreated: Set<string> = new Set(); // Tables that have had their view column created (one-shot)
 
-	constructor(config: ColorScaleConfig, registry: any, gpuCoordinator: any) {
+	constructor(config: ColorScaleConfig, registry: ScaleRegistry, gpuCoordinator: GPUCoordinator | null) {
 		this.#field = config.field;
 		this.#scheme = config.scheme || 'viridis';
 		this.#reverse = config.reverse ?? false;
@@ -143,7 +145,7 @@ export class ColorScaleState {
 	/**
 	 * D3 scale for legends and CPU-side color lookups.
 	 */
-	get d3Scale(): any {
+	get d3Scale(): D3ColorScale | null {
 		return this.#d3Scale;
 	}
 

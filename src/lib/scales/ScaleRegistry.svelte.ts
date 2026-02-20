@@ -9,7 +9,7 @@ import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
-export type ScaleStateInstance =
+export type AnyScaleState =
 	| LinearScaleState
 	| TimeScaleState
 	| BandScaleState
@@ -37,7 +37,7 @@ const stableStringify = (obj: unknown): string => {
 
 export class ScaleRegistry {
 	// Public field for reactive tracking
-	scaleUsage = $state(new Map<any, Set<string>>());
+	scaleUsage = $state(new Map<AnyScaleState, Set<string>>());
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -213,7 +213,7 @@ export class ScaleRegistry {
 		type: string = 'linear',
 		config: Record<string, any> = {},
 		chartId: string | null = null
-	): any {
+	): AnyScaleState {
 		// Wrap map operations in untrack() to prevent SvelteMap reads from creating
 		// reactive dependencies when called from $effect blocks (MarkColor, MarkSize, etc.)
 		const scale = untrack(() => {
@@ -277,7 +277,7 @@ export class ScaleRegistry {
 								reverse: config.reverse ?? false,
 								midpoint: config.midpoint
 							},
-							this as any,
+							this,
 							this.#gpuCoordinator
 						)
 					);
@@ -290,7 +290,7 @@ export class ScaleRegistry {
 								domain: config.domain || [],
 								range: config.range || [2, 12]
 							},
-							this as any,
+							this,
 							this.#gpuCoordinator
 						)
 					);
@@ -330,7 +330,7 @@ export class ScaleRegistry {
 		return scale;
 	}
 
-	deregisterChart(scale: any, chartId: string): void {
+	deregisterChart(scale: AnyScaleState, chartId: string): void {
 		if (!scale || !chartId) return;
 
 		untrack(() => {
@@ -373,9 +373,9 @@ export class ScaleRegistry {
 		});
 	}
 
-	_removeScaleFromStorage(scaleInstance: any): void {
+	_removeScaleFromStorage(scaleInstance: AnyScaleState): void {
 		// Release GPU slots if this is a color or size scale
-		if (scaleInstance && typeof scaleInstance.gpuSlots === 'object') {
+		if ('gpuSlots' in scaleInstance && typeof scaleInstance.gpuSlots === 'object') {
 			const slots = scaleInstance.gpuSlots as GPUSlots;
 
 			if (typeof slots.configSlot === 'number') {
@@ -410,10 +410,10 @@ export class ScaleRegistry {
 			const colorScales = this.scales.color;
 			if (!colorScales) return;
 
-			let foundScale: any = null;
+			let foundScale: ColorScaleState | null = null;
 			for (const [_key, scale] of colorScales) {
-				if (scale.field === field) {
-					foundScale = scale;
+				if ((scale as ColorScaleState).field === field) {
+					foundScale = scale as ColorScaleState;
 					break;
 				}
 			}
@@ -429,11 +429,12 @@ export class ScaleRegistry {
 		});
 	}
 
-	getScaleByField(field: string, type: string): any | null {
+	getScaleByField(field: string, type: string): AnyScaleState | null {
 		const scaleMap = this.scales[type];
 		if (!scaleMap) return null;
 		for (const [_key, scale] of scaleMap) {
-			if ((scale.field ?? scale.name) === field) return scale;
+			const name = 'field' in scale ? scale.field : 'name' in scale ? scale.name : null;
+			if (name === field) return scale as AnyScaleState;
 		}
 		return null;
 	}
@@ -449,7 +450,7 @@ export function getScaleState(
 	type: string = 'linear',
 	config: Record<string, any> = {},
 	chartId: string | null = null
-): any | null {
+): AnyScaleState | null {
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	if (!scaleRegistry) {
 		console.error('No Registry');

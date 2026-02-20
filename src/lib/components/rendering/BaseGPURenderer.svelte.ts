@@ -1,4 +1,4 @@
-import type { GPUCoordinator } from '$lib/gpu';
+import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 interface RendererOptions {
@@ -7,21 +7,11 @@ interface RendererOptions {
 	yScaleType?: string;
 }
 
-interface DataBindingEntry {
-	binding: number;
-	visibility?: number;
-	type?: string;
-}
-
 interface InitConfig {
 	dataBindingConfig: DataBindingEntry[];
 	markShaderCode: string;
 	vertexBufferLayout: GPUVertexBufferLayout[];
 	rendererDefinition: object;
-}
-
-interface LayerRegistrationResult {
-	remove: () => void;
 }
 
 export class BaseGPURenderer {
@@ -75,7 +65,7 @@ export class BaseGPURenderer {
 		markType: string,
 		webGPUContext: { getDevice(): GPUDevice },
 		gpuCoordinator: GPUCoordinator,
-		chartContext: any,
+		chartContext: ChartContext,
 		options: RendererOptions = {}
 	) {
 		this.#markType = markType;

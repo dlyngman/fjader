@@ -6,6 +6,7 @@ import { scaleLinear } from 'd3-scale';
 import type { ScaleLinear } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
 import { SpringPair, SPRING_PRESETS } from '$lib/animation';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 // =============================================================================
 // SPRING STIFFNESS PRESETS FOR SCALE INTERACTIONS
@@ -113,7 +114,7 @@ export class LinearScaleState {
 
 	// --- Animation State ---
 	#isAnimating: boolean = false;
-	#gpuCoordinator: any = null;
+	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// --- Pan Context ---
 	#panContext: PanContext | null = null;
@@ -144,7 +145,7 @@ export class LinearScaleState {
 		type: string = 'linear',
 		zoomLimits: [number, number] = [10, 100],
 		options: LinearScaleOptions = {},
-		gpuCoordinator: any = null
+		gpuCoordinator: GPUCoordinator | null = null
 	) {
 		this.id = crypto.randomUUID();
 		this.name = name;

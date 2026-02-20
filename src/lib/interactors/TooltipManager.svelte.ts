@@ -1,8 +1,9 @@
 // src/lib/interactors/TooltipManager.svelte.ts
 
 import type { Coordinator } from '@uwdata/mosaic-core';
+import type { D3Scale, ScaleStateInstance } from '$lib/types';
 
-interface MarkConfig {
+interface TooltipMarkRegistration {
 	tempTable: string;
 	markType: string;
 	scaleTypes: { x: string; y: string };
@@ -17,15 +18,15 @@ interface MarkConfig {
 	};
 	bandDomains?: Record<string, string[]>;
 	colorDomain?: string[];
-	colorScaleState?: { getColor: (value: any) => string | null };
+	colorScaleState?: { getColor: (value: unknown) => string | null };
 	enabled: boolean;
 }
 
 interface ScaleProvider {
-	xScale: any;
-	yScale: any;
-	xScaleState: any;
-	yScaleState: any;
+	xScale: D3Scale | null;
+	yScale: D3Scale | null;
+	xScaleState: ScaleStateInstance | null;
+	yScaleState: ScaleStateInstance | null;
 }
 
 interface CursorPosition {
@@ -35,7 +36,7 @@ interface CursorPosition {
 
 interface QueryResult {
 	markId: string;
-	config: MarkConfig;
+	config: TooltipMarkRegistration;
 	row: Record<string, any>;
 }
 
@@ -54,7 +55,7 @@ interface QueryResult {
 export class TooltipManager {
 	#coordinator: Coordinator;
 	#scaleProvider: ScaleProvider;
-	#marks: Map<string, MarkConfig> = new Map();
+	#marks: Map<string, TooltipMarkRegistration> = new Map();
 	#queryPending: boolean = false;
 	#latestPosition: CursorPosition | null = null;
 	#cursorActive: boolean = false;
@@ -107,7 +108,10 @@ export class TooltipManager {
 	/**
 	 * Register a mark for tooltip queries.
 	 */
-	registerMark(markId: string, config: Omit<MarkConfig, 'enabled'> & { enabled?: boolean }): void {
+	registerMark(
+		markId: string,
+		config: Omit<TooltipMarkRegistration, 'enabled'> & { enabled?: boolean }
+	): void {
 		this.#marks.set(markId, { enabled: true, ...config });
 	}
 
@@ -166,9 +170,9 @@ export class TooltipManager {
 				if (!sql) continue;
 
 				queryPromises.push(
-					(this.#coordinator as any)
+					this.#coordinator
 						.query(sql)
-						.then((result: Iterable<Record<string, any>>) => ({
+						.then((result) => ({
 							markId,
 							config,
 							row: Array.from(result)[0]
@@ -185,7 +189,7 @@ export class TooltipManager {
 			let bestResult: Record<string, any> | null = null;
 			let bestDistance = Infinity;
 			let bestMarkId: string | null = null;
-			let bestConfig: MarkConfig | null = null;
+			let bestConfig: TooltipMarkRegistration | null = null;
 
 			for (const r of results) {
 				if (r.status !== 'fulfilled' || !r.value?.row) continue;
@@ -242,7 +246,11 @@ export class TooltipManager {
 	// QUERY BUILDING
 	// =========================================================================
 
-	#buildQuery(config: MarkConfig, xData: number | null, yData: number | null): string | null {
+	#buildQuery(
+		config: TooltipMarkRegistration,
+		xData: number | null,
+		yData: number | null
+	): string | null {
 		const { markType } = config;
 
 		const hitTestMarks = ['barx', 'bary', 'rect', 'rectx', 'recty'];
@@ -253,7 +261,7 @@ export class TooltipManager {
 	}
 
 	#buildHitTestQuery(
-		config: MarkConfig,
+		config: TooltipMarkRegistration,
 		xData: number | null,
 		yData: number | null
 	): string | null {
@@ -294,7 +302,7 @@ export class TooltipManager {
 	}
 
 	#buildNearestQuery(
-		config: MarkConfig,
+		config: TooltipMarkRegistration,
 		xData: number | null,
 		yData: number | null
 	): string | null {
@@ -365,9 +373,9 @@ export class TooltipManager {
 	#resolveScreenPos(
 		axis: 'x' | 'y',
 		row: Record<string, any>,
-		config: MarkConfig,
-		scale: any,
-		columns: MarkConfig['columns']
+		config: TooltipMarkRegistration,
+		scale: D3Scale | null,
+		columns: TooltipMarkRegistration['columns']
 	): number | null {
 		if (!scale) return null;
 
@@ -408,7 +416,7 @@ export class TooltipManager {
 	 * Resolve band indices, time offsets, and color indices back to human-readable labels.
 	 * Renames columns from aliases (x, y, color) to original field names.
 	 */
-	#resolveLabels(row: Record<string, any>, config: MarkConfig): Record<string, any> {
+	#resolveLabels(row: Record<string, any>, config: TooltipMarkRegistration): Record<string, any> {
 		const { scaleTypes, channelFields, bandDomains, colorDomain } = config;
 		const point: Record<string, any> = {};
 

@@ -1,8 +1,9 @@
 import { inferScaleType } from '$lib/scales/scale-inference';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
+import type { FieldRef } from '$lib/types';
 
 export function inferMarkScaleType(
-	field: any,
+	field: FieldRef | null,
 	table: string,
 	preferredType: string | null
 ): string | null {

@@ -1,16 +1,10 @@
 // src/lib/scales/ChartScales.svelte.ts
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
+import type { RegisteredRegisteredScaleRequirement } from './ScalePriorities';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
-
-interface ScaleRequirement {
-	type: string;
-	priority: number;
-	markId: string;
-	config: Record<string, unknown>;
-	columnName: string | null;
-}
+import type { ScaleStateInstance, D3Scale, D3BandScale, FieldRef, MosaicClient } from '$lib/types';
 
 interface PanContext {
 	initialScreenPos: number;
@@ -37,16 +31,16 @@ interface ChartScalesConfig {
 
 export class ChartScales {
 	#scaleRegistry: ScaleRegistry;
-	scaleRequirements = $state<{ x: ScaleRequirement[]; y: ScaleRequirement[] }>({
+	scaleRequirements = $state<{ x: RegisteredScaleRequirement[]; y: RegisteredScaleRequirement[] }>({
 		x: [],
 		y: []
 	});
 
-	#xScaleInstance = $state<any>(null);
-	#yScaleInstance = $state<any>(null);
+	#xScaleInstance = $state<ScaleStateInstance | null>(null);
+	#yScaleInstance = $state<ScaleStateInstance | null>(null);
 
-	#previousXScale: any = null;
-	#previousYScale: any = null;
+	#previousXScale: ScaleStateInstance | null = null;
+	#previousYScale: ScaleStateInstance | null = null;
 
 	active = $state(false);
 
@@ -73,7 +67,7 @@ export class ChartScales {
 
 	binStepMultiplier = $state(1.0);
 
-	markClients = new Set<any>();
+	markClients = new Set<MosaicClient>();
 
 	config: ChartScalesConfig;
 	gpuCoordinator: GPUCoordinator;
@@ -104,19 +98,20 @@ export class ChartScales {
 			const xKey = xLabel || xConfig.columnName || 'x';
 			const yKey = yLabel || yConfig.columnName || 'y';
 
+			// ChartScales only creates axis scales (linear/band/time), safe to narrow
 			const neededXScale = this.#scaleRegistry.getOrCreateScale(
 				xKey,
 				xConfig.type,
 				xConfig.config || {},
 				this.chartId
-			);
+			) as ScaleStateInstance;
 
 			const neededYScale = this.#scaleRegistry.getOrCreateScale(
 				yKey,
 				yConfig.type,
 				yConfig.config || {},
 				this.chartId
-			);
+			) as ScaleStateInstance;
 
 			const facetIds = this.#getFacetChartIds?.();
 			if (facetIds) {
@@ -217,11 +212,11 @@ export class ChartScales {
 		y: this.scaleConfigurations?.y?.type || 'linear'
 	}));
 
-	get xScaleState(): any {
+	get xScaleState(): ScaleStateInstance | null {
 		return this.#xScaleInstance;
 	}
 
-	get yScaleState(): any {
+	get yScaleState(): ScaleStateInstance | null {
 		return this.#yScaleInstance;
 	}
 
@@ -237,24 +232,24 @@ export class ChartScales {
 			: null
 	);
 
-	get xScale(): any {
+	get xScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
 		this.#xScaleInstance.domainForReactivity; // Register dependency
 		return this.#xScaleInstance.updateScaleDomain(this.baseXScale);
 	}
 
-	get yScale(): any {
+	get yScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
 		this.#yScaleInstance.domainForReactivity; // Register dependency
 		return this.#yScaleInstance.updateScaleDomain(this.baseYScale);
 	}
 
-	get xTargetScale(): any {
+	get xTargetScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
 		return this.#xScaleInstance.updateScaleDomain(this.baseXScale, false);
 	}
 
-	get yTargetScale(): any {
+	get yTargetScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
 		return this.#yScaleInstance.updateScaleDomain(this.baseYScale, false);
 	}
@@ -271,7 +266,7 @@ export class ChartScales {
 		priority: number = SCALE_PRIORITIES.PREFER,
 		markId: string = 'unknown',
 		config: Record<string, unknown> = {},
-		columnName: any = null
+		columnName: FieldRef | null = null
 	): void => {
 		let rawColumn = columnName;
 		if (rawColumn?.isAutoBinNode) {
@@ -304,7 +299,7 @@ export class ChartScales {
 		}
 	};
 
-	getScaleRequirementsSummary = () => {
+	getRegisteredScaleRequirementsSummary = () => {
 		return {
 			x: this.scaleRequirements.x,
 			y: this.scaleRequirements.y,
@@ -322,7 +317,7 @@ export class ChartScales {
 		return type === 'linear' || type === 'time';
 	}
 
-	registerClient = (client: any): (() => void) => {
+	registerClient = (client: MosaicClient): (() => void) => {
 		this.markClients.add(client);
 		return () => this.markClients.delete(client);
 	};
@@ -460,14 +455,14 @@ export class ChartScales {
 		if (this.scaleTypes?.x !== 'band' || !this.xScale || !this.layout.isReady) return null;
 		const domain = this.#xScaleInstance?.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d: any) => this.xScale(d)));
+		return new Float32Array(domain.map((d: string | number) => this.xScale!(d)));
 	});
 
 	yCategoryPositions = $derived.by(() => {
 		if (this.scaleTypes?.y !== 'band' || !this.yScale || !this.layout.isReady) return null;
 		const domain = this.#yScaleInstance?.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d: any) => this.yScale(d)));
+		return new Float32Array(domain.map((d: string | number) => this.yScale!(d)));
 	});
 
 	categoryPositionsReady = $derived.by(() => {
@@ -478,12 +473,12 @@ export class ChartScales {
 
 	xBandwidth = $derived.by(() => {
 		if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) return 0;
-		return (this.baseXScale as any).bandwidth();
+		return (this.baseXScale as D3BandScale).bandwidth();
 	});
 
 	yBandwidth = $derived.by(() => {
 		if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) return 0;
-		return (this.baseYScale as any).bandwidth();
+		return (this.baseYScale as D3BandScale).bandwidth();
 	});
 
 	adjustBinMultiplier(delta: number): void {
@@ -564,7 +559,7 @@ export class ChartScales {
 			},
 			registerScaleType: coordinator.registerScaleType,
 			unregisterScaleType: coordinator.unregisterScaleType,
-			getScaleRequirementsSummary: coordinator.getScaleRequirementsSummary,
+			getRegisteredScaleRequirementsSummary: coordinator.getRegisteredScaleRequirementsSummary,
 			get binStepMultiplier() {
 				return coordinator.binStepMultiplier;
 			},

@@ -19,6 +19,15 @@ export interface ScaleRequirement {
 	config?: Record<string, unknown>;
 }
 
+/** A fully populated scale requirement as stored by ChartScales after registration. */
+export interface RegisteredScaleRequirement {
+	type: string;
+	priority: number;
+	markId: string;
+	config: Record<string, unknown>;
+	columnName: string | null;
+}
+
 export interface ResolvedScaleConfiguration {
 	type: string;
 	config: Record<string, unknown>;

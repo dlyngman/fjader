@@ -4,8 +4,7 @@
 // This file is the single source of truth for types that cross module boundaries.
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
-import type { Selection } from '@uwdata/mosaic-core';
-import type { Coordinator } from '@uwdata/mosaic-core';
+import type { Selection, Coordinator, MosaicClient } from '@uwdata/mosaic-core';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -16,12 +15,35 @@ export type DiscreteScaleType = 'band' | 'point';
 export type TemporalScaleType = 'time';
 export type ScaleType = ContinuousScaleType | DiscreteScaleType | TemporalScaleType;
 
+/** Shared surface implemented by all axis scale state classes (Linear, Band, Time). */
+export interface BaseScaleState {
+	id: string;
+	ready: boolean;
+	setReady(): void;
+	removeMark(identifier: string): void;
+}
+
+/** Minimal callable interface for D3 scales. */
+export interface D3Scale {
+	(value: unknown): number;
+	domain(): unknown[];
+	range(): number[];
+}
+
+/** D3 band scale — adds bandwidth() to the base interface. */
+export interface D3BandScale extends D3Scale {
+	bandwidth(): number;
+}
+
 // ---------------------------------------------------------------------------
 // Fields
 // ---------------------------------------------------------------------------
 
 /** A column name (string) or inline Mosaic SQL expression node. */
 export type FieldRef = string | ExprNode;
+
+/** Color prop: CSS constant, column name, object wrapper {field, scheme?}, SQL node, or null. */
+export type ColorProp = FieldRef | { field: string; scheme?: ColorScheme } | null;
 
 // ---------------------------------------------------------------------------
 // Transforms
@@ -160,7 +182,7 @@ export type CurveType =
 // Re-export Mosaic types for convenience
 // ---------------------------------------------------------------------------
 
-export type { Selection, Coordinator };
+export type { Selection, Coordinator, MosaicClient };
 
 // ---------------------------------------------------------------------------
 // Sort configuration for marks
@@ -182,7 +204,7 @@ export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' 
 export interface BaseMarkProps {
 	table: string;
 	selection?: Selection;
-	color?: FieldRef | null;
+	color?: ColorProp;
 	scheme?: ColorScheme;
 	limit?: number;
 	filterNulls?: boolean;
@@ -269,11 +291,11 @@ export interface ChartContext {
 	reset: () => void;
 	getDebugInfo: () => Record<string, unknown>;
 
-	// D3 scales (cell-local, mutated in place — typed as any)
-	readonly xScale: any;
-	readonly yScale: any;
-	readonly xTargetScale: any;
-	readonly yTargetScale: any;
+	// D3 scales (cell-local, mutated in place)
+	readonly xScale: D3Scale | null;
+	readonly yScale: D3Scale | null;
+	readonly xTargetScale: D3Scale | null;
+	readonly yTargetScale: D3Scale | null;
 
 	readonly xLabel: string | null | undefined;
 	readonly yLabel: string | null | undefined;
@@ -305,7 +327,7 @@ export interface ChartContext {
 		priority: number,
 		markId: string,
 		config: Record<string, unknown>,
-		columnName: unknown
+		columnName: FieldRef | null
 	) => void;
 	unregisterScaleType: (dimension: string, markId: string) => void;
 	getScaleRequirementsSummary: () => unknown;
@@ -313,8 +335,8 @@ export interface ChartContext {
 	readonly binStepMultiplier: number | undefined;
 
 	// Client registration
-	registerClient: (client: unknown) => () => void;
-	readonly markClients: Set<unknown> | undefined;
+	registerClient: (client: MosaicClient) => () => void;
+	readonly markClients: Set<MosaicClient> | undefined;
 
 	// Tooltip
 	readonly tooltipManager: TooltipManager | null;

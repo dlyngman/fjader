@@ -2,7 +2,7 @@
 	import { setContext, getContext } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
-	import type { Margin } from '$lib/layout/ChartLayout.svelte';
+	import type { Margin } from '$lib/types';
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';

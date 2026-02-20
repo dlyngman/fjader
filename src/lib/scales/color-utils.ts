@@ -498,7 +498,7 @@ export function bakePalette(
 	return result;
 }
 
-type D3ColorScale = ScaleOrdinal<string, string> | ScaleSequential<string> | ScaleDiverging<string>;
+export type D3ColorScale = ScaleOrdinal<string, string> | ScaleSequential<string> | ScaleDiverging<string>;
 
 interface CreateD3ScaleOptions {
 	reverse?: boolean;

@@ -5,6 +5,8 @@ import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import { inferScaleType } from '$lib/scales/scale-inference';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+import type { ColorProp, ChartContext } from '$lib/types';
+import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 interface ColorConfig {
 	mode: 'constant' | 'field';
@@ -14,27 +16,25 @@ interface ColorConfig {
 	scheme: string | null | undefined;
 }
 
-type ColorPropValue = string | { field: string; scheme?: string } | object | null;
-
 export class MarkColor {
-	#colorProp: () => ColorPropValue;
+	#colorProp: () => ColorProp;
 	#schemeProp: () => string | null | undefined;
 	#tableProp: () => string | null;
 	#setupState: () => any;
-	#scaleRegistry: any;
-	#chartContext: any;
+	#scaleRegistry: ScaleRegistry;
+	#chartContext: ChartContext;
 
 	// Managed State
 	scaleState: ColorScaleState | null = $state(null);
 	#readyState: boolean = $state(true); // Start optimistically ready
 
 	constructor(
-		getColor: () => ColorPropValue,
+		getColor: () => ColorProp,
 		getScheme: () => string | null | undefined,
 		getTable: () => string | null,
 		getSetup: () => any,
-		scaleRegistry: any,
-		chartContext: any
+		scaleRegistry: ScaleRegistry,
+		chartContext: ChartContext
 	) {
 		this.#colorProp = getColor;
 		this.#schemeProp = getScheme;
@@ -133,7 +133,7 @@ export class MarkColor {
 		// SQL expression nodes: aggregates and bins are always sequential
 		if (isNode(field)) {
 			if (isAggregateExpression(field)) return 'sequential';
-			if ((field as any).isAutoBinNode || (field as any).type === 'Bin') return 'sequential';
+			if ('isAutoBinNode' in field || ('type' in field && field.type === 'Bin')) return 'sequential';
 			// Other SQL expression nodes (e.g., SIGN(...), arithmetic) produce computed values.
 			// Default to sequential since most expressions return continuous numeric results.
 			// TODO: ordinal + expression node breaks ViewManager (uses expression string as
@@ -179,9 +179,9 @@ export class MarkColor {
 		let explicitScheme = s;
 
 		// Handle object wrapper format { field: "species", scheme: "dark2" }
-		if (typeof c === 'object' && (c as any).field && !isNode(c)) {
-			field = (c as any).field;
-			explicitScheme = (c as any).scheme || s;
+		if (typeof c === 'object' && 'field' in c && !isNode(c)) {
+			field = (c as { field: string; scheme?: string }).field;
+			explicitScheme = (c as { field: string; scheme?: string }).scheme || s;
 		}
 
 		// 1. Determine Type from field semantics + schema (may return null if waiting for schema)
@@ -201,7 +201,7 @@ export class MarkColor {
 		const c = this.#colorProp();
 		if (c == null) return 'constant';
 		if (isNode(c)) return 'field'; // Aggregate/expression nodes
-		if (typeof c === 'object' && (c as any).field) return 'field';
+		if (typeof c === 'object' && 'field' in c) return 'field';
 		if (typeof c === 'string') {
 			if (isColorConstant(c)) return 'constant';
 			return 'field';
@@ -214,7 +214,7 @@ export class MarkColor {
 		const c = this.#colorProp();
 		if (c == null) return null;
 		if (isNode(c)) return c; // Return the entire node for aggregates
-		if (typeof c === 'object' && (c as any).field) return (c as any).field;
+		if (typeof c === 'object' && 'field' in c) return (c as { field: string }).field;
 		if (typeof c === 'string' && !isColorConstant(c)) return c;
 		return null;
 	});
