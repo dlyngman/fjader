@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Areas, Lines } from '../rendering/index.js';
@@ -14,23 +14,42 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils/index.js';
+	import type {
+		FieldRef,
+		BaseMarkProps,
+		ContinuousScaleTypeProps,
+		ConnectedTopologyProps,
+		Coordinator
+	} from '$lib/types';
+
+	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
+		x: FieldRef;
+		y: FieldRef;
+		y1?: number | FieldRef;
+		y2?: FieldRef;
+		fill?: FieldRef | null;
+		fillOpacity?: number;
+		dotRadius?: number;
+		strokeWidth?: number;
+		strokeColor?: string | null;
+	}
 
 	let {
 		table,
 		selection = undefined,
 		x,
-		y, // Shorthand for y2 (the value)
-		y1 = 0, // Baseline (default 0, or from stack transform)
-		y2 = y, // Topline (the actual value)
-		fill = null, // Fill color field
-		stroke = null, // Series grouping field (for multi-series areas)
-		color = null, // Color encoding (fill ?? color for color scale)
-		scheme, // Color scheme
-		curve = 'linear', // Curve type: 'linear', 'step', 'step-after', 'step-before', 'catmull-rom', 'monotone', 'bump'
-		fillOpacity = 0.5, // Area fill opacity
-		dotRadius = 0, // 0 = no dots, >0 = dot radius in px on the top boundary
-		strokeWidth = 0, // Stroke outline width (0 = no stroke)
-		strokeColor = null, // Stroke color (CSS string or null to inherit from fill/color)
+		y,
+		y1 = 0,
+		y2 = y,
+		fill = null,
+		stroke = null,
+		color = null,
+		scheme,
+		curve = 'linear',
+		fillOpacity = 0.5,
+		dotRadius = 0,
+		strokeWidth = 0,
+		strokeColor = null,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -38,7 +57,7 @@
 		transforms = [],
 		sort = null,
 		tooltip = true
-	} = $props();
+	}: Props = $props();
 
 	// Map user-facing 'monotone' to the correct axis-specific variant
 	const effectiveCurve = $derived(
@@ -46,9 +65,9 @@
 	);
 
 	const markId = `areay-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);
@@ -58,7 +77,9 @@
 	// 0. Scale Type Inference
 	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
 	// y2 is the value column for scale inference (y1 is baseline)
-	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y2 ?? y, table, preferredYScaleType));
+	const effectiveYScaleType = $derived.by(() =>
+		inferMarkScaleType(y2 ?? y, table, preferredYScaleType)
+	);
 
 	// Series grouping - uses scale infrastructure for categorical → index mapping
 	const markSeries = new MarkSeries(
@@ -137,21 +158,37 @@
 
 	// --- DATA RESOLUTION ---
 
-	let xData = $derived.by(() => resolveChannelData({
-		value: x, channel: 'x', dataAccessor: setup?.data, instanceCount
-	}));
+	let xData = $derived.by(() =>
+		resolveChannelData({
+			value: x,
+			channel: 'x',
+			dataAccessor: setup?.data,
+			instanceCount
+		})
+	);
 
 	// Y top (y2): Stack output 'y1' -> y2 prop -> default column
-	let yTopData = $derived.by(() => resolveChannelData({
-		value: y2, channel: 'y2', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['y1'] : undefined
-	}));
+	let yTopData = $derived.by(() =>
+		resolveChannelData({
+			value: y2,
+			channel: 'y2',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['y1'] : undefined
+		})
+	);
 
 	// Y bottom (y1): Stack output 'y0' -> y1 prop -> 0
-	let yBottomData = $derived.by(() => resolveChannelData({
-		value: y1, channel: 'y1', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['y0'] : undefined, fallback: 0
-	}));
+	let yBottomData = $derived.by(() =>
+		resolveChannelData({
+			value: y1,
+			channel: 'y1',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['y0'] : undefined,
+			fallback: 0
+		})
+	);
 
 	// Series data comes from MarkSeries (uses scale infrastructure)
 	let seriesData = $derived(markSeries.data);
@@ -182,22 +219,29 @@
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
 
 		const colorChannelField = effectiveColorField
-			? typeof effectiveColorField === 'string' ? effectiveColorField : 'color'
+			? typeof effectiveColorField === 'string'
+				? effectiveColorField
+				: 'color'
 			: stroke
-				? typeof stroke === 'string' ? stroke : 'stroke'
+				? typeof stroke === 'string'
+					? stroke
+					: 'stroke'
 				: null;
 
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'areay',
-			chartContext,
-			channelFields: {
-				x: typeof x === 'string' ? x : 'x',
-				y: typeof y2 === 'string' ? y2 : 'y',
-				...(colorChannelField && { color: colorChannelField })
-			},
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'areay',
+				chartContext,
+				channelFields: {
+					x: typeof x === 'string' ? x : 'x',
+					y: typeof y2 === 'string' ? y2 : 'y',
+					...(colorChannelField && { color: colorChannelField })
+				},
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -227,7 +271,7 @@
 		/>
 		{#if strokeWidth > 0}
 			<Lines
-				xData={xData}
+				{xData}
 				yData={yTopData}
 				{seriesData}
 				curve={effectiveCurve}
@@ -242,7 +286,7 @@
 			/>
 			{#if showBothBoundaries}
 				<Lines
-					xData={xData}
+					{xData}
 					yData={yBottomData}
 					{seriesData}
 					curve={effectiveCurve}

@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
@@ -12,6 +12,21 @@
 		MarkColor,
 		normalizeSortConfig
 	} from './utils/index.js';
+	import type {
+		FieldRef,
+		BaseMarkProps,
+		BandScaleProps,
+		RectOffsetProps,
+		Coordinator
+	} from '$lib/types';
+
+	interface Props extends BaseMarkProps, BandScaleProps, RectOffsetProps {
+		x: FieldRef;
+		x1?: number | FieldRef;
+		x2?: FieldRef;
+		y: FieldRef;
+		alpha?: number;
+	}
 
 	let {
 		table,
@@ -35,12 +50,12 @@
 		dy = 0,
 		sort = null,
 		tooltip = true
-	} = $props();
+	}: Props = $props();
 
 	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	let setup = $state(null);
 
@@ -107,24 +122,40 @@
 	// --- DATA RESOLUTION ---
 
 	// X0: Stack Output -> x1 prop -> 0
-	let x0Data = $derived(resolveChannelData({
-		value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'], fallback: 0
-	}));
+	let x0Data = $derived(
+		resolveChannelData({
+			value: x1,
+			channel: 'x1',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['x0', 'x1'] : ['x1'],
+			fallback: 0
+		})
+	);
 
 	// X1: Stack Output -> x2 prop
-	let x1Data = $derived(resolveChannelData({
-		value: x2, channel: 'x2', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2']
-	}));
+	let x1Data = $derived(
+		resolveChannelData({
+			value: x2,
+			channel: 'x2',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['x1', 'x2'] : ['x2']
+		})
+	);
 
 	// Y: Categorical Resolution — both y0/y1 share same band indices
 	let yData = $derived.by(() => {
 		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y || 'band';
 		if (scaleType !== 'band') return null;
 		const arr = resolveChannelData({
-			value: y, channel: 'y', dataAccessor: setup?.data, instanceCount,
-			scaleState: chartContext.yScaleState, scaleType, markId
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount,
+			scaleState: chartContext.yScaleState,
+			scaleType,
+			markId
 		});
 		return arr ? { y0Data: arr, y1Data: arr } : null;
 	});
@@ -132,10 +163,15 @@
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	let alphaData = $derived(resolveChannelData({
-		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
-		instanceCount, fallback: 0.8
-	}));
+	let alphaData = $derived(
+		resolveChannelData({
+			value: alpha,
+			channel: 'alpha',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 0.8
+		})
+	);
 
 	// --- SETUP LIFECYCLE ---
 
@@ -155,23 +191,26 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'barx',
-			chartContext,
-			columns: {
-				xLow: hasStackTransform ? 'x0' : typeof x1 === 'number' ? x1 : 'x1',
-				xHigh: hasStackTransform ? 'x1' : 'x2',
-				y: 'y'
-			},
-			channelFields: {
-				x: typeof x2 === 'string' ? x2 : 'x',
-				y: typeof y === 'string' ? y : 'y',
-				...(color && { color: typeof color === 'string' ? color : 'color' })
-			},
-			bandAxes: { y: true },
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'barx',
+				chartContext,
+				columns: {
+					xLow: hasStackTransform ? 'x0' : typeof x1 === 'number' ? x1 : 'x1',
+					xHigh: hasStackTransform ? 'x1' : 'x2',
+					y: 'y'
+				},
+				channelFields: {
+					x: typeof x2 === 'string' ? x2 : 'x',
+					y: typeof y === 'string' ? y : 'y',
+					...(color && { color: typeof color === 'string' ? color : 'color' })
+				},
+				bandAxes: { y: true },
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 

@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
@@ -13,6 +13,25 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils/index.js';
+	import type {
+		FieldRef,
+		ScaleType,
+		BaseMarkProps,
+		RectOffsetProps,
+		Coordinator
+	} from '$lib/types';
+
+	interface Props extends BaseMarkProps, RectOffsetProps {
+		x?: FieldRef | null;
+		x1?: FieldRef | null;
+		x2?: FieldRef | null;
+		y: FieldRef;
+		y1?: number | FieldRef;
+		y2?: FieldRef;
+		alpha?: number;
+		preferredXScaleType?: ScaleType | null;
+		viewportLocalDomain?: boolean;
+	}
 
 	let {
 		table,
@@ -36,12 +55,12 @@
 		dy = 0,
 		sort = null,
 		tooltip = true
-	} = $props();
+	}: Props = $props();
 
 	const markId = `recty-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);
@@ -75,7 +94,8 @@
 		// Check if x1 is a bin (AutoBinNode)
 		const hasBinnedX = x1?.isAutoBinNode;
 		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
-		const hasAggregateY = y2?.aggregate || (typeof y2 === 'object' && y2?.constructor?.name === '_AggregateNode');
+		const hasAggregateY =
+			y2?.aggregate || (typeof y2 === 'object' && y2?.constructor?.name === '_AggregateNode');
 		return hasBinnedX && hasAggregateY;
 	});
 
@@ -133,35 +153,66 @@
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
 		if (scaleType === 'band' || scaleType === 'point') {
 			const arr = resolveChannelData({
-				value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
-				scaleState: chartContext.xScaleState, scaleType, markId
+				value: x1,
+				channel: 'x1',
+				dataAccessor: setup?.data,
+				instanceCount,
+				scaleState: chartContext.xScaleState,
+				scaleType,
+				markId
 			});
 			return arr ? { x0Data: arr, x1Data: arr } : null;
 		}
-		const lo = resolveChannelData({ value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount });
-		const hi = resolveChannelData({ value: x2, channel: 'x2', dataAccessor: setup?.data, instanceCount });
-		return (lo && hi) ? { x0Data: lo, x1Data: hi } : null;
+		const lo = resolveChannelData({
+			value: x1,
+			channel: 'x1',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		const hi = resolveChannelData({
+			value: x2,
+			channel: 'x2',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		return lo && hi ? { x0Data: lo, x1Data: hi } : null;
 	});
 
 	let x0Data = $derived(xData?.x0Data);
 	let x1Data = $derived(xData?.x1Data);
 
 	// Y0: Stack Output -> y1 prop -> 0
-	let y0Data = $derived(resolveChannelData({
-		value: y1, channel: 'y1', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['y0'] : undefined, fallback: 0
-	}));
+	let y0Data = $derived(
+		resolveChannelData({
+			value: y1,
+			channel: 'y1',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['y0'] : undefined,
+			fallback: 0
+		})
+	);
 
 	// Y1: Stack Output -> y2 prop
-	let y1Data = $derived(resolveChannelData({
-		value: y2, channel: 'y2', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['y1'] : undefined
-	}));
+	let y1Data = $derived(
+		resolveChannelData({
+			value: y2,
+			channel: 'y2',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['y1'] : undefined
+		})
+	);
 
-	let alphaData = $derived(resolveChannelData({
-		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
-		instanceCount, fallback: 0.8
-	}));
+	let alphaData = $derived(
+		resolveChannelData({
+			value: alpha,
+			channel: 'alpha',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 0.8
+		})
+	);
 
 	// --- SETUP LIFECYCLE ---
 
@@ -181,19 +232,22 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'recty',
-			chartContext,
-			columns: { xLow: 'x1', xHigh: 'x2', yLow: typeof y1 === 'number' ? y1 : 'y1', yHigh: 'y2' },
-			channelFields: {
-				x: typeof x1 === 'string' ? x1 : (typeof x === 'string' ? x : 'x'),
-				y: typeof y2 === 'string' ? y2 : (typeof y === 'string' ? y : 'y'),
-				...(color && { color: typeof color === 'string' ? color : 'color' })
-			},
-			bandAxes: { x: true },
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'recty',
+				chartContext,
+				columns: { xLow: 'x1', xHigh: 'x2', yLow: typeof y1 === 'number' ? y1 : 'y1', yHigh: 'y2' },
+				channelFields: {
+					x: typeof x1 === 'string' ? x1 : typeof x === 'string' ? x : 'x',
+					y: typeof y2 === 'string' ? y2 : typeof y === 'string' ? y : 'y',
+					...(color && { color: typeof color === 'string' ? color : 'color' })
+				},
+				bandAxes: { x: true },
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 

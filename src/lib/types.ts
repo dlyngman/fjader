@@ -4,6 +4,8 @@
 // This file is the single source of truth for types that cross module boundaries.
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
+import type { Selection } from '@uwdata/mosaic-core';
+import type { Coordinator } from '@uwdata/mosaic-core';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -153,3 +155,65 @@ export type CurveType =
 	| 'bump'
 	| 'bump-x'
 	| 'bump-y';
+
+// ---------------------------------------------------------------------------
+// Re-export Mosaic types for convenience
+// ---------------------------------------------------------------------------
+
+export type { Selection, Coordinator };
+
+// ---------------------------------------------------------------------------
+// Sort configuration for marks
+// ---------------------------------------------------------------------------
+
+export interface SortConfig {
+	x?: string;
+	y?: string;
+	order?: 'asc' | 'desc';
+}
+
+export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' } | null;
+
+// ---------------------------------------------------------------------------
+// Mark prop building blocks
+// ---------------------------------------------------------------------------
+
+/** Props shared by every mark component. */
+export interface BaseMarkProps {
+	table: string;
+	selection?: Selection;
+	color?: FieldRef | null;
+	scheme?: ColorScheme;
+	limit?: number;
+	filterNulls?: boolean;
+	transforms?: Transform[];
+	sort?: SortConfig | null;
+	tooltip?: boolean;
+}
+
+/** Props for marks that support band scale padding/alignment (Bar, Rect). */
+export interface BandScaleProps {
+	padding?: number;
+	paddingInner?: number;
+	paddingOuter?: number;
+	align?: number;
+}
+
+/** Props for marks that support continuous scale type preference. */
+export interface ContinuousScaleTypeProps {
+	preferredXScaleType?: ScaleType | null;
+	preferredYScaleType?: ScaleType | null;
+}
+
+/** Props for marks that render rectangles with spatial offsets (Bar, Rect). */
+export interface RectOffsetProps {
+	inset?: number;
+	dx?: number;
+	dy?: number;
+}
+
+/** Props for connected topology marks (Line, Area). */
+export interface ConnectedTopologyProps {
+	stroke?: FieldRef | null;
+	curve?: CurveType;
+}

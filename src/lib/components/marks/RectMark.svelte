@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Rects } from '../rendering/index.js';
@@ -13,6 +13,25 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils/index.js';
+	import type {
+		FieldRef,
+		ScaleType,
+		BaseMarkProps,
+		BandScaleProps,
+		ContinuousScaleTypeProps,
+		RectOffsetProps,
+		Coordinator
+	} from '$lib/types';
+
+	interface Props extends BaseMarkProps, BandScaleProps, ContinuousScaleTypeProps, RectOffsetProps {
+		x?: FieldRef | null;
+		x1?: FieldRef | null;
+		x2?: FieldRef | null;
+		y?: FieldRef | null;
+		y1?: FieldRef | null;
+		y2?: FieldRef | null;
+		alpha?: number;
+	}
 
 	let {
 		table,
@@ -40,12 +59,12 @@
 		dy = 0,
 		sort = null,
 		tooltip = true
-	} = $props();
+	}: Props = $props();
 
 	const markId = `rect-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);
@@ -68,8 +87,12 @@
 	const ey2 = $derived(expandedY.y2);
 
 	// --- SCALE TYPE INFERENCE ---
-	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(ex1, table, preferredXScaleType));
-	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(ey1, table, preferredYScaleType));
+	const effectiveXScaleType = $derived.by(() =>
+		inferMarkScaleType(ex1, table, preferredXScaleType)
+	);
+	const effectiveYScaleType = $derived.by(() =>
+		inferMarkScaleType(ey1, table, preferredYScaleType)
+	);
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
@@ -147,14 +170,29 @@
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
 		if (scaleType === 'band' || scaleType === 'point') {
 			const arr = resolveChannelData({
-				value: ex1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
-				scaleState: chartContext.xScaleState, scaleType, markId
+				value: ex1,
+				channel: 'x1',
+				dataAccessor: setup?.data,
+				instanceCount,
+				scaleState: chartContext.xScaleState,
+				scaleType,
+				markId
 			});
 			return arr ? { x0Data: arr, x1Data: arr } : null;
 		}
-		const x0 = resolveChannelData({ value: ex1, channel: 'x1', dataAccessor: setup?.data, instanceCount });
-		const x1 = resolveChannelData({ value: ex2, channel: 'x2', dataAccessor: setup?.data, instanceCount });
-		return (x0 && x1) ? { x0Data: x0, x1Data: x1 } : null;
+		const x0 = resolveChannelData({
+			value: ex1,
+			channel: 'x1',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		const x1 = resolveChannelData({
+			value: ex2,
+			channel: 'x2',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		return x0 && x1 ? { x0Data: x0, x1Data: x1 } : null;
 	});
 
 	let x0Data = $derived(xData?.x0Data);
@@ -165,23 +203,43 @@
 		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y;
 		if (scaleType === 'band' || scaleType === 'point') {
 			const arr = resolveChannelData({
-				value: ey1, channel: 'y1', dataAccessor: setup?.data, instanceCount,
-				scaleState: chartContext.yScaleState, scaleType, markId
+				value: ey1,
+				channel: 'y1',
+				dataAccessor: setup?.data,
+				instanceCount,
+				scaleState: chartContext.yScaleState,
+				scaleType,
+				markId
 			});
 			return arr ? { y0Data: arr, y1Data: arr } : null;
 		}
-		const y0 = resolveChannelData({ value: ey1, channel: 'y1', dataAccessor: setup?.data, instanceCount });
-		const y1 = resolveChannelData({ value: ey2, channel: 'y2', dataAccessor: setup?.data, instanceCount });
-		return (y0 && y1) ? { y0Data: y0, y1Data: y1 } : null;
+		const y0 = resolveChannelData({
+			value: ey1,
+			channel: 'y1',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		const y1 = resolveChannelData({
+			value: ey2,
+			channel: 'y2',
+			dataAccessor: setup?.data,
+			instanceCount
+		});
+		return y0 && y1 ? { y0Data: y0, y1Data: y1 } : null;
 	});
 
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	let alphaData = $derived(resolveChannelData({
-		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
-		instanceCount, fallback: 0.8
-	}));
+	let alphaData = $derived(
+		resolveChannelData({
+			value: alpha,
+			channel: 'alpha',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 0.8
+		})
+	);
 
 	// --- SETUP LIFECYCLE ---
 
@@ -201,19 +259,22 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'rect',
-			chartContext,
-			columns: { xLow: 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
-			channelFields: {
-				x: typeof x === 'string' ? x : (typeof ex1 === 'string' ? ex1 : 'x'),
-				y: typeof y === 'string' ? y : (typeof ey1 === 'string' ? ey1 : 'y'),
-				...(color && { color: typeof color === 'string' ? color : 'color' })
-			},
-			bandAxes: { x: true, y: true },
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'rect',
+				chartContext,
+				columns: { xLow: 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
+				channelFields: {
+					x: typeof x === 'string' ? x : typeof ex1 === 'string' ? ex1 : 'x',
+					y: typeof y === 'string' ? y : typeof ey1 === 'string' ? ey1 : 'y',
+					...(color && { color: typeof color === 'string' ? color : 'color' })
+				},
+				bandAxes: { x: true, y: true },
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 

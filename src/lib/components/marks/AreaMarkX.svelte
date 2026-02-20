@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Areas, Lines } from '../rendering/index.js';
@@ -14,23 +14,42 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils/index.js';
+	import type {
+		FieldRef,
+		BaseMarkProps,
+		ContinuousScaleTypeProps,
+		ConnectedTopologyProps,
+		Coordinator
+	} from '$lib/types';
+
+	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
+		y: FieldRef;
+		x: FieldRef;
+		x1?: number | FieldRef;
+		x2?: FieldRef;
+		fill?: FieldRef | null;
+		fillOpacity?: number;
+		dotRadius?: number;
+		strokeWidth?: number;
+		strokeColor?: string | null;
+	}
 
 	let {
 		table,
 		selection = undefined,
-		y, // Independent dimension (goes up)
-		x, // Shorthand for x2 (the value)
-		x1 = 0, // Left baseline (default 0, or from stack transform)
-		x2 = x, // Right boundary (the actual value)
-		fill = null, // Fill color field
-		stroke = null, // Series grouping field (for multi-series areas)
-		color = null, // Color encoding (fill ?? color for color scale)
-		scheme, // Color scheme
-		curve = 'linear', // Curve type: 'linear', 'step', 'step-after', 'step-before', 'catmull-rom', 'monotone', 'bump'
-		fillOpacity = 0.5, // Area fill opacity
-		dotRadius = 0, // 0 = no dots, >0 = dot radius in px on the top boundary
-		strokeWidth = 0, // Stroke outline width (0 = no stroke)
-		strokeColor = null, // Stroke color (CSS string or null to inherit from fill/color)
+		y,
+		x,
+		x1 = 0,
+		x2 = x,
+		fill = null,
+		stroke = null,
+		color = null,
+		scheme,
+		curve = 'linear',
+		fillOpacity = 0.5,
+		dotRadius = 0,
+		strokeWidth = 0,
+		strokeColor = null,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -38,7 +57,7 @@
 		transforms = [],
 		sort = null,
 		tooltip = true
-	} = $props();
+	}: Props = $props();
 
 	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)
 	const effectiveCurve = $derived(
@@ -46,9 +65,9 @@
 	);
 
 	const markId = `areax-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);
@@ -57,7 +76,9 @@
 
 	// 0. Scale Type Inference
 	// x2 is the value column for X scale inference (x1 is baseline)
-	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x2 ?? x, table, preferredXScaleType));
+	const effectiveXScaleType = $derived.by(() =>
+		inferMarkScaleType(x2 ?? x, table, preferredXScaleType)
+	);
 	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
 
 	// Series grouping - uses scale infrastructure for categorical → index mapping
@@ -138,21 +159,37 @@
 	// --- DATA RESOLUTION ---
 
 	// Y data: the independent dimension
-	let yData = $derived.by(() => resolveChannelData({
-		value: y, channel: 'y', dataAccessor: setup?.data, instanceCount
-	}));
+	let yData = $derived.by(() =>
+		resolveChannelData({
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount
+		})
+	);
 
 	// X right (x2): Stack output 'x1' -> x2 prop -> default column
-	let xRightData = $derived.by(() => resolveChannelData({
-		value: x2, channel: 'x2', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['x1'] : undefined
-	}));
+	let xRightData = $derived.by(() =>
+		resolveChannelData({
+			value: x2,
+			channel: 'x2',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['x1'] : undefined
+		})
+	);
 
 	// X left (x1): Stack output 'x0' -> x1 prop -> 0
-	let xLeftData = $derived.by(() => resolveChannelData({
-		value: x1, channel: 'x1', dataAccessor: setup?.data, instanceCount,
-		tryColumns: hasStackTransform ? ['x0'] : undefined, fallback: 0
-	}));
+	let xLeftData = $derived.by(() =>
+		resolveChannelData({
+			value: x1,
+			channel: 'x1',
+			dataAccessor: setup?.data,
+			instanceCount,
+			tryColumns: hasStackTransform ? ['x0'] : undefined,
+			fallback: 0
+		})
+	);
 
 	// Series data comes from MarkSeries (uses scale infrastructure)
 	let seriesData = $derived(markSeries.data);
@@ -182,22 +219,29 @@
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
 
 		const colorChannelField = effectiveColorField
-			? typeof effectiveColorField === 'string' ? effectiveColorField : 'color'
+			? typeof effectiveColorField === 'string'
+				? effectiveColorField
+				: 'color'
 			: stroke
-				? typeof stroke === 'string' ? stroke : 'stroke'
+				? typeof stroke === 'string'
+					? stroke
+					: 'stroke'
 				: null;
 
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'areax',
-			chartContext,
-			channelFields: {
-				x: typeof x2 === 'string' ? x2 : 'x',
-				y: typeof y === 'string' ? y : 'y',
-				...(colorChannelField && { color: colorChannelField })
-			},
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'areax',
+				chartContext,
+				channelFields: {
+					x: typeof x2 === 'string' ? x2 : 'x',
+					y: typeof y === 'string' ? y : 'y',
+					...(colorChannelField && { color: colorChannelField })
+				},
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -228,7 +272,7 @@
 		{#if strokeWidth > 0}
 			<Lines
 				xData={xRightData}
-				yData={yData}
+				{yData}
 				{seriesData}
 				curve={effectiveCurve}
 				colorValueData={strokeColor ? null : markColor.data}
@@ -243,7 +287,7 @@
 			{#if showBothBoundaries}
 				<Lines
 					xData={xLeftData}
-					yData={yData}
+					{yData}
 					{seriesData}
 					curve={effectiveCurve}
 					colorValueData={strokeColor ? null : markColor.data}

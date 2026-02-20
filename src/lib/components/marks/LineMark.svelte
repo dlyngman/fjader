@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Lines } from '../rendering/index.js';
@@ -15,18 +15,33 @@
 	} from './utils/index.js';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte.js';
+	import type {
+		FieldRef,
+		BaseMarkProps,
+		ContinuousScaleTypeProps,
+		ConnectedTopologyProps,
+		Coordinator
+	} from '$lib/types';
+
+	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
+		x: FieldRef;
+		y: FieldRef;
+		strokeWidth?: number;
+		dotRadius?: number;
+		optimize?: boolean | 'auto';
+	}
 
 	let {
 		table,
 		selection = undefined,
 		x,
 		y,
-		stroke = null, // Series grouping field (for multi-series lines)
-		color = null, // Color encoding (can be same as stroke or different)
-		scheme, // Color scheme
-		curve = 'linear', // Curve type: 'linear', 'step', 'step-after', 'step-before', 'catmull-rom', 'monotone', 'bump'
-		strokeWidth = 2, // Line thickness in logical pixels
-		dotRadius = 0, // 0 = strokeWidth/2 (gap-filling only), >0 = explicit radius in px
+		stroke = null,
+		color = null,
+		scheme,
+		curve = 'linear',
+		strokeWidth = 2,
+		dotRadius = 0,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -34,19 +49,18 @@
 		transforms = [],
 		sort = null,
 		tooltip = true,
-		optimize = 'auto' // M4 decimation: true | false | 'auto'
-	} = $props();
+		optimize = 'auto'
+	}: Props = $props();
 
-	// Map user-facing 'monotone' to the correct axis-specific variant
 	// Map user-facing aliases to axis-specific variants
 	const effectiveCurve = $derived(
 		curve === 'monotone' ? 'monotone-x' : curve === 'bump' ? 'bump-x' : curve
 	);
 
 	const markId = `line-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);
@@ -122,13 +136,23 @@
 
 	// --- DATA RESOLUTION ---
 
-	let xData = $derived.by(() => resolveChannelData({
-		value: x, channel: 'x', dataAccessor: setup?.data, instanceCount
-	}));
+	let xData = $derived.by(() =>
+		resolveChannelData({
+			value: x,
+			channel: 'x',
+			dataAccessor: setup?.data,
+			instanceCount
+		})
+	);
 
-	let yData = $derived.by(() => resolveChannelData({
-		value: y, channel: 'y', dataAccessor: setup?.data, instanceCount
-	}));
+	let yData = $derived.by(() =>
+		resolveChannelData({
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount
+		})
+	);
 
 	// Series data comes from MarkSeries (uses scale infrastructure)
 	let seriesData = $derived(markSeries.data);
@@ -193,7 +217,7 @@
 
 		const numBins = Math.ceil(chartContext.innerWidth);
 		const xScaleIndex = chartContext.xScaleState
-			? gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0
+			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
 			: 0;
 		m4Decimator.configure(numBins, numSeries, xScaleIndex);
 	});
@@ -205,20 +229,29 @@
 
 		// Use color channel if set, otherwise fall back to stroke for series identification
 		const colorChannelField = color
-			? (typeof color === 'string' ? color : 'color')
-			: (stroke ? (typeof stroke === 'string' ? stroke : 'stroke') : null);
+			? typeof color === 'string'
+				? color
+				: 'color'
+			: stroke
+				? typeof stroke === 'string'
+					? stroke
+					: 'stroke'
+				: null;
 
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'line',
-			chartContext,
-			channelFields: {
-				x: typeof x === 'string' ? x : 'x',
-				y: typeof y === 'string' ? y : 'y',
-				...(colorChannelField && { color: colorChannelField })
-			},
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'line',
+				chartContext,
+				channelFields: {
+					x: typeof x === 'string' ? x : 'x',
+					y: typeof y === 'string' ? y : 'y',
+					...(colorChannelField && { color: colorChannelField })
+				},
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 
