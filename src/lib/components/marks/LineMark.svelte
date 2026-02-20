@@ -14,7 +14,7 @@
 		inferMarkScaleType
 	} from './utils/index.js';
 	import { getGPUContext } from '$lib/gpu';
-	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte.js';
+	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import type {
 		FieldRef,
 		BaseMarkProps,
