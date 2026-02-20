@@ -1,18 +1,18 @@
 // lib/layout/ChartLayout.svelte.ts
 
-interface Margin {
+export interface Margin {
 	top: number;
 	right: number;
 	bottom: number;
 	left: number;
 }
 
-interface Point {
+export interface Point {
 	x: number;
 	y: number;
 }
 
-interface AxesResult {
+export interface AxesResult {
 	xInBounds: boolean;
 	yInBounds: boolean;
 	innerPoint: Point;

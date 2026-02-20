@@ -20,7 +20,7 @@ import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
 import { viewManager } from '$lib/data/ViewManager.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
-import type { FieldRef, NormalizedSortConfig, Transform } from '$lib/types';
+import type { FieldRef, NormalizedSortConfig, Transform, ChartContext } from '$lib/types';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
@@ -104,7 +104,7 @@ export class BaseMarkSetup {
 	// --- Private Properties ---
 	#config: BaseMarkSetupConfig;
 	#coordinator: Coordinator;
-	#chartContext: any; // Typed properly in Phase 6c (ChartContext interface)
+	#chartContext: ChartContext;
 	#markId: string;
 	#scaleMap: Record<string, ScaleStateInstance | null> = {};
 	#colorScaleState = $state<ColorScaleState | null>(null);
@@ -156,7 +156,7 @@ export class BaseMarkSetup {
 	constructor(
 		config: BaseMarkSetupConfig,
 		coordinator: Coordinator,
-		chartContext: any,
+		chartContext: ChartContext,
 		stableId: string | null = null
 	) {
 		console.log('🔧 BaseMarkSetup constructor:', {
