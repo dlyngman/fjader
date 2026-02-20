@@ -1,7 +1,8 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	const c = getContext('chart');
+	const c = getContext<ChartContext>('chart');
 </script>
 
 {#if c.xScale && c.yScale && c.innerHeight && c.innerWidth}

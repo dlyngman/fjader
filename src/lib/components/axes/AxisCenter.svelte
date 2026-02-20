@@ -1,5 +1,14 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
+
+	interface Props {
+		anchor?: number;
+		fixed?: boolean;
+		ticksNumber?: number;
+		tickFormat?: ((value: unknown) => string) | null;
+		labelSide?: 'left' | 'right';
+	}
 
 	let {
 		anchor = 0,
@@ -7,8 +16,8 @@
 		ticksNumber = 5,
 		tickFormat = null,
 		labelSide = 'left'
-	} = $props();
-	const c = getContext('chart');
+	}: Props = $props();
+	const c = getContext<ChartContext>('chart');
 
 	// Propagate custom format to scale state once it exists
 	$effect(() => {

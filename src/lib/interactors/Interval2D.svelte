@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount } from 'svelte';
 	import { clauseIntervals } from '@uwdata/mosaic-core';
 	import { BrushState2D } from './brush-state.svelte';
@@ -10,10 +10,18 @@
 		scaleBrushExtent2D,
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
+	import type { ChartContext, FieldRef, Point } from '$lib/types';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 
-	let { bridge, xField, yField } = $props();
+	interface Props {
+		bridge: FilterBridge;
+		xField?: FieldRef;
+		yField?: FieldRef;
+	}
 
-	const chart = getContext('chart');
+	let { bridge, xField, yField }: Props = $props();
+
+	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();
 
 	const resolvedXField = $derived(xField ?? chart.xLabel);
@@ -160,7 +168,7 @@
 		);
 	}
 
-	function handleWheel(event) {
+	function handleWheel(event: WheelEvent) {
 		if (!event.shiftKey) return;
 
 		event.preventDefault();
@@ -196,7 +204,7 @@
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
 
-	function handlePointerDown(event, innerPoint) {
+	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
 		if (brush.phase !== 'idle') return false;
 
 		event.target.setPointerCapture(event.pointerId);
@@ -210,7 +218,7 @@
 		return true;
 	}
 
-	function handlePointerMove(event) {
+	function handlePointerMove(event: PointerEvent) {
 		if (!isCapturing) return false;
 
 		point.x = event.offsetX;
@@ -274,10 +282,10 @@
 		return true;
 	}
 
-	function handlePointerUp(event) {
+	function handlePointerUp(event: PointerEvent) {
 		if (!isCapturing) return false;
 
-		event.target.releasePointerCapture(event.pointerId);
+		(event.target as Element).releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
 		if (!hasDragged && brush.active && brush.phase === 'idle') {
@@ -297,7 +305,7 @@
 		return true;
 	}
 
-	function handleMoveStart(event) {
+	function handleMoveStart(event: PointerEvent) {
 		event.stopPropagation();
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;
@@ -312,7 +320,7 @@
 		brush.phase = 'moving';
 	}
 
-	function handleResizeStart(edge, event) {
+	function handleResizeStart(edge: string, event: PointerEvent) {
 		event.stopPropagation();
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;

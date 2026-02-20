@@ -17,8 +17,10 @@
 		BaseMarkProps,
 		BandScaleProps,
 		RectOffsetProps,
-		Coordinator
+		Coordinator,
+		ChartContext
 	} from '$lib/types';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 	interface Props extends BaseMarkProps, BandScaleProps, RectOffsetProps {
 		x: FieldRef;
@@ -54,8 +56,8 @@
 
 	const markId = `barx-${crypto.randomUUID().slice(0, 8)}`;
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
-	const chartContext: any = getContext('chart');
-	const scaleRegistry: any = getContext('scale-registry');
+	const chartContext = getContext<ChartContext>('chart');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	let setup = $state(null);
 

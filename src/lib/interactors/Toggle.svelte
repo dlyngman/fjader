@@ -1,12 +1,20 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
 	import { clausePoints } from '@uwdata/mosaic-core';
 	import { column } from '@uwdata/mosaic-sql';
+	import type { ChartContext } from '$lib/types';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 
-	let { bridge, field } = $props();
+	interface Props {
+		bridge: FilterBridge;
+		field: string | string[];
+	}
 
-	const chart = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	let { bridge, field }: Props = $props();
+
+	const chart = getContext<ChartContext>('chart');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
@@ -43,7 +51,7 @@
 		return null;
 	});
 
-	function toggle(tuple, event) {
+	function toggle(tuple: unknown[], event: MouseEvent) {
 		if (!selection) return;
 
 		const isMulti = event.shiftKey || event.metaKey;
@@ -73,7 +81,7 @@
 
 	// Resolve category from a click in the band axis margin area.
 	// Uses the same getActiveAxes pattern as wheel/pan handlers in ChartContainer.
-	function resolveMarginCategory(event) {
+	function resolveMarginCategory(event: PointerEvent) {
 		const point = { x: event.offsetX, y: event.offsetY };
 		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
 

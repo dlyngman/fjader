@@ -1,6 +1,19 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
 	import OrdinalColorLegend from './OrdinalColorLegend.svelte';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+
+	interface Props {
+		color?: string | null;
+		bridge?: FilterBridge | null;
+		title?: string | null;
+		columns?: number | null;
+		swatchSize?: number;
+		swatchRadius?: number;
+		className?: string;
+		orientation?: 'horizontal' | 'vertical' | null;
+	}
 
 	let {
 		color = null,
@@ -11,10 +24,10 @@
 		swatchRadius = 0,
 		className = '',
 		orientation = null
-	} = $props();
+	}: Props = $props();
 
-	const scaleRegistry = getContext('scale-registry');
-	const getLegendPosition = getContext('legend-position');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const getLegendPosition = getContext<(() => string) | undefined>('legend-position');
 
 	const effectiveOrientation = $derived(
 		orientation ?? (getLegendPosition?.() === 'right' ? 'vertical' : 'horizontal')

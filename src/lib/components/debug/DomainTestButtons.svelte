@@ -1,12 +1,17 @@
 <!-- src/lib/components/debug/DomainTestButtons.svelte -->
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	let { offsetPercent = 10 } = $props();
+	interface Props {
+		offsetPercent?: number;
+	}
 
-	const chartContext = getContext('chart');
+	let { offsetPercent = 10 }: Props = $props();
 
-	function offsetDomain(axis, percent) {
+	const chartContext = getContext<ChartContext>('chart');
+
+	function offsetDomain(axis: 'x' | 'y', percent: number) {
 		const scaleState = axis === 'x' ? chartContext.xScaleState : chartContext.yScaleState;
 		if (!scaleState) return;
 
@@ -18,7 +23,7 @@
 		scaleState.domain.set([min + offset, max + offset]);
 	}
 
-	function offsetBoth(percent) {
+	function offsetBoth(percent: number) {
 		offsetDomain('x', percent);
 		offsetDomain('y', percent);
 	}

@@ -1,7 +1,22 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
 	import { clausePoints } from '@uwdata/mosaic-core';
 	import { column } from '@uwdata/mosaic-sql';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+
+	interface Props {
+		scaleState: ColorScaleState;
+		bridge?: FilterBridge | null;
+		field?: string | null;
+		title?: string | null;
+		columns?: number | null;
+		swatchSize?: number;
+		swatchRadius?: number;
+		className?: string;
+		orientation?: 'horizontal' | 'vertical';
+	}
 
 	let {
 		scaleState,
@@ -13,9 +28,9 @@
 		swatchRadius = 0,
 		className = '',
 		orientation = 'horizontal'
-	} = $props();
+	}: Props = $props();
 
-	const scaleRegistry = getContext('scale-registry');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Reactive: re-renders when domain or scheme changes
 	const items = $derived(
@@ -47,7 +62,7 @@
 	// Derive visual state from scale's activeValues (projected by FilterBridge)
 	const selectedSet = $derived(scaleState.activeValues);
 
-	function handleClick(value, event) {
+	function handleClick(value: unknown, event: MouseEvent) {
 		if (!selection || !columnRef) return;
 
 		const isMulti = event.shiftKey || event.metaKey;

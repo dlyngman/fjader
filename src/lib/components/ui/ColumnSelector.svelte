@@ -1,9 +1,8 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
 	import GridSizeSelector from './GridSizeSelector.svelte';
 
-	// let { } = $props();
-	let c = getContext('chartConfig');
+	let c = getContext<any>('chartConfig');
 
 	// let gridRows = $state(2);
 	// let gridColumns = $state(2);
@@ -34,7 +33,7 @@
 
 	// let config = $derived(generateChartConfigs(layout, "penguins"))
 
-	function generateChartConfigs(layout, tableName) {
+	function generateChartConfigs(layout: { row: string[]; column: string[] }, tableName: string) {
 		const result = [];
 		let idCounter = 1;
 

@@ -334,3 +334,23 @@ export interface ChartContext {
 }
 
 export type { Margin, Point, AxesResult };
+
+// ---------------------------------------------------------------------------
+// WebGPU canvas context — the object set via setContext('webgpu-canvas', ...)
+// ---------------------------------------------------------------------------
+
+export interface WebGPUCanvasContext {
+	getCanvasDimensions(): {
+		width: number;
+		height: number;
+		cssWidth: number;
+		cssHeight: number;
+		currentDPR: number;
+	};
+	getMsaaSampleCount(): number;
+	getDevice(): GPUDevice | undefined;
+	getPresentationFormat(): GPUTextureFormat | undefined;
+	isInitialized(): boolean;
+	invalidate(): void;
+	getDebugInfo(): Record<string, unknown>;
+}

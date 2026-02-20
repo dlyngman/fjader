@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount } from 'svelte';
 	import { clauseInterval } from '@uwdata/mosaic-core';
 	import { BrushState1D } from './brush-state.svelte';
@@ -11,10 +11,18 @@
 		createPanModeHandlers,
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
+	import type { ChartContext, FieldRef, Point } from '$lib/types';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 
-	let { bridge, field, axis = 'x' } = $props();
+	interface Props {
+		bridge: FilterBridge;
+		field?: FieldRef;
+		axis?: 'x' | 'y';
+	}
 
-	const chart = getContext('chart');
+	let { bridge, field, axis = 'x' }: Props = $props();
+
+	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();
 	const isX = axis === 'x';
 
@@ -87,7 +95,7 @@
 	});
 
 	// Read the axis-relevant inner coordinate from a point
-	function innerCoord(innerPoint) {
+	function innerCoord(innerPoint: Point) {
 		return isX ? innerPoint.x : innerPoint.y;
 	}
 
@@ -141,7 +149,7 @@
 		);
 	}
 
-	function handleWheel(event) {
+	function handleWheel(event: WheelEvent) {
 		if (!event.shiftKey) return;
 
 		event.preventDefault();
@@ -170,7 +178,7 @@
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
 
-	function handlePointerDown(event, innerPoint) {
+	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
 		if (brush.phase !== 'idle') return false;
 		if (isPanModeActive) return false;
 
@@ -183,7 +191,7 @@
 		return true;
 	}
 
-	function handlePointerMove(event) {
+	function handlePointerMove(event: PointerEvent) {
 		if (!isCapturing) return false;
 
 		point.x = event.offsetX;
@@ -218,10 +226,10 @@
 		return true;
 	}
 
-	function handlePointerUp(event) {
+	function handlePointerUp(event: PointerEvent) {
 		if (!isCapturing) return false;
 
-		event.target.releasePointerCapture(event.pointerId);
+		(event.target as Element).releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
 		if (!hasDragged && brush.active && brush.phase === 'idle') {
@@ -238,7 +246,7 @@
 		return true;
 	}
 
-	function handleMoveStart(event) {
+	function handleMoveStart(event: PointerEvent) {
 		event.stopPropagation();
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;
@@ -250,7 +258,7 @@
 		brush.phase = 'moving';
 	}
 
-	function handleResizeStart(edge, event) {
+	function handleResizeStart(edge: string, event: PointerEvent) {
 		event.stopPropagation();
 		event.target.setPointerCapture(event.pointerId);
 		isCapturing = true;

@@ -1,8 +1,14 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	let { show = 'both', ticksNumber = 5 } = $props();
-	const c = getContext('chart');
+	interface Props {
+		show?: 'both' | 'x' | 'y';
+		ticksNumber?: number;
+	}
+
+	let { show = 'both', ticksNumber = 5 }: Props = $props();
+	const c = getContext<ChartContext>('chart');
 
 	// console.log(c.yScale.ticks(ticksNumber))
 </script>

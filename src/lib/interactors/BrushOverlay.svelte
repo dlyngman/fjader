@@ -1,14 +1,16 @@
-<script>
-	let {
-		x,
-		y,
-		width,
-		height, // Screen coordinates
-		orientation, // 'x' | 'y' | '2d'
-		onMoveStart, // (event) => void
-		onResizeStart, // (edge: string, event) => void
-		onWheel // (event) => void - Shift+scroll to scale brush
-	} = $props();
+<script lang="ts">
+	interface Props {
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+		orientation: 'x' | 'y' | '2d';
+		onMoveStart: (event: PointerEvent) => void;
+		onResizeStart: (edge: string, event: PointerEvent) => void;
+		onWheel: (event: WheelEvent) => void;
+	}
+
+	let { x, y, width, height, orientation, onMoveStart, onResizeStart, onWheel }: Props = $props();
 
 	// Normalize to ensure positive dimensions (avoid GC by using primitives)
 	const nx = $derived(width < 0 ? x + width : x);
