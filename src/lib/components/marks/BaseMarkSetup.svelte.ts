@@ -1,4 +1,4 @@
-// src/lib/components/marks/BaseMarkSetup.svelte.js
+// src/lib/components/marks/BaseMarkSetup.svelte.ts
 
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data-clients/DataClient.svelte';
@@ -13,15 +13,82 @@ import {
 	min,
 	max
 } from '@uwdata/mosaic-sql';
+import type { ExprNode } from '@uwdata/mosaic-sql';
+import type { Selection, Coordinator } from '@uwdata/mosaic-core';
 import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
 import { viewManager } from '$lib/data/ViewManager.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
+import type { FieldRef, NormalizedSortConfig, Transform } from '$lib/types';
+import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
+import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
+
+// ---------------------------------------------------------------------------
+// Local interfaces
+// ---------------------------------------------------------------------------
+
+type ScaleStateInstance = LinearScaleState | BandScaleState | TimeScaleState;
+
+interface ScaleRequirement {
+	type: string;
+	priority: number;
+	config?: Record<string, unknown>;
+}
+
+interface ConnectedConfig {
+	seriesChannel: string | null;
+	dimensionChannel: string;
+}
+
+interface AutoBinNode {
+	isAutoBinNode: true;
+	field: string;
+	stats: { column: string; stats: string[] };
+	resolve(
+		fieldInfo: Record<string, unknown>,
+		scaleType: string | null,
+		t0?: number | null,
+		currentDomain?: number[] | null,
+		binStepMultiplier?: number
+	): ExprNode;
+}
+
+export interface BaseMarkSetupConfig {
+	markType: string;
+	supportedScaleTypes: { x: string[]; y: string[] };
+	scaleRequirements: {
+		x: ScaleRequirement | null;
+		y: ScaleRequirement | null;
+	};
+	inferredScaleColumns?: { x?: FieldRef; y?: FieldRef };
+	table: string;
+	selection?: Selection;
+	transforms: Transform[];
+	select: Record<string, unknown>;
+	clientOptions?: { limit?: number; filterNulls?: unknown[] | null };
+	sort?: NormalizedSortConfig;
+	tooltip?: boolean | { sortTable?: boolean };
+	constants?: Record<string, number>;
+	_connectedConfig?: ConnectedConfig;
+	_filterNulls?: unknown[];
+	viewportLocalDomain?: boolean;
+	zeroBaseline?: { x?: boolean; y?: boolean };
+}
+
+interface ExtentFilterOptions {
+	filterAxis?: string;
+	filterDomain?: [number, number];
+}
+
+type DataAccessor = ArrowDataAccessor | ObjectDataAccessor;
 
 export class BaseMarkSetup {
 	// --- Reactive State ---
-	client = $state(null);
+	client = $state<DataClient | null>(null);
 	categoricalDataFetched = $state(false);
 
 	// --- Setup Progress ---
@@ -35,59 +102,63 @@ export class BaseMarkSetup {
 	#colorDomainFetched = $state(false);
 
 	// --- Private Properties ---
-	#config;
-	#coordinator;
-	#chartContext;
-	#markId;
-	#scaleMap = {};
-	#colorScaleState = $state(null); // Optional color scale for ViewManager integration
-	#seriesScaleState = $state(null); // Optional series scale for connected topology marks
-	#sizeScaleState = $state(null); // Optional size scale for radius mapping
-	#currentClientTable = $state(null); // Track which table the current client queries
+	#config: BaseMarkSetupConfig;
+	#coordinator: Coordinator;
+	#chartContext: any; // Typed properly in Phase 6c (ChartContext interface)
+	#markId: string;
+	#scaleMap: Record<string, ScaleStateInstance | null> = {};
+	#colorScaleState = $state<ColorScaleState | null>(null);
+	#seriesScaleState = $state<ColorScaleState | null>(null);
+	#sizeScaleState = $state<SizeScaleState | null>(null);
+	#currentClientTable = $state<string | null>(null);
 
 	// --- Transform Support ---
-	#transformCompiler;
-	#autoBinNodes = new Map(); // channel -> AutoBinNode
+	#transformCompiler: TransformCompiler;
+	#autoBinNodes: Map<string, AutoBinNode> = new Map();
 
 	// --- Tooltip Write-Back ---
-	#tooltipEnabled;
-	#tooltipSortTable;
-	#tooltipTableName;
-	#tooltipWriteTimeout = null;
+	#tooltipEnabled: boolean;
+	#tooltipSortTable: boolean;
+	#tooltipTableName: string;
+	#tooltipWriteTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Adaptive Binning Support ---
-	#lastBinningDomain = { x: null, y: null }; // Track domains used for binning
-	#rebinTimeout = null;
-	#binningThreshold = 1.25; // Re-bin when domain changes by this factor
-	#skipDomainUpdateForAxis = null; // Skip domain update for this axis after re-bin
-	#rebinPendingDataVersion = null; // Track which dataVersion we're waiting for
-	#prevBinMultiplier = 1.0;
+	#lastBinningDomain: { x: number[] | null; y: number[] | null } = { x: null, y: null };
+	#rebinTimeout: ReturnType<typeof setTimeout> | null = null;
+	#binningThreshold: number = 1.25;
+	#skipDomainUpdateForAxis: string | null = null;
+	#rebinPendingDataVersion: number | null = null;
+	#prevBinMultiplier: number = 1.0;
 
 	// --- Viewport-Local Domain Support ---
-	#viewportDomainUpdateTimeout = null;
+	#viewportDomainUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Data-Derived Domain Support ---
-	// Channels that need domain computed from query results (aggregates, transforms)
-	#channelsNeedingDataDomain = new Set();
-	#dataDerivedDomainsSet = $state(false); // From data scan (fallback)
-	#globalAggregatesSet = $state(false); // From sidecar query (preferred)
+	#channelsNeedingDataDomain: Set<string> = new Set();
+	#dataDerivedDomainsSet = $state(false);
+	#globalAggregatesSet = $state(false);
 
 	// --- Client Registration ---
-	#unregisterClient = null; // Cleanup function for chart context registration
+	#unregisterClient: (() => void) | null = null;
 
 	/**
 	 * Ensure shared services (ViewManager, TableSchemaService) have the coordinator.
 	 * Call this before inference so schema lookups can proceed.
 	 * Idempotent — safe to call multiple times.
 	 */
-	static ensureServices(coordinator) {
+	static ensureServices(coordinator: Coordinator): void {
 		if (coordinator) {
 			viewManager.setCoordinator(coordinator);
 			tableSchemaService.setCoordinator(coordinator);
 		}
 	}
 
-	constructor(config, coordinator, chartContext, stableId = null) {
+	constructor(
+		config: BaseMarkSetupConfig,
+		coordinator: Coordinator,
+		chartContext: any,
+		stableId: string | null = null
+	) {
 		console.log('🔧 BaseMarkSetup constructor:', {
 			markType: config.markType,
 			transforms: config.transforms,
@@ -127,10 +198,10 @@ export class BaseMarkSetup {
 	}
 
 	// NEW: Detect AutoBinNodes in config
-	#detectAutoBins() {
+	#detectAutoBins(): void {
 		for (const [channel, value] of Object.entries(this.#config.select)) {
-			if (value?.isAutoBinNode) {
-				this.#autoBinNodes.set(channel, value);
+			if ((value as AutoBinNode)?.isAutoBinNode) {
+				this.#autoBinNodes.set(channel, value as AutoBinNode);
 			}
 		}
 	}
@@ -142,7 +213,7 @@ export class BaseMarkSetup {
 	 * - Aggregate expressions for continuous color scales
 	 * - Channels that will be generated by transforms (x0/x1, y0/y1)
 	 */
-	#detectChannelsNeedingDataDomain() {
+	#detectChannelsNeedingDataDomain(): void {
 		const { select, scaleRequirements } = this.#config;
 
 		// Check each channel in select for aggregates and bins
@@ -152,7 +223,7 @@ export class BaseMarkSetup {
 			// AutoBinNodes need data-derived domains: bin boundaries depend on
 			// nice rounding and can't be known until the query results arrive.
 			// The sidecar query can't run before fieldInfo resolves bins to SQL.
-			if (value.isAutoBinNode) {
+			if ((value as AutoBinNode).isAutoBinNode) {
 				if (channel === 'x' || channel === 'x1' || channel === 'x2') {
 					this.#channelsNeedingDataDomain.add('x');
 				} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
@@ -202,7 +273,7 @@ export class BaseMarkSetup {
 		}
 	}
 
-	#setupReactiveEffects() {
+	#setupReactiveEffects(): void {
 		// Effect 1: Wait for scale objects
 		// Gated on #scaleRequirementsRegistered — when inference is pending (null types),
 		// the entire effect chain is blocked until the mark is recreated with resolved types.
@@ -299,7 +370,7 @@ export class BaseMarkSetup {
 		// Effect 6: Set initial continuous domains (from fieldInfo for non-aggregated fields)
 		$effect(() => {
 			if (this.#clientDataReady && !this.#continuousDomainsSet) {
-				this.#setInitialContinuousDomains(this.client.fieldInfo);
+				this.#setInitialContinuousDomains(this.client!.fieldInfo);
 				this.#continuousDomainsSet = true;
 			}
 		});
@@ -343,32 +414,13 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// // Effect 9: Adaptive binning - re-query when domain changes significantly
-		// $effect(() => {
-		// 	if (this.#autoBinNodes.size === 0 || !this.client) return;
-
-		// 	// Watch X domain TARGET (immediate user input, not animated current)
-		// 	const xDomain = this.#chartContext.xScaleState?.domain?.target;
-		// 	const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
-		// 	if (xHasBin && xDomain && this.#shouldReBin(xDomain, 'x')) {
-		// 		this.#scheduleReBin('x', xDomain);
-		// 	}
-
-		// 	// Watch Y domain TARGET (immediate user input, not animated current)
-		// 	const yDomain = this.#chartContext.yScaleState?.domain?.target;
-		// 	const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
-		// 	if (yHasBin && yDomain && this.#shouldReBin(yDomain, 'y')) {
-		// 		this.#scheduleReBin('y', yDomain);
-		// 	}
-		// });
-
 		// Effect 9: Adaptive Binning & User Resolution Control
 		$effect(() => {
 			// IMPORTANT: Read reactive values FIRST to establish dependencies
 			// Even if we early-return, Svelte needs to track these for reactivity
-			const multiplier = this.#chartContext.binStepMultiplier ?? 1.0;
-			const xDomain = this.#chartContext.xScaleState?.domain?.target;
-			const yDomain = this.#chartContext.yScaleState?.domain?.target;
+			const multiplier: number = this.#chartContext.binStepMultiplier ?? 1.0;
+			const xDomain: number[] | undefined = this.#chartContext.xScaleState?.domain?.target;
+			const yDomain: number[] | undefined = this.#chartContext.yScaleState?.domain?.target;
 
 			if (this.#autoBinNodes.size === 0 || !this.client) {
 				// Early return, but reactive values were already read above
@@ -396,7 +448,7 @@ export class BaseMarkSetup {
 				if (yHasBin) this.#skipDomainUpdateForAxis = 'y';
 
 				// Track current dataVersion - we'll wait for it to increment before updating domains
-				this.#rebinPendingDataVersion = this.client?.dataVersion;
+				this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
 
 				// Reset data-derived domain flag so aggregate extent updates from new data
 				this.#dataDerivedDomainsSet = false;
@@ -428,7 +480,7 @@ export class BaseMarkSetup {
 			if (!data || data.length === 0) return;
 
 			untrack(() => {
-				clearTimeout(this.#tooltipWriteTimeout);
+				clearTimeout(this.#tooltipWriteTimeout!);
 				this.#tooltipWriteTimeout = setTimeout(() => this.#writeTooltipTable(data), 300);
 			});
 		});
@@ -468,7 +520,7 @@ export class BaseMarkSetup {
 		});
 	}
 
-	#registerScaleRequirements() {
+	#registerScaleRequirements(): void {
 		const { scaleRequirements, inferredScaleColumns } = this.#config;
 
 		if (scaleRequirements?.x) {
@@ -501,15 +553,15 @@ export class BaseMarkSetup {
 		);
 	}
 
-	get actualXScaleType() {
+	get actualXScaleType(): string {
 		return this.#chartContext.scaleTypes?.x || 'linear';
 	}
 
-	get actualYScaleType() {
+	get actualYScaleType(): string {
 		return this.#chartContext.scaleTypes?.y || 'linear';
 	}
 
-	get markId() {
+	get markId(): string {
 		return this.#markId;
 	}
 
@@ -517,21 +569,20 @@ export class BaseMarkSetup {
 	 * Reactive effective table name.
 	 * Automatically updates when ViewManager creates the derived view.
 	 */
-	effectiveTable = $derived(viewManager.getEffectiveTable(this.#config.table));
+	effectiveTable: string = $derived(viewManager.getEffectiveTable(this.#config.table));
 
 	/**
 	 * Get the source table name (without ViewManager transformation).
 	 */
-	get sourceTable() {
+	get sourceTable(): string {
 		return this.#config.table;
 	}
 
 	/**
 	 * Set the color scale state for ViewManager integration.
 	 * Must be called before categorical domain fetch completes.
-	 * @param {ColorScaleState} colorScaleState
 	 */
-	setColorScale(colorScaleState) {
+	setColorScale(colorScaleState: ColorScaleState): void {
 		this.#colorScaleState = colorScaleState;
 		// Register table with color scale
 		if (colorScaleState && this.#config.table) {
@@ -542,9 +593,8 @@ export class BaseMarkSetup {
 	/**
 	 * Register a series scale for connected topology marks (Lines, Areas).
 	 * Enables domain discovery for the stroke/series field.
-	 * @param {ColorScaleState} seriesScaleState
 	 */
-	setSeriesScale(seriesScaleState) {
+	setSeriesScale(seriesScaleState: ColorScaleState): void {
 		this.#seriesScaleState = seriesScaleState;
 		if (seriesScaleState && this.#config.table) {
 			seriesScaleState.registerTable(this.#config.table);
@@ -553,13 +603,12 @@ export class BaseMarkSetup {
 
 	/**
 	 * Set the size scale state for radius domain discovery.
-	 * @param {SizeScaleState} sizeScaleState
 	 */
-	setSizeScale(sizeScaleState) {
+	setSizeScale(sizeScaleState: SizeScaleState): void {
 		this.#sizeScaleState = sizeScaleState;
 	}
 
-	scaleCompatibilityError = $derived.by(() => {
+	scaleCompatibilityError: string | null = $derived.by(() => {
 		const { supportedScaleTypes, markType } = this.#config;
 		if (!this.actualXScaleType || !this.actualYScaleType) return null;
 
@@ -574,7 +623,7 @@ export class BaseMarkSetup {
 		return null;
 	});
 
-	gpuReady = $derived.by(() => {
+	gpuReady: boolean = $derived.by(() => {
 		if (!this.#chartContext.scalesReady || !this.categoricalDataFetched) return false;
 
 		const xReady =
@@ -591,41 +640,16 @@ export class BaseMarkSetup {
 	});
 
 	// Processed data with JS transforms applied
-	// processedData = $derived.by(() => {
-	// 	if (!this.client?.arrowTable) return null;
-
-	// 	// Convert Arrow to objects
-	// 	const data = this.#arrowToObjects(this.client.arrowTable);
-
-	// 	// Apply JS transforms if any
-	// 	if (this.#transformCompiler.hasJSTransforms()) {
-	// 		return this.#transformCompiler.applyToData(
-	// 			data,
-	// 			{
-	// 				x: this.#getFieldName('x'),
-	// 				y: this.#getFieldName('y'),
-	// 				fill: this.#getFieldName('fill')
-	// 			},
-	// 			{
-	// 				x: this.#chartContext.xScale,
-	// 				y: this.#chartContext.yScale
-	// 			}
-	// 		);
-	// 	}
-
-	// 	return data;
-	// });
-	data = $derived.by(() => {
+	data: DataAccessor | null = $derived.by(() => {
 		if (!this.client?.arrowTable) return null;
 
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
-			// console.log('📊 Using ArrowDataAccessor (fast path)');
-			return new ArrowDataAccessor(this.client.arrowTable);
+			return new ArrowDataAccessor(this.client.arrowTable as any);
 		}
 
 		// Transform path: Arrow → Objects → Inject constants → Transform → Object accessor
-		const objects = this.#arrowToObjects(this.client.arrowTable);
+		const objects = this.#arrowToObjects(this.client.arrowTable as any);
 
 		// Inject constant channel values that were excluded from SQL
 		const constants = this.#config.constants;
@@ -643,35 +667,28 @@ export class BaseMarkSetup {
 			fill: this.#getFieldName('fill')
 		};
 
-		// console.log('📊 Transform config:', transformConfig);
-		// console.log('📊 Input data sample:', objects.slice(0, 3));
-		// console.log('📊 Select config:', this.#config.select);
-
 		const transformed = this.#transformCompiler.applyToData(objects, transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale
 		});
 
-		// console.log('📊 Transformed data:', transformed.length, 'rows');
-		// console.log('📊 Transformed sample:', transformed.slice(0, 3));
-
 		return new ObjectDataAccessor(transformed);
 	});
 
 	/** Facet index data (Float32Array) for GPU upload. Null when not faceted. */
-	facetData = $derived.by(() => {
+	facetData: Float32Array | null = $derived.by(() => {
 		if (!this.#chartContext.fx || !this.data) return null;
 		const raw = this.data.getColumn('__facet');
 		if (!raw) return null;
-		return raw instanceof Float32Array ? raw : new Float32Array(raw);
+		return raw instanceof Float32Array ? raw : new Float32Array(raw as ArrayLike<number>);
 	});
 
-	#arrowToObjects(arrowTable) {
-		const rows = [];
-		const numRows = arrowTable.numRows;
+	#arrowToObjects(arrowTable: any): Record<string, unknown>[] {
+		const rows: Record<string, unknown>[] = [];
+		const numRows: number = arrowTable.numRows;
 
 		for (let i = 0; i < numRows; i++) {
-			const row = {};
+			const row: Record<string, unknown> = {};
 			for (const field of arrowTable.schema.fields) {
 				const column = arrowTable.getChild(field.name);
 				row[field.name] = column.get(i);
@@ -687,7 +704,7 @@ export class BaseMarkSetup {
 	 * The data uses aliases as column names, not the original field expressions.
 	 * For transforms, we need the alias that appears in the data.
 	 */
-	#getFieldName(channel) {
+	#getFieldName(channel: string): string {
 		// First check if the channel exists directly in select
 		if (this.#config.select[channel] != null) {
 			// The column name in the data is the ALIAS (the key), not the value
@@ -720,11 +737,11 @@ export class BaseMarkSetup {
 		return channel; // fallback
 	}
 
-	getSelectConfig() {
+	getSelectConfig(): Record<string, unknown> {
 		// Return select with AutoBinNodes unresolved
 		// They'll be resolved in buildQuery()
 		// Also swap categorical fields for indexed column names if views are ready
-		const select = { ...this.#config.select };
+		const select: Record<string, unknown> = { ...this.#config.select };
 		const hasView = viewManager.hasView(this.#config.table);
 
 		// For band/point scales, use the indexed column name from ViewManager
@@ -772,8 +789,8 @@ export class BaseMarkSetup {
 		return select;
 	}
 
-	buildQuery(sourceTable, config, filter) {
-		let select = config.select;
+	buildQuery(sourceTable: string, config: Record<string, any>, filter: unknown[]): any {
+		let select: Record<string, unknown> = config.select;
 
 		// Resolve auto bins if we have field info
 		if (this.#autoBinNodes.size > 0 && this.client?.fieldInfo) {
@@ -788,8 +805,8 @@ export class BaseMarkSetup {
 		select = this.#applyTimeOffsets(select, hasView);
 
 		const q = Query.from(sourceTable);
-		const selectDef = {};
-		const nonAggregateGroupBy = [];
+		const selectDef: Record<string, unknown> = {};
+		const nonAggregateGroupBy: unknown[] = [];
 		let hasAggregates = false;
 
 		// Build select clause
@@ -829,7 +846,7 @@ export class BaseMarkSetup {
 		// Add filters
 		const allFilters = [...filter];
 		if (config._filterNulls && Array.isArray(config._filterNulls)) {
-			allFilters.push(...config._filterNulls.map((col) => isNotNull(col)));
+			allFilters.push(...config._filterNulls.map((col: unknown) => isNotNull(col)));
 		}
 		if (allFilters.length > 0) {
 			queryWithTransforms = queryWithTransforms.where(and(allFilters));
@@ -841,7 +858,7 @@ export class BaseMarkSetup {
 			const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
 
 			// Get column expressions for ordering
-			const orderCols = [];
+			const orderCols: unknown[] = [];
 
 			// Facet column first — ensures all points per facet cell are contiguous
 			if (select.__facet) {
@@ -863,7 +880,7 @@ export class BaseMarkSetup {
 			if (orderCols.length > 0) {
 				console.log(
 					`🔗 [${this.#markId}] Connected mark ordering by:`,
-					orderCols.map((c) => c.toString())
+					orderCols.map((c: any) => c.toString())
 				);
 				queryWithTransforms = queryWithTransforms.orderby(...orderCols);
 			}
@@ -872,59 +889,36 @@ export class BaseMarkSetup {
 		return queryWithTransforms;
 	}
 
-	// Resolve AutoBinNodes to concrete SQL expressions
-	// #resolveAutoBins(select) {
-	// 	const resolved = {};
+	#resolveAutoBins(select: Record<string, unknown>): Record<string, unknown> {
+		const resolved: Record<string, unknown> = {};
 
-	// 	for (const [channel, value] of Object.entries(select)) {
-	// 		if (value?.isAutoBinNode) {
-	// 			const scaleType =
-	// 				channel === 'x' || channel === 'x1' || channel === 'x2'
-	// 					? this.actualXScaleType
-	// 					: channel === 'y' || channel === 'y1' || channel === 'y2'
-	// 						? this.actualYScaleType
-	// 						: null;
-
-	// 			resolved[channel] = value.resolve(this.client.fieldInfo, scaleType);
-	// 		} else {
-	// 			resolved[channel] = value;
-	// 		}
-	// 	}
-
-	// 	return resolved;
-	// }
-
-	// src/lib/components/marks/BaseMarkSetup.svelte.js
-
-	#resolveAutoBins(select) {
-		const resolved = {};
-
-		const binStepMultiplier = this.#chartContext.binStepMultiplier || 1.0;
+		const binStepMultiplier: number = this.#chartContext.binStepMultiplier || 1.0;
 
 		for (const [channel, value] of Object.entries(select)) {
-			if (value?.isAutoBinNode) {
+			if ((value as AutoBinNode)?.isAutoBinNode) {
+				const autoBin = value as AutoBinNode;
 				const axis = channel.startsWith('x') ? 'x' : 'y';
 				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 				const scaleState = this.#chartContext[`${axis}ScaleState`];
 
-				let currentDomain = null;
+				let currentDomain: number[] | null = null;
 
 				// Get frozen binning domain for adaptive bin count
 				if (scaleType === 'time' || scaleType === 'utc' || scaleType === 'linear') {
-					currentDomain = this.#lastBinningDomain[axis];
+					currentDomain = this.#lastBinningDomain[axis as 'x' | 'y'];
 
 					if (!currentDomain) {
 						currentDomain = scaleState?.domain?.current;
 						if (currentDomain) {
-							this.#lastBinningDomain[axis] = [...currentDomain];
+							this.#lastBinningDomain[axis as 'x' | 'y'] = [...currentDomain];
 						}
 					}
 				}
 
 				// Resolve bin to SQL expression (temporal bins return DATE/TIMESTAMP;
 				// offset conversion is handled by the time-scale swap section downstream)
-				resolved[channel] = value.resolve(
-					this.client.fieldInfo,
+				resolved[channel] = autoBin.resolve(
+					this.client!.fieldInfo!,
 					scaleType,
 					null, // t0 no longer needed here — offset wrapping is centralized
 					currentDomain,
@@ -938,13 +932,13 @@ export class BaseMarkSetup {
 		return resolved;
 	}
 
-	#applyTimeOffsets(select, hasView) {
-		const result = { ...select };
+	#applyTimeOffsets(select: Record<string, unknown>, hasView: boolean): Record<string, unknown> {
+		const result: Record<string, unknown> = { ...select };
 
 		for (const [axis, channels] of [
 			['x', ['x', 'x1', 'x2']],
 			['y', ['y', 'y1', 'y2']]
-		]) {
+		] as const) {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			if (scaleType !== 'time') continue;
 
@@ -971,15 +965,15 @@ export class BaseMarkSetup {
 		return result;
 	}
 
-	#createClient(tableName, fieldRequests) {
+	#createClient(tableName: string, fieldRequests: unknown[]): void {
 		if (this.client) this.client.destroy();
 
 		this.client = new DataClient(
 			tableName,
-			this.#config.selection,
+			this.#config.selection ?? null,
 			{
 				select: this.getSelectConfig(),
-				queryBuilder: (table, config, filter) => {
+				queryBuilder: (table: string, config: any, filter: unknown[]) => {
 					return this.buildQuery(table, config, filter);
 				},
 				dataFormat: 'arrow',
@@ -988,7 +982,7 @@ export class BaseMarkSetup {
 			},
 			fieldRequests
 		);
-		this.#coordinator.connect(this.client);
+		(this.#coordinator as any).connect(this.client);
 
 		// Register with chart context for crossfilter
 		if (this.#chartContext?.registerClient) {
@@ -998,7 +992,7 @@ export class BaseMarkSetup {
 		}
 	}
 
-	#setupScaleMappings() {
+	#setupScaleMappings(): void {
 		this.#scaleMap = {
 			x: this.#chartContext.xScaleState,
 			y: this.#chartContext.yScaleState
@@ -1033,18 +1027,18 @@ export class BaseMarkSetup {
 		});
 	}
 
-	#buildFieldInfoRequests() {
+	#buildFieldInfoRequests(): unknown[] {
 		const { select, table } = this.#config;
-		const requests = [];
-		const processedFields = new Set();
+		const requests: unknown[] = [];
+		const processedFields = new Set<string>();
 
 		for (const alias in select) {
 			const fieldValue = select[alias];
 			if (fieldValue == null) continue;
 
 			// NEW: Handle AutoBinNodes
-			if (fieldValue.isAutoBinNode) {
-				const stats = fieldValue.stats;
+			if ((fieldValue as AutoBinNode).isAutoBinNode) {
+				const stats = (fieldValue as AutoBinNode).stats;
 				if (!processedFields.has(stats.column)) {
 					requests.push({ table, column: stats.column, stats: stats.stats });
 					processedFields.add(stats.column);
@@ -1053,7 +1047,7 @@ export class BaseMarkSetup {
 			}
 
 			// Handle regular fields
-			if (processedFields.has(fieldValue.toString())) continue;
+			if (processedFields.has(String(fieldValue))) continue;
 
 			const exprNode = isNode(fieldValue) ? fieldValue : sqlColumn(String(fieldValue));
 			if (isAggregateExpression(exprNode)) continue;
@@ -1069,14 +1063,14 @@ export class BaseMarkSetup {
 			// not from fieldInfo (which would return values from the offset column)
 			if (scaleType === 'linear' || scaleType === 'log') {
 				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
-				processedFields.add(fieldValue.toString());
+				processedFields.add(String(fieldValue));
 			}
 		}
 
 		return requests;
 	}
 
-	#setInitialContinuousDomains(fieldInfo) {
+	#setInitialContinuousDomains(fieldInfo: Record<string, any> | null): void {
 		if (!fieldInfo) return;
 
 		for (const alias in this.#scaleMap) {
@@ -1090,7 +1084,7 @@ export class BaseMarkSetup {
 				const select = this.#config.select;
 				// Try direct alias first, then extent variants (x1/x2, y1/y2)
 				const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
-					(f) => f != null && !f.isAutoBinNode
+					(f) => f != null && !(f as AutoBinNode).isAutoBinNode
 				);
 
 				if (candidates.length === 0) continue;
@@ -1114,7 +1108,7 @@ export class BaseMarkSetup {
 					console.log(
 						`📐 [${this.#markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
 					);
-					scaleState.addMark([combinedMin, combinedMax], this.#markId);
+					(scaleState as any).addMark([combinedMin, combinedMax], this.#markId);
 				}
 			}
 		}
@@ -1125,14 +1119,13 @@ export class BaseMarkSetup {
 	 * This handles both:
 	 * - Regular aggregate channels (count, sum, etc.)
 	 * - Transform-generated channels (x0/x1, y0/y1 from stack)
-	 *
-	 * @param {DataAccessor|Array} data - Data accessor or array of objects
-	 * @param {Array<string>} [additionalChannels=[]] - Extra channels from transforms
-	 * @param {boolean} [isRebinning=false] - Whether this update is from a rebinning operation
 	 */
-	#registerDataDerivedDomains(data, additionalChannels = [], isRebinning = false) {
-		if (!data || (Array.isArray(data) && data.length === 0)) return;
-		if (!Array.isArray(data) && data.length === 0) return;
+	#registerDataDerivedDomains(
+		data: DataAccessor,
+		additionalChannels: string[] = [],
+		isRebinning: boolean = false
+	): void {
+		if (!data || data.length === 0) return;
 
 		// Skip if no channels need data-derived domains
 		if (this.#channelsNeedingDataDomain.size === 0 && additionalChannels.length === 0) {
@@ -1141,8 +1134,8 @@ export class BaseMarkSetup {
 		}
 
 		// Build list of channels to examine for each axis
-		const xChannelsToCheck = [];
-		const yChannelsToCheck = [];
+		const xChannelsToCheck: string[] = [];
+		const yChannelsToCheck: string[] = [];
 
 		// Add base channels that need data-derived domains
 		if (this.#channelsNeedingDataDomain.has('x')) {
@@ -1170,7 +1163,7 @@ export class BaseMarkSetup {
 			(this.actualXScaleType === 'linear' || this.actualXScaleType === 'time')
 		) {
 			// For viewport-local domains, filter to visible Y range
-			let filterOptions = {};
+			let filterOptions: ExtentFilterOptions = {};
 			if (this.#config.viewportLocalDomain && this.actualYScaleType !== 'band') {
 				const yDomain = this.#chartContext.yScaleState?.domain?.current;
 				if (yDomain) {
@@ -1219,7 +1212,7 @@ export class BaseMarkSetup {
 			(this.actualYScaleType === 'linear' || this.actualYScaleType === 'time')
 		) {
 			// For viewport-local domains, filter to visible X range
-			let filterOptions = {};
+			let filterOptions: ExtentFilterOptions = {};
 			if (this.#config.viewportLocalDomain && this.actualXScaleType !== 'band') {
 				const xDomain = this.#chartContext.xScaleState?.domain?.current;
 				if (xDomain) {
@@ -1269,46 +1262,45 @@ export class BaseMarkSetup {
 	/**
 	 * Compute min/max extent from data for given channels.
 	 * Works with both DataAccessor (Arrow) and plain object arrays.
-	 *
-	 * @param {DataAccessor|Array} data - Data source
-	 * @param {Array<string>} channels - Channel names to examine
-	 * @param {Object} options - Filtering options
-	 * @param {string} options.filterAxis - 'x' or 'y' - axis to filter on
-	 * @param {[number, number]} options.filterDomain - Domain range to filter to
-	 * @returns {[number, number]|null} Extent or null if no valid data
 	 */
-	#computeExtentFromData(data, channels, options = {}) {
+	#computeExtentFromData(
+		data: DataAccessor | Record<string, unknown>[],
+		channels: string[],
+		options: ExtentFilterOptions = {}
+	): [number, number] | null {
 		const { filterAxis, filterDomain } = options;
 
 		let min = Infinity;
 		let max = -Infinity;
 
-		const isAccessor = typeof data.getColumn === 'function';
+		const isAccessor = typeof (data as DataAccessor).getColumn === 'function';
 
 		// Performance guard: skip viewport filtering for large datasets
-		const dataLength = isAccessor ? data.length : data.length;
+		const dataLength = (data as any).length;
 		const shouldFilter = filterAxis && filterDomain && dataLength < 10000;
 
 		if (isAccessor) {
+			const accessor = data as DataAccessor;
 			// DataAccessor path - use getColumn for efficiency
 			// Get filter columns if needed
-			let filterCol1, filterCol2;
+			let filterCol1: ArrayLike<unknown> | null = null;
+			let filterCol2: ArrayLike<unknown> | null = null;
 			if (shouldFilter) {
-				filterCol1 = data.getColumn(`${filterAxis}1`);
-				filterCol2 = data.getColumn(`${filterAxis}2`);
+				filterCol1 = accessor.getColumn(`${filterAxis}1`);
+				filterCol2 = accessor.getColumn(`${filterAxis}2`);
 			}
 
 			for (const channel of channels) {
-				const column = data.getColumn(channel);
+				const column = accessor.getColumn(channel);
 				if (!column) continue;
 
 				for (let i = 0; i < column.length; i++) {
 					// Viewport filtering: skip rows outside viewport
 					if (shouldFilter && filterCol1 && filterCol2) {
-						const v1 = filterCol1[i];
-						const v2 = filterCol2[i];
+						const v1 = filterCol1[i] as number;
+						const v2 = filterCol2[i] as number;
 						// Check if bin [v1, v2] intersects viewport [filterDomain[0], filterDomain[1]]
-						if (v2 < filterDomain[0] || v1 > filterDomain[1]) {
+						if (v2 < filterDomain![0] || v1 > filterDomain![1]) {
 							continue; // Outside viewport
 						}
 					}
@@ -1322,13 +1314,13 @@ export class BaseMarkSetup {
 			}
 		} else {
 			// Plain array path
-			for (const row of data) {
+			for (const row of data as Record<string, unknown>[]) {
 				// Viewport filtering: skip rows outside viewport
 				if (shouldFilter) {
-					const v1 = row[`${filterAxis}1`];
-					const v2 = row[`${filterAxis}2`];
+					const v1 = row[`${filterAxis}1`] as number;
+					const v2 = row[`${filterAxis}2`] as number;
 					// Check if bin [v1, v2] intersects viewport
-					if (v2 < filterDomain[0] || v1 > filterDomain[1]) {
+					if (v2 < filterDomain![0] || v1 > filterDomain![1]) {
 						continue; // Outside viewport
 					}
 				}
@@ -1347,13 +1339,13 @@ export class BaseMarkSetup {
 		return [min, max];
 	}
 
-	async #fetchCategoricalDomains() {
+	async #fetchCategoricalDomains(): Promise<number> {
 		const { table, selection, sort } = this.#config;
-		if (!this.#coordinator || !table) return;
+		if (!this.#coordinator || !table) return 0;
 
-		const fetches = [];
+		const fetches: Promise<void>[] = [];
 
-		const setupFetch = (axis, field) => {
+		const setupFetch = (axis: string, field: unknown): void => {
 			if (!field) return;
 			const scaleState = this.#chartContext[`${axis}ScaleState`];
 			let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
@@ -1362,8 +1354,6 @@ export class BaseMarkSetup {
 			// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
 			// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
 			// 'x1'/'x2'/'y1'/'y2'. Fall back to channel+'2' then channel+'1' for those.
-			// TODO: A cleaner approach would be mark-owned sortChannelMaps, where each mark
-			// explicitly declares the mapping (e.g. BarMarkX: { x: 'x2' }), avoiding heuristics.
 			const sortField = sortConfig
 				? this.#config.select[sortConfig.channel] ||
 					this.#config.select[sortConfig.channel + '2'] ||
@@ -1373,7 +1363,7 @@ export class BaseMarkSetup {
 				if (isAggregateExpression(sortField)) {
 					// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
 					q = q.groupby(field).select({ _sort: sortField });
-					if (sortConfig.direction === 'desc') {
+					if (sortConfig!.direction === 'desc') {
 						q.orderby(sql`${sqlColumn('_sort')} DESC`);
 					} else {
 						q.orderby(sqlColumn('_sort'));
@@ -1381,7 +1371,7 @@ export class BaseMarkSetup {
 				} else {
 					// Raw field or expression: ORDER BY directly
 					const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
-					if (sortConfig.direction === 'desc') {
+					if (sortConfig!.direction === 'desc') {
 						q.orderby(sql`${sortExpr} DESC`);
 					} else {
 						q.orderby(sortExpr);
@@ -1392,7 +1382,7 @@ export class BaseMarkSetup {
 			}
 
 			fetches.push(
-				this.#coordinator.query(q).then((result) => {
+				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
 					const categories = Array.from(result).map((row) => row[axis]);
 					// Y band scale maps index 0 → bottom, index N → top (bottom-to-top),
 					// but users read top-to-bottom. Reverse so SQL sort order matches
@@ -1421,7 +1411,7 @@ export class BaseMarkSetup {
 			const fxExpr = isNode(fxField) ? fxField : sqlColumn(String(fxField));
 			const q = Query.from(table).select({ fx: fxExpr }).distinct();
 			fetches.push(
-				this.#coordinator.query(q).then((result) => {
+				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
 					const categories = Array.from(result).map((row) => row.fx);
 					if (categories.length > 0) {
 						facetBandScale.addMark(categories, this.#markId);
@@ -1431,7 +1421,7 @@ export class BaseMarkSetup {
 		}
 
 		// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
-		const setupTimeFetch = (axis, field) => {
+		const setupTimeFetch = (axis: string, field: unknown): void => {
 			if (!field) return;
 			const scaleState = this.#chartContext[`${axis}ScaleState`];
 			if (!scaleState?.addDatetimeExtent) return;
@@ -1439,7 +1429,7 @@ export class BaseMarkSetup {
 			// Unwrap AutoBinNode to get the underlying column name
 			// For bins: fetch raw column min/max to establish t0, then actual bin
 			// boundaries from query results will update the extent later
-			const rawField = field.isAutoBinNode ? field.field : field;
+			const rawField = (field as AutoBinNode).isAutoBinNode ? (field as AutoBinNode).field : field;
 
 			// Ensure we have a valid string or SQL node
 			const colExpr = isNode(rawField) ? rawField : sqlColumn(String(rawField));
@@ -1450,7 +1440,7 @@ export class BaseMarkSetup {
 			});
 
 			fetches.push(
-				this.#coordinator.query(q).then((result) => {
+				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
 					const row = Array.from(result)[0];
 					if (row && row.min_time != null && row.max_time != null) {
 						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [row.min_time, row.max_time]);
@@ -1463,11 +1453,9 @@ export class BaseMarkSetup {
 		if (this.actualXScaleType === 'time') {
 			// Check x1 if x is missing (standard pattern for Rect/Rule marks)
 			setupTimeFetch('x', this.#config.select.x || this.#config.select.x1);
-			// setupTimeFetch('x', this.#config.select.x);
 		}
 		if (this.actualYScaleType === 'time') {
 			setupTimeFetch('y', this.#config.select.y || this.#config.select.y1);
-			// setupTimeFetch('y', this.#config.select.y);
 		}
 
 		// Fetch color domain if color scale is set and there's a color field
@@ -1475,8 +1463,8 @@ export class BaseMarkSetup {
 			// Extract field from color config (handles object format { field: "x", scheme: "y" })
 			const colorValue = this.#config.select.color;
 			const colorField =
-				typeof colorValue === 'object' && colorValue.field && !isNode(colorValue)
-					? colorValue.field
+				typeof colorValue === 'object' && (colorValue as any).field && !isNode(colorValue)
+					? (colorValue as any).field
 					: colorValue;
 
 			// Skip if color is an aggregate expression (handled by sidecar query)
@@ -1489,13 +1477,15 @@ export class BaseMarkSetup {
 					const q = Query.from(table).select({ color: colExpr }).distinct();
 
 					fetches.push(
-						this.#coordinator.query(q).then((result) => {
-							const categories = Array.from(result).map((row) => row.color);
-							if (categories.length > 0) {
-								console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
-								this.#colorScaleState.setDomain(categories);
-							}
-						})
+						(this.#coordinator as any)
+							.query(q)
+							.then((result: Iterable<Record<string, unknown>>) => {
+								const categories = Array.from(result).map((row) => row.color);
+								if (categories.length > 0) {
+									console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
+									this.#colorScaleState!.setDomain(categories as any);
+								}
+							})
 					);
 				} else {
 					// Sequential: fetch min/max extent
@@ -1506,16 +1496,18 @@ export class BaseMarkSetup {
 					});
 
 					fetches.push(
-						this.#coordinator.query(q).then((result) => {
-							const row = Array.from(result)[0];
-							if (row && row.min_color != null && row.max_color != null) {
-								console.log(`[BaseMarkSetup] Color domain (sequential):`, [
-									row.min_color,
-									row.max_color
-								]);
-								this.#colorScaleState.setDomain([row.min_color, row.max_color]);
-							}
-						})
+						(this.#coordinator as any)
+							.query(q)
+							.then((result: Iterable<Record<string, unknown>>) => {
+								const row = Array.from(result)[0];
+								if (row && row.min_color != null && row.max_color != null) {
+									console.log(`[BaseMarkSetup] Color domain (sequential):`, [
+										row.min_color,
+										row.max_color
+									]);
+									this.#colorScaleState!.setDomain([row.min_color, row.max_color] as any);
+								}
+							})
 					);
 				}
 			}
@@ -1530,10 +1522,10 @@ export class BaseMarkSetup {
 			});
 
 			fetches.push(
-				this.#coordinator.query(q).then((result) => {
+				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
 					const row = Array.from(result)[0];
 					if (row && row.min_radius != null && row.max_radius != null) {
-						this.#sizeScaleState.setDomain([row.min_radius, row.max_radius]);
+						this.#sizeScaleState!.setDomain([row.min_radius as number, row.max_radius as number]);
 					}
 				})
 			);
@@ -1547,10 +1539,10 @@ export class BaseMarkSetup {
 				.distinct();
 
 			fetches.push(
-				this.#coordinator.query(q).then((result) => {
+				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
 					const categories = Array.from(result).map((row) => row.stroke);
 					if (categories.length > 0) {
-						this.#seriesScaleState.setDomain(categories);
+						this.#seriesScaleState!.setDomain(categories as any);
 					}
 				})
 			);
@@ -1565,7 +1557,7 @@ export class BaseMarkSetup {
 	 * This runs the same aggregation logic as the main query but without filters,
 	 * wrapped in an outer aggregation to get min/max of the results.
 	 */
-	async #fetchGlobalAggregates() {
+	async #fetchGlobalAggregates(): Promise<void> {
 		const { table } = this.#config;
 		if (!this.#coordinator || !table) return;
 
@@ -1595,7 +1587,7 @@ export class BaseMarkSetup {
 			console.log(`📊 [${this.#markId}] Inner query SQL:`, innerQuery.toString());
 
 			// Step 2: Build outer aggregation to get min/max of each channel
-			const outerSelect = {};
+			const outerSelect: Record<string, unknown> = {};
 
 			if (this.#channelsNeedingDataDomain.has('x')) {
 				const select = this.#config.select;
@@ -1637,8 +1629,10 @@ export class BaseMarkSetup {
 			console.log(`📊 [${this.#markId}] Sidecar query SQL:`, sidecarQuery.toString());
 
 			// Step 3: Execute the query
-			const result = await this.#coordinator.query(sidecarQuery);
-			const extents = Array.from(result)[0]; // Should be single row
+			const result = await (this.#coordinator as any).query(sidecarQuery);
+			const extents: Record<string, unknown> = Array.from(
+				result as Iterable<Record<string, unknown>>
+			)[0]; // Should be single row
 
 			console.log(`✅ [${this.#markId}] Sidecar results:`, extents);
 
@@ -1670,7 +1664,7 @@ export class BaseMarkSetup {
 			) {
 				const colorExtent = [extents.min_color, extents.max_color];
 				console.log(`📊 [${this.#markId}] Applying color extent from sidecar:`, colorExtent);
-				this.#colorScaleState?.setDomain(colorExtent);
+				this.#colorScaleState?.setDomain(colorExtent as any);
 			}
 
 			// Mark that global aggregates have been set
@@ -1687,7 +1681,7 @@ export class BaseMarkSetup {
 	 * - Linear scales without data-derived domains: mark ready immediately (domain from fieldInfo)
 	 * - Linear scales WITH data-derived domains: mark ready if sidecar OR data-scan has set domain
 	 */
-	#setScalesReady() {
+	#setScalesReady(): void {
 		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
 			if (!scale) continue;
 
@@ -1697,7 +1691,7 @@ export class BaseMarkSetup {
 			// For categorical scales (band/point) and time scales, mark ready immediately
 			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
 			if (scaleType === 'band' || scaleType === 'point' || scaleType === 'time') {
-				scale.setReady?.();
+				(scale as any).setReady?.();
 				continue;
 			}
 
@@ -1705,7 +1699,7 @@ export class BaseMarkSetup {
 			// OR if domains have been set (either via sidecar query OR data-scan fallback)
 			const domainsReady = this.#globalAggregatesSet || this.#dataDerivedDomainsSet;
 			if (!needsDataDomain || domainsReady) {
-				scale.setReady?.();
+				(scale as any).setReady?.();
 			} else {
 				console.log(`⏳ [${this.#markId}] Deferring ${axis} scale ready - waiting for domain`);
 			}
@@ -1716,7 +1710,7 @@ export class BaseMarkSetup {
 	 * Mark linear scales ready after data-derived domains have been set.
 	 * Called from an effect that watches #dataDerivedDomainsSet.
 	 */
-	#markDeferredScalesReady() {
+	#markDeferredScalesReady(): void {
 		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
 			if (!scale) continue;
 
@@ -1728,9 +1722,9 @@ export class BaseMarkSetup {
 				needsDataDomain &&
 				(scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')
 			) {
-				if (!scale.ready) {
+				if (!(scale as any).ready) {
 					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
-					scale.setReady?.();
+					(scale as any).setReady?.();
 				}
 			}
 		}
@@ -1744,12 +1738,9 @@ export class BaseMarkSetup {
 	 * Update the aggregate axis domain based on current viewport.
 	 * Called when panning (without re-querying data).
 	 * Debounced to avoid excessive updates during active pan/zoom.
-	 *
-	 * @param {string} aggregateAxis - 'x' or 'y' - the axis to update
-	 * @param {Array<number>} viewportDomain - Current viewport domain of the binned axis
 	 */
-	#updateViewportLocalDomain(aggregateAxis, viewportDomain) {
-		clearTimeout(this.#viewportDomainUpdateTimeout);
+	#updateViewportLocalDomain(aggregateAxis: string, viewportDomain: number[]): void {
+		clearTimeout(this.#viewportDomainUpdateTimeout!);
 		this.#viewportDomainUpdateTimeout = setTimeout(() => {
 			if (!this.data) return;
 
@@ -1763,16 +1754,16 @@ export class BaseMarkSetup {
 			const channels = aggregateAxis === 'x' ? ['x', 'x1', 'x2'] : ['y', 'y1', 'y2'];
 
 			// Compute extent with viewport filtering
-			const filterOptions = {
+			const filterOptions: ExtentFilterOptions = {
 				filterAxis: binnedAxis,
-				filterDomain: viewportDomain
+				filterDomain: viewportDomain as [number, number]
 			};
 
 			let extent = this.#computeExtentFromData(this.data, channels, filterOptions);
 			if (!extent) return;
 
 			// Apply zero baseline if configured
-			if (this.#config.zeroBaseline?.[aggregateAxis]) {
+			if (this.#config.zeroBaseline?.[aggregateAxis as 'x' | 'y']) {
 				extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
 			}
 
@@ -1791,12 +1782,9 @@ export class BaseMarkSetup {
 
 	/**
 	 * Check if domain change is significant enough to trigger re-binning.
-	 * @param {Array<number>} currentDomain - Current domain [min, max]
-	 * @param {string} axis - 'x' or 'y'
-	 * @returns {boolean}
 	 */
-	#shouldReBin(currentDomain, axis) {
-		const lastDomain = this.#lastBinningDomain[axis];
+	#shouldReBin(currentDomain: number[], axis: string): boolean {
+		const lastDomain = this.#lastBinningDomain[axis as 'x' | 'y'];
 		if (!lastDomain) return false; // First run, no baseline
 		if (!currentDomain || currentDomain.length !== 2) return false;
 
@@ -1813,21 +1801,19 @@ export class BaseMarkSetup {
 
 	/**
 	 * Schedule a re-bin operation (debounced).
-	 * @param {string} axis - 'x' or 'y'
-	 * @param {Array<number>} domain - New domain to bin with
 	 */
-	#scheduleReBin(axis, domain) {
-		clearTimeout(this.#rebinTimeout);
+	#scheduleReBin(axis: string, domain: number[]): void {
+		clearTimeout(this.#rebinTimeout!);
 		this.#rebinTimeout = setTimeout(() => {
 			console.log(`🔄 [${this.#markId}] Re-binning ${axis} axis with domain:`, domain);
-			this.#lastBinningDomain[axis] = [...domain];
+			this.#lastBinningDomain[axis as 'x' | 'y'] = [...domain];
 
 			// Skip updating the binned axis domain (user zoomed there intentionally)
 			// But DO update the aggregate axis domain (counts changed)
 			this.#skipDomainUpdateForAxis = axis;
 
 			// Track current dataVersion - we'll wait for it to increment before updating domains
-			this.#rebinPendingDataVersion = this.client?.dataVersion;
+			this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
 
 			// Reset data-derived domain flag so aggregate extent updates from new data
 			this.#dataDerivedDomainsSet = false;
@@ -1844,15 +1830,15 @@ export class BaseMarkSetup {
 	// TOOLTIP WRITE-BACK
 	// ===========================================================================
 
-	get tooltipTableName() {
+	get tooltipTableName(): string {
 		return this.#tooltipTableName;
 	}
 
-	get tooltipEnabled() {
+	get tooltipEnabled(): boolean {
 		return this.#tooltipEnabled;
 	}
 
-	async #writeTooltipTable(data) {
+	async #writeTooltipTable(data: DataAccessor): Promise<void> {
 		const tableName = this.#tooltipTableName;
 
 		try {
@@ -1866,10 +1852,10 @@ export class BaseMarkSetup {
 				// Get current crossfilter predicate (original column names, not preagg).
 				// selection.predicate(client) returns an array of SQL expression nodes,
 				// or undefined if client is the active cross-filter source (skip self).
-				let filter = [];
+				let filter: unknown[] = [];
 				const selection = this.#config.selection;
 				if (selection && this.client) {
-					const predicate = selection.predicate(this.client);
+					const predicate = (selection as any).predicate(this.client);
 					if (Array.isArray(predicate)) filter = predicate;
 				}
 
@@ -1895,7 +1881,7 @@ export class BaseMarkSetup {
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
 				}
 
-				await this.#coordinator.exec([
+				await (this.#coordinator as any).exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
@@ -1905,25 +1891,26 @@ export class BaseMarkSetup {
 				const columns = data.columnNames.filter((c) => !c.startsWith('__dplot_'));
 				if (columns.length === 0) return;
 
-				const columnArrays = {};
+				const columnArrays: Record<string, ArrayLike<unknown>> = {};
 				for (const col of columns) {
-					columnArrays[col] = data.getColumn(col);
+					const colData = data.getColumn(col);
+					if (colData) columnArrays[col] = colData;
 				}
 
 				// Infer schema from first row
 				const schemaDef = columns
 					.map((col) => {
-						const sample = columnArrays[col][0];
+						const sample = columnArrays[col]?.[0];
 						const sqlType = typeof sample === 'number' ? 'DOUBLE' : 'VARCHAR';
 						return `"${col}" ${sqlType}`;
 					})
 					.join(', ');
 
 				// Build VALUES rows
-				const valueRows = [];
+				const valueRows: string[] = [];
 				for (let i = 0; i < data.length; i++) {
 					const vals = columns.map((col) => {
-						const v = columnArrays[col][i];
+						const v = columnArrays[col]?.[i];
 						if (v == null || (typeof v === 'number' && isNaN(v))) return 'NULL';
 						if (typeof v === 'number') return v.toString();
 						return `'${String(v).replace(/'/g, "''")}'`;
@@ -1931,7 +1918,7 @@ export class BaseMarkSetup {
 					valueRows.push(`(${vals.join(', ')})`);
 				}
 
-				await this.#coordinator.exec([
+				await (this.#coordinator as any).exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
@@ -1942,16 +1929,18 @@ export class BaseMarkSetup {
 		}
 	}
 
-	destroy() {
+	destroy(): void {
 		console.log(`💥 BaseMarkSetup destroying for ${this.#markId}`);
 
-		clearTimeout(this.#rebinTimeout);
-		clearTimeout(this.#viewportDomainUpdateTimeout);
-		clearTimeout(this.#tooltipWriteTimeout);
+		clearTimeout(this.#rebinTimeout!);
+		clearTimeout(this.#viewportDomainUpdateTimeout!);
+		clearTimeout(this.#tooltipWriteTimeout!);
 
 		// Drop tooltip temp table
 		if (this.#tooltipEnabled && this.#coordinator) {
-			this.#coordinator.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
+			(this.#coordinator as any)
+				.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`)
+				.catch(() => {});
 		}
 
 		// Unregister client from chart context
@@ -1961,7 +1950,7 @@ export class BaseMarkSetup {
 		this.#chartContext.unregisterScaleType('x', this.#markId);
 		this.#chartContext.unregisterScaleType('y', this.#markId);
 
-		Object.values(this.#scaleMap).forEach((scale) => scale?.removeMark?.(this.#markId));
+		Object.values(this.#scaleMap).forEach((scale) => (scale as any)?.removeMark?.(this.#markId));
 
 		if (this.client) {
 			this.client.destroy();

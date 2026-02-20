@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
+	import { BaseMarkSetup } from './BaseMarkSetup.svelte';
 	import { Dots } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
