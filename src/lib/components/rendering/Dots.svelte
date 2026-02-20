@@ -1,6 +1,6 @@
 <script>
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 
 	const dotRendererDefinition = {
@@ -281,11 +281,17 @@
 
 	async function initializeDots() {
 		try {
-			renderer = new BaseGPURenderer(effectiveMarkType, webGPUContext, gpuCoordinator, chartContext, {
-				zIndex,
-				xScaleType: chartContext.scaleTypes?.x || 'linear',
-				yScaleType: chartContext.scaleTypes?.y || 'linear'
-			});
+			renderer = new BaseGPURenderer(
+				effectiveMarkType,
+				webGPUContext,
+				gpuCoordinator,
+				chartContext,
+				{
+					zIndex,
+					xScaleType: chartContext.scaleTypes?.x || 'linear',
+					yScaleType: chartContext.scaleTypes?.y || 'linear'
+				}
+			);
 
 			await renderer.initialize({
 				markShaderCode: dotsShaderCode,

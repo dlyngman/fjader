@@ -1,21 +1,55 @@
-// src/lib/gpu/ScaleTemplateSystem.js
+// src/lib/gpu/ScaleTemplateSystem.ts
 
 /**
  * Template-based shader generation for scale combinations
  * Supports linear, band, and color scales
  */
 
+interface BufferLayout {
+	size: number;
+	fields: string[];
+}
+
+interface ScaleFragment {
+	declaration: () => string;
+	functionCall: (value: string, suffix: string) => string;
+	implementation: (suffix: string, axis: string) => string;
+	bufferLayout: BufferLayout;
+}
+
+interface AxisDefinition {
+	concept: string;
+	channels: string[];
+}
+
+interface RendererDefinition {
+	x?: AxisDefinition;
+	y?: AxisDefinition;
+	placeholders?: { x?: string; y?: string };
+}
+
+interface SemanticLogicDef {
+	inputs: number;
+	generate: (axis: string, ...channels: string[]) => string;
+}
+
+interface ShaderResult {
+	shaderCode: string;
+	bufferLayouts: Record<string, BufferLayout & { type: string }>;
+	cacheKey: string;
+}
+
 import {
 	COLOR_SCALE_STRUCTS,
 	COLOR_SCALE_BINDINGS,
 	COLOR_SCALE_FUNCTIONS
-} from './ColorScaleShaderLib.js';
+} from './ColorScaleShaderLib';
 
 import {
 	SIZE_SCALE_STRUCTS,
 	SIZE_SCALE_BINDINGS,
 	SIZE_SCALE_FUNCTIONS
-} from './SizeScaleShaderLib.js';
+} from './SizeScaleShaderLib';
 
 /**
  * Scale fragment definitions
@@ -24,7 +58,7 @@ import {
 // Time scales use identical GPU math to linear (data is float offsets from t0)
 const TIME_SCALE_ALIAS = 'linear';
 
-const SCALE_FRAGMENTS = {
+const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 	linear: {
 		declaration: () => {
 			return `
@@ -138,7 +172,7 @@ SCALE_FRAGMENTS.time = SCALE_FRAGMENTS[TIME_SCALE_ALIAS];
  * - position: scaledX or scaledY
  * - extent: scaledX0, scaledX1 or scaledY0, scaledY1
  */
-const SEMANTIC_LOGIC_MAP = {
+const SEMANTIC_LOGIC_MAP: Record<string, Record<string, SemanticLogicDef>> = {
 	position: {
 		linear: {
 			inputs: 1,
@@ -195,10 +229,10 @@ const SEMANTIC_LOGIC_MAP = {
  * Main template system class
  */
 export class ScaleTemplateSystem {
-	constructor() {
-		this.shaderCache = new Map(); // Cache generated shaders by combination key
-		this.bufferLayoutCache = new Map(); // Cache buffer layouts by combination
-	}
+	shaderCache = new Map<string, ShaderResult>();
+	bufferLayoutCache = new Map<string, unknown>();
+
+	constructor() {}
 
 	/**
 	 * Generate shader code for a specific scale combination
@@ -208,7 +242,12 @@ export class ScaleTemplateSystem {
 	 * @param {string} [markType] - Mark type identifier (dots, rects, rule, etc.)
 	 * @returns {Object} { shaderCode: string, bufferLayouts: Object }
 	 */
-	generateShader(scaleTypes, markShaderCode, rendererDefinition, markType = 'unknown') {
+	generateShader(
+		scaleTypes: { x: string; y: string },
+		markShaderCode: string,
+		rendererDefinition: RendererDefinition,
+		markType: string = 'unknown'
+	): ShaderResult {
 		if (!rendererDefinition) {
 			throw new Error(
 				'generateShader requires a rendererDefinition. ' +
@@ -221,7 +260,7 @@ export class ScaleTemplateSystem {
 
 		// Return cached version if available
 		if (this.shaderCache.has(cacheKey)) {
-			return this.shaderCache.get(cacheKey);
+			return this.shaderCache.get(cacheKey)!;
 		}
 
 		// Generate new shader
@@ -232,7 +271,11 @@ export class ScaleTemplateSystem {
 		return result;
 	}
 
-	_buildShader(scaleTypes, markShaderCode, rendererDefinition) {
+	_buildShader(
+		scaleTypes: { x: string; y: string },
+		markShaderCode: string,
+		rendererDefinition: RendererDefinition
+	): ShaderResult {
 		// Validate scale types exist
 		this._validateScaleTypes(scaleTypes);
 
@@ -341,7 +384,7 @@ export class ScaleTemplateSystem {
 	 * Build declarations section for scale uniforms
 	 * @private
 	 */
-	_buildDeclarations(xFragment, yFragment) {
+	_buildDeclarations(xFragment: ScaleFragment, yFragment: ScaleFragment): string {
 		// We can just use the one from xFragment since they are identical.
 		const structDef = xFragment.declaration();
 
@@ -358,7 +401,7 @@ export class ScaleTemplateSystem {
 	 * Build band scale helper functions (only if needed)
 	 * @private
 	 */
-	_buildBandHelpers(scaleTypes) {
+	_buildBandHelpers(scaleTypes: { x: string; y: string }): string {
 		const needsBandHelpers = scaleTypes.x === 'band' || scaleTypes.y === 'band';
 
 		if (!needsBandHelpers) {
@@ -431,7 +474,11 @@ export class ScaleTemplateSystem {
 	 * @returns {string} Processed shader code with placeholders replaced
 	 * @private
 	 */
-	_processMarkShader(markShaderCode, scaleTypes, rendererDefinition) {
+	_processMarkShader(
+		markShaderCode: string,
+		scaleTypes: { x: string; y: string },
+		rendererDefinition: RendererDefinition
+	): string {
 		let processedCode = markShaderCode;
 
 		for (const axis of ['x', 'y']) {
@@ -486,7 +533,11 @@ export class ScaleTemplateSystem {
 	 * Only generates the implementations needed for this scale combination
 	 * @private
 	 */
-	_buildImplementations(scaleTypes, xFragment, yFragment) {
+	_buildImplementations(
+		scaleTypes: { x: string; y: string },
+		xFragment: ScaleFragment,
+		yFragment: ScaleFragment
+	): string {
 		const implementations = [];
 
 		// Generate X axis implementation
@@ -513,7 +564,12 @@ export class ScaleTemplateSystem {
 	 * Conditionally generates only the functions needed by the renderer definition.
 	 * @private
 	 */
-	_buildScaleFunctions(scaleTypes, xFragment, yFragment, rendererDefinition) {
+	_buildScaleFunctions(
+		scaleTypes: { x: string; y: string },
+		xFragment: ScaleFragment,
+		yFragment: ScaleFragment,
+		rendererDefinition: RendererDefinition
+	): string {
 		const functions = [];
 
 		// Only generate scaleX if the renderer uses X axis
@@ -556,7 +612,7 @@ export class ScaleTemplateSystem {
 	 * @param {Object} rendererDefinition - Renderer definition to check if helpers are needed
 	 * @private
 	 */
-	_buildProjectHelpers(rendererDefinition) {
+	_buildProjectHelpers(rendererDefinition: RendererDefinition): string {
 		// Only include if both X and Y axes are defined (connected marks need both)
 		if (!rendererDefinition?.x || !rendererDefinition?.y) {
 			return '';
@@ -584,7 +640,11 @@ export class ScaleTemplateSystem {
 	 * Build buffer layout specifications for GPUCoordinator
 	 * @private
 	 */
-	_buildBufferLayouts(scaleTypes, xFragment, yFragment) {
+	_buildBufferLayouts(
+		scaleTypes: { x: string; y: string },
+		xFragment: ScaleFragment,
+		yFragment: ScaleFragment
+	): Record<string, BufferLayout & { type: string }> {
 		const layouts = {
 			x: {
 				type: scaleTypes.x,
@@ -603,7 +663,7 @@ export class ScaleTemplateSystem {
 	 * Validate that scale types are supported
 	 * @private
 	 */
-	_validateScaleTypes(scaleTypes) {
+	_validateScaleTypes(scaleTypes: { x: string; y: string }): void {
 		const supportedTypes = Object.keys(SCALE_FRAGMENTS);
 
 		if (!supportedTypes.includes(scaleTypes.x)) {
@@ -622,14 +682,14 @@ export class ScaleTemplateSystem {
 	/**
 	 * Get supported scale types
 	 */
-	getSupportedScaleTypes() {
+	getSupportedScaleTypes(): string[] {
 		return Object.keys(SCALE_FRAGMENTS);
 	}
 
 	/**
 	 * Clear shader cache (useful for development)
 	 */
-	clearCache() {
+	clearCache(): void {
 		this.shaderCache.clear();
 		this.bufferLayoutCache.clear();
 	}

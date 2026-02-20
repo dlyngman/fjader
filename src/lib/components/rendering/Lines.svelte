@@ -1,8 +1,8 @@
 <script>
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
-	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib.js';
+	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
 
 	// Lines uses projectToPixels() directly, so we don't need placeholder replacement.
 	// We still define x/y so that scaleX/scaleY functions are generated.
@@ -340,8 +340,7 @@
 			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated && facetData)
-			renderer.writeAttribute(BINDINGS.FACET, facetData);
+		if (renderer?.resourcesCreated && facetData) renderer.writeAttribute(BINDINGS.FACET, facetData);
 	});
 
 	// Write uniforms when configuration changes

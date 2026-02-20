@@ -1,6 +1,100 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
-import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
+import { scaleTemplateSystem } from './ScaleTemplateSystem';
+
+// =============================================================================
+// TYPE INTERFACES
+// =============================================================================
+
+interface ChartConfig {
+	chartId: string;
+	canvas: HTMLCanvasElement;
+	zIndex: number;
+	facetIndex: number;
+	visible: boolean;
+	context: GPUCanvasContext;
+	contextConfigured: boolean;
+	layers: Map<string, LayerConfig>;
+	renderPlan: LayerConfig[];
+	needsPlanRebuild: boolean;
+	xScaleId: string | null;
+	yScaleId: string | null;
+	frameUniformsBuffer: GPUBuffer | null;
+	perFrameBindGroup: GPUBindGroup | null;
+	renderPassDescriptor: GPURenderPassDescriptor | null;
+	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
+	_lastRenderFrame: number;
+	_isDirty: boolean;
+}
+
+interface LayerConfig {
+	id: string;
+	draw: (passEncoder: GPURenderPassEncoder) => void;
+	markType: string;
+	renderer: { pipeline: GPURenderPipeline | null; perDataBindGroup: GPUBindGroup | null };
+	componentId?: string;
+	zIndex: number;
+	cachedPipeline?: GPURenderPipeline | null;
+}
+
+interface DataBindingEntry {
+	binding: number;
+	visibility?: number;
+	type?: string;
+}
+
+interface RendererDefinition {
+	x?: { concept: string; channels: string[] };
+	y?: { concept: string; channels: string[] };
+	placeholders?: { x?: string; y?: string };
+}
+
+interface ScaleInstance {
+	id: string;
+	constructor: { name: string };
+	gpuState?: { domainMin: number; domainMax: number; domainScale: number };
+	getConfig?: () => { categoryCount: number; paddingInner: number; paddingOuter: number };
+	step: () => void;
+	updateRenderState: (dt: number) => void;
+	isAtRest: () => boolean;
+	_markAtRest: () => void;
+	_applyInput?: () => void;
+	_affectedChartsArray?: string[];
+}
+
+interface ScaleArrayEntry {
+	instance: ScaleInstance;
+	index: number;
+}
+
+type ComputeWorkFn = (commandEncoder: GPUCommandEncoder, scaleBindGroup: GPUBindGroup) => void;
+type FrameCallback = (isAnimating: boolean) => void;
+
+interface GPUCoordinatorConfig {
+	msaaSampleCount?: number;
+}
+
+interface ChartRegistrationConfig {
+	zIndex?: number;
+	facetIndex?: number;
+}
+
+interface ChartRegistrationResult {
+	setContextReady: () => void;
+	setVisible: (visible: boolean) => void;
+	invalidate: () => void;
+	remove: () => void;
+}
+
+interface LayerRegistrationResult {
+	remove: () => void;
+}
+
+interface PipelineResult {
+	pipeline: GPURenderPipeline;
+	frameLayout: GPUBindGroupLayout;
+	dataLayout: GPUBindGroupLayout;
+}
 
 // =============================================================================
 // HELPER CLASSES
@@ -12,15 +106,15 @@ import { scaleTemplateSystem } from './ScaleTemplateSystem.js';
  */
 class NonNegativeRollingAverage {
 	#total = 0;
-	#samples = [];
+	#samples: number[] = [];
 	#cursor = 0;
 	#numSamples;
 
-	constructor(numSamples = 120) {
+	constructor(numSamples: number = 120) {
 		this.#numSamples = numSamples;
 	}
 
-	addSample(v) {
+	addSample(v: number): void {
 		if (!Number.isNaN(v) && Number.isFinite(v) && v >= 0) {
 			this.#total += v - (this.#samples[this.#cursor] || 0);
 			this.#samples[this.#cursor] = v;
@@ -28,7 +122,7 @@ class NonNegativeRollingAverage {
 		}
 	}
 
-	get() {
+	get(): number {
 		return this.#samples.length > 0 ? this.#total / this.#samples.length : 0;
 	}
 }
@@ -38,10 +132,10 @@ class NonNegativeRollingAverage {
  * Rebuilds indices when scale topology changes.
  */
 class ScaleIndexManager {
-	#scaleIds = [];
-	#scaleIdToIndex = new Map();
+	#scaleIds: string[] = [];
+	#scaleIdToIndex = new Map<string, number>();
 
-	rebuild(allCurrentScaleIds) {
+	rebuild(allCurrentScaleIds: Iterable<string>): number {
 		this.#scaleIds = [...allCurrentScaleIds];
 		this.#scaleIdToIndex.clear();
 
@@ -52,15 +146,15 @@ class ScaleIndexManager {
 		return this.#scaleIds.length;
 	}
 
-	getIndex(scaleId) {
+	getIndex(scaleId: string): number | undefined {
 		return this.#scaleIdToIndex.get(scaleId);
 	}
 
-	getCount() {
+	getCount(): number {
 		return this.#scaleIds.length;
 	}
 
-	getAllScaleIds() {
+	getAllScaleIds(): string[] {
 		return [...this.#scaleIds];
 	}
 }
@@ -84,67 +178,73 @@ export class GPUCoordinator {
 	// =========================================================================
 	// CORE WEBGPU RESOURCES (Raw fields, no $state overhead)
 	// =========================================================================
-	#device = null;
-	#presentationFormat = null;
+	#device: GPUDevice | null = null;
+	#presentationFormat: GPUTextureFormat | null = null;
 	#initialized = $state(false);
 
 	// Promise-based initialization (eliminates polling in WebGPUCanvas)
-	#readyPromise;
-	#resolveReady;
+	#readyPromise: Promise<boolean>;
+	#resolveReady!: (value: boolean) => void;
 
 	// Timestamp query resources (optional, for GPU timing)
 	#canTimestamp = false;
-	#querySet = null;
-	#resolveBuffer = null;
-	#resultBuffer = null;
+	#querySet: GPUQuerySet | null = null;
+	#resolveBuffer: GPUBuffer | null = null;
+	#resultBuffer: GPUBuffer | null = null;
 
 	// =========================================================================
 	// RESOURCE REGISTRY (Renderer → Resources tracking)
 	// =========================================================================
 	// Maps rendererId → Map<resourceKey, {type, key}>
 	// This is the single source of truth for "who owns what"
-	#rendererRegistry = new Map();
+	#rendererRegistry = new Map<string, Map<string, { type: string; key: string }>>();
 
 	// =========================================================================
 	// SHARED RESOURCES (Reference Counted)
 	// =========================================================================
 	#sharedResources = {
-		pipelines: new Map(), // key -> { pipeline, refCount }
-		shaderModules: new Map(), // key -> { module, refCount }
-		bindGroupLayouts: new Map() // key -> { layout, refCount }
+		pipelines: new Map<
+			string,
+			{ pipeline: GPURenderPipeline; refCount: number; createdAt: number }
+		>(), // key -> { pipeline, refCount }
+		shaderModules: new Map<
+			string,
+			{ module: GPUShaderModule; refCount: number; createdAt: number }
+		>(), // key -> { module, refCount }
+		bindGroupLayouts: new Map<string, { layout: GPUBindGroupLayout; refCount: number }>() // key -> { layout, refCount }
 	};
 
 	// =========================================================================
 	// CHART MANAGEMENT
 	// =========================================================================
-	#registeredCharts = new Map(); // chartId -> chartConfig
+	#registeredCharts = new Map<string, ChartConfig>(); // chartId -> chartConfig
 	// #msaaCache = new Map(); // chartId -> { texture, view }
-	#dirtyChartsArray = [];
+	#dirtyChartsArray: ChartConfig[] = [];
 	#msaaSampleCount = 1;
 
 	// =========================================================================
 	// ANIMATION SYSTEM
 	// =========================================================================
-	#animationLoop = null;
-	#animatedScales = new Set(); // Set for O(1) membership check
-	#animatedScalesArray = []; // Array for O(1) iteration (no allocation)
-	#scaleRegistry = null;
+	#animationLoop: AnimationLoop | null = null;
+	#animatedScales = new Set<ScaleInstance>(); // Set for O(1) membership check
+	#animatedScalesArray: ScaleInstance[] = []; // Array for O(1) iteration (no allocation)
+	#scaleRegistry: any = null;
 
 	// =========================================================================
 	// HOVER STATE (Keep loop warm while any chart is hovered)
 	// =========================================================================
-	#hoveredCharts = new Set();
+	#hoveredCharts = new Set<string>();
 
 	// =========================================================================
 	// PER-FRAME CALLBACKS (for tooltip scheduling, etc.)
 	// =========================================================================
-	#frameCallbacks = [];
+	#frameCallbacks: FrameCallback[] = [];
 	#isAnimating = false; // True when scales are actively animating (pan/zoom)
 
 	// =========================================================================
 	// PRE-RENDER COMPUTE WORK (M4 decimation, etc.)
 	// =========================================================================
-	#computeWork = new Map(); // key -> computeFn(commandEncoder, scaleBindGroup)
+	#computeWork = new Map<string, ComputeWorkFn>(); // key -> computeFn(commandEncoder, scaleBindGroup)
 
 	// =========================================================================
 	// SCALE SSBO SYSTEM
@@ -153,14 +253,14 @@ export class GPUCoordinator {
 	#maxScaleSlots = 256;
 	#SSBO_SLOT_COUNT = 16;
 
-	#globalScaleLayout = null;
-	#globalScaleSSBO = null;
-	#slotByteSize = null;
-	#globalScaleBindGroups = [];
-	#cpuScaleBuffer = null; // Reusable CPU buffer for scale data
+	#globalScaleLayout: GPUBindGroupLayout | null = null;
+	#globalScaleSSBO: GPUBuffer | null = null;
+	#slotByteSize: number | null = null;
+	#globalScaleBindGroups: GPUBindGroup[] = [];
+	#cpuScaleBuffer: Float32Array | null = null; // Reusable CPU buffer for scale data
 
-	#scaleIdToInstance = new Map(); // scaleId -> scale instance
-	#scaleArray = []; // Flat array for hot loop: [{instance, index}]
+	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
+	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
 
 	#frameId = 0;
 
@@ -168,12 +268,12 @@ export class GPUCoordinator {
 	// COLOR BUFFER DECLARATIONS
 	// =========================================================================
 	// Color scale buffers (group 2, bindings 1-3)
-	#colorConfigBuffer = null; // 64 configs × 32 bytes = 2KB
-	#colorRampBuffer = null; // 64 ramps × 256 colors × 16 bytes = 256KB
-	#colorPaletteBuffer = null; // 64 palettes × 32 colors × 16 bytes = 32KB
+	#colorConfigBuffer: GPUBuffer | null = null; // 64 configs × 32 bytes = 2KB
+	#colorRampBuffer: GPUBuffer | null = null; // 64 ramps × 256 colors × 16 bytes = 256KB
+	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
 	// Size scale buffer (group 2, binding 4)
-	#sizeConfigBuffer = null; // 64 configs × 16 bytes = 1KB
+	#sizeConfigBuffer: GPUBuffer | null = null; // 64 configs × 16 bytes = 1KB
 	#maxSizeSlots = 64;
 
 	// Constants
@@ -185,24 +285,24 @@ export class GPUCoordinator {
 	// LAYOUT CACHES
 	// =========================================================================
 	#templateSystem = scaleTemplateSystem;
-	#frameLayout = null;
-	#dataLayouts = new Map(); // markType-config -> GPUBindGroupLayout
+	#frameLayout: GPUBindGroupLayout | null = null;
+	#dataLayouts = new Map<string, GPUBindGroupLayout>(); // markType-config -> GPUBindGroupLayout
 
 	// =========================================================================
 	// PENDING OPERATIONS
 	// =========================================================================
-	#pendingScaleMappings = new Map(); // chartId -> { xScaleId, yScaleId }
-	#pendingFrameUpdates = new Map(); // chartId -> update params
-	#pendingLayers = new Map(); // chartId -> [{ layerConfig, layerId }]
+	#pendingScaleMappings = new Map<string, { xScaleId: string; yScaleId: string }>(); // chartId -> { xScaleId, yScaleId }
+	#pendingFrameUpdates = new Map<string, { timestamp: number }>(); // chartId -> update params
+	#pendingLayers = new Map<string, LayerConfig[]>(); // chartId -> [{ layerConfig, layerId }]
 	#topologyUpdateScheduled = false;
 
 	// =========================================================================
 	// RENDER LOOP STATE (Zero-Allocation)
 	// =========================================================================
-	#chartsToRenderArray = []; // Reused array for charts to render
-	#acquiredTextures = []; // Reused array for texture acquisition
+	#chartsToRenderArray: ChartConfig[] = []; // Reused array for charts to render
+	#acquiredTextures: { chartConfig: ChartConfig; texture: GPUTexture; view: GPUTextureView }[] = []; // Reused array for texture acquisition
 	#encoderDescriptor = { label: 'frame-encoder' };
-	#submitArray = [null]; // Reused array for queue.submit()
+	#submitArray: [GPUCommandBuffer | null] = [null]; // Reused array for queue.submit()
 	#framesInFlight = 0;
 	#maxFramesInFlight = 2; // Double-buffering: allow 2 frames in flight
 
@@ -215,13 +315,13 @@ export class GPUCoordinator {
 	timings = $state({ cpu: '0', fps: '0', gpu: '0' });
 
 	// Promise cache for pipeline creation (prevents "thundering herd")
-	#pipelineCreationPromises = new Map();
+	#pipelineCreationPromises = new Map<string, Promise<GPURenderPipeline>>();
 
 	// =========================================================================
 	// CONSTRUCTOR
 	// =========================================================================
 
-	constructor(config = {}) {
+	constructor(config: GPUCoordinatorConfig = {}) {
 		this.#msaaSampleCount = config.msaaSampleCount ?? 4;
 		this.#scaleIndexManager = new ScaleIndexManager();
 
@@ -242,7 +342,7 @@ export class GPUCoordinator {
 	// INITIALIZATION
 	// =========================================================================
 
-	async initialize() {
+	async initialize(): Promise<void> {
 		if (this.#initialized) return;
 
 		try {
@@ -260,7 +360,7 @@ export class GPUCoordinator {
 		}
 	}
 
-	async #initWebGPU() {
+	async #initWebGPU(): Promise<void> {
 		if (typeof window === 'undefined' || typeof navigator === 'undefined') {
 			throw new Error('WebGPU initialization attempted server-side');
 		}
@@ -345,8 +445,8 @@ export class GPUCoordinator {
 	// 	}
 	// }
 
-	async #initializeScaleBindGroupLayouts() {
-		this.#globalScaleLayout = this.#device.createBindGroupLayout({
+	async #initializeScaleBindGroupLayouts(): Promise<void> {
+		this.#globalScaleLayout = this.#device!.createBindGroupLayout({
 			label: 'global-scale-ssbo-layout',
 			entries: [
 				{
@@ -389,8 +489,8 @@ export class GPUCoordinator {
 
 		// Pre-create bind groups for each slot
 		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-			const slotOffset = slot * this.#slotByteSize;
-			this.#globalScaleBindGroups[slot] = this.#device.createBindGroup({
+			const slotOffset = slot * this.#slotByteSize!;
+			this.#globalScaleBindGroups[slot] = this.#device!.createBindGroup({
 				label: `global-scale-bind-group-slot-${slot}`,
 				layout: this.#globalScaleLayout,
 				entries: [
@@ -398,37 +498,37 @@ export class GPUCoordinator {
 						// Coordinate scales - uses slot offset
 						binding: 0,
 						resource: {
-							buffer: this.#globalScaleSSBO,
+							buffer: this.#globalScaleSSBO!,
 							offset: slotOffset,
-							size: this.#slotByteSize
+							size: this.#slotByteSize!
 						}
 					},
 					{
 						// Color configs - full buffer, no offset
 						binding: 1,
 						resource: {
-							buffer: this.#colorConfigBuffer
+							buffer: this.#colorConfigBuffer!
 						}
 					},
 					{
 						// Color ramps - full buffer, no offset
 						binding: 2,
 						resource: {
-							buffer: this.#colorRampBuffer
+							buffer: this.#colorRampBuffer!
 						}
 					},
 					{
 						// Ordinal palettes - full buffer, no offset
 						binding: 3,
 						resource: {
-							buffer: this.#colorPaletteBuffer
+							buffer: this.#colorPaletteBuffer!
 						}
 					},
 					{
 						// Size configs - full buffer, no offset
 						binding: 4,
 						resource: {
-							buffer: this.#sizeConfigBuffer
+							buffer: this.#sizeConfigBuffer!
 						}
 					}
 				]
@@ -436,12 +536,12 @@ export class GPUCoordinator {
 		}
 	}
 
-	#createGlobalScaleSSBO() {
+	#createGlobalScaleSSBO(): void {
 		const scaleParamSize = 16; // 4 floats * 4 bytes
 		this.#slotByteSize = this.#maxScaleSlots * scaleParamSize;
 		const totalSSBOSize = this.#slotByteSize * this.#SSBO_SLOT_COUNT;
 
-		this.#globalScaleSSBO = this.#device.createBuffer({
+		this.#globalScaleSSBO = this.#device!.createBuffer({
 			size: totalSSBOSize,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			label: 'global-scale-ssbo-ring'
@@ -451,8 +551,8 @@ export class GPUCoordinator {
 		this.#cpuScaleBuffer = new Float32Array(this.#slotByteSize / 4);
 	}
 
-	#createColorScaleBuffers() {
-		const device = this.#device;
+	#createColorScaleBuffers(): void {
+		const device = this.#device!;
 
 		// ColorConfig buffer: 64 slots × 32 bytes each
 		this.#colorConfigBuffer = device.createBuffer({
@@ -487,7 +587,7 @@ export class GPUCoordinator {
 	 * Fill CPU buffer with current scale GPU state.
 	 * Zero-allocation hot path.
 	 */
-	#fillAllScales(view) {
+	#fillAllScales(view: Float32Array): void {
 		const len = this.#scaleArray.length;
 		for (let i = 0; i < len; i++) {
 			const item = this.#scaleArray[i];
@@ -498,7 +598,7 @@ export class GPUCoordinator {
 
 			if (scaleTypeName === 'BandScaleState') {
 				// BAND SCALE: Write configuration
-				const config = scale.getConfig();
+				const config = scale.getConfig!();
 
 				view[off] = config.categoryCount;
 				view[off + 1] = config.paddingInner;
@@ -506,7 +606,7 @@ export class GPUCoordinator {
 				view[off + 3] = 0; // padding (unused)
 			} else {
 				// LINEAR SCALE: Write domain state
-				const s = scale.gpuState;
+				const s = scale.gpuState!;
 
 				view[off] = s.domainMin;
 				view[off + 1] = s.domainMax;
@@ -524,7 +624,7 @@ export class GPUCoordinator {
 	 * Physics step - called at fixed rate (360Hz).
 	 * Steps all animated scales.
 	 */
-	#physicsStep = () => {
+	#physicsStep = (): void => {
 		const len = this.#animatedScalesArray.length;
 		for (let i = 0; i < len; i++) {
 			this.#animatedScalesArray[i].step();
@@ -536,7 +636,7 @@ export class GPUCoordinator {
 	 * Updates render state and triggers GPU render.
 	 */
 
-	#renderFrame = (extrapolationDt) => {
+	#renderFrame = (extrapolationDt: number): void => {
 		// GPU back-pressure: skip render if too many frames are queued
 		if (this.#framesInFlight >= this.#maxFramesInFlight) {
 			return;
@@ -604,7 +704,7 @@ export class GPUCoordinator {
 				scale._markAtRest();
 				// Swap and pop removal (O(1))
 				this.#animatedScales.delete(scale);
-				const last = this.#animatedScalesArray.pop();
+				const last = this.#animatedScalesArray.pop()!;
 				if (i < this.#animatedScalesArray.length) {
 					this.#animatedScalesArray[i] = last;
 				}
@@ -627,7 +727,7 @@ export class GPUCoordinator {
 	/**
 	 * Idle check - return true if animation should stop.
 	 */
-	#idleCheck = () => {
+	#idleCheck = (): boolean => {
 		return (
 			this.#animatedScales.size === 0 &&
 			this.#dirtyChartsArray.length === 0 &&
@@ -639,7 +739,7 @@ export class GPUCoordinator {
 	// RENDER PIPELINE
 	// =========================================================================
 
-	#coordinatedRender(chartsNeedingRender) {
+	#coordinatedRender(chartsNeedingRender: ChartConfig[]): void {
 		const slot = this.#frameId % this.#SSBO_SLOT_COUNT;
 
 		// PHASE 1: EARLY TEXTURE ACQUISITION
@@ -654,19 +754,19 @@ export class GPUCoordinator {
 		}
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
-		this.#fillAllScales(this.#cpuScaleBuffer);
+		this.#fillAllScales(this.#cpuScaleBuffer!);
 
-		const dstOffset = slot * this.#slotByteSize;
-		this.#device.queue.writeBuffer(
-			this.#globalScaleSSBO,
+		const dstOffset = slot * this.#slotByteSize!;
+		this.#device!.queue.writeBuffer(
+			this.#globalScaleSSBO!,
 			dstOffset,
-			this.#cpuScaleBuffer,
+			this.#cpuScaleBuffer! as Float32Array<ArrayBuffer>,
 			0,
-			this.#cpuScaleBuffer.length
+			this.#cpuScaleBuffer!.length
 		);
 
 		// PHASE 3: GPU COMMAND ENCODING
-		const commandEncoder = this.#device.createCommandEncoder(this.#encoderDescriptor);
+		const commandEncoder = this.#device!.createCommandEncoder(this.#encoderDescriptor);
 		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
 
 		// PHASE 3a: PRE-RENDER COMPUTE (M4 decimation, etc.)
@@ -699,8 +799,8 @@ export class GPUCoordinator {
 				const plan = chartConfig.renderPlan;
 				const planLen = plan.length;
 
-				let currentPipeline = null;
-				let currentPerDataBindGroup = null;
+				let currentPipeline: GPURenderPipeline | null = null;
+				let currentPerDataBindGroup: GPUBindGroup | null = null;
 
 				for (let j = 0; j < planLen; j++) {
 					const layer = plan[j];
@@ -709,8 +809,8 @@ export class GPUCoordinator {
 					if (!renderer || !renderer.perDataBindGroup) continue;
 
 					if (layer.cachedPipeline !== currentPipeline) {
-						passEncoder.setPipeline(layer.cachedPipeline);
-						currentPipeline = layer.cachedPipeline;
+						passEncoder.setPipeline(layer.cachedPipeline!);
+						currentPipeline = layer.cachedPipeline!;
 					}
 
 					if (renderer.perDataBindGroup !== currentPerDataBindGroup) {
@@ -727,10 +827,10 @@ export class GPUCoordinator {
 
 		// PHASE 4: SUBMIT
 		this.#submitArray[0] = commandEncoder.finish();
-		this.#device.queue.submit(this.#submitArray);
+		this.#device!.queue.submit(this.#submitArray as [GPUCommandBuffer]);
 
 		this.#framesInFlight++;
-		this.#device.queue.onSubmittedWorkDone().then(() => {
+		this.#device!.queue.onSubmittedWorkDone().then(() => {
 			this.#framesInFlight--;
 		});
 
@@ -755,14 +855,14 @@ export class GPUCoordinator {
 	 * @returns {Promise<{pipeline, frameLayout, dataLayout}>}
 	 */
 	async acquirePipeline(
-		rendererId,
-		markType,
-		scaleTypes,
-		markShaderCode,
-		vertexBufferLayout,
-		dataBindingConfig,
-		rendererDefinition
-	) {
+		rendererId: string,
+		markType: string,
+		scaleTypes: { x: string; y: string },
+		markShaderCode: string,
+		vertexBufferLayout: GPUVertexBufferLayout[],
+		dataBindingConfig: DataBindingEntry[],
+		rendererDefinition: RendererDefinition
+	): Promise<PipelineResult> {
 		if (!rendererDefinition) {
 			throw new Error(
 				`acquirePipeline requires a rendererDefinition for mark type '${markType}'. ` +
@@ -780,10 +880,10 @@ export class GPUCoordinator {
 		if (!this.#rendererRegistry.has(rendererId)) {
 			this.#rendererRegistry.set(rendererId, new Map());
 		}
-		const localRegistry = this.#rendererRegistry.get(rendererId);
+		const localRegistry = this.#rendererRegistry.get(rendererId)!;
 
 		// --- Acquire Shader (with idempotency check) ---
-		let shaderModule;
+		let shaderModule: GPUShaderModule | undefined;
 		const shaderLookupKey = `shader:${resourceKey}`;
 
 		if (localRegistry.has(shaderLookupKey)) {
@@ -815,7 +915,7 @@ export class GPUCoordinator {
 		const dataLayout = this.#getOrCreateDataLayout(markType, dataBindingConfig);
 
 		// --- Acquire Pipeline (with idempotency check) ---
-		let pipeline;
+		let pipeline: GPURenderPipeline | undefined;
 		const pipelineLookupKey = `pipeline:${resourceKey}`;
 
 		if (localRegistry.has(pipelineLookupKey)) {
@@ -831,25 +931,25 @@ export class GPUCoordinator {
 			// Create/Get and increment RefCount
 			// Note: pipelineLayout created inside callback to avoid waste when cached
 			pipeline = await this.#getOrCreateSharedPipeline(resourceKey, async () => {
-				const pipelineLayout = this.#device.createPipelineLayout({
+				const pipelineLayout = this.#device!.createPipelineLayout({
 					label: `${resourceKey}-pipeline-layout`,
-					bindGroupLayouts: [frameLayout, dataLayout, this.#globalScaleLayout]
+					bindGroupLayouts: [frameLayout, dataLayout, this.#globalScaleLayout!]
 				});
 
-				return this.#device.createRenderPipeline({
+				return this.#device!.createRenderPipeline({
 					label: `${resourceKey}-pipeline`,
 					layout: pipelineLayout,
 					vertex: {
-						module: shaderModule,
+						module: shaderModule!,
 						entryPoint: 'vertexMain',
 						buffers: vertexBufferLayout || []
 					},
 					fragment: {
-						module: shaderModule,
+						module: shaderModule!,
 						entryPoint: 'fragmentMain',
 						targets: [
 							{
-								format: this.#presentationFormat,
+								format: this.#presentationFormat!,
 								blend: {
 									color: {
 										srcFactor: 'one',
@@ -880,7 +980,7 @@ export class GPUCoordinator {
 	 * Release all resources tracked for a specific renderer ID.
 	 * Called by BaseGPURenderer.destroy()
 	 */
-	releaseRenderer(rendererId) {
+	releaseRenderer(rendererId: string): void {
 		const localRegistry = this.#rendererRegistry.get(rendererId);
 		if (!localRegistry) return;
 
@@ -899,7 +999,10 @@ export class GPUCoordinator {
 	// INTERNAL REF-COUNTING (Private)
 	// =========================================================================
 
-	async #getOrCreateSharedPipeline(key, createFn) {
+	async #getOrCreateSharedPipeline(
+		key: string,
+		createFn: () => Promise<GPURenderPipeline>
+	): Promise<GPURenderPipeline> {
 		// Fast path: Check cache first
 		const existing = this.#sharedResources.pipelines.get(key);
 		if (existing) {
@@ -911,7 +1014,7 @@ export class GPUCoordinator {
 		// This eliminates the "thundering herd" problem - all concurrent requests
 		// for the same pipeline share a single creation promise
 		if (this.#pipelineCreationPromises.has(key)) {
-			const pipeline = await this.#pipelineCreationPromises.get(key);
+			const pipeline = await this.#pipelineCreationPromises.get(key)!;
 			// After await completes, increment refCount on the now-cached pipeline
 			const cached = this.#sharedResources.pipelines.get(key);
 			if (cached) {
@@ -941,7 +1044,7 @@ export class GPUCoordinator {
 		return creationPromise;
 	}
 
-	#releaseSharedPipeline(key) {
+	#releaseSharedPipeline(key: string): void {
 		const resource = this.#sharedResources.pipelines.get(key);
 		if (!resource) return;
 
@@ -951,14 +1054,14 @@ export class GPUCoordinator {
 		}
 	}
 
-	async #getOrCreateSharedShader(key, code) {
+	async #getOrCreateSharedShader(key: string, code: string): Promise<GPUShaderModule> {
 		const existing = this.#sharedResources.shaderModules.get(key);
 		if (existing) {
 			existing.refCount++;
 			return existing.module;
 		}
 
-		const module = this.#device.createShaderModule({ code });
+		const module = this.#device!.createShaderModule({ code });
 		this.#sharedResources.shaderModules.set(key, {
 			module,
 			refCount: 1,
@@ -967,7 +1070,7 @@ export class GPUCoordinator {
 		return module;
 	}
 
-	#releaseSharedShader(key) {
+	#releaseSharedShader(key: string): void {
 		const resource = this.#sharedResources.shaderModules.get(key);
 		if (!resource) return;
 
@@ -981,20 +1084,20 @@ export class GPUCoordinator {
 	// SCALE REGISTRATION
 	// =========================================================================
 
-	setScaleRegistry(scaleRegistry) {
+	setScaleRegistry(scaleRegistry: any): void {
 		this.#scaleRegistry = scaleRegistry;
 	}
 
-	registerScale(scaleId, scaleType = 'linear') {
+	registerScale(scaleId: string, scaleType: string = 'linear'): void {
 		if (!this.#initialized) return;
 		this.#handleScaleTopologyChange();
 	}
 
-	unregisterScale(scaleId) {
+	unregisterScale(scaleId: string): void {
 		this.#handleScaleTopologyChange();
 	}
 
-	scheduleTopologyUpdate() {
+	scheduleTopologyUpdate(): void {
 		if (this.#topologyUpdateScheduled) return;
 		this.#topologyUpdateScheduled = true;
 
@@ -1004,14 +1107,14 @@ export class GPUCoordinator {
 		});
 	}
 
-	#handleScaleTopologyChange() {
+	#handleScaleTopologyChange(): void {
 		if (!this.#scaleRegistry) return;
 
 		const usageMap = this.#scaleRegistry.scaleUsage;
 		if (!usageMap || typeof usageMap[Symbol.iterator] !== 'function') return;
 
 		// Clear and rebuild
-		const ids = [];
+		const ids: string[] = [];
 		this.#scaleIdToInstance.clear();
 		this.#scaleArray = [];
 
@@ -1052,7 +1155,7 @@ export class GPUCoordinator {
 		}
 	}
 
-	#recreateGlobalScalesSSBOAndBindGroups() {
+	#recreateGlobalScalesSSBOAndBindGroups(): void {
 		console.log('Resizing Global Scale SSBO...');
 
 		const oldSSBO = this.#globalScaleSSBO;
@@ -1062,18 +1165,18 @@ export class GPUCoordinator {
 		const totalSSBOSize = this.#slotByteSize * this.#SSBO_SLOT_COUNT;
 
 		try {
-			const newSSBO = this.#device.createBuffer({
+			const newSSBO = this.#device!.createBuffer({
 				size: totalSSBOSize,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 				label: `global-scale-ssbo-ring-v${this.#frameId}`
 			});
 
-			const newBindGroups = [];
+			const newBindGroups: GPUBindGroup[] = [];
 			for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
 				const offset = slot * this.#slotByteSize;
-				newBindGroups[slot] = this.#device.createBindGroup({
+				newBindGroups[slot] = this.#device!.createBindGroup({
 					label: `global-scale-bind-group-slot-${slot}`,
-					layout: this.#globalScaleLayout,
+					layout: this.#globalScaleLayout!,
 					entries: [
 						{
 							binding: 0,
@@ -1085,19 +1188,19 @@ export class GPUCoordinator {
 						},
 						{
 							binding: 1,
-							resource: { buffer: this.#colorConfigBuffer }
+							resource: { buffer: this.#colorConfigBuffer! }
 						},
 						{
 							binding: 2,
-							resource: { buffer: this.#colorRampBuffer }
+							resource: { buffer: this.#colorRampBuffer! }
 						},
 						{
 							binding: 3,
-							resource: { buffer: this.#colorPaletteBuffer }
+							resource: { buffer: this.#colorPaletteBuffer! }
 						},
 						{
 							binding: 4,
-							resource: { buffer: this.#sizeConfigBuffer }
+							resource: { buffer: this.#sizeConfigBuffer! }
 						}
 					]
 				});
@@ -1125,7 +1228,7 @@ export class GPUCoordinator {
 	 * @param {number} slot - Config slot index (0-63)
 	 * @param {ArrayBuffer} configData - 32-byte config struct from ColorScaleState
 	 */
-	writeColorConfig(slot, configData) {
+	writeColorConfig(slot: number, configData: ArrayBufferLike): void {
 		if (!this.#colorConfigBuffer) {
 			console.warn('[GPUCoordinator] Color config buffer not initialized');
 			return;
@@ -1137,7 +1240,7 @@ export class GPUCoordinator {
 		}
 
 		const byteOffset = slot * 32;
-		this.#device.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
+		this.#device!.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
 	}
 
 	/**
@@ -1146,7 +1249,7 @@ export class GPUCoordinator {
 	 * @param {number} slot - Ramp slot index (0-63)
 	 * @param {Float32Array} rampData - 1024 floats (256 colors × RGBA)
 	 */
-	writeColorRamp(slot, rampData) {
+	writeColorRamp(slot: number, rampData: Float32Array<ArrayBuffer>): void {
 		if (!this.#colorRampBuffer) {
 			console.warn('[GPUCoordinator] Color ramp buffer not initialized');
 			return;
@@ -1159,7 +1262,7 @@ export class GPUCoordinator {
 
 		// Each slot = 256 colors × 4 floats × 4 bytes = 4096 bytes
 		const byteOffset = slot * this.#rampColorsPerSlot * 4 * 4;
-		this.#device.queue.writeBuffer(this.#colorRampBuffer, byteOffset, rampData);
+		this.#device!.queue.writeBuffer(this.#colorRampBuffer, byteOffset, rampData);
 	}
 
 	/**
@@ -1168,7 +1271,7 @@ export class GPUCoordinator {
 	 * @param {number} slot - Palette slot index (0-63)
 	 * @param {Float32Array} paletteData - 128 floats (32 colors × RGBA)
 	 */
-	writeColorPalette(slot, paletteData) {
+	writeColorPalette(slot: number, paletteData: Float32Array<ArrayBuffer>): void {
 		if (!this.#colorPaletteBuffer) {
 			console.warn('[GPUCoordinator] Color palette buffer not initialized');
 			return;
@@ -1181,7 +1284,7 @@ export class GPUCoordinator {
 
 		// Each slot = 32 colors × 4 floats × 4 bytes = 512 bytes
 		const byteOffset = slot * this.#paletteColorsPerSlot * 4 * 4;
-		this.#device.queue.writeBuffer(this.#colorPaletteBuffer, byteOffset, paletteData);
+		this.#device!.queue.writeBuffer(this.#colorPaletteBuffer, byteOffset, paletteData);
 	}
 
 	/**
@@ -1190,7 +1293,7 @@ export class GPUCoordinator {
 	 * @param {number} slot - Config slot index (0-63)
 	 * @param {ArrayBuffer} configData - 16-byte config struct from SizeScaleState
 	 */
-	writeSizeConfig(slot, configData) {
+	writeSizeConfig(slot: number, configData: ArrayBufferLike): void {
 		if (!this.#sizeConfigBuffer) {
 			console.warn('[GPUCoordinator] Size config buffer not initialized');
 			return;
@@ -1202,14 +1305,14 @@ export class GPUCoordinator {
 		}
 
 		const byteOffset = slot * 16;
-		this.#device.queue.writeBuffer(this.#sizeConfigBuffer, byteOffset, configData);
+		this.#device!.queue.writeBuffer(this.#sizeConfigBuffer, byteOffset, configData);
 	}
 
 	// =========================================================================
 	// ANIMATED SCALE MANAGEMENT
 	// =========================================================================
 
-	addAnimatingScale(scale) {
+	addAnimatingScale(scale: ScaleInstance): void {
 		// console.log(`=== addAnimatingScale ${scale.name} (${scale.id}) ===`);
 		let idx = this.#scaleIndexManager.getIndex(scale.id);
 		// console.log('Initial index lookup:', idx);
@@ -1233,14 +1336,14 @@ export class GPUCoordinator {
 			// console.log('Added to animatedScales, new length:', this.#animatedScalesArray.length);
 		}
 
-		this.#animationLoop.requestStart();
+		this.#animationLoop!.requestStart();
 	}
 
-	removeAnimatingScale(scale) {
+	removeAnimatingScale(scale: ScaleInstance): void {
 		if (this.#animatedScales.delete(scale)) {
 			const idx = this.#animatedScalesArray.indexOf(scale);
 			if (idx !== -1) {
-				const lastItem = this.#animatedScalesArray.pop();
+				const lastItem = this.#animatedScalesArray.pop()!;
 				if (idx < this.#animatedScalesArray.length) {
 					this.#animatedScalesArray[idx] = lastItem;
 				}
@@ -1256,16 +1359,16 @@ export class GPUCoordinator {
 	 * Mark a chart as hovered - keeps animation loop warm for instant response.
 	 * @param {string} chartId
 	 */
-	setChartHovered(chartId) {
+	setChartHovered(chartId: string): void {
 		this.#hoveredCharts.add(chartId);
-		this.#animationLoop.requestStart();
+		this.#animationLoop!.requestStart();
 	}
 
 	/**
 	 * Mark a chart as no longer hovered.
 	 * @param {string} chartId
 	 */
-	setChartUnhovered(chartId) {
+	setChartUnhovered(chartId: string): void {
 		this.#hoveredCharts.delete(chartId);
 		// Loop will stop on its own via idle check if nothing else is active
 	}
@@ -1275,27 +1378,31 @@ export class GPUCoordinator {
 	 * Callback receives { isAnimating: boolean } — true when scales are actively
 	 * animating (pan/zoom), useful for skipping non-essential work like tooltips.
 	 */
-	addFrameCallback(fn) {
+	addFrameCallback(fn: FrameCallback): void {
 		this.#frameCallbacks.push(fn);
 	}
 
-	removeFrameCallback(fn) {
+	removeFrameCallback(fn: FrameCallback): void {
 		const idx = this.#frameCallbacks.indexOf(fn);
 		if (idx !== -1) this.#frameCallbacks.splice(idx, 1);
 	}
 
-	registerChart(chartId, canvas, config) {
+	registerChart(
+		chartId: string,
+		canvas: HTMLCanvasElement,
+		config: ChartRegistrationConfig
+	): ChartRegistrationResult {
 		if (this.#registeredCharts.has(chartId)) {
 			console.warn(`Chart ${chartId} already registered, updating config`);
 		}
 
-		const chartConfig = {
+		const chartConfig: ChartConfig = {
 			chartId,
 			canvas,
 			zIndex: config.zIndex || 0,
 			facetIndex: config.facetIndex ?? 0,
 			visible: true,
-			context: canvas.getContext('webgpu'),
+			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
 			layers: new Map(),
 			renderPlan: [],
@@ -1340,7 +1447,7 @@ export class GPUCoordinator {
 					this.invalidateChart(chartId);
 				}
 			},
-			setVisible: (visible) => {
+			setVisible: (visible: boolean) => {
 				const cfg = this.#registeredCharts.get(chartId);
 				if (cfg && cfg.visible !== visible) {
 					cfg.visible = visible;
@@ -1352,7 +1459,7 @@ export class GPUCoordinator {
 		};
 	}
 
-	unregisterChart(chartId) {
+	unregisterChart(chartId: string): void {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (chartConfig) {
 			chartConfig._isDirty = false;
@@ -1379,16 +1486,19 @@ export class GPUCoordinator {
 		}
 	}
 
-	invalidateChart(chartId) {
+	invalidateChart(chartId: string): void {
 		const chart = this.#registeredCharts.get(chartId);
 		if (chart && !chart._isDirty) {
 			chart._isDirty = true;
 			this.#dirtyChartsArray.push(chart);
-			this.#animationLoop.requestStart();
+			this.#animationLoop!.requestStart();
 		}
 	}
 
-	setChartScaleMapping(chartId, { xScaleId, yScaleId }) {
+	setChartScaleMapping(
+		chartId: string,
+		{ xScaleId, yScaleId }: { xScaleId: string; yScaleId: string }
+	): void {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (!chartConfig) {
 			this.#pendingScaleMappings.set(chartId, { xScaleId, yScaleId });
@@ -1410,9 +1520,9 @@ export class GPUCoordinator {
 	// FRAME UNIFORMS
 	// =========================================================================
 
-	#getOrCreateFrameLayout() {
+	#getOrCreateFrameLayout(): GPUBindGroupLayout {
 		if (!this.#frameLayout) {
-			this.#frameLayout = this.#device.createBindGroupLayout({
+			this.#frameLayout = this.#device!.createBindGroupLayout({
 				label: 'shared-frame-layout',
 				entries: [
 					{
@@ -1426,11 +1536,14 @@ export class GPUCoordinator {
 		return this.#frameLayout;
 	}
 
-	#getOrCreateDataLayout(markType, dataBindingConfig) {
+	#getOrCreateDataLayout(
+		markType: string,
+		dataBindingConfig: DataBindingEntry[]
+	): GPUBindGroupLayout {
 		const layoutKey = `${markType}-${JSON.stringify(dataBindingConfig)}`;
 
 		if (!this.#dataLayouts.has(layoutKey)) {
-			const layout = this.#device.createBindGroupLayout({
+			const layout = this.#device!.createBindGroupLayout({
 				label: `${markType}-data-layout`,
 				entries: dataBindingConfig.map((config) => ({
 					binding: config.binding,
@@ -1439,20 +1552,20 @@ export class GPUCoordinator {
 						config.visibility !== undefined
 							? config.visibility
 							: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					buffer: { type: config.type || 'read-only-storage' }
+					buffer: { type: (config.type || 'read-only-storage') as GPUBufferBindingType }
 				}))
 			});
 			this.#dataLayouts.set(layoutKey, layout);
 		}
 
-		return this.#dataLayouts.get(layoutKey);
+		return this.#dataLayouts.get(layoutKey)!;
 	}
 
-	#createChartFrameResources(chartId) {
+	#createChartFrameResources(chartId: string): void {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (!chartConfig || chartConfig.frameUniformsBuffer) return;
 
-		chartConfig.frameUniformsBuffer = this.#device.createBuffer({
+		chartConfig.frameUniformsBuffer = this.#device!.createBuffer({
 			size: 64,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			label: `frame-uniforms-${chartId}`
@@ -1461,13 +1574,13 @@ export class GPUCoordinator {
 		this.#createChartFrameBindGroup(chartId);
 	}
 
-	#createChartFrameBindGroup(chartId) {
+	#createChartFrameBindGroup(chartId: string): void {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (!chartConfig?.frameUniformsBuffer || chartConfig.perFrameBindGroup) return;
 
 		const frameLayout = this.#getOrCreateFrameLayout();
 
-		chartConfig.perFrameBindGroup = this.#device.createBindGroup({
+		chartConfig.perFrameBindGroup = this.#device!.createBindGroup({
 			label: `per-frame-bind-group-${chartId}`,
 			layout: frameLayout,
 			entries: [
@@ -1480,7 +1593,7 @@ export class GPUCoordinator {
 	}
 
 	// nullColor, where should we set this? per chart or per mark or theme wide?
-	updateChartFrameUniforms(chartId, nullColor = [0.5, 0.5, 0.5, 1.0]) {
+	updateChartFrameUniforms(chartId: string, nullColor: number[] = [0.5, 0.5, 0.5, 1.0]): void {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (!chartConfig?.contextConfigured) {
 			this.#pendingFrameUpdates.set(chartId, { timestamp: Date.now() });
@@ -1502,8 +1615,8 @@ export class GPUCoordinator {
 		const rangeMinY = 0; // Top of chart (screen coords)
 		const rangeMaxY = canvas.clientHeight * dpr;
 
-		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId) ?? 0;
-		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId) ?? 1;
+		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId!) ?? 0;
+		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId!) ?? 1;
 
 		const buf = new ArrayBuffer(64);
 		const f32 = new Float32Array(buf);
@@ -1519,14 +1632,14 @@ export class GPUCoordinator {
 		// f32[7] = padding
 		u32[8] = xScaleIndex >>> 0;
 		u32[9] = yScaleIndex >>> 0;
-		u32[10] = chartConfig.facetIndex ?? 0; // activeFacetIdx
+		u32[10] = (chartConfig.facetIndex ?? 0) >>> 0;
 		u32[11] = 0; // padding
 		f32[12] = nullColor[0]; // R
 		f32[13] = nullColor[1]; // G
 		f32[14] = nullColor[2]; // B
 		f32[15] = nullColor[3]; // A
 
-		this.#device.queue.writeBuffer(chartConfig.frameUniformsBuffer, 0, buf);
+		this.#device!.queue.writeBuffer(chartConfig.frameUniformsBuffer!, 0, buf);
 
 		// console.log(`📏 Frame uniforms for chart ${chartId}:`, {
 		// 	rangeMinY: rangeMinY,
@@ -1536,7 +1649,7 @@ export class GPUCoordinator {
 		// });
 	}
 
-	#processPendingFrameUpdates(chartId) {
+	#processPendingFrameUpdates(chartId: string): void {
 		if (this.#pendingFrameUpdates.has(chartId)) {
 			this.updateChartFrameUniforms(chartId);
 			this.#pendingFrameUpdates.delete(chartId);
@@ -1547,7 +1660,7 @@ export class GPUCoordinator {
 	// LAYER MANAGEMENT
 	// =========================================================================
 
-	registerLayer(chartId, layerConfig) {
+	registerLayer(chartId: string, layerConfig: Partial<LayerConfig>): LayerRegistrationResult {
 		const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
 		const chart = this.#registeredCharts.get(chartId);
 
@@ -1556,7 +1669,9 @@ export class GPUCoordinator {
 			if (!this.#pendingLayers.has(chartId)) {
 				this.#pendingLayers.set(chartId, []);
 			}
-			this.#pendingLayers.get(chartId).push({ ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
+			this.#pendingLayers
+				.get(chartId)!
+				.push({ ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 } as LayerConfig);
 
 			return {
 				remove: () => {
@@ -1571,7 +1686,11 @@ export class GPUCoordinator {
 			};
 		}
 
-		chart.layers.set(layerId, { ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 });
+		chart.layers.set(layerId, {
+			...layerConfig,
+			id: layerId,
+			zIndex: layerConfig.zIndex ?? 0
+		} as LayerConfig);
 		chart.needsPlanRebuild = true;
 		this.invalidateChart(chartId);
 
@@ -1580,7 +1699,7 @@ export class GPUCoordinator {
 		};
 	}
 
-	unregisterLayer(chartId, layerId) {
+	unregisterLayer(chartId: string, layerId: string): void {
 		const chart = this.#registeredCharts.get(chartId);
 		if (chart?.layers.has(layerId)) {
 			chart.layers.delete(layerId);
@@ -1589,7 +1708,7 @@ export class GPUCoordinator {
 		}
 	}
 
-	#buildRenderPlanForChart(chartConfig) {
+	#buildRenderPlanForChart(chartConfig: ChartConfig): void {
 		const layers = Array.from(chartConfig.layers.values());
 		if (layers.length === 0) {
 			chartConfig.renderPlan = [];
@@ -1597,24 +1716,24 @@ export class GPUCoordinator {
 			return;
 		}
 
-		const zIndexGroups = new Map();
+		const zIndexGroups = new Map<number, LayerConfig[]>();
 		for (const layer of layers) {
 			const zIndex = layer.zIndex;
 			if (!zIndexGroups.has(zIndex)) zIndexGroups.set(zIndex, []);
-			zIndexGroups.get(zIndex).push(layer);
+			zIndexGroups.get(zIndex)!.push(layer);
 		}
 
 		const sortedZLevels = Array.from(zIndexGroups.keys()).sort((a, b) => a - b);
-		const newPlan = [];
+		const newPlan: LayerConfig[] = [];
 
 		for (const zLevel of sortedZLevels) {
-			const layersInZLevel = zIndexGroups.get(zLevel);
-			const markTypeGroups = new Map();
+			const layersInZLevel = zIndexGroups.get(zLevel)!;
+			const markTypeGroups = new Map<string, LayerConfig[]>();
 
 			for (const layer of layersInZLevel) {
 				const markType = layer.markType || 'unknown';
 				if (!markTypeGroups.has(markType)) markTypeGroups.set(markType, []);
-				markTypeGroups.get(markType).push(layer);
+				markTypeGroups.get(markType)!.push(layer);
 			}
 
 			for (const batchedLayers of markTypeGroups.values()) {
@@ -1697,7 +1816,10 @@ export class GPUCoordinator {
 	// 	}
 	// }
 
-	#createRenderPassDescriptor(textureView, chartConfig) {
+	#createRenderPassDescriptor(
+		textureView: GPUTextureView,
+		chartConfig: ChartConfig
+	): GPURenderPassDescriptor {
 		const canvas = chartConfig.canvas;
 
 		if (this.#msaaSampleCount > 1) {
@@ -1713,10 +1835,10 @@ export class GPUCoordinator {
 
 				msaa?.texture.destroy();
 
-				const newTexture = this.#device.createTexture({
+				const newTexture = this.#device!.createTexture({
 					size: { width: canvas.width, height: canvas.height },
 					sampleCount: this.#msaaSampleCount,
-					format: this.#presentationFormat,
+					format: this.#presentationFormat!,
 					usage: GPUTextureUsage.RENDER_ATTACHMENT
 				});
 
@@ -1726,19 +1848,21 @@ export class GPUCoordinator {
 			}
 
 			if (chartConfig.renderPassDescriptor) {
-				chartConfig.renderPassDescriptor.colorAttachments[0].resolveTarget = textureView;
+				(
+					chartConfig.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[]
+				)[0].resolveTarget = textureView;
 				return chartConfig.renderPassDescriptor;
 			}
 
-			const desc = {
+			const desc: GPURenderPassDescriptor = {
 				colorAttachments: [
 					{
 						view: msaa.view,
 						resolveTarget: textureView,
 						clearValue: { r: 0, g: 0, b: 0, a: 0 },
-						loadOp: 'clear',
+						loadOp: 'clear' as GPULoadOp,
 						// storeOp: 'store'
-						storeOp: 'discard'
+						storeOp: 'discard' as GPUStoreOp
 					}
 				]
 			};
@@ -1747,17 +1871,19 @@ export class GPUCoordinator {
 			return desc;
 		} else {
 			if (chartConfig.renderPassDescriptor) {
-				chartConfig.renderPassDescriptor.colorAttachments[0].view = textureView;
+				(
+					chartConfig.renderPassDescriptor.colorAttachments as GPURenderPassColorAttachment[]
+				)[0].view = textureView;
 				return chartConfig.renderPassDescriptor;
 			}
 
-			const desc = {
+			const desc: GPURenderPassDescriptor = {
 				colorAttachments: [
 					{
 						view: textureView,
 						clearValue: { r: 0, g: 0, b: 0, a: 0 },
-						loadOp: 'clear',
-						storeOp: 'store'
+						loadOp: 'clear' as GPULoadOp,
+						storeOp: 'store' as GPUStoreOp
 					}
 				]
 			};
@@ -1770,16 +1896,16 @@ export class GPUCoordinator {
 	// GETTERS
 	// =========================================================================
 
-	get device() {
+	get device(): GPUDevice | null {
 		return this.#device;
 	}
-	get presentationFormat() {
+	get presentationFormat(): GPUTextureFormat | null {
 		return this.#presentationFormat;
 	}
-	get msaaSampleCount() {
+	get msaaSampleCount(): number {
 		return this.#msaaSampleCount;
 	}
-	get isInitialized() {
+	get isInitialized(): boolean {
 		return this.#initialized;
 	}
 
@@ -1788,27 +1914,27 @@ export class GPUCoordinator {
 	 * Use this instead of polling isInitialized.
 	 * @returns {Promise<boolean>}
 	 */
-	get ready() {
+	get ready(): Promise<boolean> {
 		return this.#readyPromise;
 	}
 
-	get colorConfigBuffer() {
+	get colorConfigBuffer(): GPUBuffer | null {
 		return this.#colorConfigBuffer;
 	}
 
-	get colorRampBuffer() {
+	get colorRampBuffer(): GPUBuffer | null {
 		return this.#colorRampBuffer;
 	}
 
-	get colorPaletteBuffer() {
+	get colorPaletteBuffer(): GPUBuffer | null {
 		return this.#colorPaletteBuffer;
 	}
 
-	get globalScaleLayout() {
+	get globalScaleLayout(): GPUBindGroupLayout | null {
 		return this.#globalScaleLayout;
 	}
 
-	getScaleIndex(scaleId) {
+	getScaleIndex(scaleId: string): number | undefined {
 		return this.#scaleIndexManager.getIndex(scaleId);
 	}
 
@@ -1822,11 +1948,11 @@ export class GPUCoordinator {
 	 * @param {string} key - Unique identifier for this compute work
 	 * @param {function(GPUCommandEncoder, GPUBindGroup): void} computeFn
 	 */
-	registerComputeWork(key, computeFn) {
+	registerComputeWork(key: string, computeFn: ComputeWorkFn): void {
 		this.#computeWork.set(key, computeFn);
 	}
 
-	removeComputeWork(key) {
+	removeComputeWork(key: string): void {
 		this.#computeWork.delete(key);
 	}
 
@@ -1834,7 +1960,7 @@ export class GPUCoordinator {
 	// CLEANUP
 	// =========================================================================
 
-	#destroyColorScaleBuffers() {
+	#destroyColorScaleBuffers(): void {
 		this.#colorConfigBuffer?.destroy();
 		this.#colorRampBuffer?.destroy();
 		this.#colorPaletteBuffer?.destroy();
@@ -1846,7 +1972,7 @@ export class GPUCoordinator {
 		this.#sizeConfigBuffer = null;
 	}
 
-	destroy() {
+	destroy(): void {
 		console.log('Destroying GPUCoordinator');
 
 		// Stop animation loop
@@ -1906,7 +2032,7 @@ export class GPUCoordinator {
 // CONTEXT HELPERS
 // =============================================================================
 
-export function setGPUCoordinator(config = {}) {
+export function setGPUCoordinator(config: GPUCoordinatorConfig = {}): GPUCoordinator {
 	const coordinator = new GPUCoordinator(config);
 
 	if (typeof window !== 'undefined') {
@@ -1918,8 +2044,8 @@ export function setGPUCoordinator(config = {}) {
 	return setContext('gpu-coordinator', coordinator);
 }
 
-export function getGPUContext() {
-	const coordinator = getContext('gpu-coordinator');
+export function getGPUContext(): GPUCoordinator | null {
+	const coordinator = getContext<GPUCoordinator>('gpu-coordinator');
 
 	if (!coordinator) {
 		console.error(
