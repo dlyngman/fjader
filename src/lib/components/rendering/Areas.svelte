@@ -2,7 +2,7 @@
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
 	import { getGPUContext } from '$lib/gpu';
-	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib.js';
+	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
 
 	// Areas uses projectToPixels() directly (like Lines, not like Rects).
 	// We define x/y so scaleX/scaleY functions are generated.
@@ -367,8 +367,7 @@
 			renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated && facetData)
-			renderer.writeAttribute(BINDINGS.FACET, facetData);
+		if (renderer?.resourcesCreated && facetData) renderer.writeAttribute(BINDINGS.FACET, facetData);
 	});
 
 	// Write uniforms when configuration changes

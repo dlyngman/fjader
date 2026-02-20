@@ -1,4 +1,9 @@
-// src/lib/gpu/CurveShaderLib.js
+// src/lib/gpu/CurveShaderLib.ts
+
+interface CurveConfig {
+	wgsl: string;
+	resolution: number;
+}
 
 /**
  * Curve interpolation shader library for GPU-side segment evaluation.
@@ -271,7 +276,7 @@ export const CURVE_IMPLEMENTATIONS = {
  * effectiveRes = clamp(ceil(chordPixelLen / 4.0), 1, CURVE_RESOLUTION).
  * Short segments use fewer sub-segments; long (zoomed-in) segments use more.
  */
-export const CURVE_CONFIGS = {
+export const CURVE_CONFIGS: Record<string, CurveConfig> = {
 	linear: { wgsl: CURVE_LINEAR, resolution: 1 },
 	step: { wgsl: CURVE_STEP, resolution: 3 },
 	'step-after': { wgsl: CURVE_STEP_AFTER, resolution: 2 },
@@ -284,12 +289,12 @@ export const CURVE_CONFIGS = {
 };
 
 /** Get WGSL code for a curve type with CURVE_RESOLUTION constant prepended. */
-export function getCurveWGSL(curveType) {
+export function getCurveWGSL(curveType: string): string {
 	const config = CURVE_CONFIGS[curveType] || CURVE_CONFIGS.linear;
 	return `const CURVE_RESOLUTION: u32 = ${config.resolution}u;\n${config.wgsl}`;
 }
 
 /** Get the sub-segment resolution for a curve type. */
-export function getCurveResolution(curveType) {
+export function getCurveResolution(curveType: string): number {
 	return (CURVE_CONFIGS[curveType] || CURVE_CONFIGS.linear).resolution;
 }
