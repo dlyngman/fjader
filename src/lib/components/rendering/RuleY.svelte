@@ -1,6 +1,6 @@
 <script>
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte.js';
+	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 
 	// RuleY: Horizontal lines (Y-axis gridlines)

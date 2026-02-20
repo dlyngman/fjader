@@ -1,48 +1,82 @@
+import type { GPUCoordinator } from '$lib/gpu';
+
+interface RendererOptions {
+	zIndex?: number;
+	xScaleType?: string;
+	yScaleType?: string;
+}
+
+interface DataBindingEntry {
+	binding: number;
+	visibility?: number;
+	type?: string;
+}
+
+interface InitConfig {
+	dataBindingConfig: DataBindingEntry[];
+	markShaderCode: string;
+	vertexBufferLayout: GPUVertexBufferLayout[];
+	rendererDefinition: object;
+}
+
+interface LayerRegistrationResult {
+	remove: () => void;
+}
+
 export class BaseGPURenderer {
 	// Core properties
-	#markType;
-	#webGPUContext;
-	#gpuCoordinator;
-	#chartContext;
+	#markType: string;
+	#webGPUContext: { getDevice(): GPUDevice };
+	#gpuCoordinator: GPUCoordinator;
+	#chartContext: any; // Phase 6 will type this
 
 	// Identity & Async Control
-	#rendererId;
+	#rendererId: string;
 	#initGeneration = 0;
 	#isDestroyed = false;
 
 	// Resource tracking (Exclusive resources only)
-	#ownedResources = {
-		buffers: new Map(), // bindingIndex -> GPUBuffer
+	#ownedResources: {
+		buffers: Map<number, GPUBuffer>;
+		layerControl: LayerRegistrationResult | null;
+	} = {
+		buffers: new Map(),
 		layerControl: null
 	};
 
 	// Vertex buffers (separate from bind group storage buffers)
-	#vertexBuffers = new Map(); // slot -> GPUBuffer
+	#vertexBuffers = new Map<number, GPUBuffer>();
 
 	// State management
 	#resourcesCreated = $state(false);
-	#initializationError = $state(null);
+	#initializationError: string | null = $state(null);
 	#instanceCount = $state(0);
 
 	// GPU Objects
-	#device = null;
-	#pipeline = null;
-	#perDataBindGroup = $state(null);
-	#perDataLayout = null;
-	#dataBindingConfig = null; // Store config for rebuilding bind groups
+	#device: GPUDevice | null = null;
+	#pipeline: GPURenderPipeline | null = null;
+	#perDataBindGroup: GPUBindGroup | null = $state(null);
+	#perDataLayout: GPUBindGroupLayout | null = null;
+	#dataBindingConfig: DataBindingEntry[] | null = null;
 
-	#dummyBuffer = null;
+	#dummyBuffer: GPUBuffer | null = null;
 	#bindGroupUpdateScheduled = false;
 
-	#zIndex;
-	#xScaleType;
-	#yScaleType;
+	#zIndex: number;
+	#xScaleType: string;
+	#yScaleType: string;
 
 	// Facet support: one renderer registered across multiple facet cell charts
-	#facetLayerControls = []; // { chartId, control }[]
-	#facetChartIds = [];
+	#facetLayerControls: { chartId: string; control: LayerRegistrationResult }[] = [];
+	#facetChartIds: string[] = [];
 
-	constructor(markType, webGPUContext, gpuCoordinator, chartContext, options = {}) {
+	constructor(
+		markType: string,
+		webGPUContext: { getDevice(): GPUDevice },
+		gpuCoordinator: GPUCoordinator,
+		chartContext: any,
+		options: RendererOptions = {}
+	) {
 		this.#markType = markType;
 		this.#webGPUContext = webGPUContext;
 		this.#gpuCoordinator = gpuCoordinator;
@@ -54,20 +88,20 @@ export class BaseGPURenderer {
 	}
 
 	// ... Getters (resourcesCreated, etc.) ...
-	get resourcesCreated() {
+	get resourcesCreated(): boolean {
 		return this.#resourcesCreated;
 	}
-	get instanceCount() {
+	get instanceCount(): number {
 		return this.#instanceCount;
 	}
-	get pipeline() {
+	get pipeline(): GPURenderPipeline | null {
 		return this.#pipeline;
 	}
-	get perDataBindGroup() {
+	get perDataBindGroup(): GPUBindGroup | null {
 		return this.#perDataBindGroup;
 	}
 
-	async initialize(config) {
+	async initialize(config: InitConfig): Promise<void> {
 		if (this.#isDestroyed) return;
 		const currentGen = ++this.#initGeneration;
 
@@ -114,7 +148,7 @@ export class BaseGPURenderer {
 		} catch (error) {
 			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
 				console.error(`${this.#markType} initialization failed:`, error);
-				this.#initializationError = error.message;
+				this.#initializationError = (error as Error).message;
 				throw error;
 			}
 		}
@@ -125,11 +159,8 @@ export class BaseGPURenderer {
 	/**
 	 * Write data to a specific shader binding.
 	 * Handles buffer creation, smart resizing, and bind group invalidation.
-	 *
-	 * @param {number} binding - Shader binding index (use constants!)
-	 * @param {ArrayBufferView} data - Float32Array, etc.
 	 */
-	writeAttribute(binding, data) {
+	writeAttribute(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 
 		let buffer = this.#ownedResources.buffers.get(binding);
@@ -157,7 +188,7 @@ export class BaseGPURenderer {
 		}
 
 		// 2. Write Data (Fine-grained: only touches this buffer)
-		this.#device.queue.writeBuffer(buffer, 0, data);
+		this.#device.queue.writeBuffer(buffer, 0, data as ArrayBufferView<ArrayBuffer>);
 
 		// 3. Trigger Render
 		if (!this.#bindGroupUpdateScheduled) {
@@ -167,10 +198,8 @@ export class BaseGPURenderer {
 
 	/**
 	 * Write data to a uniform binding.
-	 * @param {number} binding
-	 * @param {ArrayBufferView} data
 	 */
-	writeUniform(binding, data) {
+	writeUniform(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 
 		let buffer = this.#ownedResources.buffers.get(binding);
@@ -188,7 +217,7 @@ export class BaseGPURenderer {
 			this.#scheduleBindGroupUpdate();
 		}
 
-		this.#device.queue.writeBuffer(buffer, 0, data);
+		this.#device.queue.writeBuffer(buffer, 0, data as ArrayBufferView<ArrayBuffer>);
 
 		if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();
@@ -199,11 +228,8 @@ export class BaseGPURenderer {
 	 * Write data to a vertex buffer slot (not part of bind group).
 	 * Used for per-instance data like facet indices that should use
 	 * stepMode: 'instance' instead of storage buffers.
-	 *
-	 * @param {number} slot - Vertex buffer slot index
-	 * @param {ArrayBufferView} data - Float32Array, etc.
 	 */
-	writeVertexBuffer(slot, data) {
+	writeVertexBuffer(slot: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 
 		let buffer = this.#vertexBuffers.get(slot);
@@ -225,16 +251,14 @@ export class BaseGPURenderer {
 			this.#vertexBuffers.set(slot, buffer);
 		}
 
-		this.#device.queue.writeBuffer(buffer, 0, data);
+		this.#device.queue.writeBuffer(buffer, 0, data as ArrayBufferView<ArrayBuffer>);
 		this.invalidateLayer();
 	}
 
 	/**
 	 * Get a vertex buffer by slot index (for use in draw callbacks).
-	 * @param {number} slot
-	 * @returns {GPUBuffer|undefined}
 	 */
-	getVertexBuffer(slot) {
+	getVertexBuffer(slot: number): GPUBuffer | undefined {
 		return this.#vertexBuffers.get(slot);
 	}
 
@@ -242,16 +266,14 @@ export class BaseGPURenderer {
 	 * Get a storage/uniform buffer by binding index.
 	 * Used by compute passes (e.g. M4 decimation) to read from
 	 * renderer data buffers or include markConstants in alternate bind groups.
-	 * @param {number} binding
-	 * @returns {GPUBuffer|undefined}
 	 */
-	getBuffer(binding) {
+	getBuffer(binding: number): GPUBuffer | undefined {
 		return this.#ownedResources.buffers.get(binding);
 	}
 
 	// ===== INTERNAL HELPERS =====
 
-	#scheduleBindGroupUpdate() {
+	#scheduleBindGroupUpdate(): void {
 		if (this.#bindGroupUpdateScheduled) return;
 		this.#bindGroupUpdateScheduled = true;
 
@@ -263,7 +285,7 @@ export class BaseGPURenderer {
 		});
 	}
 
-	#rebuildBindGroup() {
+	#rebuildBindGroup(): void {
 		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) return;
 
 		// Map stored buffers to config entries
@@ -282,9 +304,9 @@ export class BaseGPURenderer {
 		});
 	}
 
-	get #sharedDummyBuffer() {
+	get #sharedDummyBuffer(): GPUBuffer {
 		if (!this.#dummyBuffer) {
-			this.#dummyBuffer = this.#device.createBuffer({
+			this.#dummyBuffer = this.#device!.createBuffer({
 				size: 16, // Minimum size
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 				label: `${this.#markType}-dummy`
@@ -293,12 +315,14 @@ export class BaseGPURenderer {
 		return this.#dummyBuffer;
 	}
 
-	updateInstanceCount(count) {
+	updateInstanceCount(count: number): void {
 		this.#instanceCount = count;
 		this.invalidateLayer();
 	}
 
-	registerLayer(drawFunction) {
+	registerLayer(
+		drawFunction: (passEncoder: GPURenderPassEncoder) => void
+	): LayerRegistrationResult {
 		const chartId = this.#chartContext.chartId;
 		this.#ownedResources.layerControl = this.#gpuCoordinator.registerLayer(chartId, {
 			draw: drawFunction,
@@ -314,7 +338,10 @@ export class BaseGPURenderer {
 	 * Register the same draw function across multiple facet cell charts.
 	 * Idempotent — cleans up previous registrations before re-registering.
 	 */
-	registerFacetLayers(chartIds, drawFunction) {
+	registerFacetLayers(
+		chartIds: string[],
+		drawFunction: (passEncoder: GPURenderPassEncoder) => void
+	): void {
 		// Clean up previous facet registrations
 		for (const { control } of this.#facetLayerControls) {
 			control.remove();
@@ -339,7 +366,7 @@ export class BaseGPURenderer {
 		this.invalidateLayer();
 	}
 
-	invalidateLayer() {
+	invalidateLayer(): void {
 		if (!this.#gpuCoordinator) return;
 
 		if (this.#facetChartIds.length > 0) {
@@ -351,7 +378,7 @@ export class BaseGPURenderer {
 		}
 	}
 
-	destroy() {
+	destroy(): void {
 		this.#isDestroyed = true;
 		this.#initGeneration++;
 
@@ -377,8 +404,4 @@ export class BaseGPURenderer {
 		this.#perDataBindGroup = null;
 		this.#device = null;
 	}
-
-	// Legacy helper kept for compatibility if needed, but unused in new flow
-	// createDataBindGroup(bindings) { /* ... */ }
-	// createOrUpdateBuffer(buf, data) { /* ... */ }
 }
