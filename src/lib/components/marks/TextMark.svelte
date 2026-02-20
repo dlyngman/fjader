@@ -11,7 +11,7 @@
 		MarkColor,
 		normalizeSortConfig,
 		inferMarkScaleType
-	} from './utils/index.js';
+	} from './utils';
 	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, Coordinator } from '$lib/types';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {

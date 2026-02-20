@@ -4,20 +4,38 @@ import { resolveChannel } from './channel-resolution';
 import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import { inferScaleType } from '$lib/scales/scale-inference';
+import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+
+interface ColorConfig {
+	mode: 'constant' | 'field';
+	value?: number[];
+	field?: string | object;
+	scaleType: string | null;
+	scheme: string | null | undefined;
+}
+
+type ColorPropValue = string | { field: string; scheme?: string } | object | null;
 
 export class MarkColor {
-	#colorProp;
-	#schemeProp;
-	#tableProp;
-	#setupState;
-	#scaleRegistry;
-	#chartContext;
+	#colorProp: () => ColorPropValue;
+	#schemeProp: () => string | null | undefined;
+	#tableProp: () => string | null;
+	#setupState: () => any;
+	#scaleRegistry: any;
+	#chartContext: any;
 
 	// Managed State
-	scaleState = $state(null);
-	#readyState = $state(true); // Start optimistically ready
+	scaleState: ColorScaleState | null = $state(null);
+	#readyState: boolean = $state(true); // Start optimistically ready
 
-	constructor(getColor, getScheme, getTable, getSetup, scaleRegistry, chartContext) {
+	constructor(
+		getColor: () => ColorPropValue,
+		getScheme: () => string | null | undefined,
+		getTable: () => string | null,
+		getSetup: () => any,
+		scaleRegistry: any,
+		chartContext: any
+	) {
 		this.#colorProp = getColor;
 		this.#schemeProp = getScheme;
 		this.#tableProp = getTable;
@@ -111,11 +129,11 @@ export class MarkColor {
 	 * For SQL nodes that aren't aggregates/bins, falls back to 'ordinal' (safe for color).
 	 * Returns null if schema info is needed but not yet available (blocking).
 	 */
-	#resolveScaleType(field) {
+	#resolveScaleType(field: string | object): string | null {
 		// SQL expression nodes: aggregates and bins are always sequential
 		if (isNode(field)) {
 			if (isAggregateExpression(field)) return 'sequential';
-			if (field.isAutoBinNode || field.type === 'Bin') return 'sequential';
+			if ((field as any).isAutoBinNode || (field as any).type === 'Bin') return 'sequential';
 			// Other SQL expression nodes (e.g., SIGN(...), arithmetic) produce computed values.
 			// Default to sequential since most expressions return continuous numeric results.
 			// TODO: ordinal + expression node breaks ViewManager (uses expression string as
@@ -140,7 +158,7 @@ export class MarkColor {
 
 	// --- Derived State ---
 
-	config = $derived.by(() => {
+	config: ColorConfig = $derived.by(() => {
 		const c = this.#colorProp();
 		const s = this.#schemeProp();
 
@@ -157,13 +175,13 @@ export class MarkColor {
 		}
 
 		// Case 2: Field / Expression
-		let field = c;
+		let field: string | object = c as string | object;
 		let explicitScheme = s;
 
 		// Handle object wrapper format { field: "species", scheme: "dark2" }
-		if (typeof c === 'object' && c.field && !isNode(c)) {
-			field = c.field;
-			explicitScheme = c.scheme || s;
+		if (typeof c === 'object' && (c as any).field && !isNode(c)) {
+			field = (c as any).field;
+			explicitScheme = (c as any).scheme || s;
 		}
 
 		// 1. Determine Type from field semantics + schema (may return null if waiting for schema)
@@ -179,11 +197,11 @@ export class MarkColor {
 	});
 
 	// Separate derived for mode (independent of scheme to avoid unnecessary tracking)
-	#mode = $derived.by(() => {
+	#mode: 'constant' | 'field' = $derived.by(() => {
 		const c = this.#colorProp();
 		if (c == null) return 'constant';
 		if (isNode(c)) return 'field'; // Aggregate/expression nodes
-		if (typeof c === 'object' && c.field) return 'field';
+		if (typeof c === 'object' && (c as any).field) return 'field';
 		if (typeof c === 'string') {
 			if (isColorConstant(c)) return 'constant';
 			return 'field';
@@ -192,21 +210,21 @@ export class MarkColor {
 	});
 
 	// Separate derived for field (independent of scheme)
-	#field = $derived.by(() => {
+	#field: string | object | null = $derived.by(() => {
 		const c = this.#colorProp();
 		if (c == null) return null;
 		if (isNode(c)) return c; // Return the entire node for aggregates
-		if (typeof c === 'object' && c.field) return c.field;
+		if (typeof c === 'object' && (c as any).field) return (c as any).field;
 		if (typeof c === 'string' && !isColorConstant(c)) return c;
 		return null;
 	});
 
 	// Field/expression for BaseMarkSetup select (or null)
 	// This can be a string (column name) or a SQL expression node (aggregate)
-	selectField = $derived(this.#mode === 'field' ? this.#field : null);
+	selectField: string | object | null = $derived(this.#mode === 'field' ? this.#field : null);
 
 	// Resolved Data for GPU
-	data = $derived.by(() => {
+	data: Float32Array | null = $derived.by(() => {
 		if (this.#mode !== 'field') return null;
 		if (!this.scaleState?.ready) return null;
 
@@ -225,17 +243,17 @@ export class MarkColor {
 	});
 
 	// Individual derived properties for fine-grained reactivity
-	colorMode = $derived(this.#mode === 'field' ? 1 : 0);
+	colorMode: number = $derived(this.#mode === 'field' ? 1 : 0);
 
-	colorScaleIndex = $derived(this.scaleState?.gpuIndex ?? 0);
+	colorScaleIndex: number = $derived(this.scaleState?.gpuIndex ?? 0);
 
-	constantColor = $derived.by(() => {
+	constantColor: number[] = $derived.by(() => {
 		const mode = this.#mode;
-		const value = mode === 'constant' ? this.config.value : [0, 0, 0, 1];
+		const value = mode === 'constant' ? this.config.value! : [0, 0, 0, 1];
 		// Return a new array to ensure reference changes
 		return [...value];
 	});
 
 	// Use state instead of derived to avoid flickering during transitions
-	ready = $derived(this.#readyState);
+	ready: boolean = $derived(this.#readyState);
 }

@@ -1,4 +1,43 @@
-// src/lib/interactors/TooltipManager.svelte.js
+// src/lib/interactors/TooltipManager.svelte.ts
+
+import type { Coordinator } from '@uwdata/mosaic-core';
+
+interface MarkConfig {
+	tempTable: string;
+	markType: string;
+	scaleTypes: { x: string; y: string };
+	channelFields?: Record<string, string>;
+	columns?: {
+		xLow?: string | number;
+		xHigh?: string | number;
+		yLow?: string | number;
+		yHigh?: string | number;
+		x?: string;
+		y?: string;
+	};
+	bandDomains?: Record<string, string[]>;
+	colorDomain?: string[];
+	colorScaleState?: { getColor: (value: any) => string | null };
+	enabled: boolean;
+}
+
+interface ScaleProvider {
+	xScale: any;
+	yScale: any;
+	xScaleState: any;
+	yScaleState: any;
+}
+
+interface CursorPosition {
+	xData: number | null;
+	yData: number | null;
+}
+
+interface QueryResult {
+	markId: string;
+	config: MarkConfig;
+	row: Record<string, any>;
+}
 
 /**
  * TooltipManager - DB-first tooltip query service.
@@ -13,32 +52,28 @@
  * Created per-chart and made available via Svelte context.
  */
 export class TooltipManager {
-	#coordinator;
-	#scaleProvider;
-	#marks = new Map(); // markId → config
-	#queryPending = false;
-	#latestPosition = null; // { xData, yData } — always the most recent cursor position
-	#cursorActive = false; // True when cursor is over the chart, false when it leaves
-	#suppressUntil = 0; // Timestamp before which tooltip queries are blocked
+	#coordinator: Coordinator;
+	#scaleProvider: ScaleProvider;
+	#marks: Map<string, MarkConfig> = new Map();
+	#queryPending: boolean = false;
+	#latestPosition: CursorPosition | null = null;
+	#cursorActive: boolean = false;
+	#suppressUntil: number = 0;
 
 	// Reactive state
-	currentPoint = $state(null);
-	currentMarkId = $state(null);
-	currentMarkType = $state(null);
-	currentColor = $state(null);
-	currentColorField = $state(null);
-	currentChannelFields = $state(null); // { x: 'bill_length', y: 'species', color: 'species' }
-	visible = $state(false);
-	pointerScreenX = $state(0);
-	pointerScreenY = $state(0);
-	matchedScreenX = $state(null);
-	matchedScreenY = $state(null);
+	currentPoint: Record<string, any> | null = $state(null);
+	currentMarkId: string | null = $state(null);
+	currentMarkType: string | null = $state(null);
+	currentColor: string | null = $state(null);
+	currentColorField: string | null = $state(null);
+	currentChannelFields: Record<string, string> | null = $state(null);
+	visible: boolean = $state(false);
+	pointerScreenX: number = $state(0);
+	pointerScreenY: number = $state(0);
+	matchedScreenX: number | null = $state(null);
+	matchedScreenY: number | null = $state(null);
 
-	/**
-	 * @param {object} coordinator - Mosaic coordinator for DB queries
-	 * @param {object} scaleProvider - { xScale, yScale, xScaleState, yScaleState }
-	 */
-	constructor(coordinator, scaleProvider) {
+	constructor(coordinator: Coordinator, scaleProvider: ScaleProvider) {
 		this.#coordinator = coordinator;
 		this.#scaleProvider = scaleProvider;
 	}
@@ -46,7 +81,7 @@ export class TooltipManager {
 	/**
 	 * Update the cursor's data-space position. Called directly from pointer move handler.
 	 */
-	updatePosition(xData, yData) {
+	updatePosition(xData: number | null, yData: number | null): void {
 		if (xData == null && yData == null) {
 			this.visible = false;
 			this.#latestPosition = null;
@@ -63,33 +98,20 @@ export class TooltipManager {
 	 * Suppress tooltip queries for the given duration.
 	 * Call from interaction handlers (pan, zoom, reset) to block tooltips
 	 * during active interaction. Each call extends the suppression window.
-	 * @param {number} durationMs - How long to suppress from now
 	 */
-	suppress(durationMs) {
+	suppress(durationMs: number): void {
 		this.#suppressUntil = performance.now() + durationMs;
 		this.visible = false;
 	}
 
 	/**
 	 * Register a mark for tooltip queries.
-	 *
-	 * @param {string} markId
-	 * @param {object} config
-	 * @param {string} config.tempTable - DuckDB temp table name
-	 * @param {string} config.markType - 'dot', 'barX', 'bar', 'rect', etc.
-	 * @param {object} config.scaleTypes - { x: 'linear'|'band'|'time', y: ... }
-	 * @param {object} config.channelFields - Channel → field name { x: 'bill_length', y: 'species' }
-	 * @param {object} [config.columns] - Column aliases for hit testing { xLow, xHigh, yLow, yHigh, x, y }
-	 * @param {object} [config.bandDomains] - { y: ['Adelie', 'Gentoo', ...] } for band scales
-	 * @param {string[]} [config.colorDomain] - Color category labels (ordinal)
-	 * @param {object} [config.colorScaleState] - ColorScaleState for CSS color lookup via getColor()
-	 * @param {boolean} [config.enabled=true]
 	 */
-	registerMark(markId, config) {
+	registerMark(markId: string, config: Omit<MarkConfig, 'enabled'> & { enabled?: boolean }): void {
 		this.#marks.set(markId, { enabled: true, ...config });
 	}
 
-	unregisterMark(markId) {
+	unregisterMark(markId: string): void {
 		this.#marks.delete(markId);
 		if (this.currentMarkId === markId) {
 			this.visible = false;
@@ -102,7 +124,7 @@ export class TooltipManager {
 	 * Update raw screen position for tooltip positioning.
 	 * Called from chart container's pointer move handler.
 	 */
-	updatePointerScreen(x, y) {
+	updatePointerScreen(x: number, y: number): void {
 		this.pointerScreenX = x;
 		this.pointerScreenY = y;
 	}
@@ -114,7 +136,7 @@ export class TooltipManager {
 	/**
 	 * Called once per animation frame by GPUCoordinator's render loop.
 	 */
-	tick() {
+	tick(): void {
 		// Suppressed by active interaction (pan, zoom, reset)
 		if (performance.now() < this.#suppressUntil) {
 			this.visible = false;
@@ -127,7 +149,7 @@ export class TooltipManager {
 		}
 	}
 
-	async #executeLatest() {
+	async #executeLatest(): Promise<void> {
 		if (!this.#latestPosition || this.#queryPending) return;
 
 		const { xData, yData } = this.#latestPosition;
@@ -136,7 +158,7 @@ export class TooltipManager {
 
 		try {
 			// Build all queries and execute in parallel
-			const queryPromises = [];
+			const queryPromises: Promise<QueryResult | null>[] = [];
 			for (const [markId, config] of this.#marks) {
 				if (!config.enabled) continue;
 
@@ -144,9 +166,9 @@ export class TooltipManager {
 				if (!sql) continue;
 
 				queryPromises.push(
-					this.#coordinator
+					(this.#coordinator as any)
 						.query(sql)
-						.then((result) => ({
+						.then((result: Iterable<Record<string, any>>) => ({
 							markId,
 							config,
 							row: Array.from(result)[0]
@@ -160,15 +182,15 @@ export class TooltipManager {
 			// Only discard if cursor left the chart entirely
 			if (!this.#cursorActive) return;
 
-			let bestResult = null;
+			let bestResult: Record<string, any> | null = null;
 			let bestDistance = Infinity;
-			let bestMarkId = null;
-			let bestConfig = null;
+			let bestMarkId: string | null = null;
+			let bestConfig: MarkConfig | null = null;
 
 			for (const r of results) {
 				if (r.status !== 'fulfilled' || !r.value?.row) continue;
 				const { markId, config, row } = r.value;
-				const dist = row._distance ?? 0;
+				const dist = (row._distance as number) ?? 0;
 				if (dist < bestDistance) {
 					bestDistance = dist;
 					bestResult = row;
@@ -220,7 +242,7 @@ export class TooltipManager {
 	// QUERY BUILDING
 	// =========================================================================
 
-	#buildQuery(config, xData, yData) {
+	#buildQuery(config: MarkConfig, xData: number | null, yData: number | null): string | null {
 		const { markType } = config;
 
 		const hitTestMarks = ['barx', 'bary', 'rect', 'rectx', 'recty'];
@@ -230,9 +252,13 @@ export class TooltipManager {
 		return this.#buildNearestQuery(config, xData, yData);
 	}
 
-	#buildHitTestQuery(config, xData, yData) {
+	#buildHitTestQuery(
+		config: MarkConfig,
+		xData: number | null,
+		yData: number | null
+	): string | null {
 		const { tempTable, scaleTypes, columns } = config;
-		const conditions = [];
+		const conditions: string[] = [];
 
 		// Y axis
 		if (scaleTypes.y === 'band' && yData != null) {
@@ -267,10 +293,14 @@ export class TooltipManager {
 		return `SELECT *, 0 AS _distance FROM "${tempTable}" WHERE ${conditions.join(' AND ')} LIMIT 1`;
 	}
 
-	#buildNearestQuery(config, xData, yData) {
+	#buildNearestQuery(
+		config: MarkConfig,
+		xData: number | null,
+		yData: number | null
+	): string | null {
 		const { tempTable, scaleTypes } = config;
-		const distParts = [];
-		const bbConditions = []; // bounding box (applied in inner query)
+		const distParts: string[] = [];
+		const bbConditions: string[] = [];
 		const boundingBoxPx = 50;
 		const dismissPxSq = 30 * 30;
 
@@ -332,15 +362,21 @@ export class TooltipManager {
 	 * Resolve screen position for one axis from a query result row.
 	 * Handles band scales (index → category string) and range columns (x1/x2 midpoint).
 	 */
-	#resolveScreenPos(axis, row, config, scale, columns) {
+	#resolveScreenPos(
+		axis: 'x' | 'y',
+		row: Record<string, any>,
+		config: MarkConfig,
+		scale: any,
+		columns: MarkConfig['columns']
+	): number | null {
 		if (!scale) return null;
 
 		// Band scale: convert integer index to category string, center in band
 		if (config.scaleTypes[axis] === 'band' && config.bandDomains?.[axis]) {
 			const col = columns?.[axis] || axis;
-			const index = row[col];
+			const index = row[col as string];
 			if (index == null) return null;
-			const category = config.bandDomains[axis][index];
+			const category = config.bandDomains[axis]![index];
 			if (category == null) return null;
 			const pos = scale(category);
 			const bandwidth = scale.bandwidth ? scale.bandwidth() : 0;
@@ -351,8 +387,8 @@ export class TooltipManager {
 		const lowKey = axis === 'x' ? 'xLow' : 'yLow';
 		const highKey = axis === 'x' ? 'xHigh' : 'yHigh';
 		if (columns?.[lowKey] && columns?.[highKey]) {
-			const low = row[columns[lowKey]];
-			const high = row[columns[highKey]];
+			const low = row[columns[lowKey] as string];
+			const high = row[columns[highKey] as string];
 			if (low != null && high != null) {
 				return scale((low + high) / 2);
 			}
@@ -372,9 +408,9 @@ export class TooltipManager {
 	 * Resolve band indices, time offsets, and color indices back to human-readable labels.
 	 * Renames columns from aliases (x, y, color) to original field names.
 	 */
-	#resolveLabels(row, config) {
+	#resolveLabels(row: Record<string, any>, config: MarkConfig): Record<string, any> {
 		const { scaleTypes, channelFields, bandDomains, colorDomain } = config;
-		const point = {};
+		const point: Record<string, any> = {};
 
 		for (const [key, value] of Object.entries(row)) {
 			// Skip internal columns
@@ -384,7 +420,7 @@ export class TooltipManager {
 
 			// Resolve band index to category label
 			if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
-				const label = bandDomains[key][value];
+				const label = bandDomains[key]![value];
 				point[fieldName] = label ?? value;
 				continue;
 			}
@@ -426,7 +462,7 @@ export class TooltipManager {
 	// LIFECYCLE
 	// =========================================================================
 
-	destroy() {
+	destroy(): void {
 		this.#marks.clear();
 		this.visible = false;
 		this.currentPoint = null;

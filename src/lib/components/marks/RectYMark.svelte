@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-	import { Rects } from '../rendering/index.js';
+	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { expandBinForExtent } from '$lib/sql/bin';
 	import {
@@ -12,7 +12,7 @@
 		MarkColor,
 		normalizeSortConfig,
 		inferMarkScaleType
-	} from './utils/index.js';
+	} from './utils';
 	import type {
 		FieldRef,
 		ScaleType,

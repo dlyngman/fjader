@@ -1,30 +1,38 @@
+type BrushPhase = 'idle' | 'creating' | 'moving' | 'resizing';
+type ResizeEdge = 'start' | 'end' | null;
+type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se' | null;
+
 export class BrushState1D {
 	// Data-space bounds (source of truth)
-	dataMin = $state(null);
-	dataMax = $state(null);
+	dataMin: number | Date | null = $state(null);
+	dataMax: number | Date | null = $state(null);
 
 	// Interaction phase
-	phase = $state('idle'); // 'idle' | 'creating' | 'moving' | 'resizing'
-	resizeEdge = $state(null); // 'start' | 'end' | null
+	phase: BrushPhase = $state('idle');
+	resizeEdge: ResizeEdge = $state(null);
 
 	// Derived
 	active = $derived(this.dataMin != null && this.dataMax != null);
 
 	// Screen coordinate conversions (using D3 scale)
-	screenMin(scale) {
+	screenMin(scale: (v: any) => number): number {
 		return scale(this.dataMin);
 	}
 
-	screenMax(scale) {
+	screenMax(scale: (v: any) => number): number {
 		return scale(this.dataMax);
 	}
 
-	screenExtent(scale) {
-		return [this.screenMin(scale), this.screenMax(scale)].sort((a, b) => a - b);
+	screenExtent(scale: (v: any) => number): [number, number] {
+		return [this.screenMin(scale), this.screenMax(scale)].sort((a, b) => a - b) as [number, number];
 	}
 
 	// Set from screen coordinates (during gesture)
-	setFromScreen(screenMin, screenMax, scale) {
+	setFromScreen(
+		screenMin: number,
+		screenMax: number,
+		scale: { invert: (v: number) => number }
+	): void {
 		// Convert to data space first, then sort data values
 		// This handles inverted scales (like Y-axis) correctly
 		const data1 = scale.invert(screenMin);
@@ -35,13 +43,13 @@ export class BrushState1D {
 	}
 
 	// Shift by delta (for move gesture)
-	shiftByScreen(screenDelta, scale) {
+	shiftByScreen(screenDelta: number, scale: { invert: (v: number) => number }): void {
 		const dataDelta = scale.invert(screenDelta) - scale.invert(0);
-		this.dataMin += dataDelta;
-		this.dataMax += dataDelta;
+		(this.dataMin as number) += dataDelta;
+		(this.dataMax as number) += dataDelta;
 	}
 
-	clear() {
+	clear(): void {
 		this.dataMin = null;
 		this.dataMax = null;
 		this.phase = 'idle';
@@ -49,7 +57,7 @@ export class BrushState1D {
 	}
 
 	// Normalize to ensure dataMin <= dataMax (swap if needed)
-	normalize() {
+	normalize(): void {
 		if (this.dataMin != null && this.dataMax != null && this.dataMin > this.dataMax) {
 			const temp = this.dataMin;
 			this.dataMin = this.dataMax;
@@ -58,18 +66,18 @@ export class BrushState1D {
 	}
 
 	// Set both values (Svelte 5 batches these updates automatically)
-	setExtent(min, max) {
+	setExtent(min: number | Date, max: number | Date): void {
 		this.dataMin = min;
 		this.dataMax = max;
 	}
 
 	// Validate brush for current scale
-	validate(scale, scaleType) {
+	validate(scale: { domain: () => number[] }, scaleType: string): boolean {
 		if (!this.active) return true;
 
 		// Log scales require positive values
 		if (scaleType === 'log' || scaleType === 'log10') {
-			if (this.dataMin <= 0 || this.dataMax <= 0) {
+			if ((this.dataMin as number) <= 0 || (this.dataMax as number) <= 0) {
 				this.clear();
 				return false;
 			}
@@ -85,11 +93,11 @@ export class BrushState1D {
 
 		// Clamp to domain bounds
 		const [domainMin, domainMax] = scale.domain();
-		this.dataMin = Math.max(this.dataMin, domainMin);
-		this.dataMax = Math.min(this.dataMax, domainMax);
+		this.dataMin = Math.max(this.dataMin as number, domainMin);
+		this.dataMax = Math.min(this.dataMax as number, domainMax);
 
 		// Clear if collapsed
-		if (this.dataMin >= this.dataMax) {
+		if ((this.dataMin as number) >= (this.dataMax as number)) {
 			this.clear();
 			return false;
 		}
@@ -103,12 +111,12 @@ export class BrushState2D {
 	x = new BrushState1D();
 	y = new BrushState1D();
 
-	phase = $state('idle');
-	resizeCorner = $state(null); // 'nw' | 'ne' | 'sw' | 'se' | null
+	phase: BrushPhase = $state('idle');
+	resizeCorner: ResizeCorner = $state(null);
 
 	active = $derived(this.x.active && this.y.active);
 
-	clear() {
+	clear(): void {
 		this.x.clear();
 		this.y.clear();
 		this.phase = 'idle';

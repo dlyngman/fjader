@@ -1,6 +1,7 @@
 import { untrack } from 'svelte';
 import { resolveChannel } from './channel-resolution';
 import { isNode } from '@uwdata/mosaic-sql';
+import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 
 /**
  * MarkSeries - Handles series grouping for connected topology marks (Lines, Areas)
@@ -10,15 +11,21 @@ import { isNode } from '@uwdata/mosaic-sql';
  * and they share the same scale (same domain, same indices, same legend).
  */
 export class MarkSeries {
-	#seriesProp;
-	#tableProp;
-	#setupState;
-	#scaleRegistry;
-	#chartContext;
+	#seriesProp: () => string | object | null;
+	#tableProp: () => string | null;
+	#setupState: () => any;
+	#scaleRegistry: any;
+	#chartContext: any;
 
-	scaleState = $state(null);
+	scaleState: ColorScaleState | null = $state(null);
 
-	constructor(getSeries, getTable, getSetup, scaleRegistry, chartContext) {
+	constructor(
+		getSeries: () => string | object | null,
+		getTable: () => string | null,
+		getSetup: () => any,
+		scaleRegistry: any,
+		chartContext: any
+	) {
 		this.#seriesProp = getSeries;
 		this.#tableProp = getTable;
 		this.#setupState = getSetup;
@@ -62,7 +69,7 @@ export class MarkSeries {
 	}
 
 	// The series field (null if not set)
-	#field = $derived.by(() => {
+	#field: string | object | null = $derived.by(() => {
 		const s = this.#seriesProp();
 		if (s == null) return null;
 		if (isNode(s)) return s;
@@ -71,10 +78,10 @@ export class MarkSeries {
 	});
 
 	// Field for BaseMarkSetup select
-	selectField = $derived(this.#field);
+	selectField: string | object | null = $derived(this.#field);
 
 	// Resolved Data for GPU - Float32Array of series indices
-	data = $derived.by(() => {
+	data: Float32Array | null = $derived.by(() => {
 		const field = this.#field;
 		const setup = this.#setupState();
 
@@ -103,5 +110,5 @@ export class MarkSeries {
 	});
 
 	// Ready when: no field (single series) or scale is ready
-	ready = $derived(!this.#field || (this.scaleState?.ready ?? false));
+	ready: boolean = $derived(!this.#field || (this.scaleState?.ready ?? false));
 }

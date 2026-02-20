@@ -1,6 +1,6 @@
 <script>
 	import { getContext } from 'svelte';
-	import { RuleX, RuleY } from '../rendering/index.js';
+	import { RuleX, RuleY } from '../rendering';
 
 	let { axis = 'both', color = [0.8, 0.8, 0.8, 0.4], lineWidth = 1, zIndex = -10 } = $props();
 

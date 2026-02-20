@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
-	import { Areas, Lines } from '../rendering/index.js';
+	import { Areas, Lines } from '../rendering';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -13,7 +13,7 @@
 		MarkSeries,
 		normalizeSortConfig,
 		inferMarkScaleType
-	} from './utils/index.js';
+	} from './utils';
 	import type {
 		FieldRef,
 		BaseMarkProps,
