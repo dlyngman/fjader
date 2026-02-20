@@ -1,14 +1,16 @@
 import { untrack } from 'svelte';
 import { resolveChannel } from './channel-resolution';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
+import type { ChartContext } from '$lib/types';
+import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 export class MarkSize {
 	#sizeProp: () => number | string | ((point: { x: number; y: number }) => number) | null;
 	#rangeProp: () => [number, number];
 	#tableProp: () => string | null;
 	#setupState: () => any;
-	#scaleRegistry: any;
-	#chartContext: any;
+	#scaleRegistry: ScaleRegistry;
+	#chartContext: ChartContext;
 
 	// Managed State
 	scaleState: SizeScaleState | null = $state(null);
@@ -18,8 +20,8 @@ export class MarkSize {
 		getRange: () => [number, number],
 		getTable: () => string | null,
 		getSetup: () => any,
-		scaleRegistry: any,
-		chartContext: any
+		scaleRegistry: ScaleRegistry,
+		chartContext: ChartContext
 	) {
 		this.#sizeProp = getSize;
 		this.#rangeProp = getRange;

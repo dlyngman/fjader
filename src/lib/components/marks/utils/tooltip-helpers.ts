@@ -1,22 +1,25 @@
+import type { ChartContext } from '$lib/types';
+import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+
 interface TooltipConfigParams {
 	tempTable: string;
 	markType: string;
-	chartContext: any;
+	chartContext: ChartContext;
 	channelFields: Record<string, string | undefined>;
-	columns?: Record<string, any>;
+	columns?: Record<string, unknown>;
 	bandAxes?: { x?: boolean; y?: boolean };
-	markColorScaleState: any | null;
+	markColorScaleState: ColorScaleState | null;
 }
 
 interface TooltipConfig {
 	tempTable: string;
 	markType: string;
 	scaleTypes: { x: string | undefined; y: string | undefined };
-	columns?: Record<string, any>;
+	columns?: Record<string, unknown>;
 	channelFields: Record<string, string | undefined>;
-	bandDomains: Record<string, any>;
-	colorDomain: any[] | null;
-	colorScaleState: any | null;
+	bandDomains: Record<string, string[]>;
+	colorDomain: unknown[] | null;
+	colorScaleState: ColorScaleState | null;
 	enabled: boolean;
 }
 

@@ -16,28 +16,26 @@ import {
 import type { ExprNode } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator } from '@uwdata/mosaic-core';
 import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
 import { viewManager } from '$lib/data/ViewManager.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
-import type { FieldRef, NormalizedSortConfig, Transform, ChartContext } from '$lib/types';
+import type {
+	FieldRef,
+	NormalizedSortConfig,
+	Transform,
+	ChartContext,
+	ScaleStateInstance
+} from '$lib/types';
+import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
-import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 
 // ---------------------------------------------------------------------------
 // Local interfaces
 // ---------------------------------------------------------------------------
-
-type ScaleStateInstance = LinearScaleState | BandScaleState | TimeScaleState;
-
-interface ScaleRequirement {
-	type: string;
-	priority: number;
-	config?: Record<string, unknown>;
-}
 
 interface ConnectedConfig {
 	seriesChannel: string | null;
@@ -645,11 +643,11 @@ export class BaseMarkSetup {
 
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
-			return new ArrowDataAccessor(this.client.arrowTable as any);
+			return new ArrowDataAccessor(this.client.arrowTable);
 		}
 
 		// Transform path: Arrow → Objects → Inject constants → Transform → Object accessor
-		const objects = this.#arrowToObjects(this.client.arrowTable as any);
+		const objects = this.#arrowToObjects(this.client.arrowTable);
 
 		// Inject constant channel values that were excluded from SQL
 		const constants = this.#config.constants;
@@ -683,7 +681,7 @@ export class BaseMarkSetup {
 		return raw instanceof Float32Array ? raw : new Float32Array(raw as ArrayLike<number>);
 	});
 
-	#arrowToObjects(arrowTable: any): Record<string, unknown>[] {
+	#arrowToObjects(arrowTable: Table): Record<string, unknown>[] {
 		const rows: Record<string, unknown>[] = [];
 		const numRows: number = arrowTable.numRows;
 
@@ -982,7 +980,7 @@ export class BaseMarkSetup {
 			},
 			fieldRequests
 		);
-		(this.#coordinator as any).connect(this.client);
+		this.#coordinator.connect(this.client);
 
 		// Register with chart context for crossfilter
 		if (this.#chartContext?.registerClient) {
@@ -1108,7 +1106,7 @@ export class BaseMarkSetup {
 					console.log(
 						`📐 [${this.#markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
 					);
-					(scaleState as any).addMark([combinedMin, combinedMax], this.#markId);
+					(scaleState as LinearScaleState).addMark([combinedMin, combinedMax], this.#markId);
 				}
 			}
 		}
@@ -1382,7 +1380,7 @@ export class BaseMarkSetup {
 			}
 
 			fetches.push(
-				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
+				this.#coordinator.query(q).then((result) => {
 					const categories = Array.from(result).map((row) => row[axis]);
 					// Y band scale maps index 0 → bottom, index N → top (bottom-to-top),
 					// but users read top-to-bottom. Reverse so SQL sort order matches
@@ -1411,7 +1409,7 @@ export class BaseMarkSetup {
 			const fxExpr = isNode(fxField) ? fxField : sqlColumn(String(fxField));
 			const q = Query.from(table).select({ fx: fxExpr }).distinct();
 			fetches.push(
-				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
+				this.#coordinator.query(q).then((result) => {
 					const categories = Array.from(result).map((row) => row.fx);
 					if (categories.length > 0) {
 						facetBandScale.addMark(categories, this.#markId);
@@ -1440,7 +1438,7 @@ export class BaseMarkSetup {
 			});
 
 			fetches.push(
-				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
+				this.#coordinator.query(q).then((result) => {
 					const row = Array.from(result)[0];
 					if (row && row.min_time != null && row.max_time != null) {
 						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [row.min_time, row.max_time]);
@@ -1463,8 +1461,8 @@ export class BaseMarkSetup {
 			// Extract field from color config (handles object format { field: "x", scheme: "y" })
 			const colorValue = this.#config.select.color;
 			const colorField =
-				typeof colorValue === 'object' && (colorValue as any).field && !isNode(colorValue)
-					? (colorValue as any).field
+				typeof colorValue === 'object' && 'field' in colorValue && !isNode(colorValue)
+					? (colorValue as { field: string }).field
 					: colorValue;
 
 			// Skip if color is an aggregate expression (handled by sidecar query)
@@ -1477,15 +1475,13 @@ export class BaseMarkSetup {
 					const q = Query.from(table).select({ color: colExpr }).distinct();
 
 					fetches.push(
-						(this.#coordinator as any)
-							.query(q)
-							.then((result: Iterable<Record<string, unknown>>) => {
-								const categories = Array.from(result).map((row) => row.color);
-								if (categories.length > 0) {
-									console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
-									this.#colorScaleState!.setDomain(categories as any);
-								}
-							})
+						this.#coordinator.query(q).then((result) => {
+							const categories = Array.from(result).map((row) => row.color);
+							if (categories.length > 0) {
+								console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
+								this.#colorScaleState!.setDomain(categories as (string | number)[]);
+							}
+						})
 					);
 				} else {
 					// Sequential: fetch min/max extent
@@ -1496,18 +1492,19 @@ export class BaseMarkSetup {
 					});
 
 					fetches.push(
-						(this.#coordinator as any)
-							.query(q)
-							.then((result: Iterable<Record<string, unknown>>) => {
-								const row = Array.from(result)[0];
-								if (row && row.min_color != null && row.max_color != null) {
-									console.log(`[BaseMarkSetup] Color domain (sequential):`, [
-										row.min_color,
-										row.max_color
-									]);
-									this.#colorScaleState!.setDomain([row.min_color, row.max_color] as any);
-								}
-							})
+						this.#coordinator.query(q).then((result) => {
+							const row = Array.from(result)[0];
+							if (row && row.min_color != null && row.max_color != null) {
+								console.log(`[BaseMarkSetup] Color domain (sequential):`, [
+									row.min_color,
+									row.max_color
+								]);
+								this.#colorScaleState!.setDomain([row.min_color, row.max_color] as (
+									| string
+									| number
+								)[]);
+							}
+						})
 					);
 				}
 			}
@@ -1522,7 +1519,7 @@ export class BaseMarkSetup {
 			});
 
 			fetches.push(
-				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
+				this.#coordinator.query(q).then((result) => {
 					const row = Array.from(result)[0];
 					if (row && row.min_radius != null && row.max_radius != null) {
 						this.#sizeScaleState!.setDomain([row.min_radius as number, row.max_radius as number]);
@@ -1539,10 +1536,10 @@ export class BaseMarkSetup {
 				.distinct();
 
 			fetches.push(
-				(this.#coordinator as any).query(q).then((result: Iterable<Record<string, unknown>>) => {
+				this.#coordinator.query(q).then((result) => {
 					const categories = Array.from(result).map((row) => row.stroke);
 					if (categories.length > 0) {
-						this.#seriesScaleState!.setDomain(categories as any);
+						this.#seriesScaleState!.setDomain(categories as (string | number)[]);
 					}
 				})
 			);
@@ -1629,10 +1626,8 @@ export class BaseMarkSetup {
 			console.log(`📊 [${this.#markId}] Sidecar query SQL:`, sidecarQuery.toString());
 
 			// Step 3: Execute the query
-			const result = await (this.#coordinator as any).query(sidecarQuery);
-			const extents: Record<string, unknown> = Array.from(
-				result as Iterable<Record<string, unknown>>
-			)[0]; // Should be single row
+			const result = await this.#coordinator.query(sidecarQuery);
+			const extents: Record<string, unknown> = Array.from(result)[0]; // Should be single row
 
 			console.log(`✅ [${this.#markId}] Sidecar results:`, extents);
 
@@ -1664,7 +1659,7 @@ export class BaseMarkSetup {
 			) {
 				const colorExtent = [extents.min_color, extents.max_color];
 				console.log(`📊 [${this.#markId}] Applying color extent from sidecar:`, colorExtent);
-				this.#colorScaleState?.setDomain(colorExtent as any);
+				this.#colorScaleState?.setDomain(colorExtent as (string | number)[]);
 			}
 
 			// Mark that global aggregates have been set
@@ -1691,7 +1686,7 @@ export class BaseMarkSetup {
 			// For categorical scales (band/point) and time scales, mark ready immediately
 			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
 			if (scaleType === 'band' || scaleType === 'point' || scaleType === 'time') {
-				(scale as any).setReady?.();
+				scale.setReady();
 				continue;
 			}
 
@@ -1699,7 +1694,7 @@ export class BaseMarkSetup {
 			// OR if domains have been set (either via sidecar query OR data-scan fallback)
 			const domainsReady = this.#globalAggregatesSet || this.#dataDerivedDomainsSet;
 			if (!needsDataDomain || domainsReady) {
-				(scale as any).setReady?.();
+				scale.setReady();
 			} else {
 				console.log(`⏳ [${this.#markId}] Deferring ${axis} scale ready - waiting for domain`);
 			}
@@ -1722,9 +1717,9 @@ export class BaseMarkSetup {
 				needsDataDomain &&
 				(scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')
 			) {
-				if (!(scale as any).ready) {
+				if (!scale.ready) {
 					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
-					(scale as any).setReady?.();
+					scale.setReady();
 				}
 			}
 		}
@@ -1855,7 +1850,7 @@ export class BaseMarkSetup {
 				let filter: unknown[] = [];
 				const selection = this.#config.selection;
 				if (selection && this.client) {
-					const predicate = (selection as any).predicate(this.client);
+					const predicate = selection.predicate(this.client);
 					if (Array.isArray(predicate)) filter = predicate;
 				}
 
@@ -1881,7 +1876,7 @@ export class BaseMarkSetup {
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
 				}
 
-				await (this.#coordinator as any).exec([
+				await this.#coordinator.exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
@@ -1918,7 +1913,7 @@ export class BaseMarkSetup {
 					valueRows.push(`(${vals.join(', ')})`);
 				}
 
-				await (this.#coordinator as any).exec([
+				await this.#coordinator.exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
@@ -1938,9 +1933,7 @@ export class BaseMarkSetup {
 
 		// Drop tooltip temp table
 		if (this.#tooltipEnabled && this.#coordinator) {
-			(this.#coordinator as any)
-				.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`)
-				.catch(() => {});
+			this.#coordinator.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 		}
 
 		// Unregister client from chart context
@@ -1950,7 +1943,7 @@ export class BaseMarkSetup {
 		this.#chartContext.unregisterScaleType('x', this.#markId);
 		this.#chartContext.unregisterScaleType('y', this.#markId);
 
-		Object.values(this.#scaleMap).forEach((scale) => (scale as any)?.removeMark?.(this.#markId));
+		Object.values(this.#scaleMap).forEach((scale) => scale?.removeMark(this.#markId));
 
 		if (this.client) {
 			this.client.destroy();

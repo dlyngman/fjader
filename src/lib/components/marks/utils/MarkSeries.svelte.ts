@@ -2,6 +2,8 @@ import { untrack } from 'svelte';
 import { resolveChannel } from './channel-resolution';
 import { isNode } from '@uwdata/mosaic-sql';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+import type { ChartContext } from '$lib/types';
+import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 /**
  * MarkSeries - Handles series grouping for connected topology marks (Lines, Areas)
@@ -14,8 +16,8 @@ export class MarkSeries {
 	#seriesProp: () => string | object | null;
 	#tableProp: () => string | null;
 	#setupState: () => any;
-	#scaleRegistry: any;
-	#chartContext: any;
+	#scaleRegistry: ScaleRegistry;
+	#chartContext: ChartContext;
 
 	scaleState: ColorScaleState | null = $state(null);
 
@@ -23,8 +25,8 @@ export class MarkSeries {
 		getSeries: () => string | object | null,
 		getTable: () => string | null,
 		getSetup: () => any,
-		scaleRegistry: any,
-		chartContext: any
+		scaleRegistry: ScaleRegistry,
+		chartContext: ChartContext
 	) {
 		this.#seriesProp = getSeries;
 		this.#tableProp = getTable;

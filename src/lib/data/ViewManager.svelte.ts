@@ -269,7 +269,7 @@ FROM ${sourceTable}`;
 		console.log(`[ViewManager] Creating view ${viewName}:`, sql);
 
 		try {
-			await (this.#coordinator as any).exec(sql);
+			await this.#coordinator.exec(sql);
 
 			// Update reactive state - view is now ready
 			this.#tableStates.set(sourceTable, { viewName, version: currentVersion });

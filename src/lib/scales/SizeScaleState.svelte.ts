@@ -1,4 +1,6 @@
 // src/lib/scales/SizeScaleState.svelte.ts
+import type { ScaleRegistry } from './ScaleRegistry.svelte';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 interface SizeScaleConfig {
 	field: string;
@@ -16,8 +18,8 @@ interface SizeScaleConfig {
 export class SizeScaleState {
 	// Identity
 	#field: string;
-	#registry: any;
-	#gpuCoordinator: any;
+	#registry: ScaleRegistry;
+	#gpuCoordinator: GPUCoordinator | null;
 
 	// GPU slot index (allocated from registry)
 	#configSlot: number = -1;
@@ -29,7 +31,7 @@ export class SizeScaleState {
 	domain: number[] = $state([]);
 	ready: boolean = $state(false);
 
-	constructor(config: SizeScaleConfig, registry: any, gpuCoordinator: any) {
+	constructor(config: SizeScaleConfig, registry: ScaleRegistry, gpuCoordinator: GPUCoordinator | null) {
 		this.#field = config.field;
 		this.#range = config.range || [2, 12];
 		this.#registry = registry;

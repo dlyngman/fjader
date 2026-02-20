@@ -17,12 +17,12 @@ interface ScaleFragment {
 	bufferLayout: BufferLayout;
 }
 
-interface AxisDefinition {
+export interface AxisDefinition {
 	concept: string;
 	channels: string[];
 }
 
-interface RendererDefinition {
+export interface RendererDefinition {
 	x?: AxisDefinition;
 	y?: AxisDefinition;
 	placeholders?: { x?: string; y?: string };

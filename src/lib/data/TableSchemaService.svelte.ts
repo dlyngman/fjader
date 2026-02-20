@@ -75,7 +75,7 @@ class TableSchemaServiceImpl {
 
 		try {
 			// DuckDB DESCRIBE returns: column_name, column_type, null, key, default, extra
-			const result = await (this.#coordinator as any).query(`DESCRIBE "${tableName}"`);
+			const result = await this.#coordinator!.query(`DESCRIBE "${tableName}"`);
 
 			const schema = new Map<string, ColumnSchemaEntry>();
 			for (const row of result) {

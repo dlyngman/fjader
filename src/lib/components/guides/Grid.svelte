@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
 	import { RuleX, RuleY } from '../rendering';
-	import type { ChartContext } from '$lib/types';
+	import type { ChartContext, ScaleStateInstance } from '$lib/types';
 
 	interface Props {
 		axis?: 'both' | 'x' | 'y';
@@ -34,7 +34,7 @@
 	let yTickValues = $state(null);
 
 	// Helper: fill buffer from scale ticks (zero-allocation)
-	function fillTickBuffer(scale: any, buffer: Float32Array) {
+	function fillTickBuffer(scale: ScaleStateInstance, buffer: Float32Array) {
 		const newTicks = scale?.getTicks ? scale.getTicks() : [];
 		const count = Math.min(newTicks.length, MAX_TICKS);
 

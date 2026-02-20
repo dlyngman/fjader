@@ -8,6 +8,7 @@ import {
 	isNotNull,
 	and
 } from '@uwdata/mosaic-sql';
+import type { Table } from '@uwdata/flechette';
 
 type DataFormat = 'arrow' | 'array' | 'both';
 
@@ -28,6 +29,9 @@ export interface DataClientOptions {
 interface DataClientConfig {
 	_filterNulls: unknown[] | null;
 	_dataFormat: DataFormat;
+	select?: Record<string, unknown>;
+	sort?: { channel: string; direction: 'asc' | 'desc' } | null;
+	limit?: number;
 	[key: string]: unknown;
 }
 
@@ -45,7 +49,7 @@ interface FieldInfoEntry {
 export class DataClient extends MosaicClient {
 	// --- Reactive State Properties (for Svelte components to bind to) ---
 	data = $state<unknown[] | null>(null);
-	arrowTable = $state<unknown | null>(null);
+	arrowTable = $state<Table | null>(null);
 	fieldInfo = $state<Record<string, FieldInfoEntry> | null>(null);
 	loading = $state(false);
 	delayedLoading = $state(false);
@@ -162,7 +166,7 @@ export class DataClient extends MosaicClient {
 	// =================================================================
 
 	_defaultQueryBuilder(sourceTable: string, config: DataClientConfig, filter: unknown[]): any {
-		const { select, sort, limit, _filterNulls } = config as any;
+		const { select, sort, limit, _filterNulls } = config;
 
 		const q = Query.from(sourceTable);
 		const selectDef: Record<string, unknown> = {};

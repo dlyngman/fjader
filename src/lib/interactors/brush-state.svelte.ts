@@ -1,3 +1,5 @@
+import type { D3Scale } from '$lib/types';
+
 type BrushPhase = 'idle' | 'creating' | 'moving' | 'resizing';
 type ResizeEdge = 'start' | 'end' | null;
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se' | null;
@@ -15,15 +17,15 @@ export class BrushState1D {
 	active = $derived(this.dataMin != null && this.dataMax != null);
 
 	// Screen coordinate conversions (using D3 scale)
-	screenMin(scale: (v: any) => number): number {
+	screenMin(scale: D3Scale): number {
 		return scale(this.dataMin);
 	}
 
-	screenMax(scale: (v: any) => number): number {
+	screenMax(scale: D3Scale): number {
 		return scale(this.dataMax);
 	}
 
-	screenExtent(scale: (v: any) => number): [number, number] {
+	screenExtent(scale: D3Scale): [number, number] {
 		return [this.screenMin(scale), this.screenMax(scale)].sort((a, b) => a - b) as [number, number];
 	}
 
