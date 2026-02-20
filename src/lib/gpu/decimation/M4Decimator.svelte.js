@@ -24,7 +24,7 @@ import {
 	FIND_MINMAX_SHADER,
 	EMIT_OUTPUT_SHADER,
 	FILL_FORWARD_SHADER
-} from './M4Shader.js';
+} from './M4Shader';
 
 // M4Bin struct: 6 × u32 atomics = 24 bytes per bin
 const M4_BIN_SIZE = 24;

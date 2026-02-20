@@ -9,13 +9,13 @@ import {
 	COLOR_SCALE_STRUCTS,
 	COLOR_SCALE_BINDINGS,
 	COLOR_SCALE_FUNCTIONS
-} from './ColorScaleShaderLib.js';
+} from './ColorScaleShaderLib';
 
 import {
 	SIZE_SCALE_STRUCTS,
 	SIZE_SCALE_BINDINGS,
 	SIZE_SCALE_FUNCTIONS
-} from './SizeScaleShaderLib.js';
+} from './SizeScaleShaderLib';
 
 /**
  * Scale fragment definitions
