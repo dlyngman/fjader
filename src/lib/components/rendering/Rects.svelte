@@ -2,6 +2,7 @@
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 	const rectRendererDefinition = {
@@ -66,7 +67,7 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
-		constantColor = [0.2, 0.4, 0.8, 1.0],
+		constantColor = DEFAULT_FILL_COLOR,
 		inset = 0,
 		dx = 0,
 		dy = 0

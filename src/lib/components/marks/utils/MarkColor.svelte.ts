@@ -1,7 +1,7 @@
 import { untrack } from 'svelte';
-import { isColorConstant, parseColorToRGBA } from '$lib/scales/color-utils';
+import { isColorConstant, parseColorToRGBA, DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 import { resolveChannel } from './channel-resolution';
-import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+import { isNode } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import { inferScaleType } from '$lib/scales/scale-inference';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
@@ -125,22 +125,14 @@ export class MarkColor {
 
 	/**
 	 * Resolve the color scale type based on the field definition.
-	 * Delegates to the shared inferScaleType() for schema-based inference.
-	 *
-	 * For SQL nodes that aren't aggregates/bins, falls back to 'ordinal' (safe for color).
+	 * Delegates to inferScaleType() for all inference logic.
 	 * Returns null if schema info is needed but not yet available (blocking).
 	 */
 	#resolveScaleType(field: string | object): string | null {
-		// SQL expression nodes: aggregates and bins are always sequential
+		// SQL expression nodes: delegate with 'sequential' fallback for unknown nodes
+		// (ordinal + expression node breaks ViewManager column naming)
 		if (isNode(field)) {
-			if (isAggregateExpression(field)) return 'sequential';
-			if ('isAutoBinNode' in field || ('type' in field && field.type === 'Bin')) return 'sequential';
-			// Other SQL expression nodes (e.g., SIGN(...), arithmetic) produce computed values.
-			// Default to sequential since most expressions return continuous numeric results.
-			// TODO: ordinal + expression node breaks ViewManager (uses expression string as
-			// column name for __dplot_*_idx). If we ever need ordinal for expressions, fix
-			// ViewManager.colorIndexColumn / bandIndexColumn to sanitize expression fields.
-			return 'sequential';
+			return inferScaleType({ field, schemaType: null, context: 'visual', nodeFallback: 'sequential' });
 		}
 
 		// Raw column names: use shared inference with 'visual' context
@@ -168,7 +160,7 @@ export class MarkColor {
 
 		// Case 1: Constant / Null
 		if (c == null) {
-			return { mode: 'constant', value: [0.2, 0.4, 0.8, 1.0], scaleType: null, scheme: null };
+			return { mode: 'constant', value: DEFAULT_FILL_COLOR, scaleType: null, scheme: null };
 		}
 
 		if (typeof c === 'string' && isColorConstant(c)) {

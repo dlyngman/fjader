@@ -3,7 +3,6 @@ export {
 	processData,
 	processAlphaData,
 	processColorData,
-	parseColor,
 	buildSelectFromChannels,
 	buildConstantsFromChannels
 } from './data-processing';
@@ -19,6 +18,10 @@ export { MarkColor } from './MarkColor.svelte';
 export { MarkSize } from './MarkSize.svelte';
 export { MarkSeries } from './MarkSeries.svelte';
 export { inferMarkScaleType } from './inferMarkScaleType';
+
+export function generateMarkId(prefix: string): string {
+	return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
 
 import type { SortConfig, NormalizedSortConfig } from '$lib/types';
 

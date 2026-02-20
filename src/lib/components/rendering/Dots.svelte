@@ -2,6 +2,7 @@
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 	const dotRendererDefinition = {
@@ -58,7 +59,7 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
-		constantColor = [0.13, 0.55, 0.13, 1.0],
+		constantColor = DEFAULT_STROKE_COLOR,
 		sizeMode = 0,
 		sizeScaleIndex = 0
 	}: Props = $props();

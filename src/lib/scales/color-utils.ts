@@ -65,6 +65,12 @@ import type { ColorScaleType } from '$lib/types';
 /** RGBA tuple with values in the 0–1 range. */
 export type RGBA = [number, number, number, number];
 
+/** Default fill color for area/rect marks (steel blue). */
+export const DEFAULT_FILL_COLOR: RGBA = [0.2, 0.4, 0.8, 1.0];
+
+/** Default stroke color for dot/line marks (forest green). */
+export const DEFAULT_STROKE_COLOR: RGBA = [0.13, 0.55, 0.13, 1.0];
+
 type Interpolator = (t: number) => string;
 
 /**

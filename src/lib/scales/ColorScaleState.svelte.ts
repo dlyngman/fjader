@@ -10,7 +10,7 @@ import type { RGBA, D3ColorScale } from './color-utils';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
 import type { ColorScaleType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
-import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 interface ColorScaleConfig {
 	field: string;
@@ -258,13 +258,13 @@ export class ColorScaleState {
 
 	#uploadContinuous(): void {
 		// Bake gradient from configured D3 scale
-		const rampData = bakeGradient(this.#d3Scale, 256);
+		const rampData = bakeGradient(this.#d3Scale, COLOR_RAMP_RESOLUTION);
 		this.#gpuCoordinator.writeColorRamp(this.#rampSlot, rampData);
 
 		// Build and upload config struct
 		const config = this.#buildColorConfig({
 			type: this.#getScaleTypeInt(),
-			rampOffset: this.#rampSlot * 256,
+			rampOffset: this.#rampSlot * COLOR_RAMP_RESOLUTION,
 			domainMin: this.domain[0] as number,
 			domainMax: this.domain[this.domain.length - 1] as number
 		});
