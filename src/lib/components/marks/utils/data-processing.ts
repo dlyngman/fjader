@@ -1,9 +1,7 @@
-import { isColorConstant, type RGBA } from '$lib/scales/color-utils';
+import { isColorConstant, parseColorToRGBA, DEFAULT_FILL_COLOR, type RGBA } from '$lib/scales/color-utils';
 import type { Column } from '@uwdata/flechette';
 
 export type SourceType = 'constant' | 'constant-color' | 'array' | 'float32array' | 'sql';
-
-type RGB = [number, number, number];
 
 export function getSourceType(value: unknown): SourceType {
 	if (typeof value === 'number') return 'constant';
@@ -93,27 +91,6 @@ export function buildConstantsFromChannels(
 	return constants;
 }
 
-export function parseColor(color: string): RGBA {
-	if (color.startsWith('#')) {
-		const hex = color.slice(1);
-		if (hex.length === 3) {
-			const r = parseInt(hex[0] + hex[0], 16) / 255;
-			const g = parseInt(hex[1] + hex[1], 16) / 255;
-			const b = parseInt(hex[2] + hex[2], 16) / 255;
-			return [r, g, b, 1.0];
-		} else if (hex.length === 6) {
-			const r = parseInt(hex.slice(0, 2), 16) / 255;
-			const g = parseInt(hex.slice(2, 4), 16) / 255;
-			const b = parseInt(hex.slice(4, 6), 16) / 255;
-			return [r, g, b, 1.0];
-		}
-	} else {
-		const rgb = COLOR_NAME_RGB.get(color.toLowerCase());
-		if (rgb) return [...rgb, 1.0];
-	}
-	return [0.2, 0.4, 0.8, 1.0];
-}
-
 export function processColorData(
 	value: unknown,
 	column: Column<unknown> | null,
@@ -128,7 +105,7 @@ export function processColorData(
 
 	switch (sourceType) {
 		case 'constant-color': {
-			const parsed = parseColor(value as string);
+			const parsed = parseColorToRGBA(value as string);
 			for (let i = 0; i < instanceCount; i++) {
 				rgba.set(parsed, i * 4);
 			}
@@ -144,7 +121,7 @@ export function processColorData(
 			for (let i = 0; i < instanceCount; i++) {
 				const colorValue = colorArray[i];
 				const fillColor = colorScale(colorValue);
-				const parsed = parseColor(fillColor);
+				const parsed = parseColorToRGBA(fillColor);
 				rgba.set(parsed, i * 4);
 			}
 			return rgba;
@@ -157,24 +134,10 @@ export function processColorData(
 
 function getDefaultColorData(instanceCount: number): Float32Array {
 	const rgba = new Float32Array(instanceCount * 4);
-	const defaultColor = [0.2, 0.4, 0.8, 1.0];
+	const defaultColor = DEFAULT_FILL_COLOR;
 	for (let i = 0; i < instanceCount; i++) {
 		rgba.set(defaultColor, i * 4);
 	}
 	return rgba;
 }
 
-const COLOR_NAME_RGB = new Map<string, RGB>([
-	['red', [1, 0, 0]],
-	['green', [0, 0.5, 0]],
-	['blue', [0, 0, 1]],
-	['orange', [1, 0.65, 0]],
-	['purple', [0.5, 0, 0.5]],
-	['yellow', [1, 1, 0]],
-	['pink', [1, 0.75, 0.8]],
-	['brown', [0.65, 0.16, 0.16]],
-	['gray', [0.5, 0.5, 0.5]],
-	['grey', [0.5, 0.5, 0.5]],
-	['black', [0, 0, 0]],
-	['white', [1, 1, 1]]
-]);

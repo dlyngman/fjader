@@ -7,6 +7,9 @@ interface InferScaleTypeOptions {
 	field: unknown;
 	schemaType: string | null;
 	context: InferenceContext;
+	/** Fallback for SQL nodes that aren't aggregates or bins (e.g., SIGN(...), arithmetic).
+	 *  Defaults to null (unknown). Pass 'sequential' when a definite answer is needed. */
+	nodeFallback?: string | null;
 }
 
 /**
@@ -21,7 +24,8 @@ interface InferScaleTypeOptions {
 export function inferScaleType({
 	field,
 	schemaType,
-	context
+	context,
+	nodeFallback = null
 }: InferScaleTypeOptions): string | null {
 	// SQL expression nodes: infer from expression semantics, not schema
 	if (isNode(field)) {
@@ -35,7 +39,7 @@ export function inferScaleType({
 			return 'sequential'; // visual or size
 		}
 		// Other SQL nodes (column refs, functions): can't look up in schema
-		return null;
+		return nodeFallback;
 	}
 
 	// Raw column name — needs schema to infer

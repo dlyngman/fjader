@@ -10,7 +10,8 @@
 		buildTooltipConfig,
 		MarkColor,
 		normalizeSortConfig,
-		inferMarkScaleType
+		inferMarkScaleType,
+		generateMarkId
 	} from './utils';
 	import type {
 		FieldRef,
@@ -64,7 +65,7 @@
 		tooltip = false
 	}: Props = $props();
 
-	const markId = `text-${crypto.randomUUID().slice(0, 8)}`;
+	const markId = generateMarkId('text');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');

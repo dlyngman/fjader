@@ -3,6 +3,7 @@
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
+	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 
 	// Areas uses projectToPixels() directly (like Lines, not like Rects).
@@ -70,7 +71,7 @@
 		orientation = 'vertical',
 		colorMode = 0,
 		colorScaleIndex = 0,
-		constantColor = [0.2, 0.4, 0.8, 1.0]
+		constantColor = DEFAULT_FILL_COLOR
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');

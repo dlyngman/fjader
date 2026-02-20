@@ -11,7 +11,8 @@
 		MarkColor,
 		MarkSeries,
 		normalizeSortConfig,
-		inferMarkScaleType
+		inferMarkScaleType,
+		generateMarkId
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -59,7 +60,7 @@
 		curve === 'monotone' ? 'monotone-x' : curve === 'bump' ? 'bump-x' : curve
 	);
 
-	const markId = `line-${crypto.randomUUID().slice(0, 8)}`;
+	const markId = generateMarkId('line');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');

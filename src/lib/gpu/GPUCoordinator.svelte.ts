@@ -4,6 +4,9 @@ import { scaleTemplateSystem } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
+/** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
+export const COLOR_RAMP_RESOLUTION = 256;
+
 // =============================================================================
 // TYPE INTERFACES
 // =============================================================================
@@ -274,7 +277,7 @@ export class GPUCoordinator {
 
 	// Constants
 	#maxColorSlots = 64;
-	#rampColorsPerSlot = 256;
+	#rampColorsPerSlot = COLOR_RAMP_RESOLUTION;
 	#paletteColorsPerSlot = 32;
 
 	// =========================================================================

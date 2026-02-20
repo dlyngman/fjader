@@ -35,6 +35,7 @@ import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
+import { generateMarkId } from './utils';
 
 // ---------------------------------------------------------------------------
 // Local interfaces
@@ -154,7 +155,7 @@ export class BaseMarkSetup {
 		this.#config = config;
 		this.#coordinator = coordinator;
 		this.#chartContext = chartContext;
-		this.#markId = stableId || `${config.markType}-${crypto.randomUUID().slice(0, 8)}`;
+		this.#markId = stableId || generateMarkId(config.markType);
 
 		// Tooltip write-back
 		this.#tooltipEnabled = config.tooltip !== false;

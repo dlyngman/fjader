@@ -42,7 +42,7 @@ fn normalizeValue(config: ColorConfig, value: f32) -> f32 {
 }
 
 fn sampleRamp(config: ColorConfig, t: f32) -> vec4<f32> {
-    let idx = min(u32(t * 255.0), 255u);
+    let idx = min(u32(t * 255.0), 255u); // Must match COLOR_RAMP_RESOLUTION (256 stops)
     return colorRamps[config.rampOffset + idx];
 }
 

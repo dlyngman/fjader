@@ -1,17 +1,13 @@
 <script>
-	import { Coordinator, coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { loadCSV, loadParquet } from '@uwdata/mosaic-sql';
-	// import { setScaleRegistry } from "$lib/scales";
+	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
+	import { loadParquet } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, onDestroy, setContext } from 'svelte';
+	import { onMount, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	// setScaleRegistry();
 	setCoordinators();
 
 	let coord;
-	// setContext('mosaic-coordinator', coord);
-
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
@@ -52,30 +48,6 @@
 		} catch (error) {
 			console.error('Initialization error:', error);
 			loadError = error.message;
-		}
-	});
-
-	import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
-
-	if (typeof window !== 'undefined') {
-		window.testScaleConfig = {
-			resolveScaleConfiguration,
-			SCALE_PRIORITIES,
-			// NEW: Add access to chart context for testing
-			getCurrentChart: () => {
-				// This would need to be set from your actual chart component
-				return window.currentChartContext;
-			}
-		};
-	}
-
-	$effect(() => {
-		if (chartContext) {
-			console.log('📐 Chart dimensions:', {
-				innerHeight: chartContext.innerHeight,
-				innerWidth: chartContext.innerWidth,
-				margin: chartContext.margin
-			});
 		}
 	});
 </script>

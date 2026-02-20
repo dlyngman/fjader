@@ -12,7 +12,8 @@
 		MarkColor,
 		MarkSeries,
 		normalizeSortConfig,
-		inferMarkScaleType
+		inferMarkScaleType,
+		generateMarkId
 	} from './utils';
 	import type {
 		FieldRef,
@@ -66,7 +67,7 @@
 		curve === 'monotone' ? 'monotone-y' : curve === 'bump' ? 'bump-y' : curve
 	);
 
-	const markId = `areax-${crypto.randomUUID().slice(0, 8)}`;
+	const markId = generateMarkId('areax');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
