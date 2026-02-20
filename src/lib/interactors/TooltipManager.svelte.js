@@ -190,21 +190,16 @@ export class TooltipManager {
 				const colorFieldName = bestConfig.channelFields?.color || 'color';
 				const colorValue = resolved[colorFieldName];
 				this.currentColorField = colorValue != null ? colorFieldName : null;
-				this.currentColor = colorValue != null
-					? bestConfig.colorScaleState?.getColor(colorValue) ?? null
-					: null;
+				this.currentColor =
+					colorValue != null ? (bestConfig.colorScaleState?.getColor(colorValue) ?? null) : null;
 
 				// Compute matched point screen position from raw data-space values
 				const xScale = this.#scaleProvider.xScale;
 				const yScale = this.#scaleProvider.yScale;
 				const cols = bestConfig.columns;
 
-				this.matchedScreenX = this.#resolveScreenPos(
-					'x', bestResult, bestConfig, xScale, cols
-				);
-				this.matchedScreenY = this.#resolveScreenPos(
-					'y', bestResult, bestConfig, yScale, cols
-				);
+				this.matchedScreenX = this.#resolveScreenPos('x', bestResult, bestConfig, xScale, cols);
+				this.matchedScreenY = this.#resolveScreenPos('y', bestResult, bestConfig, yScale, cols);
 			} else {
 				this.visible = false;
 			}
@@ -289,19 +284,13 @@ export class TooltipManager {
 			if (xScale) {
 				const x0 = xScale.invert(xScale(xData) - boundingBoxPx);
 				const x1 = xScale.invert(xScale(xData) + boundingBoxPx);
-				bbConditions.push(
-					`x BETWEEN ${Math.min(x0, x1)} AND ${Math.max(x0, x1)}`
-				);
+				bbConditions.push(`x BETWEEN ${Math.min(x0, x1)} AND ${Math.max(x0, x1)}`);
 
 				const pxPerUnit = xScale(xData + 1) - xScale(xData);
 				const pxSq = pxPerUnit * pxPerUnit;
-				distParts.push(
-					`(x - ${xData}) * (x - ${xData}) * ${pxSq}`
-				);
+				distParts.push(`(x - ${xData}) * (x - ${xData}) * ${pxSq}`);
 			} else {
-				distParts.push(
-					`(x - ${xData}) * (x - ${xData})`
-				);
+				distParts.push(`(x - ${xData}) * (x - ${xData})`);
 			}
 		}
 
@@ -312,27 +301,18 @@ export class TooltipManager {
 			if (yScale) {
 				const y0 = yScale.invert(yScale(yData) - boundingBoxPx);
 				const y1 = yScale.invert(yScale(yData) + boundingBoxPx);
-				bbConditions.push(
-					`y BETWEEN ${Math.min(y0, y1)} AND ${Math.max(y0, y1)}`
-				);
+				bbConditions.push(`y BETWEEN ${Math.min(y0, y1)} AND ${Math.max(y0, y1)}`);
 
 				const pxPerUnit = yScale(yData + 1) - yScale(yData);
 				const pxSq = pxPerUnit * pxPerUnit;
-				distParts.push(
-					`(y - ${yData}) * (y - ${yData}) * ${pxSq}`
-				);
+				distParts.push(`(y - ${yData}) * (y - ${yData}) * ${pxSq}`);
 			} else {
-				distParts.push(
-					`(y - ${yData}) * (y - ${yData})`
-				);
+				distParts.push(`(y - ${yData}) * (y - ${yData})`);
 			}
 		}
 
 		const distExpr = distParts.length > 0 ? distParts.join(' + ') : '0';
-		const bbWhere =
-			bbConditions.length > 0
-				? `WHERE ${bbConditions.join(' AND ')}`
-				: '';
+		const bbWhere = bbConditions.length > 0 ? `WHERE ${bbConditions.join(' AND ')}` : '';
 
 		// Subquery: bounding box filter + compute distance once.
 		// Outer query: dismiss threshold + ORDER BY on the already-computed column.
@@ -403,11 +383,7 @@ export class TooltipManager {
 			const fieldName = channelFields?.[key] || key;
 
 			// Resolve band index to category label
-			if (
-				(key === 'x' || key === 'y') &&
-				scaleTypes[key] === 'band' &&
-				bandDomains?.[key]
-			) {
+			if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
 				const label = bandDomains[key][value];
 				point[fieldName] = label ?? value;
 				continue;

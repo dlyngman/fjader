@@ -12,8 +12,8 @@
 		Crosshair,
 		WebGPUCanvas,
 		DotsMark,
-        AreaMarkY,
-        LineMark,
+		AreaMarkY,
+		LineMark,
 		IntervalX,
 		FilterBridge,
 		Legend
@@ -23,7 +23,6 @@
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { eq, literal, sql } from '@uwdata/mosaic-sql';
 	import { filter, stack } from '$lib/transforms';
-
 
 	setCoordinators();
 
@@ -44,7 +43,7 @@
 				// loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`)
 				loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
 				loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`)
-            ]);
+			]);
 
 			isLoaded = true;
 		} catch (error) {
@@ -83,9 +82,9 @@
 									table="aapl"
 									x="Date"
 									y="Close"
-                                    dotRadius={3}
-                                    curve="monotone"
-                                    strokeWidth={2}
+									dotRadius={3}
+									curve="monotone"
+									strokeWidth={2}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -102,7 +101,7 @@
 			</div>
 		</div>
 	</div>
-    <div class="container">
+	<div class="container">
 		<h1>SF temp</h1>
 
 		<div class="charts">
@@ -127,10 +126,10 @@
 									x="date"
 									y1="low"
 									y2="high"
-                                    dotRadius={3}
-                                    curve="monotone"
-                                    strokeWidth={2}
-                                />
+									dotRadius={3}
+									curve="monotone"
+									strokeWidth={2}
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}

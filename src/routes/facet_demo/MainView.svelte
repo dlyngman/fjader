@@ -60,13 +60,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						<Grid axis="y" />
-						<BarMarkY
-							table="penguins"
-							x="island"
-							y={count()}
-							color="island"
-							alpha={0.8}
-						/>
+						<BarMarkY table="penguins" x="island" y={count()} color="island" alpha={0.8} />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}
@@ -91,13 +85,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						<Grid />
-						<LineMark
-							table="facet_timeseries"
-							x="x"
-							y="y"
-							color="series"
-							strokeWidth={2}
-						/>
+						<LineMark table="facet_timeseries" x="x" y="y" color="series" strokeWidth={2} />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}

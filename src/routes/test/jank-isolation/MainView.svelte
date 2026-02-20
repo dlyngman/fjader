@@ -26,7 +26,9 @@
 		Zoom with wheel. Toggle layers off one at a time. Judge smoothness VISUALLY.
 	</p>
 
-	<div style="display: flex; gap: 16px; margin: 12px 0; padding: 8px 12px; background: #f5f5f5; border-radius: 6px; font-size: 14px;">
+	<div
+		style="display: flex; gap: 16px; margin: 12px 0; padding: 8px 12px; background: #f5f5f5; border-radius: 6px; font-size: 14px;"
+	>
 		<label><input type="checkbox" bind:checked={showAxes} /> Axes</label>
 		<label><input type="checkbox" bind:checked={showGrid} /> Grid</label>
 		<label><input type="checkbox" bind:checked={showFrame} /> Frame</label>
@@ -47,13 +49,7 @@
 			<WebGPUCanvas>
 				{#snippet canvasComponents()}
 					{#if showGrid}<Grid />{/if}
-					<DotsMark
-						table="flights"
-						x={min('delay')}
-						y={'time'}
-						color={avg('delay')}
-						alpha="0.8"
-					/>
+					<DotsMark table="flights" x={min('delay')} y={'time'} color={avg('delay')} alpha="0.8" />
 				{/snippet}
 			</WebGPUCanvas>
 		{/snippet}

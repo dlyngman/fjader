@@ -1,8 +1,13 @@
 <script>
 	import { getContext } from 'svelte';
 
-	let { anchor = 0, fixed = false, ticksNumber = 5, tickFormat = null, labelSide = 'left' } =
-		$props();
+	let {
+		anchor = 0,
+		fixed = false,
+		ticksNumber = 5,
+		tickFormat = null,
+		labelSide = 'left'
+	} = $props();
 	const c = getContext('chart');
 
 	// Propagate custom format to scale state once it exists
@@ -11,7 +16,7 @@
 	});
 
 	// Compute axis x position: data-anchored or visually fixed
-	const axisX = $derived(fixed ? c.innerWidth / 2 : c.xScale?.(anchor) ?? 0);
+	const axisX = $derived(fixed ? c.innerWidth / 2 : (c.xScale?.(anchor) ?? 0));
 
 	// Hide when off-screen (only relevant for data-anchored mode)
 	const visible = $derived(fixed || (axisX >= 0 && axisX <= c.innerWidth));
@@ -41,12 +46,7 @@
 			{#each continuousTicks as tick, i (i)}
 				{@const tickY = c.yScale(tick)}
 				<line x1={axisX} x2={axisX + tickDir * 6} y1={tickY} y2={tickY} />
-				<text
-					text-anchor={textAnchor}
-					dominant-baseline="middle"
-					x={axisX + tickDir * 9}
-					y={tickY}
-				>
+				<text text-anchor={textAnchor} dominant-baseline="middle" x={axisX + tickDir * 9} y={tickY}>
 					{tickFormatter(tick)}
 				</text>
 			{/each}
@@ -55,7 +55,12 @@
 				{@const tickY = c.yScale(tick) + c.yScale.bandwidth() / 2}
 				<g class:tick-dimmed={c.yScaleState.activeValues != null && !c.yScaleState.isActive(tick)}>
 					<line x1={axisX} x2={axisX + tickDir * 6} y1={tickY} y2={tickY} />
-					<text text-anchor={textAnchor} dominant-baseline="middle" x={axisX + tickDir * 9} y={tickY}>
+					<text
+						text-anchor={textAnchor}
+						dominant-baseline="middle"
+						x={axisX + tickDir * 9}
+						y={tickY}
+					>
 						{tick}
 					</text>
 				</g>

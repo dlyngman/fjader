@@ -10,10 +10,7 @@
 
 	const chart = getContext('chart');
 
-	let {
-		fields = null,
-		formatters = {}
-	} = $props();
+	let { fields = null, formatters = {} } = $props();
 
 	let tm = $derived(chart?.tooltipManager);
 	let visible = $derived(tm?.visible ?? false);
@@ -45,9 +42,7 @@
 		if (!data) return [];
 
 		if (fields) {
-			return fields
-				.filter((key) => key in data)
-				.map((key) => [key, data[key]]);
+			return fields.filter((key) => key in data).map((key) => [key, data[key]]);
 		}
 
 		return Object.entries(data);
@@ -103,7 +98,10 @@
 		bottom: anchor(top);
 		margin-left: 12px;
 		margin-bottom: -4px;
-		position-try-fallbacks: flip-inline, flip-block, flip-inline flip-block;
+		position-try-fallbacks:
+			flip-inline,
+			flip-block,
+			flip-inline flip-block;
 		background: rgba(0, 0, 0, 0.88);
 		color: white;
 		padding: 6px 10px;

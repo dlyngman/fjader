@@ -39,7 +39,11 @@
 			await coord.exec([
 				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`),
 				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`),
-				msql.loadCSV('statepop', `${window.location.origin}/data/us-state-population-2010-2019.csv`, {header: true}),
+				msql.loadCSV(
+					'statepop',
+					`${window.location.origin}/data/us-state-population-2010-2019.csv`,
+					{ header: true }
+				),
 				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
 			]);
 
@@ -84,7 +88,6 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
-
 				</ChartContainer>
 			</div>
 		</div>
@@ -116,10 +119,7 @@
 									inset={0.5}
 									color="body_mass"
 									scheme="turbo"
-									transforms={[
-										orderby(msql.asc('body_mass')),
-										stack({ direction: 'horizontal' })
-									]}
+									transforms={[orderby(msql.asc('body_mass')), stack({ direction: 'horizontal' })]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -155,14 +155,14 @@
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<Grid axis="x"/>
+								<Grid axis="x" />
 								<BarMarkX
 									table="civilizations"
 									x1="start"
 									x2="end"
 									y="civilization"
 									inset={0.5}
-									sort={{ y: "x1", order: "asc" }}
+									sort={{ y: 'x1', order: 'asc' }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -201,14 +201,14 @@
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<Grid axis="x"/>
+								<Grid axis="x" />
 								<BarMarkX
 									table="statepop"
 									x={msql.sql`(${msql.column('2019')} - ${msql.column('2010')}) * 1.0 / ${msql.column('2010')}`}
 									y="State"
 									color={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
 									scheme="piyg"
-									sort={{ y: "x2", order: "desc" }}
+									sort={{ y: 'x2', order: 'desc' }}
 									inset={0.5}
 								/>
 							{/snippet}
@@ -216,7 +216,7 @@
 					{/snippet}
 
 					{#snippet foreground()}
-						<AxisCenter/>
+						<AxisCenter />
 						<Crosshair />
 					{/snippet}
 				</ChartContainer>

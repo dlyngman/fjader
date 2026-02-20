@@ -14,7 +14,6 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-
 	setCoordinators();
 
 	let isLoaded = $state(false);
@@ -99,7 +98,7 @@
 							{#snippet canvas()}
 								<WebGPUCanvas>
 									{#snippet canvasComponents()}
-										<Grid axis='y'/>
+										<Grid axis="y" />
 										<BarMarkY
 											table="losses"
 											x="category"
@@ -187,16 +186,16 @@
 				<h3>Test Notes</h3>
 				<ul>
 					<li>
-						<strong>Negative-only:</strong> The bug fix ensures the domain extends to 0 on the
-						positive side (Math.max(0, extent[1]))
+						<strong>Negative-only:</strong> The bug fix ensures the domain extends to 0 on the positive
+						side (Math.max(0, extent[1]))
 					</li>
 					<li>
-						<strong>Mixed values:</strong> Zero is guaranteed to be within the domain bounds,
-						providing visual reference for positive vs negative
+						<strong>Mixed values:</strong> Zero is guaranteed to be within the domain bounds, providing
+						visual reference for positive vs negative
 					</li>
 					<li>
-						<strong>Positive-only:</strong> Standard behavior, domain starts at 0 as expected
-						(Math.min(0, extent[0]))
+						<strong>Positive-only:</strong> Standard behavior, domain starts at 0 as expected (Math.min(0,
+						extent[0]))
 					</li>
 					<li>
 						All three cases use <code>sum()</code> aggregates, which trigger automatic zero baseline

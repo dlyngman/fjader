@@ -1,7 +1,7 @@
 // src/lib/components/marks/BaseMarkSetup.svelte.js
 
 import { untrack } from 'svelte';
-import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
+import { DataClient } from '$lib/data-clients/DataClient.svelte';
 import {
 	Query,
 	isNode,
@@ -16,8 +16,8 @@ import {
 import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
-import { viewManager } from '$lib/data/ViewManager.svelte.js';
-import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+import { viewManager } from '$lib/data/ViewManager.svelte';
+import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 
 export class BaseMarkSetup {
 	// --- Reactive State ---
@@ -751,7 +751,12 @@ export class BaseMarkSetup {
 
 		// For ordinal color scales, use the indexed column name
 		// Sequential/continuous color scales pass raw numeric values directly
-		if (this.#colorScaleState?.isOrdinal && this.#colorScaleState?.indexColumnName && hasView && select.color) {
+		if (
+			this.#colorScaleState?.isOrdinal &&
+			this.#colorScaleState?.indexColumnName &&
+			hasView &&
+			select.color
+		) {
 			const originalField = select.color;
 			select.color = this.#colorScaleState.indexColumnName;
 			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
@@ -952,7 +957,9 @@ export class BaseMarkSetup {
 				if (!(ch in result)) continue;
 				const val = result[ch];
 				if (typeof val === 'string' && scaleState.offsetColumnName && hasView) {
-					console.log(`[BaseMarkSetup] Swapping ${ch} (time): ${val} → ${scaleState.offsetColumnName}`);
+					console.log(
+						`[BaseMarkSetup] Swapping ${ch} (time): ${val} → ${scaleState.offsetColumnName}`
+					);
 					result[ch] = scaleState.offsetColumnName;
 				} else if (isNode(val)) {
 					console.log(`[BaseMarkSetup] Wrapping ${ch} (time expr) with epoch offset`);
@@ -1479,9 +1486,7 @@ export class BaseMarkSetup {
 				if (this.#colorScaleState.isOrdinal) {
 					// Ordinal: fetch distinct categories
 					const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
-					const q = Query.from(table)
-						.select({ color: colExpr })
-						.distinct();
+					const q = Query.from(table).select({ color: colExpr }).distinct();
 
 					fetches.push(
 						this.#coordinator.query(q).then((result) => {
@@ -1946,9 +1951,7 @@ export class BaseMarkSetup {
 
 		// Drop tooltip temp table
 		if (this.#tooltipEnabled && this.#coordinator) {
-			this.#coordinator
-				.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`)
-				.catch(() => {});
+			this.#coordinator.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 		}
 
 		// Unregister client from chart context

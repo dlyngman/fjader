@@ -21,23 +21,17 @@ npm run dev
 
 ```svelte
 <script>
-  import { ChartContainer, DotsMark, BarMarkY, LineMark } from 'diveplot';
-  import { count, sum } from '@uwdata/mosaic-sql';
-  import { filter, stack } from '$lib/transforms';
+	import { ChartContainer, DotsMark, BarMarkY, LineMark } from 'diveplot';
+	import { count, sum } from '@uwdata/mosaic-sql';
+	import { filter, stack } from '$lib/transforms';
 </script>
 
 <ChartContainer xLabel="species" yLabel="count">
-  <DotsMark table="penguins" x="bill_length" y="body_mass" color="species" />
+	<DotsMark table="penguins" x="bill_length" y="body_mass" color="species" />
 </ChartContainer>
 
 <ChartContainer xLabel="island" yLabel="count">
-  <BarMarkY
-    table="penguins"
-    x="island"
-    y={count()}
-    color="species"
-    transforms={[stack()]}
-  />
+	<BarMarkY table="penguins" x="island" y={count()} color="species" transforms={[stack()]} />
 </ChartContainer>
 ```
 
@@ -47,14 +41,14 @@ npm run dev
 
 Each mark is a Svelte component backed by `BaseMarkSetup`, which orchestrates scale registration, data fetching, and transform compilation.
 
-| Mark | Description |
-|------|-------------|
-| DotsMark | Scatter plots, bubble charts |
-| BarMarkX / BarMarkY | Horizontal / vertical bars |
-| RectMark / RectXMark / RectYMark | Rectangles, histograms, heatmaps |
-| LineMark | Lines with curve interpolation |
-| AreaMarkY / AreaMarkX | Filled areas with curve interpolation |
-| TextMark | Text labels |
+| Mark                             | Description                           |
+| -------------------------------- | ------------------------------------- |
+| DotsMark                         | Scatter plots, bubble charts          |
+| BarMarkX / BarMarkY              | Horizontal / vertical bars            |
+| RectMark / RectXMark / RectYMark | Rectangles, histograms, heatmaps      |
+| LineMark                         | Lines with curve interpolation        |
+| AreaMarkY / AreaMarkX            | Filled areas with curve interpolation |
+| TextMark                         | Text labels                           |
 
 ### Scale System
 
@@ -81,12 +75,14 @@ See `docs/architecture/` for detailed documentation.
 ### GPU Rendering
 
 **GPUCoordinator** (`src/lib/gpu/GPUCoordinator.svelte.js`) manages:
+
 - WebGPU device/queue and shared pipeline caching
 - Fixed-timestep animation loop (360Hz physics, spring-based, with render extrapolation)
 - SSBO management for scale parameters (linear, color, size configs)
 - Render batching via `queueMicrotask` invalidation
 
 **Renderers** in `src/lib/components/rendering/`:
+
 - Dots, Rects, Lines, Areas — each with WGSL shaders
 - Scale transforms injected at compile time via template system
 - Curve interpolation (linear, step, catmull-rom, monotone, bump) evaluated in vertex shader

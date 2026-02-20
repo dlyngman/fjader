@@ -1,4 +1,34 @@
-// lib/layout/ChartLayout.svelte.js
+// lib/layout/ChartLayout.svelte.ts
+
+interface Margin {
+	top: number;
+	right: number;
+	bottom: number;
+	left: number;
+}
+
+interface Point {
+	x: number;
+	y: number;
+}
+
+interface AxesResult {
+	xInBounds: boolean;
+	yInBounds: boolean;
+	innerPoint: Point;
+}
+
+export interface ChartLayoutConfig {
+	margin?: Partial<Margin>;
+	height?: number;
+	clipPadding?: number;
+}
+
+interface ResolvedConfig {
+	margin: Margin;
+	height: number;
+	clipPadding: number;
+}
 
 /**
  * ChartLayout manages all chart dimensions, margins, and coordinate transformations.
@@ -6,28 +36,31 @@
  */
 export class ChartLayout {
 	// Reactive state
-	width = $state(0);
+	width = $state<number | null>(0);
 	height = $state(0);
-	margin = $state({ top: 0, right: 0, bottom: 0, left: 0 });
+	margin = $state<Margin>({ top: 0, right: 0, bottom: 0, left: 0 });
+
+	config: ResolvedConfig;
+	chartId: string;
 
 	// --- ZERO-GC BUFFERS ---
 	// Reused objects to prevent allocation during high-frequency events (pointermove, wheel)
-	_axesBuffer = {
+	_axesBuffer: AxesResult = {
 		xInBounds: false,
 		yInBounds: false,
 		innerPoint: { x: 0, y: 0 }
 	};
 
-	_pointBuffer = { x: 0, y: 0 };
+	_pointBuffer: Point = { x: 0, y: 0 };
 
-	constructor(config = {}) {
-		const defaults = {
+	constructor(config: ChartLayoutConfig = {}) {
+		const defaults: ResolvedConfig = {
 			margin: { top: 30, right: 50, bottom: 35, left: 75 },
 			height: 250,
 			clipPadding: 0
 		};
 
-		this.config = { ...defaults, ...config };
+		this.config = { ...defaults, ...config, margin: { ...defaults.margin, ...config.margin } };
 
 		// Initialize state
 		this.height = this.config.height;
@@ -38,15 +71,15 @@ export class ChartLayout {
 
 	// --- COMPUTED PROPERTIES (Getters) ---
 
-	get innerWidth() {
+	get innerWidth(): number {
 		return this.width ? Math.max(0, this.width - this.margin.left - this.margin.right) : 0;
 	}
 
-	get innerHeight() {
+	get innerHeight(): number {
 		return Math.max(0, this.height - this.margin.top - this.margin.bottom);
 	}
 
-	get isReady() {
+	get isReady(): boolean {
 		return (
 			this.width !== null &&
 			this.width > 0 &&
@@ -56,15 +89,15 @@ export class ChartLayout {
 		);
 	}
 
-	get innerTransform() {
+	get innerTransform(): string {
 		return `translate(${this.margin.left}, ${this.margin.top})`;
 	}
 
-	get clipPathId() {
+	get clipPathId(): string {
 		return `mask-${this.chartId}`;
 	}
 
-	get clipPathUrl() {
+	get clipPathUrl(): string {
 		return `url(#${this.clipPathId})`;
 	}
 
@@ -81,21 +114,19 @@ export class ChartLayout {
 
 	// --- METHODS ---
 
-	updateWidth = (newWidth) => {
+	updateWidth = (newWidth: number): void => {
 		this.width = newWidth;
 	};
 
-	updateHeight = (newHeight) => {
+	updateHeight = (newHeight: number): void => {
 		this.height = newHeight;
 	};
 
-	updateMargin = (newMargin) => {
-		// Deep merge into existing state object to preserve reference if possible,
-		// but spreading is fine here as margins don't change at 60fps.
+	updateMargin = (newMargin: Partial<Margin>): void => {
 		this.margin = { ...this.margin, ...newMargin };
 	};
 
-	reset = () => {
+	reset = (): void => {
 		this.width = null;
 		this.height = this.config.height;
 		this.margin = { ...this.config.margin };
@@ -104,36 +135,34 @@ export class ChartLayout {
 	// --- HOT PATH METHODS (Optimized) ---
 
 	// OPTIMIZED: Mutates shared buffer instead of returning new {x,y}
-	toInnerCoordinates = (point) => {
+	toInnerCoordinates = (point: Point): Point => {
 		this._pointBuffer.x = point.x - this.margin.left;
 		this._pointBuffer.y = point.y - this.margin.top;
 		return this._pointBuffer;
 	};
 
 	// Alias for converting specific x/y numbers (Better for internal use)
-	toInnerRaw = (x, y) => {
+	toInnerRaw = (x: number, y: number): Point => {
 		this._pointBuffer.x = x - this.margin.left;
 		this._pointBuffer.y = y - this.margin.top;
 		return this._pointBuffer;
 	};
 
-	toScreenCoordinates = (innerPoint) => {
-		// Used less frequently in hot paths, but we reuse the same buffer
+	toScreenCoordinates = (innerPoint: Point): Point => {
 		this._pointBuffer.x = innerPoint.x + this.margin.left;
 		this._pointBuffer.y = innerPoint.y + this.margin.top;
 		return this._pointBuffer;
 	};
 
 	// OPTIMIZED: Returns primitive boolean
-	// Logic: Check if point (screen coords) is inside the chart area
-	isWithinInnerBounds = (point) => {
+	isWithinInnerBounds = (point: Point): boolean => {
 		const x = point.x - this.margin.left;
 		const y = point.y - this.margin.top;
 
 		return x >= 0 && x <= this.innerWidth && y >= 0 && y <= this.innerHeight;
 	};
 
-	getActiveAxes = (point) => {
+	getActiveAxes = (point: Point): AxesResult => {
 		const ix = point.x - this.margin.left;
 		const iy = point.y - this.margin.top;
 
@@ -161,10 +190,6 @@ export class ChartLayout {
 		};
 	};
 
-	/**
-	 * Context data merging.
-	 * Removed .bind() calls because arrow functions handles 'this' automatically.
-	 */
 	getContextData() {
 		const layout = this;
 

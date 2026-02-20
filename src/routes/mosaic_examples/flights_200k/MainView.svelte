@@ -125,7 +125,6 @@
 							color="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
-
 						/>
 					{/snippet}
 				</WebGPUCanvas>

@@ -126,10 +126,7 @@ function resolveConfigurationForType(
 				description: propSchema.description
 			});
 		} catch (error) {
-			console.error(
-				`❌ Failed to resolve ${scaleType}.${propName}:`,
-				(error as Error).message
-			);
+			console.error(`❌ Failed to resolve ${scaleType}.${propName}:`, (error as Error).message);
 			throw new Error(
 				`Configuration resolution failed for ${scaleType}.${propName}: ${(error as Error).message}`
 			);

@@ -249,7 +249,7 @@ export function parseColorToRGBA(colorStr: string): RGBA {
 	}
 
 	// Handle hsl/hsla and named colors using D3
-	const d3Color = color(trimmed) as (RGBColor | HSLColor | null);
+	const d3Color = color(trimmed) as RGBColor | HSLColor | null;
 	if (d3Color) {
 		const rgb = d3Color.rgb();
 		return [rgb.r / 255, rgb.g / 255, rgb.b / 255, rgb.opacity];
@@ -498,10 +498,7 @@ export function bakePalette(
 	return result;
 }
 
-type D3ColorScale =
-	| ScaleOrdinal<string, string>
-	| ScaleSequential<string>
-	| ScaleDiverging<string>;
+type D3ColorScale = ScaleOrdinal<string, string> | ScaleSequential<string> | ScaleDiverging<string>;
 
 interface CreateD3ScaleOptions {
 	reverse?: boolean;
@@ -523,7 +520,9 @@ export function createD3Scale(
 	if (schemeType === 'ordinal') {
 		let colors = getOrdinalColors(scheme)!;
 		if (reverse) colors = [...colors].reverse();
-		return scaleOrdinal<string, string>().domain(domain.map(String)).range(colors as string[]);
+		return scaleOrdinal<string, string>()
+			.domain(domain.map(String))
+			.range(colors as string[]);
 	}
 
 	// Get interpolator, handle reverse

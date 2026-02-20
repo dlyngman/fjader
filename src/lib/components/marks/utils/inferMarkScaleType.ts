@@ -1,5 +1,5 @@
 import { inferScaleType } from '$lib/scales/scale-inference';
-import { tableSchemaService } from '$lib/data/TableSchemaService.svelte.js';
+import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 
 export function inferMarkScaleType(
 	field: any,

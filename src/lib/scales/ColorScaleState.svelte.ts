@@ -7,7 +7,7 @@ import {
 	parseColorToRGBA
 } from './color-utils';
 import type { RGBA } from './color-utils';
-import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
+import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
 import type { ColorScaleType } from '$lib/types';
 
 interface ColorScaleConfig {
@@ -371,13 +371,9 @@ export class ColorScaleState {
 		this.#viewsCreated.add(sourceTable);
 
 		const alias = this.indexColumnName;
-		const sql = ViewManagerService.buildCaseExpression(
-			this.#field,
-			this.domain as string[],
-			{
-				oneBased: false // 0-based indices (shared with band scales, -1 = null/unknown)
-			}
-		);
+		const sql = ViewManagerService.buildCaseExpression(this.#field, this.domain as string[], {
+			oneBased: false // 0-based indices (shared with band scales, -1 = null/unknown)
+		});
 
 		viewManager.registerColumn(sourceTable, alias, {
 			sql,

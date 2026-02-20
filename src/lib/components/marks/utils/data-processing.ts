@@ -13,8 +13,7 @@ export function getSourceType(value: unknown): SourceType {
 }
 
 const processors: Record<string, (value: any, instanceCount?: number) => Float32Array | null> = {
-	constant: (value: number, instanceCount?: number) =>
-		new Float32Array(instanceCount!).fill(value),
+	constant: (value: number, instanceCount?: number) => new Float32Array(instanceCount!).fill(value),
 	array: (value: number[]) => new Float32Array(value),
 	float32array: (value: Float32Array) => value,
 	sql: (column: any) => {
