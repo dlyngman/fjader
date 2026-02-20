@@ -1,9 +1,34 @@
-<script>
+<script lang="ts">
 	import { setContext, getContext } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
+	import type { Margin } from '$lib/layout/ChartLayout.svelte';
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { ChartContext, Coordinator } from '$lib/types';
 	import ChartCell from './ChartCell.svelte';
+
+	interface Props {
+		xLabel?: string | null;
+		yLabel?: string | null;
+		fx?: string | null;
+		columns?: number | null;
+		background?: Snippet;
+		foreground?: Snippet;
+		canvas?: Snippet;
+		canvasComponents?: Snippet;
+		overlay?: Snippet;
+		interactors?: Snippet;
+		legend?: Snippet;
+		legendPosition?: 'top' | 'right';
+		wheelInteraction?: { dwellTimeMs?: number; momentumThreshold?: number; enabled?: boolean };
+		xZoomLimit?: number;
+		yZoomLimit?: number;
+		xPanLimit?: number;
+		yPanLimit?: number;
+		margin?: Partial<Margin>;
+	}
 
 	let {
 		xLabel = null,
@@ -28,7 +53,7 @@
 		xPanLimit = undefined,
 		yPanLimit = undefined,
 		margin: marginOverride = {}
-	} = $props();
+	}: Props = $props();
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
 	const cellMargin = { ...defaultMargin, ...marginOverride };
@@ -39,9 +64,9 @@
 		height: 250
 	});
 
-	const scaleRegistry = getContext('scale-registry');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const gpuCoordinator = getGPUContext();
-	const coordinator = getContext('mosaic-coordinator');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 
 	// --- Faceting ---
 	const facetBandScale = fx
@@ -68,13 +93,21 @@
 	};
 
 	// --- ChartScales ---
-	let scales = $state(null);
+	let scales = $state<ChartScales | null>(null);
 
 	// Queue for scale registrations that arrive before ChartScales is created.
 	// Marks mount synchronously during render, but ChartScales is created in an
 	// $effect (which runs after render). Without queuing, registerScaleType calls
 	// from mark constructors silently fail via optional chaining on null.
-	let pendingScaleRegistrations = [];
+	interface PendingRegistration {
+		dimension: string;
+		type: string;
+		priority: number;
+		markId: string;
+		config: Record<string, unknown>;
+		columnName: unknown;
+	}
+	let pendingScaleRegistrations: PendingRegistration[] = [];
 
 	$effect(() => {
 		const x = xLabel;
@@ -120,7 +153,7 @@
 	// --- Marks-only context for hidden container (faceted mode) ---
 	// In non-faceted mode, ChartCell overrides this with a full context.
 	// In faceted mode, marks in the hidden container use this minimal context.
-	const marksContext = {
+	const marksContext: ChartContext = {
 		get width() {
 			return layout.width;
 		},

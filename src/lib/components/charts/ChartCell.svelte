@@ -1,11 +1,49 @@
-<script>
+<script lang="ts">
 	import { setContext, getContext, onMount } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
+	import type { Margin } from '$lib/layout/ChartLayout.svelte';
 	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
+	import type { ChartContext, Coordinator } from '$lib/types';
+	import type { ChartScales } from '$lib/scales/ChartScales.svelte';
+	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
+
+	interface FacetingProps {
+		fx: string | null;
+		isFaceted: boolean;
+		facetChartIds: string[];
+		facetBandScale: BandScaleState | null;
+	}
+
+	interface WheelInteractionConfig {
+		dwellTimeMs?: number;
+		momentumThreshold?: number;
+		enabled?: boolean;
+	}
+
+	interface Props {
+		cellChartId: string;
+		facetIndex?: number | null;
+		facetLabel?: string | null;
+		margin?: Margin;
+		height?: number;
+		scales: ChartScales;
+		facetingProps?: FacetingProps;
+		gpuCoordinator: GPUCoordinator;
+		coordinator: Coordinator;
+		wheelInteraction?: WheelInteractionConfig;
+		background?: Snippet;
+		foreground?: Snippet;
+		canvas?: Snippet;
+		canvasComponents?: Snippet;
+		interactors?: Snippet;
+		overlay?: Snippet;
+	}
 
 	let {
 		cellChartId,
@@ -24,7 +62,7 @@
 		canvasComponents = undefined,
 		interactors = undefined,
 		overlay = undefined
-	} = $props();
+	}: Props = $props();
 
 	// --- Layout ---
 	const layout = new ChartLayout({ margin, height });
@@ -103,7 +141,7 @@
 
 	// --- Tooltip ---
 	const isFacetedCell = facetIndex != null;
-	let tooltipManager = $state(null);
+	let tooltipManager = $state<TooltipManager | null>(null);
 
 	$effect(() => {
 		if (!scales || !coordinator || isFacetedCell) return;
@@ -158,7 +196,7 @@
 	});
 
 	// --- Chart context ---
-	const chartContext = {
+	const chartContext: ChartContext = {
 		// Layout — cell-specific
 		get width() {
 			return layout.width;
@@ -331,7 +369,7 @@
 	const wheelControl = new WheelInteractionControl(wheelInteraction);
 	const hasPointerRawUpdate = typeof window !== 'undefined' && 'onpointerrawupdate' in window;
 
-	let svg = $state();
+	let svg = $state<SVGSVGElement>();
 	let isPanning = $state(false);
 	let activePanX = $state(false);
 	let activePanY = $state(false);
@@ -351,7 +389,7 @@
 		tooltipManager?.updatePosition(null, null);
 	}
 
-	function handleWheel(event) {
+	function handleWheel(event: WheelEvent) {
 		if (!wheelControl.shouldCaptureWheel(event)) return;
 		event.preventDefault();
 
@@ -377,11 +415,11 @@
 		tooltipManager?.suppress(100);
 	}
 
-	function handleClick(event) {
+	function handleClick(event: MouseEvent) {
 		chartContext.onChartClick?.(event);
 	}
 
-	function handleDoubleClick(event) {
+	function handleDoubleClick(event: MouseEvent) {
 		event.preventDefault();
 		pointerBuffer.x = event.offsetX;
 		pointerBuffer.y = event.offsetY;
@@ -390,13 +428,13 @@
 		tooltipManager?.suppress(300);
 	}
 
-	function getTouchDistance(t1, t2) {
+	function getTouchDistance(t1: Touch, t2: Touch): number {
 		const dx = t1.clientX - t2.clientX;
 		const dy = t1.clientY - t2.clientY;
 		return Math.sqrt(dx * dx + dy * dy);
 	}
 
-	function handleTouchStart(event) {
+	function handleTouchStart(event: TouchEvent) {
 		if (event.touches.length === 2) {
 			event.preventDefault();
 			isZooming = true;
@@ -409,7 +447,7 @@
 		}
 	}
 
-	function handleTouchMove(event) {
+	function handleTouchMove(event: TouchEvent) {
 		if (!isZooming || event.touches.length !== 2) return;
 		const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
 		const scaleFactor = currentDistance / initialTouchDistance;
@@ -437,7 +475,7 @@
 		activePanY = false;
 	}
 
-	function handlePointerDown(event) {
+	function handlePointerDown(event: PointerEvent) {
 		event.preventDefault();
 		if (event.target.focus) event.target.focus({ preventScroll: true });
 
@@ -466,7 +504,7 @@
 		event.target.setPointerCapture?.(event.pointerId);
 	}
 
-	function processPointerMove(event) {
+	function processPointerMove(event: PointerEvent) {
 		if (isPanning) {
 			scales.updatePanPosition(event.offsetX, event.offsetY);
 			tooltipManager?.suppress(150);
@@ -488,16 +526,16 @@
 		}
 	}
 
-	function handlePointerMove(event) {
+	function handlePointerMove(event: PointerEvent) {
 		if (hasPointerRawUpdate) return;
 		processPointerMove(event);
 	}
 
-	function handlePointerRawUpdate(event) {
+	function handlePointerRawUpdate(event: PointerEvent) {
 		processPointerMove(event);
 	}
 
-	function handlePointerUp(event) {
+	function handlePointerUp(event: PointerEvent) {
 		if (chartContext.onInteractorPointerUp?.(event)) return;
 		isPanning = false;
 		activePanX = false;
