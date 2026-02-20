@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { Dots } from '../rendering/index.js';
@@ -15,6 +15,15 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils/index.js';
+	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, Coordinator } from '$lib/types';
+
+	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
+		x: FieldRef;
+		y: FieldRef;
+		alpha?: number;
+		radius?: number | string | ((point: { x: number; y: number }) => number);
+		radiusRange?: [number, number];
+	}
 
 	let {
 		table,
@@ -22,7 +31,7 @@
 		x,
 		y,
 		color = null,
-		scheme, // No default - MarkColor will infer based on field type
+		scheme,
 		alpha = 0.5,
 		radius = 3,
 		radiusRange = [2, 12],
@@ -33,12 +42,12 @@
 		transforms = [],
 		sort = null,
 		tooltip = true
-	} = $props();
+	}: Props = $props();
 
 	const markId = `dot-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);
@@ -109,17 +118,29 @@
 
 	// --- DATA RESOLUTION ---
 
-	let xData = $derived.by(() => resolveChannelData({
-		value: x, channel: 'x', dataAccessor: setup?.data, instanceCount,
-		scaleState: chartContext.xScaleState,
-		scaleType: setup?.actualXScaleType || chartContext.scaleTypes?.x, markId
-	}));
+	let xData = $derived.by(() =>
+		resolveChannelData({
+			value: x,
+			channel: 'x',
+			dataAccessor: setup?.data,
+			instanceCount,
+			scaleState: chartContext.xScaleState,
+			scaleType: setup?.actualXScaleType || chartContext.scaleTypes?.x,
+			markId
+		})
+	);
 
-	let yData = $derived.by(() => resolveChannelData({
-		value: y, channel: 'y', dataAccessor: setup?.data, instanceCount,
-		scaleState: chartContext.yScaleState,
-		scaleType: setup?.actualYScaleType || chartContext.scaleTypes?.y, markId
-	}));
+	let yData = $derived.by(() =>
+		resolveChannelData({
+			value: y,
+			channel: 'y',
+			dataAccessor: setup?.data,
+			instanceCount,
+			scaleState: chartContext.yScaleState,
+			scaleType: setup?.actualYScaleType || chartContext.scaleTypes?.y,
+			markId
+		})
+	);
 
 	let radiusData = $derived.by(() => {
 		if (!instanceCount) return null;
@@ -136,15 +157,23 @@
 		}
 		// Constant or column name
 		return resolveChannelData({
-			value: radius, channel: 'radius', dataAccessor: setup?.data,
-			instanceCount, fallback: 3
+			value: radius,
+			channel: 'radius',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 3
 		});
 	});
 
-	let alphaData = $derived(resolveChannelData({
-		value: alpha, channel: 'alpha', dataAccessor: setup?.data,
-		instanceCount, fallback: 0.5
-	}));
+	let alphaData = $derived(
+		resolveChannelData({
+			value: alpha,
+			channel: 'alpha',
+			dataAccessor: setup?.data,
+			instanceCount,
+			fallback: 0.5
+		})
+	);
 
 	// --- SETUP LIFECYCLE ---
 
@@ -167,18 +196,21 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'dot',
-			chartContext,
-			channelFields: {
-				x: typeof x === 'string' ? x : 'x',
-				y: typeof y === 'string' ? y : 'y',
-				...(color && { color: typeof color === 'string' ? color : 'color' })
-			},
-			bandAxes: { x: true, y: true },
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'dot',
+				chartContext,
+				channelFields: {
+					x: typeof x === 'string' ? x : 'x',
+					y: typeof y === 'string' ? y : 'y',
+					...(color && { color: typeof color === 'string' ? color : 'color' })
+				},
+				bandAxes: { x: true, y: true },
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 

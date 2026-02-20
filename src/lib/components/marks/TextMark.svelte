@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { BaseMarkSetup } from './BaseMarkSetup.svelte.js';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -12,6 +12,22 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils/index.js';
+	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, Coordinator } from '$lib/types';
+
+	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
+		x: FieldRef;
+		y: FieldRef;
+		text: FieldRef;
+		fontSize?: number;
+		fontWeight?: string;
+		fontFamily?: string | null;
+		dx?: number;
+		dy?: number;
+		textAnchor?: 'start' | 'middle' | 'end';
+		lineAnchor?: 'top' | 'middle' | 'bottom';
+		rotate?: number;
+		format?: (value: unknown) => string;
+	}
 
 	const FADE_THRESHOLD = 100;
 
@@ -39,12 +55,12 @@
 		transforms = [],
 		sort = null,
 		tooltip = false
-	} = $props();
+	}: Props = $props();
 
 	const markId = `text-${crypto.randomUUID().slice(0, 8)}`;
-	const coordinator = getContext('mosaic-coordinator');
-	const chartContext = getContext('chart');
-	const scaleRegistry = getContext('scale-registry');
+	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const chartContext: any = getContext('chart');
+	const scaleRegistry: any = getContext('scale-registry');
 
 	BaseMarkSetup.ensureServices(coordinator);
 
@@ -220,13 +236,9 @@
 		const xType = chartContext.scaleTypes?.x;
 		const yType = chartContext.scaleTypes?.y;
 		const xDomain =
-			xType === 'band' || xType === 'point'
-				? chartContext.xScaleState.effectiveDomain
-				: null;
+			xType === 'band' || xType === 'point' ? chartContext.xScaleState.effectiveDomain : null;
 		const yDomain =
-			yType === 'band' || yType === 'point'
-				? chartContext.yScaleState.effectiveDomain
-				: null;
+			yType === 'band' || yType === 'point' ? chartContext.yScaleState.effectiveDomain : null;
 		const xBandHalf = xType === 'band' ? xScale.bandwidth() / 2 : 0;
 		const yBandHalf = yType === 'band' ? yScale.bandwidth() / 2 : 0;
 
@@ -276,18 +288,21 @@
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(markId, buildTooltipConfig({
-			tempTable: setup.tooltipTableName,
-			markType: 'text',
-			chartContext,
-			channelFields: {
-				x: typeof x === 'string' ? x : 'x',
-				y: typeof y === 'string' ? y : 'y',
-				...(color && typeof color === 'string' && !isColorConstant(color) && { color })
-			},
-			bandAxes: { x: true, y: true },
-			markColorScaleState: markColor.scaleState
-		}));
+		tm.registerMark(
+			markId,
+			buildTooltipConfig({
+				tempTable: setup.tooltipTableName,
+				markType: 'text',
+				chartContext,
+				channelFields: {
+					x: typeof x === 'string' ? x : 'x',
+					y: typeof y === 'string' ? y : 'y',
+					...(color && typeof color === 'string' && !isColorConstant(color) && { color })
+				},
+				bandAxes: { x: true, y: true },
+				markColorScaleState: markColor.scaleState
+			})
+		);
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -297,10 +312,7 @@
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && labelItems.length > 0}
-	<g
-		class="text-mark"
-		class:text-mark-hidden={useFadeMode && scalesAnimating}
-	>
+	<g class="text-mark" class:text-mark-hidden={useFadeMode && scalesAnimating}>
 		{#each labelItems as item, i (item.idx)}
 			{@const pos = positions[i]}
 			<text
@@ -314,8 +326,8 @@
 					? rotate
 						? `translate(${pos.x}px, ${pos.y}px) rotate(${rotate}deg)`
 						: `translate(${pos.x}px, ${pos.y}px)`
-					: null}
-			>{item.label}</text>
+					: null}>{item.label}</text
+			>
 		{/each}
 	</g>
 {/if}
