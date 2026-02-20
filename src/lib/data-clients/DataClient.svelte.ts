@@ -1,4 +1,5 @@
-import { MosaicClient, queryFieldInfo, toDataColumns } from '@uwdata/mosaic-core';
+import { MosaicClient, queryFieldInfo } from '@uwdata/mosaic-core';
+import type { Selection } from '@uwdata/mosaic-core';
 import {
 	Query,
 	column as sqlColumn,
@@ -8,45 +9,69 @@ import {
 	and
 } from '@uwdata/mosaic-sql';
 
+type DataFormat = 'arrow' | 'array' | 'both';
+
+export type QueryBuilder = (
+	sourceTable: string,
+	config: DataClientConfig,
+	filter: unknown[]
+) => any | null;
+
+export interface DataClientOptions {
+	name?: string;
+	filterNulls?: unknown[] | null;
+	dataFormat?: DataFormat;
+	queryBuilder?: QueryBuilder;
+	[key: string]: unknown;
+}
+
+interface DataClientConfig {
+	_filterNulls: unknown[] | null;
+	_dataFormat: DataFormat;
+	[key: string]: unknown;
+}
+
+interface FieldInfoEntry {
+	column: string;
+	[key: string]: unknown;
+}
+
 /**
  * A generic, stateful bridge to the Mosaic data backend.
  * Its primary responsibility is to execute queries and manage the resulting state
  * (data, loading, errors). It is designed to be a reusable service, completely
  * decoupled from any view or chart-specific logic.
- *
- * It is configured by a "controller" (like a MarkSetup class), which tells it
- * what metadata to prepare and how to build its queries.
  */
 export class DataClient extends MosaicClient {
 	// --- Reactive State Properties (for Svelte components to bind to) ---
-	data = $state(null);
-	arrowTable = $state(null);
-	fieldInfo = $state(null);
+	data = $state<unknown[] | null>(null);
+	arrowTable = $state<unknown | null>(null);
+	fieldInfo = $state<Record<string, FieldInfoEntry> | null>(null);
 	loading = $state(false);
 	delayedLoading = $state(false);
-	error = $state(null);
+	error = $state<Error | unknown | null>(null);
 	dataVersion = $state(0);
-	config = $state({});
+	config = $state<DataClientConfig>({ _filterNulls: null, _dataFormat: 'arrow' });
+
+	clientName: string;
+	_sourceTable: string;
 
 	// --- Private Internal Properties ---
-	#loadingTimeout = null;
-	#fieldRequests;
-	#queryBuilder;
+	#loadingTimeout: ReturnType<typeof setTimeout> | null = null;
+	#fieldRequests: unknown[];
+	#queryBuilder: QueryBuilder;
 
-	/**
-	 * Creates an instance of DataClient.
-	 * @param {string} sourceTable The database table to query.
-	 * @param {import('@uwdata/mosaic-core').Selection} [filterBy=null] An optional Mosaic Selection for filtering.
-	 * @param {object} [options={}] Configuration for the client.
-	 * @param {Function} [options.queryBuilder] A function that builds the SQL query. If not provided, a default builder is used.
-	 * @param {Array} [fieldRequests=[]] The specific metadata requests for the prepare() step.
-	 */
-	constructor(sourceTable, filterBy = null, options = {}, fieldRequests = []) {
+	constructor(
+		sourceTable: string,
+		filterBy: Selection | null = null,
+		options: DataClientOptions = {},
+		fieldRequests: unknown[] = []
+	) {
 		super(filterBy);
 
 		const {
 			filterNulls = null,
-			dataFormat = 'arrow',
+			dataFormat = 'arrow' as DataFormat,
 			queryBuilder = this._defaultQueryBuilder,
 			...restOptions
 		} = options;
@@ -67,12 +92,7 @@ export class DataClient extends MosaicClient {
 	// ==  MOSAIC CLIENT LIFECYCLE METHODS                            ==
 	// =================================================================
 
-	/**
-	 * Fetches metadata based on requests provided during construction.
-	 * This is an internal lifecycle hook called by the Coordinator upon connection.
-	 * @override
-	 */
-	async prepare() {
+	async prepare(): Promise<void> {
 		console.log('DataClient: initializing');
 		if (!this.coordinator || this.#fieldRequests.length === 0) {
 			this.fieldInfo = {};
@@ -81,8 +101,8 @@ export class DataClient extends MosaicClient {
 
 		try {
 			const infoArray = await queryFieldInfo(this.coordinator, this.#fieldRequests);
-			const infoMap = {};
-			for (const info of infoArray) {
+			const infoMap: Record<string, FieldInfoEntry> = {};
+			for (const info of infoArray as FieldInfoEntry[]) {
 				const key = info.column.replace(/^["']|["']$/g, '');
 				infoMap[key] = info;
 			}
@@ -94,14 +114,7 @@ export class DataClient extends MosaicClient {
 		}
 	}
 
-	/**
-	 * Builds the main data query by delegating to its assigned query builder.
-	 * This is an internal lifecycle hook called by the Coordinator.
-	 * @override
-	 * @param {Array} [filter=[]] - The filter predicate from `filterBy` Selection.
-	 * @returns {Query | null}
-	 */
-	query(filter = []) {
+	query(filter: unknown[] = []): any | null {
 		if (!this._sourceTable) {
 			this.error = new Error('Source table is not defined.');
 			this.setLoading(false);
@@ -110,21 +123,13 @@ export class DataClient extends MosaicClient {
 		return this.#queryBuilder(this._sourceTable, this.config, filter);
 	}
 
-	/**
-	 * Called by the coordinator when a query is dispatched.
-	 * @override
-	 */
-	queryPending() {
+	queryPending(): this {
 		this.setLoading(true);
 		this.error = null;
 		return this;
 	}
 
-	/**
-	 * Called by the coordinator with the result of a query.
-	 * @override
-	 */
-	queryResult(rawData) {
+	queryResult(rawData: unknown): this {
 		const dataFormat = this.config._dataFormat;
 		try {
 			if (dataFormat === 'arrow' || dataFormat === 'both') {
@@ -132,7 +137,7 @@ export class DataClient extends MosaicClient {
 				this.dataVersion++; // Increment version for reactive consumers
 			}
 			if (dataFormat === 'array' || dataFormat === 'both') {
-				this.data = Array.isArray(rawData) ? rawData : Array.from(rawData);
+				this.data = Array.isArray(rawData) ? rawData : Array.from(rawData as Iterable<unknown>);
 			}
 			this.error = null;
 		} catch (err) {
@@ -143,11 +148,7 @@ export class DataClient extends MosaicClient {
 		return this;
 	}
 
-	/**
-	 * Called by the coordinator when a query fails.
-	 * @override
-	 */
-	queryError(error) {
+	queryError(error: unknown): this {
 		console.error(`[${this.clientName}] Query Error:`, error);
 		this.error = error;
 		this.setLoading(false);
@@ -160,17 +161,12 @@ export class DataClient extends MosaicClient {
 	// ==  DEFAULT QUERY BUILDER                                      ==
 	// =================================================================
 
-	/**
-	 * The default query builder. It correctly handles SQL expressions,
-	 * aggregations, and automatic GROUP BY clause generation.
-	 * This is used when a mark does not provide its own specialized builder.
-	 */
-	_defaultQueryBuilder(sourceTable, config, filter) {
-		const { select, sort, limit, _filterNulls } = config;
+	_defaultQueryBuilder(sourceTable: string, config: DataClientConfig, filter: unknown[]): any {
+		const { select, sort, limit, _filterNulls } = config as any;
 
 		const q = Query.from(sourceTable);
-		const selectDef = {};
-		const nonAggregateGroupBy = [];
+		const selectDef: Record<string, unknown> = {};
+		const nonAggregateGroupBy: unknown[] = [];
 		let hasAggregates = false;
 
 		// 1. Parse select expressions and identify aggregates vs. dimensions
@@ -197,7 +193,7 @@ export class DataClient extends MosaicClient {
 		// 3. Add filtering
 		const allFilters = [...filter];
 		if (_filterNulls && Array.isArray(_filterNulls)) {
-			allFilters.push(..._filterNulls.map((col) => isNotNull(col)));
+			allFilters.push(..._filterNulls.map((col: unknown) => isNotNull(col)));
 		}
 		if (allFilters.length > 0) {
 			q.where(and(allFilters));
@@ -217,7 +213,7 @@ export class DataClient extends MosaicClient {
 	// ==  UTILITY AND CLEANUP METHODS                                ==
 	// =================================================================
 
-	setLoading(value) {
+	setLoading(value: boolean): void {
 		if (value === this.loading) return;
 		this.loading = value;
 
@@ -233,7 +229,7 @@ export class DataClient extends MosaicClient {
 		}
 	}
 
-	destroy() {
+	destroy(): void {
 		if (this.#loadingTimeout) clearTimeout(this.#loadingTimeout);
 		if (this.coordinator) this.coordinator.disconnect(this);
 	}

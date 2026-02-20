@@ -26,7 +26,11 @@
 	}
 
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
-	const { sel: selection, source, off: unregister } = bridge.createToggle(fields[0], {
+	const {
+		sel: selection,
+		source,
+		off: unregister
+	} = bridge.createToggle(fields[0], {
 		scaleStates: getToggleScaleStates
 	});
 
@@ -75,17 +79,13 @@
 
 		// Y-axis margin: click left of inner area, Y within chart range
 		if (!xInBounds && yInBounds && chart.scaleTypes?.y === 'band') {
-			const index = chart.yScaleState.invertScreenToData(
-				innerPoint.y, chart.innerHeight, true
-			);
+			const index = chart.yScaleState.invertScreenToData(innerPoint.y, chart.innerHeight, true);
 			return chart.yScaleState.effectiveDomain[index] ?? null;
 		}
 
 		// X-axis margin: click below inner area, X within chart range
 		if (xInBounds && !yInBounds && chart.scaleTypes?.x === 'band') {
-			const index = chart.xScaleState.invertScreenToData(
-				innerPoint.x, chart.innerWidth, false
-			);
+			const index = chart.xScaleState.invertScreenToData(innerPoint.x, chart.innerWidth, false);
 			return chart.xScaleState.effectiveDomain[index] ?? null;
 		}
 

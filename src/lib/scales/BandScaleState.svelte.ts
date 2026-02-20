@@ -2,7 +2,7 @@
 
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
-import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
+import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
 
 interface BandScaleConfig {
 	padding?: number;
@@ -439,7 +439,10 @@ export class BandScaleState {
 	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
 	 * returns it directly without processing.
 	 */
-	processDataForGPU(categoryData: string[] | Float32Array, markId: string = 'unknown'): Float32Array {
+	processDataForGPU(
+		categoryData: string[] | Float32Array,
+		markId: string = 'unknown'
+	): Float32Array {
 		// Fast path: already Float32Array from derived view (zero-copy)
 		if (categoryData instanceof Float32Array) {
 			return categoryData;

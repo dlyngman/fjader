@@ -1,274 +1,274 @@
 <div class="wrapper">
-<h1>DivePlot Demos</h1>
+	<h1>DivePlot Demos</h1>
 
-<section>
-	<h2>Marks</h2>
-	<div class="grid">
-		<a class="card" href="/bar_chart">
-			<div class="route">/bar_chart</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					BarMarkX, BarMarkY
+	<section>
+		<h2>Marks</h2>
+		<div class="grid">
+			<a class="card" href="/bar_chart">
+				<div class="route">/bar_chart</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						BarMarkX, BarMarkY
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						GPU color scale modes, stacking, normalize, range bars
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					GPU color scale modes, stacking, normalize, range bars
+			</a>
+			<a class="card" href="/line_chart">
+				<div class="route">/line_chart</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						LineMark
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Multi-series lines, gap handling, stroke width, color by series
+					</div>
 				</div>
-			</div>
-		</a>
-		<a class="card" href="/line_chart">
-			<div class="route">/line_chart</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					LineMark
+			</a>
+			<a class="card" href="/histogram">
+				<div class="route">/histogram</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						RectYMark
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Histogram via bin() + count(), penguins and travelers datasets
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Multi-series lines, gap handling, stroke width, color by series
+			</a>
+			<a class="card" href="/zero-baseline-test">
+				<div class="route">/zero-baseline-test</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						BarMarkY
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Zero baseline: negative-only, mixed, positive-only values
+					</div>
 				</div>
-			</div>
-		</a>
-		<a class="card" href="/histogram">
-			<div class="route">/histogram</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					RectYMark
-				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Histogram via bin() + count(), penguins and travelers datasets
-				</div>
-			</div>
-		</a>
-		<a class="card" href="/zero-baseline-test">
-			<div class="route">/zero-baseline-test</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					BarMarkY
-				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Zero baseline: negative-only, mixed, positive-only values
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Scales</h2>
-	<div class="grid">
-		<a class="card" href="/color_scale_test">
-			<div class="route">/color_scale_test</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark, BarMarkY
+	<section>
+		<h2>Scales</h2>
+		<div class="grid">
+			<a class="card" href="/color_scale_test">
+				<div class="route">/color_scale_test</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark, BarMarkY
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Categorical vs continuous color scales, scheme gallery
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Categorical vs continuous color scales, scheme gallery
+			</a>
+			<a class="card" href="/time_scale_test">
+				<div class="route">/time_scale_test</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Time scale axis formatting with synthetic hourly data
+					</div>
 				</div>
-			</div>
-		</a>
-		<a class="card" href="/time_scale_test">
-			<div class="route">/time_scale_test</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark
+			</a>
+			<a class="card" href="/test_scale_conf">
+				<div class="route">/test_scale_conf</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						<em>utility</em>
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Scale config resolution testing, band padding/alignment
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Time scale axis formatting with synthetic hourly data
-				</div>
-			</div>
-		</a>
-		<a class="card" href="/test_scale_conf">
-			<div class="route">/test_scale_conf</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					<em>utility</em>
-				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Scale config resolution testing, band padding/alignment
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Layout & Grid</h2>
-	<div class="grid">
-		<a class="card" href="/scatter_plot_matrix">
-			<div class="route">/scatter_plot_matrix</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark, BarMarkX, BarMarkY
+	<section>
+		<h2>Layout & Grid</h2>
+		<div class="grid">
+			<a class="card" href="/scatter_plot_matrix">
+				<div class="route">/scatter_plot_matrix</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark, BarMarkX, BarMarkY
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Small multiples grid, dynamic rows/columns, column selector
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Small multiples grid, dynamic rows/columns, column selector
+			</a>
+			<a class="card" href="/grid_test">
+				<div class="route">/grid_test</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark, Grid
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Hybrid GPU/SVG grid, zero-lag movement at 120fps
+					</div>
 				</div>
-			</div>
-		</a>
-		<a class="card" href="/grid_test">
-			<div class="route">/grid_test</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark, Grid
-				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Hybrid GPU/SVG grid, zero-lag movement at 120fps
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Interactors</h2>
-	<div class="grid">
-		<a class="card" href="/brush-demo">
-			<div class="route">/brush-demo</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark, BarMarkY, Interval2D, FilterBridge
+	<section>
+		<h2>Interactors</h2>
+		<div class="grid">
+			<a class="card" href="/brush-demo">
+				<div class="route">/brush-demo</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark, BarMarkY, Interval2D, FilterBridge
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Cross-chart brushing, 2D interval selection, filter chips
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Cross-chart brushing, 2D interval selection, filter chips
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Transforms</h2>
-	<div class="grid">
-		<a class="card" href="/transform-test">
-			<div class="route">/transform-test</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark, BarMarkX
+	<section>
+		<h2>Transforms</h2>
+		<div class="grid">
+			<a class="card" href="/transform-test">
+				<div class="route">/transform-test</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark, BarMarkX
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						bin, filter (SQL) + topN, normalize, stack (JS)
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					bin, filter (SQL) + topN, normalize, stack (JS)
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Mosaic Examples</h2>
-	<div class="grid">
-		<a class="card" href="/mosaic_examples/airline_travelers">
-			<div class="route">/mosaic_examples/airline_travelers</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					LineMark, DotsMark
+	<section>
+		<h2>Mosaic Examples</h2>
+		<div class="grid">
+			<a class="card" href="/mosaic_examples/airline_travelers">
+				<div class="route">/mosaic_examples/airline_travelers</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						LineMark, DotsMark
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Line chart with overlaid dots, multiple series
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Line chart with overlaid dots, multiple series
+			</a>
+			<a class="card" href="/mosaic_examples/flights_200k">
+				<div class="route">/mosaic_examples/flights_200k</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						RectYMark, IntervalX, FilterBridge
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Three coordinated histograms with cross-filtering, 200k rows
+					</div>
 				</div>
-			</div>
-		</a>
-		<a class="card" href="/mosaic_examples/flights_200k">
-			<div class="route">/mosaic_examples/flights_200k</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					RectYMark, IntervalX, FilterBridge
+			</a>
+			<a class="card" href="/mosaic_examples/weather">
+				<div class="route">/mosaic_examples/weather</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						...
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Sync view
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Three coordinated histograms with cross-filtering, 200k rows
-				</div>
-			</div>
-		</a>
-		<a class="card" href="/mosaic_examples/weather">
-			<div class="route">/mosaic_examples/weather</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					...
-				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Sync view 
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Integration</h2>
-	<div class="grid">
-		<a class="card" href="/flights_200k">
-			<div class="route">/flights_200k</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark, RectYMark, IntervalX, FilterBridge
+	<section>
+		<h2>Integration</h2>
+		<div class="grid">
+			<a class="card" href="/flights_200k">
+				<div class="route">/flights_200k</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark, RectYMark, IntervalX, FilterBridge
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Scatter + histogram with cross-filtering, aggregated color
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Scatter + histogram with cross-filtering, aggregated color
+			</a>
+			<a class="card" href="/performance-demo">
+				<div class="route">/performance-demo</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						DotsMark
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						FPS tracking, GPU debug tools, dynamic chart count
+					</div>
 				</div>
-			</div>
-		</a>
-		<a class="card" href="/performance-demo">
-			<div class="route">/performance-demo</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					DotsMark
-				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					FPS tracking, GPU debug tools, dynamic chart count
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 
-<section>
-	<h2>Data Internals</h2>
-	<div class="grid">
-		<a class="card" href="/test/flechette-structure">
-			<div class="route">/test/flechette-structure</div>
-			<div class="cols">
-				<div class="col">
-					<span class="label">Components</span>
-					<em>utility</em>
+	<section>
+		<h2>Data Internals</h2>
+		<div class="grid">
+			<a class="card" href="/test/flechette-structure">
+				<div class="route">/test/flechette-structure</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						<em>utility</em>
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Arrow IPC dictionary encoding inspection, DuckDB ENUM structure
+					</div>
 				</div>
-				<div class="col">
-					<span class="label">Description</span>
-					Arrow IPC dictionary encoding inspection, DuckDB ENUM structure
-				</div>
-			</div>
-		</a>
-	</div>
-</section>
+			</a>
+		</div>
+	</section>
 </div>
 
 <style>

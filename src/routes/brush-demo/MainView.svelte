@@ -19,7 +19,6 @@
 	const filterBridge = new FilterBridge(Selection, null);
 	globalThis.filterBridge = filterBridge;
 
-
 	// // Reactive filter count
 	// $effect(() => {
 	// 	console.log('Active filters:', filterBridge.activeCount, $state.snapshot(filterBridge.items));
@@ -30,9 +29,9 @@
 	<h1>Cross-Chart Brushing Demo</h1>
 
 	<p class="instructions">
-		<strong>Instructions:</strong> Drag in the scatter plot to create a 2D brush. The bar chart
-		will update to show only filtered data. Click outside the brush to clear it, or drag to create
-		a new one. Hold <kbd>Shift</kbd> and scroll to scale the brush.
+		<strong>Instructions:</strong> Drag in the scatter plot to create a 2D brush. The bar chart will
+		update to show only filtered data. Click outside the brush to clear it, or drag to create a new
+		one. Hold <kbd>Shift</kbd> and scroll to scale the brush.
 	</p>
 
 	<div class="charts-wrapper">
@@ -107,13 +106,15 @@
 						<span class="chip-label"
 							>{item.schema?.label || 'Filter'}:
 							{#if item.schema?.xValues && item.schema?.yValues}
-								{item.schema.xColumn}: [{item.schema.xValues[0]?.toFixed(1)}, {item.schema
-									.xValues[1]?.toFixed(1)}] × {item.schema.yColumn}: [{item.schema.yValues[0]?.toFixed(
+								{item.schema.xColumn}: [{item.schema.xValues[0]?.toFixed(1)}, {item.schema.xValues[1]?.toFixed(
 									1
-								)}, {item.schema.yValues[1]?.toFixed(1)}]
+								)}] × {item.schema.yColumn}: [{item.schema.yValues[0]?.toFixed(1)}, {item.schema.yValues[1]?.toFixed(
+									1
+								)}]
 							{:else if item.schema?.values}
-								[{item.schema.values[0]?.toFixed?.(1) ?? item.schema.values[0]}, {item.schema
-									.values[1]?.toFixed?.(1) ?? item.schema.values[1]}]
+								[{item.schema.values[0]?.toFixed?.(1) ?? item.schema.values[0]}, {item.schema.values[1]?.toFixed?.(
+									1
+								) ?? item.schema.values[1]}]
 							{:else}
 								active
 							{/if}

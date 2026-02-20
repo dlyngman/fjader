@@ -1,12 +1,6 @@
 <script>
 	import { getContext } from 'svelte';
-	import {
-		ChartContainer,
-		Grid,
-		Crosshair,
-		WebGPUCanvas,
-		LineMark
-	} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');
 </script>
@@ -18,7 +12,7 @@
 	<div class="charts-grid">
 		<div class="chart-wrapper">
 			<h3>M4 Enabled (optimize=true)</h3>
-			<ChartContainer xLabel="x" yLabel="y">
+			<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}

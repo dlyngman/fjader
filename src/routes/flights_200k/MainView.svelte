@@ -21,11 +21,9 @@
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 
-
 	const coordinator = getContext('mosaic-coordinator');
 	// const brushSeletion = Selection.crossfilter();
 	const filterBridge = new FilterBridge(Selection, null);
-
 </script>
 
 <div class="main-view-container">

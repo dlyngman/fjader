@@ -854,9 +854,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 	function handleWheel(e) {
 		e.preventDefault();
 		const scaleFactor =
-			e.deltaY < 0
-				? 1 + Math.abs(e.deltaY) * 0.003
-				: 1 / (1 + Math.abs(e.deltaY) * 0.003);
+			e.deltaY < 0 ? 1 + Math.abs(e.deltaY) * 0.003 : 1 / (1 + Math.abs(e.deltaY) * 0.003);
 		// Zoom around cursor — use whichever canvas wrapper received the event
 		const rect = e.currentTarget.getBoundingClientRect();
 		const nx = (e.clientX - rect.left) / rect.width;
@@ -890,7 +888,10 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 <div class="page">
 	<h2>Jank Bisect — Scatter Plot Pan Test</h2>
 	<p class="info">{info}</p>
-	<p class="info ptr-rate">Pointer events/sec: <strong>{pointerRate}</strong> {pointerRate < 60 ? '— low, try mouse or click-drag' : ''}</p>
+	<p class="info ptr-rate">
+		Pointer events/sec: <strong>{pointerRate}</strong>
+		{pointerRate < 60 ? '— low, try mouse or click-drag' : ''}
+	</p>
 	<p class="active">Active: {activeToggles}</p>
 
 	<div class="layout">
@@ -902,13 +903,25 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 					<button onclick={applyLoopOnly}>Loop only</button>
 					<button onclick={applyDivePlot}>Full DivePlot</button>
 					<button onclick={resetStats}>Reset Stats</button>
-					<button class="toggle-canvas" class:active-btn={showWebGPU} onclick={() => showWebGPU = !showWebGPU}>
+					<button
+						class="toggle-canvas"
+						class:active-btn={showWebGPU}
+						onclick={() => (showWebGPU = !showWebGPU)}
+					>
 						GPU {showWebGPU ? 'ON' : 'OFF'}
 					</button>
-					<button class="toggle-canvas" class:active-btn={showCanvas2D} onclick={() => showCanvas2D = !showCanvas2D}>
+					<button
+						class="toggle-canvas"
+						class:active-btn={showCanvas2D}
+						onclick={() => (showCanvas2D = !showCanvas2D)}
+					>
 						2D {showCanvas2D ? 'ON' : 'OFF'}
 					</button>
-					<button class="toggle-canvas" class:active-btn={show2DGrid} onclick={() => show2DGrid = !show2DGrid}>
+					<button
+						class="toggle-canvas"
+						class:active-btn={show2DGrid}
+						onclick={() => (show2DGrid = !show2DGrid)}
+					>
 						Grid
 					</button>
 				</div>
@@ -917,8 +930,8 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 			<div class="group">
 				<strong>Animation Loop</strong>
 				<label
-					><input type="checkbox" bind:checked={useRafAtEnd} onchange={resetStats} /> RAF at end
-					of frame
+					><input type="checkbox" bind:checked={useRafAtEnd} onchange={resetStats} /> RAF at end of
+					frame
 					<span class="note-inline">(vs top)</span></label
 				>
 				<label
@@ -927,8 +940,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 					<span class="note-inline">(accumulator loop)</span></label
 				>
 				<label
-					><input type="checkbox" bind:checked={useSpring} onchange={resetStats} /> Spring
-					physics
+					><input type="checkbox" bind:checked={useSpring} onchange={resetStats} /> Spring physics
 					<span class="note-inline">(critically-damped, stiffness 600)</span></label
 				>
 				<label
@@ -956,12 +968,10 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 					strict</label
 				>
 				<label
-					><input type="checkbox" bind:checked={wrapIsolation} onchange={resetStats} /> isolation:
-					isolate</label
+					><input type="checkbox" bind:checked={wrapIsolation} onchange={resetStats} /> isolation: isolate</label
 				>
 				<label
-					><input type="checkbox" bind:checked={wrapTranslateZ} onchange={resetStats} /> transform:
-					translateZ(0)</label
+					><input type="checkbox" bind:checked={wrapTranslateZ} onchange={resetStats} /> transform: translateZ(0)</label
 				>
 				<label
 					><input type="checkbox" bind:checked={wrapWillChange} onchange={resetStats} /> will-change:
@@ -1008,7 +1018,8 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 			<div class="group">
 				<strong>DOM Siblings</strong>
 				<label
-					><input type="checkbox" bind:checked={showDummyCanvas} onchange={resetStats} /> Dummy Canvas 2D
+					><input type="checkbox" bind:checked={showDummyCanvas} onchange={resetStats} /> Dummy
+					Canvas 2D
 					<span class="note-inline">({dummySize}×{dummySize}px, outside wrapper)</span></label
 				>
 				{#if showDummyCanvas}
@@ -1022,16 +1033,16 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 					>
 				{/if}
 				<label
-					><input type="checkbox" bind:checked={showSvgBg} onchange={resetStats} /> SVG background
-					(z-index: 1)</label
+					><input type="checkbox" bind:checked={showSvgBg} onchange={resetStats} /> SVG background (z-index:
+					1)</label
 				>
 				<label
-					><input type="checkbox" bind:checked={showSvgFg} onchange={resetStats} /> SVG foreground
-					(z-index: 3)</label
+					><input type="checkbox" bind:checked={showSvgFg} onchange={resetStats} /> SVG foreground (z-index:
+					3)</label
 				>
 				<label
-					><input type="checkbox" bind:checked={showOverlay} onchange={resetStats} /> Overlay div
-					(z-index: 10)</label
+					><input type="checkbox" bind:checked={showOverlay} onchange={resetStats} /> Overlay div (z-index:
+					10)</label
 				>
 				{#if showSvgBg || showSvgFg}
 					<label class="range"
@@ -1045,72 +1056,72 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 		<div class="canvases">
 			<!-- WebGPU canvas -->
 			{#if showWebGPU}
-			<div class="canvas-col">
-				<div class="canvas-label">WebGPU</div>
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<div
-					class="chart-wrapper"
-					class:cw-contain-strict={wrapContainStrict}
-					class:cw-isolation={wrapIsolation}
-					class:cw-translate-z={wrapTranslateZ}
-					class:cw-will-change={wrapWillChange}
-					onpointerdown={handlePointerDown}
-					onpointermove={handlePointerMove}
-					onpointerrawupdate={handlePointerRawUpdate}
-					onpointerup={handlePointerUp}
-					onpointercancel={handlePointerUp}
-					onpointerenter={handlePointerEnter}
-					onwheel={handleWheel}
-					ondblclick={handleDblClick}
-				>
-					{#if show2DGrid}
-						<canvas
-							bind:this={canvasGrid}
-							class="grid-underlay"
-							style="width: 600px; height: 600px;"
-						></canvas>
-					{/if}
-
-					{#if showSvgBg}
-						<svg class="svg-bg" width="600" height="600">
-							{#each ticks as y, i (i)}
-								<line x1="0" x2="600" y1={y} y2={y} stroke="#333" />
-							{/each}
-							{#each ticks as x, i (i)}
-								<line x1={x} x2={x} y1="0" y2="600" stroke="#333" />
-							{/each}
-						</svg>
-					{/if}
-
+				<div class="canvas-col">
+					<div class="canvas-label">WebGPU</div>
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
-						class="canvas-layer"
-						class:cl-contain-strict={layerContainStrict}
-						class:cl-will-change={layerWillChange}
+						class="chart-wrapper"
+						class:cw-contain-strict={wrapContainStrict}
+						class:cw-isolation={wrapIsolation}
+						class:cw-translate-z={wrapTranslateZ}
+						class:cw-will-change={wrapWillChange}
+						onpointerdown={handlePointerDown}
+						onpointermove={handlePointerMove}
+						onpointerrawupdate={handlePointerRawUpdate}
+						onpointerup={handlePointerUp}
+						onpointercancel={handlePointerUp}
+						onpointerenter={handlePointerEnter}
+						onwheel={handleWheel}
+						ondblclick={handleDblClick}
 					>
-						<canvas
-							bind:this={canvas}
-							class:cv-translate-z={canvasTranslateZ}
-							class:cv-contain-size={canvasContainSize}
-							class:cv-will-change={canvasWillChange}
-							style="width: 600px; height: 600px;"
-						></canvas>
-					</div>
+						{#if show2DGrid}
+							<canvas
+								bind:this={canvasGrid}
+								class="grid-underlay"
+								style="width: 600px; height: 600px;"
+							></canvas>
+						{/if}
 
-					{#if showSvgFg}
-						<svg class="svg-fg" width="600" height="600">
-							{#each ticks as x, i (i)}
-								<line x1={x} x2={x} y1="590" y2="600" stroke="#888" />
-							{/each}
-						</svg>
-					{/if}
+						{#if showSvgBg}
+							<svg class="svg-bg" width="600" height="600">
+								{#each ticks as y, i (i)}
+									<line x1="0" x2="600" y1={y} y2={y} stroke="#333" />
+								{/each}
+								{#each ticks as x, i (i)}
+									<line x1={x} x2={x} y1="0" y2="600" stroke="#333" />
+								{/each}
+							</svg>
+						{/if}
 
-					{#if showOverlay}
-						<div class="overlay-layer">
-							<div class="overlay-content">overlay</div>
+						<div
+							class="canvas-layer"
+							class:cl-contain-strict={layerContainStrict}
+							class:cl-will-change={layerWillChange}
+						>
+							<canvas
+								bind:this={canvas}
+								class:cv-translate-z={canvasTranslateZ}
+								class:cv-contain-size={canvasContainSize}
+								class:cv-will-change={canvasWillChange}
+								style="width: 600px; height: 600px;"
+							></canvas>
 						</div>
-					{/if}
+
+						{#if showSvgFg}
+							<svg class="svg-fg" width="600" height="600">
+								{#each ticks as x, i (i)}
+									<line x1={x} x2={x} y1="590" y2="600" stroke="#888" />
+								{/each}
+							</svg>
+						{/if}
+
+						{#if showOverlay}
+							<div class="overlay-layer">
+								<div class="overlay-content">overlay</div>
+							</div>
+						{/if}
+					</div>
 				</div>
-			</div>
 			{/if}
 
 			<!-- Canvas 2D reference -->
@@ -1129,10 +1140,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 						onwheel={handleWheel}
 						ondblclick={handleDblClick}
 					>
-						<canvas
-							bind:this={canvas2d}
-							style="width: 600px; height: 600px;"
-						></canvas>
+						<canvas bind:this={canvas2d} style="width: 600px; height: 600px;"></canvas>
 					</div>
 				</div>
 			{/if}
@@ -1148,8 +1156,8 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 	{/if}
 
 	<p class="note">
-		Drag on either canvas to pan both. Same domain, same frame. Compare WebGPU vs Canvas 2D smoothness.<br
-		/>
+		Drag on either canvas to pan both. Same domain, same frame. Compare WebGPU vs Canvas 2D
+		smoothness.<br />
 		Scroll to zoom, double-click to reset.
 	</p>
 
@@ -1158,9 +1166,9 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 
 		<h3>The Problem</h3>
 		<p>
-			DivePlot shows intermittent microstutter/jank when panning on Chrome at 120fps.
-			Safari 26 with WebGPU is buttery smooth. The jank manifests as periods of lower
-			perceived refresh rate that come and go during interaction.
+			DivePlot shows intermittent microstutter/jank when panning on Chrome at 120fps. Safari 26 with
+			WebGPU is buttery smooth. The jank manifests as periods of lower perceived refresh rate that
+			come and go during interaction.
 		</p>
 
 		<h3>Confirmed Facts</h3>
@@ -1169,7 +1177,9 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 			<li>JS work time is 1.5ms — well within the 8.33ms frame budget</li>
 			<li>Chrome FPS counter shows 120fps throughout</li>
 			<li>GPU timing queries show fast execution</li>
-			<li><code>/test/gpu-minimal</code> (standalone WebGPU, no DivePlot) is smooth on the same Chrome</li>
+			<li>
+				<code>/test/gpu-minimal</code> (standalone WebGPU, no DivePlot) is smooth on the same Chrome
+			</li>
 			<li>Safari 26 is buttery smooth with identical DivePlot code</li>
 		</ul>
 
@@ -1179,20 +1189,48 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 				<tr><th>Test</th><th>Change</th><th>Result</th></tr>
 			</thead>
 			<tbody>
-				<tr><td>SVG layers off</td><td>Removed SVG axis/grid components</td><td>No difference</td></tr>
+				<tr
+					><td>SVG layers off</td><td>Removed SVG axis/grid components</td><td>No difference</td
+					></tr
+				>
 				<tr><td>MSAA off</td><td>msaaSampleCount: 4 → 1</td><td>No difference</td></tr>
-				<tr><td>Svelte reactivity off</td><td>Commented out _version++ in updateRenderState</td><td>No difference</td></tr>
-				<tr><td>SSBO fresh buffer/frame</td><td>New GPUBuffer + GPUBindGroup each frame</td><td>No difference</td></tr>
-				<tr><td>Extrapolation off</td><td>#onRender(0) instead of #onRender(accumulator)</td><td>Slightly different, still bad</td></tr>
-				<tr><td>desynchronized off</td><td>Removed desynchronized: true</td><td>Slightly worse</td></tr>
-				<tr><td>desynchronized + CSS</td><td>Removed desynchronized + will-change + translateZ</td><td>Worse</td></tr>
-				<tr><td>Render pass → clear</td><td>Only color clear, no marks/MSAA/bind groups</td><td>Couldn't evaluate (no motion)</td></tr>
+				<tr
+					><td>Svelte reactivity off</td><td>Commented out _version++ in updateRenderState</td><td
+						>No difference</td
+					></tr
+				>
+				<tr
+					><td>SSBO fresh buffer/frame</td><td>New GPUBuffer + GPUBindGroup each frame</td><td
+						>No difference</td
+					></tr
+				>
+				<tr
+					><td>Extrapolation off</td><td>#onRender(0) instead of #onRender(accumulator)</td><td
+						>Slightly different, still bad</td
+					></tr
+				>
+				<tr
+					><td>desynchronized off</td><td>Removed desynchronized: true</td><td>Slightly worse</td
+					></tr
+				>
+				<tr
+					><td>desynchronized + CSS</td><td>Removed desynchronized + will-change + translateZ</td
+					><td>Worse</td></tr
+				>
+				<tr
+					><td>Render pass → clear</td><td>Only color clear, no marks/MSAA/bind groups</td><td
+						>Couldn't evaluate (no motion)</td
+					></tr
+				>
 			</tbody>
 		</table>
 
 		<h3>Ruled Out</h3>
 		<ul>
-			<li>WebGPU object lifecycle (pipelines, MSAA textures, render pass descriptors, bind groups — all cached)</li>
+			<li>
+				WebGPU object lifecycle (pipelines, MSAA textures, render pass descriptors, bind groups —
+				all cached)
+			</li>
 			<li>Per-frame allocations (only standard WebGPU ops)</li>
 			<li>Buffer barriers (fresh buffer per frame didn't help)</li>
 			<li>Svelte framework overhead (disabling _version++ had no effect)</li>
@@ -1205,36 +1243,52 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 			Built this isolated test page replicating DivePlot's DOM structure (contain: strict,
 			isolation: isolate, translateZ(0), will-change, z-indexed SVG/canvas/overlay layers).
 		</p>
-		<p><strong>Result: "Full DivePlot" CSS preset looked smooth.</strong>
-			CSS properties and DOM structure alone are NOT the cause.</p>
+		<p>
+			<strong>Result: "Full DivePlot" CSS preset looked smooth.</strong>
+			CSS properties and DOM structure alone are NOT the cause.
+		</p>
 
 		<h3>Phase 3: Animation Loop Bisect</h3>
 		<p>Added toggles for DivePlot's runtime behaviors:</p>
 		<ul>
 			<li><strong>RAF at end</strong> — requestAnimationFrame after submit (vs top of frame)</li>
-			<li><strong>Fixed timestep 360Hz</strong> — accumulator loop, ~3 physics steps per 120fps frame</li>
-			<li><strong>Spring physics</strong> — critically-damped spring (stiffness 600 for pan, 400 default)</li>
+			<li>
+				<strong>Fixed timestep 360Hz</strong> — accumulator loop, ~3 physics steps per 120fps frame
+			</li>
+			<li>
+				<strong>Spring physics</strong> — critically-damped spring (stiffness 600 for pan, 400 default)
+			</li>
 			<li><strong>Idle detection</strong> — stop/start RAF on interaction boundaries</li>
-			<li><strong>Extra buffer writes</strong> — 6× writeBuffer per frame simulating SSBO updates</li>
+			<li>
+				<strong>Extra buffer writes</strong> — 6× writeBuffer per frame simulating SSBO updates
+			</li>
 			<li><strong>pointerrawupdate</strong> — higher-frequency input events</li>
 		</ul>
 
 		<h3>Phase 3 Findings</h3>
 		<ul>
-			<li>Pointer event rate is ~110Hz (pointermove) / ~123Hz (pointerrawupdate) — input frequency is fine</li>
-			<li><strong>Bare mode (direct domain, no spring) feels WORSE than with spring</strong> — the spring
-				provides temporal smoothing of discrete pointer events, which is essential at 120fps</li>
+			<li>
+				Pointer event rate is ~110Hz (pointermove) / ~123Hz (pointerrawupdate) — input frequency is
+				fine
+			</li>
+			<li>
+				<strong>Bare mode (direct domain, no spring) feels WORSE than with spring</strong> — the spring
+				provides temporal smoothing of discrete pointer events, which is essential at 120fps
+			</li>
 			<li>Spring + fixed timestep still shows some perceived jank on WebGPU</li>
 		</ul>
 
 		<h3>Phase 4: Canvas 2D Reference</h3>
 		<p>
-			Added a Canvas 2D scatter plot side-by-side with WebGPU, sharing the same domain springs.
-			Both render in the same RAF callback, same pointer events, same frame.
+			Added a Canvas 2D scatter plot side-by-side with WebGPU, sharing the same domain springs. Both
+			render in the same RAF callback, same pointer events, same frame.
 		</p>
-		<p><strong>Key observation: WebGPU canvas may feel smoother when a Canvas 2D element is also
-			present on the page</strong> — suggesting Chrome's compositor changes scheduling behavior
-			with mixed rendering contexts.</p>
+		<p>
+			<strong
+				>Key observation: WebGPU canvas may feel smoother when a Canvas 2D element is also present
+				on the page</strong
+			> — suggesting Chrome's compositor changes scheduling behavior with mixed rendering contexts.
+		</p>
 		<p>
 			The "Grid" toggle adds a lightweight Canvas 2D layer underneath the WebGPU canvas
 			(domain-aware grid lines only) to test if a layered 2D canvas affects WebGPU presentation
@@ -1243,21 +1297,27 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 
 		<h3>Current Hypothesis</h3>
 		<p>
-			The issue lives between <code>queue.submit()</code> and pixels appearing on screen —
-			Chrome's internal presentation/compositor pipeline. Our code submits perfectly-timed,
-			fast-executing frames, but Chrome delivers them to the 120Hz display unevenly.
-			This does NOT happen on Safari or on simpler WebGPU pages within the same Chrome.
-			The presence of a Canvas 2D element may influence Chrome's compositor scheduling
-			heuristics in a way that improves WebGPU frame pacing.
+			The issue lives between <code>queue.submit()</code> and pixels appearing on screen — Chrome's internal
+			presentation/compositor pipeline. Our code submits perfectly-timed, fast-executing frames, but
+			Chrome delivers them to the 120Hz display unevenly. This does NOT happen on Safari or on simpler
+			WebGPU pages within the same Chrome. The presence of a Canvas 2D element may influence Chrome's
+			compositor scheduling heuristics in a way that improves WebGPU frame pacing.
 		</p>
 
 		<h3>Remaining Unknowns</h3>
 		<ul>
 			<li>Does a Chrome Performance trace (Frames lane) show compositor-level frame drops?</li>
-			<li>Does a production build (<code>npm run build && npm run preview</code>) behave differently?</li>
-			<li>Do Chrome flags (<code>chrome://flags/#enable-webgpu-developer-features</code>) affect it?</li>
+			<li>
+				Does a production build (<code>npm run build && npm run preview</code>) behave differently?
+			</li>
+			<li>
+				Do Chrome flags (<code>chrome://flags/#enable-webgpu-developer-features</code>) affect it?
+			</li>
 			<li>Is the effect reproducible with a dummy Canvas 2D (just clear, no drawing)?</li>
-			<li>Does the number/complexity of WebGPU draw calls matter, or is it purely a presentation issue?</li>
+			<li>
+				Does the number/complexity of WebGPU draw calls matter, or is it purely a presentation
+				issue?
+			</li>
 		</ul>
 	</details>
 </div>

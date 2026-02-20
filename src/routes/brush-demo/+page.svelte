@@ -5,7 +5,6 @@
 	import { onMount, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
-
 	setCoordinators();
 
 	// Create coordinator synchronously so context is available
@@ -30,7 +29,6 @@
 			loadError = error.message;
 		}
 	});
-
 </script>
 
 {#if loadError}

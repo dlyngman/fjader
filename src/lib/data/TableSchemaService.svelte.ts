@@ -1,4 +1,13 @@
-// src/lib/data/TableSchemaService.svelte.js
+// src/lib/data/TableSchemaService.svelte.ts
+
+import type { Coordinator } from '@uwdata/mosaic-core';
+
+export type JsColumnType = 'number' | 'string' | 'date' | 'boolean';
+
+export interface ColumnSchemaEntry {
+	sqlType: string;
+	jsType: JsColumnType;
+}
 
 /**
  * TableSchemaService caches table schemas from DuckDB.
@@ -10,19 +19,15 @@
  * - One DESCRIBE query per unique table
  */
 class TableSchemaServiceImpl {
-	#coordinator = null;
-	#schemas = $state(new Map()); // Map<tableName, Map<columnName, { sqlType, jsType }>>
-	#pending = new Set(); // Tables currently being fetched
-	#deferredRequests = new Set(); // Tables requested before coordinator was available
+	#coordinator: Coordinator | null = null;
+	#schemas = $state(new Map<string, Map<string, ColumnSchemaEntry>>());
+	#pending = new Set<string>(); // Tables currently being fetched
+	#deferredRequests = new Set<string>(); // Tables requested before coordinator was available
 
 	// Reactive version counter - external code reads this to establish dependency
 	version = $state(0);
 
-	/**
-	 * Set the Mosaic coordinator. Called lazily when available.
-	 * @param {Object} coordinator - Mosaic coordinator instance
-	 */
-	setCoordinator(coordinator) {
+	setCoordinator(coordinator: Coordinator): void {
 		if (this.#coordinator === coordinator) return;
 		this.#coordinator = coordinator;
 
@@ -33,23 +38,13 @@ class TableSchemaServiceImpl {
 		this.#deferredRequests.clear();
 	}
 
-	/**
-	 * Get the Mosaic coordinator.
-	 * @returns {Object|null}
-	 */
-	getCoordinator() {
+	getCoordinator(): Coordinator | null {
 		return this.#coordinator;
 	}
 
-	/**
-	 * Request schema for a table. Triggers async fetch if not cached.
-	 * Returns cached schema or null if not yet available.
-	 * @param {string} tableName
-	 * @returns {Map<string, {sqlType: string, jsType: string}>|null}
-	 */
-	getSchema(tableName) {
+	getSchema(tableName: string): Map<string, ColumnSchemaEntry> | null {
 		if (this.#schemas.has(tableName)) {
-			return this.#schemas.get(tableName);
+			return this.#schemas.get(tableName)!;
 		}
 
 		// Trigger fetch if coordinator available, otherwise defer
@@ -65,40 +60,24 @@ class TableSchemaServiceImpl {
 		return null;
 	}
 
-	/**
-	 * Get the JavaScript type for a specific column.
-	 * Returns null if schema not yet available.
-	 * @param {string} tableName
-	 * @param {string} columnName
-	 * @returns {'number'|'string'|'date'|'boolean'|null}
-	 */
-	getColumnType(tableName, columnName) {
+	getColumnType(tableName: string, columnName: string): JsColumnType | null {
 		const schema = this.#schemas.get(tableName);
 		return schema?.get(columnName)?.jsType ?? null;
 	}
 
-	/**
-	 * Check if schema is ready for a table.
-	 * @param {string} tableName
-	 * @returns {boolean}
-	 */
-	isReady(tableName) {
+	isReady(tableName: string): boolean {
 		return this.#schemas.has(tableName);
 	}
 
-	/**
-	 * Fetch schema from DuckDB using DESCRIBE query.
-	 * @param {string} tableName
-	 */
-	async #fetchSchema(tableName) {
+	async #fetchSchema(tableName: string): Promise<void> {
 		if (this.#pending.has(tableName)) return;
 		this.#pending.add(tableName);
 
 		try {
 			// DuckDB DESCRIBE returns: column_name, column_type, null, key, default, extra
-			const result = await this.#coordinator.query(`DESCRIBE "${tableName}"`);
+			const result = await (this.#coordinator as any).query(`DESCRIBE "${tableName}"`);
 
-			const schema = new Map();
+			const schema = new Map<string, ColumnSchemaEntry>();
 			for (const row of result) {
 				schema.set(row.column_name, {
 					sqlType: row.column_type,
@@ -118,12 +97,7 @@ class TableSchemaServiceImpl {
 		}
 	}
 
-	/**
-	 * Map DuckDB SQL type to simplified JavaScript type.
-	 * @param {string} sqlType - DuckDB column type
-	 * @returns {'number'|'string'|'date'|'boolean'}
-	 */
-	#mapSqlTypeToJs(sqlType) {
+	#mapSqlTypeToJs(sqlType: string): JsColumnType {
 		const upper = (sqlType || '').toUpperCase();
 
 		// Numeric types

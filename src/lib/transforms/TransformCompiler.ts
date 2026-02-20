@@ -40,9 +40,7 @@ export class TransformCompiler {
 			try {
 				result = transform.apply(result);
 			} catch (error) {
-				throw new Error(
-					`Failed to apply ${transform.type} transform: ${(error as Error).message}`
-				);
+				throw new Error(`Failed to apply ${transform.type} transform: ${(error as Error).message}`);
 			}
 		}
 
@@ -60,9 +58,7 @@ export class TransformCompiler {
 			try {
 				result = transform.apply(result, config, scales);
 			} catch (error) {
-				throw new Error(
-					`Failed to apply ${transform.type} transform: ${(error as Error).message}`
-				);
+				throw new Error(`Failed to apply ${transform.type} transform: ${(error as Error).message}`);
 			}
 		}
 

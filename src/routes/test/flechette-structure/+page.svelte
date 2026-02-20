@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet, sql } from '@uwdata/mosaic-sql';
-	import { DataClient } from '$lib/data-clients/DataClient.svelte.js';
+	import { DataClient } from '$lib/data-clients/DataClient.svelte';
 
 	let status = $state('Initializing...');
 	let dictionaryData = $state(null);

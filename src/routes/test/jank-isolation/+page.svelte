@@ -15,9 +15,7 @@
 		coord = new Coordinator();
 		coord.databaseConnector(wasm);
 		setContext('mosaic-coordinator', coord);
-		await coord.exec(
-			loadParquet('flights', `${window.location.origin}/data/flights-200k.parquet`)
-		);
+		await coord.exec(loadParquet('flights', `${window.location.origin}/data/flights-200k.parquet`));
 		isLoaded = true;
 	});
 </script>

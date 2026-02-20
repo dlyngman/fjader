@@ -19,12 +19,7 @@
 </script>
 
 {#if show}
-	<circle
-		cx={tm.matchedScreenX}
-		cy={tm.matchedScreenY}
-		r="6"
-		class="hover-indicator"
-	/>
+	<circle cx={tm.matchedScreenX} cy={tm.matchedScreenY} r="6" class="hover-indicator" />
 {/if}
 
 <style>

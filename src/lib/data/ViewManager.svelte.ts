@@ -1,11 +1,19 @@
-// src/lib/data/ViewManager.svelte.js
+// src/lib/data/ViewManager.svelte.ts
 
-/**
- * Escapes a value for use in SQL CASE expressions.
- * @param {*} value - The value to escape
- * @returns {string} SQL-safe string
- */
-function escapeSql(value) {
+import type { Coordinator } from '@uwdata/mosaic-core';
+
+export interface ColumnDefinition {
+	sql: string;
+	source: string;
+	scaleId: string;
+}
+
+interface TableState {
+	viewName: string;
+	version: number;
+}
+
+function escapeSql(value: unknown): string {
 	if (value === null || value === undefined) return 'NULL';
 	return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -15,51 +23,39 @@ function escapeSql(value) {
  * for categorical data. This moves the category-to-integer indexing from JavaScript
  * into SQL, enabling zero-copy Float32 data flow to the GPU.
  *
- * Key features:
- * - Lazy coordinator injection (setCoordinator)
- * - Reference counting for column cleanup
- * - Debounced view creation via queueMicrotask
- * - Global domain (ignores crossfilters)
- *
  * Column naming conventions:
  * - Color index: __dplot_{field}_color_idx (1-based, 0 = null/unknown)
  * - Band index: __dplot_{field}_idx (0-based)
  *
- * View naming: {table}_derived
+ * View naming: {table}_derived_v{version}
  */
 class ViewManagerService {
 	// Map<sourceTable, Map<columnAlias, ColumnDefinition>>
-	#tableDefinitions = new Map();
+	#tableDefinitions = new Map<string, Map<string, ColumnDefinition>>();
 
 	// Mosaic coordinator (set lazily)
-	#coordinator = null;
+	#coordinator: Coordinator | null = null;
 
 	// Map<sourceTable, Set<scaleId>> - tracks which scales use each table
-	#referenceCount = new Map();
+	#referenceCount = new Map<string, Set<string>>();
 
-	// REACTIVITY FIX: Reactive map for table states
-	// When view is created, this triggers derivations to re-run
-	#tableStates = $state(new Map()); // Map<sourceTable, { viewName, version }>
+	// Reactive map for table states
+	#tableStates = $state(new Map<string, TableState>());
 
-	// Track tables with pending view creation - prevents eager client creation
-	#pendingViews = $state(new Set());
+	// Track tables with pending view creation
+	#pendingViews = $state(new Set<string>());
 
 	// Global version counter - external code reads this to establish Svelte dependency
-	// Incremented whenever any view state changes (pending or ready)
 	version = $state(0);
 
 	// Pending view updates (debounced via queueMicrotask)
-	#pendingUpdates = new Set();
+	#pendingUpdates = new Set<string>();
 	#updateScheduled = false;
 
 	// Cardinality warning threshold
 	static CARDINALITY_WARNING = 50;
 
-	/**
-	 * Set the Mosaic coordinator. Called lazily when coordinator becomes available.
-	 * @param {Object} coordinator - Mosaic coordinator instance
-	 */
-	setCoordinator(coordinator) {
+	setCoordinator(coordinator: Coordinator): void {
 		if (this.#coordinator === coordinator) return;
 
 		this.#coordinator = coordinator;
@@ -71,33 +67,23 @@ class ViewManagerService {
 		}
 	}
 
-	/**
-	 * Get the Mosaic coordinator.
-	 * @returns {Object|null}
-	 */
-	getCoordinator() {
+	getCoordinator(): Coordinator | null {
 		return this.#coordinator;
 	}
 
-	/**
-	 * Register a computed column for a source table.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @param {string} alias - Column alias (e.g., '__dplot_species_color_idx')
-	 * @param {Object} definition - Column definition
-	 * @param {string} definition.sql - SQL expression for the column
-	 * @param {string} definition.source - Original source column name
-	 * @param {string} definition.scaleId - ID of the scale registering this column
-	 */
-	registerColumn(sourceTable, alias, { sql, source, scaleId }) {
+	registerColumn(
+		sourceTable: string,
+		alias: string,
+		{ sql, source, scaleId }: ColumnDefinition
+	): void {
 		// Get or create table definition map
 		if (!this.#tableDefinitions.has(sourceTable)) {
 			this.#tableDefinitions.set(sourceTable, new Map());
 			this.#referenceCount.set(sourceTable, new Set());
 		}
 
-		const columns = this.#tableDefinitions.get(sourceTable);
-		const refs = this.#referenceCount.get(sourceTable);
+		const columns = this.#tableDefinitions.get(sourceTable)!;
+		const refs = this.#referenceCount.get(sourceTable)!;
 
 		// Check if column already exists with same SQL
 		const existing = columns.get(alias);
@@ -122,21 +108,14 @@ class ViewManagerService {
 		this.#scheduleViewUpdate(sourceTable);
 	}
 
-	/**
-	 * Unregister a column when a scale is destroyed.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @param {string} alias - Column alias
-	 * @param {string} scaleId - ID of the scale unregistering
-	 */
-	unregisterColumn(sourceTable, alias, scaleId) {
+	unregisterColumn(sourceTable: string, alias: string, scaleId: string): void {
 		if (!this.#tableDefinitions.has(sourceTable)) return;
 
-		const refs = this.#referenceCount.get(sourceTable);
+		const refs = this.#referenceCount.get(sourceTable)!;
 		refs.delete(scaleId);
 
 		// If no more references to this table's columns from this scale, check column
-		const columns = this.#tableDefinitions.get(sourceTable);
+		const columns = this.#tableDefinitions.get(sourceTable)!;
 		const column = columns.get(alias);
 
 		if (column && column.scaleId === scaleId) {
@@ -150,55 +129,24 @@ class ViewManagerService {
 		}
 	}
 
-	/**
-	 * Get the effective table name for queries.
-	 * Returns the derived view name if view is ready, otherwise the source table.
-	 * REACTIVITY: Reads version to establish Svelte dependency.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @returns {string} The table name to use in queries
-	 */
-	getEffectiveTable(sourceTable) {
+	getEffectiveTable(sourceTable: string): string {
 		// Read version to establish reactive dependency for external callers
 		void this.version;
 		const state = this.#tableStates.get(sourceTable);
 		return state ? state.viewName : sourceTable;
 	}
 
-	/**
-	 * Check if a derived view exists and is ready for a table.
-	 * REACTIVITY: Reads version to establish Svelte dependency.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @returns {boolean}
-	 */
-	hasView(sourceTable) {
+	hasView(sourceTable: string): boolean {
 		void this.version;
 		return this.#tableStates.has(sourceTable);
 	}
 
-	/**
-	 * Check if a view creation is pending/in-progress for a table.
-	 * Used to prevent eager client creation before view is ready.
-	 * REACTIVITY: Reads version to establish Svelte dependency.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @returns {boolean}
-	 */
-	isViewPending(sourceTable) {
+	isViewPending(sourceTable: string): boolean {
 		void this.version;
 		return this.#pendingViews.has(sourceTable);
 	}
 
-	/**
-	 * Check if it's safe to create a client for this table.
-	 * Returns true if either: no view is expected, or view is ready.
-	 * Returns false if view creation is pending.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @returns {boolean}
-	 */
-	isReadyForClient(sourceTable) {
+	isReadyForClient(sourceTable: string): boolean {
 		void this.version;
 		// If no columns registered, no view expected - safe to use source table
 		if (!this.#tableDefinitions.has(sourceTable)) return true;
@@ -208,39 +156,21 @@ class ViewManagerService {
 		return this.#tableStates.has(sourceTable);
 	}
 
-	/**
-	 * Get the reactive version for a table (for Svelte dependency tracking).
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @returns {number}
-	 */
-	getVersion(sourceTable) {
+	getVersion(sourceTable: string): number {
 		const state = this.#tableStates.get(sourceTable);
 		return state?.version ?? 0;
 	}
 
-	/**
-	 * Get registered column names for a table.
-	 *
-	 * @param {string} sourceTable - The base table name
-	 * @returns {string[]} Array of column aliases
-	 */
-	getRegisteredColumns(sourceTable) {
+	getRegisteredColumns(sourceTable: string): string[] {
 		const columns = this.#tableDefinitions.get(sourceTable);
 		return columns ? [...columns.keys()] : [];
 	}
 
-	/**
-	 * Build a CASE expression for categorical indexing.
-	 * Returns CAST(...AS REAL) to ensure Float32Array from Arrow/DuckDB.
-	 *
-	 * @param {string} sourceColumn - The source column name
-	 * @param {Array} domain - Array of category values
-	 * @param {Object} options
-	 * @param {boolean} [options.oneBased=false] - Use 1-based indexing (for colors)
-	 * @returns {string} SQL CASE expression wrapped in CAST to REAL
-	 */
-	static buildCaseExpression(sourceColumn, domain, { oneBased = false } = {}) {
+	static buildCaseExpression(
+		sourceColumn: string,
+		domain: unknown[],
+		{ oneBased = false } = {}
+	): string {
 		if (!domain || domain.length === 0) {
 			// Return float literal for empty domain
 			return oneBased ? 'CAST(0 AS REAL)' : 'CAST(-1 AS REAL)';
@@ -265,30 +195,15 @@ class ViewManagerService {
 		return `CAST(CASE ${whenClauses} ELSE ${defaultValue} END AS REAL)`;
 	}
 
-	/**
-	 * Build the column alias for a color index column.
-	 * @param {string} field - The source field name
-	 * @returns {string}
-	 */
-	static colorIndexColumn(field) {
+	static colorIndexColumn(field: string): string {
 		return `__dplot_${field}_color_idx`;
 	}
 
-	/**
-	 * Build the column alias for a band index column.
-	 * @param {string} field - The source field name
-	 * @returns {string}
-	 */
-	static bandIndexColumn(field) {
+	static bandIndexColumn(field: string): string {
 		return `__dplot_${field}_idx`;
 	}
 
-	/**
-	 * Build the column alias for a time offset column.
-	 * @param {string} field - The source field name
-	 * @returns {string}
-	 */
-	static timeOffsetColumn(field) {
+	static timeOffsetColumn(field: string): string {
 		return `__dplot_${field}_time_offset`;
 	}
 
@@ -296,10 +211,7 @@ class ViewManagerService {
 	// PRIVATE METHODS
 	// =========================================================================
 
-	/**
-	 * Schedule a view update for the next microtask (debounced).
-	 */
-	#scheduleViewUpdate(sourceTable) {
+	#scheduleViewUpdate(sourceTable: string): void {
 		this.#pendingUpdates.add(sourceTable);
 
 		// Mark as pending so clients know to wait
@@ -312,10 +224,7 @@ class ViewManagerService {
 		}
 	}
 
-	/**
-	 * Flush all pending view updates.
-	 */
-	async #flushUpdates() {
+	async #flushUpdates(): Promise<void> {
 		this.#updateScheduled = false;
 		const tables = [...this.#pendingUpdates];
 		this.#pendingUpdates.clear();
@@ -325,10 +234,7 @@ class ViewManagerService {
 		}
 	}
 
-	/**
-	 * Create or update the derived view for a table.
-	 */
-	async #createOrUpdateView(sourceTable) {
+	async #createOrUpdateView(sourceTable: string): Promise<void> {
 		if (!this.#coordinator) {
 			console.log(`[ViewManager] No coordinator, deferring view creation for ${sourceTable}`);
 			this.#pendingViews.delete(sourceTable);
@@ -363,7 +269,7 @@ FROM ${sourceTable}`;
 		console.log(`[ViewManager] Creating view ${viewName}:`, sql);
 
 		try {
-			await this.#coordinator.exec(sql);
+			await (this.#coordinator as any).exec(sql);
 
 			// Update reactive state - view is now ready
 			this.#tableStates.set(sourceTable, { viewName, version: currentVersion });
@@ -382,11 +288,8 @@ FROM ${sourceTable}`;
 	// DEBUG
 	// =========================================================================
 
-	/**
-	 * Get debug information about the ViewManager state.
-	 */
 	getDebugInfo() {
-		const tables = {};
+		const tables: Record<string, unknown> = {};
 		for (const [table, columns] of this.#tableDefinitions) {
 			const state = this.#tableStates.get(table);
 			tables[table] = {

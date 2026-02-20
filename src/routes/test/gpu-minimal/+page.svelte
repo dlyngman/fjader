@@ -75,12 +75,14 @@
 		const texture = context.getCurrentTexture();
 		const encoder = device.createCommandEncoder();
 		const pass = encoder.beginRenderPass({
-			colorAttachments: [{
-				view: texture.createView(),
-				loadOp: 'clear',
-				storeOp: 'store',
-				clearValue: { r, g, b, a: 1 }
-			}]
+			colorAttachments: [
+				{
+					view: texture.createView(),
+					loadOp: 'clear',
+					storeOp: 'store',
+					clearValue: { r, g, b, a: 1 }
+				}
+			]
 		});
 		pass.end();
 		device.queue.submit([encoder.finish()]);
@@ -116,30 +118,42 @@
 	<p class="info">{info}</p>
 
 	<div class="controls">
-		<label><input type="checkbox" bind:checked={showSVG} onchange={resetJanks} /> SVG layers (axis-like elements around canvas)</label>
-		<label><input type="checkbox" bind:checked={showContainStrict} onchange={resetJanks} /> contain: strict on wrapper</label>
-		<label><input type="checkbox" bind:checked={showTranslateZ} onchange={resetJanks} /> transform: translateZ(0) on layers</label>
-		<label><input type="checkbox" bind:checked={showWillChange} onchange={resetJanks} /> will-change: transform on layers</label>
+		<label
+			><input type="checkbox" bind:checked={showSVG} onchange={resetJanks} /> SVG layers (axis-like elements
+			around canvas)</label
+		>
+		<label
+			><input type="checkbox" bind:checked={showContainStrict} onchange={resetJanks} /> contain: strict
+			on wrapper</label
+		>
+		<label
+			><input type="checkbox" bind:checked={showTranslateZ} onchange={resetJanks} /> transform: translateZ(0)
+			on layers</label
+		>
+		<label
+			><input type="checkbox" bind:checked={showWillChange} onchange={resetJanks} /> will-change: transform
+			on layers</label
+		>
 		{#if showSVG}
-			<label>SVG ticks: <input type="range" min="0" max="50" bind:value={svgTickCount} /> {svgTickCount}</label>
+			<label
+				>SVG ticks: <input type="range" min="0" max="50" bind:value={svgTickCount} />
+				{svgTickCount}</label
+			>
 		{/if}
 		<button onclick={resetJanks}>Reset Jank Counter</button>
 	</div>
 
 	<!-- Chart-like wrapper (mimics ChartContainer structure) -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div
-		class="chart-wrapper"
-		class:contain-strict={showContainStrict}
-		onwheel={handleWheel}
-	>
+	<div class="chart-wrapper" class:contain-strict={showContainStrict} onwheel={handleWheel}>
 		{#if showSVG}
 			<!-- SVG background (mimics Grid + axis background) -->
 			<svg
 				class="svg-bg"
 				class:translate-z={showTranslateZ}
 				class:will-change-transform={showWillChange}
-				width="800" height="600"
+				width="800"
+				height="600"
 			>
 				{#each ticks as y, i (i)}
 					<line x1="0" x2="800" y1={y} y2={y} stroke="#eee" />
@@ -164,24 +178,30 @@
 				class="svg-fg"
 				class:translate-z={showTranslateZ}
 				class:will-change-transform={showWillChange}
-				width="800" height="600"
+				width="800"
+				height="600"
 			>
 				<!-- X axis ticks -->
 				{#each ticks as x, i (i)}
 					<line x1={x} x2={x} y1="600" y2="605" stroke="#999" />
-					<text x={x} y="618" text-anchor="middle" font-size="10" fill="#666">{(x * zoom).toFixed(0)}</text>
+					<text {x} y="618" text-anchor="middle" font-size="10" fill="#666"
+						>{(x * zoom).toFixed(0)}</text
+					>
 				{/each}
 				<!-- Y axis ticks -->
 				{#each ticks as y, i (i)}
 					<line x1="0" x2="-5" y1={y} y2={y} stroke="#999" />
-					<text x="-8" y={y + 3} text-anchor="end" font-size="10" fill="#666">{(y * zoom).toFixed(0)}</text>
+					<text x="-8" y={y + 3} text-anchor="end" font-size="10" fill="#666"
+						>{(y * zoom).toFixed(0)}</text
+					>
 				{/each}
 			</svg>
 		{/if}
 	</div>
 
 	<p class="note">
-		Toggle layers one at a time. After each toggle, zoom with wheel and watch the jank counter.<br/>
+		Toggle layers one at a time. After each toggle, zoom with wheel and watch the jank counter.<br
+		/>
 		The layer that causes jank count to increase is the culprit.
 	</p>
 </div>
@@ -233,17 +253,30 @@
 	.chart-wrapper.contain-strict {
 		contain: strict;
 	}
-	.svg-bg, .svg-fg, .canvas-layer {
+	.svg-bg,
+	.svg-fg,
+	.canvas-layer {
 		position: absolute;
 		top: 0;
 		left: 0;
 	}
-	.svg-bg { z-index: 1; }
-	.canvas-layer { z-index: 2; }
-	.svg-fg { z-index: 3; pointer-events: none; }
+	.svg-bg {
+		z-index: 1;
+	}
+	.canvas-layer {
+		z-index: 2;
+	}
+	.svg-fg {
+		z-index: 3;
+		pointer-events: none;
+	}
 
-	.translate-z { transform: translateZ(0); }
-	.will-change-transform { will-change: transform; }
+	.translate-z {
+		transform: translateZ(0);
+	}
+	.will-change-transform {
+		will-change: transform;
+	}
 
 	canvas {
 		display: block;

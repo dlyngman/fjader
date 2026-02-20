@@ -1,6 +1,6 @@
 <script>
 	import { setContext, getContext, onMount } from 'svelte';
-	import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
+	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte.js';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
@@ -109,10 +109,18 @@
 		if (!scales || !coordinator || isFacetedCell) return;
 
 		const scaleProvider = {
-			get xScale() { return cellXScale; },
-			get yScale() { return cellYScale; },
-			get xScaleState() { return scales.xScaleState; },
-			get yScaleState() { return scales.yScaleState; }
+			get xScale() {
+				return cellXScale;
+			},
+			get yScale() {
+				return cellYScale;
+			},
+			get xScaleState() {
+				return scales.xScaleState;
+			},
+			get yScaleState() {
+				return scales.yScaleState;
+			}
 		};
 
 		const tm = new TooltipManager(coordinator, scaleProvider);
@@ -152,17 +160,39 @@
 	// --- Chart context ---
 	const chartContext = {
 		// Layout — cell-specific
-		get width() { return layout.width; },
-		get height() { return layout.height; },
-		get innerWidth() { return layout.innerWidth; },
-		get innerHeight() { return layout.innerHeight; },
-		get margin() { return layout.margin; },
-		get chartId() { return layout.chartId; },
-		get clipPathId() { return layout.clipPathId; },
-		get clipPathUrl() { return layout.clipPathUrl; },
-		get isReady() { return layout.isReady; },
-		get innerTransform() { return layout.innerTransform; },
-		get dimensions() { return layout.dimensions; },
+		get width() {
+			return layout.width;
+		},
+		get height() {
+			return layout.height;
+		},
+		get innerWidth() {
+			return layout.innerWidth;
+		},
+		get innerHeight() {
+			return layout.innerHeight;
+		},
+		get margin() {
+			return layout.margin;
+		},
+		get chartId() {
+			return layout.chartId;
+		},
+		get clipPathId() {
+			return layout.clipPathId;
+		},
+		get clipPathUrl() {
+			return layout.clipPathUrl;
+		},
+		get isReady() {
+			return layout.isReady;
+		},
+		get innerTransform() {
+			return layout.innerTransform;
+		},
+		get dimensions() {
+			return layout.dimensions;
+		},
 
 		updateWidth: (w) => layout.updateWidth(w),
 		updateHeight: (h) => layout.updateHeight(h),
@@ -178,33 +208,77 @@
 		// Read domainForReactivity so template expressions track _version directly.
 		// Without this, $derived returns the same D3 scale reference (mutated in place)
 		// and Svelte's === check considers it unchanged, skipping axis tick updates.
-		get xScale() { scales?.xScaleState?.domainForReactivity; return cellXScale; },
-		get yScale() { scales?.yScaleState?.domainForReactivity; return cellYScale; },
-		get xTargetScale() { scales?.xScaleState?.domainForReactivity; return cellXTargetScale; },
-		get yTargetScale() { scales?.yScaleState?.domainForReactivity; return cellYTargetScale; },
+		get xScale() {
+			scales?.xScaleState?.domainForReactivity;
+			return cellXScale;
+		},
+		get yScale() {
+			scales?.yScaleState?.domainForReactivity;
+			return cellYScale;
+		},
+		get xTargetScale() {
+			scales?.xScaleState?.domainForReactivity;
+			return cellXTargetScale;
+		},
+		get yTargetScale() {
+			scales?.yScaleState?.domainForReactivity;
+			return cellYTargetScale;
+		},
 
-		get xLabel() { return scales?.xLabel; },
-		get yLabel() { return scales?.yLabel; },
+		get xLabel() {
+			return scales?.xLabel;
+		},
+		get yLabel() {
+			return scales?.yLabel;
+		},
 
 		// Data points — from shared scale state
-		get currentXDataPoint() { return scales?.xScaleState?.currentDataPoint; },
-		get currentYDataPoint() { return scales?.yScaleState?.currentDataPoint; },
-		get currentXScreenPoint() { return cellXScale?.(scales?.xScaleState?.currentDataPoint); },
-		get currentYScreenPoint() { return cellYScale?.(scales?.yScaleState?.currentDataPoint); },
+		get currentXDataPoint() {
+			return scales?.xScaleState?.currentDataPoint;
+		},
+		get currentYDataPoint() {
+			return scales?.yScaleState?.currentDataPoint;
+		},
+		get currentXScreenPoint() {
+			return cellXScale?.(scales?.xScaleState?.currentDataPoint);
+		},
+		get currentYScreenPoint() {
+			return cellYScale?.(scales?.yScaleState?.currentDataPoint);
+		},
 
 		// Scale states + types — shared
-		get xScaleState() { return scales?.xScaleState; },
-		get yScaleState() { return scales?.yScaleState; },
-		get scaleTypes() { return scales?.scaleTypes; },
-		get scalesReady() { return scales?.scalesReady; },
-		get active() { return scales?.active; },
+		get xScaleState() {
+			return scales?.xScaleState;
+		},
+		get yScaleState() {
+			return scales?.yScaleState;
+		},
+		get scaleTypes() {
+			return scales?.scaleTypes;
+		},
+		get scalesReady() {
+			return scales?.scalesReady;
+		},
+		get active() {
+			return scales?.active;
+		},
 
 		// Band support — cell-local $derived
-		get xCategoryPositions() { return xCategoryPositions; },
-		get yCategoryPositions() { return yCategoryPositions; },
-		get categoryPositionsReady() { return categoryPositionsReady; },
-		get xBandwidth() { return xBandwidth; },
-		get yBandwidth() { return yBandwidth; },
+		get xCategoryPositions() {
+			return xCategoryPositions;
+		},
+		get yCategoryPositions() {
+			return yCategoryPositions;
+		},
+		get categoryPositionsReady() {
+			return categoryPositionsReady;
+		},
+		get xBandwidth() {
+			return xBandwidth;
+		},
+		get yBandwidth() {
+			return yBandwidth;
+		},
 
 		// Scale registration — delegate to ChartScales
 		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
@@ -212,23 +286,35 @@
 		unregisterScaleType: (dimension, markId) => scales?.unregisterScaleType(dimension, markId),
 		getScaleRequirementsSummary: () => scales?.getScaleRequirementsSummary(),
 
-		get binStepMultiplier() { return scales?.binStepMultiplier; },
+		get binStepMultiplier() {
+			return scales?.binStepMultiplier;
+		},
 
 		// Client registration
 		registerClient(client) {
 			if (!client || !scales) return () => {};
 			return scales.registerClient(client);
 		},
-		get markClients() { return scales?.markClients; },
+		get markClients() {
+			return scales?.markClients;
+		},
 
 		// Tooltip — cell-local
-		get tooltipManager() { return tooltipManager; },
+		get tooltipManager() {
+			return tooltipManager;
+		},
 
 		// Faceting — from parent
 		fx: facetingProps.fx,
-		get isFaceted() { return facetingProps.isFaceted; },
-		get facetChartIds() { return facetingProps.facetChartIds; },
-		get facetBandScale() { return facetingProps.facetBandScale; },
+		get isFaceted() {
+			return facetingProps.isFaceted;
+		},
+		get facetChartIds() {
+			return facetingProps.facetChartIds;
+		},
+		get facetBandScale() {
+			return facetingProps.facetBandScale;
+		},
 
 		// Pointer hooks — cell-local (mutable slots set by interactors)
 		onChartClick: null,
@@ -280,7 +366,14 @@
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
-		scales.accumulateZoom(innerPoint, scaleFactor, xInBounds, yInBounds, layout.innerWidth, layout.innerHeight);
+		scales.accumulateZoom(
+			innerPoint,
+			scaleFactor,
+			xInBounds,
+			yInBounds,
+			layout.innerWidth,
+			layout.innerHeight
+		);
 		tooltipManager?.suppress(100);
 	}
 
@@ -325,7 +418,14 @@
 			pointerBuffer.x = event.offsetX;
 			pointerBuffer.y = event.offsetY;
 			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
-			scales.applyZoom(innerPoint, scaleFactor, activePanX, activePanY, layout.innerWidth, layout.innerHeight);
+			scales.applyZoom(
+				innerPoint,
+				scaleFactor,
+				activePanX,
+				activePanY,
+				layout.innerWidth,
+				layout.innerHeight
+			);
 			initialTouchDistance = currentDistance;
 		}
 	}
@@ -354,7 +454,14 @@
 
 		if (!activePanX && !activePanY) return;
 		isPanning = true;
-		scales.startPan(pointerBuffer.x, pointerBuffer.y, activePanX, activePanY, layout.innerWidth, layout.innerHeight);
+		scales.startPan(
+			pointerBuffer.x,
+			pointerBuffer.y,
+			activePanX,
+			activePanY,
+			layout.innerWidth,
+			layout.innerHeight
+		);
 		scales.clearCurrentDataPoints();
 		event.target.setPointerCapture?.(event.pointerId);
 	}
@@ -439,7 +546,7 @@
 				{#if canvas}
 					{@render canvas()}
 				{:else}
-					<WebGPUCanvas facetIndex={facetIndex} />
+					<WebGPUCanvas {facetIndex} />
 				{/if}
 			</div>
 

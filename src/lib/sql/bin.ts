@@ -1,9 +1,4 @@
-import type {
-	ExprNode,
-	ExprValue,
-	BinHistogramOptions,
-	BinDateOptions
-} from '@uwdata/mosaic-sql';
+import type { ExprNode, ExprValue, BinHistogramOptions, BinDateOptions } from '@uwdata/mosaic-sql';
 import { binDate, binHistogram, column } from '@uwdata/mosaic-sql';
 
 type BinOptions = BinHistogramOptions & BinDateOptions;
@@ -59,8 +54,7 @@ export class AutoBinNode {
 			);
 		}
 
-		const col: ExprValue =
-			typeof this.field === 'string' ? column(this.field) : this.field;
+		const col: ExprValue = typeof this.field === 'string' ? column(this.field) : this.field;
 
 		const isTemporal =
 			this.options.interval !== undefined ||

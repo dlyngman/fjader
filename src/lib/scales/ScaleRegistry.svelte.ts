@@ -1,4 +1,4 @@
-// src/lib/scales/ScaleRegistry.svelte.js
+// src/lib/scales/ScaleRegistry.svelte.ts
 import { setContext, getContext, untrack } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import { LinearScaleState } from './LinearScaleState.svelte';
@@ -7,44 +7,61 @@ import { BandScaleState } from './BandScaleState.svelte';
 import { ColorScaleState } from './ColorScaleState.svelte';
 import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+
+export type ScaleStateInstance =
+	| LinearScaleState
+	| TimeScaleState
+	| BandScaleState
+	| ColorScaleState
+	| SizeScaleState;
+
+type ScaleMapBucket = SvelteMap<string, any>;
+
+interface GPUSlots {
+	configSlot?: number;
+	rampSlot?: number;
+	paletteSlot?: number;
+	sizeConfigSlot?: number;
+}
 
 // Helper to stringify sorted
-const stableStringify = (obj) => {
+const stableStringify = (obj: unknown): string => {
 	if (typeof obj !== 'object' || obj === null) return JSON.stringify(obj);
 	if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(',')}]`;
-	return `{${Object.keys(obj)
+	return `{${Object.keys(obj as Record<string, unknown>)
 		.sort()
-		.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+		.map((k) => `${JSON.stringify(k)}:${stableStringify((obj as Record<string, unknown>)[k])}`)
 		.join(',')}}`;
 };
 
-class ScaleRegistry {
+export class ScaleRegistry {
 	// Public field for reactive tracking
-	scaleUsage = $state(new Map());
-	#gpuCoordinator = null;
+	scaleUsage = $state(new Map<any, Set<string>>());
+	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
 	// COLOR SCALE SLOT MANAGEMENT (GPU resource allocation)
 	// ============================================================
-	// Free lists for recycled slots
-	#freeColorSlots = [];
-	#freeRampSlots = [];
-	#freePaletteSlots = [];
+	#freeColorSlots: number[] = [];
+	#freeRampSlots: number[] = [];
+	#freePaletteSlots: number[] = [];
 
-	// High water marks (next fresh slot index)
 	#nextColorSlot = 0;
 	#nextRampSlot = 0;
 	#nextPaletteSlot = 0;
 
-	// Fixed capacity (matches SSBO sizing in GPUCoordinator)
 	#maxColorSlots = 64;
 	#maxRampSlots = 64;
 	#maxPaletteSlots = 64;
 
 	// Size scale slot management
-	#freeSizeSlots = [];
+	#freeSizeSlots: number[] = [];
 	#nextSizeSlot = 0;
 	#maxSizeSlots = 64;
+
+	registryId: string;
+	scales: Record<string, ScaleMapBucket>;
 
 	constructor() {
 		this.registryId = Math.random().toString(36).slice(2, 8);
@@ -59,11 +76,11 @@ class ScaleRegistry {
 		};
 	}
 
-	setGPUCoordinator(coordinator) {
+	setGPUCoordinator(coordinator: GPUCoordinator): void {
 		this.#gpuCoordinator = coordinator;
 	}
 
-	#notifyTopologyChange() {
+	#notifyTopologyChange(): void {
 		if (this.#gpuCoordinator) {
 			this.#gpuCoordinator.scheduleTopologyUpdate();
 		}
@@ -73,19 +90,11 @@ class ScaleRegistry {
 	// SLOT ALLOCATION METHODS
 	// ============================================================
 
-	/**
-	 * Allocate a color config slot index.
-	 * Prefers recycled slots, falls back to fresh allocation.
-	 * @returns {number} Slot index (0-63)
-	 * @throws {Error} If slot limit exceeded
-	 */
-	allocateColorSlot() {
-		// Prefer recycled slots
+	allocateColorSlot(): number {
 		if (this.#freeColorSlots.length > 0) {
-			return this.#freeColorSlots.pop();
+			return this.#freeColorSlots.pop()!;
 		}
 
-		// Check capacity
 		if (this.#nextColorSlot >= this.#maxColorSlots) {
 			console.warn(
 				`[ScaleRegistry] Color scale limit reached (${this.#maxColorSlots}). ` +
@@ -102,14 +111,9 @@ class ScaleRegistry {
 		return this.#nextColorSlot++;
 	}
 
-	/**
-	 * Allocate a ramp slot index (for continuous color scales).
-	 * Each ramp slot holds 256 colors.
-	 * @returns {number} Slot index (0-63)
-	 */
-	allocateRampSlot() {
+	allocateRampSlot(): number {
 		if (this.#freeRampSlots.length > 0) {
-			return this.#freeRampSlots.pop();
+			return this.#freeRampSlots.pop()!;
 		}
 
 		if (this.#nextRampSlot >= this.#maxRampSlots) {
@@ -120,14 +124,9 @@ class ScaleRegistry {
 		return this.#nextRampSlot++;
 	}
 
-	/**
-	 * Allocate a palette slot index (for ordinal color scales).
-	 * Each palette slot holds 32 colors.
-	 * @returns {number} Slot index (0-63)
-	 */
-	allocatePaletteSlot() {
+	allocatePaletteSlot(): number {
 		if (this.#freePaletteSlots.length > 0) {
-			return this.#freePaletteSlots.pop();
+			return this.#freePaletteSlots.pop()!;
 		}
 
 		if (this.#nextPaletteSlot >= this.#maxPaletteSlots) {
@@ -142,43 +141,27 @@ class ScaleRegistry {
 	// SLOT RELEASE METHODS
 	// ============================================================
 
-	/**
-	 * Release a color config slot back to the free list.
-	 * @param {number} slot - Slot index to release
-	 */
-	releaseColorSlot(slot) {
+	releaseColorSlot(slot: number): void {
 		if (typeof slot === 'number' && slot >= 0 && slot < this.#nextColorSlot) {
 			this.#freeColorSlots.push(slot);
 		}
 	}
 
-	/**
-	 * Release a ramp slot back to the free list.
-	 * @param {number} slot - Slot index to release
-	 */
-	releaseRampSlot(slot) {
+	releaseRampSlot(slot: number): void {
 		if (typeof slot === 'number' && slot >= 0 && slot < this.#nextRampSlot) {
 			this.#freeRampSlots.push(slot);
 		}
 	}
 
-	/**
-	 * Release a palette slot back to the free list.
-	 * @param {number} slot - Slot index to release
-	 */
-	releasePaletteSlot(slot) {
+	releasePaletteSlot(slot: number): void {
 		if (typeof slot === 'number' && slot >= 0 && slot < this.#nextPaletteSlot) {
 			this.#freePaletteSlots.push(slot);
 		}
 	}
 
-	/**
-	 * Allocate a size config slot index.
-	 * @returns {number} Slot index (0-63)
-	 */
-	allocateSizeSlot() {
+	allocateSizeSlot(): number {
 		if (this.#freeSizeSlots.length > 0) {
-			return this.#freeSizeSlots.pop();
+			return this.#freeSizeSlots.pop()!;
 		}
 
 		if (this.#nextSizeSlot >= this.#maxSizeSlots) {
@@ -188,11 +171,7 @@ class ScaleRegistry {
 		return this.#nextSizeSlot++;
 	}
 
-	/**
-	 * Release a size config slot back to the free list.
-	 * @param {number} slot - Slot index to release
-	 */
-	releaseSizeSlot(slot) {
+	releaseSizeSlot(slot: number): void {
 		if (typeof slot === 'number' && slot >= 0 && slot < this.#nextSizeSlot) {
 			this.#freeSizeSlots.push(slot);
 		}
@@ -202,10 +181,6 @@ class ScaleRegistry {
 	// DEBUG STATS
 	// ============================================================
 
-	/**
-	 * Get color slot allocation statistics for debugging.
-	 * @returns {Object} Stats object
-	 */
 	getColorSlotStats() {
 		return {
 			color: {
@@ -230,14 +205,19 @@ class ScaleRegistry {
 	}
 
 	// ============================================================
-	// EXISTING SCALE MANAGEMENT (unchanged logic, updated _removeScaleFromStorage)
+	// SCALE MANAGEMENT
 	// ============================================================
 
-	getOrCreateScale(name, type = 'linear', config = {}, chartId = null) {
+	getOrCreateScale(
+		name: string,
+		type: string = 'linear',
+		config: Record<string, any> = {},
+		chartId: string | null = null
+	): any {
 		// Wrap map operations in untrack() to prevent SvelteMap reads from creating
 		// reactive dependencies when called from $effect blocks (MarkColor, MarkSize, etc.)
 		const scale = untrack(() => {
-			let key;
+			let key: string;
 
 			if (type === 'color') {
 				// Color scales: key by field + type only (scheme is mutable state)
@@ -291,13 +271,13 @@ class ScaleRegistry {
 						new ColorScaleState(
 							{
 								field: name,
-								type: scaleType, // Pass explicit type
-								scheme: config.scheme || defaultScheme, // Apply default based on type
+								type: scaleType,
+								scheme: config.scheme || defaultScheme,
 								domain: config.domain || [],
 								reverse: config.reverse ?? false,
 								midpoint: config.midpoint
 							},
-							this,
+							this as any,
 							this.#gpuCoordinator
 						)
 					);
@@ -310,7 +290,7 @@ class ScaleRegistry {
 								domain: config.domain || [],
 								range: config.range || [2, 12]
 							},
-							this,
+							this as any,
 							this.#gpuCoordinator
 						)
 					);
@@ -339,7 +319,7 @@ class ScaleRegistry {
 					this.scaleUsage.set(scale, new Set());
 				}
 
-				const chartIds = this.scaleUsage.get(scale);
+				const chartIds = this.scaleUsage.get(scale)!;
 				if (!chartIds.has(chartId)) {
 					chartIds.add(chartId);
 					this.#notifyTopologyChange();
@@ -350,12 +330,12 @@ class ScaleRegistry {
 		return scale;
 	}
 
-	deregisterChart(scale, chartId) {
+	deregisterChart(scale: any, chartId: string): void {
 		if (!scale || !chartId) return;
 
 		untrack(() => {
 			if (this.scaleUsage.has(scale)) {
-				const usage = this.scaleUsage.get(scale);
+				const usage = this.scaleUsage.get(scale)!;
 				if (usage.delete(chartId)) {
 					if (usage.size === 0) {
 						if (scale.destroy) scale.destroy();
@@ -368,7 +348,7 @@ class ScaleRegistry {
 		});
 	}
 
-	removeChartUsage(chartId) {
+	removeChartUsage(chartId: string): void {
 		if (!chartId) return;
 
 		untrack(() => {
@@ -393,14 +373,10 @@ class ScaleRegistry {
 		});
 	}
 
-	/**
-	 * Remove scale from storage and release any GPU slots it held.
-	 * @param {Object} scaleInstance - Scale to remove
-	 */
-	_removeScaleFromStorage(scaleInstance) {
+	_removeScaleFromStorage(scaleInstance: any): void {
 		// Release GPU slots if this is a color or size scale
 		if (scaleInstance && typeof scaleInstance.gpuSlots === 'object') {
-			const slots = scaleInstance.gpuSlots;
+			const slots = scaleInstance.gpuSlots as GPUSlots;
 
 			if (typeof slots.configSlot === 'number') {
 				this.releaseColorSlot(slots.configSlot);
@@ -427,22 +403,15 @@ class ScaleRegistry {
 		}
 	}
 
-	/**
-	 * Invalidate all charts that use a specific scale field.
-	 * Called when a color scale's scheme updates to trigger re-renders.
-	 * @param {string} field - The field name of the scale that changed
-	 */
-	invalidateChartsForScale(field) {
+	invalidateChartsForScale(field: string): void {
 		if (!this.#gpuCoordinator) return;
 
-		// Wrap in untrack() to prevent SvelteMap iteration from creating
-		// reactive dependencies (this is called from MarkColor's $effect via setScheme)
 		untrack(() => {
 			const colorScales = this.scales.color;
 			if (!colorScales) return;
 
-			let foundScale = null;
-			for (const [key, scale] of colorScales) {
+			let foundScale: any = null;
+			for (const [_key, scale] of colorScales) {
 				if (scale.field === field) {
 					foundScale = scale;
 					break;
@@ -455,37 +424,33 @@ class ScaleRegistry {
 			if (!chartIds || chartIds.size === 0) return;
 
 			for (const chartId of chartIds) {
-				this.#gpuCoordinator.invalidateChart(chartId);
+				this.#gpuCoordinator!.invalidateChart(chartId);
 			}
 		});
 	}
 
-	/**
-	 * Look up a scale by field name and type.
-	 * Used by Legend components to find active scales.
-	 * Intentionally reactive (no untrack) -- reads from SvelteMap trigger
-	 * re-evaluation when scales are created or destroyed.
-	 * @param {string} field - The data field name
-	 * @param {string} type - Scale type bucket ('color' or 'size')
-	 * @returns {Object|null} The scale state instance, or null
-	 */
-	getScaleByField(field, type) {
+	getScaleByField(field: string, type: string): any | null {
 		const scaleMap = this.scales[type];
 		if (!scaleMap) return null;
-		for (const [key, scale] of scaleMap) {
+		for (const [_key, scale] of scaleMap) {
 			if ((scale.field ?? scale.name) === field) return scale;
 		}
 		return null;
 	}
 }
 
-export function setScaleRegistry() {
+export function setScaleRegistry(): ScaleRegistry {
 	const state = new ScaleRegistry();
 	return setContext('scale-registry', state);
 }
 
-export function getScaleState(name, type = 'linear', config = {}, chartId = null) {
-	const scaleRegistry = getContext('scale-registry');
+export function getScaleState(
+	name: string,
+	type: string = 'linear',
+	config: Record<string, any> = {},
+	chartId: string | null = null
+): any | null {
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	if (!scaleRegistry) {
 		console.error('No Registry');
 		return null;

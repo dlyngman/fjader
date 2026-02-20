@@ -4,7 +4,7 @@
 
 import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte';
-import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte.js';
+import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
 
 /**
  * TimeScaleState extends LinearScaleState with datetime awareness.
@@ -64,7 +64,10 @@ export class TimeScaleState extends LinearScaleState {
 	 * Register a mark's datetime extent.
 	 * Computes t0, converts all extents to offsets, updates parent.
 	 */
-	addDatetimeExtent(datetimeRange: [Date | number | bigint | string, Date | number | bigint | string], markId: string): void {
+	addDatetimeExtent(
+		datetimeRange: [Date | number | bigint | string, Date | number | bigint | string],
+		markId: string
+	): void {
 		const minDate = toDate(datetimeRange[0]);
 		const maxDate = toDate(datetimeRange[1]);
 		this.#datetimeExtents.set(markId, [minDate, maxDate]);
@@ -287,13 +290,27 @@ export class TimeScaleState extends LinearScaleState {
 
 	// Cached Intl formatters for tooltip (created once, reused)
 	static #tooltipFmtDate = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'
+		year: 'numeric',
+		month: 'short',
+		day: 'numeric',
+		timeZone: 'UTC'
 	});
 	static #tooltipFmtDateTime = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC'
+		year: 'numeric',
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+		timeZone: 'UTC'
 	});
 	static #tooltipFmtDateTimeSec = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC'
+		year: 'numeric',
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit',
+		timeZone: 'UTC'
 	});
 
 	/**

@@ -1,28 +1,57 @@
-// src/lib/scales/ChartScales.svelte.js
-import { getContext } from 'svelte';
-import { getScaleState } from '$lib/scales';
+// src/lib/scales/ChartScales.svelte.ts
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
+import type { ScaleRegistry } from './ScaleRegistry.svelte';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
+
+interface ScaleRequirement {
+	type: string;
+	priority: number;
+	markId: string;
+	config: Record<string, unknown>;
+	columnName: string | null;
+}
+
+interface PanContext {
+	initialScreenPos: number;
+	initialDomain: number[];
+	screenToDataRatio: number;
+	domainWidth: number;
+	screenDimension: number;
+	axis: string;
+	lastScreenPos: number;
+}
+
+interface ChartScalesConfig {
+	gpuCoordinator: GPUCoordinator;
+	scaleRegistry: ScaleRegistry;
+	layout: ChartLayout;
+	xLabel?: string | null;
+	yLabel?: string | null;
+	getFacetChartIds?: (() => string[]) | null;
+	xZoomLimit?: number;
+	yZoomLimit?: number;
+	xPanLimit?: number;
+	yPanLimit?: number;
+}
 
 export class ChartScales {
-	#scaleRegistry;
-	scaleRequirements = $state({
+	#scaleRegistry: ScaleRegistry;
+	scaleRequirements = $state<{ x: ScaleRequirement[]; y: ScaleRequirement[] }>({
 		x: [],
 		y: []
 	});
 
-	// Use $state instead of $derived for scale instances
-	#xScaleInstance = $state(null);
-	#yScaleInstance = $state(null);
+	#xScaleInstance = $state<any>(null);
+	#yScaleInstance = $state<any>(null);
 
-	// Track previous scales for cleanup
-	#previousXScale = null;
-	#previousYScale = null;
+	#previousXScale: any = null;
+	#previousYScale: any = null;
 
 	active = $state(false);
 
 	// --- MEMORY POOLS ---
-	// Reusable objects to avoid garbage collection during "pointerdown"
-	_xPanContext = {
+	_xPanContext: PanContext = {
 		initialScreenPos: 0,
 		initialDomain: [0, 0],
 		screenToDataRatio: 0,
@@ -32,7 +61,7 @@ export class ChartScales {
 		lastScreenPos: 0
 	};
 
-	_yPanContext = {
+	_yPanContext: PanContext = {
 		initialScreenPos: 0,
 		initialDomain: [0, 0],
 		screenToDataRatio: 0,
@@ -44,12 +73,16 @@ export class ChartScales {
 
 	binStepMultiplier = $state(1.0);
 
-	// Mark client tracking (moved from ChartContainer)
-	markClients = new Set();
+	markClients = new Set<any>();
 
-	#getFacetChartIds;
+	config: ChartScalesConfig;
+	gpuCoordinator: GPUCoordinator;
+	activePanX = false;
+	activePanY = false;
 
-	constructor(config) {
+	#getFacetChartIds: (() => string[]) | null;
+
+	constructor(config: ChartScalesConfig) {
 		this.config = config;
 		this.gpuCoordinator = config.gpuCoordinator;
 		this.#scaleRegistry = config.scaleRegistry;
@@ -66,15 +99,10 @@ export class ChartScales {
 			const xConfig = this.scaleConfigurations.x;
 			const yConfig = this.scaleConfigurations.y;
 
-			// Wait for at least one mark to register on each axis.
-			// When scale inference is pending, configurations are null.
 			if (!xConfig || !yConfig) return;
 
-			// Resolve scale keys: use explicit label if provided, otherwise auto-infer from marks
 			const xKey = xLabel || xConfig.columnName || 'x';
 			const yKey = yLabel || yConfig.columnName || 'y';
-
-			// Get what scales SHOULD be
 
 			const neededXScale = this.#scaleRegistry.getOrCreateScale(
 				xKey,
@@ -90,8 +118,6 @@ export class ChartScales {
 				this.chartId
 			);
 
-			// Register facet cell chart IDs with the same scales so the
-			// animation loop knows to redraw them when scales change.
 			const facetIds = this.#getFacetChartIds?.();
 			if (facetIds) {
 				for (const cellId of facetIds) {
@@ -100,7 +126,6 @@ export class ChartScales {
 				}
 			}
 
-			// Check if X scale changed
 			if (this.#xScaleInstance !== neededXScale) {
 				if (this.#xScaleInstance) {
 					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
@@ -109,7 +134,6 @@ export class ChartScales {
 				this.#previousXScale = neededXScale;
 			}
 
-			// Check if Y scale changed
 			if (this.#yScaleInstance !== neededYScale) {
 				if (this.#yScaleInstance) {
 					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
@@ -118,7 +142,6 @@ export class ChartScales {
 				this.#previousYScale = neededYScale;
 			}
 
-			// Apply zoom/pan limits from chart config
 			if (this.config.xZoomLimit !== undefined) {
 				this.#xScaleInstance?.setZoomLimit?.(this.config.xZoomLimit);
 			}
@@ -143,15 +166,13 @@ export class ChartScales {
 				const trySetMapping = () => {
 					try {
 						this.gpuCoordinator.setChartScaleMapping(this.chartId, mapping);
-						// Propagate to facet cell charts (pending mechanism handles timing)
 						const facetIds = this.#getFacetChartIds?.();
 						if (facetIds) {
 							for (const cellId of facetIds) {
 								this.gpuCoordinator.setChartScaleMapping(cellId, mapping);
 							}
 						}
-					} catch (error) {
-						// Retry logic for race conditions
+					} catch (_error) {
 						setTimeout(trySetMapping, 10);
 					}
 				};
@@ -160,24 +181,22 @@ export class ChartScales {
 		});
 	}
 
-	// Getters
-	get xLabel() {
+	get xLabel(): string | null | undefined {
 		return this.config.xLabel;
 	}
 
-	get yLabel() {
+	get yLabel(): string | null | undefined {
 		return this.config.yLabel;
 	}
 
-	get layout() {
+	get layout(): ChartLayout {
 		return this.config.layout;
 	}
 
-	get chartId() {
+	get chartId(): string {
 		return this.config.layout.chartId;
 	}
 
-	// Derived scale configurations
 	scaleConfigurations = $derived.by(() => {
 		try {
 			return {
@@ -186,7 +205,10 @@ export class ChartScales {
 			};
 		} catch (error) {
 			console.error('Scale config error', error);
-			return { x: { type: 'linear', config: {} }, y: { type: 'linear', config: {} } };
+			return {
+				x: { type: 'linear', config: {} },
+				y: { type: 'linear', config: {} }
+			};
 		}
 	});
 
@@ -195,16 +217,14 @@ export class ChartScales {
 		y: this.scaleConfigurations?.y?.type || 'linear'
 	}));
 
-	// Expose scale instances as getters (now using $state)
-	get xScaleState() {
+	get xScaleState(): any {
 		return this.#xScaleInstance;
 	}
 
-	get yScaleState() {
+	get yScaleState(): any {
 		return this.#yScaleInstance;
 	}
 
-	// Base D3 scales
 	baseXScale = $derived(
 		this.layout.isReady && this.#xScaleInstance
 			? this.#xScaleInstance.getBaseScale('x', this.layout.innerWidth)
@@ -217,45 +237,42 @@ export class ChartScales {
 			: null
 	);
 
-	// D3 scales with current domains
-	get xScale() {
+	get xScale(): any {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
 		this.#xScaleInstance.domainForReactivity; // Register dependency
 		return this.#xScaleInstance.updateScaleDomain(this.baseXScale);
 	}
 
-	get yScale() {
+	get yScale(): any {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
 		this.#yScaleInstance.domainForReactivity; // Register dependency
 		return this.#yScaleInstance.updateScaleDomain(this.baseYScale);
 	}
 
-	get xTargetScale() {
+	get xTargetScale(): any {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
 		return this.#xScaleInstance.updateScaleDomain(this.baseXScale, false);
 	}
 
-	get yTargetScale() {
+	get yTargetScale(): any {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
 		return this.#yScaleInstance.updateScaleDomain(this.baseYScale, false);
 	}
 
-	// Derived properties
 	currentXDataPoint = $derived(this.#xScaleInstance?.currentDataPoint);
 	currentYDataPoint = $derived(this.#yScaleInstance?.currentDataPoint);
 	currentXScreenPoint = $derived(this.xScale?.(this.currentXDataPoint));
 	currentYScreenPoint = $derived(this.yScale?.(this.currentYDataPoint));
 	scalesReady = $derived(this.#xScaleInstance?.ready && this.#yScaleInstance?.ready);
 
-	// Scale requirement registration
 	registerScaleType = (
-		dimension,
-		type,
-		priority = SCALE_PRIORITIES.PREFER,
-		markId = 'unknown',
-		config = {},
-		columnName = null
-	) => {
+		dimension: 'x' | 'y',
+		type: string,
+		priority: number = SCALE_PRIORITIES.PREFER,
+		markId: string = 'unknown',
+		config: Record<string, unknown> = {},
+		columnName: any = null
+	): void => {
 		let rawColumn = columnName;
 		if (rawColumn?.isAutoBinNode) {
 			rawColumn = rawColumn.field;
@@ -276,13 +293,10 @@ export class ChartScales {
 		if (!existing) {
 			requirements.push({ type, priority, markId, config, columnName: rawColumn });
 			this.scaleRequirements[dimension] = [...requirements];
-
-			// requirements.push({ type, priority, markId, config, columnName });
-			// this.scaleRequirements[dimension] = [...requirements];
 		}
 	};
 
-	unregisterScaleType = (dimension, markId) => {
+	unregisterScaleType = (dimension: 'x' | 'y', markId: string): void => {
 		const requirements = this.scaleRequirements[dimension];
 		const filtered = requirements.filter((req) => req.markId !== markId);
 		if (filtered.length !== requirements.length) {
@@ -298,29 +312,31 @@ export class ChartScales {
 		};
 	};
 
-	// Interaction methods
-	clearCurrentDataPoints = () => {
+	clearCurrentDataPoints = (): void => {
 		if (this.#xScaleInstance) this.#xScaleInstance.currentDataPoint = null;
 		if (this.#yScaleInstance) this.#yScaleInstance.currentDataPoint = null;
 	};
 
-	/** Check if axis has a continuous scale that supports pan/zoom/hover. */
-	#isContinuous(axis) {
+	#isContinuous(axis: 'x' | 'y'): boolean {
 		const type = this.scaleTypes?.[axis];
 		return type === 'linear' || type === 'time';
 	}
 
-	registerClient = (client) => {
+	registerClient = (client: any): (() => void) => {
 		this.markClients.add(client);
 		return () => this.markClients.delete(client);
 	};
 
-	updateCurrentDataPoints = (innerPoint, innerWidth, innerHeight) => {
+	updateCurrentDataPoints = (
+		innerPoint: { x: number; y: number },
+		innerWidth: number,
+		innerHeight: number
+	): void => {
 		if (this.#yScaleInstance?.invertScreenToData) {
 			this.#yScaleInstance.currentDataPoint = this.#yScaleInstance.invertScreenToData(
 				innerPoint.y,
 				innerHeight,
-				true // isYAxis
+				true
 			);
 		}
 		if (this.#xScaleInstance?.invertScreenToData) {
@@ -332,7 +348,7 @@ export class ChartScales {
 		}
 	};
 
-	resetZoom = (resetX = true, resetY = true) => {
+	resetZoom = (resetX = true, resetY = true): void => {
 		if (resetX && this.#isContinuous('x') && this.#xScaleInstance) {
 			this.#xScaleInstance.resetZoom();
 		}
@@ -341,59 +357,62 @@ export class ChartScales {
 		}
 	};
 
-	accumulateZoom = (innerPoint, scaleFactor, doX, doY, innerWidth, innerHeight) => {
+	accumulateZoom = (
+		innerPoint: { x: number; y: number },
+		scaleFactor: number,
+		doX: boolean,
+		doY: boolean,
+		innerWidth: number,
+		innerHeight: number
+	): void => {
 		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
-			const dataPoint = this.#xScaleInstance.invertScreenToData(
-				innerPoint.x,
-				innerWidth,
-				false
-			);
+			const dataPoint = this.#xScaleInstance.invertScreenToData(innerPoint.x, innerWidth, false);
 			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 		}
 		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
-			const dataPoint = this.#yScaleInstance.invertScreenToData(
-				innerPoint.y,
-				innerHeight,
-				true
-			);
+			const dataPoint = this.#yScaleInstance.invertScreenToData(innerPoint.y, innerHeight, true);
 			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 		}
 	};
 
-	applyZoom = (innerPoint, scaleFactor, doX, doY, innerWidth, innerHeight) => {
+	applyZoom = (
+		innerPoint: { x: number; y: number },
+		scaleFactor: number,
+		doX: boolean,
+		doY: boolean,
+		innerWidth: number,
+		innerHeight: number
+	): void => {
 		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
-			const dataPoint = this.#xScaleInstance.invertScreenToData(
-				innerPoint.x,
-				innerWidth,
-				false
-			);
+			const dataPoint = this.#xScaleInstance.invertScreenToData(innerPoint.x, innerWidth, false);
 			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', innerWidth);
 		}
 		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
-			const dataPoint = this.#yScaleInstance.invertScreenToData(
-				innerPoint.y,
-				innerHeight,
-				true
-			);
+			const dataPoint = this.#yScaleInstance.invertScreenToData(innerPoint.y, innerHeight, true);
 			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
 			this.#yScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'y', innerHeight);
 		}
 	};
 
-	startPan = (x, y, activePanX, activePanY, innerWidth, innerHeight) => {
+	startPan = (
+		x: number,
+		y: number,
+		activePanX: boolean,
+		activePanY: boolean,
+		innerWidth: number,
+		innerHeight: number
+	): void => {
 		this.activePanX = activePanX;
 		this.activePanY = activePanY;
 
-		// X Axis Setup
 		if (activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
 			const currentDomain = this.#xScaleInstance.domain.current;
 
 			this._xPanContext.initialScreenPos = x;
 			this._xPanContext.initialDomain[0] = currentDomain[0];
 			this._xPanContext.initialDomain[1] = currentDomain[1];
-			this._xPanContext.screenToDataRatio =
-				(currentDomain[1] - currentDomain[0]) / innerWidth;
+			this._xPanContext.screenToDataRatio = (currentDomain[1] - currentDomain[0]) / innerWidth;
 			this._xPanContext.domainWidth = currentDomain[1] - currentDomain[0];
 			this._xPanContext.screenDimension = innerWidth;
 			this._xPanContext.lastScreenPos = x;
@@ -401,15 +420,13 @@ export class ChartScales {
 			this.#xScaleInstance.setPanContext(this._xPanContext);
 		}
 
-		// Y Axis Setup
 		if (activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
 			const currentDomain = this.#yScaleInstance.domain.current;
 
 			this._yPanContext.initialScreenPos = y;
 			this._yPanContext.initialDomain[0] = currentDomain[0];
 			this._yPanContext.initialDomain[1] = currentDomain[1];
-			this._yPanContext.screenToDataRatio =
-				(currentDomain[1] - currentDomain[0]) / innerHeight;
+			this._yPanContext.screenToDataRatio = (currentDomain[1] - currentDomain[0]) / innerHeight;
 			this._yPanContext.domainWidth = currentDomain[1] - currentDomain[0];
 			this._yPanContext.screenDimension = innerHeight;
 			this._yPanContext.lastScreenPos = y;
@@ -418,7 +435,7 @@ export class ChartScales {
 		}
 	};
 
-	endPan = () => {
+	endPan = (): void => {
 		this.activePanX = false;
 		this.activePanY = false;
 
@@ -430,7 +447,7 @@ export class ChartScales {
 		}
 	};
 
-	updatePanPosition = (screenX, screenY) => {
+	updatePanPosition = (screenX: number, screenY: number): void => {
 		if (this.activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
 			this.#xScaleInstance.updatePanPosition(screenX, 0);
 		}
@@ -439,19 +456,18 @@ export class ChartScales {
 		}
 	};
 
-	// Band scale support
 	xCategoryPositions = $derived.by(() => {
 		if (this.scaleTypes?.x !== 'band' || !this.xScale || !this.layout.isReady) return null;
 		const domain = this.#xScaleInstance?.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d) => this.xScale(d)));
+		return new Float32Array(domain.map((d: any) => this.xScale(d)));
 	});
 
 	yCategoryPositions = $derived.by(() => {
 		if (this.scaleTypes?.y !== 'band' || !this.yScale || !this.layout.isReady) return null;
 		const domain = this.#yScaleInstance?.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d) => this.yScale(d)));
+		return new Float32Array(domain.map((d: any) => this.yScale(d)));
 	});
 
 	categoryPositionsReady = $derived.by(() => {
@@ -462,30 +478,24 @@ export class ChartScales {
 
 	xBandwidth = $derived.by(() => {
 		if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) return 0;
-		return this.baseXScale.bandwidth();
+		return (this.baseXScale as any).bandwidth();
 	});
 
 	yBandwidth = $derived.by(() => {
 		if (this.scaleTypes?.y !== 'band' || !this.baseYScale || !this.layout.isReady) return 0;
-		return this.baseYScale.bandwidth();
+		return (this.baseYScale as any).bandwidth();
 	});
 
-	adjustBinMultiplier(delta) {
-		// Clamp between 0.1x (coarse) and 20x (fine)
+	adjustBinMultiplier(delta: number): void {
 		const current = this.binStepMultiplier;
-
-		// Multiplicative: delta is a percentage of current value
-		// e.g., delta=0.2 means 20% change relative to current
 		const absoluteDelta = current * delta;
 		const newValue = Math.max(0.1, Math.min(20.0, current + absoluteDelta));
 
-		// Only update if changed significantly
 		if (Math.abs(newValue - current) > 0.001) {
 			this.binStepMultiplier = newValue;
 		}
 	}
 
-	// Context data for child components
 	getContextData() {
 		const coordinator = this;
 		return {
@@ -558,23 +568,13 @@ export class ChartScales {
 			get binStepMultiplier() {
 				return coordinator.binStepMultiplier;
 			},
-			adjustBinMultiplier: (d) => coordinator.adjustBinMultiplier(d)
+			adjustBinMultiplier: (d: number) => coordinator.adjustBinMultiplier(d)
 		};
 	}
 
-	destroy() {
-		console.log(`💥 ChartScales destroying for chart ${this.chartId}`);
-
-		// const scaleRegistry = getContext('scale-registry');
+	destroy(): void {
 		if (this.#scaleRegistry) {
 			this.#scaleRegistry.removeChartUsage(this.chartId);
-			// Remove this chart from all scales it's using
-			// if (this.#xScaleInstance && scaleRegistry.scaleUsage.has(this.#xScaleInstance)) {
-			// 	scaleRegistry.scaleUsage.get(this.#xScaleInstance).delete(this.chartId);
-			// }
-			// if (this.#yScaleInstance && scaleRegistry.scaleUsage.has(this.#yScaleInstance)) {
-			// 	scaleRegistry.scaleUsage.get(this.#yScaleInstance).delete(this.chartId);
-			// }
 		}
 
 		this.#xScaleInstance = null;

@@ -1,7 +1,7 @@
 <script>
 	import { resolveScaleConfiguration, SCALE_PRIORITIES } from '$lib/scales';
-	import { ChartLayout } from '$lib/layout/ChartLayout.svelte.js';
-	import { ChartScales } from '$lib/scales/ChartScales.svelte.js';
+	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
+	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 
 	// Create test instances
 	const testLayout = new ChartLayout({ height: 300 });

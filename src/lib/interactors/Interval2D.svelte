@@ -141,26 +141,22 @@
 			: [0, 1];
 
 		selection.activate(
-			clauseIntervals(
-				[xColumnRef, yColumnRef],
-				[xRange, yRange],
-				{
-					source,
-					clients: chart.markClients,
-					scales: [
-						{
-							type: chart.xScaleState?.scaleType || 'linear',
-							domain: chart.xScale.domain(),
-							range: chart.xScale.range()
-						},
-						{
-							type: chart.yScaleState?.scaleType || 'linear',
-							domain: chart.yScale.domain(),
-							range: chart.yScale.range()
-						}
-					]
-				}
-			)
+			clauseIntervals([xColumnRef, yColumnRef], [xRange, yRange], {
+				source,
+				clients: chart.markClients,
+				scales: [
+					{
+						type: chart.xScaleState?.scaleType || 'linear',
+						domain: chart.xScale.domain(),
+						range: chart.xScale.range()
+					},
+					{
+						type: chart.yScaleState?.scaleType || 'linear',
+						domain: chart.yScale.domain(),
+						range: chart.yScale.range()
+					}
+				]
+			})
 		);
 	}
 
@@ -177,13 +173,10 @@
 		const yMin = Math.min(brush.y.dataMin, brush.y.dataMax);
 		const yMax = Math.max(brush.y.dataMin, brush.y.dataMax);
 
-		const { x: [newXMin, newXMax], y: [newYMin, newYMax] } = scaleBrushExtent2D(
-			xMin,
-			xMax,
-			yMin,
-			yMax,
-			scaleFactor
-		);
+		const {
+			x: [newXMin, newXMax],
+			y: [newYMin, newYMax]
+		} = scaleBrushExtent2D(xMin, xMax, yMin, yMax, scaleFactor);
 
 		brush.x.setExtent(newXMin, newXMax);
 		brush.y.setExtent(newYMin, newYMax);
@@ -262,11 +255,17 @@
 				if (edge === 'left' || edge === 'right') {
 					const anchorXData = edge === 'left' ? brush.x.dataMax : brush.x.dataMin;
 					const currentXData = chart.xScale.invert(currentX);
-					brush.x.setExtent(Math.min(anchorXData, currentXData), Math.max(anchorXData, currentXData));
+					brush.x.setExtent(
+						Math.min(anchorXData, currentXData),
+						Math.max(anchorXData, currentXData)
+					);
 				} else if (edge === 'top' || edge === 'bottom') {
 					const anchorYData = edge === 'top' ? brush.y.dataMin : brush.y.dataMax;
 					const currentYData = chart.yScale.invert(currentY);
-					brush.y.setExtent(Math.min(anchorYData, currentYData), Math.max(anchorYData, currentYData));
+					brush.y.setExtent(
+						Math.min(anchorYData, currentYData),
+						Math.max(anchorYData, currentYData)
+					);
 				}
 			}
 		}
