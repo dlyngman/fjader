@@ -1,4 +1,5 @@
 import type { GPUCoordinator } from '$lib/gpu';
+import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 interface RendererOptions {
 	zIndex?: number;
@@ -28,7 +29,7 @@ export class BaseGPURenderer {
 	#markType: string;
 	#webGPUContext: { getDevice(): GPUDevice };
 	#gpuCoordinator: GPUCoordinator;
-	#chartContext: any; // Phase 6 will type this
+	#chartContext: ChartContext;
 
 	// Identity & Async Control
 	#rendererId: string;

@@ -1,9 +1,14 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	let { show = 'both' } = $props();
+	interface Props {
+		show?: 'both' | 'x' | 'y';
+	}
 
-	const c = getContext('chart');
+	let { show = 'both' }: Props = $props();
+
+	const c = getContext<ChartContext>('chart');
 
 	const xFormatter = $derived(
 		c.xScaleState?.formatValue ? (v) => c.xScaleState.formatValue(v) : String

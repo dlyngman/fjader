@@ -5,12 +5,18 @@
   at the cursor position. Uses CSS anchor positioning for automatic
   edge-aware placement.
 -->
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	const chart = getContext('chart');
+	interface Props {
+		fields?: string[] | null;
+		formatters?: Record<string, (value: unknown) => string>;
+	}
 
-	let { fields = null, formatters = {} } = $props();
+	const chart = getContext<ChartContext>('chart');
+
+	let { fields = null, formatters = {} }: Props = $props();
 
 	let tm = $derived(chart?.tooltipManager);
 	let visible = $derived(tm?.visible ?? false);
@@ -34,7 +40,7 @@
 
 	// Resolve channel for a tooltip entry key — checks reverse map first,
 	// then falls back to pattern match for raw aliases (x1, x2, y1, y2)
-	function getChannel(key) {
+	function getChannel(key: string) {
 		return fieldToChannel[key] ?? (/^x\d?$/.test(key) ? 'x' : /^y\d?$/.test(key) ? 'y' : null);
 	}
 
@@ -48,7 +54,7 @@
 		return Object.entries(data);
 	});
 
-	function formatValue(key, value) {
+	function formatValue(key: string, value: unknown) {
 		if (formatters[key]) return formatters[key](value);
 		if (typeof value === 'number') {
 			return Number.isInteger(value) ? value.toString() : value.toFixed(2);
@@ -56,7 +62,7 @@
 		return String(value);
 	}
 
-	const channelIcons = { x: '\u2192', y: '\u2191' };
+	const channelIcons: Record<string, string> = { x: '\u2192', y: '\u2191' };
 </script>
 
 <!-- Invisible anchor point tracking the cursor -->

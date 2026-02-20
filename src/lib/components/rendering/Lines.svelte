@@ -1,8 +1,10 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
+	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
+	import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 
 	// Lines uses projectToPixels() directly, so we don't need placeholder replacement.
 	// We still define x/y so that scaleX/scaleY functions are generated.
@@ -31,6 +33,23 @@
 		DOT_RADIUS: 32 // f32
 	};
 
+	interface Props {
+		xData: Float32Array;
+		yData: Float32Array;
+		seriesData?: Float32Array | null;
+		colorValueData?: Float32Array | null;
+		facetData?: Float32Array | null;
+		dataVersion?: number;
+		zIndex?: number;
+		curve?: CurveType;
+		strokeWidth?: number;
+		dotRadius?: number;
+		colorMode?: number;
+		colorScaleIndex?: number;
+		constantColor?: [number, number, number, number];
+		m4Decimator?: M4Decimator | null;
+	}
+
 	let {
 		xData,
 		yData,
@@ -41,15 +60,15 @@
 		zIndex = 0,
 		curve = 'linear',
 		strokeWidth = 2,
-		dotRadius = 0, // 0 = strokeWidth/2 (gap-filling only), >0 = explicit radius in px
-		colorMode = 0, // 0 = constant, 1 = scale
+		dotRadius = 0,
+		colorMode = 0,
 		colorScaleIndex = 0,
 		constantColor = [0.13, 0.55, 0.13, 1.0],
 		m4Decimator = null
-	} = $props();
+	}: Props = $props();
 
-	const chartContext = getContext('chart');
-	const webGPUContext = getContext('webgpu-canvas');
+	const chartContext = getContext<ChartContext>('chart');
+	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
@@ -75,9 +94,9 @@
       return output;
     }`;
 
-	let renderer = $state(null);
-	let initializationError = $state(null);
-	let quadGeometryBuffer;
+	let renderer = $state<BaseGPURenderer | null>(null);
+	let initializationError = $state<string | null>(null);
+	let quadGeometryBuffer: GPUBuffer;
 	const m4ComputeKey = `m4-${crypto.randomUUID()}`;
 
 	// Resolution and vertex count derived from curve type
@@ -425,7 +444,7 @@
 	// Geometry: N sub-segment quads (6N vertices) + 1 join circle quad (6 vertices).
 	// Sub-segment quads: quadPosition.x = t value [0..1], .y = side {-1, 1}
 	// Circle quad: quadPosition = [-1..1] for SDF
-	function createLineGeometry(res) {
+	function createLineGeometry(res: number) {
 		const verts = [];
 		for (let i = 0; i < res; i++) {
 			const tLeft = i / res;
@@ -456,7 +475,7 @@
 		device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
 	}
 
-	function drawLines(passEncoder) {
+	function drawLines(passEncoder: GPURenderPassEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
 		if (m4Decimator?.renderBindGroup) {
 			passEncoder.setBindGroup(1, m4Decimator.renderBindGroup);
@@ -507,7 +526,7 @@
 			}
 		} catch (error) {
 			console.error('Lines init failed:', error);
-			initializationError = error.message;
+			initializationError = (error as Error).message;
 		}
 	}
 

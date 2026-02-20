@@ -19,8 +19,10 @@
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
 		ConnectedTopologyProps,
-		Coordinator
+		Coordinator,
+		ChartContext
 	} from '$lib/types';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
 		y: FieldRef;
@@ -66,8 +68,8 @@
 
 	const markId = `areax-${crypto.randomUUID().slice(0, 8)}`;
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
-	const chartContext: any = getContext('chart');
-	const scaleRegistry: any = getContext('scale-registry');
+	const chartContext = getContext<ChartContext>('chart');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
 	BaseMarkSetup.ensureServices(coordinator);

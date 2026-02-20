@@ -1,37 +1,34 @@
-<script>
-	/** @type {number} - Maximum number of rows/columns that can be selected */
+<script lang="ts">
+	interface Props {
+		maxSize?: number;
+		maxSelected?: number;
+		selectedRows?: number;
+		selectedColumns?: number;
+	}
+
 	let {
 		maxSize = 5,
 		maxSelected = maxSize,
 		selectedRows = $bindable(1),
 		selectedColumns = $bindable(1)
-	} = $props();
+	}: Props = $props();
 
-	/** @type {boolean} - Whether the dropdown is currently open */
 	let isOpen = $state(false);
-
-	/** @type {number} - Number of rows being hovered */
 	let hoverRows = $state(0);
-
-	/** @type {number} - Number of columns being hovered */
 	let hoverColumns = $state(0);
-
-	/** @type {HTMLDivElement | null} */
-	let dropdownEl = $state(null);
-
-	/** @type {HTMLButtonElement | null} */
-	let buttonEl = $state(null);
+	let dropdownEl = $state<HTMLDivElement | null>(null);
+	let buttonEl = $state<HTMLButtonElement | null>(null);
 
 	// Setup click outside listener when component mounts
 	$effect(() => {
 		if (isOpen) {
-			const handleClickOutside = (/** @type {MouseEvent} */ event) => {
+			const handleClickOutside = (event: MouseEvent) => {
 				// Check if the click was outside both the dropdown and the button
 				if (
 					dropdownEl &&
-					!dropdownEl.contains(/** @type {Node} */ (event.target)) &&
+					!dropdownEl.contains(event.target as Node) &&
 					buttonEl &&
-					!buttonEl.contains(/** @type {Node} */ (event.target))
+					!buttonEl.contains(event.target as Node)
 				) {
 					isOpen = false;
 				}
@@ -47,14 +44,14 @@
 		}
 	});
 
-	function handleSelect(rows, columns) {
+	function handleSelect(rows: number, columns: number) {
 		selectedRows = rows;
 		selectedColumns = columns;
 		isOpen = false;
 	}
 
 	// Handle mouse entering a cell
-	function handleMouseEnter(row, col) {
+	function handleMouseEnter(row: number, col: number) {
 		hoverRows = row;
 		hoverColumns = col;
 	}

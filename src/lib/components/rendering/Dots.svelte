@@ -1,7 +1,8 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 	const dotRendererDefinition = {
 		x: { concept: 'position', channels: ['x'] },
@@ -30,6 +31,22 @@
 		CONSTANT_COLOR: 16
 	};
 
+	interface Props {
+		xData: Float32Array;
+		yData: Float32Array;
+		colorValueData: Float32Array | null;
+		radiusData: Float32Array | null;
+		alphaData: Float32Array | null;
+		facetData?: Float32Array | null;
+		dataVersion: number;
+		zIndex?: number;
+		colorMode?: number;
+		colorScaleIndex?: number;
+		constantColor?: [number, number, number, number];
+		sizeMode?: number;
+		sizeScaleIndex?: number;
+	}
+
 	let {
 		xData,
 		yData,
@@ -44,17 +61,17 @@
 		constantColor = [0.13, 0.55, 0.13, 1.0],
 		sizeMode = 0,
 		sizeScaleIndex = 0
-	} = $props();
+	}: Props = $props();
 
-	const chartContext = getContext('chart');
-	const webGPUContext = getContext('webgpu-canvas');
+	const chartContext = getContext<ChartContext>('chart');
+	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 
 	const faceted = !!chartContext.fx;
 
-	let renderer = $state(null);
-	let initializationError = $state(null);
-	let quadGeometryBuffer;
+	let renderer = $state<BaseGPURenderer | null>(null);
+	let initializationError = $state<string | null>(null);
+	let quadGeometryBuffer: GPUBuffer;
 
 	const quadVertexCount = 6;
 
@@ -269,7 +286,7 @@
 		device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices);
 	}
 
-	function drawDots(passEncoder) {
+	function drawDots(passEncoder: GPURenderPassEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
 		if (faceted) {
@@ -309,7 +326,7 @@
 			}
 		} catch (error) {
 			console.error('Dots init failed:', error);
-			initializationError = error.message;
+			initializationError = (error as Error).message;
 		}
 	}
 

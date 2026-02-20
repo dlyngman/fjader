@@ -1,7 +1,8 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 	const rectRendererDefinition = {
 		x: { concept: 'extent', channels: ['x0', 'x1'] },
@@ -35,6 +36,24 @@
 		// 40-47: padding for 16-byte alignment
 	};
 
+	interface Props {
+		x0Data: Float32Array;
+		x1Data: Float32Array;
+		y0Data: Float32Array;
+		y1Data: Float32Array;
+		colorValueData: Float32Array | null;
+		alphaData: Float32Array | null;
+		facetData?: Float32Array | null;
+		dataVersion: number;
+		zIndex?: number;
+		colorMode?: number;
+		colorScaleIndex?: number;
+		constantColor?: [number, number, number, number];
+		inset?: number;
+		dx?: number;
+		dy?: number;
+	}
+
 	let {
 		x0Data,
 		x1Data,
@@ -51,10 +70,10 @@
 		inset = 0,
 		dx = 0,
 		dy = 0
-	} = $props();
+	}: Props = $props();
 
-	const chartContext = getContext('chart');
-	const webGPUContext = getContext('webgpu-canvas');
+	const chartContext = getContext<ChartContext>('chart');
+	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
@@ -68,9 +87,9 @@
         return degen;
       }`;
 
-	let renderer = $state(null);
-	let initializationError = $state(null);
-	let rectGeometryBuffer; // Static geometry managed locally
+	let renderer = $state<BaseGPURenderer | null>(null);
+	let initializationError = $state<string | null>(null);
+	let rectGeometryBuffer: GPUBuffer;
 
 	const rectVertexCount = 6;
 
@@ -276,7 +295,7 @@
 		device.queue.writeBuffer(rectGeometryBuffer, 0, rectVertices);
 	}
 
-	function drawRects(passEncoder) {
+	function drawRects(passEncoder: GPURenderPassEncoder) {
 		if (!rectGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, rectGeometryBuffer);
 		if (faceted) {
@@ -316,7 +335,7 @@
 			}
 		} catch (error) {
 			console.error('Rects init failed:', error);
-			initializationError = error.message;
+			initializationError = (error as Error).message;
 		}
 	}
 

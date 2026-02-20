@@ -4,10 +4,11 @@
   Renders in the SVG foreground layer at the matched point's screen coordinates.
   Only shows for point-like marks (dots), not area marks (bars/rects).
 -->
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	const c = getContext('chart');
+	const c = getContext<ChartContext>('chart');
 
 	let tm = $derived(c?.tooltipManager);
 	let show = $derived(

@@ -1,8 +1,9 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
+	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 
 	// Areas uses projectToPixels() directly (like Lines, not like Rects).
 	// We define x/y so scaleX/scaleY functions are generated.
@@ -34,6 +35,25 @@
 		SHOW_BOTTOM_DOTS: 40 // u32 (0 or 1)
 	};
 
+	interface Props {
+		dimData: Float32Array;
+		topData: Float32Array;
+		bottomData: Float32Array;
+		seriesData?: Float32Array | null;
+		colorValueData?: Float32Array | null;
+		facetData?: Float32Array | null;
+		dataVersion?: number;
+		zIndex?: number;
+		curve?: CurveType;
+		fillOpacity?: number;
+		dotRadius?: number;
+		showBottomDots?: boolean;
+		orientation?: 'vertical' | 'horizontal';
+		colorMode?: number;
+		colorScaleIndex?: number;
+		constantColor?: [number, number, number, number];
+	}
+
 	let {
 		dimData,
 		topData,
@@ -45,16 +65,16 @@
 		zIndex = 0,
 		curve = 'linear',
 		fillOpacity = 0.5,
-		dotRadius = 0, // 0 = no dots, >0 = dot radius in px
-		showBottomDots = false, // true = dots on both boundaries
-		orientation = 'vertical', // 'vertical' (AreaY) or 'horizontal' (AreaX)
-		colorMode = 0, // 0 = constant, 1 = scale
+		dotRadius = 0,
+		showBottomDots = false,
+		orientation = 'vertical',
+		colorMode = 0,
 		colorScaleIndex = 0,
 		constantColor = [0.2, 0.4, 0.8, 1.0]
-	} = $props();
+	}: Props = $props();
 
-	const chartContext = getContext('chart');
-	const webGPUContext = getContext('webgpu-canvas');
+	const chartContext = getContext<ChartContext>('chart');
+	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
@@ -80,9 +100,9 @@
       return output;
     }`;
 
-	let renderer = $state(null);
-	let initializationError = $state(null);
-	let areaGeometryBuffer;
+	let renderer = $state<BaseGPURenderer | null>(null);
+	let initializationError = $state<string | null>(null);
+	let areaGeometryBuffer: GPUBuffer;
 
 	// Resolution and vertex count derived from curve type
 	const resolution = getCurveResolution(curve);
@@ -411,7 +431,7 @@
 	// Geometry: N sub-segment quads (6N vertices) + 2 dot circle quads (12 vertices).
 	// Sub-segment quads: quadCorner.x = t value [0..1], .y = boundary {0=bottom, 1=top}
 	// Circle quads: quadCorner = [-1..1] for SDF (top at 6N, bottom at 6N+6)
-	function createAreaGeometry(res) {
+	function createAreaGeometry(res: number) {
 		const verts = [];
 		for (let i = 0; i < res; i++) {
 			const tLeft = i / res;
@@ -448,7 +468,7 @@
 		device.queue.writeBuffer(areaGeometryBuffer, 0, areaVertices);
 	}
 
-	function drawAreas(passEncoder) {
+	function drawAreas(passEncoder: GPURenderPassEncoder) {
 		if (!areaGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, areaGeometryBuffer);
 		passEncoder.draw(areaVertexCount, renderer.instanceCount);
@@ -496,7 +516,7 @@
 			}
 		} catch (error) {
 			console.error('Areas init failed:', error);
-			initializationError = error.message;
+			initializationError = (error as Error).message;
 		}
 	}
 

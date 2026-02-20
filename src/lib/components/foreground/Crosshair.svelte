@@ -1,11 +1,17 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
+	import type { ChartContext } from '$lib/types';
 
-	let { show = 'both' } = $props();
+	interface Props {
+		show?: 'both' | 'x' | 'y';
+	}
 
-	const c = getContext('chart');
+	let { show = 'both' }: Props = $props();
 
-	const isValid = (val) => val !== null && val !== undefined && !isNaN(val);
+	const c = getContext<ChartContext>('chart');
+
+	const isValid = (val: unknown): val is number =>
+		val !== null && val !== undefined && !isNaN(val as number);
 </script>
 
 {#if c.xScale && c.yScale && c.innerHeight && c.innerWidth}

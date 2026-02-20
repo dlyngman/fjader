@@ -1,22 +1,29 @@
-<script>
+<script lang="ts">
 	import { onMount, onDestroy, setContext, getContext } from 'svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import type { Snippet } from 'svelte';
+	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
-	let { canvasComponents = undefined, facetIndex } = $props();
+	interface Props {
+		canvasComponents?: Snippet | undefined;
+		facetIndex?: number;
+	}
 
-	const c = getContext('chart');
+	let { canvasComponents = undefined, facetIndex }: Props = $props();
+
+	const c = getContext<ChartContext>('chart');
 	const isFaceted = !!c.fx && facetIndex == null;
 	let width = $derived(c.innerWidth);
 	let height = $derived(c.innerHeight);
 	let margin = $derived(c.margin);
 
-	// let canvas;
-	let canvas = $state();
-	let context;
-	let gpuCoordinator = isFaceted ? getGPUContext() : undefined;
-	let chartControl;
+	let canvas = $state<HTMLCanvasElement>();
+	let context: GPUCanvasContext | null = null;
+	let gpuCoordinator: GPUCoordinator | null | undefined = isFaceted ? getGPUContext() : undefined;
+	let chartControl: any = null;
 	let contextConfigured = $state(isFaceted);
-	let initializationError = $state(null);
+	let initializationError = $state<string | null>(null);
 	let lastTransform = '';
 
 	const chartId = c.chartId;
@@ -50,7 +57,7 @@
 			console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
 		} catch (error) {
 			console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
-			initializationError = error.message;
+			initializationError = (error as Error).message;
 			throw error;
 		}
 	}
@@ -159,12 +166,12 @@
 			}
 		} catch (error) {
 			console.error(`❌ Canvas setup failed for ${chartId}:`, error);
-			initializationError = `Canvas setup failed: ${error.message}`;
+			initializationError = `Canvas setup failed: ${(error as Error).message}`;
 		}
 	}
 
 	// Enhanced context with better state management and error handling
-	setContext('webgpu-canvas', {
+	setContext<WebGPUCanvasContext>('webgpu-canvas', {
 		getCanvasDimensions() {
 			const currentDPR = window.devicePixelRatio || 1;
 			return {

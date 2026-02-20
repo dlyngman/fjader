@@ -1,10 +1,23 @@
-<script>
+<script lang="ts">
 	import { getContext } from 'svelte';
 	import { RuleX, RuleY } from '../rendering';
+	import type { ChartContext } from '$lib/types';
 
-	let { axis = 'both', color = [0.8, 0.8, 0.8, 0.4], lineWidth = 1, zIndex = -10 } = $props();
+	interface Props {
+		axis?: 'both' | 'x' | 'y';
+		color?: [number, number, number, number];
+		lineWidth?: number;
+		zIndex?: number;
+	}
 
-	const chartContext = getContext('chart');
+	let {
+		axis = 'both',
+		color = [0.8, 0.8, 0.8, 0.4],
+		lineWidth = 1,
+		zIndex = -10
+	}: Props = $props();
+
+	const chartContext = getContext<ChartContext>('chart');
 
 	// Get scales based on axis prop
 	const xScale = $derived(axis === 'x' || axis === 'both' ? chartContext.xScaleState : null);
@@ -21,7 +34,7 @@
 	let yTickValues = $state(null);
 
 	// Helper: fill buffer from scale ticks (zero-allocation)
-	function fillTickBuffer(scale, buffer) {
+	function fillTickBuffer(scale: any, buffer: Float32Array) {
 		const newTicks = scale?.getTicks ? scale.getTicks() : [];
 		const count = Math.min(newTicks.length, MAX_TICKS);
 

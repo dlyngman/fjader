@@ -1,7 +1,8 @@
-<script>
+<script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
+	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
 	// RuleX: Vertical lines (X-axis gridlines)
 	// Only binds X scale - eliminates Y scale binding overhead
@@ -22,16 +23,23 @@
 		COLOR: 16
 	};
 
-	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 } = $props();
+	interface Props {
+		positions: Float32Array;
+		color?: [number, number, number, number];
+		lineWidth?: number;
+		zIndex?: number;
+	}
 
-	const chartContext = getContext('chart');
-	const webGPUContext = getContext('webgpu-canvas');
+	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 }: Props = $props();
+
+	const chartContext = getContext<ChartContext>('chart');
+	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
-	let renderer = $state(null);
-	let initializationError = $state(null);
-	let lineGeometryBuffer;
+	let renderer = $state<BaseGPURenderer | null>(null);
+	let initializationError = $state<string | null>(null);
+	let lineGeometryBuffer: GPUBuffer;
 
 	const ruleXShaderCode = `
     struct RuleConstants {
@@ -155,7 +163,7 @@
 		device.queue.writeBuffer(lineGeometryBuffer, 0, lineVertices);
 	}
 
-	function drawRules(passEncoder) {
+	function drawRules(passEncoder: GPURenderPassEncoder) {
 		if (!lineGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, lineGeometryBuffer);
 		passEncoder.draw(6, renderer.instanceCount);
@@ -185,7 +193,7 @@
 			}
 		} catch (error) {
 			console.error('RuleX renderer init failed:', error);
-			initializationError = error.message;
+			initializationError = (error as Error).message;
 		}
 	}
 

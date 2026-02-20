@@ -12,7 +12,14 @@
 		normalizeSortConfig,
 		inferMarkScaleType
 	} from './utils';
-	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, Coordinator } from '$lib/types';
+	import type {
+		FieldRef,
+		BaseMarkProps,
+		ContinuousScaleTypeProps,
+		Coordinator,
+		ChartContext
+	} from '$lib/types';
+	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
 		x: FieldRef;
@@ -59,8 +66,8 @@
 
 	const markId = `text-${crypto.randomUUID().slice(0, 8)}`;
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
-	const chartContext: any = getContext('chart');
-	const scaleRegistry: any = getContext('scale-registry');
+	const chartContext = getContext<ChartContext>('chart');
+	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	BaseMarkSetup.ensureServices(coordinator);
 
