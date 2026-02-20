@@ -93,8 +93,8 @@
 		chartContext
 	);
 
-	// Color logic - uses fill ?? color for the color field
-	const effectiveColorField = $derived(fill ?? color);
+	// Color logic - fill wins, then explicit color, then stroke fallback
+	const effectiveColorField = $derived(fill ?? color ?? stroke);
 	const markColor = new MarkColor(
 		() => effectiveColorField,
 		() => scheme,
@@ -221,13 +221,13 @@
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
 
-		const colorChannelField = effectiveColorField
-			? typeof effectiveColorField === 'string'
-				? effectiveColorField
+		const colorChannelField = markColor.selectField
+			? typeof markColor.selectField === 'string'
+				? markColor.selectField
 				: 'color'
-			: stroke
-				? typeof stroke === 'string'
-					? stroke
+			: markSeries.selectField
+				? typeof markSeries.selectField === 'string'
+					? markSeries.selectField
 					: 'stroke'
 				: null;
 

@@ -1,6 +1,7 @@
 import { untrack } from 'svelte';
 import { resolveChannel } from './channel-resolution';
 import { isNode } from '@uwdata/mosaic-sql';
+import { isColorConstant } from '$lib/scales/color-utils';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ChartContext } from '$lib/types';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -71,12 +72,16 @@ export class MarkSeries {
 		});
 	}
 
-	// The series field (null if not set)
+	// The series field (null if not set or if stroke is a constant CSS color)
 	#field: string | object | null = $derived.by(() => {
 		const s = this.#seriesProp();
 		if (s == null) return null;
 		if (isNode(s)) return s;
-		if (typeof s === 'string') return s;
+		if (typeof s === 'string') {
+			// CSS color constants (e.g. "steelblue", "#ff0000") are not series fields
+			if (isColorConstant(s)) return null;
+			return s;
+		}
 		return null;
 	});
 

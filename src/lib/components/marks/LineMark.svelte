@@ -83,10 +83,10 @@
 		chartContext
 	);
 
-	// Color logic - only uses explicit color prop
-	// To color by series, set color={stroke} explicitly
+	// Color logic - explicit color wins, else falls back to stroke
+	// (stroke="steelblue" → constant color, stroke="species" → color by species)
 	const markColor = new MarkColor(
-		() => color,
+		() => color ?? stroke,
 		() => scheme,
 		() => table,
 		() => setup,
@@ -210,7 +210,7 @@
 		if (!m4Decimator || !chartContext.innerWidth) return;
 
 		let numSeries;
-		if (stroke) {
+		if (markSeries.selectField) {
 			const domain = markSeries.scaleState?.domain;
 			if (!domain || domain.length === 0) return;
 			numSeries = domain.length;
@@ -230,14 +230,14 @@
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
 
-		// Use color channel if set, otherwise fall back to stroke for series identification
-		const colorChannelField = color
-			? typeof color === 'string'
-				? color
+		// Use resolved field from MarkColor or MarkSeries (avoids treating constant colors as fields)
+		const colorChannelField = markColor.selectField
+			? typeof markColor.selectField === 'string'
+				? markColor.selectField
 				: 'color'
-			: stroke
-				? typeof stroke === 'string'
-					? stroke
+			: markSeries.selectField
+				? typeof markSeries.selectField === 'string'
+					? markSeries.selectField
 					: 'stroke'
 				: null;
 
