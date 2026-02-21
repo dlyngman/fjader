@@ -101,34 +101,34 @@
 	$effect(() => {
 		switch (selectedColorMode) {
 			case 'default':
-				modeDescription = 'No color prop - uses default blue [0.2, 0.4, 0.8, 1.0]';
+				modeDescription = 'No fill prop - uses default blue [0.2, 0.4, 0.8, 1.0]';
 				break;
 			case 'hex':
-				modeDescription = 'color="#800080" - constant purple via hex';
+				modeDescription = 'fill="#800080" - constant purple via hex';
 				break;
 			case 'named':
-				modeDescription = 'color="steelblue" - constant via CSS named color';
+				modeDescription = 'fill="steelblue" - constant via CSS named color';
 				break;
 			case 'rgb':
-				modeDescription = 'color="rgb(255, 100, 50)" - constant via rgb()';
+				modeDescription = 'fill="rgb(255, 100, 50)" - constant via rgb()';
 				break;
 			case 'field-tableau10':
-				modeDescription = 'color="species" scheme="tableau10" - GPU color scale lookup';
+				modeDescription = 'fill="species" scheme="tableau10" - GPU color scale lookup';
 				break;
 			case 'field-category10':
-				modeDescription = 'color={{ field: "species", scheme: "category10" }} - object form';
+				modeDescription = 'fill={{ field: "species", scheme: "category10" }} - object form';
 				break;
 			case 'field-dark2':
-				modeDescription = 'color={{ field: "species", scheme: "dark2" }}';
+				modeDescription = 'fill={{ field: "species", scheme: "dark2" }}';
 				break;
 			case 'field-set1':
-				modeDescription = 'color={{ field: "species", scheme: "set1" }}';
+				modeDescription = 'fill={{ field: "species", scheme: "set1" }}';
 				break;
 			case 'field-pastel1':
-				modeDescription = 'color={{ field: "species", scheme: "pastel1" }}';
+				modeDescription = 'fill={{ field: "species", scheme: "pastel1" }}';
 				break;
 			case 'field-island':
-				modeDescription = 'color="island" - different categorical field';
+				modeDescription = 'fill="island" - different categorical field';
 				break;
 			default:
 				modeDescription = '';
@@ -239,18 +239,18 @@
 								x1={min('bill_length')}
 								x2={max('bill_length')}
 								y="species"
-								color={colorProp}
+								fill={colorProp}
 								scheme={schemeProp}
-								alpha={1}
+								opacity={1}
 							/>
 						{:else}
 							<BarMarkX
 								table="penguins"
 								x={count()}
 								y="species"
-								color={colorProp}
+								fill={colorProp}
 								scheme={schemeProp}
-								alpha={1}
+								opacity={1}
 								{transforms}
 							/>
 						{/if}
@@ -282,18 +282,18 @@
 								x1={min('bill_length')}
 								x2={max('bill_length')}
 								y="species"
-								color={colorProp}
+								fill={colorProp}
 								scheme={schemeProp}
-								alpha={1}
+								opacity={1}
 							/>
 						{:else}
 							<BarMarkX
 								table="penguins"
 								x={count()}
 								y="species"
-								color={colorProp}
+								fill={colorProp}
 								scheme={schemeProp}
-								alpha={1}
+								opacity={1}
 								{transforms}
 							/>
 						{/if}
@@ -322,18 +322,18 @@
 								y1={min('bill_length')}
 								y2={max('bill_length')}
 								x="species"
-								color={colorProp}
+								fill={colorProp}
 								scheme={schemeProp}
-								alpha={1}
+								opacity={1}
 							/>
 						{:else}
 							<BarMarkY
 								table="penguins"
 								y={count()}
 								x="species"
-								color={colorProp}
+								fill={colorProp}
 								scheme={schemeProp}
-								alpha={1}
+								opacity={1}
 								{transforms}
 							/>
 						{/if}

@@ -85,7 +85,7 @@
 		</div>
 
 		<div class="chart-section">
-			<h3>stroke="category" color="tomato"</h3>
+			<h3>z="category" stroke="tomato" (constant color, grouped by category)</h3>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="timestamp" yLabel="count (override)">
 					{#snippet background()}
@@ -102,8 +102,8 @@
 									table="events"
 									x={bin('timestamp', { interval: 'day' })}
 									y={count()}
-									stroke="category"
-									color="tomato"
+									z="category"
+									stroke="tomato"
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -133,7 +133,7 @@
 									table="events"
 									x={bin('timestamp', { steps: 50 })}
 									y={count()}
-									color="category"
+									fill="category"
 								/>
 								<LineMark
 									table="events"

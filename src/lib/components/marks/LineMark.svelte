@@ -29,6 +29,7 @@
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
 		x: FieldRef;
 		y: FieldRef;
+		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
 		optimize?: boolean | 'auto';
@@ -40,7 +41,7 @@
 		x,
 		y,
 		stroke = null,
-		color = null,
+		z = null,
 		scheme,
 		curve = 'linear',
 		strokeWidth = 2,
@@ -74,20 +75,23 @@
 	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
 	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
 
-	// Series grouping - uses scale infrastructure for categorical → index mapping
+	// Series grouping: z overrides stroke for grouping
+	const seriesChannelKey = z != null ? 'z' : 'stroke';
 	const markSeries = new MarkSeries(
-		() => stroke,
+		() => z ?? stroke,
+		seriesChannelKey,
 		() => table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// Color logic - explicit color wins, else falls back to stroke
+	// Color: stroke determines line color
 	// (stroke="steelblue" → constant color, stroke="species" → color by species)
 	const markColor = new MarkColor(
-		() => color ?? stroke,
+		() => stroke,
 		() => scheme,
+		'stroke',
 		() => table,
 		() => setup,
 		scaleRegistry,
@@ -119,12 +123,13 @@
 		select: buildSelectFromChannels({
 			x,
 			y,
-			...(markSeries.selectField && { stroke: markSeries.selectField }),
-			...(markColor.selectField && { color: markColor.selectField })
+			...(markColor.selectField && { stroke: markColor.selectField }),
+			...(z != null && markSeries.selectField && { z: markSeries.selectField })
 		}),
+		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
 		_connectedConfig: {
-			seriesChannel: markSeries.selectField ? 'stroke' : null,
+			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'x'
 		},
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
@@ -234,7 +239,7 @@
 		const colorChannelField = markColor.selectField
 			? typeof markColor.selectField === 'string'
 				? markColor.selectField
-				: 'color'
+				: 'stroke'
 			: markSeries.selectField
 				? typeof markSeries.selectField === 'string'
 					? markSeries.selectField

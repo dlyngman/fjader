@@ -20,6 +20,7 @@ interface ColorConfig {
 export class MarkColor {
 	#colorProp: () => ColorProp;
 	#schemeProp: () => string | null | undefined;
+	#channelName: string;
 	#tableProp: () => string | null;
 	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
@@ -32,6 +33,7 @@ export class MarkColor {
 	constructor(
 		getColor: () => ColorProp,
 		getScheme: () => string | null | undefined,
+		channelName: string,
 		getTable: () => string | null,
 		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
@@ -39,6 +41,7 @@ export class MarkColor {
 	) {
 		this.#colorProp = getColor;
 		this.#schemeProp = getScheme;
+		this.#channelName = channelName;
 		this.#tableProp = getTable;
 		this.#setupState = getSetup;
 		this.#scaleRegistry = scaleRegistry;
@@ -226,7 +229,7 @@ export class MarkColor {
 
 		const raw = resolveChannel({
 			value: this.#field,
-			channel: 'color',
+			channel: this.#channelName,
 			dataAccessor: setup.data,
 			instanceCount: setup.data.length
 		});

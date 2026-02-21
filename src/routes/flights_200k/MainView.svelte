@@ -47,8 +47,8 @@
 							selection={filterBridge.filterSel}
 							x={min('delay')}
 							y={'time'}
-							color={avg('delay')}
-							alpha="0.8"
+							fill={avg('delay')}
+							opacity="0.8"
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -81,7 +81,7 @@
 							table="flights"
 							x={bin('distance', { steps: 50 })}
 							y={count()}
-							color="red"
+							fill="red"
 							viewportLocalDomain={true}
 							selection={filterBridge.filterSel}
 						/>

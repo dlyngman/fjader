@@ -117,7 +117,7 @@
 									x={1}
 									y="species"
 									inset={0.5}
-									color="body_mass"
+									fill="body_mass"
 									scheme="turbo"
 									transforms={[orderby(msql.asc('body_mass')), stack({ direction: 'horizontal' })]}
 								/>
@@ -206,7 +206,7 @@
 									table="statepop"
 									x={msql.sql`(${msql.column('2019')} - ${msql.column('2010')}) * 1.0 / ${msql.column('2010')}`}
 									y="State"
-									color={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
+									fill={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
 									scheme="piyg"
 									sort={{ y: 'x2', order: 'desc' }}
 									inset={0.5}

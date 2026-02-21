@@ -10,12 +10,13 @@ import type { MarkSetupState } from './mark-types';
 /**
  * MarkSeries - Handles series grouping for connected topology marks (Lines, Areas)
  *
- * Registers an ordinal color scale for the stroke field via the scale registry.
- * When stroke and color reference the same field, the registry deduplicates
+ * Registers an ordinal color scale for the series field via the scale registry.
+ * When series and color reference the same field, the registry deduplicates
  * and they share the same scale (same domain, same indices, same legend).
  */
 export class MarkSeries {
 	#seriesProp: () => string | object | null;
+	#channelName: string;
 	#tableProp: () => string | null;
 	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
@@ -25,12 +26,14 @@ export class MarkSeries {
 
 	constructor(
 		getSeries: () => string | object | null,
+		channelName: string,
 		getTable: () => string | null,
 		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
 		chartContext: ChartContext
 	) {
 		this.#seriesProp = getSeries;
+		this.#channelName = channelName;
 		this.#tableProp = getTable;
 		this.#setupState = getSetup;
 		this.#scaleRegistry = scaleRegistry;
@@ -43,7 +46,7 @@ export class MarkSeries {
 			if (field && this.#scaleRegistry) {
 				untrack(() => {
 					// Use raw field name - registry deduplicates automatically
-					// when stroke and color share the same field
+					// when series and color share the same field
 					const scaleName = isNode(field) ? field.toString() : field;
 
 					this.scaleState = this.#scaleRegistry.getOrCreateScale(
@@ -72,14 +75,14 @@ export class MarkSeries {
 		});
 	}
 
-	// The series field (null if not set or if stroke is a constant CSS color)
+	// The series field (null if not set or if value is a constant CSS color)
+	// For z channel, skip isColorConstant check — z is always a field reference
 	#field: string | object | null = $derived.by(() => {
 		const s = this.#seriesProp();
 		if (s == null) return null;
 		if (isNode(s)) return s;
 		if (typeof s === 'string') {
-			// CSS color constants (e.g. "steelblue", "#ff0000") are not series fields
-			if (isColorConstant(s)) return null;
+			if (this.#channelName !== 'z' && isColorConstant(s)) return null;
 			return s;
 		}
 		return null;
@@ -105,7 +108,7 @@ export class MarkSeries {
 
 		const raw = resolveChannel({
 			value: field,
-			channel: 'stroke',
+			channel: this.#channelName,
 			dataAccessor: setup.data,
 			instanceCount: setup.data.length
 		});

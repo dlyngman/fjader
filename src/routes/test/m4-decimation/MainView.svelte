@@ -22,7 +22,6 @@
 								x="x"
 								y="y"
 								stroke="series"
-								color="series"
 								curve="monotone"
 								strokeWidth={1.5}
 								optimize={true}
@@ -50,7 +49,6 @@
 								x="x"
 								y="y"
 								stroke="series"
-								color="series"
 								strokeWidth={1.5}
 								optimize={false}
 							/>
@@ -76,7 +74,6 @@
 								x="x"
 								y="y"
 								stroke="series"
-								color="series"
 								strokeWidth={1.5}
 							/>
 						{/snippet}

@@ -28,8 +28,9 @@
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
 		x: FieldRef;
 		y: FieldRef;
-		alpha?: number;
-		radius?: number | string | ((point: { x: number; y: number }) => number);
+		fill?: FieldRef | null;
+		opacity?: number;
+		r?: number | string | ((point: { x: number; y: number }) => number);
 		radiusRange?: [number, number];
 	}
 
@@ -38,10 +39,10 @@
 		selection = undefined,
 		x,
 		y,
-		color = null,
+		fill = null,
 		scheme,
-		alpha = 0.5,
-		radius = 3,
+		opacity = 0.5,
+		r = 3,
 		radiusRange = [2, 12],
 		limit,
 		filterNulls = false,
@@ -68,8 +69,9 @@
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
-		() => color,
+		() => fill,
 		() => scheme,
+		'fill',
 		() => table,
 		() => setup,
 		scaleRegistry,
@@ -78,7 +80,7 @@
 
 	// 1b. Size Logic
 	const markSize = new MarkSize(
-		() => radius,
+		() => r,
 		() => radiusRange,
 		() => table,
 		() => setup,
@@ -111,8 +113,8 @@
 		select: buildSelectFromChannels({
 			x,
 			y,
-			...(markColor.selectField && { color: markColor.selectField }),
-			...(markSize.selectField && { radius: markSize.selectField })
+			...(markColor.selectField && { fill: markColor.selectField }),
+			...(markSize.selectField && { r: markSize.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
@@ -155,28 +157,28 @@
 		// Field mode: data comes from MarkSize (raw values, shader does scaling)
 		if (markSize.sizeMode === 1) return markSize.data;
 		// Function mode
-		if (typeof radius === 'function') {
+		if (typeof r === 'function') {
 			const xArr = setup?.data?.getColumn('x');
 			const yArr = setup?.data?.getColumn('y');
 			if (!xArr || !yArr) return null;
 			const radii = new Float32Array(instanceCount);
-			for (let i = 0; i < instanceCount; i++) radii[i] = radius({ x: xArr[i], y: yArr[i] });
+			for (let i = 0; i < instanceCount; i++) radii[i] = r({ x: xArr[i], y: yArr[i] });
 			return radii;
 		}
 		// Constant or column name
 		return resolveChannelData({
-			value: radius,
-			channel: 'radius',
+			value: r,
+			channel: 'r',
 			dataAccessor: setup?.data,
 			instanceCount,
 			fallback: 3
 		});
 	});
 
-	let alphaData = $derived(
+	let opacityData = $derived(
 		resolveChannelData({
-			value: alpha,
-			channel: 'alpha',
+			value: opacity,
+			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
 			fallback: 0.5
@@ -213,7 +215,7 @@
 				channelFields: {
 					x: typeof x === 'string' ? x : 'x',
 					y: typeof y === 'string' ? y : 'y',
-					...(color && { color: typeof color === 'string' ? color : 'color' })
+					...(fill && typeof fill === 'string' && { color: fill })
 				},
 				bandAxes: { x: true, y: true },
 				markColorScaleState: markColor.scaleState
@@ -232,7 +234,7 @@
 		{xData}
 		{yData}
 		{radiusData}
-		{alphaData}
+		alphaData={opacityData}
 		colorValueData={markColor.data}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}

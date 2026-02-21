@@ -32,9 +32,9 @@
 							table="penguins"
 							x="bill_length"
 							y="bill_depth"
-							color="species"
-							radius={4}
-							alpha={0.7}
+							fill="species"
+							r={4}
+							opacity={0.7}
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -60,7 +60,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						<Grid axis="y" />
-						<BarMarkY table="penguins" x="island" y={count()} color="island" alpha={0.8} />
+						<BarMarkY table="penguins" x="island" y={count()} fill="island" opacity={0.8} />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}
@@ -85,7 +85,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						<Grid />
-						<LineMark table="facet_timeseries" x="x" y="y" color="series" strokeWidth={2} />
+						<LineMark table="facet_timeseries" x="x" y="y" stroke="series" strokeWidth={2} />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}
@@ -114,7 +114,7 @@
 							table="facet_timeseries"
 							x="x"
 							y="y"
-							color="series"
+							fill="series"
 							fillOpacity={0.4}
 							strokeWidth={1.5}
 						/>

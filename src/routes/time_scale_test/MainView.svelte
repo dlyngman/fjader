@@ -31,9 +31,9 @@
 							table="timeseries"
 							x="timestamp"
 							y="value"
-							color="sensor"
-							alpha={0.6}
-							radius={5}
+							fill="sensor"
+							opacity={0.6}
+							r={5}
 						/>
 					{/snippet}
 				</WebGPUCanvas>

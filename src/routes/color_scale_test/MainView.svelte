@@ -143,10 +143,10 @@
 								table="flights"
 								x="delay"
 								y="time"
-								color={colorField}
+								fill={colorField}
 								scheme={colorScheme}
-								alpha={0.5}
-								radius={2}
+								opacity={0.5}
+								r={2}
 								limit={50000}
 							/>
 						{:else}
@@ -155,7 +155,7 @@
 								table="flights"
 								x="origin"
 								y={sum('delay')}
-								color={colorField}
+								fill={colorField}
 								scheme={colorScheme}
 							/>
 						{/if}

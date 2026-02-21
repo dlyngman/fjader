@@ -368,12 +368,12 @@
 											table="penguins"
 											x={config.x}
 											y={config.y}
-											color="species"
-											alpha={0.7}
-											radius={3}
+											fill="species"
+											opacity={0.7}
+											r={3}
 										/>
 									{:else if config.markType === 'bars'}
-										<BarMark table="penguins" x={config.x} y={config.y} alpha={0.8} />
+										<BarMark table="penguins" x={config.x} y={config.y} opacity={0.8} />
 									{/if}
 								{/snippet}
 							</WebGPUCanvas>

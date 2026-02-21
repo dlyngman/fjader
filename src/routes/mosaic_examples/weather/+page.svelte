@@ -76,8 +76,8 @@
 									table="weather"
 									x={dateMonthDay('date')}
 									y="temp_max"
-									color="weather"
-									radius="precipitation"
+									fill="weather"
+									r="precipitation"
 									preferredXScaleType="time"
 									selection={filterBridge.filterSel}
 								/>
@@ -115,7 +115,7 @@
 									table="weather"
 									x={count()}
 									y="weather"
-									color="weather"
+									fill="weather"
 									selection={filterBridge.filterSel}
 								/>
 							{/snippet}

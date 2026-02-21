@@ -32,9 +32,9 @@
 		x2?: FieldRef;
 		fill?: FieldRef | null;
 		fillOpacity?: number;
+		stroke?: string | null;
 		dotRadius?: number;
 		strokeWidth?: number;
-		strokeColor?: string | null;
 	}
 
 	let {
@@ -45,14 +45,13 @@
 		x1 = 0,
 		x2 = x,
 		fill = null,
-		stroke = null,
-		color = null,
+		z = null,
 		scheme,
 		curve = 'linear',
 		fillOpacity = 0.5,
+		stroke = null,
 		dotRadius = 0,
 		strokeWidth = 0,
-		strokeColor = null,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -84,20 +83,22 @@
 	);
 	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
 
-	// Series grouping - uses scale infrastructure for categorical → index mapping
+	// Series grouping: z overrides fill for grouping (Observable Plot convention)
+	const seriesChannelKey = z != null ? 'z' : 'fill';
 	const markSeries = new MarkSeries(
-		() => stroke,
+		() => z ?? fill,
+		seriesChannelKey,
 		() => table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// Color logic - fill wins, then explicit color, then stroke fallback
-	const effectiveColorField = $derived(fill ?? color ?? stroke);
+	// Color: fill determines area color
 	const markColor = new MarkColor(
-		() => effectiveColorField,
+		() => fill,
 		() => scheme,
+		'fill',
 		() => table,
 		() => setup,
 		scaleRegistry,
@@ -139,12 +140,12 @@
 			y,
 			x1,
 			x2,
-			...(markSeries.selectField && { stroke: markSeries.selectField }),
-			...(markColor.selectField && { color: markColor.selectField })
+			...(markColor.selectField && { fill: markColor.selectField }),
+			...(z != null && markSeries.selectField && { z: markSeries.selectField })
 		}),
 		// Connected topology - ordered by dimension (y)
 		_connectedConfig: {
-			seriesChannel: markSeries.selectField ? 'stroke' : null,
+			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'y'
 		},
 		clientOptions: { limit, filterNulls: filterNulls ? [y, x1, x2] : null },
@@ -197,9 +198,9 @@
 	// Series data comes from MarkSeries (uses scale infrastructure)
 	let seriesData = $derived(markSeries.data);
 
-	// Stroke outline color: parse CSS color string, or inherit from fill/color
+	// Stroke outline color: parse CSS color string, or inherit from fill color
 	const strokeConstantColor = $derived.by(() => {
-		if (strokeColor) return parseColorToRGBA(strokeColor);
+		if (stroke) return parseColorToRGBA(stroke);
 		return markColor.constantColor;
 	});
 
@@ -224,11 +225,11 @@
 		const colorChannelField = markColor.selectField
 			? typeof markColor.selectField === 'string'
 				? markColor.selectField
-				: 'color'
+				: 'fill'
 			: markSeries.selectField
 				? typeof markSeries.selectField === 'string'
 					? markSeries.selectField
-					: 'stroke'
+					: 'fill'
 				: null;
 
 		tm.registerMark(
@@ -278,9 +279,9 @@
 				{yData}
 				{seriesData}
 				curve={effectiveCurve}
-				colorValueData={strokeColor ? null : markColor.data}
-				colorMode={strokeColor ? 0 : markColor.colorMode}
-				colorScaleIndex={strokeColor ? 0 : markColor.colorScaleIndex}
+				colorValueData={stroke ? null : markColor.data}
+				colorMode={stroke ? 0 : markColor.colorMode}
+				colorScaleIndex={stroke ? 0 : markColor.colorScaleIndex}
 				constantColor={strokeConstantColor}
 				{strokeWidth}
 				zIndex={1}
@@ -293,9 +294,9 @@
 					{yData}
 					{seriesData}
 					curve={effectiveCurve}
-					colorValueData={strokeColor ? null : markColor.data}
-					colorMode={strokeColor ? 0 : markColor.colorMode}
-					colorScaleIndex={strokeColor ? 0 : markColor.colorScaleIndex}
+					colorValueData={stroke ? null : markColor.data}
+					colorMode={stroke ? 0 : markColor.colorMode}
+					colorScaleIndex={stroke ? 0 : markColor.colorScaleIndex}
 					constantColor={strokeConstantColor}
 					{strokeWidth}
 					zIndex={1}

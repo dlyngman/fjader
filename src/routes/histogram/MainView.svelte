@@ -36,7 +36,7 @@
 							table="penguins"
 							x={bin('bill_length', { steps: 50 })}
 							y={count()}
-							color="steelblue"
+							fill="steelblue"
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -62,7 +62,7 @@
 							table="travelers"
 							x={bin('date', { step: 2 })}
 							y={count()}
-							color="steelblue"
+							fill="steelblue"
 						/>
 					{/snippet}
 				</WebGPUCanvas>

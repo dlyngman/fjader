@@ -26,6 +26,7 @@
 		x: FieldRef;
 		y: FieldRef;
 		text: FieldRef;
+		fill?: FieldRef | null;
 		fontSize?: number;
 		fontWeight?: string;
 		fontFamily?: string | null;
@@ -45,7 +46,7 @@
 		x,
 		y,
 		text,
-		color = null,
+		fill = null,
 		scheme,
 		fontSize = 12,
 		fontWeight = 'normal',
@@ -81,8 +82,9 @@
 	// --- Color ---
 
 	const markColor = new MarkColor(
-		() => color,
+		() => fill,
 		() => scheme,
+		'fill',
 		() => table,
 		() => setup,
 		scaleRegistry,
@@ -113,7 +115,7 @@
 			x,
 			y,
 			text,
-			...(markColor.selectField && { color: markColor.selectField })
+			...(markColor.selectField && { fill: markColor.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
@@ -160,13 +162,13 @@
 	// --- Color Resolution (pre-resolved once, not per-label) ---
 
 	const colorCSSValues = $derived.by(() => {
-		if (!color) return null;
-		if (typeof color === 'string' && isColorConstant(color)) return null;
+		if (!fill) return null;
+		if (typeof fill === 'string' && isColorConstant(fill)) return null;
 		if (!markColor.scaleState || !instanceCount) return null;
 
 		const raw = resolveChannel({
-			value: color,
-			channel: 'color',
+			value: fill,
+			channel: 'fill',
 			dataAccessor: setup?.data,
 			instanceCount
 		});
@@ -181,10 +183,10 @@
 	});
 
 	const constantColor = $derived(
-		!color
+		!fill
 			? 'currentColor'
-			: typeof color === 'string' && isColorConstant(color)
-				? color
+			: typeof fill === 'string' && isColorConstant(fill)
+				? fill
 				: 'currentColor'
 	);
 
@@ -305,7 +307,7 @@
 				channelFields: {
 					x: typeof x === 'string' ? x : 'x',
 					y: typeof y === 'string' ? y : 'y',
-					...(color && typeof color === 'string' && !isColorConstant(color) && { color })
+					...(fill && typeof fill === 'string' && !isColorConstant(fill) && { color: fill })
 				},
 				bandAxes: { x: true, y: true },
 				markColorScaleState: markColor.scaleState

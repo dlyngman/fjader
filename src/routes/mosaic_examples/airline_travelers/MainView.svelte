@@ -39,14 +39,13 @@
 					{#snippet canvasComponents()}
 						<Grid />
 
-						<!-- <LineMark table="travelers" x="date" y="previous" alpha="0.8" color="red" /> -->
+						<!-- <LineMark table="travelers" x="date" y="previous" stroke="red" /> -->
 						<LineMark
 							table="travelers"
 							x={bin('date')}
 							y={max('previous')}
 							curve="monotone"
-							alpha="0.8"
-							color="red"
+							stroke="red"
 							dotRadius={5}
 						/>
 						<LineMark
@@ -54,8 +53,7 @@
 							x={bin('date')}
 							y={min('previous')}
 							curve="monotone"
-							alpha="0.8"
-							color="red"
+							stroke="red"
 							dotRadius={5}
 						/>
 						<LineMark
@@ -63,14 +61,13 @@
 							x="date"
 							y="previous"
 							curve="monotone"
-							alpha="0.8"
-							color="green"
+							stroke="green"
 							dotRadius={4}
 						/>
 
-						<!-- <DotsMark table="travelers" x="date" y="previous" alpha="1" color="red" /> -->
-						<LineMark table="travelers" x="date" y="current" alpha="0.8" color="blue" />
-						<DotsMark table="travelers" x="date" y="current" alpha="1" color="blue" />
+						<!-- <DotsMark table="travelers" x="date" y="previous" opacity="1" fill="red" /> -->
+						<LineMark table="travelers" x="date" y="current" stroke="blue" />
+						<DotsMark table="travelers" x="date" y="current" opacity="1" fill="blue" />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}

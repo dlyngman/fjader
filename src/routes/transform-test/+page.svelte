@@ -49,8 +49,8 @@
 									selection={brushSeletion}
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
-									color="species"
-									radius={12}
+									fill="species"
+									r={12}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -72,8 +72,8 @@
 									selection={brushSeletion}
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
-									color="species"
-									radius={8}
+									fill="species"
+									r={8}
 									transforms={[filter(gt('body_mass', 4500))]}
 								/>
 							{/snippet}
@@ -96,8 +96,8 @@
 									selection={brushSeletion}
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
-									color="species"
-									radius={8}
+									fill="species"
+									r={8}
 									transforms={[filter(gt('body_mass', 5000))]}
 								/>
 							{/snippet}
@@ -120,9 +120,9 @@
 									selection={brushSeletion}
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
-									color="species"
-									alpha="1"
-									radius={12}
+									fill="species"
+									opacity="1"
+									r={12}
 									transforms={[topN(5, { includeOthers: true })]}
 								/>
 							{/snippet}
@@ -145,9 +145,9 @@
 									selection={brushSeletion}
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
-									color="species"
-									radius={8}
-									alpha="1"
+									fill="species"
+									r={8}
+									opacity="1"
 									transforms={[normalize()]}
 								/>
 							{/snippet}
