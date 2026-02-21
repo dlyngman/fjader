@@ -97,7 +97,7 @@ export class MarkSize {
 
 		const raw = resolveChannel({
 			value: this.#field,
-			channel: 'radius',
+			channel: 'r',
 			dataAccessor: setup.data,
 			instanceCount: setup.data.length
 		});

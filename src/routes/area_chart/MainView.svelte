@@ -36,7 +36,7 @@
 								y="y"
 								transforms={[filter(eq('series', literal('Alpha')))]}
 								fillOpacity={0.4}
-								color="#4e79a7"
+								fill="#4e79a7"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -63,7 +63,7 @@
 								transforms={[filter(eq('series', literal('Alpha')))]}
 								curve="monotone"
 								fillOpacity={0.4}
-								color="#4e79a7"
+								fill="#4e79a7"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -90,7 +90,7 @@
 								transforms={[filter(eq('series', literal('Alpha')))]}
 								curve="catmull-rom"
 								fillOpacity={0.4}
-								color="#4e79a7"
+								fill="#4e79a7"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -117,7 +117,7 @@
 								transforms={[filter(eq('series', literal('Alpha')))]}
 								curve="bump"
 								fillOpacity={0.4}
-								color="#76b7b2"
+								fill="#76b7b2"
 								dotRadius={4}
 							/>
 						{/snippet}
@@ -143,7 +143,6 @@
 								x="x"
 								y="y"
 								stroke="series"
-								color="series"
 								curve="bump"
 								strokeWidth={2}
 								dotRadius={4}
@@ -173,7 +172,7 @@
 								transforms={[filter(eq('series', literal('Beta')))]}
 								curve="step"
 								fillOpacity={0.4}
-								color="#e15759"
+								fill="#e15759"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -200,9 +199,9 @@
 								transforms={[filter(eq('series', literal('Alpha')))]}
 								curve="monotone"
 								fillOpacity={0.3}
-								color="#59a14f"
+								fill="#59a14f"
 								strokeWidth={2}
-								strokeColor="#2d5a27"
+								stroke="#2d5a27"
 								dotRadius={5}
 							/>
 						{/snippet}
@@ -230,7 +229,7 @@
 								transforms={[filter(eq('series', literal('Gamma')))]}
 								curve="monotone"
 								strokeWidth={2}
-								color="#f28e2b"
+								stroke="#f28e2b"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -257,7 +256,7 @@
 								transforms={[filter(eq('series', literal('Gamma')))]}
 								curve="step"
 								strokeWidth={2}
-								color="#f28e2b"
+								stroke="#f28e2b"
 								dotRadius={3}
 							/>
 						{/snippet}
@@ -282,8 +281,7 @@
 								table="area_data"
 								x="x"
 								y="y"
-								stroke="series"
-								color="series"
+								fill="series"
 								curve="monotone"
 								fillOpacity={0.3}
 							/>
@@ -309,8 +307,7 @@
 								table="area_data"
 								x="x"
 								y="y"
-								stroke="series"
-								color="series"
+								fill="series"
 								curve="monotone"
 								fillOpacity={0.2}
 								strokeWidth={2}

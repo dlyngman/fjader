@@ -103,9 +103,9 @@
 										table={'penguins'}
 										x={config.x}
 										y={config.y}
-										color={'species'}
-										alpha={0.5}
-										radius={10}
+										fill={'species'}
+										opacity={0.5}
+										r={10}
 									/>
 								{/if}
 							{/snippet}
@@ -132,7 +132,7 @@
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
-							<BarMarkX table="penguins" x="body_mass" y="species" color="species" />
+							<BarMarkX table="penguins" x="body_mass" y="species" fill="species" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}
@@ -146,7 +146,7 @@
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
-							<BarMarkY table="penguins" y="body_mass" x="species" color="species" />
+							<BarMarkY table="penguins" y="body_mass" x="species" fill="species" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

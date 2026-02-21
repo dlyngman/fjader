@@ -204,7 +204,6 @@ export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' 
 export interface BaseMarkProps {
 	table: string;
 	selection?: Selection;
-	color?: ColorProp;
 	scheme?: ColorScheme;
 	limit?: number;
 	filterNulls?: boolean;
@@ -236,7 +235,7 @@ export interface RectOffsetProps {
 
 /** Props for connected topology marks (Line, Area). */
 export interface ConnectedTopologyProps {
-	stroke?: FieldRef | null;
+	z?: FieldRef | null;
 	curve?: CurveType;
 }
 

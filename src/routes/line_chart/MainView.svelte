@@ -34,7 +34,6 @@
 								x="x"
 								y="y"
 								stroke="series"
-								color="series"
 								strokeWidth={2}
 							/>
 						{/snippet}
@@ -59,8 +58,7 @@
 								table="timeseries"
 								x="x"
 								y="y"
-								stroke="series"
-								color="#2196f3"
+								stroke="#2196f3"
 								strokeWidth={5}
 							/>
 						{/snippet}
@@ -87,7 +85,7 @@
 								y="y"
 								transforms={[filter(eq('series', literal('Series A')))]}
 								strokeWidth={3}
-								color="#e63946"
+								stroke="#e63946"
 							/>
 						{/snippet}
 					</WebGPUCanvas>

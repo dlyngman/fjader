@@ -68,9 +68,9 @@
 									table="penguins"
 									x="bill_length"
 									y="bill_depth"
-									color="species"
-									alpha={0.7}
-									radius={4}
+									fill="species"
+									opacity={0.7}
+									r={4}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

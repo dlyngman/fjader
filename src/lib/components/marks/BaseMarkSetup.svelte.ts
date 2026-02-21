@@ -62,6 +62,8 @@ export interface BaseMarkSetupConfig {
 	sort?: NormalizedSortConfig;
 	tooltip?: boolean | { sortTable?: boolean };
 	constants?: Record<string, number>;
+	colorChannel?: string; // Key in select for color data ('fill' or 'stroke')
+	sizeChannel?: string; // Key in select for size data ('r')
 	_connectedConfig?: ConnectedConfig;
 	_filterNulls?: unknown[];
 	viewportLocalDomain?: boolean;
@@ -234,10 +236,10 @@ export class BaseMarkSetup {
 				if (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time') {
 					this.#channelsNeedingDataDomain.add('y');
 				}
-			} else if (channel === 'color') {
+			} else if (channel === 'fill' || channel === 'stroke') {
 				// Aggregated color fields produce continuous (numeric) values
 				// These need domain discovery for continuous color scales
-				this.#channelsNeedingDataDomain.add('color');
+				this.#channelsNeedingDataDomain.add(channel);
 			}
 		}
 
@@ -289,8 +291,11 @@ export class BaseMarkSetup {
 			if (!this.#scaleMappingsReady) return;
 
 			// Track color/series scale states for reactive re-entry
-			const colorReady = !this.#config.select?.color || !!this.#colorScaleState;
-			const seriesReady = !this.#config.select?.stroke || !!this.#seriesScaleState;
+			const colorKey = this.#config.colorChannel || 'fill';
+			const seriesKey = this.#config._connectedConfig?.seriesChannel;
+			const colorReady = !this.#config.select?.[colorKey] || !!this.#colorScaleState;
+			const seriesReady =
+				!seriesKey || !this.#config.select?.[seriesKey] || !!this.#seriesScaleState;
 
 			if (!this.#categoricalFetchStarted || (colorReady && !this.#colorDomainFetched)) {
 				this.#categoricalFetchStarted = true;
@@ -755,15 +760,16 @@ export class BaseMarkSetup {
 
 		// For ordinal color scales, use the indexed column name
 		// Sequential/continuous color scales pass raw numeric values directly
+		const colorKey = this.#config.colorChannel || 'fill';
 		if (
 			this.#colorScaleState?.isOrdinal &&
 			this.#colorScaleState?.indexColumnName &&
 			hasView &&
-			select.color
+			select[colorKey]
 		) {
-			const originalField = select.color;
-			select.color = this.#colorScaleState.indexColumnName;
-			console.log(`[BaseMarkSetup] Swapping color: ${originalField} → ${select.color}`);
+			const originalField = select[colorKey];
+			select[colorKey] = this.#colorScaleState.indexColumnName;
+			console.log(`[BaseMarkSetup] Swapping ${colorKey}: ${originalField} → ${select[colorKey]}`);
 		}
 
 		// For faceting, include the facet index column
@@ -1446,9 +1452,10 @@ export class BaseMarkSetup {
 		}
 
 		// Fetch color domain if color scale is set and there's a color field
-		if (this.#colorScaleState && this.#config.select.color) {
+		const colorKey = this.#config.colorChannel || 'fill';
+		if (this.#colorScaleState && this.#config.select[colorKey]) {
 			// Extract field from color config (handles object format { field: "x", scheme: "y" })
-			const colorValue = this.#config.select.color;
+			const colorValue = this.#config.select[colorKey];
 			const colorField =
 				typeof colorValue === 'object' && 'field' in colorValue && !isNode(colorValue)
 					? (colorValue as { field: string }).field
@@ -1499,12 +1506,13 @@ export class BaseMarkSetup {
 			}
 		}
 
-		// Fetch size domain if size scale is set and there's a radius field
-		if (this.#sizeScaleState && this.#config.select.radius) {
-			const radiusField = this.#config.select.radius;
+		// Fetch size domain if size scale is set and there's a size field
+		const sizeKey = this.#config.sizeChannel || 'r';
+		if (this.#sizeScaleState && this.#config.select[sizeKey]) {
+			const sizeField = this.#config.select[sizeKey];
 			const q = Query.from(table).select({
-				min_radius: min(sqlColumn(String(radiusField))),
-				max_radius: max(sqlColumn(String(radiusField)))
+				min_radius: min(sqlColumn(String(sizeField))),
+				max_radius: max(sqlColumn(String(sizeField)))
 			});
 
 			fetches.push(
@@ -1517,16 +1525,17 @@ export class BaseMarkSetup {
 			);
 		}
 
-		// Fetch series domain if series scale is set and there's a stroke field
-		if (this.#seriesScaleState && this.#config.select.stroke) {
-			const strokeField = this.#config.select.stroke;
+		// Fetch series domain if series scale is set and there's a series field
+		const seriesKey = this.#config._connectedConfig?.seriesChannel;
+		if (this.#seriesScaleState && seriesKey && this.#config.select[seriesKey]) {
+			const seriesField = this.#config.select[seriesKey];
 			const q = Query.from(table)
-				.select({ stroke: sqlColumn(String(strokeField)) })
+				.select({ series: sqlColumn(String(seriesField)) })
 				.distinct();
 
 			fetches.push(
 				this.#coordinator.query(q).then((result) => {
-					const categories = Array.from(result).map((row) => row.stroke);
+					const categories = Array.from(result).map((row) => row.series);
 					if (categories.length > 0) {
 						this.#seriesScaleState!.setDomain(categories as (string | number)[]);
 					}
@@ -1599,9 +1608,15 @@ export class BaseMarkSetup {
 				}
 			}
 
-			if (this.#channelsNeedingDataDomain.has('color')) {
-				outerSelect.min_color = min('color');
-				outerSelect.max_color = max('color');
+			// Color channel domain discovery (fill or stroke key)
+			const colorChannel = this.#channelsNeedingDataDomain.has('fill')
+				? 'fill'
+				: this.#channelsNeedingDataDomain.has('stroke')
+					? 'stroke'
+					: null;
+			if (colorChannel) {
+				outerSelect.min_color = min(colorChannel);
+				outerSelect.max_color = max(colorChannel);
 			}
 
 			// Skip if no aggregation expressions were generated (e.g., all channels are constants)
@@ -1642,7 +1657,8 @@ export class BaseMarkSetup {
 			}
 
 			if (
-				this.#channelsNeedingDataDomain.has('color') &&
+				(this.#channelsNeedingDataDomain.has('fill') ||
+					this.#channelsNeedingDataDomain.has('stroke')) &&
 				extents.min_color != null &&
 				extents.max_color != null
 			) {

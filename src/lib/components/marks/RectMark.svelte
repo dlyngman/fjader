@@ -33,7 +33,8 @@
 		y?: FieldRef | null;
 		y1?: FieldRef | null;
 		y2?: FieldRef | null;
-		alpha?: number;
+		fill?: FieldRef | null;
+		opacity?: number;
 	}
 
 	let {
@@ -45,9 +46,9 @@
 		y = null,
 		y1: y1Prop = null,
 		y2: y2Prop = null,
-		color = null,
+		fill = null,
 		scheme,
-		alpha = 1,
+		opacity = 1,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -99,8 +100,9 @@
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
-		() => color,
+		() => fill,
 		() => scheme,
+		'fill',
 		() => table,
 		() => setup,
 		scaleRegistry,
@@ -152,7 +154,7 @@
 			x2: ex2,
 			y1: ey1,
 			y2: ey2,
-			...(markColor.selectField && { color: markColor.selectField })
+			...(markColor.selectField && { fill: markColor.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null },
 		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
@@ -234,10 +236,10 @@
 	let y0Data = $derived(yData?.y0Data);
 	let y1Data = $derived(yData?.y1Data);
 
-	let alphaData = $derived(
+	let opacityData = $derived(
 		resolveChannelData({
-			value: alpha,
-			channel: 'alpha',
+			value: opacity,
+			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
 			fallback: 0.8
@@ -272,7 +274,7 @@
 				channelFields: {
 					x: typeof x === 'string' ? x : typeof ex1 === 'string' ? ex1 : 'x',
 					y: typeof y === 'string' ? y : typeof ey1 === 'string' ? ey1 : 'y',
-					...(color && { color: typeof color === 'string' ? color : 'color' })
+					...(fill && typeof fill === 'string' && { color: fill })
 				},
 				bandAxes: { x: true, y: true },
 				markColorScaleState: markColor.scaleState
@@ -293,7 +295,7 @@
 		{y0Data}
 		{y1Data}
 		colorValueData={markColor.data}
-		{alphaData}
+		alphaData={opacityData}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}

@@ -31,7 +31,8 @@
 		y: FieldRef;
 		y1?: number | FieldRef;
 		y2?: FieldRef;
-		alpha?: number;
+		fill?: FieldRef | null;
+		opacity?: number;
 		preferredXScaleType?: ScaleType | null;
 		viewportLocalDomain?: boolean;
 	}
@@ -45,9 +46,9 @@
 		y,
 		y1 = 0,
 		y2 = y,
-		color = null,
+		fill = null,
 		scheme,
-		alpha = 1,
+		opacity = 1,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -84,8 +85,9 @@
 
 	// 1. Color Logic
 	const markColor = new MarkColor(
-		() => color,
+		() => fill,
 		() => scheme,
+		'fill',
 		() => table,
 		() => setup,
 		scaleRegistry,
@@ -131,7 +133,7 @@
 			x2,
 			y1,
 			y2,
-			...(markColor.selectField && { color: markColor.selectField })
+			...(markColor.selectField && { fill: markColor.selectField })
 		}),
 		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y1, y2] : null },
 		// Histograms should start at zero baseline for the aggregate dimension
@@ -207,10 +209,10 @@
 		})
 	);
 
-	let alphaData = $derived(
+	let opacityData = $derived(
 		resolveChannelData({
-			value: alpha,
-			channel: 'alpha',
+			value: opacity,
+			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
 			fallback: 0.8
@@ -245,7 +247,7 @@
 				channelFields: {
 					x: typeof x1 === 'string' ? x1 : typeof x === 'string' ? x : 'x',
 					y: typeof y2 === 'string' ? y2 : typeof y === 'string' ? y : 'y',
-					...(color && { color: typeof color === 'string' ? color : 'color' })
+					...(fill && typeof fill === 'string' && { color: fill })
 				},
 				bandAxes: { x: true },
 				markColorScaleState: markColor.scaleState
@@ -266,7 +268,7 @@
 		{y0Data}
 		{y1Data}
 		colorValueData={markColor.data}
-		{alphaData}
+		alphaData={opacityData}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}

@@ -48,7 +48,7 @@
 							x={bin('delay', { steps: 50 })}
 							y={count()}
 							inset={0.5}
-							color="steelblue"
+							fill="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
 						/>
@@ -85,7 +85,7 @@
 							x={bin('time', { steps: 50 })}
 							y={count()}
 							inset={0.5}
-							color="steelblue"
+							fill="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
 						/>
@@ -122,7 +122,7 @@
 							x={bin('distance', { steps: 50 })}
 							y={count()}
 							inset={0.5}
-							color="steelblue"
+							fill="steelblue"
 							viewportLocalDomain={viewportLocal}
 							selection={filterBridge.filterSel}
 						/>

@@ -54,8 +54,8 @@
 								table="penguins"
 								x="bill_length"
 								y="bill_depth"
-								color="species"
-								alpha={0.6}
+								fill="species"
+								opacity={0.6}
 								selection={filterBridge.filterSel}
 							/>
 						{/snippet}
@@ -86,7 +86,7 @@
 								table="penguins"
 								x="species"
 								y={count()}
-								color="species"
+								fill="species"
 								selection={filterBridge.filterSel}
 							/>
 						{/snippet}

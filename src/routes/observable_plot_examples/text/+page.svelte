@@ -78,7 +78,7 @@
 							dx={-8}
 							textAnchor="end"
 							fontSize={12}
-							color="white"
+							fill="white"
 						/>
 					{/snippet}
 				</ChartContainer>
@@ -102,7 +102,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<DotsMark table="penguins" x="bill_length" y="body_mass" color="species" />
+								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -116,7 +116,7 @@
 							text="species"
 							dy={-10}
 							fontSize={9}
-							color="species"
+							fill="species"
 						/>
 					{/snippet}
 				</ChartContainer>

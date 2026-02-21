@@ -103,8 +103,8 @@
 											table="losses"
 											x="category"
 											y={sum('amount')}
-											color="steelblue"
-											alpha={0.8}
+											fill="steelblue"
+											opacity={0.8}
 										/>
 									{/snippet}
 								</WebGPUCanvas>
@@ -137,8 +137,8 @@
 											table="profit_loss"
 											x="quarter"
 											y={sum('value')}
-											color="orange"
-											alpha={0.8}
+											fill="orange"
+											opacity={0.8}
 										/>
 									{/snippet}
 								</WebGPUCanvas>
@@ -170,8 +170,8 @@
 											table="revenue"
 											x="region"
 											y={sum('sales')}
-											color="green"
-											alpha={0.8}
+											fill="green"
+											opacity={0.8}
 										/>
 									{/snippet}
 								</WebGPUCanvas>
