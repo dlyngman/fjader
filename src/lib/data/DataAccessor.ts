@@ -81,12 +81,59 @@ export class ArrowDataAccessor {
 		return arr;
 	}
 
+	withOverlays(overlays: Record<string, Float32Array>): OverlayDataAccessor {
+		return new OverlayDataAccessor(this, new Map(Object.entries(overlays)));
+	}
+
 	toString(): string {
 		return `ArrowDataAccessor(${this.length} rows)`;
 	}
 }
 
-export type DataAccessor = ArrowDataAccessor | ObjectDataAccessor;
+export class OverlayDataAccessor {
+	#base: DataAccessor;
+	#overlays: Map<string, Float32Array>;
+	type = 'overlay' as const;
+
+	constructor(base: DataAccessor, overlays: Map<string, Float32Array>) {
+		this.#base = base;
+		this.#overlays = overlays;
+	}
+
+	get length(): number {
+		return this.#base.length;
+	}
+
+	get columnNames(): string[] {
+		const baseNames = this.#base.columnNames;
+		const overlayNames = [...this.#overlays.keys()].filter((n) => !baseNames.includes(n));
+		return [...baseNames, ...overlayNames];
+	}
+
+	getColumn(name: string): Float32Array | ArrayLike<unknown> | null {
+		return this.#overlays.get(name) ?? this.#base.getColumn(name);
+	}
+
+	/** Merge new overlays with existing ones, keeping the same base. */
+	withOverlays(overlays: Record<string, Float32Array>): OverlayDataAccessor {
+		const merged = new Map(this.#overlays);
+		for (const [k, v] of Object.entries(overlays)) {
+			merged.set(k, v);
+		}
+		return new OverlayDataAccessor(this.#base, merged);
+	}
+
+	/** Access to underlying base accessor (for tooltip or other introspection). */
+	get base(): DataAccessor {
+		return this.#base;
+	}
+
+	toString(): string {
+		return `OverlayDataAccessor(${this.length} rows, ${this.#overlays.size} overlays)`;
+	}
+}
+
+export type DataAccessor = ArrowDataAccessor | ObjectDataAccessor | OverlayDataAccessor;
 
 export class ObjectDataAccessor {
 	data: Record<string, unknown>[];
@@ -134,6 +181,10 @@ export class ObjectDataAccessor {
 
 		// Non-numeric → plain array
 		return this.data.map((d) => d?.[name] ?? null);
+	}
+
+	withOverlays(overlays: Record<string, Float32Array>): OverlayDataAccessor {
+		return new OverlayDataAccessor(this, new Map(Object.entries(overlays)));
 	}
 
 	toString(): string {

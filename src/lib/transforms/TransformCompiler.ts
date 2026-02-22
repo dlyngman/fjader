@@ -1,6 +1,6 @@
-import type { Table } from '@uwdata/flechette';
 import type { SelectQuery } from '@uwdata/mosaic-sql';
 import type { Transform, SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
+import type { DataAccessor } from '$lib/data/DataAccessor';
 
 export class TransformCompiler {
 	transforms: Transform[];
@@ -47,12 +47,8 @@ export class TransformCompiler {
 		return result;
 	}
 
-	applyToData(
-		data: Record<string, unknown>[] | Table,
-		config: MarkConfig,
-		scales: ScaleMap = {}
-	): Record<string, unknown>[] {
-		let result = Array.isArray(data) ? data : this.#arrowToArray(data);
+	applyToData(data: DataAccessor, config: MarkConfig, scales: ScaleMap = {}): DataAccessor {
+		let result = data;
 
 		for (const transform of this.jsTransforms) {
 			try {
@@ -65,22 +61,6 @@ export class TransformCompiler {
 		return result;
 	}
 
-	#arrowToArray(arrowTable: Table): Record<string, unknown>[] {
-		const rows: Record<string, unknown>[] = [];
-		const numRows = arrowTable.numRows;
-
-		for (let i = 0; i < numRows; i++) {
-			const row: Record<string, unknown> = {};
-			for (const field of arrowTable.schema.fields) {
-				const column = arrowTable.getChild(field.name);
-				row[field.name] = column?.get(i);
-			}
-			rows.push(row);
-		}
-
-		return rows;
-	}
-
 	getAdditionalChannels(): string[] {
 		const channels: string[] = [];
 
@@ -91,6 +71,10 @@ export class TransformCompiler {
 		}
 
 		return channels;
+	}
+
+	hasStackTransform(): boolean {
+		return this.jsTransforms.some((t) => t.type === 'stack');
 	}
 
 	validateQuery(query: SelectQuery): void {

@@ -5,6 +5,7 @@
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, MosaicClient } from '@uwdata/mosaic-core';
+import type { DataAccessor } from '$lib/data/DataAccessor';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -61,11 +62,7 @@ export interface SqlTransform {
 export interface JsTransform {
 	stage: 'js';
 	type: string;
-	apply(
-		data: Record<string, unknown>[],
-		config: MarkConfig,
-		scales?: ScaleMap
-	): Record<string, unknown>[];
+	apply(data: DataAccessor, config: MarkConfig, scales?: ScaleMap): DataAccessor;
 	channels?: string[];
 	describe?(): string;
 }
