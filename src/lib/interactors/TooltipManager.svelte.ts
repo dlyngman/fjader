@@ -18,6 +18,7 @@ interface TooltipMarkRegistration {
 		x?: string;
 		y?: string;
 	};
+	colorColumn?: string;
 	bandDomains?: Record<string, string[]>;
 	colorDomain?: string[];
 	colorScaleState?: { getColor: (value: unknown) => string | null };
@@ -215,7 +216,10 @@ export class TooltipManager {
 				this.currentChannelFields = bestConfig.channelFields ?? null;
 
 				// Resolve color swatch
-				const colorFieldName = bestConfig.channelFields?.color || 'color';
+				const colorFieldName =
+					bestConfig.channelFields?.color ||
+					bestConfig.channelFields?.[bestConfig.colorColumn ?? 'color'] ||
+					'color';
 				const colorValue = resolved[colorFieldName];
 				this.currentColorField = colorValue != null ? colorFieldName : null;
 				this.currentColor =
@@ -460,9 +464,11 @@ export class TooltipManager {
 			}
 
 			// Resolve color index to label
-			if (key === 'color' && colorDomain) {
-				const label = colorDomain[value];
-				point[fieldName] = label ?? value;
+			const colorCol = config.colorColumn || 'color';
+			if (key === colorCol && colorDomain) {
+				const resolvedName = channelFields?.color || channelFields?.[key] || key;
+				const label = colorDomain[value as number];
+				point[resolvedName] = label ?? value;
 				continue;
 			}
 

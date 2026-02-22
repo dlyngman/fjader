@@ -257,6 +257,7 @@
 					y: typeof y === 'string' ? y : 'y',
 					...(colorChannelField && { color: colorChannelField })
 				},
+				colorColumn: 'stroke',
 				markColorScaleState: markColor.scaleState
 			})
 		);
