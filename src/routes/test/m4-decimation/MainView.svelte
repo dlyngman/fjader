@@ -37,7 +37,7 @@
 			</ChartContainer>
 		</div>
 
-		<!-- <div class="chart-wrapper">
+		<div class="chart-wrapper">
 			<h3>M4 Disabled (optimize=false) - Reference</h3>
 			<ChartContainer xLabel="x" yLabel="y">
 				{#snippet canvas()}
@@ -60,7 +60,7 @@
 					<Crosshair />
 				{/snippet}
 			</ChartContainer>
-		</div> -->
+		</div>
 
 		<div class="chart-wrapper">
 			<h3>M4 Auto (default)</h3>

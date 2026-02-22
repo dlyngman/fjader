@@ -308,7 +308,7 @@ export class TooltipManager {
 		xData: number | null,
 		yData: number | null
 	): string | null {
-		const { tempTable, scaleTypes } = config;
+		const { tempTable, scaleTypes, columns } = config;
 		const distParts: string[] = [];
 		const bbConditions: string[] = [];
 		const boundingBoxPx = 50;
@@ -317,37 +317,41 @@ export class TooltipManager {
 		const xScale = this.#scaleProvider.xScale;
 		const yScale = this.#scaleProvider.yScale;
 
+		// Column overrides (e.g., stacked areas use y1 instead of y)
+		const xCol = columns?.x || 'x';
+		const yCol = columns?.y || 'y';
+
 		// X axis (x/y are pre-cast to DOUBLE during tooltip table creation)
 		if (scaleTypes.x === 'band' && xData != null) {
-			bbConditions.push(`CAST(x AS INTEGER) = ${Math.round(xData)}`);
+			bbConditions.push(`CAST(${xCol} AS INTEGER) = ${Math.round(xData)}`);
 		} else if (xData != null) {
 			if (xScale) {
 				const x0 = xScale.invert(xScale(xData) - boundingBoxPx);
 				const x1 = xScale.invert(xScale(xData) + boundingBoxPx);
-				bbConditions.push(`x BETWEEN ${Math.min(x0, x1)} AND ${Math.max(x0, x1)}`);
+				bbConditions.push(`${xCol} BETWEEN ${Math.min(x0, x1)} AND ${Math.max(x0, x1)}`);
 
 				const pxPerUnit = xScale(xData + 1) - xScale(xData);
 				const pxSq = pxPerUnit * pxPerUnit;
-				distParts.push(`(x - ${xData}) * (x - ${xData}) * ${pxSq}`);
+				distParts.push(`(${xCol} - ${xData}) * (${xCol} - ${xData}) * ${pxSq}`);
 			} else {
-				distParts.push(`(x - ${xData}) * (x - ${xData})`);
+				distParts.push(`(${xCol} - ${xData}) * (${xCol} - ${xData})`);
 			}
 		}
 
 		// Y axis
 		if (scaleTypes.y === 'band' && yData != null) {
-			bbConditions.push(`CAST(y AS INTEGER) = ${Math.round(yData)}`);
+			bbConditions.push(`CAST(${yCol} AS INTEGER) = ${Math.round(yData)}`);
 		} else if (yData != null) {
 			if (yScale) {
 				const y0 = yScale.invert(yScale(yData) - boundingBoxPx);
 				const y1 = yScale.invert(yScale(yData) + boundingBoxPx);
-				bbConditions.push(`y BETWEEN ${Math.min(y0, y1)} AND ${Math.max(y0, y1)}`);
+				bbConditions.push(`${yCol} BETWEEN ${Math.min(y0, y1)} AND ${Math.max(y0, y1)}`);
 
 				const pxPerUnit = yScale(yData + 1) - yScale(yData);
 				const pxSq = pxPerUnit * pxPerUnit;
-				distParts.push(`(y - ${yData}) * (y - ${yData}) * ${pxSq}`);
+				distParts.push(`(${yCol} - ${yData}) * (${yCol} - ${yData}) * ${pxSq}`);
 			} else {
-				distParts.push(`(y - ${yData}) * (y - ${yData})`);
+				distParts.push(`(${yCol} - ${yData}) * (${yCol} - ${yData})`);
 			}
 		}
 

@@ -635,36 +635,41 @@ export class BaseMarkSetup {
 	data: DataAccessor | null = $derived.by(() => {
 		if (!this.client?.arrowTable) return null;
 
+		let accessor: DataAccessor = new ArrowDataAccessor(this.client.arrowTable);
+
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
-			return new ArrowDataAccessor(this.client.arrowTable);
+			return accessor;
 		}
 
-		// Transform path: Arrow → Objects → Inject constants → Transform → Object accessor
-		const objects = this.#arrowToObjects(this.client.arrowTable);
-
-		// Inject constant channel values that were excluded from SQL
+		// Inject constant channel values as overlays (numeric values excluded from SQL)
 		const constants = this.#config.constants;
 		if (constants) {
-			for (const obj of objects) {
-				for (const key in constants) {
-					if (obj[key] === undefined) obj[key] = constants[key];
+			const overlays: Record<string, Float32Array> = {};
+			for (const key in constants) {
+				if (accessor.getColumn(key) === null) {
+					const arr = new Float32Array(accessor.length);
+					arr.fill(constants[key]);
+					overlays[key] = arr;
 				}
+			}
+			if (Object.keys(overlays).length > 0) {
+				accessor = accessor.withOverlays(overlays);
 			}
 		}
 
 		const transformConfig = {
+			markType: this.#config.markType,
+			table: this.#config.table,
 			x: this.#getFieldName('x'),
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill')
 		};
 
-		const transformed = this.#transformCompiler.applyToData(objects, transformConfig, {
+		return this.#transformCompiler.applyToData(accessor, transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale
 		});
-
-		return new ObjectDataAccessor(transformed);
 	});
 
 	/** Facet index data (Float32Array) for GPU upload. Null when not faceted. */
@@ -1130,22 +1135,30 @@ export class BaseMarkSetup {
 		const xChannelsToCheck: string[] = [];
 		const yChannelsToCheck: string[] = [];
 
-		// Add base channels that need data-derived domains
-		if (this.#channelsNeedingDataDomain.has('x')) {
-			// Check for x, x1, x2 variants in the data
-			xChannelsToCheck.push('x', 'x1', 'x2');
-		}
-		if (this.#channelsNeedingDataDomain.has('y')) {
-			yChannelsToCheck.push('y', 'y1', 'y2');
-		}
-
-		// Add transform-generated channels
+		// Collect transform-generated channels per axis
+		const xTransformChannels: string[] = [];
+		const yTransformChannels: string[] = [];
 		for (const channel of additionalChannels) {
 			if (channel.startsWith('x')) {
-				xChannelsToCheck.push(channel);
+				xTransformChannels.push(channel);
 			} else if (channel.startsWith('y')) {
-				yChannelsToCheck.push(channel);
+				yTransformChannels.push(channel);
 			}
+		}
+
+		// When transforms generate replacement channels (e.g., y0/y1 from stack),
+		// use ONLY those for domain computation — the raw column values are no longer
+		// meaningful for the scale (e.g., expand produces 0–1, but raw y has original values).
+		if (xTransformChannels.length > 0) {
+			xChannelsToCheck.push(...xTransformChannels);
+		} else if (this.#channelsNeedingDataDomain.has('x')) {
+			xChannelsToCheck.push('x', 'x1', 'x2');
+		}
+
+		if (yTransformChannels.length > 0) {
+			yChannelsToCheck.push(...yTransformChannels);
+		} else if (this.#channelsNeedingDataDomain.has('y')) {
+			yChannelsToCheck.push('y', 'y1', 'y2');
 		}
 
 		// Compute and register X domain
