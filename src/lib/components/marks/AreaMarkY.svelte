@@ -243,6 +243,7 @@
 					y: typeof y2 === 'string' ? y2 : 'y',
 					...(colorChannelField && { color: colorChannelField })
 				},
+				colorColumn: 'fill',
 				// Stacked areas: compute nearest-point distance against the stacked top (y1)
 				...(hasStackTransform && { columns: { y: 'y1' } }),
 				markColorScaleState: markColor.scaleState

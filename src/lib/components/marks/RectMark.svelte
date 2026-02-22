@@ -276,6 +276,7 @@
 					y: typeof y === 'string' ? y : typeof ey1 === 'string' ? ey1 : 'y',
 					...(fill && typeof fill === 'string' && { color: fill })
 				},
+				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
 				markColorScaleState: markColor.scaleState
 			})

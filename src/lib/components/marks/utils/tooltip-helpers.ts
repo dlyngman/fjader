@@ -8,6 +8,7 @@ interface TooltipConfigParams {
 	channelFields: Record<string, string | undefined>;
 	columns?: Record<string, unknown>;
 	bandAxes?: { x?: boolean; y?: boolean };
+	colorColumn?: string;
 	markColorScaleState: ColorScaleState | null;
 }
 
@@ -17,6 +18,7 @@ interface TooltipConfig {
 	scaleTypes: { x: string | undefined; y: string | undefined };
 	columns?: Record<string, unknown>;
 	channelFields: Record<string, string | undefined>;
+	colorColumn?: string;
 	bandDomains: Record<string, string[]>;
 	colorDomain: unknown[] | null;
 	colorScaleState: ColorScaleState | null;
@@ -30,6 +32,7 @@ export function buildTooltipConfig({
 	channelFields,
 	columns,
 	bandAxes,
+	colorColumn,
 	markColorScaleState
 }: TooltipConfigParams): TooltipConfig {
 	return {
@@ -41,6 +44,7 @@ export function buildTooltipConfig({
 		},
 		...(columns && { columns }),
 		channelFields,
+		...(colorColumn && { colorColumn }),
 		bandDomains: {
 			...(bandAxes?.x &&
 				chartContext.scaleTypes?.x === 'band' && {
