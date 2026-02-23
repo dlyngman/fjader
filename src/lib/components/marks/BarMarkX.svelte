@@ -13,6 +13,7 @@
 		normalizeSortConfig,
 		generateMarkId
 	} from './utils';
+	import { withImplicitStack } from '$lib/transforms';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -36,8 +37,8 @@
 		table,
 		selection = undefined,
 		x,
-		x1 = 0,
-		x2 = x,
+		x1: x1Prop,
+		x2: x2Prop,
 		y,
 		fill = null,
 		scheme,
@@ -55,6 +56,12 @@
 		sort = null,
 		tooltip = true
 	}: Props = $props();
+
+	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
+	const hasExplicitBounds = $derived(x1Prop !== undefined || x2Prop !== undefined);
+	let x1 = $derived(x1Prop ?? 0);
+	let x2 = $derived(x2Prop ?? x);
+	let effectiveTransforms = $derived(withImplicitStack(transforms, hasExplicitBounds, 'x'));
 
 	const markId = generateMarkId('barx');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
@@ -102,7 +109,7 @@
 		},
 		table,
 		selection,
-		transforms,
+		transforms: effectiveTransforms,
 		select: buildSelectFromChannels({
 			x1,
 			x2,
@@ -122,7 +129,7 @@
 
 	let instanceCount = $derived(computeInstanceCount(setup?.data, x2, y));
 
-	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
+	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));
 
 	// --- DATA RESOLUTION ---
 
@@ -160,7 +167,8 @@
 			instanceCount,
 			scaleState: chartContext.yScaleState,
 			scaleType,
-			markId
+			markId,
+			suppressUnmappedWarning: setup?.hasCategoryReducingTransforms
 		});
 		return arr ? { y0Data: arr, y1Data: arr } : null;
 	});
@@ -185,7 +193,7 @@
 		// - table, scales, transforms (data/scale changes)
 		// - markColor.selectField (color field changes like species→island)
 		// BUT NOT scheme changes (tableau10→category10 with same field)
-		(void table, xScaleId, yScaleId, transforms, markColor.selectField);
+		(void table, xScaleId, yScaleId, effectiveTransforms, markColor.selectField);
 		untrack(() => {
 			setup?.destroy();
 			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
