@@ -5,11 +5,12 @@
  * For each pixel bin, keeps 4 representative points (First, Last, Min-Y, Max-Y)
  * to preserve visual fidelity while dramatically reducing vertex count.
  *
- * Uses 4 compute passes:
+ * Uses 5 compute passes:
  *   Pass 0 (initBins): Reset bin atomics to sentinel values
  *   Pass 1 (binPoints): Assign each point to a pixel bin, track first/last/minY/maxY
  *   Pass 2 (findMinMaxIndices): Find indices of min/max Y points per bin
  *   Pass 3 (emitOutput): Write decimated x/y/series/color arrays
+ *   Pass 4 (compact): Pack non-NaN points contiguously, deduplicate
  *
  * Bind group layout:
  *   Group 0: Input data + config + bins
@@ -298,15 +299,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 `;
 
 /**
- * Pass 4: Fill-forward to bridge NaN gaps from empty bins.
- * When zoomed in, some bins may have no visible data points, producing NaN
- * output that breaks line connectivity. This pass propagates the last valid
- * value forward through NaN slots so the line connects across empty bins.
+ * Pass 4: Compact non-NaN output points and deduplicate.
+ * After the emit pass, empty bins contain NaN. Instead of fill-forward
+ * (which created runs of identical points causing zero-length segments),
+ * this pass packs real data points contiguously so line segments connect
+ * them directly. Consecutive duplicate coordinates are also removed.
  *
- * One thread per series (sequential scan). For 3 series × 2000 slots each,
+ * One thread per series (sequential scan). For 3 series × 6400 slots each,
  * this completes in microseconds with no thread contention.
  */
-const FILL_FORWARD_SHADER = /* wgsl */ `
+const COMPACT_SHADER = /* wgsl */ `
 struct M4Config {
 	pointCount: u32,
 	numBins: u32,
@@ -328,15 +330,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let start = series * 4u * config.numBins;
 	let end = start + 4u * config.numBins;
 
-	// Forward fill: propagate last valid value through NaN gaps.
-	// Leading NaN (before first visible bin) stays NaN — no line there.
-	for (var i = start + 1u; i < end; i++) {
-		if (xOut[i] != xOut[i]) {
-			xOut[i] = xOut[i - 1u];
-			yOut[i] = yOut[i - 1u];
-			seriesOut[i] = seriesOut[i - 1u];
-			colorOut[i] = colorOut[i - 1u];
+	// Pack non-NaN points to the front, skipping consecutive duplicates.
+	var writeIdx = start;
+	var nanBits = 0x7FC00000u;
+	var lastX: f32 = bitcast<f32>(nanBits);
+	var lastY: f32 = bitcast<f32>(nanBits);
+
+	for (var i = start; i < end; i++) {
+		let x = xOut[i];
+		if (x != x) { continue; }
+		let y = yOut[i];
+		if (x == lastX && y == lastY) { continue; }
+
+		if (writeIdx != i) {
+			xOut[writeIdx] = x;
+			yOut[writeIdx] = y;
+			seriesOut[writeIdx] = seriesOut[i];
+			colorOut[writeIdx] = colorOut[i];
 		}
+		lastX = x;
+		lastY = y;
+		writeIdx++;
+	}
+
+	// NaN-pad remaining slots
+	let nan = bitcast<f32>(nanBits);
+	for (var i = writeIdx; i < end; i++) {
+		xOut[i] = nan;
+		yOut[i] = nan;
+		seriesOut[i] = nan;
+		colorOut[i] = nan;
 	}
 }
 `;
@@ -347,5 +370,5 @@ export {
 	BIN_POINTS_SHADER,
 	FIND_MINMAX_SHADER,
 	EMIT_OUTPUT_SHADER,
-	FILL_FORWARD_SHADER
+	COMPACT_SHADER
 };

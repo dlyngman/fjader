@@ -23,7 +23,7 @@ import {
 	BIN_POINTS_SHADER,
 	FIND_MINMAX_SHADER,
 	EMIT_OUTPUT_SHADER,
-	FILL_FORWARD_SHADER
+	COMPACT_SHADER
 } from './M4Shader';
 
 interface M4InputBuffers {
@@ -53,7 +53,7 @@ export class M4Decimator {
 	#binPointsPipeline: GPUComputePipeline | null = null;
 	#findMinMaxPipeline: GPUComputePipeline | null = null;
 	#emitOutputPipeline: GPUComputePipeline | null = null;
-	#fillForwardPipeline: GPUComputePipeline | null = null;
+	#compactPipeline: GPUComputePipeline | null = null;
 
 	// Bind group layouts
 	#inputLayout: GPUBindGroupLayout | null = null;
@@ -241,9 +241,9 @@ export class M4Decimator {
 		emitPass.dispatchWorkgroups(binWorkgroups);
 		emitPass.end();
 
-		// Pass 4: Fill-forward (bridge NaN gaps from empty bins)
-		const fillPass = commandEncoder.beginComputePass({ label: 'm4-fill-forward' });
-		fillPass.setPipeline(this.#fillForwardPipeline!);
+		// Pass 4: Compact (pack non-NaN points contiguously, deduplicate)
+		const fillPass = commandEncoder.beginComputePass({ label: 'm4-compact' });
+		fillPass.setPipeline(this.#compactPipeline!);
 		fillPass.setBindGroup(0, this.#fillBindGroup!);
 		fillPass.dispatchWorkgroups(this.#numSeries);
 		fillPass.end();
@@ -470,11 +470,11 @@ export class M4Decimator {
 			}
 		});
 
-		this.#fillForwardPipeline = this.#device.createComputePipeline({
+		this.#compactPipeline = this.#device.createComputePipeline({
 			label: 'm4-fill-forward',
 			layout: fillLayout,
 			compute: {
-				module: this.#device.createShaderModule({ code: FILL_FORWARD_SHADER }),
+				module: this.#device.createShaderModule({ code: COMPACT_SHADER }),
 				entryPoint: 'main'
 			}
 		});
