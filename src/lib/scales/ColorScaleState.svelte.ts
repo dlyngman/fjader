@@ -62,7 +62,7 @@ export class ColorScaleState {
 	// D3 scale instance (for legends and CPU lookups)
 	#d3Scale: D3ColorScale | null = null;
 
-	// Ordinal category mapping (string -> 1-based index)
+	// Ordinal category mapping (string -> 0-based index, -1 = null/unknown)
 	#categoryMap: Map<string | number, number> = new Map();
 
 	// ViewManager integration - tracks tables this scale has registered columns for
@@ -201,7 +201,7 @@ export class ColorScaleState {
 
 	/**
 	 * Converts raw data into GPU-ready values.
-	 * - Ordinal: string -> u32 index (1-based, 0 = null/unknown)
+	 * - Ordinal: string -> 0-based index (-1 = null/unknown, 0+ = categories)
 	 * - Continuous: number -> f32 value (pass-through)
 	 *
 	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
@@ -217,8 +217,8 @@ export class ColorScaleState {
 			const indices = new Float32Array(data.length);
 			for (let i = 0; i < data.length; i++) {
 				const val = data[i];
-				// 0 = null/fallback, 1..N = valid categories
-				indices[i] = val == null ? 0 : (this.#categoryMap.get(val) ?? 0);
+				// -1 = null/unknown, 0+ = valid categories (matches ViewManager convention)
+				indices[i] = val == null ? -1 : (this.#categoryMap.get(val) ?? -1);
 			}
 			return indices;
 		}
@@ -272,9 +272,9 @@ export class ColorScaleState {
 	}
 
 	#uploadOrdinal(): void {
-		// Rebuild category map (string -> 1-based index)
+		// Rebuild category map (string -> 0-based index)
 		this.#categoryMap.clear();
-		this.domain.forEach((cat, i) => this.#categoryMap.set(cat, i + 1));
+		this.domain.forEach((cat, i) => this.#categoryMap.set(cat, i));
 
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
