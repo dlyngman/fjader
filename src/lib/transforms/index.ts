@@ -10,34 +10,10 @@
  */
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
-import type { SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
-import {
-	ObjectDataAccessor,
-	type DataAccessor
-} from '$lib/data/DataAccessor';
+import type { SqlTransform, JsTransform, Transform, MarkConfig, ScaleMap } from '$lib/types';
+import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
 
 type Query = SelectQuery;
-
-type DataRow = Record<string, unknown>;
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/** Convert any DataAccessor to plain row objects (for transforms that need row-level ops). */
-function accessorToRows(data: DataAccessor): DataRow[] {
-	const cols = data.columnNames;
-	const arrays = cols.map((c) => data.getColumn(c));
-	const rows: DataRow[] = [];
-	for (let i = 0; i < data.length; i++) {
-		const row: DataRow = {};
-		for (let j = 0; j < cols.length; j++) {
-			row[cols[j]] = arrays[j]?.[i] ?? null;
-		}
-		rows.push(row);
-	}
-	return rows;
-}
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
@@ -115,38 +91,159 @@ export function topN(n: number, options: TopNOptions = {}): JsTransform {
 		apply(data: DataAccessor, config: MarkConfig) {
 			if (data.length === 0) return data;
 
-			const rows = accessorToRows(data);
-			const by = options.by || config.y;
+			// Value axis: x for horizontal marks (barx), y for vertical (bary, default)
+			const isHorizontal = config.markType === 'barx';
+			const valueField = (options.by || (isHorizontal ? config.x : config.y)) as string | undefined;
+			const bandField = (isHorizontal ? config.y : config.x) as string | undefined;
+			const seriesField = config.fill as string | undefined;
 
-			const sorted = rows.sort(
-				(a, b) => ((b[by!] as number) || 0) - ((a[by!] as number) || 0)
-			);
+			if (!valueField || !bandField) return data;
+			const valueCol = data.getColumn(valueField);
+			const bandColData = data.getColumn(bandField);
+			if (!valueCol || !bandColData) return data;
 
-			if (sorted.length <= n) {
-				return new ObjectDataAccessor(sorted);
+			const seriesCol = seriesField ? data.getColumn(seriesField) : null;
+			if (seriesCol) {
+				return topNGrouped(data, n, valueCol, bandColData, bandField, seriesCol, options, valueField);
 			}
 
-			const top = sorted.slice(0, n);
-
-			if (options.includeOthers) {
-				const others = sorted.slice(n);
-				const otherRow: DataRow = { [config.x!]: 'Other' };
-
-				for (const key of Object.keys(others[0])) {
-					if (typeof others[0][key] === 'number') {
-						otherRow[key] = others.reduce((sum, d) => sum + ((d[key] as number) || 0), 0);
-					}
-				}
-
-				return new ObjectDataAccessor([...top, otherRow]);
-			}
-
-			return new ObjectDataAccessor(top);
+			// Simple path: no series column, rank individual rows
+			if (data.length <= n) return data;
+			return topNSimple(data, n, valueCol, bandField, options);
 		},
 		describe() {
 			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''}`;
 		}
 	};
+}
+
+/** topN without series: rank and gather individual rows. */
+function topNSimple(
+	data: DataAccessor,
+	n: number,
+	valueCol: ArrayLike<unknown>,
+	bandField: string,
+	options: TopNOptions
+): DataAccessor {
+	const indices = Array.from({ length: data.length }, (_, i) => i);
+	indices.sort((a, b) => (Number(valueCol[b]) || 0) - (Number(valueCol[a]) || 0));
+
+	const topIndices = indices.slice(0, n);
+	const outLen = options.includeOthers ? n + 1 : n;
+	const columns: Record<string, Float32Array | unknown[]> = {};
+
+	for (const colName of data.columnNames) {
+		const src = data.getColumn(colName);
+		if (!src) continue;
+
+		if (src instanceof Float32Array) {
+			const dst = new Float32Array(outLen);
+			for (let i = 0; i < n; i++) dst[i] = src[topIndices[i]];
+			if (options.includeOthers) {
+				let sum = 0;
+				for (let i = n; i < indices.length; i++) sum += src[indices[i]];
+				dst[n] = sum;
+			}
+			columns[colName] = dst;
+		} else {
+			const dst: unknown[] = topIndices.map((i) => src[i]);
+			if (options.includeOthers) {
+				dst.push(colName === bandField ? 'Other' : null);
+			}
+			columns[colName] = dst;
+		}
+	}
+
+	return new ColumnDataAccessor(columns, outLen);
+}
+
+/** topN with series: rank categories by total across all series, keep all series rows. */
+function topNGrouped(
+	data: DataAccessor,
+	n: number,
+	valueCol: ArrayLike<unknown>,
+	bandColData: ArrayLike<unknown>,
+	bandField: string,
+	seriesCol: ArrayLike<unknown>,
+	options: TopNOptions,
+	valueField: string
+): DataAccessor {
+	// Sum values per category to rank them
+	const categoryTotals = new Map<unknown, number>();
+	for (let i = 0; i < data.length; i++) {
+		const cat = bandColData[i];
+		categoryTotals.set(cat, (categoryTotals.get(cat) || 0) + (Number(valueCol[i]) || 0));
+	}
+
+	// Rank categories descending by total
+	const ranked = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1]);
+	const topCategories = new Set(ranked.slice(0, n).map(([cat]) => cat));
+
+	// Collect row indices for top categories and excluded categories
+	const keepIndices: number[] = [];
+	const excludeIndices: number[] = [];
+	for (let i = 0; i < data.length; i++) {
+		if (topCategories.has(bandColData[i])) {
+			keepIndices.push(i);
+		} else {
+			excludeIndices.push(i);
+		}
+	}
+
+	if (!options.includeOthers) {
+		// Simple: gather rows for top N categories
+		const columns: Record<string, Float32Array | unknown[]> = {};
+		for (const colName of data.columnNames) {
+			const src = data.getColumn(colName);
+			if (!src) continue;
+			if (src instanceof Float32Array) {
+				const dst = new Float32Array(keepIndices.length);
+				for (let i = 0; i < keepIndices.length; i++) dst[i] = src[keepIndices[i]];
+				columns[colName] = dst;
+			} else {
+				columns[colName] = keepIndices.map((i) => src[i]);
+			}
+		}
+		return new ColumnDataAccessor(columns, keepIndices.length);
+	}
+
+	// includeOthers: sum excluded rows per series into synthetic "Other" rows
+	const seriesValues = new Map<unknown, number>();
+	const seriesOrder: unknown[] = [];
+	for (const i of excludeIndices) {
+		const s = seriesCol[i];
+		if (!seriesValues.has(s)) seriesOrder.push(s);
+		seriesValues.set(s, (seriesValues.get(s) || 0) + (Number(valueCol[i]) || 0));
+	}
+
+	const outLen = keepIndices.length + seriesOrder.length;
+	const columns: Record<string, Float32Array | unknown[]> = {};
+
+	for (const colName of data.columnNames) {
+		const src = data.getColumn(colName);
+		if (!src) continue;
+
+		if (src instanceof Float32Array) {
+			const dst = new Float32Array(outLen);
+			for (let i = 0; i < keepIndices.length; i++) dst[i] = src[keepIndices[i]];
+			// "Other" rows: value column gets summed total per series, others get 0
+			for (let j = 0; j < seriesOrder.length; j++) {
+				dst[keepIndices.length + j] =
+					colName === valueField ? (seriesValues.get(seriesOrder[j]) || 0) : 0;
+			}
+			columns[colName] = dst;
+		} else {
+			const dst: unknown[] = keepIndices.map((i) => src[i]);
+			for (let j = 0; j < seriesOrder.length; j++) {
+				if (colName === bandField) dst.push('Other');
+				else if (src === seriesCol) dst.push(seriesOrder[j]);
+				else dst.push(null);
+			}
+			columns[colName] = dst;
+		}
+	}
+
+	return new ColumnDataAccessor(columns, outLen);
 }
 
 // -----------------------------------------------------------------------------
@@ -404,6 +501,30 @@ export function dodge(options: DodgeOptions = {}): JsTransform {
 			return 'Dodge by group';
 		}
 	};
+}
+
+// -----------------------------------------------------------------------------
+// withImplicitStack — Observable Plot's maybeStackY/maybeStackX pattern
+// -----------------------------------------------------------------------------
+
+/**
+ * Auto-inject a stack transform when the mark uses shorthand (y/x) without
+ * explicit bounds (y1/y2 or x1/x2). Appends stack at end of the transforms
+ * array so user transforms like topN run first, then stacking runs on the
+ * filtered result.
+ *
+ * Mirrors Observable Plot's maybeStackY/maybeStackX: marks that specify only
+ * `y` (not `y1`/`y2`) get automatic stacking. Specifying explicit bounds
+ * opts out.
+ */
+export function withImplicitStack(
+	transforms: Transform[],
+	hasExplicitBounds: boolean,
+	direction: 'x' | 'y'
+): Transform[] {
+	if (hasExplicitBounds) return transforms;
+	if (transforms.some((t) => t.type === 'stack')) return transforms;
+	return [...transforms, direction === 'y' ? stackY() : stackX()];
 }
 
 export { TransformCompiler } from './TransformCompiler';

@@ -133,7 +133,42 @@ export class OverlayDataAccessor {
 	}
 }
 
-export type DataAccessor = ArrowDataAccessor | ObjectDataAccessor | OverlayDataAccessor;
+export class ColumnDataAccessor {
+	#columns: Map<string, Float32Array | unknown[]>;
+	#length: number;
+	type = 'columns' as const;
+
+	constructor(columns: Record<string, Float32Array | unknown[]>, length: number) {
+		this.#columns = new Map(Object.entries(columns));
+		this.#length = length;
+	}
+
+	get length(): number {
+		return this.#length;
+	}
+
+	get columnNames(): string[] {
+		return [...this.#columns.keys()];
+	}
+
+	getColumn(name: string): Float32Array | unknown[] | null {
+		return this.#columns.get(name) ?? null;
+	}
+
+	withOverlays(overlays: Record<string, Float32Array>): OverlayDataAccessor {
+		return new OverlayDataAccessor(this, new Map(Object.entries(overlays)));
+	}
+
+	toString(): string {
+		return `ColumnDataAccessor(${this.#length} rows, ${this.#columns.size} columns)`;
+	}
+}
+
+export type DataAccessor =
+	| ArrowDataAccessor
+	| ObjectDataAccessor
+	| OverlayDataAccessor
+	| ColumnDataAccessor;
 
 export class ObjectDataAccessor {
 	data: Record<string, unknown>[];

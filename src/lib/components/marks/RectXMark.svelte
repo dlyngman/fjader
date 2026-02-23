@@ -14,6 +14,7 @@
 		inferMarkScaleType,
 		generateMarkId
 	} from './utils';
+	import { withImplicitStack } from '$lib/transforms';
 	import type {
 		FieldRef,
 		ScaleType,
@@ -41,8 +42,8 @@
 		table,
 		selection = undefined,
 		x,
-		x1 = 0,
-		x2 = x,
+		x1: x1Prop,
+		x2: x2Prop,
 		y = null,
 		y1: y1Prop = null,
 		y2: y2Prop = null,
@@ -60,6 +61,12 @@
 		sort = null,
 		tooltip = true
 	}: Props = $props();
+
+	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
+	const hasExplicitBounds = $derived(x1Prop !== undefined || x2Prop !== undefined);
+	let x1 = $derived(x1Prop ?? 0);
+	let x2 = $derived(x2Prop ?? x);
+	let effectiveTransforms = $derived(withImplicitStack(transforms, hasExplicitBounds, 'x'));
 
 	const markId = generateMarkId('rectx');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
@@ -129,7 +136,7 @@
 		},
 		table,
 		selection,
-		transforms,
+		transforms: effectiveTransforms,
 		select: buildSelectFromChannels({
 			x1,
 			x2,
@@ -151,7 +158,7 @@
 
 	let instanceCount = $derived(computeInstanceCount(setup?.data, x2));
 
-	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
+	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));
 
 	// --- DATA RESOLUTION ---
 
@@ -224,7 +231,7 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId, transforms, markColor.selectField);
+		(void config, xScaleId, yScaleId, effectiveTransforms, markColor.selectField);
 		untrack(() => {
 			setup?.destroy();
 			setup = null;

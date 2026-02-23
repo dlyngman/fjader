@@ -31,6 +31,7 @@ import type {
 	ScaleStateInstance
 } from '$lib/types';
 import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
@@ -126,6 +127,7 @@ export class BaseMarkSetup {
 	#channelsNeedingDataDomain: Set<string> = new Set();
 	#dataDerivedDomainsSet = $state(false);
 	#globalAggregatesSet = $state(false);
+	#lastBandDomainDataVersion: number | null = null;
 
 	// --- Client Registration ---
 	#unregisterClient: (() => void) | null = null;
@@ -376,7 +378,19 @@ export class BaseMarkSetup {
 
 			const data = this.data;
 			if (!data || data.length === 0) return;
-			if (this.#dataDerivedDomainsSet) return; // Already done
+			if (this.#dataDerivedDomainsSet) {
+				// For topN marks, re-derive band domain when new data arrives (selection change).
+				// dataVersion only increments on DB query results, not on scale mutations,
+				// so this naturally breaks the effect→domain→effect loop.
+				if (
+					this.#transformCompiler.hasCategoryReducingTransforms() &&
+					dataVersion !== this.#lastBandDomainDataVersion
+				) {
+					this.#lastBandDomainDataVersion = dataVersion;
+				} else {
+					return;
+				}
+			}
 
 			// If we're waiting for new data from a re-bin, skip until dataVersion increments
 			if (this.#rebinPendingDataVersion !== null && dataVersion <= this.#rebinPendingDataVersion) {
@@ -514,25 +528,37 @@ export class BaseMarkSetup {
 
 	#registerScaleRequirements(): void {
 		const { scaleRequirements, inferredScaleColumns } = this.#config;
+		const hasCatReducing = this.#transformCompiler.hasCategoryReducingTransforms();
 
+		const table = this.#config.table;
 		if (scaleRequirements?.x) {
+			let config = scaleRequirements.x.config || {};
+			if (scaleRequirements.x.type === 'band' && hasCatReducing) {
+				const key = this.#transformCompiler.getCategoryTransformKey();
+				if (key) config = { ...config, transformKey: `${table}:${key}` };
+			}
 			this.#chartContext.registerScaleType(
 				'x',
 				scaleRequirements.x.type,
 				scaleRequirements.x.priority,
 				this.#markId,
-				scaleRequirements.x.config || {},
+				config,
 				inferredScaleColumns?.x
 			);
 		}
 
 		if (scaleRequirements?.y) {
+			let config = scaleRequirements.y.config || {};
+			if (scaleRequirements.y.type === 'band' && hasCatReducing) {
+				const key = this.#transformCompiler.getCategoryTransformKey();
+				if (key) config = { ...config, transformKey: `${table}:${key}` };
+			}
 			this.#chartContext.registerScaleType(
 				'y',
 				scaleRequirements.y.type,
 				scaleRequirements.y.priority,
 				this.#markId,
-				scaleRequirements.y.config || {},
+				config,
 				inferredScaleColumns?.y
 			);
 		}
@@ -551,6 +577,10 @@ export class BaseMarkSetup {
 
 	get actualYScaleType(): string {
 		return this.#chartContext.scaleTypes?.y || 'linear';
+	}
+
+	get hasCategoryReducingTransforms(): boolean {
+		return this.#transformCompiler.hasCategoryReducingTransforms();
 	}
 
 	get markId(): string {
@@ -666,10 +696,12 @@ export class BaseMarkSetup {
 			fill: this.#getFieldName('fill')
 		};
 
-		return this.#transformCompiler.applyToData(accessor, transformConfig, {
+		const result = this.#transformCompiler.applyToData(accessor, transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale
 		});
+
+		return result;
 	});
 
 	/** Facet index data (Float32Array) for GPU upload. Null when not faceted. */
@@ -742,7 +774,12 @@ export class BaseMarkSetup {
 		const hasView = viewManager.hasView(this.#config.table);
 
 		// For band/point scales, use the indexed column name from ViewManager
-		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+		// Skip for marks with category-reducing transforms — they query raw strings
+		const skipIndexSwap = this.#transformCompiler.hasCategoryReducingTransforms();
+		if (
+			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
+			!skipIndexSwap
+		) {
 			const xScale = this.#chartContext.xScaleState;
 			if (xScale?.indexColumnName && hasView) {
 				const originalField = select.x;
@@ -750,7 +787,10 @@ export class BaseMarkSetup {
 				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
 			}
 		}
-		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+		if (
+			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
+			!skipIndexSwap
+		) {
 			const yScale = this.#chartContext.yScaleState;
 			if (yScale?.indexColumnName && hasView) {
 				const originalField = select.y;
@@ -998,11 +1038,20 @@ export class BaseMarkSetup {
 
 		// Register table with band/time scales for ViewManager integration
 		// This must happen BEFORE categorical domain fetch so views can be created
+		// Skip for marks with category-reducing transforms (topN) — they populate
+		// band domain post-transform and don't need ViewManager index columns
 		const table = this.#config.table;
-		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+		const skipBandView = this.#transformCompiler.hasCategoryReducingTransforms();
+		if (
+			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
+			!skipBandView
+		) {
 			this.#chartContext.xScaleState?.registerTable?.(table);
 		}
-		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+		if (
+			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
+			!skipBandView
+		) {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
 		// Only register time scale tables for view column creation when the field
@@ -1259,6 +1308,24 @@ export class BaseMarkSetup {
 			}
 		}
 
+		// Band scale domain from post-transform data (for topN and other category-reducing transforms).
+		// These marks skip #fetchCategoricalDomains for the band axis and populate domain here.
+		if (this.#transformCompiler.hasCategoryReducingTransforms()) {
+			for (const axis of ['x', 'y'] as const) {
+				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+				if (scaleType !== 'band' && scaleType !== 'point') continue;
+
+				const categories = this.#extractCategoriesFromData(data, axis);
+				const scaleState = this.#chartContext[`${axis}ScaleState`] as
+					| BandScaleState
+					| undefined;
+				if (scaleState?.addMark && categories.length > 0) {
+					scaleState.addMark(categories, this.#markId, { sorted: true });
+					scaleState.updateDomainFromExtents();
+				}
+			}
+		}
+
 		// Clear the skip flag after processing
 		this.#skipDomainUpdateForAxis = null;
 
@@ -1345,6 +1412,25 @@ export class BaseMarkSetup {
 		return [min, max];
 	}
 
+	/**
+	 * Extract unique category values from a column in the data, preserving order.
+	 * Used to populate band scale domains from post-transform data (topN).
+	 */
+	#extractCategoriesFromData(data: DataAccessor, axis: string): string[] {
+		const col = data.getColumn(axis);
+		if (!col) return [];
+		const seen = new Set<string>();
+		const result: string[] = [];
+		for (let i = 0; i < data.length; i++) {
+			const val = String(col[i]);
+			if (!seen.has(val)) {
+				seen.add(val);
+				result.push(val);
+			}
+		}
+		return result;
+	}
+
 	async #fetchCategoricalDomains(): Promise<number> {
 		const { table, selection, sort } = this.#config;
 		if (!this.#coordinator || !table) return 0;
@@ -1403,10 +1489,19 @@ export class BaseMarkSetup {
 			);
 		};
 
-		if (this.actualXScaleType === 'band' || this.actualXScaleType === 'point') {
+		// Skip band fetch for marks with category-reducing transforms (topN):
+		// domain will be populated post-transform in #registerDataDerivedDomains
+		const skipBandFetch = this.#transformCompiler.hasCategoryReducingTransforms();
+		if (
+			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
+			!skipBandFetch
+		) {
 			setupFetch('x', this.#config.select.x);
 		}
-		if (this.actualYScaleType === 'band' || this.actualYScaleType === 'point') {
+		if (
+			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
+			!skipBandFetch
+		) {
 			setupFetch('y', this.#config.select.y);
 		}
 
@@ -1910,9 +2005,23 @@ export class BaseMarkSetup {
 					if (colData) columnArrays[col] = colData;
 				}
 
+				// Band axis columns from category-reducing transforms (e.g. topN) contain
+				// strings instead of ViewManager integer indices. Use the scale's index map
+				// to convert them so the tooltip query pipeline works unchanged.
+				const bandIndexMaps: Record<string, ReadonlyMap<string, number>> = {};
+				const xss = this.#chartContext.xScaleState;
+				if (this.actualXScaleType === 'band' && xss && 'categoryIndexMap' in xss) {
+					bandIndexMaps['x'] = xss.categoryIndexMap;
+				}
+				const yss = this.#chartContext.yScaleState;
+				if (this.actualYScaleType === 'band' && yss && 'categoryIndexMap' in yss) {
+					bandIndexMaps['y'] = yss.categoryIndexMap;
+				}
+
 				// Infer schema from first row
 				const schemaDef = columns
 					.map((col) => {
+						if (bandIndexMaps[col]) return `"${col}" INTEGER`;
 						const sample = columnArrays[col]?.[0];
 						const sqlType = typeof sample === 'number' ? 'DOUBLE' : 'VARCHAR';
 						return `"${col}" ${sqlType}`;
@@ -1925,6 +2034,11 @@ export class BaseMarkSetup {
 					const vals = columns.map((col) => {
 						const v = columnArrays[col]?.[i];
 						if (v == null || (typeof v === 'number' && isNaN(v))) return 'NULL';
+						const bandMap = bandIndexMaps[col];
+						if (bandMap && typeof v === 'string') {
+							const idx = bandMap.get(v);
+							return idx != null ? idx.toString() : 'NULL';
+						}
 						if (typeof v === 'number') return v.toString();
 						return `'${String(v).replace(/'/g, "''")}'`;
 					});

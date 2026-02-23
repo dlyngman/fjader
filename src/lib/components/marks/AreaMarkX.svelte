@@ -15,6 +15,7 @@
 		inferMarkScaleType,
 		generateMarkId
 	} from './utils';
+	import { withImplicitStack } from '$lib/transforms';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -42,8 +43,8 @@
 		selection = undefined,
 		y,
 		x,
-		x1 = 0,
-		x2 = x,
+		x1: x1Prop,
+		x2: x2Prop,
 		fill = null,
 		z = null,
 		scheme,
@@ -60,6 +61,12 @@
 		sort = null,
 		tooltip = true
 	}: Props = $props();
+
+	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
+	const hasExplicitBounds = $derived(x1Prop !== undefined || x2Prop !== undefined);
+	let x1 = $derived(x1Prop ?? 0);
+	let x2 = $derived(x2Prop ?? x);
+	let effectiveTransforms = $derived(withImplicitStack(transforms, hasExplicitBounds, 'x'));
 
 	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)
 	const effectiveCurve = $derived(
@@ -110,8 +117,8 @@
 		return x2?.aggregate || (typeof x2 === 'object' && x2?.constructor?.name === '_AggregateNode');
 	});
 
-	let hasStackTransform = $derived(transforms.some((t) => t.type === 'stack'));
-	let showBothBoundaries = $derived(typeof x1 === 'string' && !hasStackTransform);
+	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));
+	let showBothBoundaries = $derived(typeof x1Prop === 'string' && !hasStackTransform);
 
 	// Config with _connectedConfig for automatic ORDER BY (dimension is y)
 	const config = $derived({
@@ -134,7 +141,7 @@
 		},
 		table,
 		selection,
-		transforms,
+		transforms: effectiveTransforms,
 		select: buildSelectFromChannels({
 			x: x2, // Alias for tooltip nearest-point query (expects 'x' column)
 			y,

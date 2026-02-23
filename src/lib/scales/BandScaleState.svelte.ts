@@ -441,7 +441,8 @@ export class BandScaleState {
 	 */
 	processDataForGPU(
 		categoryData: string[] | Float32Array,
-		markId: string = 'unknown'
+		markId: string = 'unknown',
+		{ suppressUnmappedWarning = false }: { suppressUnmappedWarning?: boolean } = {}
 	): Float32Array {
 		// Fast path: already Float32Array from derived view (zero-copy)
 		if (categoryData instanceof Float32Array) {
@@ -457,10 +458,10 @@ export class BandScaleState {
 			this.effectiveDomain.forEach((category, index) => {
 				fallbackMap.set(category, index);
 			});
-			return this.#processWithMap(categoryData, fallbackMap, markId);
+			return this.#processWithMap(categoryData, fallbackMap, markId, suppressUnmappedWarning);
 		}
 
-		return this.#processWithMap(categoryData, categoryMap, markId);
+		return this.#processWithMap(categoryData, categoryMap, markId, suppressUnmappedWarning);
 	}
 
 	/**
@@ -469,7 +470,8 @@ export class BandScaleState {
 	#processWithMap(
 		categoryData: string[],
 		categoryMap: Map<string, number>,
-		markId: string
+		markId: string,
+		suppressUnmappedWarning: boolean = false
 	): Float32Array {
 		const unmappedCategories = new Set<string>();
 
@@ -486,7 +488,8 @@ export class BandScaleState {
 		);
 
 		// Warn about unmapped categories in development
-		if (unmappedCategories.size > 0) {
+		// (suppressed for topN marks where transient mismatches are expected during selection changes)
+		if (unmappedCategories.size > 0 && !suppressUnmappedWarning) {
 			console.warn(
 				`🔶 BandScale "${this.name}": Unmapped categories for mark "${markId}":`,
 				Array.from(unmappedCategories).slice(0, 5),
@@ -666,10 +669,11 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Get category index map (for debugging)
+	 * Read-only view of the category→index mapping.
+	 * Derived from the effective domain; updates reactively.
 	 */
-	getCategoryIndexMap(): Map<string, number> {
-		return new Map(this.#categoryIndexMap);
+	get categoryIndexMap(): ReadonlyMap<string, number> {
+		return this.#categoryIndexMap;
 	}
 
 	/**

@@ -132,4 +132,16 @@ export class TransformCompiler {
 	hasJSTransforms(): boolean {
 		return this.jsTransforms.length > 0;
 	}
+
+	hasCategoryReducingTransforms(): boolean {
+		return this.jsTransforms.some((t) => t.type === 'topN');
+	}
+
+	getCategoryTransformKey(): string | null {
+		const parts: string[] = [];
+		for (const t of this.jsTransforms) {
+			if (t.type === 'topN') parts.push(t.describe?.() || t.type);
+		}
+		return parts.length > 0 ? parts.join('+') : null;
+	}
 }
