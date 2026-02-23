@@ -109,13 +109,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 	let t = (x - domainMin) / (domainMax - domainMin);
 
-	// Series computation (before bin assignment — needed for boundary bins)
-	let rawSeries = u32(seriesValues[idx]);
-	var series = rawSeries;
-	if (config.numSeries > 1u) {
-		if (rawSeries == 0u) { return; }
-		series = rawSeries - 1u;
-	}
+	// Series: 0-indexed from ViewManager (-1 = null/unknown, 0+ = categories)
+	let seriesF = seriesValues[idx];
+	if (seriesF < 0.0 || seriesF != seriesF) { return; }
+	let series = u32(seriesF);
 	if (series >= config.numSeries) { return; }
 
 	// Bin assignment: boundary bins capture off-screen points for line connectivity.
@@ -171,13 +168,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 	let t = (x - domainMin) / (domainMax - domainMin);
 
-	// Series computation (before bin assignment — matches binPoints pass)
-	let rawSeries = u32(seriesValues[idx]);
-	var series = rawSeries;
-	if (config.numSeries > 1u) {
-		if (rawSeries == 0u) { return; }
-		series = rawSeries - 1u;
-	}
+	// Series: 0-indexed (matches binPoints pass)
+	let seriesF = seriesValues[idx];
+	if (seriesF < 0.0 || seriesF != seriesF) { return; }
+	let series = u32(seriesF);
 	if (series >= config.numSeries) { return; }
 
 	// Boundary bin clamping (matches binPoints pass)
@@ -288,13 +282,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 		count++;
 	}
 
-	// Derive series value from bin key (0-indexed internally).
-	// For multi-series, add 1 to match ColorScaleState's 1-indexed convention
-	// so the vertex shader's series boundary detection stays consistent.
-	var seriesVal = f32(binKey / config.numBins);
-	if (config.numSeries > 1u) {
-		seriesVal = seriesVal + 1.0;
-	}
+	// Derive series value from bin key (0-indexed, matching ViewManager convention).
+	// Vertex shader uses != comparison for series breaks, so any distinct values work.
+	let seriesVal = f32(binKey / config.numBins);
 
 	// Write unique points, fill remaining slots with last unique point
 	for (var i = 0u; i < 4u; i++) {
