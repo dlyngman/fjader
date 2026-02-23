@@ -223,7 +223,8 @@
 			numSeries = 1;
 		}
 
-		const numBins = Math.ceil(chartContext.innerWidth);
+		const dpr = window.devicePixelRatio || 1;
+		const numBins = Math.ceil(chartContext.innerWidth * dpr);
 		const xScaleIndex = chartContext.xScaleState
 			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
 			: 0;
