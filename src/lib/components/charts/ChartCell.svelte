@@ -243,23 +243,28 @@
 		getDebugInfo: () => layout.getDebugInfo(),
 
 		// D3 scales — cell-local (cached $derived)
-		// Read domainForReactivity so template expressions track _version directly.
-		// Without this, $derived returns the same D3 scale reference (mutated in place)
+		// Read domainForReactivity so template expressions track _version (domain changes).
+		// Read layout dimensions so template expressions also track range changes (resize).
+		// Without these, $derived returns the same D3 scale reference (mutated in place)
 		// and Svelte's === check considers it unchanged, skipping axis tick updates.
 		get xScale() {
 			scales?.xScaleState?.domainForReactivity;
+			layout.innerWidth;
 			return cellXScale;
 		},
 		get yScale() {
 			scales?.yScaleState?.domainForReactivity;
+			layout.innerHeight;
 			return cellYScale;
 		},
 		get xTargetScale() {
 			scales?.xScaleState?.domainForReactivity;
+			layout.innerWidth;
 			return cellXTargetScale;
 		},
 		get yTargetScale() {
 			scales?.yScaleState?.domainForReactivity;
+			layout.innerHeight;
 			return cellYTargetScale;
 		},
 
