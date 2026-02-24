@@ -39,6 +39,15 @@ import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { generateMarkId } from './utils';
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Check if an AST node is a window expression (e.g. sum('x').partitionby(...).orderby(...)). */
+function isWindowExpression(node: unknown): boolean {
+	return isNode(node) && (node as { type: string }).type === 'WINDOW';
+}
+
+// ---------------------------------------------------------------------------
 // Local interfaces
 // ---------------------------------------------------------------------------
 
@@ -119,6 +128,18 @@ export class BaseMarkSetup {
 	#skipDomainUpdateForAxis: string | null = null;
 	#rebinPendingDataVersion: number | null = null;
 	#prevBinMultiplier: number = 1.0;
+
+	// --- Query Build Cache ---
+	// Caches all filter-independent query state (resolved select, classification,
+	// transforms, ordering) so repeated buildQuery calls during interaction
+	// only apply the WHERE clause. Invalidated on re-bin or multiplier change.
+	#cachedQueryParts: {
+		selectDef: Record<string, unknown>;
+		nonAggregateGroupBy: unknown[];
+		hasAggregates: boolean;
+		hasSQLTransforms: boolean;
+		orderCols: unknown[] | null;
+	} | null = null;
 
 	// --- Viewport-Local Domain Support ---
 	#viewportDomainUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -223,9 +244,9 @@ export class BaseMarkSetup {
 				continue;
 			}
 
-			// Check if it's an aggregate expression
+			// Check if it's an aggregate or window expression
 			const exprNode = isNode(value) ? value : null;
-			if (!exprNode || !isAggregateExpression(exprNode)) continue;
+			if (!exprNode || !(isAggregateExpression(exprNode) || isWindowExpression(exprNode))) continue;
 
 			// Determine channel type and whether it needs data-derived domain
 			if (channel === 'x' || channel === 'x1' || channel === 'x2') {
@@ -458,6 +479,9 @@ export class BaseMarkSetup {
 
 				// Reset data-derived domain flag so aggregate extent updates from new data
 				this.#dataDerivedDomainsSet = false;
+
+				// Invalidate resolved select cache so next buildQuery re-resolves bins
+				this.#cachedQueryParts = null;
 
 				// Immediate update. Since this changes the query definition via
 				// resolveAutoBins -> buildQuery, requestUpdate will re-run the pipeline.
@@ -828,60 +852,87 @@ export class BaseMarkSetup {
 	}
 
 	buildQuery(sourceTable: string, config: DataClientConfig, filter: unknown[]): Query {
-		let select: Record<string, unknown> = config.select;
+		// Build and cache all filter-independent query parts on first call.
+		// Subsequent calls (e.g. during brush interaction) reuse the cache.
+		if (!this.#cachedQueryParts) {
+			let select: Record<string, unknown> = config.select;
 
-		// Resolve auto bins if we have field info
-		if (this.#autoBinNodes.size > 0 && this.client?.fieldInfo) {
-			select = this.#resolveAutoBins(config.select);
-		}
-
-		// Convert temporal values to float offsets from t0.
-		// Must run AFTER bin resolution so expression nodes are available.
-		// Raw column strings → swap to ViewManager offset column.
-		// Expression nodes (bins, dateMonthDay, etc.) → inline epoch offset.
-		const hasView = viewManager.hasView(this.#config.table);
-		select = this.#applyTimeOffsets(select, hasView);
-
-		const q = Query.from(sourceTable);
-		const selectDef: Record<string, unknown> = {};
-		const nonAggregateGroupBy: unknown[] = [];
-		let hasAggregates = false;
-
-		// Build select clause
-		for (const alias in select) {
-			const expr = select[alias];
-			if (expr == null) continue;
-
-			const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
-			selectDef[alias] = exprNode;
-
-			if (isAggregateExpression(exprNode)) {
-				hasAggregates = true;
-			} else {
-				nonAggregateGroupBy.push(exprNode);
+			// Resolve auto bins if we have field info
+			if (this.#autoBinNodes.size > 0 && this.client?.fieldInfo) {
+				select = this.#resolveAutoBins(config.select);
 			}
-		}
-		q.select(selectDef);
 
-		// Add GROUP BY if needed
+			// Convert temporal values to float offsets from t0.
+			const hasView = viewManager.hasView(this.#config.table);
+			select = this.#applyTimeOffsets(select, hasView);
+
+			// Classify select expressions
+			const selectDef: Record<string, unknown> = {};
+			const nonAggregateGroupBy: unknown[] = [];
+			let hasAggregates = false;
+
+			for (const alias in select) {
+				const expr = select[alias];
+				if (expr == null) continue;
+
+				const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
+				selectDef[alias] = exprNode;
+
+				if (isAggregateExpression(exprNode)) {
+					hasAggregates = true;
+				} else if (!isWindowExpression(exprNode)) {
+					nonAggregateGroupBy.push(exprNode);
+				}
+				// Window expressions: skip both — they don't trigger GROUP BY
+				// and shouldn't appear in GROUP BY themselves
+			}
+
+			// Build connected ordering columns using SELECT aliases.
+			// Mosaic renders GROUP BY with aliases but ORDER BY with raw expressions,
+			// so we must use aliases explicitly for DuckDB compatibility.
+			let orderCols: unknown[] | null = null;
+			if (this.#config._connectedConfig) {
+				const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
+				const cols: unknown[] = [];
+
+				if (selectDef.__facet) cols.push(sqlColumn('__facet'));
+				if (seriesChannel && selectDef[seriesChannel]) cols.push(sqlColumn(seriesChannel));
+				if (dimensionChannel && selectDef[dimensionChannel]) cols.push(sqlColumn(dimensionChannel));
+
+				if (cols.length > 0) {
+					console.log(
+						`🔗 [${this.#markId}] Connected mark ordering by:`,
+						cols.map((c: ExprNode) => c.toString())
+					);
+					orderCols = cols;
+				}
+			}
+
+			this.#cachedQueryParts = {
+				selectDef,
+				nonAggregateGroupBy,
+				hasAggregates,
+				hasSQLTransforms: this.#transformCompiler.hasSQLTransforms(),
+				orderCols
+			};
+		}
+
+		const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderCols } =
+			this.#cachedQueryParts;
+
+		// Build fresh Query (cheap object construction)
+		const q = Query.from(sourceTable).select(selectDef);
+
 		if (hasAggregates && nonAggregateGroupBy.length > 0) {
 			q.groupby(nonAggregateGroupBy);
 		}
 
-		// NEW: Apply SQL transforms
 		let queryWithTransforms = q;
-		if (this.#transformCompiler.hasSQLTransforms()) {
-			console.log('🔨 Applying SQL transforms...');
-			console.log('🔨 Query BEFORE transforms:', q.toString());
+		if (hasSQLTransforms) {
 			queryWithTransforms = this.#transformCompiler.applyToQuery(q);
-
-			console.log('🔨 Query AFTER transforms:', queryWithTransforms.toString());
-
-			// Validate query is still flat
-			this.#transformCompiler.validateQuery(queryWithTransforms);
 		}
 
-		// Add filters
+		// Apply filters (the only part that varies per-call)
 		const allFilters = [...filter];
 		if (config._filterNulls && Array.isArray(config._filterNulls)) {
 			allFilters.push(...config._filterNulls.map((col: unknown) => isNotNull(col)));
@@ -890,38 +941,8 @@ export class BaseMarkSetup {
 			queryWithTransforms = queryWithTransforms.where(and(allFilters));
 		}
 
-		// Connected topology marks (lines, areas) require strict ordering
-		// Order by facet first (if faceted), then series, then dimension to ensure buffer contiguity
-		if (this.#config._connectedConfig) {
-			const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
-
-			// Get column expressions for ordering
-			const orderCols: unknown[] = [];
-
-			// Facet column first — ensures all points per facet cell are contiguous
-			if (select.__facet) {
-				orderCols.push(isNode(select.__facet) ? select.__facet : sqlColumn(String(select.__facet)));
-			}
-
-			// Series column (optional - single-series lines don't have this)
-			if (seriesChannel && select[seriesChannel]) {
-				const seriesExpr = select[seriesChannel];
-				orderCols.push(isNode(seriesExpr) ? seriesExpr : sqlColumn(String(seriesExpr)));
-			}
-
-			// Dimension column (required - typically x for time series)
-			if (dimensionChannel && select[dimensionChannel]) {
-				const dimExpr = select[dimensionChannel];
-				orderCols.push(isNode(dimExpr) ? dimExpr : sqlColumn(String(dimExpr)));
-			}
-
-			if (orderCols.length > 0) {
-				console.log(
-					`🔗 [${this.#markId}] Connected mark ordering by:`,
-					orderCols.map((c: ExprNode) => c.toString())
-				);
-				queryWithTransforms = queryWithTransforms.orderby(...orderCols);
-			}
+		if (orderCols) {
+			queryWithTransforms = queryWithTransforms.orderby(...orderCols);
 		}
 
 		return queryWithTransforms;
@@ -1004,6 +1025,7 @@ export class BaseMarkSetup {
 	}
 
 	#createClient(tableName: string, fieldRequests: unknown[]): void {
+		this.#cachedQueryParts = null;
 		if (this.client) this.client.destroy();
 
 		this.client = new DataClient(
@@ -1097,7 +1119,7 @@ export class BaseMarkSetup {
 			if (processedFields.has(String(fieldValue))) continue;
 
 			const exprNode = isNode(fieldValue) ? fieldValue : sqlColumn(String(fieldValue));
-			if (isAggregateExpression(exprNode)) continue;
+			if (isAggregateExpression(exprNode) || isWindowExpression(exprNode)) continue;
 
 			const scaleType =
 				alias === 'x' || alias === 'x1' || alias === 'x2'
@@ -1925,6 +1947,9 @@ export class BaseMarkSetup {
 
 			// Reset data-derived domain flag so aggregate extent updates from new data
 			this.#dataDerivedDomainsSet = false;
+
+			// Invalidate resolved select cache so next buildQuery re-resolves bins
+			this.#cachedQueryParts = null;
 
 			// Trigger re-query using Mosaic's requestUpdate (throttled)
 			// This will cause buildQuery to be called again with new domain context
