@@ -23,6 +23,7 @@ export interface DataClientOptions {
 	filterNulls?: unknown[] | null;
 	dataFormat?: DataFormat;
 	queryBuilder?: QueryBuilder;
+	filterStable?: boolean;
 	[key: string]: unknown;
 }
 
@@ -64,6 +65,7 @@ export class DataClient extends MosaicClient {
 	#loadingTimeout: ReturnType<typeof setTimeout> | null = null;
 	#fieldRequests: unknown[];
 	#queryBuilder: QueryBuilder;
+	#filterStable: boolean;
 
 	constructor(
 		sourceTable: string,
@@ -77,6 +79,7 @@ export class DataClient extends MosaicClient {
 			filterNulls = null,
 			dataFormat = 'arrow' as DataFormat,
 			queryBuilder = this._defaultQueryBuilder,
+			filterStable = true,
 			...restOptions
 		} = options;
 
@@ -84,12 +87,25 @@ export class DataClient extends MosaicClient {
 		this._sourceTable = sourceTable;
 		this.#fieldRequests = fieldRequests;
 		this.#queryBuilder = queryBuilder;
+		this.#filterStable = filterStable;
 
 		this.config = {
 			...restOptions,
 			_filterNulls: filterNulls,
 			_dataFormat: dataFormat
 		};
+	}
+
+	/**
+	 * Override MosaicClient.filterStable. When false, Mosaic's PreAggregator
+	 * skips this client (preaggColumns returns null immediately).
+	 * Window expressions are incompatible with Mosaic's preagg because
+	 * collectAggregates walks into WINDOW nodes and finds the inner aggregate,
+	 * but preaggregateInfo doesn't add the dimension columns to GROUP BY,
+	 * causing the CREATE TABLE to fail silently.
+	 */
+	override get filterStable(): boolean {
+		return this.#filterStable;
 	}
 
 	// =================================================================

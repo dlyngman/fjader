@@ -19,7 +19,11 @@
 	const filterBridge = new FilterBridge(Selection, null);
 
 	// Rolling 7-day (168-hour) sum of value, partitioned by group
-	const weeklySumY = sum('value')
+	const weeklySumY1 = sum('value')
+		.partitionby('grp')
+		.orderby('ts')
+		.frame(frameRows([preceding(167), currentRow()]));
+	const weeklySumY2 = sum('value')
 		.partitionby('grp')
 		.orderby('ts')
 		.frame(frameRows([preceding(167), currentRow()]));
@@ -46,7 +50,7 @@
 							<LineMark
 								table="hourly_series"
 								x={bin('ts', { interval: 'hour' })}
-								y={weeklySumY}
+								y={weeklySumY1}
 								stroke="grp"
 								strokeWidth={1.5}
 							/>
@@ -61,6 +65,31 @@
 				{#snippet interactors()}
 					<IntervalX bridge={filterBridge} />
 				{/snippet}
+			</ChartContainer>
+		</div>
+		<div class="chart-wrapper thin">
+			<h3>Chart</h3>
+			<ChartContainer xLabel="ts" yLabel="value weekly">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<LineMark
+								table="hourly_series"
+								x={bin('ts', { interval: 'hour' })}
+								y={weeklySumY2}
+								stroke="grp"
+								strokeWidth={1.5}
+								selection={filterBridge.filterSel}
+							/>
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+
+				{#snippet foreground()}
+					<Crosshair />
+				{/snippet}
+
 			</ChartContainer>
 		</div>
 		<div class="chart-wrapper">
