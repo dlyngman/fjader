@@ -27,14 +27,14 @@
 	let px = $derived(tm?.pointerScreenX ?? 0);
 	let py = $derived(tm?.pointerScreenY ?? 0);
 
-	// Reverse lookup: field name → channel ('x', 'y')
-	// Process color first so x/y overwrite (swatch already indicates color)
+	// Reverse lookup: field name → axis channel ('x' or 'y') for channel icons
 	let fieldToChannel = $derived.by(() => {
 		if (!channelFields) return {};
-		const map = {};
-		if (channelFields.color) map[channelFields.color] = 'color';
-		if (channelFields.x) map[channelFields.x] = 'x';
-		if (channelFields.y) map[channelFields.y] = 'y';
+		const map: Record<string, string> = {};
+		for (const [channel, field] of Object.entries(channelFields)) {
+			const axis = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : null;
+			if (axis) map[field] = axis;
+		}
 		return map;
 	});
 

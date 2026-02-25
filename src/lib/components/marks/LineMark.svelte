@@ -236,28 +236,13 @@
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
 
-		// Use resolved field from MarkColor or MarkSeries (avoids treating constant colors as fields)
-		const colorChannelField = markColor.selectField
-			? typeof markColor.selectField === 'string'
-				? markColor.selectField
-				: 'stroke'
-			: markSeries.selectField
-				? typeof markSeries.selectField === 'string'
-					? markSeries.selectField
-					: 'stroke'
-				: null;
-
 		tm.registerMark(
 			markId,
 			buildTooltipConfig({
 				tempTable: setup.tooltipTableName,
 				markType: 'line',
 				chartContext,
-				channelFields: {
-					x: typeof x === 'string' ? x : 'x',
-					y: typeof y === 'string' ? y : 'y',
-					...(colorChannelField && { color: colorChannelField })
-				},
+				channelFields: setup.channelFieldMap,
 				colorColumn: 'stroke',
 				markColorScaleState: markColor.scaleState
 			})

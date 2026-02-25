@@ -9,6 +9,8 @@ import {
 	sql,
 	column as sqlColumn,
 	isAggregateExpression,
+	isColumnRef,
+	isColumnParam,
 	isNotNull,
 	and,
 	min,
@@ -36,7 +38,7 @@ import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
-import { generateMarkId } from './utils';
+import { generateMarkId, buildChannelFieldMap } from './utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -116,7 +118,8 @@ export class BaseMarkSetup {
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
 
 	// --- Tooltip Write-Back ---
-	#tooltipEnabled: boolean;
+	#tooltipWanted: boolean;
+	#tooltipTableReady = $state(false);
 	#tooltipSortTable: boolean;
 	#tooltipTableName: string;
 	#tooltipWriteTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -138,7 +141,8 @@ export class BaseMarkSetup {
 		nonAggregateGroupBy: unknown[];
 		hasAggregates: boolean;
 		hasSQLTransforms: boolean;
-		orderCols: unknown[] | null;
+		orderChannels: string[] | null;
+		aliasMap: Map<string, string>;
 	} | null = null;
 
 	// --- Viewport-Local Domain Support ---
@@ -183,7 +187,7 @@ export class BaseMarkSetup {
 		this.#markId = stableId || generateMarkId(config.markType);
 
 		// Tooltip write-back
-		this.#tooltipEnabled = config.tooltip !== false;
+		this.#tooltipWanted = config.tooltip !== false;
 		this.#tooltipSortTable =
 			typeof config.tooltip === 'object' ? config.tooltip.sortTable !== false : true;
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
@@ -503,15 +507,21 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 10: Write tooltip table when data updates (debounced)
+		// Effect 10: Write tooltip table when data updates (debounced).
+		// Trigger on dataVersion (increments only on DB query results) rather than
+		// this.data directly — the data derivation recomputes on every scale change
+		// (xScale/yScale) which would reset the debounce timer indefinitely.
 		$effect(() => {
-			if (!this.#tooltipEnabled) return;
-			const data = this.data;
-			if (!data || data.length === 0) return;
+			if (!this.#tooltipWanted) return;
+			const dataVersion = this.client?.dataVersion;
+			if (dataVersion === undefined) return;
 
 			untrack(() => {
 				clearTimeout(this.#tooltipWriteTimeout!);
-				this.#tooltipWriteTimeout = setTimeout(() => this.#writeTooltipTable(data), 300);
+				this.#tooltipWriteTimeout = setTimeout(() => {
+					const data = this.data;
+					if (data && data.length > 0) this.#writeTooltipTable(data);
+				}, 300);
 			});
 		});
 
@@ -689,7 +699,10 @@ export class BaseMarkSetup {
 	data: DataAccessor | null = $derived.by(() => {
 		if (!this.client?.arrowTable) return null;
 
-		let accessor: DataAccessor = new ArrowDataAccessor(this.client.arrowTable);
+		let accessor: DataAccessor = new ArrowDataAccessor(
+			this.client.arrowTable,
+			this.#cachedQueryParts?.aliasMap
+		);
 
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
@@ -800,10 +813,7 @@ export class BaseMarkSetup {
 		// For band/point scales, use the indexed column name from ViewManager
 		// Skip for marks with category-reducing transforms — they query raw strings
 		const skipIndexSwap = this.#transformCompiler.hasCategoryReducingTransforms();
-		if (
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
-			!skipIndexSwap
-		) {
+		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipIndexSwap) {
 			const xScale = this.#chartContext.xScaleState;
 			if (xScale?.indexColumnName && hasView) {
 				const originalField = select.x;
@@ -811,10 +821,7 @@ export class BaseMarkSetup {
 				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
 			}
 		}
-		if (
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
-			!skipIndexSwap
-		) {
+		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipIndexSwap) {
 			const yScale = this.#chartContext.yScaleState;
 			if (yScale?.indexColumnName && hasView) {
 				const originalField = select.y;
@@ -851,7 +858,12 @@ export class BaseMarkSetup {
 		return select;
 	}
 
-	buildQuery(sourceTable: string, config: DataClientConfig, filter: unknown[]): Query {
+	buildQuery(
+		sourceTable: string,
+		config: DataClientConfig,
+		filter: unknown[],
+		forMosaic = true
+	): Query {
 		// Build and cache all filter-independent query parts on first call.
 		// Subsequent calls (e.g. during brush interaction) reuse the cache.
 		if (!this.#cachedQueryParts) {
@@ -866,45 +878,61 @@ export class BaseMarkSetup {
 			const hasView = viewManager.hasView(this.#config.table);
 			select = this.#applyTimeOffsets(select, hasView);
 
-			// Classify select expressions
+			// Classify select expressions and build the SQL alias map.
+			// The selectDef uses channel names as keys (internal convention).
+			// The aliasMap records what SQL alias each channel gets:
+			//   simple field ref → field name; expressions → channel name.
+			// Translation happens at query assembly time (only when
+			// forMosaic=true) so sidecar/tooltip queries stay channel-named.
 			const selectDef: Record<string, unknown> = {};
 			const nonAggregateGroupBy: unknown[] = [];
+			const groupByKeys = new Set<string>();
 			let hasAggregates = false;
+			const aliasMap = new Map<string, string>();
 
-			for (const alias in select) {
-				const expr = select[alias];
+			for (const channel in select) {
+				const expr = select[channel];
 				if (expr == null) continue;
 
 				const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
-				selectDef[alias] = exprNode;
+
+				// SQL alias: field name for simple column refs, channel name
+				// for expressions. Matches Mosaic's PreAggregator expectations.
+				const sqlAlias =
+					isColumnRef(exprNode) && !isColumnParam(exprNode)
+						? exprNode.column
+						: channel;
+
+				aliasMap.set(channel, sqlAlias);
+				selectDef[channel] = exprNode;
 
 				if (isAggregateExpression(exprNode)) {
 					hasAggregates = true;
 				} else if (!isWindowExpression(exprNode)) {
-					nonAggregateGroupBy.push(exprNode);
+					// Dedup: multiple channels may reference the same column
+					if (!groupByKeys.has(sqlAlias)) {
+						groupByKeys.add(sqlAlias);
+						nonAggregateGroupBy.push(exprNode);
+					}
 				}
 				// Window expressions: skip both — they don't trigger GROUP BY
 				// and shouldn't appear in GROUP BY themselves
 			}
 
-			// Build connected ordering columns using SELECT aliases.
-			// Mosaic renders GROUP BY with aliases but ORDER BY with raw expressions,
-			// so we must use aliases explicitly for DuckDB compatibility.
-			let orderCols: unknown[] | null = null;
+			// Store channel names for connected mark ordering.
+			// sqlColumn() nodes are built at query assembly time using
+			// the appropriate alias convention (channel or field-based).
+			let orderChannels: string[] | null = null;
 			if (this.#config._connectedConfig) {
 				const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
-				const cols: unknown[] = [];
+				const chans: string[] = [];
 
-				if (selectDef.__facet) cols.push(sqlColumn('__facet'));
-				if (seriesChannel && selectDef[seriesChannel]) cols.push(sqlColumn(seriesChannel));
-				if (dimensionChannel && selectDef[dimensionChannel]) cols.push(sqlColumn(dimensionChannel));
+				if (aliasMap.has('__facet')) chans.push('__facet');
+				if (seriesChannel && aliasMap.has(seriesChannel)) chans.push(seriesChannel);
+				if (dimensionChannel && aliasMap.has(dimensionChannel)) chans.push(dimensionChannel);
 
-				if (cols.length > 0) {
-					console.log(
-						`🔗 [${this.#markId}] Connected mark ordering by:`,
-						cols.map((c: ExprNode) => c.toString())
-					);
-					orderCols = cols;
+				if (chans.length > 0) {
+					orderChannels = chans;
 				}
 			}
 
@@ -913,15 +941,35 @@ export class BaseMarkSetup {
 				nonAggregateGroupBy,
 				hasAggregates,
 				hasSQLTransforms: this.#transformCompiler.hasSQLTransforms(),
-				orderCols
+				orderChannels,
+				aliasMap
 			};
 		}
 
-		const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderCols } =
-			this.#cachedQueryParts;
+		const {
+			selectDef,
+			nonAggregateGroupBy,
+			hasAggregates,
+			hasSQLTransforms,
+			orderChannels,
+			aliasMap
+		} = this.#cachedQueryParts;
+
+		// When forMosaic is true, translate channel-named selectDef to field-based
+		// aliases so Mosaic's PreAggregator sees the column names it expects.
+		// Internal callers (sidecar, tooltip) pass false to keep channel names.
+		let effectiveSelectDef: Record<string, unknown>;
+		if (forMosaic) {
+			effectiveSelectDef = {};
+			for (const [channel, expr] of Object.entries(selectDef)) {
+				effectiveSelectDef[aliasMap.get(channel) ?? channel] = expr;
+			}
+		} else {
+			effectiveSelectDef = selectDef;
+		}
 
 		// Build fresh Query (cheap object construction)
-		const q = Query.from(sourceTable).select(selectDef);
+		const q = Query.from(sourceTable).select(effectiveSelectDef);
 
 		if (hasAggregates && nonAggregateGroupBy.length > 0) {
 			q.groupby(nonAggregateGroupBy);
@@ -941,7 +989,12 @@ export class BaseMarkSetup {
 			queryWithTransforms = queryWithTransforms.where(and(allFilters));
 		}
 
-		if (orderCols) {
+		// ORDER BY uses the appropriate alias convention
+		if (orderChannels) {
+			const orderCols = orderChannels.map((ch) => {
+				const name = forMosaic ? (aliasMap.get(ch) ?? ch) : ch;
+				return sqlColumn(name);
+			});
 			queryWithTransforms = queryWithTransforms.orderby(...orderCols);
 		}
 
@@ -1071,16 +1124,10 @@ export class BaseMarkSetup {
 		// band domain post-transform and don't need ViewManager index columns
 		const table = this.#config.table;
 		const skipBandView = this.#transformCompiler.hasCategoryReducingTransforms();
-		if (
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
-			!skipBandView
-		) {
+		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipBandView) {
 			this.#chartContext.xScaleState?.registerTable?.(table);
 		}
-		if (
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
-			!skipBandView
-		) {
+		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipBandView) {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
 		// Only register time scale tables for view column creation when the field
@@ -1345,9 +1392,7 @@ export class BaseMarkSetup {
 				if (scaleType !== 'band' && scaleType !== 'point') continue;
 
 				const categories = this.#extractCategoriesFromData(data, axis);
-				const scaleState = this.#chartContext[`${axis}ScaleState`] as
-					| BandScaleState
-					| undefined;
+				const scaleState = this.#chartContext[`${axis}ScaleState`] as BandScaleState | undefined;
 				if (scaleState?.addMark && categories.length > 0) {
 					scaleState.addMark(categories, this.#markId, { sorted: true });
 					scaleState.updateDomainFromExtents();
@@ -1521,16 +1566,10 @@ export class BaseMarkSetup {
 		// Skip band fetch for marks with category-reducing transforms (topN):
 		// domain will be populated post-transform in #registerDataDerivedDomains
 		const skipBandFetch = this.#transformCompiler.hasCategoryReducingTransforms();
-		if (
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
-			!skipBandFetch
-		) {
+		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipBandFetch) {
 			setupFetch('x', this.#config.select.x);
 		}
-		if (
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
-			!skipBandFetch
-		) {
+		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipBandFetch) {
 			setupFetch('y', this.#config.select.y);
 		}
 
@@ -1713,8 +1752,9 @@ export class BaseMarkSetup {
 		);
 
 		try {
-			// Step 1: Build the inner query using the same query builder (no filter)
-			const innerQuery = this.buildQuery(table, this.#config, []);
+			// Step 1: Build the inner query with channel-named aliases (forMosaic=false)
+			// so the outer SELECT can reference channels directly.
+			const innerQuery = this.buildQuery(table, this.#config, [], false);
 
 			console.log(`📊 [${this.#markId}] Inner query SQL:`, innerQuery.toString());
 
@@ -1975,12 +2015,16 @@ export class BaseMarkSetup {
 	}
 
 	get tooltipEnabled(): boolean {
-		return this.#tooltipEnabled;
+		return this.#tooltipWanted && this.#tooltipTableReady;
+	}
+
+	/** Channel → original field name mapping (single source of truth for display). */
+	get channelFieldMap(): Record<string, string> {
+		return buildChannelFieldMap(this.#config.select);
 	}
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
 		const tableName = this.#tooltipTableName;
-
 		try {
 			if (!this.#transformCompiler.hasJSTransforms()) {
 				// Path A: Build a fresh query from the original select config.
@@ -1999,10 +2043,13 @@ export class BaseMarkSetup {
 					if (Array.isArray(predicate)) filter = predicate;
 				}
 
+				// Build with channel-named aliases (forMosaic=false) so the tooltip
+				// temp table columns match what the tooltip query system expects.
 				const tooltipQuery = this.buildQuery(
 					this.effectiveTable,
 					{ select: selectConfig, _filterNulls: this.#config._filterNulls },
-					filter
+					filter,
+					false
 				);
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow in distance math).
@@ -2025,6 +2072,7 @@ export class BaseMarkSetup {
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
+				this.#tooltipTableReady = true;
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
 				// JS transforms produce small datasets (tens of rows).
@@ -2082,6 +2130,7 @@ export class BaseMarkSetup {
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 				]);
+				this.#tooltipTableReady = true;
 			}
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
@@ -2096,7 +2145,8 @@ export class BaseMarkSetup {
 		clearTimeout(this.#tooltipWriteTimeout!);
 
 		// Drop tooltip temp table
-		if (this.#tooltipEnabled && this.#coordinator) {
+		this.#tooltipTableReady = false;
+		if (this.#tooltipWanted && this.#coordinator) {
 			this.#coordinator.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 		}
 

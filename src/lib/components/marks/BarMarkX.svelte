@@ -215,11 +215,7 @@
 					xHigh: hasStackTransform ? 'x1' : 'x2',
 					y: 'y'
 				},
-				channelFields: {
-					x: typeof x2 === 'string' ? x2 : 'x',
-					y: typeof y === 'string' ? y : 'y',
-					...(fill && typeof fill === 'string' && { color: fill })
-				},
+				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { y: true },
 				markColorScaleState: markColor.scaleState
