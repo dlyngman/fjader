@@ -463,12 +463,16 @@ export class TooltipManager {
 				continue;
 			}
 
-			// Resolve color index to label
+			// Resolve color column: index → label (ordinal) or rename to field name (sequential)
 			const colorCol = config.colorColumn || 'color';
-			if (key === colorCol && colorDomain) {
+			if (key === colorCol) {
 				const resolvedName = channelFields?.color || channelFields?.[key] || key;
-				const label = colorDomain[value as number];
-				point[resolvedName] = label ?? value;
+				if (colorDomain) {
+					const label = colorDomain[value as number];
+					point[resolvedName] = label ?? value;
+				} else {
+					point[resolvedName] = value;
+				}
 				continue;
 			}
 
