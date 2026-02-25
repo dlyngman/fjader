@@ -1028,16 +1028,23 @@ export class BaseMarkSetup {
 		this.#cachedQueryParts = null;
 		if (this.client) this.client.destroy();
 
+		// Detect window expressions — Mosaic's preagg incorrectly walks into
+		// WINDOW nodes (collectAggregates finds inner aggregate) but doesn't
+		// add dimension columns to GROUP BY, causing CREATE TABLE to fail silently.
+		const selectConfig = this.getSelectConfig();
+		const hasWindows = Object.values(selectConfig).some((v) => isWindowExpression(v));
+
 		this.client = new DataClient(
 			tableName,
 			this.#config.selection ?? null,
 			{
-				select: this.getSelectConfig(),
+				select: selectConfig,
 				queryBuilder: (table: string, config: DataClientConfig, filter: unknown[]) => {
 					return this.buildQuery(table, config, filter);
 				},
 				dataFormat: 'arrow',
 				name: this.#markId,
+				filterStable: !hasWindows,
 				...this.#config.clientOptions
 			},
 			fieldRequests
