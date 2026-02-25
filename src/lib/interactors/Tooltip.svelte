@@ -108,10 +108,11 @@
 			flip-inline,
 			flip-block,
 			flip-inline flip-block;
-		background: rgba(0, 0, 0, 0.88);
-		color: white;
+		background: var(--diveplot-tooltip-bg, rgba(0, 0, 0, 0.88));
+		color: var(--diveplot-tooltip-text, #ffffff);
 		padding: 6px 10px;
 		border-radius: 4px;
+		font-family: var(--diveplot-font, system-ui, sans-serif);
 		font-size: 12px;
 		line-height: 1.4;
 		pointer-events: none;

@@ -27,6 +27,6 @@
 
 <style>
 	line {
-		stroke: var(--text-muted);
+		stroke: var(--diveplot-text-muted, #d1d5db);
 	}
 </style>

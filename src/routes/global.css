@@ -1,36 +1,41 @@
 @import 'open-props/style';
 @import 'open-props/normalize.min.css';
 
-/* Light Mode (Default) */
+/* DivePlot theme overrides using open-props tokens */
 :root {
-	--bg-color: var(--gray-0);
-	--text-color: var(--gray-10);
-	--text-secondary: var(--gray-8);
-	--text-muted: var(--gray-3);
-	--primary-color: var(--blue-6);
-	--secondary-color: var(--blue-4);
+	--diveplot-text-secondary: var(--gray-8);
+	--diveplot-text-muted: var(--gray-3);
+	--diveplot-bg: var(--gray-0);
+	--diveplot-primary: var(--blue-6);
+	--diveplot-accent: var(--blue-4);
 	color-scheme: light;
 }
 
-/* Dark Mode */
 @media (prefers-color-scheme: dark) {
 	:root {
-		--bg-color: var(--gray-10);
-		--text-color: var(--gray-0);
-		--text-secondary: var(--gray-3);
-		--text-muted: var(--gray-8);
-		--primary-color: var(--blue-3);
-		--secondary-color: var(--blue-1);
+		--diveplot-text-secondary: var(--gray-3);
+		--diveplot-text-muted: var(--gray-8);
+		--diveplot-bg: var(--gray-10);
+		--diveplot-primary: var(--blue-3);
+		--diveplot-accent: var(--blue-1);
+		--diveplot-tooltip-bg: rgba(255, 255, 255, 0.92);
+		--diveplot-tooltip-text: var(--gray-10);
 		color-scheme: dark;
 	}
 }
 
-/* Apply to body */
+/* Demo page layout */
 body {
-	background-color: var(--bg-color);
-	color: var(--text-color);
+	background-color: var(--diveplot-bg);
+	color: var(--gray-10);
 	font-family: system-ui, sans-serif;
 	transition:
 		background-color 0.3s ease,
 		color 0.3s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+	body {
+		color: var(--gray-0);
+	}
 }

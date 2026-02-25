@@ -36,13 +36,13 @@
 
 	label {
 		font-size: 14px;
-		color: var(--gray-8, #333);
+		color: var(--diveplot-text-secondary, #6b7280);
 	}
 
 	select {
 		padding: 4px 8px;
 		border-radius: 4px;
-		border: 1px solid var(--gray-4, #ccc);
+		border: 1px solid var(--diveplot-text-muted, #d1d5db);
 		background-color: white;
 		font-size: 14px;
 		min-width: 150px;
