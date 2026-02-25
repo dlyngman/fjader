@@ -36,7 +36,7 @@ import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
-import { generateMarkId } from './utils';
+import { generateMarkId, buildChannelFieldMap } from './utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -800,10 +800,7 @@ export class BaseMarkSetup {
 		// For band/point scales, use the indexed column name from ViewManager
 		// Skip for marks with category-reducing transforms — they query raw strings
 		const skipIndexSwap = this.#transformCompiler.hasCategoryReducingTransforms();
-		if (
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
-			!skipIndexSwap
-		) {
+		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipIndexSwap) {
 			const xScale = this.#chartContext.xScaleState;
 			if (xScale?.indexColumnName && hasView) {
 				const originalField = select.x;
@@ -811,10 +808,7 @@ export class BaseMarkSetup {
 				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
 			}
 		}
-		if (
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
-			!skipIndexSwap
-		) {
+		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipIndexSwap) {
 			const yScale = this.#chartContext.yScaleState;
 			if (yScale?.indexColumnName && hasView) {
 				const originalField = select.y;
@@ -1071,16 +1065,10 @@ export class BaseMarkSetup {
 		// band domain post-transform and don't need ViewManager index columns
 		const table = this.#config.table;
 		const skipBandView = this.#transformCompiler.hasCategoryReducingTransforms();
-		if (
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
-			!skipBandView
-		) {
+		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipBandView) {
 			this.#chartContext.xScaleState?.registerTable?.(table);
 		}
-		if (
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
-			!skipBandView
-		) {
+		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipBandView) {
 			this.#chartContext.yScaleState?.registerTable?.(table);
 		}
 		// Only register time scale tables for view column creation when the field
@@ -1345,9 +1333,7 @@ export class BaseMarkSetup {
 				if (scaleType !== 'band' && scaleType !== 'point') continue;
 
 				const categories = this.#extractCategoriesFromData(data, axis);
-				const scaleState = this.#chartContext[`${axis}ScaleState`] as
-					| BandScaleState
-					| undefined;
+				const scaleState = this.#chartContext[`${axis}ScaleState`] as BandScaleState | undefined;
 				if (scaleState?.addMark && categories.length > 0) {
 					scaleState.addMark(categories, this.#markId, { sorted: true });
 					scaleState.updateDomainFromExtents();
@@ -1521,16 +1507,10 @@ export class BaseMarkSetup {
 		// Skip band fetch for marks with category-reducing transforms (topN):
 		// domain will be populated post-transform in #registerDataDerivedDomains
 		const skipBandFetch = this.#transformCompiler.hasCategoryReducingTransforms();
-		if (
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point') &&
-			!skipBandFetch
-		) {
+		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipBandFetch) {
 			setupFetch('x', this.#config.select.x);
 		}
-		if (
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point') &&
-			!skipBandFetch
-		) {
+		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipBandFetch) {
 			setupFetch('y', this.#config.select.y);
 		}
 
@@ -1976,6 +1956,11 @@ export class BaseMarkSetup {
 
 	get tooltipEnabled(): boolean {
 		return this.#tooltipEnabled;
+	}
+
+	/** Channel → original field name mapping (single source of truth for display). */
+	get channelFieldMap(): Record<string, string> {
+		return buildChannelFieldMap(this.#config.select);
 	}
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {

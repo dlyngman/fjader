@@ -229,27 +229,13 @@
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
 
-		const colorChannelField = markColor.selectField
-			? typeof markColor.selectField === 'string'
-				? markColor.selectField
-				: 'fill'
-			: markSeries.selectField
-				? typeof markSeries.selectField === 'string'
-					? markSeries.selectField
-					: 'fill'
-				: null;
-
 		tm.registerMark(
 			markId,
 			buildTooltipConfig({
 				tempTable: setup.tooltipTableName,
 				markType: 'areax',
 				chartContext,
-				channelFields: {
-					x: typeof x2 === 'string' ? x2 : 'x',
-					y: typeof y === 'string' ? y : 'y',
-					...(colorChannelField && { color: colorChannelField })
-				},
+				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				// Stacked areas: compute nearest-point distance against the stacked right (x1)
 				...(hasStackTransform && { columns: { x: 'x1' } }),

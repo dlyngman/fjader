@@ -304,11 +304,7 @@
 				tempTable: setup.tooltipTableName,
 				markType: 'text',
 				chartContext,
-				channelFields: {
-					x: typeof x === 'string' ? x : 'x',
-					y: typeof y === 'string' ? y : 'y',
-					...(fill && typeof fill === 'string' && !isColorConstant(fill) && { color: fill })
-				},
+				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
 				markColorScaleState: markColor.scaleState

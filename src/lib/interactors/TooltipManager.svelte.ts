@@ -215,12 +215,10 @@ export class TooltipManager {
 
 				this.currentChannelFields = bestConfig.channelFields ?? null;
 
-				// Resolve color swatch
-				const colorFieldName =
-					bestConfig.channelFields?.color ||
-					bestConfig.channelFields?.[bestConfig.colorColumn ?? 'color'] ||
-					'color';
-				const colorValue = resolved[colorFieldName];
+				// Resolve color swatch — use the actual color channel (fill/stroke) from colorColumn
+				const colorCol = bestConfig.colorColumn;
+				const colorFieldName = colorCol ? (bestConfig.channelFields?.[colorCol] ?? colorCol) : null;
+				const colorValue = colorFieldName ? resolved[colorFieldName] : undefined;
 				this.currentColorField = colorValue != null ? colorFieldName : null;
 				this.currentColor =
 					colorValue != null ? (bestConfig.colorScaleState?.getColor(colorValue) ?? null) : null;
@@ -464,9 +462,9 @@ export class TooltipManager {
 			}
 
 			// Resolve color column: index → label (ordinal) or rename to field name (sequential)
-			const colorCol = config.colorColumn || 'color';
-			if (key === colorCol) {
-				const resolvedName = channelFields?.color || channelFields?.[key] || key;
+			const colorCol = config.colorColumn;
+			if (colorCol && key === colorCol) {
+				const resolvedName = channelFields?.[key] || key;
 				if (colorDomain) {
 					const label = colorDomain[value as number];
 					point[resolvedName] = label ?? value;

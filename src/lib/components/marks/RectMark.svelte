@@ -271,11 +271,7 @@
 				markType: 'rect',
 				chartContext,
 				columns: { xLow: 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
-				channelFields: {
-					x: typeof x === 'string' ? x : typeof ex1 === 'string' ? ex1 : 'x',
-					y: typeof y === 'string' ? y : typeof ey1 === 'string' ? ey1 : 'y',
-					...(fill && typeof fill === 'string' && { color: fill })
-				},
+				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
 				markColorScaleState: markColor.scaleState
