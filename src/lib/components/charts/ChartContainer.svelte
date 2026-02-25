@@ -429,7 +429,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: #999;
+		color: var(--diveplot-text-muted, #d1d5db);
 		font-size: 13px;
 	}
 </style>

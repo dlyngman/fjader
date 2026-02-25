@@ -665,9 +665,10 @@
 
 	.facet-label {
 		text-align: center;
+		font-family: var(--diveplot-font, system-ui, sans-serif);
 		font-size: 12px;
 		font-weight: 500;
-		color: #555;
+		color: var(--diveplot-text-secondary, #6b7280);
 		padding: 4px 0;
 		flex-shrink: 0;
 		position: absolute;
