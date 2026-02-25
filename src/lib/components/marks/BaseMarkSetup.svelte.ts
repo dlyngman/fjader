@@ -9,6 +9,8 @@ import {
 	sql,
 	column as sqlColumn,
 	isAggregateExpression,
+	isColumnRef,
+	isColumnParam,
 	isNotNull,
 	and,
 	min,
@@ -139,7 +141,8 @@ export class BaseMarkSetup {
 		nonAggregateGroupBy: unknown[];
 		hasAggregates: boolean;
 		hasSQLTransforms: boolean;
-		orderCols: unknown[] | null;
+		orderChannels: string[] | null;
+		aliasMap: Map<string, string>;
 	} | null = null;
 
 	// --- Viewport-Local Domain Support ---
@@ -696,7 +699,10 @@ export class BaseMarkSetup {
 	data: DataAccessor | null = $derived.by(() => {
 		if (!this.client?.arrowTable) return null;
 
-		let accessor: DataAccessor = new ArrowDataAccessor(this.client.arrowTable);
+		let accessor: DataAccessor = new ArrowDataAccessor(
+			this.client.arrowTable,
+			this.#cachedQueryParts?.aliasMap
+		);
 
 		// Fast path: No JS transforms - return Arrow accessor (zero-copy)
 		if (!this.#transformCompiler.hasJSTransforms()) {
@@ -852,7 +858,12 @@ export class BaseMarkSetup {
 		return select;
 	}
 
-	buildQuery(sourceTable: string, config: DataClientConfig, filter: unknown[]): Query {
+	buildQuery(
+		sourceTable: string,
+		config: DataClientConfig,
+		filter: unknown[],
+		forMosaic = true
+	): Query {
 		// Build and cache all filter-independent query parts on first call.
 		// Subsequent calls (e.g. during brush interaction) reuse the cache.
 		if (!this.#cachedQueryParts) {
@@ -867,45 +878,61 @@ export class BaseMarkSetup {
 			const hasView = viewManager.hasView(this.#config.table);
 			select = this.#applyTimeOffsets(select, hasView);
 
-			// Classify select expressions
+			// Classify select expressions and build the SQL alias map.
+			// The selectDef uses channel names as keys (internal convention).
+			// The aliasMap records what SQL alias each channel gets:
+			//   simple field ref → field name; expressions → channel name.
+			// Translation happens at query assembly time (only when
+			// forMosaic=true) so sidecar/tooltip queries stay channel-named.
 			const selectDef: Record<string, unknown> = {};
 			const nonAggregateGroupBy: unknown[] = [];
+			const groupByKeys = new Set<string>();
 			let hasAggregates = false;
+			const aliasMap = new Map<string, string>();
 
-			for (const alias in select) {
-				const expr = select[alias];
+			for (const channel in select) {
+				const expr = select[channel];
 				if (expr == null) continue;
 
 				const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
-				selectDef[alias] = exprNode;
+
+				// SQL alias: field name for simple column refs, channel name
+				// for expressions. Matches Mosaic's PreAggregator expectations.
+				const sqlAlias =
+					isColumnRef(exprNode) && !isColumnParam(exprNode)
+						? exprNode.column
+						: channel;
+
+				aliasMap.set(channel, sqlAlias);
+				selectDef[channel] = exprNode;
 
 				if (isAggregateExpression(exprNode)) {
 					hasAggregates = true;
 				} else if (!isWindowExpression(exprNode)) {
-					nonAggregateGroupBy.push(exprNode);
+					// Dedup: multiple channels may reference the same column
+					if (!groupByKeys.has(sqlAlias)) {
+						groupByKeys.add(sqlAlias);
+						nonAggregateGroupBy.push(exprNode);
+					}
 				}
 				// Window expressions: skip both — they don't trigger GROUP BY
 				// and shouldn't appear in GROUP BY themselves
 			}
 
-			// Build connected ordering columns using SELECT aliases.
-			// Mosaic renders GROUP BY with aliases but ORDER BY with raw expressions,
-			// so we must use aliases explicitly for DuckDB compatibility.
-			let orderCols: unknown[] | null = null;
+			// Store channel names for connected mark ordering.
+			// sqlColumn() nodes are built at query assembly time using
+			// the appropriate alias convention (channel or field-based).
+			let orderChannels: string[] | null = null;
 			if (this.#config._connectedConfig) {
 				const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
-				const cols: unknown[] = [];
+				const chans: string[] = [];
 
-				if (selectDef.__facet) cols.push(sqlColumn('__facet'));
-				if (seriesChannel && selectDef[seriesChannel]) cols.push(sqlColumn(seriesChannel));
-				if (dimensionChannel && selectDef[dimensionChannel]) cols.push(sqlColumn(dimensionChannel));
+				if (aliasMap.has('__facet')) chans.push('__facet');
+				if (seriesChannel && aliasMap.has(seriesChannel)) chans.push(seriesChannel);
+				if (dimensionChannel && aliasMap.has(dimensionChannel)) chans.push(dimensionChannel);
 
-				if (cols.length > 0) {
-					console.log(
-						`🔗 [${this.#markId}] Connected mark ordering by:`,
-						cols.map((c: ExprNode) => c.toString())
-					);
-					orderCols = cols;
+				if (chans.length > 0) {
+					orderChannels = chans;
 				}
 			}
 
@@ -914,15 +941,35 @@ export class BaseMarkSetup {
 				nonAggregateGroupBy,
 				hasAggregates,
 				hasSQLTransforms: this.#transformCompiler.hasSQLTransforms(),
-				orderCols
+				orderChannels,
+				aliasMap
 			};
 		}
 
-		const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderCols } =
-			this.#cachedQueryParts;
+		const {
+			selectDef,
+			nonAggregateGroupBy,
+			hasAggregates,
+			hasSQLTransforms,
+			orderChannels,
+			aliasMap
+		} = this.#cachedQueryParts;
+
+		// When forMosaic is true, translate channel-named selectDef to field-based
+		// aliases so Mosaic's PreAggregator sees the column names it expects.
+		// Internal callers (sidecar, tooltip) pass false to keep channel names.
+		let effectiveSelectDef: Record<string, unknown>;
+		if (forMosaic) {
+			effectiveSelectDef = {};
+			for (const [channel, expr] of Object.entries(selectDef)) {
+				effectiveSelectDef[aliasMap.get(channel) ?? channel] = expr;
+			}
+		} else {
+			effectiveSelectDef = selectDef;
+		}
 
 		// Build fresh Query (cheap object construction)
-		const q = Query.from(sourceTable).select(selectDef);
+		const q = Query.from(sourceTable).select(effectiveSelectDef);
 
 		if (hasAggregates && nonAggregateGroupBy.length > 0) {
 			q.groupby(nonAggregateGroupBy);
@@ -942,7 +989,12 @@ export class BaseMarkSetup {
 			queryWithTransforms = queryWithTransforms.where(and(allFilters));
 		}
 
-		if (orderCols) {
+		// ORDER BY uses the appropriate alias convention
+		if (orderChannels) {
+			const orderCols = orderChannels.map((ch) => {
+				const name = forMosaic ? (aliasMap.get(ch) ?? ch) : ch;
+				return sqlColumn(name);
+			});
 			queryWithTransforms = queryWithTransforms.orderby(...orderCols);
 		}
 
@@ -1700,8 +1752,9 @@ export class BaseMarkSetup {
 		);
 
 		try {
-			// Step 1: Build the inner query using the same query builder (no filter)
-			const innerQuery = this.buildQuery(table, this.#config, []);
+			// Step 1: Build the inner query with channel-named aliases (forMosaic=false)
+			// so the outer SELECT can reference channels directly.
+			const innerQuery = this.buildQuery(table, this.#config, [], false);
 
 			console.log(`📊 [${this.#markId}] Inner query SQL:`, innerQuery.toString());
 
@@ -1990,10 +2043,13 @@ export class BaseMarkSetup {
 					if (Array.isArray(predicate)) filter = predicate;
 				}
 
+				// Build with channel-named aliases (forMosaic=false) so the tooltip
+				// temp table columns match what the tooltip query system expects.
 				const tooltipQuery = this.buildQuery(
 					this.effectiveTable,
 					{ select: selectConfig, _filterNulls: this.#config._filterNulls },
-					filter
+					filter,
+					false
 				);
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow in distance math).

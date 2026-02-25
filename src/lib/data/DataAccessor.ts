@@ -2,10 +2,12 @@ import type { Table } from '@uwdata/flechette';
 
 export class ArrowDataAccessor {
 	arrowTable: Table;
+	#aliasMap: Map<string, string> | null;
 	type = 'arrow' as const;
 
-	constructor(arrowTable: Table) {
+	constructor(arrowTable: Table, aliasMap?: Map<string, string>) {
 		this.arrowTable = arrowTable;
+		this.#aliasMap = aliasMap ?? null;
 	}
 
 	get length(): number {
@@ -13,11 +15,13 @@ export class ArrowDataAccessor {
 	}
 
 	get columnNames(): string[] {
+		if (this.#aliasMap) return [...this.#aliasMap.keys()];
 		return this.arrowTable.schema.fields.map((f) => f.name);
 	}
 
 	getColumn(name: string): Float32Array | ArrayLike<unknown> | null {
-		const col = this.arrowTable.getChild(name);
+		const arrowName = this.#aliasMap?.get(name) ?? name;
+		const col = this.arrowTable.getChild(arrowName);
 		if (!col) return null;
 
 		// Check if this is a string/dictionary column - must use toArray() for proper decoding
