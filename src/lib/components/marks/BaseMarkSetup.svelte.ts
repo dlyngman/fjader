@@ -116,7 +116,8 @@ export class BaseMarkSetup {
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
 
 	// --- Tooltip Write-Back ---
-	#tooltipEnabled: boolean;
+	#tooltipWanted: boolean;
+	#tooltipTableReady = $state(false);
 	#tooltipSortTable: boolean;
 	#tooltipTableName: string;
 	#tooltipWriteTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -183,7 +184,7 @@ export class BaseMarkSetup {
 		this.#markId = stableId || generateMarkId(config.markType);
 
 		// Tooltip write-back
-		this.#tooltipEnabled = config.tooltip !== false;
+		this.#tooltipWanted = config.tooltip !== false;
 		this.#tooltipSortTable =
 			typeof config.tooltip === 'object' ? config.tooltip.sortTable !== false : true;
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
@@ -503,15 +504,21 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 10: Write tooltip table when data updates (debounced)
+		// Effect 10: Write tooltip table when data updates (debounced).
+		// Trigger on dataVersion (increments only on DB query results) rather than
+		// this.data directly — the data derivation recomputes on every scale change
+		// (xScale/yScale) which would reset the debounce timer indefinitely.
 		$effect(() => {
-			if (!this.#tooltipEnabled) return;
-			const data = this.data;
-			if (!data || data.length === 0) return;
+			if (!this.#tooltipWanted) return;
+			const dataVersion = this.client?.dataVersion;
+			if (dataVersion === undefined) return;
 
 			untrack(() => {
 				clearTimeout(this.#tooltipWriteTimeout!);
-				this.#tooltipWriteTimeout = setTimeout(() => this.#writeTooltipTable(data), 300);
+				this.#tooltipWriteTimeout = setTimeout(() => {
+					const data = this.data;
+					if (data && data.length > 0) this.#writeTooltipTable(data);
+				}, 300);
 			});
 		});
 
@@ -1955,7 +1962,7 @@ export class BaseMarkSetup {
 	}
 
 	get tooltipEnabled(): boolean {
-		return this.#tooltipEnabled;
+		return this.#tooltipWanted && this.#tooltipTableReady;
 	}
 
 	/** Channel → original field name mapping (single source of truth for display). */
@@ -1965,7 +1972,6 @@ export class BaseMarkSetup {
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
 		const tableName = this.#tooltipTableName;
-
 		try {
 			if (!this.#transformCompiler.hasJSTransforms()) {
 				// Path A: Build a fresh query from the original select config.
@@ -2010,6 +2016,7 @@ export class BaseMarkSetup {
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
+				this.#tooltipTableReady = true;
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
 				// JS transforms produce small datasets (tens of rows).
@@ -2067,6 +2074,7 @@ export class BaseMarkSetup {
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 				]);
+				this.#tooltipTableReady = true;
 			}
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
@@ -2081,7 +2089,8 @@ export class BaseMarkSetup {
 		clearTimeout(this.#tooltipWriteTimeout!);
 
 		// Drop tooltip temp table
-		if (this.#tooltipEnabled && this.#coordinator) {
+		this.#tooltipTableReady = false;
+		if (this.#tooltipWanted && this.#coordinator) {
 			this.#coordinator.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 		}
 
