@@ -39,7 +39,12 @@ class Mark:
     _opts: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        if self.data is not None and self.table is None:
+        if self.data is not None and self.table is not None:
+            raise ValueError(
+                "Cannot specify both 'data' and 'table'. "
+                "Use 'data' for inline DataFrames or 'table' for pre-loaded DuckDB tables."
+            )
+        if self.data is not None:
             from .._data import df_to_ipc_cached
 
             h, _ = df_to_ipc_cached(self.data)

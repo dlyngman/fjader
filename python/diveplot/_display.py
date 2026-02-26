@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from ._data import df_to_ipc_cached
+
+
+@runtime_checkable
+class Displayable(Protocol):
+    """Protocol for objects that can be rendered as DivePlot widgets."""
+
+    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
 
 def _serialize_dataframes(
@@ -35,7 +42,7 @@ def _serialize_dataframes(
     return manifest, b"".join(chunks)
 
 
-def make_widget(obj: Any) -> Any:
+def make_widget(obj: Displayable) -> Any:
     """Convert Mark/Plot/Overlay/Layout to a renderable DivePlotWidget."""
     from ._widget import DivePlotWidget
 
@@ -49,7 +56,7 @@ def make_widget(obj: Any) -> Any:
     )
 
 
-def show(obj: Any) -> Any:
+def show(obj: Displayable) -> Any:
     """Display a DivePlot object in a Jupyter notebook.
 
     Convenience function — equivalent to calling ``make_widget(obj)``

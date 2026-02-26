@@ -17,7 +17,7 @@
 	let { spec, params }: Props = $props();
 
 	const resolvedMarks = $derived(
-		spec.marks.map((markSpec) => resolveMarkEntry(markSpec, params))
+		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec, params))
 	);
 </script>
 

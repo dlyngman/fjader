@@ -8,11 +8,19 @@ from __future__ import annotations
 
 import hashlib
 import io
+import weakref
 from typing import Any
 
-# Module-level cache: id(df) → (hash, ipc_bytes)
-# Avoids re-serializing the same DataFrame object.
-_hash_cache: dict[int, tuple[str, bytes]] = {}
+
+# Module-level cache: weakref to df object → (hash, ipc_bytes).
+# Uses weak references so cache entries are evicted when the DataFrame
+# is garbage-collected, preventing unbounded memory growth in long sessions.
+_hash_cache: dict[int, tuple[weakref.ref, str, bytes]] = {}
+
+
+def _cleanup_ref(obj_id: int) -> None:
+    """Remove cache entry when the DataFrame is garbage-collected."""
+    _hash_cache.pop(obj_id, None)
 
 
 def df_to_arrow_ipc(df: Any) -> bytes:
@@ -51,14 +59,21 @@ def content_hash(data: bytes) -> str:
 def df_to_ipc_cached(df: Any) -> tuple[str, bytes]:
     """Serialize DataFrame to Arrow IPC with caching by object identity.
 
+    The same DataFrame object serialized multiple times reuses cached bytes.
+    Cache entries are automatically evicted when the DataFrame is garbage-collected.
+
     Returns (content_hash, ipc_bytes).
     """
     obj_id = id(df)
     cached = _hash_cache.get(obj_id)
     if cached is not None:
-        return cached
+        ref, h, ipc_bytes = cached
+        # Verify the weakref is still alive (same object, not reused id)
+        if ref() is df:
+            return h, ipc_bytes
 
     ipc_bytes = df_to_arrow_ipc(df)
     h = content_hash(ipc_bytes)
-    _hash_cache[obj_id] = (h, ipc_bytes)
+    ref = weakref.ref(df, lambda _: _cleanup_ref(obj_id))
+    _hash_cache[obj_id] = (ref, h, ipc_bytes)
     return h, ipc_bytes

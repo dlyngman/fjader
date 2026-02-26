@@ -33,7 +33,11 @@ export async function getOrCreateCoordinator(
 	if (_coordinator) return _coordinator;
 	if (_coordinatorPromise) return _coordinatorPromise;
 
-	_coordinatorPromise = initCoordinator();
+	_coordinatorPromise = initCoordinator().catch((err) => {
+		// Reset so subsequent calls can retry instead of permanently failing
+		_coordinatorPromise = null;
+		throw err;
+	});
 	return _coordinatorPromise;
 }
 
