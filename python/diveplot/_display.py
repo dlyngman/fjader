@@ -53,6 +53,7 @@ def make_widget(obj: Displayable) -> Any:
         spec=json.dumps(spec_dict),
         data_manifest=json.dumps(manifest),
         data_blob=blob,
+        _source=obj,
     )
 
 
