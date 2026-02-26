@@ -22,7 +22,7 @@ interface AnywidgetModel {
 	get(key: 'data_manifest'): string;
 	get(key: 'data_blob'): DataView;
 	on(event: string, callback: () => void): void;
-	off?(event: string, callback: () => void): void;
+	off(event: string, callback: () => void): void;
 }
 
 interface RenderContext {
@@ -30,8 +30,18 @@ interface RenderContext {
 	el: HTMLElement;
 }
 
-// Serialize all renders through a single promise chain to prevent races
-let renderChain: Promise<void> = Promise.resolve();
+function showError(el: HTMLElement, err: unknown): void {
+	el.innerHTML = '';
+	const msg = err instanceof Error ? err.message : String(err);
+	const div = document.createElement('div');
+	div.style.cssText =
+		'padding:12px;color:#dc2626;font:13px/1.5 monospace;' +
+		'white-space:pre-wrap;border:1px solid #fca5a5;' +
+		'border-radius:4px;background:#fef2f2;';
+	div.textContent = `[diveplot] ${msg}`;
+	el.appendChild(div);
+	console.error('[diveplot] render failed:', err);
+}
 
 async function doRender(
 	model: AnywidgetModel,
@@ -46,50 +56,59 @@ async function doRender(
 
 	const coordinator = await getOrCreateCoordinator();
 
-	// Load Arrow IPC tables
-	for (const { name, offset, length } of manifest) {
-		const slice = blob.slice(offset, offset + length);
-		await loadArrowIPCTable(coordinator, name, slice);
-	}
+	// Load Arrow IPC tables (deduplicated by content hash + per-table locked)
+	await Promise.all(
+		manifest.map(({ name, hash, offset, length }) => {
+			const slice = blob.slice(offset, offset + length);
+			return loadArrowIPCTable(coordinator, name, slice, hash);
+		})
+	);
 
 	return divePlotRender(el, spec, { coordinator });
 }
 
+const WATCHED_TRAITS = ['change:spec', 'change:data_manifest', 'change:data_blob'] as const;
+
 function render({ model, el }: RenderContext): () => void {
 	let handle: { destroy(): void } | null = null;
+	let renderPromise: Promise<void> = Promise.resolve();
+	let pendingRender = false;
 
-	const onSpecChange = () => {
-		renderChain = renderChain
-			.then(async () => {
-				if (handle) {
-					handle.destroy();
+	const scheduleRender = () => {
+		// Debounce — anywidget may deliver binary buffers and JSON traitlets
+		// in separate messages. queueMicrotask coalesces updates that arrive
+		// in the same event loop tick into a single render.
+		if (pendingRender) return;
+		pendingRender = true;
+		queueMicrotask(() => {
+			pendingRender = false;
+			renderPromise = renderPromise
+				.then(async () => {
+					if (handle) {
+						handle.destroy();
+						handle = null;
+					}
+					el.innerHTML = '';
+					handle = await doRender(model, el);
+				})
+				.catch((err) => {
+					showError(el, err);
 					handle = null;
-				}
-				el.innerHTML = '';
-				handle = await doRender(model, el);
-			})
-			.catch((err) => {
-				console.error('[diveplot] re-render failed:', err);
-				el.innerHTML = '';
-				handle = null;
-			});
+				});
+		});
 	};
 
-	// Initial render — chain onto global queue to prevent concurrent renders
-	renderChain = renderChain
-		.then(async () => {
-			handle = await doRender(model, el);
+	// Initial render
+	renderPromise = doRender(model, el)
+		.then((h) => {
+			handle = h;
 		})
-		.catch((err) => {
-			console.error('[diveplot] render failed:', err);
-			el.innerHTML = '';
-			handle = null;
-		});
+		.catch((err) => showError(el, err));
 
-	model.on('change:spec', onSpecChange);
+	for (const trait of WATCHED_TRAITS) model.on(trait, scheduleRender);
 
 	return () => {
-		model.off?.('change:spec', onSpecChange);
+		for (const trait of WATCHED_TRAITS) model.off(trait, scheduleRender);
 		if (handle) handle.destroy();
 		handle = null;
 	};
