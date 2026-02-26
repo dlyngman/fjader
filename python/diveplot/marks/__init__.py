@@ -1,0 +1,627 @@
+"""Mark factory functions — the public API for creating marks.
+
+Each function mirrors a DivePlot Svelte mark component with full type hints
+for IDE autocompletion.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
+from .area import AreaXMark, AreaYMark
+from .bar import BarXMark, BarYMark
+from .dot import DotMark
+from .line import LineMark
+from .rect import RectMark, RectXMark, RectYMark
+from .text import TextMark
+
+if TYPE_CHECKING:
+    from ..fields import FieldSpec
+    from .._types import (
+        ColorScheme,
+        CurveType,
+        LineAnchor,
+        ScaleType,
+        SortConfig,
+        TextAnchor,
+    )
+    from ..transforms._base import TransformSpec
+
+
+def dot(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    opacity: float | None = None,
+    r: float | FieldSpec | None = None,
+    radius_range: list[float] | tuple[float, float] | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> DotMark:
+    """Scatter/dot mark.
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name, aggregate (``dp.count()``), or bin (``dp.bin('col')``).
+        y: Y position — column name, aggregate, or bin.
+        fill: Fill color — column name for color scale, aggregate, or bin.
+        opacity: Constant opacity (0–1).
+        r: Dot radius — constant ``float`` or data-driven ``FieldSpec`` for size scale.
+        radius_range: Min/max radius in pixels when ``r`` is data-driven, e.g. ``[2, 12]``.
+        preferred_x_scale_type: Force x-axis scale type (e.g. ``'log'``, ``'time'``).
+        preferred_y_scale_type: Force y-axis scale type.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name (e.g. ``'category10'``, ``'viridis'``).
+        limit: Maximum number of rows to query.
+        filter_nulls: Whether to filter null values from the query.
+        transforms: List of transforms (e.g. ``[dp.topN(10), dp.filter(...)]``).
+        sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
+        tooltip: Enable tooltip on hover.
+    """
+    return DotMark(
+        table=table, x=x, y=y, fill=fill, opacity=opacity, r=r,
+        radius_range=radius_range,
+        preferred_x_scale_type=preferred_x_scale_type,
+        preferred_y_scale_type=preferred_y_scale_type,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def bar_x(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    x1: FieldSpec | None = None,
+    x2: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    opacity: float | None = None,
+    padding: float | None = None,
+    padding_inner: float | None = None,
+    padding_outer: float | None = None,
+    align: float | None = None,
+    inset: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> BarXMark:
+    """Horizontal bar mark (bars extend along x-axis).
+
+    Args:
+        table: Table name in DuckDB.
+        x: Bar length — column name, aggregate, or bin.
+        x1: Bar start position (for ranged bars).
+        x2: Bar end position (for ranged bars).
+        y: Category axis — column name.
+        fill: Fill color — column name for color scale.
+        opacity: Constant opacity (0–1).
+        padding: Band scale padding (0–1), shorthand for inner + outer.
+        padding_inner: Space between bars within a group (0–1).
+        padding_outer: Space at band edges (0–1).
+        align: Band alignment (0–1).
+        inset: Pixel inset within each band.
+        dx: Horizontal pixel offset.
+        dy: Vertical pixel offset.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
+        tooltip: Enable tooltip on hover.
+    """
+    return BarXMark(
+        table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
+        padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
+        align=align, inset=inset, dx=dx, dy=dy,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def bar_y(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    y1: FieldSpec | None = None,
+    y2: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    opacity: float | None = None,
+    padding: float | None = None,
+    padding_inner: float | None = None,
+    padding_outer: float | None = None,
+    align: float | None = None,
+    inset: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> BarYMark:
+    """Vertical bar mark (bars extend along y-axis).
+
+    Args:
+        table: Table name in DuckDB.
+        x: Category axis — column name.
+        y: Bar height — column name, aggregate (e.g. ``dp.count()``), or bin.
+        y1: Bar start position (for ranged/stacked bars).
+        y2: Bar end position (for ranged/stacked bars).
+        fill: Fill color — column name for color scale.
+        opacity: Constant opacity (0–1).
+        padding: Band scale padding (0–1), shorthand for inner + outer.
+        padding_inner: Space between bars within a group (0–1).
+        padding_outer: Space at band edges (0–1).
+        align: Band alignment (0–1).
+        inset: Pixel inset within each band.
+        dx: Horizontal pixel offset.
+        dy: Vertical pixel offset.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration, e.g. ``{'x': 'name', 'order': 'asc'}``.
+        tooltip: Enable tooltip on hover.
+    """
+    return BarYMark(
+        table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
+        padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
+        align=align, inset=inset, dx=dx, dy=dy,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def line(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    stroke: FieldSpec | None = None,
+    z: FieldSpec | None = None,
+    stroke_width: float | None = None,
+    dot_radius: float | None = None,
+    curve: CurveType | None = None,
+    optimize: bool | Literal["auto"] | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> LineMark:
+    """Line mark for connected data points.
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name, aggregate, or bin.
+        y: Y position — column name, aggregate, or bin.
+        stroke: Line color — column name for color scale (also groups into series).
+        z: Explicit series grouping (overrides implicit grouping from ``stroke``).
+        stroke_width: Line width in pixels.
+        dot_radius: Radius of dots at data points (0 to hide).
+        curve: Interpolation curve type (e.g. ``'monotone'``, ``'step'``, ``'catmull-rom'``).
+        optimize: M4 decimation — ``True``, ``False``, or ``'auto'`` (default).
+        preferred_x_scale_type: Force x-axis scale type (e.g. ``'time'``).
+        preferred_y_scale_type: Force y-axis scale type.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return LineMark(
+        table=table, x=x, y=y, stroke=stroke, z=z,
+        stroke_width=stroke_width, dot_radius=dot_radius,
+        curve=curve, optimize=optimize,
+        preferred_x_scale_type=preferred_x_scale_type,
+        preferred_y_scale_type=preferred_y_scale_type,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def area_y(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    y1: FieldSpec | None = None,
+    y2: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    z: FieldSpec | None = None,
+    fill_opacity: float | None = None,
+    stroke: str | None = None,
+    stroke_width: float | None = None,
+    dot_radius: float | None = None,
+    curve: CurveType | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> AreaYMark:
+    """Vertical area mark (x dimension, y1/y2 boundaries).
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name, aggregate, or bin.
+        y: Y position (shorthand for y2 with y1=0).
+        y1: Lower y boundary.
+        y2: Upper y boundary.
+        fill: Fill color — column name for color scale (also groups into series).
+        z: Explicit series grouping (overrides implicit grouping from ``fill``).
+        fill_opacity: Fill opacity (0–1).
+        stroke: CSS color for area outline (e.g. ``'#333'``). Not data-driven.
+        stroke_width: Outline width in pixels.
+        dot_radius: Radius of dots at data points (0 to hide).
+        curve: Interpolation curve type (e.g. ``'monotone'``, ``'step'``).
+        preferred_x_scale_type: Force x-axis scale type.
+        preferred_y_scale_type: Force y-axis scale type.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms (e.g. ``[dp.stack_y()]``).
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return AreaYMark(
+        table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, z=z,
+        fill_opacity=fill_opacity, stroke=stroke, stroke_width=stroke_width,
+        dot_radius=dot_radius, curve=curve,
+        preferred_x_scale_type=preferred_x_scale_type,
+        preferred_y_scale_type=preferred_y_scale_type,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def area_x(
+    *,
+    table: str | None = None,
+    y: FieldSpec | None = None,
+    x: FieldSpec | None = None,
+    x1: FieldSpec | None = None,
+    x2: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    z: FieldSpec | None = None,
+    fill_opacity: float | None = None,
+    stroke: str | None = None,
+    stroke_width: float | None = None,
+    dot_radius: float | None = None,
+    curve: CurveType | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> AreaXMark:
+    """Horizontal area mark (y dimension, x1/x2 boundaries).
+
+    Args:
+        table: Table name in DuckDB.
+        y: Y position — column name, aggregate, or bin.
+        x: X position (shorthand for x2 with x1=0).
+        x1: Left x boundary.
+        x2: Right x boundary.
+        fill: Fill color — column name for color scale (also groups into series).
+        z: Explicit series grouping (overrides implicit grouping from ``fill``).
+        fill_opacity: Fill opacity (0–1).
+        stroke: CSS color for area outline (e.g. ``'#333'``). Not data-driven.
+        stroke_width: Outline width in pixels.
+        dot_radius: Radius of dots at data points (0 to hide).
+        curve: Interpolation curve type.
+        preferred_x_scale_type: Force x-axis scale type.
+        preferred_y_scale_type: Force y-axis scale type.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return AreaXMark(
+        table=table, y=y, x=x, x1=x1, x2=x2, fill=fill, z=z,
+        fill_opacity=fill_opacity, stroke=stroke, stroke_width=stroke_width,
+        dot_radius=dot_radius, curve=curve,
+        preferred_x_scale_type=preferred_x_scale_type,
+        preferred_y_scale_type=preferred_y_scale_type,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def rect(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    x1: FieldSpec | None = None,
+    x2: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    y1: FieldSpec | None = None,
+    y2: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    opacity: float | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    padding: float | None = None,
+    padding_inner: float | None = None,
+    padding_outer: float | None = None,
+    align: float | None = None,
+    inset: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> RectMark:
+    """Rectangle mark for 2D binning or heatmaps.
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name (band or continuous).
+        x1: Left x boundary.
+        x2: Right x boundary.
+        y: Y position — column name.
+        y1: Bottom y boundary.
+        y2: Top y boundary.
+        fill: Fill color — column name for color scale.
+        opacity: Constant opacity (0–1).
+        preferred_x_scale_type: Force x-axis scale type.
+        preferred_y_scale_type: Force y-axis scale type.
+        padding: Band scale padding (0–1).
+        padding_inner: Space between rects (0–1).
+        padding_outer: Space at band edges (0–1).
+        align: Band alignment (0–1).
+        inset: Pixel inset within each band.
+        dx: Horizontal pixel offset.
+        dy: Vertical pixel offset.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return RectMark(
+        table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
+        fill=fill, opacity=opacity,
+        preferred_x_scale_type=preferred_x_scale_type,
+        preferred_y_scale_type=preferred_y_scale_type,
+        padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
+        align=align, inset=inset, dx=dx, dy=dy,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def rect_x(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    x1: FieldSpec | None = None,
+    x2: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    y1: FieldSpec | None = None,
+    y2: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    opacity: float | None = None,
+    inset: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    viewport_local_domain: bool | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> RectXMark:
+    """Horizontal rect mark (e.g. histograms along x-axis).
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name or bin.
+        x1: Left x boundary.
+        x2: Right x boundary.
+        y: Y position.
+        y1: Bottom y boundary.
+        y2: Top y boundary.
+        fill: Fill color — column name for color scale.
+        opacity: Constant opacity (0–1).
+        inset: Pixel inset.
+        dx: Horizontal pixel offset.
+        dy: Vertical pixel offset.
+        preferred_y_scale_type: Force y-axis scale type.
+        viewport_local_domain: Derive y-domain from visible viewport only.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return RectXMark(
+        table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
+        fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
+        preferred_y_scale_type=preferred_y_scale_type,
+        viewport_local_domain=viewport_local_domain,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def rect_y(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    x1: FieldSpec | None = None,
+    x2: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    y1: FieldSpec | None = None,
+    y2: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    opacity: float | None = None,
+    inset: float | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    viewport_local_domain: bool | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> RectYMark:
+    """Vertical rect mark (e.g. histograms along y-axis).
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name or bin.
+        x1: Left x boundary.
+        x2: Right x boundary.
+        y: Y position — column name or aggregate.
+        y1: Bottom y boundary.
+        y2: Top y boundary.
+        fill: Fill color — column name for color scale.
+        opacity: Constant opacity (0–1).
+        inset: Pixel inset.
+        dx: Horizontal pixel offset.
+        dy: Vertical pixel offset.
+        preferred_x_scale_type: Force x-axis scale type.
+        viewport_local_domain: Derive x-domain from visible viewport only.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return RectYMark(
+        table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
+        fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
+        preferred_x_scale_type=preferred_x_scale_type,
+        viewport_local_domain=viewport_local_domain,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
+
+
+def text(
+    *,
+    table: str | None = None,
+    x: FieldSpec | None = None,
+    y: FieldSpec | None = None,
+    text: FieldSpec | None = None,
+    fill: FieldSpec | None = None,
+    font_size: float | None = None,
+    font_weight: str | None = None,
+    font_family: str | None = None,
+    dx: float | None = None,
+    dy: float | None = None,
+    text_anchor: TextAnchor | None = None,
+    line_anchor: LineAnchor | None = None,
+    rotate: float | None = None,
+    preferred_x_scale_type: ScaleType | None = None,
+    preferred_y_scale_type: ScaleType | None = None,
+    selection: str | None = None,
+    scheme: ColorScheme | None = None,
+    limit: int | None = None,
+    filter_nulls: bool | None = None,
+    transforms: list[TransformSpec] | None = None,
+    sort: SortConfig | None = None,
+    tooltip: bool | None = None,
+) -> TextMark:
+    """Text mark for labels and annotations.
+
+    Args:
+        table: Table name in DuckDB.
+        x: X position — column name, aggregate, or bin.
+        y: Y position — column name, aggregate, or bin.
+        text: Text content — column name or aggregate.
+        fill: Text color — column name for color scale.
+        font_size: Font size in pixels.
+        font_weight: CSS font weight (e.g. ``'bold'``, ``'600'``).
+        font_family: CSS font family.
+        dx: Horizontal pixel offset.
+        dy: Vertical pixel offset.
+        text_anchor: Horizontal alignment: ``'start'``, ``'middle'``, or ``'end'``.
+        line_anchor: Vertical alignment: ``'top'``, ``'middle'``, or ``'bottom'``.
+        rotate: Rotation angle in degrees.
+        preferred_x_scale_type: Force x-axis scale type.
+        preferred_y_scale_type: Force y-axis scale type.
+        selection: Selection parameter name for linked interactors.
+        scheme: Color scheme name.
+        limit: Maximum number of rows.
+        filter_nulls: Filter null values.
+        transforms: List of transforms.
+        sort: Sort configuration.
+        tooltip: Enable tooltip on hover.
+    """
+    return TextMark(
+        table=table, x=x, y=y, text=text, fill=fill,
+        font_size=font_size, font_weight=font_weight, font_family=font_family,
+        dx=dx, dy=dy, text_anchor=text_anchor, line_anchor=line_anchor,
+        rotate=rotate,
+        preferred_x_scale_type=preferred_x_scale_type,
+        preferred_y_scale_type=preferred_y_scale_type,
+        selection=selection, scheme=scheme, limit=limit,
+        filter_nulls=filter_nulls, transforms=transforms,
+        sort=sort, tooltip=tooltip,
+    )
