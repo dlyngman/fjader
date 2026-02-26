@@ -20,6 +20,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"package": "svelte-package",
+		"prepack": "svelte-package",
 		"prepare": "svelte-kit sync || echo ''",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && eslint .",
