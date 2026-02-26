@@ -593,9 +593,7 @@ export class GPUCoordinator {
 			const scale = item.instance;
 			const off = item.index << 2;
 
-			const scaleTypeName = scale.constructor.name;
-
-			if (scaleTypeName === 'BandScaleState') {
+			if (scale.type === 'band' || scale.type === 'point') {
 				// BAND SCALE: Write configuration
 				const config = scale.getConfig!();
 

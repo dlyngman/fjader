@@ -10,6 +10,7 @@ interface BandScaleConfig {
 	paddingOuter?: number | null;
 	align?: number;
 	sourceColumn?: string | null;
+	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
 }
 
 interface BandGpuConfig {
@@ -75,6 +76,7 @@ export class BandScaleState {
 	#paddingOuter: number | null = null;
 	#align: number = 0.5;
 	#sourceColumn: string | null = null; // Actual SQL column name (defaults to this.name if null)
+	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
 
 	// =========================================================================
 	// FREEZE/DEBOUNCE FUNCTIONALITY
@@ -134,6 +136,7 @@ export class BandScaleState {
 		this.#paddingOuter = config.paddingOuter ?? null;
 		this.#align = config.align ?? 0.5;
 		this.#sourceColumn = config.sourceColumn ?? null;
+		this.#registry = config.registry ?? null;
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
 			initialDomain: domain.length,
@@ -422,6 +425,8 @@ export class BandScaleState {
 		if (domainChanged) {
 			// Domain order changed — clear one-shot guard to force view recreation
 			this.#viewsCreated.clear();
+			// Notify GPU to re-render charts using this scale
+			this.#registry?.invalidateChartsUsingScale(this);
 		}
 
 		for (const table of this.#registeredTables) {

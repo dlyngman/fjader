@@ -254,7 +254,8 @@ export class ScaleRegistry {
 							paddingOuter: config.paddingOuter ?? 0.1,
 							padding: config.padding ?? 0.1,
 							align: config.align ?? 0.5,
-							sourceColumn: config.sourceColumn
+							sourceColumn: config.sourceColumn,
+							registry: this
 						})
 					);
 				} else if (type === 'color') {
@@ -403,24 +404,11 @@ export class ScaleRegistry {
 		}
 	}
 
-	invalidateChartsForScale(field: string): void {
+	invalidateChartsUsingScale(scale: AnyScaleState): void {
 		if (!this.#gpuCoordinator) return;
 
 		untrack(() => {
-			const colorScales = this.scales.color;
-			if (!colorScales) return;
-
-			let foundScale: ColorScaleState | null = null;
-			for (const [_key, scale] of colorScales) {
-				if ((scale as ColorScaleState).field === field) {
-					foundScale = scale as ColorScaleState;
-					break;
-				}
-			}
-
-			if (!foundScale) return;
-
-			const chartIds = this.scaleUsage.get(foundScale);
+			const chartIds = this.scaleUsage.get(scale);
 			if (!chartIds || chartIds.size === 0) return;
 
 			for (const chartId of chartIds) {
