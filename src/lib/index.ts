@@ -41,3 +41,7 @@ export * from './components';
 export * from './transforms';
 export * from './sql/bin';
 export * from './types';
+
+// Spec-driven rendering API
+export { DivePlot, render } from './spec';
+export type { DivePlotSpec, DivePlotHandle, RenderOptions } from './spec';
