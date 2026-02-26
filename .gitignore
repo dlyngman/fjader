@@ -34,4 +34,4 @@ llm_context.*
 # markdown and notes
 /proposals
 
-CLAUDE.md
+CLAUDE.md__pycache__/

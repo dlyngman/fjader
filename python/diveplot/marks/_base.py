@@ -1,0 +1,113 @@
+"""Base Mark class with composition operators and serialization."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field, fields as dc_fields
+from typing import Any, ClassVar
+
+from .._convert import clean_dict, serialize_value, to_camel_case
+
+
+@dataclass
+class Mark:
+    """Base class for all mark specs.
+
+    Subclasses set _mark_type and declare their channel/prop fields.
+    """
+
+    _mark_type: ClassVar[str]
+
+    # Common props from BaseMarkSpec in types.ts
+    table: str | None = None
+    selection: str | None = None
+    scheme: str | None = None
+    limit: int | None = None
+    filter_nulls: bool | None = None
+    transforms: list[Any] | None = None
+    sort: dict[str, Any] | None = None
+    tooltip: bool | None = None
+
+    # Internal state (not serialized)
+    _opts: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def to_mark_dict(self) -> dict[str, Any]:
+        """Serialize to a MarkSpec dict (without DivePlotSpec wrapper)."""
+        result: dict[str, Any] = {"mark": self._mark_type}
+        for f in dc_fields(self):
+            if f.name.startswith("_"):
+                continue
+            val = getattr(self, f.name)
+            if val is None:
+                continue
+            key = to_camel_case(f.name)
+            if f.name == "transforms":
+                result[key] = [serialize_value(t) for t in val]
+            else:
+                result[key] = serialize_value(val)
+        return clean_dict(result)
+
+    def opts(self, **kwargs: Any) -> Any:
+        """Apply chart-level options. Returns a Plot wrapping this mark."""
+        from ..plot import Plot
+
+        return Plot(self, **kwargs)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Full DivePlotSpec with this mark in a single-chart plot."""
+        from ..plot import Plot
+
+        return Plot(self, **self._opts).to_dict()
+
+    def to_json(self, **kwargs: Any) -> str:
+        return json.dumps(self.to_dict(), **kwargs)
+
+    def __mul__(self, other: Any) -> Any:
+        from ..layout import Overlay
+
+        return Overlay(marks=_get_marks(self) + _get_marks(other))
+
+    def __rmul__(self, other: Any) -> Any:
+        if isinstance(other, Mark):
+            return other.__mul__(self)
+        return NotImplemented
+
+    def __add__(self, other: Any) -> Any:
+        from ..layout import HConcat
+
+        return HConcat(items=_to_plots(self) + _to_plots(other))
+
+    def __radd__(self, other: Any) -> Any:
+        if isinstance(other, Mark):
+            return other.__add__(self)
+        return NotImplemented
+
+
+def _get_marks(obj: Any) -> list[Mark]:
+    """Extract list of marks from a Mark, Overlay, or Plot."""
+    from ..layout import Overlay
+    from ..plot import Plot
+
+    if isinstance(obj, Mark):
+        return [obj]
+    if isinstance(obj, Overlay):
+        return list(obj.marks)
+    if isinstance(obj, Plot):
+        return list(obj._marks)
+    raise TypeError(f"Cannot get marks from {type(obj).__name__}")
+
+
+def _to_plots(obj: Any) -> list[Any]:
+    """Convert to list of Plot instances for layout composition."""
+    from ..layout import HConcat, Overlay
+    from ..plot import Plot
+
+    if isinstance(obj, Mark):
+        return [Plot(obj)]
+    if isinstance(obj, Overlay):
+        return [Plot(*obj.marks, **obj._opts)]
+    if isinstance(obj, Plot):
+        return [obj]
+    if isinstance(obj, HConcat):
+        return list(obj.items)
+    raise TypeError(f"Cannot convert {type(obj).__name__} to plots")
