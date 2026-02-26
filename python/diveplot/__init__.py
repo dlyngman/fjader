@@ -49,6 +49,9 @@ from .fields import count, sum, avg, min_, max_, median, bin
 # Data helpers
 from .data import sql
 
+# Display helpers
+from ._display import show
+
 # Types (for type annotations in user code)
 from ._types import ColorScheme, CurveType, ScaleType, SortConfig, TextAnchor, LineAnchor
 from .fields import FieldSpec
@@ -69,6 +72,8 @@ __all__ = [
     "count", "sum", "avg", "min_", "max_", "median", "bin",
     # Data
     "sql",
+    # Display
+    "show",
     # Types
     "FieldSpec", "ColorScheme", "CurveType", "ScaleType",
     "SortConfig", "TextAnchor", "LineAnchor",

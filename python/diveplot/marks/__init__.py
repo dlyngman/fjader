@@ -6,7 +6,7 @@ for IDE autocompletion.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .area import AreaXMark, AreaYMark
 from .bar import BarXMark, BarYMark
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 def dot(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
@@ -68,7 +69,7 @@ def dot(
         tooltip: Enable tooltip on hover.
     """
     return DotMark(
-        table=table, x=x, y=y, fill=fill, opacity=opacity, r=r,
+        data=data, table=table, x=x, y=y, fill=fill, opacity=opacity, r=r,
         radius_range=radius_range,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
@@ -80,6 +81,7 @@ def dot(
 
 def bar_x(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     x1: FieldSpec | None = None,
@@ -128,7 +130,7 @@ def bar_x(
         tooltip: Enable tooltip on hover.
     """
     return BarXMark(
-        table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
+        data=data, table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
@@ -139,6 +141,7 @@ def bar_x(
 
 def bar_y(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
@@ -187,7 +190,7 @@ def bar_y(
         tooltip: Enable tooltip on hover.
     """
     return BarYMark(
-        table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
+        data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
@@ -198,6 +201,7 @@ def bar_y(
 
 def line(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
@@ -240,7 +244,7 @@ def line(
         tooltip: Enable tooltip on hover.
     """
     return LineMark(
-        table=table, x=x, y=y, stroke=stroke, z=z,
+        data=data, table=table, x=x, y=y, stroke=stroke, z=z,
         stroke_width=stroke_width, dot_radius=dot_radius,
         curve=curve, optimize=optimize,
         preferred_x_scale_type=preferred_x_scale_type,
@@ -253,6 +257,7 @@ def line(
 
 def area_y(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
@@ -301,7 +306,7 @@ def area_y(
         tooltip: Enable tooltip on hover.
     """
     return AreaYMark(
-        table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, z=z,
+        data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, z=z,
         fill_opacity=fill_opacity, stroke=stroke, stroke_width=stroke_width,
         dot_radius=dot_radius, curve=curve,
         preferred_x_scale_type=preferred_x_scale_type,
@@ -314,6 +319,7 @@ def area_y(
 
 def area_x(
     *,
+    data: Any = None,
     table: str | None = None,
     y: FieldSpec | None = None,
     x: FieldSpec | None = None,
@@ -362,7 +368,7 @@ def area_x(
         tooltip: Enable tooltip on hover.
     """
     return AreaXMark(
-        table=table, y=y, x=x, x1=x1, x2=x2, fill=fill, z=z,
+        data=data, table=table, y=y, x=x, x1=x1, x2=x2, fill=fill, z=z,
         fill_opacity=fill_opacity, stroke=stroke, stroke_width=stroke_width,
         dot_radius=dot_radius, curve=curve,
         preferred_x_scale_type=preferred_x_scale_type,
@@ -375,6 +381,7 @@ def area_x(
 
 def rect(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     x1: FieldSpec | None = None,
@@ -431,7 +438,7 @@ def rect(
         tooltip: Enable tooltip on hover.
     """
     return RectMark(
-        table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
+        data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
@@ -445,6 +452,7 @@ def rect(
 
 def rect_x(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     x1: FieldSpec | None = None,
@@ -493,7 +501,7 @@ def rect_x(
         tooltip: Enable tooltip on hover.
     """
     return RectXMark(
-        table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
+        data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_y_scale_type=preferred_y_scale_type,
         viewport_local_domain=viewport_local_domain,
@@ -505,6 +513,7 @@ def rect_x(
 
 def rect_y(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     x1: FieldSpec | None = None,
@@ -553,7 +562,7 @@ def rect_y(
         tooltip: Enable tooltip on hover.
     """
     return RectYMark(
-        table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
+        data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_x_scale_type=preferred_x_scale_type,
         viewport_local_domain=viewport_local_domain,
@@ -565,6 +574,7 @@ def rect_y(
 
 def text(
     *,
+    data: Any = None,
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
@@ -615,7 +625,7 @@ def text(
         tooltip: Enable tooltip on hover.
     """
     return TextMark(
-        table=table, x=x, y=y, text=text, fill=fill,
+        data=data, table=table, x=x, y=y, text=text, fill=fill,
         font_size=font_size, font_weight=font_weight, font_family=font_family,
         dx=dx, dy=dy, text_anchor=text_anchor, line_anchor=line_anchor,
         rotate=rotate,

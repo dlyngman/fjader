@@ -32,14 +32,24 @@ class Mark:
     sort: SortConfig | None = None
     tooltip: bool | None = None
 
+    # DataFrame attachment (not serialized — data travels via binary traitlets)
+    data: Any = field(default=None, repr=False, compare=False)
+
     # Internal state (not serialized)
     _opts: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.data is not None and self.table is None:
+            from .._data import df_to_ipc_cached
+
+            h, _ = df_to_ipc_cached(self.data)
+            self.table = f"_df_{h}"
 
     def to_mark_dict(self) -> dict[str, Any]:
         """Serialize to a MarkSpec dict (without DivePlotSpec wrapper)."""
         result: dict[str, Any] = {"mark": self._mark_type}
         for f in dc_fields(self):
-            if f.name.startswith("_"):
+            if f.name.startswith("_") or f.name == "data":
                 continue
             val = getattr(self, f.name)
             if val is None:
@@ -65,6 +75,24 @@ class Mark:
 
     def to_json(self, **kwargs: Any) -> str:
         return json.dumps(self.to_dict(), **kwargs)
+
+    def _collect_data(self) -> dict[str, Any]:
+        """Return {table_name: df} for marks with data attached."""
+        if self.data is not None and self.table is not None:
+            return {self.table: self.data}
+        return {}
+
+    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return (spec_dict, dataframes_dict) for widget rendering."""
+        from ..plot import Plot
+
+        p = Plot(self, **self._opts)
+        return p._to_full_spec()
+
+    def _repr_mimebundle_(self, **kwargs: Any) -> Any:
+        from .._display import make_widget
+
+        return make_widget(self)._repr_mimebundle_(**kwargs)
 
     def __mul__(self, other: Any) -> Any:
         from ..layout import Overlay
