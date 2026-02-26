@@ -2,6 +2,10 @@
 	import type { Selection } from '@uwdata/mosaic-core';
 	import ChartContainer from '$lib/components/charts/ChartContainer.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
+	import { AxisBottom, AxisLeft, MarginLabel } from '$lib/components/axes';
+	import Frame from '$lib/components/background/Frame.svelte';
+	import { Grid } from '$lib/components/guides';
+	import Crosshair from '$lib/components/foreground/Crosshair.svelte';
 	import { resolveMarkEntry } from './MarkRegistry';
 	import type { PlotSpec } from './types';
 
@@ -13,7 +17,7 @@
 	let { spec, params }: Props = $props();
 
 	const resolvedMarks = $derived(
-		spec.marks.map((markSpec) => resolveMarkEntry(markSpec, params))
+		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec, params))
 	);
 </script>
 
@@ -31,14 +35,26 @@
 		columns={spec.columns ?? null}
 		margin={spec.margin}
 	>
+		{#snippet background()}
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
+		{/snippet}
+
 		{#snippet canvas()}
 			<WebGPUCanvas>
 				{#snippet canvasComponents()}
+					<Grid />
 					{#each resolvedMarks as { component: MarkComponent, props }, i (i)}
 						<MarkComponent {...props} />
 					{/each}
 				{/snippet}
 			</WebGPUCanvas>
+		{/snippet}
+
+		{#snippet foreground()}
+			<Crosshair />
 		{/snippet}
 	</ChartContainer>
 </div>

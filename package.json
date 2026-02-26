@@ -25,7 +25,8 @@
 		"format": "prettier --write .",
 		"lint": "prettier --check . && eslint .",
 		"test": "vitest",
-		"typecheck": "svelte-check --tsconfig ./jsconfig.json"
+		"typecheck": "svelte-check --tsconfig ./jsconfig.json",
+		"build:widget": "vite build --config vite.widget.config.js"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^1.2.5",

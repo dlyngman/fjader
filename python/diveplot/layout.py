@@ -32,6 +32,20 @@ class Overlay:
     def to_json(self, **kwargs: Any) -> str:
         return json.dumps(self.to_dict(), **kwargs)
 
+    def _collect_data(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for m in self.marks:
+            result.update(m._collect_data())
+        return result
+
+    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        return self.to_dict(), self._collect_data()
+
+    def _repr_mimebundle_(self, **kwargs: Any) -> Any:
+        from ._display import make_widget
+
+        return make_widget(self)._repr_mimebundle_(**kwargs)
+
     def __mul__(self, other: Any) -> Overlay:
         return Overlay(marks=self.marks + _get_marks(other))
 
@@ -56,6 +70,20 @@ class HConcat:
     def to_json(self, **kwargs: Any) -> str:
         return json.dumps(self.to_dict(), **kwargs)
 
+    def _collect_data(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for p in self.items:
+            result.update(p._collect_data())
+        return result
+
+    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        return self.to_dict(), self._collect_data()
+
+    def _repr_mimebundle_(self, **kwargs: Any) -> Any:
+        from ._display import make_widget
+
+        return make_widget(self)._repr_mimebundle_(**kwargs)
+
     def __add__(self, other: Any) -> HConcat:
         return HConcat(items=self.items + _to_plots(other))
 
@@ -73,6 +101,20 @@ class VConcat:
 
     def to_json(self, **kwargs: Any) -> str:
         return json.dumps(self.to_dict(), **kwargs)
+
+    def _collect_data(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for p in self.items:
+            result.update(p._collect_data())
+        return result
+
+    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        return self.to_dict(), self._collect_data()
+
+    def _repr_mimebundle_(self, **kwargs: Any) -> Any:
+        from ._display import make_widget
+
+        return make_widget(self)._repr_mimebundle_(**kwargs)
 
     def __add__(self, other: Any) -> VConcat:
         return VConcat(items=self.items + _to_plots(other))

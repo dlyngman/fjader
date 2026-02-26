@@ -448,7 +448,7 @@ export class ColorScaleState {
 		if (this.domain.length > 0) {
 			this.#uploadToGPU();
 			// Trigger re-render - registry will invalidate charts using this scale
-			this.#registry.invalidateChartsForScale(this.#field);
+			this.#registry.invalidateChartsUsingScale(this);
 		}
 	}
 

@@ -4,9 +4,11 @@
 
 	let dotContainer;
 	let barContainer;
+	let barXContainer;
 	let hconcatContainer;
 	let handle1;
 	let handle2;
+	let handle2b;
 	let handle3;
 	let status = $state('Loading...');
 
@@ -64,6 +66,30 @@
 				}
 			});
 
+			// Test 2b: Horizontal bar chart (barX) with aggregate
+			status = 'Rendering barX chart...';
+			handle2b = await render(barXContainer, {
+				data: {
+					penguins: { url: dataUrl, type: 'parquet' }
+				},
+				plot: {
+					width: 600,
+					height: 300,
+					xLabel: 'Count',
+					yLabel: 'Species',
+					marks: [
+						{
+							mark: 'barX',
+							table: 'penguins',
+							x: 'count()',
+							y: 'species',
+							fill: 'species',
+							tooltip: true
+						}
+					]
+				}
+			});
+
 			// Test 3: hconcat layout
 			status = 'Rendering hconcat layout...';
 			handle3 = await render(hconcatContainer, {
@@ -113,6 +139,7 @@
 		return () => {
 			handle1?.destroy();
 			handle2?.destroy();
+			handle2b?.destroy();
 			handle3?.destroy();
 		};
 	});
@@ -125,8 +152,11 @@
 	<h2>Test 1: Dot Plot (from spec)</h2>
 	<div bind:this={dotContainer}></div>
 
-	<h2>Test 2: Bar Chart with Aggregate (shared coordinator)</h2>
+	<h2>Test 2: Bar Chart with Aggregate (barY)</h2>
 	<div bind:this={barContainer}></div>
+
+	<h2>Test 2b: Horizontal Bar Chart (barX)</h2>
+	<div bind:this={barXContainer}></div>
 
 	<h2>Test 3: hconcat Layout</h2>
 	<div bind:this={hconcatContainer}></div>
