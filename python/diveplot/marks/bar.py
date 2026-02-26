@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from ._base import Mark
+
+if TYPE_CHECKING:
+    from ..fields import FieldSpec
 
 
 @dataclass
 class BarXMark(Mark):
     _mark_type: ClassVar[str] = "barX"
 
-    x: Any = None
-    x1: Any = None
-    x2: Any = None
-    y: Any = None
-    fill: Any = None
+    x: FieldSpec | None = None
+    x1: FieldSpec | None = None
+    x2: FieldSpec | None = None
+    y: FieldSpec | None = None
+    fill: FieldSpec | None = None
     opacity: float | None = None
     padding: float | None = None
     padding_inner: float | None = None
@@ -29,11 +32,11 @@ class BarXMark(Mark):
 class BarYMark(Mark):
     _mark_type: ClassVar[str] = "barY"
 
-    x: Any = None
-    y: Any = None
-    y1: Any = None
-    y2: Any = None
-    fill: Any = None
+    x: FieldSpec | None = None
+    y: FieldSpec | None = None
+    y1: FieldSpec | None = None
+    y2: FieldSpec | None = None
+    fill: FieldSpec | None = None
     opacity: float | None = None
     padding: float | None = None
     padding_inner: float | None = None

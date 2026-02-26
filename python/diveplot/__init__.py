@@ -50,7 +50,7 @@ from .fields import count, sum, avg, min_, max_, median, bin
 from .data import sql
 
 # Types (for type annotations in user code)
-from ._types import ColorScheme, CurveType, ScaleType
+from ._types import ColorScheme, CurveType, ScaleType, SortConfig, TextAnchor, LineAnchor
 from .fields import FieldSpec
 
 __all__ = [
@@ -71,4 +71,5 @@ __all__ = [
     "sql",
     # Types
     "FieldSpec", "ColorScheme", "CurveType", "ScaleType",
+    "SortConfig", "TextAnchor", "LineAnchor",
 ]

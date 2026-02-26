@@ -42,11 +42,13 @@ const FIELD_CHANNELS = new Set([
 	'y1',
 	'y2',
 	'fill',
-	'stroke',
 	'r',
 	'z',
 	'text'
 ]);
+
+/** Mark types where `stroke` is a data-driven FieldSpec (not a CSS constant). */
+const STROKE_AS_FIELD_MARKS = new Set(['line']);
 
 /**
  * Convert a MarkSpec into { component, props } for svelte:component rendering.
@@ -70,6 +72,11 @@ export function resolveMarkEntry(
 		if (key in props && props[key] != null) {
 			props[key] = resolveFieldSpec(props[key] as FieldSpec);
 		}
+	}
+
+	// stroke is data-driven (FieldSpec) on lines, but a CSS constant on areas
+	if (STROKE_AS_FIELD_MARKS.has(markSpec.mark) && props.stroke != null) {
+		props.stroke = resolveFieldSpec(props.stroke as FieldSpec);
 	}
 
 	// Resolve transforms

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ._convert import serialize_value, to_camel_case
 from .marks._base import Mark
+
+if TYPE_CHECKING:
+    from ._types import SortConfig
 
 _PLOT_FIELDS = ("width", "height", "margin", "x_label", "y_label", "fx", "columns")
 
@@ -26,12 +29,22 @@ class Plot:
     columns: int | None = None
 
     def __init__(self, *marks: Mark, **kwargs: Any) -> None:
+        unexpected = set(kwargs) - set(_PLOT_FIELDS)
+        if unexpected:
+            raise TypeError(
+                f"plot() got unexpected keyword argument(s): {', '.join(sorted(unexpected))}"
+            )
         self._marks = list(marks)
         for key in _PLOT_FIELDS:
             setattr(self, key, kwargs.get(key))
 
     def opts(self, **kwargs: Any) -> Plot:
         """Return a new Plot with updated chart-level config."""
+        unexpected = set(kwargs) - set(_PLOT_FIELDS)
+        if unexpected:
+            raise TypeError(
+                f"opts() got unexpected keyword argument(s): {', '.join(sorted(unexpected))}"
+            )
         new = Plot(*self._marks)
         for key in _PLOT_FIELDS:
             setattr(new, key, getattr(self, key))
@@ -79,17 +92,30 @@ class Plot:
         return NotImplemented
 
 
-def plot(*marks: Mark, **kwargs: Any) -> Plot:
+def plot(
+    *marks: Mark,
+    width: int | None = None,
+    height: int | None = None,
+    margin: dict[str, int] | None = None,
+    x_label: str | None = None,
+    y_label: str | None = None,
+    fx: str | None = None,
+    columns: int | None = None,
+) -> Plot:
     """Create a chart with one or more marks and chart-level configuration.
 
     Args:
         *marks: Mark instances to include in the chart.
         width: Chart width in CSS pixels.
         height: Chart height in CSS pixels.
-        margin: Dict with top/right/bottom/left pixel values.
+        margin: Dict with ``top``/``right``/``bottom``/``left`` pixel values.
         x_label: X-axis label.
         y_label: Y-axis label.
         fx: Facet column name.
         columns: Number of columns for facet grid.
     """
-    return Plot(*marks, **kwargs)
+    return Plot(
+        *marks,
+        width=width, height=height, margin=margin,
+        x_label=x_label, y_label=y_label, fx=fx, columns=columns,
+    )

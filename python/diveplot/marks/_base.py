@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, fields as dc_fields
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from .._convert import clean_dict, serialize_value, to_camel_case
+
+if TYPE_CHECKING:
+    from .._types import ColorScheme, SortConfig
+    from ..transforms._base import TransformSpec
 
 
 @dataclass
@@ -21,11 +25,11 @@ class Mark:
     # Common props from BaseMarkSpec in types.ts
     table: str | None = None
     selection: str | None = None
-    scheme: str | None = None
+    scheme: ColorScheme | None = None
     limit: int | None = None
     filter_nulls: bool | None = None
-    transforms: list[Any] | None = None
-    sort: dict[str, Any] | None = None
+    transforms: list[TransformSpec] | None = None
+    sort: SortConfig | None = None
     tooltip: bool | None = None
 
     # Internal state (not serialized)

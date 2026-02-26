@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 import diveplot as dp
 
 
@@ -121,3 +123,12 @@ class TestOpts:
         spec = dp.dot(table="t", x="a", y="b").opts(width=800).to_dict()
         assert len(spec["plot"]["marks"]) == 1
         assert spec["plot"]["marks"][0]["mark"] == "dot"
+
+    def test_plot_rejects_unknown_kwargs(self):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            dp.plot(dp.dot(table="t", x="a", y="b"), wdith=600)
+
+    def test_opts_rejects_unknown_kwargs(self):
+        p = dp.plot(dp.dot(table="t", x="a", y="b"), width=600)
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            p.opts(hieght=400)
