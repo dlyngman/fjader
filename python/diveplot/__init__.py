@@ -52,6 +52,14 @@ from .data import sql
 # Display helpers
 from ._display import show
 
+# Lazy submodule access — import only when accessed (avoids hard dep on streamlit)
+import importlib as _importlib
+
+def __getattr__(name: str):
+    if name == "streamlit":
+        return _importlib.import_module("._streamlit", __name__)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 # Types (for type annotations in user code)
 from ._types import ColorScheme, CurveType, ScaleType, SortConfig, TextAnchor, LineAnchor
 from .fields import FieldSpec

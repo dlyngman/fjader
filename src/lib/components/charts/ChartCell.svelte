@@ -72,6 +72,13 @@
 	let containerWidth = $state(0);
 	let containerHeight = $state(0);
 
+	// Store inner screen coordinates directly from pointer events.
+	// Avoids the screen→data→screen round-trip for crosshair/MarginLabel positioning,
+	// which can desync when the animation loop advances the scale domain between
+	// the event handler (inversion) and the Svelte render pass (forward mapping).
+	let currentInnerX = $state<number | null>(null);
+	let currentInnerY = $state<number | null>(null);
+
 	$effect(() => {
 		if (containerWidth > 0) layout.updateWidth(containerWidth);
 	});
@@ -283,10 +290,10 @@
 			return scales?.yScaleState?.currentDataPoint;
 		},
 		get currentXScreenPoint() {
-			return cellXScale?.(scales?.xScaleState?.currentDataPoint);
+			return currentInnerX;
 		},
 		get currentYScreenPoint() {
-			return cellYScale?.(scales?.yScaleState?.currentDataPoint);
+			return currentInnerY;
 		},
 
 		// Scale states + types — shared
@@ -372,7 +379,15 @@
 	// --- Pointer event handling ---
 	const pointerBuffer = { x: 0, y: 0 };
 	const wheelControl = new WheelInteractionControl(wheelInteraction);
-	const hasPointerRawUpdate = typeof window !== 'undefined' && 'onpointerrawupdate' in window;
+	// Disable pointerrawupdate inside iframes (e.g. Streamlit). In Chrome iframes,
+	// pointerrawupdate fires at hardware rate (~1000Hz) and creates a timing desync:
+	// the animation loop can advance the scale domain between the event handler's
+	// screen→data inversion and Svelte's render pass that maps data→screen for the
+	// crosshair, breaking the round-trip identity and causing a visible offset.
+	// pointermove (coalesced to frame boundaries) does not have this issue.
+	const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+	const hasPointerRawUpdate =
+		typeof window !== 'undefined' && 'onpointerrawupdate' in window && !isIframe;
 
 	let svg = $state<SVGSVGElement>();
 	let isPanning = $state(false);
@@ -506,6 +521,8 @@
 			layout.innerHeight
 		);
 		scales.clearCurrentDataPoints();
+		currentInnerX = null;
+		currentInnerY = null;
 		event.target.setPointerCapture?.(event.pointerId);
 	}
 
@@ -521,6 +538,8 @@
 
 			if (layout.isWithinInnerBounds(pointerBuffer)) {
 				const innerPoint = layout.toInnerCoordinates(pointerBuffer);
+				currentInnerX = innerPoint.x;
+				currentInnerY = innerPoint.y;
 				scales.updateCurrentDataPoints(innerPoint, layout.innerWidth, layout.innerHeight);
 				tooltipManager?.updatePointerScreen(event.offsetX, event.offsetY);
 				tooltipManager?.updatePosition(
@@ -556,6 +575,8 @@
 
 	function handleInnerMouseLeave() {
 		scales.clearCurrentDataPoints();
+		currentInnerX = null;
+		currentInnerY = null;
 		scales.active = false;
 		tooltipManager?.updatePosition(null, null);
 	}

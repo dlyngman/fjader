@@ -26,7 +26,9 @@
 		"lint": "prettier --check . && eslint .",
 		"test": "vitest",
 		"typecheck": "svelte-check --tsconfig ./jsconfig.json",
-		"build:widget": "vite build --config vite.widget.config.js"
+		"build:widget": "vite build --config vite.widget.config.js",
+		"build:streamlit": "vite build --config vite.streamlit.config.js",
+		"build:all": "npm run build:widget && npm run build:streamlit"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^1.2.5",
@@ -46,6 +48,7 @@
 		"open-props": "^1.7.23",
 		"prettier": "^3.4.2",
 		"prettier-plugin-svelte": "^3.3.3",
+		"streamlit-component-lib": "^2.0.0",
 		"svelte": "^5.0.0",
 		"svelte-check": "^4.4.1",
 		"typescript": "^5.9.3",
