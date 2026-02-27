@@ -22,7 +22,7 @@ describe('Transforms', () => {
 
 			const sql = result.toString();
 			expect(sql).toContain('WHERE');
-			expect(sql).toContain('revenue > 0');
+			expect(sql).toMatch(/revenue.*> 0/);
 		});
 	});
 

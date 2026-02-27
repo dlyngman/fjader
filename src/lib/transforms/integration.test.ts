@@ -5,6 +5,7 @@ import { Query, sum, count, gt, column } from '@uwdata/mosaic-sql';
 import { filter, topN, stack } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin } from '../sql/bin';
+import { ObjectDataAccessor } from '$lib/data/DataAccessor';
 
 describe('Transform Pipeline Integration', () => {
 	it('full pipeline: SQL + JS transforms', () => {
@@ -29,27 +30,28 @@ describe('Transform Pipeline Integration', () => {
 		expect(() => compiler.validateQuery(query)).not.toThrow();
 
 		const sql = query.toString();
-		expect(sql).toContain('WHERE revenue > 0');
+		expect(sql).toMatch(/WHERE.*revenue.*> 0/);
 		expect(sql).not.toContain('WITH'); // No CTE
 
 		// Simulate query results
-		const mockData = [
+		const mockData = new ObjectDataAccessor([
 			{ x: 'A', y: 1000, fill: 'North' },
 			{ x: 'A', y: 500, fill: 'South' },
 			{ x: 'B', y: 800, fill: 'North' }
-			// ... more data
-		];
+		]);
 
 		// Apply JS transforms
 		const result = compiler.applyToData(mockData, {
+			markType: 'bar',
+			table: 'sales',
 			x: 'x',
 			y: 'y',
 			fill: 'fill'
 		});
 
 		// Verify stacking
-		expect(result[0]).toHaveProperty('y0');
-		expect(result[0]).toHaveProperty('y1');
+		expect(result.getColumn('y0')).toBeTruthy();
+		expect(result.getColumn('y1')).toBeTruthy();
 	});
 
 	it('auto binning with transforms', () => {

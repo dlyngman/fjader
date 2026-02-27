@@ -8,7 +8,7 @@
 		ChartContainer,
 		WebGPUCanvas,
 		DotsMark,
-		// BarMark,
+		BarMarkY,
 		Grid,
 		AxisLeft,
 		AxisBottom,
@@ -373,7 +373,7 @@
 											r={3}
 										/>
 									{:else if config.markType === 'bars'}
-										<BarMark table="penguins" x={config.x} y={config.y} opacity={0.8} />
+										<BarMarkY table="penguins" x={config.x} y={config.y} opacity={0.8} />
 									{/if}
 								{/snippet}
 							</WebGPUCanvas>
