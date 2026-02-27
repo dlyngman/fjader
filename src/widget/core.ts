@@ -1,0 +1,62 @@
+/**
+ * Shared rendering core for anywidget and Streamlit entry points.
+ *
+ * Provides framework-agnostic functions for loading data into DuckDB
+ * and rendering a DivePlot spec into a DOM element.
+ */
+
+import { render as divePlotRender } from '$lib/spec';
+import { getOrCreateCoordinator } from '$lib/spec/LazyCoordinator';
+import { loadArrowIPCTable } from './loadArrowIPC';
+
+export interface ManifestEntry {
+	name: string;
+	hash: string;
+	[key: string]: unknown;
+}
+
+export interface DivePlotHandle {
+	destroy(): void;
+}
+
+/**
+ * Render a DivePlot spec, loading Arrow IPC tables via the provided callback.
+ *
+ * The `getTableIPC` callback abstracts the data source:
+ * - anywidget: slices from a concatenated blob
+ * - Streamlit: serializes ArrowTable instances
+ */
+export async function renderFromData(
+	el: HTMLElement,
+	specJson: string,
+	manifestJson: string,
+	getTableIPC: (entry: ManifestEntry) => Uint8Array
+): Promise<DivePlotHandle> {
+	const spec = JSON.parse(specJson);
+	const manifest: ManifestEntry[] = JSON.parse(manifestJson);
+
+	const coordinator = await getOrCreateCoordinator();
+
+	await Promise.all(
+		manifest.map((entry) => {
+			const ipcBytes = getTableIPC(entry);
+			return loadArrowIPCTable(coordinator, entry.name, ipcBytes, entry.hash);
+		})
+	);
+
+	return divePlotRender(el, spec, { coordinator });
+}
+
+/** Display a styled error message inline in the target element. */
+export function showError(el: HTMLElement, err: unknown): void {
+	el.innerHTML = '';
+	const msg = err instanceof Error ? err.message : String(err);
+	const div = document.createElement('div');
+	div.style.cssText =
+		'padding:12px;color:#dc2626;font:13px/1.5 monospace;' +
+		'white-space:pre-wrap;border:1px solid #fca5a5;' +
+		'border-radius:4px;background:#fef2f2;';
+	div.textContent = `[diveplot] ${msg}`;
+	el.appendChild(div);
+	console.error('[diveplot] render failed:', err);
+}
