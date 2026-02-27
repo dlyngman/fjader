@@ -28,7 +28,8 @@
 		"typecheck": "svelte-check --tsconfig ./jsconfig.json",
 		"build:widget": "vite build --config vite.widget.config.js",
 		"build:streamlit": "vite build --config vite.streamlit.config.js",
-		"build:all": "npm run build:widget && npm run build:streamlit"
+		"build:all": "npm run build:widget && npm run build:streamlit",
+		"build:python": "npm run build:all && cd python && uv build"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^1.2.5",

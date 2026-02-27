@@ -18,6 +18,10 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+source-include = [
+    "diveplot/static/**",
+    "diveplot/streamlit_frontend/**",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["diveplot/tests"]
