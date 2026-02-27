@@ -19,6 +19,11 @@ import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
  * 5. Ticks and labels rehydrate offsets back to datetimes for display
  */
 export class TimeScaleState extends LinearScaleState {
+	// --- Discriminant override ---
+	override get scaleType(): 'time' {
+		return 'time';
+	}
+
 	// --- Time Metadata ---
 	#t0: Date | null = null; // Origin Date (raw global min datetime)
 	#unit: number = 1; // Seconds per offset unit (1 = seconds)

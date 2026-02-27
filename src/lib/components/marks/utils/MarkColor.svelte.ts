@@ -64,14 +64,14 @@ export class MarkColor {
 					// Pass type and scheme in config
 					// Registry will use only 'type' for caching, 'scheme' for initialization/updates
 					this.scaleState = this.#scaleRegistry.getOrCreateScale(
-						scaleKey,
+						scaleKey as string,
 						'color',
 						{
 							type: type,
 							scheme: this.config.scheme
 						},
 						this.#chartContext.chartId
-					);
+					) as ColorScaleState;
 
 					const table = this.#tableProp();
 					if (this.scaleState && table) {
@@ -243,11 +243,11 @@ export class MarkColor {
 
 	colorScaleIndex: number = $derived(this.scaleState?.gpuIndex ?? 0);
 
-	constantColor: number[] = $derived.by(() => {
+	constantColor: [number, number, number, number] = $derived.by(() => {
 		const mode = this.#mode;
 		const value = mode === 'constant' ? this.config.value! : [0, 0, 0, 1];
 		// Return a new array to ensure reference changes
-		return [...value];
+		return [value[0], value[1], value[2], value[3]] as [number, number, number, number];
 	});
 
 	// Use state instead of derived to avoid flickering during transitions

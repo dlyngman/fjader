@@ -50,6 +50,7 @@ export interface DataBindingEntry {
 
 interface ScaleInstance {
 	id: string;
+	type: string;
 	constructor: { name: string };
 	gpuState?: { domainMin: number; domainMax: number; domainScale: number };
 	getConfig?: () => { categoryCount: number; paddingInner: number; paddingOuter: number };
@@ -1116,16 +1117,18 @@ export class GPUCoordinator {
 		this.#scaleArray = [];
 
 		for (const [scaleInstance, chartIds] of usageMap) {
+			// Only positional scales (Linear, Band, Time) have id and _affectedChartsArray
+			const scale = scaleInstance as unknown as ScaleInstance;
+			if (!scale?.id) continue;
+
 			if (chartIds && typeof chartIds[Symbol.iterator] === 'function') {
-				scaleInstance._affectedChartsArray = Array.from(chartIds);
+				scale._affectedChartsArray = Array.from(chartIds);
 			} else {
-				scaleInstance._affectedChartsArray = [];
+				scale._affectedChartsArray = [];
 			}
 
-			if (scaleInstance?.id) {
-				ids.push(scaleInstance.id);
-				this.#scaleIdToInstance.set(scaleInstance.id, scaleInstance);
-			}
+			ids.push(scale.id);
+			this.#scaleIdToInstance.set(scale.id, scale);
 		}
 
 		const count = this.#scaleIndexManager.rebuild(ids);

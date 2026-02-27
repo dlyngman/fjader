@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
+	import type { ChartContext, D3BandScale } from '$lib/types';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { ContinuousScaleState } from '$lib/types';
 
 	interface Props {
 		anchor?: number;
@@ -21,7 +23,8 @@
 
 	// Propagate custom format to scale state once it exists
 	$effect(() => {
-		if (tickFormat && c.yScaleState?.setCustomFormat) c.yScaleState.setCustomFormat(tickFormat);
+		const s = c.yScaleState;
+		if (tickFormat && s && s.scaleType !== 'band') (s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
 	// Compute axis x position: data-anchored or visually fixed
@@ -61,8 +64,8 @@
 			{/each}
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
 			{#each bandTicks as tick (tick)}
-				{@const tickY = c.yScale(tick) + c.yScale.bandwidth() / 2}
-				<g class:tick-dimmed={c.yScaleState.activeValues != null && !c.yScaleState.isActive(tick)}>
+				{@const tickY = c.yScale(tick) + (c.yScale as D3BandScale).bandwidth() / 2}
+				<g class:tick-dimmed={(c.yScaleState as BandScaleState).activeValues != null && !(c.yScaleState as BandScaleState).isActive(tick as string)}>
 					<line x1={axisX} x2={axisX + tickDir * 6} y1={tickY} y2={tickY} />
 					<text
 						text-anchor={textAnchor}

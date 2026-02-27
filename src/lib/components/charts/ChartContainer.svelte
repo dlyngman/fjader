@@ -6,7 +6,8 @@
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ChartContext, Coordinator } from '$lib/types';
+	import type { ChartContext, Coordinator, FieldRef } from '$lib/types';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import ChartCell from './ChartCell.svelte';
 
 	interface Props {
@@ -70,7 +71,12 @@
 
 	// --- Faceting ---
 	const facetBandScale = fx
-		? scaleRegistry.getOrCreateScale(`__facet__${fx}`, 'band', { sourceColumn: fx }, layout.chartId)
+		? (scaleRegistry.getOrCreateScale(
+				`__facet__${fx}`,
+				'band',
+				{ sourceColumn: fx },
+				layout.chartId
+			) as BandScaleState)
 		: null;
 	const facetCategories = $derived(
 		facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null
@@ -100,12 +106,12 @@
 	// $effect (which runs after render). Without queuing, registerScaleType calls
 	// from mark constructors silently fail via optional chaining on null.
 	interface PendingRegistration {
-		dimension: string;
+		dimension: 'x' | 'y';
 		type: string;
 		priority: number;
 		markId: string;
 		config: Record<string, unknown>;
-		columnName: unknown;
+		columnName: FieldRef | null;
 	}
 	let pendingScaleRegistrations: PendingRegistration[] = [];
 
@@ -264,14 +270,14 @@
 		},
 
 		registerScaleType: (dimension, type, priority, markId, config, columnName) => {
+			const dim = dimension as 'x' | 'y';
 			if (scales) {
-				scales.registerScaleType(dimension, type, priority, markId, config, columnName);
+				scales.registerScaleType(dim, type, priority, markId, config, columnName);
 			} else {
-				pendingScaleRegistrations.push({ dimension, type, priority, markId, config, columnName });
+				pendingScaleRegistrations.push({ dimension: dim, type, priority, markId, config, columnName });
 			}
 		},
-		unregisterScaleType: (dimension, markId) => scales?.unregisterScaleType(dimension, markId),
-		getScaleRequirementsSummary: () => scales?.getScaleRequirementsSummary(),
+		unregisterScaleType: (dimension, markId) => scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
 
 		get binStepMultiplier() {
 			return scales?.binStepMultiplier;

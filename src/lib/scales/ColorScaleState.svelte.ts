@@ -207,7 +207,7 @@ export class ColorScaleState {
 	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
 	 * returns it directly without processing.
 	 */
-	processDataForGPU(data: (string | number | null)[] | Float32Array): Float32Array {
+	processDataForGPU(data: (string | number | null)[] | ArrayLike<number>): Float32Array {
 		// Fast path: already Float32Array from derived view (zero-copy)
 		if (data instanceof Float32Array) {
 			return data;
@@ -258,8 +258,11 @@ export class ColorScaleState {
 
 	#uploadContinuous(): void {
 		// Bake gradient from configured D3 scale
-		const rampData = bakeGradient(this.#d3Scale, COLOR_RAMP_RESOLUTION);
-		this.#gpuCoordinator.writeColorRamp(this.#rampSlot, rampData);
+		const rampData = bakeGradient(
+			this.#d3Scale as Parameters<typeof bakeGradient>[0],
+			COLOR_RAMP_RESOLUTION
+		);
+		this.#gpuCoordinator.writeColorRamp(this.#rampSlot, rampData as Float32Array<ArrayBuffer>);
 
 		// Build and upload config struct
 		const config = this.#buildColorConfig({
@@ -278,7 +281,7 @@ export class ColorScaleState {
 
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
-		this.#gpuCoordinator.writeColorPalette(this.#paletteSlot, paletteData);
+		this.#gpuCoordinator.writeColorPalette(this.#paletteSlot, paletteData as Float32Array<ArrayBuffer>);
 
 		// Build and upload config struct
 		const config = this.#buildColorConfig({
@@ -481,7 +484,7 @@ export class ColorScaleState {
 	 */
 	getColor(value: string | number): string {
 		if (!this.#d3Scale) return '#000000';
-		return this.#d3Scale(value);
+		return (this.#d3Scale as (v: string | number) => string)(value);
 	}
 
 	/**

@@ -1,7 +1,8 @@
 // src/lib/interactors/TooltipManager.svelte.ts
 
 import type { Coordinator } from '@uwdata/mosaic-core';
-import type { D3Scale, ScaleStateInstance } from '$lib/types';
+import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
+import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 
 type DataRow = Record<string, unknown>;
 
@@ -328,9 +329,9 @@ export class TooltipManager {
 			bbConditions.push(`CAST(${xCol} AS INTEGER) = ${Math.round(xData)}`);
 		} else if (xData != null) {
 			if (xScale) {
-				const x0 = xScale.invert(xScale(xData) - boundingBoxPx);
-				const x1 = xScale.invert(xScale(xData) + boundingBoxPx);
-				bbConditions.push(`${xCol} BETWEEN ${Math.min(x0, x1)} AND ${Math.max(x0, x1)}`);
+				const x0 = xScale.invert!(xScale(xData) - boundingBoxPx);
+				const x1 = xScale.invert!(xScale(xData) + boundingBoxPx);
+				bbConditions.push(`${xCol} BETWEEN ${Math.min(x0 as number, x1 as number)} AND ${Math.max(x0 as number, x1 as number)}`);
 
 				const pxPerUnit = xScale(xData + 1) - xScale(xData);
 				const pxSq = pxPerUnit * pxPerUnit;
@@ -345,9 +346,9 @@ export class TooltipManager {
 			bbConditions.push(`CAST(${yCol} AS INTEGER) = ${Math.round(yData)}`);
 		} else if (yData != null) {
 			if (yScale) {
-				const y0 = yScale.invert(yScale(yData) - boundingBoxPx);
-				const y1 = yScale.invert(yScale(yData) + boundingBoxPx);
-				bbConditions.push(`${yCol} BETWEEN ${Math.min(y0, y1)} AND ${Math.max(y0, y1)}`);
+				const y0 = yScale.invert!(yScale(yData) - boundingBoxPx);
+				const y1 = yScale.invert!(yScale(yData) + boundingBoxPx);
+				bbConditions.push(`${yCol} BETWEEN ${Math.min(y0 as number, y1 as number)} AND ${Math.max(y0 as number, y1 as number)}`);
 
 				const pxPerUnit = yScale(yData + 1) - yScale(yData);
 				const pxSq = pxPerUnit * pxPerUnit;
@@ -392,10 +393,10 @@ export class TooltipManager {
 			const col = columns?.[axis] || axis;
 			const index = row[col as string];
 			if (index == null) return null;
-			const category = config.bandDomains[axis]![index];
+			const category = config.bandDomains[axis]![index as number];
 			if (category == null) return null;
 			const pos = scale(category);
-			const bandwidth = scale.bandwidth ? scale.bandwidth() : 0;
+			const bandwidth = 'bandwidth' in scale ? (scale as D3BandScale).bandwidth() : 0;
 			return pos != null ? pos + bandwidth / 2 : null;
 		}
 
@@ -406,7 +407,7 @@ export class TooltipManager {
 			const low = row[columns[lowKey] as string];
 			const high = row[columns[highKey] as string];
 			if (low != null && high != null) {
-				return scale((low + high) / 2);
+				return scale(((low as number) + (high as number)) / 2);
 			}
 			return null;
 		}
@@ -436,7 +437,7 @@ export class TooltipManager {
 
 			// Resolve band index to category label
 			if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
-				const label = bandDomains[key]![value];
+				const label = bandDomains[key]![value as number];
 				point[fieldName] = label ?? value;
 				continue;
 			}
@@ -448,7 +449,9 @@ export class TooltipManager {
 				typeof value === 'number'
 			) {
 				const scaleState = this.#scaleProvider.xScaleState;
-				point[fieldName] = scaleState?.formatTooltipValue?.(value) ?? value;
+				point[fieldName] = scaleState && scaleState.scaleType === 'time'
+					? (scaleState as TimeScaleState).formatTooltipValue(value) ?? value
+					: value;
 				continue;
 			}
 			if (
@@ -457,7 +460,9 @@ export class TooltipManager {
 				typeof value === 'number'
 			) {
 				const scaleState = this.#scaleProvider.yScaleState;
-				point[fieldName] = scaleState?.formatTooltipValue?.(value) ?? value;
+				point[fieldName] = scaleState && scaleState.scaleType === 'time'
+					? (scaleState as TimeScaleState).formatTooltipValue(value) ?? value
+					: value;
 				continue;
 			}
 

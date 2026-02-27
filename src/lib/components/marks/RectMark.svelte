@@ -80,15 +80,15 @@
 		if (x != null) return expandBinForExtent(x, 'x', 'rect');
 		return { x1: x1Prop, x2: x2Prop };
 	});
-	const ex1 = $derived(expandedX.x1);
-	const ex2 = $derived(expandedX.x2);
+	const ex1 = $derived(expandedX.x1 as FieldRef | null);
+	const ex2 = $derived(expandedX.x2 as FieldRef | null);
 
 	const expandedY = $derived.by(() => {
 		if (y != null) return expandBinForExtent(y, 'y', 'rect');
 		return { y1: y1Prop, y2: y2Prop };
 	});
-	const ey1 = $derived(expandedY.y1);
-	const ey2 = $derived(expandedY.y2);
+	const ey1 = $derived(expandedY.y1 as FieldRef | null);
+	const ey2 = $derived(expandedY.y2 as FieldRef | null);
 
 	// --- SCALE TYPE INFERENCE ---
 	const effectiveXScaleType = $derived.by(() =>
@@ -111,7 +111,7 @@
 
 	// Band scale config (applies only when axis resolves to band)
 	const bandScaleConfig = $derived.by(() => {
-		const config = {};
+		const config: Record<string, unknown> = {};
 		if (padding != null) config.padding = padding;
 		if (paddingInner != null) config.paddingInner = paddingInner;
 		if (paddingOuter != null) config.paddingOuter = paddingOuter;

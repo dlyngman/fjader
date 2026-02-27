@@ -73,14 +73,14 @@
 	{#each entries as [key, value] (key)}
 		<div class="row">
 			<span class="key">
-				<span class="channel-icon">{channelIcons[getChannel(key)] ?? ''}</span>
+				<span class="channel-icon">{channelIcons[getChannel(key as string)] ?? ''}</span>
 				{key}
 			</span>
 			<span class="value">
 				{#if key === colorField && color}
 					<span class="swatch" style="background-color: {color};"></span>
 				{/if}
-				{formatValue(key, value)}
+				{formatValue(key as string, value)}
 			</span>
 		</div>
 	{/each}

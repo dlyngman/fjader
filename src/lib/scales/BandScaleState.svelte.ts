@@ -39,6 +39,10 @@ export class BandScaleState {
 	// =========================================================================
 	// IDENTITY & TYPE
 	// =========================================================================
+	get scaleType(): 'band' {
+		return 'band';
+	}
+
 	id: string = crypto.randomUUID();
 	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
 	name: string = $state('');
@@ -551,7 +555,7 @@ export class BandScaleState {
 	/**
 	 * Update scale domain (for D3 scale)
 	 */
-	updateScaleDomain(scale: ScaleBand<string>): ScaleBand<string> {
+	updateScaleDomain(scale: { domain(d: string[]): unknown }): unknown {
 		this._version; // Register svelte dependency
 		scale.domain(this.effectiveDomain);
 		return scale; // Return the function itself

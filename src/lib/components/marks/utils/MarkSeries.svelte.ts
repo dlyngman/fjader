@@ -50,11 +50,11 @@ export class MarkSeries {
 					const scaleName = isNode(field) ? field.toString() : field;
 
 					this.scaleState = this.#scaleRegistry.getOrCreateScale(
-						scaleName,
+						scaleName as string,
 						'color',
 						{ type: 'ordinal' },
 						this.#chartContext.chartId
-					);
+					) as ColorScaleState;
 
 					const table = this.#tableProp();
 					if (this.scaleState && table) {

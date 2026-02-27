@@ -29,6 +29,10 @@ export interface D3Scale {
 	(value: unknown): number;
 	domain(): unknown[];
 	range(): number[];
+	invert?(value: number): number;
+	ticks?(count?: number): number[];
+	tickFormat?(count?: number, specifier?: string): (d: number) => string;
+	bandwidth?(): number;
 }
 
 /** D3 band scale — adds bandwidth() to the base interface. */
@@ -246,8 +250,11 @@ import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 
+/** Continuous axis scales (support zoom, pan, animated domain). */
+export type ContinuousScaleState = LinearScaleState | TimeScaleState;
+
 /** Union of all scale state types that can appear on x/y axes. */
-export type ScaleStateInstance = LinearScaleState | BandScaleState | TimeScaleState;
+export type ScaleStateInstance = ContinuousScaleState | BandScaleState;
 
 /**
  * The chart context object created by ChartCell/ChartContainer and
@@ -318,15 +325,14 @@ export interface ChartContext {
 
 	// Scale registration
 	registerScaleType: (
-		dimension: string,
+		dimension: 'x' | 'y',
 		type: string,
 		priority: number,
 		markId: string,
 		config: Record<string, unknown>,
 		columnName: FieldRef | null
 	) => void;
-	unregisterScaleType: (dimension: string, markId: string) => void;
-	getScaleRequirementsSummary: () => unknown;
+	unregisterScaleType: (dimension: 'x' | 'y', markId: string) => void;
 
 	readonly binStepMultiplier: number | undefined;
 

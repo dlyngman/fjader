@@ -90,10 +90,10 @@
     }
   `;
 
-	const vertexBufferLayout = [
+	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
 			arrayStride: 2 * 4,
-			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' as GPUVertexFormat }]
 		}
 	];
 

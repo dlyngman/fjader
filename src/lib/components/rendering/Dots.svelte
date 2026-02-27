@@ -182,18 +182,18 @@
 		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
 
-	const vertexBufferLayout = [
+	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
 			arrayStride: 2 * 4,
-			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' as GPUVertexFormat }]
 		},
 		// Facet index: per-instance f32 via vertex attribute (not a storage buffer)
 		...(faceted
 			? [
 					{
 						arrayStride: 4,
-						stepMode: 'instance',
-						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' }]
+						stepMode: 'instance' as GPUVertexStepMode,
+						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' as GPUVertexFormat }]
 					}
 				]
 			: [])

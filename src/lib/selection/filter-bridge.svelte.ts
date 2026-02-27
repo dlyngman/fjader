@@ -196,7 +196,8 @@ export class FilterBridge {
 			this.#syncItems();
 		};
 
-		const onActivate = (clause: SelectionClause): void => {
+		const onActivate = (clauses: SelectionClause[] & { active?: SelectionClause }): void => {
+			const clause = clauses.active ?? clauses[0];
 			if (clause && !isNeutral(clause)) {
 				this.filterSel.activate?.({ ...clause, source: source as unknown as SelectionClause['source'] });
 			}

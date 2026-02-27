@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { filter, topN, stack, stackY, stackX, normalize } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin, AutoBinNode } from '../sql/bin';
-import { Query, gt, sum, column } from '@uwdata/mosaic-sql';
+import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
 import { ObjectDataAccessor } from '$lib/data/DataAccessor';
 
 /** Helper: wrap plain objects as DataAccessor for tests. */
@@ -227,7 +227,7 @@ describe('Transforms', () => {
 				toString: () => 'WITH temp AS (SELECT * FROM t) SELECT * FROM temp'
 			};
 
-			expect(() => compiler.validateQuery(badQuery)).toThrow(/CTE/);
+			expect(() => compiler.validateQuery(badQuery as unknown as SelectQuery)).toThrow(/CTE/);
 		});
 	});
 

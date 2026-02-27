@@ -5,7 +5,7 @@ type BinOptions = BinHistogramOptions & BinDateOptions;
 
 interface FieldStats {
 	column: string;
-	stats: string[];
+	stats: ('min' | 'max' | 'count' | 'nulls' | 'distinct')[];
 }
 
 interface FieldInfo {

@@ -2,6 +2,7 @@
 	import { getContext } from 'svelte';
 	import OrdinalColorLegend from './OrdinalColorLegend.svelte';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 
 	interface Props {
@@ -42,9 +43,9 @@
 	const effectiveTitle = $derived(title ?? color ?? '');
 </script>
 
-{#if colorScaleState?.ready && colorScaleState.isOrdinal}
+{#if colorScaleState?.ready && (colorScaleState as ColorScaleState).isOrdinal}
 	<OrdinalColorLegend
-		scaleState={colorScaleState}
+		scaleState={colorScaleState as ColorScaleState}
 		{bridge}
 		field={color}
 		{title}

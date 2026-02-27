@@ -1,4 +1,5 @@
 import { MosaicClient, queryFieldInfo } from '@uwdata/mosaic-core';
+import type { FieldInfoRequest } from '@uwdata/mosaic-core';
 import type { Selection } from '@uwdata/mosaic-core';
 import {
 	Query,
@@ -8,6 +9,7 @@ import {
 	isNotNull,
 	and
 } from '@uwdata/mosaic-sql';
+import type { ExprNode, FilterExpr, ExprValue, SelectExpr, GroupByExpr, OrderByExpr } from '@uwdata/mosaic-sql';
 import type { Table } from '@uwdata/flechette';
 
 type DataFormat = 'arrow' | 'array' | 'both';
@@ -15,12 +17,12 @@ type DataFormat = 'arrow' | 'array' | 'both';
 export type QueryBuilder = (
 	sourceTable: string,
 	config: DataClientConfig,
-	filter: unknown[]
+	filter: FilterExpr
 ) => Query | null;
 
 export interface DataClientOptions {
 	name?: string;
-	filterNulls?: unknown[] | null;
+	filterNulls?: ExprValue[] | null;
 	dataFormat?: DataFormat;
 	queryBuilder?: QueryBuilder;
 	filterStable?: boolean;
@@ -28,7 +30,7 @@ export interface DataClientOptions {
 }
 
 export interface DataClientConfig {
-	_filterNulls: unknown[] | null;
+	_filterNulls: ExprValue[] | null;
 	_dataFormat: DataFormat;
 	select?: Record<string, unknown>;
 	sort?: { channel: string; direction: 'asc' | 'desc' } | null;
@@ -63,7 +65,7 @@ export class DataClient extends MosaicClient {
 
 	// --- Private Internal Properties ---
 	#loadingTimeout: ReturnType<typeof setTimeout> | null = null;
-	#fieldRequests: unknown[];
+	#fieldRequests: FieldInfoRequest[];
 	#queryBuilder: QueryBuilder;
 	#filterStable: boolean;
 
@@ -71,7 +73,7 @@ export class DataClient extends MosaicClient {
 		sourceTable: string,
 		filterBy: Selection | null = null,
 		options: DataClientOptions = {},
-		fieldRequests: unknown[] = []
+		fieldRequests: FieldInfoRequest[] = []
 	) {
 		super(filterBy);
 
@@ -122,7 +124,7 @@ export class DataClient extends MosaicClient {
 		try {
 			const infoArray = await queryFieldInfo(this.coordinator, this.#fieldRequests);
 			const infoMap: Record<string, FieldInfoEntry> = {};
-			for (const info of infoArray as FieldInfoEntry[]) {
+			for (const info of infoArray as unknown as FieldInfoEntry[]) {
 				const key = info.column.replace(/^["']|["']$/g, '');
 				infoMap[key] = info;
 			}
@@ -134,13 +136,13 @@ export class DataClient extends MosaicClient {
 		}
 	}
 
-	query(filter: unknown[] = []): Query | null {
+	query(filter?: FilterExpr | null): Query | null {
 		if (!this._sourceTable) {
 			this.error = new Error('Source table is not defined.');
 			this.setLoading(false);
 			return null;
 		}
-		return this.#queryBuilder(this._sourceTable, this.config, filter);
+		return this.#queryBuilder(this._sourceTable, this.config, filter ?? []);
 	}
 
 	queryPending(): this {
@@ -153,7 +155,7 @@ export class DataClient extends MosaicClient {
 		const dataFormat = this.config._dataFormat;
 		try {
 			if (dataFormat === 'arrow' || dataFormat === 'both') {
-				this.arrowTable = rawData;
+				this.arrowTable = rawData as Table;
 				this.dataVersion++; // Increment version for reactive consumers
 			}
 			if (dataFormat === 'array' || dataFormat === 'both') {
@@ -181,12 +183,12 @@ export class DataClient extends MosaicClient {
 	// ==  DEFAULT QUERY BUILDER                                      ==
 	// =================================================================
 
-	_defaultQueryBuilder(sourceTable: string, config: DataClientConfig, filter: unknown[]): Query {
+	_defaultQueryBuilder(sourceTable: string, config: DataClientConfig, filter: FilterExpr): Query {
 		const { select, sort, limit, _filterNulls } = config;
 
 		const q = Query.from(sourceTable);
-		const selectDef: Record<string, unknown> = {};
-		const nonAggregateGroupBy: unknown[] = [];
+		const selectDef: Record<string, ExprValue> = {};
+		const nonAggregateGroupBy: ExprNode[] = [];
 		let hasAggregates = false;
 
 		// 1. Parse select expressions and identify aggregates vs. dimensions
@@ -207,22 +209,22 @@ export class DataClient extends MosaicClient {
 
 		// 2. Add GROUP BY clause ONLY if there are aggregates and dimensions
 		if (hasAggregates && nonAggregateGroupBy.length > 0) {
-			q.groupby(nonAggregateGroupBy);
+			q.groupby(...nonAggregateGroupBy);
 		}
 
 		// 3. Add filtering
-		const allFilters = [...filter];
+		const allFilters: (string | boolean | ExprNode)[] = [...(Array.isArray(filter) ? filter : filter ? [filter] : [])];
 		if (_filterNulls && Array.isArray(_filterNulls)) {
-			allFilters.push(..._filterNulls.map((col: unknown) => isNotNull(col)));
+			allFilters.push(..._filterNulls.map((col) => isNotNull(col as ExprValue)));
 		}
 		if (allFilters.length > 0) {
-			q.where(and(allFilters));
+			q.where(and(...allFilters));
 		}
 
 		// 4. Add sorting and limit
 		if (sort) {
 			const dir = sort.direction === 'desc' ? 'DESC' : 'ASC';
-			q.orderby({ [sort.by]: dir });
+			q.orderby({ [sort.channel]: dir } as unknown as OrderByExpr);
 		}
 		if (limit) q.limit(limit);
 

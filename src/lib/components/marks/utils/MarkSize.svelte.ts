@@ -43,7 +43,7 @@ export class MarkSize {
 						'size',
 						{ range: this.#rangeProp() },
 						this.#chartContext.chartId
-					);
+					) as SizeScaleState;
 				});
 			} else {
 				this.scaleState = null;
@@ -103,7 +103,7 @@ export class MarkSize {
 		});
 
 		if (!raw) return null;
-		return this.scaleState.processDataForGPU(raw);
+		return this.scaleState.processDataForGPU(raw as ArrayLike<number>);
 	});
 
 	sizeMode: number = $derived(this.#mode === 'field' ? 1 : 0);

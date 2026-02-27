@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
+	import type { ChartContext, D3BandScale } from '$lib/types';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { ContinuousScaleState } from '$lib/types';
 
 	interface Props {
 		ticksNumber?: number;
@@ -12,7 +14,8 @@
 
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
 	$effect(() => {
-		if (tickFormat && c.xScaleState?.setCustomFormat) c.xScaleState.setCustomFormat(tickFormat);
+		const s = c.xScaleState;
+		if (tickFormat && s && s.scaleType !== 'band') (s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
 	// Continuous scales (linear, time): use scaleState.getTicks()
@@ -44,17 +47,19 @@
 			</text>
 		{:else if c.scaleTypes.x === 'band' && c.xScale}
 			<!-- Band scales: centered positioning -->
+			{@const bandState = c.xScaleState as BandScaleState}
+			{@const bandScale = c.xScale as D3BandScale}
 			{#each bandTicks as tick (tick)}
 				{@const tickX = c.xScale(tick)}
-				<g class:tick-dimmed={c.xScaleState.activeValues != null && !c.xScaleState.isActive(tick)}>
+				<g class:tick-dimmed={bandState.activeValues != null && !bandState.isActive(tick as string)}>
 					<line
-						x1={tickX + c.xScale.bandwidth() / 2}
-						x2={tickX + c.xScale.bandwidth() / 2}
+						x1={tickX + bandScale.bandwidth() / 2}
+						x2={tickX + bandScale.bandwidth() / 2}
 						y1={0}
 						y2={5}
 					/>
 
-					<text text-anchor="middle" x={tickX + c.xScale.bandwidth() / 2} y={16}>
+					<text text-anchor="middle" x={tickX + bandScale.bandwidth() / 2} y={16}>
 						{tick}
 					</text>
 				</g>

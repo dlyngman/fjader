@@ -84,8 +84,8 @@
 		if (x != null) return expandBinForExtent(x, 'x', 'rectY');
 		return { x1: x1Prop, x2: x2Prop };
 	});
-	const x1 = $derived(expandedX.x1);
-	const x2 = $derived(expandedX.x2);
+	const x1 = $derived(expandedX.x1 as FieldRef | null);
+	const x2 = $derived(expandedX.x2 as FieldRef | null);
 
 	// --- SCALE TYPE INFERENCE ---
 	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x1, table, preferredXScaleType));
@@ -104,10 +104,10 @@
 	// Detect if this is a histogram: binning on X + aggregate on Y
 	const isHistogram = $derived.by(() => {
 		// Check if x1 is a bin (AutoBinNode)
-		const hasBinnedX = x1?.isAutoBinNode;
+		const hasBinnedX = typeof x1 === 'object' && x1 != null && 'isAutoBinNode' in x1 && x1.isAutoBinNode;
 		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
 		const hasAggregateY =
-			y2?.aggregate || (typeof y2 === 'object' && y2?.constructor?.name === '_AggregateNode');
+			typeof y2 === 'object' && y2 != null && ('aggregate' in y2 || y2.constructor?.name === '_AggregateNode');
 		return hasBinnedX && hasAggregateY;
 	});
 
@@ -129,8 +129,8 @@
 			}
 		},
 		inferredScaleColumns: {
-			x: x1,
-			y: y2
+			x: x1 ?? undefined,
+			y: y2 ?? undefined
 		},
 		table,
 		selection,

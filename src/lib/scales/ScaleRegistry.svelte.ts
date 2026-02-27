@@ -8,6 +8,7 @@ import { ColorScaleState } from './ColorScaleState.svelte';
 import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import type { ColorScaleType } from '$lib/types';
 
 export type AnyScaleState =
 	| LinearScaleState
@@ -250,11 +251,11 @@ export class ScaleRegistry {
 					this.scales[type].set(
 						key,
 						new BandScaleState(name, [], {
-							paddingInner: config.paddingInner ?? (type === 'point' ? 1 : 0.1),
-							paddingOuter: config.paddingOuter ?? 0.1,
-							padding: config.padding ?? 0.1,
-							align: config.align ?? 0.5,
-							sourceColumn: config.sourceColumn,
+							paddingInner: (config.paddingInner as number | undefined) ?? (type === 'point' ? 1 : 0.1),
+							paddingOuter: (config.paddingOuter as number | undefined) ?? 0.1,
+							padding: (config.padding as number | undefined) ?? 0.1,
+							align: (config.align as number | undefined) ?? 0.5,
+							sourceColumn: config.sourceColumn as string | undefined,
 							registry: this
 						})
 					);
@@ -272,11 +273,11 @@ export class ScaleRegistry {
 						new ColorScaleState(
 							{
 								field: name,
-								type: scaleType,
-								scheme: config.scheme || defaultScheme,
-								domain: config.domain || [],
-								reverse: config.reverse ?? false,
-								midpoint: config.midpoint
+								type: scaleType as ColorScaleType,
+								scheme: (config.scheme as string | undefined) || defaultScheme,
+								domain: (config.domain as number[] | undefined) || [],
+								reverse: (config.reverse as boolean | undefined) ?? false,
+								midpoint: config.midpoint as number | undefined
 							},
 							this,
 							this.#gpuCoordinator
@@ -288,8 +289,8 @@ export class ScaleRegistry {
 						new SizeScaleState(
 							{
 								field: name,
-								domain: config.domain || [],
-								range: config.range || [2, 12]
+								domain: (config.domain as number[] | undefined) || [],
+								range: (config.range as [number, number] | undefined) || [2, 12]
 							},
 							this,
 							this.#gpuCoordinator
@@ -300,7 +301,7 @@ export class ScaleRegistry {
 						key,
 						scaleOrdinal()
 							.range(['#EFB605', '#FFF84A', '#FF0266'])
-							.domain(['Adelie', 'Gentoo', 'Chinstrap'])
+							.domain(['Adelie', 'Gentoo', 'Chinstrap']) as unknown as AnyScaleState
 					);
 				} else {
 					// Fallback

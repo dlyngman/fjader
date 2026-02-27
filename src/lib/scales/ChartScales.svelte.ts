@@ -1,10 +1,11 @@
 // src/lib/scales/ChartScales.svelte.ts
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
-import type { RegisteredRegisteredScaleRequirement } from './ScalePriorities';
+import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './ScalePriorities';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 import type { ScaleStateInstance, D3Scale, D3BandScale, FieldRef, MosaicClient } from '$lib/types';
+import { isBinExpression } from '$lib/sql/bin';
 
 interface PanContext {
 	initialScreenPos: number;
@@ -12,7 +13,7 @@ interface PanContext {
 	screenToDataRatio: number;
 	domainWidth: number;
 	screenDimension: number;
-	axis: string;
+	axis: 'x' | 'y';
 	lastScreenPos: number;
 }
 
@@ -137,17 +138,21 @@ export class ChartScales {
 				this.#previousYScale = neededYScale;
 			}
 
-			if (this.config.xZoomLimit !== undefined) {
-				this.#xScaleInstance?.setZoomLimit?.(this.config.xZoomLimit);
-			}
-			if (this.config.yZoomLimit !== undefined) {
-				this.#yScaleInstance?.setZoomLimit?.(this.config.yZoomLimit);
-			}
-			if (this.config.xPanLimit !== undefined) {
-				this.#xScaleInstance?.setPanLimit?.(this.config.xPanLimit);
-			}
-			if (this.config.yPanLimit !== undefined) {
-				this.#yScaleInstance?.setPanLimit?.(this.config.yPanLimit);
+			{
+				const xInst = this.#xScaleInstance;
+				const yInst = this.#yScaleInstance;
+				if (this.config.xZoomLimit !== undefined && xInst && xInst.scaleType !== 'band') {
+					xInst.setZoomLimit(this.config.xZoomLimit);
+				}
+				if (this.config.yZoomLimit !== undefined && yInst && yInst.scaleType !== 'band') {
+					yInst.setZoomLimit(this.config.yZoomLimit);
+				}
+				if (this.config.xPanLimit !== undefined && xInst && xInst.scaleType !== 'band') {
+					xInst.setPanLimit(this.config.xPanLimit);
+				}
+				if (this.config.yPanLimit !== undefined && yInst && yInst.scaleType !== 'band') {
+					yInst.setPanLimit(this.config.yPanLimit);
+				}
 			}
 		});
 
@@ -201,8 +206,8 @@ export class ChartScales {
 		} catch (error) {
 			console.error('Scale config error', error);
 			return {
-				x: { type: 'linear', config: {} },
-				y: { type: 'linear', config: {} }
+				x: { type: 'linear', config: {}, columnName: null } as ResolvedScaleConfiguration,
+				y: { type: 'linear', config: {}, columnName: null } as ResolvedScaleConfiguration
 			};
 		}
 	});
@@ -235,23 +240,27 @@ export class ChartScales {
 	get xScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
 		this.#xScaleInstance.domainForReactivity; // Register dependency
-		return this.#xScaleInstance.updateScaleDomain(this.baseXScale);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return this.#xScaleInstance.updateScaleDomain(this.baseXScale) as D3Scale;
 	}
 
 	get yScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
 		this.#yScaleInstance.domainForReactivity; // Register dependency
-		return this.#yScaleInstance.updateScaleDomain(this.baseYScale);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return this.#yScaleInstance.updateScaleDomain(this.baseYScale) as D3Scale;
 	}
 
 	get xTargetScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
-		return this.#xScaleInstance.updateScaleDomain(this.baseXScale, false);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return this.#xScaleInstance.updateScaleDomain(this.baseXScale) as D3Scale;
 	}
 
 	get yTargetScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
-		return this.#yScaleInstance.updateScaleDomain(this.baseYScale, false);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return this.#yScaleInstance.updateScaleDomain(this.baseYScale) as D3Scale;
 	}
 
 	currentXDataPoint = $derived(this.#xScaleInstance?.currentDataPoint);
@@ -268,13 +277,14 @@ export class ChartScales {
 		config: Record<string, unknown> = {},
 		columnName: FieldRef | null = null
 	): void => {
-		let rawColumn = columnName;
-		if (rawColumn?.isAutoBinNode) {
+		let rawColumn: FieldRef | null = columnName;
+		if (isBinExpression(rawColumn)) {
 			rawColumn = rawColumn.field;
 		}
 		if (rawColumn && typeof rawColumn !== 'string') {
 			rawColumn = rawColumn.toString();
 		}
+		const resolvedColumnName: string | null = typeof rawColumn === 'string' ? rawColumn : null;
 
 		const requirements = this.scaleRequirements[dimension];
 		const existing = requirements.find(
@@ -286,7 +296,7 @@ export class ChartScales {
 		);
 
 		if (!existing) {
-			requirements.push({ type, priority, markId, config, columnName: rawColumn });
+			requirements.push({ type, priority, markId, config, columnName: resolvedColumnName });
 			this.scaleRequirements[dimension] = [...requirements];
 		}
 	};
@@ -360,13 +370,15 @@ export class ChartScales {
 		innerWidth: number,
 		innerHeight: number
 	): void => {
-		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
-			const dataPoint = this.#xScaleInstance.invertScreenToData(innerPoint.x, innerWidth, false);
-			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
+		const xInst = this.#xScaleInstance;
+		if (doX && xInst && xInst.scaleType !== 'band') {
+			const dataPoint = xInst.invertScreenToData(innerPoint.x, innerWidth, false);
+			xInst.accumulateZoom(dataPoint, scaleFactor);
 		}
-		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
-			const dataPoint = this.#yScaleInstance.invertScreenToData(innerPoint.y, innerHeight, true);
-			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
+		const yInst = this.#yScaleInstance;
+		if (doY && yInst && yInst.scaleType !== 'band') {
+			const dataPoint = yInst.invertScreenToData(innerPoint.y, innerHeight, true);
+			yInst.accumulateZoom(dataPoint, scaleFactor);
 		}
 	};
 
@@ -378,15 +390,15 @@ export class ChartScales {
 		innerWidth: number,
 		innerHeight: number
 	): void => {
-		if (doX && this.#isContinuous('x') && this.#xScaleInstance) {
-			const dataPoint = this.#xScaleInstance.invertScreenToData(innerPoint.x, innerWidth, false);
-			this.#xScaleInstance.accumulateZoom(dataPoint, scaleFactor);
-			this.#xScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'x', innerWidth);
+		const xInst = this.#xScaleInstance;
+		if (doX && xInst && xInst.scaleType !== 'band') {
+			const dataPoint = xInst.invertScreenToData(innerPoint.x, innerWidth, false);
+			xInst.accumulateZoom(dataPoint, scaleFactor);
 		}
-		if (doY && this.#isContinuous('y') && this.#yScaleInstance) {
-			const dataPoint = this.#yScaleInstance.invertScreenToData(innerPoint.y, innerHeight, true);
-			this.#yScaleInstance.accumulateZoom(dataPoint, scaleFactor);
-			this.#yScaleInstance.applyZoomDomain(dataPoint, scaleFactor, 'y', innerHeight);
+		const yInst = this.#yScaleInstance;
+		if (doY && yInst && yInst.scaleType !== 'band') {
+			const dataPoint = yInst.invertScreenToData(innerPoint.y, innerHeight, true);
+			yInst.accumulateZoom(dataPoint, scaleFactor);
 		}
 	};
 
@@ -401,8 +413,9 @@ export class ChartScales {
 		this.activePanX = activePanX;
 		this.activePanY = activePanY;
 
-		if (activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
-			const currentDomain = this.#xScaleInstance.domain.current;
+		const xInst = this.#xScaleInstance;
+		if (activePanX && xInst && xInst.scaleType !== 'band') {
+			const currentDomain = xInst.domain.current;
 
 			this._xPanContext.initialScreenPos = x;
 			this._xPanContext.initialDomain[0] = currentDomain[0];
@@ -412,11 +425,12 @@ export class ChartScales {
 			this._xPanContext.screenDimension = innerWidth;
 			this._xPanContext.lastScreenPos = x;
 
-			this.#xScaleInstance.setPanContext(this._xPanContext);
+			xInst.setPanContext(this._xPanContext);
 		}
 
-		if (activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
-			const currentDomain = this.#yScaleInstance.domain.current;
+		const yInst = this.#yScaleInstance;
+		if (activePanY && yInst && yInst.scaleType !== 'band') {
+			const currentDomain = yInst.domain.current;
 
 			this._yPanContext.initialScreenPos = y;
 			this._yPanContext.initialDomain[0] = currentDomain[0];
@@ -426,7 +440,7 @@ export class ChartScales {
 			this._yPanContext.screenDimension = innerHeight;
 			this._yPanContext.lastScreenPos = y;
 
-			this.#yScaleInstance.setPanContext(this._yPanContext);
+			yInst.setPanContext(this._yPanContext);
 		}
 	};
 
@@ -434,33 +448,39 @@ export class ChartScales {
 		this.activePanX = false;
 		this.activePanY = false;
 
-		if (this.#isContinuous('x') && this.#xScaleInstance) {
-			this.#xScaleInstance.endPan();
+		const xInst = this.#xScaleInstance;
+		if (xInst && xInst.scaleType !== 'band') {
+			xInst.endPan();
 		}
-		if (this.#isContinuous('y') && this.#yScaleInstance) {
-			this.#yScaleInstance.endPan();
+		const yInst = this.#yScaleInstance;
+		if (yInst && yInst.scaleType !== 'band') {
+			yInst.endPan();
 		}
 	};
 
 	updatePanPosition = (screenX: number, screenY: number): void => {
-		if (this.activePanX && this.#isContinuous('x') && this.#xScaleInstance) {
-			this.#xScaleInstance.updatePanPosition(screenX, 0);
+		const xInst = this.#xScaleInstance;
+		if (this.activePanX && xInst && xInst.scaleType !== 'band') {
+			xInst.updatePanPosition(screenX, 0);
 		}
-		if (this.activePanY && this.#isContinuous('y') && this.#yScaleInstance) {
-			this.#yScaleInstance.updatePanPosition(0, screenY);
+		const yInst = this.#yScaleInstance;
+		if (this.activePanY && yInst && yInst.scaleType !== 'band') {
+			yInst.updatePanPosition(0, screenY);
 		}
 	};
 
 	xCategoryPositions = $derived.by(() => {
-		if (this.scaleTypes?.x !== 'band' || !this.xScale || !this.layout.isReady) return null;
-		const domain = this.#xScaleInstance?.effectiveDomain;
+		const xInst = this.#xScaleInstance;
+		if (!xInst || xInst.scaleType !== 'band' || !this.xScale || !this.layout.isReady) return null;
+		const domain = xInst.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
 		return new Float32Array(domain.map((d: string | number) => this.xScale!(d)));
 	});
 
 	yCategoryPositions = $derived.by(() => {
-		if (this.scaleTypes?.y !== 'band' || !this.yScale || !this.layout.isReady) return null;
-		const domain = this.#yScaleInstance?.effectiveDomain;
+		const yInst = this.#yScaleInstance;
+		if (!yInst || yInst.scaleType !== 'band' || !this.yScale || !this.layout.isReady) return null;
+		const domain = yInst.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
 		return new Float32Array(domain.map((d: string | number) => this.yScale!(d)));
 	});
