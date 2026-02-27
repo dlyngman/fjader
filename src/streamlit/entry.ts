@@ -14,6 +14,7 @@ const root = document.getElementById('root')!;
 let handle: DivePlotHandle | null = null;
 let generation = 0;
 
+
 function onRender(event: Event): void {
 	const gen = ++generation;
 	const { args } = (event as CustomEvent<RenderData>).detail;
@@ -41,15 +42,12 @@ function onRender(event: Event): void {
 				return;
 			}
 			handle = h;
-			Streamlit.setFrameHeight();
 		})
 		.catch((err) => {
 			if (gen !== generation) return;
 			showError(root, err);
-			Streamlit.setFrameHeight();
 		});
 }
 
 Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
 Streamlit.setComponentReady();
-Streamlit.setFrameHeight();

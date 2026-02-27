@@ -3,11 +3,14 @@
 	<head>
 		<meta charset="utf-8" />
 		<style>
-			body {
+			*, *::before, *::after { box-sizing: border-box; }
+			html, body, #root {
 				margin: 0;
 				padding: 0;
+				height: 100%;
 				overflow: hidden;
 			}
+			svg { display: block; }
 		</style>
 	</head>
 	<body>

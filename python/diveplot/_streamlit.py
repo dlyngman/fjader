@@ -55,6 +55,11 @@ def render(
     """
     spec_dict, dataframes = obj._to_full_spec()
 
+    # Inject height into the spec so the chart fills the iframe exactly.
+    # Without this, PlotFromSpec falls back to aspect-ratio which can
+    # overflow the fixed-height iframe, causing clipping and coordinate offset.
+    _inject_height(spec_dict, height)
+
     manifest: list[dict[str, str]] = []
     table_args: dict[str, Any] = {}
 
@@ -72,3 +77,12 @@ def render(
         default=None,
         **table_args,
     )
+
+
+def _inject_height(spec: dict[str, Any], height: int) -> None:
+    """Set height on all plot specs that don't already have one."""
+    if "plot" in spec:
+        spec["plot"].setdefault("height", height)
+    for key in ("hconcat", "vconcat"):
+        for item in spec.get(key, []):
+            item.setdefault("height", height)
