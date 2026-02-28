@@ -106,8 +106,11 @@
 		// Check if x1 is a bin (AutoBinNode)
 		const hasBinnedX = typeof x1 === 'object' && x1 != null && 'isAutoBinNode' in x1 && x1.isAutoBinNode;
 		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
+		// NOTE: This detection is currently broken (AggregateNode has no .aggregate prop
+		// and constructor name is 'AggregateNode' not '_AggregateNode'). Fixing it would
+		// enable disableZoom + zeroBaseline which needs viewportLocalDomain race fix first.
 		const hasAggregateY =
-			typeof y2 === 'object' && y2 != null && ('aggregate' in y2 || y2.constructor?.name === '_AggregateNode');
+			(y2 as unknown as Record<string, unknown>)?.aggregate || (typeof y2 === 'object' && y2?.constructor?.name === '_AggregateNode');
 		return hasBinnedX && hasAggregateY;
 	});
 

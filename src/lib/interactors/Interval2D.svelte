@@ -67,15 +67,13 @@
 	let lastEmittedMaxY = null;
 
 	// Scale validation for both dimensions
+	// Always validate as 'linear': DivePlot time scales use float offsets, not Dates.
 	$effect(() => {
-		const xScaleType = chart.xScaleState?.scaleType;
-		const yScaleType = chart.yScaleState?.scaleType;
-
 		let invalid = false;
-		if (brush.active && xScaleType && !brush.x.validate(chart.xScale as { domain: () => number[] }, xScaleType)) {
+		if (brush.active && chart.xScale && !brush.x.validate(chart.xScale as { domain: () => number[] }, 'linear')) {
 			invalid = true;
 		}
-		if (brush.active && yScaleType && !brush.y.validate(chart.yScale as { domain: () => number[] }, yScaleType)) {
+		if (brush.active && chart.yScale && !brush.y.validate(chart.yScale as { domain: () => number[] }, 'linear')) {
 			invalid = true;
 		}
 		if (invalid) {
@@ -125,12 +123,12 @@
 				clients: chart.markClients,
 				scales: [
 					{
-						type: chart.xScaleState?.scaleType || 'linear',
+						type: 'linear',
 						domain: chart.xScale.domain() as [number, number],
 						range: chart.xScale.range() as [number, number]
 					},
 					{
-						type: chart.yScaleState?.scaleType || 'linear',
+						type: 'linear',
 						domain: chart.yScale.domain() as [number, number],
 						range: chart.yScale.range() as [number, number]
 					}
@@ -158,12 +156,12 @@
 				clients: chart.markClients,
 				scales: [
 					{
-						type: chart.xScaleState?.scaleType || 'linear',
+						type: 'linear',
 						domain: chart.xScale.domain() as [number, number],
 						range: chart.xScale.range() as [number, number]
 					},
 					{
-						type: chart.yScaleState?.scaleType || 'linear',
+						type: 'linear',
 						domain: chart.yScale.domain() as [number, number],
 						range: chart.yScale.range() as [number, number]
 					}

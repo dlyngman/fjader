@@ -1303,14 +1303,20 @@ export class BaseMarkSetup {
 			(this.actualXScaleType === 'linear' || this.actualXScaleType === 'time')
 		) {
 			// For viewport-local domains, filter to visible Y range
+			// Only apply if the Y scale already has a data-derived domain — on initial load
+			// the Y domain is still at its default [0, 100] which would incorrectly exclude
+			// most bins from the X domain computation.
 			let filterOptions: ExtentFilterOptions = {};
 			if (this.#config.viewportLocalDomain && this.actualYScaleType !== 'band') {
-				const yDomain = (this.#chartContext.yScaleState as ContinuousScaleState | null | undefined)?.domain?.current;
-				if (yDomain) {
-					filterOptions = { filterAxis: 'y', filterDomain: [yDomain[0], yDomain[1]] };
-					console.log(
-						`🔍 [${this.#markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`
-					);
+				const yState = this.#chartContext.yScaleState as ContinuousScaleState | null | undefined;
+				if (yState?.hasDomain) {
+					const yDomain = yState.domain?.current;
+					if (yDomain) {
+						filterOptions = { filterAxis: 'y', filterDomain: [yDomain[0], yDomain[1]] };
+						console.log(
+							`🔍 [${this.#markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`
+						);
+					}
 				}
 			}
 
@@ -1352,14 +1358,18 @@ export class BaseMarkSetup {
 			(this.actualYScaleType === 'linear' || this.actualYScaleType === 'time')
 		) {
 			// For viewport-local domains, filter to visible X range
+			// Only apply if the X scale already has a data-derived domain.
 			let filterOptions: ExtentFilterOptions = {};
 			if (this.#config.viewportLocalDomain && this.actualXScaleType !== 'band') {
-				const xDomain = (this.#chartContext.xScaleState as ContinuousScaleState | null | undefined)?.domain?.current;
-				if (xDomain) {
-					filterOptions = { filterAxis: 'x', filterDomain: [xDomain[0], xDomain[1]] };
-					console.log(
-						`🔍 [${this.#markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`
-					);
+				const xState = this.#chartContext.xScaleState as ContinuousScaleState | null | undefined;
+				if (xState?.hasDomain) {
+					const xDomain = xState.domain?.current;
+					if (xDomain) {
+						filterOptions = { filterAxis: 'x', filterDomain: [xDomain[0], xDomain[1]] };
+						console.log(
+							`🔍 [${this.#markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`
+						);
+					}
 				}
 			}
 

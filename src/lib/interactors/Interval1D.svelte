@@ -86,10 +86,11 @@
 	});
 
 	// Scale validation
+	// Always validate as 'linear': DivePlot time scales use float offsets, not Dates,
+	// so the 'time' validation (requires Date instances) would incorrectly clear the brush.
 	$effect(() => {
-		const scaleType = scaleState?.scaleType;
 		const s = getScale();
-		if (brush.active && scaleType && !brush.validate(s as { domain: () => number[] }, scaleType)) {
+		if (brush.active && s && !brush.validate(s as { domain: () => number[] }, 'linear')) {
 			clearBrush();
 		}
 	});
@@ -124,11 +125,14 @@
 		lastEmittedMax = dataMax;
 
 		const s = getScale();
+		// Always 'linear': DivePlot's columnRef already encodes time→offset,
+		// so values are plain floats. Declaring 'time' causes Mosaic to wrap
+		// with epoch_ms() which fails on FLOAT.
 		const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
 			source: source as unknown as ClauseSource,
 			clients: chart.markClients,
 			scale: {
-				type: scaleState?.scaleType || 'linear',
+				type: 'linear',
 				domain: s!.domain() as ScaleDomain,
 				range: s!.range() as [number, number]
 			}
@@ -151,7 +155,7 @@
 				source: source as unknown as ClauseSource,
 				clients: chart.markClients,
 				scale: {
-					type: scaleState?.scaleType || 'linear',
+					type: 'linear',
 					domain: s!.domain() as ScaleDomain,
 					range: s!.range() as [number, number]
 				}

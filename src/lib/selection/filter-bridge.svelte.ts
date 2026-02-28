@@ -196,8 +196,7 @@ export class FilterBridge {
 			this.#syncItems();
 		};
 
-		const onActivate = (clauses: SelectionClause[] & { active?: SelectionClause }): void => {
-			const clause = clauses.active ?? clauses[0];
+		const onActivate = (clause: SelectionClause): void => {
 			if (clause && !isNeutral(clause)) {
 				this.filterSel.activate?.({ ...clause, source: source as unknown as SelectionClause['source'] });
 			}
@@ -205,7 +204,9 @@ export class FilterBridge {
 
 		// Bind listeners
 		sel.addEventListener('value', onValue);
-		sel.addEventListener('activate', onActivate);
+		// Mosaic emits a single SelectionClause for 'activate' (not the array form
+		// used for 'value'), so we cast to satisfy the typed overload.
+		sel.addEventListener('activate', onActivate as unknown as typeof onValue);
 
 		// Note: We don't pre-initialize entries - they're created on first value event
 
@@ -213,7 +214,7 @@ export class FilterBridge {
 			sel,
 			off: () => {
 				sel.removeEventListener('value', onValue);
-				sel.removeEventListener('activate', onActivate);
+				sel.removeEventListener('activate', onActivate as unknown as typeof onValue);
 				this.remove(source!);
 			}
 		};
