@@ -93,13 +93,11 @@ export class BrushState1D {
 			}
 		}
 
-		// Clamp to domain bounds
+		// Check if brush is entirely outside the domain — clear if so.
+		// Don't clamp to domain bounds: the brush should retain its full extent
+		// even when partially off-screen, so dragging it back restores the size.
 		const [domainMin, domainMax] = scale.domain();
-		this.dataMin = Math.max(this.dataMin as number, domainMin);
-		this.dataMax = Math.min(this.dataMax as number, domainMax);
-
-		// Clear if collapsed
-		if ((this.dataMin as number) >= (this.dataMax as number)) {
+		if ((this.dataMax as number) <= domainMin || (this.dataMin as number) >= domainMax) {
 			this.clear();
 			return false;
 		}

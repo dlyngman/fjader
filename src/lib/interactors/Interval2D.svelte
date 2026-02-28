@@ -86,7 +86,13 @@
 		if (!brush.active) return null;
 		const [xMin, xMax] = brush.x.screenExtent(chart.xScale);
 		const [yMin, yMax] = brush.y.screenExtent(chart.yScale);
-		return { x: xMin, y: yMin, width: xMax - xMin, height: yMax - yMin };
+		// Clamp to chart bounds for rendering — data extent is preserved
+		const cx0 = Math.max(0, xMin);
+		const cx1 = Math.min(chart.innerWidth, xMax);
+		const cy0 = Math.max(0, yMin);
+		const cy1 = Math.min(chart.innerHeight, yMax);
+		if (cx1 <= cx0 || cy1 <= cy0) return null;
+		return { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 };
 	});
 
 	// Emit Mosaic clause

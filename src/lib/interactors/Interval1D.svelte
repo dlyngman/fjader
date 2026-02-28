@@ -102,7 +102,14 @@
 		const s = isX ? chart.xScale : chart.yScale;
 		if (!brush.active || !s) return null;
 		const [min, max] = brush.screenExtent(s);
-		return { pos: min, size: max - min };
+		// Clamp screen coordinates to chart bounds for rendering only —
+		// the underlying data extent is preserved so the brush retains its
+		// full size when dragged back from beyond the edge.
+		const dim = isX ? chart.innerWidth : chart.innerHeight;
+		const clampedMin = Math.max(0, min);
+		const clampedMax = Math.min(dim, max);
+		if (clampedMax <= clampedMin) return null;
+		return { pos: clampedMin, size: clampedMax - clampedMin };
 	});
 
 	// Read the axis-relevant inner coordinate from a point
