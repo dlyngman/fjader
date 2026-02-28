@@ -15,6 +15,7 @@
 		const scaleState = axis === 'x' ? chartContext.xScaleState : chartContext.yScaleState;
 		if (!scaleState) return;
 
+		if (scaleState.scaleType === 'band') return;
 		const [min, max] = scaleState.domain.current;
 		const range = max - min;
 		const offset = range * (percent / 100);

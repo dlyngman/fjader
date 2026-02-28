@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
+	import type { ChartContext, ContinuousScaleState } from '$lib/types';
 
 	interface Props {
 		show?: 'both' | 'x' | 'y';
@@ -11,10 +11,10 @@
 	const c = getContext<ChartContext>('chart');
 
 	const xFormatter = $derived(
-		c.xScaleState?.formatValue ? (v) => c.xScaleState.formatValue(v) : String
+		c.xScaleState && c.xScaleState.scaleType !== 'band' ? (v: unknown) => (c.xScaleState as ContinuousScaleState).formatValue(v as number) : String
 	);
 	const yFormatter = $derived(
-		c.yScaleState?.formatValue ? (v) => c.yScaleState.formatValue(v) : String
+		c.yScaleState && c.yScaleState.scaleType !== 'band' ? (v: unknown) => (c.yScaleState as ContinuousScaleState).formatValue(v as number) : String
 	);
 </script>
 

@@ -52,7 +52,7 @@
 
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
 	const toggle =
-		bridge && field ? bridge.createToggle(field, { scaleStates: getLegendScaleStates }) : null;
+		bridge && field ? bridge.createToggle(field, { scaleStates: getLegendScaleStates as () => any[] }) : null;
 
 	const selection = toggle?.sel;
 	const source = toggle?.source;
@@ -62,7 +62,7 @@
 	// Derive visual state from scale's activeValues (projected by FilterBridge)
 	const selectedSet = $derived(scaleState.activeValues);
 
-	function handleClick(value: unknown, event: MouseEvent) {
+	function handleClick(value: string | number, event: MouseEvent) {
 		if (!selection || !columnRef) return;
 
 		const isMulti = event.shiftKey || event.metaKey;
@@ -93,7 +93,7 @@
 		if (newValues === null) {
 			bridge.clearToggle(field);
 		} else {
-			selection.update(clausePoints([columnRef], newValues, { source }));
+			selection.update(clausePoints([columnRef], newValues, { source: source as unknown as import('@uwdata/mosaic-core').ClauseSource }));
 		}
 	}
 </script>

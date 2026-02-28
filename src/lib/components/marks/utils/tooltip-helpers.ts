@@ -1,5 +1,6 @@
 import type { ChartContext } from '$lib/types';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 
 interface TooltipConfigParams {
 	tempTable: string;
@@ -20,7 +21,7 @@ interface TooltipConfig {
 	channelFields: Record<string, string | undefined>;
 	colorColumn?: string;
 	bandDomains: Record<string, string[]>;
-	colorDomain: unknown[] | null;
+	colorDomain: string[] | null;
 	colorScaleState: ColorScaleState | null;
 	enabled: boolean;
 }
@@ -48,14 +49,16 @@ export function buildTooltipConfig({
 		bandDomains: {
 			...(bandAxes?.x &&
 				chartContext.scaleTypes?.x === 'band' && {
-					x: chartContext.xScaleState?.effectiveDomain
+					x: (chartContext.xScaleState as BandScaleState | null)?.effectiveDomain
 				}),
 			...(bandAxes?.y &&
 				chartContext.scaleTypes?.y === 'band' && {
-					y: chartContext.yScaleState?.effectiveDomain
+					y: (chartContext.yScaleState as BandScaleState | null)?.effectiveDomain
 				})
 		},
-		colorDomain: markColorScaleState?.isOrdinal ? markColorScaleState?.domain : null,
+		colorDomain: markColorScaleState?.isOrdinal
+			? (markColorScaleState.domain as string[])
+			: null,
 		colorScaleState: markColorScaleState ?? null,
 		enabled: true
 	};

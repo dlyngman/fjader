@@ -1,7 +1,7 @@
 import type { D3Scale } from '$lib/types';
 
 type BrushPhase = 'idle' | 'creating' | 'moving' | 'resizing';
-type ResizeEdge = 'start' | 'end' | null;
+type ResizeEdge = 'start' | 'end' | 'left' | 'right' | 'top' | 'bottom' | null;
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se' | null;
 
 export class BrushState1D {
@@ -33,20 +33,20 @@ export class BrushState1D {
 	setFromScreen(
 		screenMin: number,
 		screenMax: number,
-		scale: { invert: (v: number) => number }
+		scale: D3Scale
 	): void {
 		// Convert to data space first, then sort data values
 		// This handles inverted scales (like Y-axis) correctly
-		const data1 = scale.invert(screenMin);
-		const data2 = scale.invert(screenMax);
+		const data1 = scale.invert!(screenMin);
+		const data2 = scale.invert!(screenMax);
 		const sorted = [data1, data2].sort((a, b) => a - b);
 		this.dataMin = sorted[0];
 		this.dataMax = sorted[1];
 	}
 
 	// Shift by delta (for move gesture)
-	shiftByScreen(screenDelta: number, scale: { invert: (v: number) => number }): void {
-		const dataDelta = scale.invert(screenDelta) - scale.invert(0);
+	shiftByScreen(screenDelta: number, scale: D3Scale): void {
+		const dataDelta = scale.invert!(screenDelta) - scale.invert!(0);
 		(this.dataMin as number) += dataDelta;
 		(this.dataMax as number) += dataDelta;
 	}
@@ -93,13 +93,11 @@ export class BrushState1D {
 			}
 		}
 
-		// Clamp to domain bounds
+		// Check if brush is entirely outside the domain — clear if so.
+		// Don't clamp to domain bounds: the brush should retain its full extent
+		// even when partially off-screen, so dragging it back restores the size.
 		const [domainMin, domainMax] = scale.domain();
-		this.dataMin = Math.max(this.dataMin as number, domainMin);
-		this.dataMax = Math.min(this.dataMax as number, domainMax);
-
-		// Clear if collapsed
-		if ((this.dataMin as number) >= (this.dataMax as number)) {
+		if ((this.dataMax as number) <= domainMin || (this.dataMin as number) >= domainMax) {
 			this.clear();
 			return false;
 		}

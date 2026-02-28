@@ -82,7 +82,7 @@
 	);
 
 	const yScaleConfig = $derived.by(() => {
-		const config = {};
+		const config: Record<string, unknown> = {};
 		if (padding != null) config.padding = padding;
 		if (paddingInner != null) config.paddingInner = paddingInner;
 		if (paddingOuter != null) config.paddingOuter = paddingOuter;
@@ -92,7 +92,7 @@
 
 	// Detect if x2 is an aggregate expression (count, sum, mean, etc.)
 	const hasAggregateX = $derived.by(() => {
-		return x2?.aggregate || (typeof x2 === 'object' && x2?.constructor?.name === '_AggregateNode');
+		return typeof x2 === 'object' && x2 != null && ('aggregate' in x2 || x2.constructor?.name === '_AggregateNode');
 	});
 
 	// 2. Config

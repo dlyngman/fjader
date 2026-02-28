@@ -114,7 +114,7 @@
 
 	// Detect if x2 is an aggregate expression
 	const hasAggregateX = $derived.by(() => {
-		return x2?.aggregate || (typeof x2 === 'object' && x2?.constructor?.name === '_AggregateNode');
+		return typeof x2 === 'object' && x2 != null && ('aggregate' in x2 || x2.constructor?.name === '_AggregateNode');
 	});
 
 	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));

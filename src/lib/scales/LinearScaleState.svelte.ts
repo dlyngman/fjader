@@ -62,6 +62,14 @@ interface DomainAccessor {
  * - Domain limits and zoom constraints
  */
 export class LinearScaleState {
+	// --- Discriminant for union narrowing ---
+	get scaleType(): 'linear' | 'time' {
+		return 'linear';
+	}
+
+	// --- Scale type (for GPU registration) ---
+	type: string = 'linear';
+
 	// --- Svelte Reactive State ---
 	name: string = $state('');
 	ready: boolean = $state(false);
@@ -149,6 +157,7 @@ export class LinearScaleState {
 	) {
 		this.id = crypto.randomUUID();
 		this.name = name;
+		this.type = type;
 		this.#gpuCoordinator = gpuCoordinator;
 
 		// Apply options
@@ -459,7 +468,7 @@ export class LinearScaleState {
 	 * Update a D3 scale's domain with current render values.
 	 * Registers Svelte dependency via _version.
 	 */
-	updateScaleDomain(scale: ScaleLinear<number, number>): ScaleLinear<number, number> {
+	updateScaleDomain(scale: { domain(d: [number, number]): unknown }): unknown {
 		this._version; // Register dependency
 		scale.domain([this.#renderMin, this.#renderMax]);
 		return scale;

@@ -9,6 +9,7 @@
 	import type { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { D3Scale } from '$lib/types';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
@@ -87,45 +88,51 @@
 	});
 
 	// --- Cell-local D3 scales (cached via $derived) ---
-	const cellXScale = $derived.by(() => {
+	const cellXScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.xScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth));
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth) ) as D3Scale;
 	});
 
-	const cellYScale = $derived.by(() => {
+	const cellYScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight));
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight) ) as D3Scale;
 	});
 
-	const cellXTargetScale = $derived.by(() => {
+	const cellXTargetScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.xScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth), false);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth) ) as D3Scale;
 	});
 
-	const cellYTargetScale = $derived.by(() => {
+	const cellYTargetScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight), false);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight) ) as D3Scale;
 	});
 
 	// --- Band scale support (cell-local $derived) ---
 	const xCategoryPositions = $derived.by(() => {
-		if (scales?.scaleTypes?.x !== 'band' || !cellXScale || !layout.isReady) return null;
-		const domain = scales.xScaleState?.effectiveDomain;
+		const xss = scales?.xScaleState;
+		if (!xss || xss.scaleType !== 'band' || !cellXScale || !layout.isReady) return null;
+		const domain = xss.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
 		return new Float32Array(domain.map((d) => cellXScale(d)));
 	});
 
 	const yCategoryPositions = $derived.by(() => {
-		if (scales?.scaleTypes?.y !== 'band' || !cellYScale || !layout.isReady) return null;
-		const domain = scales.yScaleState?.effectiveDomain;
+		const yss = scales?.yScaleState;
+		if (!yss || yss.scaleType !== 'band' || !cellYScale || !layout.isReady) return null;
+		const domain = yss.effectiveDomain;
 		if (!domain || domain.length === 0) return null;
 		return new Float32Array(domain.map((d) => cellYScale(d)));
 	});
@@ -138,12 +145,12 @@
 
 	const xBandwidth = $derived.by(() => {
 		if (scales?.scaleTypes?.x !== 'band' || !cellXScale || !layout.isReady) return 0;
-		return cellXScale.bandwidth?.() ?? 0;
+		return cellXScale?.bandwidth?.() ?? 0;
 	});
 
 	const yBandwidth = $derived.by(() => {
 		if (scales?.scaleTypes?.y !== 'band' || !cellYScale || !layout.isReady) return 0;
-		return cellYScale.bandwidth?.() ?? 0;
+		return cellYScale?.bandwidth?.() ?? 0;
 	});
 
 	// --- Tooltip ---
@@ -186,8 +193,14 @@
 		const yScale = scales?.yScaleState;
 
 		if (xScale && yScale && layout.isReady) {
-			const xHasDomain = xScale.hasDomain ?? xScale.effectiveDomain?.length > 0;
-			const yHasDomain = yScale.hasDomain ?? yScale.effectiveDomain?.length > 0;
+			const xHasDomain =
+				xScale.scaleType !== 'band'
+					? xScale.hasDomain
+					: xScale.effectiveDomain.length > 0;
+			const yHasDomain =
+				yScale.scaleType !== 'band'
+					? yScale.hasDomain
+					: yScale.effectiveDomain.length > 0;
 
 			if (!xScale.ready && xHasDomain) {
 				xScale.setReady?.();
@@ -332,10 +345,9 @@
 
 		// Scale registration — delegate to ChartScales
 		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
-			scales?.registerScaleType(dimension, type, priority, markId, config, columnName),
-		unregisterScaleType: (dimension, markId) => scales?.unregisterScaleType(dimension, markId),
-		getScaleRequirementsSummary: () => scales?.getScaleRequirementsSummary(),
-
+			scales?.registerScaleType(dimension as 'x' | 'y', type, priority, markId, config, columnName),
+		unregisterScaleType: (dimension, markId) =>
+			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
 		get binStepMultiplier() {
 			return scales?.binStepMultiplier;
 		},
@@ -436,7 +448,7 @@
 	}
 
 	function handleClick(event: MouseEvent) {
-		chartContext.onChartClick?.(event);
+		chartContext.onChartClick?.(event as unknown as PointerEvent);
 	}
 
 	function handleDoubleClick(event: MouseEvent) {
@@ -459,8 +471,8 @@
 			event.preventDefault();
 			isZooming = true;
 			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
-			pointerBuffer.x = event.offsetX;
-			pointerBuffer.y = event.offsetY;
+			pointerBuffer.x = (event as unknown as { offsetX: number }).offsetX;
+			pointerBuffer.y = (event as unknown as { offsetY: number }).offsetY;
 			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
 			activePanX = xInBounds;
 			activePanY = yInBounds;
@@ -473,8 +485,8 @@
 		const scaleFactor = currentDistance / initialTouchDistance;
 
 		if (Math.abs(scaleFactor - 1) > 0.01) {
-			pointerBuffer.x = event.offsetX;
-			pointerBuffer.y = event.offsetY;
+			pointerBuffer.x = (event as unknown as { offsetX: number }).offsetX;
+			pointerBuffer.y = (event as unknown as { offsetY: number }).offsetY;
 			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
 			scales.applyZoom(
 				innerPoint,
@@ -497,7 +509,8 @@
 
 	function handlePointerDown(event: PointerEvent) {
 		event.preventDefault();
-		if (event.target.focus) event.target.focus({ preventScroll: true });
+		const target = event.target as Element | null;
+		if (target && 'focus' in target) (target as HTMLElement).focus({ preventScroll: true });
 
 		pointerBuffer.x = event.offsetX;
 		pointerBuffer.y = event.offsetY;
@@ -523,7 +536,7 @@
 		scales.clearCurrentDataPoints();
 		currentInnerX = null;
 		currentInnerY = null;
-		event.target.setPointerCapture?.(event.pointerId);
+		(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
 	}
 
 	function processPointerMove(event: PointerEvent) {
@@ -564,7 +577,7 @@
 		isPanning = false;
 		activePanX = false;
 		activePanY = false;
-		event.target.releasePointerCapture?.(event.pointerId);
+		(event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
 		scales.endPan();
 	}
 
@@ -624,7 +637,7 @@
 				onwheel={handleWheel}
 				onpointerdown={handlePointerDown}
 				onpointermove={handlePointerMove}
-				onpointerrawupdate={handlePointerRawUpdate}
+				{.../** @type {any} */ ({ onpointerrawupdate: handlePointerRawUpdate })}
 				onpointerup={handlePointerUp}
 				onpointercancel={handlePointerUp}
 				ondblclick={handleDoubleClick}

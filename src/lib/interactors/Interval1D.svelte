@@ -11,8 +11,13 @@
 		createPanModeHandlers,
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
-	import type { ChartContext, FieldRef, Point } from '$lib/types';
+	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
 	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+	import type { ClauseSource } from '@uwdata/mosaic-core';
+	import type { ScaleDomain } from '@uwdata/mosaic-sql';
+
+	/** Helper: cast D3Scale to one with invert() for continuous scales. */
+	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
 
 	interface Props {
 		bridge: FilterBridge;
@@ -42,16 +47,21 @@
 	// Source string — single definition used everywhere
 	const source = `interval-${axis}-${chart.chartId}`;
 
-	const columnRef = $derived.by(() => buildColumnRef(resolvedField, scaleState));
+	const columnRef = $derived.by(() =>
+		buildColumnRef(
+			resolvedField,
+			scaleState && 't0' in scaleState ? (scaleState as { t0?: Date | null }) : null
+		)
+	);
 
 	// Register with FilterBridge to get a local Selection
 	const { sel: selection, off: unregister } = bridge.createLocal('single', {
 		source,
 		augment: (clause) => ({
 			kind: 'range',
-			column: resolvedField,
+			column: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString() ?? '',
 			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
-			values: clause?.value ? [clause.value[0], clause.value[1]] : []
+			values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
 		}),
 		onVisualClear: () => brush.clear()
 	});
@@ -76,10 +86,11 @@
 	});
 
 	// Scale validation
+	// Always validate as 'linear': DivePlot time scales use float offsets, not Dates,
+	// so the 'time' validation (requires Date instances) would incorrectly clear the brush.
 	$effect(() => {
-		const scaleType = scaleState?.scaleType;
 		const s = getScale();
-		if (brush.active && scaleType && !brush.validate(s, scaleType)) {
+		if (brush.active && s && !brush.validate(s as { domain: () => number[] }, 'linear')) {
 			clearBrush();
 		}
 	});
@@ -91,7 +102,14 @@
 		const s = isX ? chart.xScale : chart.yScale;
 		if (!brush.active || !s) return null;
 		const [min, max] = brush.screenExtent(s);
-		return { pos: min, size: max - min };
+		// Clamp screen coordinates to chart bounds for rendering only —
+		// the underlying data extent is preserved so the brush retains its
+		// full size when dragged back from beyond the edge.
+		const dim = isX ? chart.innerWidth : chart.innerHeight;
+		const clampedMin = Math.max(0, min);
+		const clampedMax = Math.min(dim, max);
+		if (clampedMax <= clampedMin) return null;
+		return { pos: clampedMin, size: clampedMax - clampedMin };
 	});
 
 	// Read the axis-relevant inner coordinate from a point
@@ -103,8 +121,8 @@
 	function emitClause() {
 		if (!brush.active || !columnRef) return;
 
-		const dataMin = Math.min(brush.dataMin, brush.dataMax);
-		const dataMax = Math.max(brush.dataMin, brush.dataMax);
+		const dataMin = Math.min(brush.dataMin as number, brush.dataMax as number);
+		const dataMax = Math.max(brush.dataMin as number, brush.dataMax as number);
 
 		if (closeTo(dataMin, lastEmittedMin) && closeTo(dataMax, lastEmittedMax)) {
 			return;
@@ -114,13 +132,16 @@
 		lastEmittedMax = dataMax;
 
 		const s = getScale();
-		const clause = clauseInterval(columnRef, [dataMin, dataMax], {
-			source,
+		// Always 'linear': DivePlot's columnRef already encodes time→offset,
+		// so values are plain floats. Declaring 'time' causes Mosaic to wrap
+		// with epoch_ms() which fails on FLOAT.
+		const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
+			source: source as unknown as ClauseSource,
 			clients: chart.markClients,
 			scale: {
-				type: scaleState?.scaleType || 'linear',
-				domain: s.domain(),
-				range: s.range()
+				type: 'linear',
+				domain: s!.domain() as ScaleDomain,
+				range: s!.range() as [number, number]
 			}
 		});
 
@@ -132,18 +153,18 @@
 		const s = getScale();
 		if (!selection.activate || !s || !columnRef) return;
 
-		const range = brush.active
-			? [Math.min(brush.dataMin, brush.dataMax), Math.max(brush.dataMin, brush.dataMax)]
+		const range: ScaleDomain = brush.active
+			? [Math.min(brush.dataMin as number, brush.dataMax as number), Math.max(brush.dataMin as number, brush.dataMax as number)]
 			: [0, 1];
 
 		selection.activate(
 			clauseInterval(columnRef, range, {
-				source,
+				source: source as unknown as ClauseSource,
 				clients: chart.markClients,
 				scale: {
-					type: scaleState?.scaleType || 'linear',
-					domain: s.domain(),
-					range: s.range()
+					type: 'linear',
+					domain: s!.domain() as ScaleDomain,
+					range: s!.range() as [number, number]
 				}
 			})
 		);
@@ -157,8 +178,8 @@
 
 		const scaleFactor = 1 + event.deltaY * WHEEL_SENSITIVITY;
 
-		const min = Math.min(brush.dataMin, brush.dataMax);
-		const max = Math.max(brush.dataMin, brush.dataMax);
+		const min = Math.min(brush.dataMin as number, brush.dataMax as number);
+		const max = Math.max(brush.dataMin as number, brush.dataMax as number);
 
 		const [newMin, newMax] = scaleBrushExtent1D(min, max, scaleFactor);
 		brush.setExtent(newMin, newMax);
@@ -170,7 +191,7 @@
 		brush.clear();
 		selection.update({
 			predicate: null,
-			source,
+			source: source as unknown as ClauseSource,
 			clients: chart.markClients,
 			value: null
 		});
@@ -182,7 +203,7 @@
 		if (brush.phase !== 'idle') return false;
 		if (isPanModeActive) return false;
 
-		event.target.setPointerCapture(event.pointerId);
+		(event.target as Element).setPointerCapture(event.pointerId);
 		isCapturing = true;
 		hasDragged = false;
 
@@ -209,7 +230,7 @@
 			}
 		}
 
-		const s = getScale();
+		const s = getScale() as InvertibleScale;
 		if (brush.phase === 'creating') {
 			brush.setFromScreen(anchor, current, s);
 		} else if (brush.phase === 'moving') {
@@ -217,9 +238,9 @@
 			brush.shiftByScreen(delta, s);
 			anchor = current;
 		} else if (brush.phase === 'resizing') {
-			const anchorData = brush.resizeEdge === edgeStart ? brush.dataMax : brush.dataMin;
+			const anchorData = brush.resizeEdge === 'start' ? brush.dataMax : brush.dataMin;
 			const currentData = s.invert(current);
-			brush.setExtent(Math.min(anchorData, currentData), Math.max(anchorData, currentData));
+			brush.setExtent(Math.min(anchorData as number, currentData as number), Math.max(anchorData as number, currentData as number));
 		}
 
 		emitClause();
@@ -248,7 +269,7 @@
 
 	function handleMoveStart(event: PointerEvent) {
 		event.stopPropagation();
-		event.target.setPointerCapture(event.pointerId);
+		(event.target as Element).setPointerCapture(event.pointerId);
 		isCapturing = true;
 
 		point.x = event.offsetX;
@@ -260,7 +281,7 @@
 
 	function handleResizeStart(edge: string, event: PointerEvent) {
 		event.stopPropagation();
-		event.target.setPointerCapture(event.pointerId);
+		(event.target as Element).setPointerCapture(event.pointerId);
 		isCapturing = true;
 
 		point.x = event.offsetX;
@@ -268,7 +289,7 @@
 		const innerCoords = chart.toInnerCoordinates(point);
 		anchor = innerCoord(innerCoords);
 		brush.phase = 'resizing';
-		brush.resizeEdge = edge === edgeStart ? edgeStart : edgeEnd;
+		brush.resizeEdge = edge === edgeStart ? 'start' : 'end';
 	}
 
 	// Register callbacks and keyboard listeners

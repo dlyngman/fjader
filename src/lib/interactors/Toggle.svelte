@@ -5,6 +5,8 @@
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { ClauseSource } from '@uwdata/mosaic-core';
 
 	interface Props {
 		bridge: FilterBridge;
@@ -30,7 +32,7 @@
 		const xIsBand = chart.scaleTypes?.x === 'band';
 		const band = yIsBand ? chart.yScaleState : xIsBand ? chart.xScaleState : null;
 		const color = scaleRegistry?.getScaleByField(fields[0], 'color');
-		return [band, color].filter(Boolean);
+		return [band, color].filter(Boolean) as { setActiveValues(values: Set<unknown>): void; clearActiveValues(): void }[];
 	}
 
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
@@ -46,7 +48,7 @@
 	const selectedSet = $derived.by(() => {
 		const scales = getToggleScaleStates();
 		for (const s of scales) {
-			if (s?.activeValues) return s.activeValues;
+			if (s && 'activeValues' in s) return (s as BandScaleState).activeValues;
 		}
 		return null;
 	});
@@ -75,7 +77,7 @@
 		if (newValues === null) {
 			bridge.clearToggle(fields[0]);
 		} else {
-			selection.update(clausePoints(columnRefs, newValues, { source }));
+			selection.update(clausePoints(columnRefs, newValues, { source: source as unknown as ClauseSource }));
 		}
 	}
 
@@ -87,14 +89,16 @@
 
 		// Y-axis margin: click left of inner area, Y within chart range
 		if (!xInBounds && yInBounds && chart.scaleTypes?.y === 'band') {
-			const index = chart.yScaleState.invertScreenToData(innerPoint.y, chart.innerHeight, true);
-			return chart.yScaleState.effectiveDomain[index] ?? null;
+			const bandState = chart.yScaleState as BandScaleState;
+			const index = bandState.invertScreenToData(innerPoint.y, chart.innerHeight, true);
+			return bandState.effectiveDomain[index] ?? null;
 		}
 
 		// X-axis margin: click below inner area, X within chart range
 		if (xInBounds && !yInBounds && chart.scaleTypes?.x === 'band') {
-			const index = chart.xScaleState.invertScreenToData(innerPoint.x, chart.innerWidth, false);
-			return chart.xScaleState.effectiveDomain[index] ?? null;
+			const bandState = chart.xScaleState as BandScaleState;
+			const index = bandState.invertScreenToData(innerPoint.x, chart.innerWidth, false);
+			return bandState.effectiveDomain[index] ?? null;
 		}
 
 		return null;

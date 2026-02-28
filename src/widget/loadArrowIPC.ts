@@ -42,7 +42,7 @@ export async function loadArrowIPCTable(
 
 	const loadPromise = (async () => {
 		await coordinator.exec(`DROP TABLE IF EXISTS "${tableName}"`);
-		const connector = coordinator.databaseConnector() as WasmConnector;
+		const connector = coordinator.databaseConnector() as unknown as WasmConnector;
 		const connection = await connector.getConnection();
 		await connection.insertArrowFromIPCStream(ipcBytes, {
 			name: tableName,

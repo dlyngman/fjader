@@ -21,6 +21,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { D3BandScale } from '$lib/types';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
 		x: FieldRef;
@@ -246,11 +248,11 @@
 		const xType = chartContext.scaleTypes?.x;
 		const yType = chartContext.scaleTypes?.y;
 		const xDomain =
-			xType === 'band' || xType === 'point' ? chartContext.xScaleState.effectiveDomain : null;
+			xType === 'band' || xType === 'point' ? (chartContext.xScaleState as BandScaleState).effectiveDomain : null;
 		const yDomain =
-			yType === 'band' || yType === 'point' ? chartContext.yScaleState.effectiveDomain : null;
-		const xBandHalf = xType === 'band' ? xScale.bandwidth() / 2 : 0;
-		const yBandHalf = yType === 'band' ? yScale.bandwidth() / 2 : 0;
+			yType === 'band' || yType === 'point' ? (chartContext.yScaleState as BandScaleState).effectiveDomain : null;
+		const xBandHalf = xType === 'band' ? (xScale as D3BandScale).bandwidth() / 2 : 0;
+		const yBandHalf = yType === 'band' ? (yScale as D3BandScale).bandwidth() / 2 : 0;
 
 		const newPos = new Array(items.length);
 		for (let i = 0; i < items.length; i++) {

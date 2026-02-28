@@ -341,10 +341,10 @@
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '')
 		.replace('{{FACET_BOUNDARY}}', faceted ? FACET_BOUNDARY_WGSL : '');
 
-	const vertexBufferLayout = [
+	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
 			arrayStride: 2 * 4, // 2 floats per vertex
-			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }]
+			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' as GPUVertexFormat }]
 		}
 	];
 
