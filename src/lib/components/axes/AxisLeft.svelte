@@ -32,7 +32,7 @@
 
 {#if c.isReady && c.scaleTypes}
 	<g class="axis">
-		{#if (c.scaleTypes.y === 'linear' || c.scaleTypes.y === 'time') && c.yScale}
+		{#if c.scaleTypes.y !== 'band' && c.yScale}
 			<!-- Continuous scales: direct positioning -->
 			{#each continuousTicks as tick, i (i)}
 				<line x1={0} x2={-6} y1={c.yScale(tick)} y2={c.yScale(tick)} />

@@ -52,7 +52,7 @@ interface ScaleInstance {
 	id: string;
 	type: string;
 	constructor: { name: string };
-	gpuState?: { domainMin: number; domainMax: number; domainScale: number };
+	gpuState?: { domainMin: number; domainMax: number; domainScale: number; categoryCount: number };
 	getConfig?: () => { categoryCount: number; paddingInner: number; paddingOuter: number };
 	step: () => void;
 	updateRenderState: (dt: number) => void;
@@ -603,13 +603,13 @@ export class GPUCoordinator {
 				view[off + 2] = config.paddingOuter;
 				view[off + 3] = 0; // padding (unused)
 			} else {
-				// LINEAR SCALE: Write domain state
+				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
 				const s = scale.gpuState!;
 
 				view[off] = s.domainMin;
 				view[off + 1] = s.domainMax;
 				view[off + 2] = s.domainScale;
-				view[off + 3] = 0; // padding (unused)
+				view[off + 3] = s.categoryCount; // p4: symlog constant C, 0 for others
 			}
 		}
 	}

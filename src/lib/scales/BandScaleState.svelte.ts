@@ -43,6 +43,11 @@ export class BandScaleState {
 		return 'band';
 	}
 
+	/** Whether this scale supports interactive pan and zoom. */
+	get supportsPanZoom(): boolean {
+		return false;
+	}
+
 	id: string = crypto.randomUUID();
 	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
 	name: string = $state('');

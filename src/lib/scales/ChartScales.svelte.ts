@@ -4,8 +4,13 @@ import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './S
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
-import type { ScaleStateInstance, D3Scale, D3BandScale, FieldRef, MosaicClient } from '$lib/types';
+import type { ScaleStateInstance, ContinuousScaleState, D3Scale, D3BandScale, FieldRef, MosaicClient } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
+
+/** Type guard: narrows ScaleStateInstance to ContinuousScaleState via supportsPanZoom. */
+function isPanZoomScale(inst: ScaleStateInstance | null): inst is ContinuousScaleState {
+	return !!inst?.supportsPanZoom;
+}
 
 interface PanContext {
 	initialScreenPos: number;
@@ -141,16 +146,16 @@ export class ChartScales {
 			{
 				const xInst = this.#xScaleInstance;
 				const yInst = this.#yScaleInstance;
-				if (this.config.xZoomLimit !== undefined && xInst && xInst.scaleType !== 'band') {
+				if (this.config.xZoomLimit !== undefined && isPanZoomScale(xInst)) {
 					xInst.setZoomLimit(this.config.xZoomLimit);
 				}
-				if (this.config.yZoomLimit !== undefined && yInst && yInst.scaleType !== 'band') {
+				if (this.config.yZoomLimit !== undefined && isPanZoomScale(yInst)) {
 					yInst.setZoomLimit(this.config.yZoomLimit);
 				}
-				if (this.config.xPanLimit !== undefined && xInst && xInst.scaleType !== 'band') {
+				if (this.config.xPanLimit !== undefined && isPanZoomScale(xInst)) {
 					xInst.setPanLimit(this.config.xPanLimit);
 				}
-				if (this.config.yPanLimit !== undefined && yInst && yInst.scaleType !== 'band') {
+				if (this.config.yPanLimit !== undefined && isPanZoomScale(yInst)) {
 					yInst.setPanLimit(this.config.yPanLimit);
 				}
 			}
@@ -324,7 +329,7 @@ export class ChartScales {
 
 	#isContinuous(axis: 'x' | 'y'): boolean {
 		const type = this.scaleTypes?.[axis];
-		return type === 'linear' || type === 'time';
+		return type === 'linear' || type === 'time' || type === 'log' || type === 'symlog';
 	}
 
 	registerClient = (client: MosaicClient): (() => void) => {
@@ -370,15 +375,11 @@ export class ChartScales {
 		innerWidth: number,
 		innerHeight: number
 	): void => {
-		const xInst = this.#xScaleInstance;
-		if (doX && xInst && xInst.scaleType !== 'band') {
-			const dataPoint = xInst.invertScreenToData(innerPoint.x, innerWidth, false);
-			xInst.accumulateZoom(dataPoint, scaleFactor);
+		if (doX && isPanZoomScale(this.#xScaleInstance)) {
+			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
 		}
-		const yInst = this.#yScaleInstance;
-		if (doY && yInst && yInst.scaleType !== 'band') {
-			const dataPoint = yInst.invertScreenToData(innerPoint.y, innerHeight, true);
-			yInst.accumulateZoom(dataPoint, scaleFactor);
+		if (doY && isPanZoomScale(this.#yScaleInstance)) {
+			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
 		}
 	};
 
@@ -390,15 +391,11 @@ export class ChartScales {
 		innerWidth: number,
 		innerHeight: number
 	): void => {
-		const xInst = this.#xScaleInstance;
-		if (doX && xInst && xInst.scaleType !== 'band') {
-			const dataPoint = xInst.invertScreenToData(innerPoint.x, innerWidth, false);
-			xInst.accumulateZoom(dataPoint, scaleFactor);
+		if (doX && isPanZoomScale(this.#xScaleInstance)) {
+			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
 		}
-		const yInst = this.#yScaleInstance;
-		if (doY && yInst && yInst.scaleType !== 'band') {
-			const dataPoint = yInst.invertScreenToData(innerPoint.y, innerHeight, true);
-			yInst.accumulateZoom(dataPoint, scaleFactor);
+		if (doY && isPanZoomScale(this.#yScaleInstance)) {
+			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
 		}
 	};
 
@@ -414,7 +411,7 @@ export class ChartScales {
 		this.activePanY = activePanY;
 
 		const xInst = this.#xScaleInstance;
-		if (activePanX && xInst && xInst.scaleType !== 'band') {
+		if (activePanX && isPanZoomScale(xInst)) {
 			const currentDomain = xInst.domain.current;
 
 			this._xPanContext.initialScreenPos = x;
@@ -429,7 +426,7 @@ export class ChartScales {
 		}
 
 		const yInst = this.#yScaleInstance;
-		if (activePanY && yInst && yInst.scaleType !== 'band') {
+		if (activePanY && isPanZoomScale(yInst)) {
 			const currentDomain = yInst.domain.current;
 
 			this._yPanContext.initialScreenPos = y;
@@ -449,22 +446,22 @@ export class ChartScales {
 		this.activePanY = false;
 
 		const xInst = this.#xScaleInstance;
-		if (xInst && xInst.scaleType !== 'band') {
+		if (isPanZoomScale(xInst)) {
 			xInst.endPan();
 		}
 		const yInst = this.#yScaleInstance;
-		if (yInst && yInst.scaleType !== 'band') {
+		if (isPanZoomScale(yInst)) {
 			yInst.endPan();
 		}
 	};
 
 	updatePanPosition = (screenX: number, screenY: number): void => {
 		const xInst = this.#xScaleInstance;
-		if (this.activePanX && xInst && xInst.scaleType !== 'band') {
+		if (this.activePanX && isPanZoomScale(xInst)) {
 			xInst.updatePanPosition(screenX, 0);
 		}
 		const yInst = this.#yScaleInstance;
-		if (this.activePanY && yInst && yInst.scaleType !== 'band') {
+		if (this.activePanY && isPanZoomScale(yInst)) {
 			yInst.updatePanPosition(0, screenY);
 		}
 	};

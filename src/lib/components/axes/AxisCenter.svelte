@@ -54,7 +54,7 @@
 		<!-- Axis line -->
 		<line class="axis-line" x1={axisX} x2={axisX} y1={0} y2={c.innerHeight} />
 
-		{#if (c.scaleTypes.y === 'linear' || c.scaleTypes.y === 'time') && c.yScale}
+		{#if c.scaleTypes.y !== 'band' && c.yScale}
 			{#each continuousTicks as tick, i (i)}
 				{@const tickY = c.yScale(tick)}
 				<line x1={axisX} x2={axisX + tickDir * 6} y1={tickY} y2={tickY} />

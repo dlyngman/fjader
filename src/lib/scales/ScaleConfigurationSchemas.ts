@@ -120,11 +120,58 @@ export const SCALE_CONFIG_SCHEMAS: Record<string, ScaleConfigSchema> = {
 			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
 			description: 'Clamp values outside domain'
 		}
-	}
+	},
 
-	// Future scale types can be added here:
-	// log: { ... },
-	// ordinal: { ... }
+	log: {
+		nice: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
+			description: 'Extend domain to nice powers'
+		},
+		domainMin: {
+			type: 'number',
+			strategy: RESOLUTION_STRATEGIES.MIN as (values: unknown[]) => unknown,
+			description: 'Explicit minimum domain value (must be > 0)'
+		},
+		domainMax: {
+			type: 'number',
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
+			description: 'Explicit maximum domain value'
+		},
+		disableZoom: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
+			description: 'Disable user zoom/pan interactions'
+		}
+	},
+
+	symlog: {
+		nice: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
+			description: 'Extend domain to nice values'
+		},
+		constant: {
+			type: 'number',
+			strategy: RESOLUTION_STRATEGIES.FIRST_WINS as (values: unknown[]) => unknown,
+			description: 'Symlog constant C (default 1). Controls linearity around zero.'
+		},
+		domainMin: {
+			type: 'number',
+			strategy: RESOLUTION_STRATEGIES.MIN as (values: unknown[]) => unknown,
+			description: 'Explicit minimum domain value'
+		},
+		domainMax: {
+			type: 'number',
+			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
+			description: 'Explicit maximum domain value'
+		},
+		disableZoom: {
+			type: 'boolean',
+			strategy: RESOLUTION_STRATEGIES.BOOLEAN_OR as (values: unknown[]) => unknown,
+			description: 'Disable user zoom/pan interactions'
+		}
+	}
 };
 
 /**

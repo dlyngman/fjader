@@ -11,7 +11,7 @@ import type { DataAccessor } from '$lib/data/DataAccessor';
 // Scales
 // ---------------------------------------------------------------------------
 
-export type ContinuousScaleType = 'linear' | 'log' | 'pow' | 'identity';
+export type ContinuousScaleType = 'linear' | 'log' | 'symlog' | 'pow' | 'identity';
 export type DiscreteScaleType = 'band' | 'point';
 export type TemporalScaleType = 'time';
 export type ScaleType = ContinuousScaleType | DiscreteScaleType | TemporalScaleType;
@@ -248,10 +248,12 @@ import type { Margin, Point, AxesResult } from '$lib/layout/ChartLayout.svelte';
 import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
+import type { LogScaleState } from '$lib/scales/LogScaleState.svelte';
+import type { SymlogScaleState } from '$lib/scales/SymlogScaleState.svelte';
 import type { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 
 /** Continuous axis scales (support zoom, pan, animated domain). */
-export type ContinuousScaleState = LinearScaleState | TimeScaleState;
+export type ContinuousScaleState = LinearScaleState | TimeScaleState | LogScaleState | SymlogScaleState;
 
 /** Union of all scale state types that can appear on x/y axes. */
 export type ScaleStateInstance = ContinuousScaleState | BandScaleState;

@@ -187,6 +187,9 @@
 
 	const m4Active = $derived.by(() => {
 		if (optimize === false || faceted) return false;
+		// M4 uses linear domain math for bin assignment; disable for nonlinear scales
+		const xType = chartContext.scaleTypes?.x;
+		if (xType === 'log' || xType === 'symlog') return false;
 		if (optimize === true) return true;
 		// 'auto': activate when points exceed 10x pixel width
 		const pixels = chartContext.innerWidth;
