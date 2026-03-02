@@ -118,7 +118,7 @@
 		markType: 'rectx',
 		supportedScaleTypes: {
 			x: ['linear', 'identity'],
-			y: ['linear', 'band', 'point', 'time', 'log']
+			y: ['linear', 'band', 'point', 'time', 'log', 'symlog']
 		},
 		scaleRequirements: {
 			x: {

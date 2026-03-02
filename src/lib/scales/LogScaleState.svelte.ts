@@ -4,6 +4,7 @@
 
 import { scaleLog } from 'd3-scale';
 import type { ScaleLogarithmic } from 'd3-scale';
+import { format } from 'd3-format';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import type { LinearScaleOptions, GpuScaleState } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -24,6 +25,7 @@ export class LogScaleState extends LinearScaleState {
 	}
 
 	#logScale: ScaleLogarithmic<number, number> = scaleLog();
+	static #pointFormat = format('.4~s');
 
 	constructor(
 		name: string,
@@ -61,7 +63,7 @@ export class LogScaleState extends LinearScaleState {
 		out.domainMin = logMin;
 		out.domainMax = logMax;
 		out.domainScale = logRange === 0 ? 0 : 1 / logRange;
-		out.categoryCount = 0;
+		out.p4 = 0;
 	}
 
 	protected override normalizeValue(value: number, min: number, max: number): number {
@@ -93,6 +95,15 @@ export class LogScaleState extends LinearScaleState {
 		return scaleLog()
 			.domain([Math.max(min, LOG_MIN_CLAMP), Math.max(max, LOG_MIN_CLAMP)])
 			.ticks(count);
+	}
+
+	/**
+	 * Format a single value for point display (crosshair, tooltip).
+	 * Unlike tickFormat(), always returns a readable string — D3 log
+	 * tickFormat returns '' for non-significant values (non-powers-of-10).
+	 */
+	override formatValue(value: number): string {
+		return LogScaleState.#pointFormat(value);
 	}
 
 	override tickFormat(count: number = 5): (value: number) => string {

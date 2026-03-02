@@ -98,8 +98,8 @@
 	const config = $derived({
 		markType: 'text',
 		supportedScaleTypes: {
-			x: ['linear', 'band', 'point', 'time', 'log'],
-			y: ['linear', 'band', 'point', 'time', 'log']
+			x: ['linear', 'band', 'point', 'time', 'log', 'symlog'],
+			y: ['linear', 'band', 'point', 'time', 'log', 'symlog']
 		},
 		scaleRequirements: {
 			x: effectiveXScaleType

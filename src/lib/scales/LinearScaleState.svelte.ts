@@ -43,7 +43,7 @@ export interface GpuScaleState {
 	domainMin: number;
 	domainMax: number;
 	domainScale: number;
-	categoryCount: number;
+	p4: number; // scale-type-specific: symlog constant C, 0 for linear/log/time
 }
 
 interface DomainAccessor {
@@ -119,7 +119,7 @@ export class LinearScaleState {
 		domainMin: 0,
 		domainMax: 1,
 		domainScale: 1,
-		categoryCount: 0
+		p4: 0
 	};
 
 	// --- Constraints ---
@@ -199,7 +199,7 @@ export class LinearScaleState {
 		this.gpuState.domainMin = extent[0];
 		this.gpuState.domainMax = extent[1];
 		this.gpuState.domainScale = initRange === 0 ? 0 : 1 / initRange;
-		this.gpuState.categoryCount = 0;
+		this.gpuState.p4 = 0;
 
 		// Store zoom limits
 		this.zoomLimits.max = zoomLimits[0];
@@ -780,7 +780,7 @@ export class LinearScaleState {
 		out.domainMin = min;
 		out.domainMax = max;
 		out.domainScale = range === 0 ? 0 : 1 / range;
-		out.categoryCount = 0;
+		out.p4 = 0;
 	}
 
 	/**

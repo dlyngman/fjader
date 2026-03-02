@@ -118,7 +118,7 @@
 	const config = $derived({
 		markType: 'recty',
 		supportedScaleTypes: {
-			x: ['linear', 'band', 'point', 'time', 'log'],
+			x: ['linear', 'band', 'point', 'time', 'log', 'symlog'],
 			y: ['linear', 'identity']
 		},
 		scaleRequirements: {

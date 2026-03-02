@@ -4,6 +4,7 @@
 
 import { scaleSymlog, scaleLog } from 'd3-scale';
 import type { ScaleSymLog } from 'd3-scale';
+import { format } from 'd3-format';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import type { LinearScaleOptions, GpuScaleState } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -27,6 +28,7 @@ export class SymlogScaleState extends LinearScaleState {
 
 	#constant: number;
 	#symlogScale: ScaleSymLog<number, number>;
+	static #pointFormat = format('.4~s');
 
 	constructor(
 		name: string,
@@ -80,7 +82,7 @@ export class SymlogScaleState extends LinearScaleState {
 		out.domainMin = sMin;
 		out.domainMax = sMax;
 		out.domainScale = sRange === 0 ? 0 : 1 / sRange;
-		out.categoryCount = this.#constant;
+		out.p4 = this.#constant; // symlog constant C
 	}
 
 	protected override normalizeValue(value: number, min: number, max: number): number {
@@ -100,6 +102,15 @@ export class SymlogScaleState extends LinearScaleState {
 	// ===========================================================================
 	// D3 SCALE INTERFACE
 	// ===========================================================================
+
+	/**
+	 * Format a single value for point display (crosshair, tooltip).
+	 * Unlike tickFormat(), always returns a readable string — D3 log
+	 * tickFormat returns '' for non-significant values.
+	 */
+	override formatValue(value: number): string {
+		return SymlogScaleState.#pointFormat(value);
+	}
 
 	override getBaseScale(axis: string, size: number): ScaleSymLog<number, number> {
 		this.#symlogScale.range(axis === 'x' ? [0, size] : [size, 0]);

@@ -30,10 +30,16 @@
 					idx as id,
 					-- Exponentially distributed x values (1 to ~150,000)
 					POWER(10, idx * 5.0 / 499) as population,
+					-- Exponential y for log-y line/area charts
+					POWER(10, idx * 3.0 / 499) * (1.0 + 0.3 * sin(idx * 0.1)) as value,
 					-- Some noisy linear-ish y (for log-x scatter)
 					50 + 20 * sin(idx * 0.05) + 10 * random() as gdp,
 					-- Values that cross zero (for symlog): linear spread from -1000 to +1000
 					(idx - 250) * 4.0 as profit,
+					-- Large-magnitude zero-crossing (for symlog with custom constant)
+					(idx - 250) * 400.0 as revenue,
+					-- Near-zero values for boundary testing (1e-12 to 1e-8)
+					POWER(10, -12 + idx * 4.0 / 499) as tiny,
 					-- Categorical
 					CASE WHEN idx % 3 = 0 THEN 'A' WHEN idx % 3 = 1 THEN 'B' ELSE 'C' END as category
 				FROM points
