@@ -3,6 +3,7 @@ import { AnimationLoop } from '$lib/animation';
 import { scaleTemplateSystem } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+import { isCategoricalScale } from '$lib/scales/scale-categories';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -52,7 +53,7 @@ interface ScaleInstance {
 	id: string;
 	type: string;
 	constructor: { name: string };
-	gpuState?: { domainMin: number; domainMax: number; domainScale: number };
+	gpuState?: { domainMin: number; domainMax: number; domainScale: number; p4: number };
 	getConfig?: () => { categoryCount: number; paddingInner: number; paddingOuter: number };
 	step: () => void;
 	updateRenderState: (dt: number) => void;
@@ -594,7 +595,7 @@ export class GPUCoordinator {
 			const scale = item.instance;
 			const off = item.index << 2;
 
-			if (scale.type === 'band' || scale.type === 'point') {
+			if (isCategoricalScale(scale.type)) {
 				// BAND SCALE: Write configuration
 				const config = scale.getConfig!();
 
@@ -603,13 +604,13 @@ export class GPUCoordinator {
 				view[off + 2] = config.paddingOuter;
 				view[off + 3] = 0; // padding (unused)
 			} else {
-				// LINEAR SCALE: Write domain state
+				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
 				const s = scale.gpuState!;
 
 				view[off] = s.domainMin;
 				view[off + 1] = s.domainMax;
 				view[off + 2] = s.domainScale;
-				view[off + 3] = 0; // padding (unused)
+				view[off + 3] = s.p4; // symlog constant C, 0 for linear/log/time
 			}
 		}
 	}

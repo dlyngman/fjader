@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { scaleLinear } from 'd3-scale';
-import type { ScaleLinear } from 'd3-scale';
+import type { ScaleLinear, ScaleContinuousNumeric } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
 import { SpringPair, SPRING_PRESETS } from '$lib/animation';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -39,6 +39,13 @@ interface PanContext {
 	startScreenPos: number;
 }
 
+export interface GpuScaleState {
+	domainMin: number;
+	domainMax: number;
+	domainScale: number;
+	p4: number; // scale-type-specific: symlog constant C, 0 for linear/log/time
+}
+
 interface DomainAccessor {
 	readonly current: Float64Array;
 	readonly target: [number, number];
@@ -63,8 +70,13 @@ interface DomainAccessor {
  */
 export class LinearScaleState {
 	// --- Discriminant for union narrowing ---
-	get scaleType(): 'linear' | 'time' {
+	get scaleType(): 'linear' | 'time' | 'log' | 'symlog' {
 		return 'linear';
+	}
+
+	/** Whether this scale supports interactive pan and zoom. */
+	get supportsPanZoom(): boolean {
+		return true;
 	}
 
 	// --- Scale type (for GPU registration) ---
@@ -107,7 +119,7 @@ export class LinearScaleState {
 		domainMin: 0,
 		domainMax: 1,
 		domainScale: 1,
-		categoryCount: 0
+		p4: 0
 	};
 
 	// --- Constraints ---
@@ -179,10 +191,15 @@ export class LinearScaleState {
 			1e-6 // precision for isAtRest
 		);
 
-		// Sync render state
+		// Sync render state — inline linear math to avoid virtual transformForGpu()
+		// call before subclass private fields are initialized (JS inheritance constraint)
 		this.#renderMin = extent[0];
 		this.#renderMax = extent[1];
-		this.#updateGpuState();
+		const initRange = extent[1] - extent[0];
+		this.gpuState.domainMin = extent[0];
+		this.gpuState.domainMax = extent[1];
+		this.gpuState.domainScale = initRange === 0 ? 0 : 1 / initRange;
+		this.gpuState.p4 = 0;
 
 		// Store zoom limits
 		this.zoomLimits.max = zoomLimits[0];
@@ -222,7 +239,10 @@ export class LinearScaleState {
 			/** Target domain (what we're animating toward) */
 			get target(): [number, number] {
 				self._targetVersion; // Register Svelte dependency (only changes on user input)
-				return [self.#springPair.targetA, self.#springPair.targetB];
+				return [
+					self.fromSpringSpace(self.#springPair.targetA),
+					self.fromSpringSpace(self.#springPair.targetB)
+				];
 			},
 
 			/** Set domain with optional instant mode */
@@ -269,12 +289,9 @@ export class LinearScaleState {
 	 * Called once per frame by AnimationLoop.
 	 */
 	updateRenderState(extrapolationDt: number): void {
-		// const rendered = this.#springPair.getRenderable(extrapolationDt);
 		this.#springPair.getRenderableInto(extrapolationDt, this.#springOutput);
-		this.#renderMin = this.#springOutput[0];
-		this.#renderMax = this.#springOutput[1];
-		// this.#renderMin = rendered.a;
-		// this.#renderMax = rendered.b;
+		this.#renderMin = this.fromSpringSpace(this.#springOutput[0]);
+		this.#renderMax = this.fromSpringSpace(this.#springOutput[1]);
 		this.#updateGpuState();
 
 		// Trigger Svelte reactivity
@@ -310,10 +327,12 @@ export class LinearScaleState {
 	}): void {
 		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
 
+		const panMin = this.fromSpringSpace(this.#springPair.currentA);
+		const panMax = this.fromSpringSpace(this.#springPair.currentB);
 		this.#panContext = {
-			initialMin: this.#springPair.currentA,
-			initialMax: this.#springPair.currentB,
-			domainWidth: this.#springPair.currentB - this.#springPair.currentA,
+			initialMin: panMin,
+			initialMax: panMax,
+			domainWidth: panMax - panMin,
 			screenToDataRatio: context.screenToDataRatio,
 			axis: context.axis,
 			startScreenPos: context.initialScreenPos
@@ -325,25 +344,27 @@ export class LinearScaleState {
 
 	/**
 	 * Update pan position.
+	 * Uses normalizeValue/denormalizeValue so pan is uniform in visual space
+	 * for all scale types (linear, log, symlog).
 	 */
 	updatePanPosition(screenX: number, screenY: number): void {
 		if (!this.#panContext) return;
 
 		const ctx = this.#panContext;
-		let dataDelta = 0;
+		const screenDelta =
+			ctx.axis === 'x' ? screenX - ctx.startScreenPos : screenY - ctx.startScreenPos;
+		const sign = ctx.axis === 'x' ? -1 : 1;
 
-		if (ctx.axis === 'x') {
-			const screenDelta = screenX - ctx.startScreenPos;
-			dataDelta = -(screenDelta * ctx.screenToDataRatio);
-		} else {
-			const screenDelta = screenY - ctx.startScreenPos;
-			dataDelta = screenDelta * ctx.screenToDataRatio;
-		}
+		// Derive screen size from stored pan context
+		const screenSize = ctx.domainWidth / ctx.screenToDataRatio;
 
-		let newMin = ctx.initialMin + dataDelta;
-		let newMax = newMin + ctx.domainWidth;
+		// Convert screen motion to visual-space fraction
+		const normalizedDelta = (sign * screenDelta) / screenSize;
 
-		// Clamp to domain limits
+		// Shift in visual space and convert back to data space
+		const newMin = this.denormalizeValue(normalizedDelta, ctx.initialMin, ctx.initialMax);
+		const newMax = this.denormalizeValue(1 + normalizedDelta, ctx.initialMin, ctx.initialMax);
+
 		const clamped = this.#clampDomain(newMin, newMax);
 		this.#setTarget(clamped.min, clamped.max);
 	}
@@ -358,12 +379,13 @@ export class LinearScaleState {
 
 	/**
 	 * Accumulate zoom input (for coalesced wheel events).
+	 * @param visualCenter - Cursor position as a visual fraction [0,1] (0=left/bottom, 1=right/top)
 	 */
-	accumulateZoom(dataCenter: number, scaleFactor: number): void {
+	accumulateZoom(visualCenter: number, scaleFactor: number): void {
 		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
 
 		this.#zoomAccumulator.logScale += Math.log(scaleFactor);
-		this.#zoomAccumulator.center = dataCenter;
+		this.#zoomAccumulator.center = visualCenter;
 		this.#zoomAccumulator.hasUpdates = true;
 		this.#setStiffness(SCALE_SPRING_PRESETS.zoom);
 		this.#ensureAnimating();
@@ -390,8 +412,8 @@ export class LinearScaleState {
 			const expandedMax = center + (range * factor) / 2;
 
 			// Set current position to expanded, target to actual
-			this.#springPair.set(expandedMin, expandedMax);
-			this.#setTarget(min, max);
+			this.#springPair.set(this.toSpringSpace(expandedMin), this.toSpringSpace(expandedMax));
+			this.#setTarget(min, max); // #setTarget transforms internally
 
 			// Initialize render values so first frame renders correctly
 			this.#renderMin = expandedMin;
@@ -414,7 +436,7 @@ export class LinearScaleState {
 	 * Get a D3 scale configured for the given axis and size.
 	 * Reuses internal scale object to avoid allocation.
 	 */
-	getBaseScale(axis: string, size: number): ScaleLinear<number, number> {
+	getBaseScale(axis: string, size: number): ScaleContinuousNumeric<number, number> {
 		if (axis === 'x') {
 			this.#sharedScale.range([0, size]);
 		} else {
@@ -490,37 +512,18 @@ export class LinearScaleState {
 	 * Convert data value to screen position.
 	 */
 	scaleDataToScreen(dataVal: number, rangeSize: number, isYAxis: boolean = false): number {
-		const min = this.#renderMin;
-		const max = this.#renderMax;
-		const domainSpan = max - min;
-
-		if (domainSpan === 0) return 0;
-
-		const t = (dataVal - min) / domainSpan;
-
-		if (isYAxis) {
-			return rangeSize - t * rangeSize;
-		} else {
-			return t * rangeSize;
-		}
+		const t = this.normalizeValue(dataVal, this.#renderMin, this.#renderMax);
+		return isYAxis ? rangeSize - t * rangeSize : t * rangeSize;
 	}
 
 	/**
 	 * Convert screen position to data value.
 	 */
 	invertScreenToData(screenVal: number, rangeSize: number, isYAxis: boolean = false): number {
-		const min = this.#renderMin;
-		const max = this.#renderMax;
-
-		if (rangeSize === 0) return min;
-
+		if (rangeSize === 0) return this.#renderMin;
 		const t = screenVal / rangeSize;
-
-		if (isYAxis) {
-			return max - t * (max - min);
-		} else {
-			return min + t * (max - min);
-		}
+		const frac = isYAxis ? 1 - t : t;
+		return this.denormalizeValue(frac, this.#renderMin, this.#renderMax);
 	}
 
 	// ===========================================================================
@@ -649,13 +652,13 @@ export class LinearScaleState {
 	// ===========================================================================
 
 	#setTarget(min: number, max: number): void {
-		this.#springPair.setTarget(min, max);
+		this.#springPair.setTarget(this.toSpringSpace(min), this.toSpringSpace(max));
 		this._targetVersion++; // Trigger reactivity for target watchers
 		this.#ensureAnimating();
 	}
 
 	#setInstant(min: number, max: number): void {
-		this.#springPair.set(min, max);
+		this.#springPair.set(this.toSpringSpace(min), this.toSpringSpace(max));
 		this.#renderMin = min;
 		this.#renderMax = max;
 		this.#updateGpuState();
@@ -668,13 +671,7 @@ export class LinearScaleState {
 	}
 
 	#updateGpuState(): void {
-		const min = this.#renderMin;
-		const max = this.#renderMax;
-		const range = max - min;
-
-		this.gpuState.domainMin = min;
-		this.gpuState.domainMax = max;
-		this.gpuState.domainScale = range === 0 ? 0 : 1 / range;
+		this.transformForGpu(this.#renderMin, this.#renderMax, this.gpuState);
 	}
 
 	#ensureAnimating(): void {
@@ -684,21 +681,37 @@ export class LinearScaleState {
 		}
 	}
 
-	#applyZoomToTarget(center: number, scaleFactor: number): void {
-		const min = this.#springPair.targetA;
-		const max = this.#springPair.targetB;
-		const curWidth = max - min;
-		const newWidth = curWidth / scaleFactor;
+	#applyZoomToTarget(tCenter: number, scaleFactor: number): void {
+		const min = this.fromSpringSpace(this.#springPair.targetA);
+		const max = this.fromSpringSpace(this.#springPair.targetB);
 
-		// Clamp to minimum width
-		const safeWidth = Math.max(newWidth, this.domainLimits.minWidth);
+		// tCenter is already a visual [0,1] fraction from screen position —
+		// no normalizeValue needed, so the cursor stays perfectly anchored
+		// regardless of render-vs-target spring lag.
+		const newVisualWidth = 1.0 / scaleFactor;
 
-		// Maintain zoom center position
-		const ratio = (center - min) / curWidth;
-		let newMin = center - ratio * safeWidth;
-		let newMax = newMin + safeWidth;
+		// Zoom around tCenter: preserve its relative visual position
+		const newTMin = tCenter - tCenter * newVisualWidth;
+		const newTMax = newTMin + newVisualWidth;
 
-		// Clamp to domain limits
+		// Convert back to data space
+		let newMin = this.denormalizeValue(newTMin, min, max);
+		let newMax = this.denormalizeValue(newTMax, min, max);
+
+		// Enforce minimum zoom level in visual space (works for all scale types)
+		const ext = this.#enableUpdates ? this.#extent : (this.#frozenExtent ?? this.#extent);
+		const extMin = ext[0];
+		const extMax = ext[1];
+		const minVisualWidth = 1.0 / this.zoomLimits.min;
+		const visNewMin = this.normalizeValue(newMin, extMin, extMax);
+		const visNewMax = this.normalizeValue(newMax, extMin, extMax);
+
+		if (visNewMax - visNewMin < minVisualWidth) {
+			const visMid = (visNewMin + visNewMax) / 2;
+			newMin = this.denormalizeValue(visMid - minVisualWidth / 2, extMin, extMax);
+			newMax = this.denormalizeValue(visMid + minVisualWidth / 2, extMin, extMax);
+		}
+
 		const clamped = this.#clampDomain(newMin, newMax);
 		this.#setTarget(clamped.min, clamped.max);
 	}
@@ -741,6 +754,66 @@ export class LinearScaleState {
 	_setExtent(min: number, max: number): void {
 		this.#extent[0] = min;
 		this.#extent[1] = max;
+	}
+
+	/**
+	 * Reinitialize spring and GPU state after subclass private fields are ready.
+	 * Subclasses must call this at the end of their constructor.
+	 */
+	protected _reinitScale(): void {
+		// Re-set spring into transformed space using current render values
+		this.#springPair.set(this.toSpringSpace(this.#renderMin), this.toSpringSpace(this.#renderMax));
+		this.#springPair.setTarget(this.toSpringSpace(this.#renderMin), this.toSpringSpace(this.#renderMax));
+		this.#updateGpuState();
+	}
+
+	// ===========================================================================
+	// TEMPLATE METHOD HOOKS (override in LogScaleState, SymlogScaleState)
+	// ===========================================================================
+
+	/**
+	 * Write GPU SSBO parameters into the output object (zero-alloc).
+	 * Override to pre-compute transformed domain values (e.g., log(domainMin)).
+	 */
+	protected transformForGpu(min: number, max: number, out: GpuScaleState): void {
+		const range = max - min;
+		out.domainMin = min;
+		out.domainMax = max;
+		out.domainScale = range === 0 ? 0 : 1 / range;
+		out.p4 = 0;
+	}
+
+	/**
+	 * Normalize a data value to visual [0,1] space within the given domain.
+	 * Override for nonlinear mappings (log, symlog).
+	 */
+	protected normalizeValue(value: number, min: number, max: number): number {
+		const range = max - min;
+		return range === 0 ? 0 : (value - min) / range;
+	}
+
+	/**
+	 * Convert a visual [0,1] fraction back to a data value within the given domain.
+	 * Override for nonlinear mappings (log, symlog).
+	 */
+	protected denormalizeValue(t: number, min: number, max: number): number {
+		return min + t * (max - min);
+	}
+
+	/**
+	 * Transform a data value into the space the spring animates in.
+	 * Linear: identity. Log: Math.log. Symlog: sign(x)*log1p(|x/C|).
+	 * This ensures spring physics produce visually uniform motion.
+	 */
+	protected toSpringSpace(value: number): number {
+		return value;
+	}
+
+	/**
+	 * Inverse of toSpringSpace — convert spring value back to data space.
+	 */
+	protected fromSpringSpace(value: number): number {
+		return value;
 	}
 
 	// ===========================================================================

@@ -43,6 +43,11 @@ export class BandScaleState {
 		return 'band';
 	}
 
+	/** Whether this scale supports interactive pan and zoom. */
+	get supportsPanZoom(): boolean {
+		return false;
+	}
+
 	id: string = crypto.randomUUID();
 	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
 	name: string = $state('');
@@ -114,14 +119,14 @@ export class BandScaleState {
 	/**
 	 * GPU state (derived) - for compatibility with coordinator
 	 */
-	gpuState: { domainMin: number; domainMax: number; categoryCount: number; domainScale: number } =
+	gpuState: { domainMin: number; domainMax: number; p4: number; domainScale: number } =
 		$derived.by(() => {
 			const categoryCount = this.#categoryIndexMap.size;
 
 			return {
 				domainMin: 0,
 				domainMax: Math.max(0, categoryCount - 1),
-				categoryCount: categoryCount,
+				p4: 0, // unused for band scales (SSBO written via getConfig instead)
 				domainScale: 0
 			};
 		});

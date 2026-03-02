@@ -41,6 +41,12 @@ import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
+import {
+	isContinuousScale,
+	isNumericScale,
+	isCategoricalScale,
+	isTemporalScale
+} from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from './utils';
 
 // ---------------------------------------------------------------------------
@@ -257,13 +263,11 @@ export class BaseMarkSetup {
 
 			// Determine channel type and whether it needs data-derived domain
 			if (channel === 'x' || channel === 'x1' || channel === 'x2') {
-				const scaleType = scaleRequirements?.x?.type;
-				if (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time') {
+				if (isContinuousScale(scaleRequirements?.x?.type)) {
 					this.#channelsNeedingDataDomain.add('x');
 				}
 			} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
-				const scaleType = scaleRequirements?.y?.type;
-				if (scaleType === 'linear' || scaleType === 'log' || scaleType === 'time') {
+				if (isContinuousScale(scaleRequirements?.y?.type)) {
 					this.#channelsNeedingDataDomain.add('y');
 				}
 			} else if (channel === 'fill' || channel === 'stroke') {
@@ -1025,7 +1029,7 @@ export class BaseMarkSetup {
 				let currentDomain: [number, number] | null = null;
 
 				// Get frozen binning domain for adaptive bin count
-				if (scaleType === 'time' || scaleType === 'utc' || scaleType === 'linear') {
+				if (isContinuousScale(scaleType)) {
 					currentDomain = this.#lastBinningDomain[axis as 'x' | 'y'] as [number, number] | null;
 
 					if (!currentDomain) {
@@ -1193,7 +1197,7 @@ export class BaseMarkSetup {
 
 			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
 			// not from fieldInfo (which would return values from the offset column)
-			if (scaleType === 'linear' || scaleType === 'log') {
+			if (isNumericScale(scaleType)) {
 				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
 				processedFields.add(String(fieldValue));
 			}
@@ -1212,7 +1216,7 @@ export class BaseMarkSetup {
 			const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
 
 			// Time scales get their domain from sidecar query, skip fieldInfo path
-			if (scaleType === 'linear' || scaleType === 'log') {
+			if (isNumericScale(scaleType)) {
 				const select = this.#config.select;
 				// Try direct alias first, then extent variants (x1/x2, y1/y2)
 				const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
@@ -1300,7 +1304,10 @@ export class BaseMarkSetup {
 		if (
 			this.#skipDomainUpdateForAxis !== 'x' &&
 			xChannelsToCheck.length > 0 &&
-			(this.actualXScaleType === 'linear' || this.actualXScaleType === 'time')
+			(this.actualXScaleType === 'linear' ||
+				this.actualXScaleType === 'time' ||
+				this.actualXScaleType === 'log' ||
+				this.actualXScaleType === 'symlog')
 		) {
 			// For viewport-local domains, filter to visible Y range
 			// Only apply if the Y scale already has a data-derived domain — on initial load
@@ -1355,7 +1362,10 @@ export class BaseMarkSetup {
 		if (
 			this.#skipDomainUpdateForAxis !== 'y' &&
 			yChannelsToCheck.length > 0 &&
-			(this.actualYScaleType === 'linear' || this.actualYScaleType === 'time')
+			(this.actualYScaleType === 'linear' ||
+				this.actualYScaleType === 'time' ||
+				this.actualYScaleType === 'log' ||
+				this.actualYScaleType === 'symlog')
 		) {
 			// For viewport-local domains, filter to visible X range
 			// Only apply if the X scale already has a data-derived domain.
@@ -1886,7 +1896,7 @@ export class BaseMarkSetup {
 
 			// For categorical scales (band/point) and time scales, mark ready immediately
 			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
-			if (scaleType === 'band' || scaleType === 'point' || scaleType === 'time') {
+			if (isCategoricalScale(scaleType) || isTemporalScale(scaleType)) {
 				scale.setReady();
 				continue;
 			}
@@ -1913,11 +1923,8 @@ export class BaseMarkSetup {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
 
-			// Only mark linear scales that were waiting for data-derived domains
-			if (
-				needsDataDomain &&
-				(scaleType === 'linear' || scaleType === 'log' || scaleType === 'time')
-			) {
+			// Only mark continuous scales that were waiting for data-derived domains
+			if (needsDataDomain && isContinuousScale(scaleType)) {
 				if (!scale.ready) {
 					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
 					scale.setReady();
@@ -1941,7 +1948,7 @@ export class BaseMarkSetup {
 			if (!this.data) return;
 
 			const scaleType = aggregateAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			if (scaleType !== 'linear' && scaleType !== 'time') return;
+			if (scaleType !== 'linear' && scaleType !== 'log' && scaleType !== 'symlog' && scaleType !== 'time') return;
 
 			// Determine which axis is binned (opposite of aggregate)
 			const binnedAxis = aggregateAxis === 'x' ? 'y' : 'x';

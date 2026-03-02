@@ -4,9 +4,18 @@ export type { AnyScaleState } from './ScaleRegistry.svelte';
 
 export { LinearScaleState } from './LinearScaleState.svelte';
 export { TimeScaleState } from './TimeScaleState.svelte';
+export { LogScaleState } from './LogScaleState.svelte';
+export { SymlogScaleState } from './SymlogScaleState.svelte';
 export { BandScaleState } from './BandScaleState.svelte';
 export { SizeScaleState } from './SizeScaleState.svelte';
 export { SCALE_PRIORITIES, resolveScaleType, resolveScaleConfiguration } from './ScalePriorities';
+export {
+	isContinuousScale,
+	isNumericScale,
+	isCategoricalScale,
+	isTemporalScale,
+	requiresPositiveDomain
+} from './scale-categories';
 export type {
 	ScaleRequirement,
 	RegisteredScaleRequirement,

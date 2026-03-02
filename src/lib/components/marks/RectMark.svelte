@@ -4,6 +4,7 @@
 	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { expandBinForExtent } from '$lib/sql/bin';
+	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import {
 		buildSelectFromChannels,
 		resolveChannelData,
@@ -123,8 +124,8 @@
 	const config = $derived({
 		markType: 'rect',
 		supportedScaleTypes: {
-			x: ['linear', 'band', 'point', 'time', 'log'],
-			y: ['linear', 'band', 'point', 'time', 'log']
+			x: ['linear', 'band', 'point', 'time', 'log', 'symlog'],
+			y: ['linear', 'band', 'point', 'time', 'log', 'symlog']
 		},
 		scaleRequirements: {
 			x: effectiveXScaleType
@@ -173,7 +174,7 @@
 	// X Data: Extent channels with band/linear branching
 	let xData = $derived.by(() => {
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
-		if (scaleType === 'band' || scaleType === 'point') {
+		if (isCategoricalScale(scaleType)) {
 			const arr = resolveChannelData({
 				value: ex1,
 				channel: 'x1',
@@ -206,7 +207,7 @@
 	// Y Data: Extent channels with band/linear branching
 	let yData = $derived.by(() => {
 		const scaleType = setup?.actualYScaleType || chartContext.scaleTypes?.y;
-		if (scaleType === 'band' || scaleType === 'point') {
+		if (isCategoricalScale(scaleType)) {
 			const arr = resolveChannelData({
 				value: ey1,
 				channel: 'y1',

@@ -518,10 +518,8 @@
 
 		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) return;
 
-		const xType = scales.scaleTypes?.x;
-		const yType = scales.scaleTypes?.y;
-		activePanX = xInBounds && (xType === 'linear' || xType === 'time');
-		activePanY = yInBounds && (yType === 'linear' || yType === 'time');
+		activePanX = xInBounds && !!scales.xScaleState?.supportsPanZoom;
+		activePanY = yInBounds && !!scales.yScaleState?.supportsPanZoom;
 
 		if (!activePanX && !activePanY) return;
 		isPanning = true;

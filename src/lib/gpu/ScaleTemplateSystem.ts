@@ -107,6 +107,95 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		}
 	},
 
+	log: {
+		declaration: () => {
+			return `
+        struct ScaleParam {
+          p1: f32, // logDomainMin (pre-computed)
+          p2: f32, // logDomainMax (pre-computed)
+          p3: f32, // logDomainScale = 1/(logMax - logMin)
+          p4: f32, // unused
+        };
+      `;
+		},
+
+		functionCall: (value, suffix) => `scaleLog${suffix}(${value})`,
+
+		implementation: (suffix, axis) => `
+      fn scaleLog${suffix}(value: f32, scaleIndex: u32) -> f32 {
+        let scale = scaleParams[scaleIndex];
+
+        let logDomainMin = scale.p1;
+        let logDomainScale = scale.p3;
+
+        let logValue = log(max(value, 1e-38));
+        let normalized = (logValue - logDomainMin) * logDomainScale;
+
+        let rangeMin = frameUniforms.rangeMin.${axis};
+        let rangeMax = frameUniforms.rangeMax.${axis};
+        let rangeSize = rangeMax - rangeMin;
+
+				${
+					axis === 'y'
+						? `return rangeMax - normalized * rangeSize;`
+						: `return rangeMin + normalized * rangeSize;`
+				}
+      }
+    `,
+
+		bufferLayout: {
+			size: 4 * 4,
+			fields: ['logDomainMin', 'logDomainMax', 'logDomainScale', '_pad']
+		}
+	},
+
+	symlog: {
+		declaration: () => {
+			return `
+        struct ScaleParam {
+          p1: f32, // symlogDomainMin (pre-computed)
+          p2: f32, // symlogDomainMax (pre-computed)
+          p3: f32, // symlogDomainScale = 1/(symlogMax - symlogMin)
+          p4: f32, // constant C
+        };
+      `;
+		},
+
+		functionCall: (value, suffix) => `scaleSymlog${suffix}(${value})`,
+
+		implementation: (suffix, axis) => `
+      fn symlogTransform${suffix}(value: f32, constant: f32) -> f32 {
+        return sign(value) * log(1.0 + abs(value / constant));
+      }
+
+      fn scaleSymlog${suffix}(value: f32, scaleIndex: u32) -> f32 {
+        let scale = scaleParams[scaleIndex];
+
+        let symlogMin = scale.p1;
+        let symlogScale = scale.p3;
+        let constant = scale.p4;
+
+        let transformed = symlogTransform${suffix}(value, constant);
+        let normalized = (transformed - symlogMin) * symlogScale;
+
+        let rangeMin = frameUniforms.rangeMin.${axis};
+        let rangeMax = frameUniforms.rangeMax.${axis};
+        let rangeSize = rangeMax - rangeMin;
+
+				${
+					axis === 'y'
+						? `return rangeMax - normalized * rangeSize;`
+						: `return rangeMin + normalized * rangeSize;`
+				}
+      }
+    `,
+
+		bufferLayout: {
+			size: 4 * 4,
+			fields: ['symlogDomainMin', 'symlogDomainMax', 'symlogDomainScale', 'constant']
+		}
+	},
+
 	band: {
 		declaration: () => {
 			return `
@@ -198,6 +287,11 @@ const SEMANTIC_LOGIC_MAP: Record<string, Record<string, SemanticLogicDef>> = {
 			inputs: 1,
 			generate: (axis, channel) =>
 				`let scaled${axis.toUpperCase()} = scale${axis.toUpperCase()}(${channel});`
+		},
+		symlog: {
+			inputs: 1,
+			generate: (axis, channel) =>
+				`let scaled${axis.toUpperCase()} = scale${axis.toUpperCase()}(${channel});`
 		}
 	},
 
@@ -221,9 +315,35 @@ const SEMANTIC_LOGIC_MAP: Record<string, Record<string, SemanticLogicDef>> = {
       let bandWidth${axis.toUpperCase()} = getBandwidth${axis.toUpperCase()}();
       let scaled${axis.toUpperCase()}0 = bandCenter${axis.toUpperCase()} - bandWidth${axis.toUpperCase()} * 0.5;
       let scaled${axis.toUpperCase()}1 = bandCenter${axis.toUpperCase()} + bandWidth${axis.toUpperCase()} * 0.5;`
+		},
+		log: {
+			inputs: 2,
+			generate: (axis, channel0, channel1) => `
+      let scaled${axis.toUpperCase()}0 = scale${axis.toUpperCase()}(${channel0});
+      let scaled${axis.toUpperCase()}1 = scale${axis.toUpperCase()}(${channel1});`
+		},
+		symlog: {
+			inputs: 2,
+			generate: (axis, channel0, channel1) => `
+      let scaled${axis.toUpperCase()}0 = scale${axis.toUpperCase()}(${channel0});
+      let scaled${axis.toUpperCase()}1 = scale${axis.toUpperCase()}(${channel1});`
 		}
 	}
 };
+
+/** Map scale type → WGSL function base name */
+const SCALE_FUNCTION_BASES: Record<string, string> = {
+	linear: 'scaleLinear',
+	time: 'scaleLinear',
+	band: 'scaleBand',
+	point: 'scaleBand',
+	log: 'scaleLog',
+	symlog: 'scaleSymlog'
+};
+
+function _scaleFunctionName(scaleType: string, axis: string): string {
+	return `${SCALE_FUNCTION_BASES[scaleType] || 'scaleLinear'}${axis}`;
+}
 
 /**
  * Main template system class
@@ -574,7 +694,7 @@ export class ScaleTemplateSystem {
 
 		// Only generate scaleX if the renderer uses X axis
 		if (rendererDefinition?.x) {
-			const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
+			const xFunctionName = _scaleFunctionName(scaleTypes.x, 'X');
 			functions.push(`
       fn scaleX(value: f32) -> f32 {
         return ${xFunctionName}(value, frameUniforms.xScaleIndex);
@@ -583,7 +703,7 @@ export class ScaleTemplateSystem {
 
 		// Only generate scaleY if the renderer uses Y axis
 		if (rendererDefinition?.y) {
-			const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+			const yFunctionName = _scaleFunctionName(scaleTypes.y, 'Y');
 			functions.push(`
       fn scaleY(value: f32) -> f32 {
         return ${yFunctionName}(value, frameUniforms.yScaleIndex);
@@ -592,8 +712,8 @@ export class ScaleTemplateSystem {
 
 		// Fallback: if no renderer definition, generate both (backward compatibility)
 		if (functions.length === 0) {
-			const xFunctionName = scaleTypes.x === 'band' ? 'scaleBandX' : 'scaleLinearX';
-			const yFunctionName = scaleTypes.y === 'band' ? 'scaleBandY' : 'scaleLinearY';
+			const xFunctionName = _scaleFunctionName(scaleTypes.x, 'X');
+			const yFunctionName = _scaleFunctionName(scaleTypes.y, 'Y');
 			functions.push(`
       fn scaleX(value: f32) -> f32 {
         return ${xFunctionName}(value, frameUniforms.xScaleIndex);

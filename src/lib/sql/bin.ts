@@ -1,5 +1,6 @@
 import type { ExprNode, ExprValue, BinHistogramOptions, BinDateOptions } from '@uwdata/mosaic-sql';
 import { binDate, binHistogram, column } from '@uwdata/mosaic-sql';
+import { isTemporalScale } from '$lib/scales/scale-categories';
 
 type BinOptions = BinHistogramOptions & BinDateOptions;
 
@@ -59,8 +60,7 @@ export class AutoBinNode {
 		const isTemporal =
 			this.options.interval !== undefined ||
 			type === 'date' ||
-			scaleType === 'time' ||
-			scaleType === 'utc';
+			isTemporalScale(scaleType);
 
 		let binOptions = { ...this.options };
 		if (currentDomain && binOptions.steps && !binOptions.step && !binOptions.interval) {

@@ -124,8 +124,8 @@
 	const config = $derived({
 		markType: 'areax',
 		supportedScaleTypes: {
-			x: ['linear', 'time', 'log'],
-			y: ['linear', 'time', 'log']
+			x: ['linear', 'time', 'log', 'symlog'],
+			y: ['linear', 'time', 'log', 'symlog']
 		},
 		scaleRequirements: {
 			x: effectiveXScaleType

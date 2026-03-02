@@ -3,6 +3,8 @@ import { setContext, getContext, untrack } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import { TimeScaleState } from './TimeScaleState.svelte';
+import { LogScaleState } from './LogScaleState.svelte';
+import { SymlogScaleState } from './SymlogScaleState.svelte';
 import { BandScaleState } from './BandScaleState.svelte';
 import { ColorScaleState } from './ColorScaleState.svelte';
 import { SizeScaleState } from './SizeScaleState.svelte';
@@ -13,6 +15,8 @@ import type { ColorScaleType } from '$lib/types';
 export type AnyScaleState =
 	| LinearScaleState
 	| TimeScaleState
+	| LogScaleState
+	| SymlogScaleState
 	| BandScaleState
 	| ColorScaleState
 	| SizeScaleState;
@@ -70,7 +74,13 @@ export class ScaleRegistry {
 		// Initialize the storage buckets (SvelteMap for reactive legend lookups)
 		this.scales = {
 			linear: new SvelteMap(),
+			log: new SvelteMap(),
+			symlog: new SvelteMap(),
+			pow: new SvelteMap(),
+			identity: new SvelteMap(),
+			time: new SvelteMap(),
 			band: new SvelteMap(),
+			point: new SvelteMap(),
 			ordinal: new SvelteMap(),
 			color: new SvelteMap(),
 			size: new SvelteMap()
@@ -237,10 +247,27 @@ export class ScaleRegistry {
 
 			if (!this.scales[type].has(key)) {
 				// Factory Logic
-				if (['linear', 'log', 'pow', 'identity'].includes(type)) {
+				if (['linear', 'pow', 'identity'].includes(type)) {
 					this.scales[type].set(
 						key,
 						new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
+					);
+				} else if (type === 'log') {
+					this.scales[type].set(
+						key,
+						new LogScaleState(name, undefined, 'log', undefined, config, this.#gpuCoordinator)
+					);
+				} else if (type === 'symlog') {
+					this.scales[type].set(
+						key,
+						new SymlogScaleState(
+							name,
+							undefined,
+							'symlog',
+							undefined,
+							{ ...config, constant: config.constant as number | undefined },
+							this.#gpuCoordinator
+						)
 					);
 				} else if (type === 'time') {
 					this.scales[type].set(
