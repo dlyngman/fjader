@@ -3,6 +3,7 @@
 import type { Coordinator } from '@uwdata/mosaic-core';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
+import { isTemporalScale } from '$lib/scales/scale-categories';
 
 type DataRow = Record<string, unknown>;
 
@@ -445,22 +446,22 @@ export class TooltipManager {
 			// Resolve time offset to formatted datetime string
 			if (
 				(key === 'x' || key === 'x1' || key === 'x2') &&
-				scaleTypes.x === 'time' &&
+				isTemporalScale(scaleTypes.x) &&
 				typeof value === 'number'
 			) {
 				const scaleState = this.#scaleProvider.xScaleState;
-				point[fieldName] = scaleState && scaleState.scaleType === 'time'
+				point[fieldName] = scaleState && isTemporalScale(scaleState.scaleType)
 					? (scaleState as TimeScaleState).formatTooltipValue(value) ?? value
 					: value;
 				continue;
 			}
 			if (
 				(key === 'y' || key === 'y1' || key === 'y2') &&
-				scaleTypes.y === 'time' &&
+				isTemporalScale(scaleTypes.y) &&
 				typeof value === 'number'
 			) {
 				const scaleState = this.#scaleProvider.yScaleState;
-				point[fieldName] = scaleState && scaleState.scaleType === 'time'
+				point[fieldName] = scaleState && isTemporalScale(scaleState.scaleType)
 					? (scaleState as TimeScaleState).formatTooltipValue(value) ?? value
 					: value;
 				continue;

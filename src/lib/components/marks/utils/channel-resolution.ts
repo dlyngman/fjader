@@ -1,6 +1,7 @@
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { AnyScaleState } from '$lib/scales';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import { isCategoricalScale } from '$lib/scales/scale-categories';
 
 type ArrayLike = Float32Array | Int32Array | Uint32Array | number[] | string[];
 
@@ -110,7 +111,7 @@ export function resolveChannelData({
 	const raw = resolveChannel({ value, channel, dataAccessor, tryColumns, instanceCount, fallback });
 	if (!raw) return null;
 
-	if ((scaleType === 'band' || scaleType === 'point') && scaleState && 'processDataForGPU' in scaleState) {
+	if (isCategoricalScale(scaleType) && scaleState && 'processDataForGPU' in scaleState) {
 		return toFloat32((scaleState as BandScaleState).processDataForGPU(raw as string[] | Float32Array, markId, { suppressUnmappedWarning }));
 	}
 

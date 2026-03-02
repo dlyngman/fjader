@@ -6,6 +6,7 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 import type { ScaleStateInstance, ContinuousScaleState, D3Scale, D3BandScale, FieldRef, MosaicClient } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
+import { isContinuousScale } from '$lib/scales/scale-categories';
 
 /** Type guard: narrows ScaleStateInstance to ContinuousScaleState via supportsPanZoom. */
 function isPanZoomScale(inst: ScaleStateInstance | null): inst is ContinuousScaleState {
@@ -328,8 +329,7 @@ export class ChartScales {
 	};
 
 	#isContinuous(axis: 'x' | 'y'): boolean {
-		const type = this.scaleTypes?.[axis];
-		return type === 'linear' || type === 'time' || type === 'log' || type === 'symlog';
+		return isContinuousScale(this.scaleTypes?.[axis]);
 	}
 
 	registerClient = (client: MosaicClient): (() => void) => {

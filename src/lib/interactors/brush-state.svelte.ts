@@ -1,4 +1,5 @@
 import type { D3Scale } from '$lib/types';
+import { requiresPositiveDomain, isTemporalScale } from '$lib/scales/scale-categories';
 
 type BrushPhase = 'idle' | 'creating' | 'moving' | 'resizing';
 type ResizeEdge = 'start' | 'end' | 'left' | 'right' | 'top' | 'bottom' | null;
@@ -78,7 +79,7 @@ export class BrushState1D {
 		if (!this.active) return true;
 
 		// Log scales require positive values
-		if (scaleType === 'log' || scaleType === 'log10') {
+		if (requiresPositiveDomain(scaleType)) {
 			if ((this.dataMin as number) <= 0 || (this.dataMax as number) <= 0) {
 				this.clear();
 				return false;
@@ -86,7 +87,7 @@ export class BrushState1D {
 		}
 
 		// Time scales require Date objects
-		if (scaleType === 'time' || scaleType === 'utc') {
+		if (isTemporalScale(scaleType)) {
 			if (!(this.dataMin instanceof Date) || !(this.dataMax instanceof Date)) {
 				this.clear();
 				return false;

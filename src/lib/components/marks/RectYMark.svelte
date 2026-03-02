@@ -4,6 +4,7 @@
 	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { expandBinForExtent } from '$lib/sql/bin';
+	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import {
 		buildSelectFromChannels,
 		resolveChannelData,
@@ -166,7 +167,7 @@
 	// X Data: Extent channels with band/linear branching
 	let xData = $derived.by(() => {
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
-		if (scaleType === 'band' || scaleType === 'point') {
+		if (isCategoricalScale(scaleType)) {
 			const arr = resolveChannelData({
 				value: x1,
 				channel: 'x1',

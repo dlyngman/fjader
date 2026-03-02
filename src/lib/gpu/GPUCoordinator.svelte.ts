@@ -3,6 +3,7 @@ import { AnimationLoop } from '$lib/animation';
 import { scaleTemplateSystem } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+import { isCategoricalScale } from '$lib/scales/scale-categories';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -594,7 +595,7 @@ export class GPUCoordinator {
 			const scale = item.instance;
 			const off = item.index << 2;
 
-			if (scale.type === 'band' || scale.type === 'point') {
+			if (isCategoricalScale(scale.type)) {
 				// BAND SCALE: Write configuration
 				const config = scale.getConfig!();
 
