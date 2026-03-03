@@ -74,13 +74,7 @@
 				stroke-width="1.5"
 			/>
 		{:else}
-			<circle
-				cx={pt.screenX}
-				cy={pt.screenY}
-				r={ringR}
-				class="hover-indicator"
-				fill={color}
-			/>
+			<circle cx={pt.screenX} cy={pt.screenY} r={ringR} class="hover-indicator" fill={color} />
 		{/if}
 	{/if}
 {/if}

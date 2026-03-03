@@ -125,8 +125,8 @@
 			<div class="chart-panel">
 				<h3>2. topN(5)</h3>
 				<p class="desc">
-					Should show 5 bars. Known issue: band scale fetches all 10 categories from
-					raw table before JS transform runs.
+					Should show 5 bars. Known issue: band scale fetches all 10 categories from raw table
+					before JS transform runs.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
@@ -159,8 +159,8 @@
 			<div class="chart-panel">
 				<h3>3. topN(5, includeOthers: true)</h3>
 				<p class="desc">
-					Should show 5 + "Other" bar (revenue 320). Known issue: "Other" not in band
-					domain, maps to index -1, invisible.
+					Should show 5 + "Other" bar (revenue 320). Known issue: "Other" not in band domain, maps
+					to index -1, invisible.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
@@ -192,9 +192,7 @@
 			<!-- Chart 4: BarMarkX horizontal -->
 			<div class="chart-panel">
 				<h3>4. BarMarkX + topN(3)</h3>
-				<p class="desc">
-					Horizontal bars. topN auto-detects value axis from mark type.
-				</p>
+				<p class="desc">Horizontal bars. topN auto-detects value axis from mark type.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Category">
 						{#snippet background()}
@@ -226,8 +224,8 @@
 			<div class="chart-panel">
 				<h3>5. Stacked bars with region filter</h3>
 				<p class="desc">
-					All 10 categories, stacked by region. Shares filter with chart 6 to test
-					cross-filter interaction with topN.
+					All 10 categories, stacked by region. Shares filter with chart 6 to test cross-filter
+					interaction with topN.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
@@ -267,8 +265,8 @@
 			<div class="chart-panel">
 				<h3>6. Selection + topN(5)</h3>
 				<p class="desc">
-					topN(5) with shared region filter. Toggling regions should change which
-					categories make the top 5 and update the band domain.
+					topN(5) with shared region filter. Toggling regions should change which categories make
+					the top 5 and update the band domain.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">

@@ -278,7 +278,8 @@ export class ScaleRegistry {
 					this.scales[type].set(
 						key,
 						new BandScaleState(name, [], {
-							paddingInner: (config.paddingInner as number | undefined) ?? (type === 'point' ? 1 : 0.1),
+							paddingInner:
+								(config.paddingInner as number | undefined) ?? (type === 'point' ? 1 : 0.1),
 							paddingOuter: (config.paddingOuter as number | undefined) ?? 0.1,
 							padding: (config.padding as number | undefined) ?? 0.1,
 							align: (config.align as number | undefined) ?? 0.5,

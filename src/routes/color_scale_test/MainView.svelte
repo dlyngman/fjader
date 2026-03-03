@@ -89,7 +89,7 @@
 			<label>
 				<strong>Color Field:</strong>
 				<select bind:value={colorField}>
-					{#each allFields as field}
+					{#each allFields as field (field.value)}
 						<option value={field.value}>{field.label}</option>
 					{/each}
 				</select>
@@ -100,7 +100,7 @@
 			<label>
 				<strong>Color Scheme:</strong>
 				<select bind:value={colorScheme}>
-					{#each availableSchemes as scheme}
+					{#each availableSchemes as scheme (scheme)}
 						<option value={scheme}>{scheme}</option>
 					{/each}
 				</select>

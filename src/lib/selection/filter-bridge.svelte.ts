@@ -198,7 +198,10 @@ export class FilterBridge {
 
 		const onActivate = (clause: SelectionClause): void => {
 			if (clause && !isNeutral(clause)) {
-				this.filterSel.activate?.({ ...clause, source: source as unknown as SelectionClause['source'] });
+				this.filterSel.activate?.({
+					...clause,
+					source: source as unknown as SelectionClause['source']
+				});
 			}
 		};
 
@@ -302,7 +305,11 @@ export class FilterBridge {
 	 */
 	upsertManual(key: string, clause: SelectionClause, schema: FilterSchema): void {
 		const source = `manual:${key}`;
-		const c: AugmentedClause = { ...clause, source: source as unknown as SelectionClause['source'], schema };
+		const c: AugmentedClause = {
+			...clause,
+			source: source as unknown as SelectionClause['source'],
+			schema
+		};
 
 		this.#entries.set(source, {
 			source,

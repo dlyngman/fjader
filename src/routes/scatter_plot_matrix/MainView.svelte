@@ -100,10 +100,10 @@
 									<Grid />
 
 									<DotsMark
-										table={'penguins'}
+										table="penguins"
 										x={config.x}
 										y={config.y}
-										fill={'species'}
+										fill="species"
 										opacity={0.5}
 										r={10}
 									/>

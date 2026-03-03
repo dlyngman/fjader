@@ -118,7 +118,16 @@ export class SymlogScaleState extends LinearScaleState {
 	}
 
 	/** D3 log domain for the positive half. */
-	#logDomain(min: number, max: number): { hasZero: boolean; hasPos: boolean; hasNeg: boolean; posDomain: [number, number]; negDomain: [number, number] } {
+	#logDomain(
+		min: number,
+		max: number
+	): {
+		hasZero: boolean;
+		hasPos: boolean;
+		hasNeg: boolean;
+		posDomain: [number, number];
+		negDomain: [number, number];
+	} {
 		const c = this.#constant;
 		return {
 			hasZero: min <= 0 && max >= 0,

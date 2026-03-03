@@ -93,7 +93,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth) ) as D3Scale;
+		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth)) as D3Scale;
 	});
 
 	const cellYScale = $derived.by((): D3Scale | null => {
@@ -101,7 +101,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight) ) as D3Scale;
+		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight)) as D3Scale;
 	});
 
 	const cellXTargetScale = $derived.by((): D3Scale | null => {
@@ -109,7 +109,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth) ) as D3Scale;
+		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth)) as D3Scale;
 	});
 
 	const cellYTargetScale = $derived.by((): D3Scale | null => {
@@ -117,7 +117,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight) ) as D3Scale;
+		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight)) as D3Scale;
 	});
 
 	// --- Band scale support (cell-local $derived) ---
@@ -194,13 +194,9 @@
 
 		if (xScale && yScale && layout.isReady) {
 			const xHasDomain =
-				xScale.scaleType !== 'band'
-					? xScale.hasDomain
-					: xScale.effectiveDomain.length > 0;
+				xScale.scaleType !== 'band' ? xScale.hasDomain : xScale.effectiveDomain.length > 0;
 			const yHasDomain =
-				yScale.scaleType !== 'band'
-					? yScale.hasDomain
-					: yScale.effectiveDomain.length > 0;
+				yScale.scaleType !== 'band' ? yScale.hasDomain : yScale.effectiveDomain.length > 0;
 
 			if (!xScale.ready && xHasDomain) {
 				xScale.setReady?.();
@@ -655,7 +651,7 @@
 				onwheel={handleWheel}
 				onpointerdown={handlePointerDown}
 				onpointermove={handlePointerMove}
-				{.../** @type {any} */ ({ onpointerrawupdate: handlePointerRawUpdate })}
+				onpointerrawupdate={handlePointerRawUpdate}
 				onpointerup={handlePointerUp}
 				onpointercancel={handlePointerUp}
 				ondblclick={handleDoubleClick}

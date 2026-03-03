@@ -2,25 +2,69 @@ import prettier from 'eslint-config-prettier';
 import js from '@eslint/js';
 import { includeIgnoreFile } from '@eslint/compat';
 import svelte from 'eslint-plugin-svelte';
+import ts from 'typescript-eslint';
 import globals from 'globals';
 import { fileURLToPath } from 'node:url';
 import svelteConfig from './svelte.config.js';
 
 const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
 
-export default [
+export default ts.config(
 	includeIgnoreFile(gitignorePath),
 	js.configs.recommended,
+	...ts.configs.recommended,
 	...svelte.configs.recommended,
 	prettier,
 	...svelte.configs.prettier,
 	{
 		languageOptions: {
-			globals: { ...globals.browser, ...globals.node }
+			globals: {
+				...globals.browser,
+				...globals.node,
+				// WebGPU globals
+				GPUVertexFormat: 'readonly',
+				GPUVertexBufferLayout: 'readonly',
+				GPUVertexStepMode: 'readonly'
+			}
 		}
 	},
 	{
-		files: ['**/*.svelte', '**/*.svelte.js'],
-		languageOptions: { parserOptions: { svelteConfig } }
+		files: ['**/*.svelte', '**/*.svelte.ts', '**/*.svelte.js'],
+		languageOptions: {
+			parserOptions: {
+				svelteConfig,
+				parser: ts.parser
+			}
+		},
+		rules: {
+			// Raw Map/Set/Date are used intentionally for GPU state and
+			// performance-critical paths — Svelte reactive wrappers add overhead
+			'svelte/prefer-svelte-reactivity': 'off',
+			// Svelte $effect() reactive patterns look like unused expressions
+			'@typescript-eslint/no-unused-expressions': 'off',
+			// const self = this is needed in callbacks within class methods
+			'@typescript-eslint/no-this-alias': 'off'
+		}
+	},
+	{
+		rules: {
+			// Allow _prefixed unused vars (intentional placeholders)
+			'@typescript-eslint/no-unused-vars': [
+				'warn',
+				{
+					argsIgnorePattern: '^_',
+					varsIgnorePattern: '^_',
+					caughtErrorsIgnorePattern: '^_'
+				}
+			]
+		}
+	},
+	{
+		ignores: [
+			'python/diveplot/static/',
+			'python/diveplot/streamlit_frontend/',
+			'python/__marimo__/',
+			'python/layouts/'
+		]
 	}
-];
+);

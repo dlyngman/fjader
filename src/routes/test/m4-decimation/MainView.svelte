@@ -69,13 +69,7 @@
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={1.5}
-							/>
+							<LineMark table="dense_timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

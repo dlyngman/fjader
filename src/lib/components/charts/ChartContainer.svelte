@@ -274,10 +274,18 @@
 			if (scales) {
 				scales.registerScaleType(dim, type, priority, markId, config, columnName);
 			} else {
-				pendingScaleRegistrations.push({ dimension: dim, type, priority, markId, config, columnName });
+				pendingScaleRegistrations.push({
+					dimension: dim,
+					type,
+					priority,
+					markId,
+					config,
+					columnName
+				});
 			}
 		},
-		unregisterScaleType: (dimension, markId) => scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
+		unregisterScaleType: (dimension, markId) =>
+			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
 
 		get binStepMultiplier() {
 			return scales?.binStepMultiplier;
@@ -336,7 +344,7 @@
 
 		{#if facetCategories}
 			<div class="facet-grid" style:grid-template-columns="repeat({effectiveColumns}, 1fr)">
-				{#each facetCategories as cat, i}
+				{#each facetCategories as cat, i (cat)}
 					<ChartCell
 						cellChartId={facetChartIds[i]}
 						facetIndex={i}

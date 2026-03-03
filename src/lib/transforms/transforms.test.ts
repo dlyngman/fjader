@@ -153,10 +153,20 @@ describe('Transforms', () => {
 			]);
 
 			const stackTransform = stackY();
-			const stackedResult = stackTransform.apply(stacked, { markType: 'area', table: 't', x: 'x', y: 'y' });
+			const stackedResult = stackTransform.apply(stacked, {
+				markType: 'area',
+				table: 't',
+				x: 'x',
+				y: 'y'
+			});
 
 			const normalizeTransform = normalize();
-			const result = normalizeTransform.apply(stackedResult, { markType: 'area', table: 't', x: 'x', y: 'y' });
+			const result = normalizeTransform.apply(stackedResult, {
+				markType: 'area',
+				table: 't',
+				x: 'x',
+				y: 'y'
+			});
 
 			const y0 = result.getColumn('y0') as Float32Array;
 			const y1 = result.getColumn('y1') as Float32Array;

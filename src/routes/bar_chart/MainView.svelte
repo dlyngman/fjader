@@ -195,7 +195,7 @@
 		<div class="control-row">
 			<label for="color-mode">Color Mode:</label>
 			<select id="color-mode" bind:value={selectedColorMode}>
-				{#each colorModes as mode}
+				{#each colorModes as mode (mode.value)}
 					<option value={mode.value}>{mode.label}</option>
 				{/each}
 			</select>
@@ -207,7 +207,7 @@
 		<div class="control-row" style="margin-top: 16px;">
 			<label for="stack-mode">Stack Mode:</label>
 			<select id="stack-mode" bind:value={selectedStackMode}>
-				{#each stackModes as mode}
+				{#each stackModes as mode (mode.value)}
 					<option value={mode.value}>{mode.label}</option>
 				{/each}
 			</select>

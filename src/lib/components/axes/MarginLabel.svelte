@@ -11,10 +11,14 @@
 	const c = getContext<ChartContext>('chart');
 
 	const xFormatter = $derived(
-		c.xScaleState && c.xScaleState.scaleType !== 'band' ? (v: unknown) => (c.xScaleState as ContinuousScaleState).formatValue(v as number) : String
+		c.xScaleState && c.xScaleState.scaleType !== 'band'
+			? (v: unknown) => (c.xScaleState as ContinuousScaleState).formatValue(v as number)
+			: String
 	);
 	const yFormatter = $derived(
-		c.yScaleState && c.yScaleState.scaleType !== 'band' ? (v: unknown) => (c.yScaleState as ContinuousScaleState).formatValue(v as number) : String
+		c.yScaleState && c.yScaleState.scaleType !== 'band'
+			? (v: unknown) => (c.yScaleState as ContinuousScaleState).formatValue(v as number)
+			: String
 	);
 </script>
 

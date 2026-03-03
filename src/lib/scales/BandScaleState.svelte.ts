@@ -119,8 +119,8 @@ export class BandScaleState {
 	/**
 	 * GPU state (derived) - for compatibility with coordinator
 	 */
-	gpuState: { domainMin: number; domainMax: number; p4: number; domainScale: number } =
-		$derived.by(() => {
+	gpuState: { domainMin: number; domainMax: number; p4: number; domainScale: number } = $derived.by(
+		() => {
 			const categoryCount = this.#categoryIndexMap.size;
 
 			return {
@@ -129,7 +129,8 @@ export class BandScaleState {
 				p4: 0, // unused for band scales (SSBO written via getConfig instead)
 				domainScale: 0
 			};
-		});
+		}
+	);
 
 	// =========================================================================
 	// CONSTRUCTOR

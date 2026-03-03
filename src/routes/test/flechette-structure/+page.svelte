@@ -145,7 +145,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each dictionaryData as item}
+						{#each dictionaryData as item (item.index)}
 							<tr class="border-b last:border-0 hover:bg-gray-50">
 								<td class="p-2 font-bold text-gray-400">{item.index}</td>
 								<td class="p-2 font-mono text-green-700">"{item.value}"</td>
@@ -172,7 +172,7 @@
 						</tr>
 					</thead>
 					<tbody class="divide-y">
-						{#each dataSample as row}
+						{#each dataSample as row (row.rowId)}
 							<tr class="hover:bg-gray-50">
 								<td class="p-2 text-gray-400">{row.rowId}</td>
 								<td class="p-2 font-bold">{row.storedIndex}</td>

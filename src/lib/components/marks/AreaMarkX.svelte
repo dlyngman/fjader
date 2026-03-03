@@ -253,7 +253,7 @@
 				...(hasStackTransform && { columns: { x: 'x1' } }),
 				markColor,
 				proximityAxis: tooltipProximity,
-				constantRadius: dotRadius || undefined,
+				constantRadius: dotRadius ? Number(dotRadius) : undefined,
 				displayFields: resolvedTip.displayFields
 			})
 		);

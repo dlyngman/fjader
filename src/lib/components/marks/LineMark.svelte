@@ -257,7 +257,7 @@
 				colorColumn: 'stroke',
 				markColor,
 				proximityAxis: tooltipProximity,
-				constantRadius: dotRadius || undefined,
+				constantRadius: dotRadius ? Number(dotRadius) : undefined,
 				displayFields: resolvedTip.displayFields
 			})
 		);

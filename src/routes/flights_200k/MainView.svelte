@@ -28,7 +28,7 @@
 
 <div class="main-view-container">
 	<div class="chart-wrapper">
-		<ChartContainer xLabel={'delay'} yLabel={'time'} xZoomLimit={10000} yZoomLimit={10000}>
+		<ChartContainer xLabel="delay" yLabel="time" xZoomLimit={10000} yZoomLimit={10000}>
 			{#snippet background()}
 				<!-- <Grid /> -->
 				<Frame />
@@ -46,7 +46,7 @@
 							table="flights"
 							selection={filterBridge.filterSel}
 							x={min('delay')}
-							y={'time'}
+							y="time"
 							fill={avg('delay')}
 							opacity="0.8"
 						/>

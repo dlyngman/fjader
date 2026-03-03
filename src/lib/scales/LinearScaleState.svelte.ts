@@ -763,7 +763,10 @@ export class LinearScaleState {
 	protected _reinitScale(): void {
 		// Re-set spring into transformed space using current render values
 		this.#springPair.set(this.toSpringSpace(this.#renderMin), this.toSpringSpace(this.#renderMax));
-		this.#springPair.setTarget(this.toSpringSpace(this.#renderMin), this.toSpringSpace(this.#renderMax));
+		this.#springPair.setTarget(
+			this.toSpringSpace(this.#renderMin),
+			this.toSpringSpace(this.#renderMax)
+		);
 		this.#updateGpuState();
 	}
 

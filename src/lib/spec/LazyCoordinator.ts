@@ -26,9 +26,7 @@ function getLoadedTables(coordinator: Coordinator): Set<string> {
  * Get or lazily create the shared Mosaic Coordinator.
  * If a user-provided coordinator is passed, it is used instead.
  */
-export async function getOrCreateCoordinator(
-	userCoordinator?: Coordinator
-): Promise<Coordinator> {
+export async function getOrCreateCoordinator(userCoordinator?: Coordinator): Promise<Coordinator> {
 	if (userCoordinator) return userCoordinator;
 	if (_coordinator) return _coordinator;
 	if (_coordinatorPromise) return _coordinatorPromise;

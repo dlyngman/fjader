@@ -22,7 +22,7 @@ export function bin(field: string | ExprNode, options: BinOptions = {}): AutoBin
 export class AutoBinNode {
 	field: string | ExprNode;
 	options: BinOptions;
-	isAutoBinNode: true = true;
+	isAutoBinNode = true as const;
 
 	constructor(field: string | ExprNode, options: BinOptions = {}) {
 		this.field = field;
@@ -58,9 +58,7 @@ export class AutoBinNode {
 		const col: ExprValue = typeof this.field === 'string' ? column(this.field) : this.field;
 
 		const isTemporal =
-			this.options.interval !== undefined ||
-			type === 'date' ||
-			isTemporalScale(scaleType);
+			this.options.interval !== undefined || type === 'date' || isTemporalScale(scaleType);
 
 		let binOptions = { ...this.options };
 		if (currentDomain && binOptions.steps && !binOptions.step && !binOptions.interval) {
@@ -99,7 +97,12 @@ export class AutoBinNode {
 }
 
 export function isBinExpression(expr: unknown): expr is AutoBinNode {
-	return typeof expr === 'object' && expr !== null && 'isAutoBinNode' in expr && expr.isAutoBinNode === true;
+	return (
+		typeof expr === 'object' &&
+		expr !== null &&
+		'isAutoBinNode' in expr &&
+		expr.isAutoBinNode === true
+	);
 }
 
 export function expandBinForExtent(

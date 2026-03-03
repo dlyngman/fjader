@@ -70,10 +70,18 @@
 	// Always validate as 'linear': DivePlot time scales use float offsets, not Dates.
 	$effect(() => {
 		let invalid = false;
-		if (brush.active && chart.xScale && !brush.x.validate(chart.xScale as { domain: () => number[] }, 'linear')) {
+		if (
+			brush.active &&
+			chart.xScale &&
+			!brush.x.validate(chart.xScale as { domain: () => number[] }, 'linear')
+		) {
 			invalid = true;
 		}
-		if (brush.active && chart.yScale && !brush.y.validate(chart.yScale as { domain: () => number[] }, 'linear')) {
+		if (
+			brush.active &&
+			chart.yScale &&
+			!brush.y.validate(chart.yScale as { domain: () => number[] }, 'linear')
+		) {
 			invalid = true;
 		}
 		if (invalid) {
@@ -150,10 +158,16 @@
 		if (!selection.activate || !chart.xScale || !chart.yScale || !xColumnRef || !yColumnRef) return;
 
 		const xRange: [number, number] = brush.x.active
-			? [Math.min(brush.x.dataMin as number, brush.x.dataMax as number), Math.max(brush.x.dataMin as number, brush.x.dataMax as number)]
+			? [
+					Math.min(brush.x.dataMin as number, brush.x.dataMax as number),
+					Math.max(brush.x.dataMin as number, brush.x.dataMax as number)
+				]
 			: [0, 1];
 		const yRange: [number, number] = brush.y.active
-			? [Math.min(brush.y.dataMin as number, brush.y.dataMax as number), Math.max(brush.y.dataMin as number, brush.y.dataMax as number)]
+			? [
+					Math.min(brush.y.dataMin as number, brush.y.dataMax as number),
+					Math.max(brush.y.dataMin as number, brush.y.dataMax as number)
+				]
 			: [0, 1];
 
 		selection.activate(
@@ -328,7 +342,10 @@
 		brush.phase = 'moving';
 	}
 
-	function handleResizeStart(edge: 'left' | 'right' | 'top' | 'bottom' | 'nw' | 'ne' | 'sw' | 'se', event: PointerEvent) {
+	function handleResizeStart(
+		edge: 'left' | 'right' | 'top' | 'bottom' | 'nw' | 'ne' | 'sw' | 'se',
+		event: PointerEvent
+	) {
 		event.stopPropagation();
 		(event.target as HTMLElement).setPointerCapture(event.pointerId);
 		isCapturing = true;

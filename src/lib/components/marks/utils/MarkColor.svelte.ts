@@ -135,7 +135,12 @@ export class MarkColor {
 		// SQL expression nodes: delegate with 'sequential' fallback for unknown nodes
 		// (ordinal + expression node breaks ViewManager column naming)
 		if (isNode(field)) {
-			return inferScaleType({ field, schemaType: null, context: 'visual', nodeFallback: 'sequential' });
+			return inferScaleType({
+				field,
+				schemaType: null,
+				context: 'visual',
+				nodeFallback: 'sequential'
+			});
 		}
 
 		// Raw column names: use shared inference with 'visual' context

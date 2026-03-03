@@ -14,7 +14,6 @@ const root = document.getElementById('root')!;
 let handle: DivePlotHandle | null = null;
 let generation = 0;
 
-
 function onRender(event: Event): void {
 	const gen = ++generation;
 	const { args } = (event as CustomEvent<RenderData>).detail;

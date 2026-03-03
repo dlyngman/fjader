@@ -34,18 +34,7 @@ export const MARK_REGISTRY: Record<string, Component<any>> = {
 };
 
 /** Channel prop names that hold FieldSpec values and need resolution. */
-const FIELD_CHANNELS = new Set([
-	'x',
-	'x1',
-	'x2',
-	'y',
-	'y1',
-	'y2',
-	'fill',
-	'r',
-	'z',
-	'text'
-]);
+const FIELD_CHANNELS = new Set(['x', 'x1', 'x2', 'y', 'y1', 'y2', 'fill', 'r', 'z', 'text']);
 
 /** Mark types where `stroke` is a data-driven FieldSpec (not a CSS constant). */
 const STROKE_AS_FIELD_MARKS = new Set(['line']);
@@ -60,7 +49,9 @@ export function resolveMarkEntry(
 ): { component: Component; props: Record<string, unknown> } {
 	const component = MARK_REGISTRY[markSpec.mark];
 	if (!component) {
-		throw new Error(`Unknown mark type: "${markSpec.mark}". Valid types: ${Object.keys(MARK_REGISTRY).join(', ')}`);
+		throw new Error(
+			`Unknown mark type: "${markSpec.mark}". Valid types: ${Object.keys(MARK_REGISTRY).join(', ')}`
+		);
 	}
 
 	// Shallow copy, then strip the discriminant

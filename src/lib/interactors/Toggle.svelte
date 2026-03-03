@@ -32,7 +32,10 @@
 		const xIsBand = chart.scaleTypes?.x === 'band';
 		const band = yIsBand ? chart.yScaleState : xIsBand ? chart.xScaleState : null;
 		const color = scaleRegistry?.getScaleByField(fields[0], 'color');
-		return [band, color].filter(Boolean) as { setActiveValues(values: Set<unknown>): void; clearActiveValues(): void }[];
+		return [band, color].filter(Boolean) as {
+			setActiveValues(values: Set<unknown>): void;
+			clearActiveValues(): void;
+		}[];
 	}
 
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
@@ -77,7 +80,9 @@
 		if (newValues === null) {
 			bridge.clearToggle(fields[0]);
 		} else {
-			selection.update(clausePoints(columnRefs, newValues, { source: source as unknown as ClauseSource }));
+			selection.update(
+				clausePoints(columnRefs, newValues, { source: source as unknown as ClauseSource })
+			);
 		}
 	}
 

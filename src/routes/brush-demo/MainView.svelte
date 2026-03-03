@@ -101,7 +101,7 @@
 		<h3>Active Filters: {filterBridge.activeCount}</h3>
 		{#if filterBridge.items.length > 0}
 			<div class="filter-chips">
-				{#each filterBridge.items as item}
+				{#each filterBridge.items as item (item.source)}
 					<div class="filter-chip">
 						<span class="chip-label"
 							>{item.schema?.label || 'Filter'}:
