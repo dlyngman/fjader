@@ -69,7 +69,7 @@
 		</div>
 		<div class="chart-wrapper thin">
 			<h3>Chart</h3>
-			<ChartContainer xLabel="ts" yLabel="value weekly">
+			<ChartContainer xLabel="ts" yLabel="value weekly" useXSelection>
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
@@ -93,7 +93,7 @@
 		</div>
 		<div class="chart-wrapper">
 			<h3>Chart</h3>
-			<ChartContainer xLabel="ts" yLabel="value">
+			<ChartContainer xLabel="ts" yLabel="value" useXSelection>
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
