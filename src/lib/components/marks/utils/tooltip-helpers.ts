@@ -1,6 +1,13 @@
 import type { ChartContext } from '$lib/types';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
+
+/** Minimal interface for color info needed by tooltip (satisfied by MarkColor). */
+interface MarkColorInfo {
+	scaleState: ColorScaleState | null;
+	constantCssColor: string | null;
+}
 
 interface TooltipConfigParams {
 	tempTable: string;
@@ -10,7 +17,11 @@ interface TooltipConfigParams {
 	columns?: Record<string, unknown>;
 	bandAxes?: { x?: boolean; y?: boolean };
 	colorColumn?: string;
-	markColorScaleState: ColorScaleState | null;
+	markColor: MarkColorInfo;
+	proximityAxis?: 'x' | 'y' | 'xy';
+	constantRadius?: number;
+	sizeScaleState?: SizeScaleState | null;
+	displayFields?: string[] | null;
 }
 
 interface TooltipConfig {
@@ -20,9 +31,14 @@ interface TooltipConfig {
 	columns?: Record<string, unknown>;
 	channelFields: Record<string, string | undefined>;
 	colorColumn?: string;
+	constantColor?: string;
 	bandDomains: Record<string, string[]>;
 	colorDomain: string[] | null;
 	colorScaleState: ColorScaleState | null;
+	proximityAxis?: 'x' | 'y' | 'xy';
+	constantRadius?: number;
+	sizeScaleState?: SizeScaleState | null;
+	displayFields?: string[] | null;
 	enabled: boolean;
 }
 
@@ -34,8 +50,14 @@ export function buildTooltipConfig({
 	columns,
 	bandAxes,
 	colorColumn,
-	markColorScaleState
+	markColor,
+	proximityAxis,
+	constantRadius,
+	sizeScaleState,
+	displayFields
 }: TooltipConfigParams): TooltipConfig {
+	const colorScaleState = markColor.scaleState;
+	const constantColor = markColor.constantCssColor;
 	return {
 		tempTable,
 		markType,
@@ -45,7 +67,8 @@ export function buildTooltipConfig({
 		},
 		...(columns && { columns }),
 		channelFields,
-		...(colorColumn && { colorColumn }),
+		...(colorColumn && channelFields[colorColumn] && { colorColumn }),
+		...(constantColor && { constantColor }),
 		bandDomains: {
 			...(bandAxes?.x &&
 				chartContext.scaleTypes?.x === 'band' && {
@@ -56,10 +79,12 @@ export function buildTooltipConfig({
 					y: (chartContext.yScaleState as BandScaleState | null)?.effectiveDomain
 				})
 		},
-		colorDomain: markColorScaleState?.isOrdinal
-			? (markColorScaleState.domain as string[])
-			: null,
-		colorScaleState: markColorScaleState ?? null,
+		colorDomain: colorScaleState?.isOrdinal ? (colorScaleState.domain as string[]) : null,
+		colorScaleState: colorScaleState ?? null,
+		...(proximityAxis && { proximityAxis }),
+		...(constantRadius != null && { constantRadius }),
+		...(sizeScaleState && { sizeScaleState }),
+		...(displayFields && { displayFields }),
 		enabled: true
 	};
 }

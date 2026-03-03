@@ -14,7 +14,8 @@
 		MarkSize,
 		normalizeSortConfig,
 		inferMarkScaleType,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import type {
 		FieldRef,
@@ -50,7 +51,9 @@
 		preferredYScaleType = null,
 		transforms = [],
 		sort = null,
-		tooltip = true
+		tooltip = true,
+		tooltipProximity,
+		tip = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('dot');
@@ -89,6 +92,16 @@
 	);
 
 	// 2. Config
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x,
+			y,
+			...(markColor.selectField && { fill: markColor.selectField }),
+			...(markSize.selectField && { r: markSize.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'dot',
 		supportedScaleTypes: {
@@ -110,15 +123,10 @@
 		table,
 		selection,
 		transforms,
-		select: buildSelectFromChannels({
-			x,
-			y,
-			...(markColor.selectField && { fill: markColor.selectField }),
-			...(markSize.selectField && { r: markSize.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -215,7 +223,11 @@
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
-				markColorScaleState: markColor.scaleState
+				markColor,
+				proximityAxis: tooltipProximity,
+				constantRadius: typeof r === 'number' ? r : undefined,
+				sizeScaleState: markSize.scaleState,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

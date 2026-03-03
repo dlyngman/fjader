@@ -13,7 +13,8 @@
 		MarkColor,
 		normalizeSortConfig,
 		inferMarkScaleType,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -60,7 +61,8 @@
 		dx = 0,
 		dy = 0,
 		sort = null,
-		tooltip = true
+		tooltip = true,
+		tip = undefined
 	}: Props = $props();
 
 	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
@@ -115,6 +117,17 @@
 	});
 
 	// 2. Config
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x1,
+			x2,
+			y1: ey1,
+			y2: ey2,
+			...(markColor.selectField && { fill: markColor.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'rectx',
 		supportedScaleTypes: {
@@ -138,20 +151,14 @@
 		table,
 		selection,
 		transforms: effectiveTransforms,
-		select: buildSelectFromChannels({
-			x1,
-			x2,
-			y1: ey1,
-			y2: ey2,
-			...(markColor.selectField && { fill: markColor.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, ey1, ey2] : null },
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { x: true } : null,
 		// Viewport-local domain: compute X extent from visible Y range only
 		viewportLocalDomain,
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -257,7 +264,8 @@
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { y: true },
-				markColorScaleState: markColor.scaleState
+				markColor,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

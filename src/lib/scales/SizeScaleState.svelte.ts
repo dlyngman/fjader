@@ -31,7 +31,11 @@ export class SizeScaleState {
 	domain: number[] = $state([]);
 	ready: boolean = $state(false);
 
-	constructor(config: SizeScaleConfig, registry: ScaleRegistry, gpuCoordinator: GPUCoordinator | null) {
+	constructor(
+		config: SizeScaleConfig,
+		registry: ScaleRegistry,
+		gpuCoordinator: GPUCoordinator | null
+	) {
 		this.#field = config.field;
 		this.#range = config.range || [2, 12];
 		this.#registry = registry;
@@ -159,6 +163,30 @@ export class SizeScaleState {
 		if (this.domain.length > 0) {
 			this.#uploadToGPU();
 		}
+	}
+
+	// ============================================================
+	// CPU-SIDE RADIUS LOOKUP (mirrors GPU shader logic)
+	// ============================================================
+
+	/**
+	 * Map a raw data value to rendered CSS-pixel radius.
+	 * Same sqrt area-proportional transform as the vertex shader.
+	 */
+	getRenderedRadius(value: number): number {
+		if (this.domain.length === 0) return this.#range[0];
+
+		const domainMin = this.domain[0];
+		const domainMax = this.domain[this.domain.length - 1];
+		const span = domainMax - domainMin;
+
+		if (Math.abs(span) < 0.0001) {
+			return (this.#range[0] + this.#range[1]) * 0.5;
+		}
+
+		const t = Math.max(0, Math.min(1, (value - domainMin) / span));
+		const s = Math.sqrt(t);
+		return this.#range[0] + s * (this.#range[1] - this.#range[0]);
 	}
 
 	// ============================================================
