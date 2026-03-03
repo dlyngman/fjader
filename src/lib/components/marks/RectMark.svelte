@@ -13,7 +13,8 @@
 		MarkColor,
 		normalizeSortConfig,
 		inferMarkScaleType,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import type {
 		FieldRef,
@@ -63,7 +64,8 @@
 		dx = 0,
 		dy = 0,
 		sort = null,
-		tooltip = true
+		tooltip = true,
+		tip = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('rect');
@@ -121,6 +123,17 @@
 	});
 
 	// 2. Config
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x1: ex1,
+			x2: ex2,
+			y1: ey1,
+			y2: ey2,
+			...(markColor.selectField && { fill: markColor.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'rect',
 		supportedScaleTypes: {
@@ -150,18 +163,12 @@
 		table,
 		selection,
 		transforms,
-		select: buildSelectFromChannels({
-			x1: ex1,
-			x2: ex2,
-			y1: ey1,
-			y2: ey2,
-			...(markColor.selectField && { fill: markColor.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null },
 		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
 		// (could be heatmap, 2D histogram, etc.). Use RectXMark/RectYMark for histograms.
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -275,7 +282,8 @@
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
-				markColorScaleState: markColor.scaleState
+				markColor,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

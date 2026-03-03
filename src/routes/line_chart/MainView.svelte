@@ -35,6 +35,7 @@
 								y="y"
 								stroke="series"
 								strokeWidth={2}
+								tooltipProximity="x"
 							/>
 						{/snippet}
 					</WebGPUCanvas>

@@ -11,7 +11,8 @@
 		buildTooltipConfig,
 		MarkColor,
 		normalizeSortConfig,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -54,7 +55,8 @@
 		dx = 0,
 		dy = 0,
 		sort = null,
-		tooltip = true
+		tooltip = true,
+		tip = undefined
 	}: Props = $props();
 
 	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
@@ -96,6 +98,16 @@
 	});
 
 	// 2. Config
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x1,
+			x2,
+			y,
+			...(markColor.selectField && { fill: markColor.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'barx',
 		supportedScaleTypes: { x: ['linear', 'identity'], y: ['band'] },
@@ -110,18 +122,13 @@
 		table,
 		selection,
 		transforms: effectiveTransforms,
-		select: buildSelectFromChannels({
-			x1,
-			x2,
-			y,
-			...(markColor.selectField && { fill: markColor.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		constants: buildConstantsFromChannels({ x1, x2, y }),
 		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y] : null },
 		// Bar charts with aggregates should start at zero baseline
 		zeroBaseline: hasAggregateX ? { x: true } : null,
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -218,7 +225,8 @@
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { y: true },
-				markColorScaleState: markColor.scaleState
+				markColor,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

@@ -211,6 +211,8 @@ export interface BaseMarkProps {
 	transforms?: Transform[];
 	sort?: SortConfig | null;
 	tooltip?: boolean;
+	tooltipProximity?: 'x' | 'y' | 'xy';
+	tip?: (FieldRef | '*')[] | false;
 }
 
 /** Props for marks that support band scale padding/alignment (Bar, Rect). */
@@ -253,7 +255,11 @@ import type { SymlogScaleState } from '$lib/scales/SymlogScaleState.svelte';
 import type { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 
 /** Continuous axis scales (support zoom, pan, animated domain). */
-export type ContinuousScaleState = LinearScaleState | TimeScaleState | LogScaleState | SymlogScaleState;
+export type ContinuousScaleState =
+	| LinearScaleState
+	| TimeScaleState
+	| LogScaleState
+	| SymlogScaleState;
 
 /** Union of all scale state types that can appear on x/y axes. */
 export type ScaleStateInstance = ContinuousScaleState | BandScaleState;

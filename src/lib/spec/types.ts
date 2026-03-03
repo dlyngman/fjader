@@ -104,6 +104,7 @@ interface BaseMarkSpec {
 	transforms?: TransformSpec[];
 	sort?: SortConfig | null;
 	tooltip?: boolean;
+	tooltipProximity?: 'x' | 'y' | 'xy';
 }
 
 interface ContinuousScaleTypeSpec {

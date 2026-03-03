@@ -12,7 +12,8 @@
 		MarkSeries,
 		normalizeSortConfig,
 		inferMarkScaleType,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -53,7 +54,9 @@
 		transforms = [],
 		sort = null,
 		tooltip = true,
-		optimize = 'auto'
+		tooltipProximity,
+		optimize = 'auto',
+		tip = undefined
 	}: Props = $props();
 
 	// Map user-facing aliases to axis-specific variants
@@ -99,6 +102,16 @@
 	);
 
 	// Config with _connectedConfig for automatic ORDER BY
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x,
+			y,
+			...(markColor.selectField && { stroke: markColor.selectField }),
+			...(z != null && markSeries.selectField && { z: markSeries.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'line',
 		supportedScaleTypes: {
@@ -120,12 +133,7 @@
 		table,
 		selection,
 		transforms,
-		select: buildSelectFromChannels({
-			x,
-			y,
-			...(markColor.selectField && { stroke: markColor.selectField }),
-			...(z != null && markSeries.selectField && { z: markSeries.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
 		_connectedConfig: {
@@ -134,7 +142,7 @@
 		},
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -247,7 +255,10 @@
 				chartContext,
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'stroke',
-				markColorScaleState: markColor.scaleState
+				markColor,
+				proximityAxis: tooltipProximity,
+				constantRadius: dotRadius || undefined,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

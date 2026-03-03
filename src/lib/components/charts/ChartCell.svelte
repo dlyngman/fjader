@@ -410,9 +410,15 @@
 	let initialTouchDistance = $state(0);
 	let isZooming = $state(false);
 
-	function handleChartPointerEnter() {
+	let chartCellEl: HTMLDivElement;
+
+	function handleChartPointerEnter(event: PointerEvent) {
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
+		// Focus so [ / ] keyboard shortcuts work for tooltip cycling
+		if (document.activeElement === document.body || document.activeElement === null) {
+			chartCellEl?.focus({ preventScroll: true });
+		}
 	}
 
 	function handleChartPointerLeave() {
@@ -449,6 +455,17 @@
 
 	function handleClick(event: MouseEvent) {
 		chartContext.onChartClick?.(event as unknown as PointerEvent);
+	}
+
+	function handleKeyDown(event: KeyboardEvent) {
+		if (!tooltipManager?.visible || tooltipManager.currentPoints.length <= 1) return;
+		if (event.code === 'BracketRight') {
+			event.preventDefault();
+			tooltipManager.cycleFocused(1);
+		} else if (event.code === 'BracketLeft') {
+			event.preventDefault();
+			tooltipManager.cycleFocused(-1);
+		}
 	}
 
 	function handleDoubleClick(event: MouseEvent) {
@@ -600,10 +617,13 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="chart-cell"
+	bind:this={chartCellEl}
 	bind:clientWidth={containerWidth}
 	bind:clientHeight={containerHeight}
 	onpointerenter={handleChartPointerEnter}
 	onpointerleave={handleChartPointerLeave}
+	onkeydown={handleKeyDown}
+	tabindex="-1"
 >
 	{#if facetLabel != null}
 		<div class="facet-label">{facetLabel}</div>

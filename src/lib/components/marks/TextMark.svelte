@@ -11,7 +11,8 @@
 		MarkColor,
 		normalizeSortConfig,
 		inferMarkScaleType,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import type {
 		FieldRef,
@@ -65,7 +66,9 @@
 		preferredYScaleType = null,
 		transforms = [],
 		sort = null,
-		tooltip = false
+		tooltip = false,
+		tooltipProximity,
+		tip = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('text');
@@ -95,6 +98,16 @@
 
 	// --- Config ---
 
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x,
+			y,
+			text,
+			...(markColor.selectField && { fill: markColor.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'text',
 		supportedScaleTypes: {
@@ -113,15 +126,10 @@
 		table,
 		selection,
 		transforms,
-		select: buildSelectFromChannels({
-			x,
-			y,
-			text,
-			...(markColor.selectField && { fill: markColor.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -248,9 +256,13 @@
 		const xType = chartContext.scaleTypes?.x;
 		const yType = chartContext.scaleTypes?.y;
 		const xDomain =
-			xType === 'band' || xType === 'point' ? (chartContext.xScaleState as BandScaleState).effectiveDomain : null;
+			xType === 'band' || xType === 'point'
+				? (chartContext.xScaleState as BandScaleState).effectiveDomain
+				: null;
 		const yDomain =
-			yType === 'band' || yType === 'point' ? (chartContext.yScaleState as BandScaleState).effectiveDomain : null;
+			yType === 'band' || yType === 'point'
+				? (chartContext.yScaleState as BandScaleState).effectiveDomain
+				: null;
 		const xBandHalf = xType === 'band' ? (xScale as D3BandScale).bandwidth() / 2 : 0;
 		const yBandHalf = yType === 'band' ? (yScale as D3BandScale).bandwidth() / 2 : 0;
 
@@ -309,7 +321,9 @@
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
-				markColorScaleState: markColor.scaleState
+				markColor,
+				proximityAxis: tooltipProximity,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

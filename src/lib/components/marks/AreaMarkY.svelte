@@ -13,7 +13,8 @@
 		MarkSeries,
 		normalizeSortConfig,
 		inferMarkScaleType,
-		generateMarkId
+		generateMarkId,
+		resolveTip
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -59,7 +60,9 @@
 		preferredYScaleType = null,
 		transforms = [],
 		sort = null,
-		tooltip = true
+		tooltip = true,
+		tooltipProximity,
+		tip = undefined
 	}: Props = $props();
 
 	// Observable Plot pattern: y shorthand → auto-stack, explicit y1/y2 → opt-out
@@ -114,13 +117,29 @@
 
 	// Detect if y2 is an aggregate expression (count, sum, mean, etc.)
 	const hasAggregateY = $derived.by(() => {
-		return typeof y2 === 'object' && y2 != null && ('aggregate' in y2 || y2.constructor?.name === '_AggregateNode');
+		return (
+			typeof y2 === 'object' &&
+			y2 != null &&
+			('aggregate' in y2 || y2.constructor?.name === '_AggregateNode')
+		);
 	});
 
 	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));
 	let showBothBoundaries = $derived(typeof y1Prop === 'string' && !hasStackTransform);
 
 	// Config with _connectedConfig for automatic ORDER BY
+	const channelSelect = $derived(
+		buildSelectFromChannels({
+			x,
+			y: y2, // Alias for tooltip nearest-point query (expects 'y' column)
+			y1,
+			y2,
+			...(markColor.selectField && { fill: markColor.selectField }),
+			...(z != null && markSeries.selectField && { z: markSeries.selectField })
+		})
+	);
+	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+
 	const config = $derived({
 		markType: 'areay',
 		supportedScaleTypes: {
@@ -142,14 +161,7 @@
 		table,
 		selection,
 		transforms: effectiveTransforms,
-		select: buildSelectFromChannels({
-			x,
-			y: y2, // Alias for tooltip nearest-point query (expects 'y' column)
-			y1,
-			y2,
-			...(markColor.selectField && { fill: markColor.selectField }),
-			...(z != null && markSeries.selectField && { z: markSeries.selectField })
-		}),
+		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		// Connected topology config - ensures data is ordered for area connectivity
 		_connectedConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
@@ -159,7 +171,7 @@
 		// Area charts with aggregates should include zero in the domain
 		zeroBaseline: hasAggregateY ? { y: true } : null,
 		sort: normalizeSortConfig(sort),
-		tooltip
+		tooltip: tip === false ? false : tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -239,7 +251,10 @@
 				colorColumn: 'fill',
 				// Stacked areas: compute nearest-point distance against the stacked top (y1)
 				...(hasStackTransform && { columns: { y: 'y1' } }),
-				markColorScaleState: markColor.scaleState
+				markColor,
+				proximityAxis: tooltipProximity,
+				constantRadius: dotRadius || undefined,
+				displayFields: resolvedTip.displayFields
 			})
 		);
 		return () => tm.unregisterMark(markId);

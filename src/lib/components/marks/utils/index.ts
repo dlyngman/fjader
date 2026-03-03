@@ -14,7 +14,7 @@ export {
 	computeInstanceCount
 } from './channel-resolution';
 export { buildTooltipConfig } from './tooltip-helpers';
-export { buildChannelFieldMap } from './channel-field-map';
+export { buildChannelFieldMap, resolveTip } from './channel-field-map';
 export { MarkColor } from './MarkColor.svelte';
 export { MarkSize } from './MarkSize.svelte';
 export { MarkSeries } from './MarkSeries.svelte';

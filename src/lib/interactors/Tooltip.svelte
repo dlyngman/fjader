@@ -4,10 +4,14 @@
   Reads from TooltipManager (via context) and renders a floating tooltip
   at the cursor position. Uses CSS anchor positioning for automatic
   edge-aware placement.
+
+  Always renders one point at a time (stable layout). When multiple
+  points match, colored dots appear at the bottom and the user can
+  cycle through series with [ / ] keys.
 -->
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
+	import type { ChartContext, ContinuousScaleState } from '$lib/types';
 
 	interface Props {
 		fields?: string[] | null;
@@ -20,12 +24,32 @@
 
 	let tm = $derived(chart?.tooltipManager);
 	let visible = $derived(tm?.visible ?? false);
-	let data = $derived(tm?.currentPoint ?? null);
+	let point = $derived(tm?.focusedPoint ?? null);
+	let match = $derived(tm?.focusedMatch ?? null);
+	let matched = $derived(tm?.matchedPoints ?? []);
+	let focusedIndex = $derived(tm?.focusedIndex ?? 0);
+	let isMulti = $derived(matched.length > 1);
 	let colorField = $derived(tm?.currentColorField ?? null);
-	let color = $derived(tm?.currentColor ?? null);
 	let channelFields = $derived(tm?.currentChannelFields ?? null);
+	let displayFields = $derived(tm?.currentDisplayFields ?? null);
 	let px = $derived(tm?.pointerScreenX ?? 0);
 	let py = $derived(tm?.pointerScreenY ?? 0);
+
+	// High-water mark for tooltip width — grows but never shrinks.
+	let tooltipEl: HTMLDivElement;
+	let minWidth = $state(0);
+
+	$effect(() => {
+		// Dependencies: re-measure when focused point or index changes
+		void point;
+		void focusedIndex;
+		if (!visible || !tooltipEl) return;
+		const prev = tooltipEl.style.minWidth;
+		tooltipEl.style.minWidth = '0px';
+		const natural = tooltipEl.offsetWidth;
+		tooltipEl.style.minWidth = prev;
+		if (natural > minWidth) minWidth = natural;
+	});
 
 	// Reverse lookup: field name → axis channel ('x' or 'y') for channel icons
 	let fieldToChannel = $derived.by(() => {
@@ -38,25 +62,36 @@
 		return map;
 	});
 
-	// Resolve channel for a tooltip entry key — checks reverse map first,
-	// then falls back to pattern match for raw aliases (x1, x2, y1, y2)
 	function getChannel(key: string) {
 		return fieldToChannel[key] ?? (/^x\d?$/.test(key) ? 'x' : /^y\d?$/.test(key) ? 'y' : null);
 	}
 
-	let entries = $derived.by(() => {
-		if (!data) return [];
-
-		if (fields) {
-			return fields.filter((key) => key in data).map((key) => [key, data[key]]);
-		}
-
-		return Object.entries(data);
+	// Keys to display — per-mark displayFields (from tip) takes priority over component-level fields
+	let keys = $derived.by(() => {
+		if (!point) return [];
+		if (displayFields) return displayFields.filter((k) => k in point);
+		if (fields) return fields.filter((k) => k in point);
+		return Object.keys(point);
 	});
+
+	// Scale-aware formatters for numeric values (same as MarginLabel)
+	const xFormat = $derived(
+		chart.xScaleState && chart.xScaleState.scaleType !== 'band'
+			? (v: number) => (chart.xScaleState as ContinuousScaleState).formatValue(v)
+			: null
+	);
+	const yFormat = $derived(
+		chart.yScaleState && chart.yScaleState.scaleType !== 'band'
+			? (v: number) => (chart.yScaleState as ContinuousScaleState).formatValue(v)
+			: null
+	);
 
 	function formatValue(key: string, value: unknown) {
 		if (formatters[key]) return formatters[key](value);
 		if (typeof value === 'number') {
+			const channel = getChannel(key);
+			const fmt = channel === 'x' ? xFormat : channel === 'y' ? yFormat : null;
+			if (fmt) return fmt(value);
 			return Number.isInteger(value) ? value.toString() : value.toFixed(2);
 		}
 		return String(value);
@@ -69,21 +104,30 @@
 <div class="tooltip-anchor" style="transform: translate({px}px, {py}px);"></div>
 
 <!-- Tooltip positioned via CSS anchor positioning -->
-<div class="tooltip" class:visible>
-	{#each entries as [key, value] (key)}
+<div class="tooltip" class:visible bind:this={tooltipEl} style:min-width="{minWidth}px">
+	{#each keys as key (key)}
 		<div class="row">
 			<span class="key">
-				<span class="channel-icon">{channelIcons[getChannel(key as string)] ?? ''}</span>
+				<span class="channel-icon">{channelIcons[getChannel(key)] ?? ''}</span>
 				{key}
 			</span>
 			<span class="value">
-				{#if key === colorField && color}
-					<span class="swatch" style="background-color: {color};"></span>
+				{#if key === colorField && match?.color}
+					<span class="swatch" style="background-color: {match.color};"></span>
 				{/if}
-				{formatValue(key as string, value)}
+				{formatValue(key, point?.[key])}
 			</span>
 		</div>
 	{/each}
+	<div class="dots" class:show={isMulti}>
+		{#each matched as m, i (i)}
+			<span
+				class="dot"
+				class:focused={i === focusedIndex}
+				style="background-color: {m.color ?? 'currentColor'};"
+			></span>
+		{/each}
+	</div>
 </div>
 
 <style>
@@ -101,9 +145,9 @@
 		position: absolute;
 		position-anchor: --tooltip-anchor;
 		left: anchor(right);
-		bottom: anchor(top);
+		top: anchor(top);
 		margin-left: 12px;
-		margin-bottom: -4px;
+		margin-top: -4px;
 		position-try-fallbacks:
 			flip-inline,
 			flip-block,
@@ -163,5 +207,38 @@
 		gap: 4px;
 		font-weight: 500;
 		font-variant-numeric: tabular-nums;
+	}
+
+	.dots {
+		display: flex;
+		gap: 3px;
+		justify-content: center;
+		padding-top: 0;
+		max-height: 0;
+		overflow: hidden;
+		transition:
+			max-height 150ms ease-out,
+			padding-top 150ms ease-out;
+	}
+
+	.dots.show {
+		max-height: 14px;
+		padding-top: 4px;
+	}
+
+	.dot {
+		width: 5px;
+		height: 5px;
+		border-radius: 50%;
+		opacity: 0;
+		transition: opacity 80ms;
+	}
+
+	.dots.show .dot {
+		opacity: 0.3;
+	}
+
+	.dots.show .dot.focused {
+		opacity: 1;
 	}
 </style>

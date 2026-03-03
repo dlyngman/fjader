@@ -250,6 +250,13 @@ export class MarkColor {
 		return [value[0], value[1], value[2], value[3]] as [number, number, number, number];
 	});
 
+	/** CSS color string when mode is constant, null when data-driven. */
+	constantCssColor: string | null = $derived.by(() => {
+		if (this.#mode !== 'constant') return null;
+		const [r, g, b, a] = this.constantColor;
+		return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
+	});
+
 	// Use state instead of derived to avoid flickering during transitions
 	ready: boolean = $derived(this.#readyState);
 }
