@@ -35,12 +35,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<DotsMark
-									table="penguins"
-									x="bill_length"
-									y="body_mass"
-									fill="species"
-								/>
+								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -144,7 +139,9 @@
 		<!-- 5. BarMarkY with tip filtering + 'y' alias -->
 		<section>
 			<h2>BarMarkY &mdash; tip={'{["x", "y"]}'}</h2>
-			<p class="desc">Should show: species, count (no color field). 'y' aliases to 'y2' for range marks.</p>
+			<p class="desc">
+				Should show: species, count (no color field). 'y' aliases to 'y2' for range marks.
+			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="species" yLabel="count">
 					{#snippet background()}

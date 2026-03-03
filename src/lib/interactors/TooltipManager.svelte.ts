@@ -143,7 +143,7 @@ export class TooltipManager {
 	cycleFocused(delta: number): void {
 		const n = this.currentPoints.length;
 		if (n <= 1) return;
-		this.focusedIndex = ((this.focusedIndex + delta) % n + n) % n;
+		this.focusedIndex = (((this.focusedIndex + delta) % n) + n) % n;
 		// Remember the category so we can restore it after the next query
 		const colorField = this.currentColorField;
 		if (colorField) {
@@ -302,9 +302,7 @@ export class TooltipManager {
 
 				// Restore focused index to sticky category, or default to 0
 				if (this.#stickyCategory != null && colorFieldName) {
-					const idx = resolvedPoints.findIndex(
-						(pt) => pt[colorFieldName] === this.#stickyCategory
-					);
+					const idx = resolvedPoints.findIndex((pt) => pt[colorFieldName] === this.#stickyCategory);
 					this.focusedIndex = idx >= 0 ? idx : 0;
 				} else {
 					this.focusedIndex = 0;
@@ -547,20 +545,12 @@ export class TooltipManager {
 		const { scaleTypes, bandDomains } = config;
 
 		// Band index → category label
-		if (
-			(key === 'x' || key === 'y') &&
-			scaleTypes[key] === 'band' &&
-			bandDomains?.[key]
-		) {
+		if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
 			return bandDomains[key]![value as number] ?? value;
 		}
 
 		// Time offset → formatted datetime
-		if (
-			key.startsWith(axis) &&
-			isTemporalScale(scaleTypes[axis]) &&
-			typeof value === 'number'
-		) {
+		if (key.startsWith(axis) && isTemporalScale(scaleTypes[axis]) && typeof value === 'number') {
 			const scaleState =
 				axis === 'x' ? this.#scaleProvider.xScaleState : this.#scaleProvider.yScaleState;
 			if (scaleState && isTemporalScale(scaleState.scaleType)) {
@@ -716,7 +706,10 @@ export class TooltipManager {
 			const rangeEntries: [string, unknown][] = mergedRanges.map((r) => {
 				const lowVal = this.#resolveValue(r.axis, r.lowKey, row[r.lowKey], config);
 				const highVal = this.#resolveValue(r.axis, r.highKey, row[r.highKey], config);
-				return [r.label, `${this.#formatValue(lowVal, r.axis)}\u2013${this.#formatValue(highVal, r.axis)}`];
+				return [
+					r.label,
+					`${this.#formatValue(lowVal, r.axis)}\u2013${this.#formatValue(highVal, r.axis)}`
+				];
 			});
 
 			// Splice range entries into position

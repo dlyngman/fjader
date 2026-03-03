@@ -34,7 +34,10 @@ export function inferScaleType({
 			if (context === 'visual') return 'sequential';
 			return 'sqrt'; // size context
 		}
-		if (isBinExpression(field) || ('type' in (field as object) && (field as { type: string }).type === 'Bin')) {
+		if (
+			isBinExpression(field) ||
+			('type' in (field as object) && (field as { type: string }).type === 'Bin')
+		) {
 			if (context === 'axis') return 'linear';
 			return 'sequential'; // visual or size
 		}

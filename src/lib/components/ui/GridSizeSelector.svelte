@@ -67,9 +67,9 @@
 	{#if isOpen}
 		<div class="dropdown" bind:this={dropdownEl}>
 			<div class="grid-container">
-				{#each Array(maxSize) as _, rowIndex}
+				{#each Array(maxSize) as _, rowIndex (rowIndex)}
 					<div class="grid-row">
-						{#each Array(maxSize) as _, colIndex}
+						{#each Array(maxSize) as _, colIndex (colIndex)}
 							{@const row = rowIndex + 1}
 							{@const col = colIndex + 1}
 							{@const isDisabled = row * col > maxSelected}

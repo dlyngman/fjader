@@ -104,7 +104,16 @@ export function topN(n: number, options: TopNOptions = {}): JsTransform {
 
 			const seriesCol = seriesField ? data.getColumn(seriesField) : null;
 			if (seriesCol) {
-				return topNGrouped(data, n, valueCol, bandColData, bandField, seriesCol, options, valueField);
+				return topNGrouped(
+					data,
+					n,
+					valueCol,
+					bandColData,
+					bandField,
+					seriesCol,
+					options,
+					valueField
+				);
 			}
 
 			// Simple path: no series column, rank individual rows
@@ -229,7 +238,7 @@ function topNGrouped(
 			// "Other" rows: value column gets summed total per series, others get 0
 			for (let j = 0; j < seriesOrder.length; j++) {
 				dst[keepIndices.length + j] =
-					colName === valueField ? (seriesValues.get(seriesOrder[j]) || 0) : 0;
+					colName === valueField ? seriesValues.get(seriesOrder[j]) || 0 : 0;
 			}
 			columns[colName] = dst;
 		} else {

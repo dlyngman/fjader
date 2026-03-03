@@ -112,7 +112,11 @@ export function resolveChannelData({
 	if (!raw) return null;
 
 	if (isCategoricalScale(scaleType) && scaleState && 'processDataForGPU' in scaleState) {
-		return toFloat32((scaleState as BandScaleState).processDataForGPU(raw as string[] | Float32Array, markId, { suppressUnmappedWarning }));
+		return toFloat32(
+			(scaleState as BandScaleState).processDataForGPU(raw as string[] | Float32Array, markId, {
+				suppressUnmappedWarning
+			})
+		);
 	}
 
 	return toFloat32(raw);

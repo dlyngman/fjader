@@ -118,11 +118,7 @@ export class LogScaleState extends LinearScaleState {
 	// EXTENT MANAGEMENT (clamp to positive)
 	// ===========================================================================
 
-	override addMark(
-		range: number[],
-		identifier: string,
-		options: { instant?: boolean } = {}
-	): this {
+	override addMark(range: number[], identifier: string, options: { instant?: boolean } = {}): this {
 		// Clamp to positive for log scale
 		const clamped = range.map((v) => Math.max(v, LOG_MIN_CLAMP));
 		return super.addMark(clamped, identifier, options);

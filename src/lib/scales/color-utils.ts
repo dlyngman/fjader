@@ -231,7 +231,7 @@ export const CSS_COLOR_NAMES: Set<string> = new Set([
 
 // Pre-compiled regex for RGB parsing
 const RGB_REGEX =
-	/rgba?\(\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)(?:\s*[,\/]\s*([0-9.]+%?))?\s*\)/;
+	/rgba?\(\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)\s*[,\s]\s*([0-9.]+%?)(?:\s*[,/]\s*([0-9.]+%?))?\s*\)/;
 
 /**
  * Parse any CSS color string to [r, g, b, a] array with values 0-1.
@@ -504,7 +504,10 @@ export function bakePalette(
 	return result;
 }
 
-export type D3ColorScale = ScaleOrdinal<string, string> | ScaleSequential<string> | ScaleDiverging<string>;
+export type D3ColorScale =
+	| ScaleOrdinal<string, string>
+	| ScaleSequential<string>
+	| ScaleDiverging<string>;
 
 interface CreateD3ScaleOptions {
 	reverse?: boolean;

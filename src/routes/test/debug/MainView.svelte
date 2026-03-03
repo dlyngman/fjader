@@ -89,7 +89,6 @@
 				{#snippet foreground()}
 					<Crosshair />
 				{/snippet}
-
 			</ChartContainer>
 		</div>
 		<div class="chart-wrapper">

@@ -69,7 +69,11 @@ export class ColorScaleState {
 	#registeredTables: Set<string> = new Set();
 	#viewsCreated: Set<string> = new Set(); // Tables that have had their view column created (one-shot)
 
-	constructor(config: ColorScaleConfig, registry: ScaleRegistry, gpuCoordinator: GPUCoordinator | null) {
+	constructor(
+		config: ColorScaleConfig,
+		registry: ScaleRegistry,
+		gpuCoordinator: GPUCoordinator | null
+	) {
 		this.#field = config.field;
 		this.#scheme = config.scheme || 'viridis';
 		this.#reverse = config.reverse ?? false;
@@ -281,7 +285,10 @@ export class ColorScaleState {
 
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
-		this.#gpuCoordinator.writeColorPalette(this.#paletteSlot, paletteData as Float32Array<ArrayBuffer>);
+		this.#gpuCoordinator.writeColorPalette(
+			this.#paletteSlot,
+			paletteData as Float32Array<ArrayBuffer>
+		);
 
 		// Build and upload config struct
 		const config = this.#buildColorConfig({

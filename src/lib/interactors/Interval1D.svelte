@@ -59,7 +59,7 @@
 		source,
 		augment: (clause) => ({
 			kind: 'range',
-			column: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString() ?? '',
+			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
 			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
 			values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
 		}),
@@ -154,7 +154,10 @@
 		if (!selection.activate || !s || !columnRef) return;
 
 		const range: ScaleDomain = brush.active
-			? [Math.min(brush.dataMin as number, brush.dataMax as number), Math.max(brush.dataMin as number, brush.dataMax as number)]
+			? [
+					Math.min(brush.dataMin as number, brush.dataMax as number),
+					Math.max(brush.dataMin as number, brush.dataMax as number)
+				]
 			: [0, 1];
 
 		selection.activate(
@@ -240,7 +243,10 @@
 		} else if (brush.phase === 'resizing') {
 			const anchorData = brush.resizeEdge === 'start' ? brush.dataMax : brush.dataMin;
 			const currentData = s.invert(current);
-			brush.setExtent(Math.min(anchorData as number, currentData as number), Math.max(anchorData as number, currentData as number));
+			brush.setExtent(
+				Math.min(anchorData as number, currentData as number),
+				Math.max(anchorData as number, currentData as number)
+			);
 		}
 
 		emitClause();

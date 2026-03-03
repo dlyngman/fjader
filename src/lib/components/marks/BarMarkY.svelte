@@ -93,7 +93,11 @@
 
 	// Detect if y2 is an aggregate expression (count, sum, mean, etc.)
 	const hasAggregateY = $derived.by(() => {
-		return typeof y2 === 'object' && y2 != null && ('aggregate' in y2 || y2.constructor?.name === '_AggregateNode');
+		return (
+			typeof y2 === 'object' &&
+			y2 != null &&
+			('aggregate' in y2 || y2.constructor?.name === '_AggregateNode')
+		);
 	});
 
 	// 2. Config

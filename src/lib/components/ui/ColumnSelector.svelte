@@ -17,10 +17,7 @@
 
 	let layoutMemory = $state({
 		// column: [],
-		// svelte-ignore state_referenced_locally
 		row: options.slice(0, c.gridRows),
-		// row: []
-		// svelte-ignore state_referenced_locally
 		column: options.slice(c.gridRows, c.gridRows + c.gridColumns)
 	});
 
@@ -71,21 +68,21 @@
 </div>
 
 <div class="container">
-	{#each Array(c.gridRows).keys() as row, i}
+	{#each Array(c.gridRows).keys() as row, i (row)}
 		<div>
 			<span>Row {row + 1}</span>
 			<select bind:value={layoutMemory.row[i]}>
-				{#each options as option}
+				{#each options as option (option)}
 					<option value={option}>{option}</option>
 				{/each}
 			</select>
 		</div>
 	{/each}
-	{#each Array(c.gridColumns).keys() as col, i}
+	{#each Array(c.gridColumns).keys() as col, i (col)}
 		<div>
 			<span>Column {col + 1}</span>
 			<select bind:value={layoutMemory.column[i]}>
-				{#each options as option}
+				{#each options as option (option)}
 					<option value={option}>{option}</option>
 				{/each}
 			</select>

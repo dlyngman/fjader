@@ -37,7 +37,7 @@
 </div>
 
 <div class="chart-wrapper">
-	<ChartContainer xLabel={'delay'} yLabel={'time'}>
+	<ChartContainer xLabel="delay" yLabel="time">
 		{#snippet background()}
 			{#if showFrame}<Frame />{/if}
 			{#if showAxes}<AxisLeft />{/if}
@@ -49,7 +49,7 @@
 			<WebGPUCanvas>
 				{#snippet canvasComponents()}
 					{#if showGrid}<Grid />{/if}
-					<DotsMark table="flights" x={min('delay')} y={'time'} fill={avg('delay')} opacity="0.8" />
+					<DotsMark table="flights" x={min('delay')} y="time" fill={avg('delay')} opacity="0.8" />
 				{/snippet}
 			</WebGPUCanvas>
 		{/snippet}

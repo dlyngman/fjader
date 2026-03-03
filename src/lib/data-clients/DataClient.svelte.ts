@@ -9,7 +9,14 @@ import {
 	isNotNull,
 	and
 } from '@uwdata/mosaic-sql';
-import type { ExprNode, FilterExpr, ExprValue, SelectExpr, GroupByExpr, OrderByExpr } from '@uwdata/mosaic-sql';
+import type {
+	ExprNode,
+	FilterExpr,
+	ExprValue,
+	SelectExpr,
+	GroupByExpr,
+	OrderByExpr
+} from '@uwdata/mosaic-sql';
 import type { Table } from '@uwdata/flechette';
 
 type DataFormat = 'arrow' | 'array' | 'both';
@@ -213,7 +220,9 @@ export class DataClient extends MosaicClient {
 		}
 
 		// 3. Add filtering
-		const allFilters: (string | boolean | ExprNode)[] = [...(Array.isArray(filter) ? filter : filter ? [filter] : [])];
+		const allFilters: (string | boolean | ExprNode)[] = [
+			...(Array.isArray(filter) ? filter : filter ? [filter] : [])
+		];
 		if (_filterNulls && Array.isArray(_filterNulls)) {
 			allFilters.push(..._filterNulls.map((col) => isNotNull(col as ExprValue)));
 		}

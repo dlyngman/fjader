@@ -144,7 +144,6 @@
 	</div>
 
 	<!-- Chart-like wrapper (mimics ChartContainer structure) -->
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="chart-wrapper" class:contain-strict={showContainStrict} onwheel={handleWheel}>
 		{#if showSVG}
 			<!-- SVG background (mimics Grid + axis background) -->

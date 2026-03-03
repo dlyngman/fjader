@@ -12,8 +12,7 @@ export function inferMarkScaleType(
 
 	// AutoBinNode: unwrap to get underlying column for schema lookup
 	if (typeof field !== 'string' && 'isAutoBinNode' in field && field.isAutoBinNode) {
-		const colName =
-			'field' in field && typeof field.field === 'string' ? field.field : null;
+		const colName = 'field' in field && typeof field.field === 'string' ? field.field : null;
 		if (!colName) return 'linear';
 		const _v = tableSchemaService.version;
 		const colType = tableSchemaService.getColumnType(table, colName);

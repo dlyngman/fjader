@@ -20,7 +20,7 @@
 <div class="selector-container">
 	<label for="selector">{label}</label>
 	<select id="selector" {value} onchange={handleChange}>
-		{#each options as option}
+		{#each options as option (option.value)}
 			<option value={option.value}>{option.label}</option>
 		{/each}
 	</select>

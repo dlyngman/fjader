@@ -52,7 +52,9 @@
 
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
 	const toggle =
-		bridge && field ? bridge.createToggle(field, { scaleStates: getLegendScaleStates as () => any[] }) : null;
+		bridge && field
+			? bridge.createToggle(field, { scaleStates: getLegendScaleStates as () => any[] })
+			: null;
 
 	const selection = toggle?.sel;
 	const source = toggle?.source;
@@ -93,7 +95,11 @@
 		if (newValues === null) {
 			bridge.clearToggle(field);
 		} else {
-			selection.update(clausePoints([columnRef], newValues, { source: source as unknown as import('@uwdata/mosaic-core').ClauseSource }));
+			selection.update(
+				clausePoints([columnRef], newValues, {
+					source: source as unknown as import('@uwdata/mosaic-core').ClauseSource
+				})
+			);
 		}
 	}
 </script>
@@ -111,7 +117,7 @@
 		class:legend-columns={columns}
 		class:legend-vertical={orientation === 'vertical'}
 	>
-		{#each items as { value, color }}
+		{#each items as { value, color } (value)}
 			{#if isInteractive}
 				<button
 					class="legend-item legend-item-interactive"

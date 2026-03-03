@@ -15,7 +15,8 @@
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
 	$effect(() => {
 		const s = c.yScaleState;
-		if (tickFormat && s && s.scaleType !== 'band') (s as ContinuousScaleState).setCustomFormat(tickFormat);
+		if (tickFormat && s && s.scaleType !== 'band')
+			(s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
 	// Continuous scales (linear, time): use scaleState.getTicks()
@@ -51,7 +52,9 @@
 			{@const bandScale = c.yScale as D3BandScale}
 			{#each bandTicks as tick (tick)}
 				{@const tickY = c.yScale(tick)}
-				<g class:tick-dimmed={bandState.activeValues != null && !bandState.isActive(tick as string)}>
+				<g
+					class:tick-dimmed={bandState.activeValues != null && !bandState.isActive(tick as string)}
+				>
 					<line
 						x1={0}
 						x2={-6}

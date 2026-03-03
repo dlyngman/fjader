@@ -83,7 +83,7 @@
 
 	{#if orientation === '2d'}
 		<!-- Corner handles -->
-		{#each ['nw', 'ne', 'sw', 'se'] as corner}
+		{#each ['nw', 'ne', 'sw', 'se'] as corner (corner)}
 			<circle
 				cx={corner.includes('e') ? nx + nw : nx}
 				cy={corner.includes('s') ? ny + nh : ny}

@@ -2,7 +2,11 @@
 
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data-clients/DataClient.svelte';
-import type { DataClientConfig, DataClientOptions, FieldInfoEntry } from '$lib/data-clients/DataClient.svelte';
+import type {
+	DataClientConfig,
+	DataClientOptions,
+	FieldInfoEntry
+} from '$lib/data-clients/DataClient.svelte';
 import {
 	Query,
 	isNode,
@@ -459,8 +463,10 @@ export class BaseMarkSetup {
 			const multiplier: number = this.#chartContext.binStepMultiplier ?? 1.0;
 			const xState = this.#chartContext.xScaleState;
 			const yState = this.#chartContext.yScaleState;
-			const xDomain: number[] | undefined = xState && xState.scaleType !== 'band' ? xState.domain?.target : undefined;
-			const yDomain: number[] | undefined = yState && yState.scaleType !== 'band' ? yState.domain?.target : undefined;
+			const xDomain: number[] | undefined =
+				xState && xState.scaleType !== 'band' ? xState.domain?.target : undefined;
+			const yDomain: number[] | undefined =
+				yState && yState.scaleType !== 'band' ? yState.domain?.target : undefined;
 
 			if (this.#autoBinNodes.size === 0 || !this.client) {
 				// Early return, but reactive values were already read above
@@ -636,7 +642,9 @@ export class BaseMarkSetup {
 	 * Reactive effective table name.
 	 * Automatically updates when ViewManager creates the derived view.
 	 */
-	effectiveTable: string = $derived.by(() => viewManager.getEffectiveTable(this.#config?.table ?? ''));
+	effectiveTable: string = $derived.by(() =>
+		viewManager.getEffectiveTable(this.#config?.table ?? '')
+	);
 
 	/**
 	 * Get the source table name (without ViewManager transformation).
@@ -912,9 +920,7 @@ export class BaseMarkSetup {
 				// SQL alias: field name for simple column refs, channel name
 				// for expressions. Matches Mosaic's PreAggregator expectations.
 				const sqlAlias =
-					isColumnRef(exprNode) && !isColumnParam(exprNode)
-						? exprNode.column
-						: channel;
+					isColumnRef(exprNode) && !isColumnParam(exprNode) ? exprNode.column : channel;
 
 				aliasMap.set(channel, sqlAlias);
 				selectDef[channel] = exprNode;
@@ -1033,7 +1039,8 @@ export class BaseMarkSetup {
 					currentDomain = this.#lastBinningDomain[axis as 'x' | 'y'] as [number, number] | null;
 
 					if (!currentDomain) {
-						currentDomain = (scaleState as ContinuousScaleState | null | undefined)?.domain?.current as unknown as [number, number] | null;
+						currentDomain = (scaleState as ContinuousScaleState | null | undefined)?.domain
+							?.current as unknown as [number, number] | null;
 						if (currentDomain) {
 							this.#lastBinningDomain[axis as 'x' | 'y'] = [...currentDomain];
 						}
@@ -1067,7 +1074,10 @@ export class BaseMarkSetup {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			if (scaleType !== 'time') continue;
 
-			const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState | null | undefined;
+			const scaleState = this.#chartContext[`${axis}ScaleState`] as
+				| TimeScaleState
+				| null
+				| undefined;
 			if (!scaleState?.t0) continue;
 
 			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
@@ -1121,7 +1131,9 @@ export class BaseMarkSetup {
 		if (this.#chartContext?.registerClient) {
 			// Unregister previous client if any
 			this.#unregisterClient?.();
-			this.#unregisterClient = this.#chartContext.registerClient(this.client as unknown as MosaicClient);
+			this.#unregisterClient = this.#chartContext.registerClient(
+				this.client as unknown as MosaicClient
+			);
 		}
 	}
 
@@ -1338,7 +1350,10 @@ export class BaseMarkSetup {
 
 				// Use instant domain update when rebinning to avoid confusing grow/shrink effect
 				// Keep spring animation for viewport panning (smooth bin entry/exit)
-				if (this.actualXScaleType === 'time' && (scaleState as TimeScaleState | null)?.addOffsetExtent) {
+				if (
+					this.actualXScaleType === 'time' &&
+					(scaleState as TimeScaleState | null)?.addOffsetExtent
+				) {
 					// Time scale: data is in offset form, use addOffsetExtent
 					console.log(
 						`📊 [${this.#markId}] Registering X domain from data (time offsets):`,
@@ -1394,7 +1409,10 @@ export class BaseMarkSetup {
 
 				// Use instant domain update when rebinning to avoid confusing grow/shrink effect
 				// Keep spring animation for viewport panning (smooth bin entry/exit)
-				if (this.actualYScaleType === 'time' && (scaleState as TimeScaleState | null)?.addOffsetExtent) {
+				if (
+					this.actualYScaleType === 'time' &&
+					(scaleState as TimeScaleState | null)?.addOffsetExtent
+				) {
 					// Time scale: data is in offset form, use addOffsetExtent
 					console.log(
 						`📊 [${this.#markId}] Registering Y domain from data (time offsets):`,
@@ -1783,7 +1801,12 @@ export class BaseMarkSetup {
 		try {
 			// Step 1: Build the inner query with channel-named aliases (forMosaic=false)
 			// so the outer SELECT can reference channels directly.
-			const innerQuery = this.buildQuery(table, this.#config as unknown as DataClientConfig, [], false);
+			const innerQuery = this.buildQuery(
+				table,
+				this.#config as unknown as DataClientConfig,
+				[],
+				false
+			);
 
 			console.log(`📊 [${this.#markId}] Inner query SQL:`, innerQuery.toString());
 
@@ -1849,7 +1872,10 @@ export class BaseMarkSetup {
 			) {
 				const xExtent = [extents.min_x as number, extents.max_x as number];
 				console.log(`📊 [${this.#markId}] Applying X extent from sidecar:`, xExtent);
-				(this.#chartContext.xScaleState as ContinuousScaleState | null)?.addMark(xExtent, this.#markId);
+				(this.#chartContext.xScaleState as ContinuousScaleState | null)?.addMark(
+					xExtent,
+					this.#markId
+				);
 			}
 
 			if (
@@ -1859,7 +1885,10 @@ export class BaseMarkSetup {
 			) {
 				const yExtent = [extents.min_y as number, extents.max_y as number];
 				console.log(`📊 [${this.#markId}] Applying Y extent from sidecar:`, yExtent);
-				(this.#chartContext.yScaleState as ContinuousScaleState | null)?.addMark(yExtent, this.#markId);
+				(this.#chartContext.yScaleState as ContinuousScaleState | null)?.addMark(
+					yExtent,
+					this.#markId
+				);
 			}
 
 			if (
@@ -1948,7 +1977,13 @@ export class BaseMarkSetup {
 			if (!this.data) return;
 
 			const scaleType = aggregateAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			if (scaleType !== 'linear' && scaleType !== 'log' && scaleType !== 'symlog' && scaleType !== 'time') return;
+			if (
+				scaleType !== 'linear' &&
+				scaleType !== 'log' &&
+				scaleType !== 'symlog' &&
+				scaleType !== 'time'
+			)
+				return;
 
 			// Determine which axis is binned (opposite of aggregate)
 			const binnedAxis = aggregateAxis === 'x' ? 'y' : 'x';
@@ -2073,7 +2108,10 @@ export class BaseMarkSetup {
 				// temp table columns match what the tooltip query system expects.
 				const tooltipQuery = this.buildQuery(
 					this.effectiveTable,
-					{ select: selectConfig, _filterNulls: this.#config._filterNulls as ExprValue[] | undefined } as DataClientConfig,
+					{
+						select: selectConfig,
+						_filterNulls: this.#config._filterNulls as ExprValue[] | undefined
+					} as DataClientConfig,
 					filter,
 					false
 				);

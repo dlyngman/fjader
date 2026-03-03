@@ -31,11 +31,7 @@ export class BrushState1D {
 	}
 
 	// Set from screen coordinates (during gesture)
-	setFromScreen(
-		screenMin: number,
-		screenMax: number,
-		scale: D3Scale
-	): void {
+	setFromScreen(screenMin: number, screenMax: number, scale: D3Scale): void {
 		// Convert to data space first, then sort data values
 		// This handles inverted scales (like Y-axis) correctly
 		const data1 = scale.invert!(screenMin);

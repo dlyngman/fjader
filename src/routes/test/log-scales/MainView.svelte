@@ -123,7 +123,9 @@
 		<!-- 4. NEW: LineMark with log Y axis -->
 		<div class="chart-wrapper">
 			<h3>LineMark with Log Y</h3>
-			<p>Line chart with exponential data on a log Y axis. Should appear roughly linear with noise.</p>
+			<p>
+				Line chart with exponential data on a log Y axis. Should appear roughly linear with noise.
+			</p>
 			<ChartContainer xLabel="id_4" yLabel="value_4">
 				{#snippet background()}
 					<AxisBottom />
@@ -167,13 +169,7 @@
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<AreaMarkY
-								table="log_data"
-								x="id"
-								y2="value"
-								y1={1}
-								preferredYScaleType="log"
-							/>
+							<AreaMarkY table="log_data" x="id" y2="value" y1={1} preferredYScaleType="log" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

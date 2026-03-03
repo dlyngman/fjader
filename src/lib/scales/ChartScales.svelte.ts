@@ -4,7 +4,14 @@ import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './S
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
-import type { ScaleStateInstance, ContinuousScaleState, D3Scale, D3BandScale, FieldRef, MosaicClient } from '$lib/types';
+import type {
+	ScaleStateInstance,
+	ContinuousScaleState,
+	D3Scale,
+	D3BandScale,
+	FieldRef,
+	MosaicClient
+} from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
 import { isContinuousScale } from '$lib/scales/scale-categories';
 
