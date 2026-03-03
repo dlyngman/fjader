@@ -134,10 +134,10 @@
 												: stackY()
 									]}
 									tooltip
-									fillOpacity="0.8"
-									strokeWidth="2"
+									fillOpacity={0.8}
+									strokeWidth={2}
 									curve="monotone"
-									dotRadius="4"
+									dotRadius={4}
 								/>
 							{:else}
 								<AreaMarkY table="stacked_timeseries" x="x" y="y" fill="series" tooltip />
