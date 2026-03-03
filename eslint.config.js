@@ -43,7 +43,13 @@ export default ts.config(
 			// Svelte $effect() reactive patterns look like unused expressions
 			'@typescript-eslint/no-unused-expressions': 'off',
 			// const self = this is needed in callbacks within class methods
-			'@typescript-eslint/no-this-alias': 'off'
+			'@typescript-eslint/no-this-alias': 'off',
+			// writable $derived doesn't cover zero-allocation patterns with pre-allocated buffers
+			'svelte/prefer-writable-derived': 'off',
+			// Demo/test pages use simple <a href="/path"> without SvelteKit resolve()
+			'svelte/no-navigation-without-resolve': 'off',
+			// GPU canvas and spec renderer require direct DOM manipulation
+			'svelte/no-dom-manipulating': 'off'
 		}
 	},
 	{
@@ -61,6 +67,7 @@ export default ts.config(
 	},
 	{
 		ignores: [
+			'.claude/',
 			'python/diveplot/static/',
 			'python/diveplot/streamlit_frontend/',
 			'python/__marimo__/',

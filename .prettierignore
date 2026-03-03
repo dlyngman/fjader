@@ -5,6 +5,9 @@ yarn.lock
 bun.lock
 bun.lockb
 
+# Claude worktrees
+.claude/
+
 # Python build artifacts
 python/diveplot/static/
 python/diveplot/streamlit_frontend/

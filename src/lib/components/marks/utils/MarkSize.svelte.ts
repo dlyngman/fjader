@@ -8,7 +8,6 @@ import type { MarkSetupState } from './mark-types';
 export class MarkSize {
 	#sizeProp: () => number | string | ((point: { x: number; y: number }) => number) | null;
 	#rangeProp: () => [number, number];
-	#tableProp: () => string | null;
 	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
 	#chartContext: ChartContext;
@@ -19,14 +18,12 @@ export class MarkSize {
 	constructor(
 		getSize: () => number | string | ((point: { x: number; y: number }) => number) | null,
 		getRange: () => [number, number],
-		getTable: () => string | null,
 		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
 		chartContext: ChartContext
 	) {
 		this.#sizeProp = getSize;
 		this.#rangeProp = getRange;
-		this.#tableProp = getTable;
 		this.#setupState = getSetup;
 		this.#scaleRegistry = scaleRegistry;
 		this.#chartContext = chartContext;
