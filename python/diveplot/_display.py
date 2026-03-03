@@ -42,11 +42,29 @@ def _serialize_dataframes(
     return manifest, b"".join(chunks)
 
 
+_DEFAULT_WIDGET_HEIGHT = 400
+
+
+def _inject_default_height(spec: dict[str, Any], height: int) -> None:
+    """Set height on all plot specs that don't already have one.
+
+    Without an explicit pixel height, PlotFromSpec falls back to
+    ``aspect-ratio: 4/3`` which doesn't size correctly inside
+    anywidget containers in marimo / Jupyter.
+    """
+    if "plot" in spec:
+        spec["plot"].setdefault("height", height)
+    for key in ("hconcat", "vconcat"):
+        for item in spec.get(key, []):
+            item.setdefault("height", height)
+
+
 def make_widget(obj: Displayable) -> Any:
     """Convert Mark/Plot/Overlay/Layout to a renderable DivePlotWidget."""
     from ._widget import DivePlotWidget
 
     spec_dict, dataframes = obj._to_full_spec()
+    _inject_default_height(spec_dict, _DEFAULT_WIDGET_HEIGHT)
     manifest, blob = _serialize_dataframes(dataframes)
 
     return DivePlotWidget(
