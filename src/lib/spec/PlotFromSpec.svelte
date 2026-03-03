@@ -7,6 +7,8 @@
 	import { Grid } from '$lib/components/guides';
 	import Crosshair from '$lib/components/foreground/Crosshair.svelte';
 	import Legend from '$lib/components/guides/legend/Legend.svelte';
+	import IntervalX from '$lib/interactors/IntervalX.svelte';
+	import IntervalY from '$lib/interactors/IntervalY.svelte';
 	import { resolveMarkEntry } from './MarkRegistry';
 	import type { LegendSpec, PlotSpec } from './types';
 
@@ -56,6 +58,8 @@
 		fx={spec.fx ?? null}
 		columns={spec.columns ?? null}
 		margin={spec.margin}
+		useXSelection={spec.useXSelection ?? false}
+		useYSelection={spec.useYSelection ?? false}
 		{legendPosition}
 	>
 		{#snippet background()}
@@ -78,6 +82,16 @@
 
 		{#snippet foreground()}
 			<Crosshair />
+		{/snippet}
+
+		{#snippet interactors()}
+			{#each spec.interactors ?? [] as interactor}
+				{#if interactor.interactor === 'intervalX'}
+					<IntervalX field={interactor.field} />
+				{:else if interactor.interactor === 'intervalY'}
+					<IntervalY field={interactor.field} />
+				{/if}
+			{/each}
 		{/snippet}
 
 		{#snippet legend()}

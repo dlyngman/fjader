@@ -70,7 +70,26 @@ export interface PlotSpec {
 	fx?: string;
 	columns?: number;
 	marks: MarkSpec[];
+	interactors?: InteractorSpec[];
+	useXSelection?: boolean;
+	useYSelection?: boolean;
 	legend?: LegendSpec | boolean;
+}
+
+// =============================================================================
+// Interactor specs — discriminated union on `interactor`
+// =============================================================================
+
+export type InteractorSpec = IntervalXSpec | IntervalYSpec;
+
+export interface IntervalXSpec {
+	interactor: 'intervalX';
+	field?: string;
+}
+
+export interface IntervalYSpec {
+	interactor: 'intervalY';
+	field?: string;
 }
 
 // =============================================================================

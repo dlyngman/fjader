@@ -7,12 +7,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ._convert import serialize_value, to_camel_case
+from .interactors import InteractorSpec
 from .marks._base import Mark
 
 if TYPE_CHECKING:
     from ._types import SortConfig
 
-_PLOT_FIELDS = ("width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend")
+_PLOT_FIELDS = (
+    "width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend",
+    "interactors", "use_x_selection", "use_y_selection",
+)
 
 
 @dataclass
@@ -28,6 +32,9 @@ class Plot:
     fx: str | None = None
     columns: int | None = None
     legend: dict[str, Any] | bool | None = None
+    interactors: list[InteractorSpec] | None = None
+    use_x_selection: bool | None = None
+    use_y_selection: bool | None = None
 
     def __init__(self, *marks: Mark, **kwargs: Any) -> None:
         unexpected = set(kwargs) - set(_PLOT_FIELDS)
@@ -119,6 +126,9 @@ def plot(
     fx: str | None = None,
     columns: int | None = None,
     legend: dict[str, Any] | bool | None = None,
+    interactors: list[InteractorSpec] | None = None,
+    use_x_selection: bool | None = None,
+    use_y_selection: bool | None = None,
 ) -> Plot:
     """Create a chart with one or more marks and chart-level configuration.
 
@@ -133,10 +143,15 @@ def plot(
         columns: Number of columns for facet grid.
         legend: Legend config — ``True`` for auto-detect, or a dict like
             ``{"color": "species", "position": "right"}``.
+        interactors: List of interactor specs (e.g. ``[dp.interval_x()]``).
+        use_x_selection: Follow the shared x-scale's selection extent
+            (for overview+detail linked domains).
+        use_y_selection: Follow the shared y-scale's selection extent.
     """
     return Plot(
         *marks,
         width=width, height=height, margin=margin,
         x_label=x_label, y_label=y_label, fx=fx, columns=columns,
-        legend=legend,
+        legend=legend, interactors=interactors,
+        use_x_selection=use_x_selection, use_y_selection=use_y_selection,
     )

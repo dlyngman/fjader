@@ -27,6 +27,9 @@ from .marks import dot, bar_x, bar_y, line, area_y, area_x, rect, rect_x, rect_y
 # Chart container
 from .plot import plot
 
+# Interactors
+from .interactors import interval_x, interval_y
+
 # Layout helpers
 from .layout import hconcat, vconcat
 
@@ -71,6 +74,8 @@ __all__ = [
     "rect", "rect_x", "rect_y", "text",
     # Chart
     "plot",
+    # Interactors
+    "interval_x", "interval_y",
     # Layout
     "hconcat", "vconcat",
     # Transforms
