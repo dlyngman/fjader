@@ -108,15 +108,15 @@
 	});
 
 	// Watch for external selection changes (from detail chart pan/zoom)
-	// to keep brush visual in sync
+	// to keep brush visual in sync and update Mosaic filter
 	$effect(() => {
 		if (!(scaleState instanceof LinearScaleState)) return;
 		const extent = scaleState.selectionExtent;
 		if (extent && scaleState.selectionSource === 'external') {
 			brush.setExtent(extent[0], extent[1]);
-			// Keep dedup cache in sync so the next user drag doesn't skip/repeat
 			lastEmittedMin = extent[0];
 			lastEmittedMax = extent[1];
+			emitFilterClause(extent[0], extent[1]);
 		}
 	});
 
@@ -142,6 +142,25 @@
 		return isX ? innerPoint.x : innerPoint.y;
 	}
 
+	// Emit Mosaic filter clause for the given data range (bridge-only path)
+	function emitFilterClause(dataMin: number, dataMax: number) {
+		if (!selection || !columnRef) return;
+		const s = getScale();
+		// Always 'linear': DivePlot's columnRef already encodes time→offset,
+		// so values are plain floats. Declaring 'time' causes Mosaic to wrap
+		// with epoch_ms() which fails on FLOAT.
+		const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
+			source: source as unknown as ClauseSource,
+			clients: chart.markClients,
+			scale: {
+				type: 'linear',
+				domain: s!.domain() as ScaleDomain,
+				range: s!.range() as [number, number]
+			}
+		});
+		selection.update(clause);
+	}
+
 	// Update scale selectionExtent and optionally emit Mosaic clause
 	function emitUpdate() {
 		if (!brush.active) return;
@@ -161,24 +180,7 @@
 			scaleState.setSelectionExtent(dataMin, dataMax, 'brush');
 		}
 
-		// Emit Mosaic clause if bridge is provided
-		if (selection && columnRef) {
-			const s = getScale();
-			// Always 'linear': DivePlot's columnRef already encodes time→offset,
-			// so values are plain floats. Declaring 'time' causes Mosaic to wrap
-			// with epoch_ms() which fails on FLOAT.
-			const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
-				source: source as unknown as ClauseSource,
-				clients: chart.markClients,
-				scale: {
-					type: 'linear',
-					domain: s!.domain() as ScaleDomain,
-					range: s!.range() as [number, number]
-				}
-			});
-
-			selection.update(clause);
-		}
+		emitFilterClause(dataMin, dataMax);
 	}
 
 	// Pre-aggregation on pointer enter (only with bridge)
