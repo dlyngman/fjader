@@ -85,7 +85,7 @@
 		{/snippet}
 
 		{#snippet interactors()}
-			{#each spec.interactors ?? [] as interactor}
+			{#each spec.interactors ?? [] as interactor, i (i)}
 				{#if interactor.interactor === 'intervalX'}
 					<IntervalX field={interactor.field} />
 				{:else if interactor.interactor === 'intervalY'}
