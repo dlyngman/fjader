@@ -27,15 +27,27 @@ async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<DivePlo
 	// Copy blob immediately — anywidget may detach the underlying ArrayBuffer
 	const blob = new Uint8Array(blobView.buffer, blobView.byteOffset, blobView.byteLength).slice();
 
-	return renderFromData(
+	// Size the container to the exact height computed by the Python wrapper.
+	// Marimo / Jupyter constrain el's height; setting an explicit pixel value
+	// before mount ensures vconcat layouts aren't clipped.
+	const specJson = model.get('spec');
+	const spec = JSON.parse(specJson);
+	if (typeof spec._containerHeight === 'number' && spec._containerHeight > 0) {
+		el.style.height = `${spec._containerHeight}px`;
+		el.style.overflow = 'visible';
+	}
+
+	const handle = await renderFromData(
 		el,
-		model.get('spec'),
+		specJson,
 		model.get('data_manifest'),
 		(entry: ManifestEntry) => {
 			const { offset, length } = entry as ManifestEntry & { offset: number; length: number };
 			return new Uint8Array(blob.buffer, blob.byteOffset + offset, length);
 		}
 	);
+
+	return handle;
 }
 
 const WATCHED_TRAITS = ['change:spec', 'change:data_manifest', 'change:data_blob'] as const;

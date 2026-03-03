@@ -43,20 +43,32 @@ def _serialize_dataframes(
 
 
 _DEFAULT_WIDGET_HEIGHT = 400
+_LAYOUT_GAP = 8  # matches .diveplot-vconcat/.diveplot-hconcat { gap: 8px }
 
 
 def _inject_default_height(spec: dict[str, Any], height: int) -> None:
-    """Set height on all plot specs that don't already have one.
+    """Set height on all plot specs and compute total container height.
 
     Without an explicit pixel height, PlotFromSpec falls back to
     ``aspect-ratio: 4/3`` which doesn't size correctly inside
     anywidget containers in marimo / Jupyter.
+
+    Also computes ``_containerHeight`` — the exact pixel height the
+    anywidget ``el`` needs so that vconcat layouts aren't clipped.
     """
     if "plot" in spec:
         spec["plot"].setdefault("height", height)
-    for key in ("hconcat", "vconcat"):
-        for item in spec.get(key, []):
+        spec["_containerHeight"] = spec["plot"]["height"]
+    elif "vconcat" in spec:
+        for item in spec["vconcat"]:
             item.setdefault("height", height)
+        heights = [item["height"] for item in spec["vconcat"]]
+        spec["_containerHeight"] = sum(heights) + (len(heights) - 1) * _LAYOUT_GAP
+    elif "hconcat" in spec:
+        for item in spec["hconcat"]:
+            item.setdefault("height", height)
+        heights = [item["height"] for item in spec["hconcat"]]
+        spec["_containerHeight"] = max(heights) if heights else height
 
 
 def make_widget(obj: Displayable) -> Any:
