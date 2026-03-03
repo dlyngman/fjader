@@ -12,7 +12,7 @@ from .marks._base import Mark
 if TYPE_CHECKING:
     from ._types import SortConfig
 
-_PLOT_FIELDS = ("width", "height", "margin", "x_label", "y_label", "fx", "columns")
+_PLOT_FIELDS = ("width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend")
 
 
 @dataclass
@@ -27,6 +27,7 @@ class Plot:
     y_label: str | None = None
     fx: str | None = None
     columns: int | None = None
+    legend: dict[str, Any] | bool | None = None
 
     def __init__(self, *marks: Mark, **kwargs: Any) -> None:
         unexpected = set(kwargs) - set(_PLOT_FIELDS)
@@ -117,6 +118,7 @@ def plot(
     y_label: str | None = None,
     fx: str | None = None,
     columns: int | None = None,
+    legend: dict[str, Any] | bool | None = None,
 ) -> Plot:
     """Create a chart with one or more marks and chart-level configuration.
 
@@ -129,9 +131,12 @@ def plot(
         y_label: Y-axis label.
         fx: Facet column name.
         columns: Number of columns for facet grid.
+        legend: Legend config — ``True`` for auto-detect, or a dict like
+            ``{"color": "species", "position": "right"}``.
     """
     return Plot(
         *marks,
         width=width, height=height, margin=margin,
         x_label=x_label, y_label=y_label, fx=fx, columns=columns,
+        legend=legend,
     )

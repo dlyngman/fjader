@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, fields as dc_fields
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from .._convert import clean_dict, serialize_value, to_camel_case
 
@@ -31,6 +31,8 @@ class Mark:
     transforms: list[TransformSpec] | None = None
     sort: SortConfig | None = None
     tooltip: bool | None = None
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None
+    tip: list[str] | Literal[False] | None = None
 
     # DataFrame attachment (not serialized — data travels via binary traitlets)
     data: Any = field(default=None, repr=False, compare=False)
