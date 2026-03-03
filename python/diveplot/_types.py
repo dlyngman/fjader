@@ -6,7 +6,7 @@ from typing import Literal, TypedDict
 
 AggregateType = Literal["count", "sum", "avg", "min", "max", "median"]
 
-ScaleType = Literal["linear", "log", "pow", "identity", "band", "point", "time"]
+ScaleType = Literal["linear", "log", "symlog", "pow", "identity", "band", "point", "time"]
 
 ColorScheme = Literal[
     # Category

@@ -88,6 +88,7 @@
 <style>
 	.hover-indicator {
 		pointer-events: none;
+		outline: none; /* prevent host CSS (e.g. marimo/Jupyter) adding bounding-box outlines */
 	}
 
 	.outline {

@@ -150,6 +150,58 @@ class TestTextMark:
         }
 
 
+class TestTipProp:
+    def test_tip_explicit_fields(self):
+        m = dp.dot(table="t", x="a", y="b", fill="c", tip=["x", "fill", "island"])
+        d = m.to_mark_dict()
+        assert d["tip"] == ["x", "fill", "island"]
+
+    def test_tip_wildcard(self):
+        m = dp.dot(table="t", x="a", y="b", tip=["*", "island"])
+        d = m.to_mark_dict()
+        assert d["tip"] == ["*", "island"]
+
+    def test_tip_false_disables(self):
+        m = dp.dot(table="t", x="a", y="b", tip=False)
+        d = m.to_mark_dict()
+        assert d["tip"] is False
+
+    def test_tip_none_excluded(self):
+        m = dp.dot(table="t", x="a", y="b")
+        d = m.to_mark_dict()
+        assert "tip" not in d
+
+    def test_tip_on_all_marks(self):
+        """Verify tip passes through on all mark types."""
+        factories = [
+            lambda: dp.dot(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.bar_x(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.bar_y(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.line(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.area_y(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.area_x(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.rect(table="t", x="a", y="b", tip=["x"]),
+            lambda: dp.rect_x(table="t", x="a", tip=["x"]),
+            lambda: dp.rect_y(table="t", y="a", tip=["x"]),
+            lambda: dp.text(table="t", x="a", y="b", text="c", tip=["x"]),
+        ]
+        for factory in factories:
+            d = factory().to_mark_dict()
+            assert d["tip"] == ["x"], f"tip failed on {d['mark']}"
+
+
+class TestTooltipProximity:
+    def test_tooltip_proximity(self):
+        m = dp.dot(table="t", x="a", y="b", tooltip_proximity="x")
+        d = m.to_mark_dict()
+        assert d["tooltipProximity"] == "x"
+
+    def test_tooltip_proximity_none_excluded(self):
+        m = dp.dot(table="t", x="a", y="b")
+        d = m.to_mark_dict()
+        assert "tooltipProximity" not in d
+
+
 class TestNoneStripping:
     def test_unset_props_excluded(self):
         """Only set props appear in output — no None values."""
@@ -158,4 +210,6 @@ class TestNoneStripping:
         assert "fill" not in d
         assert "opacity" not in d
         assert "radiusRange" not in d
+        assert "tip" not in d
+        assert "tooltipProximity" not in d
         assert set(d.keys()) == {"mark", "table", "x", "y"}

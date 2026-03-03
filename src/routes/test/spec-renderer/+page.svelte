@@ -6,10 +6,14 @@
 	let barContainer;
 	let barXContainer;
 	let hconcatContainer;
+	let tipContainer;
+	let legendContainer;
 	let handle1;
 	let handle2;
 	let handle2b;
 	let handle3;
+	let handle4;
+	let handle5;
 	let status = $state('Loading...');
 
 	const dataUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/data/penguins.parquet`;
@@ -35,7 +39,6 @@
 							y: 'bill_depth',
 							fill: 'species',
 							opacity: 0.6,
-							// r: 4,
 							tooltip: true
 						}
 					]
@@ -108,8 +111,7 @@
 								x: 'body_mass',
 								y: 'flipper_length',
 								fill: 'species',
-								opacity: 0.5,
-								// r: 3
+								opacity: 0.5
 							}
 						]
 					},
@@ -130,6 +132,58 @@
 				]
 			});
 
+			// Test 4: Tip prop (tooltip field control)
+			status = 'Rendering tip prop test...';
+			handle4 = await render(tipContainer, {
+				data: {
+					penguins: { url: dataUrl, type: 'parquet' }
+				},
+				plot: {
+					width: 600,
+					height: 400,
+					xLabel: 'Bill Length (mm)',
+					yLabel: 'Body Mass (g)',
+					marks: [
+						{
+							mark: 'dot',
+							table: 'penguins',
+							x: 'bill_length',
+							y: 'body_mass',
+							fill: 'species',
+							opacity: 0.6,
+							tooltip: true,
+							tip: ['x', 'y', 'fill', 'island', 'sex']
+						}
+					]
+				}
+			});
+
+			// Test 5: Legend (auto-detect)
+			status = 'Rendering legend test...';
+			handle5 = await render(legendContainer, {
+				data: {
+					penguins: { url: dataUrl, type: 'parquet' }
+				},
+				plot: {
+					width: 600,
+					height: 400,
+					xLabel: 'Bill Length (mm)',
+					yLabel: 'Bill Depth (mm)',
+					legend: true,
+					marks: [
+						{
+							mark: 'dot',
+							table: 'penguins',
+							x: 'bill_length',
+							y: 'bill_depth',
+							fill: 'species',
+							opacity: 0.6,
+							tooltip: true
+						}
+					]
+				}
+			});
+
 			status = 'All charts rendered successfully!';
 		} catch (error) {
 			console.error('Spec renderer error:', error);
@@ -141,6 +195,8 @@
 			handle2?.destroy();
 			handle2b?.destroy();
 			handle3?.destroy();
+			handle4?.destroy();
+			handle5?.destroy();
 		};
 	});
 </script>
@@ -160,4 +216,10 @@
 
 	<h2>Test 3: hconcat Layout</h2>
 	<div bind:this={hconcatContainer}></div>
+
+	<h2>Test 4: Tip Prop (tooltip shows x, y, fill, island, sex)</h2>
+	<div bind:this={tipContainer}></div>
+
+	<h2>Test 5: Legend (auto-detect from fill)</h2>
+	<div bind:this={legendContainer}></div>
 </div>

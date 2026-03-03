@@ -6,8 +6,9 @@
 	import Frame from '$lib/components/background/Frame.svelte';
 	import { Grid } from '$lib/components/guides';
 	import Crosshair from '$lib/components/foreground/Crosshair.svelte';
+	import Legend from '$lib/components/guides/legend/Legend.svelte';
 	import { resolveMarkEntry } from './MarkRegistry';
-	import type { PlotSpec } from './types';
+	import type { LegendSpec, PlotSpec } from './types';
 
 	interface Props {
 		spec: PlotSpec;
@@ -18,6 +19,27 @@
 
 	const resolvedMarks = $derived(
 		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec, params))
+	);
+
+	const legendConfig = $derived.by((): LegendSpec | null => {
+		if (!spec.legend) return null;
+		if (spec.legend === true) {
+			// Auto-detect: find first mark with a fill or stroke color field
+			for (const m of spec.marks ?? []) {
+				if ('fill' in m && m.fill && typeof m.fill === 'string') {
+					return { color: m.fill };
+				}
+				if ('stroke' in m && m.stroke && typeof m.stroke === 'string') {
+					return { color: m.stroke };
+				}
+			}
+			return null;
+		}
+		return spec.legend;
+	});
+
+	const legendPosition = $derived(
+		(typeof spec.legend === 'object' && spec.legend?.position) || 'top'
 	);
 </script>
 
@@ -34,6 +56,7 @@
 		fx={spec.fx ?? null}
 		columns={spec.columns ?? null}
 		margin={spec.margin}
+		{legendPosition}
 	>
 		{#snippet background()}
 			<Frame />
@@ -55,6 +78,19 @@
 
 		{#snippet foreground()}
 			<Crosshair />
+		{/snippet}
+
+		{#snippet legend()}
+			{#if legendConfig}
+				<Legend
+					color={legendConfig.color}
+					title={legendConfig.title ?? null}
+					columns={legendConfig.columns ?? null}
+					swatchSize={legendConfig.swatchSize}
+					swatchRadius={legendConfig.swatchRadius}
+					orientation={legendConfig.orientation ?? null}
+				/>
+			{/if}
 		{/snippet}
 	</ChartContainer>
 </div>

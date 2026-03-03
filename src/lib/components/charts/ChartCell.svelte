@@ -768,6 +768,11 @@
 		z-index: 3;
 	}
 
+	/* Prevent host CSS (marimo, Jupyter) from adding rectangular outlines to SVG elements */
+	.svg-foreground :global(*) {
+		outline: none;
+	}
+
 	.crosshair {
 		cursor: crosshair;
 	}

@@ -47,6 +47,8 @@ def dot(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> DotMark:
     """Scatter/dot mark.
 
@@ -67,6 +69,8 @@ def dot(
         transforms: List of transforms (e.g. ``[dp.topN(10), dp.filter(...)]``).
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return DotMark(
         data=data, table=table, x=x, y=y, fill=fill, opacity=opacity, r=r,
@@ -76,6 +80,7 @@ def dot(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -103,6 +108,8 @@ def bar_x(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> BarXMark:
     """Horizontal bar mark (bars extend along x-axis).
 
@@ -128,6 +135,8 @@ def bar_x(
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return BarXMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
@@ -136,6 +145,7 @@ def bar_x(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -163,6 +173,8 @@ def bar_y(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> BarYMark:
     """Vertical bar mark (bars extend along y-axis).
 
@@ -188,6 +200,8 @@ def bar_y(
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'x': 'name', 'order': 'asc'}``.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return BarYMark(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
@@ -196,6 +210,7 @@ def bar_y(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -220,6 +235,8 @@ def line(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> LineMark:
     """Line mark for connected data points.
 
@@ -242,6 +259,8 @@ def line(
         transforms: List of transforms.
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return LineMark(
         data=data, table=table, x=x, y=y, stroke=stroke, z=z,
@@ -252,6 +271,7 @@ def line(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -279,6 +299,8 @@ def area_y(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> AreaYMark:
     """Vertical area mark (x dimension, y1/y2 boundaries).
 
@@ -304,6 +326,8 @@ def area_y(
         transforms: List of transforms (e.g. ``[dp.stack_y()]``).
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return AreaYMark(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, z=z,
@@ -314,6 +338,7 @@ def area_y(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -341,6 +366,8 @@ def area_x(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> AreaXMark:
     """Horizontal area mark (y dimension, x1/x2 boundaries).
 
@@ -366,6 +393,8 @@ def area_x(
         transforms: List of transforms.
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return AreaXMark(
         data=data, table=table, y=y, x=x, x1=x1, x2=x2, fill=fill, z=z,
@@ -376,6 +405,7 @@ def area_x(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -407,6 +437,8 @@ def rect(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> RectMark:
     """Rectangle mark for 2D binning or heatmaps.
 
@@ -436,6 +468,8 @@ def rect(
         transforms: List of transforms.
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return RectMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
@@ -447,6 +481,7 @@ def rect(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -474,6 +509,8 @@ def rect_x(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> RectXMark:
     """Horizontal rect mark (e.g. histograms along x-axis).
 
@@ -499,6 +536,8 @@ def rect_x(
         transforms: List of transforms.
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return RectXMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
@@ -508,6 +547,7 @@ def rect_x(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -535,6 +575,8 @@ def rect_y(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> RectYMark:
     """Vertical rect mark (e.g. histograms along y-axis).
 
@@ -560,6 +602,8 @@ def rect_y(
         transforms: List of transforms.
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return RectYMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
@@ -569,6 +613,7 @@ def rect_y(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )
 
 
@@ -597,6 +642,8 @@ def text(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     tooltip: bool | None = None,
+    tooltip_proximity: Literal["x", "y", "xy"] | None = None,
+    tip: list[str] | Literal[False] | None = None,
 ) -> TextMark:
     """Text mark for labels and annotations.
 
@@ -623,6 +670,8 @@ def text(
         transforms: List of transforms.
         sort: Sort configuration.
         tooltip: Enable tooltip on hover.
+        tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
+        tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
     """
     return TextMark(
         data=data, table=table, x=x, y=y, text=text, fill=fill,
@@ -634,4 +683,5 @@ def text(
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
+        tooltip_proximity=tooltip_proximity, tip=tip,
     )

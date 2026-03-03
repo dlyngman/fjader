@@ -51,6 +51,16 @@ export interface ParamSpec {
 // Plot
 // =============================================================================
 
+export interface LegendSpec {
+	color: string;
+	title?: string | null;
+	columns?: number | null;
+	swatchSize?: number;
+	swatchRadius?: number;
+	position?: 'top' | 'right';
+	orientation?: 'horizontal' | 'vertical' | null;
+}
+
 export interface PlotSpec {
 	width?: number;
 	height?: number;
@@ -60,6 +70,7 @@ export interface PlotSpec {
 	fx?: string;
 	columns?: number;
 	marks: MarkSpec[];
+	legend?: LegendSpec | boolean;
 }
 
 // =============================================================================
@@ -105,6 +116,7 @@ interface BaseMarkSpec {
 	sort?: SortConfig | null;
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
+	tip?: (string | '*')[] | false;
 }
 
 interface ContinuousScaleTypeSpec {
