@@ -9,6 +9,17 @@
 import type { Coordinator } from '@uwdata/mosaic-core';
 import type { DataSpec } from './types';
 
+/** Optional local WASM bundle URLs (set before first render to avoid CDN fetch). */
+let _wasmBundle: { mainModule: string; mainWorker: string } | null = null;
+
+/**
+ * Configure DuckDB-WASM to load from local bundled files instead of jsDelivr CDN.
+ * Must be called before any render / getOrCreateCoordinator call.
+ */
+export function configureWasmBundle(bundle: { mainModule: string; mainWorker: string }): void {
+	_wasmBundle = bundle;
+}
+
 let _coordinatorPromise: Promise<Coordinator> | null = null;
 let _coordinator: Coordinator | null = null;
 const _loadedTablesPerCoordinator = new WeakMap<Coordinator, Set<string>>();
@@ -41,7 +52,25 @@ export async function getOrCreateCoordinator(userCoordinator?: Coordinator): Pro
 
 async function initCoordinator(): Promise<Coordinator> {
 	const { Coordinator, wasmConnector } = await import('@uwdata/mosaic-core');
-	const wasm = wasmConnector();
+
+	let wasm;
+	if (_wasmBundle) {
+		const duckdb = await import('@duckdb/duckdb-wasm');
+		const workerUrl = URL.createObjectURL(
+			new Blob([`importScripts("${_wasmBundle.mainWorker}");`], {
+				type: 'text/javascript'
+			})
+		);
+		const worker = new Worker(workerUrl);
+		const logger = new duckdb.VoidLogger();
+		const db = new duckdb.AsyncDuckDB(logger, worker);
+		await db.instantiate(_wasmBundle.mainModule);
+		URL.revokeObjectURL(workerUrl);
+		wasm = wasmConnector({ duckdb: db });
+	} else {
+		wasm = wasmConnector();
+	}
+
 	const coord = new Coordinator();
 	coord.databaseConnector(wasm);
 	_coordinator = coord;
