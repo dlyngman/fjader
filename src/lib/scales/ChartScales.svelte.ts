@@ -1,4 +1,5 @@
 // src/lib/scales/ChartScales.svelte.ts
+import { untrack } from 'svelte';
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
 import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './ScalePriorities';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
@@ -14,6 +15,7 @@ import type {
 } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
 import { isContinuousScale } from '$lib/scales/scale-categories';
+import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 
 /** Type guard: narrows ScaleStateInstance to ContinuousScaleState via supportsPanZoom. */
 function isPanZoomScale(inst: ScaleStateInstance | null): inst is ContinuousScaleState {
@@ -41,6 +43,8 @@ interface ChartScalesConfig {
 	yZoomLimit?: number;
 	xPanLimit?: number;
 	yPanLimit?: number;
+	useXSelection?: boolean;
+	useYSelection?: boolean;
 }
 
 export class ChartScales {
@@ -109,18 +113,28 @@ export class ChartScales {
 			const xKey = xLabel || xConfig.columnName || 'x';
 			const yKey = yLabel || yConfig.columnName || 'y';
 
+			// When useXSelection/useYSelection is set, add a discriminator to
+			// the config so ScaleRegistry creates a separate scale instance
+			// (the detail chart needs its own domain, independent from the overview's).
+			const xScaleConfig = this.config.useXSelection
+				? { ...(xConfig.config || {}), __selectionConsumer: this.chartId }
+				: xConfig.config || {};
+			const yScaleConfig = this.config.useYSelection
+				? { ...(yConfig.config || {}), __selectionConsumer: this.chartId }
+				: yConfig.config || {};
+
 			// ChartScales only creates axis scales (linear/band/time), safe to narrow
 			const neededXScale = this.#scaleRegistry.getOrCreateScale(
 				xKey,
 				xConfig.type,
-				xConfig.config || {},
+				xScaleConfig,
 				this.chartId
 			) as ScaleStateInstance;
 
 			const neededYScale = this.#scaleRegistry.getOrCreateScale(
 				yKey,
 				yConfig.type,
-				yConfig.config || {},
+				yScaleConfig,
 				this.chartId
 			) as ScaleStateInstance;
 
@@ -185,6 +199,87 @@ export class ChartScales {
 					}
 				};
 				trySetMapping();
+			}
+		});
+
+		// Effect: Drive rendering scale domain from source scale's selectionExtent
+		// (forward direction: brush on overview → detail domain)
+		this.#setupSelectionLink('x');
+		this.#setupSelectionLink('y');
+	}
+
+	/**
+	 * Set up bidirectional selection-linking for one axis.
+	 * - Effect A (forward): source.selectionExtent → render.setExternalDomain()
+	 * - Effect B (backward): render.domain.target → source.setSelectionExtent('external')
+	 *
+	 * Critical: each effect must only track its *input* signal reactively.
+	 * The comparison value (used for loop-prevention guards) is read inside
+	 * untrack() so it doesn't create a spurious dependency that would cause
+	 * the effects to fight each other during detail pan/zoom.
+	 */
+	#setupSelectionLink(axis: 'x' | 'y'): void {
+		const useSelection = axis === 'x' ? this.config.useXSelection : this.config.useYSelection;
+		if (!useSelection) return;
+
+		// Helper: find the source (overview) scale by name match in the type bucket.
+		// Iterates the bucket to find a LinearScaleState with matching name, skipping
+		// the consumer's own isolated instance. The SvelteMap read creates a dependency
+		// so the effect re-runs when the source scale is first created.
+		const findSourceScale = (): LinearScaleState | null => {
+			const config = axis === 'x' ? this.scaleConfigurations?.x : this.scaleConfigurations?.y;
+			if (!config) return null;
+			const label = axis === 'x' ? this.xLabel : this.yLabel;
+			const name = label || config.columnName || axis;
+			const renderInst = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
+			const bucket = this.#scaleRegistry.scales[config.type];
+			if (!bucket) return null;
+			for (const scale of bucket.values()) {
+				if (scale === renderInst) continue; // skip our own isolated instance
+				if (scale instanceof LinearScaleState && scale.name === name) return scale;
+			}
+			return null;
+		};
+
+		// Effect A (forward): source.selectionExtent → render scale domain
+		// Tracks: sourceScale.selectionExtent (the input signal)
+		// Untracks: renderInst.domain.target (comparison-only, not a trigger)
+		$effect(() => {
+			const renderInst = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
+			if (!renderInst || !(renderInst instanceof LinearScaleState)) return;
+
+			const sourceScale = findSourceScale();
+			if (!sourceScale || sourceScale === renderInst) return;
+
+			const extent = sourceScale.selectionExtent; // reactive trigger
+			if (extent) {
+				const [targetMin, targetMax] = untrack(() => renderInst.domain.target);
+				if (extent[0] !== targetMin || extent[1] !== targetMax) {
+					untrack(() => renderInst.setExternalDomain(extent[0], extent[1]));
+				}
+			} else {
+				untrack(() => renderInst.clearExternalDomain());
+			}
+		});
+
+		// Effect B (backward): render scale domain.target → source.selectionExtent
+		// Tracks: renderInst.domain.target (the input signal)
+		// Untracks: sourceScale.selectionExtent (comparison-only, not a trigger)
+		$effect(() => {
+			const renderInst = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
+			if (!renderInst || !(renderInst instanceof LinearScaleState)) return;
+
+			const sourceScale = findSourceScale();
+			if (!sourceScale || sourceScale === renderInst) return;
+
+			const [targetMin, targetMax] = renderInst.domain.target; // reactive trigger
+
+			// Only propagate back when there's an active selection
+			const current = untrack(() => sourceScale.selectionExtent);
+			if (!current) return;
+
+			if (current[0] !== targetMin || current[1] !== targetMax) {
+				untrack(() => sourceScale.setSelectionExtent(targetMin, targetMax, 'external'));
 			}
 		});
 	}

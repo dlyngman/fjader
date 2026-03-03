@@ -4,11 +4,11 @@
 	import type { FieldRef } from '$lib/types';
 
 	interface Props {
-		bridge: FilterBridge;
+		bridge?: FilterBridge | null;
 		field?: FieldRef;
 	}
 
-	let { bridge, field }: Props = $props();
+	let { bridge = null, field }: Props = $props();
 </script>
 
 <Interval1D {bridge} {field} axis="y" />

@@ -12,6 +12,7 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
+	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 	import type { ClauseSource } from '@uwdata/mosaic-core';
 	import type { ScaleDomain } from '@uwdata/mosaic-sql';
@@ -20,12 +21,12 @@
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
 
 	interface Props {
-		bridge: FilterBridge;
+		bridge?: FilterBridge | null;
 		field?: FieldRef;
 		axis?: 'x' | 'y';
 	}
 
-	let { bridge, field, axis = 'x' }: Props = $props();
+	let { bridge = null, field, axis = 'x' }: Props = $props();
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();
@@ -54,17 +55,28 @@
 		)
 	);
 
-	// Register with FilterBridge to get a local Selection
-	const { sel: selection, off: unregister } = bridge.createLocal('single', {
-		source,
-		augment: (clause) => ({
-			kind: 'range',
-			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
-			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
-			values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
-		}),
-		onVisualClear: () => brush.clear()
-	});
+	// Register with FilterBridge to get a local Selection (only when bridge is provided)
+	let selection: {
+		update: (clause: unknown) => void;
+		activate?: (clause: unknown) => void;
+	} | null = null;
+	let unregister: (() => void) | null = null;
+
+	if (bridge) {
+		const result = bridge.createLocal('single', {
+			source,
+			augment: (clause) => ({
+				kind: 'range',
+				column:
+					typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
+				label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
+				values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
+			}),
+			onVisualClear: () => brush.clear()
+		});
+		selection = result.sel;
+		unregister = result.off;
+	}
 
 	// Pointer state (reused to avoid GC)
 	let anchor = 0;
@@ -77,8 +89,8 @@
 	const point = { x: 0, y: 0 };
 
 	// Deduplication (skip redundant updates)
-	let lastEmittedMin = null;
-	let lastEmittedMax = null;
+	let lastEmittedMin: number | null = null;
+	let lastEmittedMax: number | null = null;
 
 	// Keyboard handlers for Space key pan mode
 	const { handleKeyDown, handleKeyUp } = createPanModeHandlers((active) => {
@@ -92,6 +104,19 @@
 		const s = getScale();
 		if (brush.active && s && !brush.validate(s as { domain: () => number[] }, 'linear')) {
 			clearBrush();
+		}
+	});
+
+	// Watch for external selection changes (from detail chart pan/zoom)
+	// to keep brush visual in sync
+	$effect(() => {
+		if (!(scaleState instanceof LinearScaleState)) return;
+		const extent = scaleState.selectionExtent;
+		if (extent && scaleState.selectionSource === 'external') {
+			brush.setExtent(extent[0], extent[1]);
+			// Keep dedup cache in sync so the next user drag doesn't skip/repeat
+			lastEmittedMin = extent[0];
+			lastEmittedMax = extent[1];
 		}
 	});
 
@@ -117,9 +142,9 @@
 		return isX ? innerPoint.x : innerPoint.y;
 	}
 
-	// Emit Mosaic clause
-	function emitClause() {
-		if (!brush.active || !columnRef) return;
+	// Update scale selectionExtent and optionally emit Mosaic clause
+	function emitUpdate() {
+		if (!brush.active) return;
 
 		const dataMin = Math.min(brush.dataMin as number, brush.dataMax as number);
 		const dataMax = Math.max(brush.dataMin as number, brush.dataMax as number);
@@ -131,27 +156,36 @@
 		lastEmittedMin = dataMin;
 		lastEmittedMax = dataMax;
 
-		const s = getScale();
-		// Always 'linear': DivePlot's columnRef already encodes time→offset,
-		// so values are plain floats. Declaring 'time' causes Mosaic to wrap
-		// with epoch_ms() which fails on FLOAT.
-		const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
-			source: source as unknown as ClauseSource,
-			clients: chart.markClients,
-			scale: {
-				type: 'linear',
-				domain: s!.domain() as ScaleDomain,
-				range: s!.range() as [number, number]
-			}
-		});
+		// Always set selectionExtent on the scale (for useXSelection consumers)
+		if (scaleState instanceof LinearScaleState) {
+			scaleState.setSelectionExtent(dataMin, dataMax, 'brush');
+		}
 
-		selection.update(clause);
+		// Emit Mosaic clause if bridge is provided
+		if (selection && columnRef) {
+			const s = getScale();
+			// Always 'linear': DivePlot's columnRef already encodes time→offset,
+			// so values are plain floats. Declaring 'time' causes Mosaic to wrap
+			// with epoch_ms() which fails on FLOAT.
+			const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
+				source: source as unknown as ClauseSource,
+				clients: chart.markClients,
+				scale: {
+					type: 'linear',
+					domain: s!.domain() as ScaleDomain,
+					range: s!.range() as [number, number]
+				}
+			});
+
+			selection.update(clause);
+		}
 	}
 
-	// Pre-aggregation on pointer enter
+	// Pre-aggregation on pointer enter (only with bridge)
 	function handlePointerEnter() {
+		if (!selection?.activate) return;
 		const s = getScale();
-		if (!selection.activate || !s || !columnRef) return;
+		if (!s || !columnRef) return;
 
 		const range: ScaleDomain = brush.active
 			? [
@@ -187,17 +221,28 @@
 		const [newMin, newMax] = scaleBrushExtent1D(min, max, scaleFactor);
 		brush.setExtent(newMin, newMax);
 
-		emitClause();
+		emitUpdate();
 	}
 
 	function clearBrush() {
 		brush.clear();
-		selection.update({
-			predicate: null,
-			source: source as unknown as ClauseSource,
-			clients: chart.markClients,
-			value: null
-		});
+		lastEmittedMin = null;
+		lastEmittedMax = null;
+
+		// Clear selectionExtent on the scale
+		if (scaleState instanceof LinearScaleState) {
+			scaleState.clearSelectionExtent();
+		}
+
+		// Clear Mosaic selection if bridge is provided
+		if (selection) {
+			selection.update({
+				predicate: null,
+				source: source as unknown as ClauseSource,
+				clients: chart.markClients,
+				value: null
+			});
+		}
 	}
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
@@ -249,7 +294,7 @@
 			);
 		}
 
-		emitClause();
+		emitUpdate();
 		return true;
 	}
 
@@ -265,7 +310,7 @@
 		}
 
 		if (brush.phase !== 'idle') {
-			emitClause();
+			emitUpdate();
 			brush.phase = 'idle';
 		}
 
@@ -315,7 +360,7 @@
 			chart.onInteractorPointerEnter = null;
 			window.removeEventListener('keydown', handleKeyDown);
 			window.removeEventListener('keyup', handleKeyUp);
-			unregister();
+			unregister?.();
 		};
 	});
 </script>
