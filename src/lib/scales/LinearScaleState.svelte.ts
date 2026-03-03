@@ -16,7 +16,8 @@ const SCALE_SPRING_PRESETS = {
 	pan: SPRING_PRESETS.pan.stiffness, // 600 - responsive dragging
 	zoom: SPRING_PRESETS.zoom.stiffness, // 400 - smooth zoom
 	reset: SPRING_PRESETS.reset.stiffness, // 150 - gentle reset animation
-	zoomIn: 200 // Initial zoom-in effect
+	zoomIn: 200, // Initial zoom-in effect
+	externalDomain: 600 // Brush-driven domain tracking (snappy, like pan)
 };
 
 // =============================================================================
@@ -126,6 +127,17 @@ export class LinearScaleState {
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
 	zoomLimits = { max: 10, min: 100 }; // max = pan multiplier, min = zoom divisor
 	disableZoom: boolean = false; // When true, user zoom/pan is ignored (for auto-scaling axes)
+
+	// --- Selection Extent (set by IntervalX brush, consumed by useXSelection) ---
+	// Pre-allocated buffer to avoid per-update GC pressure during continuous brush drag.
+	// #selectionActive gates whether the extent is valid (replaces null vs non-null).
+	#selectionBuffer = new Float64Array(2);
+	#selectionActive: boolean = $state(false);
+	#selectionVersion: number = $state(0); // bumped on value change to trigger effects
+	#selectionSource: 'brush' | 'external' | null = $state(null);
+
+	// --- External Domain (suppresses data-driven resetZoom while active) ---
+	#externalDomainActive = false;
 
 	// --- Mark Extent Tracking ---
 	#extents: Map<string, [number, number]> = new Map();
@@ -254,6 +266,69 @@ export class LinearScaleState {
 				}
 			}
 		};
+	}
+
+	// ===========================================================================
+	// SELECTION EXTENT (for overview+detail linked domains)
+	// ===========================================================================
+
+	/**
+	 * Current selection extent (set by brush interactor).
+	 * Returns the pre-allocated buffer (read-only by convention) or null.
+	 * Callers must not mutate the returned array.
+	 */
+	get selectionExtent(): Float64Array | null {
+		this.#selectionVersion; // register reactive dependency
+		return this.#selectionActive ? this.#selectionBuffer : null;
+	}
+
+	/** Whether the last selection change came from 'brush' or 'external' (detail pan/zoom). */
+	get selectionSource(): 'brush' | 'external' | null {
+		return this.#selectionSource;
+	}
+
+	/** Set the selection extent (called by IntervalX or detail chart pan/zoom). */
+	setSelectionExtent(min: number, max: number, source: 'brush' | 'external' = 'brush'): void {
+		// Skip if values unchanged — avoids spurious reactivity and downstream effect re-runs
+		if (
+			this.#selectionActive &&
+			this.#selectionBuffer[0] === min &&
+			this.#selectionBuffer[1] === max &&
+			this.#selectionSource === source
+		) {
+			return;
+		}
+		this.#selectionBuffer[0] = min;
+		this.#selectionBuffer[1] = max;
+		this.#selectionActive = true;
+		this.#selectionSource = source;
+		this.#selectionVersion++;
+	}
+
+	/** Clear the selection extent (called when brush is cleared). */
+	clearSelectionExtent(): void {
+		if (!this.#selectionActive) return; // already clear
+		this.#selectionActive = false;
+		this.#selectionSource = null;
+		this.#selectionVersion++;
+	}
+
+	// ===========================================================================
+	// EXTERNAL DOMAIN (for useXSelection consumer scales)
+	// ===========================================================================
+
+	/** Set domain from external source (suppresses data-driven resetZoom). */
+	setExternalDomain(min: number, max: number): void {
+		this.#externalDomainActive = true;
+		this.#setStiffness(SCALE_SPRING_PRESETS.externalDomain);
+		this.domain.set([min, max]);
+	}
+
+	/** Clear external domain and animate back to data extent. */
+	clearExternalDomain(): void {
+		if (!this.#externalDomainActive) return; // Already inactive, no-op
+		this.#externalDomainActive = false;
+		this.resetZoom();
 	}
 
 	// ===========================================================================
@@ -589,7 +664,9 @@ export class LinearScaleState {
 		}
 
 		this.resetDomainLimits();
-		this.resetZoom(instant);
+		if (!this.#externalDomainActive) {
+			this.resetZoom(instant);
+		}
 	}
 
 	/**

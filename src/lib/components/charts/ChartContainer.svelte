@@ -29,6 +29,8 @@
 		xPanLimit?: number;
 		yPanLimit?: number;
 		margin?: Partial<Margin>;
+		useXSelection?: boolean;
+		useYSelection?: boolean;
 	}
 
 	let {
@@ -53,7 +55,9 @@
 		yZoomLimit = undefined,
 		xPanLimit = undefined,
 		yPanLimit = undefined,
-		margin: marginOverride = {}
+		margin: marginOverride = {},
+		useXSelection = false,
+		useYSelection = false
 	}: Props = $props();
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
@@ -131,7 +135,9 @@
 			xZoomLimit,
 			yZoomLimit,
 			xPanLimit,
-			yPanLimit
+			yPanLimit,
+			useXSelection,
+			useYSelection
 		});
 
 		// Replay any scale registrations that were queued before scales existed
