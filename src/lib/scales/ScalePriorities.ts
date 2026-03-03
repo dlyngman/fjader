@@ -137,7 +137,8 @@ function resolveConfigurationForType(
 		} catch (error) {
 			console.error(`❌ Failed to resolve ${scaleType}.${propName}:`, (error as Error).message);
 			throw new Error(
-				`Configuration resolution failed for ${scaleType}.${propName}: ${(error as Error).message}`
+				`Configuration resolution failed for ${scaleType}.${propName}: ${(error as Error).message}`,
+				{ cause: error }
 			);
 		}
 	}

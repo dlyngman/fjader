@@ -40,7 +40,6 @@ export class BaseGPURenderer {
 
 	// State management
 	#resourcesCreated = $state(false);
-	#initializationError: string | null = $state(null);
 	#instanceCount = $state(0);
 
 	// GPU Objects
@@ -139,7 +138,6 @@ export class BaseGPURenderer {
 		} catch (error) {
 			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
 				console.error(`${this.#markType} initialization failed:`, error);
-				this.#initializationError = (error as Error).message;
 				throw error;
 			}
 		}

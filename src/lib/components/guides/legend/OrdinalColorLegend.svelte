@@ -53,7 +53,12 @@
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
 	const toggle =
 		bridge && field
-			? bridge.createToggle(field, { scaleStates: getLegendScaleStates as () => any[] })
+			? bridge.createToggle(field, {
+					scaleStates: getLegendScaleStates as () => {
+						setActiveValues(v: Set<unknown>): void;
+						clearActiveValues(): void;
+					}[]
+				})
 			: null;
 
 	const selection = toggle?.sel;

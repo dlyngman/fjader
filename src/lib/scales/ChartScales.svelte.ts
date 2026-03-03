@@ -53,9 +53,6 @@ export class ChartScales {
 	#xScaleInstance = $state<ScaleStateInstance | null>(null);
 	#yScaleInstance = $state<ScaleStateInstance | null>(null);
 
-	#previousXScale: ScaleStateInstance | null = null;
-	#previousYScale: ScaleStateInstance | null = null;
-
 	active = $state(false);
 
 	// --- MEMORY POOLS ---
@@ -140,7 +137,6 @@ export class ChartScales {
 					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
 				}
 				this.#xScaleInstance = neededXScale;
-				this.#previousXScale = neededXScale;
 			}
 
 			if (this.#yScaleInstance !== neededYScale) {
@@ -148,7 +144,6 @@ export class ChartScales {
 					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
 				}
 				this.#yScaleInstance = neededYScale;
-				this.#previousYScale = neededYScale;
 			}
 
 			{
@@ -598,7 +593,5 @@ export class ChartScales {
 
 		this.#xScaleInstance = null;
 		this.#yScaleInstance = null;
-		this.#previousXScale = null;
-		this.#previousYScale = null;
 	}
 }

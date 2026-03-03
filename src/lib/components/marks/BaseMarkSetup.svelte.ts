@@ -770,22 +770,6 @@ export class BaseMarkSetup {
 		return raw instanceof Float32Array ? raw : new Float32Array(raw as ArrayLike<number>);
 	});
 
-	#arrowToObjects(arrowTable: Table): Record<string, unknown>[] {
-		const rows: Record<string, unknown>[] = [];
-		const numRows: number = arrowTable.numRows;
-
-		for (let i = 0; i < numRows; i++) {
-			const row: Record<string, unknown> = {};
-			for (const field of arrowTable.schema.fields) {
-				const column = arrowTable.getChild(field.name);
-				row[field.name] = column.get(i);
-			}
-			rows.push(row);
-		}
-
-		return rows;
-	}
-
 	/**
 	 * Get the COLUMN NAME (alias) for a channel.
 	 * The data uses aliases as column names, not the original field expressions.

@@ -85,7 +85,6 @@
 	const markSize = new MarkSize(
 		() => r,
 		() => radiusRange,
-		() => table,
 		() => setup,
 		scaleRegistry,
 		chartContext

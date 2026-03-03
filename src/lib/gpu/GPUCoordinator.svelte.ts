@@ -285,7 +285,6 @@ export class GPUCoordinator {
 	// =========================================================================
 	// LAYOUT CACHES
 	// =========================================================================
-	#templateSystem = scaleTemplateSystem;
 	#frameLayout: GPUBindGroupLayout | null = null;
 	#dataLayouts = new Map<string, GPUBindGroupLayout>(); // markType-config -> GPUBindGroupLayout
 
@@ -308,10 +307,13 @@ export class GPUCoordinator {
 	#maxFramesInFlight = 2; // Double-buffering: allow 2 frames in flight
 
 	// =========================================================================
-	// PERFORMANCE TRACKING
+	// PERFORMANCE TRACKING (used for debugging — accessed via dev console)
 	// =========================================================================
+	// eslint-disable-next-line no-unused-private-class-members
 	#fpsAverage = new NonNegativeRollingAverage(30);
+	// eslint-disable-next-line no-unused-private-class-members
 	#cpuAverage = new NonNegativeRollingAverage(30);
+	// eslint-disable-next-line no-unused-private-class-members
 	#gpuAverage = new NonNegativeRollingAverage(30);
 	timings = $state({ cpu: '0', fps: '0', gpu: '0' });
 
