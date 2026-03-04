@@ -88,36 +88,62 @@
 	});
 
 	// --- Cell-local D3 scales (cached via $derived) ---
+	// Each cell owns its own D3 scale copies so that vconcat charts sharing
+	// the same scale state don't overwrite each other's range via the shared
+	// internal scale object. Copies are only created when the scale state
+	// identity changes (rare); range/domain updates are in-place (zero-alloc).
+	let ownXScale: D3Scale | null = null;
+	let ownXSource: unknown = null;
+	let ownYScale: D3Scale | null = null;
+	let ownYSource: unknown = null;
+
 	const cellXScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.xScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth)) as D3Scale;
+		if (ownXSource !== ss) {
+			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as D3Scale & { copy(): D3Scale }).copy();
+			ownXSource = ss;
+		}
+		ownXScale!.range([0, layout.innerWidth]);
+		return ss.updateScaleDomain(ownXScale!) as D3Scale;
 	});
 
 	const cellYScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight)) as D3Scale;
+		if (ownYSource !== ss) {
+			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }).copy();
+			ownYSource = ss;
+		}
+		ownYScale!.range([layout.innerHeight, 0]);
+		return ss.updateScaleDomain(ownYScale!) as D3Scale;
 	});
 
 	const cellXTargetScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.xScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth)) as D3Scale;
+		// Target scales can reuse the same cell-local copy since they read the same state
+		if (ownXSource !== ss) {
+			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as D3Scale & { copy(): D3Scale }).copy();
+			ownXSource = ss;
+		}
+		ownXScale!.range([0, layout.innerWidth]);
+		return ss.updateScaleDomain(ownXScale!) as D3Scale;
 	});
 
 	const cellYTargetScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight)) as D3Scale;
+		if (ownYSource !== ss) {
+			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }).copy();
+			ownYSource = ss;
+		}
+		ownYScale!.range([layout.innerHeight, 0]);
+		return ss.updateScaleDomain(ownYScale!) as D3Scale;
 	});
 
 	// --- Band scale support (cell-local $derived) ---
@@ -407,8 +433,19 @@
 	let isZooming = $state(false);
 
 	let chartCellEl: HTMLDivElement;
+	// Cached SVG origin — refreshed on pointer enter (not per-move).
+	// SVG offsetX/offsetY is relative to the *target* element, not the listener,
+	// so coordinates shift when the pointer crosses the margin ↔ inner boundary.
+	// Using clientX/Y minus a cached origin avoids this.
+	let svgLeft = 0;
+	let svgTop = 0;
 
 	function handleChartPointerEnter(event: PointerEvent) {
+		if (svg) {
+			const rect = svg.getBoundingClientRect();
+			svgLeft = rect.left;
+			svgTop = rect.top;
+		}
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
 		// Focus so [ / ] keyboard shortcuts work for tooltip cycling
@@ -423,6 +460,15 @@
 		tooltipManager?.updatePosition(null, null);
 	}
 
+	/** Pointer x relative to SVG root — immune to target-dependent offsetX shifts. */
+	function ptrX(event: { clientX: number }): number {
+		return event.clientX - svgLeft;
+	}
+	/** Pointer y relative to SVG root. */
+	function ptrY(event: { clientY: number }): number {
+		return event.clientY - svgTop;
+	}
+
 	function handleWheel(event: WheelEvent) {
 		if (!wheelControl.shouldCaptureWheel(event)) return;
 		event.preventDefault();
@@ -433,8 +479,8 @@
 			return;
 		}
 
-		pointerBuffer.x = event.offsetX;
-		pointerBuffer.y = event.offsetY;
+		pointerBuffer.x = ptrX(event);
+		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
@@ -466,8 +512,8 @@
 
 	function handleDoubleClick(event: MouseEvent) {
 		event.preventDefault();
-		pointerBuffer.x = event.offsetX;
-		pointerBuffer.y = event.offsetY;
+		pointerBuffer.x = ptrX(event);
+		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
 		scales.resetZoom(xInBounds, yInBounds);
 		tooltipManager?.suppress(300);
@@ -484,12 +530,17 @@
 			event.preventDefault();
 			isZooming = true;
 			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
-			pointerBuffer.x = (event as unknown as { offsetX: number }).offsetX;
-			pointerBuffer.y = (event as unknown as { offsetY: number }).offsetY;
+			const mid = touchMidpoint(event.touches[0], event.touches[1]);
+			pointerBuffer.x = mid.x;
+			pointerBuffer.y = mid.y;
 			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
 			activePanX = xInBounds;
 			activePanY = yInBounds;
 		}
+	}
+
+	function touchMidpoint(t1: Touch, t2: Touch): { x: number; y: number } {
+		return { x: (t1.clientX + t2.clientX) / 2 - svgLeft, y: (t1.clientY + t2.clientY) / 2 - svgTop };
 	}
 
 	function handleTouchMove(event: TouchEvent) {
@@ -498,8 +549,9 @@
 		const scaleFactor = currentDistance / initialTouchDistance;
 
 		if (Math.abs(scaleFactor - 1) > 0.01) {
-			pointerBuffer.x = (event as unknown as { offsetX: number }).offsetX;
-			pointerBuffer.y = (event as unknown as { offsetY: number }).offsetY;
+			const mid = touchMidpoint(event.touches[0], event.touches[1]);
+			pointerBuffer.x = mid.x;
+			pointerBuffer.y = mid.y;
 			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
 			scales.applyZoom(
 				innerPoint,
@@ -525,8 +577,8 @@
 		const target = event.target as Element | null;
 		if (target && 'focus' in target) (target as HTMLElement).focus({ preventScroll: true });
 
-		pointerBuffer.x = event.offsetX;
-		pointerBuffer.y = event.offsetY;
+		pointerBuffer.x = ptrX(event);
+		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
 		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) return;
@@ -551,25 +603,31 @@
 	}
 
 	function processPointerMove(event: PointerEvent) {
+		const x = ptrX(event);
+		const y = ptrY(event);
 		if (isPanning) {
-			scales.updatePanPosition(event.offsetX, event.offsetY);
+			scales.updatePanPosition(x, y);
 			tooltipManager?.suppress(150);
 		} else if (chartContext.onInteractorPointerMove?.(event)) {
 			tooltipManager?.suppress(100);
 		} else {
-			pointerBuffer.x = event.offsetX;
-			pointerBuffer.y = event.offsetY;
+			pointerBuffer.x = x;
+			pointerBuffer.y = y;
 
 			if (layout.isWithinInnerBounds(pointerBuffer)) {
 				const innerPoint = layout.toInnerCoordinates(pointerBuffer);
 				currentInnerX = innerPoint.x;
 				currentInnerY = innerPoint.y;
 				scales.updateCurrentDataPoints(innerPoint, layout.innerWidth, layout.innerHeight);
-				tooltipManager?.updatePointerScreen(event.offsetX, event.offsetY);
+				tooltipManager?.updatePointerScreen(x, y);
 				tooltipManager?.updatePosition(
 					scales.xScaleState?.currentDataPoint,
 					scales.yScaleState?.currentDataPoint
 				);
+			} else {
+				currentInnerX = null;
+				currentInnerY = null;
+				scales.clearCurrentDataPoints();
 			}
 		}
 	}

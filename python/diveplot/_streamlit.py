@@ -55,10 +55,8 @@ def render(
     """
     spec_dict, dataframes = obj._to_full_spec()
 
-    # Inject height into the spec so the chart fills the iframe exactly.
-    # Without this, PlotFromSpec falls back to aspect-ratio which can
-    # overflow the fixed-height iframe, causing clipping and coordinate offset.
-    _inject_height(spec_dict, height)
+    # Inject heights into the spec and compute the actual iframe height.
+    iframe_height = _inject_height(spec_dict, height)
 
     manifest: list[dict[str, str]] = []
     table_args: dict[str, Any] = {}
@@ -72,17 +70,44 @@ def render(
     return _component(
         spec=json.dumps(spec_dict),
         data_manifest=json.dumps(manifest),
-        height=height,
+        height=iframe_height,
         key=key,
         default=None,
         **table_args,
     )
 
 
-def _inject_height(spec: dict[str, Any], height: int) -> None:
-    """Set height on all plot specs that don't already have one."""
+_VCONCAT_GAP = 8  # matches CSS gap in LayoutFromSpec.svelte
+
+
+def _inject_height(spec: dict[str, Any], height: int) -> int:
+    """Set height on plot specs and return the iframe height to use.
+
+    For a single plot, uses ``height`` as the default.
+    For vconcat: if all items have explicit heights the iframe expands to fit;
+    otherwise the remaining space from ``height`` is split among unset items.
+    For hconcat: each item gets the full ``height`` (CSS flex splits width).
+    """
     if "plot" in spec:
         spec["plot"].setdefault("height", height)
-    for key in ("hconcat", "vconcat"):
-        for item in spec.get(key, []):
-            item.setdefault("height", height)
+        return height
+
+    items = spec.get("vconcat", [])
+    if items:
+        unset = [item for item in items if "height" not in item]
+        explicit_total = sum(item.get("height", 0) for item in items)
+        total_gap = _VCONCAT_GAP * (len(items) - 1)
+
+        if not unset:
+            # All heights explicit — expand iframe to fit.
+            return explicit_total + total_gap
+        # Divide remaining space among items without a height.
+        remaining = height - explicit_total - total_gap
+        per_item = max(remaining // len(unset), 50)
+        for item in unset:
+            item["height"] = per_item
+        return height
+
+    for item in spec.get("hconcat", []):
+        item.setdefault("height", height)
+    return height
