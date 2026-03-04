@@ -433,19 +433,22 @@
 	let isZooming = $state(false);
 
 	let chartCellEl: HTMLDivElement;
-	// Cached SVG origin — refreshed on pointer enter (not per-move).
 	// SVG offsetX/offsetY is relative to the *target* element, not the listener,
 	// so coordinates shift when the pointer crosses the margin ↔ inner boundary.
-	// Using clientX/Y minus a cached origin avoids this.
+	// Using clientX/Y minus the SVG's viewport origin avoids this.
 	let svgLeft = 0;
 	let svgTop = 0;
 
-	function handleChartPointerEnter(event: PointerEvent) {
+	function refreshSvgOrigin(): void {
 		if (svg) {
 			const rect = svg.getBoundingClientRect();
 			svgLeft = rect.left;
 			svgTop = rect.top;
 		}
+	}
+
+	function handleChartPointerEnter(event: PointerEvent) {
+		refreshSvgOrigin();
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
 		// Focus so [ / ] keyboard shortcuts work for tooltip cycling
@@ -460,7 +463,7 @@
 		tooltipManager?.updatePosition(null, null);
 	}
 
-	/** Pointer x relative to SVG root — immune to target-dependent offsetX shifts. */
+	/** Pointer x relative to SVG root. */
 	function ptrX(event: { clientX: number }): number {
 		return event.clientX - svgLeft;
 	}
@@ -581,7 +584,13 @@
 		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
-		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) return;
+		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) {
+			currentInnerX = null;
+			currentInnerY = null;
+			scales.clearCurrentDataPoints();
+			tooltipManager?.updatePosition(null, null);
+			return;
+		}
 
 		activePanX = xInBounds && !!scales.xScaleState?.supportsPanZoom;
 		activePanY = yInBounds && !!scales.yScaleState?.supportsPanZoom;
@@ -609,7 +618,14 @@
 			scales.updatePanPosition(x, y);
 			tooltipManager?.suppress(150);
 		} else if (chartContext.onInteractorPointerMove?.(event)) {
-			tooltipManager?.suppress(100);
+			// Brush move/resize use stopPropagation, bypassing handlePointerDown cleanup.
+			// Guard ensures this only runs once on the first captured move.
+			if (currentInnerX != null) {
+				currentInnerX = null;
+				currentInnerY = null;
+				scales.clearCurrentDataPoints();
+				tooltipManager?.updatePosition(null, null);
+			}
 		} else {
 			pointerBuffer.x = x;
 			pointerBuffer.y = y;
@@ -619,15 +635,22 @@
 				currentInnerX = innerPoint.x;
 				currentInnerY = innerPoint.y;
 				scales.updateCurrentDataPoints(innerPoint, layout.innerWidth, layout.innerHeight);
-				tooltipManager?.updatePointerScreen(x, y);
-				tooltipManager?.updatePosition(
-					scales.xScaleState?.currentDataPoint,
-					scales.yScaleState?.currentDataPoint
-				);
+				// Suppress tooltip over brush overlays — crosshair/margin labels stay active
+				const overBrush = (event.target as Element)?.closest?.('.brush-overlay');
+				if (overBrush) {
+					tooltipManager?.updatePosition(null, null);
+				} else {
+					tooltipManager?.updatePointerScreen(x, y);
+					tooltipManager?.updatePosition(
+						scales.xScaleState?.currentDataPoint,
+						scales.yScaleState?.currentDataPoint
+					);
+				}
 			} else {
 				currentInnerX = null;
 				currentInnerY = null;
 				scales.clearCurrentDataPoints();
+				tooltipManager?.updatePosition(null, null);
 			}
 		}
 	}
@@ -638,6 +661,7 @@
 	}
 
 	function handlePointerRawUpdate(event: PointerEvent) {
+		if (!hasPointerRawUpdate) return;
 		processPointerMove(event);
 	}
 
