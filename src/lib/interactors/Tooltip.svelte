@@ -38,6 +38,8 @@
 	// High-water mark for tooltip width — grows but never shrinks.
 	let tooltipEl: HTMLDivElement;
 	let minWidth = $state(0);
+	let tooltipW = $state(0);
+	let tooltipH = $state(0);
 
 	$effect(() => {
 		// Dependencies: re-measure when focused point or index changes
@@ -49,7 +51,25 @@
 		const natural = tooltipEl.offsetWidth;
 		tooltipEl.style.minWidth = prev;
 		if (natural > minWidth) minWidth = natural;
+		tooltipW = tooltipEl.offsetWidth;
+		tooltipH = tooltipEl.offsetHeight;
 	});
+
+	// Flip when tooltip would overflow chart bounds, with hysteresis to prevent jitter
+	const GAP = 12;
+	const HYSTERESIS = 40;
+	let flippedX = $state(true);
+	let flippedY = $state(false);
+	$effect(() => {
+		const spaceLeft = px - tooltipW - GAP;
+		flippedX = spaceLeft >= 0 && (!flippedX ? spaceLeft >= HYSTERESIS : true);
+		const spaceY = chart.height - py - tooltipH;
+		flippedY = spaceY < 0 || (flippedY && spaceY < HYSTERESIS);
+	});
+
+	// Transform origin: corner nearest the anchor point
+	let originX = $derived(flippedX ? '100%' : '0%');
+	let originY = $derived(flippedY ? '100%' : '0%');
 
 	// Reverse lookup: field name → axis channel ('x' or 'y') for channel icons
 	let fieldToChannel = $derived.by(() => {
@@ -100,11 +120,17 @@
 	const channelIcons: Record<string, string> = { x: '\u2192', y: '\u2191' };
 </script>
 
-<!-- Invisible anchor point tracking the cursor -->
-<div class="tooltip-anchor" style="transform: translate({px}px, {py}px);"></div>
-
-<!-- Tooltip positioned via CSS anchor positioning -->
-<div class="tooltip" class:visible bind:this={tooltipEl} style:min-width="{minWidth}px">
+<!-- Tooltip positioned via JS with flip detection -->
+<div
+	class="tooltip"
+	class:visible
+	bind:this={tooltipEl}
+	style:left="{px}px"
+	style:top="{py}px"
+	style:translate="{flippedX ? 'calc(-100% - 12px)' : '12px'} {flippedY ? 'calc(-100% + 4px)' : '-4px'}"
+	style:transform-origin="{originX} {originY}"
+	style:min-width="{minWidth}px"
+>
 	{#each keys as key (key)}
 		<div class="row">
 			<span class="key">
@@ -131,27 +157,8 @@
 </div>
 
 <style>
-	.tooltip-anchor {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 0;
-		height: 0;
-		anchor-name: --tooltip-anchor;
-		pointer-events: none;
-	}
-
 	.tooltip {
 		position: absolute;
-		position-anchor: --tooltip-anchor;
-		left: anchor(right);
-		top: anchor(top);
-		margin-left: 12px;
-		margin-top: -4px;
-		position-try-fallbacks:
-			flip-inline,
-			flip-block,
-			flip-inline flip-block;
 		background: var(--diveplot-tooltip-bg, rgba(0, 0, 0, 0.88));
 		color: var(--diveplot-tooltip-text, #ffffff);
 		padding: 6px 10px;
@@ -164,12 +171,16 @@
 		white-space: nowrap;
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 		opacity: 0;
-		transition: opacity 80ms ease-out;
-		will-change: opacity;
+		scale: 0.78;
+		transition:
+			opacity 100ms ease-out,
+			scale 200ms cubic-bezier(0.34, 1.3, 0.64, 1);
+		will-change: opacity, scale;
 	}
 
 	.tooltip.visible {
 		opacity: 1;
+		scale: 1;
 	}
 
 	.row {
