@@ -602,7 +602,6 @@
 				currentInnerX = null;
 				currentInnerY = null;
 				scales.clearCurrentDataPoints();
-				tooltipManager?.suppress(0);
 			}
 		}
 	}
