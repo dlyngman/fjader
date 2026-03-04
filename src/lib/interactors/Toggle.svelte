@@ -51,7 +51,10 @@
 	const selectedSet = $derived.by(() => {
 		const scales = getToggleScaleStates();
 		for (const s of scales) {
-			if (s && 'activeValues' in s) return (s as BandScaleState).activeValues;
+			if (s && 'activeValues' in s) {
+				const av = (s as BandScaleState).activeValues;
+				if (av != null) return av;
+			}
 		}
 		return null;
 	});
@@ -86,33 +89,14 @@
 		}
 	}
 
-	// Resolve category from a click in the band axis margin area.
-	// Uses the same getActiveAxes pattern as wheel/pan handlers in ChartContainer.
-	function resolveMarginCategory(event: PointerEvent) {
+	chart.onChartClick = (event) => {
+		const tm = chart.tooltipManager;
 		const point = { x: event.offsetX, y: event.offsetY };
 		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
 
-		// Y-axis margin: click left of inner area, Y within chart range
-		if (!xInBounds && yInBounds && chart.scaleTypes?.y === 'band') {
-			const bandState = chart.yScaleState as BandScaleState;
-			const index = bandState.invertScreenToData(innerPoint.y, chart.innerHeight, true);
-			return bandState.effectiveDomain[index] ?? null;
-		}
-
-		// X-axis margin: click below inner area, X within chart range
-		if (xInBounds && !yInBounds && chart.scaleTypes?.x === 'band') {
-			const bandState = chart.xScaleState as BandScaleState;
-			const index = bandState.invertScreenToData(innerPoint.x, chart.innerWidth, false);
-			return bandState.effectiveDomain[index] ?? null;
-		}
-
-		return null;
-	}
-
-	chart.onChartClick = (event) => {
-		// Path 1: Inner area click — use tooltip hit data
-		const tm = chart.tooltipManager;
-		if (tm?.visible && tm.currentPoint) {
+		// Path 1: Inner area click — use tooltip hit data (don't require visible —
+		// pointer micro-movement during click hides tooltip but data stays valid)
+		if (xInBounds && yInBounds && tm?.currentPoint) {
 			const tuple = fields.map((f) => tm.currentPoint[f]);
 			if (tuple.some((v) => v == null)) return;
 			toggle(tuple, event);
@@ -120,10 +104,23 @@
 		}
 
 		// Path 2: Band axis margin click — invert position to find category
-		const category = resolveMarginCategory(event);
-		if (category != null) {
-			toggle([category], event);
-			return;
+		if (!xInBounds && yInBounds && chart.scaleTypes?.y === 'band') {
+			const bandState = chart.yScaleState as BandScaleState;
+			const index = bandState.invertScreenToData(innerPoint.y, chart.innerHeight, true);
+			const category = bandState.effectiveDomain[index] ?? null;
+			if (category != null) {
+				toggle([category], event);
+				return;
+			}
+		}
+		if (xInBounds && !yInBounds && chart.scaleTypes?.x === 'band') {
+			const bandState = chart.xScaleState as BandScaleState;
+			const index = bandState.invertScreenToData(innerPoint.x, chart.innerWidth, false);
+			const category = bandState.effectiveDomain[index] ?? null;
+			if (category != null) {
+				toggle([category], event);
+				return;
+			}
 		}
 
 		// Path 3: Click on empty space — clear

@@ -309,6 +309,8 @@ export class TooltipManager {
 				}
 			} else {
 				this.visible = false;
+				this.currentPoints = [];
+				this.matchedPoints = [];
 			}
 		} catch (error) {
 			console.error('Tooltip query failed:', error);
