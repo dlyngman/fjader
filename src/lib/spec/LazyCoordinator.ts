@@ -69,11 +69,18 @@ async function initCoordinator(): Promise<Coordinator> {
 async function initFromLocalBundle() {
 	const { wasmConnector } = await import('@uwdata/mosaic-core');
 	const duckdb = await import('@duckdb/duckdb-wasm');
+
+	// Fetch worker JS in main thread context to avoid importScripts() being
+	// blocked by strict CSP/sandbox rules in managed hosting environments.
+	const res = await fetch(_wasmBundle!.mainWorker);
+	if (!res.ok) {
+		throw new Error(`DuckDB worker fetch failed: ${res.status} ${res.statusText}`);
+	}
+	const workerCode = await res.text();
 	const workerUrl = URL.createObjectURL(
-		new Blob([`importScripts("${_wasmBundle!.mainWorker}");`], {
-			type: 'text/javascript'
-		})
+		new Blob([workerCode], { type: 'text/javascript' })
 	);
+
 	const worker = new Worker(workerUrl);
 	const logger = new duckdb.VoidLogger();
 	const db = new duckdb.AsyncDuckDB(logger, worker);
