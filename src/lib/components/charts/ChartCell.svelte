@@ -88,36 +88,62 @@
 	});
 
 	// --- Cell-local D3 scales (cached via $derived) ---
+	// Each cell owns its own D3 scale copies so that vconcat charts sharing
+	// the same scale state don't overwrite each other's range via the shared
+	// internal scale object. Copies are only created when the scale state
+	// identity changes (rare); range/domain updates are in-place (zero-alloc).
+	let ownXScale: D3Scale | null = null;
+	let ownXSource: unknown = null;
+	let ownYScale: D3Scale | null = null;
+	let ownYSource: unknown = null;
+
 	const cellXScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.xScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth)) as D3Scale;
+		if (ownXSource !== ss) {
+			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as D3Scale & { copy(): D3Scale }).copy();
+			ownXSource = ss;
+		}
+		ownXScale!.range([0, layout.innerWidth]);
+		return ss.updateScaleDomain(ownXScale!) as D3Scale;
 	});
 
 	const cellYScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight)) as D3Scale;
+		if (ownYSource !== ss) {
+			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }).copy();
+			ownYSource = ss;
+		}
+		ownYScale!.range([layout.innerHeight, 0]);
+		return ss.updateScaleDomain(ownYScale!) as D3Scale;
 	});
 
 	const cellXTargetScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.xScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('x', layout.innerWidth)) as D3Scale;
+		// Target scales can reuse the same cell-local copy since they read the same state
+		if (ownXSource !== ss) {
+			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as D3Scale & { copy(): D3Scale }).copy();
+			ownXSource = ss;
+		}
+		ownXScale!.range([0, layout.innerWidth]);
+		return ss.updateScaleDomain(ownXScale!) as D3Scale;
 	});
 
 	const cellYTargetScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		return ss.updateScaleDomain(ss.getBaseScale('y', layout.innerHeight)) as D3Scale;
+		if (ownYSource !== ss) {
+			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }).copy();
+			ownYSource = ss;
+		}
+		ownYScale!.range([layout.innerHeight, 0]);
+		return ss.updateScaleDomain(ownYScale!) as D3Scale;
 	});
 
 	// --- Band scale support (cell-local $derived) ---
