@@ -55,18 +55,7 @@ async function initCoordinator(): Promise<Coordinator> {
 
 	let wasm;
 	if (_wasmBundle) {
-		const duckdb = await import('@duckdb/duckdb-wasm');
-		const workerUrl = URL.createObjectURL(
-			new Blob([`importScripts("${_wasmBundle.mainWorker}");`], {
-				type: 'text/javascript'
-			})
-		);
-		const worker = new Worker(workerUrl);
-		const logger = new duckdb.VoidLogger();
-		const db = new duckdb.AsyncDuckDB(logger, worker);
-		await db.instantiate(_wasmBundle.mainModule);
-		URL.revokeObjectURL(workerUrl);
-		wasm = wasmConnector({ duckdb: db });
+		wasm = await initFromLocalBundle();
 	} else {
 		wasm = wasmConnector();
 	}
@@ -75,6 +64,22 @@ async function initCoordinator(): Promise<Coordinator> {
 	coord.databaseConnector(wasm);
 	_coordinator = coord;
 	return coord;
+}
+
+async function initFromLocalBundle() {
+	const { wasmConnector } = await import('@uwdata/mosaic-core');
+	const duckdb = await import('@duckdb/duckdb-wasm');
+	const workerUrl = URL.createObjectURL(
+		new Blob([`importScripts("${_wasmBundle!.mainWorker}");`], {
+			type: 'text/javascript'
+		})
+	);
+	const worker = new Worker(workerUrl);
+	const logger = new duckdb.VoidLogger();
+	const db = new duckdb.AsyncDuckDB(logger, worker);
+	await db.instantiate(_wasmBundle!.mainModule);
+	URL.revokeObjectURL(workerUrl);
+	return wasmConnector({ duckdb: db });
 }
 
 /**

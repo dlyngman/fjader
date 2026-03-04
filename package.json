@@ -2,7 +2,7 @@
 	"name": "diveplot",
 	"private": true,
 	"license": "BSD-3-Clause",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"type": "module",
 	"svelte": "./dist/index.js",
 	"exports": {
