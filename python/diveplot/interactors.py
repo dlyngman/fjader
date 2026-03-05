@@ -57,3 +57,41 @@ def interval_y(field: str | None = None) -> IntervalYSpec:
         field: Optional field name override for the brush column.
     """
     return IntervalYSpec(field=field)
+
+
+@dataclass(frozen=True)
+class Interval2DSpec(InteractorSpec):
+    """2D rectangle brush interactor."""
+
+    _interactor_type: ClassVar[str] = "interval2D"
+    x_field: str | None = None
+    y_field: str | None = None
+
+
+def interval_2d(
+    x_field: str | None = None, y_field: str | None = None
+) -> Interval2DSpec:
+    """Create a 2D rectangle brush interactor.
+
+    Args:
+        x_field: Optional x-axis field override (auto-detected from chart).
+        y_field: Optional y-axis field override (auto-detected from chart).
+    """
+    return Interval2DSpec(x_field=x_field, y_field=y_field)
+
+
+@dataclass(frozen=True)
+class ToggleSpec(InteractorSpec):
+    """Click-to-toggle categorical filter."""
+
+    _interactor_type: ClassVar[str] = "toggle"
+    field: str | None = None
+
+
+def toggle(field: str | None = None) -> ToggleSpec:
+    """Create a click-to-toggle interactor for categorical filtering.
+
+    Args:
+        field: Column name to toggle on (e.g. ``"weather"``).
+    """
+    return ToggleSpec(field=field)

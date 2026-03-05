@@ -47,22 +47,31 @@ dots = dp.plot(
 )
 dp.streamlit.render(dots, height=450, server_duckdb=USE_SERVER)
 
-# --- Bar chart ---
-st.header("Seattle Weather — Bars")
+# --- Weather: legend toggle + bar chart (replicates Svelte weather demo) ---
+st.header("Seattle Weather — Legend Toggle + Bars")
 
-bars = dp.plot(
-    dp.bar_x(
-        data=weather,
-        x=dp.count(),
-        y="weather",
-        fill="weather",
+weather_dots = dp.plot(
+    dp.dot(
+        data=weather, x="date", y="temp_max", fill="weather",
+        r="precipitation", opacity=0.7, preferred_x_scale_type="time",
+        selection="sel",
     ),
-    width=800,
-    height=300,
-    # x_label="Count",
-    # y_label="Weather",
+    width=800, height=350,
+    legend=True,
+    interactors=[dp.interval_x()],
 )
-dp.streamlit.render(bars, height=350, server_duckdb=USE_SERVER)
+weather_bars = dp.plot(
+    dp.bar_x(
+        data=weather, x=dp.count(), y="weather", fill="weather",
+        selection="sel",
+    ),
+    width=800, height=200,
+    interactors=[dp.toggle(field="weather")],
+)
+dp.streamlit.render(
+    dp.vconcat(weather_dots, weather_bars, params={"sel": {"select": "crossfilter"}}),
+    server_duckdb=USE_SERVER,
+)
 
 # --- Simple bar from inline data ---
 st.header("Simple Bar (inline data)")
@@ -108,12 +117,37 @@ dp.streamlit.render(
     server_duckdb=USE_SERVER,
 )
 
+# --- 2D Brush: rectangle brush on scatter, cross-filters bar chart ---
+st.header("2D Brush (rectangle brush → filters bars)")
+
+penguins = pl.read_parquet(Path(__file__).parent / "../static/data/penguins.parquet")
+
+brush_scatter = dp.plot(
+    dp.dot(
+        data=penguins, x="bill_length", y="bill_depth", fill="species",
+        opacity=0.6, selection="brush2d",
+    ),
+    width=600, height=400,
+    interactors=[dp.interval_2d()],
+)
+brush_bars = dp.plot(
+    dp.bar_y(
+        data=penguins, x="species", y=dp.count(), fill="species",
+        selection="brush2d",
+    ),
+    width=600, height=300,
+)
+dp.streamlit.render(
+    dp.hconcat(brush_scatter, brush_bars, params={"brush2d": {"select": "crossfilter"}}),
+    server_duckdb=USE_SERVER,
+)
+
 # --- Overview + Detail (domain zoom, not crossfilter) ---
 st.header("Overview + Detail (domain zoom)")
 detail = dp.plot(
     dp.line(data=weather, x="date", y="temp_max"),
     height=400, x_label="Date",
-    use_x_selection=True,
+    use_selection='x',
 )
 overview = dp.plot(
     dp.line(data=weather, x="date", y="temp_max"),
