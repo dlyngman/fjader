@@ -1,5 +1,5 @@
 <script>
-	import { Coordinator, wasmConnector, Selection } from '@uwdata/mosaic-core';
+	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { sum } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
@@ -12,7 +12,6 @@
 		WebGPUCanvas,
 		BarMarkY,
 		BarMarkX,
-		FilterBridge,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -24,8 +23,6 @@
 	let coord;
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-
-	const filterBridge = new FilterBridge(Selection, null);
 
 	onMount(async () => {
 		try {
@@ -230,7 +227,7 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
 						{#snippet legend()}
-							<Legend color="region" bridge={filterBridge} />
+							<Legend color="region" selection="brush" />
 						{/snippet}
 						{#snippet background()}
 							<Frame />
@@ -248,14 +245,14 @@
 										y={sum('revenue')}
 										fill="region"
 										sort={{ x: 'y', order: 'desc' }}
-										selection={filterBridge.filterSel}
+										selection="brush"
 										tooltip
 									/>
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
 						{#snippet interactors()}
-							<Toggle bridge={filterBridge} field="region" />
+							<Toggle selection="brush" field="region" />
 						{/snippet}
 					</ChartContainer>
 				</div>
@@ -271,7 +268,7 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
 						{#snippet legend()}
-							<Legend color="region" bridge={filterBridge} />
+							<Legend color="region" selection="brush" />
 						{/snippet}
 						{#snippet background()}
 							<Frame />
@@ -289,7 +286,7 @@
 										y={sum('revenue')}
 										fill="region"
 										sort={{ x: 'y', order: 'desc' }}
-										selection={filterBridge.filterSel}
+										selection="brush"
 										transforms={[topN(5)]}
 										tooltip
 									/>
@@ -297,7 +294,7 @@
 							</WebGPUCanvas>
 						{/snippet}
 						{#snippet interactors()}
-							<Toggle bridge={filterBridge} field="region" />
+							<Toggle selection="brush" field="region" />
 						{/snippet}
 					</ChartContainer>
 				</div>

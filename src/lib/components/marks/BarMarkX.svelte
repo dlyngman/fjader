@@ -12,7 +12,8 @@
 		MarkColor,
 		normalizeSortConfig,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -124,7 +125,7 @@
 			y: y // Y scale uses categorical column
 		},
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		constants: buildConstantsFromChannels({ x1, x2, y }),

@@ -1,9 +1,6 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { count } from '@uwdata/mosaic-sql';
 	import {
-		FilterBridge,
-		IntervalX,
 		Interval2D,
 		ChartContainer,
 		WebGPUCanvas,
@@ -15,14 +12,9 @@
 		AxisBottom,
 		MarginLabel
 	} from '$lib/components';
+	import { getSelectionRegistry } from '$lib/selection';
 
-	const filterBridge = new FilterBridge(Selection, null);
-	globalThis.filterBridge = filterBridge;
-
-	// // Reactive filter count
-	// $effect(() => {
-	// 	console.log('Active filters:', filterBridge.activeCount, $state.snapshot(filterBridge.items));
-	// });
+	const group = getSelectionRegistry()?.getGroup('brush') ?? null;
 </script>
 
 <div class="demo-container">
@@ -56,14 +48,14 @@
 								y="bill_depth"
 								fill="species"
 								opacity={0.6}
-								selection={filterBridge.filterSel}
+								selection="brush"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}
 
 				{#snippet interactors()}
-					<Interval2D bridge={filterBridge} />
+					<Interval2D selection="brush" />
 				{/snippet}
 			</ChartContainer>
 		</div>
@@ -87,7 +79,7 @@
 								x="species"
 								y={count()}
 								fill="species"
-								selection={filterBridge.filterSel}
+								selection="brush"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -98,10 +90,10 @@
 
 	<!-- Filter status display -->
 	<div class="filter-status">
-		<h3>Active Filters: {filterBridge.activeCount}</h3>
-		{#if filterBridge.items.length > 0}
+		<h3>Active Filters: {group?.activeCount ?? 0}</h3>
+		{#if group?.items.length}
 			<div class="filter-chips">
-				{#each filterBridge.items as item (item.source)}
+				{#each group.items as item (item.source)}
 					<div class="filter-chip">
 						<span class="chip-label"
 							>{item.schema?.label || 'Filter'}:
@@ -119,7 +111,7 @@
 								active
 							{/if}
 						</span>
-						<button class="chip-clear" onclick={() => filterBridge.clear(item.source)}>×</button>
+						<button class="chip-clear" onclick={() => group?.clear(item.source)}>×</button>
 					</div>
 				{/each}
 			</div>

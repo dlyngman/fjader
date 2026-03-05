@@ -69,7 +69,7 @@ weather_bars = dp.plot(
     interactors=[dp.toggle(field="weather")],
 )
 dp.streamlit.render(
-    dp.vconcat(weather_dots, weather_bars, params={"sel": {"select": "crossfilter"}}),
+    dp.vconcat(weather_dots, weather_bars),
     server_duckdb=USE_SERVER,
 )
 
@@ -113,7 +113,7 @@ bar_brush = dp.plot(
 )
 
 dp.streamlit.render(
-    dp.vconcat(filtered_dots, bar_brush, params={"brush": {"select": "crossfilter"}}),
+    dp.vconcat(filtered_dots, bar_brush),
     server_duckdb=USE_SERVER,
 )
 
@@ -138,7 +138,7 @@ brush_bars = dp.plot(
     width=600, height=300,
 )
 dp.streamlit.render(
-    dp.hconcat(brush_scatter, brush_bars, params={"brush2d": {"select": "crossfilter"}}),
+    dp.hconcat(brush_scatter, brush_bars),
     server_duckdb=USE_SERVER,
 )
 

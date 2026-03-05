@@ -4,7 +4,6 @@
  */
 
 import type { Component } from 'svelte';
-import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 import DotsMark from '$lib/components/marks/DotsMark.svelte';
 import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 import BarMarkY from '$lib/components/marks/BarMarkY.svelte';
@@ -44,8 +43,7 @@ const STROKE_AS_FIELD_MARKS = new Set(['line']);
  * Resolves FieldSpecs, transforms, and selection references.
  */
 export function resolveMarkEntry(
-	markSpec: MarkSpec,
-	params: Record<string, FilterBridge>
+	markSpec: MarkSpec
 ): { component: Component; props: Record<string, unknown> } {
 	const component = MARK_REGISTRY[markSpec.mark];
 	if (!component) {
@@ -75,16 +73,6 @@ export function resolveMarkEntry(
 		props.transforms = parseTransforms(props.transforms);
 	}
 
-	// Resolve selection reference → FilterBridge.filterSel (same pattern as Svelte examples)
-	if (typeof props.selection === 'string') {
-		const bridge = params[props.selection];
-		if (!bridge) {
-			console.warn(`Selection "${props.selection}" not found in params`);
-			delete props.selection;
-		} else {
-			props.selection = bridge.filterSel;
-		}
-	}
-
+	// selection stays as a string — mark components resolve it from SelectionRegistry context
 	return { component, props };
 }

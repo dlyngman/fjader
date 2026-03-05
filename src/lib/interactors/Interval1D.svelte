@@ -13,7 +13,7 @@
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+	import { getSelectionRegistry } from '$lib/selection';
 	import type { ClauseSource } from '@uwdata/mosaic-core';
 	import type { ScaleDomain } from '@uwdata/mosaic-sql';
 
@@ -21,12 +21,14 @@
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
 
 	interface Props {
-		bridge?: FilterBridge | null;
+		selection: string;
 		field?: FieldRef;
 		axis?: 'x' | 'y';
 	}
 
-	let { bridge = null, field, axis = 'x' }: Props = $props();
+	let { selection: selectionName, field, axis = 'x' }: Props = $props();
+
+	const group = getSelectionRegistry()!.getGroup(selectionName);
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();
@@ -55,28 +57,17 @@
 		)
 	);
 
-	// Register with FilterBridge to get a local Selection (only when bridge is provided)
-	let selection: {
-		update: (clause: unknown) => void;
-		activate?: (clause: unknown) => void;
-	} | null = null;
-	let unregister: (() => void) | null = null;
-
-	if (bridge) {
-		const result = bridge.createLocal('single', {
-			source,
-			augment: (clause) => ({
-				kind: 'range',
-				column:
-					typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
-				label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
-				values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
-			}),
-			onVisualClear: () => brush.clear()
-		});
-		selection = result.sel;
-		unregister = result.off;
-	}
+	const { sel: selection, off: unregister } = group.createLocal('single', {
+		source,
+		augment: (clause) => ({
+			kind: 'range',
+			column:
+				typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
+			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
+			values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
+		}),
+		onVisualClear: () => brush.clear()
+	});
 
 	// Pointer state (reused to avoid GC)
 	let anchor = 0;

@@ -12,7 +12,8 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import type {
 		FieldRef,
@@ -124,7 +125,7 @@
 		},
 		inferredScaleColumns: { x, y },
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },

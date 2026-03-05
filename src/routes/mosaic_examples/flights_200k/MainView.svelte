@@ -1,7 +1,5 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { count } from '@uwdata/mosaic-sql';
-	import { getContext } from 'svelte';
 
 	import {
 		ChartContainer,
@@ -13,12 +11,9 @@
 		Crosshair,
 		WebGPUCanvas,
 		RectYMark,
-		IntervalX,
-		FilterBridge
+		IntervalX
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
-
-	const filterBridge = new FilterBridge(Selection, null);
 
 	let viewportLocal = $state(true);
 </script>
@@ -50,7 +45,7 @@
 							inset={0.5}
 							fill="steelblue"
 							viewportLocalDomain={viewportLocal}
-							selection={filterBridge.filterSel}
+							selection="brush"
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -61,7 +56,7 @@
 			{/snippet}
 
 			{#snippet interactors()}
-				<IntervalX bridge={filterBridge} />
+				<IntervalX selection="brush" />
 			{/snippet}
 		</ChartContainer>
 	</div>
@@ -87,7 +82,7 @@
 							inset={0.5}
 							fill="steelblue"
 							viewportLocalDomain={viewportLocal}
-							selection={filterBridge.filterSel}
+							selection="brush"
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -98,7 +93,7 @@
 			{/snippet}
 
 			{#snippet interactors()}
-				<IntervalX bridge={filterBridge} />
+				<IntervalX selection="brush" />
 			{/snippet}
 		</ChartContainer>
 	</div>
@@ -124,7 +119,7 @@
 							inset={0.5}
 							fill="steelblue"
 							viewportLocalDomain={viewportLocal}
-							selection={filterBridge.filterSel}
+							selection="brush"
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -135,7 +130,7 @@
 			{/snippet}
 
 			{#snippet interactors()}
-				<IntervalX bridge={filterBridge} />
+				<IntervalX selection="brush" />
 			{/snippet}
 		</ChartContainer>
 	</div>

@@ -1,18 +1,27 @@
-// No need for TRUE_PREDICATE - use null for cleared states
+/**
+ * SelectionRegistry — context-based singleton for managing named selection groups.
+ *
+ * Context-based singleton for managing named selection groups. Groups are auto-created
+ * on first reference and shared across all components in the render tree.
+ */
 
+import { getContext, setContext } from 'svelte';
 import type { Selection, SelectionClause } from '@uwdata/mosaic-core';
-import type { ExprNode } from '@uwdata/mosaic-sql';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 /**
  * Narrow protocol for scale states that support active-value projection.
  * Implemented by ColorScaleState and BandScaleState.
  */
-interface ActiveValueScale {
+export interface ActiveValueScale {
 	setActiveValues(values: Set<unknown>): void;
 	clearActiveValues(): void;
 }
 
-interface FilterSchema {
+export interface FilterSchema {
 	kind?: string;
 	column?: string;
 	label?: string;
@@ -21,7 +30,7 @@ interface FilterSchema {
 }
 
 /** A clause augmented with DivePlot-specific schema metadata. */
-interface AugmentedClause extends SelectionClause {
+export interface AugmentedClause extends SelectionClause {
 	schema?: FilterSchema;
 }
 
@@ -33,14 +42,14 @@ interface FilterEntry {
 	scaleStates: (() => ActiveValueScale[]) | null;
 }
 
-interface FilterItem {
+export interface FilterItem {
 	source: string;
 	enabled: boolean;
 	clause: AugmentedClause | null;
 	schema?: FilterSchema;
 }
 
-interface CreateLocalOpts {
+export interface CreateLocalOpts {
 	source?: string;
 	augment?: (clause: SelectionClause) => FilterSchema | null;
 	onVisualClear?: () => void;
@@ -53,37 +62,38 @@ interface ToggleEntry {
 	refCount: number;
 }
 
-/**
- * Checks if a clause is neutral/cleared (Mosaic standard: predicate is null).
- */
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Checks if a clause is neutral/cleared (Mosaic standard: predicate is null). */
 export function isNeutral(clause: SelectionClause | AugmentedClause | null | undefined): boolean {
 	return !clause || clause.predicate == null;
 }
 
-export class FilterBridge {
-	Selection: typeof Selection;
+// ---------------------------------------------------------------------------
+// SelectionGroup
+// ---------------------------------------------------------------------------
+
+/**
+ * A named crossfilter group. Manages Mosaic Selections for a set of linked
+ * marks, interactors, and legends that share a common selection name.
+ */
+export class SelectionGroup {
+	SelectionClass: typeof Selection;
 	filterSel: Selection;
 
-	// Reactive storage - Map tracks all filter sources
 	#entries: Map<string, FilterEntry> = $state(new Map());
-
-	// Public reactive state - components subscribe to this
 	items: FilterItem[] = $state([]);
 	activeCount: number = $derived(this.items.length);
-
-	// Scale states that have been projected to (for cleanup on clear)
 	#projectedScales: Set<ActiveValueScale> = new Set();
-
-	// Shared toggle selections keyed by column (deduplicated, ref-counted)
 	#toggleSelections: Map<string, ToggleEntry> = new Map();
 
-	constructor(SelectionClass: typeof Selection, baseSel: Selection | Selection[] | null) {
-		this.Selection = SelectionClass;
-		const base = Array.isArray(baseSel) ? baseSel : baseSel ? [baseSel] : [];
-		this.filterSel = SelectionClass.intersect({ cross: true, include: base });
+	constructor(SelectionClass: typeof Selection) {
+		this.SelectionClass = SelectionClass;
+		this.filterSel = SelectionClass.intersect({ cross: true });
 	}
 
-	// Sync items from entries to public state
 	#syncItems(): void {
 		this.items = Array.from(this.#entries.values())
 			.filter((e) => e.enabled && !isNeutral(e.clause))
@@ -93,24 +103,16 @@ export class FilterBridge {
 				clause,
 				schema: clause?.schema
 			}));
-
 		this.#projectToScales();
 	}
 
-	/**
-	 * Project toggle selection state onto scale activeValues.
-	 * Reads selected values directly from clause.value (array of tuples from clausePoints).
-	 * Scale state refs are resolved lazily via getter functions passed at registration.
-	 */
 	#projectToScales(): void {
 		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();
 
 		for (const entry of this.#entries.values()) {
 			if (!entry.scaleStates || !entry.enabled || isNeutral(entry.clause)) continue;
-
 			const tuples = entry.clause?.value as unknown[][] | undefined;
 			if (!tuples?.length) continue;
-
 			for (const scale of entry.scaleStates()) {
 				if (!activeByScale.has(scale)) {
 					activeByScale.set(scale, new Set());
@@ -123,13 +125,11 @@ export class FilterBridge {
 		for (const [scale, values] of activeByScale) {
 			scale.setActiveValues(values);
 		}
-
 		for (const scale of this.#projectedScales) {
 			if (!activeByScale.has(scale)) {
 				scale.clearActiveValues();
 			}
 		}
-
 		this.#projectedScales = new Set(activeByScale.keys());
 	}
 
@@ -141,26 +141,20 @@ export class FilterBridge {
 
 		const sel =
 			kind === 'union'
-				? this.Selection.union()
+				? this.SelectionClass.union()
 				: kind === 'intersect'
-					? this.Selection.intersect()
-					: this.Selection.single();
+					? this.SelectionClass.intersect()
+					: this.SelectionClass.single();
 
-		// Listener: Mosaic Selection -> Svelte State
 		const onValue = (): void => {
 			let clause: AugmentedClause = sel.active;
-
-			// Augment with metadata for UI display
 			if (clause && augment) {
 				const schema = augment(clause);
 				if (schema) clause = { ...clause, schema };
 			}
 
 			if (isNeutral(clause)) {
-				// Neutral/cleared state
 				const entry = this.#entries.get(source!);
-
-				// Update internal state
 				if (entry) {
 					entry.enabled = false;
 					entry.clause = clause;
@@ -173,14 +167,9 @@ export class FilterBridge {
 						scaleStates: scaleStates || null
 					});
 				}
-
-				// Update Mosaic output - pass through the clause as-is
 				this.filterSel.update(clause);
-
-				// Sync UI visuals
 				onVisualClear?.();
 			} else {
-				// Active filter - pass through
 				this.#entries.set(source!, {
 					source: source!,
 					sel,
@@ -188,11 +177,9 @@ export class FilterBridge {
 					enabled: true,
 					scaleStates: scaleStates || null
 				});
-
 				this.filterSel.update(clause);
 			}
 
-			// Sync public reactive state
 			this.#syncItems();
 		};
 
@@ -205,13 +192,8 @@ export class FilterBridge {
 			}
 		};
 
-		// Bind listeners
 		sel.addEventListener('value', onValue);
-		// Mosaic emits a single SelectionClause for 'activate' (not the array form
-		// used for 'value'), so we cast to satisfy the typed overload.
 		sel.addEventListener('activate', onActivate as unknown as typeof onValue);
-
-		// Note: We don't pre-initialize entries - they're created on first value event
 
 		return {
 			sel,
@@ -223,11 +205,6 @@ export class FilterBridge {
 		};
 	}
 
-	/**
-	 * Get or create a shared toggle Selection for a column.
-	 * Multiple components (Toggle, Legend) on the same field share one Selection,
-	 * avoiding conflicting entries in filterSel.intersect().
-	 */
 	createToggle(
 		column: string,
 		opts: { scaleStates?: () => ActiveValueScale[] } = {}
@@ -267,22 +244,13 @@ export class FilterBridge {
 		};
 	}
 
-	/**
-	 * Clear the shared toggle Selection for a column.
-	 */
 	clearToggle(column: string): void {
 		this.clear(`toggle-${column}`);
 	}
 
-	/**
-	 * Manually clears a specific source.
-	 * Delegates to Mosaic Selection which triggers onValue callback.
-	 */
 	clear(source: string): void {
 		const entry = this.#entries.get(source);
 		if (!entry?.sel) return;
-
-		// Send neutral clause to Mosaic - onValue callback handles our state
 		entry.sel.update({
 			predicate: null,
 			source: source as unknown as SelectionClause['source'],
@@ -291,18 +259,12 @@ export class FilterBridge {
 		} as SelectionClause);
 	}
 
-	/**
-	 * Completely removes a source from the registry
-	 */
 	remove(source: string): void {
-		this.clear(source); // Trigger clear first
+		this.clear(source);
 		this.#entries.delete(source);
 		this.#syncItems();
 	}
 
-	/**
-	 * For manual clauses (not attached to a Mosaic Selection object)
-	 */
 	upsertManual(key: string, clause: SelectionClause, schema: FilterSchema): void {
 		const source = `manual:${key}`;
 		const c: AugmentedClause = {
@@ -310,7 +272,6 @@ export class FilterBridge {
 			source: source as unknown as SelectionClause['source'],
 			schema
 		};
-
 		this.#entries.set(source, {
 			source,
 			sel: null as unknown as Selection,
@@ -318,8 +279,54 @@ export class FilterBridge {
 			enabled: true,
 			scaleStates: null
 		});
-
 		this.filterSel.update(c);
 		this.#syncItems();
 	}
+}
+
+// ---------------------------------------------------------------------------
+// SelectionRegistry
+// ---------------------------------------------------------------------------
+
+const CONTEXT_KEY = 'selection-registry';
+
+/**
+ * Singleton that manages named SelectionGroups. Lives in Svelte context.
+ * Groups are auto-created on first reference as crossfilter selections.
+ */
+export class SelectionRegistry {
+	#SelectionClass: typeof Selection;
+	#groups = new Map<string, SelectionGroup>();
+
+	constructor(SelectionClass: typeof Selection) {
+		this.#SelectionClass = SelectionClass;
+	}
+
+	/** Get (or auto-create) a named selection group. */
+	getGroup(name: string): SelectionGroup {
+		let group = this.#groups.get(name);
+		if (!group) {
+			group = new SelectionGroup(this.#SelectionClass);
+			this.#groups.set(name, group);
+		}
+		return group;
+	}
+
+	/** Shortcut: get the Mosaic Selection for a named group (for marks). */
+	getSelection(name: string): Selection {
+		return this.getGroup(name).filterSel;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Context helpers
+// ---------------------------------------------------------------------------
+
+export function setSelectionRegistry(SelectionClass: typeof Selection): SelectionRegistry {
+	const registry = new SelectionRegistry(SelectionClass);
+	return setContext(CONTEXT_KEY, registry);
+}
+
+export function getSelectionRegistry(): SelectionRegistry | null {
+	return getContext<SelectionRegistry | null>(CONTEXT_KEY) ?? null;
 }

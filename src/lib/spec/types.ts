@@ -12,7 +12,6 @@ import type { Coordinator } from '@uwdata/mosaic-core';
 
 export interface DivePlotSpec {
 	data?: Record<string, DataSpec>;
-	params?: Record<string, ParamSpec>;
 	plot?: PlotSpec;
 	hconcat?: PlotSpec[];
 	vconcat?: PlotSpec[];
@@ -37,14 +36,6 @@ export interface SqlDataSpec {
 export interface InlineDataSpec {
 	values: Record<string, unknown>[];
 	type: 'inline';
-}
-
-// =============================================================================
-// Params (selections for linked interactors)
-// =============================================================================
-
-export interface ParamSpec {
-	select: 'crossfilter' | 'single' | 'intersect' | 'union';
 }
 
 // =============================================================================
@@ -88,22 +79,26 @@ export type InteractorSpec = IntervalXSpec | IntervalYSpec | Interval2DSpec | To
 
 export interface IntervalXSpec {
 	interactor: 'intervalX';
+	selection?: string;
 	field?: string;
 }
 
 export interface IntervalYSpec {
 	interactor: 'intervalY';
+	selection?: string;
 	field?: string;
 }
 
 export interface Interval2DSpec {
 	interactor: 'interval2D';
+	selection?: string;
 	xField?: string;
 	yField?: string;
 }
 
 export interface ToggleSpec {
 	interactor: 'toggle';
+	selection?: string;
 	field: string;
 }
 
@@ -142,7 +137,7 @@ export type MarkSpec =
 
 interface BaseMarkSpec {
 	table: string;
-	selection?: string; // key into params
+	selection?: string; // selection group name (auto-created in SelectionRegistry)
 	scheme?: ColorScheme;
 	limit?: number;
 	filterNulls?: boolean;

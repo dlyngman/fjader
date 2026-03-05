@@ -11,7 +11,8 @@
 		MarkColor,
 		normalizeSortConfig,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -126,7 +127,7 @@
 			y: y2 // Y scale uses the value column (y2, not y1 which is baseline)
 		},
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y1, y2] : null },

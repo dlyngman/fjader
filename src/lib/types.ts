@@ -204,7 +204,7 @@ export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' 
 /** Props shared by every mark component. */
 export interface BaseMarkProps {
 	table: string;
-	selection?: Selection;
+	selection?: string | Selection;
 	scheme?: ColorScheme;
 	limit?: number;
 	filterNulls?: boolean;

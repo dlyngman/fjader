@@ -61,12 +61,9 @@ class HConcat:
     """Horizontal layout of independent charts. Created by `mark + mark`."""
 
     items: list[Any] = field(default_factory=list)  # list[Plot]
-    _params: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        if self._params:
-            result["params"] = self._params
         result["hconcat"] = [p._to_plot_spec() for p in self.items]
         return result
 
@@ -96,12 +93,9 @@ class VConcat:
     """Vertical layout of independent charts."""
 
     items: list[Any] = field(default_factory=list)  # list[Plot]
-    _params: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        if self._params:
-            result["params"] = self._params
         result["vconcat"] = [p._to_plot_spec() for p in self.items]
         return result
 
@@ -132,31 +126,17 @@ class VConcat:
         return VConcat(items=self.items + _to_plots(other))
 
 
-def hconcat(
-    *items: Any,
-    params: dict[str, dict[str, str]] | None = None,
-) -> HConcat:
-    """Create a horizontal layout from plots or marks.
-
-    Args:
-        params: Named selections, e.g. ``{"brush": {"select": "crossfilter"}}``.
-    """
+def hconcat(*items: Any) -> HConcat:
+    """Create a horizontal layout from plots or marks."""
     plots: list[Any] = []
     for item in items:
         plots.extend(_to_plots(item))
-    return HConcat(items=plots, _params=params or {})
+    return HConcat(items=plots)
 
 
-def vconcat(
-    *items: Any,
-    params: dict[str, dict[str, str]] | None = None,
-) -> VConcat:
-    """Create a vertical layout from plots or marks.
-
-    Args:
-        params: Named selections, e.g. ``{"brush": {"select": "crossfilter"}}``.
-    """
+def vconcat(*items: Any) -> VConcat:
+    """Create a vertical layout from plots or marks."""
     plots: list[Any] = []
     for item in items:
         plots.extend(_to_plots(item))
-    return VConcat(items=plots, _params=params or {})
+    return VConcat(items=plots)

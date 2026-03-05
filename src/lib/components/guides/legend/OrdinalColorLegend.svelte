@@ -4,11 +4,11 @@
 	import { column } from '@uwdata/mosaic-sql';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+	import { getSelectionRegistry, type SelectionGroup } from '$lib/selection';
 
 	interface Props {
 		scaleState: ColorScaleState;
-		bridge?: FilterBridge | null;
+		selection?: string;
 		field?: string | null;
 		title?: string | null;
 		columns?: number | null;
@@ -20,7 +20,7 @@
 
 	let {
 		scaleState,
-		bridge = null,
+		selection: selectionName = undefined,
 		field = null,
 		title,
 		columns = null,
@@ -41,7 +41,10 @@
 	);
 
 	// --- Toggle interaction ---
-	const isInteractive = $derived(bridge != null && field != null);
+	const group: SelectionGroup | null = selectionName
+		? (getSelectionRegistry()?.getGroup(selectionName) ?? null)
+		: null;
+	const isInteractive = $derived(group != null && field != null);
 	const columnRef = field ? column(field) : null;
 
 	// Getter for scale states — includes color scale + any band scale for same field
@@ -52,8 +55,8 @@
 
 	// Shared toggle Selection — deduplicated by column across Toggle + Legend
 	const toggle =
-		bridge && field
-			? bridge.createToggle(field, {
+		group && field
+			? group.createToggle(field, {
 					scaleStates: getLegendScaleStates as () => {
 						setActiveValues(v: Set<unknown>): void;
 						clearActiveValues(): void;
@@ -66,7 +69,7 @@
 
 	onDestroy(() => toggle?.off());
 
-	// Derive visual state from scale's activeValues (projected by FilterBridge)
+	// Derive visual state from scale's activeValues (projected by SelectionGroup)
 	const selectedSet = $derived(scaleState.activeValues);
 
 	function handleClick(value: string | number, event: MouseEvent) {
@@ -98,7 +101,7 @@
 		}
 
 		if (newValues === null) {
-			bridge.clearToggle(field);
+			group!.clearToggle(field);
 		} else {
 			selection.update(
 				clausePoints([columnRef], newValues, {
