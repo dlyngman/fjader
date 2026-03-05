@@ -292,6 +292,15 @@ export class ChartScales {
 		return this.config.yLabel;
 	}
 
+	/** Column name from mark registrations — used as interactor field fallback. */
+	get xColumnName(): string | null {
+		return this.scaleConfigurations?.x?.columnName?.toString() ?? null;
+	}
+
+	get yColumnName(): string | null {
+		return this.scaleConfigurations?.y?.columnName?.toString() ?? null;
+	}
+
 	get layout(): ChartLayout {
 		return this.config.layout;
 	}

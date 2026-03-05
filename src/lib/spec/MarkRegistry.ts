@@ -4,7 +4,7 @@
  */
 
 import type { Component } from 'svelte';
-import type { Selection } from '@uwdata/mosaic-core';
+import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 import DotsMark from '$lib/components/marks/DotsMark.svelte';
 import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 import BarMarkY from '$lib/components/marks/BarMarkY.svelte';
@@ -45,7 +45,7 @@ const STROKE_AS_FIELD_MARKS = new Set(['line']);
  */
 export function resolveMarkEntry(
 	markSpec: MarkSpec,
-	params: Record<string, Selection>
+	params: Record<string, FilterBridge>
 ): { component: Component; props: Record<string, unknown> } {
 	const component = MARK_REGISTRY[markSpec.mark];
 	if (!component) {
@@ -75,14 +75,14 @@ export function resolveMarkEntry(
 		props.transforms = parseTransforms(props.transforms);
 	}
 
-	// Resolve selection reference → Selection instance
+	// Resolve selection reference → FilterBridge.filterSel (same pattern as Svelte examples)
 	if (typeof props.selection === 'string') {
-		const sel = params[props.selection];
-		if (!sel) {
+		const bridge = params[props.selection];
+		if (!bridge) {
 			console.warn(`Selection "${props.selection}" not found in params`);
 			delete props.selection;
 		} else {
-			props.selection = sel;
+			props.selection = bridge.filterSel;
 		}
 	}
 

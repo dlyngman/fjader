@@ -83,13 +83,6 @@ export function resolveScaleConfiguration(
 	const sorted = [...typeRequirements].sort((a, b) => (b.priority || 0) - (a.priority || 0));
 	const columnName = sorted.find((req) => req.columnName)?.columnName || null;
 
-	console.log(`🎯 Resolved scale configuration:`, {
-		type: resolvedType,
-		config: resolvedConfig,
-		columnName,
-		fromRequirements: typeRequirements.length
-	});
-
 	return { type: resolvedType, config: resolvedConfig, columnName };
 }
 

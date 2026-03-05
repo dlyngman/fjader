@@ -1,11 +1,11 @@
 <script lang="ts">
-	import type { Selection } from '@uwdata/mosaic-core';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 	import PlotFromSpec from './PlotFromSpec.svelte';
 	import type { DivePlotSpec } from './types';
 
 	interface Props {
 		spec: DivePlotSpec;
-		params: Record<string, Selection>;
+		params: Record<string, FilterBridge>;
 	}
 
 	let { spec, params }: Props = $props();

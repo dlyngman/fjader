@@ -9,15 +9,16 @@
 import type { Coordinator } from '@uwdata/mosaic-core';
 import type { DataSpec } from './types';
 
-/** Optional local WASM bundle URLs (set before first render to avoid CDN fetch). */
-let _wasmBundle: { mainModule: string; mainWorker: string } | null = null;
+/** Optional inline WASM bytes + worker code (for environments where separate assets can't be served). */
+let _wasmInline: { wasmBytes: ArrayBuffer; workerCode: string } | null = null;
 
 /**
- * Configure DuckDB-WASM to load from local bundled files instead of jsDelivr CDN.
+ * Configure DuckDB-WASM with inline WASM bytes and worker code.
+ * For managed hosting (e.g. Snowflake) where separate static assets can't be served.
  * Must be called before any render / getOrCreateCoordinator call.
  */
-export function configureWasmBundle(bundle: { mainModule: string; mainWorker: string }): void {
-	_wasmBundle = bundle;
+export function configureWasmInline(inline: { wasmBytes: ArrayBuffer; workerCode: string }): void {
+	_wasmInline = inline;
 }
 
 let _coordinatorPromise: Promise<Coordinator> | null = null;
@@ -50,43 +51,90 @@ export async function getOrCreateCoordinator(userCoordinator?: Coordinator): Pro
 	return _coordinatorPromise;
 }
 
-async function initCoordinator(): Promise<Coordinator> {
-	const { Coordinator, wasmConnector } = await import('@uwdata/mosaic-core');
+/** Whether the coordinator was initialized via REST (server-side DuckDB). */
+let _usingRest = false;
 
-	let wasm;
-	if (_wasmBundle) {
-		wasm = await initFromLocalBundle();
-	} else {
-		wasm = wasmConnector();
-	}
+/** Force server-side DuckDB (skip WASM entirely). */
+let _forceServer = false;
 
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	_coordinator = coord;
-	return coord;
+/** Check whether the coordinator is using the REST fallback. */
+export function isUsingRestConnector(): boolean {
+	return _usingRest;
 }
 
-async function initFromLocalBundle() {
+/** Skip WASM and go straight to server-side DuckDB via REST. */
+export function configureForceServer(force: boolean): void {
+	_forceServer = force;
+}
+
+async function initCoordinator(): Promise<Coordinator> {
+	const { Coordinator } = await import('@uwdata/mosaic-core');
+
+	if (_forceServer) {
+		console.info('[diveplot] Server-side DuckDB forced via configuration');
+		return initFromRest();
+	}
+
+	// Try WASM first
+	try {
+		let wasm;
+		if (_wasmInline) {
+			wasm = await initFromInlineBundle();
+		} else {
+			const { wasmConnector } = await import('@uwdata/mosaic-core');
+			wasm = wasmConnector();
+		}
+		const coord = new Coordinator();
+		coord.databaseConnector(wasm);
+		_coordinator = coord;
+		return coord;
+	} catch (err) {
+		console.warn('[diveplot] WASM init failed, trying server-side DuckDB fallback:', err);
+	}
+
+	// Fall back to REST connector (Python-side DuckDB via Tornado handler)
+	return initFromRest();
+}
+
+async function initFromInlineBundle() {
 	const { wasmConnector } = await import('@uwdata/mosaic-core');
 	const duckdb = await import('@duckdb/duckdb-wasm');
 
-	// Fetch worker JS in main thread context to avoid importScripts() being
-	// blocked by strict CSP/sandbox rules in managed hosting environments.
-	const res = await fetch(_wasmBundle!.mainWorker);
-	if (!res.ok) {
-		throw new Error(`DuckDB worker fetch failed: ${res.status} ${res.statusText}`);
-	}
-	const workerCode = await res.text();
 	const workerUrl = URL.createObjectURL(
-		new Blob([workerCode], { type: 'text/javascript' })
+		new Blob([_wasmInline!.workerCode], { type: 'text/javascript' })
 	);
-
 	const worker = new Worker(workerUrl);
 	const logger = new duckdb.VoidLogger();
 	const db = new duckdb.AsyncDuckDB(logger, worker);
-	await db.instantiate(_wasmBundle!.mainModule);
+
+	const wasmUrl = URL.createObjectURL(
+		new Blob([_wasmInline!.wasmBytes], { type: 'application/wasm' })
+	);
+	await db.instantiate(wasmUrl);
+
 	URL.revokeObjectURL(workerUrl);
+	URL.revokeObjectURL(wasmUrl);
 	return wasmConnector({ duckdb: db });
+}
+
+async function initFromRest(): Promise<Coordinator> {
+	const { Coordinator, restConnector } = await import('@uwdata/mosaic-core');
+	const uri = `${window.location.origin}/_diveplot/query`;
+
+	// Verify the endpoint exists before committing to it
+	const probe = await fetch(uri, { method: 'OPTIONS' }).catch(() => null);
+	if (!probe || !probe.ok) {
+		throw new Error(
+			'[diveplot] WASM init failed and server-side DuckDB endpoint not available at ' + uri
+		);
+	}
+
+	const rest = restConnector({ uri });
+	const coord = new Coordinator();
+	coord.databaseConnector(rest);
+	_coordinator = coord;
+	_usingRest = true;
+	return coord;
 }
 
 /**

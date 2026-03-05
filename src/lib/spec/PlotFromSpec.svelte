@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Selection } from '@uwdata/mosaic-core';
+	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 	import ChartContainer from '$lib/components/charts/ChartContainer.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
 	import { AxisBottom, AxisLeft, MarginLabel } from '$lib/components/axes';
@@ -14,10 +14,21 @@
 
 	interface Props {
 		spec: PlotSpec;
-		params: Record<string, Selection>;
+		params: Record<string, FilterBridge>;
 	}
 
 	let { spec, params }: Props = $props();
+
+	// Find the FilterBridge used by marks in this plot (if any).
+	// All marks with a selection key share the same FilterBridge.
+	const bridge = $derived.by((): FilterBridge | null => {
+		for (const m of spec.marks ?? []) {
+			if (typeof m.selection === 'string' && params[m.selection]) {
+				return params[m.selection];
+			}
+		}
+		return null;
+	});
 
 	const resolvedMarks = $derived(
 		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec, params))
@@ -87,9 +98,9 @@
 		{#snippet interactors()}
 			{#each spec.interactors ?? [] as interactor, i (i)}
 				{#if interactor.interactor === 'intervalX'}
-					<IntervalX field={interactor.field} />
+					<IntervalX bridge={bridge} field={interactor.field} />
 				{:else if interactor.interactor === 'intervalY'}
-					<IntervalY field={interactor.field} />
+					<IntervalY bridge={bridge} field={interactor.field} />
 				{/if}
 			{/each}
 		{/snippet}

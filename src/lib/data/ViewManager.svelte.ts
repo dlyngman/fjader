@@ -52,6 +52,16 @@ class ViewManagerService {
 	#pendingUpdates = new Set<string>();
 	#updateScheduled = false;
 
+	// Per-table async serialization: ensures only one CREATE VIEW is in-flight
+	// per table. If new columns arrive during an exec(), the view is rebuilt
+	// after the current one completes.
+	#tableLocks = new Map<string, Promise<void>>();
+	#dirtyDuringLock = new Set<string>();
+
+	// Unique session ID to namespace views — prevents collisions when multiple
+	// render contexts (e.g. Streamlit iframes) share the same DuckDB instance.
+	#sessionId = Math.random().toString(36).slice(2, 8);
+
 	// Cardinality warning threshold
 	static CARDINALITY_WARNING = 50;
 
@@ -242,19 +252,52 @@ class ViewManagerService {
 			return;
 		}
 
+		// Serialize: if a CREATE VIEW is already in-flight for this table,
+		// mark it dirty so it rebuilds after the current one finishes.
+		const existingLock = this.#tableLocks.get(sourceTable);
+		if (existingLock) {
+			this.#dirtyDuringLock.add(sourceTable);
+			console.log(`[ViewManager] View creation in-flight for ${sourceTable}, will rebuild after`);
+			return;
+		}
+
+		// Keep view pending through the entire create+rebuild cycle so marks
+		// don't query a view that's missing columns still being registered.
+		this.#pendingViews.add(sourceTable);
+
+		let needsRebuild = true;
+		while (needsRebuild) {
+			this.#dirtyDuringLock.delete(sourceTable);
+			const lockPromise = this.#doCreateView(sourceTable);
+			this.#tableLocks.set(sourceTable, lockPromise);
+			try {
+				await lockPromise;
+			} finally {
+				this.#tableLocks.delete(sourceTable);
+			}
+			needsRebuild = this.#dirtyDuringLock.has(sourceTable);
+			if (needsRebuild) {
+				console.log(`[ViewManager] Rebuilding ${sourceTable} with columns added during lock`);
+			}
+		}
+
+		// Only now mark the view as ready for queries
+		this.#pendingViews.delete(sourceTable);
+		this.version++;
+	}
+
+	async #doCreateView(sourceTable: string): Promise<void> {
 		const columns = this.#tableDefinitions.get(sourceTable);
 		if (!columns || columns.size === 0) {
 			// No columns - remove from reactive state
 			this.#tableStates.delete(sourceTable);
-			this.#pendingViews.delete(sourceTable);
-			this.version++;
 			console.log(`[ViewManager] No columns for ${sourceTable}, skipping view creation`);
 			return;
 		}
 
-		// Version the view name to bust caches
+		// Version the view name — session ID prevents collisions across render contexts
 		const currentVersion = (this.#tableStates.get(sourceTable)?.version ?? 0) + 1;
-		const viewName = `${sourceTable}_derived_v${currentVersion}`;
+		const viewName = `${sourceTable}_s${this.#sessionId}_v${currentVersion}`;
 
 		// Build SELECT clause: all original columns + computed columns
 		const computedColumns = [...columns.entries()]
@@ -269,18 +312,17 @@ FROM ${sourceTable}`;
 		console.log(`[ViewManager] Creating view ${viewName}:`, sql);
 
 		try {
-			await this.#coordinator.exec(sql);
+			await this.#coordinator!.exec(sql);
 
-			// Update reactive state - view is now ready
+			// Update table state (view name + version) but DON'T clear pendingViews —
+			// the caller (#createOrUpdateView) handles that after confirming no more
+			// dirty columns arrived.
 			this.#tableStates.set(sourceTable, { viewName, version: currentVersion });
-			this.#pendingViews.delete(sourceTable);
-			this.version++; // Trigger reactive updates - clients can now be created
+			this.version++;
 
-			console.log(`[ViewManager] View ${viewName} ready (version ${currentVersion})`);
+			console.log(`[ViewManager] View ${viewName} created (version ${currentVersion})`);
 		} catch (error) {
 			console.error(`[ViewManager] Failed to create view ${viewName}:`, error);
-			this.#pendingViews.delete(sourceTable);
-			this.version++;
 		}
 	}
 

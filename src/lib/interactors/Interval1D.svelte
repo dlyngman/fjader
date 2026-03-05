@@ -39,7 +39,7 @@
 		return isX ? chart.xScale : chart.yScale;
 	}
 	const scaleState = $derived(isX ? chart.xScaleState : chart.yScaleState);
-	const resolvedField = $derived(field ?? (isX ? chart.xLabel : chart.yLabel));
+	const resolvedField = $derived(field ?? (isX ? chart.xColumnName : chart.yColumnName) ?? (isX ? chart.xLabel : chart.yLabel));
 
 	// Resize edge names
 	const edgeStart = isX ? 'left' : 'top';
