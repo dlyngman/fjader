@@ -14,7 +14,8 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import type {
 		FieldRef,
@@ -161,7 +162,7 @@
 			y: ey1
 		},
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null },

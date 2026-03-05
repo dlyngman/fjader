@@ -1,22 +1,15 @@
 <script>
-	import { getContext } from 'svelte';
-	import { Selection } from '@uwdata/mosaic-core';
 	import {
 		ChartContainer,
 		Grid,
 		Crosshair,
 		WebGPUCanvas,
-		LineMark,
-		FilterBridge
+		LineMark
 	} from '$lib/components';
 	import { AreaMarkY } from '$lib/components/marks';
 	import { IntervalX } from '$lib/interactors';
 	import { sum, avg, min, max, sql, frameRows, preceding, currentRow } from '@uwdata/mosaic-sql';
 	import { bin } from '$lib/sql/bin';
-
-	const coordinator = getContext('mosaic-coordinator');
-
-	const filterBridge = new FilterBridge(Selection, null);
 
 	// Rolling 7-day (168-hour) sum of value, partitioned by group
 	const weeklySumY1 = sum('value')
@@ -63,7 +56,7 @@
 				{/snippet}
 
 				{#snippet interactors()}
-					<IntervalX bridge={filterBridge} />
+					<IntervalX selection="brush" />
 				{/snippet}
 			</ChartContainer>
 		</div>
@@ -80,7 +73,7 @@
 								y={weeklySumY2}
 								stroke="grp"
 								strokeWidth={1.5}
-								selection={filterBridge.filterSel}
+								selection="brush"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -104,7 +97,7 @@
 								y="value"
 								stroke="grp"
 								strokeWidth={1.5}
-								selection={filterBridge.filterSel}
+								selection="brush"
 							/>
 						{/snippet}
 					</WebGPUCanvas>
@@ -129,7 +122,7 @@
 								y2={maxValue}
 								fill="grp"
 								fillOpacity={0.3}
-								selection={filterBridge.filterSel}
+								selection="brush"
 								curve="monotone"
 							/>
 							<LineMark
@@ -138,7 +131,7 @@
 								y={avgValue}
 								stroke="grp"
 								strokeWidth={2}
-								selection={filterBridge.filterSel}
+								selection="brush"
 								curve="monotone"
 							/>
 						{/snippet}

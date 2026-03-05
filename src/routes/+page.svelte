@@ -144,7 +144,7 @@
 				<div class="cols">
 					<div class="col">
 						<span class="label">Components</span>
-						DotsMark, BarMarkY, Interval2D, FilterBridge
+						DotsMark, BarMarkY, Interval2D
 					</div>
 					<div class="col">
 						<span class="label">Description</span>
@@ -195,7 +195,7 @@
 				<div class="cols">
 					<div class="col">
 						<span class="label">Components</span>
-						RectYMark, IntervalX, FilterBridge
+						RectYMark, IntervalX
 					</div>
 					<div class="col">
 						<span class="label">Description</span>
@@ -227,7 +227,7 @@
 				<div class="cols">
 					<div class="col">
 						<span class="label">Components</span>
-						DotsMark, RectYMark, IntervalX, FilterBridge
+						DotsMark, RectYMark, IntervalX
 					</div>
 					<div class="col">
 						<span class="label">Description</span>

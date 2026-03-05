@@ -1,12 +1,9 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
-	import { sum, min, max, avg, count } from '@uwdata/mosaic-sql';
-	import { setContext, getContext } from 'svelte';
-	import Plot from './Plot.svelte';
+	import { min, avg, count } from '@uwdata/mosaic-sql';
+	import { getContext } from 'svelte';
 
 	import {
 		ChartContainer,
-		ColumnSelector,
 		Grid,
 		Frame,
 		AxisLeft,
@@ -16,14 +13,9 @@
 		WebGPUCanvas,
 		DotsMark,
 		RectYMark,
-		FilterBridge,
 		IntervalX
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
-
-	const coordinator = getContext('mosaic-coordinator');
-	// const brushSeletion = Selection.crossfilter();
-	const filterBridge = new FilterBridge(Selection, null);
 </script>
 
 <div class="main-view-container">
@@ -44,7 +36,7 @@
 
 						<DotsMark
 							table="flights"
-							selection={filterBridge.filterSel}
+							selection="brush"
 							x={min('delay')}
 							y="time"
 							fill={avg('delay')}
@@ -83,7 +75,7 @@
 							y={count()}
 							fill="red"
 							viewportLocalDomain={true}
-							selection={filterBridge.filterSel}
+							selection="brush"
 						/>
 					{/snippet}
 				</WebGPUCanvas>
@@ -94,7 +86,7 @@
 			{/snippet}
 
 			{#snippet interactors()}
-				<IntervalX bridge={filterBridge} />
+				<IntervalX selection="brush" />
 			{/snippet}
 		</ChartContainer>
 	</div>

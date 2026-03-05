@@ -19,7 +19,7 @@ import { mount, unmount } from 'svelte';
 import { Selection } from '@uwdata/mosaic-core';
 import { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+import { SelectionRegistry } from '$lib/selection';
 import { getOrCreateCoordinator, loadData } from './LazyCoordinator';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
 import type { DivePlotSpec, RenderOptions, DivePlotHandle } from './types';
@@ -57,29 +57,23 @@ export async function render(
 		await gpuCoordinator.initialize();
 	}
 
-	// 4. Resolve params → FilterBridge instances (same pattern as Svelte route examples)
-	const params: Record<string, FilterBridge> = {};
-	if (spec.params) {
-		for (const [name] of Object.entries(spec.params)) {
-			params[name] = new FilterBridge(Selection, null);
-		}
-	}
-
-	// 5. Build context map — injected into Svelte mount() so child components
+	// 4. Build context map — injected into Svelte mount() so child components
 	//    find these via getContext() calls (same keys as setCoordinators())
+	const selectionRegistry = new SelectionRegistry(Selection);
 	const context = new Map<string, unknown>();
 	context.set('mosaic-coordinator', coordinator);
 	context.set('gpu-coordinator', gpuCoordinator);
 	context.set('scale-registry', scaleRegistry);
+	context.set('selection-registry', selectionRegistry);
 
-	// 6. Mount the Svelte component tree
+	// 5. Mount the Svelte component tree
 	const component = mount(LayoutFromSpec, {
 		target,
-		props: { spec, params },
+		props: { spec },
 		context
 	});
 
-	// 7. Return handle for cleanup
+	// 6. Return handle for cleanup
 	return {
 		destroy() {
 			unmount(component);

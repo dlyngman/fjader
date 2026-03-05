@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 	import ChartContainer from '$lib/components/charts/ChartContainer.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
 	import { AxisBottom, AxisLeft, MarginLabel } from '$lib/components/axes';
@@ -16,24 +15,21 @@
 
 	interface Props {
 		spec: PlotSpec;
-		params: Record<string, FilterBridge>;
 	}
 
-	let { spec, params }: Props = $props();
+	let { spec }: Props = $props();
 
-	// Find the FilterBridge used by marks in this plot (if any).
-	// All marks with a selection key share the same FilterBridge.
-	const bridge = $derived.by((): FilterBridge | null => {
+	// Derive selection name from the first mark that declares one.
+	// Interactors and legend share the same selection group.
+	const selectionName = $derived.by((): string | null => {
 		for (const m of spec.marks ?? []) {
-			if (typeof m.selection === 'string' && params[m.selection]) {
-				return params[m.selection];
-			}
+			if (typeof m.selection === 'string') return m.selection;
 		}
 		return null;
 	});
 
 	const resolvedMarks = $derived(
-		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec, params))
+		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec))
 	);
 
 	const legendConfig = $derived.by((): LegendSpec | null => {
@@ -102,24 +98,26 @@
 		{/snippet}
 
 		{#snippet interactors()}
-			{#each spec.interactors ?? [] as interactor, i (i)}
-				{#if interactor.interactor === 'intervalX'}
-					<IntervalX bridge={bridge} field={interactor.field} />
-				{:else if interactor.interactor === 'intervalY'}
-					<IntervalY bridge={bridge} field={interactor.field} />
-				{:else if interactor.interactor === 'interval2D'}
-					<Interval2D bridge={bridge} xField={interactor.xField} yField={interactor.yField} />
-				{:else if interactor.interactor === 'toggle'}
-					<Toggle bridge={bridge} field={interactor.field} />
-				{/if}
-			{/each}
+			{#if selectionName}
+				{#each spec.interactors ?? [] as interactor, i (i)}
+					{#if interactor.interactor === 'intervalX'}
+						<IntervalX selection={interactor.selection ?? selectionName} field={interactor.field} />
+					{:else if interactor.interactor === 'intervalY'}
+						<IntervalY selection={interactor.selection ?? selectionName} field={interactor.field} />
+					{:else if interactor.interactor === 'interval2D'}
+						<Interval2D selection={interactor.selection ?? selectionName} xField={interactor.xField} yField={interactor.yField} />
+					{:else if interactor.interactor === 'toggle'}
+						<Toggle selection={interactor.selection ?? selectionName} field={interactor.field} />
+					{/if}
+				{/each}
+			{/if}
 		{/snippet}
 
 		{#snippet legend()}
 			{#if legendConfig}
 				<Legend
 					color={legendConfig.color}
-					bridge={bridge}
+					selection={selectionName ?? undefined}
 					title={legendConfig.title ?? null}
 					columns={legendConfig.columns ?? null}
 					swatchSize={legendConfig.swatchSize}

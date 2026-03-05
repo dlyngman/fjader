@@ -1,32 +1,30 @@
 <script lang="ts">
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 	import PlotFromSpec from './PlotFromSpec.svelte';
 	import type { DivePlotSpec } from './types';
 
 	interface Props {
 		spec: DivePlotSpec;
-		params: Record<string, FilterBridge>;
 	}
 
-	let { spec, params }: Props = $props();
+	let { spec }: Props = $props();
 </script>
 
 {#if spec.hconcat?.length}
 	<div class="diveplot-hconcat">
 		{#each spec.hconcat as plotSpec, i (i)}
 			<div class="diveplot-hconcat-item">
-				<PlotFromSpec spec={plotSpec} {params} />
+				<PlotFromSpec spec={plotSpec} />
 			</div>
 		{/each}
 	</div>
 {:else if spec.vconcat?.length}
 	<div class="diveplot-vconcat">
 		{#each spec.vconcat as plotSpec, i (i)}
-			<PlotFromSpec spec={plotSpec} {params} />
+			<PlotFromSpec spec={plotSpec} />
 		{/each}
 	</div>
 {:else if spec.plot}
-	<PlotFromSpec spec={spec.plot} {params} />
+	<PlotFromSpec spec={spec.plot} />
 {/if}
 
 <style>

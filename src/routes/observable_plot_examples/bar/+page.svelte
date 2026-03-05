@@ -1,5 +1,5 @@
 <script>
-	import { Coordinator, wasmConnector, Selection } from '@uwdata/mosaic-core';
+	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
@@ -15,7 +15,6 @@
 		BarMarkY,
 		BarMarkX,
 		TextMark,
-		FilterBridge,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -26,8 +25,6 @@
 	let coord;
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-
-	const filterBridge = new FilterBridge(Selection, null);
 
 	onMount(async () => {
 		try {
@@ -67,7 +64,7 @@
 			<div class="chart-wrapper">
 				<ChartContainer>
 					{#snippet legend()}
-						<Legend color="weather" bridge={filterBridge} />
+						<Legend color="weather" selection="brush" />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -99,7 +96,7 @@
 			<div class="chart-wrapper" style="max-height: 200px;">
 				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" bridge={filterBridge} />
+						<Legend color="weather" selection="brush" />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -130,7 +127,7 @@
 					{/snippet}
 
 					{#snippet interactors()}
-						<!-- <IntervalX bridge={filterBridge} field={dateMonthDay('date')} /> -->
+						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -143,7 +140,7 @@
 			<div class="chart-wrapper" style="max-height:700px;">
 				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" bridge={filterBridge} />
+						<Legend color="weather" selection="brush" />
 					{/snippet}
 					{#snippet background()}
 						<!-- <Frame /> -->
@@ -181,7 +178,7 @@
 					{/snippet}
 
 					{#snippet interactors()}
-						<!-- <IntervalX bridge={filterBridge} field={dateMonthDay('date')} /> -->
+						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>

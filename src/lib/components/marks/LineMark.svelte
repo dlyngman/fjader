@@ -13,7 +13,8 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -131,7 +132,7 @@
 			y: y
 		},
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',

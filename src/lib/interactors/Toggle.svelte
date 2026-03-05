@@ -4,16 +4,18 @@
 	import { column } from '@uwdata/mosaic-sql';
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+	import { getSelectionRegistry } from '$lib/selection';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { ClauseSource } from '@uwdata/mosaic-core';
 
 	interface Props {
-		bridge: FilterBridge;
+		selection: string;
 		field: string | string[];
 	}
 
-	let { bridge, field }: Props = $props();
+	let { selection: selectionName, field }: Props = $props();
+
+	const group = getSelectionRegistry()!.getGroup(selectionName);
 
 	const chart = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
@@ -43,11 +45,11 @@
 		sel: selection,
 		source,
 		off: unregister
-	} = bridge.createToggle(fields[0], {
+	} = group.createToggle(fields[0], {
 		scaleStates: getToggleScaleStates
 	});
 
-	// Derive selected set reactively from scale state (projected by FilterBridge)
+	// Derive selected set reactively from scale state (projected by SelectionGroup)
 	const selectedSet = $derived.by(() => {
 		const scales = getToggleScaleStates();
 		for (const s of scales) {
@@ -81,7 +83,7 @@
 		}
 
 		if (newValues === null) {
-			bridge.clearToggle(fields[0]);
+			group.clearToggle(fields[0]);
 		} else {
 			selection.update(
 				clausePoints(columnRefs, newValues, { source: source as unknown as ClauseSource })
@@ -125,7 +127,7 @@
 
 		// Path 3: Click on empty space — clear
 		if (selectedSet) {
-			bridge.clearToggle(fields[0]);
+			group.clearToggle(fields[0]);
 		}
 	};
 

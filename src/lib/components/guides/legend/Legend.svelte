@@ -3,11 +3,9 @@
 	import OrdinalColorLegend from './OrdinalColorLegend.svelte';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
-
 	interface Props {
 		color?: string | null;
-		bridge?: FilterBridge | null;
+		selection?: string;
 		title?: string | null;
 		columns?: number | null;
 		swatchSize?: number;
@@ -18,7 +16,7 @@
 
 	let {
 		color = null,
-		bridge = null,
+		selection: selectionName = undefined,
 		title = null,
 		columns = null,
 		swatchSize = 15,
@@ -46,7 +44,7 @@
 {#if colorScaleState?.ready && (colorScaleState as ColorScaleState).isOrdinal}
 	<OrdinalColorLegend
 		scaleState={colorScaleState as ColorScaleState}
-		{bridge}
+		selection={selectionName}
 		field={color}
 		{title}
 		{columns}

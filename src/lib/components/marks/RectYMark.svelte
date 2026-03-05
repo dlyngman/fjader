@@ -14,7 +14,8 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -152,7 +153,7 @@
 			y: y2 ?? undefined
 		},
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y1, y2] : null },

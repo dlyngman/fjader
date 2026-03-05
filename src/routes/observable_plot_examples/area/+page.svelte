@@ -1,6 +1,6 @@
 <script>
-	import { Coordinator, wasmConnector, Selection } from '@uwdata/mosaic-core';
-	import { loadParquet, loadCSV, count, dateMonthDay } from '@uwdata/mosaic-sql';
+	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
+	import { loadCSV } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
 	import {
@@ -11,26 +11,16 @@
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		DotsMark,
 		AreaMarkY,
-		LineMark,
-		IntervalX,
-		FilterBridge,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
-	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
-	import Toggle from '$lib/interactors/Toggle.svelte';
-	import { eq, literal, sql } from '@uwdata/mosaic-sql';
-	import { filter, stack } from '$lib/transforms';
 
 	setCoordinators();
 
 	let coord;
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-
-	const filterBridge = new FilterBridge(Selection, null);
 
 	onMount(async () => {
 		try {
@@ -65,7 +55,7 @@
 			<div class="chart-wrapper">
 				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" bridge={filterBridge} />
+						<Legend color="weather" selection="brush" />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -95,7 +85,7 @@
 					{/snippet}
 
 					{#snippet interactors()}
-						<!-- <IntervalX bridge={filterBridge} field={dateMonthDay('date')} /> -->
+						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -108,7 +98,7 @@
 			<div class="chart-wrapper">
 				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" bridge={filterBridge} />
+						<Legend color="weather" selection="brush" />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -139,7 +129,7 @@
 					{/snippet}
 
 					{#snippet interactors()}
-						<!-- <IntervalX bridge={filterBridge} field={dateMonthDay('date')} /> -->
+						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>

@@ -14,7 +14,8 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		resolveSelection
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -159,7 +160,7 @@
 			y: y
 		},
 		table,
-		selection,
+		selection: resolveSelection(selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		// Connected topology - ordered by dimension (y)

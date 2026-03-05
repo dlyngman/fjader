@@ -11,15 +11,17 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
-	import type { FilterBridge } from '$lib/selection/filter-bridge.svelte';
+	import { getSelectionRegistry } from '$lib/selection';
 
 	interface Props {
-		bridge: FilterBridge;
+		selection: string;
 		xField?: FieldRef;
 		yField?: FieldRef;
 	}
 
-	let { bridge, xField, yField }: Props = $props();
+	let { selection: selectionName, xField, yField }: Props = $props();
+
+	const group = getSelectionRegistry()!.getGroup(selectionName);
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();
@@ -36,7 +38,7 @@
 
 	const source = `interval-2d-${chart.chartId}`;
 
-	const { sel: selection, off: unregister } = bridge.createLocal('single', {
+	const { sel: selection, off: unregister } = group.createLocal('single', {
 		source,
 		augment: (clause) => ({
 			kind: 'range',
