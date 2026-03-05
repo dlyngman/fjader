@@ -73,6 +73,10 @@ export interface PlotSpec {
 	interactors?: InteractorSpec[];
 	useXSelection?: boolean;
 	useYSelection?: boolean;
+	xZoomLimit?: number;
+	yZoomLimit?: number;
+	xPanLimit?: number;
+	yPanLimit?: number;
 	legend?: LegendSpec | boolean;
 }
 
@@ -80,7 +84,7 @@ export interface PlotSpec {
 // Interactor specs — discriminated union on `interactor`
 // =============================================================================
 
-export type InteractorSpec = IntervalXSpec | IntervalYSpec;
+export type InteractorSpec = IntervalXSpec | IntervalYSpec | Interval2DSpec | ToggleSpec;
 
 export interface IntervalXSpec {
 	interactor: 'intervalX';
@@ -90,6 +94,17 @@ export interface IntervalXSpec {
 export interface IntervalYSpec {
 	interactor: 'intervalY';
 	field?: string;
+}
+
+export interface Interval2DSpec {
+	interactor: 'interval2D';
+	xField?: string;
+	yField?: string;
+}
+
+export interface ToggleSpec {
+	interactor: 'toggle';
+	field: string;
 }
 
 // =============================================================================

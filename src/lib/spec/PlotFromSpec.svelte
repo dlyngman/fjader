@@ -9,6 +9,8 @@
 	import Legend from '$lib/components/guides/legend/Legend.svelte';
 	import IntervalX from '$lib/interactors/IntervalX.svelte';
 	import IntervalY from '$lib/interactors/IntervalY.svelte';
+	import Interval2D from '$lib/interactors/Interval2D.svelte';
+	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { resolveMarkEntry } from './MarkRegistry';
 	import type { LegendSpec, PlotSpec } from './types';
 
@@ -71,6 +73,10 @@
 		margin={spec.margin}
 		useXSelection={spec.useXSelection ?? false}
 		useYSelection={spec.useYSelection ?? false}
+		xZoomLimit={spec.xZoomLimit}
+		yZoomLimit={spec.yZoomLimit}
+		xPanLimit={spec.xPanLimit}
+		yPanLimit={spec.yPanLimit}
 		{legendPosition}
 	>
 		{#snippet background()}
@@ -101,6 +107,10 @@
 					<IntervalX bridge={bridge} field={interactor.field} />
 				{:else if interactor.interactor === 'intervalY'}
 					<IntervalY bridge={bridge} field={interactor.field} />
+				{:else if interactor.interactor === 'interval2D'}
+					<Interval2D bridge={bridge} xField={interactor.xField} yField={interactor.yField} />
+				{:else if interactor.interactor === 'toggle'}
+					<Toggle bridge={bridge} field={interactor.field} />
 				{/if}
 			{/each}
 		{/snippet}
@@ -109,6 +119,7 @@
 			{#if legendConfig}
 				<Legend
 					color={legendConfig.color}
+					bridge={bridge}
 					title={legendConfig.title ?? null}
 					columns={legendConfig.columns ?? null}
 					swatchSize={legendConfig.swatchSize}

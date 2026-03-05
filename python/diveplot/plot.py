@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 _PLOT_FIELDS = (
     "width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend",
-    "interactors", "use_x_selection", "use_y_selection",
+    "interactors", "use_selection", "zoom_limit", "pan_limit",
 )
 
 
@@ -33,8 +33,9 @@ class Plot:
     columns: int | None = None
     legend: dict[str, Any] | bool | None = None
     interactors: list[InteractorSpec] | None = None
-    use_x_selection: bool | None = None
-    use_y_selection: bool | None = None
+    use_selection: str | None = None  # 'x' | 'y' | 'xy'
+    zoom_limit: int | float | tuple[int | float, int | float] | None = None
+    pan_limit: int | float | tuple[int | float, int | float] | None = None
 
     def __init__(self, *marks: Mark, **kwargs: Any) -> None:
         unexpected = set(kwargs) - set(_PLOT_FIELDS)
@@ -61,12 +62,35 @@ class Plot:
                 setattr(new, key, val)
         return new
 
+    @staticmethod
+    def _expand_axis_pair(
+        value: int | float | tuple[int | float, int | float],
+        x_key: str,
+        y_key: str,
+        spec: dict[str, Any],
+    ) -> None:
+        if isinstance(value, (int, float)):
+            spec[x_key] = value
+            spec[y_key] = value
+        else:
+            spec[x_key] = value[0]
+            spec[y_key] = value[1]
+
     def _to_plot_spec(self) -> dict[str, Any]:
         """Produce the PlotSpec portion (without outer data wrapper)."""
         spec: dict[str, Any] = {"marks": [m.to_mark_dict() for m in self._marks]}
         for key in _PLOT_FIELDS:
             val = getattr(self, key)
-            if val is not None:
+            if val is None:
+                continue
+            if key == "use_selection":
+                spec["useXSelection"] = "x" in val
+                spec["useYSelection"] = "y" in val
+            elif key == "zoom_limit":
+                self._expand_axis_pair(val, "xZoomLimit", "yZoomLimit", spec)
+            elif key == "pan_limit":
+                self._expand_axis_pair(val, "xPanLimit", "yPanLimit", spec)
+            else:
                 spec[to_camel_case(key)] = serialize_value(val)
         return spec
 
@@ -127,8 +151,9 @@ def plot(
     columns: int | None = None,
     legend: dict[str, Any] | bool | None = None,
     interactors: list[InteractorSpec] | None = None,
-    use_x_selection: bool | None = None,
-    use_y_selection: bool | None = None,
+    use_selection: str | None = None,
+    zoom_limit: int | float | tuple[int | float, int | float] | None = None,
+    pan_limit: int | float | tuple[int | float, int | float] | None = None,
 ) -> Plot:
     """Create a chart with one or more marks and chart-level configuration.
 
@@ -144,14 +169,18 @@ def plot(
         legend: Legend config — ``True`` for auto-detect, or a dict like
             ``{"color": "species", "position": "right"}``.
         interactors: List of interactor specs (e.g. ``[dp.interval_x()]``).
-        use_x_selection: Follow the shared x-scale's selection extent
-            (for overview+detail linked domains).
-        use_y_selection: Follow the shared y-scale's selection extent.
+        use_selection: Follow the shared scale's selection extent —
+            ``'x'``, ``'y'``, or ``'xy'`` for both axes.
+        zoom_limit: Max zoom depth. A number applies to both axes;
+            a ``(x, y)`` tuple sets per-axis limits.
+        pan_limit: How far past data edges the user can pan. A number
+            applies to both axes; a ``(x, y)`` tuple sets per-axis limits.
     """
     return Plot(
         *marks,
         width=width, height=height, margin=margin,
         x_label=x_label, y_label=y_label, fx=fx, columns=columns,
         legend=legend, interactors=interactors,
-        use_x_selection=use_x_selection, use_y_selection=use_y_selection,
+        use_selection=use_selection,
+        zoom_limit=zoom_limit, pan_limit=pan_limit,
     )
