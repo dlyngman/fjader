@@ -229,6 +229,12 @@
 		get yLabel() {
 			return scales?.yLabel;
 		},
+		get xColumnName() {
+			return scales?.xColumnName ?? null;
+		},
+		get yColumnName() {
+			return scales?.yColumnName ?? null;
+		},
 
 		get currentXDataPoint() {
 			return scales?.currentXDataPoint;

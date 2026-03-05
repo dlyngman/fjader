@@ -42,6 +42,7 @@ def render(
     obj: Displayable,
     height: int = 500,
     key: str | None = None,
+    server_duckdb: bool = False,
 ) -> Any:
     """Render a DivePlot chart in a Streamlit app.
 
@@ -49,6 +50,8 @@ def render(
         obj: A DivePlot mark, plot, or layout object.
         height: Component height in pixels.
         key: Streamlit component key for state management.
+        server_duckdb: If True, use Python-side DuckDB instead of browser WASM.
+            Useful for environments where WebAssembly is blocked by CSP.
 
     Returns:
         The component value (None unless selections are implemented).
@@ -58,23 +61,56 @@ def render(
     # Inject heights into the spec and compute the actual iframe height.
     iframe_height = _inject_height(spec_dict, height)
 
+    # Set up server-side DuckDB when requested (for environments where WASM
+    # is blocked by CSP). Fast and idempotent — tables are skipped if already loaded.
+    if server_duckdb:
+        _setup_server_fallback(dataframes)
+
     manifest: list[dict[str, str]] = []
     table_args: dict[str, Any] = {}
 
-    for i, (table_name, df) in enumerate(dataframes.items()):
-        h, _ = df_to_ipc_cached(df)
-        arg_key = f"_df_{i}"
-        table_args[arg_key] = _to_pandas(df)
-        manifest.append({"name": table_name, "hash": h, "arg": arg_key})
+    if not server_duckdb:
+        # Only send data to the frontend when using WASM DuckDB.
+        # With server-side DuckDB the data is already loaded — no need to
+        # serialize and transfer it over the Streamlit component bridge.
+        for i, (table_name, df) in enumerate(dataframes.items()):
+            h, _ = df_to_ipc_cached(df)
+            arg_key = f"_df_{i}"
+            table_args[arg_key] = _to_pandas(df)
+            manifest.append({"name": table_name, "hash": h, "arg": arg_key})
 
     return _component(
         spec=json.dumps(spec_dict),
         data_manifest=json.dumps(manifest),
+        server_duckdb=server_duckdb,
         height=iframe_height,
         key=key,
         default=None,
         **table_args,
     )
+
+
+def _setup_server_fallback(dataframes: dict[str, Any]) -> None:
+    """Register the DuckDB query endpoint and load DataFrames server-side.
+
+    This runs on every render() call but is idempotent — the endpoint is
+    registered once, and tables are only reloaded when their content changes.
+    """
+    try:
+        from ._query_server import ensure_query_endpoint, load_dataframe
+
+        ensure_query_endpoint()
+        for table_name, df in dataframes.items():
+            h, _ = df_to_ipc_cached(df)
+            load_dataframe(table_name, df, content_hash=h)
+    except Exception:
+        # Non-fatal: if the server fallback can't be set up, the frontend
+        # will still try WASM. Only log at debug level.
+        import logging
+
+        logging.getLogger("diveplot").debug(
+            "Server-side DuckDB fallback setup failed", exc_info=True
+        )
 
 
 _VCONCAT_GAP = 8  # matches CSS gap in LayoutFromSpec.svelte

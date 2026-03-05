@@ -316,6 +316,12 @@
 		get yLabel() {
 			return scales?.yLabel;
 		},
+		get xColumnName() {
+			return scales?.xColumnName ?? null;
+		},
+		get yColumnName() {
+			return scales?.yColumnName ?? null;
+		},
 
 		// Data points — from shared scale state
 		get currentXDataPoint() {

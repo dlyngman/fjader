@@ -93,11 +93,20 @@ class VConcat:
     """Vertical layout of independent charts."""
 
     items: list[Any] = field(default_factory=list)  # list[Plot]
+    _params: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {}
+        if self._params:
+            result["params"] = self._params
         result["vconcat"] = [p._to_plot_spec() for p in self.items]
         return result
+
+    def _all_marks(self) -> list[Any]:
+        marks: list[Any] = []
+        for p in self.items:
+            marks.extend(p._marks)
+        return marks
 
     def to_json(self, **kwargs: Any) -> str:
         return json.dumps(self.to_dict(), **kwargs)
@@ -128,9 +137,16 @@ def hconcat(*items: Any) -> HConcat:
     return HConcat(items=plots)
 
 
-def vconcat(*items: Any) -> VConcat:
-    """Create a vertical layout from plots or marks."""
+def vconcat(
+    *items: Any,
+    params: dict[str, dict[str, str]] | None = None,
+) -> VConcat:
+    """Create a vertical layout from plots or marks.
+
+    Args:
+        params: Named selections, e.g. ``{"brush": {"select": "crossfilter"}}``.
+    """
     plots: list[Any] = []
     for item in items:
         plots.extend(_to_plots(item))
-    return VConcat(items=plots)
+    return VConcat(items=plots, _params=params or {})

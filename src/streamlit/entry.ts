@@ -8,6 +8,7 @@
 import { Streamlit, type RenderData } from 'streamlit-component-lib';
 import type { ArrowTable } from 'streamlit-component-lib';
 import { renderFromData, showError, type DivePlotHandle, type ManifestEntry } from '../widget/core';
+import { configureForceServer } from '$lib/spec/LazyCoordinator';
 import '$lib/theme.css';
 
 const root = document.getElementById('root')!;
@@ -17,6 +18,9 @@ let generation = 0;
 function onRender(event: Event): void {
 	const gen = ++generation;
 	const { args } = (event as CustomEvent<RenderData>).detail;
+
+	// Configure server-side DuckDB if requested
+	configureForceServer(!!args.server_duckdb);
 
 	// Destroy previous render
 	if (handle) {
@@ -48,5 +52,13 @@ function onRender(event: Event): void {
 		});
 }
 
-Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
-Streamlit.setComponentReady();
+/**
+ * Register the Streamlit render listener and signal readiness.
+ * Exported so entry-bundled.ts can defer this until after inline WASM is configured.
+ * (With inlineDynamicImports, top-level code runs at bundle load — before async
+ * WASM decompression finishes — so the bundled entry must control the timing.)
+ */
+export function init(): void {
+	Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+	Streamlit.setComponentReady();
+}

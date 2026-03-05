@@ -19,6 +19,7 @@ import { mount, unmount } from 'svelte';
 import { Selection } from '@uwdata/mosaic-core';
 import { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { FilterBridge } from '$lib/selection/filter-bridge.svelte';
 import { getOrCreateCoordinator, loadData } from './LazyCoordinator';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
 import type { DivePlotSpec, RenderOptions, DivePlotHandle } from './types';
@@ -56,24 +57,11 @@ export async function render(
 		await gpuCoordinator.initialize();
 	}
 
-	// 4. Resolve params → Selection instances
-	const params: Record<string, Selection> = {};
+	// 4. Resolve params → FilterBridge instances (same pattern as Svelte route examples)
+	const params: Record<string, FilterBridge> = {};
 	if (spec.params) {
-		for (const [name, paramSpec] of Object.entries(spec.params)) {
-			switch (paramSpec.select) {
-				case 'crossfilter':
-					params[name] = Selection.crossfilter();
-					break;
-				case 'single':
-					params[name] = Selection.single();
-					break;
-				case 'intersect':
-					params[name] = Selection.intersect();
-					break;
-				case 'union':
-					params[name] = Selection.union();
-					break;
-			}
+		for (const [name] of Object.entries(spec.params)) {
+			params[name] = new FilterBridge(Selection, null);
 		}
 	}
 

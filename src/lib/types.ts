@@ -310,6 +310,8 @@ export interface ChartContext {
 
 	readonly xLabel: string | null | undefined;
 	readonly yLabel: string | null | undefined;
+	readonly xColumnName: string | null;
+	readonly yColumnName: string | null;
 
 	// Data points
 	readonly currentXDataPoint: number | null | undefined;

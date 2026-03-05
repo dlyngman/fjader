@@ -24,8 +24,8 @@
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();
 
-	const resolvedXField = $derived(xField ?? chart.xLabel);
-	const resolvedYField = $derived(yField ?? chart.yLabel);
+	const resolvedXField = $derived(xField ?? chart.xColumnName ?? chart.xLabel);
+	const resolvedYField = $derived(yField ?? chart.yColumnName ?? chart.yLabel);
 
 	const xColumnRef = $derived(
 		buildColumnRef(resolvedXField, chart.xScaleState as { t0?: Date } | null)
