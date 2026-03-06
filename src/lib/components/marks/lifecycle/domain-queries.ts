@@ -14,7 +14,7 @@ import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { ContinuousScaleState, NormalizedSortConfig } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
-import type { DataClientConfig } from '$lib/data-clients/DataClient.svelte';
+import type { DataClientConfig } from '$lib/data/DataClient.svelte';
 
 // ---------------------------------------------------------------------------
 // fetchCategoricalDomains

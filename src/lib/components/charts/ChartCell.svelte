@@ -3,7 +3,7 @@
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
-	import { WheelInteractionControl } from '$lib/utils/wheelInteractionControl';
+	import { WheelInteractionControl } from '$lib/interactors/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 	import type { ChartContext, Coordinator } from '$lib/types';
 	import type { ChartScales } from '$lib/scales/ChartScales.svelte';

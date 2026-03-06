@@ -1,4 +1,4 @@
-import type { FieldInfoEntry } from '$lib/data-clients/DataClient.svelte';
+import type { FieldInfoEntry } from '$lib/data/DataClient.svelte';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
