@@ -4,28 +4,14 @@ import { untrack } from 'svelte';
 import { DataClient } from '$lib/data-clients/DataClient.svelte';
 import type {
 	DataClientConfig,
-	DataClientOptions,
-	FieldInfoEntry
+	DataClientOptions
 } from '$lib/data-clients/DataClient.svelte';
-import {
-	Query,
-	isNode,
-	sql,
-	column as sqlColumn,
-	isAggregateExpression,
-	isColumnRef,
-	isColumnParam,
-	isNotNull,
-	and,
-	min,
-	max
-} from '@uwdata/mosaic-sql';
-import type { ExprNode, ExprValue, FilterExpr, GroupByExpr, SelectExpr } from '@uwdata/mosaic-sql';
+import { Query, isNode, sql } from '@uwdata/mosaic-sql';
+import type { ExprValue, FilterExpr } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, FieldInfoRequest } from '@uwdata/mosaic-core';
-import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { ArrowDataAccessor, ObjectDataAccessor } from '$lib/data/DataAccessor';
+import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import { viewManager } from '$lib/data/ViewManager.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
@@ -38,29 +24,66 @@ import type {
 	ContinuousScaleState,
 	MosaicClient
 } from '$lib/types';
-import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
-import type { Table } from '@uwdata/flechette';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
-import {
-	isContinuousScale,
-	isNumericScale,
-	isCategoricalScale,
-	isTemporalScale
-} from '$lib/scales/scale-categories';
+import { isContinuousScale } from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from './utils';
+import { isWindowExpression } from '$lib/sql/expression-utils';
+import {
+	computeExtentFromData,
+	detectChannelsNeedingDataDomain,
+	type ExtentFilterOptions
+} from './domain-computation';
+import {
+	buildFieldInfoRequests,
+	buildQueryParts,
+	assembleQuery,
+	type QueryParts
+} from './query-builder';
+import {
+	setScalesReady,
+	markDeferredScalesReady,
+	setInitialContinuousDomains,
+	registerDataDerivedDomains
+} from './domain-registration';
+import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// LIFECYCLE: 10-Effect State Machine
+//
+//  constructor
+//    ├─ detectChannelsNeedingDataDomain()       [domain-computation.ts]
+//    └─ registerScaleRequirements()             → #scaleRequirementsRegistered
+//
+//  Effect 1:  scaleRequirementsRegistered        → #scaleStatesReady
+//  Effect 2:  scaleStatesReady                   → #scaleMappingsReady
+//  Effect 3:  scaleMappingsReady                 → categoricalDataFetched  [async]
+//             Calls: fetchCategoricalDomains()     [domain-queries.ts]
+//                    fetchGlobalAggregates()       [domain-queries.ts]
+//                    setScalesReady()              [domain-registration.ts]
+//  Effect 4:  categoricalDataFetched + view      → #clientCreated
+//             Calls: buildFieldInfoRequests()      [query-builder.ts]
+//  Effect 5:  clientCreated + fieldInfo           → #continuousDomainsSet
+//             Calls: setInitialContinuousDomains() [domain-registration.ts]
+//  Effect 6:  client.dataVersion + data          → #dataDerivedDomainsSet
+//             Calls: registerDataDerivedDomains()  [domain-registration.ts]
+//  Effect 7:  dataDerivedDomainsSet              → scales.setReady()
+//             Calls: markDeferredScalesReady()     [domain-registration.ts]
+//  Effect 8:  domain.target + autoBins           → re-bin cycle (→ Effect 6)
+//  Effect 9:  client.dataVersion                 → tooltip table [side effect]
+//  Effect 10: domain.target + data               → viewport-local domain
+//
+//  gpuReady = scalesReady && categoricalDataFetched && xReady && yReady
+//
+//  Extracted modules:
+//    domain-computation.ts   — pure extent/category/channel detection
+//    query-builder.ts        — SQL query construction
+//    domain-registration.ts  — scale domain registration
+//    domain-queries.ts       — async coordinator queries
 // ---------------------------------------------------------------------------
-
-/** Check if an AST node is a window expression (e.g. sum('x').partitionby(...).orderby(...)). */
-function isWindowExpression(node: unknown): boolean {
-	return isNode(node) && (node as { type: string }).type === 'WINDOW';
-}
 
 // ---------------------------------------------------------------------------
 // Local interfaces
@@ -95,11 +118,6 @@ export interface BaseMarkSetupConfig {
 	zeroBaseline?: { x?: boolean; y?: boolean };
 }
 
-interface ExtentFilterOptions {
-	filterAxis?: string;
-	filterDomain?: [number, number];
-}
-
 export class BaseMarkSetup {
 	// --- Reactive State ---
 	client = $state<DataClient | null>(null);
@@ -110,7 +128,6 @@ export class BaseMarkSetup {
 	#scaleStatesReady = $state(false);
 	#scaleMappingsReady = $state(false);
 	#clientCreated = $state(false);
-	#clientDataReady = $state(false);
 	#continuousDomainsSet = $state(false);
 	#categoricalFetchStarted = $state(false);
 	#colorDomainFetched = $state(false);
@@ -149,14 +166,7 @@ export class BaseMarkSetup {
 	// Caches all filter-independent query state (resolved select, classification,
 	// transforms, ordering) so repeated buildQuery calls during interaction
 	// only apply the WHERE clause. Invalidated on re-bin or multiplier change.
-	#cachedQueryParts: {
-		selectDef: Record<string, unknown>;
-		nonAggregateGroupBy: unknown[];
-		hasAggregates: boolean;
-		hasSQLTransforms: boolean;
-		orderChannels: string[] | null;
-		aliasMap: Map<string, string>;
-	} | null = null;
+	#cachedQueryParts: QueryParts | null = null;
 
 	// --- Viewport-Local Domain Support ---
 	#viewportDomainUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -220,7 +230,17 @@ export class BaseMarkSetup {
 		this.#detectAutoBins();
 
 		// Detect which channels need data-derived domains (aggregates)
-		this.#detectChannelsNeedingDataDomain();
+		this.#channelsNeedingDataDomain = detectChannelsNeedingDataDomain(
+			config.select,
+			config.scaleRequirements,
+			this.#transformCompiler
+		);
+		if (this.#channelsNeedingDataDomain.size > 0) {
+			console.log(
+				`🔧 ${this.#markId} channels needing data-derived domain:`,
+				Array.from(this.#channelsNeedingDataDomain)
+			);
+		}
 
 		this.#registerScaleRequirements();
 		this.#setupReactiveEffects();
@@ -232,71 +252,6 @@ export class BaseMarkSetup {
 			if (isBinExpression(value)) {
 				this.#autoBinNodes.set(channel, value);
 			}
-		}
-	}
-
-	/**
-	 * Detect which channels need their domain computed from query results.
-	 * This includes:
-	 * - Aggregate expressions (count, sum, etc.) on linear scales
-	 * - Aggregate expressions for continuous color scales
-	 * - Channels that will be generated by transforms (x0/x1, y0/y1)
-	 */
-	#detectChannelsNeedingDataDomain(): void {
-		const { select, scaleRequirements } = this.#config;
-
-		// Check each channel in select for aggregates and bins
-		for (const [channel, value] of Object.entries(select)) {
-			if (value == null) continue;
-
-			// AutoBinNodes need data-derived domains: bin boundaries depend on
-			// nice rounding and can't be known until the query results arrive.
-			// The sidecar query can't run before fieldInfo resolves bins to SQL.
-			if (isBinExpression(value)) {
-				if (channel === 'x' || channel === 'x1' || channel === 'x2') {
-					this.#channelsNeedingDataDomain.add('x');
-				} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
-					this.#channelsNeedingDataDomain.add('y');
-				}
-				continue;
-			}
-
-			// Check if it's an aggregate or window expression
-			const exprNode = isNode(value) ? value : null;
-			if (!exprNode || !(isAggregateExpression(exprNode) || isWindowExpression(exprNode))) continue;
-
-			// Determine channel type and whether it needs data-derived domain
-			if (channel === 'x' || channel === 'x1' || channel === 'x2') {
-				if (isContinuousScale(scaleRequirements?.x?.type)) {
-					this.#channelsNeedingDataDomain.add('x');
-				}
-			} else if (channel === 'y' || channel === 'y1' || channel === 'y2') {
-				if (isContinuousScale(scaleRequirements?.y?.type)) {
-					this.#channelsNeedingDataDomain.add('y');
-				}
-			} else if (channel === 'fill' || channel === 'stroke') {
-				// Aggregated color fields produce continuous (numeric) values
-				// These need domain discovery for continuous color scales
-				this.#channelsNeedingDataDomain.add(channel);
-			}
-		}
-
-		// Also add channels that transforms will generate
-		if (this.#transformCompiler.hasJSTransforms()) {
-			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-			for (const channel of additionalChannels) {
-				const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : null;
-				if (baseChannel) {
-					this.#channelsNeedingDataDomain.add(baseChannel);
-				}
-			}
-		}
-
-		if (this.#channelsNeedingDataDomain.size > 0) {
-			console.log(
-				`🔧 ${this.#markId} channels needing data-derived domain:`,
-				Array.from(this.#channelsNeedingDataDomain)
-			);
 		}
 	}
 
@@ -339,11 +294,53 @@ export class BaseMarkSetup {
 				this.#categoricalFetchStarted = true;
 
 				// Fetch both categorical and aggregated domains in parallel
-				Promise.all([this.#fetchCategoricalDomains(), this.#fetchGlobalAggregates()])
-					.then(([fetchCount]) => {
+				const seriesKey2 = this.#config._connectedConfig?.seriesChannel ?? null;
+				const catPromise = fetchCategoricalDomains(
+					this.#coordinator!,
+					this.#config.table,
+					this.#config.select,
+					this.#config.sort,
+					this.actualXScaleType,
+					this.actualYScaleType,
+					this.#chartContext.xScaleState as BandScaleState | null,
+					this.#chartContext.yScaleState as BandScaleState | null,
+					this.#chartContext.facetBandScale,
+					this.#chartContext.fx,
+					this.#config.colorChannel || 'fill',
+					this.#colorScaleState,
+					this.#config.sizeChannel || 'r',
+					this.#sizeScaleState,
+					this.#seriesScaleState,
+					seriesKey2,
+					this.#transformCompiler.hasCategoryReducingTransforms(),
+					this.#markId
+				);
+				const aggPromise = fetchGlobalAggregates(
+					this.#coordinator!,
+					this.#config.table,
+					this.#config.select,
+					this.#channelsNeedingDataDomain,
+					this.#autoBinNodes.size,
+					this.buildQuery.bind(this),
+					this.#config as unknown as DataClientConfig,
+					this.#chartContext.xScaleState as ContinuousScaleState | null,
+					this.#chartContext.yScaleState as ContinuousScaleState | null,
+					this.#colorScaleState,
+					this.#markId
+				);
+				Promise.all([catPromise, aggPromise])
+					.then(([fetchCount, aggResult]) => {
 						this.categoricalDataFetched = true;
 						if (colorReady) this.#colorDomainFetched = true;
-						this.#setScalesReady();
+						if (aggResult.globalAggregatesSet) this.#globalAggregatesSet = true;
+						setScalesReady(
+							this.#scaleMap,
+							this.#channelsNeedingDataDomain,
+							this.actualXScaleType,
+							this.actualYScaleType,
+							this.#globalAggregatesSet,
+							this.#dataDerivedDomainsSet
+						);
 						if (fetchCount > 0) {
 							console.log(`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`);
 						}
@@ -381,7 +378,7 @@ export class BaseMarkSetup {
 						this.client = null;
 					}
 
-					const fieldRequests = this.#buildFieldInfoRequests();
+					const fieldRequests = buildFieldInfoRequests(this.#config.select, tableToQuery, this.actualXScaleType, this.actualYScaleType);
 					console.log(`[Mark ${this.#markId}] Creating DataClient for ${tableToQuery}`);
 					this.#createClient(tableToQuery, fieldRequests);
 					this.#currentClientTable = tableToQuery;
@@ -390,22 +387,22 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 5: Monitor client data readiness
+		// Effect 5: Set initial continuous domains when fieldInfo arrives (merged 5+6)
 		$effect(() => {
-			if (this.#clientCreated && this.client?.fieldInfo && !this.#clientDataReady) {
-				this.#clientDataReady = true;
-			}
-		});
-
-		// Effect 6: Set initial continuous domains (from fieldInfo for non-aggregated fields)
-		$effect(() => {
-			if (this.#clientDataReady && !this.#continuousDomainsSet) {
-				this.#setInitialContinuousDomains(this.client!.fieldInfo);
+			if (this.#clientCreated && this.client?.fieldInfo && !this.#continuousDomainsSet) {
+				setInitialContinuousDomains(
+					this.client.fieldInfo,
+					this.#scaleMap,
+					this.#config.select,
+					this.actualXScaleType,
+					this.actualYScaleType,
+					this.#markId
+				);
 				this.#continuousDomainsSet = true;
 			}
 		});
 
-		// Effect 7: Register data-derived domains when data arrives
+		// Effect 6: Register data-derived domains when data arrives
 		// This handles aggregates and transforms that need domain computed from query results
 		$effect(() => {
 			// Watch dataVersion to ensure we only process NEW data
@@ -444,19 +441,46 @@ export class BaseMarkSetup {
 
 			// Get additional channels from transforms (if any)
 			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-			this.#registerDataDerivedDomains(data, additionalChannels, isRebinning);
+			const xState = this.#chartContext.xScaleState as ContinuousScaleState | null;
+			const yState = this.#chartContext.yScaleState as ContinuousScaleState | null;
+			const result = registerDataDerivedDomains(
+				data,
+				this.#channelsNeedingDataDomain,
+				additionalChannels,
+				this.#skipDomainUpdateForAxis,
+				this.#config.viewportLocalDomain,
+				this.#config.zeroBaseline,
+				this.actualXScaleType,
+				this.actualYScaleType,
+				xState,
+				yState,
+				(xState as ContinuousScaleState | null)?.hasDomain ?? false,
+				(yState as ContinuousScaleState | null)?.hasDomain ?? false,
+				this.#transformCompiler.hasCategoryReducingTransforms(),
+				this.#chartContext.xScaleState as BandScaleState | null,
+				this.#chartContext.yScaleState as BandScaleState | null,
+				this.#markId,
+				isRebinning
+			);
+			this.#dataDerivedDomainsSet = result.dataDerivedDomainsSet;
+			this.#skipDomainUpdateForAxis = result.skipDomainUpdateForAxis;
 		});
 
-		// Effect 8: Mark deferred scales ready when data-derived domains are set
+		// Effect 7: Mark deferred scales ready when data-derived domains are set
 		// This handles linear scales with aggregates/transforms that couldn't be marked
-		// ready in #setScalesReady() because their domain wasn't known yet
+		// ready in setScalesReady() because their domain wasn't known yet
 		$effect(() => {
 			if (this.#dataDerivedDomainsSet && this.#scaleMappingsReady) {
-				this.#markDeferredScalesReady();
+				markDeferredScalesReady(
+					this.#scaleMap,
+					this.#channelsNeedingDataDomain,
+					this.actualXScaleType,
+					this.actualYScaleType
+				);
 			}
 		});
 
-		// Effect 9: Adaptive Binning & User Resolution Control
+		// Effect 8: Adaptive Binning & User Resolution Control
 		$effect(() => {
 			// IMPORTANT: Read reactive values FIRST to establish dependencies
 			// Even if we early-return, Svelte needs to track these for reactivity
@@ -522,7 +546,7 @@ export class BaseMarkSetup {
 			}
 		});
 
-		// Effect 10: Write tooltip table when data updates (debounced).
+		// Effect 9: Write tooltip table when data updates (debounced).
 		// Trigger on dataVersion (increments only on DB query results) rather than
 		// this.data directly — the data derivation recomputes on every scale change
 		// (xScale/yScale) which would reset the debounce timer indefinitely.
@@ -540,7 +564,7 @@ export class BaseMarkSetup {
 			});
 		});
 
-		// Effect 11: Viewport-local domain - update aggregate axis when viewport pans
+		// Effect 10: Viewport-local domain - update aggregate axis when viewport pans
 		$effect(() => {
 			if (!this.#config.viewportLocalDomain) return;
 			if (!this.data || !this.#dataDerivedDomainsSet) return;
@@ -883,125 +907,21 @@ export class BaseMarkSetup {
 			const hasView = viewManager.hasView(this.#config.table);
 			select = this.#applyTimeOffsets(select, hasView);
 
-			// Classify select expressions and build the SQL alias map.
-			// The selectDef uses channel names as keys (internal convention).
-			// The aliasMap records what SQL alias each channel gets:
-			//   simple field ref → field name; expressions → channel name.
-			// Translation happens at query assembly time (only when
-			// forMosaic=true) so sidecar/tooltip queries stay channel-named.
-			const selectDef: Record<string, unknown> = {};
-			const nonAggregateGroupBy: unknown[] = [];
-			const groupByKeys = new Set<string>();
-			let hasAggregates = false;
-			const aliasMap = new Map<string, string>();
-
-			for (const channel in select) {
-				const expr = select[channel];
-				if (expr == null) continue;
-
-				const exprNode = isNode(expr) ? expr : sqlColumn(String(expr));
-
-				// SQL alias: field name for simple column refs, channel name
-				// for expressions. Matches Mosaic's PreAggregator expectations.
-				const sqlAlias =
-					isColumnRef(exprNode) && !isColumnParam(exprNode) ? exprNode.column : channel;
-
-				aliasMap.set(channel, sqlAlias);
-				selectDef[channel] = exprNode;
-
-				if (isAggregateExpression(exprNode)) {
-					hasAggregates = true;
-				} else if (!isWindowExpression(exprNode)) {
-					// Dedup: multiple channels may reference the same column
-					if (!groupByKeys.has(sqlAlias)) {
-						groupByKeys.add(sqlAlias);
-						nonAggregateGroupBy.push(exprNode);
-					}
-				}
-				// Window expressions: skip both — they don't trigger GROUP BY
-				// and shouldn't appear in GROUP BY themselves
-			}
-
-			// Store channel names for connected mark ordering.
-			// sqlColumn() nodes are built at query assembly time using
-			// the appropriate alias convention (channel or field-based).
-			let orderChannels: string[] | null = null;
-			if (this.#config._connectedConfig) {
-				const { seriesChannel, dimensionChannel } = this.#config._connectedConfig;
-				const chans: string[] = [];
-
-				if (aliasMap.has('__facet')) chans.push('__facet');
-				if (seriesChannel && aliasMap.has(seriesChannel)) chans.push(seriesChannel);
-				if (dimensionChannel && aliasMap.has(dimensionChannel)) chans.push(dimensionChannel);
-
-				if (chans.length > 0) {
-					orderChannels = chans;
-				}
-			}
-
-			this.#cachedQueryParts = {
-				selectDef,
-				nonAggregateGroupBy,
-				hasAggregates,
-				hasSQLTransforms: this.#transformCompiler.hasSQLTransforms(),
-				orderChannels,
-				aliasMap
-			};
+			this.#cachedQueryParts = buildQueryParts(
+				select,
+				this.#config._connectedConfig,
+				this.#transformCompiler.hasSQLTransforms()
+			);
 		}
 
-		const {
-			selectDef,
-			nonAggregateGroupBy,
-			hasAggregates,
-			hasSQLTransforms,
-			orderChannels,
-			aliasMap
-		} = this.#cachedQueryParts;
-
-		// When forMosaic is true, translate channel-named selectDef to field-based
-		// aliases so Mosaic's PreAggregator sees the column names it expects.
-		// Internal callers (sidecar, tooltip) pass false to keep channel names.
-		let effectiveSelectDef: Record<string, unknown>;
-		if (forMosaic) {
-			effectiveSelectDef = {};
-			for (const [channel, expr] of Object.entries(selectDef)) {
-				effectiveSelectDef[aliasMap.get(channel) ?? channel] = expr;
-			}
-		} else {
-			effectiveSelectDef = selectDef;
-		}
-
-		// Build fresh Query (cheap object construction)
-		const q = Query.from(sourceTable).select(effectiveSelectDef as Record<string, ExprNode>);
-
-		if (hasAggregates && nonAggregateGroupBy.length > 0) {
-			q.groupby(nonAggregateGroupBy as ExprNode[]);
-		}
-
-		let queryWithTransforms = q;
-		if (hasSQLTransforms) {
-			queryWithTransforms = this.#transformCompiler.applyToQuery(q);
-		}
-
-		// Apply filters (the only part that varies per-call)
-		const allFilters = [...filter] as ExprNode[];
-		if (config._filterNulls && Array.isArray(config._filterNulls)) {
-			allFilters.push(...config._filterNulls.map((col) => isNotNull(col as ExprNode)));
-		}
-		if (allFilters.length > 0) {
-			queryWithTransforms = queryWithTransforms.where(and(allFilters));
-		}
-
-		// ORDER BY uses the appropriate alias convention
-		if (orderChannels) {
-			const orderCols = orderChannels.map((ch) => {
-				const name = forMosaic ? (aliasMap.get(ch) ?? ch) : ch;
-				return sqlColumn(name);
-			});
-			queryWithTransforms = queryWithTransforms.orderby(...orderCols);
-		}
-
-		return queryWithTransforms;
+		return assembleQuery(
+			sourceTable,
+			this.#cachedQueryParts,
+			filter,
+			config._filterNulls as unknown[] | null | undefined,
+			this.#transformCompiler,
+			forMosaic
+		);
 	}
 
 	#resolveAutoBins(select: Record<string, unknown>): Record<string, unknown> {
@@ -1159,793 +1079,6 @@ export class BaseMarkSetup {
 		});
 	}
 
-	#buildFieldInfoRequests(): FieldInfoRequest[] {
-		const { select, table } = this.#config;
-		const requests: FieldInfoRequest[] = [];
-		const processedFields = new Set<string>();
-
-		for (const alias in select) {
-			const fieldValue = select[alias];
-			if (fieldValue == null) continue;
-
-			// NEW: Handle AutoBinNodes
-			if (isBinExpression(fieldValue)) {
-				const stats = fieldValue.stats;
-				if (!processedFields.has(stats.column)) {
-					requests.push({ table, column: stats.column, stats: stats.stats });
-					processedFields.add(stats.column);
-				}
-				continue;
-			}
-
-			// Handle regular fields
-			if (processedFields.has(String(fieldValue))) continue;
-
-			const exprNode = isNode(fieldValue) ? fieldValue : sqlColumn(String(fieldValue));
-			if (isAggregateExpression(exprNode) || isWindowExpression(exprNode)) continue;
-
-			const scaleType =
-				alias === 'x' || alias === 'x1' || alias === 'x2'
-					? this.actualXScaleType
-					: alias === 'y' || alias === 'y1' || alias === 'y2'
-						? this.actualYScaleType
-						: null;
-
-			// Time scales get their domain from sidecar query in #fetchCategoricalDomains,
-			// not from fieldInfo (which would return values from the offset column)
-			if (isNumericScale(scaleType)) {
-				requests.push({ table, column: exprNode, stats: ['min', 'max'] });
-				processedFields.add(String(fieldValue));
-			}
-		}
-
-		return requests;
-	}
-
-	#setInitialContinuousDomains(fieldInfo: Record<string, FieldInfoEntry> | null): void {
-		if (!fieldInfo) return;
-
-		for (const alias in this.#scaleMap) {
-			const scaleState = this.#scaleMap[alias];
-			if (!scaleState) continue;
-
-			const scaleType = alias === 'x' ? this.actualXScaleType : this.actualYScaleType;
-
-			// Time scales get their domain from sidecar query, skip fieldInfo path
-			if (isNumericScale(scaleType)) {
-				const select = this.#config.select;
-				// Try direct alias first, then extent variants (x1/x2, y1/y2)
-				const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
-					(f) => f != null && !isBinExpression(f)
-				);
-
-				if (candidates.length === 0) continue;
-
-				// Compute combined min/max across all extent fields for this axis
-				let combinedMin = Infinity;
-				let combinedMax = -Infinity;
-				let found = false;
-
-				for (const fieldValue of candidates) {
-					const infoKey = String(fieldValue).replace(/^["']|["']$/g, '');
-					const info = fieldInfo[infoKey];
-					if (info && info.min != null && info.max != null) {
-						combinedMin = Math.min(combinedMin, info.min as number);
-						combinedMax = Math.max(combinedMax, info.max as number);
-						found = true;
-					}
-				}
-
-				if (found) {
-					console.log(
-						`📐 [${this.#markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
-					);
-					(scaleState as LinearScaleState).addMark([combinedMin, combinedMax], this.#markId);
-				}
-			}
-		}
-	}
-
-	/**
-	 * Register domains from query result data for channels that need data-derived domains.
-	 * This handles both:
-	 * - Regular aggregate channels (count, sum, etc.)
-	 * - Transform-generated channels (x0/x1, y0/y1 from stack)
-	 */
-	#registerDataDerivedDomains(
-		data: DataAccessor,
-		additionalChannels: string[] = [],
-		isRebinning: boolean = false
-	): void {
-		if (!data || data.length === 0) return;
-
-		// Skip if no channels need data-derived domains
-		if (this.#channelsNeedingDataDomain.size === 0 && additionalChannels.length === 0) {
-			this.#dataDerivedDomainsSet = true;
-			return;
-		}
-
-		// Build list of channels to examine for each axis
-		const xChannelsToCheck: string[] = [];
-		const yChannelsToCheck: string[] = [];
-
-		// Collect transform-generated channels per axis
-		const xTransformChannels: string[] = [];
-		const yTransformChannels: string[] = [];
-		for (const channel of additionalChannels) {
-			if (channel.startsWith('x')) {
-				xTransformChannels.push(channel);
-			} else if (channel.startsWith('y')) {
-				yTransformChannels.push(channel);
-			}
-		}
-
-		// When transforms generate replacement channels (e.g., y0/y1 from stack),
-		// use ONLY those for domain computation — the raw column values are no longer
-		// meaningful for the scale (e.g., expand produces 0–1, but raw y has original values).
-		if (xTransformChannels.length > 0) {
-			xChannelsToCheck.push(...xTransformChannels);
-		} else if (this.#channelsNeedingDataDomain.has('x')) {
-			xChannelsToCheck.push('x', 'x1', 'x2');
-		}
-
-		if (yTransformChannels.length > 0) {
-			yChannelsToCheck.push(...yTransformChannels);
-		} else if (this.#channelsNeedingDataDomain.has('y')) {
-			yChannelsToCheck.push('y', 'y1', 'y2');
-		}
-
-		// Compute and register X domain
-		// Skip if this axis triggered the re-bin (user zoomed here, don't override)
-		if (
-			this.#skipDomainUpdateForAxis !== 'x' &&
-			xChannelsToCheck.length > 0 &&
-			(this.actualXScaleType === 'linear' ||
-				this.actualXScaleType === 'time' ||
-				this.actualXScaleType === 'log' ||
-				this.actualXScaleType === 'symlog')
-		) {
-			// For viewport-local domains, filter to visible Y range
-			// Only apply if the Y scale already has a data-derived domain — on initial load
-			// the Y domain is still at its default [0, 100] which would incorrectly exclude
-			// most bins from the X domain computation.
-			let filterOptions: ExtentFilterOptions = {};
-			if (this.#config.viewportLocalDomain && this.actualYScaleType !== 'band') {
-				const yState = this.#chartContext.yScaleState as ContinuousScaleState | null | undefined;
-				if (yState?.hasDomain) {
-					const yDomain = yState.domain?.current;
-					if (yDomain) {
-						filterOptions = { filterAxis: 'y', filterDomain: [yDomain[0], yDomain[1]] };
-						console.log(
-							`🔍 [${this.#markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`
-						);
-					}
-				}
-			}
-
-			let extent = this.#computeExtentFromData(data, xChannelsToCheck, filterOptions);
-			if (extent) {
-				// Apply zero baseline if mark requests it
-				if (this.#config.zeroBaseline?.x) {
-					extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
-				}
-
-				const scaleState = this.#chartContext.xScaleState as ContinuousScaleState | null;
-
-				// Use instant domain update when rebinning to avoid confusing grow/shrink effect
-				// Keep spring animation for viewport panning (smooth bin entry/exit)
-				if (
-					this.actualXScaleType === 'time' &&
-					(scaleState as TimeScaleState | null)?.addOffsetExtent
-				) {
-					// Time scale: data is in offset form, use addOffsetExtent
-					console.log(
-						`📊 [${this.#markId}] Registering X domain from data (time offsets):`,
-						extent
-					);
-					(scaleState as TimeScaleState).addOffsetExtent(extent, this.#markId);
-				} else if (scaleState?.addMark) {
-					// Linear scale: use addMark with instant flag when rebinning
-					if (isRebinning) {
-						console.log(`⚡ [${this.#markId}] Instant X domain update (rebinning):`, extent);
-					} else {
-						console.log(`📊 [${this.#markId}] Registering X domain from data:`, extent);
-					}
-					scaleState.addMark(extent, this.#markId, { instant: isRebinning });
-				}
-			}
-		}
-
-		// Compute and register Y domain
-		// Skip if this axis triggered the re-bin (user zoomed here, don't override)
-		if (
-			this.#skipDomainUpdateForAxis !== 'y' &&
-			yChannelsToCheck.length > 0 &&
-			(this.actualYScaleType === 'linear' ||
-				this.actualYScaleType === 'time' ||
-				this.actualYScaleType === 'log' ||
-				this.actualYScaleType === 'symlog')
-		) {
-			// For viewport-local domains, filter to visible X range
-			// Only apply if the X scale already has a data-derived domain.
-			let filterOptions: ExtentFilterOptions = {};
-			if (this.#config.viewportLocalDomain && this.actualXScaleType !== 'band') {
-				const xState = this.#chartContext.xScaleState as ContinuousScaleState | null | undefined;
-				if (xState?.hasDomain) {
-					const xDomain = xState.domain?.current;
-					if (xDomain) {
-						filterOptions = { filterAxis: 'x', filterDomain: [xDomain[0], xDomain[1]] };
-						console.log(
-							`🔍 [${this.#markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`
-						);
-					}
-				}
-			}
-
-			let extent = this.#computeExtentFromData(data, yChannelsToCheck, filterOptions);
-			if (extent) {
-				// Apply zero baseline if mark requests it
-				if (this.#config.zeroBaseline?.y) {
-					extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
-				}
-
-				const scaleState = this.#chartContext.yScaleState as ContinuousScaleState | null;
-
-				// Use instant domain update when rebinning to avoid confusing grow/shrink effect
-				// Keep spring animation for viewport panning (smooth bin entry/exit)
-				if (
-					this.actualYScaleType === 'time' &&
-					(scaleState as TimeScaleState | null)?.addOffsetExtent
-				) {
-					// Time scale: data is in offset form, use addOffsetExtent
-					console.log(
-						`📊 [${this.#markId}] Registering Y domain from data (time offsets):`,
-						extent
-					);
-					(scaleState as TimeScaleState).addOffsetExtent(extent, this.#markId);
-				} else if (scaleState?.addMark) {
-					// Linear scale: use addMark with instant flag when rebinning
-					if (isRebinning) {
-						console.log(`⚡ [${this.#markId}] Instant Y domain update (rebinning):`, extent);
-					} else {
-						console.log(`📊 [${this.#markId}] Registering Y domain from data:`, extent);
-					}
-					scaleState.addMark(extent, this.#markId, { instant: isRebinning });
-				}
-			}
-		}
-
-		// Band scale domain from post-transform data (for topN and other category-reducing transforms).
-		// These marks skip #fetchCategoricalDomains for the band axis and populate domain here.
-		if (this.#transformCompiler.hasCategoryReducingTransforms()) {
-			for (const axis of ['x', 'y'] as const) {
-				const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-				if (scaleType !== 'band' && scaleType !== 'point') continue;
-
-				const categories = this.#extractCategoriesFromData(data, axis);
-				const scaleState = this.#chartContext[`${axis}ScaleState`] as BandScaleState | undefined;
-				if (scaleState?.addMark && categories.length > 0) {
-					scaleState.addMark(categories, this.#markId, { sorted: true });
-					scaleState.updateDomainFromExtents();
-				}
-			}
-		}
-
-		// Clear the skip flag after processing
-		this.#skipDomainUpdateForAxis = null;
-
-		this.#dataDerivedDomainsSet = true;
-	}
-
-	/**
-	 * Compute min/max extent from data for given channels.
-	 * Works with both DataAccessor (Arrow) and plain object arrays.
-	 */
-	#computeExtentFromData(
-		data: DataAccessor | Record<string, unknown>[],
-		channels: string[],
-		options: ExtentFilterOptions = {}
-	): [number, number] | null {
-		const { filterAxis, filterDomain } = options;
-
-		let min = Infinity;
-		let max = -Infinity;
-
-		const isAccessor = typeof (data as DataAccessor).getColumn === 'function';
-
-		// Performance guard: skip viewport filtering for large datasets
-		const dataLength = (data as DataAccessor).length;
-		const shouldFilter = filterAxis && filterDomain && dataLength < 10000;
-
-		if (isAccessor) {
-			const accessor = data as DataAccessor;
-			// DataAccessor path - use getColumn for efficiency
-			// Get filter columns if needed
-			let filterCol1: ArrayLike<unknown> | null = null;
-			let filterCol2: ArrayLike<unknown> | null = null;
-			if (shouldFilter) {
-				filterCol1 = accessor.getColumn(`${filterAxis}1`);
-				filterCol2 = accessor.getColumn(`${filterAxis}2`);
-			}
-
-			for (const channel of channels) {
-				const column = accessor.getColumn(channel);
-				if (!column) continue;
-
-				for (let i = 0; i < column.length; i++) {
-					// Viewport filtering: skip rows outside viewport
-					if (shouldFilter && filterCol1 && filterCol2) {
-						const v1 = filterCol1[i] as number;
-						const v2 = filterCol2[i] as number;
-						// Check if bin [v1, v2] intersects viewport [filterDomain[0], filterDomain[1]]
-						if (v2 < filterDomain![0] || v1 > filterDomain![1]) {
-							continue; // Outside viewport
-						}
-					}
-
-					const value = column[i];
-					if (typeof value === 'number' && !isNaN(value)) {
-						if (value < min) min = value;
-						if (value > max) max = value;
-					}
-				}
-			}
-		} else {
-			// Plain array path
-			for (const row of data as Record<string, unknown>[]) {
-				// Viewport filtering: skip rows outside viewport
-				if (shouldFilter) {
-					const v1 = row[`${filterAxis}1`] as number;
-					const v2 = row[`${filterAxis}2`] as number;
-					// Check if bin [v1, v2] intersects viewport
-					if (v2 < filterDomain![0] || v1 > filterDomain![1]) {
-						continue; // Outside viewport
-					}
-				}
-
-				for (const channel of channels) {
-					const value = row[channel];
-					if (typeof value === 'number' && !isNaN(value)) {
-						if (value < min) min = value;
-						if (value > max) max = value;
-					}
-				}
-			}
-		}
-
-		if (min === Infinity || max === -Infinity) return null;
-		return [min, max];
-	}
-
-	/**
-	 * Extract unique category values from a column in the data, preserving order.
-	 * Used to populate band scale domains from post-transform data (topN).
-	 */
-	#extractCategoriesFromData(data: DataAccessor, axis: string): string[] {
-		const col = data.getColumn(axis);
-		if (!col) return [];
-		const seen = new Set<string>();
-		const result: string[] = [];
-		for (let i = 0; i < data.length; i++) {
-			const val = String(col[i]);
-			if (!seen.has(val)) {
-				seen.add(val);
-				result.push(val);
-			}
-		}
-		return result;
-	}
-
-	async #fetchCategoricalDomains(): Promise<number> {
-		const { table, selection, sort } = this.#config;
-		if (!this.#coordinator || !table) return 0;
-
-		const fetches: Promise<void>[] = [];
-
-		const setupFetch = (axis: string, field: unknown): void => {
-			if (!field) return;
-			const scaleState = this.#chartContext[`${axis}ScaleState`];
-			let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
-
-			const sortConfig = sort;
-			// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
-			// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
-			// 'x1'/'x2'/'y1'/'y2'. Fall back to channel+'2' then channel+'1' for those.
-			const sortField = sortConfig
-				? this.#config.select[sortConfig.channel] ||
-					this.#config.select[sortConfig.channel + '2'] ||
-					this.#config.select[sortConfig.channel + '1']
-				: null;
-			if (sortField) {
-				if (isAggregateExpression(sortField as ExprNode)) {
-					// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
-					q = q.groupby(field as GroupByExpr).select({ _sort: sortField as ExprValue });
-					if (sortConfig!.direction === 'desc') {
-						q.orderby(sql`${sqlColumn('_sort')} DESC`);
-					} else {
-						q.orderby(sqlColumn('_sort'));
-					}
-				} else {
-					// Raw field or expression: ORDER BY directly
-					const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
-					if (sortConfig!.direction === 'desc') {
-						q.orderby(sql`${sortExpr} DESC`);
-					} else {
-						q.orderby(sortExpr);
-					}
-				}
-			} else {
-				q.distinct();
-			}
-
-			fetches.push(
-				this.#coordinator.query(q).then((result) => {
-					const categories = Array.from(result).map((row) => row[axis]);
-					// Y band scale maps index 0 → bottom, index N → top (bottom-to-top),
-					// but users read top-to-bottom. Reverse so SQL sort order matches
-					// the visual reading direction (e.g. 'desc' → largest at top).
-					if (axis === 'y' && sortField) {
-						categories.reverse();
-					}
-					if (categories.length > 0) {
-						scaleState.addMark(categories, this.#markId, { sorted: !!sortField });
-					}
-				})
-			);
-		};
-
-		// Skip band fetch for marks with category-reducing transforms (topN):
-		// domain will be populated post-transform in #registerDataDerivedDomains
-		const skipBandFetch = this.#transformCompiler.hasCategoryReducingTransforms();
-		if ((this.actualXScaleType === 'band' || this.actualXScaleType === 'point') && !skipBandFetch) {
-			setupFetch('x', this.#config.select.x);
-		}
-		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipBandFetch) {
-			setupFetch('y', this.#config.select.y);
-		}
-
-		// Facet: register categories with the facet BandScaleState
-		const facetBandScale = this.#chartContext.facetBandScale;
-		const fxField = this.#chartContext.fx;
-		if (facetBandScale && fxField) {
-			const fxExpr = isNode(fxField) ? fxField : sqlColumn(String(fxField));
-			const q = Query.from(table).select({ fx: fxExpr }).distinct();
-			fetches.push(
-				this.#coordinator.query(q).then((result) => {
-					const categories = Array.from(result).map((row) => row.fx);
-					if (categories.length > 0) {
-						facetBandScale.addMark(categories, this.#markId);
-					}
-				})
-			);
-		}
-
-		// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
-		const setupTimeFetch = (axis: string, field: unknown): void => {
-			if (!field) return;
-			const scaleState = this.#chartContext[`${axis}ScaleState`];
-			if (!scaleState?.addDatetimeExtent) return;
-
-			// Unwrap AutoBinNode to get the underlying column name
-			// For bins: fetch raw column min/max to establish t0, then actual bin
-			// boundaries from query results will update the extent later
-			const rawField = isBinExpression(field) ? field.field : field;
-
-			// Ensure we have a valid string or SQL node
-			const colExpr = isNode(rawField) ? rawField : sqlColumn(String(rawField));
-
-			const q = Query.from(table).select({
-				min_time: min(colExpr),
-				max_time: max(colExpr)
-			});
-
-			fetches.push(
-				this.#coordinator.query(q).then((result) => {
-					const row = Array.from(result)[0];
-					if (row && row.min_time != null && row.max_time != null) {
-						console.log(`[BaseMarkSetup] Time extent for ${axis}:`, [row.min_time, row.max_time]);
-						scaleState.addDatetimeExtent([row.min_time, row.max_time], this.#markId);
-					}
-				})
-			);
-		};
-
-		if (this.actualXScaleType === 'time') {
-			// Check x1 if x is missing (standard pattern for Rect/Rule marks)
-			setupTimeFetch('x', this.#config.select.x || this.#config.select.x1);
-		}
-		if (this.actualYScaleType === 'time') {
-			setupTimeFetch('y', this.#config.select.y || this.#config.select.y1);
-		}
-
-		// Fetch color domain if color scale is set and there's a color field
-		const colorKey = this.#config.colorChannel || 'fill';
-		if (this.#colorScaleState && this.#config.select[colorKey]) {
-			// Extract field from color config (handles object format { field: "x", scheme: "y" })
-			const colorValue = this.#config.select[colorKey];
-			const colorField =
-				typeof colorValue === 'object' && 'field' in colorValue && !isNode(colorValue)
-					? (colorValue as { field: string }).field
-					: colorValue;
-
-			// Skip if color is an aggregate expression (handled by sidecar query)
-			const isAggregate = isNode(colorField) && isAggregateExpression(colorField);
-
-			if (!isAggregate) {
-				if (this.#colorScaleState.isOrdinal) {
-					// Ordinal: fetch distinct categories
-					const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
-					const q = Query.from(table).select({ color: colExpr }).distinct();
-
-					fetches.push(
-						this.#coordinator.query(q).then((result) => {
-							const categories = Array.from(result).map((row) => row.color);
-							if (categories.length > 0) {
-								console.log(`[BaseMarkSetup] Color domain (ordinal):`, categories);
-								this.#colorScaleState!.setDomain(categories as (string | number)[]);
-							}
-						})
-					);
-				} else {
-					// Sequential: fetch min/max extent
-					const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
-					const q = Query.from(table).select({
-						min_color: min(colExpr),
-						max_color: max(colExpr)
-					});
-
-					fetches.push(
-						this.#coordinator.query(q).then((result) => {
-							const row = Array.from(result)[0];
-							if (row && row.min_color != null && row.max_color != null) {
-								console.log(`[BaseMarkSetup] Color domain (sequential):`, [
-									row.min_color,
-									row.max_color
-								]);
-								this.#colorScaleState!.setDomain([row.min_color, row.max_color] as (
-									| string
-									| number
-								)[]);
-							}
-						})
-					);
-				}
-			}
-		}
-
-		// Fetch size domain if size scale is set and there's a size field
-		const sizeKey = this.#config.sizeChannel || 'r';
-		if (this.#sizeScaleState && this.#config.select[sizeKey]) {
-			const sizeField = this.#config.select[sizeKey];
-			const q = Query.from(table).select({
-				min_radius: min(sqlColumn(String(sizeField))),
-				max_radius: max(sqlColumn(String(sizeField)))
-			});
-
-			fetches.push(
-				this.#coordinator.query(q).then((result) => {
-					const row = Array.from(result)[0];
-					if (row && row.min_radius != null && row.max_radius != null) {
-						this.#sizeScaleState!.setDomain([row.min_radius as number, row.max_radius as number]);
-					}
-				})
-			);
-		}
-
-		// Fetch series domain if series scale is set and there's a series field
-		const seriesKey = this.#config._connectedConfig?.seriesChannel;
-		if (this.#seriesScaleState && seriesKey && this.#config.select[seriesKey]) {
-			const seriesField = this.#config.select[seriesKey];
-			const q = Query.from(table)
-				.select({ series: sqlColumn(String(seriesField)) })
-				.distinct();
-
-			fetches.push(
-				this.#coordinator.query(q).then((result) => {
-					const categories = Array.from(result).map((row) => row.series);
-					if (categories.length > 0) {
-						this.#seriesScaleState!.setDomain(categories as (string | number)[]);
-					}
-				})
-			);
-		}
-
-		if (fetches.length > 0) await Promise.all(fetches);
-		return fetches.length; // Return count for logging
-	}
-
-	/**
-	 * Fetch global min/max extents for aggregated fields using a "sidecar" query.
-	 * This runs the same aggregation logic as the main query but without filters,
-	 * wrapped in an outer aggregation to get min/max of the results.
-	 */
-	async #fetchGlobalAggregates(): Promise<void> {
-		const { table } = this.#config;
-		if (!this.#coordinator || !table) return;
-
-		// Only proceed if we have channels needing data-derived domains
-		if (this.#channelsNeedingDataDomain.size === 0) {
-			console.log(`[${this.#markId}] No aggregated channels, skipping sidecar query`);
-			return;
-		}
-
-		// Skip sidecar when AutoBinNodes exist — they can't be resolved to SQL
-		// until fieldInfo is available (which requires the DataClient created later).
-		// Domains will be set from query results via #registerDataDerivedDomains.
-		if (this.#autoBinNodes.size > 0) {
-			console.log(`[${this.#markId}] Skipping sidecar: bin domains derived from query results`);
-			return;
-		}
-
-		console.log(
-			`🔍 [${this.#markId}] Building sidecar query for channels:`,
-			Array.from(this.#channelsNeedingDataDomain)
-		);
-
-		try {
-			// Step 1: Build the inner query with channel-named aliases (forMosaic=false)
-			// so the outer SELECT can reference channels directly.
-			const innerQuery = this.buildQuery(
-				table,
-				this.#config as unknown as DataClientConfig,
-				[],
-				false
-			);
-
-			console.log(`📊 [${this.#markId}] Inner query SQL:`, innerQuery.toString());
-
-			// Step 2: Build outer aggregation to get min/max of each channel
-			const outerSelect: Record<string, ExprValue> = {};
-
-			if (this.#channelsNeedingDataDomain.has('x')) {
-				const select = this.#config.select;
-				if ('x' in select) {
-					outerSelect.min_x = min('x');
-					outerSelect.max_x = max('x');
-				} else {
-					// Extent channels: use x1 for min, x2 for max
-					if ('x1' in select) outerSelect.min_x = min('x1');
-					if ('x2' in select) outerSelect.max_x = max('x2');
-				}
-			}
-
-			if (this.#channelsNeedingDataDomain.has('y')) {
-				const select = this.#config.select;
-				if ('y' in select) {
-					outerSelect.min_y = min('y');
-					outerSelect.max_y = max('y');
-				} else {
-					// Extent channels: use y1 for min, y2 for max
-					if ('y1' in select) outerSelect.min_y = min('y1');
-					if ('y2' in select) outerSelect.max_y = max('y2');
-				}
-			}
-
-			// Color channel domain discovery (fill or stroke key)
-			const colorChannel = this.#channelsNeedingDataDomain.has('fill')
-				? 'fill'
-				: this.#channelsNeedingDataDomain.has('stroke')
-					? 'stroke'
-					: null;
-			if (colorChannel) {
-				outerSelect.min_color = min(colorChannel);
-				outerSelect.max_color = max(colorChannel);
-			}
-
-			// Skip if no aggregation expressions were generated (e.g., all channels are constants)
-			if (Object.keys(outerSelect).length === 0) {
-				console.log(`📊 [${this.#markId}] Skipping sidecar: no SQL channels to aggregate`);
-				return;
-			}
-
-			const sidecarQuery = Query.from(innerQuery).select(outerSelect);
-
-			console.log(`📊 [${this.#markId}] Sidecar query SQL:`, sidecarQuery.toString());
-
-			// Step 3: Execute the query
-			const result = await this.#coordinator.query(sidecarQuery);
-			const extents: Record<string, unknown> = Array.from(result)[0]; // Should be single row
-
-			console.log(`✅ [${this.#markId}] Sidecar results:`, extents);
-
-			// Step 4: Apply extents to scales
-			if (
-				this.#channelsNeedingDataDomain.has('x') &&
-				extents.min_x != null &&
-				extents.max_x != null
-			) {
-				const xExtent = [extents.min_x as number, extents.max_x as number];
-				console.log(`📊 [${this.#markId}] Applying X extent from sidecar:`, xExtent);
-				(this.#chartContext.xScaleState as ContinuousScaleState | null)?.addMark(
-					xExtent,
-					this.#markId
-				);
-			}
-
-			if (
-				this.#channelsNeedingDataDomain.has('y') &&
-				extents.min_y != null &&
-				extents.max_y != null
-			) {
-				const yExtent = [extents.min_y as number, extents.max_y as number];
-				console.log(`📊 [${this.#markId}] Applying Y extent from sidecar:`, yExtent);
-				(this.#chartContext.yScaleState as ContinuousScaleState | null)?.addMark(
-					yExtent,
-					this.#markId
-				);
-			}
-
-			if (
-				(this.#channelsNeedingDataDomain.has('fill') ||
-					this.#channelsNeedingDataDomain.has('stroke')) &&
-				extents.min_color != null &&
-				extents.max_color != null
-			) {
-				const colorExtent = [extents.min_color, extents.max_color];
-				console.log(`📊 [${this.#markId}] Applying color extent from sidecar:`, colorExtent);
-				this.#colorScaleState?.setDomain(colorExtent as (string | number)[]);
-			}
-
-			// Mark that global aggregates have been set
-			this.#globalAggregatesSet = true;
-		} catch (error) {
-			console.error(`❌ [${this.#markId}] Sidecar query failed:`, error);
-			// Don't set flag on failure - will fall back to data-derived domains
-		}
-	}
-
-	/**
-	 * Mark scales as ready, but be selective:
-	 * - Band/categorical scales: mark ready immediately (domain from categorical fetch)
-	 * - Linear scales without data-derived domains: mark ready immediately (domain from fieldInfo)
-	 * - Linear scales WITH data-derived domains: mark ready if sidecar OR data-scan has set domain
-	 */
-	#setScalesReady(): void {
-		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
-			if (!scale) continue;
-
-			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
-
-			// For categorical scales (band/point) and time scales, mark ready immediately
-			// (their domains are set by sidecar queries in #fetchCategoricalDomains)
-			if (isCategoricalScale(scaleType) || isTemporalScale(scaleType)) {
-				scale.setReady();
-				continue;
-			}
-
-			// For linear scales, only mark ready if they don't need data-derived domain
-			// OR if domains have been set (either via sidecar query OR data-scan fallback)
-			const domainsReady = this.#globalAggregatesSet || this.#dataDerivedDomainsSet;
-			if (!needsDataDomain || domainsReady) {
-				scale.setReady();
-			} else {
-				console.log(`⏳ [${this.#markId}] Deferring ${axis} scale ready - waiting for domain`);
-			}
-		}
-	}
-
-	/**
-	 * Mark linear scales ready after data-derived domains have been set.
-	 * Called from an effect that watches #dataDerivedDomainsSet.
-	 */
-	#markDeferredScalesReady(): void {
-		for (const [axis, scale] of Object.entries(this.#scaleMap)) {
-			if (!scale) continue;
-
-			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			const needsDataDomain = this.#channelsNeedingDataDomain.has(axis);
-
-			// Only mark continuous scales that were waiting for data-derived domains
-			if (needsDataDomain && isContinuousScale(scaleType)) {
-				if (!scale.ready) {
-					console.log(`✅ [${this.#markId}] Marking ${axis} scale ready (data-derived domain set)`);
-					scale.setReady();
-				}
-			}
-		}
-	}
-
 	// ===========================================================================
 	// VIEWPORT-LOCAL DOMAIN
 	// ===========================================================================
@@ -1981,7 +1114,7 @@ export class BaseMarkSetup {
 				filterDomain: viewportDomain as [number, number]
 			};
 
-			let extent = this.#computeExtentFromData(this.data, channels, filterOptions);
+			let extent = computeExtentFromData(this.data, channels, filterOptions);
 			if (!extent) return;
 
 			// Apply zero baseline if configured

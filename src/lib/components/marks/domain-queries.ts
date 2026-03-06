@@ -1,0 +1,379 @@
+import {
+	Query,
+	isNode,
+	sql,
+	column as sqlColumn,
+	isAggregateExpression,
+	min,
+	max
+} from '@uwdata/mosaic-sql';
+import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
+import type { Coordinator } from '@uwdata/mosaic-core';
+import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
+import type { ContinuousScaleState, NormalizedSortConfig } from '$lib/types';
+import { isBinExpression } from '$lib/sql/bin';
+import type { DataClientConfig } from '$lib/data-clients/DataClient.svelte';
+
+// ---------------------------------------------------------------------------
+// fetchCategoricalDomains
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch categorical (band/point), time, color, size, and series domains
+ * via sidecar queries against the coordinator.
+ *
+ * Returns the number of fetches executed (for logging).
+ */
+export async function fetchCategoricalDomains(
+	coordinator: Coordinator,
+	table: string,
+	select: Record<string, unknown>,
+	sort: NormalizedSortConfig,
+	actualXScaleType: string,
+	actualYScaleType: string,
+	xScaleState: BandScaleState | null,
+	yScaleState: BandScaleState | null,
+	facetBandScale: BandScaleState | null | undefined,
+	fx: unknown,
+	colorChannel: string,
+	colorScaleState: ColorScaleState | null,
+	sizeChannel: string,
+	sizeScaleState: SizeScaleState | null,
+	seriesScaleState: ColorScaleState | null,
+	seriesChannel: string | null,
+	hasCategoryReducingTransforms: boolean,
+	markId: string
+): Promise<number> {
+	const fetches: Promise<void>[] = [];
+
+	const setupFetch = (axis: string, field: unknown, scaleState: BandScaleState | null): void => {
+		if (!field || !scaleState) return;
+		let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
+
+		// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
+		// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
+		// 'x1'/'x2'/'y1'/'y2'. Fall back to channel+'2' then channel+'1' for those.
+		const sortField = sort
+			? select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1']
+			: null;
+		if (sortField) {
+			if (isAggregateExpression(sortField as ExprNode)) {
+				// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
+				q = q.groupby(field as GroupByExpr).select({ _sort: sortField as ExprValue });
+				if (sort!.direction === 'desc') {
+					q.orderby(sql`${sqlColumn('_sort')} DESC`);
+				} else {
+					q.orderby(sqlColumn('_sort'));
+				}
+			} else {
+				// Raw field or expression: ORDER BY directly
+				const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
+				if (sort!.direction === 'desc') {
+					q.orderby(sql`${sortExpr} DESC`);
+				} else {
+					q.orderby(sortExpr);
+				}
+			}
+		} else {
+			q.distinct();
+		}
+
+		fetches.push(
+			coordinator.query(q).then((result) => {
+				const categories = Array.from(result).map((row) => row[axis]);
+				// Y band scale maps index 0 → bottom, index N → top (bottom-to-top),
+				// but users read top-to-bottom. Reverse so SQL sort order matches
+				// the visual reading direction (e.g. 'desc' → largest at top).
+				if (axis === 'y' && sortField) {
+					categories.reverse();
+				}
+				if (categories.length > 0) {
+					scaleState.addMark(categories, markId, { sorted: !!sortField });
+				}
+			})
+		);
+	};
+
+	// Skip band fetch for marks with category-reducing transforms (topN):
+	// domain will be populated post-transform in registerDataDerivedDomains
+	const skipBandFetch = hasCategoryReducingTransforms;
+	if ((actualXScaleType === 'band' || actualXScaleType === 'point') && !skipBandFetch) {
+		setupFetch('x', select.x, xScaleState);
+	}
+	if ((actualYScaleType === 'band' || actualYScaleType === 'point') && !skipBandFetch) {
+		setupFetch('y', select.y, yScaleState);
+	}
+
+	// Facet: register categories with the facet BandScaleState
+	if (facetBandScale && fx) {
+		const fxExpr = isNode(fx) ? fx : sqlColumn(String(fx));
+		const q = Query.from(table).select({ fx: fxExpr }).distinct();
+		fetches.push(
+			coordinator.query(q).then((result) => {
+				const categories = Array.from(result).map((row) => row.fx);
+				if (categories.length > 0) {
+					facetBandScale.addMark(categories, markId);
+				}
+			})
+		);
+	}
+
+	// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
+	const setupTimeFetch = (axis: string, field: unknown): void => {
+		if (!field) return;
+		const timeScaleState = axis === 'x' ? xScaleState : yScaleState;
+		if (!(timeScaleState as unknown as { addDatetimeExtent?: unknown })?.addDatetimeExtent) return;
+
+		// Unwrap AutoBinNode to get the underlying column name
+		const rawField = isBinExpression(field) ? field.field : field;
+		const colExpr = isNode(rawField) ? rawField : sqlColumn(String(rawField));
+
+		const q = Query.from(table).select({
+			min_time: min(colExpr),
+			max_time: max(colExpr)
+		});
+
+		fetches.push(
+			coordinator.query(q).then((result) => {
+				const row = Array.from(result)[0];
+				if (row && row.min_time != null && row.max_time != null) {
+					console.log(`[fetchCategoricalDomains] Time extent for ${axis}:`, [
+						row.min_time,
+						row.max_time
+					]);
+					(timeScaleState as unknown as { addDatetimeExtent: (e: unknown[], id: string) => void })
+						.addDatetimeExtent([row.min_time, row.max_time], markId);
+				}
+			})
+		);
+	};
+
+	if (actualXScaleType === 'time') {
+		setupTimeFetch('x', select.x || select.x1);
+	}
+	if (actualYScaleType === 'time') {
+		setupTimeFetch('y', select.y || select.y1);
+	}
+
+	// Fetch color domain if color scale is set and there's a color field
+	const colorKey = colorChannel || 'fill';
+	if (colorScaleState && select[colorKey]) {
+		const colorValue = select[colorKey];
+		const colorField =
+			typeof colorValue === 'object' && 'field' in colorValue && !isNode(colorValue)
+				? (colorValue as { field: string }).field
+				: colorValue;
+
+		const isAggregate = isNode(colorField) && isAggregateExpression(colorField);
+
+		if (!isAggregate) {
+			if (colorScaleState.isOrdinal) {
+				const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
+				const q = Query.from(table).select({ color: colExpr }).distinct();
+
+				fetches.push(
+					coordinator.query(q).then((result) => {
+						const categories = Array.from(result).map((row) => row.color);
+						if (categories.length > 0) {
+							console.log(`[fetchCategoricalDomains] Color domain (ordinal):`, categories);
+							colorScaleState.setDomain(categories as (string | number)[]);
+						}
+					})
+				);
+			} else {
+				const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
+				const q = Query.from(table).select({
+					min_color: min(colExpr),
+					max_color: max(colExpr)
+				});
+
+				fetches.push(
+					coordinator.query(q).then((result) => {
+						const row = Array.from(result)[0];
+						if (row && row.min_color != null && row.max_color != null) {
+							console.log(`[fetchCategoricalDomains] Color domain (sequential):`, [
+								row.min_color,
+								row.max_color
+							]);
+							colorScaleState.setDomain([row.min_color, row.max_color] as (string | number)[]);
+						}
+					})
+				);
+			}
+		}
+	}
+
+	// Fetch size domain if size scale is set and there's a size field
+	const sizeKey = sizeChannel || 'r';
+	if (sizeScaleState && select[sizeKey]) {
+		const sizeField = select[sizeKey];
+		const q = Query.from(table).select({
+			min_radius: min(sqlColumn(String(sizeField))),
+			max_radius: max(sqlColumn(String(sizeField)))
+		});
+
+		fetches.push(
+			coordinator.query(q).then((result) => {
+				const row = Array.from(result)[0];
+				if (row && row.min_radius != null && row.max_radius != null) {
+					sizeScaleState.setDomain([row.min_radius as number, row.max_radius as number]);
+				}
+			})
+		);
+	}
+
+	// Fetch series domain if series scale is set and there's a series field
+	if (seriesScaleState && seriesChannel && select[seriesChannel]) {
+		const seriesField = select[seriesChannel];
+		const q = Query.from(table).select({ series: sqlColumn(String(seriesField)) }).distinct();
+
+		fetches.push(
+			coordinator.query(q).then((result) => {
+				const categories = Array.from(result).map((row) => row.series);
+				if (categories.length > 0) {
+					seriesScaleState.setDomain(categories as (string | number)[]);
+				}
+			})
+		);
+	}
+
+	if (fetches.length > 0) await Promise.all(fetches);
+	return fetches.length;
+}
+
+// ---------------------------------------------------------------------------
+// fetchGlobalAggregates
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch global min/max extents for aggregated fields using a "sidecar" query.
+ * Runs the same aggregation as the main query but without filters, wrapped
+ * in an outer MIN/MAX to get the full domain.
+ *
+ * Returns `{ globalAggregatesSet: true }` on success so the caller can
+ * update its reactive state.
+ */
+export async function fetchGlobalAggregates(
+	coordinator: Coordinator,
+	table: string,
+	select: Record<string, unknown>,
+	channelsNeedingDataDomain: Set<string>,
+	autoBinNodeCount: number,
+	buildQueryFn: (
+		table: string,
+		config: DataClientConfig,
+		filter: unknown[],
+		forMosaic: boolean
+	) => Query,
+	config: DataClientConfig,
+	xScaleState: ContinuousScaleState | null,
+	yScaleState: ContinuousScaleState | null,
+	colorScaleState: ColorScaleState | null,
+	markId: string
+): Promise<{ globalAggregatesSet: boolean }> {
+	// Only proceed if we have channels needing data-derived domains
+	if (channelsNeedingDataDomain.size === 0) {
+		console.log(`[${markId}] No aggregated channels, skipping sidecar query`);
+		return { globalAggregatesSet: false };
+	}
+
+	// Skip sidecar when AutoBinNodes exist — they can't be resolved to SQL
+	// until fieldInfo is available (which requires the DataClient created later).
+	// Domains will be set from query results via registerDataDerivedDomains.
+	if (autoBinNodeCount > 0) {
+		console.log(`[${markId}] Skipping sidecar: bin domains derived from query results`);
+		return { globalAggregatesSet: false };
+	}
+
+	console.log(
+		`🔍 [${markId}] Building sidecar query for channels:`,
+		Array.from(channelsNeedingDataDomain)
+	);
+
+	try {
+		// Step 1: Build the inner query with channel-named aliases (forMosaic=false)
+		const innerQuery = buildQueryFn(table, config, [], false);
+
+		console.log(`📊 [${markId}] Inner query SQL:`, innerQuery.toString());
+
+		// Step 2: Build outer aggregation to get min/max of each channel
+		const outerSelect: Record<string, ExprValue> = {};
+
+		if (channelsNeedingDataDomain.has('x')) {
+			if ('x' in select) {
+				outerSelect.min_x = min('x');
+				outerSelect.max_x = max('x');
+			} else {
+				if ('x1' in select) outerSelect.min_x = min('x1');
+				if ('x2' in select) outerSelect.max_x = max('x2');
+			}
+		}
+
+		if (channelsNeedingDataDomain.has('y')) {
+			if ('y' in select) {
+				outerSelect.min_y = min('y');
+				outerSelect.max_y = max('y');
+			} else {
+				if ('y1' in select) outerSelect.min_y = min('y1');
+				if ('y2' in select) outerSelect.max_y = max('y2');
+			}
+		}
+
+		// Color channel domain discovery (fill or stroke key)
+		const colorChannel = channelsNeedingDataDomain.has('fill')
+			? 'fill'
+			: channelsNeedingDataDomain.has('stroke')
+				? 'stroke'
+				: null;
+		if (colorChannel) {
+			outerSelect.min_color = min(colorChannel);
+			outerSelect.max_color = max(colorChannel);
+		}
+
+		// Skip if no aggregation expressions were generated
+		if (Object.keys(outerSelect).length === 0) {
+			console.log(`📊 [${markId}] Skipping sidecar: no SQL channels to aggregate`);
+			return { globalAggregatesSet: false };
+		}
+
+		const sidecarQuery = Query.from(innerQuery).select(outerSelect);
+
+		console.log(`📊 [${markId}] Sidecar query SQL:`, sidecarQuery.toString());
+
+		// Step 3: Execute the query
+		const result = await coordinator.query(sidecarQuery);
+		const extents: Record<string, unknown> = Array.from(result)[0];
+
+		console.log(`✅ [${markId}] Sidecar results:`, extents);
+
+		// Step 4: Apply extents to scales
+		if (channelsNeedingDataDomain.has('x') && extents.min_x != null && extents.max_x != null) {
+			const xExtent = [extents.min_x as number, extents.max_x as number];
+			console.log(`📊 [${markId}] Applying X extent from sidecar:`, xExtent);
+			xScaleState?.addMark(xExtent, markId);
+		}
+
+		if (channelsNeedingDataDomain.has('y') && extents.min_y != null && extents.max_y != null) {
+			const yExtent = [extents.min_y as number, extents.max_y as number];
+			console.log(`📊 [${markId}] Applying Y extent from sidecar:`, yExtent);
+			yScaleState?.addMark(yExtent, markId);
+		}
+
+		if (
+			(channelsNeedingDataDomain.has('fill') || channelsNeedingDataDomain.has('stroke')) &&
+			extents.min_color != null &&
+			extents.max_color != null
+		) {
+			const colorExtent = [extents.min_color, extents.max_color];
+			console.log(`📊 [${markId}] Applying color extent from sidecar:`, colorExtent);
+			colorScaleState?.setDomain(colorExtent as (string | number)[]);
+		}
+
+		return { globalAggregatesSet: true };
+	} catch (error) {
+		console.error(`❌ [${markId}] Sidecar query failed:`, error);
+		return { globalAggregatesSet: false };
+	}
+}
