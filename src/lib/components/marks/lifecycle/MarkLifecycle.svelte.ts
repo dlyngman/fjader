@@ -1,11 +1,11 @@
 // src/lib/components/marks/MarkLifecycle.svelte.ts
 
 import { untrack } from 'svelte';
-import { DataClient } from '$lib/data-clients/DataClient.svelte';
+import { DataClient } from '$lib/data/DataClient.svelte';
 import type {
 	DataClientConfig,
 	DataClientOptions
-} from '$lib/data-clients/DataClient.svelte';
+} from '$lib/data/DataClient.svelte';
 import { Query, isNode, sql } from '@uwdata/mosaic-sql';
 import type { ExprValue, FilterExpr } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, FieldInfoRequest } from '@uwdata/mosaic-core';
