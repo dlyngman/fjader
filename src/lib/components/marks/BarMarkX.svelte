@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { BaseMarkSetup } from './BaseMarkSetup.svelte';
+	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -208,7 +208,7 @@
 		(void table, xScaleId, yScaleId, effectiveTransforms, markColor.selectField);
 		untrack(() => {
 			setup?.destroy();
-			if (table) setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+			if (table) setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 		});
 	});
 

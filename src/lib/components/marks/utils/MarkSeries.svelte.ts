@@ -88,7 +88,7 @@ export class MarkSeries {
 		return null;
 	});
 
-	// Field for BaseMarkSetup select
+	// Field for MarkLifecycle select
 	selectField: string | object | null = $derived(this.#field);
 
 	// Resolved Data for GPU - Float32Array of series indices

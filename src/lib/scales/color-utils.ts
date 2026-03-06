@@ -75,7 +75,7 @@ type Interpolator = (t: number) => string;
 
 /**
  * Set of valid CSS named colors for constant color detection.
- * Used by BaseMarkSetup to distinguish "red" (constant) from "price" (field).
+ * Used by MarkLifecycle to distinguish "red" (constant) from "price" (field).
  */
 export const CSS_COLOR_NAMES: Set<string> = new Set([
 	'aliceblue',

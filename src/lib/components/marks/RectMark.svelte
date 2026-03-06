@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { BaseMarkSetup } from './BaseMarkSetup.svelte';
+	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { expandBinForExtent } from '$lib/sql/bin';
@@ -75,7 +75,7 @@
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
-	BaseMarkSetup.ensureServices(coordinator);
+	MarkLifecycle.ensureServices(coordinator);
 
 	let setup = $state(null);
 
@@ -264,7 +264,7 @@
 			setup = null;
 			// Gate on BOTH scale types being resolved
 			if (table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
 	});

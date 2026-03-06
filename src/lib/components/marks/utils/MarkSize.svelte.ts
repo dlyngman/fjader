@@ -81,7 +81,7 @@ export class MarkSize {
 		return null;
 	});
 
-	// Field/expression for BaseMarkSetup select (or null)
+	// Field/expression for MarkLifecycle select (or null)
 	selectField: string | null = $derived(this.#mode === 'field' ? this.#field : null);
 
 	// Resolved Data for GPU

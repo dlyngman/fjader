@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { BaseMarkSetup } from './BaseMarkSetup.svelte';
+	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Dots } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -63,7 +63,7 @@
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
-	BaseMarkSetup.ensureServices(coordinator);
+	MarkLifecycle.ensureServices(coordinator);
 
 	let setup = $state(null);
 
@@ -200,12 +200,12 @@
 		untrack(() => {
 			setup?.destroy();
 			setup = null;
-			// Don't create BaseMarkSetup until scale type inference has resolved.
+			// Don't create MarkLifecycle until scale type inference has resolved.
 			// When effectiveXScaleType or effectiveYScaleType is null (schema pending),
 			// config.scaleRequirements will have null entries — skip creation to avoid
 			// a throwaway instance that gets immediately destroyed when schema arrives.
 			if (table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
 	});
