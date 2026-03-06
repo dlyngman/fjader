@@ -21,12 +21,12 @@
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
 
 	interface Props {
-		selection: string;
+		selection?: string;
 		field?: FieldRef;
 		axis?: 'x' | 'y';
 	}
 
-	let { selection: selectionName, field, axis = 'x' }: Props = $props();
+	let { selection: selectionName = 'brush', field, axis = 'x' }: Props = $props();
 
 	const group = getSelectionRegistry()!.getGroup(selectionName);
 
@@ -108,6 +108,9 @@
 			lastEmittedMin = extent[0];
 			lastEmittedMax = extent[1];
 			emitFilterClause(extent[0], extent[1]);
+		} else if (!extent && brush.active) {
+			// Selection was cleared externally (e.g. detail chart reset) — clear brush
+			clearBrush();
 		}
 	});
 
