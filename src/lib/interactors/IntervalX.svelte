@@ -3,11 +3,11 @@
 	import type { FieldRef } from '$lib/types';
 
 	interface Props {
-		selection: string;
+		selection?: string;
 		field?: FieldRef;
 	}
 
-	let { selection, field }: Props = $props();
+	let { selection = 'brush', field }: Props = $props();
 </script>
 
 <Interval1D {selection} {field} axis="x" />

@@ -14,12 +14,12 @@
 	import { getSelectionRegistry } from '$lib/selection';
 
 	interface Props {
-		selection: string;
+		selection?: string;
 		xField?: FieldRef;
 		yField?: FieldRef;
 	}
 
-	let { selection: selectionName, xField, yField }: Props = $props();
+	let { selection: selectionName = 'brush', xField, yField }: Props = $props();
 
 	const group = getSelectionRegistry()!.getGroup(selectionName);
 

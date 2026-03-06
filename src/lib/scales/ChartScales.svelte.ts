@@ -274,11 +274,16 @@ export class ChartScales {
 
 			const [targetMin, targetMax] = renderInst.domain.target; // reactive trigger
 
-			// Only propagate back when there's an active selection
-			const current = untrack(() => sourceScale.selectionExtent);
-			if (!current) return;
+			// If detail is at full data extent, clear the selection (removes brush)
+			const [extMin, extMax] = untrack(() => renderInst.effectiveExtent);
+			if (targetMin === extMin && targetMax === extMax) {
+				untrack(() => sourceScale.clearSelectionExtent());
+				return;
+			}
 
-			if (current[0] !== targetMin || current[1] !== targetMax) {
+			// Propagate detail domain to source selection (creates or updates brush)
+			const current = untrack(() => sourceScale.selectionExtent);
+			if (!current || current[0] !== targetMin || current[1] !== targetMax) {
 				untrack(() => sourceScale.setSelectionExtent(targetMin, targetMax, 'external'));
 			}
 		});

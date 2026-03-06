@@ -9,11 +9,11 @@
 	import type { ClauseSource } from '@uwdata/mosaic-core';
 
 	interface Props {
-		selection: string;
+		selection?: string;
 		field: string | string[];
 	}
 
-	let { selection: selectionName, field }: Props = $props();
+	let { selection: selectionName = 'brush', field }: Props = $props();
 
 	const group = getSelectionRegistry()!.getGroup(selectionName);
 

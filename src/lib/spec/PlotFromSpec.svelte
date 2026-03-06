@@ -98,19 +98,17 @@
 		{/snippet}
 
 		{#snippet interactors()}
-			{#if selectionName}
-				{#each spec.interactors ?? [] as interactor, i (i)}
-					{#if interactor.interactor === 'intervalX'}
-						<IntervalX selection={interactor.selection ?? selectionName} field={interactor.field} />
-					{:else if interactor.interactor === 'intervalY'}
-						<IntervalY selection={interactor.selection ?? selectionName} field={interactor.field} />
-					{:else if interactor.interactor === 'interval2D'}
-						<Interval2D selection={interactor.selection ?? selectionName} xField={interactor.xField} yField={interactor.yField} />
-					{:else if interactor.interactor === 'toggle'}
-						<Toggle selection={interactor.selection ?? selectionName} field={interactor.field} />
-					{/if}
-				{/each}
-			{/if}
+			{#each spec.interactors ?? [] as interactor, i (i)}
+				{#if interactor.interactor === 'intervalX'}
+					<IntervalX selection={interactor.selection ?? selectionName ?? undefined} field={interactor.field} />
+				{:else if interactor.interactor === 'intervalY'}
+					<IntervalY selection={interactor.selection ?? selectionName ?? undefined} field={interactor.field} />
+				{:else if interactor.interactor === 'interval2D'}
+					<Interval2D selection={interactor.selection ?? selectionName ?? undefined} xField={interactor.xField} yField={interactor.yField} />
+				{:else if interactor.interactor === 'toggle'}
+					<Toggle selection={interactor.selection ?? selectionName ?? undefined} field={interactor.field} />
+				{/if}
+			{/each}
 		{/snippet}
 
 		{#snippet legend()}
