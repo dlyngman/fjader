@@ -1,4 +1,4 @@
-// src/lib/components/marks/BaseMarkSetup.svelte.ts
+// src/lib/components/marks/MarkLifecycle.svelte.ts
 
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data-clients/DataClient.svelte';
@@ -30,7 +30,7 @@ import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { isContinuousScale } from '$lib/scales/scale-categories';
-import { generateMarkId, buildChannelFieldMap } from './utils';
+import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import {
 	computeExtentFromData,
@@ -94,7 +94,7 @@ interface ConnectedConfig {
 	dimensionChannel: string;
 }
 
-export interface BaseMarkSetupConfig {
+export interface MarkLifecycleConfig {
 	markType: string;
 	supportedScaleTypes: { x: string[]; y: string[] };
 	scaleRequirements: {
@@ -118,7 +118,7 @@ export interface BaseMarkSetupConfig {
 	zeroBaseline?: { x?: boolean; y?: boolean };
 }
 
-export class BaseMarkSetup {
+export class MarkLifecycle {
 	// --- Reactive State ---
 	client = $state<DataClient | null>(null);
 	categoricalDataFetched = $state(false);
@@ -133,7 +133,7 @@ export class BaseMarkSetup {
 	#colorDomainFetched = $state(false);
 
 	// --- Private Properties ---
-	#config: BaseMarkSetupConfig;
+	#config: MarkLifecycleConfig;
 	#coordinator: Coordinator;
 	#chartContext: ChartContext;
 	#markId: string;
@@ -193,12 +193,12 @@ export class BaseMarkSetup {
 	}
 
 	constructor(
-		config: BaseMarkSetupConfig,
+		config: MarkLifecycleConfig,
 		coordinator: Coordinator,
 		chartContext: ChartContext,
 		stableId: string | null = null
 	) {
-		console.log('🔧 BaseMarkSetup constructor:', {
+		console.log('🔧 MarkLifecycle constructor:', {
 			markType: config.markType,
 			transforms: config.transforms,
 			transformCount: config.transforms?.length || 0
@@ -216,7 +216,7 @@ export class BaseMarkSetup {
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
 
 		// Ensure services have coordinator (idempotent)
-		BaseMarkSetup.ensureServices(coordinator);
+		MarkLifecycle.ensureServices(coordinator);
 
 		// NEW: Create transform compiler
 		this.#transformCompiler = new TransformCompiler(config.transforms || []);
@@ -847,7 +847,7 @@ export class BaseMarkSetup {
 			if (xScale?.indexColumnName && hasView) {
 				const originalField = select.x;
 				select.x = xScale.indexColumnName;
-				console.log(`[BaseMarkSetup] Swapping x: ${originalField} → ${select.x}`);
+				console.log(`[MarkLifecycle] Swapping x: ${originalField} → ${select.x}`);
 			}
 		}
 		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipIndexSwap) {
@@ -855,7 +855,7 @@ export class BaseMarkSetup {
 			if (yScale?.indexColumnName && hasView) {
 				const originalField = select.y;
 				select.y = yScale.indexColumnName;
-				console.log(`[BaseMarkSetup] Swapping y: ${originalField} → ${select.y}`);
+				console.log(`[MarkLifecycle] Swapping y: ${originalField} → ${select.y}`);
 			}
 		}
 
@@ -874,14 +874,14 @@ export class BaseMarkSetup {
 		) {
 			const originalField = select[colorKey];
 			select[colorKey] = this.#colorScaleState.indexColumnName;
-			console.log(`[BaseMarkSetup] Swapping ${colorKey}: ${originalField} → ${select[colorKey]}`);
+			console.log(`[MarkLifecycle] Swapping ${colorKey}: ${originalField} → ${select[colorKey]}`);
 		}
 
 		// For faceting, include the facet index column
 		const facetBandScale = this.#chartContext.facetBandScale;
 		if (facetBandScale?.indexColumnName && hasView) {
 			select.__facet = facetBandScale.indexColumnName;
-			console.log(`[BaseMarkSetup] Adding facet column: ${select.__facet}`);
+			console.log(`[MarkLifecycle] Adding facet column: ${select.__facet}`);
 		}
 
 		return select;
@@ -991,11 +991,11 @@ export class BaseMarkSetup {
 				const val = result[ch];
 				if (typeof val === 'string' && scaleState.offsetColumnName && hasView) {
 					console.log(
-						`[BaseMarkSetup] Swapping ${ch} (time): ${val} → ${scaleState.offsetColumnName}`
+						`[MarkLifecycle] Swapping ${ch} (time): ${val} → ${scaleState.offsetColumnName}`
 					);
 					result[ch] = scaleState.offsetColumnName;
 				} else if (isNode(val)) {
-					console.log(`[BaseMarkSetup] Wrapping ${ch} (time expr) with epoch offset`);
+					console.log(`[MarkLifecycle] Wrapping ${ch} (time expr) with epoch offset`);
 					result[ch] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
 				}
 			}
@@ -1319,7 +1319,7 @@ export class BaseMarkSetup {
 	}
 
 	destroy(): void {
-		console.log(`💥 BaseMarkSetup destroying for ${this.#markId}`);
+		console.log(`💥 MarkLifecycle destroying for ${this.#markId}`);
 
 		clearTimeout(this.#rebinTimeout!);
 		clearTimeout(this.#viewportDomainUpdateTimeout!);

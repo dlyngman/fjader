@@ -54,7 +54,7 @@ interface QueryResult {
 /**
  * TooltipManager - DB-first tooltip query service.
  *
- * Queries DuckDB temp tables (written by BaseMarkSetup) to find the nearest
+ * Queries DuckDB temp tables (written by MarkLifecycle) to find the nearest
  * data point(s) to the cursor. Returns multiple co-located points when they
  * share the same (or nearly same) position — e.g., multi-series lines at the
  * same x, or overlapping dots in a dense scatter plot.

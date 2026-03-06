@@ -220,7 +220,7 @@ export class MarkColor {
 		return null;
 	});
 
-	// Field/expression for BaseMarkSetup select (or null)
+	// Field/expression for MarkLifecycle select (or null)
 	// This can be a string (column name) or a SQL expression node (aggregate)
 	selectField: string | object | null = $derived(this.#mode === 'field' ? this.#field : null);
 

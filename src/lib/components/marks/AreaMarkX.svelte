@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { BaseMarkSetup } from './BaseMarkSetup.svelte';
+	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Areas, Lines } from '../rendering';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -83,7 +83,7 @@
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Ensure services are ready before inference (idempotent)
-	BaseMarkSetup.ensureServices(coordinator);
+	MarkLifecycle.ensureServices(coordinator);
 
 	let setup = $state(null);
 
@@ -232,7 +232,7 @@
 			setup?.destroy();
 			setup = null;
 			if (table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new BaseMarkSetup(config, coordinator, chartContext, markId);
+				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
 	});

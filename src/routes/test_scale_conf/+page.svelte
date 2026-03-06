@@ -53,7 +53,7 @@
 					}
 				};
 
-				// Simulate the registration (what BaseMarkSetup does)
+				// Simulate the registration (what MarkLifecycle does)
 				window.testScaleConfig.registerTestScale('y', 'band', 3, 'test-bar', {
 					padding: 0.3,
 					align: 0.2
