@@ -2,19 +2,24 @@
  * M4Decimator - GPU compute-based M4 decimation for line charts.
  *
  * Manages compute pipelines, buffers, and bind groups for the M4 algorithm.
- * Reads domain bounds from the shared scale SSBO (group 2) — no separate
- * domain uniform needed. Integrates into GPUCoordinator's render loop via
- * registerComputeWork().
+ * The GPU decides per-frame whether to decimate or pass through raw data,
+ * based on the actual visible point count from the previous frame.
+ *
+ * The decision flag is stored in an extended indirect buffer (20 bytes:
+ * 4 drawIndirect args + 1 decision flag). This merges what was previously
+ * a separate DecisionBuffer, saving 1 storage binding per stage.
+ *
+ * Passthrough is split into two sub-dispatches (XY + series/color) to stay
+ * within the 8 storage buffer per-stage limit.
  *
  * Usage:
  *   const decimator = new M4Decimator(device, globalScaleLayout);
- *   decimator.configure(numBins, numSeries, xScaleIndex);
- *   // Register with GPUCoordinator:
+ *   decimator.configure(numBins, numSeries, xScaleIndex, fullDomainSpan, pixelWidth);
+ *   decimator.setVertexCount(quadVertexCount);
  *   gpuCoordinator.registerComputeWork(key, (encoder, scaleBG) =>
  *       decimator.encode(encoder, inputBuffers, scaleBG, pointCount));
- *   // For rendering, override bind group in draw callback:
  *   passEncoder.setBindGroup(1, decimator.renderBindGroup);
- *   passEncoder.draw(verticesPerInstance, decimator.outputSize);
+ *   passEncoder.drawIndirect(decimator.indirectBuffer, 0);
  */
 
 import {
@@ -23,7 +28,9 @@ import {
 	BIN_POINTS_SHADER,
 	FIND_MINMAX_SHADER,
 	EMIT_OUTPUT_SHADER,
-	COMPACT_SHADER
+	COMPACT_SHADER,
+	PASSTHROUGH_XY_SHADER,
+	PASSTHROUGH_SC_SHADER
 } from './M4Shader';
 
 interface M4InputBuffers {
@@ -42,8 +49,12 @@ interface M4OutputBuffers {
 
 // M4Bin struct: 6 × u32 atomics = 24 bytes per bin
 const M4_BIN_SIZE = 24;
-// M4Config: 4 × u32 = 16 bytes
-const M4_CONFIG_SIZE = 16;
+// M4Config: 8 × u32 = 32 bytes (with fullDomainSpan, pixelWidth, densityThreshold)
+const M4_CONFIG_SIZE = 32;
+// Control buffer: 5 × u32 = 20 bytes (4 drawIndirect args + shouldDecimate flag)
+const CONTROL_BUFFER_SIZE = 20;
+// Visible count: 1 × u32 = 4 bytes (atomic counter)
+const VISIBLE_COUNT_SIZE = 4;
 
 export class M4Decimator {
 	#device: GPUDevice;
@@ -54,16 +65,23 @@ export class M4Decimator {
 	#findMinMaxPipeline: GPUComputePipeline | null = null;
 	#emitOutputPipeline: GPUComputePipeline | null = null;
 	#compactPipeline: GPUComputePipeline | null = null;
+	#passthroughXYPipeline: GPUComputePipeline | null = null;
+	#passthroughSCPipeline: GPUComputePipeline | null = null;
 
 	// Bind group layouts
 	#inputLayout: GPUBindGroupLayout | null = null;
 	#emitInputLayout: GPUBindGroupLayout | null = null;
 	#outputLayout: GPUBindGroupLayout | null = null;
 	#fillLayout: GPUBindGroupLayout | null = null;
+	#controlLayout: GPUBindGroupLayout | null = null;
+	#passthroughInputLayout: GPUBindGroupLayout | null = null;
+	#halfOutputLayout: GPUBindGroupLayout | null = null;
 
 	// Buffers
 	#configBuffer: GPUBuffer | null = null;
 	#binBuffer: GPUBuffer | null = null;
+	#controlBuffer: GPUBuffer | null = null;
+	#visibleCountBuffer: GPUBuffer | null = null;
 	#outputBuffers: M4OutputBuffers = {
 		x: null,
 		y: null,
@@ -75,7 +93,11 @@ export class M4Decimator {
 	#inputBindGroups = new Map<string, GPUBindGroup>();
 	#outputBindGroup: GPUBindGroup | null = null;
 	#fillBindGroup: GPUBindGroup | null = null;
-	#emptyBindGroup: GPUBindGroup | null = null;
+	#controlBindGroup: GPUBindGroup | null = null;
+	#pass5aInputBindGroup: GPUBindGroup | null = null;
+	#pass5bInputBindGroup: GPUBindGroup | null = null;
+	#pass5aOutputBindGroup: GPUBindGroup | null = null;
+	#pass5bOutputBindGroup: GPUBindGroup | null = null;
 
 	// Reactive configuration — Lines.svelte effects track these via getters
 	#numBins = $state(0);
@@ -85,18 +107,28 @@ export class M4Decimator {
 	// Non-reactive internal state
 	#xScaleIndex = 0;
 	#pointCount = 0;
+	#fullDomainSpan = 0;
+	#pixelWidth = 0;
+	#densityThreshold = 4.0;
+	#outputCapacity = 0;
 
-	// CPU-side config buffer for updates
-	#configData = new Uint32Array(4);
+	// CPU-side config buffer for updates (8 × u32 = 32 bytes)
+	#configData = new Uint32Array(8);
+	#configF32 = new Float32Array(this.#configData.buffer);
 
 	#lastInputBuffers: M4InputBuffers | null = null;
 	#dummyBuffer: GPUBuffer | null = null;
+
+	// Stored references for rebuilding renderBindGroup after output buffer reallocation
+	#renderBindGroupLayout: GPUBindGroupLayout | null = null;
+	#renderMarkConstantsBuffer: GPUBuffer | null = null;
 
 	constructor(device: GPUDevice, globalScaleLayout: GPUBindGroupLayout) {
 		this.#device = device;
 		this.#createLayouts(globalScaleLayout);
 		this.#createPipelines(globalScaleLayout);
 		this.#createConfigBuffer();
+		this.#createControlBuffers();
 	}
 
 	get outputSize(): number {
@@ -107,28 +139,58 @@ export class M4Decimator {
 		return this.#configured;
 	}
 
+	get indirectBuffer(): GPUBuffer | null {
+		return this.#controlBuffer;
+	}
+
+	get visibleCountBuffer(): GPUBuffer | null {
+		return this.#visibleCountBuffer;
+	}
+
+	/**
+	 * Set the vertex count for drawIndirect (curve-dependent).
+	 * Written to control buffer at byte 0 (vertexCount). Called once after renderer creation.
+	 */
+	setVertexCount(count: number): void {
+		if (!this.#controlBuffer) return;
+		const data = new Uint32Array([count]);
+		this.#device.queue.writeBuffer(this.#controlBuffer, 0, data);
+	}
+
 	/**
 	 * Configure dimensions and allocate buffers.
 	 * Call when chart width, series count, or scale index changes.
-	 * Only reallocates GPU buffers when dimensions change (not for xScaleIndex-only changes).
 	 */
-	configure(numBins: number, numSeries: number, xScaleIndex: number): void {
-		// +2 boundary bins: bin 0 (left) and bin N-1 (right) capture off-screen
-		// points for line connectivity at viewport edges.
+	configure(
+		numBins: number,
+		numSeries: number,
+		xScaleIndex: number,
+		fullDomainSpan: number,
+		pixelWidth: number,
+		densityThreshold: number = 4.0
+	): void {
 		const internalBins = numBins + 2;
 		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
-		const scaleChanged = xScaleIndex !== this.#xScaleIndex;
+		const configChanged =
+			xScaleIndex !== this.#xScaleIndex ||
+			fullDomainSpan !== this.#fullDomainSpan ||
+			pixelWidth !== this.#pixelWidth ||
+			densityThreshold !== this.#densityThreshold;
 
-		if (!dimsChanged && !scaleChanged) return;
+		if (!dimsChanged && !configChanged) return;
 
 		this.#xScaleIndex = xScaleIndex;
+		this.#fullDomainSpan = fullDomainSpan;
+		this.#pixelWidth = pixelWidth;
+		this.#densityThreshold = densityThreshold;
 
 		if (dimsChanged) {
 			this.#numBins = internalBins;
 			this.#numSeries = numSeries;
 
 			const totalBins = internalBins * numSeries;
-			const outputCount = totalBins * 4;
+			const m4OutputCount = totalBins * 4;
+			const outputCount = Math.max(m4OutputCount, this.#pointCount);
 
 			// Reallocate bin buffer
 			this.#binBuffer?.destroy();
@@ -138,54 +200,19 @@ export class M4Decimator {
 				label: 'm4-bins'
 			});
 
-			// Reallocate output buffers
-			const outputByteSize = Math.max(outputCount * 4, 16);
-			for (const key of ['x', 'y', 'series', 'color'] as const) {
-				this.#outputBuffers[key]?.destroy();
-				this.#outputBuffers[key] = this.#device.createBuffer({
-					size: outputByteSize,
-					usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-					label: `m4-output-${key}`
-				});
-			}
-
-			// Rebuild output bind group (used by emit pass)
-			this.#outputBindGroup = this.#device.createBindGroup({
-				label: 'm4-output-bind-group',
-				layout: this.#outputLayout!,
-				entries: [
-					{ binding: 0, resource: { buffer: this.#outputBuffers.x! } },
-					{ binding: 1, resource: { buffer: this.#outputBuffers.y! } },
-					{ binding: 2, resource: { buffer: this.#outputBuffers.series! } },
-					{ binding: 3, resource: { buffer: this.#outputBuffers.color! } }
-				]
-			});
-
-			// Rebuild fill-forward bind group (config + output arrays)
-			this.#fillBindGroup = this.#device.createBindGroup({
-				label: 'm4-fill-bind-group',
-				layout: this.#fillLayout!,
-				entries: [
-					{ binding: 0, resource: { buffer: this.#configBuffer! } },
-					{ binding: 1, resource: { buffer: this.#outputBuffers.x! } },
-					{ binding: 2, resource: { buffer: this.#outputBuffers.y! } },
-					{ binding: 3, resource: { buffer: this.#outputBuffers.series! } },
-					{ binding: 4, resource: { buffer: this.#outputBuffers.color! } }
-				]
-			});
-
-			// Clear stale input bind groups (will be rebuilt on next encode)
+			this.#allocateOutputBuffers(outputCount);
 			this.#inputBindGroups.clear();
+			this.#pass5aInputBindGroup = null;
+			this.#pass5bInputBindGroup = null;
 		}
 
-		// Always update config uniform (covers both dimension and scale index changes)
 		this.#updateConfig(this.#pointCount);
 		this.#configured = true;
 	}
 
 	/**
 	 * Encode M4 compute passes into the provided command encoder.
-	 * Called by GPUCoordinator's registerComputeWork callback.
+	 * 7 passes: initBins → binPoints → findMinMax → emitOutput → compact → passthroughXY → passthroughSC
 	 */
 	encode(
 		commandEncoder: GPUCommandEncoder,
@@ -195,45 +222,47 @@ export class M4Decimator {
 	): void {
 		if (!this.#configured || this.#numBins === 0 || pointCount === 0) return;
 
-		// Update config if pointCount changed
 		if (pointCount !== this.#pointCount) {
 			this.#pointCount = pointCount;
 			this.#updateConfig(pointCount);
+			this.#ensureOutputCapacity(pointCount);
 		}
 
-		// Rebuild input bind groups if needed (new input buffers)
 		this.#ensureInputBindGroups(inputBuffers);
+		this.#ensurePassthroughBindGroups(inputBuffers);
 
 		const totalBins = this.#numBins * this.#numSeries;
 		const pointWorkgroups = Math.ceil(pointCount / WORKGROUP_SIZE);
 		const binWorkgroups = Math.ceil(totalBins / WORKGROUP_SIZE);
 
-		// Pass 0: Initialize bins
+		// Pass 0: Decision + initialize bins
 		const initPass = commandEncoder.beginComputePass({ label: 'm4-init-bins' });
 		initPass.setPipeline(this.#initBinsPipeline!);
 		initPass.setBindGroup(0, this.#inputBindGroups.get('initBins')!);
+		initPass.setBindGroup(1, this.#controlBindGroup!);
+		initPass.setBindGroup(2, scaleBindGroup);
 		initPass.dispatchWorkgroups(binWorkgroups);
 		initPass.end();
 
-		// Pass 1: Bin points
+		// Pass 1: Count visible points + bin points (if decimating)
 		const binPass = commandEncoder.beginComputePass({ label: 'm4-bin-points' });
 		binPass.setPipeline(this.#binPointsPipeline!);
 		binPass.setBindGroup(0, this.#inputBindGroups.get('binPoints')!);
-		binPass.setBindGroup(1, this.#emptyBindGroup!);
+		binPass.setBindGroup(1, this.#controlBindGroup!);
 		binPass.setBindGroup(2, scaleBindGroup);
 		binPass.dispatchWorkgroups(pointWorkgroups);
 		binPass.end();
 
-		// Pass 2: Find min/max indices
+		// Pass 2: Find min/max indices (skips in passthrough mode)
 		const findPass = commandEncoder.beginComputePass({ label: 'm4-find-minmax' });
 		findPass.setPipeline(this.#findMinMaxPipeline!);
 		findPass.setBindGroup(0, this.#inputBindGroups.get('findMinMax')!);
-		findPass.setBindGroup(1, this.#emptyBindGroup!);
+		findPass.setBindGroup(1, this.#controlBindGroup!);
 		findPass.setBindGroup(2, scaleBindGroup);
 		findPass.dispatchWorkgroups(pointWorkgroups);
 		findPass.end();
 
-		// Pass 3: Emit output
+		// Pass 3: Emit output (always runs — harmless in passthrough)
 		const emitPass = commandEncoder.beginComputePass({ label: 'm4-emit-output' });
 		emitPass.setPipeline(this.#emitOutputPipeline!);
 		emitPass.setBindGroup(0, this.#inputBindGroups.get('emitOutput')!);
@@ -241,29 +270,56 @@ export class M4Decimator {
 		emitPass.dispatchWorkgroups(binWorkgroups);
 		emitPass.end();
 
-		// Pass 4: Compact (pack non-NaN points contiguously, deduplicate)
-		const fillPass = commandEncoder.beginComputePass({ label: 'm4-compact' });
-		fillPass.setPipeline(this.#compactPipeline!);
-		fillPass.setBindGroup(0, this.#fillBindGroup!);
-		fillPass.dispatchWorkgroups(this.#numSeries);
-		fillPass.end();
+		// Pass 4: Compact + write indirect instance count (skips in passthrough)
+		const compactPass = commandEncoder.beginComputePass({ label: 'm4-compact' });
+		compactPass.setPipeline(this.#compactPipeline!);
+		compactPass.setBindGroup(0, this.#fillBindGroup!);
+		compactPass.setBindGroup(1, this.#controlBindGroup!);
+		compactPass.dispatchWorkgroups(this.#numSeries);
+		compactPass.end();
+
+		// Pass 5a: Passthrough x,y copy + set indirect count (skips in decimate)
+		const ptXYPass = commandEncoder.beginComputePass({ label: 'm4-passthrough-xy' });
+		ptXYPass.setPipeline(this.#passthroughXYPipeline!);
+		ptXYPass.setBindGroup(0, this.#pass5aInputBindGroup!);
+		ptXYPass.setBindGroup(1, this.#pass5aOutputBindGroup!);
+		ptXYPass.dispatchWorkgroups(pointWorkgroups);
+		ptXYPass.end();
+
+		// Pass 5b: Passthrough series,color copy (skips in decimate)
+		const ptSCPass = commandEncoder.beginComputePass({ label: 'm4-passthrough-sc' });
+		ptSCPass.setPipeline(this.#passthroughSCPipeline!);
+		ptSCPass.setBindGroup(0, this.#pass5bInputBindGroup!);
+		ptSCPass.setBindGroup(1, this.#pass5bOutputBindGroup!);
+		ptSCPass.dispatchWorkgroups(pointWorkgroups);
+		ptSCPass.end();
 	}
 
 	/**
 	 * Create a bind group compatible with the render pipeline's group(1) layout.
-	 * Uses M4 output buffers for data slots (0-3) and the renderer's
-	 * markConstants buffer for slot 4.
+	 * Uses M4 output buffers for data slots (0-3), the renderer's
+	 * markConstants buffer for slot 4, and visibleCountBuffer for slot 6.
+	 * Stores references so the bind group can be auto-rebuilt after output buffer reallocation.
 	 */
 	createRenderBindGroup(perDataLayout: GPUBindGroupLayout, markConstantsBuffer: GPUBuffer): void {
+		this.#renderBindGroupLayout = perDataLayout;
+		this.#renderMarkConstantsBuffer = markConstantsBuffer;
+		this.#rebuildRenderBindGroup();
+	}
+
+	#rebuildRenderBindGroup(): void {
+		if (!this.#renderBindGroupLayout || !this.#renderMarkConstantsBuffer) return;
+		if (!this.#outputBuffers.x || !this.#visibleCountBuffer) return;
 		this.renderBindGroup = this.#device.createBindGroup({
 			label: 'm4-render-bind-group',
-			layout: perDataLayout,
+			layout: this.#renderBindGroupLayout,
 			entries: [
 				{ binding: 0, resource: { buffer: this.#outputBuffers.x! } },
 				{ binding: 1, resource: { buffer: this.#outputBuffers.y! } },
 				{ binding: 2, resource: { buffer: this.#outputBuffers.series! } },
 				{ binding: 3, resource: { buffer: this.#outputBuffers.color! } },
-				{ binding: 4, resource: { buffer: markConstantsBuffer } }
+				{ binding: 4, resource: { buffer: this.#renderMarkConstantsBuffer } },
+				{ binding: 6, resource: { buffer: this.#visibleCountBuffer! } }
 			]
 		});
 	}
@@ -276,12 +332,18 @@ export class M4Decimator {
 		this.#configBuffer = null;
 		this.#binBuffer?.destroy();
 		this.#binBuffer = null;
+		this.#controlBuffer?.destroy();
+		this.#controlBuffer = null;
+		this.#visibleCountBuffer?.destroy();
+		this.#visibleCountBuffer = null;
 		for (const key of ['x', 'y', 'series', 'color'] as const) {
 			this.#outputBuffers[key]?.destroy();
 			this.#outputBuffers[key] = null;
 		}
 		this.#dummyBuffer?.destroy();
 		this.#dummyBuffer = null;
+		this.#renderBindGroupLayout = null;
+		this.#renderMarkConstantsBuffer = null;
 		this.#configured = false;
 	}
 
@@ -297,11 +359,42 @@ export class M4Decimator {
 		});
 	}
 
+	#createControlBuffers(): void {
+		// Extended indirect buffer: 4 drawIndirect args + 1 decision flag = 20 bytes
+		// drawIndirect reads only the first 16 bytes.
+		this.#controlBuffer = this.#device.createBuffer({
+			size: CONTROL_BUFFER_SIZE,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.INDIRECT,
+			label: 'm4-control'
+		});
+		// Pre-write zeros: [vertexCount=0, instanceCount=0, firstVertex=0, firstInstance=0, shouldDecimate=0]
+		this.#device.queue.writeBuffer(this.#controlBuffer, 0, new Uint32Array(5));
+
+		this.#visibleCountBuffer = this.#device.createBuffer({
+			size: VISIBLE_COUNT_SIZE,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			label: 'm4-visible-count'
+		});
+
+		this.#controlBindGroup = this.#device.createBindGroup({
+			label: 'm4-control-bind-group',
+			layout: this.#controlLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: this.#controlBuffer } },
+				{ binding: 1, resource: { buffer: this.#visibleCountBuffer } }
+			]
+		});
+	}
+
 	#updateConfig(pointCount: number): void {
 		this.#configData[0] = pointCount;
 		this.#configData[1] = this.#numBins;
 		this.#configData[2] = this.#numSeries;
 		this.#configData[3] = this.#xScaleIndex;
+		this.#configF32[4] = this.#fullDomainSpan;
+		this.#configF32[5] = this.#pixelWidth;
+		this.#configF32[6] = this.#densityThreshold;
+		this.#configData[7] = 0; // padding
 		this.#device.queue.writeBuffer(
 			this.#configBuffer!,
 			0,
@@ -309,74 +402,98 @@ export class M4Decimator {
 		);
 	}
 
+	#allocateOutputBuffers(outputCount: number): void {
+		const outputByteSize = Math.max(outputCount * 4, 16);
+		this.#outputCapacity = outputCount;
+
+		for (const key of ['x', 'y', 'series', 'color'] as const) {
+			this.#outputBuffers[key]?.destroy();
+			this.#outputBuffers[key] = this.#device.createBuffer({
+				size: outputByteSize,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+				label: `m4-output-${key}`
+			});
+		}
+
+		this.#outputBindGroup = this.#device.createBindGroup({
+			label: 'm4-output-bind-group',
+			layout: this.#outputLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: this.#outputBuffers.x! } },
+				{ binding: 1, resource: { buffer: this.#outputBuffers.y! } },
+				{ binding: 2, resource: { buffer: this.#outputBuffers.series! } },
+				{ binding: 3, resource: { buffer: this.#outputBuffers.color! } }
+			]
+		});
+
+		this.#fillBindGroup = this.#device.createBindGroup({
+			label: 'm4-fill-bind-group',
+			layout: this.#fillLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: this.#configBuffer! } },
+				{ binding: 1, resource: { buffer: this.#outputBuffers.x! } },
+				{ binding: 2, resource: { buffer: this.#outputBuffers.y! } },
+				{ binding: 3, resource: { buffer: this.#outputBuffers.series! } },
+				{ binding: 4, resource: { buffer: this.#outputBuffers.color! } }
+			]
+		});
+
+		// Rebuild render bind group with new output buffers (no-op if not yet created)
+		this.#rebuildRenderBindGroup();
+		this.#pass5aOutputBindGroup = null;
+		this.#pass5bOutputBindGroup = null;
+		this.#pass5aInputBindGroup = null;
+		this.#pass5bInputBindGroup = null;
+	}
+
+	/**
+	 * Grow output buffers if raw point count exceeds current capacity.
+	 * Needed for passthrough mode (raw data → output).
+	 */
+	#ensureOutputCapacity(pointCount: number): void {
+		const needed = Math.max(this.outputSize, pointCount);
+		if (needed <= this.#outputCapacity) return;
+		this.#allocateOutputBuffers(needed);
+		this.#inputBindGroups.clear();
+	}
+
 	#createLayouts(globalScaleLayout: GPUBindGroupLayout): void {
+		// Group 0 for passes 0, 1, 2 — input data + config + bins
 		this.#inputLayout = this.#device.createBindGroupLayout({
 			label: 'm4-input-layout',
 			entries: [
-				{
-					binding: 0,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 1,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 2,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 3,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 4,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'uniform' }
-				},
-				{
-					binding: 5,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'storage' }
-				}
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+				{ binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
 			]
 		});
 
+		// Group 1 for control (merged indirect+decision) + visibleCount
+		// 2 bindings instead of the original 3 (decision, indirect, visibleCount)
+		this.#controlLayout = this.#device.createBindGroupLayout({
+			label: 'm4-control-layout',
+			entries: [
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+			]
+		});
+
+		// Group 0 for pass 3 (emit) — x, y, color, config, bins (no decision)
 		this.#emitInputLayout = this.#device.createBindGroupLayout({
 			label: 'm4-emit-input-layout',
 			entries: [
-				{
-					binding: 0,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 1,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 2,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
-				{
-					binding: 3,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'uniform' }
-				},
-				{
-					binding: 4,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'storage' }
-				}
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+				{ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
 			]
 		});
 
+		// Group 1 for output arrays — pass 3
 		this.#outputLayout = this.#device.createBindGroupLayout({
 			label: 'm4-output-layout',
 			entries: [
@@ -387,56 +504,67 @@ export class M4Decimator {
 			]
 		});
 
+		// Group 0 for pass 4 (compact) — config + output arrays
 		this.#fillLayout = this.#device.createBindGroupLayout({
 			label: 'm4-fill-layout',
 			entries: [
-				{
-					binding: 0,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: { type: 'uniform' }
-				},
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
 				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
 				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
 				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
 				{ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
 			]
 		});
+
+		// Group 0 for pass 5a/5b (passthrough) — 2 data + config + control
+		this.#passthroughInputLayout = this.#device.createBindGroupLayout({
+			label: 'm4-passthrough-input-layout',
+			entries: [
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+			]
+		});
+
+		// Group 1 for pass 5a/5b — 2 output channels
+		this.#halfOutputLayout = this.#device.createBindGroupLayout({
+			label: 'm4-half-output-layout',
+			entries: [
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+			]
+		});
 	}
 
 	#createPipelines(globalScaleLayout: GPUBindGroupLayout): void {
-		const emptyLayout = this.#device.createBindGroupLayout({
-			label: 'm4-empty-layout',
-			entries: []
-		});
-		this.#emptyBindGroup = this.#device.createBindGroup({
-			label: 'm4-empty-bind-group',
-			layout: emptyLayout,
-			entries: []
+		// Passes 0, 1, 2: [inputLayout, controlLayout, globalScaleLayout]
+		const inputControlScaleLayout = this.#device.createPipelineLayout({
+			label: 'm4-input-control-scale-layout',
+			bindGroupLayouts: [this.#inputLayout!, this.#controlLayout!, globalScaleLayout]
 		});
 
-		const initBinsLayout = this.#device.createPipelineLayout({
-			label: 'm4-init-bins-layout',
-			bindGroupLayouts: [this.#inputLayout!]
-		});
-
-		const dataScaleLayout = this.#device.createPipelineLayout({
-			label: 'm4-data-scale-layout',
-			bindGroupLayouts: [this.#inputLayout!, emptyLayout, globalScaleLayout]
-		});
-
+		// Pass 3: [emitInputLayout, outputLayout]
 		const emitLayout = this.#device.createPipelineLayout({
 			label: 'm4-emit-layout',
 			bindGroupLayouts: [this.#emitInputLayout!, this.#outputLayout!]
 		});
 
-		const fillLayout = this.#device.createPipelineLayout({
-			label: 'm4-fill-layout',
-			bindGroupLayouts: [this.#fillLayout!]
+		// Pass 4: [fillLayout, controlLayout]
+		const compactControlLayout = this.#device.createPipelineLayout({
+			label: 'm4-compact-control-layout',
+			bindGroupLayouts: [this.#fillLayout!, this.#controlLayout!]
+		});
+
+		// Passes 5a, 5b: [passthroughInputLayout, halfOutputLayout]
+		const passthroughLayout = this.#device.createPipelineLayout({
+			label: 'm4-passthrough-layout',
+			bindGroupLayouts: [this.#passthroughInputLayout!, this.#halfOutputLayout!]
 		});
 
 		this.#initBinsPipeline = this.#device.createComputePipeline({
 			label: 'm4-init-bins',
-			layout: initBinsLayout,
+			layout: inputControlScaleLayout,
 			compute: {
 				module: this.#device.createShaderModule({ code: INIT_BINS_SHADER }),
 				entryPoint: 'main'
@@ -445,7 +573,7 @@ export class M4Decimator {
 
 		this.#binPointsPipeline = this.#device.createComputePipeline({
 			label: 'm4-bin-points',
-			layout: dataScaleLayout,
+			layout: inputControlScaleLayout,
 			compute: {
 				module: this.#device.createShaderModule({ code: BIN_POINTS_SHADER }),
 				entryPoint: 'main'
@@ -454,7 +582,7 @@ export class M4Decimator {
 
 		this.#findMinMaxPipeline = this.#device.createComputePipeline({
 			label: 'm4-find-minmax',
-			layout: dataScaleLayout,
+			layout: inputControlScaleLayout,
 			compute: {
 				module: this.#device.createShaderModule({ code: FIND_MINMAX_SHADER }),
 				entryPoint: 'main'
@@ -471,22 +599,34 @@ export class M4Decimator {
 		});
 
 		this.#compactPipeline = this.#device.createComputePipeline({
-			label: 'm4-fill-forward',
-			layout: fillLayout,
+			label: 'm4-compact',
+			layout: compactControlLayout,
 			compute: {
 				module: this.#device.createShaderModule({ code: COMPACT_SHADER }),
 				entryPoint: 'main'
 			}
 		});
+
+		this.#passthroughXYPipeline = this.#device.createComputePipeline({
+			label: 'm4-passthrough-xy',
+			layout: passthroughLayout,
+			compute: {
+				module: this.#device.createShaderModule({ code: PASSTHROUGH_XY_SHADER }),
+				entryPoint: 'main'
+			}
+		});
+
+		this.#passthroughSCPipeline = this.#device.createComputePipeline({
+			label: 'm4-passthrough-sc',
+			layout: passthroughLayout,
+			compute: {
+				module: this.#device.createShaderModule({ code: PASSTHROUGH_SC_SHADER }),
+				entryPoint: 'main'
+			}
+		});
 	}
 
-	/**
-	 * Create or update input bind groups for each kernel.
-	 * Different kernels reference different bindings, but all share
-	 * the same layout (unused bindings get a dummy buffer).
-	 */
 	#ensureInputBindGroups(inputBuffers: M4InputBuffers): void {
-		// Check if we need to rebuild (buffer references changed)
 		if (
 			this.#inputBindGroups.size > 0 &&
 			this.#lastInputBuffers?.x === inputBuffers.x &&
@@ -515,7 +655,6 @@ export class M4Decimator {
 			{ binding: 5, resource: { buffer: this.#binBuffer! } }
 		];
 
-		// initBins only uses config + bins (no data)
 		this.#inputBindGroups.set(
 			'initBins',
 			this.#device.createBindGroup({
@@ -525,7 +664,6 @@ export class M4Decimator {
 			})
 		);
 
-		// binPoints, findMinMax use full data + config + bins
 		const dataBindGroup = this.#device.createBindGroup({
 			label: 'm4-input-data',
 			layout: this.#inputLayout!,
@@ -535,7 +673,6 @@ export class M4Decimator {
 		this.#inputBindGroups.set('binPoints', dataBindGroup);
 		this.#inputBindGroups.set('findMinMax', dataBindGroup);
 
-		// emitOutput uses reduced layout (no seriesValues, different binding indices)
 		this.#inputBindGroups.set(
 			'emitOutput',
 			this.#device.createBindGroup({
@@ -550,5 +687,57 @@ export class M4Decimator {
 				]
 			})
 		);
+
+		// Invalidate passthrough bind groups (they reference input buffers)
+		this.#pass5aInputBindGroup = null;
+		this.#pass5bInputBindGroup = null;
+	}
+
+	#ensurePassthroughBindGroups(inputBuffers: M4InputBuffers): void {
+		if (this.#pass5aInputBindGroup && this.#pass5aOutputBindGroup) return;
+
+		// Pass 5a input: xIn, yIn, config, control
+		this.#pass5aInputBindGroup = this.#device.createBindGroup({
+			label: 'm4-pass5a-input',
+			layout: this.#passthroughInputLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: inputBuffers.x } },
+				{ binding: 1, resource: { buffer: inputBuffers.y } },
+				{ binding: 2, resource: { buffer: this.#configBuffer! } },
+				{ binding: 3, resource: { buffer: this.#controlBuffer! } }
+			]
+		});
+
+		// Pass 5b input: seriesIn, colorIn, config, control
+		this.#pass5bInputBindGroup = this.#device.createBindGroup({
+			label: 'm4-pass5b-input',
+			layout: this.#passthroughInputLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: inputBuffers.series } },
+				{ binding: 1, resource: { buffer: inputBuffers.color } },
+				{ binding: 2, resource: { buffer: this.#configBuffer! } },
+				{ binding: 3, resource: { buffer: this.#controlBuffer! } }
+			]
+		});
+
+		// Pass 5a output: xOut, yOut
+		this.#pass5aOutputBindGroup = this.#device.createBindGroup({
+			label: 'm4-pass5a-output',
+			layout: this.#halfOutputLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: this.#outputBuffers.x! } },
+				{ binding: 1, resource: { buffer: this.#outputBuffers.y! } }
+			]
+		});
+
+		// Pass 5b output: seriesOut, colorOut
+		this.#pass5bOutputBindGroup = this.#device.createBindGroup({
+			label: 'm4-pass5b-output',
+			layout: this.#halfOutputLayout!,
+			entries: [
+				{ binding: 0, resource: { buffer: this.#outputBuffers.series! } },
+				{ binding: 1, resource: { buffer: this.#outputBuffers.color! } }
+			]
+		});
 	}
 }

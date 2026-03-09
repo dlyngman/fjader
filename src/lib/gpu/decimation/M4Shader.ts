@@ -5,16 +5,29 @@
  * For each pixel bin, keeps 4 representative points (First, Last, Min-Y, Max-Y)
  * to preserve visual fidelity while dramatically reducing vertex count.
  *
- * Uses 5 compute passes:
- *   Pass 0 (initBins): Reset bin atomics to sentinel values
- *   Pass 1 (binPoints): Assign each point to a pixel bin, track first/last/minY/maxY
+ * Uses 7 compute passes:
+ *   Pass 0 (initBins): Decision + reset counters + init bin atomics
+ *   Pass 1 (binPoints): Count visible points + bin each point (if decimating)
  *   Pass 2 (findMinMaxIndices): Find indices of min/max Y points per bin
  *   Pass 3 (emitOutput): Write decimated x/y/series/color arrays
- *   Pass 4 (compact): Pack non-NaN points contiguously, deduplicate
+ *   Pass 4 (compact): Pack non-NaN points contiguously, write indirect instance count
+ *   Pass 5a (passthroughXY): Copy raw x,y → output + set indirect count
+ *   Pass 5b (passthroughSC): Copy raw series,color → output
+ *
+ * The GPU decides per-frame whether to decimate or pass through raw data,
+ * based on actual visible point count from the previous frame.
+ * drawIndirect lets the GPU control its own instance count.
+ *
+ * The decision flag is stored in control[4] of the extended indirect buffer
+ * (20 bytes: 4 drawIndirect args + 1 decision flag). drawIndirect reads
+ * only the first 16 bytes.
+ *
+ * Passthrough is split into two sub-dispatches (XY + series/color) to stay
+ * within the 8 storage buffer per-stage limit.
  *
  * Bind group layout:
  *   Group 0: Input data + config + bins
- *   Group 1: Output arrays
+ *   Group 1: Control buffer + visible count (OR output arrays)
  *   Group 2: Global scale SSBO (shared with render pipeline)
  */
 
@@ -36,6 +49,10 @@ struct M4Config {
 	numBins: u32,
 	numSeries: u32,
 	xScaleIndex: u32,
+	fullDomainSpan: f32,
+	pixelWidth: f32,
+	densityThreshold: f32,
+	_pad: u32,
 };
 
 struct M4Bin {
@@ -54,19 +71,60 @@ fn floatToSortableUint(f: f32) -> u32 {
 `;
 
 /**
- * Pass 0: Initialize all bins to sentinel values.
- * Runs on GPU to avoid CPU→GPU transfer during zoom/pan.
+ * Pass 0: Decision + initialize bins.
+ *
+ * Thread 0 reads the previous frame's visible count, computes the
+ * decimate/passthrough decision, writes the decision flag to control[4],
+ * and resets counters. All threads unconditionally init bins.
+ *
+ * Control buffer layout: [vertexCount, instanceCount, firstVertex,
+ * firstInstance, shouldDecimate]. drawIndirect reads first 4 u32s only.
+ *
+ * Group 0: inputLayout (data dummies + config + bins)
+ * Group 1: controlLayout (control + visibleCount)
+ * Group 2: globalScaleLayout (scaleParams — for heuristic fallback)
  */
 const INIT_BINS_SHADER = /* wgsl */ `
 ${SHARED_TYPES}
 
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
+@group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
+@group(1) @binding(1) var<storage, read_write> visibleCount: array<atomic<u32>>;
+@group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let binKey = gid.x;
 	let totalBins = config.numSeries * config.numBins;
+
+	// Thread 0: compute density decision, reset counters
+	if (binKey == 0u) {
+		let prevCount = atomicLoad(&visibleCount[0]);
+
+		// Use actual visible count from previous frame when available.
+		// Falls back to uniform-distribution heuristic on first frame (prevCount == 0).
+		var ppp: f32;
+		if (prevCount > 0u) {
+			ppp = f32(prevCount) / max(config.pixelWidth, 1.0);
+		} else {
+			let scale = scaleParams[config.xScaleIndex];
+			let viewSpan = scale.p2 - scale.p1;
+			let frac = select(1.0, viewSpan / config.fullDomainSpan,
+				config.fullDomainSpan > 0.0 && viewSpan > 0.0);
+			ppp = f32(config.pointCount) * frac / max(config.pixelWidth, 1.0);
+		}
+
+		let shouldDec = ppp >= config.densityThreshold;
+		atomicStore(&control[4], select(0u, 1u, shouldDec));
+		// Set instance count: outputSize when decimating, 0 when passthrough
+		// (pass 5a will set it to pointCount in passthrough mode)
+		let outputSize = config.numBins * config.numSeries * 4u;
+		atomicStore(&control[1], select(0u, outputSize, shouldDec));
+		atomicStore(&visibleCount[0], 0u);
+	}
+
+	// Always init bins — cheap and ensures clean state for potential decimation.
 	if (binKey >= totalBins) { return; }
 
 	atomicStore(&bins[binKey].firstIdx, 0xFFFFFFFFu);
@@ -80,8 +138,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 /**
  * Pass 1: Bin each point by scaled x position.
- * Uses atomics to track first/last index and min/max y per bin.
- * Domain bounds are read from the shared scale SSBO.
+ *
+ * Always counts in-viewport points (atomicAdd to visibleCount) regardless
+ * of decimate/passthrough decision — the vertex shader reads this count
+ * for auto-dots density fade.
+ *
+ * Only performs actual binning (atomic min/max to bins) when decimating.
+ *
+ * Group 0: inputLayout (x, y, series, [color dummy], config, bins)
+ * Group 1: controlLayout (control, visibleCount)
+ * Group 2: globalScaleLayout (scaleParams)
  */
 const BIN_POINTS_SHADER = /* wgsl */ `
 ${SHARED_TYPES}
@@ -91,6 +157,8 @@ ${SHARED_TYPES}
 @group(0) @binding(2) var<storage, read> seriesValues: array<f32>;
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
+@group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
+@group(1) @binding(1) var<storage, read_write> visibleCount: array<atomic<u32>>;
 @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
@@ -115,6 +183,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	if (seriesF < 0.0 || seriesF != seriesF) { return; }
 	let series = u32(seriesF);
 	if (series >= config.numSeries) { return; }
+
+	// Count in-viewport points (always, regardless of decimate/passthrough).
+	// Used by the vertex shader for auto-dots density fade.
+	if (t >= 0.0 && t <= 1.0) {
+		atomicAdd(&visibleCount[0], 1u);
+	}
+
+	// Only bin if decimating
+	if (atomicLoad(&control[4]) == 0u) { return; }
 
 	// Bin assignment: boundary bins capture off-screen points for line connectivity.
 	// Bins 0 and numBins-1 are boundary bins; bins 1..numBins-2 map to viewport pixels.
@@ -142,6 +219,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * Pass 2: Find indices of min/max Y points.
  * Each thread re-checks if its Y value matches the bin's min/max.
  * Uses atomicMin for deterministic tie-breaking (smallest index wins).
+ *
+ * Early-exits entirely in passthrough mode (no work needed).
+ *
+ * Group 0: inputLayout (x, y, series, [color dummy], config, bins)
+ * Group 1: controlLayout (control — only reads shouldDecimate; visibleCount bound but unused)
+ * Group 2: globalScaleLayout (scaleParams)
  */
 const FIND_MINMAX_SHADER = /* wgsl */ `
 ${SHARED_TYPES}
@@ -151,10 +234,13 @@ ${SHARED_TYPES}
 @group(0) @binding(2) var<storage, read> seriesValues: array<f32>;
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
+@group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
 @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+	if (atomicLoad(&control[4]) == 0u) { return; }
+
 	let idx = gid.x;
 	if (idx >= config.pointCount) { return; }
 
@@ -204,12 +290,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * (first, last, minY, maxY), sorting by original index to preserve
  * x-order, and writing x/y/series/color to output arrays.
  * Empty bins output NaN, causing the vertex shader to discard segments.
+ *
+ * Always runs (no decision check). In passthrough mode, all bins are empty
+ * (pass 1 skips binning), so this writes NaN everywhere — harmless since
+ * pass 5a/5b overwrites with raw data.
+ *
+ * Group 0: emitInputLayout (x, y, color, config, bins)
+ * Group 1: outputLayout (xOut, yOut, seriesOut, colorOut)
  */
 const EMIT_OUTPUT_SHADER = /* wgsl */ `
 ${SHARED_TYPES}
 
 // Note: seriesValues not bound here — series is derived from binKey / numBins.
-// This keeps total storage buffers at 8 (within WebGPU default limit).
+// This keeps total storage buffers within WebGPU default limit.
 @group(0) @binding(0) var<storage, read> xValues: array<f32>;
 @group(0) @binding(1) var<storage, read> yValues: array<f32>;
 @group(0) @binding(2) var<storage, read> colorValues: array<f32>;
@@ -300,13 +393,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 /**
  * Pass 4: Compact non-NaN output points and deduplicate.
- * After the emit pass, empty bins contain NaN. Instead of fill-forward
- * (which created runs of identical points causing zero-length segments),
- * this pass packs real data points contiguously so line segments connect
- * them directly. Consecutive duplicate coordinates are also removed.
+ * After the emit pass, empty bins contain NaN. This pass packs real data
+ * points contiguously so line segments connect them directly.
+ * Consecutive duplicate coordinates are also removed.
  *
- * One thread per series (sequential scan). For 3 series × 6400 slots each,
+ * Each series thread atomically adds its compacted count to the indirect
+ * draw buffer's instanceCount (control[1]).
+ *
+ * Early-exits entirely in passthrough mode.
+ *
+ * One thread per series (sequential scan). For 3 series x 6400 slots each,
  * this completes in microseconds with no thread contention.
+ *
+ * Group 0: fillLayout (config + output arrays)
+ * Group 1: controlLayout (control + visibleCount [unused])
  */
 const COMPACT_SHADER = /* wgsl */ `
 struct M4Config {
@@ -314,6 +414,10 @@ struct M4Config {
 	numBins: u32,
 	numSeries: u32,
 	xScaleIndex: u32,
+	fullDomainSpan: f32,
+	pixelWidth: f32,
+	densityThreshold: f32,
+	_pad: u32,
 };
 
 @group(0) @binding(0) var<uniform> config: M4Config;
@@ -321,9 +425,12 @@ struct M4Config {
 @group(0) @binding(2) var<storage, read_write> yOut: array<f32>;
 @group(0) @binding(3) var<storage, read_write> seriesOut: array<f32>;
 @group(0) @binding(4) var<storage, read_write> colorOut: array<f32>;
+@group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+	if (atomicLoad(&control[4]) == 0u) { return; }
+
 	let series = gid.x;
 	if (series >= config.numSeries) { return; }
 
@@ -361,6 +468,103 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 		seriesOut[i] = nan;
 		colorOut[i] = nan;
 	}
+
+	// Instance count is set by pass 0 (outputSize) — compact only reorganizes
+	// data within each series block, it doesn't change the total count.
+	// The vertex shader discards NaN-padded entries at the end of each block.
+}
+`;
+
+/**
+ * Pass 5a: Passthrough copy — raw x,y → output + set indirect count.
+ *
+ * When density is below the decimation threshold, copies raw x/y data
+ * directly to the output buffers. Thread 0 sets instanceCount.
+ * Split from series/color copy to stay within 8 storage buffer limit.
+ *
+ * Early-exits entirely in decimate mode.
+ *
+ * Group 0: passthroughInputLayout (data0, data1, config, control)
+ * Group 1: halfOutputLayout (out0, out1)
+ */
+const PASSTHROUGH_XY_SHADER = /* wgsl */ `
+struct M4Config {
+	pointCount: u32,
+	numBins: u32,
+	numSeries: u32,
+	xScaleIndex: u32,
+	fullDomainSpan: f32,
+	pixelWidth: f32,
+	densityThreshold: f32,
+	_pad: u32,
+};
+
+@group(0) @binding(0) var<storage, read> xIn: array<f32>;
+@group(0) @binding(1) var<storage, read> yIn: array<f32>;
+@group(0) @binding(2) var<uniform> config: M4Config;
+@group(0) @binding(3) var<storage, read_write> control: array<atomic<u32>>;
+@group(1) @binding(0) var<storage, read_write> xOut: array<f32>;
+@group(1) @binding(1) var<storage, read_write> yOut: array<f32>;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+	// Only run in passthrough mode
+	if (atomicLoad(&control[4]) == 1u) { return; }
+
+	let idx = gid.x;
+
+	// Thread 0 sets instance count to raw point count
+	if (idx == 0u) {
+		atomicStore(&control[1], config.pointCount);
+	}
+
+	if (idx >= config.pointCount) { return; }
+
+	xOut[idx] = xIn[idx];
+	yOut[idx] = yIn[idx];
+}
+`;
+
+/**
+ * Pass 5b: Passthrough copy — raw series,color → output.
+ *
+ * Companion to pass 5a. Copies series/color channels.
+ * Split to stay within 8 storage buffer limit.
+ *
+ * Early-exits entirely in decimate mode.
+ *
+ * Group 0: passthroughInputLayout (data0, data1, config, control)
+ * Group 1: halfOutputLayout (out0, out1)
+ */
+const PASSTHROUGH_SC_SHADER = /* wgsl */ `
+struct M4Config {
+	pointCount: u32,
+	numBins: u32,
+	numSeries: u32,
+	xScaleIndex: u32,
+	fullDomainSpan: f32,
+	pixelWidth: f32,
+	densityThreshold: f32,
+	_pad: u32,
+};
+
+@group(0) @binding(0) var<storage, read> seriesIn: array<f32>;
+@group(0) @binding(1) var<storage, read> colorIn: array<f32>;
+@group(0) @binding(2) var<uniform> config: M4Config;
+@group(0) @binding(3) var<storage, read_write> control: array<atomic<u32>>;
+@group(1) @binding(0) var<storage, read_write> seriesOut: array<f32>;
+@group(1) @binding(1) var<storage, read_write> colorOut: array<f32>;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+	// Only run in passthrough mode
+	if (atomicLoad(&control[4]) == 1u) { return; }
+
+	let idx = gid.x;
+	if (idx >= config.pointCount) { return; }
+
+	seriesOut[idx] = seriesIn[idx];
+	colorOut[idx] = colorIn[idx];
 }
 `;
 
@@ -370,5 +574,7 @@ export {
 	BIN_POINTS_SHADER,
 	FIND_MINMAX_SHADER,
 	EMIT_OUTPUT_SHADER,
-	COMPACT_SHADER
+	COMPACT_SHADER,
+	PASSTHROUGH_XY_SHADER,
+	PASSTHROUGH_SC_SHADER
 };

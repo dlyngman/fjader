@@ -61,7 +61,7 @@
 		paddingInner,
 		paddingOuter,
 		align = 0.5,
-		inset = 0,
+		inset = 0.5,
 		dx = 0,
 		dy = 0,
 		sort = null,

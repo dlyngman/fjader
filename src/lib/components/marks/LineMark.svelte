@@ -34,6 +34,7 @@
 		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
+		autoDots?: boolean;
 		optimize?: boolean | 'auto';
 	}
 
@@ -48,6 +49,7 @@
 		curve = 'linear',
 		strokeWidth = 2,
 		dotRadius = 0,
+		autoDots = false,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -190,26 +192,38 @@
 
 	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
 
-	// --- M4 DECIMATION ---
+	// --- M4 DECIMATION + AUTO-DOTS ---
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
-	const m4Active = $derived.by(() => {
+	// M4 always created when eligible — GPU decides per-frame whether to decimate or passthrough
+	const m4Eligible = $derived.by(() => {
 		if (optimize === false || faceted) return false;
-		// M4 uses linear domain math for bin assignment; disable for nonlinear scales
 		const xType = chartContext.scaleTypes?.x;
 		if (xType === 'log' || xType === 'symlog') return false;
-		if (optimize === true) return true;
-		// 'auto': activate when points exceed 10x pixel width
-		const pixels = chartContext.innerWidth;
-		const points = instanceCount;
-		return points > 0 && pixels > 0 && points > pixels * 10;
+		return true;
+	});
+
+	// Auto-dots: negative dotRadius signals density-based fade to the vertex shader
+	const effectiveDotRadius = $derived.by(() => {
+		if (!autoDots) return dotRadius;
+		if (optimize === true) return 0; // forced M4 — no dots on representatives
+		const baseR = dotRadius > 0 ? dotRadius : 2.5;
+		return -baseR; // negative = auto mode
+	});
+
+	// Full data domain span for density calculation
+	const fullDomainSpan = $derived.by(() => {
+		const xScale = chartContext.xScaleState;
+		if (!xScale || !('effectiveExtent' in xScale)) return 0;
+		const [min, max] = xScale.effectiveExtent;
+		return max - min;
 	});
 
 	let m4Decimator = $state(null);
 
 	$effect(() => {
-		if (m4Active && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
+		if (m4Eligible && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
 			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
 			m4Decimator = decimator;
 			return () => {
@@ -237,10 +251,11 @@
 
 		const dpr = window.devicePixelRatio || 1;
 		const numBins = Math.ceil(chartContext.innerWidth * dpr);
+		const pixelWidth = chartContext.innerWidth * dpr;
 		const xScaleIndex = chartContext.xScaleState
 			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
 			: 0;
-		m4Decimator.configure(numBins, numSeries, xScaleIndex);
+		m4Decimator.configure(numBins, numSeries, xScaleIndex, fullDomainSpan, pixelWidth);
 	});
 
 	// Tooltip registration
@@ -283,10 +298,11 @@
 			colorScaleIndex={markColor.colorScaleIndex}
 			constantColor={markColor.constantColor}
 			{strokeWidth}
-			{dotRadius}
+			dotRadius={effectiveDotRadius}
+			{fullDomainSpan}
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
-			m4Decimator={m4Active ? m4Decimator : null}
+			m4Decimator={m4Eligible ? m4Decimator : null}
 		/>
 	{/key}
 {:else if setup?.client?.error}

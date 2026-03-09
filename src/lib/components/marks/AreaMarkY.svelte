@@ -37,6 +37,7 @@
 		fillOpacity?: number;
 		stroke?: string | null;
 		dotRadius?: number;
+		autoDots?: boolean;
 		strokeWidth?: number;
 	}
 
@@ -54,6 +55,7 @@
 		fillOpacity = 0.5,
 		stroke = null,
 		dotRadius = 0,
+		autoDots = false,
 		strokeWidth = 0,
 		limit,
 		filterNulls = false,
@@ -223,6 +225,21 @@
 		return markColor.constantColor;
 	});
 
+	// Auto-dots: negative dotRadius signals density-based fade to the vertex shader
+	const effectiveDotRadius = $derived.by(() => {
+		if (!autoDots) return dotRadius;
+		const baseR = dotRadius > 0 ? dotRadius : 2.5;
+		return -baseR;
+	});
+
+	// Full data domain span for density calculation (x-axis for vertical areas)
+	const fullDomainSpan = $derived.by(() => {
+		const xScale = chartContext.xScaleState;
+		if (!xScale || !('effectiveExtent' in xScale)) return 0;
+		const [min, max] = xScale.effectiveExtent;
+		return max - min;
+	});
+
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
@@ -279,7 +296,8 @@
 			colorScaleIndex={markColor.colorScaleIndex}
 			constantColor={markColor.constantColor}
 			{fillOpacity}
-			{dotRadius}
+			dotRadius={effectiveDotRadius}
+			{fullDomainSpan}
 			showBottomDots={showBothBoundaries}
 			orientation="vertical"
 			facetData={setup?.facetData}

@@ -21,7 +21,8 @@
 		SERIES: 2,
 		COLOR: 3,
 		CONSTANTS: 4,
-		FACET: 5
+		FACET: 5,
+		VISIBLE_COUNT: 6
 	};
 
 	// Uniform struct offsets (matching WGSL MarkConstants layout, 48 bytes)
@@ -31,7 +32,9 @@
 		COLOR_MODE: 8, // u32
 		COLOR_SCALE_INDEX: 12, // u32
 		CONSTANT_COLOR: 16, // vec4<f32>
-		DOT_RADIUS: 32 // f32
+		DOT_RADIUS: 32, // f32
+		FULL_DOMAIN_SPAN: 36, // f32
+		TOTAL_POINT_COUNT: 40 // u32
 	};
 
 	interface Props {
@@ -45,6 +48,7 @@
 		curve?: CurveType;
 		strokeWidth?: number;
 		dotRadius?: number;
+		fullDomainSpan?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
 		constantColor?: [number, number, number, number];
@@ -62,6 +66,7 @@
 		curve = 'linear',
 		strokeWidth = 2,
 		dotRadius = 0,
+		fullDomainSpan = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
@@ -122,15 +127,19 @@
     colorMode: u32,
     colorScaleIndex: u32,
     constantColor: vec4<f32>,
-    dotRadius: f32
+    dotRadius: f32,
+    fullDomainSpan: f32,
+    totalPointCount: u32
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
+  @group(1) @binding(6) var<storage, read> visibleCount: array<u32>;
 
   struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) colorValue: f32,
     @location(1) alpha: f32,
-    @location(2) circleUV: vec2<f32>
+    @location(2) circleUV: vec2<f32>,
+    @location(3) circleRadius: f32
   };
 
   @group(1) @binding(0) var<storage, read> xValues: array<f32>;
@@ -171,7 +180,32 @@
         return output;
       }
       let center = projectToPixels(vec2<f32>(x, y));
-      let circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio, markConstants.dotRadius > 0.0);
+
+      var circleR: f32;
+      if (markConstants.dotRadius < 0.0) {
+        // Auto-dots: negative radius encodes base size, density-based fade
+        let baseR = abs(markConstants.dotRadius) * frameUniforms.devicePixelRatio;
+        let actualCount = visibleCount[0];
+        var pointsInView: f32;
+        if (actualCount > 0u) {
+          pointsInView = f32(actualCount);
+        } else {
+          // Heuristic fallback (no M4 or first frame)
+          let scale = scaleParams[frameUniforms.xScaleIndex];
+          let viewSpan = scale.p2 - scale.p1;
+          let frac = select(1.0, viewSpan / markConstants.fullDomainSpan,
+            markConstants.fullDomainSpan > 0.0);
+          pointsInView = f32(markConstants.totalPointCount) * frac;
+        }
+        let pixelWidth = (frameUniforms.rangeMax.x - frameUniforms.rangeMin.x)
+          * frameUniforms.devicePixelRatio;
+        let avgSpacing = pixelWidth / max(pointsInView, 1.0);
+        let t = smoothstep(8.0, 30.0, avgSpacing);
+        circleR = baseR * t;
+      } else {
+        circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio,
+          markConstants.dotRadius > 0.0);
+      }
       let pos = center + quadPosition * circleR * 1.2;
 
       var output: VertexOutput;
@@ -179,6 +213,7 @@
       output.colorValue = colorValues[instanceIdx];
       output.alpha = 1.0;
       output.circleUV = quadPosition;
+      output.circleRadius = circleR;
       return output;
     }
 
@@ -273,6 +308,7 @@
     output.colorValue = colorValues[currIdx];
     output.alpha = 1.0;
     output.circleUV = vec2<f32>(-2.0, -2.0);
+    output.circleRadius = 0.0;
     return output;
   }
 
@@ -296,12 +332,7 @@
       let dist = length(input.circleUV);
       // Pixel-accurate AA matching Dots renderer
       let sdf = dist - (1.0 / 1.2);
-      let circleR = select(
-        markConstants.strokeWidth * frameUniforms.devicePixelRatio * 0.5,
-        markConstants.dotRadius * frameUniforms.devicePixelRatio,
-        markConstants.dotRadius > 0.0
-      );
-      let pixelSize = frameUniforms.devicePixelRatio / (circleR * 2.0);
+      let pixelSize = frameUniforms.devicePixelRatio / (input.circleRadius * 2.0);
       let circleAlpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
       finalAlpha *= circleAlpha;
       if (finalAlpha < 0.01) { discard; }
@@ -333,6 +364,11 @@
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
+		},
+		{
+			binding: BINDINGS.VISIBLE_COUNT,
+			type: 'read-only-storage',
+			visibility: GPUShaderStage.VERTEX
 		}
 	];
 
@@ -370,11 +406,12 @@
 			const view = new DataView(buffer);
 			const LE = true;
 
+			const rawCount = xData ? xData.length : 0;
+			// With drawIndirect, GPU controls instance count. pointCount in MarkConstants
+			// is used for bounds checking only — set to max of both modes.
 			const pointCount = m4Decimator?.configured
-				? m4Decimator.outputSize
-				: xData
-					? xData.length
-					: 0;
+				? Math.max(m4Decimator.outputSize, rawCount)
+				: rawCount;
 			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
 			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, pointCount, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
@@ -384,6 +421,8 @@
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
 			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
+			view.setFloat32(UNIFORM_OFFSETS.FULL_DOMAIN_SPAN, fullDomainSpan, LE);
+			view.setUint32(UNIFORM_OFFSETS.TOTAL_POINT_COUNT, rawCount, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 
@@ -398,10 +437,13 @@
 		}
 	});
 
-	// Instance count = number of points (or M4 output size when decimating)
+	// Instance count — with drawIndirect the GPU controls the actual count,
+	// but we still set a CPU-side value so the renderer.instanceCount === 0 guard works.
 	$effect(() => {
 		if (renderer?.resourcesCreated && xData && xData.length > 1) {
-			const count = m4Decimator?.configured ? m4Decimator.outputSize : xData.length;
+			const count = m4Decimator?.configured
+				? Math.max(m4Decimator.outputSize, xData.length)
+				: xData.length;
 			renderer.updateInstanceCount(count);
 		}
 	});
@@ -412,6 +454,9 @@
 			gpuCoordinator.removeComputeWork(m4ComputeKey);
 			return;
 		}
+
+		// Ensure decimator knows the vertex count for drawIndirect
+		m4Decimator.setVertexCount(quadVertexCount);
 
 		gpuCoordinator.registerComputeWork(m4ComputeKey, (commandEncoder, scaleBindGroup) => {
 			const xBuf = renderer.getBuffer(BINDINGS.X);
@@ -482,7 +527,11 @@
 			passEncoder.setBindGroup(1, m4Decimator.renderBindGroup);
 		}
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-		passEncoder.draw(quadVertexCount, renderer.instanceCount);
+		if (m4Decimator?.indirectBuffer) {
+			passEncoder.drawIndirect(m4Decimator.indirectBuffer, 0);
+		} else {
+			passEncoder.draw(quadVertexCount, renderer.instanceCount);
+		}
 	}
 
 	async function initializeLines() {
@@ -524,6 +573,14 @@
 			if (!colorValueData && xData) {
 				const defaultColor = new Float32Array(xData.length);
 				renderer.writeAttribute(BINDINGS.COLOR, defaultColor);
+			}
+
+			// Initialize visibleCount buffer with 0 (overridden by M4 render bind group when active)
+			renderer.writeAttribute(BINDINGS.VISIBLE_COUNT, new Uint32Array([0]));
+
+			// Tell M4 decimator the vertex count for drawIndirect
+			if (m4Decimator) {
+				m4Decimator.setVertexCount(quadVertexCount);
 			}
 		} catch (error) {
 			console.error('Lines init failed:', error);

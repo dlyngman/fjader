@@ -240,6 +240,7 @@ export interface RectOffsetProps {
 export interface ConnectedTopologyProps {
 	z?: FieldRef | null;
 	curve?: CurveType;
+	autoDots?: boolean;
 }
 
 // ---------------------------------------------------------------------------
