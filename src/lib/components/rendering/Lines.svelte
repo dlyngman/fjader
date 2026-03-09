@@ -21,8 +21,7 @@
 		SERIES: 2,
 		COLOR: 3,
 		CONSTANTS: 4,
-		FACET: 5,
-		VISIBLE_COUNT: 6
+		FACET: 5
 	};
 
 	// Uniform struct offsets (matching WGSL MarkConstants layout, 48 bytes)
@@ -32,9 +31,7 @@
 		COLOR_MODE: 8, // u32
 		COLOR_SCALE_INDEX: 12, // u32
 		CONSTANT_COLOR: 16, // vec4<f32>
-		DOT_RADIUS: 32, // f32
-		FULL_DOMAIN_SPAN: 36, // f32
-		TOTAL_POINT_COUNT: 40 // u32
+		DOT_RADIUS: 32 // f32
 	};
 
 	interface Props {
@@ -48,7 +45,6 @@
 		curve?: CurveType;
 		strokeWidth?: number;
 		dotRadius?: number;
-		fullDomainSpan?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
 		constantColor?: [number, number, number, number];
@@ -67,7 +63,6 @@
 		curve = 'linear',
 		strokeWidth = 2,
 		dotRadius = 0,
-		fullDomainSpan = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
@@ -130,11 +125,10 @@
     colorScaleIndex: u32,
     constantColor: vec4<f32>,
     dotRadius: f32,
-    fullDomainSpan: f32,
-    totalPointCount: u32
+    _pad0: u32,
+    _pad1: u32
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
-  @group(1) @binding(6) var<storage, read> visibleCount: array<u32>;
 
   struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -183,31 +177,9 @@
       }
       let center = projectToPixels(vec2<f32>(x, y));
 
-      var circleR: f32;
-      if (markConstants.dotRadius < 0.0) {
-        // Auto-dots: negative radius encodes base size, density-based fade
-        let baseR = abs(markConstants.dotRadius) * frameUniforms.devicePixelRatio;
-        let actualCount = visibleCount[0];
-        var pointsInView: f32;
-        if (actualCount > 0u) {
-          pointsInView = f32(actualCount);
-        } else {
-          // Heuristic fallback (no M4 or first frame)
-          let scale = scaleParams[frameUniforms.xScaleIndex];
-          let viewSpan = scale.p2 - scale.p1;
-          let frac = select(1.0, viewSpan / markConstants.fullDomainSpan,
-            markConstants.fullDomainSpan > 0.0);
-          pointsInView = f32(markConstants.totalPointCount) * frac;
-        }
-        let pixelWidth = (frameUniforms.rangeMax.x - frameUniforms.rangeMin.x)
-          * frameUniforms.devicePixelRatio;
-        let avgSpacing = pixelWidth / max(pointsInView, 1.0);
-        let t = smoothstep(8.0, 30.0, avgSpacing);
-        circleR = baseR * t;
-      } else {
-        circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio,
-          markConstants.dotRadius > 0.0);
-      }
+      // JS computes dotRadius via LODController. 0 = no dots. >0 = show at this size.
+      let circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio,
+        markConstants.dotRadius > 0.0);
       let pos = center + quadPosition * circleR * 1.2;
 
       var output: VertexOutput;
@@ -366,11 +338,6 @@
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
-		},
-		{
-			binding: BINDINGS.VISIBLE_COUNT,
-			type: 'read-only-storage',
-			visibility: GPUShaderStage.VERTEX
 		}
 	];
 
@@ -423,8 +390,6 @@
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
 			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
-			view.setFloat32(UNIFORM_OFFSETS.FULL_DOMAIN_SPAN, fullDomainSpan, LE);
-			view.setUint32(UNIFORM_OFFSETS.TOTAL_POINT_COUNT, rawCount, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 
@@ -600,9 +565,6 @@
 				const defaultColor = new Float32Array(xData.length);
 				renderer.writeAttribute(BINDINGS.COLOR, defaultColor);
 			}
-
-			// Initialize visibleCount buffer with 0 (overridden by M4 render bind group when active)
-			renderer.writeAttribute(BINDINGS.VISIBLE_COUNT, new Uint32Array([0]));
 
 			// Tell M4 decimator the vertex count for drawIndirect
 			if (m4Decimator) {

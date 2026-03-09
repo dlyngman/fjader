@@ -14,7 +14,7 @@
  *
  * Usage:
  *   const decimator = new M4Decimator(device, globalScaleLayout);
- *   decimator.configure(numBins, numSeries, xScaleIndex, fullDomainSpan, pixelWidth);
+ *   decimator.configure(numBins, numSeries, xScaleIndex);
  *   decimator.setVertexCount(quadVertexCount);
  *   gpuCoordinator.registerComputeWork(key, (encoder, scaleBG) =>
  *       decimator.encode(encoder, inputBuffers, scaleBG, pointCount));
@@ -49,12 +49,10 @@ interface M4OutputBuffers {
 
 // M4Bin struct: 6 × u32 atomics = 24 bytes per bin
 const M4_BIN_SIZE = 24;
-// M4Config: 8 × u32 = 32 bytes (with fullDomainSpan, pixelWidth, densityThreshold)
+// M4Config: 8 × u32 = 32 bytes
 const M4_CONFIG_SIZE = 32;
 // Control buffer: 5 × u32 = 20 bytes (4 drawIndirect args + shouldDecimate flag)
 const CONTROL_BUFFER_SIZE = 20;
-// Visible count: 1 × u32 = 4 bytes (atomic counter)
-const VISIBLE_COUNT_SIZE = 4;
 
 export class M4Decimator {
 	#device: GPUDevice;
@@ -81,7 +79,6 @@ export class M4Decimator {
 	#configBuffer: GPUBuffer | null = null;
 	#binBuffer: GPUBuffer | null = null;
 	#controlBuffer: GPUBuffer | null = null;
-	#visibleCountBuffer: GPUBuffer | null = null;
 	#outputBuffers: M4OutputBuffers = {
 		x: null,
 		y: null,
@@ -107,9 +104,6 @@ export class M4Decimator {
 	// Non-reactive internal state
 	#xScaleIndex = 0;
 	#pointCount = 0;
-	#fullDomainSpan = 0;
-	#pixelWidth = 0;
-	#densityThreshold = 4.0;
 	#outputCapacity = 0;
 
 	// CPU-side config buffer for updates (8 × u32 = 32 bytes)
@@ -143,10 +137,6 @@ export class M4Decimator {
 		return this.#controlBuffer;
 	}
 
-	get visibleCountBuffer(): GPUBuffer | null {
-		return this.#visibleCountBuffer;
-	}
-
 	/**
 	 * Set the vertex count for drawIndirect (curve-dependent).
 	 * Written to control buffer at byte 0 (vertexCount). Called once after renderer creation.
@@ -161,28 +151,14 @@ export class M4Decimator {
 	 * Configure dimensions and allocate buffers.
 	 * Call when chart width, series count, or scale index changes.
 	 */
-	configure(
-		numBins: number,
-		numSeries: number,
-		xScaleIndex: number,
-		fullDomainSpan: number,
-		pixelWidth: number,
-		densityThreshold: number = 4.0
-	): void {
+	configure(numBins: number, numSeries: number, xScaleIndex: number): void {
 		const internalBins = numBins + 2;
 		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
-		const configChanged =
-			xScaleIndex !== this.#xScaleIndex ||
-			fullDomainSpan !== this.#fullDomainSpan ||
-			pixelWidth !== this.#pixelWidth ||
-			densityThreshold !== this.#densityThreshold;
+		const configChanged = xScaleIndex !== this.#xScaleIndex;
 
 		if (!dimsChanged && !configChanged) return;
 
 		this.#xScaleIndex = xScaleIndex;
-		this.#fullDomainSpan = fullDomainSpan;
-		this.#pixelWidth = pixelWidth;
-		this.#densityThreshold = densityThreshold;
 
 		if (dimsChanged) {
 			this.#numBins = internalBins;
@@ -297,8 +273,8 @@ export class M4Decimator {
 
 	/**
 	 * Create a bind group compatible with the render pipeline's group(1) layout.
-	 * Uses M4 output buffers for data slots (0-3), the renderer's
-	 * markConstants buffer for slot 4, and visibleCountBuffer for slot 6.
+	 * Uses M4 output buffers for data slots (0-3) and the renderer's
+	 * markConstants buffer for slot 4.
 	 * Stores references so the bind group can be auto-rebuilt after output buffer reallocation.
 	 */
 	createRenderBindGroup(perDataLayout: GPUBindGroupLayout, markConstantsBuffer: GPUBuffer): void {
@@ -309,7 +285,7 @@ export class M4Decimator {
 
 	#rebuildRenderBindGroup(): void {
 		if (!this.#renderBindGroupLayout || !this.#renderMarkConstantsBuffer) return;
-		if (!this.#outputBuffers.x || !this.#visibleCountBuffer) return;
+		if (!this.#outputBuffers.x) return;
 		this.renderBindGroup = this.#device.createBindGroup({
 			label: 'm4-render-bind-group',
 			layout: this.#renderBindGroupLayout,
@@ -318,8 +294,7 @@ export class M4Decimator {
 				{ binding: 1, resource: { buffer: this.#outputBuffers.y! } },
 				{ binding: 2, resource: { buffer: this.#outputBuffers.series! } },
 				{ binding: 3, resource: { buffer: this.#outputBuffers.color! } },
-				{ binding: 4, resource: { buffer: this.#renderMarkConstantsBuffer } },
-				{ binding: 6, resource: { buffer: this.#visibleCountBuffer! } }
+				{ binding: 4, resource: { buffer: this.#renderMarkConstantsBuffer } }
 			]
 		});
 	}
@@ -334,8 +309,6 @@ export class M4Decimator {
 		this.#binBuffer = null;
 		this.#controlBuffer?.destroy();
 		this.#controlBuffer = null;
-		this.#visibleCountBuffer?.destroy();
-		this.#visibleCountBuffer = null;
 		for (const key of ['x', 'y', 'series', 'color'] as const) {
 			this.#outputBuffers[key]?.destroy();
 			this.#outputBuffers[key] = null;
@@ -370,28 +343,21 @@ export class M4Decimator {
 		// Pre-write zeros: [vertexCount=0, instanceCount=0, firstVertex=0, firstInstance=0, shouldDecimate=0]
 		this.#device.queue.writeBuffer(this.#controlBuffer, 0, new Uint32Array(5));
 
-		this.#visibleCountBuffer = this.#device.createBuffer({
-			size: VISIBLE_COUNT_SIZE,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-			label: 'm4-visible-count'
-		});
-
 		this.#controlBindGroup = this.#device.createBindGroup({
 			label: 'm4-control-bind-group',
 			layout: this.#controlLayout!,
 			entries: [
-				{ binding: 0, resource: { buffer: this.#controlBuffer } },
-				{ binding: 1, resource: { buffer: this.#visibleCountBuffer } }
+				{ binding: 0, resource: { buffer: this.#controlBuffer } }
 			]
 		});
 	}
 
 	/**
 	 * JS-driven decimation decision. Writes to config._pad field:
-	 * 'gpu' (0) → GPU decides (default), 'decimate' (1) → force on, 'passthrough' (2) → force off.
+	 * 'decimate' (1) → M4 decimation active, 'passthrough' (2) → raw data passthrough.
 	 */
-	setJSDecision(decision: 'decimate' | 'passthrough' | 'gpu'): void {
-		const value = decision === 'decimate' ? 1 : decision === 'passthrough' ? 2 : 0;
+	setJSDecision(decision: 'decimate' | 'passthrough'): void {
+		const value = decision === 'decimate' ? 1 : 2;
 		if (this.#configData[7] === value) return; // no-op if unchanged
 		this.#configData[7] = value;
 		if (this.#configBuffer) {
@@ -405,10 +371,7 @@ export class M4Decimator {
 		this.#configData[1] = this.#numBins;
 		this.#configData[2] = this.#numSeries;
 		this.#configData[3] = this.#xScaleIndex;
-		this.#configF32[4] = this.#fullDomainSpan;
-		this.#configF32[5] = this.#pixelWidth;
-		this.#configF32[6] = this.#densityThreshold;
-		// Preserve current _pad value (JS decision) — don't reset to 0
+		// Indices 4-6 unused (struct padding), index 7 = _pad (JS decision) preserved
 		this.#device.queue.writeBuffer(
 			this.#configBuffer!,
 			0,
@@ -485,13 +448,11 @@ export class M4Decimator {
 			]
 		});
 
-		// Group 1 for control (merged indirect+decision) + visibleCount
-		// 2 bindings instead of the original 3 (decision, indirect, visibleCount)
+		// Group 1 for control (merged indirect+decision)
 		this.#controlLayout = this.#device.createBindGroupLayout({
 			label: 'm4-control-layout',
 			entries: [
-				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
 			]
 		});
 

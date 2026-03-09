@@ -209,24 +209,15 @@
 		return true;
 	});
 
-	// Auto-dots: negative dotRadius signals density-based fade to the vertex shader.
-	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
-	// via its frame callback — no reactive chain. We set 0 here to disable the GPU
-	// auto-dots path (vertex shader's dotRadius < 0.0 branch).
-	const effectiveDotRadius = $derived.by(() => {
-		if (lod && lodController) return 0; // LODController writes directly to GPU
-		if (!autoDots) return dotRadius;
-		if (optimize === true) return 0; // forced M4 — no dots on representatives
-		const baseR = dotRadius > 0 ? dotRadius : 2.5;
-		return -baseR; // negative = auto mode
-	});
+	// autoDots implies lod — the LODController owns dot radius via its spring.
+	const effectiveLod = lod || autoDots;
 
-	// Full data domain span for density calculation
-	const fullDomainSpan = $derived.by(() => {
-		const xScale = chartContext.xScaleState;
-		if (!xScale || !('effectiveExtent' in xScale)) return 0;
-		const [min, max] = xScale.effectiveExtent;
-		return max - min;
+	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
+	// via its frame callback — no reactive chain. We set 0 here as a placeholder.
+	// Without LOD: dotRadius > 0 shows fixed dots, 0 = no dots.
+	const effectiveDotRadius = $derived.by(() => {
+		if (effectiveLod && lodController) return 0; // LODController writes directly to GPU
+		return dotRadius;
 	});
 
 	let m4Decimator = $state(null);
@@ -234,6 +225,8 @@
 	$effect(() => {
 		if (m4Eligible && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
 			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
+			// Default to always-decimate. LODController overrides this when active.
+			decimator.setJSDecision('decimate');
 			m4Decimator = decimator;
 			return () => {
 				decimator.destroy();
@@ -248,7 +241,7 @@
 	let lodController: LODController | null = $state(null);
 
 	$effect(() => {
-		if (!lod || !setup || !coordinator || !gpuCoordinator) {
+		if (!effectiveLod || !setup || !coordinator || !gpuCoordinator) {
 			lodController?.destroy();
 			lodController = null;
 			onLodController?.(null);
@@ -286,11 +279,10 @@
 
 		const dpr = window.devicePixelRatio || 1;
 		const numBins = Math.ceil(chartContext.innerWidth * dpr);
-		const pixelWidth = chartContext.innerWidth * dpr;
 		const xScaleIndex = chartContext.xScaleState
 			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
 			: 0;
-		m4Decimator.configure(numBins, numSeries, xScaleIndex, fullDomainSpan, pixelWidth);
+		m4Decimator.configure(numBins, numSeries, xScaleIndex);
 	});
 
 	// Tooltip registration
@@ -335,7 +327,6 @@
 			constantColor={markColor.constantColor}
 			{strokeWidth}
 			dotRadius={effectiveDotRadius}
-			{fullDomainSpan}
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}

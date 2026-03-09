@@ -6,28 +6,24 @@
  * to preserve visual fidelity while dramatically reducing vertex count.
  *
  * Uses 7 compute passes:
- *   Pass 0 (initBins): Decision + reset counters + init bin atomics
- *   Pass 1 (binPoints): Count visible points + bin each point (if decimating)
+ *   Pass 0 (initBins): Read JS decision + init bin atomics
+ *   Pass 1 (binPoints): Bin each point (if decimating)
  *   Pass 2 (findMinMaxIndices): Find indices of min/max Y points per bin
  *   Pass 3 (emitOutput): Write decimated x/y/series/color arrays
- *   Pass 4 (compact): Pack non-NaN points contiguously, write indirect instance count
+ *   Pass 4 (compact): Pack non-NaN points contiguously
  *   Pass 5a (passthroughXY): Copy raw x,y → output + set indirect count
  *   Pass 5b (passthroughSC): Copy raw series,color → output
  *
- * The GPU decides per-frame whether to decimate or pass through raw data,
- * based on actual visible point count from the previous frame.
+ * JS owns the decimate/passthrough decision via LODController. The decision
+ * is written to config._pad (1=decimate, 2=passthrough) and read by INIT_BINS.
  * drawIndirect lets the GPU control its own instance count.
- *
- * The decision flag is stored in control[4] of the extended indirect buffer
- * (20 bytes: 4 drawIndirect args + 1 decision flag). drawIndirect reads
- * only the first 16 bytes.
  *
  * Passthrough is split into two sub-dispatches (XY + series/color) to stay
  * within the 8 storage buffer per-stage limit.
  *
  * Bind group layout:
  *   Group 0: Input data + config + bins
- *   Group 1: Control buffer + visible count (OR output arrays)
+ *   Group 1: Control buffer (OR output arrays)
  *   Group 2: Global scale SSBO (shared with render pipeline)
  */
 
@@ -71,18 +67,18 @@ fn floatToSortableUint(f: f32) -> u32 {
 `;
 
 /**
- * Pass 0: Decision + initialize bins.
+ * Pass 0: Read JS decision + initialize bins.
  *
- * Thread 0 reads the previous frame's visible count, computes the
- * decimate/passthrough decision, writes the decision flag to control[4],
- * and resets counters. All threads unconditionally init bins.
+ * Thread 0 reads the JS-driven decimate/passthrough decision from config._pad,
+ * writes the decision flag to control[4], and sets instance count.
+ * All threads unconditionally init bins.
  *
  * Control buffer layout: [vertexCount, instanceCount, firstVertex,
  * firstInstance, shouldDecimate]. drawIndirect reads first 4 u32s only.
  *
  * Group 0: inputLayout (data dummies + config + bins)
- * Group 1: controlLayout (control + visibleCount)
- * Group 2: globalScaleLayout (scaleParams — for heuristic fallback)
+ * Group 1: controlLayout (control)
+ * Group 2: globalScaleLayout (scaleParams — unused but bound for layout compatibility)
  */
 const INIT_BINS_SHADER = /* wgsl */ `
 ${SHARED_TYPES}
@@ -90,7 +86,6 @@ ${SHARED_TYPES}
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
-@group(1) @binding(1) var<storage, read_write> visibleCount: array<atomic<u32>>;
 @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
@@ -98,39 +93,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let binKey = gid.x;
 	let totalBins = config.numSeries * config.numBins;
 
-	// Thread 0: compute density decision, reset counters
+	// Thread 0: read JS decision, set instance count
 	if (binKey == 0u) {
 		let outputSize = config.numBins * config.numSeries * 4u;
-
-		// JS decision mode: _pad != 0 means JS is driving the decimate/passthrough choice.
-		// _pad == 1 → decimate, _pad == 2 → passthrough, _pad == 0 → GPU decides (default).
-		if (config._pad != 0u) {
-			let shouldDec = config._pad == 1u;
-			atomicStore(&control[4], select(0u, 1u, shouldDec));
-			atomicStore(&control[1], select(0u, outputSize, shouldDec));
-			atomicStore(&visibleCount[0], 0u);
-		} else {
-			// GPU-driven decision (original path)
-			let prevCount = atomicLoad(&visibleCount[0]);
-
-			// Use actual visible count from previous frame when available.
-			// Falls back to uniform-distribution heuristic on first frame (prevCount == 0).
-			var ppp: f32;
-			if (prevCount > 0u) {
-				ppp = f32(prevCount) / max(config.pixelWidth, 1.0);
-			} else {
-				let scale = scaleParams[config.xScaleIndex];
-				let viewSpan = scale.p2 - scale.p1;
-				let frac = select(1.0, viewSpan / config.fullDomainSpan,
-					config.fullDomainSpan > 0.0 && viewSpan > 0.0);
-				ppp = f32(config.pointCount) * frac / max(config.pixelWidth, 1.0);
-			}
-
-			let shouldDec = ppp >= config.densityThreshold;
-			atomicStore(&control[4], select(0u, 1u, shouldDec));
-			atomicStore(&control[1], select(0u, outputSize, shouldDec));
-			atomicStore(&visibleCount[0], 0u);
-		}
+		// JS sets _pad: 1 = decimate, 2 = passthrough
+		let shouldDec = config._pad == 1u;
+		atomicStore(&control[4], select(0u, 1u, shouldDec));
+		atomicStore(&control[1], select(0u, outputSize, shouldDec));
 	}
 
 	// Always init bins — cheap and ensures clean state for potential decimation.
@@ -148,14 +117,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /**
  * Pass 1: Bin each point by scaled x position.
  *
- * Always counts in-viewport points (atomicAdd to visibleCount) regardless
- * of decimate/passthrough decision — the vertex shader reads this count
- * for auto-dots density fade.
- *
- * Only performs actual binning (atomic min/max to bins) when decimating.
+ * Only runs binning when decimating (control[4] == 1).
+ * Early-exits entirely in passthrough mode.
  *
  * Group 0: inputLayout (x, y, series, [color dummy], config, bins)
- * Group 1: controlLayout (control, visibleCount)
+ * Group 1: controlLayout (control)
  * Group 2: globalScaleLayout (scaleParams)
  */
 const BIN_POINTS_SHADER = /* wgsl */ `
@@ -167,11 +133,13 @@ ${SHARED_TYPES}
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
-@group(1) @binding(1) var<storage, read_write> visibleCount: array<atomic<u32>>;
 @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+	// Only bin if decimating
+	if (atomicLoad(&control[4]) == 0u) { return; }
+
 	let idx = gid.x;
 	if (idx >= config.pointCount) { return; }
 
@@ -192,15 +160,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	if (seriesF < 0.0 || seriesF != seriesF) { return; }
 	let series = u32(seriesF);
 	if (series >= config.numSeries) { return; }
-
-	// Count in-viewport points (always, regardless of decimate/passthrough).
-	// Used by the vertex shader for auto-dots density fade.
-	if (t >= 0.0 && t <= 1.0) {
-		atomicAdd(&visibleCount[0], 1u);
-	}
-
-	// Only bin if decimating
-	if (atomicLoad(&control[4]) == 0u) { return; }
 
 	// Bin assignment: boundary bins capture off-screen points for line connectivity.
 	// Bins 0 and numBins-1 are boundary bins; bins 1..numBins-2 map to viewport pixels.
@@ -232,7 +191,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * Early-exits entirely in passthrough mode (no work needed).
  *
  * Group 0: inputLayout (x, y, series, [color dummy], config, bins)
- * Group 1: controlLayout (control — only reads shouldDecimate; visibleCount bound but unused)
+ * Group 1: controlLayout (control — only reads shouldDecimate)
  * Group 2: globalScaleLayout (scaleParams)
  */
 const FIND_MINMAX_SHADER = /* wgsl */ `
@@ -415,7 +374,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  * this completes in microseconds with no thread contention.
  *
  * Group 0: fillLayout (config + output arrays)
- * Group 1: controlLayout (control + visibleCount [unused])
+ * Group 1: controlLayout (control)
  */
 const COMPACT_SHADER = /* wgsl */ `
 struct M4Config {

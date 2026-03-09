@@ -317,9 +317,9 @@ export class LODController {
 			this.#frameCallback = null;
 		}
 
-		// Reset M4 to GPU-driven mode
+		// Set M4 to passthrough on teardown
 		if (this.#m4Decimator) {
-			this.#m4Decimator.setJSDecision('gpu');
+			this.#m4Decimator.setJSDecision('passthrough');
 		}
 
 		this.#writeDotRadius = null;
