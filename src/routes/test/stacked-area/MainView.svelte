@@ -18,10 +18,7 @@
 
 <div class="main-view-container">
 	<h2>Stacked Area/Bar Experiment</h2>
-	<p>
-		Testing Arrow-native stacking (Track A). Transforms operate on DataAccessor directly — no
-		arrowToObjects() conversion.
-	</p>
+	<p>Testing Arrow-native stacking (Track A). Transforms operate on DataAccessor directly — no arrowToObjects() conversion.</p>
 
 	<div class="controls">
 		<label>
@@ -134,13 +131,21 @@
 												: stackY()
 									]}
 									tooltip
-									fillOpacity={0.8}
-									strokeWidth={2}
+									fillOpacity=0.8
+									strokeWidth=2
 									curve="monotone"
-									dotRadius={4}
+									dotRadius=4
+									
 								/>
 							{:else}
-								<AreaMarkY table="stacked_timeseries" x="x" y="y" fill="series" tooltip />
+								<AreaMarkY
+									table="stacked_timeseries"
+									x="x"
+									y="y"
+									fill="series"
+									tooltip
+									
+								/>
 							{/if}
 						{/snippet}
 					</WebGPUCanvas>

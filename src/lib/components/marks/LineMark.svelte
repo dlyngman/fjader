@@ -18,6 +18,7 @@
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
+	import { LODController } from '$lib/lod';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -36,6 +37,8 @@
 		dotRadius?: number;
 		autoDots?: boolean;
 		optimize?: boolean | 'auto';
+		lod?: boolean;
+		onLodController?: (ctrl: LODController | null) => void;
 	}
 
 	let {
@@ -59,7 +62,9 @@
 		tooltip = true,
 		tooltipProximity,
 		optimize = 'auto',
-		tip = undefined
+		tip = undefined,
+		lod = false,
+		onLodController = undefined
 	}: Props = $props();
 
 	// Map user-facing aliases to axis-specific variants
@@ -204,8 +209,12 @@
 		return true;
 	});
 
-	// Auto-dots: negative dotRadius signals density-based fade to the vertex shader
+	// Auto-dots: negative dotRadius signals density-based fade to the vertex shader.
+	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
+	// via its frame callback — no reactive chain. We set 0 here to disable the GPU
+	// auto-dots path (vertex shader's dotRadius < 0.0 branch).
 	const effectiveDotRadius = $derived.by(() => {
+		if (lod && lodController) return 0; // LODController writes directly to GPU
 		if (!autoDots) return dotRadius;
 		if (optimize === true) return 0; // forced M4 — no dots on representatives
 		const baseR = dotRadius > 0 ? dotRadius : 2.5;
@@ -233,6 +242,32 @@
 		} else {
 			m4Decimator = null;
 		}
+	});
+
+	// --- LOD CONTROLLER ---
+	let lodController: LODController | null = $state(null);
+
+	$effect(() => {
+		if (!lod || !setup || !coordinator || !gpuCoordinator) {
+			lodController?.destroy();
+			lodController = null;
+			onLodController?.(null);
+			return;
+		}
+		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
+			table,
+			xField: String(x),
+			setup,
+			m4Decimator,
+			baseR: dotRadius > 0 ? dotRadius : 2.5
+		});
+		lodController = ctrl;
+		onLodController?.(ctrl);
+		return () => {
+			ctrl.destroy();
+			lodController = null;
+			onLodController?.(null);
+		};
 	});
 
 	// Configure M4 decimator when chart dimensions or series count change.
@@ -281,6 +316,7 @@
 	});
 
 	onDestroy(() => {
+		lodController?.destroy();
 		m4Decimator?.destroy();
 		setup?.destroy();
 	});
@@ -303,6 +339,7 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
+			{lodController}
 		/>
 	{/key}
 {:else if setup?.client?.error}

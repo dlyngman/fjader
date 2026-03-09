@@ -1,5 +1,6 @@
 // src/lib/interactors/TooltipManager.svelte.ts
 
+import { Priority } from '@uwdata/mosaic-core';
 import type { Coordinator } from '@uwdata/mosaic-core';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
@@ -232,7 +233,7 @@ export class TooltipManager {
 
 				queryPromises.push(
 					this.#coordinator
-						.query(sql)
+						.query(sql, { priority: Priority.Low })
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
 							return rows.length > 0 ? { markId, config, rows } : null;

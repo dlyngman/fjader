@@ -386,6 +386,20 @@ export class M4Decimator {
 		});
 	}
 
+	/**
+	 * JS-driven decimation decision. Writes to config._pad field:
+	 * 'gpu' (0) → GPU decides (default), 'decimate' (1) → force on, 'passthrough' (2) → force off.
+	 */
+	setJSDecision(decision: 'decimate' | 'passthrough' | 'gpu'): void {
+		const value = decision === 'decimate' ? 1 : decision === 'passthrough' ? 2 : 0;
+		if (this.#configData[7] === value) return; // no-op if unchanged
+		this.#configData[7] = value;
+		if (this.#configBuffer) {
+			// Write only the _pad field at buffer offset 28 (index 7 * 4 bytes)
+			this.#device.queue.writeBuffer(this.#configBuffer, 28, new Uint32Array([value]));
+		}
+	}
+
 	#updateConfig(pointCount: number): void {
 		this.#configData[0] = pointCount;
 		this.#configData[1] = this.#numBins;
@@ -394,7 +408,7 @@ export class M4Decimator {
 		this.#configF32[4] = this.#fullDomainSpan;
 		this.#configF32[5] = this.#pixelWidth;
 		this.#configF32[6] = this.#densityThreshold;
-		this.#configData[7] = 0; // padding
+		// Preserve current _pad value (JS decision) — don't reset to 0
 		this.#device.queue.writeBuffer(
 			this.#configBuffer!,
 			0,

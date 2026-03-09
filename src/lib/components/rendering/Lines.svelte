@@ -53,6 +53,7 @@
 		colorScaleIndex?: number;
 		constantColor?: [number, number, number, number];
 		m4Decimator?: M4Decimator | null;
+		lodController?: import('$lib/lod/LODController.svelte').LODController | null;
 	}
 
 	let {
@@ -70,7 +71,8 @@
 		colorMode = 0,
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
-		m4Decimator = null
+		m4Decimator = null,
+		lodController = null
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -435,6 +437,30 @@
 				}
 			}
 		}
+	});
+
+	// Wire LODController render target — lets it write dotRadius directly to GPU buffer
+	$effect(() => {
+		if (!lodController || !renderer?.resourcesCreated) {
+			lodController?.clearRenderTarget();
+			return;
+		}
+
+		const constantsBuffer = renderer.getBuffer(BINDINGS.CONSTANTS);
+		const device = gpuCoordinator?.device;
+		if (!constantsBuffer || !device) return;
+
+		const r = renderer; // capture for closure
+		const f32Buf = new Float32Array(1); // pre-allocated, reused per frame
+		lodController.setRenderTarget(
+			(radius: number) => {
+				f32Buf[0] = radius;
+				device.queue.writeBuffer(constantsBuffer, UNIFORM_OFFSETS.DOT_RADIUS, f32Buf);
+			},
+			() => r.invalidateLayer()
+		);
+
+		return () => lodController?.clearRenderTarget();
 	});
 
 	// Instance count — with drawIndirect the GPU controls the actual count,

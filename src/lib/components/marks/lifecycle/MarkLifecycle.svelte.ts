@@ -1201,6 +1201,22 @@ export class MarkLifecycle {
 		return buildChannelFieldMap(this.#config.select);
 	}
 
+	/**
+	 * Live getter — returns the current crossfilter predicate array from the Selection.
+	 * Recomputes each call via Mosaic's selection.predicate() API (no stored mutable state).
+	 * Returns [] when no selection is active or this client is the crossfilter source
+	 * (predicate() returns undefined when the client should skip its own filter).
+	 */
+	get currentFilter(): unknown[] {
+		const selection = this.#config.selection;
+		if (!selection || !this.client) return [];
+		const predicate = (selection as Selection).predicate(this.client as MosaicClient);
+		if (predicate == null) return [];
+		// Mosaic returns an array for intersect/single mode (DivePlot's default),
+		// but a single OR-combined node for union mode. Normalize to array.
+		return Array.isArray(predicate) ? predicate : [predicate];
+	}
+
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
 		const tableName = this.#tooltipTableName;
 		try {

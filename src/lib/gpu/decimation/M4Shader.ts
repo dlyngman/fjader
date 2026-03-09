@@ -100,28 +100,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 	// Thread 0: compute density decision, reset counters
 	if (binKey == 0u) {
-		let prevCount = atomicLoad(&visibleCount[0]);
-
-		// Use actual visible count from previous frame when available.
-		// Falls back to uniform-distribution heuristic on first frame (prevCount == 0).
-		var ppp: f32;
-		if (prevCount > 0u) {
-			ppp = f32(prevCount) / max(config.pixelWidth, 1.0);
-		} else {
-			let scale = scaleParams[config.xScaleIndex];
-			let viewSpan = scale.p2 - scale.p1;
-			let frac = select(1.0, viewSpan / config.fullDomainSpan,
-				config.fullDomainSpan > 0.0 && viewSpan > 0.0);
-			ppp = f32(config.pointCount) * frac / max(config.pixelWidth, 1.0);
-		}
-
-		let shouldDec = ppp >= config.densityThreshold;
-		atomicStore(&control[4], select(0u, 1u, shouldDec));
-		// Set instance count: outputSize when decimating, 0 when passthrough
-		// (pass 5a will set it to pointCount in passthrough mode)
 		let outputSize = config.numBins * config.numSeries * 4u;
-		atomicStore(&control[1], select(0u, outputSize, shouldDec));
-		atomicStore(&visibleCount[0], 0u);
+
+		// JS decision mode: _pad != 0 means JS is driving the decimate/passthrough choice.
+		// _pad == 1 → decimate, _pad == 2 → passthrough, _pad == 0 → GPU decides (default).
+		if (config._pad != 0u) {
+			let shouldDec = config._pad == 1u;
+			atomicStore(&control[4], select(0u, 1u, shouldDec));
+			atomicStore(&control[1], select(0u, outputSize, shouldDec));
+			atomicStore(&visibleCount[0], 0u);
+		} else {
+			// GPU-driven decision (original path)
+			let prevCount = atomicLoad(&visibleCount[0]);
+
+			// Use actual visible count from previous frame when available.
+			// Falls back to uniform-distribution heuristic on first frame (prevCount == 0).
+			var ppp: f32;
+			if (prevCount > 0u) {
+				ppp = f32(prevCount) / max(config.pixelWidth, 1.0);
+			} else {
+				let scale = scaleParams[config.xScaleIndex];
+				let viewSpan = scale.p2 - scale.p1;
+				let frac = select(1.0, viewSpan / config.fullDomainSpan,
+					config.fullDomainSpan > 0.0 && viewSpan > 0.0);
+				ppp = f32(config.pointCount) * frac / max(config.pixelWidth, 1.0);
+			}
+
+			let shouldDec = ppp >= config.densityThreshold;
+			atomicStore(&control[4], select(0u, 1u, shouldDec));
+			atomicStore(&control[1], select(0u, outputSize, shouldDec));
+			atomicStore(&visibleCount[0], 0u);
+		}
 	}
 
 	// Always init bins — cheap and ensures clean state for potential decimation.
