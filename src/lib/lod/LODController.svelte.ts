@@ -1,10 +1,20 @@
 // =============================================================================
-// LODController — JS-side LOD policy for LineMark (Phase 0 verification)
+// LODController — JS-side LOD policy for LineMark (Phase 0)
 //
-// Owns density measurement (DuckDB count queries) and rung evaluation.
+// Owns density measurement (DuckDB count queries) and LOD evaluation.
 // All per-frame work lives in a single frame callback — no Svelte effects in
 // the hot path. Matches the existing animation pipeline pattern where springs
 // are stepped imperatively and GPU buffers are written directly.
+//
+// Frame callback contract: LODController runs as a post-render frame callback
+// via GPUCoordinator.addFrameCallback(). This means LOD state updates (count
+// query scheduling, spring stepping, GPU buffer writes) are next-frame policy
+// updates, not same-frame render control. The 1-frame lag is intentional and
+// imperceptible — LOD is a policy decision, not a frame-perfect requirement.
+//
+// Decimation mode ownership: LODController controls M4's decimation mode only
+// while attached. LineMark owns the default ('decimate') and restores it when
+// the controller detaches. LODController.destroy() does not touch M4 state.
 // =============================================================================
 
 import { Query, column as sqlColumn, sql, and } from '@uwdata/mosaic-sql';
@@ -263,7 +273,7 @@ export class LODController {
 		if (newShouldDecimate !== this.shouldDecimate) {
 			this.shouldDecimate = newShouldDecimate;
 			if (this.#m4Decimator) {
-				this.#m4Decimator.setJSDecision(
+				this.#m4Decimator.setDecimationMode(
 					newShouldDecimate ? 'decimate' : 'passthrough'
 				);
 			}
@@ -317,10 +327,8 @@ export class LODController {
 			this.#frameCallback = null;
 		}
 
-		// Set M4 to passthrough on teardown
-		if (this.#m4Decimator) {
-			this.#m4Decimator.setJSDecision('passthrough');
-		}
+		// LODController does not reset decimation mode on teardown.
+		// LineMark owns the default and restores it when the controller detaches.
 
 		this.#writeDotRadius = null;
 		this.#invalidateLayer = null;

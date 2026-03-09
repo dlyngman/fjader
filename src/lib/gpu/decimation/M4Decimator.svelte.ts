@@ -353,10 +353,10 @@ export class M4Decimator {
 	}
 
 	/**
-	 * JS-driven decimation decision. Writes to config._pad field:
+	 * Set decimation mode. Writes to config._pad field:
 	 * 'decimate' (1) → M4 decimation active, 'passthrough' (2) → raw data passthrough.
 	 */
-	setJSDecision(decision: 'decimate' | 'passthrough'): void {
+	setDecimationMode(decision: 'decimate' | 'passthrough'): void {
 		const value = decision === 'decimate' ? 1 : 2;
 		if (this.#configData[7] === value) return; // no-op if unchanged
 		this.#configData[7] = value;

@@ -16,6 +16,7 @@
 		resolveTip,
 		resolveSelection
 	} from './utils';
+	import { isNode } from '@uwdata/mosaic-sql';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { LODController } from '$lib/lod';
@@ -209,8 +210,14 @@
 		return true;
 	});
 
+	// TEMPORARY Phase 0 guard: LOD count queries use `String(x)` as a raw column
+	// name in SQL. Expression nodes (aggregates, bins, sql`...`) would produce
+	// invalid SQL. When LOD gains CTE-wrapping (proposal Section 3.3), this guard
+	// can be removed and expression nodes will work via the general counting path.
+	const lodEligible = !isNode(x);
+
 	// autoDots implies lod — the LODController owns dot radius via its spring.
-	const effectiveLod = lod || autoDots;
+	const effectiveLod = lodEligible && (lod || autoDots);
 
 	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
 	// via its frame callback — no reactive chain. We set 0 here as a placeholder.
@@ -226,7 +233,7 @@
 		if (m4Eligible && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
 			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
 			// Default to always-decimate. LODController overrides this when active.
-			decimator.setJSDecision('decimate');
+			decimator.setDecimationMode('decimate');
 			m4Decimator = decimator;
 			return () => {
 				decimator.destroy();
@@ -245,6 +252,8 @@
 			lodController?.destroy();
 			lodController = null;
 			onLodController?.(null);
+			// Restore LineMark's default: M4 always decimates when not LOD-controlled
+			m4Decimator?.setDecimationMode('decimate');
 			return;
 		}
 		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
@@ -260,6 +269,8 @@
 			ctrl.destroy();
 			lodController = null;
 			onLodController?.(null);
+			// Restore LineMark's default: M4 always decimates when not LOD-controlled
+			m4Decimator?.setDecimationMode('decimate');
 		};
 	});
 
