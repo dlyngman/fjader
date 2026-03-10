@@ -353,7 +353,7 @@ export class M4Decimator {
 	}
 
 	/**
-	 * Set decimation mode. Writes to config._pad field:
+	 * Set decimation mode. Writes to config.decimationMode field:
 	 * 'decimate' (1) → M4 decimation active, 'passthrough' (2) → raw data passthrough.
 	 */
 	setDecimationMode(decision: 'decimate' | 'passthrough'): void {
@@ -361,7 +361,7 @@ export class M4Decimator {
 		if (this.#configData[7] === value) return; // no-op if unchanged
 		this.#configData[7] = value;
 		if (this.#configBuffer) {
-			// Write only the _pad field at buffer offset 28 (index 7 * 4 bytes)
+			// Write decimationMode at buffer offset 28 (index 7 * 4 bytes)
 			this.#device.queue.writeBuffer(this.#configBuffer, 28, new Uint32Array([value]));
 		}
 	}
@@ -371,7 +371,7 @@ export class M4Decimator {
 		this.#configData[1] = this.#numBins;
 		this.#configData[2] = this.#numSeries;
 		this.#configData[3] = this.#xScaleIndex;
-		// Indices 4-6 unused (struct padding), index 7 = _pad (JS decision) preserved
+		// Indices 4-6 reserved, index 7 = decimationMode (JS decision) preserved
 		this.#device.queue.writeBuffer(
 			this.#configBuffer!,
 			0,

@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import type { LODController } from '$lib/lod';
 	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+	import { getGPUContext } from '$lib/gpu';
 	import { expandBinForExtent } from '$lib/sql/bin';
 	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import {
@@ -39,6 +41,7 @@
 		opacity?: number;
 		preferredXScaleType?: ScaleType | null;
 		viewportLocalDomain?: boolean;
+		onLodController?: (ctrl: LODController | null) => void;
 	}
 
 	let {
@@ -63,7 +66,8 @@
 		dy = 0,
 		sort = null,
 		tooltip = true,
-		tip = undefined
+		tip = undefined,
+		onLodController = undefined
 	}: Props = $props();
 
 	// Observable Plot pattern: y shorthand → auto-stack, explicit y1/y2 → opt-out
@@ -76,6 +80,8 @@
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+
+	const gpuCoordinator = getGPUContext();
 
 	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
@@ -249,7 +255,10 @@
 			setup = null;
 			// Gate on effectiveXScaleType (blocks while schema loads)
 			if (table && effectiveXScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+				setup = new MarkLifecycle(config, coordinator, chartContext, markId, {
+					gpuCoordinator,
+					onLodController
+				});
 			}
 		});
 	});

@@ -379,6 +379,7 @@
 		get binStepMultiplier() {
 			return scales?.binStepMultiplier;
 		},
+		adjustBinMultiplier: (delta: number) => scales?.adjustBinMultiplier(delta),
 
 		// Client registration
 		registerClient(client) {
@@ -483,8 +484,15 @@
 		event.preventDefault();
 
 		if (event.shiftKey) {
-			const delta = event.deltaY < 0 ? 0.05 : -0.05;
-			scales.adjustBinMultiplier(delta);
+			// Per-mark routing: if the hovered mark has an LODController, route to it
+			const lodCtrl = tooltipManager?.currentLodController;
+			if (lodCtrl) {
+				lodCtrl.adjustResolution(event.deltaY);
+			} else {
+				// Fallback: chart-level bin multiplier
+				const delta = event.deltaY < 0 ? 0.025 : -0.025;
+				scales.adjustBinMultiplier(delta);
+			}
 			return;
 		}
 

@@ -15,7 +15,7 @@
  *   Pass 5b (passthroughSC): Copy raw series,color → output
  *
  * JS owns the decimate/passthrough decision via LODController. The decision
- * is written to config._pad (1=decimate, 2=passthrough) and read by INIT_BINS.
+ * is written to config.decimationMode (1=decimate, 2=passthrough) and read by INIT_BINS.
  * drawIndirect lets the GPU control its own instance count.
  *
  * Passthrough is split into two sub-dispatches (XY + series/color) to stay
@@ -45,10 +45,10 @@ struct M4Config {
 	numBins: u32,
 	numSeries: u32,
 	xScaleIndex: u32,
-	fullDomainSpan: f32,
-	pixelWidth: f32,
-	densityThreshold: f32,
-	_pad: u32,
+	_reserved0: u32,
+	_reserved1: u32,
+	_reserved2: u32,
+	decimationMode: u32,
 };
 
 struct M4Bin {
@@ -69,7 +69,7 @@ fn floatToSortableUint(f: f32) -> u32 {
 /**
  * Pass 0: Read JS decision + initialize bins.
  *
- * Thread 0 reads the JS-driven decimate/passthrough decision from config._pad,
+ * Thread 0 reads the JS-driven decimate/passthrough decision from config.decimationMode,
  * writes the decision flag to control[4], and sets instance count.
  * All threads unconditionally init bins.
  *
@@ -97,7 +97,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	if (binKey == 0u) {
 		let outputSize = config.numBins * config.numSeries * 4u;
 		// JS sets _pad: 1 = decimate, 2 = passthrough
-		let shouldDec = config._pad == 1u;
+		let shouldDec = config.decimationMode == 1u;
 		atomicStore(&control[4], select(0u, 1u, shouldDec));
 		atomicStore(&control[1], select(0u, outputSize, shouldDec));
 	}
@@ -382,10 +382,10 @@ struct M4Config {
 	numBins: u32,
 	numSeries: u32,
 	xScaleIndex: u32,
-	fullDomainSpan: f32,
-	pixelWidth: f32,
-	densityThreshold: f32,
-	_pad: u32,
+	_reserved0: u32,
+	_reserved1: u32,
+	_reserved2: u32,
+	decimationMode: u32,
 };
 
 @group(0) @binding(0) var<uniform> config: M4Config;
@@ -461,10 +461,10 @@ struct M4Config {
 	numBins: u32,
 	numSeries: u32,
 	xScaleIndex: u32,
-	fullDomainSpan: f32,
-	pixelWidth: f32,
-	densityThreshold: f32,
-	_pad: u32,
+	_reserved0: u32,
+	_reserved1: u32,
+	_reserved2: u32,
+	decimationMode: u32,
 };
 
 @group(0) @binding(0) var<storage, read> xIn: array<f32>;
@@ -510,10 +510,10 @@ struct M4Config {
 	numBins: u32,
 	numSeries: u32,
 	xScaleIndex: u32,
-	fullDomainSpan: f32,
-	pixelWidth: f32,
-	densityThreshold: f32,
-	_pad: u32,
+	_reserved0: u32,
+	_reserved1: u32,
+	_reserved2: u32,
+	decimationMode: u32,
 };
 
 @group(0) @binding(0) var<storage, read> seriesIn: array<f32>;
