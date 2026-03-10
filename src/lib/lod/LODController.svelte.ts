@@ -1,20 +1,27 @@
 // =============================================================================
-// LODController — JS-side LOD policy for LineMark (Phase 0)
+// LODController — JS-side LOD policy for all mark types
 //
-// Owns density measurement (DuckDB count queries) and LOD evaluation.
-// All per-frame work lives in a single frame callback — no Svelte effects in
-// the hot path. Matches the existing animation pipeline pattern where springs
-// are stepped imperatively and GPU buffers are written directly.
+// Two modes:
+//
+// LINE MODE (Phase 0):
+//   Owns density measurement via DuckDB count queries and LOD evaluation.
+//   Controls M4 decimation mode and spring-animated dot radius.
+//   All per-frame work lives in a single frame callback — no Svelte effects.
+//
+// BINNED MODE (Phase 1):
+//   Owns adaptive re-binning for marks with bin() channels. Replaces Effect 8
+//   in MarkLifecycle. Derives bin metrics geometrically from data + scale state.
+//   No DuckDB queries, no spring, no GPU writes — just metric derivation and
+//   re-bin triggering via frame callback.
 //
 // Frame callback contract: LODController runs as a post-render frame callback
-// via GPUCoordinator.addFrameCallback(). This means LOD state updates (count
-// query scheduling, spring stepping, GPU buffer writes) are next-frame policy
-// updates, not same-frame render control. The 1-frame lag is intentional and
-// imperceptible — LOD is a policy decision, not a frame-perfect requirement.
+// via GPUCoordinator.addFrameCallback(). LOD state updates are next-frame
+// policy updates, not same-frame render control. The 1-frame lag is intentional
+// and imperceptible — LOD is a policy decision, not a frame-perfect requirement.
 //
-// Decimation mode ownership: LODController controls M4's decimation mode only
-// while attached. LineMark owns the default ('decimate') and restores it when
-// the controller detaches. LODController.destroy() does not touch M4 state.
+// Decimation mode ownership (line mode only): LODController controls M4's
+// decimation mode only while attached. LineMark owns the default ('decimate')
+// and restores it when the controller detaches.
 // =============================================================================
 
 import { Query, column as sqlColumn, sql, and } from '@uwdata/mosaic-sql';
@@ -22,9 +29,10 @@ import type { ExprValue } from '@uwdata/mosaic-sql';
 import { Priority } from '@uwdata/mosaic-core';
 import type { Coordinator } from '@uwdata/mosaic-core';
 import { Spring, DT } from '$lib/animation/Spring';
-import type { ChartContext } from '$lib/types';
+import type { ChartContext, LODChangeState } from '$lib/types';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
+import type { MarkLifecycle } from '$lib/components/marks/lifecycle/MarkLifecycle.svelte';
 
 // JS implementation of GLSL smoothstep (Hermite interpolation)
 function smoothstep(edge0: number, edge1: number, x: number): number {
@@ -32,65 +40,106 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 	return t * t * (3 - 2 * t);
 }
 
-export interface LODControllerConfig {
+// ---- Config types ----
+
+export interface LineConfig {
+	mode: 'line';
 	table: string;
 	xField: string;
 	baseR: number;
 	setup?: { currentFilter: unknown[] } | null;
-	m4Decimator?: M4Decimator | null;
-	densityThreshold?: number; // points per pixel to trigger decimation (default 4)
-	countDebounceMs?: number; // minimum ms between count queries (default 150)
-	domainChangeThreshold?: number; // domain width ratio to trigger early query (default 2.0)
+	dotsEnabled?: boolean;
+	dotsThreshold?: number;
+	decimate?: boolean | 'auto';
+	densityThreshold?: number;
+	countDebounceMs?: number;
+	domainChangeThreshold?: number;
+	onLODChange?: ((state: LODChangeState) => void) | null;
 }
 
+export interface BinnedConfig {
+	mode: 'binned';
+	markLifecycle: MarkLifecycle;
+	binAxes: ('x' | 'y')[];
+	binningThreshold?: number; // domain ratio threshold for re-bin (default 1.25)
+}
+
+export type LODControllerConfig = LineConfig | BinnedConfig;
+
 export class LODController {
-	// --- Configuration ---
-	#coordinator: Coordinator;
+	// --- Shared state ---
 	#gpuCoordinator: GPUCoordinator;
 	#chartContext: ChartContext;
-	#table: string;
-	#xField: string;
-	#baseR: number;
-	#setup: { currentFilter: unknown[] } | null;
-	#m4Decimator: M4Decimator | null;
-	#densityThreshold: number;
-	#countDebounceMs: number;
-	#domainChangeThreshold: number;
+	#mode: 'line' | 'binned';
+	#frameCallback: ((isAnimating: boolean) => void) | null = null;
+	#destroyed = false;
 
-	// --- Count query state ---
+	// --- Line mode state ---
+	#coordinator: Coordinator | null = null;
+	#table: string = '';
+	#xField: string = '';
+	#baseR: number = 0;
+	#setup: { currentFilter: unknown[] } | null = null;
+	#m4Decimator: M4Decimator | null = null;
+	#dotsEnabled: boolean = true;
+	#dotsThreshold: number = 18;
+	#decimate: boolean | 'auto' = 'auto';
+	#densityThreshold: number = 4;
+	#decimateHysteresis: number = 0.5;
+	#countDebounceMs: number = 150;
+	#domainChangeThreshold: number = 2.0;
 	#lastCountTime: number = 0;
 	#lastCountDomain: [number, number] = [0, 0];
 	#countQueryPending: boolean = false;
 	#querySequence: number = 0;
-
-	// --- Spring ---
-	#dotRadiusSpring: Spring;
+	#dotRadiusSpring: Spring | null = null;
 	#lastSpringTime: number = 0;
-
-	// --- GPU write target ---
-	// Set by LineMark after renderer init. Closure writes dotRadius directly
-	// to the markConstants GPU buffer — no Svelte reactivity in the hot path.
 	#writeDotRadius: ((r: number) => void) | null = null;
 	#invalidateLayer: (() => void) | null = null;
+	#onLODChange: ((state: LODChangeState) => void) | null = null;
+	#prevDecimating: boolean = false;
+	#prevDotsVisible: boolean = false;
 
-	// --- Frame callback ---
-	#frameCallback: ((isAnimating: boolean) => void) | null = null;
+	// --- Binned mode state ---
+	#markLifecycle: MarkLifecycle | null = null;
+	#binAxes: ('x' | 'y')[] = ['x'];
+	#prevMultiplier: number = 1.0;
+	#lastReBinDomain: { x: [number, number]; y: [number, number] } = {
+		x: [0, 0],
+		y: [0, 0]
+	};
+	#binningThreshold: number = 1.25;
+	#rebinTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Diagnostic state (plain properties, NOT reactive — polled by test page) ---
-	// Using plain properties avoids Svelte scheduling overhead on every frame.
+	// Line mode diagnostics
 	visibleCount: number = 0;
 	queryLatencyMs: number = 0;
 	timeSinceLastQuery: number = 0;
 	dotRadius: number = 0;
 	shouldDecimate: boolean = false;
-	frameCallbackCount: number = 0;
 	queriesIssued: number = 0;
 
+	// Binned mode diagnostics
+	binStep: number = 0;
+	numVisibleBins: number = 0;
+	binWidthPx: number = 0;
+
+	// Shared diagnostics
+	frameCallbackCount: number = 0;
+
 	// --- Derived ---
+	get mode(): 'line' | 'binned' {
+		return this.#mode;
+	}
+
 	get density(): number {
-		const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
-		const pixelWidth = this.#chartContext.innerWidth * dpr;
-		return pixelWidth > 0 ? this.visibleCount / pixelWidth : 0;
+		const pw = this.pixelWidth;
+		if (pw <= 0) return 0;
+		if (this.#mode === 'line') {
+			return this.visibleCount / pw;
+		}
+		return this.numVisibleBins / pw;
 	}
 
 	get pixelWidth(): number {
@@ -98,41 +147,48 @@ export class LODController {
 		return this.#chartContext.innerWidth * dpr;
 	}
 
-	// --- Cleanup ---
-	#destroyed = false;
-
 	constructor(
-		coordinator: Coordinator,
+		coordinator: Coordinator | null,
 		gpuCoordinator: GPUCoordinator,
 		chartContext: ChartContext,
 		config: LODControllerConfig
 	) {
-		this.#coordinator = coordinator;
 		this.#gpuCoordinator = gpuCoordinator;
 		this.#chartContext = chartContext;
-		this.#table = config.table;
-		this.#xField = config.xField;
-		this.#baseR = config.baseR;
-		this.#setup = config.setup ?? null;
-		this.#m4Decimator = config.m4Decimator ?? null;
-		this.#densityThreshold = config.densityThreshold ?? 4;
-		this.#countDebounceMs = config.countDebounceMs ?? 150;
-		this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
+		this.#mode = config.mode;
 
-		// Spring for dot radius — stiffness 400 (default preset, critically damped)
-		this.#dotRadiusSpring = new Spring(0, 400);
-		this.#lastSpringTime = performance.now();
+		if (config.mode === 'line') {
+			this.#coordinator = coordinator!;
+			this.#table = config.table;
+			this.#xField = config.xField;
+			this.#baseR = config.baseR;
+			this.#setup = config.setup ?? null;
+			this.#dotsEnabled = config.dotsEnabled ?? true;
+			this.#dotsThreshold = config.dotsThreshold ?? 18;
+			this.#decimate = config.decimate ?? 'auto';
+			this.#densityThreshold = config.densityThreshold ?? 4;
+			this.#countDebounceMs = config.countDebounceMs ?? 150;
+			this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
+			this.#onLODChange = config.onLODChange ?? null;
+			this.#dotRadiusSpring = this.#dotsEnabled ? new Spring(0, 400) : null;
+			this.#lastSpringTime = performance.now();
+		} else {
+			// Binned mode
+			this.#markLifecycle = config.markLifecycle;
+			this.#binAxes = config.binAxes;
+			this.#binningThreshold = config.binningThreshold ?? 1.25;
+			this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
+		}
 
-		// Single frame callback handles everything: domain polling, query scheduling,
-		// spring stepping, and GPU buffer writes. No Svelte effects in the hot path.
+		// Both modes use frame callbacks
 		this.#frameCallback = (_isAnimating: boolean) => this.#onFrame();
 		this.#gpuCoordinator.addFrameCallback(this.#frameCallback);
 	}
 
-	/**
-	 * Set the GPU write target. Called by LineMark after the renderer is initialized.
-	 * The closure writes dotRadius directly to the markConstants buffer at the right offset.
-	 */
+	// =========================================================================
+	// LINE MODE — GPU write target (set by LineMark after renderer init)
+	// =========================================================================
+
 	setRenderTarget(
 		writeDotRadius: (r: number) => void,
 		invalidateLayer: () => void
@@ -146,26 +202,59 @@ export class LODController {
 		this.#invalidateLayer = null;
 	}
 
+	/**
+	 * Update the M4 decimator reference. Called when M4 is created/destroyed
+	 * independently of this controller's lifecycle.
+	 */
+	setM4Decimator(decimator: M4Decimator | null): void {
+		this.#m4Decimator = decimator;
+		// Sync current decimation state to the new decimator
+		if (decimator) {
+			decimator.setDecimationMode(this.shouldDecimate ? 'decimate' : 'passthrough');
+		}
+	}
+
 	// =========================================================================
-	// FRAME CALLBACK — all per-frame LOD work in one place
+	// SHARED — resolution control (shift+scroll routing target)
+	// =========================================================================
+
+	/**
+	 * Adjust resolution. Called by ChartCell when shift+scroll targets this mark.
+	 * For binned mode: adjusts binStepMultiplier on the chart context.
+	 * For line mode: adjusts density threshold offset (future).
+	 */
+	adjustResolution(deltaY: number): void {
+		if (this.#mode === 'binned') {
+			const delta = deltaY < 0 ? 0.025 : -0.025;
+			this.#chartContext.adjustBinMultiplier?.(delta);
+		}
+		// Line mode: future — adjust density threshold offset
+	}
+
+	// =========================================================================
+	// FRAME CALLBACK — dispatches to mode-specific handler
 	// =========================================================================
 
 	#onFrame(): void {
 		if (this.#destroyed) return;
-
 		this.frameCallbackCount++;
-		this.timeSinceLastQuery = performance.now() - this.#lastCountTime;
 
-		// 1. Poll viewport domain and schedule count query if needed
-		this.#checkDomainAndQuery();
-
-		// 2. Step the spring and write to GPU
-		this.#stepSpringAndWrite();
+		if (this.#mode === 'line') {
+			this.#onFrameLine();
+		} else {
+			this.#onFrameBinned();
+		}
 	}
 
 	// =========================================================================
-	// COUNT QUERY SCHEDULING — imperative, no $effect
+	// LINE MODE — count query scheduling + spring + GPU write
 	// =========================================================================
+
+	#onFrameLine(): void {
+		this.timeSinceLastQuery = performance.now() - this.#lastCountTime;
+		this.#checkDomainAndQuery();
+		this.#stepSpringAndWrite();
+	}
 
 	#checkDomainAndQuery(): void {
 		const xState = this.#chartContext.xScaleState;
@@ -186,14 +275,11 @@ export class LODController {
 	#shouldQueryCount(lo: number, hi: number): boolean {
 		const now = performance.now();
 		const elapsed = now - this.#lastCountTime;
-
-		// Time-based debounce
 		if (elapsed > this.#countDebounceMs) return true;
 
-		// Domain-change threshold
 		const [lastLo, lastHi] = this.#lastCountDomain;
 		const lastWidth = lastHi - lastLo;
-		if (lastWidth <= 0) return true; // First query
+		if (lastWidth <= 0) return true;
 
 		const currentWidth = hi - lo;
 		const ratio = lastWidth / currentWidth;
@@ -205,14 +291,13 @@ export class LODController {
 	}
 
 	async #issueCountQuery(lo: number, hi: number): Promise<void> {
-		if (this.#countQueryPending || this.#destroyed) return;
+		if (this.#countQueryPending || this.#destroyed || !this.#coordinator) return;
 
 		this.#countQueryPending = true;
 		const seq = ++this.#querySequence;
 		const t0 = performance.now();
 
 		try {
-			// Build WHERE clause: viewport BETWEEN + optional crossfilter predicates
 			const xCol = sqlColumn(this.#xField);
 			const viewportClause = sql`${xCol} BETWEEN ${lo} AND ${hi}`;
 
@@ -231,23 +316,19 @@ export class LODController {
 			const result = await this.#coordinator.query(q, { priority: Priority.Low });
 			const t1 = performance.now();
 
-			// Discard stale results
 			if (seq !== this.#querySequence || this.#destroyed) return;
 
 			const row = Array.from(result)[0] as { cnt: number } | undefined;
 			const count = Number(row?.cnt ?? 0);
 
-			// Update diagnostic state (reactive, for test page display only)
 			this.visibleCount = count;
 			this.queryLatencyMs = t1 - t0;
 			this.queriesIssued++;
 			this.#lastCountTime = t1;
 			this.#lastCountDomain = [lo, hi];
 
-			// Evaluate LOD state from new count
 			this.#evaluateLOD();
 		} catch (e) {
-			// Count query failures are non-critical — log and continue
 			console.warn('[LODController] Count query failed:', e);
 		} finally {
 			if (seq === this.#querySequence) {
@@ -256,19 +337,25 @@ export class LODController {
 		}
 	}
 
-	// =========================================================================
-	// LOD EVALUATION
-	// =========================================================================
-
 	#evaluateLOD(): void {
 		const pw = this.pixelWidth;
 		if (pw <= 0) return;
 
 		const count = this.visibleCount;
+		const ppp = count / pw;
 
-		// --- shouldDecimate ---
-		const ppp = count / pw; // points per pixel
-		const newShouldDecimate = ppp >= this.#densityThreshold;
+		// Decimation decision: respect explicit decimate config
+		let newShouldDecimate: boolean;
+		if (this.#decimate === true) {
+			newShouldDecimate = true;
+		} else if (this.#decimate === false) {
+			newShouldDecimate = false;
+		} else {
+			// 'auto': hysteresis — decimate at threshold, un-decimate at threshold - margin
+			newShouldDecimate = this.shouldDecimate
+				? ppp >= this.#densityThreshold - this.#decimateHysteresis
+				: ppp >= this.#densityThreshold;
+		}
 
 		if (newShouldDecimate !== this.shouldDecimate) {
 			this.shouldDecimate = newShouldDecimate;
@@ -279,39 +366,149 @@ export class LODController {
 			}
 		}
 
-		// --- dotRadius target ---
-		const avgSpacing = pw / Math.max(count, 1);
-		const targetR = this.#baseR * smoothstep(8, 18, avgSpacing);
-		this.#dotRadiusSpring.setTarget(targetR);
+		// Dots: compute target radius (0 when disabled)
+		if (this.#dotsEnabled) {
+			const avgSpacing = pw / Math.max(count, 1);
+			const targetR = this.#baseR * smoothstep(8, this.#dotsThreshold, avgSpacing);
+			this.#dotRadiusSpring?.setTarget(targetR);
+		}
+
+		// Fire onLODChange on state transitions
+		this.#fireChangeIfNeeded();
 	}
 
-	// =========================================================================
-	// SPRING + GPU WRITE — direct buffer write, no reactive chain
-	// =========================================================================
+	#fireChangeIfNeeded(): void {
+		if (!this.#onLODChange) return;
+		const decimating = this.shouldDecimate;
+		const dotsVisible = this.dotRadius > 0;
+		if (decimating !== this.#prevDecimating || dotsVisible !== this.#prevDotsVisible) {
+			this.#prevDecimating = decimating;
+			this.#prevDotsVisible = dotsVisible;
+			this.#onLODChange({
+				decimating,
+				dotRadius: this.dotRadius,
+				visibleCount: this.visibleCount,
+				density: this.density
+			});
+		}
+	}
 
 	#stepSpringAndWrite(): void {
-		if (this.#dotRadiusSpring.isAtRest()) return;
+		if (!this.#dotRadiusSpring || this.#dotRadiusSpring.isAtRest()) return;
 
 		const now = performance.now();
 		const elapsed = now - this.#lastSpringTime;
 		this.#lastSpringTime = now;
 
-		// Step for accumulated dt (clamped to prevent spiral on tab-away)
 		const steps = Math.min(Math.floor(elapsed / (DT * 1000)), 20);
 		for (let i = 0; i < steps; i++) {
 			this.#dotRadiusSpring.step();
 		}
 
 		const r = this.#dotRadiusSpring.current;
-
-		// Write directly to GPU buffer — no Svelte reactivity
 		this.#writeDotRadius?.(r);
-
-		// Keep the chart rendering while the spring is active
 		this.#invalidateLayer?.();
-
-		// Update diagnostic state (for test page only)
 		this.dotRadius = r;
+	}
+
+	// =========================================================================
+	// BINNED MODE — geometric metric derivation + re-bin triggering
+	// =========================================================================
+
+	#onFrameBinned(): void {
+		if (!this.#markLifecycle) return;
+
+		// 1. Check multiplier changes BEFORE data gate — shift+scroll must
+		//    trigger re-bins even while a previous query is in-flight (data is
+		//    temporarily null during query). Without this, scroll events that
+		//    arrive while waiting for results are silently dropped.
+		//    Uses the first binned axis for the domain snapshot.
+		const multiplier = this.#chartContext.binStepMultiplier ?? 1.0;
+		if (multiplier !== this.#prevMultiplier) {
+			this.#prevMultiplier = multiplier;
+			const domain = this.#readDomain(this.#binAxes[0]);
+			if (domain) {
+				this.#markLifecycle.triggerReBin(this.#binAxes[0], domain);
+			}
+			return;
+		}
+
+		// 2. Derive bin metrics from data (may be null during query)
+		const data = this.#markLifecycle.data;
+		if (!data || data.length < 1) return;
+
+		// Use first binned axis for diagnostic metrics
+		const primaryAxis = this.#binAxes[0];
+		const ch1 = primaryAxis === 'x' ? 'x1' : 'y1';
+		const ch2 = primaryAxis === 'x' ? 'x2' : 'y2';
+		const col1 = data.getColumn(ch1);
+		const col2 = data.getColumn(ch2);
+		if (col1 && col2) {
+			this.binStep = Math.abs(Number(col2[0]) - Number(col1[0]));
+			if (this.binStep > 0) {
+				const domain = this.#readDomain(primaryAxis);
+				if (domain) {
+					const viewportWidth = domain[1] - domain[0];
+					this.numVisibleBins = viewportWidth / this.binStep;
+					const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+					const pixelExtent =
+						primaryAxis === 'x'
+							? this.#chartContext.innerWidth * dpr
+							: this.#chartContext.innerHeight * dpr;
+					this.binWidthPx = this.numVisibleBins > 0 ? pixelExtent / this.numVisibleBins : 0;
+				}
+			}
+		}
+
+		// 3. Check domain threshold for each binned axis independently
+		for (const axis of this.#binAxes) {
+			const domain = this.#readDomain(axis);
+			if (domain && this.#shouldReBin(axis, domain)) {
+				this.#debouncedReBin(axis);
+			}
+		}
+	}
+
+	/** Read the current domain [lo, hi] for an axis, or null if unavailable. */
+	#readDomain(axis: 'x' | 'y'): [number, number] | null {
+		const scaleState =
+			axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+		if (!scaleState || !('domain' in scaleState)) return null;
+		const domain = (scaleState as { domain?: { target?: [number, number] } }).domain;
+		if (!domain?.target) return null;
+		const [lo, hi] = domain.target;
+		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return null;
+		return [lo, hi];
+	}
+
+	#shouldReBin(axis: 'x' | 'y', domain: [number, number]): boolean {
+		const [lastLo, lastHi] = this.#lastReBinDomain[axis];
+		const lastWidth = lastHi - lastLo;
+		if (lastWidth <= 0) {
+			// First run — seed the baseline from current domain
+			this.#lastReBinDomain[axis] = domain;
+			return false;
+		}
+
+		const currentWidth = domain[1] - domain[0];
+		if (currentWidth <= 0) return false;
+
+		const ratio = lastWidth / currentWidth;
+		return ratio > this.#binningThreshold || ratio < 1 / this.#binningThreshold;
+	}
+
+	#debouncedReBin(axis: 'x' | 'y'): void {
+		if (this.#rebinTimeout !== null) return; // Already scheduled
+		this.#rebinTimeout = setTimeout(() => {
+			this.#rebinTimeout = null;
+			if (this.#destroyed || !this.#markLifecycle) return;
+			// Read live domain at execution time — during fast zoom the domain
+			// may have moved significantly since the re-bin was scheduled.
+			const liveDomain = this.#readDomain(axis);
+			if (!liveDomain) return;
+			this.#lastReBinDomain[axis] = liveDomain;
+			this.#markLifecycle.triggerReBin(axis, liveDomain);
+		}, 16);
 	}
 
 	// =========================================================================
@@ -321,14 +518,17 @@ export class LODController {
 	destroy(): void {
 		this.#destroyed = true;
 
-		// Remove frame callback
 		if (this.#frameCallback) {
 			this.#gpuCoordinator.removeFrameCallback(this.#frameCallback);
 			this.#frameCallback = null;
 		}
 
-		// LODController does not reset decimation mode on teardown.
-		// LineMark owns the default and restores it when the controller detaches.
+		if (this.#rebinTimeout !== null) {
+			clearTimeout(this.#rebinTimeout);
+			this.#rebinTimeout = null;
+		}
+
+		this.#markLifecycle = null;
 
 		this.#writeDotRadius = null;
 		this.#invalidateLayer = null;

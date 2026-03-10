@@ -57,7 +57,6 @@
 								y="y"
 								stroke="series"
 								strokeWidth={1.5}
-								autoDots={true}
 								dotRadius={4}
 							/>
 						{/snippet}
@@ -83,7 +82,6 @@
 								y="y"
 								stroke="series"
 								strokeWidth={1.5}
-								autoDots={true}
 								dotRadius={4}
 								lod={true}
 								selection="lod-brush"
@@ -112,10 +110,8 @@
 								y="y"
 								stroke="series"
 								strokeWidth={1.5}
-								autoDots={true}
 								dotRadius={4}
-								optimize={false}
-								lod={true}
+								lod={{ decimate: false }}
 								selection="lod-brush"
 							/>
 						{/snippet}

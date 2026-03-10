@@ -205,9 +205,8 @@ export interface LineMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	z?: FieldSpec | null;
 	strokeWidth?: number;
 	dotRadius?: number;
-	autoDots?: boolean;
 	curve?: CurveType;
-	optimize?: boolean | 'auto';
+	lod?: boolean | { dots?: { r?: number; threshold?: number } | false; decimate?: boolean | 'auto' };
 }
 
 export interface AreaYMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {

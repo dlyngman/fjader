@@ -10,11 +10,11 @@
 	} from '$lib/components';
 
 	const configs = [
-		{ label: 'LineMark + autoDots (default 2.5px)', mark: 'line', autoDots: true, dotRadius: 0, strokeWidth: 1.5 },
-		{ label: 'LineMark + autoDots + dotRadius=4', mark: 'line', autoDots: true, dotRadius: 4, strokeWidth: 1.5 },
-		{ label: 'AreaMarkY + autoDots', mark: 'area', autoDots: true, dotRadius: 0, fillOpacity: 0.4 },
-		{ label: 'LineMark + dotRadius=3 (always visible)', mark: 'line', autoDots: false, dotRadius: 3, strokeWidth: 1.5 },
-		{ label: 'LineMark without dots (baseline)', mark: 'line', autoDots: false, dotRadius: 0, strokeWidth: 1.5 }
+		{ label: 'LineMark + LOD dots (default 2.5px)', mark: 'line', lod: true, autoDots: false, dotRadius: 0, strokeWidth: 1.5 },
+		{ label: 'LineMark + LOD dots + dotRadius=4', mark: 'line', lod: true, autoDots: false, dotRadius: 4, strokeWidth: 1.5 },
+		{ label: 'AreaMarkY + autoDots', mark: 'area', lod: false, autoDots: true, dotRadius: 0, fillOpacity: 0.4 },
+		{ label: 'LineMark + dotRadius=3 (always visible)', mark: 'line', lod: false, autoDots: false, dotRadius: 3, strokeWidth: 1.5 },
+		{ label: 'LineMark without dots (baseline)', mark: 'line', lod: false, autoDots: false, dotRadius: 0, strokeWidth: 1.5 }
 	];
 
 	let selected = $state([0, 4]);
@@ -57,7 +57,7 @@
 											y="y"
 											stroke="series"
 											strokeWidth={config.strokeWidth ?? 1.5}
-											autoDots={config.autoDots}
+											lod={config.lod}
 											dotRadius={config.dotRadius}
 										/>
 									{/if}

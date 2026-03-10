@@ -11,7 +11,7 @@
 
 	<div class="charts-grid">
 		<div class="chart-wrapper">
-			<h3>M4 Enabled (optimize=true)</h3>
+			<h3>M4 Enabled (decimate=true)</h3>
 			<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
 				{#snippet canvas()}
 					<WebGPUCanvas>
@@ -24,7 +24,7 @@
 								stroke="series"
 								curve="monotone"
 								strokeWidth={1.5}
-								optimize={true}
+								lod={{ decimate: true, dots: false }}
 								dotRadius={0}
 							/>
 						{/snippet}
@@ -38,7 +38,7 @@
 		</div>
 
 		<div class="chart-wrapper">
-			<h3>M4 Disabled (optimize=false) - Reference</h3>
+			<h3>M4 Disabled (decimate=false) - Reference</h3>
 			<ChartContainer xLabel="x" yLabel="y">
 				{#snippet canvas()}
 					<WebGPUCanvas>
@@ -50,7 +50,7 @@
 								y="y"
 								stroke="series"
 								strokeWidth={1.5}
-								optimize={false}
+								lod={{ decimate: false }}
 							/>
 						{/snippet}
 					</WebGPUCanvas>

@@ -25,6 +25,7 @@
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
 		ConnectedTopologyProps,
+		LODConfig,
 		Coordinator,
 		ChartContext
 	} from '$lib/types';
@@ -36,9 +37,7 @@
 		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
-		autoDots?: boolean;
-		optimize?: boolean | 'auto';
-		lod?: boolean;
+		lod?: boolean | LODConfig;
 		onLodController?: (ctrl: LODController | null) => void;
 	}
 
@@ -53,7 +52,6 @@
 		curve = 'linear',
 		strokeWidth = 2,
 		dotRadius = 0,
-		autoDots = false,
 		limit,
 		filterNulls = false,
 		preferredXScaleType = null,
@@ -62,9 +60,8 @@
 		sort = null,
 		tooltip = true,
 		tooltipProximity,
-		optimize = 'auto',
 		tip = undefined,
-		lod = false,
+		lod = true,
 		onLodController = undefined
 	}: Props = $props();
 
@@ -198,16 +195,23 @@
 
 	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
 
-	// --- M4 DECIMATION + AUTO-DOTS ---
+	// --- LOD CONFIG RESOLUTION ---
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
-	// M4 always created when eligible — GPU decides per-frame whether to decimate or passthrough
-	const m4Eligible = $derived.by(() => {
-		if (optimize === false || faceted) return false;
-		const xType = chartContext.scaleTypes?.x;
-		if (xType === 'log' || xType === 'symlog') return false;
-		return true;
+	// Parse lod prop: boolean | LODConfig → resolved config values
+	const lodConfig = $derived.by(() => {
+		if (lod === false) return null;
+		const cfg = typeof lod === 'object' ? lod : {};
+		const dotsEnabled = cfg.dots !== false;
+		const dotsR = (dotsEnabled && typeof cfg.dots === 'object' ? cfg.dots.r : undefined)
+			?? (dotRadius > 0 ? dotRadius : 2.5);
+		const dotsThreshold = dotsEnabled && typeof cfg.dots === 'object'
+			? cfg.dots.threshold ?? 18
+			: 18;
+		const decimate = cfg.decimate ?? 'auto';
+		const onLODChange = cfg.onLODChange ?? null;
+		return { dotsEnabled, dotsR, dotsThreshold, decimate, onLODChange };
 	});
 
 	// TEMPORARY Phase 0 guard: LOD count queries use `String(x)` as a raw column
@@ -216,8 +220,20 @@
 	// can be removed and expression nodes will work via the general counting path.
 	const lodEligible = !isNode(x);
 
-	// autoDots implies lod — the LODController owns dot radius via its spring.
-	const effectiveLod = lodEligible && (lod || autoDots);
+	// LODController is on by default — it owns density evaluation, M4 control,
+	// and auto-dots spring animation. Only disabled for expression x fields
+	// (pending CTE-wrapping) or explicit lod={false}.
+	const effectiveLod = lodEligible && lodConfig !== null;
+
+	// M4 created only when LODController is active and decimation isn't disabled.
+	// No LODController = no M4 (raw data passthrough, correct for sparse data).
+	const m4Eligible = $derived.by(() => {
+		if (!effectiveLod) return false;
+		if (lodConfig?.decimate === false || faceted) return false;
+		const xType = chartContext.scaleTypes?.x;
+		if (xType === 'log' || xType === 'symlog') return false;
+		return true;
+	});
 
 	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
 	// via its frame callback — no reactive chain. We set 0 here as a placeholder.
@@ -232,8 +248,6 @@
 	$effect(() => {
 		if (m4Eligible && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
 			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
-			// Default to always-decimate. LODController overrides this when active.
-			decimator.setDecimationMode('decimate');
 			m4Decimator = decimator;
 			return () => {
 				decimator.destroy();
@@ -248,20 +262,22 @@
 	let lodController: LODController | null = $state(null);
 
 	$effect(() => {
-		if (!effectiveLod || !setup || !coordinator || !gpuCoordinator) {
+		if (!effectiveLod || !lodConfig || !setup || !coordinator || !gpuCoordinator) {
 			lodController?.destroy();
 			lodController = null;
 			onLodController?.(null);
-			// Restore LineMark's default: M4 always decimates when not LOD-controlled
-			m4Decimator?.setDecimationMode('decimate');
 			return;
 		}
 		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
+			mode: 'line',
 			table,
 			xField: String(x),
 			setup,
-			m4Decimator,
-			baseR: dotRadius > 0 ? dotRadius : 2.5
+			baseR: lodConfig.dotsR,
+			dotsEnabled: lodConfig.dotsEnabled,
+			dotsThreshold: lodConfig.dotsThreshold,
+			decimate: lodConfig.decimate,
+			onLODChange: lodConfig.onLODChange
 		});
 		lodController = ctrl;
 		onLodController?.(ctrl);
@@ -269,9 +285,13 @@
 			ctrl.destroy();
 			lodController = null;
 			onLodController?.(null);
-			// Restore LineMark's default: M4 always decimates when not LOD-controlled
-			m4Decimator?.setDecimationMode('decimate');
 		};
+	});
+
+	// Sync M4 decimator to LODController — decoupled so M4 recreation
+	// (e.g. on resize) doesn't tear down the controller and lose state.
+	$effect(() => {
+		lodController?.setM4Decimator(m4Decimator);
 	});
 
 	// Configure M4 decimator when chart dimensions or series count change.
@@ -294,6 +314,14 @@
 			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
 			: 0;
 		m4Decimator.configure(numBins, numSeries, xScaleIndex);
+	});
+
+	// LODController registration with TooltipManager (for per-mark shift+scroll routing)
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !lodController) return;
+		tm.registerLodController(markId, lodController);
+		return () => tm.unregisterLodController(markId);
 	});
 
 	// Tooltip registration
