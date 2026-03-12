@@ -50,6 +50,8 @@ import {
 	registerDataDerivedDomains
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
+import { LODController } from '$lib/lod';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 // ---------------------------------------------------------------------------
 // LIFECYCLE: 10-Effect State Machine
@@ -72,7 +74,7 @@ import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries
 //             Calls: registerDataDerivedDomains()  [domain-registration.ts]
 //  Effect 7:  dataDerivedDomainsSet              → scales.setReady()
 //             Calls: markDeferredScalesReady()     [domain-registration.ts]
-//  Effect 8:  domain.target + autoBins           → re-bin cycle (→ Effect 6)
+//  Effect 8:  LODController + tooltipManager      → register LODController with tooltip
 //  Effect 9:  client.dataVersion                 → tooltip table [side effect]
 //  Effect 10: domain.target + data               → viewport-local domain
 //
@@ -118,6 +120,11 @@ export interface MarkLifecycleConfig {
 	zeroBaseline?: { x?: boolean; y?: boolean };
 }
 
+export interface MarkLifecycleOptions {
+	gpuCoordinator?: GPUCoordinator | null;
+	onLodController?: ((ctrl: LODController | null) => void) | null;
+}
+
 export class MarkLifecycle {
 	// --- Reactive State ---
 	client = $state<DataClient | null>(null);
@@ -154,13 +161,13 @@ export class MarkLifecycle {
 	#tooltipTableName: string;
 	#tooltipWriteTimeout: ReturnType<typeof setTimeout> | null = null;
 
-	// --- Adaptive Binning Support ---
+	// --- Adaptive Binning / LOD Support ---
 	#lastBinningDomain: { x: number[] | null; y: number[] | null } = { x: null, y: null };
-	#rebinTimeout: ReturnType<typeof setTimeout> | null = null;
 	#binningThreshold: number = 1.25;
 	#skipDomainUpdateForAxis: string | null = null;
 	#rebinPendingDataVersion: number | null = null;
-	#prevBinMultiplier: number = 1.0;
+	#gpuCoordinator: GPUCoordinator | null = null;
+	#lodController: LODController | null = null;
 
 	// --- Query Build Cache ---
 	// Caches all filter-independent query state (resolved select, classification,
@@ -192,18 +199,15 @@ export class MarkLifecycle {
 		}
 	}
 
+	#onLodController: ((ctrl: LODController | null) => void) | null = null;
+
 	constructor(
 		config: MarkLifecycleConfig,
 		coordinator: Coordinator,
 		chartContext: ChartContext,
-		stableId: string | null = null
+		stableId: string | null = null,
+		options?: MarkLifecycleOptions
 	) {
-		console.log('🔧 MarkLifecycle constructor:', {
-			markType: config.markType,
-			transforms: config.transforms,
-			transformCount: config.transforms?.length || 0
-		});
-
 		this.#config = config;
 		this.#coordinator = coordinator;
 		this.#chartContext = chartContext;
@@ -218,16 +222,31 @@ export class MarkLifecycle {
 		// Ensure services have coordinator (idempotent)
 		MarkLifecycle.ensureServices(coordinator);
 
-		// NEW: Create transform compiler
+		// Store options for LODController creation
+		this.#gpuCoordinator = options?.gpuCoordinator ?? null;
+		this.#onLodController = options?.onLodController ?? null;
+
+		// Create transform compiler
 		this.#transformCompiler = new TransformCompiler(config.transforms || []);
 
-		console.log('🔧 TransformCompiler created:', {
-			sqlTransforms: this.#transformCompiler.sqlTransforms.length,
-			jsTransforms: this.#transformCompiler.jsTransforms.length
-		});
-
-		// NEW: Detect auto bins in select
+		// Detect auto bins in select
 		this.#detectAutoBins();
+
+		// Create LODController for binned marks (owns adaptive re-binning + shift+scroll)
+		if (this.#autoBinNodes.size > 0 && this.#gpuCoordinator) {
+			const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+			const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+			const binAxes: ('x' | 'y')[] = [];
+			if (xHasBin) binAxes.push('x');
+			if (yHasBin) binAxes.push('y');
+			this.#lodController = new LODController(coordinator, this.#gpuCoordinator, chartContext, {
+				mode: 'binned',
+				markLifecycle: this,
+				binAxes,
+				binningThreshold: this.#binningThreshold
+			});
+			this.#onLodController?.(this.#lodController);
+		}
 
 		// Detect which channels need data-derived domains (aggregates)
 		this.#channelsNeedingDataDomain = detectChannelsNeedingDataDomain(
@@ -235,18 +254,11 @@ export class MarkLifecycle {
 			config.scaleRequirements,
 			this.#transformCompiler
 		);
-		if (this.#channelsNeedingDataDomain.size > 0) {
-			console.log(
-				`🔧 ${this.#markId} channels needing data-derived domain:`,
-				Array.from(this.#channelsNeedingDataDomain)
-			);
-		}
-
 		this.#registerScaleRequirements();
 		this.#setupReactiveEffects();
 	}
 
-	// NEW: Detect AutoBinNodes in config
+	// Detect AutoBinNodes in config
 	#detectAutoBins(): void {
 		for (const [channel, value] of Object.entries(this.#config.select)) {
 			if (isBinExpression(value)) {
@@ -341,9 +353,6 @@ export class MarkLifecycle {
 							this.#globalAggregatesSet,
 							this.#dataDerivedDomainsSet
 						);
-						if (fetchCount > 0) {
-							console.log(`✅ Mark ${this.#markId} scale domains ready (${fetchCount} fetches)`);
-						}
 					})
 					.catch((error) => {
 						console.error(`❌ Domain fetch failed for ${this.#markId}:`, error);
@@ -358,10 +367,7 @@ export class MarkLifecycle {
 			if (!this.categoricalDataFetched) return;
 
 			// Wait until ViewManager is ready (no pending view creation)
-			if (!viewManager.isReadyForClient(this.#config.table)) {
-				console.log(`[Mark ${this.#markId}] Waiting for view to be ready...`);
-				return;
-			}
+			if (!viewManager.isReadyForClient(this.#config.table)) return;
 
 			// REACTIVITY: Track effectiveTable
 			const tableToQuery = this.effectiveTable;
@@ -371,15 +377,11 @@ export class MarkLifecycle {
 				// Action (untracked to prevent loops)
 				untrack(() => {
 					if (this.client) {
-						console.log(
-							`[Mark ${this.#markId}] Switching source: ${this.#currentClientTable} → ${tableToQuery}`
-						);
 						this.client.destroy();
 						this.client = null;
 					}
 
 					const fieldRequests = buildFieldInfoRequests(this.#config.select, tableToQuery, this.actualXScaleType, this.actualYScaleType);
-					console.log(`[Mark ${this.#markId}] Creating DataClient for ${tableToQuery}`);
 					this.#createClient(tableToQuery, fieldRequests);
 					this.#currentClientTable = tableToQuery;
 					this.#clientCreated = true;
@@ -427,9 +429,6 @@ export class MarkLifecycle {
 
 			// If we're waiting for new data from a re-bin, skip until dataVersion increments
 			if (this.#rebinPendingDataVersion !== null && dataVersion <= this.#rebinPendingDataVersion) {
-				console.log(
-					`⏳ [${this.#markId}] Waiting for new data (current: ${dataVersion}, pending: ${this.#rebinPendingDataVersion})`
-				);
 				return;
 			}
 
@@ -480,70 +479,13 @@ export class MarkLifecycle {
 			}
 		});
 
-		// Effect 8: Adaptive Binning & User Resolution Control
+		// Effect 8: Register binned LODController with TooltipManager
+		// (for per-mark shift+scroll routing)
 		$effect(() => {
-			// IMPORTANT: Read reactive values FIRST to establish dependencies
-			// Even if we early-return, Svelte needs to track these for reactivity
-			const multiplier: number = this.#chartContext.binStepMultiplier ?? 1.0;
-			const xState = this.#chartContext.xScaleState;
-			const yState = this.#chartContext.yScaleState;
-			const xDomain: number[] | undefined =
-				xState && xState.scaleType !== 'band' ? xState.domain?.target : undefined;
-			const yDomain: number[] | undefined =
-				yState && yState.scaleType !== 'band' ? yState.domain?.target : undefined;
-
-			if (this.#autoBinNodes.size === 0 || !this.client) {
-				// Early return, but reactive values were already read above
-				return;
-			}
-
-			// --- A. User Resolution Control (Shift+Scroll) ---
-			if (this.#prevBinMultiplier === undefined) {
-				this.#prevBinMultiplier = multiplier;
-			}
-
-			if (multiplier !== this.#prevBinMultiplier) {
-				console.log(
-					`🎛️ [${this.#markId}] Re-binning: Multiplier ${this.#prevBinMultiplier.toFixed(1)}x → ${multiplier.toFixed(1)}x`
-				);
-				this.#prevBinMultiplier = multiplier;
-
-				// Determine which axis has bins (should preserve user zoom on that axis)
-				const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
-				const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
-
-				// Skip domain update for binned axis (user zoomed there intentionally)
-				// But DO update the aggregate axis domain (counts changed)
-				if (xHasBin) this.#skipDomainUpdateForAxis = 'x';
-				if (yHasBin) this.#skipDomainUpdateForAxis = 'y';
-
-				// Track current dataVersion - we'll wait for it to increment before updating domains
-				this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
-
-				// Reset data-derived domain flag so aggregate extent updates from new data
-				this.#dataDerivedDomainsSet = false;
-
-				// Invalidate resolved select cache so next buildQuery re-resolves bins
-				this.#cachedQueryParts = null;
-
-				// Immediate update. Since this changes the query definition via
-				// resolveAutoBins -> buildQuery, requestUpdate will re-run the pipeline.
-				this.client.requestUpdate();
-
-				// Return early - skip adaptive check this frame
-				return;
-			}
-
-			// --- B. Adaptive Binning (Viewport changes) ---
-			const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
-			if (xHasBin && xDomain && this.#shouldReBin(xDomain, 'x')) {
-				this.#scheduleReBin('x', xDomain);
-			}
-
-			const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
-			if (yHasBin && yDomain && this.#shouldReBin(yDomain, 'y')) {
-				this.#scheduleReBin('y', yDomain);
-			}
+			const tm = this.#chartContext.tooltipManager;
+			if (!tm || !this.#lodController) return;
+			tm.registerLodController(this.#markId, this.#lodController);
+			return () => tm.unregisterLodController(this.#markId);
 		});
 
 		// Effect 9: Write tooltip table when data updates (debounced).
@@ -660,6 +602,30 @@ export class MarkLifecycle {
 
 	get markId(): string {
 		return this.#markId;
+	}
+
+	/**
+	 * Trigger a re-bin operation. Called by LODController when domain change
+	 * exceeds threshold or when the user adjusts resolution via shift+scroll.
+	 * Performs the query cache invalidation and requests a Mosaic re-query.
+	 */
+	triggerReBin(axis: string, domain: number[]): void {
+		this.#lastBinningDomain[axis as 'x' | 'y'] = [...domain];
+		this.#skipDomainUpdateForAxis = axis;
+		this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
+		this.#dataDerivedDomainsSet = false;
+		this.#cachedQueryParts = null;
+		if (this.client) {
+			this.client.requestUpdate();
+		}
+	}
+
+	/**
+	 * Get the LODController (if active). Used by mark components for line-mode
+	 * LODController to check if binned LOD is already active.
+	 */
+	get lodController(): LODController | null {
+		return this.#lodController;
 	}
 
 	/**
@@ -847,7 +813,6 @@ export class MarkLifecycle {
 			if (xScale?.indexColumnName && hasView) {
 				const originalField = select.x;
 				select.x = xScale.indexColumnName;
-				console.log(`[MarkLifecycle] Swapping x: ${originalField} → ${select.x}`);
 			}
 		}
 		if ((this.actualYScaleType === 'band' || this.actualYScaleType === 'point') && !skipIndexSwap) {
@@ -855,7 +820,6 @@ export class MarkLifecycle {
 			if (yScale?.indexColumnName && hasView) {
 				const originalField = select.y;
 				select.y = yScale.indexColumnName;
-				console.log(`[MarkLifecycle] Swapping y: ${originalField} → ${select.y}`);
 			}
 		}
 
@@ -872,16 +836,13 @@ export class MarkLifecycle {
 			hasView &&
 			select[colorKey]
 		) {
-			const originalField = select[colorKey];
 			select[colorKey] = this.#colorScaleState.indexColumnName;
-			console.log(`[MarkLifecycle] Swapping ${colorKey}: ${originalField} → ${select[colorKey]}`);
 		}
 
 		// For faceting, include the facet index column
 		const facetBandScale = this.#chartContext.facetBandScale;
 		if (facetBandScale?.indexColumnName && hasView) {
 			select.__facet = facetBandScale.indexColumnName;
-			console.log(`[MarkLifecycle] Adding facet column: ${select.__facet}`);
 		}
 
 		return select;
@@ -990,12 +951,8 @@ export class MarkLifecycle {
 				if (!(ch in result)) continue;
 				const val = result[ch];
 				if (typeof val === 'string' && scaleState.offsetColumnName && hasView) {
-					console.log(
-						`[MarkLifecycle] Swapping ${ch} (time): ${val} → ${scaleState.offsetColumnName}`
-					);
 					result[ch] = scaleState.offsetColumnName;
 				} else if (isNode(val)) {
-					console.log(`[MarkLifecycle] Wrapping ${ch} (time expr) with epoch offset`);
 					result[ch] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
 				}
 			}
@@ -1073,10 +1030,6 @@ export class MarkLifecycle {
 			this.#chartContext.facetBandScale.registerTable(table);
 		}
 
-		console.log(`📊 ${this.#markId} Scale mappings setup:`, {
-			x: this.actualXScaleType,
-			y: this.actualYScaleType
-		});
 	}
 
 	// ===========================================================================
@@ -1154,36 +1107,6 @@ export class MarkLifecycle {
 		return ratio > this.#binningThreshold || ratio < 1 / this.#binningThreshold;
 	}
 
-	/**
-	 * Schedule a re-bin operation (debounced).
-	 */
-	#scheduleReBin(axis: string, domain: number[]): void {
-		clearTimeout(this.#rebinTimeout!);
-		this.#rebinTimeout = setTimeout(() => {
-			console.log(`🔄 [${this.#markId}] Re-binning ${axis} axis with domain:`, domain);
-			this.#lastBinningDomain[axis as 'x' | 'y'] = [...domain];
-
-			// Skip updating the binned axis domain (user zoomed there intentionally)
-			// But DO update the aggregate axis domain (counts changed)
-			this.#skipDomainUpdateForAxis = axis;
-
-			// Track current dataVersion - we'll wait for it to increment before updating domains
-			this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
-
-			// Reset data-derived domain flag so aggregate extent updates from new data
-			this.#dataDerivedDomainsSet = false;
-
-			// Invalidate resolved select cache so next buildQuery re-resolves bins
-			this.#cachedQueryParts = null;
-
-			// Trigger re-query using Mosaic's requestUpdate (throttled)
-			// This will cause buildQuery to be called again with new domain context
-			if (this.client) {
-				this.client.requestUpdate();
-			}
-		}, 16); // Snappy re-query (Mosaic has its own throttling)
-	}
-
 	// ===========================================================================
 	// TOOLTIP WRITE-BACK
 	// ===========================================================================
@@ -1199,6 +1122,22 @@ export class MarkLifecycle {
 	/** Channel → original field name mapping (single source of truth for display). */
 	get channelFieldMap(): Record<string, string> {
 		return buildChannelFieldMap(this.#config.select);
+	}
+
+	/**
+	 * Live getter — returns the current crossfilter predicate array from the Selection.
+	 * Recomputes each call via Mosaic's selection.predicate() API (no stored mutable state).
+	 * Returns [] when no selection is active or this client is the crossfilter source
+	 * (predicate() returns undefined when the client should skip its own filter).
+	 */
+	get currentFilter(): unknown[] {
+		const selection = this.#config.selection;
+		if (!selection || !this.client) return [];
+		const predicate = (selection as Selection).predicate(this.client as MosaicClient);
+		if (predicate == null) return [];
+		// Mosaic returns an array for intersect/single mode (DivePlot's default),
+		// but a single OR-combined node for union mode. Normalize to array.
+		return Array.isArray(predicate) ? predicate : [predicate];
 	}
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
@@ -1319,9 +1258,13 @@ export class MarkLifecycle {
 	}
 
 	destroy(): void {
-		console.log(`💥 MarkLifecycle destroying for ${this.#markId}`);
+		// Destroy LODController (binned mode)
+		if (this.#lodController) {
+			this.#onLodController?.(null);
+			this.#lodController.destroy();
+			this.#lodController = null;
+		}
 
-		clearTimeout(this.#rebinTimeout!);
 		clearTimeout(this.#viewportDomainUpdateTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 

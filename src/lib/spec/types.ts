@@ -206,7 +206,7 @@ export interface LineMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	strokeWidth?: number;
 	dotRadius?: number;
 	curve?: CurveType;
-	optimize?: boolean | 'auto';
+	lod?: boolean | { dots?: { r?: number; threshold?: number } | false; decimate?: boolean | 'auto' };
 }
 
 export interface AreaYMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
@@ -221,6 +221,7 @@ export interface AreaYMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	stroke?: string | null; // CSS constant
 	strokeWidth?: number;
 	dotRadius?: number;
+	autoDots?: boolean;
 	curve?: CurveType;
 }
 
@@ -236,6 +237,7 @@ export interface AreaXMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	stroke?: string | null; // CSS constant
 	strokeWidth?: number;
 	dotRadius?: number;
+	autoDots?: boolean;
 	curve?: CurveType;
 }
 

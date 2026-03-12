@@ -33,7 +33,8 @@
 		CONSTANT_COLOR: 16, // vec4<f32>
 		FILL_OPACITY: 32, // f32
 		DOT_RADIUS: 36, // f32
-		SHOW_BOTTOM_DOTS: 40 // u32 (0 or 1)
+		SHOW_BOTTOM_DOTS: 40, // u32 (0 or 1)
+		FULL_DOMAIN_SPAN: 44 // f32
 	};
 
 	interface Props {
@@ -48,6 +49,7 @@
 		curve?: CurveType;
 		fillOpacity?: number;
 		dotRadius?: number;
+		fullDomainSpan?: number;
 		showBottomDots?: boolean;
 		orientation?: 'vertical' | 'horizontal';
 		colorMode?: number;
@@ -67,6 +69,7 @@
 		curve = 'linear',
 		fillOpacity = 0.5,
 		dotRadius = 0,
+		fullDomainSpan = 0,
 		showBottomDots = false,
 		orientation = 'vertical',
 		colorMode = 0,
@@ -127,7 +130,8 @@
     constantColor: vec4<f32>,
     fillOpacity: f32,
     dotRadius: f32,
-    showBottomDots: u32
+    showBottomDots: u32,
+    fullDomainSpan: f32
   };
   @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
 
@@ -135,7 +139,8 @@
     @builtin(position) position: vec4<f32>,
     @location(0) colorValue: f32,
     @location(1) alpha: f32,
-    @location(2) circleUV: vec2<f32>
+    @location(2) circleUV: vec2<f32>,
+    @location(3) circleRadius: f32
   };
 
   @group(1) @binding(0) var<storage, read> dimValues: array<f32>;
@@ -177,7 +182,7 @@
 
     // === DOT CIRCLES (vertices 6N..6N+5 top, 6N+6..6N+11 bottom) ===
     if (isCircle) {
-      if (markConstants.dotRadius <= 0.0 || instanceIdx >= pointCount) {
+      if (markConstants.dotRadius == 0.0 || instanceIdx >= pointCount) {
         var output: VertexOutput;
         output.position = DISCARD_POS;
         return output;
@@ -195,7 +200,34 @@
         return output;
       }
       let center = projectToPixels(makePoint(dim, boundary));
-      let circleR = markConstants.dotRadius * frameUniforms.devicePixelRatio;
+
+      var circleR: f32;
+      if (markConstants.dotRadius < 0.0) {
+        // Auto-dots: heuristic density fade (no M4 for Areas)
+        let baseR = abs(markConstants.dotRadius) * frameUniforms.devicePixelRatio;
+        // Select primary axis based on orientation
+        var viewSpan: f32;
+        var pixelSpan: f32;
+        if (markConstants.orientation == 0u) {
+          let scale = scaleParams[frameUniforms.xScaleIndex];
+          viewSpan = scale.p2 - scale.p1;
+          pixelSpan = (frameUniforms.rangeMax.x - frameUniforms.rangeMin.x)
+            * frameUniforms.devicePixelRatio;
+        } else {
+          let scale = scaleParams[frameUniforms.yScaleIndex];
+          viewSpan = scale.p2 - scale.p1;
+          pixelSpan = (frameUniforms.rangeMax.y - frameUniforms.rangeMin.y)
+            * frameUniforms.devicePixelRatio;
+        }
+        let frac = select(1.0, viewSpan / markConstants.fullDomainSpan,
+          markConstants.fullDomainSpan > 0.0);
+        let pointsInView = f32(markConstants.pointCount) * frac;
+        let avgSpacing = pixelSpan / max(pointsInView, 1.0);
+        let t = smoothstep(8.0, 30.0, avgSpacing);
+        circleR = baseR * t;
+      } else {
+        circleR = markConstants.dotRadius * frameUniforms.devicePixelRatio;
+      }
       let pos = center + quadCorner * circleR * 1.2;
 
       var output: VertexOutput;
@@ -203,6 +235,7 @@
       output.colorValue = colorValues[instanceIdx];
       output.alpha = 1.0;
       output.circleUV = quadCorner;
+      output.circleRadius = circleR;
       return output;
     }
 
@@ -302,6 +335,7 @@
     output.colorValue = colorValues[currIdx];
     output.alpha = markConstants.fillOpacity;
     output.circleUV = vec2<f32>(-2.0, -2.0);
+    output.circleRadius = 0.0;
     return output;
   }
 
@@ -324,8 +358,7 @@
     if (input.circleUV.x > -1.5) {
       let dist = length(input.circleUV);
       let sdf = dist - (1.0 / 1.2);
-      let circleR = markConstants.dotRadius * frameUniforms.devicePixelRatio;
-      let pixelSize = frameUniforms.devicePixelRatio / (circleR * 2.0);
+      let pixelSize = frameUniforms.devicePixelRatio / (input.circleRadius * 2.0);
       let circleAlpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
       finalAlpha *= circleAlpha;
       if (finalAlpha < 0.01) { discard; }
@@ -409,6 +442,7 @@
 			view.setFloat32(UNIFORM_OFFSETS.FILL_OPACITY, fillOpacity, LE);
 			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
 			view.setUint32(UNIFORM_OFFSETS.SHOW_BOTTOM_DOTS, showBottomDots ? 1 : 0, LE);
+			view.setFloat32(UNIFORM_OFFSETS.FULL_DOMAIN_SPAN, fullDomainSpan, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 		}

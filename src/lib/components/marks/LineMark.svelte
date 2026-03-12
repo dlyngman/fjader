@@ -16,13 +16,16 @@
 		resolveTip,
 		resolveSelection
 	} from './utils';
+	import { isNode } from '@uwdata/mosaic-sql';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
+	import { LODController } from '$lib/lod';
 	import type {
 		FieldRef,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
 		ConnectedTopologyProps,
+		LODConfig,
 		Coordinator,
 		ChartContext
 	} from '$lib/types';
@@ -34,7 +37,8 @@
 		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
-		optimize?: boolean | 'auto';
+		lod?: boolean | LODConfig;
+		onLodController?: (ctrl: LODController | null) => void;
 	}
 
 	let {
@@ -56,8 +60,9 @@
 		sort = null,
 		tooltip = true,
 		tooltipProximity,
-		optimize = 'auto',
-		tip = undefined
+		tip = undefined,
+		lod = true,
+		onLodController = undefined
 	}: Props = $props();
 
 	// Map user-facing aliases to axis-specific variants
@@ -190,26 +195,58 @@
 
 	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
 
-	// --- M4 DECIMATION ---
+	// --- LOD CONFIG RESOLUTION ---
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
-	const m4Active = $derived.by(() => {
-		if (optimize === false || faceted) return false;
-		// M4 uses linear domain math for bin assignment; disable for nonlinear scales
+	// Parse lod prop: boolean | LODConfig → resolved config values
+	const lodConfig = $derived.by(() => {
+		if (lod === false) return null;
+		const cfg = typeof lod === 'object' ? lod : {};
+		const dotsEnabled = cfg.dots !== false;
+		const dotsR = (dotsEnabled && typeof cfg.dots === 'object' ? cfg.dots.r : undefined)
+			?? (dotRadius > 0 ? dotRadius : 2.5);
+		const dotsThreshold = dotsEnabled && typeof cfg.dots === 'object'
+			? cfg.dots.threshold ?? 18
+			: 18;
+		const decimate = cfg.decimate ?? 'auto';
+		const onLODChange = cfg.onLODChange ?? null;
+		return { dotsEnabled, dotsR, dotsThreshold, decimate, onLODChange };
+	});
+
+	// TEMPORARY Phase 0 guard: LOD count queries use `String(x)` as a raw column
+	// name in SQL. Expression nodes (aggregates, bins, sql`...`) would produce
+	// invalid SQL. When LOD gains CTE-wrapping (proposal Section 3.3), this guard
+	// can be removed and expression nodes will work via the general counting path.
+	const lodEligible = !isNode(x);
+
+	// LODController is on by default — it owns density evaluation, M4 control,
+	// and auto-dots spring animation. Only disabled for expression x fields
+	// (pending CTE-wrapping) or explicit lod={false}.
+	const effectiveLod = lodEligible && lodConfig !== null;
+
+	// M4 created only when LODController is active and decimation isn't disabled.
+	// No LODController = no M4 (raw data passthrough, correct for sparse data).
+	const m4Eligible = $derived.by(() => {
+		if (!effectiveLod) return false;
+		if (lodConfig?.decimate === false || faceted) return false;
 		const xType = chartContext.scaleTypes?.x;
 		if (xType === 'log' || xType === 'symlog') return false;
-		if (optimize === true) return true;
-		// 'auto': activate when points exceed 10x pixel width
-		const pixels = chartContext.innerWidth;
-		const points = instanceCount;
-		return points > 0 && pixels > 0 && points > pixels * 10;
+		return true;
+	});
+
+	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
+	// via its frame callback — no reactive chain. We set 0 here as a placeholder.
+	// Without LOD: dotRadius > 0 shows fixed dots, 0 = no dots.
+	const effectiveDotRadius = $derived.by(() => {
+		if (effectiveLod && lodController) return 0; // LODController writes directly to GPU
+		return dotRadius;
 	});
 
 	let m4Decimator = $state(null);
 
 	$effect(() => {
-		if (m4Active && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
+		if (m4Eligible && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
 			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
 			m4Decimator = decimator;
 			return () => {
@@ -219,6 +256,42 @@
 		} else {
 			m4Decimator = null;
 		}
+	});
+
+	// --- LOD CONTROLLER ---
+	let lodController: LODController | null = $state(null);
+
+	$effect(() => {
+		if (!effectiveLod || !lodConfig || !setup || !coordinator || !gpuCoordinator) {
+			lodController?.destroy();
+			lodController = null;
+			onLodController?.(null);
+			return;
+		}
+		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
+			mode: 'line',
+			table,
+			xField: String(x),
+			setup,
+			baseR: lodConfig.dotsR,
+			dotsEnabled: lodConfig.dotsEnabled,
+			dotsThreshold: lodConfig.dotsThreshold,
+			decimate: lodConfig.decimate,
+			onLODChange: lodConfig.onLODChange
+		});
+		lodController = ctrl;
+		onLodController?.(ctrl);
+		return () => {
+			ctrl.destroy();
+			lodController = null;
+			onLodController?.(null);
+		};
+	});
+
+	// Sync M4 decimator to LODController — decoupled so M4 recreation
+	// (e.g. on resize) doesn't tear down the controller and lose state.
+	$effect(() => {
+		lodController?.setM4Decimator(m4Decimator);
 	});
 
 	// Configure M4 decimator when chart dimensions or series count change.
@@ -241,6 +314,14 @@
 			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
 			: 0;
 		m4Decimator.configure(numBins, numSeries, xScaleIndex);
+	});
+
+	// LODController registration with TooltipManager (for per-mark shift+scroll routing)
+	$effect(() => {
+		const tm = chartContext.tooltipManager;
+		if (!tm || !lodController) return;
+		tm.registerLodController(markId, lodController);
+		return () => tm.unregisterLodController(markId);
 	});
 
 	// Tooltip registration
@@ -266,6 +347,7 @@
 	});
 
 	onDestroy(() => {
+		lodController?.destroy();
 		m4Decimator?.destroy();
 		setup?.destroy();
 	});
@@ -283,10 +365,11 @@
 			colorScaleIndex={markColor.colorScaleIndex}
 			constantColor={markColor.constantColor}
 			{strokeWidth}
-			{dotRadius}
+			dotRadius={effectiveDotRadius}
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
-			m4Decimator={m4Active ? m4Decimator : null}
+			m4Decimator={m4Eligible ? m4Decimator : null}
+			{lodController}
 		/>
 	{/key}
 {:else if setup?.client?.error}

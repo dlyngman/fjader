@@ -1,9 +1,11 @@
 // src/lib/interactors/TooltipManager.svelte.ts
 
+import { Priority } from '@uwdata/mosaic-core';
 import type { Coordinator } from '@uwdata/mosaic-core';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import { isTemporalScale } from '$lib/scales/scale-categories';
+import type { LODController } from '$lib/lod';
 
 type DataRow = Record<string, unknown>;
 
@@ -68,6 +70,7 @@ export class TooltipManager {
 	#coordinator: Coordinator;
 	#scaleProvider: ScaleProvider;
 	#marks: Map<string, TooltipMarkRegistration> = new Map();
+	#lodControllers: Map<string, LODController> = new Map();
 	#queryPending: boolean = false;
 	#pendingX: number | null = null;
 	#pendingY: number | null = null;
@@ -176,12 +179,35 @@ export class TooltipManager {
 
 	unregisterMark(markId: string): void {
 		this.#marks.delete(markId);
+		this.#lodControllers.delete(markId);
 		if (this.currentMarkId === markId) {
 			this.visible = false;
 			this.currentPoints = [];
 			this.matchedPoints = [];
 			this.currentMarkId = null;
 		}
+	}
+
+	/**
+	 * Register an LODController for a mark (for per-mark shift+scroll routing).
+	 */
+	registerLodController(markId: string, controller: LODController): void {
+		this.#lodControllers.set(markId, controller);
+	}
+
+	/**
+	 * Unregister an LODController for a mark.
+	 */
+	unregisterLodController(markId: string): void {
+		this.#lodControllers.delete(markId);
+	}
+
+	/**
+	 * Get the LODController for the currently active (hovered) mark, if any.
+	 */
+	get currentLodController(): LODController | null {
+		if (!this.currentMarkId) return null;
+		return this.#lodControllers.get(this.currentMarkId) ?? null;
 	}
 
 	/**
@@ -232,7 +258,7 @@ export class TooltipManager {
 
 				queryPromises.push(
 					this.#coordinator
-						.query(sql)
+						.query(sql, { priority: Priority.Low })
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
 							return rows.length > 0 ? { markId, config, rows } : null;

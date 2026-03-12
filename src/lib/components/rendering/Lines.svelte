@@ -49,6 +49,7 @@
 		colorScaleIndex?: number;
 		constantColor?: [number, number, number, number];
 		m4Decimator?: M4Decimator | null;
+		lodController?: import('$lib/lod/LODController.svelte').LODController | null;
 	}
 
 	let {
@@ -65,7 +66,8 @@
 		colorMode = 0,
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
-		m4Decimator = null
+		m4Decimator = null,
+		lodController = null
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -122,7 +124,9 @@
     colorMode: u32,
     colorScaleIndex: u32,
     constantColor: vec4<f32>,
-    dotRadius: f32
+    dotRadius: f32,
+    _pad0: u32,
+    _pad1: u32
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
 
@@ -130,7 +134,8 @@
     @builtin(position) position: vec4<f32>,
     @location(0) colorValue: f32,
     @location(1) alpha: f32,
-    @location(2) circleUV: vec2<f32>
+    @location(2) circleUV: vec2<f32>,
+    @location(3) circleRadius: f32
   };
 
   @group(1) @binding(0) var<storage, read> xValues: array<f32>;
@@ -171,7 +176,10 @@
         return output;
       }
       let center = projectToPixels(vec2<f32>(x, y));
-      let circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio, markConstants.dotRadius > 0.0);
+
+      // JS computes dotRadius via LODController. 0 = no dots. >0 = show at this size.
+      let circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio,
+        markConstants.dotRadius > 0.0);
       let pos = center + quadPosition * circleR * 1.2;
 
       var output: VertexOutput;
@@ -179,6 +187,7 @@
       output.colorValue = colorValues[instanceIdx];
       output.alpha = 1.0;
       output.circleUV = quadPosition;
+      output.circleRadius = circleR;
       return output;
     }
 
@@ -273,6 +282,7 @@
     output.colorValue = colorValues[currIdx];
     output.alpha = 1.0;
     output.circleUV = vec2<f32>(-2.0, -2.0);
+    output.circleRadius = 0.0;
     return output;
   }
 
@@ -296,12 +306,7 @@
       let dist = length(input.circleUV);
       // Pixel-accurate AA matching Dots renderer
       let sdf = dist - (1.0 / 1.2);
-      let circleR = select(
-        markConstants.strokeWidth * frameUniforms.devicePixelRatio * 0.5,
-        markConstants.dotRadius * frameUniforms.devicePixelRatio,
-        markConstants.dotRadius > 0.0
-      );
-      let pixelSize = frameUniforms.devicePixelRatio / (circleR * 2.0);
+      let pixelSize = frameUniforms.devicePixelRatio / (input.circleRadius * 2.0);
       let circleAlpha = 1.0 - smoothstep(-pixelSize, pixelSize, sdf);
       finalAlpha *= circleAlpha;
       if (finalAlpha < 0.01) { discard; }
@@ -370,11 +375,12 @@
 			const view = new DataView(buffer);
 			const LE = true;
 
+			const rawCount = xData ? xData.length : 0;
+			// With drawIndirect, GPU controls instance count. pointCount in MarkConstants
+			// is used for bounds checking only — set to max of both modes.
 			const pointCount = m4Decimator?.configured
-				? m4Decimator.outputSize
-				: xData
-					? xData.length
-					: 0;
+				? Math.max(m4Decimator.outputSize, rawCount)
+				: rawCount;
 			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
 			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, pointCount, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
@@ -398,10 +404,37 @@
 		}
 	});
 
-	// Instance count = number of points (or M4 output size when decimating)
+	// Wire LODController render target — lets it write dotRadius directly to GPU buffer
+	$effect(() => {
+		if (!lodController || !renderer?.resourcesCreated) {
+			lodController?.clearRenderTarget();
+			return;
+		}
+
+		const constantsBuffer = renderer.getBuffer(BINDINGS.CONSTANTS);
+		const device = gpuCoordinator?.device;
+		if (!constantsBuffer || !device) return;
+
+		const r = renderer; // capture for closure
+		const f32Buf = new Float32Array(1); // pre-allocated, reused per frame
+		lodController.setRenderTarget(
+			(radius: number) => {
+				f32Buf[0] = radius;
+				device.queue.writeBuffer(constantsBuffer, UNIFORM_OFFSETS.DOT_RADIUS, f32Buf);
+			},
+			() => r.invalidateLayer()
+		);
+
+		return () => lodController?.clearRenderTarget();
+	});
+
+	// Instance count — with drawIndirect the GPU controls the actual count,
+	// but we still set a CPU-side value so the renderer.instanceCount === 0 guard works.
 	$effect(() => {
 		if (renderer?.resourcesCreated && xData && xData.length > 1) {
-			const count = m4Decimator?.configured ? m4Decimator.outputSize : xData.length;
+			const count = m4Decimator?.configured
+				? Math.max(m4Decimator.outputSize, xData.length)
+				: xData.length;
 			renderer.updateInstanceCount(count);
 		}
 	});
@@ -412,6 +445,9 @@
 			gpuCoordinator.removeComputeWork(m4ComputeKey);
 			return;
 		}
+
+		// Ensure decimator knows the vertex count for drawIndirect
+		m4Decimator.setVertexCount(quadVertexCount);
 
 		gpuCoordinator.registerComputeWork(m4ComputeKey, (commandEncoder, scaleBindGroup) => {
 			const xBuf = renderer.getBuffer(BINDINGS.X);
@@ -482,7 +518,11 @@
 			passEncoder.setBindGroup(1, m4Decimator.renderBindGroup);
 		}
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-		passEncoder.draw(quadVertexCount, renderer.instanceCount);
+		if (m4Decimator?.indirectBuffer) {
+			passEncoder.drawIndirect(m4Decimator.indirectBuffer, 0);
+		} else {
+			passEncoder.draw(quadVertexCount, renderer.instanceCount);
+		}
 	}
 
 	async function initializeLines() {
@@ -524,6 +564,11 @@
 			if (!colorValueData && xData) {
 				const defaultColor = new Float32Array(xData.length);
 				renderer.writeAttribute(BINDINGS.COLOR, defaultColor);
+			}
+
+			// Tell M4 decimator the vertex count for drawIndirect
+			if (m4Decimator) {
+				m4Decimator.setVertexCount(quadVertexCount);
 			}
 		} catch (error) {
 			console.error('Lines init failed:', error);

@@ -243,6 +243,36 @@ export interface ConnectedTopologyProps {
 }
 
 // ---------------------------------------------------------------------------
+// LOD (Level of Detail) configuration
+// ---------------------------------------------------------------------------
+
+/** Configuration for auto-dots behavior on line/area marks. */
+export interface LODDotsConfig {
+	/** Base dot radius in pixels. Default: dotRadius prop or 2.5. */
+	r?: number;
+	/** Avg pixel spacing at which dots reach full size (smoothstep upper edge). Default: 18. */
+	threshold?: number;
+}
+
+/** LOD state snapshot, passed to onLODChange callback. */
+export interface LODChangeState {
+	decimating: boolean;
+	dotRadius: number;
+	visibleCount: number;
+	density: number;
+}
+
+/** Object-form LOD configuration. */
+export interface LODConfig {
+	/** Auto-dots config, or false to disable dots while keeping decimation. */
+	dots?: LODDotsConfig | false;
+	/** Decimation behavior: 'auto' (density-based), true (always), false (never). Default: 'auto'. */
+	decimate?: boolean | 'auto';
+	/** Callback fired on LOD state transitions (decimation toggle, dots appear/disappear). */
+	onLODChange?: (state: LODChangeState) => void;
+}
+
+// ---------------------------------------------------------------------------
 // Chart context — the object set via setContext('chart', ...)
 // ---------------------------------------------------------------------------
 
@@ -345,6 +375,7 @@ export interface ChartContext {
 	unregisterScaleType: (dimension: 'x' | 'y', markId: string) => void;
 
 	readonly binStepMultiplier: number | undefined;
+	adjustBinMultiplier?: (delta: number) => void;
 
 	// Client registration
 	registerClient: (client: MosaicClient) => () => void;

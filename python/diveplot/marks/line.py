@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar
 
 from ._base import Mark
 
@@ -23,6 +23,6 @@ class LineMark(Mark):
     stroke_width: float | None = None
     dot_radius: float | None = None
     curve: CurveType | None = None
-    optimize: bool | Literal["auto"] | None = None
+    lod: bool | dict | None = None
     preferred_x_scale_type: ScaleType | None = None
     preferred_y_scale_type: ScaleType | None = None
