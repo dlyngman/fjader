@@ -13,6 +13,7 @@
 	import type { D3Scale } from '$lib/types';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
+	import CommandPalette from '$lib/interactors/CommandPalette.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
 
 	interface FacetingProps {
@@ -82,6 +83,7 @@
 	// the event handler (inversion) and the Svelte render pass (forward mapping).
 	let currentInnerX = $state<number | null>(null);
 	let currentInnerY = $state<number | null>(null);
+	let paletteOpen = $state(false);
 
 	$effect(() => {
 		if (containerWidth > 0) layout.updateWidth(containerWidth);
@@ -522,7 +524,17 @@
 		chartContext.onChartClick?.(event as unknown as PointerEvent);
 	}
 
+	function handleContextMenu(event: MouseEvent) {
+		event.preventDefault();
+		paletteOpen = !paletteOpen;
+	}
+
 	function handleKeyDown(event: KeyboardEvent) {
+		if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
+			event.preventDefault();
+			paletteOpen = !paletteOpen;
+			return;
+		}
 		if (!tooltipManager?.visible || tooltipManager.currentPoints.length <= 1) return;
 		if (event.code === 'BracketRight') {
 			event.preventDefault();
@@ -597,8 +609,7 @@
 
 	function handlePointerDown(event: PointerEvent) {
 		event.preventDefault();
-		const target = event.target as Element | null;
-		if (target && 'focus' in target) (target as HTMLElement).focus({ preventScroll: true });
+		chartCellEl?.focus({ preventScroll: true });
 
 		pointerBuffer.x = ptrX(event);
 		pointerBuffer.y = ptrY(event);
@@ -715,6 +726,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="chart-cell"
+	class:palette-open={paletteOpen}
 	bind:this={chartCellEl}
 	bind:clientWidth={containerWidth}
 	bind:clientHeight={containerHeight}
@@ -758,6 +770,7 @@
 				onpointercancel={handlePointerUp}
 				ondblclick={handleDoubleClick}
 				onclick={handleClick}
+			oncontextmenu={handleContextMenu}
 			>
 				<defs>
 					<clipPath id={layout.clipPathId}>
@@ -795,6 +808,8 @@
 			{#if tooltipManager}
 				<Tooltip />
 			{/if}
+
+			<CommandPalette bind:open={paletteOpen} />
 		{/if}
 	</div>
 </div>
@@ -811,6 +826,11 @@
 		will-change: transform;
 		outline: none;
 		isolation: isolate;
+	}
+
+	.chart-cell.palette-open {
+		contain: layout style;
+		overflow: visible;
 	}
 
 	.facet-label {

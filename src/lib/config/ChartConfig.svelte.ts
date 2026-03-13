@@ -13,6 +13,7 @@
 // on re-registration, preventing infinite loops.
 // =============================================================================
 
+import { SvelteMap } from 'svelte/reactivity';
 import { createOverridable, type Overridable } from './overridable.svelte';
 import type { Selection } from '@uwdata/mosaic-core';
 import type {
@@ -89,8 +90,8 @@ export class ChartConfig {
 	/** Overridable channels per mark, for reset support. */
 	#channels = new Map<string, Map<string, Overridable<unknown>>>();
 
-	/** Reactive entries — downstream reads trigger on property access. */
-	#entries: Map<string, MarkEntry> = $state(new Map());
+	/** Reactive entries — SvelteMap so iteration/size reads are tracked. */
+	#entries = new SvelteMap<string, MarkEntry>();
 
 	/** LOD controllers per mark — single registration point for palette + TooltipManager. */
 	#lodControllers = new Map<string, LODController>();
