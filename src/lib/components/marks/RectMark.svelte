@@ -2,6 +2,7 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Rects } from '../rendering';
+	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { expandBinForExtent } from '$lib/sql/bin';
 	import { isCategoricalScale } from '$lib/scales/scale-categories';
@@ -73,57 +74,88 @@
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const gpuCoordinator = getGPUContext();
 
 	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
+	// --- ChartConfig registration ---
+	const entry = chartContext.config.registerMark(markId, 'rect', {
+		table: () => table,
+		x: () => x,
+		x1: () => x1Prop,
+		x2: () => x2Prop,
+		y: () => y,
+		y1: () => y1Prop,
+		y2: () => y2Prop,
+		fill: () => fill,
+		scheme: () => scheme,
+		opacity: () => opacity,
+		transforms: () => transforms,
+		selection: () => selection,
+		limit: () => limit,
+		filterNulls: () => filterNulls,
+		preferredXScaleType: () => preferredXScaleType,
+		preferredYScaleType: () => preferredYScaleType,
+		padding: () => padding,
+		paddingInner: () => paddingInner,
+		paddingOuter: () => paddingOuter,
+		align: () => align,
+		inset: () => inset,
+		dx: () => dx,
+		dy: () => dy,
+		sort: () => sort,
+		tooltip: () => tooltip,
+		tip: () => tip
+	});
+
 	let setup = $state(null);
 
-	// --- INTERNAL BIN EXPANSION ---
+	// --- INTERNAL BIN EXPANSION --- reads from entry
 	const expandedX = $derived.by(() => {
-		if (x != null) return expandBinForExtent(x, 'x', 'rect');
-		return { x1: x1Prop, x2: x2Prop };
+		if (entry.x != null) return expandBinForExtent(entry.x, 'x', 'rect');
+		return { x1: entry.x1, x2: entry.x2 };
 	});
 	const ex1 = $derived(expandedX.x1 as FieldRef | null);
 	const ex2 = $derived(expandedX.x2 as FieldRef | null);
 
 	const expandedY = $derived.by(() => {
-		if (y != null) return expandBinForExtent(y, 'y', 'rect');
-		return { y1: y1Prop, y2: y2Prop };
+		if (entry.y != null) return expandBinForExtent(entry.y, 'y', 'rect');
+		return { y1: entry.y1, y2: entry.y2 };
 	});
 	const ey1 = $derived(expandedY.y1 as FieldRef | null);
 	const ey2 = $derived(expandedY.y2 as FieldRef | null);
 
-	// --- SCALE TYPE INFERENCE ---
+	// --- SCALE TYPE INFERENCE --- reads from entry
 	const effectiveXScaleType = $derived.by(() =>
-		inferMarkScaleType(ex1, table, preferredXScaleType)
+		inferMarkScaleType(ex1, entry.table, entry.preferredXScaleType)
 	);
 	const effectiveYScaleType = $derived.by(() =>
-		inferMarkScaleType(ey1, table, preferredYScaleType)
+		inferMarkScaleType(ey1, entry.table, entry.preferredYScaleType)
 	);
 
-	// 1. Color Logic
+	// 1. Color Logic — reads from entry
 	const markColor = new MarkColor(
-		() => fill,
-		() => scheme,
+		() => entry.fill,
+		() => entry.scheme,
 		'fill',
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// Band scale config (applies only when axis resolves to band)
+	// Band scale config (applies only when axis resolves to band) — reads from entry
 	const bandScaleConfig = $derived.by(() => {
 		const config: Record<string, unknown> = {};
-		if (padding != null) config.padding = padding;
-		if (paddingInner != null) config.paddingInner = paddingInner;
-		if (paddingOuter != null) config.paddingOuter = paddingOuter;
-		if (align != null) config.align = align;
+		if (entry.padding != null) config.padding = entry.padding;
+		if (entry.paddingInner != null) config.paddingInner = entry.paddingInner;
+		if (entry.paddingOuter != null) config.paddingOuter = entry.paddingOuter;
+		if (entry.align != null) config.align = entry.align;
 		return config;
 	});
 
-	// 2. Config
+	// 2. Config — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
 			x1: ex1,
@@ -133,7 +165,7 @@
 			...(markColor.selectField && { fill: markColor.selectField })
 		})
 	);
-	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
 	const config = $derived({
 		markType: 'rect',
@@ -161,15 +193,15 @@
 			x: ex1,
 			y: ey1
 		},
-		table,
-		selection: resolveSelection(selection),
-		transforms,
+		table: entry.table,
+		selection: resolveSelection(entry.selection),
+		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		clientOptions: { limit, filterNulls: filterNulls ? [ex1, ex2, ey1, ey2] : null },
+		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([ex1, ex2, ey1, ey2] as FieldRef[]) : null },
 		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
 		// (could be heatmap, 2D histogram, etc.). Use RectXMark/RectYMark for histograms.
-		sort: normalizeSortConfig(sort),
-		tooltip: tip === false ? false : tooltip
+		sort: normalizeSortConfig(entry.sort ?? null),
+		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -247,7 +279,7 @@
 
 	let opacityData = $derived(
 		resolveChannelData({
-			value: opacity,
+			value: entry.opacity,
 			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
@@ -258,21 +290,24 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId, transforms, markColor.selectField);
+		(void config, xScaleId, yScaleId);
 		untrack(() => {
+			if (setup) {
+				gpuCoordinator?.markForRetain(markId);
+			}
 			setup?.destroy();
 			setup = null;
 			// Gate on BOTH scale types being resolved
-			if (table && effectiveXScaleType && effectiveYScaleType) {
+			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
 				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
 	});
 
-	// Tooltip registration
+	// Tooltip registration — reads from entry
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
-		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 		tm.registerMark(
 			markId,
 			buildTooltipConfig({
@@ -292,6 +327,8 @@
 
 	onDestroy(() => {
 		setup?.destroy();
+		chartContext.config.unregisterMark(markId);
+		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>
 
@@ -308,9 +345,9 @@
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
 		dataVersion={setup?.client?.dataVersion || 0}
-		{inset}
-		{dx}
-		{dy}
+		inset={entry.inset ?? 0.5}
+		dx={entry.dx ?? 0}
+		dy={entry.dy ?? 0}
 	/>
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"

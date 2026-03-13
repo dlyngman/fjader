@@ -2,6 +2,7 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Dots } from '../rendering';
+	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
 		buildSelectFromChannels,
@@ -61,46 +62,76 @@
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const gpuCoordinator = getGPUContext();
 
 	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
+	// --- ChartConfig registration ---
+	// Each entry property is a writable $derived from the prop getter.
+	// Props flow through automatically; palette overrides stick until
+	// the prop changes upstream (then the override auto-clears).
+	const entry = chartContext.config.registerMark(markId, 'dot', {
+		table: () => table,
+		x: () => x,
+		y: () => y,
+		fill: () => fill,
+		scheme: () => scheme,
+		opacity: () => opacity,
+		r: () => r,
+		radiusRange: () => radiusRange,
+		transforms: () => transforms,
+		selection: () => selection,
+		limit: () => limit,
+		filterNulls: () => filterNulls,
+		preferredXScaleType: () => preferredXScaleType,
+		preferredYScaleType: () => preferredYScaleType,
+		sort: () => sort,
+		tooltip: () => tooltip,
+		tooltipProximity: () => tooltipProximity,
+		tip: () => tip
+	});
+
 	let setup = $state(null);
 
-	// 0. Scale Type Inference
-	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
-	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
+	// 0. Scale Type Inference — reads from entry
+	const effectiveXScaleType = $derived.by(() =>
+		inferMarkScaleType(entry.x, entry.table, entry.preferredXScaleType)
+	);
+	const effectiveYScaleType = $derived.by(() =>
+		inferMarkScaleType(entry.y, entry.table, entry.preferredYScaleType)
+	);
 
-	// 1. Color Logic
+	// 1. Color Logic — reads from entry
 	const markColor = new MarkColor(
-		() => fill,
-		() => scheme,
+		() => entry.fill,
+		() => entry.scheme,
 		'fill',
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// 1b. Size Logic
+	// 1b. Size Logic — reads from entry
 	const markSize = new MarkSize(
-		() => r,
-		() => radiusRange,
+		() => entry.r,
+		() => entry.radiusRange,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// 2. Config
+	// 2. Config — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
-			x,
-			y,
+			x: entry.x,
+			y: entry.y,
 			...(markColor.selectField && { fill: markColor.selectField }),
 			...(markSize.selectField && { r: markSize.selectField })
 		})
 	);
-	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
 	const config = $derived({
 		markType: 'dot',
@@ -117,28 +148,31 @@
 				: null
 		},
 		inferredScaleColumns: {
-			x: x, // X scale uses x column
-			y: y // Y scale uses y column
+			x: entry.x,
+			y: entry.y
 		},
-		table,
-		selection: resolveSelection(selection),
-		transforms,
+		table: entry.table,
+		selection: resolveSelection(entry.selection),
+		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
-		sort: normalizeSortConfig(sort),
-		tooltip: tip === false ? false : tooltip
+		clientOptions: {
+			limit: entry.limit,
+			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
+		},
+		sort: normalizeSortConfig(entry.sort ?? null),
+		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived(computeInstanceCount(setup?.data, x, y));
+	let instanceCount = $derived(computeInstanceCount(setup?.data, entry.x, entry.y));
 
-	// --- DATA RESOLUTION ---
+	// --- DATA RESOLUTION --- reads from entry
 
 	let xData = $derived.by(() =>
 		resolveChannelData({
-			value: x,
+			value: entry.x,
 			channel: 'x',
 			dataAccessor: setup?.data,
 			instanceCount,
@@ -150,7 +184,7 @@
 
 	let yData = $derived.by(() =>
 		resolveChannelData({
-			value: y,
+			value: entry.y,
 			channel: 'y',
 			dataAccessor: setup?.data,
 			instanceCount,
@@ -165,17 +199,19 @@
 		// Field mode: data comes from MarkSize (raw values, shader does scaling)
 		if (markSize.sizeMode === 1) return markSize.data;
 		// Function mode
-		if (typeof r === 'function') {
+		if (typeof entry.r === 'function') {
 			const xArr = setup?.data?.getColumn('x');
 			const yArr = setup?.data?.getColumn('y');
 			if (!xArr || !yArr) return null;
+			const rFn = entry.r;
 			const radii = new Float32Array(instanceCount);
-			for (let i = 0; i < instanceCount; i++) radii[i] = r({ x: xArr[i], y: yArr[i] });
+			for (let i = 0; i < instanceCount; i++)
+				radii[i] = rFn({ x: xArr[i], y: yArr[i] });
 			return radii;
 		}
 		// Constant or column name
 		return resolveChannelData({
-			value: r,
+			value: entry.r,
 			channel: 'r',
 			dataAccessor: setup?.data,
 			instanceCount,
@@ -185,7 +221,7 @@
 
 	let opacityData = $derived(
 		resolveChannelData({
-			value: opacity,
+			value: entry.opacity,
 			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
@@ -198,22 +234,21 @@
 	$effect(() => {
 		(void config, xScaleId, yScaleId);
 		untrack(() => {
+			if (setup) {
+				gpuCoordinator?.markForRetain(markId);
+			}
 			setup?.destroy();
 			setup = null;
-			// Don't create MarkLifecycle until scale type inference has resolved.
-			// When effectiveXScaleType or effectiveYScaleType is null (schema pending),
-			// config.scaleRequirements will have null entries — skip creation to avoid
-			// a throwaway instance that gets immediately destroyed when schema arrives.
-			if (table && effectiveXScaleType && effectiveYScaleType) {
+			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
 				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
 	});
 
-	// Tooltip registration
+	// Tooltip registration — reads from entry
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
-		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 		tm.registerMark(
 			markId,
 			buildTooltipConfig({
@@ -224,8 +259,8 @@
 				colorColumn: 'fill',
 				bandAxes: { x: true, y: true },
 				markColor,
-				proximityAxis: tooltipProximity,
-				constantRadius: typeof r === 'number' ? r : undefined,
+				proximityAxis: entry.tooltipProximity,
+				constantRadius: typeof entry.r === 'number' ? entry.r : undefined,
 				sizeScaleState: markSize.scaleState,
 				displayFields: resolvedTip.displayFields
 			})
@@ -235,11 +270,14 @@
 
 	onDestroy(() => {
 		setup?.destroy();
+		chartContext.config.unregisterMark(markId);
+		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && markSize.ready && xData && yData}
 	<Dots
+		{markId}
 		{xData}
 		{yData}
 		{radiusData}
@@ -253,16 +291,4 @@
 		facetData={setup?.facetData}
 		dataVersion={setup?.client?.dataVersion || 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
-{:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Initializing mark...</text
-	>
 {/if}

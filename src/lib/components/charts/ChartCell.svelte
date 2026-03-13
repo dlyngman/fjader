@@ -7,6 +7,7 @@
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 	import type { ChartContext, Coordinator } from '$lib/types';
 	import type { ChartScales } from '$lib/scales/ChartScales.svelte';
+	import type { ChartConfig } from '$lib/config';
 	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { D3Scale } from '$lib/types';
@@ -34,6 +35,7 @@
 		margin?: Margin;
 		height?: number;
 		scales: ChartScales;
+		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
 		coordinator: Coordinator;
@@ -53,6 +55,7 @@
 		margin = { top: 30, right: 50, bottom: 35, left: 75 },
 		height = 250,
 		scales,
+		chartConfig,
 		facetingProps = { fx: null, isFaceted: false, facetChartIds: [], facetBandScale: null },
 		gpuCoordinator,
 		coordinator,
@@ -406,6 +409,9 @@
 		get facetBandScale() {
 			return facetingProps.facetBandScale;
 		},
+
+		// Configuration store — from parent ChartContainer
+		config: chartConfig,
 
 		// Pointer hooks — cell-local (mutable slots set by interactors)
 		onChartClick: null,

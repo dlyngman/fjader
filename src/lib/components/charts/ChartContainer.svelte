@@ -4,6 +4,7 @@
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
+	import { ChartConfig } from '$lib/config';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ChartContext, Coordinator, FieldRef } from '$lib/types';
@@ -161,6 +162,9 @@
 			}
 		};
 	});
+
+	// --- ChartConfig (reactive configuration store) ---
+	const chartConfig = new ChartConfig();
 
 	// --- Marks-only context for hidden container (faceted mode) ---
 	// In non-faceted mode, ChartCell overrides this with a full context.
@@ -326,6 +330,8 @@
 			return facetBandScale;
 		},
 
+		config: chartConfig,
+
 		onChartClick: null,
 		onInteractorPointerDown: null,
 		onInteractorPointerMove: null,
@@ -363,6 +369,7 @@
 						facetLabel={cat}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
+						{chartConfig}
 						{facetingProps}
 						{gpuCoordinator}
 						{coordinator}
@@ -384,6 +391,7 @@
 			cellChartId={layout.chartId}
 			margin={cellMargin}
 			{scales}
+			{chartConfig}
 			{facetingProps}
 			{gpuCoordinator}
 			{coordinator}

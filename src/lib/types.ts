@@ -6,6 +6,7 @@
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, MosaicClient } from '@uwdata/mosaic-core';
 import type { DataAccessor } from '$lib/data/DataAccessor';
+import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -389,6 +390,9 @@ export interface ChartContext {
 	readonly isFaceted: boolean;
 	readonly facetChartIds: string[];
 	readonly facetBandScale: BandScaleState | null;
+
+	// Configuration store
+	readonly config: ChartConfig;
 
 	// Pointer hooks (mutable slots set by interactors)
 	onChartClick: ((event: PointerEvent) => void) | null;

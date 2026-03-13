@@ -2,6 +2,7 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Areas, Lines } from '../rendering';
+	import { getGPUContext } from '$lib/gpu';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -68,51 +69,83 @@
 		tip = undefined
 	}: Props = $props();
 
-	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
-	const hasExplicitBounds = $derived(x1Prop !== undefined || x2Prop !== undefined);
-	let x1 = $derived(x1Prop ?? 0);
-	let x2 = $derived(x2Prop ?? x);
-	let effectiveTransforms = $derived(withImplicitStack(transforms, hasExplicitBounds, 'x'));
-
-	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)
-	const effectiveCurve = $derived(
-		curve === 'monotone' ? 'monotone-y' : curve === 'bump' ? 'bump-y' : curve
-	);
-
 	const markId = generateMarkId('areax');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const gpuCoordinator = getGPUContext();
 
 	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
+	// --- ChartConfig registration ---
+	const entry = chartContext.config.registerMark(markId, 'areax', {
+		table: () => table,
+		y: () => y,
+		x: () => x,
+		x1: () => x1Prop,
+		x2: () => x2Prop,
+		fill: () => fill,
+		z: () => z,
+		scheme: () => scheme,
+		curve: () => curve,
+		fillOpacity: () => fillOpacity,
+		stroke: () => stroke,
+		dotRadius: () => dotRadius,
+		autoDots: () => autoDots,
+		strokeWidth: () => strokeWidth,
+		transforms: () => transforms,
+		selection: () => selection,
+		limit: () => limit,
+		filterNulls: () => filterNulls,
+		preferredXScaleType: () => preferredXScaleType,
+		preferredYScaleType: () => preferredYScaleType,
+		sort: () => sort,
+		tooltip: () => tooltip,
+		tooltipProximity: () => tooltipProximity,
+		tip: () => tip
+	});
+
+	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
+	const hasExplicitBounds = $derived(entry.x1 !== undefined || entry.x2 !== undefined);
+	let x1 = $derived(entry.x1 ?? 0);
+	let x2 = $derived(entry.x2 ?? entry.x);
+	let effectiveTransforms = $derived(withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x'));
+
+	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)
+	const effectiveCurve = $derived.by(() => {
+		const c = entry.curve ?? 'linear';
+		return c === 'monotone' ? 'monotone-y' : c === 'bump' ? 'bump-y' : c;
+	});
+
 	let setup = $state(null);
 
-	// 0. Scale Type Inference
+	// 0. Scale Type Inference — reads from entry
 	// x2 is the value column for X scale inference (x1 is baseline)
 	const effectiveXScaleType = $derived.by(() =>
-		inferMarkScaleType(x2 ?? x, table, preferredXScaleType)
+		inferMarkScaleType(x2 ?? entry.x, entry.table, entry.preferredXScaleType)
 	);
-	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
+	const effectiveYScaleType = $derived.by(() =>
+		inferMarkScaleType(entry.y, entry.table, entry.preferredYScaleType)
+	);
 
 	// Series grouping: z overrides fill for grouping (Observable Plot convention)
-	const seriesChannelKey = z != null ? 'z' : 'fill';
+	const seriesChannelKey = entry.z != null ? 'z' : 'fill';
 	const markSeries = new MarkSeries(
-		() => z ?? fill,
+		() => entry.z ?? entry.fill,
 		seriesChannelKey,
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// Color: fill determines area color
+	// Color: fill determines area color — reads from entry
 	const markColor = new MarkColor(
-		() => fill,
-		() => scheme,
+		() => entry.fill,
+		() => entry.scheme,
 		'fill',
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
@@ -128,20 +161,20 @@
 	});
 
 	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));
-	let showBothBoundaries = $derived(typeof x1Prop === 'string' && !hasStackTransform);
+	let showBothBoundaries = $derived(typeof entry.x1 === 'string' && !hasStackTransform);
 
-	// Config with _connectedConfig for automatic ORDER BY (dimension is y)
+	// Config with _connectedConfig for automatic ORDER BY (dimension is y) — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
 			x: x2, // Alias for tooltip nearest-point query (expects 'x' column)
-			y,
+			y: entry.y,
 			x1,
 			x2,
 			...(markColor.selectField && { fill: markColor.selectField }),
-			...(z != null && markSeries.selectField && { z: markSeries.selectField })
+			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField })
 		})
 	);
-	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
 	const config = $derived({
 		markType: 'areax',
@@ -159,10 +192,10 @@
 		},
 		inferredScaleColumns: {
 			x: x2, // X scale uses the value column
-			y: y
+			y: entry.y
 		},
-		table,
-		selection: resolveSelection(selection),
+		table: entry.table,
+		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		// Connected topology - ordered by dimension (y)
@@ -170,24 +203,24 @@
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'y'
 		},
-		clientOptions: { limit, filterNulls: filterNulls ? [y, x1, x2] : null },
+		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([entry.y, x1, x2] as FieldRef[]) : null },
 		// Area charts with aggregates should include zero in the domain
 		zeroBaseline: hasAggregateX ? { x: true } : null,
-		sort: normalizeSortConfig(sort),
-		tooltip: tip === false ? false : tooltip
+		sort: normalizeSortConfig(entry.sort ?? null),
+		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived(computeInstanceCount(setup?.data, y, x2));
+	let instanceCount = $derived(computeInstanceCount(setup?.data, entry.y, x2));
 
 	// --- DATA RESOLUTION ---
 
 	// Y data: the independent dimension
 	let yData = $derived.by(() =>
 		resolveChannelData({
-			value: y,
+			value: entry.y,
 			channel: 'y',
 			dataAccessor: setup?.data,
 			instanceCount
@@ -222,14 +255,15 @@
 
 	// Stroke outline color: parse CSS color string, or inherit from fill color
 	const strokeConstantColor = $derived.by(() => {
-		if (stroke) return parseColorToRGBA(stroke);
+		if (entry.stroke) return parseColorToRGBA(entry.stroke as string);
 		return markColor.constantColor;
 	});
 
 	// Auto-dots: negative dotRadius signals density-based fade to the vertex shader
 	const effectiveDotRadius = $derived.by(() => {
-		if (!autoDots) return dotRadius;
-		const baseR = dotRadius > 0 ? dotRadius : 2.5;
+		const dr = entry.dotRadius ?? 0;
+		if (!entry.autoDots) return dr;
+		const baseR = dr > 0 ? dr : 2.5;
 		return -baseR;
 	});
 
@@ -246,18 +280,21 @@
 	$effect(() => {
 		(void config, xScaleId, yScaleId);
 		untrack(() => {
+			if (setup) {
+				gpuCoordinator?.markForRetain(markId);
+			}
 			setup?.destroy();
 			setup = null;
-			if (table && effectiveXScaleType && effectiveYScaleType) {
+			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
 				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
 	});
 
-	// Tooltip registration
+	// Tooltip registration — reads from entry
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
-		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 
 		tm.registerMark(
 			markId,
@@ -270,8 +307,8 @@
 				// Stacked areas: compute nearest-point distance against the stacked right (x1)
 				...(hasStackTransform && { columns: { x: 'x1' } }),
 				markColor,
-				proximityAxis: tooltipProximity,
-				constantRadius: dotRadius ? Number(dotRadius) : undefined,
+				proximityAxis: entry.tooltipProximity,
+				constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
 				displayFields: resolvedTip.displayFields
 			})
 		);
@@ -280,6 +317,8 @@
 
 	onDestroy(() => {
 		setup?.destroy();
+		chartContext.config.unregisterMark(markId);
+		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>
 
@@ -295,7 +334,7 @@
 			colorMode={markColor.colorMode}
 			colorScaleIndex={markColor.colorScaleIndex}
 			constantColor={markColor.constantColor}
-			{fillOpacity}
+			fillOpacity={entry.fillOpacity ?? 0.5}
 			dotRadius={effectiveDotRadius}
 			{fullDomainSpan}
 			showBottomDots={showBothBoundaries}
@@ -303,17 +342,17 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 		/>
-		{#if strokeWidth > 0}
+		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines
 				xData={xRightData}
 				{yData}
 				{seriesData}
 				curve={effectiveCurve}
-				colorValueData={stroke ? null : markColor.data}
-				colorMode={stroke ? 0 : markColor.colorMode}
-				colorScaleIndex={stroke ? 0 : markColor.colorScaleIndex}
+				colorValueData={entry.stroke ? null : markColor.data}
+				colorMode={entry.stroke ? 0 : markColor.colorMode}
+				colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
 				constantColor={strokeConstantColor}
-				{strokeWidth}
+				strokeWidth={entry.strokeWidth ?? 0}
 				zIndex={1}
 				facetData={setup?.facetData}
 				dataVersion={setup?.client?.dataVersion || 0}
@@ -324,11 +363,11 @@
 					{yData}
 					{seriesData}
 					curve={effectiveCurve}
-					colorValueData={stroke ? null : markColor.data}
-					colorMode={stroke ? 0 : markColor.colorMode}
-					colorScaleIndex={stroke ? 0 : markColor.colorScaleIndex}
+					colorValueData={entry.stroke ? null : markColor.data}
+					colorMode={entry.stroke ? 0 : markColor.colorMode}
+					colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
 					constantColor={strokeConstantColor}
-					{strokeWidth}
+					strokeWidth={entry.strokeWidth ?? 0}
 					zIndex={1}
 					facetData={setup?.facetData}
 					dataVersion={setup?.client?.dataVersion || 0}

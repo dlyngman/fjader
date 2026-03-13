@@ -66,9 +66,10 @@
 	}: Props = $props();
 
 	// Map user-facing aliases to axis-specific variants
-	const effectiveCurve = $derived(
-		curve === 'monotone' ? 'monotone-x' : curve === 'bump' ? 'bump-x' : curve
-	);
+	const effectiveCurve = $derived.by(() => {
+		const c = entry.curve ?? 'linear';
+		return c === 'monotone' ? 'monotone-x' : c === 'bump' ? 'bump-x' : c;
+	});
 
 	const markId = generateMarkId('line');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
@@ -78,45 +79,72 @@
 	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
+	// --- ChartConfig registration ---
+	const entry = chartContext.config.registerMark(markId, 'line', {
+		table: () => table,
+		x: () => x,
+		y: () => y,
+		stroke: () => stroke,
+		z: () => z,
+		scheme: () => scheme,
+		curve: () => curve,
+		strokeWidth: () => strokeWidth,
+		dotRadius: () => dotRadius,
+		transforms: () => transforms,
+		selection: () => selection,
+		limit: () => limit,
+		filterNulls: () => filterNulls,
+		preferredXScaleType: () => preferredXScaleType,
+		preferredYScaleType: () => preferredYScaleType,
+		sort: () => sort,
+		tooltip: () => tooltip,
+		tooltipProximity: () => tooltipProximity,
+		tip: () => tip,
+		lod: () => lod
+	});
+
 	let setup = $state(null);
 
-	// 0. Scale Type Inference
-	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
-	const effectiveYScaleType = $derived.by(() => inferMarkScaleType(y, table, preferredYScaleType));
+	// 0. Scale Type Inference — reads from entry
+	const effectiveXScaleType = $derived.by(() =>
+		inferMarkScaleType(entry.x, entry.table, entry.preferredXScaleType)
+	);
+	const effectiveYScaleType = $derived.by(() =>
+		inferMarkScaleType(entry.y, entry.table, entry.preferredYScaleType)
+	);
 
 	// Series grouping: z overrides stroke for grouping
-	const seriesChannelKey = z != null ? 'z' : 'stroke';
+	const seriesChannelKey = entry.z != null ? 'z' : 'stroke';
 	const markSeries = new MarkSeries(
-		() => z ?? stroke,
+		() => entry.z ?? entry.stroke,
 		seriesChannelKey,
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// Color: stroke determines line color
-	// (stroke="steelblue" → constant color, stroke="species" → color by species)
+	// Color: stroke determines line color — reads from entry
 	const markColor = new MarkColor(
-		() => stroke,
-		() => scheme,
+		() => entry.stroke,
+		() => entry.scheme,
 		'stroke',
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
 	);
 
-	// Config with _connectedConfig for automatic ORDER BY
+	// Config with _connectedConfig for automatic ORDER BY — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
-			x,
-			y,
+			x: entry.x,
+			y: entry.y,
 			...(markColor.selectField && { stroke: markColor.selectField }),
-			...(z != null && markSeries.selectField && { z: markSeries.selectField })
+			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField })
 		})
 	);
-	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
 	const config = $derived({
 		markType: 'line',
@@ -133,12 +161,12 @@
 				: null
 		},
 		inferredScaleColumns: {
-			x: x,
-			y: y
+			x: entry.x,
+			y: entry.y
 		},
-		table,
-		selection: resolveSelection(selection),
-		transforms,
+		table: entry.table,
+		selection: resolveSelection(entry.selection),
+		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
@@ -146,21 +174,21 @@
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'x'
 		},
-		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
-		sort: normalizeSortConfig(sort),
-		tooltip: tip === false ? false : tooltip
+		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null },
+		sort: normalizeSortConfig(entry.sort ?? null),
+		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
 
-	let instanceCount = $derived(computeInstanceCount(setup?.data, x, y));
+	let instanceCount = $derived(computeInstanceCount(setup?.data, entry.x, entry.y));
 
 	// --- DATA RESOLUTION ---
 
 	let xData = $derived.by(() =>
 		resolveChannelData({
-			value: x,
+			value: entry.x,
 			channel: 'x',
 			dataAccessor: setup?.data,
 			instanceCount
@@ -169,7 +197,7 @@
 
 	let yData = $derived.by(() =>
 		resolveChannelData({
-			value: y,
+			value: entry.y,
 			channel: 'y',
 			dataAccessor: setup?.data,
 			instanceCount
@@ -184,10 +212,13 @@
 	$effect(() => {
 		(void config, xScaleId, yScaleId);
 		untrack(() => {
+			if (setup) {
+				gpuCoordinator?.markForRetain(markId);
+			}
 			setup?.destroy();
 			setup = null;
 			// Don't create MarkLifecycle until scale type inference has resolved.
-			if (table && effectiveXScaleType && effectiveYScaleType) {
+			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
 				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
 			}
 		});
@@ -198,14 +229,16 @@
 	// --- LOD CONFIG RESOLUTION ---
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
+	const entryLod = $derived(entry.lod);
 
 	// Parse lod prop: boolean | LODConfig → resolved config values
 	const lodConfig = $derived.by(() => {
-		if (lod === false) return null;
-		const cfg = typeof lod === 'object' ? lod : {};
+		if (entryLod === false) return null;
+		const cfg = typeof entryLod === 'object' ? entryLod : {};
+		const dr = entry.dotRadius ?? 0;
 		const dotsEnabled = cfg.dots !== false;
 		const dotsR = (dotsEnabled && typeof cfg.dots === 'object' ? cfg.dots.r : undefined)
-			?? (dotRadius > 0 ? dotRadius : 2.5);
+			?? (dr > 0 ? dr : 2.5);
 		const dotsThreshold = dotsEnabled && typeof cfg.dots === 'object'
 			? cfg.dots.threshold ?? 18
 			: 18;
@@ -218,7 +251,7 @@
 	// name in SQL. Expression nodes (aggregates, bins, sql`...`) would produce
 	// invalid SQL. When LOD gains CTE-wrapping (proposal Section 3.3), this guard
 	// can be removed and expression nodes will work via the general counting path.
-	const lodEligible = !isNode(x);
+	const lodEligible = !isNode(entry.x);
 
 	// LODController is on by default — it owns density evaluation, M4 control,
 	// and auto-dots spring animation. Only disabled for expression x fields
@@ -240,7 +273,7 @@
 	// Without LOD: dotRadius > 0 shows fixed dots, 0 = no dots.
 	const effectiveDotRadius = $derived.by(() => {
 		if (effectiveLod && lodController) return 0; // LODController writes directly to GPU
-		return dotRadius;
+		return entry.dotRadius ?? 0;
 	});
 
 	let m4Decimator = $state(null);
@@ -270,8 +303,8 @@
 		}
 		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
 			mode: 'line',
-			table,
-			xField: String(x),
+			table: entry.table,
+			xField: String(entry.x),
 			setup,
 			baseR: lodConfig.dotsR,
 			dotsEnabled: lodConfig.dotsEnabled,
@@ -324,10 +357,10 @@
 		return () => tm.unregisterLodController(markId);
 	});
 
-	// Tooltip registration
+	// Tooltip registration — reads from entry
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
-		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 
 		tm.registerMark(
 			markId,
@@ -338,8 +371,8 @@
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'stroke',
 				markColor,
-				proximityAxis: tooltipProximity,
-				constantRadius: dotRadius ? Number(dotRadius) : undefined,
+				proximityAxis: entry.tooltipProximity,
+				constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
 				displayFields: resolvedTip.displayFields
 			})
 		);
@@ -350,6 +383,8 @@
 		lodController?.destroy();
 		m4Decimator?.destroy();
 		setup?.destroy();
+		chartContext.config.unregisterMark(markId);
+		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>
 
@@ -364,7 +399,7 @@
 			colorMode={markColor.colorMode}
 			colorScaleIndex={markColor.colorScaleIndex}
 			constantColor={markColor.constantColor}
-			{strokeWidth}
+			strokeWidth={entry.strokeWidth ?? 2}
 			dotRadius={effectiveDotRadius}
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
