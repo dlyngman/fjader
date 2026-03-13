@@ -11,7 +11,10 @@
 		RectYMark,
 		WebGPUCanvas,
 		Grid,
-		Crosshair
+		Crosshair,
+		AxisLeft,
+		AxisBottom,
+		MarginLabel
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 </script>
@@ -19,15 +22,21 @@
 <div class="test-page">
 	<h2>Command Palette — All Mark Types</h2>
 	<p class="instructions">
-		Right-click any chart to open the palette. Verify: channel list, column assignment,
-		preview-on-hover, clear, reset all, Escape to cancel, Cmd+Z to undo.
+		Right-click any chart to open the palette. Tab bar at top shows marks + Chart tab.
+		Arrow keys navigate channels, Right/Enter expands, Left/Escape collapses.
+		h/j/k/l in tabs and channels zones. Chart tab shows scale type overrides.
 	</p>
 
 	<div class="charts-grid">
 		<div class="chart-cell">
 			<h3>DotsMark</h3>
 			<div class="chart">
-				<ChartContainer xLabel="bill_length" yLabel="bill_depth">
+				<ChartContainer xLabel="Bill Length (mm)" yLabel="Bill Depth (mm)">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -46,7 +55,12 @@
 		<div class="chart-cell">
 			<h3>LineMark</h3>
 			<div class="chart">
-				<ChartContainer xLabel="x" yLabel="y">
+				<ChartContainer xLabel="Time Step" yLabel="Amplitude">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -65,7 +79,12 @@
 		<div class="chart-cell">
 			<h3>BarMarkY</h3>
 			<div class="chart">
-				<ChartContainer xLabel="species" yLabel="body_mass">
+				<ChartContainer xLabel="Species" yLabel="Body Mass (g)">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -84,7 +103,12 @@
 		<div class="chart-cell">
 			<h3>BarMarkX</h3>
 			<div class="chart">
-				<ChartContainer xLabel="body_mass" yLabel="species">
+				<ChartContainer xLabel="Body Mass (g)" yLabel="Species">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -103,7 +127,12 @@
 		<div class="chart-cell">
 			<h3>AreaMarkY</h3>
 			<div class="chart">
-				<ChartContainer xLabel="x" yLabel="y">
+				<ChartContainer xLabel="Time Step" yLabel="Signal">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -122,7 +151,12 @@
 		<div class="chart-cell">
 			<h3>AreaMarkX</h3>
 			<div class="chart">
-				<ChartContainer xLabel="y" yLabel="x">
+				<ChartContainer xLabel="Signal" yLabel="Time Step">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -139,9 +173,64 @@
 		</div>
 
 		<div class="chart-cell">
+			<h3>Multi-mark (Dots + Line)</h3>
+			<div class="chart">
+				<ChartContainer xLabel="Step" yLabel="Value">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<DotsMark table="timeseries" x="x" y="y" fill="series" r={3} />
+								<LineMark table="timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+
+		<div class="chart-cell">
+			<h3>Multi-mark (Dot + Dot — same type)</h3>
+			<div class="chart">
+				<ChartContainer xLabel="Bill Length (mm)" yLabel="Bill Depth / Body Mass">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
+								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="island" r={2} />
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+
+		<div class="chart-cell">
 			<h3>RectYMark (histogram)</h3>
 			<div class="chart">
-				<ChartContainer xLabel="bill_length" yLabel="count">
+				<ChartContainer xLabel="Bill Length (mm)" yLabel="Count">
+					{#snippet background()}
+						<MarginLabel />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}

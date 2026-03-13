@@ -3,8 +3,14 @@
 	import type { ChartContext } from '$lib/types';
 	import type { MarkEntry } from '$lib/config/ChartConfig.svelte';
 	import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
-	import { getAssignableChannels, getCompatibleColumns } from './palette-channels';
-	import type { ColumnOption } from './palette-channels';
+	import {
+		getAssignableChannels,
+		getCompatibleColumns,
+		getCompatibleScaleTypes,
+		CHART_CHANNELS,
+		CHART_CHANNEL_TO_PROP
+	} from './palette-channels';
+	import type { ChartChannel } from './palette-channels';
 
 	interface Props {
 		open: boolean;
@@ -14,51 +20,122 @@
 
 	const chartContext = getContext<ChartContext>('chart');
 
-	// --- Internal state ---
-	let mode: 'channel-select' | 'column-select' = $state('channel-select');
-	let selectedChannel: string | null = $state(null);
-	let filterText: string = $state('');
-	let highlightIndex: number = $state(0);
+	// ---- Tab types ----
+	type TabItem = { kind: 'mark'; entry: MarkEntry } | { kind: 'chart' };
+
+	// ---- State ----
+	let activeTabIndex = $state(0);
+	let focusZone: 'tabs' | 'channels' | 'values' = $state('channels');
+	let channelHighlight = $state(0);
+	let expandedChannel: string | null = $state(null);
+	let valueHighlight = $state(0);
+	let filterText = $state('');
 	let checkpointed = false;
+	let originalColumnName: string | null = $state(null);
+
+	// When true, hover highlights are suppressed until mouse moves
+	let keyboardNav = $state(false);
+
+	// DOM refs
 	let filterInput: HTMLInputElement | null = $state(null);
 	let panelEl: HTMLDivElement | null = $state(null);
 
-	// --- Target mark resolution ---
-	const targetEntry: MarkEntry | null = $derived.by(() => {
+	// ---- Derived: tabs ----
+	const tabList: TabItem[] = $derived.by(() => {
+		const tabs: TabItem[] = [];
+		for (const entry of chartContext.config.entries.values()) {
+			tabs.push({ kind: 'mark', entry });
+		}
+		tabs.push({ kind: 'chart' });
+		return tabs;
+	});
+
+	const activeTab: TabItem | undefined = $derived(
+		tabList[Math.min(activeTabIndex, tabList.length - 1)]
+	);
+
+	const isChartTab: boolean = $derived(activeTab?.kind === 'chart');
+
+	const targetEntry: MarkEntry | null = $derived(
+		activeTab?.kind === 'mark' ? activeTab.entry : null
+	);
+
+	// For chart tab, pick first entry to read column bindings from
+	const firstEntry: MarkEntry | null = $derived.by(() => {
 		const entries = chartContext.config.entries;
 		if (entries.size === 0) return null;
-		if (entries.size === 1) return [...entries.values()][0];
-		const hoveredId = chartContext.tooltipManager?.currentMarkId;
-		if (hoveredId) return entries.get(hoveredId) ?? null;
 		return [...entries.values()][0];
 	});
 
-	// --- Channels for current mark ---
-	const channels: string[] = $derived(
-		targetEntry ? getAssignableChannels(targetEntry.markType) : []
-	);
+	// ---- Derived: channels ----
+	const currentChannels: string[] = $derived.by(() => {
+		if (isChartTab) return [...CHART_CHANNELS];
+		if (!targetEntry) return [];
+		return getAssignableChannels(targetEntry.markType);
+	});
 
-	// --- Schema access ---
+	// Total items in channel list (channels + reset all)
+	const channelListSize: number = $derived(currentChannels.length + 1);
+
+	// ---- Derived: schema ----
 	const schema = $derived.by(() => {
 		tableSchemaService.version;
-		return targetEntry ? tableSchemaService.getSchema(targetEntry.table) : null;
+		const entry = isChartTab ? firstEntry : targetEntry;
+		return entry ? tableSchemaService.getSchema(entry.table) : null;
 	});
 
-	// --- Filtered columns for selected channel ---
-	const allColumns: ColumnOption[] = $derived(
-		schema && selectedChannel
-			? getCompatibleColumns(schema, selectedChannel, chartContext.scaleTypes)
-			: []
-	);
+	// ---- Derived: value list for expanded channel ----
+	const allValues: Array<{ name: string; jsType?: string; current?: boolean }> = $derived.by(() => {
+		if (!expandedChannel || !schema) return [];
 
-	const filteredColumns: ColumnOption[] = $derived.by(() => {
-		if (!filterText) return allColumns;
+		if (isChartTab) {
+			// Scale type options
+			const axis = expandedChannel === 'x scale' ? 'x' : 'y';
+			const entry = firstEntry;
+			if (!entry) return [];
+			const types = getCompatibleScaleTypes(schema, axis as 'x' | 'y', entry);
+			const currentVal =
+				axis === 'x' ? entry.preferredXScaleType : entry.preferredYScaleType;
+			return types.map((t) => ({
+				name: t.label,
+				value: t.value,
+				current: t.value === currentVal
+			}));
+		}
+
+		// Column options for mark channel
+		if (!targetEntry) return [];
+		const cols = getCompatibleColumns(schema, expandedChannel, chartContext.scaleTypes);
+		return cols.map((c) => ({
+			name: c.name,
+			jsType: c.jsType,
+			current: c.name === originalColumnName
+		}));
+	});
+
+	const filteredValues = $derived.by(() => {
+		if (!filterText) return allValues;
 		const lower = filterText.toLowerCase();
-		return allColumns.filter((c) => c.name.toLowerCase().includes(lower));
+		return allValues.filter((v) => v.name.toLowerCase().includes(lower));
 	});
 
-	// --- Current value for a channel ---
+	const canClear: boolean = $derived(originalColumnName != null);
+	const showClear: boolean = $derived(canClear && !filterText && !isChartTab);
+	// Filter lives "above" the list — revealed by pressing Up from top or typing
+	let filterRevealed = $state(false);
+	// valueHighlight: -1 = filter row, 0..N-1 = values, N = clear (if shown)
+	const valueListSize: number = $derived(filteredValues.length + (showClear ? 1 : 0));
+
+	// ---- Current value display for channel rows ----
 	function currentValue(channel: string): string {
+		if (isChartTab) {
+			const axis = channel === 'x scale' ? 'x' : 'y';
+			const entry = firstEntry;
+			if (!entry) return '—';
+			const val =
+				axis === 'x' ? entry.preferredXScaleType : entry.preferredYScaleType;
+			return val ?? 'auto';
+		}
 		if (!targetEntry) return '';
 		const val = targetEntry[channel as keyof MarkEntry];
 		if (val == null) return '—';
@@ -67,41 +144,73 @@
 		return '(expr)';
 	}
 
-	// --- Original column name captured on entering column-select ---
-	let originalColumnName: string | null = $state(null);
+	// ---- Tab labels (disambiguate duplicate mark types) ----
+	const tabLabels: string[] = $derived.by(() => {
+		// Count how many marks share each type
+		const typeTotal = new Map<string, number>();
+		for (const tab of tabList) {
+			if (tab.kind === 'mark') {
+				typeTotal.set(tab.entry.markType, (typeTotal.get(tab.entry.markType) ?? 0) + 1);
+			}
+		}
+		// Build labels: "dot" when unique, "dot 1" / "dot 2" when duplicated
+		const seen = new Map<string, number>();
+		return tabList.map((tab) => {
+			if (tab.kind === 'chart') return 'Chart';
+			const t = tab.entry.markType;
+			const n = (seen.get(t) ?? 0) + 1;
+			seen.set(t, n);
+			return (typeTotal.get(t) ?? 0) > 1 ? `${t} ${n}` : t;
+		});
+	});
 
-	// --- Can the selected channel be cleared? (show clear row) ---
-	const canClear: boolean = $derived(originalColumnName != null);
-
-	// --- Whether the clear row is visible (hidden when filtering) ---
-	const showClear: boolean = $derived(canClear && !filterText);
-
-	// --- Total item count in column-select (for keyboard nav) ---
-	const columnListSize: number = $derived(
-		filteredColumns.length + (showClear ? 1 : 0)
-	);
-
-	// --- Reset state on open/close ---
+	// ---- Reset on open ----
 	$effect(() => {
 		if (open) {
-			mode = 'channel-select';
-			selectedChannel = null;
+			// Auto-select tab for hovered mark (if any)
+			const hoveredId = chartContext.tooltipManager?.currentMarkId;
+			let initialTab = 0;
+			if (hoveredId) {
+				const idx = tabList.findIndex(
+					(t) => t.kind === 'mark' && t.entry.id === hoveredId
+				);
+				if (idx >= 0) initialTab = idx;
+			}
+			activeTabIndex = initialTab;
+			focusZone = 'channels';
+			channelHighlight = 0;
+			expandedChannel = null;
+			valueHighlight = 0;
 			filterText = '';
-			highlightIndex = 0;
 			checkpointed = false;
+			originalColumnName = null;
 		}
 	});
 
-	// --- Focus management ---
+	// ---- Focus management ----
 	$effect(() => {
-		if (open && mode === 'column-select' && filterInput) {
+		if (!open) return;
+		if (focusZone === 'values' && valueHighlight === -1 && filterInput) {
 			filterInput.focus();
-		} else if (open && mode === 'channel-select' && panelEl) {
+		} else if (panelEl) {
 			panelEl.focus();
 		}
 	});
 
-	// --- Actions ---
+	// ---- Clamp highlights when lists shrink ----
+	$effect(() => {
+		if (channelHighlight >= channelListSize && channelListSize > 0) {
+			channelHighlight = channelListSize - 1;
+		}
+	});
+
+	$effect(() => {
+		if (valueHighlight >= valueListSize && valueListSize > 0) {
+			valueHighlight = valueListSize - 1;
+		}
+	});
+
+	// ---- Actions ----
 	function close() {
 		if (chartContext.config.previewing) {
 			chartContext.config.cancelPreview();
@@ -114,24 +223,46 @@
 	}
 
 	function resetAll() {
-		if (!targetEntry) return;
-		chartContext.config.checkpoint('palette reset all');
-		chartContext.config.revertMark(targetEntry.id);
+		if (isChartTab) {
+			chartContext.config.checkpoint('palette reset chart');
+			for (const entry of chartContext.config.entries.values()) {
+				chartContext.config.setMarkProp(entry.id, 'preferredXScaleType', null);
+				chartContext.config.setMarkProp(entry.id, 'preferredYScaleType', null);
+			}
+		} else if (targetEntry) {
+			chartContext.config.checkpoint('palette reset all');
+			chartContext.config.revertMark(targetEntry.id);
+		}
 		open = false;
 	}
 
-	function selectChannel(channel: string) {
-		selectedChannel = channel;
-		const val = targetEntry?.[channel as keyof MarkEntry];
-		originalColumnName = typeof val === 'string' ? val : null;
-		filterText = '';
-		highlightIndex = 0;
+	function expandChannel(channel: string) {
+		// If already expanded on a different channel, cancel first
+		if (expandedChannel != null) {
+			collapseCancel();
+		}
+		expandedChannel = channel;
+
+		if (isChartTab) {
+			const axis = channel === 'x scale' ? 'x' : 'y';
+			const entry = firstEntry;
+			const val =
+				axis === 'x' ? entry?.preferredXScaleType : entry?.preferredYScaleType;
+			originalColumnName = typeof val === 'string' ? val : null;
+		} else if (targetEntry) {
+			const val = targetEntry[channel as keyof MarkEntry];
+			originalColumnName = typeof val === 'string' ? val : null;
+		}
+
 		chartContext.config.checkpoint('palette');
 		checkpointed = true;
-		mode = 'column-select';
+		filterText = '';
+		filterRevealed = false;
+		valueHighlight = 0;
+		focusZone = 'values';
 	}
 
-	function backToChannels() {
+	function collapseCancel() {
 		if (chartContext.config.previewing) {
 			chartContext.config.cancelPreview();
 		}
@@ -139,111 +270,235 @@
 			chartContext.config.undo();
 			checkpointed = false;
 		}
-		mode = 'channel-select';
-		selectedChannel = null;
+		expandedChannel = null;
 		originalColumnName = null;
 		filterText = '';
-		highlightIndex = 0;
+		filterRevealed = false;
+		valueHighlight = 0;
 	}
 
-	function previewColumn(columnName: string | null) {
-		if (!targetEntry || !selectedChannel) return;
+	function collapseToChannels() {
+		collapseCancel();
+		focusZone = 'channels';
+	}
+
+	function previewValue(valueName: string | null) {
 		if (chartContext.config.previewing) {
 			chartContext.config.cancelPreview();
 		}
-		chartContext.config.beginPreview(targetEntry.id, selectedChannel, columnName);
+
+		if (isChartTab && expandedChannel) {
+			const propName =
+				CHART_CHANNEL_TO_PROP[expandedChannel as ChartChannel];
+			if (!propName) return;
+			// Apply to all marks
+			for (const entry of chartContext.config.entries.values()) {
+				chartContext.config.beginPreview(entry.id, propName, valueName);
+			}
+		} else if (targetEntry && expandedChannel) {
+			chartContext.config.beginPreview(
+				targetEntry.id,
+				expandedChannel,
+				valueName
+			);
+		}
 	}
 
-	function commit(columnName: string | null) {
-		if (!targetEntry || !selectedChannel) return;
+	function commitValue(valueName: string | null) {
 		if (chartContext.config.previewing) {
 			chartContext.config.commitPreview();
-		} else {
-			chartContext.config.setMarkProp(targetEntry.id, selectedChannel, columnName);
+		} else if (isChartTab && expandedChannel) {
+			const propName =
+				CHART_CHANNEL_TO_PROP[expandedChannel as ChartChannel];
+			if (propName) {
+				for (const entry of chartContext.config.entries.values()) {
+					chartContext.config.setMarkProp(entry.id, propName, valueName);
+				}
+			}
+		} else if (targetEntry && expandedChannel) {
+			chartContext.config.setMarkProp(
+				targetEntry.id,
+				expandedChannel,
+				valueName
+			);
 		}
-		// Stay open — return to channel list so user can chain edits
+
 		checkpointed = false;
-		mode = 'channel-select';
-		selectedChannel = null;
+		expandedChannel = null;
 		originalColumnName = null;
 		filterText = '';
-		highlightIndex = 0;
+		filterRevealed = false;
+		valueHighlight = 0;
+		focusZone = 'channels';
 	}
 
-	// --- Keyboard handling ---
+	function switchTab(index: number) {
+		if (expandedChannel != null) {
+			collapseCancel();
+		}
+		activeTabIndex = index;
+		channelHighlight = 0;
+	}
+
+	// ---- Resolve value from highlight index ----
+	// Layout: columns 0..N-1, then clear at index N (if shown)
+	function getValueAtIndex(idx: number): { name: string; isNull: boolean } | null {
+		if (showClear && idx === filteredValues.length) {
+			return { name: 'clear', isNull: true };
+		}
+		const v = filteredValues[idx];
+		if (!v) return null;
+		// For chart tab scale types, "auto" means null
+		if (isChartTab && (v as { value?: string | null }).value === null) {
+			return { name: v.name, isNull: true };
+		}
+		return { name: v.name, isNull: false };
+	}
+
+	// ---- Keyboard ----
 	function handleKeydown(event: KeyboardEvent) {
 		event.stopPropagation();
+		keyboardNav = true;
 
+		// Cmd+Z always available in channels zone
 		if ((event.metaKey || event.ctrlKey) && event.key === 'z') {
 			event.preventDefault();
-			if (mode === 'channel-select' && chartContext.config.canUndo) {
+			if (focusZone === 'channels' && chartContext.config.canUndo) {
 				chartContext.config.undo();
 			}
 			return;
 		}
 
+		// Escape
 		if (event.key === 'Escape') {
 			event.preventDefault();
-			if (mode === 'column-select') {
-				backToChannels();
+			if (focusZone === 'values') {
+				collapseToChannels();
+			} else if (focusZone === 'tabs') {
+				focusZone = 'channels';
 			} else {
 				close();
 			}
 			return;
 		}
 
-		const listSize = mode === 'channel-select' ? channels.length + 1 : columnListSize;
-
-		if (event.key === 'ArrowDown') {
-			event.preventDefault();
-			if (listSize > 0) highlightIndex = (highlightIndex + 1) % listSize;
-			return;
-		}
-
-		if (event.key === 'ArrowUp') {
-			event.preventDefault();
-			if (listSize > 0) highlightIndex = (highlightIndex - 1 + listSize) % listSize;
-			return;
-		}
-
-		if (event.key === 'Enter') {
-			event.preventDefault();
-			if (mode === 'channel-select' && highlightIndex === channels.length) {
-				resetAll();
-			} else if (mode === 'channel-select' && channels[highlightIndex]) {
-				selectChannel(channels[highlightIndex]);
-			} else if (mode === 'column-select') {
-				if (showClear && highlightIndex === 0) {
-					commit(null);
-				} else {
-					const colIdx = showClear ? highlightIndex - 1 : highlightIndex;
-					if (filteredColumns[colIdx]) {
-						commit(filteredColumns[colIdx].name);
-					}
-				}
-			}
-			return;
+		if (focusZone === 'tabs') {
+			handleTabKeys(event);
+		} else if (focusZone === 'channels') {
+			handleChannelKeys(event);
+		} else if (focusZone === 'values') {
+			handleValueKeys(event);
 		}
 	}
 
-	// Clamp highlight when list shrinks (e.g. from filtering)
-	$effect(() => {
-		const max = mode === 'channel-select' ? channels.length + 1 : columnListSize;
-		if (highlightIndex >= max && max > 0) {
-			highlightIndex = max - 1;
+	function handleTabKeys(event: KeyboardEvent) {
+		const key = event.key;
+		if (key === 'ArrowLeft' || key === 'h') {
+			event.preventDefault();
+			const newIdx = (activeTabIndex - 1 + tabList.length) % tabList.length;
+			switchTab(newIdx);
+		} else if (key === 'ArrowRight' || key === 'l') {
+			event.preventDefault();
+			const newIdx = (activeTabIndex + 1) % tabList.length;
+			switchTab(newIdx);
+		} else if (key === 'ArrowDown' || key === 'j' || key === 'Enter') {
+			event.preventDefault();
+			focusZone = 'channels';
 		}
-	});
+	}
 
-	// --- Close on outside click ---
+	function handleChannelKeys(event: KeyboardEvent) {
+		const key = event.key;
+		if (key === 'ArrowUp' || key === 'k') {
+			event.preventDefault();
+			if (channelHighlight === 0) {
+				focusZone = 'tabs';
+			} else {
+				channelHighlight--;
+			}
+		} else if (key === 'ArrowDown' || key === 'j') {
+			event.preventDefault();
+			if (channelListSize > 0) {
+				channelHighlight = (channelHighlight + 1) % channelListSize;
+			}
+		} else if (key === 'ArrowRight' || key === 'l' || key === 'Enter') {
+			event.preventDefault();
+			if (channelHighlight === currentChannels.length) {
+				// Reset all
+				resetAll();
+			} else if (currentChannels[channelHighlight]) {
+				expandChannel(currentChannels[channelHighlight]);
+			}
+		}
+	}
+
+	function previewAtHighlight() {
+		const item = getValueAtIndex(valueHighlight);
+		if (!item) return;
+		if (item.isNull && !isChartTab) {
+			// clear row — cancel any active preview
+			if (chartContext.config.previewing) {
+				chartContext.config.cancelPreview();
+			}
+		} else {
+			previewValue(item.isNull ? null : item.name);
+		}
+	}
+
+	function handleValueKeys(event: KeyboardEvent) {
+		const key = event.key;
+		if (key === 'ArrowUp') {
+			event.preventDefault();
+			if (valueHighlight === -1) {
+				// Already at filter, stay
+			} else if (valueHighlight === 0) {
+				// Move up to filter
+				filterRevealed = true;
+				valueHighlight = -1;
+			} else {
+				valueHighlight--;
+				previewAtHighlight();
+			}
+		} else if (key === 'ArrowDown') {
+			event.preventDefault();
+			if (valueHighlight === -1) {
+				// Leave filter, enter list
+				valueHighlight = 0;
+				previewAtHighlight();
+			} else if (valueListSize > 0) {
+				valueHighlight = (valueHighlight + 1) % valueListSize;
+				previewAtHighlight();
+			}
+		} else if (key === 'ArrowLeft' || key === 'Escape') {
+			event.preventDefault();
+			collapseToChannels();
+		} else if (key === 'Enter') {
+			event.preventDefault();
+			if (valueHighlight >= 0) {
+				const item = getValueAtIndex(valueHighlight);
+				if (item) {
+					commitValue(item.isNull ? null : item.name);
+				}
+			}
+		} else if (valueHighlight !== -1 && key.length === 1 && !event.metaKey && !event.ctrlKey) {
+			// Typing while on a value row → reveal filter and redirect keystroke
+			event.preventDefault();
+			filterRevealed = true;
+			filterText += key;
+			valueHighlight = -1;
+		}
+		// When valueHighlight === -1 (filter focused), other keys type into the input naturally
+	}
+
+	// ---- Outside click (close when clicking anywhere outside the panel) ----
 	function handleWindowPointerDown(event: PointerEvent) {
 		if (!open || !panelEl) return;
-		const cell = panelEl.closest('.chart-cell');
-		if (cell && !cell.contains(event.target as Node)) {
+		if (!panelEl.contains(event.target as Node)) {
 			close();
 		}
 	}
 
-	// --- Cleanup on destroy ---
+	// ---- Cleanup ----
 	onDestroy(() => {
 		if (chartContext.config.previewing) {
 			chartContext.config.cancelPreview();
@@ -253,261 +508,366 @@
 
 <svelte:window onpointerdown={handleWindowPointerDown} />
 
-{#if open && targetEntry}
+{#if open && (targetEntry || isChartTab)}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="palette-backdrop" onclick={close} onkeydown={handleKeydown} onwheel={(e) => e.preventDefault()}>
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div
-			class="palette-panel"
-			bind:this={panelEl}
-			tabindex="-1"
-			onclick={(e) => e.stopPropagation()}
-		>
-			<div class="palette-header">
-				{#if mode === 'column-select'}
-					<button class="back-btn" onclick={backToChannels}>&larr;</button>
-					<span class="header-channel">{selectedChannel}</span>
-				{:else}
-					<span class="header-mark">{targetEntry.markType}</span>
-				{/if}
+	<div
+		class="palette-panel"
+		class:keyboard-nav={keyboardNav}
+		bind:this={panelEl}
+		tabindex="-1"
+		onkeydown={handleKeydown}
+		onwheel={(e) => e.preventDefault()}
+		onpointermove={() => { keyboardNav = false; }}
+	>
+			<!-- Tab bar -->
+			<div class="tab-bar">
+				{#each tabList as tab, i (tab.kind === 'chart' ? 'chart' : tab.entry.id)}
+					<button
+						class="tab"
+						class:active={i === Math.min(activeTabIndex, tabList.length - 1)}
+						class:focused={focusZone === 'tabs' && i === Math.min(activeTabIndex, tabList.length - 1)}
+						onclick={() => { switchTab(i); focusZone = 'channels'; }}
+					>
+						{tabLabels[i]}
+					</button>
+				{/each}
 			</div>
 
-			{#if mode === 'column-select'}
-				<div class="filter-row">
-					<input
-						bind:this={filterInput}
-						bind:value={filterText}
-						placeholder="Filter columns..."
-						class="filter-input"
-					/>
-				</div>
-			{/if}
-
-			<div class="palette-list">
-				{#if mode === 'channel-select'}
-					{#each channels as ch, i}
+			<!-- Body -->
+			<div class="palette-body" class:split={expandedChannel != null}>
+				<!-- Channel list -->
+				<div class="channel-list">
+					{#each currentChannels as ch, i (ch)}
 						<button
-							class="palette-item"
-							class:highlighted={i === highlightIndex}
-							onclick={() => selectChannel(ch)}
-							onpointerenter={() => (highlightIndex = i)}
+							class="ch-row"
+							class:highlighted={focusZone === 'channels' && i === channelHighlight}
+							class:expanded={ch === expandedChannel}
+							onclick={() => expandChannel(ch)}
+							onpointerenter={() => {
+								if (!keyboardNav && focusZone === 'channels') channelHighlight = i;
+							}}
 						>
-							<span class="item-label">{ch}</span>
-							<span class="item-value">{currentValue(ch)}</span>
+							<span class="ch-name">{ch}</span>
+							{#if expandedChannel == null}
+								<span class="ch-value">{currentValue(ch)}</span>
+							{/if}
 						</button>
 					{/each}
 					<button
-						class="palette-item reset-item"
-						class:highlighted={highlightIndex === channels.length}
+						class="ch-row reset-row"
+						class:highlighted={focusZone === 'channels' && channelHighlight === currentChannels.length}
 						onclick={resetAll}
-						onpointerenter={() => (highlightIndex = channels.length)}
+						onpointerenter={() => {
+							if (!keyboardNav && focusZone === 'channels') channelHighlight = currentChannels.length;
+						}}
 					>
-						<span class="item-label clear-label">reset all</span>
+						<span class="ch-name reset-label">reset all</span>
 					</button>
-				{:else}
-					{#if showClear}
-						<button
-							class="palette-item clear-item"
-							class:highlighted={highlightIndex === 0}
-							onpointerenter={() => (highlightIndex = 0)}
-							onclick={() => commit(null)}
-						>
-							<span class="item-label clear-label">clear</span>
-						</button>
-					{/if}
-					{#each filteredColumns as col, i}
-						{@const idx = showClear ? i + 1 : i}
-						<button
-							class="palette-item"
-							class:highlighted={idx === highlightIndex}
-							class:current={col.name === originalColumnName}
-							onpointerenter={() => {
-								highlightIndex = idx;
-								previewColumn(col.name);
-							}}
-							onclick={() => commit(col.name)}
-						>
-							<span class="item-label">{col.name}</span>
-							<span class="item-right">
-								{#if col.name === originalColumnName}
-									<span class="current-marker">&#10003;</span>
-								{/if}
-								<span class="item-type">{col.jsType}</span>
-							</span>
-						</button>
-					{/each}
-					{#if filteredColumns.length === 0}
-						<div class="palette-empty">No matching columns</div>
-					{/if}
+				</div>
+
+				<!-- Value panel (only when expanded) -->
+				{#if expandedChannel != null}
+					<div class="value-panel">
+						{#if filterRevealed}
+							<div class="filter-row">
+								<input
+									bind:this={filterInput}
+									bind:value={filterText}
+									placeholder={isChartTab ? 'Filter...' : 'Filter columns...'}
+									class="filter-input"
+								/>
+							</div>
+						{/if}
+						<div class="value-list">
+							{#each filteredValues as val, i (val.name)}
+								{@const isAutoNull = isChartTab && (val as { value?: string | null }).value === null}
+								<button
+									class="val-row"
+									class:highlighted={focusZone === 'values' && i === valueHighlight}
+									class:current={val.current}
+									onpointerenter={() => {
+										if (keyboardNav) return;
+										valueHighlight = i;
+										if (isAutoNull) {
+											previewValue(null);
+										} else {
+											previewValue(val.name);
+										}
+									}}
+									onclick={() => commitValue(isAutoNull ? null : val.name)}
+								>
+									<span class="val-name">{val.name}</span>
+									<span class="val-right">
+										{#if val.current}
+											<span class="current-marker">&#10003;</span>
+										{/if}
+										{#if val.jsType}
+											<span class="val-type">{val.jsType}</span>
+										{/if}
+									</span>
+								</button>
+							{/each}
+							{#if showClear}
+								<button
+									class="val-row clear-row"
+									class:highlighted={focusZone === 'values' && valueHighlight === filteredValues.length}
+									onpointerenter={() => { if (!keyboardNav) valueHighlight = filteredValues.length; }}
+									onclick={() => commitValue(null)}
+								>
+									<span class="val-name clear-label">clear</span>
+								</button>
+							{/if}
+							{#if filteredValues.length === 0}
+								<div class="palette-empty">No matches</div>
+							{/if}
+						</div>
+					</div>
 				{/if}
 			</div>
-		</div>
 	</div>
 {/if}
 
 <style>
-	.palette-backdrop {
-		position: absolute;
-		inset: 0;
-		z-index: 1100;
-		display: flex;
-		align-items: flex-start;
-		justify-content: center;
-		padding-top: 12%;
-		background: transparent;
-		pointer-events: auto;
-	}
-
 	.palette-panel {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		z-index: 1100;
 		width: 280px;
-		min-height: 180px;
-		max-height: max(60%, 280px);
+		max-height: calc(100% - 16px);
 		display: flex;
 		flex-direction: column;
-		background: #1e1e2e;
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: var(--diveplot-palette-bg, rgba(0, 0, 0, 0.92));
+		color: var(--diveplot-palette-text, #ffffff);
+		border: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
 		border-radius: 8px;
 		box-shadow:
 			0 8px 32px rgba(0, 0, 0, 0.4),
 			0 2px 8px rgba(0, 0, 0, 0.2);
+		font-family: var(--diveplot-font, system-ui, sans-serif);
 		overflow: hidden;
 		outline: none;
 	}
 
-	.palette-header {
+	/* ---- Tab bar ---- */
+	.tab-bar {
 		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 8px 12px;
-		font-size: 12px;
-		font-weight: 600;
-		color: rgba(255, 255, 255, 0.5);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		gap: 0;
+		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		padding: 0 8px;
 	}
 
-	.back-btn {
+	.tab {
 		background: none;
 		border: none;
-		color: rgba(255, 255, 255, 0.6);
+		border-bottom: 2px solid transparent;
+		padding: 7px 10px 5px;
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		cursor: pointer;
-		padding: 0 4px;
-		font-size: 14px;
-		line-height: 1;
+		text-transform: lowercase;
+		letter-spacing: 0.02em;
+		transition: color 0.1s;
 	}
 
-	.back-btn:hover {
-		color: rgba(255, 255, 255, 0.9);
+	.tab:hover {
+		color: var(--diveplot-palette-text, #ffffff);
+		opacity: 0.7;
 	}
 
-	.header-channel {
-		color: rgba(255, 255, 255, 0.7);
+	.tab.active {
+		color: var(--diveplot-palette-text, #ffffff);
+		opacity: 0.85;
+		border-bottom-color: currentColor;
 	}
 
-	.header-mark {
-		color: rgba(255, 255, 255, 0.5);
+	.tab.focused {
+		outline: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		outline-offset: -2px;
+		border-radius: 3px 3px 0 0;
+	}
+
+	/* ---- Body ---- */
+	.palette-body {
+		display: flex;
+		flex: 1;
+		overflow: hidden;
+	}
+
+	/* ---- Channel list ---- */
+	.channel-list {
+		display: flex;
+		flex-direction: column;
+		overflow-y: auto;
+		padding: 4px;
+		flex: 1;
+	}
+
+	.palette-body.split .channel-list {
+		width: 90px;
+		flex: none;
+		border-right: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+	}
+
+	.ch-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		padding: 6px 8px;
+		background: none;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+		font-size: 12px;
+		color: inherit;
+		opacity: 0.85;
+		text-align: left;
+		gap: 4px;
+	}
+
+	.palette-panel:not(.keyboard-nav) .ch-row:hover,
+	.ch-row.highlighted {
+		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+	}
+
+	.ch-row.expanded {
+		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		opacity: 1;
+	}
+
+	.ch-name {
+		font-weight: 500;
+		flex-shrink: 0;
+	}
+
+	.ch-value {
+		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		font-size: 11px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+
+	.palette-body.split .ch-value {
+		display: none;
+	}
+
+	.reset-row {
+		border-top: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		margin-top: 2px;
+	}
+
+	.reset-label {
+		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		font-style: italic;
+	}
+
+	/* ---- Value panel ---- */
+	.value-panel {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		min-width: 0;
 	}
 
 	.filter-row {
 		padding: 6px 8px;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
 	}
 
 	.filter-input {
 		width: 100%;
-		background: rgba(255, 255, 255, 0.06);
-		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		border: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
 		border-radius: 4px;
-		padding: 6px 8px;
-		font-size: 13px;
-		color: rgba(255, 255, 255, 0.9);
+		padding: 4px 8px;
+		font-size: 11px;
+		color: inherit;
 		outline: none;
 		box-sizing: border-box;
 	}
 
 	.filter-input::placeholder {
-		color: rgba(255, 255, 255, 0.3);
+		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
 	}
 
 	.filter-input:focus {
-		border-color: rgba(255, 255, 255, 0.2);
+		border-color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
 	}
 
-	.palette-list {
+	.value-list {
 		overflow-y: auto;
 		padding: 4px;
 	}
 
-	.palette-item {
+	.val-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		width: 100%;
-		padding: 7px 8px;
+		padding: 5px 8px;
 		background: none;
 		border: none;
 		border-radius: 4px;
 		cursor: pointer;
-		font-size: 13px;
-		color: rgba(255, 255, 255, 0.85);
+		font-size: 11px;
+		color: inherit;
+		opacity: 0.85;
 		text-align: left;
 	}
 
-	.palette-item:hover,
-	.palette-item.highlighted {
-		background: rgba(255, 255, 255, 0.08);
+	.palette-panel:not(.keyboard-nav) .val-row:hover,
+	.val-row.highlighted {
+		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
 	}
 
-	.palette-item.current {
-		color: rgba(255, 255, 255, 1);
+	.val-row.current {
+		opacity: 1;
 	}
 
-	.item-label {
+	.val-name {
 		font-weight: 500;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.item-value {
-		color: rgba(255, 255, 255, 0.4);
-		font-size: 12px;
-	}
-
-	.item-right {
+	.val-right {
 		display: flex;
 		align-items: center;
 		gap: 6px;
+		flex-shrink: 0;
 	}
 
 	.current-marker {
 		color: rgba(120, 200, 120, 0.8);
-		font-size: 12px;
+		font-size: 10px;
 	}
 
-	.item-type {
-		color: rgba(255, 255, 255, 0.3);
-		font-size: 11px;
+	.val-type {
+		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		font-size: 10px;
 		font-style: italic;
 	}
 
-	.clear-item {
-		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-		margin-bottom: 2px;
-	}
-
-	.reset-item {
-		border-top: 1px solid rgba(255, 255, 255, 0.06);
+	.clear-row {
+		border-top: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
 		margin-top: 2px;
 	}
 
 	.clear-label {
-		color: rgba(255, 255, 255, 0.4);
+		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		font-style: italic;
 	}
 
 	.palette-empty {
 		padding: 12px 8px;
 		text-align: center;
-		color: rgba(255, 255, 255, 0.3);
-		font-size: 13px;
+		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		font-size: 11px;
 	}
 </style>

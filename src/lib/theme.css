@@ -18,6 +18,12 @@
 	--diveplot-accent: #93c5fd;
 	--diveplot-tooltip-bg: rgba(0, 0, 0, 0.88);
 	--diveplot-tooltip-text: #ffffff;
+	--diveplot-palette-bg: rgba(0, 0, 0, 0.92);
+	--diveplot-palette-text: #ffffff;
+	--diveplot-palette-text-secondary: rgba(255, 255, 255, 0.5);
+	--diveplot-palette-text-muted: rgba(255, 255, 255, 0.3);
+	--diveplot-palette-border: rgba(255, 255, 255, 0.1);
+	--diveplot-palette-highlight: rgba(255, 255, 255, 0.08);
 	color-scheme: light dark;
 }
 
@@ -30,5 +36,11 @@
 		--diveplot-accent: #3b82f6;
 		--diveplot-tooltip-bg: rgba(255, 255, 255, 0.92);
 		--diveplot-tooltip-text: #111827;
+		--diveplot-palette-bg: rgba(255, 255, 255, 0.95);
+		--diveplot-palette-text: #111827;
+		--diveplot-palette-text-secondary: rgba(17, 24, 39, 0.5);
+		--diveplot-palette-text-muted: rgba(17, 24, 39, 0.35);
+		--diveplot-palette-border: rgba(17, 24, 39, 0.1);
+		--diveplot-palette-highlight: rgba(17, 24, 39, 0.08);
 	}
 }
