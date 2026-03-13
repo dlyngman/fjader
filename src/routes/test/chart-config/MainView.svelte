@@ -51,6 +51,36 @@
 			>
 		</div>
 		<div class="button-group">
+			<span class="label">X scale:</span>
+			<button
+				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredXScaleType', 'log')}
+				disabled={!dotEntry}>Log</button
+			>
+			<button
+				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredXScaleType', 'symlog')}
+				disabled={!dotEntry}>Symlog</button
+			>
+			<button
+				onclick={() => dotEntry && chartConfig?.revertMarkProp(dotEntry.id, 'preferredXScaleType')}
+				disabled={!dotEntry}>Reset</button
+			>
+		</div>
+		<div class="button-group">
+			<span class="label">Y scale:</span>
+			<button
+				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredYScaleType', 'log')}
+				disabled={!dotEntry}>Log</button
+			>
+			<button
+				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredYScaleType', 'symlog')}
+				disabled={!dotEntry}>Symlog</button
+			>
+			<button
+				onclick={() => dotEntry && chartConfig?.revertMarkProp(dotEntry.id, 'preferredYScaleType')}
+				disabled={!dotEntry}>Reset</button
+			>
+		</div>
+		<div class="button-group">
 			<span class="label">Upstream prop:</span>
 			<button onclick={() => (upstreamOpacity = 0.2)}>Set opacity=0.2</button>
 			<button onclick={() => (upstreamOpacity = 0.7)}>Set opacity=0.7</button>
@@ -70,6 +100,8 @@
 		<span>Entry fill: <strong>{dotEntry?.fill ?? 'null'}</strong></span>
 		<span>Upstream opacity: <strong>{upstreamOpacity}</strong></span>
 		<span>Entry opacity: <strong>{dotEntry?.opacity ?? 'n/a'}</strong></span>
+		<span>X scale: <strong>{dotEntry?.preferredXScaleType ?? 'auto'}</strong></span>
+		<span>Y scale: <strong>{dotEntry?.preferredYScaleType ?? 'auto'}</strong></span>
 		<span>Registered marks: <strong>{chartConfig?.entries.size ?? 0}</strong></span>
 	</div>
 
