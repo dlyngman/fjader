@@ -73,6 +73,15 @@ export interface MarkEntry {
 /** Prop getters keyed by property name. */
 export type PropGetters = Record<string, () => unknown>;
 
+// ---- Snapshot type for undo/redo ----
+
+type ChannelSnapshot = Map<string, Map<string, unknown>>;
+
+interface UndoEntry {
+	description?: string;
+	snapshot: ChannelSnapshot;
+}
+
 // ---- ChartConfig ----
 
 export class ChartConfig {
@@ -81,6 +90,13 @@ export class ChartConfig {
 
 	/** Reactive entries — downstream reads trigger on property access. */
 	#entries: Map<string, MarkEntry> = $state(new Map());
+
+	/** Preview stack — records previous values for cancel. */
+	#previewStack: Array<{ id: string; key: string; prev: unknown }> = [];
+
+	/** Undo/redo stacks. */
+	#undoStack: UndoEntry[] = [];
+	#redoStack: UndoEntry[] = [];
 
 	/**
 	 * Register a mark with prop getters for each configurable property.
@@ -144,6 +160,93 @@ export class ChartConfig {
 		if (!channels) return;
 		for (const ch of channels.values()) {
 			ch.reset();
+		}
+	}
+
+	// ---- Preview ----
+
+	/** Preview a property change. Renders immediately; cancelPreview reverts. */
+	beginPreview(id: string, key: string, value: unknown): void {
+		if (!this.#channels.get(id)?.has(key)) return;
+		const entry = this.#entries.get(id);
+		if (!entry) return;
+		this.#previewStack.push({ id, key, prev: (entry as Record<string, unknown>)[key] });
+		(entry as Record<string, unknown>)[key] = value;
+	}
+
+	/** Accept the previewed changes. */
+	commitPreview(): void {
+		this.#previewStack = [];
+	}
+
+	/** Revert all previewed changes in reverse order. */
+	cancelPreview(): void {
+		for (let i = this.#previewStack.length - 1; i >= 0; i--) {
+			const { id, key, prev } = this.#previewStack[i];
+			const entry = this.#entries.get(id);
+			if (entry) (entry as Record<string, unknown>)[key] = prev;
+		}
+		this.#previewStack = [];
+	}
+
+	/** Whether a preview is currently active. */
+	get previewing(): boolean {
+		return this.#previewStack.length > 0;
+	}
+
+	// ---- Undo / Redo ----
+
+	/** Snapshot current state for undo. Call before making changes. */
+	checkpoint(description?: string): void {
+		this.#undoStack.push({ description, snapshot: this.#takeSnapshot() });
+		this.#redoStack = [];
+	}
+
+	/** Undo to the last checkpoint. */
+	undo(): boolean {
+		const prev = this.#undoStack.pop();
+		if (!prev) return false;
+		this.#redoStack.push({ snapshot: this.#takeSnapshot() });
+		this.#restoreSnapshot(prev.snapshot);
+		return true;
+	}
+
+	/** Redo the last undone change. */
+	redo(): boolean {
+		const next = this.#redoStack.pop();
+		if (!next) return false;
+		this.#undoStack.push({ snapshot: this.#takeSnapshot() });
+		this.#restoreSnapshot(next.snapshot);
+		return true;
+	}
+
+	get canUndo(): boolean {
+		return this.#undoStack.length > 0;
+	}
+
+	get canRedo(): boolean {
+		return this.#redoStack.length > 0;
+	}
+
+	#takeSnapshot(): ChannelSnapshot {
+		const snapshot: ChannelSnapshot = new Map();
+		for (const [id, channels] of this.#channels) {
+			const values = new Map<string, unknown>();
+			for (const [key, ch] of channels) {
+				values.set(key, ch.current);
+			}
+			snapshot.set(id, values);
+		}
+		return snapshot;
+	}
+
+	#restoreSnapshot(snapshot: ChannelSnapshot): void {
+		for (const [id, values] of snapshot) {
+			const entry = this.#entries.get(id);
+			if (!entry) continue;
+			for (const [key, value] of values) {
+				(entry as Record<string, unknown>)[key] = value;
+			}
 		}
 	}
 

@@ -87,6 +87,45 @@
 			<button onclick={() => (upstreamOpacity = 0.5)}>Set opacity=0.5</button>
 		</div>
 		<div class="button-group">
+			<span class="label">Preview fill:</span>
+			<button
+				onpointerenter={() => dotEntry && chartConfig?.beginPreview(dotEntry.id, 'fill', 'species')}
+				onpointerleave={() => chartConfig?.cancelPreview()}
+				disabled={!dotEntry}>species</button
+			>
+			<button
+				onpointerenter={() => dotEntry && chartConfig?.beginPreview(dotEntry.id, 'fill', 'island')}
+				onpointerleave={() => chartConfig?.cancelPreview()}
+				disabled={!dotEntry}>island</button
+			>
+			<button
+				onpointerenter={() => dotEntry && chartConfig?.beginPreview(dotEntry.id, 'fill', null)}
+				onpointerleave={() => chartConfig?.cancelPreview()}
+				disabled={!dotEntry}>none</button
+			>
+		</div>
+		<div class="button-group">
+			<span class="label">Undo/Redo:</span>
+			<button
+				onclick={() => {
+					if (!dotEntry) return;
+					chartConfig?.checkpoint('color by species');
+					chartConfig?.setMarkProp(dotEntry.id, 'fill', 'species');
+				}}
+				disabled={!dotEntry}>Set species (checkpoint)</button
+			>
+			<button
+				onclick={() => {
+					if (!dotEntry) return;
+					chartConfig?.checkpoint('color by island');
+					chartConfig?.setMarkProp(dotEntry.id, 'fill', 'island');
+				}}
+				disabled={!dotEntry}>Set island (checkpoint)</button
+			>
+			<button onclick={() => chartConfig?.undo()} disabled={!chartConfig?.canUndo}>Undo</button>
+			<button onclick={() => chartConfig?.redo()} disabled={!chartConfig?.canRedo}>Redo</button>
+		</div>
+		<div class="button-group">
 			<span class="label">Actions:</span>
 			<button
 				onclick={() => dotEntry && chartConfig?.revertMark(dotEntry.id)}
@@ -102,6 +141,7 @@
 		<span>Entry opacity: <strong>{dotEntry?.opacity ?? 'n/a'}</strong></span>
 		<span>X scale: <strong>{dotEntry?.preferredXScaleType ?? 'auto'}</strong></span>
 		<span>Y scale: <strong>{dotEntry?.preferredYScaleType ?? 'auto'}</strong></span>
+		<span>Preview: <strong>{chartConfig?.previewing ? 'active' : 'none'}</strong></span>
 		<span>Registered marks: <strong>{chartConfig?.entries.size ?? 0}</strong></span>
 	</div>
 
