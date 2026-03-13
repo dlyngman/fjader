@@ -349,12 +349,11 @@
 		m4Decimator.configure(numBins, numSeries, xScaleIndex);
 	});
 
-	// LODController registration with TooltipManager (for per-mark shift+scroll routing)
+	// LODController registration with ChartConfig (palette access + shift+scroll routing via TooltipManager delegation)
 	$effect(() => {
-		const tm = chartContext.tooltipManager;
-		if (!tm || !lodController) return;
-		tm.registerLodController(markId, lodController);
-		return () => tm.unregisterLodController(markId);
+		if (!lodController) return;
+		chartContext.config.registerLodController(markId, lodController);
+		return () => chartContext.config.unregisterLodController(markId);
 	});
 
 	// Tooltip registration — reads from entry

@@ -204,7 +204,7 @@
 			}
 		};
 
-		const tm = new TooltipManager(coordinator, scaleProvider);
+		const tm = new TooltipManager(coordinator, scaleProvider, chartConfig);
 		tooltipManager = tm;
 
 		const frameCallback = () => tm.tick();

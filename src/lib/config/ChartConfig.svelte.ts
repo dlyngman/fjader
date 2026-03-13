@@ -23,6 +23,7 @@ import type {
 	CurveType,
 	Transform
 } from '$lib/types';
+import type { LODController } from '$lib/lod';
 
 // ---- MarkEntry ----
 
@@ -91,6 +92,9 @@ export class ChartConfig {
 	/** Reactive entries — downstream reads trigger on property access. */
 	#entries: Map<string, MarkEntry> = $state(new Map());
 
+	/** LOD controllers per mark — single registration point for palette + TooltipManager. */
+	#lodControllers = new Map<string, LODController>();
+
 	/** Preview stack — records previous values for cancel. */
 	#previewStack: Array<{ id: string; key: string; prev: unknown }> = [];
 
@@ -140,6 +144,24 @@ export class ChartConfig {
 	unregisterMark(id: string): void {
 		this.#entries.delete(id);
 		this.#channels.delete(id);
+		this.#lodControllers.delete(id);
+	}
+
+	// ---- LODController registration ----
+
+	/** Register a mark's LODController. Called by mark components after creation. */
+	registerLodController(markId: string, controller: LODController): void {
+		this.#lodControllers.set(markId, controller);
+	}
+
+	/** Unregister a mark's LODController. Called on controller destroy. */
+	unregisterLodController(markId: string): void {
+		this.#lodControllers.delete(markId);
+	}
+
+	/** Get LODController for a mark — palette reads runtime state, TooltipManager delegates here. */
+	getLodController(markId: string): LODController | undefined {
+		return this.#lodControllers.get(markId);
 	}
 
 	// ---- Mutation (palette / programmatic) ----

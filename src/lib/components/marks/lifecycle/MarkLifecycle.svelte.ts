@@ -479,13 +479,12 @@ export class MarkLifecycle {
 			}
 		});
 
-		// Effect 8: Register binned LODController with TooltipManager
-		// (for per-mark shift+scroll routing)
+		// Effect 8: Register binned LODController with ChartConfig
+		// (palette access + shift+scroll routing via TooltipManager delegation)
 		$effect(() => {
-			const tm = this.#chartContext.tooltipManager;
-			if (!tm || !this.#lodController) return;
-			tm.registerLodController(this.#markId, this.#lodController);
-			return () => tm.unregisterLodController(this.#markId);
+			if (!this.#lodController) return;
+			this.#chartContext.config.registerLodController(this.#markId, this.#lodController);
+			return () => this.#chartContext.config.unregisterLodController(this.#markId);
 		});
 
 		// Effect 9: Write tooltip table when data updates (debounced).

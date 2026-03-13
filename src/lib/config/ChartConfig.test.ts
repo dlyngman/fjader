@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ChartConfig } from './ChartConfig.svelte';
+import type { LODController } from '$lib/lod';
 
 function createTestConfig() {
 	const config = new ChartConfig();
@@ -203,6 +204,49 @@ describe('ChartConfig', () => {
 		it('redo returns false when stack is empty', () => {
 			const { config } = createTestConfig();
 			expect(config.redo()).toBe(false);
+		});
+	});
+
+	describe('LODController registration', () => {
+		it('registers and retrieves an LODController', () => {
+			const { config } = createTestConfig();
+			const mockCtrl = { mode: 'line' } as unknown as LODController;
+
+			config.registerLodController('dot-test', mockCtrl);
+			expect(config.getLodController('dot-test')).toBe(mockCtrl);
+		});
+
+		it('returns undefined for unregistered mark', () => {
+			const { config } = createTestConfig();
+			expect(config.getLodController('nonexistent')).toBeUndefined();
+		});
+
+		it('unregisters an LODController', () => {
+			const { config } = createTestConfig();
+			const mockCtrl = { mode: 'line' } as unknown as LODController;
+
+			config.registerLodController('dot-test', mockCtrl);
+			config.unregisterLodController('dot-test');
+			expect(config.getLodController('dot-test')).toBeUndefined();
+		});
+
+		it('unregisterMark also removes LODController', () => {
+			const { config } = createTestConfig();
+			const mockCtrl = { mode: 'line' } as unknown as LODController;
+
+			config.registerLodController('dot-test', mockCtrl);
+			config.unregisterMark('dot-test');
+			expect(config.getLodController('dot-test')).toBeUndefined();
+		});
+
+		it('replaces existing controller on re-register', () => {
+			const { config } = createTestConfig();
+			const ctrl1 = { mode: 'line', id: 1 } as unknown as LODController;
+			const ctrl2 = { mode: 'line', id: 2 } as unknown as LODController;
+
+			config.registerLodController('dot-test', ctrl1);
+			config.registerLodController('dot-test', ctrl2);
+			expect(config.getLodController('dot-test')).toBe(ctrl2);
 		});
 	});
 });
