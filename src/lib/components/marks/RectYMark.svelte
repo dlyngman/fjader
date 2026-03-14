@@ -70,42 +70,68 @@
 		onLodController = undefined
 	}: Props = $props();
 
-	// Observable Plot pattern: y shorthand → auto-stack, explicit y1/y2 → opt-out
-	const hasExplicitBounds = $derived(y1Prop !== undefined || y2Prop !== undefined);
-	let y1 = $derived(y1Prop ?? 0);
-	let y2 = $derived(y2Prop ?? y);
-	let effectiveTransforms = $derived(withImplicitStack(transforms, hasExplicitBounds, 'y'));
-
 	const markId = generateMarkId('recty');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
-
 	const gpuCoordinator = getGPUContext();
 
 	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
+	// --- ChartConfig registration ---
+	const entry = chartContext.config.registerMark(markId, 'recty', {
+		table: () => table,
+		x: () => x,
+		x1: () => x1Prop,
+		x2: () => x2Prop,
+		y: () => y,
+		y1: () => y1Prop,
+		y2: () => y2Prop,
+		fill: () => fill,
+		scheme: () => scheme,
+		opacity: () => opacity,
+		transforms: () => transforms,
+		selection: () => selection,
+		limit: () => limit,
+		filterNulls: () => filterNulls,
+		preferredXScaleType: () => preferredXScaleType,
+		viewportLocalDomain: () => viewportLocalDomain,
+		inset: () => inset,
+		dx: () => dx,
+		dy: () => dy,
+		sort: () => sort,
+		tooltip: () => tooltip,
+		tip: () => tip
+	});
+
+	// Observable Plot pattern: y shorthand → auto-stack, explicit y1/y2 → opt-out
+	const hasExplicitBounds = $derived(entry.y1 !== undefined || entry.y2 !== undefined);
+	let y1 = $derived(entry.y1 ?? 0);
+	let y2 = $derived(entry.y2 ?? entry.y);
+	let effectiveTransforms = $derived(withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'y'));
+
 	let setup = $state(null);
 
-	// --- INTERNAL BIN EXPANSION ---
-	// If user provides singular x (e.g. bin('field')), expand internally to x1/x2
+	// --- INTERNAL BIN EXPANSION --- reads from entry
 	const expandedX = $derived.by(() => {
-		if (x != null) return expandBinForExtent(x, 'x', 'rectY');
-		return { x1: x1Prop, x2: x2Prop };
+		if (entry.x != null) return expandBinForExtent(entry.x, 'x', 'rectY');
+		return { x1: entry.x1, x2: entry.x2 };
 	});
-	const x1 = $derived(expandedX.x1 as FieldRef | null);
-	const x2 = $derived(expandedX.x2 as FieldRef | null);
+	const x1Expanded = $derived(expandedX.x1 as FieldRef | null);
+	const x2Expanded = $derived(expandedX.x2 as FieldRef | null);
 
-	// --- SCALE TYPE INFERENCE ---
-	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x1, table, preferredXScaleType));
+	// --- SCALE TYPE INFERENCE --- reads from entry
+	const effectiveXScaleType = $derived.by(() =>
+		inferMarkScaleType(x1Expanded, entry.table, entry.preferredXScaleType)
+	);
 
-	// 1. Color Logic
+	// 1. Color Logic — reads from entry
 	const markColor = new MarkColor(
-		() => fill,
-		() => scheme,
+		() => entry.fill,
+		() => entry.scheme,
 		'fill',
-		() => table,
+		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
@@ -113,9 +139,9 @@
 
 	// Detect if this is a histogram: binning on X + aggregate on Y
 	const isHistogram = $derived.by(() => {
-		// Check if x1 is a bin (AutoBinNode)
+		// Check if x1Expanded is a bin (AutoBinNode)
 		const hasBinnedX =
-			typeof x1 === 'object' && x1 != null && 'isAutoBinNode' in x1 && x1.isAutoBinNode;
+			typeof x1Expanded === 'object' && x1Expanded != null && 'isAutoBinNode' in x1Expanded && x1Expanded.isAutoBinNode;
 		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
 		// NOTE: This detection is currently broken (AggregateNode has no .aggregate prop
 		// and constructor name is 'AggregateNode' not '_AggregateNode'). Fixing it would
@@ -126,17 +152,17 @@
 		return hasBinnedX && hasAggregateY;
 	});
 
-	// 2. Config
+	// 2. Config — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
-			x1,
-			x2,
+			x1: x1Expanded,
+			x2: x2Expanded,
 			y1,
 			y2,
 			...(markColor.selectField && { fill: markColor.selectField })
 		})
 	);
-	const resolvedTip = $derived(resolveTip(tip, channelSelect));
+	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
 	const config = $derived({
 		markType: 'recty',
@@ -155,20 +181,20 @@
 			}
 		},
 		inferredScaleColumns: {
-			x: x1 ?? undefined,
+			x: x1Expanded ?? undefined,
 			y: y2 ?? undefined
 		},
-		table,
-		selection: resolveSelection(selection),
+		table: entry.table,
+		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		clientOptions: { limit, filterNulls: filterNulls ? [x1, x2, y1, y2] : null },
+		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([x1Expanded, x2Expanded, y1, y2] as FieldRef[]) : null },
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { y: true } : null,
 		// Viewport-local domain: compute Y extent from visible X range only
-		viewportLocalDomain,
-		sort: normalizeSortConfig(sort),
-		tooltip: tip === false ? false : tooltip
+		viewportLocalDomain: entry.viewportLocalDomain,
+		sort: normalizeSortConfig(entry.sort ?? null),
+		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -185,7 +211,7 @@
 		const scaleType = setup?.actualXScaleType || chartContext.scaleTypes?.x;
 		if (isCategoricalScale(scaleType)) {
 			const arr = resolveChannelData({
-				value: x1,
+				value: x1Expanded,
 				channel: 'x1',
 				dataAccessor: setup?.data,
 				instanceCount,
@@ -196,13 +222,13 @@
 			return arr ? { x0Data: arr, x1Data: arr } : null;
 		}
 		const lo = resolveChannelData({
-			value: x1,
+			value: x1Expanded,
 			channel: 'x1',
 			dataAccessor: setup?.data,
 			instanceCount
 		});
 		const hi = resolveChannelData({
-			value: x2,
+			value: x2Expanded,
 			channel: 'x2',
 			dataAccessor: setup?.data,
 			instanceCount
@@ -238,7 +264,7 @@
 
 	let opacityData = $derived(
 		resolveChannelData({
-			value: opacity,
+			value: entry.opacity,
 			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
@@ -249,12 +275,15 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId, effectiveTransforms, markColor.selectField);
+		(void config, xScaleId, yScaleId);
 		untrack(() => {
+			if (setup) {
+				gpuCoordinator?.markForRetain(markId);
+			}
 			setup?.destroy();
 			setup = null;
 			// Gate on effectiveXScaleType (blocks while schema loads)
-			if (table && effectiveXScaleType) {
+			if (entry.table && effectiveXScaleType) {
 				setup = new MarkLifecycle(config, coordinator, chartContext, markId, {
 					gpuCoordinator,
 					onLodController
@@ -263,10 +292,10 @@
 		});
 	});
 
-	// Tooltip registration
+	// Tooltip registration — reads from entry
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
-		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
+		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 		tm.registerMark(
 			markId,
 			buildTooltipConfig({
@@ -286,11 +315,14 @@
 
 	onDestroy(() => {
 		setup?.destroy();
+		chartContext.config.unregisterMark(markId);
+		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
 	<Rects
+		{markId}
 		{x0Data}
 		{x1Data}
 		{y0Data}
@@ -302,9 +334,9 @@
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
 		dataVersion={setup?.client?.dataVersion || 0}
-		{inset}
-		{dx}
-		{dy}
+		inset={entry.inset ?? 0.5}
+		dx={entry.dx ?? 0}
+		dy={entry.dy ?? 0}
 	/>
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"

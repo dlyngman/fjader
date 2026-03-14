@@ -66,6 +66,20 @@ export interface BinnedConfig {
 
 export type LODControllerConfig = LineConfig | BinnedConfig;
 
+/** Reactive LOD state — palette reads this, updated at well-defined moments. */
+export interface LODState {
+	mode: 'line' | 'binned';
+	density: number;
+	// Line mode
+	visibleCount: number;
+	shouldDecimate: boolean;
+	dotsVisible: boolean;
+	// Binned mode
+	binStep: number;
+	numVisibleBins: number;
+	binWidthPx: number;
+}
+
 export class LODController {
 	// --- Shared state ---
 	#gpuCoordinator: GPUCoordinator;
@@ -110,6 +124,7 @@ export class LODController {
 	};
 	#binningThreshold: number = 1.25;
 	#rebinTimeout: ReturnType<typeof setTimeout> | null = null;
+	#lastPublishedBinStep: number = 0;
 
 	// --- Diagnostic state (plain properties, NOT reactive — polled by test page) ---
 	// Line mode diagnostics
@@ -127,6 +142,21 @@ export class LODController {
 
 	// Shared diagnostics
 	frameCallbackCount: number = 0;
+
+	// --- Reactive display state — palette reads this ---
+	// Written at well-defined moments (count query returns, rung transition,
+	// re-bin data arrival), NOT every frame. Plain diagnostics above stay
+	// for test-page polling with zero proxy overhead.
+	readonly state: LODState = $state({
+		mode: 'line' as 'line' | 'binned',
+		density: 0,
+		visibleCount: 0,
+		shouldDecimate: false,
+		dotsVisible: false,
+		binStep: 0,
+		numVisibleBins: 0,
+		binWidthPx: 0
+	});
 
 	// --- Derived ---
 	get mode(): 'line' | 'binned' {
@@ -156,6 +186,7 @@ export class LODController {
 		this.#gpuCoordinator = gpuCoordinator;
 		this.#chartContext = chartContext;
 		this.#mode = config.mode;
+		this.state.mode = config.mode;
 
 		if (config.mode === 'line') {
 			this.#coordinator = coordinator!;
@@ -373,6 +404,11 @@ export class LODController {
 			this.#dotRadiusSpring?.setTarget(targetR);
 		}
 
+		// Publish to reactive state (count query is a well-defined moment)
+		this.state.visibleCount = count;
+		this.state.density = ppp;
+		this.state.shouldDecimate = newShouldDecimate;
+
 		// Fire onLODChange on state transitions
 		this.#fireChangeIfNeeded();
 	}
@@ -409,6 +445,12 @@ export class LODController {
 		this.#writeDotRadius?.(r);
 		this.#invalidateLayer?.();
 		this.dotRadius = r;
+
+		// Publish dotsVisible on threshold crossing (not every frame)
+		const nowVisible = r > 0;
+		if (nowVisible !== this.state.dotsVisible) {
+			this.state.dotsVisible = nowVisible;
+		}
 	}
 
 	// =========================================================================
@@ -457,6 +499,15 @@ export class LODController {
 							: this.#chartContext.innerHeight * dpr;
 					this.binWidthPx = this.numVisibleBins > 0 ? pixelExtent / this.numVisibleBins : 0;
 				}
+			}
+
+			// Publish to reactive state when bin step changes (new data arrived)
+			if (this.binStep !== this.#lastPublishedBinStep) {
+				this.#lastPublishedBinStep = this.binStep;
+				this.state.binStep = this.binStep;
+				this.state.numVisibleBins = this.numVisibleBins;
+				this.state.binWidthPx = this.binWidthPx;
+				this.state.density = this.density;
 			}
 		}
 

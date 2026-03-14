@@ -27,7 +27,7 @@ function escapeSql(value: unknown): string {
  * - Color index: __dplot_{field}_color_idx (1-based, 0 = null/unknown)
  * - Band index: __dplot_{field}_idx (0-based)
  *
- * View naming: {table}_derived_v{version}
+ * View naming: {table}_s{sessionId} (stable per session, CREATE OR REPLACE)
  */
 class ViewManagerService {
 	// Map<sourceTable, Map<columnAlias, ColumnDefinition>>
@@ -295,9 +295,12 @@ class ViewManagerService {
 			return;
 		}
 
-		// Version the view name — session ID prevents collisions across render contexts
+		// Stable view name per session — reuse existing name so getEffectiveTable()
+		// returns the same string, preventing MarkLifecycle effectiveTable cascades.
+		// CREATE OR REPLACE updates the definition in-place in DuckDB.
 		const currentVersion = (this.#tableStates.get(sourceTable)?.version ?? 0) + 1;
-		const viewName = `${sourceTable}_s${this.#sessionId}_v${currentVersion}`;
+		const existingName = this.#tableStates.get(sourceTable)?.viewName;
+		const viewName = existingName ?? `${sourceTable}_s${this.#sessionId}`;
 
 		// Build SELECT clause: all original columns + computed columns
 		const computedColumns = [...columns.entries()]

@@ -171,7 +171,7 @@ export async function fetchCategoricalDomains(
 		if (!isAggregate) {
 			if (colorScaleState.isOrdinal) {
 				const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
-				const q = Query.from(table).select({ color: colExpr }).distinct();
+				const q = Query.from(table).select({ color: colExpr }).distinct().orderby('color');
 
 				fetches.push(
 					coordinator.query(q).then((result) => {
@@ -227,7 +227,7 @@ export async function fetchCategoricalDomains(
 	// Fetch series domain if series scale is set and there's a series field
 	if (seriesScaleState && seriesChannel && select[seriesChannel]) {
 		const seriesField = select[seriesChannel];
-		const q = Query.from(table).select({ series: sqlColumn(String(seriesField)) }).distinct();
+		const q = Query.from(table).select({ series: sqlColumn(String(seriesField)) }).distinct().orderby('series');
 
 		fetches.push(
 			coordinator.query(q).then((result) => {

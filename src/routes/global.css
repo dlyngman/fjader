@@ -20,6 +20,12 @@
 		--diveplot-accent: var(--blue-1);
 		--diveplot-tooltip-bg: rgba(255, 255, 255, 0.92);
 		--diveplot-tooltip-text: var(--gray-10);
+		--diveplot-palette-bg: rgba(255, 255, 255, 0.95);
+		--diveplot-palette-text: var(--gray-10);
+		--diveplot-palette-text-secondary: rgba(17, 24, 39, 0.5);
+		--diveplot-palette-text-muted: rgba(17, 24, 39, 0.35);
+		--diveplot-palette-border: rgba(17, 24, 39, 0.1);
+		--diveplot-palette-highlight: rgba(17, 24, 39, 0.08);
 		color-scheme: dark;
 	}
 }

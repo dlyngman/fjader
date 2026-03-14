@@ -431,7 +431,9 @@ export class ColorScaleState {
 		this.domain = [...newDomain];
 		this.#uploadToGPU();
 
-		// Try to create views for registered tables (one-shot, will skip if already created)
+		// Domain order changed — clear one-shot guard to force view recreation
+		// so the CASE expression matches the new domain→index mapping.
+		this.#viewsCreated.clear();
 		for (const table of this.#registeredTables) {
 			this.#maybeCreateView(table);
 		}

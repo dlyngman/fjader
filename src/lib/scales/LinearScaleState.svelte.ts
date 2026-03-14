@@ -473,8 +473,19 @@ export class LinearScaleState {
 		const [min, max] = this.effectiveExtent;
 		if (!isFinite(min) || !isFinite(max) || min === max) return;
 
-		if (instant) {
-			// Instant update - skip animation entirely
+		// Snap when the new extent is completely disjoint from the current domain.
+		// This handles column reassignment (e.g., bill_length → body_mass) where
+		// animating between unrelated domains looks like random motion.
+		if (!instant && this.ready) {
+			if (min > this.#renderMax || max < this.#renderMin) {
+				instant = true;
+			}
+		}
+
+		if (instant || (!this.ready && !this.zoomInEffect.enabled)) {
+			// Instant update - skip animation entirely.
+			// Also snaps when zoom-in is disabled on a not-yet-ready scale
+			// (e.g., column reassignment — no point animating from default domain).
 			this.#setInstant(min, max);
 		} else if (!this.ready && this.zoomInEffect.enabled) {
 			// First time - do zoom-in effect from expanded view
@@ -654,14 +665,23 @@ export class LinearScaleState {
 		const minStart = Math.min(...extents.map((r) => r[0]));
 		const maxEnd = Math.max(...extents.map((r) => r[1]));
 
+		let newMin: number;
+		let newMax: number;
 		if (nice) {
 			const niceDomain = scaleLinear().domain([minStart, maxEnd]).nice(5).domain();
-			this.#extent[0] = niceDomain[0];
-			this.#extent[1] = niceDomain[1];
+			newMin = niceDomain[0];
+			newMax = niceDomain[1];
 		} else {
-			this.#extent[0] = minStart;
-			this.#extent[1] = maxEnd;
+			newMin = minStart;
+			newMax = maxEnd;
 		}
+
+		// Skip if extent hasn't changed (e.g. a shared scale losing a mark
+		// whose extent was identical to the remaining marks)
+		if (newMin === this.#extent[0] && newMax === this.#extent[1]) return;
+
+		this.#extent[0] = newMin;
+		this.#extent[1] = newMax;
 
 		this.resetDomainLimits();
 		if (!this.#externalDomainActive) {

@@ -46,6 +46,7 @@
 		constantColor?: [number, number, number, number];
 		sizeMode?: number;
 		sizeScaleIndex?: number;
+		markId?: string;
 	}
 
 	let {
@@ -61,7 +62,8 @@
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		sizeMode = 0,
-		sizeScaleIndex = 0
+		sizeScaleIndex = 0,
+		markId = ''
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -240,6 +242,15 @@
 	// Uniforms
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
+			// Guard: when switching to field-based color (colorMode=1), the uniform
+			// update fires before the parent's setup lifecycle effect has a chance to
+			// unmount this component and retain the renderer. Without this guard the
+			// retained renderer would draw one frame with colorMode=1 but a stale/dummy
+			// color buffer, producing a visible flash. Reading colorValueData via
+			// untrack avoids adding it as a dependency — on subsequent field→field
+			// changes colorMode stays 1 (no trigger), so the old valid state is kept.
+			if (colorMode === 1 && !untrack(() => colorValueData)) return;
+
 			const buffer = new ArrayBuffer(32);
 			const view = new DataView(buffer);
 			const LE = true;
@@ -342,9 +353,24 @@
 
 	onMount(() => waitForWebGPU());
 
+	// Clean up retained renderer from a previous instance once this renderer has data
+	$effect(() => {
+		if (renderer?.resourcesCreated && markId) {
+			console.log(`[Dots:${markId}] releaseRetained (resourcesCreated)`);
+			gpuCoordinator?.releaseRetained(markId);
+		}
+	});
+
 	onDestroy(() => {
-		if (quadGeometryBuffer) quadGeometryBuffer.destroy();
-		if (renderer) renderer.destroy();
+		const r = renderer;
+		const qgb = quadGeometryBuffer;
+		const retained = r && markId && gpuCoordinator?.retainRenderer(markId, {
+			destroy() { console.log(`[Dots:${markId}] retained.destroy()`); qgb?.destroy(); r.destroy(); }
+		});
+		console.log(`[Dots:${markId}] onDestroy retained=${!!retained} hasRenderer=${!!r}`);
+		if (retained) return;
+		if (qgb) qgb.destroy();
+		if (r) r.destroy();
 	});
 </script>
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
@@ -55,6 +55,7 @@
 		colorMode?: number;
 		colorScaleIndex?: number;
 		constantColor?: [number, number, number, number];
+		markId?: string;
 	}
 
 	let {
@@ -74,7 +75,8 @@
 		orientation = 'vertical',
 		colorMode = 0,
 		colorScaleIndex = 0,
-		constantColor = DEFAULT_FILL_COLOR
+		constantColor = DEFAULT_FILL_COLOR,
+		markId = ''
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -427,6 +429,10 @@
 	// Write uniforms when configuration changes
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
+			// Guard: skip uniform write when colorMode=1 but color data hasn't arrived.
+			// Prevents a retained renderer from flashing with stale/dummy color buffer.
+			if (colorMode === 1 && !untrack(() => colorValueData)) return;
+
 			const buffer = new ArrayBuffer(48);
 			const view = new DataView(buffer);
 			const LE = true;
@@ -566,9 +572,28 @@
 
 	onMount(() => waitForWebGPU());
 
+	// Release retained renderer from a previous instance once this one has data
+	$effect(() => {
+		if (renderer?.resourcesCreated && markId) {
+			gpuCoordinator?.releaseRetained(markId);
+		}
+	});
+
 	onDestroy(() => {
-		if (areaGeometryBuffer) areaGeometryBuffer.destroy();
-		if (renderer) renderer.destroy();
+		const r = renderer;
+		const agb = areaGeometryBuffer;
+		const retained =
+			r &&
+			markId &&
+			gpuCoordinator?.retainRenderer(markId, {
+				destroy() {
+					agb?.destroy();
+					r.destroy();
+				}
+			});
+		if (retained) return;
+		if (agb) agb.destroy();
+		if (r) r.destroy();
 	});
 </script>
 

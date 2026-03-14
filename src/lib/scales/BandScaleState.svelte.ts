@@ -9,7 +9,7 @@ interface BandScaleConfig {
 	paddingInner?: number | null;
 	paddingOuter?: number | null;
 	align?: number;
-	sourceColumn?: string | null;
+	sourceField?: string | null;
 	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
 }
 
@@ -84,7 +84,7 @@ export class BandScaleState {
 	#paddingInner: number | null = null;
 	#paddingOuter: number | null = null;
 	#align: number = 0.5;
-	#sourceColumn: string | null = null; // Actual SQL column name (defaults to this.name if null)
+	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
 	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
 
 	// =========================================================================
@@ -145,7 +145,7 @@ export class BandScaleState {
 		this.#paddingInner = config.paddingInner ?? null;
 		this.#paddingOuter = config.paddingOuter ?? null;
 		this.#align = config.align ?? 0.5;
-		this.#sourceColumn = config.sourceColumn ?? null;
+		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
@@ -202,10 +202,10 @@ export class BandScaleState {
 	/**
 	 * The actual SQL column name in the source table.
 	 * Defaults to this.name, but can be overridden (e.g. for facet scales
-	 * where name is "__facet__species" but sourceColumn is "species").
+	 * where name is "__facet__species" but sourceField is "species").
 	 */
-	get sourceColumn(): string {
-		return this.#sourceColumn ?? this.name;
+	get sourceField(): string {
+		return this.#sourceField ?? this.name;
 	}
 
 	/**
@@ -213,7 +213,7 @@ export class BandScaleState {
 	 * Format: __dplot_{field}_idx
 	 */
 	get indexColumnName(): string {
-		return ViewManagerService.bandIndexColumn(this.name);
+		return ViewManagerService.bandIndexColumn(this.sourceField);
 	}
 
 	/**
@@ -250,13 +250,13 @@ export class BandScaleState {
 		this.#viewsCreated.add(sourceTable);
 
 		const alias = this.indexColumnName;
-		const sql = ViewManagerService.buildCaseExpression(this.sourceColumn, this.effectiveDomain, {
+		const sql = ViewManagerService.buildCaseExpression(this.sourceField, this.effectiveDomain, {
 			oneBased: false // Band indices are 0-based
 		});
 
 		viewManager.registerColumn(sourceTable, alias, {
 			sql,
-			source: this.sourceColumn,
+			source: this.sourceField,
 			scaleId: this.#scaleId
 		});
 
@@ -429,15 +429,15 @@ export class BandScaleState {
 			oldDomain.length !== allCategories.length ||
 			allCategories.some((cat, i) => cat !== oldDomain[i]);
 
+		if (!domainChanged) return;
+
 		this.#domain = allCategories;
 		this._version++;
 
-		if (domainChanged) {
-			// Domain order changed — clear one-shot guard to force view recreation
-			this.#viewsCreated.clear();
-			// Notify GPU to re-render charts using this scale
-			this.#registry?.invalidateChartsUsingScale(this);
-		}
+		// Domain order changed — clear one-shot guard to force view recreation
+		this.#viewsCreated.clear();
+		// Notify GPU to re-render charts using this scale
+		this.#registry?.invalidateChartsUsingScale(this);
 
 		for (const table of this.#registeredTables) {
 			this.#maybeCreateView(table);

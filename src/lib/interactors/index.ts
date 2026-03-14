@@ -8,3 +8,4 @@ export { TooltipManager } from './TooltipManager.svelte';
 export { default as Tooltip } from './Tooltip.svelte';
 export { default as HoverIndicator } from './HoverIndicator.svelte';
 export { default as Toggle } from './Toggle.svelte';
+export { default as CommandPalette } from './CommandPalette.svelte';

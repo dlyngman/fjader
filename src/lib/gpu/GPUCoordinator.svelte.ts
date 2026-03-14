@@ -221,6 +221,8 @@ export class GPUCoordinator {
 	#registeredCharts = new Map<string, ChartConfig>(); // chartId -> chartConfig
 	// #msaaCache = new Map(); // chartId -> { texture, view }
 	#dirtyChartsArray: ChartConfig[] = [];
+	#retainedRenderers = new Map<string, { destroy: () => void }>();
+	#pendingReleases: { destroy: () => void }[] = [];
 	#msaaSampleCount = 1;
 
 	// =========================================================================
@@ -717,6 +719,14 @@ export class GPUCoordinator {
 			this.#coordinatedRender(chartArray);
 		}
 
+		// 5b. Process deferred renderer releases (after render so new frame is submitted)
+		if (this.#pendingReleases.length > 0) {
+			for (let i = 0; i < this.#pendingReleases.length; i++) {
+				this.#pendingReleases[i].destroy();
+			}
+			this.#pendingReleases.length = 0;
+		}
+
 		// 6. Per-frame callbacks (tooltip scheduling, etc.)
 		this.#isAnimating = this.#animatedScales.size > 0;
 		const cbLen = this.#frameCallbacks.length;
@@ -732,7 +742,8 @@ export class GPUCoordinator {
 		return (
 			this.#animatedScales.size === 0 &&
 			this.#dirtyChartsArray.length === 0 &&
-			this.#hoveredCharts.size === 0
+			this.#hoveredCharts.size === 0 &&
+			this.#pendingReleases.length === 0
 		);
 	};
 
@@ -1498,6 +1509,48 @@ export class GPUCoordinator {
 		}
 	}
 
+	/**
+	 * Signal that a mark's renderer should be retained on next unmount.
+	 * Called before setup.destroy() so the renderer keeps drawing during replacement.
+	 */
+	markForRetain(markId: string): void {
+		// If a previous retained renderer hasn't been released yet (lifecycle $effect
+		// re-ran before the new renderer mounted), queue it for destruction now.
+		// Without this, the old entry would be overwritten by the sentinel and leaked.
+		const existing = this.#retainedRenderers.get(markId);
+		if (existing) {
+			this.#pendingReleases.push(existing);
+		}
+		// Sentinel entry — renderer.onDestroy will replace it with the actual renderer
+		this.#retainedRenderers.set(markId, { destroy() {} });
+	}
+
+	/**
+	 * Check if a mark is flagged for retention, and store its actual renderer.
+	 * Called from renderer onDestroy — swaps the sentinel with the real destroyable.
+	 */
+	retainRenderer(markId: string, destroyable: { destroy: () => void }): boolean {
+		if (this.#retainedRenderers.has(markId)) {
+			this.#retainedRenderers.set(markId, destroyable);
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Queue a retained renderer for destruction after the next render cycle.
+	 * The old renderer keeps drawing until the new one has rendered a frame.
+	 */
+	releaseRetained(markId: string): void {
+		const retained = this.#retainedRenderers.get(markId);
+		if (retained) {
+			this.#retainedRenderers.delete(markId);
+			this.#pendingReleases.push(retained);
+			// Ensure a render cycle runs to process the release
+			this.#animationLoop!.requestStart();
+		}
+	}
+
 	setChartScaleMapping(
 		chartId: string,
 		{ xScaleId, yScaleId }: { xScaleId: string; yScaleId: string }
@@ -1986,6 +2039,16 @@ export class GPUCoordinator {
 		this.#resolveBuffer?.destroy();
 		this.#resultBuffer?.destroy();
 		this.#querySet = null; // QuerySet has no destroy(), just null reference
+
+		// Destroy retained and pending-release renderers
+		for (const retained of this.#retainedRenderers.values()) {
+			retained.destroy();
+		}
+		this.#retainedRenderers.clear();
+		for (let i = 0; i < this.#pendingReleases.length; i++) {
+			this.#pendingReleases[i].destroy();
+		}
+		this.#pendingReleases.length = 0;
 
 		// Force release all renderer resources
 		for (const rendererId of this.#rendererRegistry.keys()) {

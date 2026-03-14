@@ -225,6 +225,8 @@ export class ScaleRegistry {
 		config: Record<string, unknown> = {},
 		chartId: string | null = null
 	): AnyScaleState {
+		let scaleCreated = false;
+
 		// Wrap map operations in untrack() to prevent SvelteMap reads from creating
 		// reactive dependencies when called from $effect blocks (MarkColor, MarkSize, etc.)
 		const scale = untrack(() => {
@@ -246,6 +248,7 @@ export class ScaleRegistry {
 			}
 
 			if (!this.scales[type].has(key)) {
+				scaleCreated = true;
 				// Factory Logic
 				if (['linear', 'pow', 'identity'].includes(type)) {
 					this.scales[type].set(
@@ -283,7 +286,7 @@ export class ScaleRegistry {
 							paddingOuter: (config.paddingOuter as number | undefined) ?? 0.1,
 							padding: (config.padding as number | undefined) ?? 0.1,
 							align: (config.align as number | undefined) ?? 0.5,
-							sourceColumn: config.sourceColumn as string | undefined,
+							sourceField: config.sourceField as string | undefined,
 							registry: this
 						})
 					);
@@ -352,9 +355,18 @@ export class ScaleRegistry {
 				const chartIds = this.scaleUsage.get(scale)!;
 				if (!chartIds.has(chartId)) {
 					chartIds.add(chartId);
-					this.#notifyTopologyChange();
+					// Update render-loop metadata directly (no full topology rebuild)
+					const inst = scale as unknown as { _affectedChartsArray?: string[] };
+					if (inst._affectedChartsArray) {
+						inst._affectedChartsArray = Array.from(chartIds);
+					}
 				}
 			});
+		}
+
+		// Only rebuild topology when a new scale enters the SSBO layout
+		if (scaleCreated) {
+			this.#notifyTopologyChange();
 		}
 
 		return scale;
@@ -368,11 +380,18 @@ export class ScaleRegistry {
 				const usage = this.scaleUsage.get(scale)!;
 				if (usage.delete(chartId)) {
 					if (usage.size === 0) {
+						// Scale destroyed — topology changes (SSBO layout shifts)
 						if (scale.destroy) scale.destroy();
 						this.scaleUsage.delete(scale);
 						this._removeScaleFromStorage(scale);
+						this.#notifyTopologyChange();
+					} else {
+						// Scale survives — just update render-loop metadata
+						const inst = scale as unknown as { _affectedChartsArray?: string[] };
+						if (inst._affectedChartsArray) {
+							inst._affectedChartsArray = Array.from(usage);
+						}
 					}
-					this.#notifyTopologyChange();
 				}
 			}
 		});
@@ -382,22 +401,28 @@ export class ScaleRegistry {
 		if (!chartId) return;
 
 		untrack(() => {
-			let changed = false;
+			let scaleDestroyed = false;
 
 			for (const [scale, usageSet] of this.scaleUsage) {
 				if (usageSet.has(chartId)) {
 					usageSet.delete(chartId);
-					changed = true;
 
 					if (usageSet.size === 0) {
 						if (scale.destroy) scale.destroy();
 						this.scaleUsage.delete(scale);
 						this._removeScaleFromStorage(scale);
+						scaleDestroyed = true;
+					} else {
+						// Update render-loop metadata directly
+						const inst = scale as unknown as { _affectedChartsArray?: string[] };
+						if (inst._affectedChartsArray) {
+							inst._affectedChartsArray = Array.from(usageSet);
+						}
 					}
 				}
 			}
 
-			if (changed) {
+			if (scaleDestroyed) {
 				this.#notifyTopologyChange();
 			}
 		});

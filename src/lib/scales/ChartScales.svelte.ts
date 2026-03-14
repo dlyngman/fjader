@@ -101,65 +101,49 @@ export class ChartScales {
 			console.error('ChartScales initialized without scaleRegistry!');
 		}
 
-		// Effect: Update scale instances when requirements or labels change
+		// Effect: Update scale instances when requirements or labels change.
+		// Scale resolution also runs eagerly from registerScaleType() so that
+		// MarkLifecycle effects always see the correct scale instances.
 		$effect(() => {
-			const xLabel = this.xLabel;
-			const yLabel = this.yLabel;
-			const xConfig = this.scaleConfigurations.x;
-			const yConfig = this.scaleConfigurations.y;
+			// Read reactive inputs to establish dependency tracking
+			this.xLabel;
+			this.yLabel;
+			this.scaleConfigurations;
 
-			if (!xConfig || !yConfig) return;
+			this.#resolveScaleInstances();
 
-			const xKey = xLabel || xConfig.columnName || 'x';
-			const yKey = yLabel || yConfig.columnName || 'y';
-
-			// When useXSelection/useYSelection is set, add a discriminator to
-			// the config so ScaleRegistry creates a separate scale instance
-			// (the detail chart needs its own domain, independent from the overview's).
-			const xScaleConfig = this.config.useXSelection
-				? { ...(xConfig.config || {}), __selectionConsumer: this.chartId }
-				: xConfig.config || {};
-			const yScaleConfig = this.config.useYSelection
-				? { ...(yConfig.config || {}), __selectionConsumer: this.chartId }
-				: yConfig.config || {};
-
-			// ChartScales only creates axis scales (linear/band/time), safe to narrow
-			const neededXScale = this.#scaleRegistry.getOrCreateScale(
-				xKey,
-				xConfig.type,
-				xScaleConfig,
-				this.chartId
-			) as ScaleStateInstance;
-
-			const neededYScale = this.#scaleRegistry.getOrCreateScale(
-				yKey,
-				yConfig.type,
-				yScaleConfig,
-				this.chartId
-			) as ScaleStateInstance;
-
+			// Register facets — reuses the same scale instances resolved above
 			const facetIds = this.#getFacetChartIds?.();
-			if (facetIds) {
-				for (const cellId of facetIds) {
-					this.#scaleRegistry.getOrCreateScale(xKey, xConfig.type, xConfig.config || {}, cellId);
-					this.#scaleRegistry.getOrCreateScale(yKey, yConfig.type, yConfig.config || {}, cellId);
+			if (facetIds && this.#xScaleInstance && this.#yScaleInstance) {
+				const xConfig = this.scaleConfigurations.x;
+				const yConfig = this.scaleConfigurations.y;
+				if (xConfig && yConfig) {
+					const xKey = this.xLabel || xConfig.columnName || 'x';
+					const yKey = this.yLabel || yConfig.columnName || 'y';
+					const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
+					const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
+					if (this.config.useXSelection)
+						xScaleConfig.__selectionConsumer = this.chartId;
+					if (this.config.useYSelection)
+						yScaleConfig.__selectionConsumer = this.chartId;
+					for (const cellId of facetIds) {
+						this.#scaleRegistry.getOrCreateScale(
+							xKey,
+							xConfig.type,
+							xScaleConfig,
+							cellId
+						);
+						this.#scaleRegistry.getOrCreateScale(
+							yKey,
+							yConfig.type,
+							yScaleConfig,
+							cellId
+						);
+					}
 				}
 			}
 
-			if (this.#xScaleInstance !== neededXScale) {
-				if (this.#xScaleInstance) {
-					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
-				}
-				this.#xScaleInstance = neededXScale;
-			}
-
-			if (this.#yScaleInstance !== neededYScale) {
-				if (this.#yScaleInstance) {
-					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
-				}
-				this.#yScaleInstance = neededYScale;
-			}
-
+			// Apply zoom/pan limits
 			{
 				const xInst = this.#xScaleInstance;
 				const yInst = this.#yScaleInstance;
@@ -314,6 +298,79 @@ export class ChartScales {
 		return this.config.layout.chartId;
 	}
 
+	/**
+	 * Build the config object for a single axis scale, adding discriminators
+	 * (sourceField for band/point, __selectionConsumer for selection-driven).
+	 */
+	#buildAxisScaleConfig(axisConfig: ResolvedScaleConfiguration): Record<string, unknown> {
+		const cfg: Record<string, unknown> = { ...(axisConfig.config || {}) };
+		if (
+			(axisConfig.type === 'band' || axisConfig.type === 'point') &&
+			axisConfig.columnName
+		) {
+			cfg.sourceField = axisConfig.columnName;
+		}
+		return cfg;
+	}
+
+	/**
+	 * Resolve scale instances from current scaleConfigurations.
+	 * Called both eagerly (from registerScaleType, synchronous) and
+	 * reactively (from the $effect). Idempotent — a no-op when scales
+	 * are already correct.
+	 */
+	#resolveScaleInstances(): void {
+		const xConfig = this.scaleConfigurations.x;
+		const yConfig = this.scaleConfigurations.y;
+		if (!xConfig || !yConfig) return;
+
+		const xKey = this.xLabel || xConfig.columnName || 'x';
+		const yKey = this.yLabel || yConfig.columnName || 'y';
+
+		const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
+		const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
+
+		if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
+		if (this.config.useYSelection) yScaleConfig.__selectionConsumer = this.chartId;
+
+		const neededXScale = this.#scaleRegistry.getOrCreateScale(
+			xKey,
+			xConfig.type,
+			xScaleConfig,
+			this.chartId
+		) as ScaleStateInstance;
+
+		const neededYScale = this.#scaleRegistry.getOrCreateScale(
+			yKey,
+			yConfig.type,
+			yScaleConfig,
+			this.chartId
+		) as ScaleStateInstance;
+
+		if (this.#xScaleInstance !== neededXScale) {
+			const wasReplacement = !!this.#xScaleInstance;
+			if (this.#xScaleInstance) {
+				this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
+			}
+			this.#xScaleInstance = neededXScale;
+			// Skip zoom-in intro when replacing an existing scale (column reassignment)
+			if (wasReplacement && neededXScale instanceof LinearScaleState) {
+				neededXScale.zoomInEffect.enabled = false;
+			}
+		}
+
+		if (this.#yScaleInstance !== neededYScale) {
+			const wasReplacement = !!this.#yScaleInstance;
+			if (this.#yScaleInstance) {
+				this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
+			}
+			this.#yScaleInstance = neededYScale;
+			if (wasReplacement && neededYScale instanceof LinearScaleState) {
+				neededYScale.zoomInEffect.enabled = false;
+			}
+		}
+	}
+
 	scaleConfigurations = $derived.by(() => {
 		try {
 			return {
@@ -416,6 +473,13 @@ export class ChartScales {
 			requirements.push({ type, priority, markId, config, columnName: resolvedColumnName });
 			this.scaleRequirements[dimension] = [...requirements];
 		}
+
+		// Eagerly resolve scale instances so MarkLifecycle effects (which may
+		// run before the ChartScales $effect) always see the correct scales.
+		// Safe from untrack() contexts — reads $derived synchronously, writes
+		// $state. No-op when only one axis has requirements (the other config
+		// will be null, causing #resolveScaleInstances to return early).
+		this.#resolveScaleInstances();
 	};
 
 	unregisterScaleType = (dimension: 'x' | 'y', markId: string): void => {

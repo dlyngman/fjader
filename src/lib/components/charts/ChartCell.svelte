@@ -7,11 +7,13 @@
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 	import type { ChartContext, Coordinator } from '$lib/types';
 	import type { ChartScales } from '$lib/scales/ChartScales.svelte';
+	import type { ChartConfig } from '$lib/config';
 	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { D3Scale } from '$lib/types';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
+	import CommandPalette from '$lib/interactors/CommandPalette.svelte';
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
 
 	interface FacetingProps {
@@ -34,6 +36,7 @@
 		margin?: Margin;
 		height?: number;
 		scales: ChartScales;
+		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
 		coordinator: Coordinator;
@@ -53,6 +56,7 @@
 		margin = { top: 30, right: 50, bottom: 35, left: 75 },
 		height = 250,
 		scales,
+		chartConfig,
 		facetingProps = { fx: null, isFaceted: false, facetChartIds: [], facetBandScale: null },
 		gpuCoordinator,
 		coordinator,
@@ -79,6 +83,7 @@
 	// the event handler (inversion) and the Svelte render pass (forward mapping).
 	let currentInnerX = $state<number | null>(null);
 	let currentInnerY = $state<number | null>(null);
+	let paletteOpen = $state(false);
 
 	$effect(() => {
 		if (containerWidth > 0) layout.updateWidth(containerWidth);
@@ -201,7 +206,7 @@
 			}
 		};
 
-		const tm = new TooltipManager(coordinator, scaleProvider);
+		const tm = new TooltipManager(coordinator, scaleProvider, chartConfig);
 		tooltipManager = tm;
 
 		const frameCallback = () => tm.tick();
@@ -407,6 +412,9 @@
 			return facetingProps.facetBandScale;
 		},
 
+		// Configuration store — from parent ChartContainer
+		config: chartConfig,
+
 		// Pointer hooks — cell-local (mutable slots set by interactors)
 		onChartClick: null,
 		onInteractorPointerDown: null,
@@ -516,7 +524,17 @@
 		chartContext.onChartClick?.(event as unknown as PointerEvent);
 	}
 
+	function handleContextMenu(event: MouseEvent) {
+		event.preventDefault();
+		paletteOpen = !paletteOpen;
+	}
+
 	function handleKeyDown(event: KeyboardEvent) {
+		if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
+			event.preventDefault();
+			paletteOpen = !paletteOpen;
+			return;
+		}
 		if (!tooltipManager?.visible || tooltipManager.currentPoints.length <= 1) return;
 		if (event.code === 'BracketRight') {
 			event.preventDefault();
@@ -591,8 +609,7 @@
 
 	function handlePointerDown(event: PointerEvent) {
 		event.preventDefault();
-		const target = event.target as Element | null;
-		if (target && 'focus' in target) (target as HTMLElement).focus({ preventScroll: true });
+		chartCellEl?.focus({ preventScroll: true });
 
 		pointerBuffer.x = ptrX(event);
 		pointerBuffer.y = ptrY(event);
@@ -709,6 +726,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="chart-cell"
+	class:palette-open={paletteOpen}
 	bind:this={chartCellEl}
 	bind:clientWidth={containerWidth}
 	bind:clientHeight={containerHeight}
@@ -752,6 +770,7 @@
 				onpointercancel={handlePointerUp}
 				ondblclick={handleDoubleClick}
 				onclick={handleClick}
+			oncontextmenu={handleContextMenu}
 			>
 				<defs>
 					<clipPath id={layout.clipPathId}>
@@ -789,6 +808,8 @@
 			{#if tooltipManager}
 				<Tooltip />
 			{/if}
+
+			<CommandPalette bind:open={paletteOpen} />
 		{/if}
 	</div>
 </div>
@@ -805,6 +826,11 @@
 		will-change: transform;
 		outline: none;
 		isolation: isolate;
+	}
+
+	.chart-cell.palette-open {
+		contain: layout style;
+		overflow: visible;
 	}
 
 	.facet-label {
