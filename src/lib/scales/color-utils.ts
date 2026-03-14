@@ -409,6 +409,23 @@ export function getOrdinalColors(scheme: string): readonly string[] | null {
 /**
  * Determine if a scheme is ordinal (discrete) or continuous.
  */
+/**
+ * All available scheme names, grouped by type.
+ */
+export function getAllSchemeNames(): {
+	ordinal: string[];
+	sequential: string[];
+	diverging: string[];
+	cyclical: string[];
+} {
+	return {
+		ordinal: Object.keys(ORDINAL_SCHEMES),
+		sequential: Object.keys(SEQUENTIAL_SCHEMES),
+		diverging: Object.keys(DIVERGING_SCHEMES),
+		cyclical: Object.keys(CYCLICAL_SCHEMES)
+	};
+}
+
 export function getSchemeType(scheme: string): ColorScaleType | null {
 	const key = scheme.toLowerCase();
 	if (ORDINAL_SCHEMES[key]) return 'ordinal';

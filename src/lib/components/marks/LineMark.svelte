@@ -390,6 +390,7 @@
 {#if (setup?.gpuReady || !table) && markColor.ready && markSeries.ready && xData && yData}
 	{#key effectiveCurve}
 		<Lines
+			{markId}
 			{xData}
 			{yData}
 			{seriesData}

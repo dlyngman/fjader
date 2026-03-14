@@ -304,8 +304,8 @@
 				chartContext,
 				channelFields: setup.channelFieldMap,
 				colorColumn: 'fill',
-				// Stacked areas: compute nearest-point distance against the stacked right (x1)
-				...(hasStackTransform && { columns: { x: 'x1' } }),
+				// Stacked areas: containment-based proximity (x0 ≤ cursor ≤ x1)
+				...(hasStackTransform && { columns: { x: 'x1', xLow: 'x0', xHigh: 'x1' } }),
 				markColor,
 				proximityAxis: entry.tooltipProximity,
 				constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
@@ -325,6 +325,7 @@
 {#if (setup?.gpuReady || !table) && markColor.ready && markSeries.ready && yData && xRightData && xLeftData}
 	{#key effectiveCurve}
 		<Areas
+			{markId}
 			dimData={yData}
 			topData={xRightData}
 			bottomData={xLeftData}

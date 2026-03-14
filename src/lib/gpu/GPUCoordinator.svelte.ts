@@ -1514,14 +1514,20 @@ export class GPUCoordinator {
 	 * Called before setup.destroy() so the renderer keeps drawing during replacement.
 	 */
 	markForRetain(markId: string): void {
-		console.log(`[GPU] markForRetain(${markId})`);
-		// Use a sentinel entry — Dots.onDestroy will replace it with the actual renderer
+		// If a previous retained renderer hasn't been released yet (lifecycle $effect
+		// re-ran before the new renderer mounted), queue it for destruction now.
+		// Without this, the old entry would be overwritten by the sentinel and leaked.
+		const existing = this.#retainedRenderers.get(markId);
+		if (existing) {
+			this.#pendingReleases.push(existing);
+		}
+		// Sentinel entry — renderer.onDestroy will replace it with the actual renderer
 		this.#retainedRenderers.set(markId, { destroy() {} });
 	}
 
 	/**
 	 * Check if a mark is flagged for retention, and store its actual renderer.
-	 * Called from Dots.onDestroy — swaps the sentinel with the real destroyable.
+	 * Called from renderer onDestroy — swaps the sentinel with the real destroyable.
 	 */
 	retainRenderer(markId: string, destroyable: { destroy: () => void }): boolean {
 		if (this.#retainedRenderers.has(markId)) {

@@ -1,5 +1,6 @@
 import type { JsColumnType } from '$lib/data/TableSchemaService.svelte';
 import type { MarkEntry } from '$lib/config/ChartConfig.svelte';
+import { getAllSchemeNames } from '$lib/scales/color-utils';
 
 // Which entry keys are column-assignable channels (accept a FieldRef).
 // Derived from each mark's registerMark() call. Order = display order in palette.
@@ -52,14 +53,83 @@ export interface ColumnOption {
 	sqlType: string;
 }
 
-// ---- Chart-level channels (scale type overrides) ----
+// ---- Option value lists (derived from runtime sources) ----
+
+type OptionValue = { value: string | null; label: string };
+const AUTO: OptionValue = { value: null, label: 'auto' };
+
+function buildSchemeOptions(): OptionValue[] {
+	const s = getAllSchemeNames();
+	const opts: OptionValue[] = [AUTO];
+	for (const name of s.ordinal) opts.push({ value: name, label: name });
+	for (const name of s.sequential) opts.push({ value: name, label: name });
+	for (const name of s.diverging) opts.push({ value: name, label: name });
+	for (const name of s.cyclical) opts.push({ value: name, label: name });
+	return opts;
+}
+
+// User-facing curve names (excludes axis-specific variants like monotone-x/bump-x).
+const USER_CURVES = ['linear', 'step', 'step-before', 'step-after', 'monotone', 'catmull-rom', 'bump'];
+
+function buildCurveOptions(): OptionValue[] {
+	return [AUTO, ...USER_CURVES.map((c) => ({ value: c, label: c }))];
+}
+
+const SCHEME_OPTIONS = buildSchemeOptions();
+const CURVE_OPTIONS = buildCurveOptions();
+
+// ---- Option channels (enum pickers, not column assignment) ----
+
+/** An option channel maps a display name → a MarkEntry prop with a fixed set of values. */
+export interface OptionChannelDef {
+	/** MarkEntry property to read/write */
+	prop: string;
+	/** Fixed options (value=null means "auto"/unset) */
+	options: Array<{ value: string | null; label: string }>;
+	/**
+	 * If set, options are resolved dynamically from schema + entry.
+	 * Overrides the static `options` list.
+	 */
+	dynamic?: 'scaleType';
+}
+
+// Per-mark option channels, keyed by mark type.
+// These appear after column channels in the mark tab.
+const MARK_OPTION_CHANNELS: Record<string, Record<string, OptionChannelDef>> = {
+	dot: {
+		scheme: { prop: 'scheme', options: SCHEME_OPTIONS }
+	},
+	line: {
+		scheme: { prop: 'scheme', options: SCHEME_OPTIONS },
+		curve: { prop: 'curve', options: CURVE_OPTIONS }
+	},
+	areay: {
+		scheme: { prop: 'scheme', options: SCHEME_OPTIONS },
+		curve: { prop: 'curve', options: CURVE_OPTIONS }
+	},
+	areax: {
+		scheme: { prop: 'scheme', options: SCHEME_OPTIONS },
+		curve: { prop: 'curve', options: CURVE_OPTIONS }
+	},
+	bary: { scheme: { prop: 'scheme', options: SCHEME_OPTIONS } },
+	barx: { scheme: { prop: 'scheme', options: SCHEME_OPTIONS } },
+	recty: { scheme: { prop: 'scheme', options: SCHEME_OPTIONS } },
+	rectx: { scheme: { prop: 'scheme', options: SCHEME_OPTIONS } },
+	rect: { scheme: { prop: 'scheme', options: SCHEME_OPTIONS } }
+};
+
+export function getOptionChannels(markType: string): Record<string, OptionChannelDef> {
+	return MARK_OPTION_CHANNELS[markType] ?? {};
+}
+
+// ---- Chart-level channels (applied to all marks) ----
 
 export const CHART_CHANNELS = ['x scale', 'y scale'] as const;
 export type ChartChannel = (typeof CHART_CHANNELS)[number];
 
-export const CHART_CHANNEL_TO_PROP: Record<ChartChannel, string> = {
-	'x scale': 'preferredXScaleType',
-	'y scale': 'preferredYScaleType'
+export const CHART_CHANNEL_DEFS: Record<ChartChannel, OptionChannelDef> = {
+	'x scale': { prop: 'preferredXScaleType', options: [], dynamic: 'scaleType' },
+	'y scale': { prop: 'preferredYScaleType', options: [], dynamic: 'scaleType' }
 };
 
 // Scale types compatible with each JS column type.

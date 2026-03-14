@@ -852,14 +852,17 @@ export class MarkLifecycle {
 		config: DataClientConfig,
 		filter: unknown[],
 		forMosaic = true
-	): Query {
+	): Query | null {
 		// Build and cache all filter-independent query parts on first call.
 		// Subsequent calls (e.g. during brush interaction) reuse the cache.
 		if (!this.#cachedQueryParts) {
 			let select: Record<string, unknown> = config.select;
 
-			// Resolve auto bins if we have field info
-			if (this.#autoBinNodes.size > 0 && this.client?.fieldInfo) {
+			// Resolve auto bins if we have field info.
+			// If autobins exist but fieldInfo isn't available yet, defer —
+			// unresolved AutoBinNodes would stringify to "[object Object]" in SQL.
+			if (this.#autoBinNodes.size > 0) {
+				if (!this.client?.fieldInfo) return null;
 				select = this.#resolveAutoBins(config.select);
 			}
 
@@ -1170,6 +1173,7 @@ export class MarkLifecycle {
 					filter,
 					false
 				);
+				if (!tooltipQuery) return;
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow in distance math).
 				// Build REPLACE clause dynamically — bar marks have x1/x2 or y1/y2 instead of x/y.
@@ -1203,6 +1207,7 @@ export class MarkLifecycle {
 					const colData = data.getColumn(col);
 					if (colData) columnArrays[col] = colData;
 				}
+
 
 				// Band axis columns from category-reducing transforms (e.g. topN) contain
 				// strings instead of ViewManager integer indices. Use the scale's index map
@@ -1249,6 +1254,8 @@ export class MarkLifecycle {
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 				]);
+
+
 				this.#tooltipTableReady = true;
 			}
 		} catch (error) {

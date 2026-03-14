@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
@@ -50,6 +50,7 @@
 		constantColor?: [number, number, number, number];
 		m4Decimator?: M4Decimator | null;
 		lodController?: import('$lib/lod/LODController.svelte').LODController | null;
+		markId?: string;
 	}
 
 	let {
@@ -67,7 +68,8 @@
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		m4Decimator = null,
-		lodController = null
+		lodController = null,
+		markId = ''
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -371,6 +373,10 @@
 	// Write uniforms when configuration changes
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
+			// Guard: skip uniform write when colorMode=1 but color data hasn't arrived.
+			// Prevents a retained renderer from flashing with stale/dummy color buffer.
+			if (colorMode === 1 && !untrack(() => colorValueData)) return;
+
 			const buffer = new ArrayBuffer(48);
 			const view = new DataView(buffer);
 			const LE = true;
@@ -587,10 +593,31 @@
 
 	onMount(() => waitForWebGPU());
 
+	// Release retained renderer from a previous instance once this one has data
+	$effect(() => {
+		if (renderer?.resourcesCreated && markId) {
+			gpuCoordinator?.releaseRetained(markId);
+		}
+	});
+
 	onDestroy(() => {
+		const r = renderer;
+		const qgb = quadGeometryBuffer;
+		const key = m4ComputeKey;
+		const retained =
+			r &&
+			markId &&
+			gpuCoordinator?.retainRenderer(markId, {
+				destroy() {
+					gpuCoordinator.removeComputeWork(key);
+					qgb?.destroy();
+					r.destroy();
+				}
+			});
+		if (retained) return;
 		gpuCoordinator.removeComputeWork(m4ComputeKey);
-		if (quadGeometryBuffer) quadGeometryBuffer.destroy();
-		if (renderer) renderer.destroy();
+		if (qgb) qgb.destroy();
+		if (r) r.destroy();
 	});
 </script>
 

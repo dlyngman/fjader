@@ -334,6 +334,7 @@
 
 {#if (setup?.gpuReady || !table) && markColor.ready && x0Data && x1Data && y0Data && y1Data}
 	<Rects
+		{markId}
 		{x0Data}
 		{x1Data}
 		{y0Data}

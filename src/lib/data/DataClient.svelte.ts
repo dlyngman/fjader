@@ -75,6 +75,7 @@ export class DataClient extends MosaicClient {
 	#fieldRequests: FieldInfoRequest[];
 	#queryBuilder: QueryBuilder;
 	#filterStable: boolean;
+	#destroyed = false;
 
 	constructor(
 		sourceTable: string,
@@ -144,12 +145,24 @@ export class DataClient extends MosaicClient {
 	}
 
 	query(filter?: FilterExpr | null): Query | null {
-		if (!this._sourceTable) {
-			this.error = new Error('Source table is not defined.');
-			this.setLoading(false);
+		if (this.#destroyed || !this._sourceTable) {
+			if (!this.#destroyed) {
+				this.error = new Error('Source table is not defined.');
+				this.setLoading(false);
+			}
 			return null;
 		}
 		return this.#queryBuilder(this._sourceTable, this.config, filter ?? []);
+	}
+
+	/**
+	 * Guard against Mosaic calling requestQuery after disconnect.
+	 * After destroy(), the coordinator reference is null — the inherited
+	 * MosaicClient.requestQuery would throw "Cannot read properties of null".
+	 */
+	override requestQuery(query?: Query): Promise<unknown> | null {
+		if (this.#destroyed) return null;
+		return super.requestQuery(query);
 	}
 
 	queryPending(): this {
@@ -261,6 +274,7 @@ export class DataClient extends MosaicClient {
 	}
 
 	destroy(): void {
+		this.#destroyed = true;
 		if (this.#loadingTimeout) clearTimeout(this.#loadingTimeout);
 		if (this.coordinator) this.coordinator.disconnect(this);
 	}

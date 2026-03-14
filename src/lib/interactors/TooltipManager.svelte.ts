@@ -281,6 +281,7 @@ export class TooltipManager {
 				const cols = config.columns;
 				const colorCol = config.colorColumn;
 
+	
 				// Resolve all matched rows
 				const resolvedPoints: DataRow[] = [];
 				const matched: MatchedPoint[] = [];
@@ -425,7 +426,23 @@ export class TooltipManager {
 		if (useX && scaleTypes.x === 'band' && xData != null) {
 			bbConditions.push(`CAST(${xCol} AS INTEGER) = ${Math.round(xData)}`);
 		} else if (useX && xData != null) {
-			if (xScale) {
+			// Containment mode: stacked horizontal areas provide xLow/xHigh columns.
+			const xLowCol = columns?.xLow;
+			const xHighCol = columns?.xHigh;
+			if (xLowCol && xHighCol && xScale) {
+				const x0 = xScale.invert!(xScale(xData) - boundingBoxPx);
+				const x1 = xScale.invert!(xScale(xData) + boundingBoxPx);
+				bbConditions.push(
+					`"${xHighCol}" >= ${Math.min(x0 as number, x1 as number)} AND "${xLowCol}" <= ${Math.max(x0 as number, x1 as number)}`
+				);
+
+				const pxPerUnit = xScale(xData + 1) - xScale(xData);
+				const pxSq = pxPerUnit * pxPerUnit;
+				distParts.push(
+					`CASE WHEN "${xLowCol}" <= ${xData} AND "${xHighCol}" >= ${xData} THEN 0` +
+					` ELSE LEAST(("${xLowCol}" - ${xData}) * ("${xLowCol}" - ${xData}), ("${xHighCol}" - ${xData}) * ("${xHighCol}" - ${xData})) * ${pxSq} END`
+				);
+			} else if (xScale) {
 				const x0 = xScale.invert!(xScale(xData) - boundingBoxPx);
 				const x1 = xScale.invert!(xScale(xData) + boundingBoxPx);
 				bbConditions.push(
@@ -444,7 +461,26 @@ export class TooltipManager {
 		if (useY && scaleTypes.y === 'band' && yData != null) {
 			bbConditions.push(`CAST(${yCol} AS INTEGER) = ${Math.round(yData)}`);
 		} else if (useY && yData != null) {
-			if (yScale) {
+			// Containment mode: stacked areas provide yLow/yHigh columns.
+			// Points where yLow <= cursor <= yHigh get zero y-distance (cursor is inside).
+			// Points outside use distance to the nearest boundary.
+			const yLowCol = columns?.yLow;
+			const yHighCol = columns?.yHigh;
+			if (yLowCol && yHighCol && yScale) {
+				const y0 = yScale.invert!(yScale(yData) - boundingBoxPx);
+				const y1 = yScale.invert!(yScale(yData) + boundingBoxPx);
+				// Bounding box: area must overlap the cursor's vertical range
+				bbConditions.push(
+					`"${yHighCol}" >= ${Math.min(y0 as number, y1 as number)} AND "${yLowCol}" <= ${Math.max(y0 as number, y1 as number)}`
+				);
+
+				const pxPerUnit = yScale(yData + 1) - yScale(yData);
+				const pxSq = pxPerUnit * pxPerUnit;
+				distParts.push(
+					`CASE WHEN "${yLowCol}" <= ${yData} AND "${yHighCol}" >= ${yData} THEN 0` +
+					` ELSE LEAST(("${yLowCol}" - ${yData}) * ("${yLowCol}" - ${yData}), ("${yHighCol}" - ${yData}) * ("${yHighCol}" - ${yData})) * ${pxSq} END`
+				);
+			} else if (yScale) {
 				const y0 = yScale.invert!(yScale(yData) - boundingBoxPx);
 				const y1 = yScale.invert!(yScale(yData) + boundingBoxPx);
 				bbConditions.push(
@@ -506,10 +542,12 @@ export class TooltipManager {
 			return pos != null ? pos + bandwidth / 2 : null;
 		}
 
-		// Range columns (bars): use midpoint of low/high
+		// Range columns (bars): use midpoint of low/high.
+		// Skip when the primary axis column is also set (stacked areas use low/high
+		// for containment distance but position the indicator at the primary column).
 		const lowKey = axis === 'x' ? 'xLow' : 'yLow';
 		const highKey = axis === 'x' ? 'xHigh' : 'yHigh';
-		if (columns?.[lowKey] && columns?.[highKey]) {
+		if (columns?.[lowKey] && columns?.[highKey] && !columns?.[axis]) {
 			const low = row[columns[lowKey] as string];
 			const high = row[columns[highKey] as string];
 			if (low != null && high != null) {
