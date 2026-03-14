@@ -109,7 +109,9 @@
 	const hasExplicitBounds = $derived(entry.y1 !== undefined || entry.y2 !== undefined);
 	let y1 = $derived(entry.y1 ?? 0);
 	let y2 = $derived(entry.y2 ?? entry.y);
-	let effectiveTransforms = $derived(withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'y'));
+	let effectiveTransforms = $derived(
+		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'y')
+	);
 
 	let setup = $state(null);
 
@@ -141,7 +143,10 @@
 	const isHistogram = $derived.by(() => {
 		// Check if x1Expanded is a bin (AutoBinNode)
 		const hasBinnedX =
-			typeof x1Expanded === 'object' && x1Expanded != null && 'isAutoBinNode' in x1Expanded && x1Expanded.isAutoBinNode;
+			typeof x1Expanded === 'object' &&
+			x1Expanded != null &&
+			'isAutoBinNode' in x1Expanded &&
+			x1Expanded.isAutoBinNode;
 		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
 		// NOTE: This detection is currently broken (AggregateNode has no .aggregate prop
 		// and constructor name is 'AggregateNode' not '_AggregateNode'). Fixing it would
@@ -188,7 +193,10 @@
 		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([x1Expanded, x2Expanded, y1, y2] as FieldRef[]) : null },
+		clientOptions: {
+			limit: entry.limit,
+			filterNulls: entry.filterNulls ? ([x1Expanded, x2Expanded, y1, y2] as FieldRef[]) : null
+		},
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { y: true } : null,
 		// Viewport-local domain: compute Y extent from visible X range only

@@ -22,9 +22,9 @@
 <div class="test-page">
 	<h2>Command Palette — All Mark Types</h2>
 	<p class="instructions">
-		Right-click any chart to open the palette. Tab bar at top shows marks + Chart tab.
-		Arrow keys navigate channels, Right/Enter expands, Left/Escape collapses.
-		h/j/k/l in tabs and channels zones. Chart tab shows scale type overrides.
+		Right-click any chart to open the palette. Tab bar at top shows marks + Chart tab. Arrow keys
+		navigate channels, Right/Enter expands, Left/Escape collapses. h/j/k/l in tabs and channels
+		zones. Chart tab shows scale type overrides.
 	</p>
 
 	<div class="charts-grid">
@@ -235,7 +235,12 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<RectYMark table="penguins" x={bin('bill_length', { steps: 30 })} y={count()} fill="steelblue" />
+								<RectYMark
+									table="penguins"
+									x={bin('bill_length', { steps: 30 })}
+									y={count()}
+									fill="steelblue"
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}

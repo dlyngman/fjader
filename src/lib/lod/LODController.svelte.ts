@@ -220,10 +220,7 @@ export class LODController {
 	// LINE MODE — GPU write target (set by LineMark after renderer init)
 	// =========================================================================
 
-	setRenderTarget(
-		writeDotRadius: (r: number) => void,
-		invalidateLayer: () => void
-	): void {
+	setRenderTarget(writeDotRadius: (r: number) => void, invalidateLayer: () => void): void {
 		this.#writeDotRadius = writeDotRadius;
 		this.#invalidateLayer = invalidateLayer;
 	}
@@ -391,9 +388,7 @@ export class LODController {
 		if (newShouldDecimate !== this.shouldDecimate) {
 			this.shouldDecimate = newShouldDecimate;
 			if (this.#m4Decimator) {
-				this.#m4Decimator.setDecimationMode(
-					newShouldDecimate ? 'decimate' : 'passthrough'
-				);
+				this.#m4Decimator.setDecimationMode(newShouldDecimate ? 'decimate' : 'passthrough');
 			}
 		}
 

@@ -166,6 +166,14 @@
 	// --- ChartConfig (reactive configuration store) ---
 	const chartConfig = new ChartConfig();
 
+	// Register chart-level props for palette overrides
+	chartConfig.registerChart({
+		marginTop: () => cellMargin.top,
+		marginRight: () => cellMargin.right,
+		marginBottom: () => cellMargin.bottom,
+		marginLeft: () => cellMargin.left
+	});
+
 	// --- Marks-only context for hidden container (faceted mode) ---
 	// In non-faceted mode, ChartCell overrides this with a full context.
 	// In faceted mode, marks in the hidden container use this minimal context.

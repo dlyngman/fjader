@@ -55,7 +55,7 @@ export interface ColumnOption {
 
 // ---- Option value lists (derived from runtime sources) ----
 
-type OptionValue = { value: string | null; label: string };
+type OptionValue = { value: string | number | null; label: string };
 const AUTO: OptionValue = { value: null, label: 'auto' };
 
 function buildSchemeOptions(): OptionValue[] {
@@ -69,7 +69,15 @@ function buildSchemeOptions(): OptionValue[] {
 }
 
 // User-facing curve names (excludes axis-specific variants like monotone-x/bump-x).
-const USER_CURVES = ['linear', 'step', 'step-before', 'step-after', 'monotone', 'catmull-rom', 'bump'];
+const USER_CURVES = [
+	'linear',
+	'step',
+	'step-before',
+	'step-after',
+	'monotone',
+	'catmull-rom',
+	'bump'
+];
 
 function buildCurveOptions(): OptionValue[] {
 	return [AUTO, ...USER_CURVES.map((c) => ({ value: c, label: c }))];
@@ -85,12 +93,28 @@ export interface OptionChannelDef {
 	/** MarkEntry property to read/write */
 	prop: string;
 	/** Fixed options (value=null means "auto"/unset) */
-	options: Array<{ value: string | null; label: string }>;
+	options: Array<{ value: string | number | null; label: string }>;
 	/**
 	 * If set, options are resolved dynamically from schema + entry.
 	 * Overrides the static `options` list.
 	 */
 	dynamic?: 'scaleType';
+}
+
+/** A numeric channel — editable via scrubber input, not a list of options. */
+export interface NumericChannelDef {
+	/** MarkEntry property to read/write */
+	prop: string;
+	/** Minimum allowed value */
+	min: number;
+	/** Maximum allowed value */
+	max: number;
+	/** Step size for arrow key / scroll increments */
+	step: number;
+	/** Large step size (shift+arrow) — defaults to step * 10 */
+	bigStep?: number;
+	/** Number of decimal places to display */
+	decimals?: number;
 }
 
 // Per-mark option channels, keyed by mark type.
@@ -122,14 +146,92 @@ export function getOptionChannels(markType: string): Record<string, OptionChanne
 	return MARK_OPTION_CHANNELS[markType] ?? {};
 }
 
+// ---- Numeric channels (scrubber input for constant values) ----
+
+const MARK_NUMERIC_CHANNELS: Record<string, Record<string, NumericChannelDef>> = {
+	dot: {
+		opacity: { prop: 'opacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		r: { prop: 'r', min: 0.5, max: 30, step: 0.5, decimals: 1 }
+	},
+	line: {
+		strokeWidth: { prop: 'strokeWidth', min: 0.5, max: 10, step: 0.5, decimals: 1 }
+	},
+	areay: {
+		fillOpacity: { prop: 'fillOpacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		strokeWidth: { prop: 'strokeWidth', min: 0, max: 10, step: 0.5, decimals: 1 }
+	},
+	areax: {
+		fillOpacity: { prop: 'fillOpacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		strokeWidth: { prop: 'strokeWidth', min: 0, max: 10, step: 0.5, decimals: 1 }
+	},
+	bary: {
+		opacity: { prop: 'opacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		padding: { prop: 'padding', min: 0, max: 0.9, step: 0.05, decimals: 2 },
+		inset: { prop: 'inset', min: 0, max: 20, step: 0.5, decimals: 1 }
+	},
+	barx: {
+		opacity: { prop: 'opacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		padding: { prop: 'padding', min: 0, max: 0.9, step: 0.05, decimals: 2 },
+		inset: { prop: 'inset', min: 0, max: 20, step: 0.5, decimals: 1 }
+	},
+	recty: {
+		opacity: { prop: 'opacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		inset: { prop: 'inset', min: 0, max: 20, step: 0.5, decimals: 1 }
+	},
+	rectx: {
+		opacity: { prop: 'opacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		inset: { prop: 'inset', min: 0, max: 20, step: 0.5, decimals: 1 }
+	},
+	rect: {
+		opacity: { prop: 'opacity', min: 0, max: 1, step: 0.05, decimals: 2 },
+		inset: { prop: 'inset', min: 0, max: 20, step: 0.5, decimals: 1 }
+	}
+};
+
+export function getNumericChannels(markType: string): Record<string, NumericChannelDef> {
+	return MARK_NUMERIC_CHANNELS[markType] ?? {};
+}
+
+/** Channels that support both column assignment AND a constant numeric value. */
+const CONSTANT_CAPABLE_CHANNELS: Record<string, Set<string>> = {
+	dot: new Set(['r'])
+};
+
+export function channelSupportsConstant(markType: string, channel: string): boolean {
+	return CONSTANT_CAPABLE_CHANNELS[markType]?.has(channel) ?? false;
+}
+
+export function getConstantDef(markType: string, channel: string): NumericChannelDef | null {
+	if (!channelSupportsConstant(markType, channel)) return null;
+	return MARK_NUMERIC_CHANNELS[markType]?.[channel] ?? null;
+}
+
 // ---- Chart-level channels (applied to all marks) ----
 
-export const CHART_CHANNELS = ['x scale', 'y scale'] as const;
+export const CHART_CHANNELS = ['x scale', 'y scale', 'margins'] as const;
 export type ChartChannel = (typeof CHART_CHANNELS)[number];
 
-export const CHART_CHANNEL_DEFS: Record<ChartChannel, OptionChannelDef> = {
+export const CHART_CHANNEL_DEFS: Record<string, OptionChannelDef> = {
 	'x scale': { prop: 'preferredXScaleType', options: [], dynamic: 'scaleType' },
 	'y scale': { prop: 'preferredYScaleType', options: [], dynamic: 'scaleType' }
+};
+
+export const CHART_NUMERIC_DEFS: Record<string, NumericChannelDef> = {};
+
+/** A group of related numeric channels shown together in one panel. */
+export interface NumericGroupDef {
+	items: Array<{ label: string; def: NumericChannelDef }>;
+}
+
+export const CHART_NUMERIC_GROUPS: Record<string, NumericGroupDef> = {
+	margins: {
+		items: [
+			{ label: 'top', def: { prop: 'marginTop', min: 0, max: 200, step: 5, decimals: 0 } },
+			{ label: 'right', def: { prop: 'marginRight', min: 0, max: 200, step: 5, decimals: 0 } },
+			{ label: 'bottom', def: { prop: 'marginBottom', min: 0, max: 200, step: 5, decimals: 0 } },
+			{ label: 'left', def: { prop: 'marginLeft', min: 0, max: 200, step: 5, decimals: 0 } }
+		]
+	}
 };
 
 // Scale types compatible with each JS column type.
@@ -154,9 +256,7 @@ export function getCompatibleScaleTypes(
 	axis: 'x' | 'y',
 	entry: MarkEntry
 ): Array<{ value: string | null; label: string }> {
-	const result: Array<{ value: string | null; label: string }> = [
-		{ value: null, label: 'auto' }
-	];
+	const result: Array<{ value: string | null; label: string }> = [{ value: null, label: 'auto' }];
 
 	const column = entry[axis];
 	if (!column || typeof column !== 'string') return result;

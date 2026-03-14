@@ -74,13 +74,7 @@
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
-							<BarMarkY
-								table="penguins"
-								x="species"
-								y={count()}
-								fill="species"
-								selection="brush"
-							/>
+							<BarMarkY table="penguins" x="species" y={count()} fill="species" selection="brush" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

@@ -42,9 +42,10 @@ const STROKE_AS_FIELD_MARKS = new Set(['line']);
  * Convert a MarkSpec into { component, props } for svelte:component rendering.
  * Resolves FieldSpecs, transforms, and selection references.
  */
-export function resolveMarkEntry(
-	markSpec: MarkSpec
-): { component: Component; props: Record<string, unknown> } {
+export function resolveMarkEntry(markSpec: MarkSpec): {
+	component: Component;
+	props: Record<string, unknown>;
+} {
 	const component = MARK_REGISTRY[markSpec.mark];
 	if (!component) {
 		throw new Error(

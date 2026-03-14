@@ -9,5 +9,9 @@
 </script>
 
 {#if open}
-	<PaletteContent onclose={() => { open = false; }} />
+	<PaletteContent
+		onclose={() => {
+			open = false;
+		}}
+	/>
 {/if}

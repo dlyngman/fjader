@@ -75,13 +75,28 @@ export interface MarkEntry {
 /** Prop getters keyed by property name. */
 export type PropGetters = Record<string, () => unknown>;
 
+// ---- Chart-level props ----
+
+export interface ChartProps {
+	marginTop: number;
+	marginRight: number;
+	marginBottom: number;
+	marginLeft: number;
+	[key: string]: unknown;
+}
+
 // ---- Snapshot type for undo/redo ----
+
+interface ChartPropsSnapshot {
+	values: Map<string, unknown>;
+}
 
 type ChannelSnapshot = Map<string, Map<string, unknown>>;
 
 interface UndoEntry {
 	description?: string;
 	snapshot: ChannelSnapshot;
+	chartSnapshot?: ChartPropsSnapshot;
 }
 
 // ---- ChartConfig ----
@@ -99,6 +114,10 @@ export class ChartConfig {
 	/** Preview stack — records previous values for cancel. */
 	#previewStack: Array<{ id: string; key: string; prev: unknown }> = [];
 
+	/** Chart-level overridable props (margins, etc.). */
+	#chartChannels = new Map<string, Overridable<unknown>>();
+	#chartProps: ChartProps | null = null;
+
 	/** Undo/redo stacks. */
 	#undoStack: UndoEntry[] = [];
 	#redoStack: UndoEntry[] = [];
@@ -114,11 +133,7 @@ export class ChartConfig {
 	 * If an entry already exists for this ID (MarkLifecycle recreation),
 	 * the existing entry is returned unchanged.
 	 */
-	registerMark(
-		id: string,
-		markType: string,
-		propGetters: PropGetters
-	): MarkEntry {
+	registerMark(id: string, markType: string, propGetters: PropGetters): MarkEntry {
 		const existing = this.#entries.get(id);
 		if (existing) return existing;
 
@@ -129,8 +144,12 @@ export class ChartConfig {
 			const ch = createOverridable(getter);
 			channels.set(key, ch);
 			Object.defineProperty(entry, key, {
-				get() { return ch.current; },
-				set(v: unknown) { ch.current = v; },
+				get() {
+					return ch.current;
+				},
+				set(v: unknown) {
+					ch.current = v;
+				},
 				enumerable: true,
 				configurable: true
 			});
@@ -146,6 +165,49 @@ export class ChartConfig {
 		this.#entries.delete(id);
 		this.#channels.delete(id);
 		this.#lodControllers.delete(id);
+	}
+
+	// ---- Chart-level props ----
+
+	/**
+	 * Register chart-level props (margins, etc.) with overridable getters.
+	 * Returns the reactive ChartProps object that the layout reads from.
+	 */
+	registerChart(propGetters: Record<string, () => unknown>): ChartProps {
+		if (this.#chartProps) return this.#chartProps;
+
+		const props = {} as ChartProps;
+		for (const [key, getter] of Object.entries(propGetters)) {
+			const ch = createOverridable(getter);
+			this.#chartChannels.set(key, ch);
+			Object.defineProperty(props, key, {
+				get() {
+					return ch.current;
+				},
+				set(v: unknown) {
+					ch.current = v;
+				},
+				enumerable: true,
+				configurable: true
+			});
+		}
+		this.#chartProps = props;
+		return props;
+	}
+
+	get chartProps(): ChartProps | null {
+		return this.#chartProps;
+	}
+
+	setChartProp(key: string, value: unknown): void {
+		if (!this.#chartChannels.has(key)) return;
+		if (this.#chartProps) (this.#chartProps as Record<string, unknown>)[key] = value;
+	}
+
+	revertChart(): void {
+		for (const ch of this.#chartChannels.values()) {
+			ch.reset();
+		}
 	}
 
 	// ---- LODController registration ----
@@ -188,8 +250,19 @@ export class ChartConfig {
 
 	// ---- Preview ----
 
-	/** Preview a property change. Renders immediately; cancelPreview reverts. */
+	/** Preview a property change. Renders immediately; cancelPreview reverts.
+	 *  Use id='__chart__' for chart-level props. */
 	beginPreview(id: string, key: string, value: unknown): void {
+		if (id === '__chart__') {
+			if (!this.#chartChannels.has(key) || !this.#chartProps) return;
+			this.#previewStack.push({
+				id,
+				key,
+				prev: (this.#chartProps as Record<string, unknown>)[key]
+			});
+			(this.#chartProps as Record<string, unknown>)[key] = value;
+			return;
+		}
 		if (!this.#channels.get(id)?.has(key)) return;
 		const entry = this.#entries.get(id);
 		if (!entry) return;
@@ -206,8 +279,12 @@ export class ChartConfig {
 	cancelPreview(): void {
 		for (let i = this.#previewStack.length - 1; i >= 0; i--) {
 			const { id, key, prev } = this.#previewStack[i];
-			const entry = this.#entries.get(id);
-			if (entry) (entry as Record<string, unknown>)[key] = prev;
+			if (id === '__chart__') {
+				if (this.#chartProps) (this.#chartProps as Record<string, unknown>)[key] = prev;
+			} else {
+				const entry = this.#entries.get(id);
+				if (entry) (entry as Record<string, unknown>)[key] = prev;
+			}
 		}
 		this.#previewStack = [];
 	}
@@ -221,7 +298,11 @@ export class ChartConfig {
 
 	/** Snapshot current state for undo. Call before making changes. */
 	checkpoint(description?: string): void {
-		this.#undoStack.push({ description, snapshot: this.#takeSnapshot() });
+		this.#undoStack.push({
+			description,
+			snapshot: this.#takeSnapshot(),
+			chartSnapshot: this.#takeChartSnapshot()
+		});
 		this.#redoStack = [];
 	}
 
@@ -229,8 +310,12 @@ export class ChartConfig {
 	undo(): boolean {
 		const prev = this.#undoStack.pop();
 		if (!prev) return false;
-		this.#redoStack.push({ snapshot: this.#takeSnapshot() });
+		this.#redoStack.push({
+			snapshot: this.#takeSnapshot(),
+			chartSnapshot: this.#takeChartSnapshot()
+		});
 		this.#restoreSnapshot(prev.snapshot);
+		if (prev.chartSnapshot) this.#restoreChartSnapshot(prev.chartSnapshot);
 		return true;
 	}
 
@@ -238,8 +323,12 @@ export class ChartConfig {
 	redo(): boolean {
 		const next = this.#redoStack.pop();
 		if (!next) return false;
-		this.#undoStack.push({ snapshot: this.#takeSnapshot() });
+		this.#undoStack.push({
+			snapshot: this.#takeSnapshot(),
+			chartSnapshot: this.#takeChartSnapshot()
+		});
 		this.#restoreSnapshot(next.snapshot);
+		if (next.chartSnapshot) this.#restoreChartSnapshot(next.chartSnapshot);
 		return true;
 	}
 
@@ -270,6 +359,22 @@ export class ChartConfig {
 			for (const [key, value] of values) {
 				(entry as Record<string, unknown>)[key] = value;
 			}
+		}
+	}
+
+	#takeChartSnapshot(): ChartPropsSnapshot | undefined {
+		if (!this.#chartChannels.size) return undefined;
+		const values = new Map<string, unknown>();
+		for (const [key, ch] of this.#chartChannels) {
+			values.set(key, ch.current);
+		}
+		return { values };
+	}
+
+	#restoreChartSnapshot(snapshot: ChartPropsSnapshot): void {
+		if (!this.#chartProps) return;
+		for (const [key, value] of snapshot.values) {
+			(this.#chartProps as Record<string, unknown>)[key] = value;
 		}
 	}
 

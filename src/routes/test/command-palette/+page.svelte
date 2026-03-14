@@ -17,9 +17,7 @@
 
 	onMount(async () => {
 		try {
-			await coord.exec(
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
-			);
+			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
 
 			// Synthetic time series for line/area marks
 			await coord.exec(`

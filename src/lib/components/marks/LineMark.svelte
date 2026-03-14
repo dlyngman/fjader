@@ -174,7 +174,10 @@
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'x'
 		},
-		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null },
+		clientOptions: {
+			limit: entry.limit,
+			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
+		},
 		sort: normalizeSortConfig(entry.sort ?? null),
 		tooltip: entry.tip === false ? false : entry.tooltip
 	});
@@ -237,11 +240,10 @@
 		const cfg = typeof entryLod === 'object' ? entryLod : {};
 		const dr = entry.dotRadius ?? 0;
 		const dotsEnabled = cfg.dots !== false;
-		const dotsR = (dotsEnabled && typeof cfg.dots === 'object' ? cfg.dots.r : undefined)
-			?? (dr > 0 ? dr : 2.5);
-		const dotsThreshold = dotsEnabled && typeof cfg.dots === 'object'
-			? cfg.dots.threshold ?? 18
-			: 18;
+		const dotsR =
+			(dotsEnabled && typeof cfg.dots === 'object' ? cfg.dots.r : undefined) ?? (dr > 0 ? dr : 2.5);
+		const dotsThreshold =
+			dotsEnabled && typeof cfg.dots === 'object' ? (cfg.dots.threshold ?? 18) : 18;
 		const decimate = cfg.decimate ?? 'auto';
 		const onLODChange = cfg.onLODChange ?? null;
 		return { dotsEnabled, dotsR, dotsThreshold, decimate, onLODChange };

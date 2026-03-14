@@ -118,6 +118,12 @@
 	}
 
 	const channelIcons: Record<string, string> = { x: '\u2192', y: '\u2191' };
+
+	// Computed style values — kept here so Prettier can't break them by line-wrapping
+	const translateX = $derived(flippedX ? 'calc(-100% - 12px)' : '12px');
+	const translateY = $derived(flippedY ? 'calc(-100% + 4px)' : '-4px');
+	const translate = $derived(`${translateX} ${translateY}`);
+	const transformOrigin = $derived(`${originX} ${originY}`);
 </script>
 
 <!-- Tooltip positioned via JS with flip detection -->
@@ -127,8 +133,8 @@
 	bind:this={tooltipEl}
 	style:left="{px}px"
 	style:top="{py}px"
-	style:translate="{flippedX ? 'calc(-100% - 12px)' : '12px'} {flippedY ? 'calc(-100% + 4px)' : '-4px'}"
-	style:transform-origin="{originX} {originY}"
+	style:translate
+	style:transform-origin={transformOrigin}
 	style:min-width="{minWidth}px"
 >
 	{#each keys as key (key)}

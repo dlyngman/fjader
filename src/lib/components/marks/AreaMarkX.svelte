@@ -110,7 +110,9 @@
 	const hasExplicitBounds = $derived(entry.x1 !== undefined || entry.x2 !== undefined);
 	let x1 = $derived(entry.x1 ?? 0);
 	let x2 = $derived(entry.x2 ?? entry.x);
-	let effectiveTransforms = $derived(withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x'));
+	let effectiveTransforms = $derived(
+		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x')
+	);
 
 	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)
 	const effectiveCurve = $derived.by(() => {
@@ -203,7 +205,10 @@
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'y'
 		},
-		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([entry.y, x1, x2] as FieldRef[]) : null },
+		clientOptions: {
+			limit: entry.limit,
+			filterNulls: entry.filterNulls ? ([entry.y, x1, x2] as FieldRef[]) : null
+		},
 		// Area charts with aggregates should include zero in the domain
 		zeroBaseline: hasAggregateX ? { x: true } : null,
 		sort: normalizeSortConfig(entry.sort ?? null),

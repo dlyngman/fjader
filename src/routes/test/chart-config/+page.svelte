@@ -17,9 +17,7 @@
 
 	onMount(async () => {
 		try {
-			await coord.exec(
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
-			);
+			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
 
 			isLoaded = true;
 		} catch (error) {

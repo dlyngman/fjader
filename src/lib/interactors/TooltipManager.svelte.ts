@@ -281,7 +281,6 @@ export class TooltipManager {
 				const cols = config.columns;
 				const colorCol = config.colorColumn;
 
-	
 				// Resolve all matched rows
 				const resolvedPoints: DataRow[] = [];
 				const matched: MatchedPoint[] = [];
@@ -440,7 +439,7 @@ export class TooltipManager {
 				const pxSq = pxPerUnit * pxPerUnit;
 				distParts.push(
 					`CASE WHEN "${xLowCol}" <= ${xData} AND "${xHighCol}" >= ${xData} THEN 0` +
-					` ELSE LEAST(("${xLowCol}" - ${xData}) * ("${xLowCol}" - ${xData}), ("${xHighCol}" - ${xData}) * ("${xHighCol}" - ${xData})) * ${pxSq} END`
+						` ELSE LEAST(("${xLowCol}" - ${xData}) * ("${xLowCol}" - ${xData}), ("${xHighCol}" - ${xData}) * ("${xHighCol}" - ${xData})) * ${pxSq} END`
 				);
 			} else if (xScale) {
 				const x0 = xScale.invert!(xScale(xData) - boundingBoxPx);
@@ -478,7 +477,7 @@ export class TooltipManager {
 				const pxSq = pxPerUnit * pxPerUnit;
 				distParts.push(
 					`CASE WHEN "${yLowCol}" <= ${yData} AND "${yHighCol}" >= ${yData} THEN 0` +
-					` ELSE LEAST(("${yLowCol}" - ${yData}) * ("${yLowCol}" - ${yData}), ("${yHighCol}" - ${yData}) * ("${yHighCol}" - ${yData})) * ${pxSq} END`
+						` ELSE LEAST(("${yLowCol}" - ${yData}) * ("${yLowCol}" - ${yData}), ("${yHighCol}" - ${yData}) * ("${yHighCol}" - ${yData})) * ${pxSq} END`
 				);
 			} else if (yScale) {
 				const y0 = yScale.invert!(yScale(yData) - boundingBoxPx);

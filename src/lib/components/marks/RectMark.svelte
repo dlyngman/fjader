@@ -197,7 +197,10 @@
 		selection: resolveSelection(entry.selection),
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([ex1, ex2, ey1, ey2] as FieldRef[]) : null },
+		clientOptions: {
+			limit: entry.limit,
+			filterNulls: entry.filterNulls ? ([ex1, ex2, ey1, ey2] as FieldRef[]) : null
+		},
 		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
 		// (could be heatmap, 2D histogram, etc.). Use RectXMark/RectYMark for histograms.
 		sort: normalizeSortConfig(entry.sort ?? null),

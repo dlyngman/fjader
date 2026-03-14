@@ -113,8 +113,7 @@ export function buildQueryParts(
 
 		// SQL alias: field name for simple column refs, channel name
 		// for expressions. Matches Mosaic's PreAggregator expectations.
-		const sqlAlias =
-			isColumnRef(exprNode) && !isColumnParam(exprNode) ? exprNode.column : channel;
+		const sqlAlias = isColumnRef(exprNode) && !isColumnParam(exprNode) ? exprNode.column : channel;
 
 		aliasMap.set(channel, sqlAlias);
 		selectDef[channel] = exprNode;

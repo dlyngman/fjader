@@ -1,13 +1,7 @@
 <script>
 	import { count } from '@uwdata/mosaic-sql';
 	import { getContext } from 'svelte';
-	import {
-		ChartContainer,
-		Grid,
-		Crosshair,
-		WebGPUCanvas,
-		RectYMark
-	} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, RectYMark } from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 
 	const coordinator = getContext('mosaic-coordinator');
@@ -43,8 +37,8 @@
 <div class="page">
 	<h2>Binned LOD Controller Test</h2>
 	<p class="description">
-		LODController in binned mode: geometric metric derivation, adaptive re-binning,
-		per-mark shift+scroll routing. Hover a bar and shift+scroll to adjust bin resolution.
+		LODController in binned mode: geometric metric derivation, adaptive re-binning, per-mark
+		shift+scroll routing. Hover a bar and shift+scroll to adjust bin resolution.
 	</p>
 
 	<div class="layout">
@@ -62,7 +56,9 @@
 										x={bin('value', { steps: 50 })}
 										y2={count()}
 										fill="steelblue"
-										onLodController={(ctrl) => { lodRef = ctrl; }}
+										onLodController={(ctrl) => {
+											lodRef = ctrl;
+										}}
 									/>
 								{/snippet}
 							</WebGPUCanvas>
@@ -100,7 +96,10 @@
 		max-width: 1200px;
 		margin: 0 auto;
 		padding: 20px;
-		font-family: system-ui, -apple-system, sans-serif;
+		font-family:
+			system-ui,
+			-apple-system,
+			sans-serif;
 	}
 
 	h2 {
