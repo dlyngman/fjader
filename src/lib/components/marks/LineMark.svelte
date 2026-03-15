@@ -16,7 +16,9 @@
 		resolveTip,
 		resolveSelection
 	} from './utils';
-	import { isNode } from '@uwdata/mosaic-sql';
+	import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+	import { isWindowExpression } from '$lib/sql/expression-utils';
+	import { isBinExpression } from '$lib/sql/bin';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { LODController } from '$lib/lod';
@@ -249,16 +251,18 @@
 		return { dotsEnabled, dotsR, dotsThreshold, decimate, onLODChange };
 	});
 
-	// TEMPORARY Phase 0 guard: LOD count queries use `String(x)` as a raw column
-	// name in SQL. Expression nodes (aggregates, bins, sql`...`) would produce
-	// invalid SQL. When LOD gains CTE-wrapping (proposal Section 3.3), this guard
-	// can be removed and expression nodes will work via the general counting path.
-	const lodEligible = !isNode(entry.x);
+	// Detect whether the simple COUNT(*) path works. It requires x to be a raw
+	// column string and no aggregates/windows on any channel. Otherwise use CTE
+	// which wraps the mark's assembled query (bins resolved, expressions computed).
+	const needsCTE = $derived(
+		isNode(entry.x) ||
+			isBinExpression(entry.x) ||
+			[entry.y, entry.stroke, entry.z].some(
+				(v) => v != null && isNode(v) && (isAggregateExpression(v) || isWindowExpression(v))
+			)
+	);
 
-	// LODController is on by default — it owns density evaluation, M4 control,
-	// and auto-dots spring animation. Only disabled for expression x fields
-	// (pending CTE-wrapping) or explicit lod={false}.
-	const effectiveLod = lodEligible && lodConfig !== null;
+	const effectiveLod = lodConfig !== null;
 
 	// M4 created only when LODController is active and decimation isn't disabled.
 	// No LODController = no M4 (raw data passthrough, correct for sparse data).
@@ -303,11 +307,18 @@
 			onLodController?.(null);
 			return;
 		}
+		const useCTE = needsCTE;
+		const yField = !useCTE && typeof entry.y === 'string' ? entry.y : null;
 		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
 			mode: 'line',
 			table: entry.table,
 			xField: String(entry.x),
+			yField,
 			setup,
+			countQueryBuilder: useCTE
+				? (xLo: number, xHi: number, yLo: number, yHi: number) =>
+						setup.buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi)
+				: null,
 			baseR: lodConfig.dotsR,
 			dotsEnabled: lodConfig.dotsEnabled,
 			dotsThreshold: lodConfig.dotsThreshold,

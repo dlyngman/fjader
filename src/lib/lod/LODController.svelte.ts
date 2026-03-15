@@ -46,8 +46,13 @@ export interface LineConfig {
 	mode: 'line';
 	table: string;
 	xField: string;
+	yField?: string | null;
 	baseR: number;
 	setup?: { currentFilter: unknown[] } | null;
+	/** CTE count query builder for aggregated marks. Overrides simple COUNT path. */
+	countQueryBuilder?:
+		| ((xLo: number, xHi: number, yLo: number, yHi: number) => Query | null)
+		| null;
 	dotsEnabled?: boolean;
 	dotsThreshold?: number;
 	decimate?: boolean | 'auto';
@@ -70,14 +75,19 @@ export type LODControllerConfig = LineConfig | BinnedConfig;
 export interface LODState {
 	mode: 'line' | 'binned';
 	density: number;
-	// Line mode
+	// Line mode — diagnostic
 	visibleCount: number;
 	shouldDecimate: boolean;
 	dotsVisible: boolean;
-	// Binned mode
+	// Line mode — tunable
+	dotsThreshold: number;
+	baseRadius: number;
+	// Binned mode — diagnostic
 	binStep: number;
 	numVisibleBins: number;
 	binWidthPx: number;
+	// Binned mode — tunable
+	binMultiplier: number;
 }
 
 export class LODController {
@@ -92,6 +102,10 @@ export class LODController {
 	#coordinator: Coordinator | null = null;
 	#table: string = '';
 	#xField: string = '';
+	#yField: string | null = null;
+	#countQueryBuilder:
+		| ((xLo: number, xHi: number, yLo: number, yHi: number) => Query | null)
+		| null = null;
 	#baseR: number = 0;
 	#setup: { currentFilter: unknown[] } | null = null;
 	#m4Decimator: M4Decimator | null = null;
@@ -153,9 +167,12 @@ export class LODController {
 		visibleCount: 0,
 		shouldDecimate: false,
 		dotsVisible: false,
+		dotsThreshold: 18,
+		baseRadius: 0,
 		binStep: 0,
 		numVisibleBins: 0,
-		binWidthPx: 0
+		binWidthPx: 0,
+		binMultiplier: 1.0
 	});
 
 	// --- Derived ---
@@ -192,6 +209,7 @@ export class LODController {
 			this.#coordinator = coordinator!;
 			this.#table = config.table;
 			this.#xField = config.xField;
+			this.#yField = config.yField ?? null;
 			this.#baseR = config.baseR;
 			this.#setup = config.setup ?? null;
 			this.#dotsEnabled = config.dotsEnabled ?? true;
@@ -201,14 +219,18 @@ export class LODController {
 			this.#countDebounceMs = config.countDebounceMs ?? 150;
 			this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
 			this.#onLODChange = config.onLODChange ?? null;
+			this.#countQueryBuilder = config.countQueryBuilder ?? null;
 			this.#dotRadiusSpring = this.#dotsEnabled ? new Spring(0, 400) : null;
 			this.#lastSpringTime = performance.now();
+			this.state.dotsThreshold = this.#dotsThreshold;
+			this.state.baseRadius = this.#baseR;
 		} else {
 			// Binned mode
 			this.#markLifecycle = config.markLifecycle;
 			this.#binAxes = config.binAxes;
 			this.#binningThreshold = config.binningThreshold ?? 1.25;
 			this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
+			this.state.binMultiplier = this.#prevMultiplier;
 		}
 
 		// Both modes use frame callbacks
@@ -249,14 +271,48 @@ export class LODController {
 	/**
 	 * Adjust resolution. Called by ChartCell when shift+scroll targets this mark.
 	 * For binned mode: adjusts binStepMultiplier on the chart context.
-	 * For line mode: adjusts density threshold offset (future).
+	 * For line mode: adjusts dots threshold (scroll up = more detail = dots sooner).
 	 */
 	adjustResolution(deltaY: number): void {
 		if (this.#mode === 'binned') {
 			const delta = deltaY < 0 ? 0.025 : -0.025;
 			this.#chartContext.adjustBinMultiplier?.(delta);
+		} else {
+			// Scroll up (deltaY < 0) = lower threshold = dots appear sooner
+			const step = deltaY < 0 ? -1 : 1;
+			this.setDotsThreshold(this.#dotsThreshold + step);
 		}
-		// Line mode: future — adjust density threshold offset
+	}
+
+	// =========================================================================
+	// PALETTE — tunable value setters
+	// =========================================================================
+
+	/** Set dots average-spacing threshold (line mode). Range: 10–100. */
+	setDotsThreshold(value: number): void {
+		if (this.#mode !== 'line') return;
+		this.#dotsThreshold = Math.max(10, Math.min(100, value));
+		this.state.dotsThreshold = this.#dotsThreshold;
+		this.#evaluateLOD();
+	}
+
+	/** Set base dot radius in px (line mode). Range: 0.5–20. */
+	setBaseRadius(value: number): void {
+		if (this.#mode !== 'line') return;
+		this.#baseR = Math.max(0.5, Math.min(20, value));
+		this.state.baseRadius = this.#baseR;
+		this.#evaluateLOD();
+	}
+
+	/** Set bin step multiplier (binned mode). Range: 0.1–20. */
+	setBinMultiplier(value: number): void {
+		if (this.#mode !== 'binned') return;
+		const clamped = Math.max(0.1, Math.min(20, value));
+		const current = this.#chartContext.binStepMultiplier ?? 1.0;
+		if (Math.abs(clamped - current) < 0.001) return;
+		// adjustBinMultiplier uses relative delta: absoluteDelta = current * delta
+		const delta = (clamped - current) / current;
+		this.#chartContext.adjustBinMultiplier?.(delta);
 	}
 
 	// =========================================================================
@@ -295,8 +351,23 @@ export class LODController {
 		if (typeof lo !== 'number' || typeof hi !== 'number') return;
 		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return;
 
+		// Read y domain if available (continuous y scale)
+		let yLo = -Infinity,
+			yHi = Infinity;
+		const yState = this.#chartContext.yScaleState;
+		if (yState && 'domain' in yState) {
+			const yDomain = (yState as { domain?: { target?: [number, number] } }).domain;
+			if (yDomain?.target) {
+				const [y0, y1] = yDomain.target;
+				if (typeof y0 === 'number' && typeof y1 === 'number' && isFinite(y0) && isFinite(y1)) {
+					yLo = y0;
+					yHi = y1;
+				}
+			}
+		}
+
 		if (this.#shouldQueryCount(lo, hi)) {
-			this.#issueCountQuery(lo, hi);
+			this.#issueCountQuery(lo, hi, yLo, yHi);
 		}
 	}
 
@@ -318,7 +389,12 @@ export class LODController {
 		return false;
 	}
 
-	async #issueCountQuery(lo: number, hi: number): Promise<void> {
+	async #issueCountQuery(
+		lo: number,
+		hi: number,
+		yLo: number,
+		yHi: number
+	): Promise<void> {
 		if (this.#countQueryPending || this.#destroyed || !this.#coordinator) return;
 
 		this.#countQueryPending = true;
@@ -326,20 +402,34 @@ export class LODController {
 		const t0 = performance.now();
 
 		try {
-			const xCol = sqlColumn(this.#xField);
-			const viewportClause = sql`${xCol} BETWEEN ${lo} AND ${hi}`;
+			let q: Query | null;
 
-			const filters: ExprValue[] = [viewportClause];
-			if (this.#setup) {
-				const crossfilter = this.#setup.currentFilter;
-				if (crossfilter.length > 0) {
-					filters.push(...(crossfilter as ExprValue[]));
+			if (this.#countQueryBuilder) {
+				// CTE path: wrap the mark's assembled query as a subquery
+				q = this.#countQueryBuilder(lo, hi, yLo, yHi);
+				if (!q) return;
+			} else {
+				// Simple path: COUNT(*) against the raw table
+				const xCol = sqlColumn(this.#xField);
+				const filters: ExprValue[] = [sql`${xCol} BETWEEN ${lo} AND ${hi}`];
+
+				// Add y filter when we have a y field and finite bounds
+				if (this.#yField && isFinite(yLo) && isFinite(yHi)) {
+					const yCol = sqlColumn(this.#yField);
+					filters.push(sql`${yCol} BETWEEN ${yLo} AND ${yHi}`);
 				}
-			}
 
-			const q = Query.from(this.#table)
-				.select({ cnt: sql`COUNT(*)` })
-				.where(and(filters));
+				if (this.#setup) {
+					const crossfilter = this.#setup.currentFilter;
+					if (crossfilter.length > 0) {
+						filters.push(...(crossfilter as ExprValue[]));
+					}
+				}
+
+				q = Query.from(this.#table)
+					.select({ cnt: sql`COUNT(*)` })
+					.where(and(filters));
+			}
 
 			const result = await this.#coordinator.query(q, { priority: Priority.Low });
 			const t1 = performance.now();
@@ -463,6 +553,7 @@ export class LODController {
 		const multiplier = this.#chartContext.binStepMultiplier ?? 1.0;
 		if (multiplier !== this.#prevMultiplier) {
 			this.#prevMultiplier = multiplier;
+			this.state.binMultiplier = multiplier;
 			const domain = this.#readDomain(this.#binAxes[0]);
 			if (domain) {
 				this.#markLifecycle.triggerReBin(this.#binAxes[0], domain);

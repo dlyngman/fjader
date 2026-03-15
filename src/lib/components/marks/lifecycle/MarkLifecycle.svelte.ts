@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data/DataClient.svelte';
 import type { DataClientConfig, DataClientOptions } from '$lib/data/DataClient.svelte';
-import { Query, isNode, sql } from '@uwdata/mosaic-sql';
+import { Query, isNode, sql, column as sqlColumn } from '@uwdata/mosaic-sql';
 import type { ExprValue, FilterExpr } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, FieldInfoRequest } from '@uwdata/mosaic-core';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
@@ -1141,6 +1141,43 @@ export class MarkLifecycle {
 		// Mosaic returns an array for intersect/single mode (DivePlot's default),
 		// but a single OR-combined node for union mode. Normalize to array.
 		return Array.isArray(predicate) ? predicate : [predicate];
+	}
+
+	/**
+	 * Build a viewport count query by wrapping this mark's assembled query as a
+	 * subquery. Used by LODController for marks with aggregates/windows where a
+	 * simple COUNT(*) against the raw table would give the wrong count.
+	 *
+	 * Uses forMosaic=false so the inner query's SELECT aliases are channel names.
+	 * The outer query counts rows where the given channel falls within [lo, hi].
+	 */
+	buildViewportCountQuery(
+		xChannel: string,
+		xLo: number,
+		xHi: number,
+		yChannel: string | null,
+		yLo: number,
+		yHi: number
+	): Query | null {
+		if (!this.client) return null;
+		const sourceTable = this.client._sourceTable;
+		const config = this.client.config;
+		const filter = this.currentFilter;
+
+		const innerQuery = this.buildQuery(sourceTable, config, filter, false);
+		if (!innerQuery) return null;
+
+		const xCol = sqlColumn(xChannel);
+		let whereClause = sql`${xCol} BETWEEN ${xLo} AND ${xHi}`;
+
+		if (yChannel != null && isFinite(yLo) && isFinite(yHi)) {
+			const yCol = sqlColumn(yChannel);
+			whereClause = sql`${xCol} BETWEEN ${xLo} AND ${xHi} AND ${yCol} BETWEEN ${yLo} AND ${yHi}`;
+		}
+
+		return Query.from({ mark_data: innerQuery })
+			.select({ cnt: sql`COUNT(*)` })
+			.where(whereClause);
 	}
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
