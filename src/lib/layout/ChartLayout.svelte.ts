@@ -123,7 +123,15 @@ export class ChartLayout {
 	};
 
 	updateMargin = (newMargin: Partial<Margin>): void => {
-		this.margin = { ...this.margin, ...newMargin };
+		const merged = { ...this.margin, ...newMargin };
+		if (
+			merged.top === this.margin.top &&
+			merged.right === this.margin.right &&
+			merged.bottom === this.margin.bottom &&
+			merged.left === this.margin.left
+		)
+			return;
+		this.margin = merged;
 	};
 
 	reset = (): void => {

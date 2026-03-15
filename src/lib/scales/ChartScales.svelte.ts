@@ -122,23 +122,11 @@ export class ChartScales {
 					const yKey = this.yLabel || yConfig.columnName || 'y';
 					const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
 					const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
-					if (this.config.useXSelection)
-						xScaleConfig.__selectionConsumer = this.chartId;
-					if (this.config.useYSelection)
-						yScaleConfig.__selectionConsumer = this.chartId;
+					if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
+					if (this.config.useYSelection) yScaleConfig.__selectionConsumer = this.chartId;
 					for (const cellId of facetIds) {
-						this.#scaleRegistry.getOrCreateScale(
-							xKey,
-							xConfig.type,
-							xScaleConfig,
-							cellId
-						);
-						this.#scaleRegistry.getOrCreateScale(
-							yKey,
-							yConfig.type,
-							yScaleConfig,
-							cellId
-						);
+						this.#scaleRegistry.getOrCreateScale(xKey, xConfig.type, xScaleConfig, cellId);
+						this.#scaleRegistry.getOrCreateScale(yKey, yConfig.type, yScaleConfig, cellId);
 					}
 				}
 			}
@@ -304,10 +292,7 @@ export class ChartScales {
 	 */
 	#buildAxisScaleConfig(axisConfig: ResolvedScaleConfiguration): Record<string, unknown> {
 		const cfg: Record<string, unknown> = { ...(axisConfig.config || {}) };
-		if (
-			(axisConfig.type === 'band' || axisConfig.type === 'point') &&
-			axisConfig.columnName
-		) {
+		if ((axisConfig.type === 'band' || axisConfig.type === 'point') && axisConfig.columnName) {
 			cfg.sourceField = axisConfig.columnName;
 		}
 		return cfg;

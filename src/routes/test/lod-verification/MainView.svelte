@@ -41,7 +41,10 @@
 
 <div class="main-view-container">
 	<h2>LOD Architecture Verification</h2>
-	<p>100K points (33K per series). Compare GPU-driven auto-dots (reference) vs JS-driven LOD controller. Chart 4 brushes crossfilter into charts 2+3.</p>
+	<p>
+		100K points (33K per series). Compare GPU-driven auto-dots (reference) vs JS-driven LOD
+		controller. Chart 4 brushes crossfilter into charts 2+3.
+	</p>
 
 	<div class="charts-grid">
 		<div class="chart-wrapper">
@@ -131,13 +134,7 @@
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={1.5}
-							/>
+							<LineMark table="dense_timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

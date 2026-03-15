@@ -2,10 +2,7 @@
 
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data/DataClient.svelte';
-import type {
-	DataClientConfig,
-	DataClientOptions
-} from '$lib/data/DataClient.svelte';
+import type { DataClientConfig, DataClientOptions } from '$lib/data/DataClient.svelte';
 import { Query, isNode, sql } from '@uwdata/mosaic-sql';
 import type { ExprValue, FilterExpr } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, FieldInfoRequest } from '@uwdata/mosaic-core';
@@ -381,7 +378,12 @@ export class MarkLifecycle {
 						this.client = null;
 					}
 
-					const fieldRequests = buildFieldInfoRequests(this.#config.select, tableToQuery, this.actualXScaleType, this.actualYScaleType);
+					const fieldRequests = buildFieldInfoRequests(
+						this.#config.select,
+						tableToQuery,
+						this.actualXScaleType,
+						this.actualYScaleType
+					);
 					this.#createClient(tableToQuery, fieldRequests);
 					this.#currentClientTable = tableToQuery;
 					this.#clientCreated = true;
@@ -1031,7 +1033,6 @@ export class MarkLifecycle {
 		if (this.#chartContext.facetBandScale) {
 			this.#chartContext.facetBandScale.registerTable(table);
 		}
-
 	}
 
 	// ===========================================================================
@@ -1208,7 +1209,6 @@ export class MarkLifecycle {
 					if (colData) columnArrays[col] = colData;
 				}
 
-
 				// Band axis columns from category-reducing transforms (e.g. topN) contain
 				// strings instead of ViewManager integer indices. Use the scale's index map
 				// to convert them so the tooltip query pipeline works unchanged.
@@ -1254,7 +1254,6 @@ export class MarkLifecycle {
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 				]);
-
 
 				this.#tooltipTableReady = true;
 			}

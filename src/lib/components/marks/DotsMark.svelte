@@ -205,8 +205,7 @@
 			if (!xArr || !yArr) return null;
 			const rFn = entry.r;
 			const radii = new Float32Array(instanceCount);
-			for (let i = 0; i < instanceCount; i++)
-				radii[i] = rFn({ x: xArr[i], y: yArr[i] });
+			for (let i = 0; i < instanceCount; i++) radii[i] = rFn({ x: xArr[i], y: yArr[i] });
 			return radii;
 		}
 		// Constant or column name

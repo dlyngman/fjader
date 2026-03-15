@@ -8,10 +8,21 @@
 		getCompatibleColumns,
 		getCompatibleScaleTypes,
 		getOptionChannels,
+		getNumericChannels,
+		channelSupportsConstant,
+		getConstantDef,
 		CHART_CHANNELS,
-		CHART_CHANNEL_DEFS
+		CHART_CHANNEL_DEFS,
+		CHART_NUMERIC_DEFS,
+		CHART_NUMERIC_GROUPS
 	} from './palette-channels';
-	import type { ChartChannel, OptionChannelDef } from './palette-channels';
+	import type {
+		ChartChannel,
+		OptionChannelDef,
+		NumericChannelDef,
+		NumericGroupDef
+	} from './palette-channels';
+	import { exportSpecJSON } from '$lib/spec/export';
 
 	interface Props {
 		onclose: () => void;
@@ -25,16 +36,18 @@
 	type TabItem = { kind: 'mark'; entry: MarkEntry } | { kind: 'chart' };
 
 	// ---- State ----
-	let activeTabIndex = $state((() => {
-		const hoveredId = chartContext.tooltipManager?.currentMarkId;
-		if (!hoveredId) return 0;
-		let i = 0;
-		for (const entry of chartContext.config.entries.values()) {
-			if (entry.id === hoveredId) return i;
-			i++;
-		}
-		return 0;
-	})());
+	let activeTabIndex = $state(
+		(() => {
+			const hoveredId = chartContext.tooltipManager?.currentMarkId;
+			if (!hoveredId) return 0;
+			let i = 0;
+			for (const entry of chartContext.config.entries.values()) {
+				if (entry.id === hoveredId) return i;
+				i++;
+			}
+			return 0;
+		})()
+	);
 
 	let focusZone: 'tabs' | 'channels' | 'values' = $state('channels');
 	let channelHighlightRaw = $state(0);
@@ -45,9 +58,28 @@
 	let originalColumnName: string | null = $state(null);
 	let keyboardNav = $state(false);
 	let filterRevealed = $state(false);
+	/** When true, the value panel shows a numeric scrubber instead of a list. */
+	let numericMode = $state(false);
+	/** Current numeric scrubber value (live-updated). */
+	let scrubberValue = $state(0);
+	/** String representation for bind:value on the input — kept in sync with scrubberValue. */
+	let scrubberText = $state('0');
+	/** Drag state for mouse scrubbing. */
+	let scrubDragState: { startY: number; startValue: number } | null = $state(null);
+	/** Remembered constant values per channel (survives column↔constant switches). */
+	const lastConstantValues = new Map<string, number>();
+	/** Focused item index within a numeric group. */
+	let groupFocusIndex = $state(0);
+	/** Whether we're editing the focused group input (vs navigating rows). */
+	let groupEditing = $state(false);
+	/** Brief feedback after copying spec to clipboard. */
+	let copyFeedback = $state(false);
 
 	// DOM refs
 	let filterInput: HTMLInputElement | null = $state(null);
+	let scrubberInput: HTMLInputElement | null = $state(null);
+	let groupInputs: HTMLInputElement[] = $state([]);
+	let valueListEl: HTMLDivElement | null = $state(null);
 	let panelEl: HTMLDivElement | null = $state(null);
 
 	// Initial focus — tick() waits for DOM, then focuses the panel
@@ -85,16 +117,44 @@
 		if (!targetEntry) return [];
 		const cols = getAssignableChannels(targetEntry.markType);
 		const opts = Object.keys(getOptionChannels(targetEntry.markType));
-		return [...cols, ...opts];
+		const nums = Object.keys(getNumericChannels(targetEntry.markType)).filter(
+			(n) => !cols.includes(n)
+		); // exclude channels already in column list (e.g. 'r')
+		return [...cols, ...opts, ...nums];
 	});
 
 	const expandedOptionDef: OptionChannelDef | null = $derived.by(() => {
-		if (!expandedChannel) return null;
+		if (!expandedChannel || numericMode) return null;
 		if (isChartTab) {
 			return CHART_CHANNEL_DEFS[expandedChannel as ChartChannel] ?? null;
 		}
 		if (!targetEntry) return null;
 		return getOptionChannels(targetEntry.markType)[expandedChannel] ?? null;
+	});
+
+	/** Active numeric channel definition (mark or chart level). */
+	const expandedNumericDef: NumericChannelDef | null = $derived.by(() => {
+		if (!expandedChannel) return null;
+		// Chart-level single numeric channels
+		if (isChartTab) return CHART_NUMERIC_DEFS[expandedChannel] ?? null;
+		if (!targetEntry) return null;
+		// Direct mark-level numeric channel (pure numeric, not a column channel)
+		const numDef = getNumericChannels(targetEntry.markType)[expandedChannel];
+		if (numDef && !getAssignableChannels(targetEntry.markType).includes(expandedChannel)) {
+			return numDef;
+		}
+		// "constant" sub-mode of a column channel (e.g. r → constant)
+		if (numericMode) {
+			return getConstantDef(targetEntry.markType, expandedChannel);
+		}
+		return null;
+	});
+
+	/** Active numeric group (e.g. margins — multiple inputs in one panel). */
+	const expandedNumericGroup: NumericGroupDef | null = $derived.by(() => {
+		if (!expandedChannel) return null;
+		if (isChartTab) return CHART_NUMERIC_GROUPS[expandedChannel] ?? null;
+		return null;
 	});
 
 	const channelListSize: number = $derived(currentChannels.length + 1);
@@ -114,8 +174,13 @@
 	});
 
 	// ---- Derived: value list for expanded channel ----
-	const allValues: Array<{ name: string; value?: string | null; jsType?: string; current?: boolean }> = $derived.by(() => {
-		if (!expandedChannel) return [];
+	const allValues: Array<{
+		name: string;
+		value?: string | number | null;
+		jsType?: string;
+		isConstantEntry?: boolean;
+	}> = $derived.by(() => {
+		if (!expandedChannel || numericMode || expandedNumericDef || expandedNumericGroup) return [];
 
 		if (expandedOptionDef) {
 			const def = expandedOptionDef;
@@ -127,22 +192,29 @@
 				if (entry) options = getCompatibleScaleTypes(schema, axis as 'x' | 'y', entry);
 			}
 
-			const entry = isChartTab ? firstEntry : targetEntry;
-			const currentVal = entry?.[def.prop as keyof MarkEntry] ?? null;
 			return options.map((o) => ({
 				name: o.label,
-				value: o.value,
-				current: o.value === currentVal
+				value: o.value
 			}));
 		}
 
 		if (!targetEntry || !schema) return [];
 		const cols = getCompatibleColumns(schema, expandedChannel, chartContext.scaleTypes);
-		return cols.map((c) => ({
+		const result: typeof allValues = cols.map((c) => ({
 			name: c.name,
-			jsType: c.jsType,
-			current: c.name === originalColumnName
+			jsType: c.jsType
 		}));
+
+		// Add "constant" entry for channels that support both column and constant values
+		if (channelSupportsConstant(targetEntry.markType, expandedChannel)) {
+			const currentVal = targetEntry[expandedChannel as keyof MarkEntry];
+			result.unshift({
+				name: typeof currentVal === 'number' ? `constant (${currentVal})` : 'constant',
+				isConstantEntry: true
+			});
+		}
+
+		return result;
 	});
 
 	const filteredValues = $derived.by(() => {
@@ -156,16 +228,31 @@
 	const valueListSize: number = $derived(filteredValues.length + (showClear ? 1 : 0));
 
 	const valueHighlight = $derived(
-		valueHighlightRaw >= valueListSize && valueListSize > 0
-			? valueListSize - 1
-			: valueHighlightRaw
+		valueHighlightRaw >= valueListSize && valueListSize > 0 ? valueListSize - 1 : valueHighlightRaw
 	);
 
 	// ---- Current value display for channel rows ----
 	function currentValue(channel: string): string {
+		// Chart-level numeric group (margins)
+		if (isChartTab && CHART_NUMERIC_GROUPS[channel]) {
+			const cp = chartContext.config.chartProps;
+			if (!cp) return '\u2014';
+			const group = CHART_NUMERIC_GROUPS[channel];
+			return group.items.map((item) => cp[item.def.prop as keyof typeof cp] ?? '\u2014').join(' ');
+		}
+		// Chart-level single numeric channels
+		if (isChartTab && CHART_NUMERIC_DEFS[channel]) {
+			const cp = chartContext.config.chartProps;
+			if (!cp) return '\u2014';
+			const val = cp[CHART_NUMERIC_DEFS[channel].prop as keyof typeof cp];
+			return val != null ? String(val) : '\u2014';
+		}
+
 		const optDef = isChartTab
 			? CHART_CHANNEL_DEFS[channel as ChartChannel]
-			: targetEntry ? getOptionChannels(targetEntry.markType)[channel] : null;
+			: targetEntry
+				? getOptionChannels(targetEntry.markType)[channel]
+				: null;
 
 		if (optDef) {
 			const entry = isChartTab ? firstEntry : targetEntry;
@@ -173,6 +260,15 @@
 			const val = entry[optDef.prop as keyof MarkEntry];
 			if (val == null) return 'auto';
 			return String(val);
+		}
+
+		// Mark-level numeric channels
+		if (targetEntry) {
+			const numDef = getNumericChannels(targetEntry.markType)[channel];
+			if (numDef && !getAssignableChannels(targetEntry.markType).includes(channel)) {
+				const val = targetEntry[numDef.prop as keyof MarkEntry];
+				return val != null ? String(val) : 'auto';
+			}
 		}
 
 		if (!targetEntry) return '';
@@ -204,7 +300,13 @@
 	// ---- Focus helper (replaces focus management effect) ----
 	async function updateFocus() {
 		await tick();
-		if (focusZone === 'values' && valueHighlightRaw === -1 && filterInput) {
+		if (focusZone === 'values' && expandedNumericGroup && groupEditing && groupInputs[groupFocusIndex]) {
+			groupInputs[groupFocusIndex].focus();
+			groupInputs[groupFocusIndex].select();
+		} else if (focusZone === 'values' && expandedNumericDef && scrubberInput) {
+			scrubberInput.focus();
+			scrubberInput.select();
+		} else if (focusZone === 'values' && valueHighlightRaw === -1 && filterInput) {
 			filterInput.focus();
 		} else if (panelEl) {
 			panelEl.focus();
@@ -231,6 +333,7 @@
 					chartContext.config.setMarkProp(entry.id, def.prop, null);
 				}
 			}
+			chartContext.config.revertChart();
 		} else if (targetEntry) {
 			chartContext.config.checkpoint('palette reset all');
 			chartContext.config.revertMark(targetEntry.id);
@@ -240,9 +343,49 @@
 
 	function expandChannel(channel: string) {
 		if (expandedChannel != null) {
-			collapseCancel();
+			collapseCommit();
 		}
 		expandedChannel = channel;
+
+		// Numeric group (e.g. margins) — checkpoint and show group panel
+		if (isChartTab && CHART_NUMERIC_GROUPS[channel]) {
+			chartContext.config.checkpoint('palette');
+			checkpointed = true;
+			groupFocusIndex = 0;
+			groupEditing = false;
+			focusZone = 'values';
+			// Keep focus on panel for keyboard nav (not on input)
+			tick().then(() => panelEl?.focus());
+			return;
+		}
+
+		// Check if this is a direct numeric channel (not a column channel)
+		const numDef = isChartTab
+			? (CHART_NUMERIC_DEFS[channel] ?? null)
+			: targetEntry
+				? getNumericChannels(targetEntry.markType)[channel] &&
+					!getAssignableChannels(targetEntry.markType).includes(channel)
+					? getNumericChannels(targetEntry.markType)[channel]
+					: null
+				: null;
+
+		if (numDef) {
+			// Enter numeric scrubber mode directly
+			chartContext.config.checkpoint('palette');
+			checkpointed = true;
+			numericMode = true;
+			const cp = chartContext.config.chartProps;
+			const currentVal = isChartTab
+				? cp
+					? (cp as Record<string, unknown>)[numDef.prop]
+					: undefined
+				: targetEntry?.[numDef.prop as keyof MarkEntry];
+			scrubberValue = typeof currentVal === 'number' ? currentVal : numDef.min;
+			scrubberText = String(scrubberValue);
+			focusZone = 'values';
+			updateFocus();
+			return;
+		}
 
 		const entry = isChartTab ? firstEntry : targetEntry;
 		if (entry) {
@@ -263,7 +406,24 @@
 		updateFocus();
 	}
 
-	function collapseCancel() {
+	/** Clean up expanded state without undoing — values stick. */
+	function collapseCommit() {
+		if (chartContext.config.previewing) {
+			chartContext.config.commitPreview();
+		}
+		checkpointed = false;
+		expandedChannel = null;
+		originalColumnName = null;
+		filterText = '';
+		filterRevealed = false;
+		valueHighlightRaw = 0;
+		numericMode = false;
+		scrubDragState = null;
+		groupEditing = false;
+	}
+
+	/** Revert previewed changes and undo checkpoint. */
+	function collapseRevert() {
 		if (chartContext.config.previewing) {
 			chartContext.config.cancelPreview();
 		}
@@ -271,26 +431,93 @@
 			chartContext.config.undo();
 			checkpointed = false;
 		}
+		checkpointed = false;
 		expandedChannel = null;
 		originalColumnName = null;
 		filterText = '';
 		filterRevealed = false;
 		valueHighlightRaw = 0;
+		numericMode = false;
+		scrubDragState = null;
+		groupEditing = false;
 	}
 
-	function collapseToChannels() {
-		collapseCancel();
+	function collapseToChannels(revert = false) {
+		if (revert) {
+			collapseRevert();
+		} else {
+			collapseCommit();
+		}
 		focusZone = 'channels';
 		updateFocus();
 	}
 
 	function resolveExpandedProp(): string | null {
 		if (!expandedChannel) return null;
+		if (expandedNumericDef) return expandedNumericDef.prop;
 		if (expandedOptionDef) return expandedOptionDef.prop;
 		return expandedChannel;
 	}
 
-	function previewValue(valueName: string | null) {
+	// ---- Numeric helpers ----
+
+	function getGroupValue(prop: string, fallback: number): number {
+		const cp = chartContext.config.chartProps;
+		if (!cp) return fallback;
+		const v = (cp as Record<string, unknown>)[prop];
+		return typeof v === 'number' ? v : fallback;
+	}
+
+	function getActiveNumericDef(): NumericChannelDef | null {
+		return expandedNumericDef;
+	}
+
+	function clampScrubber(val: number, def: NumericChannelDef): number {
+		const decimals = def.decimals ?? 2;
+		const clamped = Math.max(def.min, Math.min(def.max, val));
+		return Number(clamped.toFixed(decimals));
+	}
+
+	function applyScrubberValue(val: number) {
+		const def = getActiveNumericDef();
+		if (!def) return;
+		const clamped = clampScrubber(val, def);
+		scrubberValue = clamped;
+		scrubberText = String(clamped);
+
+		// Remember constant value for channels that toggle between column/constant
+		if (expandedChannel && numericMode) {
+			lastConstantValues.set(expandedChannel, clamped);
+		}
+
+		const prop = def.prop;
+		if (isChartTab) {
+			chartContext.config.setChartProp(prop, clamped);
+		} else if (targetEntry) {
+			chartContext.config.setMarkProp(targetEntry.id, prop, clamped);
+		}
+	}
+
+	function commitScrubber() {
+		checkpointed = false;
+		expandedChannel = null;
+		numericMode = false;
+		scrubDragState = null;
+		focusZone = 'channels';
+		updateFocus();
+	}
+
+	function enterConstantMode() {
+		if (!expandedChannel || !targetEntry) return;
+		const def = getConstantDef(targetEntry.markType, expandedChannel);
+		if (!def) return;
+		numericMode = true;
+		scrubberValue = resolveConstantValue(expandedChannel, def);
+		scrubberText = String(scrubberValue);
+		updateFocus();
+	}
+
+	function previewValue(valueName: string | number | null) {
 		if (chartContext.config.previewing) {
 			chartContext.config.cancelPreview();
 		}
@@ -307,7 +534,7 @@
 		}
 	}
 
-	function commitValue(valueName: string | null) {
+	function commitValue(valueName: string | number | null) {
 		const prop = resolveExpandedProp();
 
 		if (chartContext.config.previewing) {
@@ -326,26 +553,36 @@
 		filterText = '';
 		filterRevealed = false;
 		valueHighlightRaw = 0;
+		numericMode = false;
+		scrubDragState = null;
 		focusZone = 'channels';
 		updateFocus();
 	}
 
+	const tabChannelMemory = new Map<number, number>();
+
 	function switchTab(index: number) {
 		if (expandedChannel != null) {
-			collapseCancel();
+			collapseCommit();
 		}
+		tabChannelMemory.set(activeTabIndex, channelHighlightRaw);
 		activeTabIndex = index;
-		channelHighlightRaw = 0;
+		channelHighlightRaw = tabChannelMemory.get(index) ?? 0;
 	}
 
 	// ---- Resolve value from highlight index ----
-	function getValueAtIndex(idx: number): { name: string; isNull: boolean } | null {
+	function getValueAtIndex(
+		idx: number
+	): { name: string; isNull: boolean; isConstantEntry?: boolean } | null {
 		if (showClear && idx === filteredValues.length) {
 			return { name: 'clear', isNull: true };
 		}
 		const v = filteredValues[idx];
 		if (!v) return null;
-		if (expandedOptionDef && (v as { value?: string | null }).value === null) {
+		if (v.isConstantEntry) {
+			return { name: v.name, isNull: false, isConstantEntry: true };
+		}
+		if (expandedOptionDef && (v as { value?: string | number | null }).value === null) {
 			return { name: v.name, isNull: true };
 		}
 		return { name: v.name, isNull: false };
@@ -353,8 +590,40 @@
 
 	// ---- Keyboard ----
 	function handleKeydown(event: KeyboardEvent) {
-		event.stopPropagation();
 		keyboardNav = true;
+
+		event.stopPropagation();
+
+		// Cmd+E: copy spec to clipboard
+		if ((event.metaKey || event.ctrlKey) && event.key === 'e') {
+			event.preventDefault();
+			copySpec();
+			return;
+		}
+
+		// [/] cycle tabs
+		if (event.key === '[' || event.key === ']') {
+			event.preventDefault();
+			const delta = event.key === ']' ? 1 : -1;
+			const newIdx = (activeTabIndex + delta + tabList.length) % tabList.length;
+			switchTab(newIdx);
+			focusZone = 'channels';
+			updateFocus();
+			return;
+		}
+
+		// Cmd+Up jumps to tab bar, Cmd+Down jumps back to channels
+		if ((event.metaKey || event.ctrlKey) && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+			event.preventDefault();
+			if (event.key === 'ArrowUp') {
+				if (focusZone === 'values') collapseCommit();
+				focusZone = 'tabs';
+			} else {
+				focusZone = 'channels';
+			}
+			updateFocus();
+			return;
+		}
 
 		if ((event.metaKey || event.ctrlKey) && event.key === 'z') {
 			event.preventDefault();
@@ -367,7 +636,7 @@
 		if (event.key === 'Escape') {
 			event.preventDefault();
 			if (focusZone === 'values') {
-				collapseToChannels();
+				collapseToChannels(true);
 			} else if (focusZone === 'tabs') {
 				focusZone = 'channels';
 				updateFocus();
@@ -405,6 +674,11 @@
 
 	function handleChannelKeys(event: KeyboardEvent) {
 		const key = event.key;
+		if (key === 'ArrowLeft' || key === 'h') {
+			event.preventDefault();
+			close();
+			return;
+		}
 		if (key === 'ArrowUp' || key === 'k') {
 			event.preventDefault();
 			if (channelHighlight === 0) {
@@ -427,10 +701,32 @@
 		}
 	}
 
+	function scrollHighlightIntoView() {
+		if (!valueListEl) return;
+		const el = valueListEl.querySelector('.val-row.highlighted') as HTMLElement | null;
+		if (el) el.scrollIntoView({ block: 'nearest' });
+	}
+
+	function resolveConstantValue(channel: string, def: NumericChannelDef): number {
+		if (!targetEntry) return def.min;
+		const currentVal = targetEntry[def.prop as keyof MarkEntry];
+		if (typeof currentVal === 'number') return currentVal;
+		return lastConstantValues.get(channel) ?? def.min;
+	}
+
+	function previewConstantValue() {
+		if (!expandedChannel || !targetEntry) return;
+		const def = getConstantDef(targetEntry.markType, expandedChannel);
+		if (!def) return;
+		previewValue(resolveConstantValue(expandedChannel, def));
+	}
+
 	function previewAtHighlight() {
 		const item = getValueAtIndex(valueHighlight);
 		if (!item) return;
-		if (item.isNull && !expandedOptionDef) {
+		if (item.isConstantEntry) {
+			previewConstantValue();
+		} else if (item.isNull && !expandedOptionDef) {
 			if (chartContext.config.previewing) {
 				chartContext.config.cancelPreview();
 			}
@@ -440,6 +736,17 @@
 	}
 
 	function handleValueKeys(event: KeyboardEvent) {
+		// Numeric group mode — up/down navigates items, left/escape exits
+		if (expandedNumericGroup) {
+			handleGroupKeys(event);
+			return;
+		}
+		// Numeric scrubber mode — arrow keys step value
+		if (expandedNumericDef) {
+			handleScrubberKeys(event);
+			return;
+		}
+
 		const key = event.key;
 		if (key === 'ArrowUp') {
 			event.preventDefault();
@@ -452,6 +759,7 @@
 			} else {
 				valueHighlightRaw = valueHighlight - 1;
 				previewAtHighlight();
+				scrollHighlightIntoView();
 			}
 		} else if (key === 'ArrowDown') {
 			event.preventDefault();
@@ -459,19 +767,28 @@
 				valueHighlightRaw = 0;
 				updateFocus();
 				previewAtHighlight();
+				scrollHighlightIntoView();
 			} else if (valueListSize > 0) {
 				valueHighlightRaw = (valueHighlight + 1) % valueListSize;
 				previewAtHighlight();
+				scrollHighlightIntoView();
 			}
-		} else if (key === 'ArrowLeft' || key === 'Escape') {
+		} else if (key === 'Escape') {
+			event.preventDefault();
+			collapseToChannels(true);
+		} else if (key === 'ArrowLeft') {
 			event.preventDefault();
 			collapseToChannels();
-		} else if (key === 'Enter' && !event.repeat) {
+		} else if ((key === 'Enter' && !event.repeat) || key === 'ArrowRight') {
 			event.preventDefault();
 			if (valueHighlight >= 0) {
 				const item = getValueAtIndex(valueHighlight);
 				if (item) {
-					commitValue(item.isNull ? null : item.name);
+					if ((item as { isConstantEntry?: boolean }).isConstantEntry) {
+						enterConstantMode();
+					} else {
+						commitValue(item.isNull ? null : item.name);
+					}
 				}
 			}
 		} else if (valueHighlight !== -1 && key.length === 1 && !event.metaKey && !event.ctrlKey) {
@@ -483,7 +800,95 @@
 		}
 	}
 
+	function handleScrubberKeys(event: KeyboardEvent) {
+		const def = expandedNumericDef;
+		if (!def) return;
+		const key = event.key;
+		const step = event.shiftKey ? (def.bigStep ?? def.step * 10) : def.step;
+
+		if (key === 'ArrowUp') {
+			event.preventDefault();
+			applyScrubberValue(scrubberValue + step);
+		} else if (key === 'ArrowDown') {
+			event.preventDefault();
+			applyScrubberValue(scrubberValue - step);
+		} else if (key === 'Escape') {
+			event.preventDefault();
+			collapseToChannels(true);
+		} else if (key === 'ArrowLeft') {
+			event.preventDefault();
+			commitScrubber();
+		} else if (key === 'Enter' && !event.repeat) {
+			event.preventDefault();
+			commitScrubber();
+		}
+	}
+
+	function handleGroupKeys(event: KeyboardEvent) {
+		const group = expandedNumericGroup;
+		if (!group) return;
+		const key = event.key;
+		const count = group.items.length;
+
+		if (groupEditing) {
+			const item = group.items[groupFocusIndex];
+			const def = item?.def;
+			if (key === 'Escape' || key === 'ArrowLeft') {
+				event.preventDefault();
+				groupEditing = false;
+				panelEl?.focus();
+			} else if (key === 'Enter' && !event.repeat) {
+				event.preventDefault();
+				groupEditing = false;
+				panelEl?.focus();
+			} else if (key === 'Tab') {
+				// Tab moves to next/prev item, staying in edit mode
+				event.preventDefault();
+				groupFocusIndex = event.shiftKey
+					? (groupFocusIndex - 1 + count) % count
+					: (groupFocusIndex + 1) % count;
+				updateFocus();
+			} else if ((key === 'ArrowUp' || key === 'ArrowDown' || key === 'j' || key === 'k') && def) {
+				event.preventDefault();
+				const step = event.shiftKey ? (def.bigStep ?? def.step * 10) : def.step;
+				const delta = key === 'ArrowUp' || key === 'k' ? step : -step;
+				const cur = getGroupValue(def.prop, def.min);
+				const clamped = clampScrubber(cur + delta, def);
+				chartContext.config.setChartProp(def.prop, clamped);
+				const input = groupInputs[groupFocusIndex];
+				if (input) input.value = String(clamped);
+			}
+			return;
+		}
+
+		// Navigation mode
+		if (key === 'ArrowDown') {
+			event.preventDefault();
+			groupFocusIndex = (groupFocusIndex + 1) % count;
+		} else if (key === 'ArrowUp') {
+			event.preventDefault();
+			groupFocusIndex = (groupFocusIndex - 1 + count) % count;
+		} else if (key === 'ArrowRight' || key === 'Enter') {
+			event.preventDefault();
+			groupEditing = true;
+			updateFocus();
+		} else if (key === 'Escape') {
+			event.preventDefault();
+			collapseToChannels(true);
+		} else if (key === 'ArrowLeft') {
+			event.preventDefault();
+			collapseToChannels();
+		}
+	}
+
 	// ---- Outside click ----
+	async function copySpec() {
+		const json = exportSpecJSON(chartContext.config);
+		await navigator.clipboard.writeText(json);
+		copyFeedback = true;
+		setTimeout(() => (copyFeedback = false), 1500);
+	}
+
 	function handleWindowPointerDown(event: PointerEvent) {
 		if (!panelEl) return;
 		if (!panelEl.contains(event.target as Node)) {
@@ -511,8 +916,12 @@
 		bind:this={panelEl}
 		tabindex="-1"
 		onkeydown={handleKeydown}
-		onwheel={(e) => e.preventDefault()}
-		onpointermove={() => { keyboardNav = false; }}
+		onwheel={(e) => {
+			if (!valueListEl?.contains(e.target as Node)) e.preventDefault();
+		}}
+		onpointermove={() => {
+			keyboardNav = false;
+		}}
 	>
 		<!-- Tab bar -->
 		<div class="tab-bar">
@@ -520,7 +929,10 @@
 				{@const isActive = i === Math.min(activeTabIndex, tabList.length - 1)}
 				<button
 					class={['tab', { active: isActive, focused: focusZone === 'tabs' && isActive }]}
-					onclick={() => { switchTab(i); focusZone = 'channels'; }}
+					onclick={() => {
+						switchTab(i);
+						focusZone = 'channels';
+					}}
 				>
 					{tabLabels[i]}
 				</button>
@@ -533,8 +945,17 @@
 			<div class="channel-list">
 				{#each currentChannels as ch, i (ch)}
 					<button
-						class={['ch-row', { highlighted: focusZone === 'channels' && i === channelHighlight, expanded: ch === expandedChannel }]}
-						onclick={() => expandChannel(ch)}
+						class={[
+							'ch-row',
+							{
+								highlighted: keyboardNav && focusZone === 'channels' && i === channelHighlight,
+								expanded: ch === expandedChannel
+							}
+						]}
+						onclick={() => {
+							channelHighlightRaw = i;
+							expandChannel(ch);
+						}}
 						onpointerenter={() => {
 							if (!keyboardNav && focusZone === 'channels') channelHighlightRaw = i;
 						}}
@@ -546,69 +967,198 @@
 					</button>
 				{/each}
 				<button
-					class={['ch-row', 'reset-row', { highlighted: focusZone === 'channels' && channelHighlight === currentChannels.length }]}
+					class={[
+						'ch-row',
+						'reset-row',
+						{ highlighted: keyboardNav && focusZone === 'channels' && channelHighlight === currentChannels.length }
+					]}
 					onclick={resetAll}
 					onpointerenter={() => {
-						if (!keyboardNav && focusZone === 'channels') channelHighlightRaw = currentChannels.length;
+						if (!keyboardNav && focusZone === 'channels')
+							channelHighlightRaw = currentChannels.length;
 					}}
 				>
 					<span class="ch-name reset-label">reset all</span>
+				</button>
+				<button
+					class="ch-row reset-row"
+					onclick={copySpec}
+				>
+					<span class="ch-name reset-label">{copyFeedback ? 'copied!' : 'copy spec'}</span>
+					<span class="ch-value" style:font-size="9px">⌘E</span>
 				</button>
 			</div>
 
 			<!-- Value panel (only when expanded) -->
 			{#if expandedChannel != null}
 				<div class="value-panel">
-					{#if filterRevealed}
-						<div class="filter-row">
-							<input
-								bind:this={filterInput}
-								bind:value={filterText}
-								placeholder={expandedOptionDef ? 'Filter...' : 'Filter columns...'}
-								class="filter-input"
-							/>
+					{#if expandedNumericGroup}
+						<div class="group-panel">
+							{#each expandedNumericGroup.items as item, gi (item.label)}
+								<div class="group-row" class:highlighted={gi === groupFocusIndex}>
+									<span class="group-label">{item.label}</span>
+									<input
+										bind:this={groupInputs[gi]}
+										type="number"
+										class="scrubber-input"
+										value={getGroupValue(item.def.prop, item.def.min)}
+										onfocus={() => {
+											groupFocusIndex = gi;
+											groupEditing = true;
+										}}
+										min={item.def.min}
+										max={item.def.max}
+										step={item.def.step}
+										oninput={(e) => {
+											const v = parseFloat((e.target as HTMLInputElement).value);
+											if (!isNaN(v)) {
+												const clamped = clampScrubber(v, item.def);
+												chartContext.config.setChartProp(item.def.prop, clamped);
+											}
+										}}
+										onwheel={(e) => {
+											e.preventDefault();
+											const cur = getGroupValue(item.def.prop, item.def.min);
+											const step = e.shiftKey
+												? (item.def.bigStep ?? item.def.step * 10)
+												: item.def.step;
+											const delta = e.deltaY < 0 ? step : -step;
+											const clamped = clampScrubber(cur + delta, item.def);
+											chartContext.config.setChartProp(item.def.prop, clamped);
+											(e.target as HTMLInputElement).value = String(clamped);
+										}}
+									/>
+								</div>
+							{/each}
 						</div>
-					{/if}
-					<div class="value-list">
-						{#each filteredValues as val, i (val.name)}
-							{@const isAutoNull = expandedOptionDef && (val as { value?: string | null }).value === null}
-							<button
-								class={['val-row', { highlighted: focusZone === 'values' && i === valueHighlight, current: val.current }]}
-								onpointerenter={() => {
-									if (keyboardNav) return;
-									valueHighlightRaw = i;
-									if (isAutoNull) {
-										previewValue(null);
-									} else {
-										previewValue(val.name);
+					{:else if expandedNumericDef}
+						{@const def = expandedNumericDef}
+						<div class="scrubber-panel">
+							<input
+								bind:this={scrubberInput}
+								type="number"
+								class="scrubber-input"
+								bind:value={scrubberText}
+								min={def.min}
+								max={def.max}
+								step={def.step}
+								oninput={() => {
+									const v = parseFloat(scrubberText);
+									if (!isNaN(v)) applyScrubberValue(v);
+								}}
+								onkeydown={(e) => {
+									if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+										e.preventDefault();
+										e.stopPropagation();
+										const step = e.shiftKey ? (def.bigStep ?? def.step * 10) : def.step;
+										const delta = e.key === 'ArrowUp' ? step : -step;
+										applyScrubberValue(scrubberValue + delta);
 									}
 								}}
-								onclick={() => commitValue(isAutoNull ? null : val.name)}
-							>
-								<span class="val-name">{val.name}</span>
-								<span class="val-right">
-									{#if val.current}
-										<span class="current-marker">&#10003;</span>
-									{/if}
-									{#if val.jsType}
-										<span class="val-type">{val.jsType}</span>
-									{/if}
-								</span>
-							</button>
-						{/each}
-						{#if showClear}
-							<button
-								class={['val-row', 'clear-row', { highlighted: focusZone === 'values' && valueHighlight === filteredValues.length }]}
-								onpointerenter={() => { if (!keyboardNav) valueHighlightRaw = filteredValues.length; }}
-								onclick={() => commitValue(null)}
-							>
-								<span class="val-name clear-label">clear</span>
-							</button>
+								onwheel={(e) => {
+									e.preventDefault();
+									const step = e.shiftKey ? (def.bigStep ?? def.step * 10) : def.step;
+									const delta = e.deltaY < 0 ? step : -step;
+									applyScrubberValue(scrubberValue + delta);
+								}}
+								onpointerdown={(e) => {
+									if (e.button !== 0) return;
+									scrubDragState = { startY: e.clientY, startValue: scrubberValue };
+									(e.target as Element).setPointerCapture(e.pointerId);
+								}}
+								onpointermove={(e) => {
+									if (!scrubDragState) return;
+									const dy = scrubDragState.startY - e.clientY;
+									const step = e.shiftKey ? (def.bigStep ?? def.step * 10) : def.step;
+									const steps = Math.round(dy / 4);
+									applyScrubberValue(scrubDragState.startValue + steps * step);
+								}}
+								onpointerup={(e) => {
+									if (scrubDragState) {
+										(e.target as Element).releasePointerCapture(e.pointerId);
+										scrubDragState = null;
+									}
+								}}
+							/>
+							<span class="scrubber-range">{def.min} – {def.max}</span>
+						</div>
+					{:else}
+						{#if filterRevealed}
+							<div class="filter-row">
+								<input
+									bind:this={filterInput}
+									bind:value={filterText}
+									placeholder={expandedOptionDef ? 'Filter...' : 'Filter columns...'}
+									class="filter-input"
+								/>
+							</div>
 						{/if}
-						{#if filteredValues.length === 0}
-							<div class="palette-empty">No matches</div>
-						{/if}
-					</div>
+						<div class="value-list" bind:this={valueListEl}>
+							{#each filteredValues as val, i (val.name)}
+								{@const isAutoNull =
+									expandedOptionDef && (val as { value?: string | number | null }).value === null}
+								{@const isConstant = val.isConstantEntry}
+								<button
+									class={[
+										'val-row',
+										{
+											highlighted: keyboardNav && focusZone === 'values' && i === valueHighlight,
+											'constant-entry': isConstant
+										}
+									]}
+									onpointerenter={() => {
+										if (keyboardNav) return;
+										valueHighlightRaw = i;
+										if (isConstant) {
+											previewConstantValue();
+										} else if (isAutoNull) {
+											previewValue(null);
+										} else {
+											previewValue(val.name);
+										}
+									}}
+									onclick={() => {
+										if (isConstant) {
+											enterConstantMode();
+										} else {
+											commitValue(isAutoNull ? null : val.name);
+										}
+									}}
+								>
+									<span class="val-name">{val.name}</span>
+									<span class="val-right">
+										{#if val.jsType}
+											<span class="val-type">{val.jsType}</span>
+										{/if}
+										{#if isConstant}
+											<span class="val-type">→</span>
+										{/if}
+									</span>
+								</button>
+							{/each}
+							{#if showClear}
+								<button
+									class={[
+										'val-row',
+										'clear-row',
+										{
+											highlighted:
+												keyboardNav && focusZone === 'values' && valueHighlight === filteredValues.length
+										}
+									]}
+									onpointerenter={() => {
+										if (!keyboardNav) valueHighlightRaw = filteredValues.length;
+									}}
+									onclick={() => commitValue(null)}
+								>
+									<span class="val-name clear-label">clear</span>
+								</button>
+							{/if}
+							{#if filteredValues.length === 0}
+								<div class="palette-empty">No matches</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -621,7 +1171,7 @@
 		top: 8px;
 		right: 8px;
 		z-index: 1100;
-		width: 280px;
+		width: 260px;
 		max-height: calc(100% - 16px);
 		display: flex;
 		flex-direction: column;
@@ -649,8 +1199,8 @@
 		background: none;
 		border: none;
 		border-bottom: 2px solid transparent;
-		padding: 7px 10px 5px;
-		font-size: 11px;
+		padding: 5px 8px 4px;
+		font-size: 10px;
 		font-weight: 600;
 		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		cursor: pointer;
@@ -688,7 +1238,7 @@
 		display: flex;
 		flex-direction: column;
 		overflow-y: auto;
-		padding: 4px;
+		padding: 2px;
 		flex: 1;
 	}
 
@@ -703,12 +1253,12 @@
 		align-items: center;
 		justify-content: space-between;
 		width: 100%;
-		padding: 6px 8px;
+		padding: 3px 6px;
 		background: none;
 		border: none;
-		border-radius: 4px;
+		border-radius: 3px;
 		cursor: pointer;
-		font-size: 12px;
+		font-size: 11px;
 		color: inherit;
 		opacity: 0.85;
 		text-align: left;
@@ -732,7 +1282,7 @@
 
 	.ch-value {
 		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
-		font-size: 11px;
+		font-size: 10px;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -763,7 +1313,7 @@
 	}
 
 	.filter-row {
-		padding: 6px 8px;
+		padding: 4px 6px;
 		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
 	}
 
@@ -771,9 +1321,9 @@
 		width: 100%;
 		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
 		border: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
-		border-radius: 4px;
-		padding: 4px 8px;
-		font-size: 11px;
+		border-radius: 3px;
+		padding: 3px 6px;
+		font-size: 10px;
 		color: inherit;
 		outline: none;
 		box-sizing: border-box;
@@ -789,7 +1339,7 @@
 
 	.value-list {
 		overflow-y: auto;
-		padding: 4px;
+		padding: 2px;
 	}
 
 	.val-row {
@@ -797,12 +1347,12 @@
 		align-items: center;
 		justify-content: space-between;
 		width: 100%;
-		padding: 5px 8px;
+		padding: 3px 6px;
 		background: none;
 		border: none;
-		border-radius: 4px;
+		border-radius: 3px;
 		cursor: pointer;
-		font-size: 11px;
+		font-size: 10px;
 		color: inherit;
 		opacity: 0.85;
 		text-align: left;
@@ -811,10 +1361,6 @@
 	.palette-panel:not(.keyboard-nav) .val-row:hover,
 	.val-row.highlighted {
 		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
-	}
-
-	.val-row.current {
-		opacity: 1;
 	}
 
 	.val-name {
@@ -831,14 +1377,9 @@
 		flex-shrink: 0;
 	}
 
-	.current-marker {
-		color: rgba(120, 200, 120, 0.8);
-		font-size: 10px;
-	}
-
 	.val-type {
 		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
-		font-size: 10px;
+		font-size: 9px;
 		font-style: italic;
 	}
 
@@ -853,9 +1394,78 @@
 	}
 
 	.palette-empty {
-		padding: 12px 8px;
+		padding: 8px 6px;
 		text-align: center;
 		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
-		font-size: 11px;
+		font-size: 10px;
+	}
+
+	/* ---- Numeric scrubber ---- */
+	.scrubber-panel {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 3px 6px;
+	}
+
+	.scrubber-input {
+		width: 48px;
+		background: none;
+		border: none;
+		border-bottom: 1px solid var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		padding: 1px 0;
+		font-size: 10px;
+		font-weight: 500;
+		color: inherit;
+		text-align: center;
+		outline: none;
+		cursor: ns-resize;
+		-moz-appearance: textfield;
+	}
+
+	.scrubber-input::-webkit-inner-spin-button,
+	.scrubber-input::-webkit-outer-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+
+	.scrubber-input:focus {
+		border-bottom-color: var(--diveplot-palette-text, #ffffff);
+		cursor: text;
+	}
+
+	.scrubber-range {
+		font-size: 9px;
+		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+	}
+
+	/* ---- Numeric group ---- */
+	.group-panel {
+		display: flex;
+		flex-direction: column;
+		padding: 4px;
+	}
+
+	.group-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 3px 6px;
+		font-size: 10px;
+	}
+
+	.group-label {
+		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		font-weight: 500;
+	}
+
+	.group-row.highlighted {
+		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		border-radius: 4px;
+	}
+
+	.constant-entry {
+		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		margin-bottom: 2px;
 	}
 </style>

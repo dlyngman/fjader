@@ -346,9 +346,7 @@ export class M4Decimator {
 		this.#controlBindGroup = this.#device.createBindGroup({
 			label: 'm4-control-bind-group',
 			layout: this.#controlLayout!,
-			entries: [
-				{ binding: 0, resource: { buffer: this.#controlBuffer } }
-			]
+			entries: [{ binding: 0, resource: { buffer: this.#controlBuffer } }]
 		});
 	}
 
@@ -451,9 +449,7 @@ export class M4Decimator {
 		// Group 1 for control (merged indirect+decision)
 		this.#controlLayout = this.#device.createBindGroupLayout({
 			label: 'm4-control-layout',
-			entries: [
-				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
-			]
+			entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }]
 		});
 
 		// Group 0 for pass 3 (emit) — x, y, color, config, bins (no decision)

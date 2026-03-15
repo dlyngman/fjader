@@ -41,7 +41,9 @@
 		return isX ? chart.xScale : chart.yScale;
 	}
 	const scaleState = $derived(isX ? chart.xScaleState : chart.yScaleState);
-	const resolvedField = $derived(field ?? (isX ? chart.xColumnName : chart.yColumnName) ?? (isX ? chart.xLabel : chart.yLabel));
+	const resolvedField = $derived(
+		field ?? (isX ? chart.xColumnName : chart.yColumnName) ?? (isX ? chart.xLabel : chart.yLabel)
+	);
 
 	// Resize edge names
 	const edgeStart = isX ? 'left' : 'top';
@@ -61,8 +63,7 @@
 		source,
 		augment: (clause) => ({
 			kind: 'range',
-			column:
-				typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
+			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
 			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
 			values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
 		}),

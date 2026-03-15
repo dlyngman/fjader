@@ -53,11 +53,13 @@
 		<div class="button-group">
 			<span class="label">X scale:</span>
 			<button
-				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredXScaleType', 'log')}
+				onclick={() =>
+					dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredXScaleType', 'log')}
 				disabled={!dotEntry}>Log</button
 			>
 			<button
-				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredXScaleType', 'symlog')}
+				onclick={() =>
+					dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredXScaleType', 'symlog')}
 				disabled={!dotEntry}>Symlog</button
 			>
 			<button
@@ -68,11 +70,13 @@
 		<div class="button-group">
 			<span class="label">Y scale:</span>
 			<button
-				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredYScaleType', 'log')}
+				onclick={() =>
+					dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredYScaleType', 'log')}
 				disabled={!dotEntry}>Log</button
 			>
 			<button
-				onclick={() => dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredYScaleType', 'symlog')}
+				onclick={() =>
+					dotEntry && chartConfig?.setMarkProp(dotEntry.id, 'preferredYScaleType', 'symlog')}
 				disabled={!dotEntry}>Symlog</button
 			>
 			<button
@@ -127,9 +131,8 @@
 		</div>
 		<div class="button-group">
 			<span class="label">Actions:</span>
-			<button
-				onclick={() => dotEntry && chartConfig?.revertMark(dotEntry.id)}
-				disabled={!dotEntry}>Revert all</button
+			<button onclick={() => dotEntry && chartConfig?.revertMark(dotEntry.id)} disabled={!dotEntry}
+				>Revert all</button
 			>
 		</div>
 	</div>
@@ -151,11 +154,14 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						<Grid />
-						<DotsMark table="penguins" x="bill_length" y="body_mass" r={3} opacity={upstreamOpacity} />
-						<ConfigCapture
-							onConfig={(cfg) => (chartConfig = cfg)}
-							onMounted={() => mountCount++}
+						<DotsMark
+							table="penguins"
+							x="bill_length"
+							y="body_mass"
+							r={3}
+							opacity={upstreamOpacity}
 						/>
+						<ConfigCapture onConfig={(cfg) => (chartConfig = cfg)} onMounted={() => mountCount++} />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}

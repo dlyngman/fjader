@@ -59,6 +59,8 @@ export type ColorProp = FieldRef | { field: string; scheme?: ColorScheme } | nul
 export interface SqlTransform {
 	stage: 'sql';
 	type: string;
+	/** Spec-format representation for export. Set by factory functions. */
+	spec?: Record<string, unknown>;
 	apply(query: SelectQuery): SelectQuery;
 	describe?(): string;
 }
@@ -67,6 +69,8 @@ export interface SqlTransform {
 export interface JsTransform {
 	stage: 'js';
 	type: string;
+	/** Spec-format representation for export. Set by factory functions. */
+	spec?: Record<string, unknown>;
 	apply(data: DataAccessor, config: MarkConfig, scales?: ScaleMap): DataAccessor;
 	channels?: string[];
 	describe?(): string;

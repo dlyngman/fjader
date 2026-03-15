@@ -97,7 +97,9 @@
 	const hasExplicitBounds = $derived(entry.x1 !== undefined || entry.x2 !== undefined);
 	let x1 = $derived(entry.x1 ?? 0);
 	let x2 = $derived(entry.x2 ?? entry.x);
-	let effectiveTransforms = $derived(withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x'));
+	let effectiveTransforms = $derived(
+		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x')
+	);
 
 	let setup = $state(null);
 
@@ -157,7 +159,10 @@
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		constants: buildConstantsFromChannels({ x1, x2, y: entry.y }),
-		clientOptions: { limit: entry.limit, filterNulls: entry.filterNulls ? ([x1, x2, entry.y] as FieldRef[]) : null },
+		clientOptions: {
+			limit: entry.limit,
+			filterNulls: entry.filterNulls ? ([x1, x2, entry.y] as FieldRef[]) : null
+		},
 		// Bar charts with aggregates should start at zero baseline
 		zeroBaseline: hasAggregateX ? { x: true } : null,
 		sort: normalizeSortConfig(entry.sort ?? null),

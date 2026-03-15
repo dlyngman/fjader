@@ -364,9 +364,16 @@
 	onDestroy(() => {
 		const r = renderer;
 		const qgb = quadGeometryBuffer;
-		const retained = r && markId && gpuCoordinator?.retainRenderer(markId, {
-			destroy() { console.log(`[Dots:${markId}] retained.destroy()`); qgb?.destroy(); r.destroy(); }
-		});
+		const retained =
+			r &&
+			markId &&
+			gpuCoordinator?.retainRenderer(markId, {
+				destroy() {
+					console.log(`[Dots:${markId}] retained.destroy()`);
+					qgb?.destroy();
+					r.destroy();
+				}
+			});
 		console.log(`[Dots:${markId}] onDestroy retained=${!!retained} hasRenderer=${!!r}`);
 		if (retained) return;
 		if (qgb) qgb.destroy();

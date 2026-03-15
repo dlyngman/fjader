@@ -87,6 +87,9 @@ export const DivePlot = { render };
 // Re-export coordinator factory for widget entry
 export { getOrCreateCoordinator } from './LazyCoordinator';
 
+// Re-export spec export
+export { exportSpec, exportSpecJSON } from './export';
+
 // Re-export types
 export type { DivePlotSpec, DivePlotHandle, RenderOptions } from './types';
 export type { MarkSpec, PlotSpec, DataSpec, TransformSpec, FieldSpec } from './types';

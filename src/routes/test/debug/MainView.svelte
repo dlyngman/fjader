@@ -1,11 +1,5 @@
 <script>
-	import {
-		ChartContainer,
-		Grid,
-		Crosshair,
-		WebGPUCanvas,
-		LineMark
-	} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
 	import { AreaMarkY } from '$lib/components/marks';
 	import { IntervalX } from '$lib/interactors';
 	import { sum, avg, min, max, sql, frameRows, preceding, currentRow } from '@uwdata/mosaic-sql';

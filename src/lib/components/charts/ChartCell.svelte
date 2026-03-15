@@ -91,6 +91,16 @@
 	$effect(() => {
 		if (containerHeight > 0) layout.updateHeight(containerHeight);
 	});
+	// Sync layout margins from chart-level palette overrides
+	$effect(() => {
+		const cp = chartConfig.chartProps;
+		layout.updateMargin({
+			top: cp?.marginTop ?? margin.top,
+			right: cp?.marginRight ?? margin.right,
+			bottom: cp?.marginBottom ?? margin.bottom,
+			left: cp?.marginLeft ?? margin.left
+		});
+	});
 
 	// --- Cell-local D3 scales (cached via $derived) ---
 	// Each cell owns its own D3 scale copies so that vconcat charts sharing
@@ -119,7 +129,9 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		if (ownYSource !== ss) {
-			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }).copy();
+			ownYScale = (
+				ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }
+			).copy();
 			ownYSource = ss;
 		}
 		ownYScale!.range([layout.innerHeight, 0]);
@@ -144,7 +156,9 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		if (ownYSource !== ss) {
-			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }).copy();
+			ownYScale = (
+				ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }
+			).copy();
 			ownYSource = ss;
 		}
 		ownYScale!.range([layout.innerHeight, 0]);
@@ -575,7 +589,10 @@
 	}
 
 	function touchMidpoint(t1: Touch, t2: Touch): { x: number; y: number } {
-		return { x: (t1.clientX + t2.clientX) / 2 - svgLeft, y: (t1.clientY + t2.clientY) / 2 - svgTop };
+		return {
+			x: (t1.clientX + t2.clientX) / 2 - svgLeft,
+			y: (t1.clientY + t2.clientY) / 2 - svgTop
+		};
 	}
 
 	function handleTouchMove(event: TouchEvent) {
@@ -770,7 +787,7 @@
 				onpointercancel={handlePointerUp}
 				ondblclick={handleDoubleClick}
 				onclick={handleClick}
-			oncontextmenu={handleContextMenu}
+				oncontextmenu={handleContextMenu}
 			>
 				<defs>
 					<clipPath id={layout.clipPathId}>

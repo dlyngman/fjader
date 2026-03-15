@@ -28,9 +28,7 @@
 		return null;
 	});
 
-	const resolvedMarks = $derived(
-		(spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec))
-	);
+	const resolvedMarks = $derived((spec.marks ?? []).map((markSpec) => resolveMarkEntry(markSpec)));
 
 	const legendConfig = $derived.by((): LegendSpec | null => {
 		if (!spec.legend) return null;
@@ -100,13 +98,26 @@
 		{#snippet interactors()}
 			{#each spec.interactors ?? [] as interactor, i (i)}
 				{#if interactor.interactor === 'intervalX'}
-					<IntervalX selection={interactor.selection ?? selectionName ?? undefined} field={interactor.field} />
+					<IntervalX
+						selection={interactor.selection ?? selectionName ?? undefined}
+						field={interactor.field}
+					/>
 				{:else if interactor.interactor === 'intervalY'}
-					<IntervalY selection={interactor.selection ?? selectionName ?? undefined} field={interactor.field} />
+					<IntervalY
+						selection={interactor.selection ?? selectionName ?? undefined}
+						field={interactor.field}
+					/>
 				{:else if interactor.interactor === 'interval2D'}
-					<Interval2D selection={interactor.selection ?? selectionName ?? undefined} xField={interactor.xField} yField={interactor.yField} />
+					<Interval2D
+						selection={interactor.selection ?? selectionName ?? undefined}
+						xField={interactor.xField}
+						yField={interactor.yField}
+					/>
 				{:else if interactor.interactor === 'toggle'}
-					<Toggle selection={interactor.selection ?? selectionName ?? undefined} field={interactor.field} />
+					<Toggle
+						selection={interactor.selection ?? selectionName ?? undefined}
+						field={interactor.field}
+					/>
 				{/if}
 			{/each}
 		{/snippet}

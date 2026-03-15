@@ -33,18 +33,33 @@ export const MARK_REGISTRY: Record<string, Component<any>> = {
 };
 
 /** Channel prop names that hold FieldSpec values and need resolution. */
-const FIELD_CHANNELS = new Set(['x', 'x1', 'x2', 'y', 'y1', 'y2', 'fill', 'r', 'z', 'text']);
+export const FIELD_CHANNELS = new Set(['x', 'x1', 'x2', 'y', 'y1', 'y2', 'fill', 'r', 'z', 'text']);
 
 /** Mark types where `stroke` is a data-driven FieldSpec (not a CSS constant). */
-const STROKE_AS_FIELD_MARKS = new Set(['line']);
+export const STROKE_AS_FIELD_MARKS = new Set(['line']);
+
+/** Internal mark type → spec mark type. Used by both resolveMarkEntry and exportSpec. */
+export const SPEC_MARK_TYPES: Record<string, string> = {
+	dot: 'dot',
+	line: 'line',
+	rect: 'rect',
+	bary: 'barY',
+	barx: 'barX',
+	areay: 'areaY',
+	areax: 'areaX',
+	recty: 'rectY',
+	rectx: 'rectX',
+	text: 'text'
+};
 
 /**
  * Convert a MarkSpec into { component, props } for svelte:component rendering.
  * Resolves FieldSpecs, transforms, and selection references.
  */
-export function resolveMarkEntry(
-	markSpec: MarkSpec
-): { component: Component; props: Record<string, unknown> } {
+export function resolveMarkEntry(markSpec: MarkSpec): {
+	component: Component;
+	props: Record<string, unknown>;
+} {
 	const component = MARK_REGISTRY[markSpec.mark];
 	if (!component) {
 		throw new Error(
@@ -59,6 +74,8 @@ export function resolveMarkEntry(
 	// Resolve FieldSpec channels → FieldRef values
 	for (const key of FIELD_CHANNELS) {
 		if (key in props && props[key] != null) {
+			// Numbers are constants (e.g. r=3), not field references — skip resolution
+			if (typeof props[key] === 'number') continue;
 			props[key] = resolveFieldSpec(props[key] as FieldSpec);
 		}
 	}

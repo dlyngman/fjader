@@ -43,22 +43,12 @@ describe('buildFieldInfoRequests', () => {
 	});
 
 	it('deduplicates same field used in multiple channels', () => {
-		const requests = buildFieldInfoRequests(
-			{ x: 'value', y: 'value' },
-			't',
-			'linear',
-			'linear'
-		);
+		const requests = buildFieldInfoRequests({ x: 'value', y: 'value' }, 't', 'linear', 'linear');
 		expect(requests).toHaveLength(1);
 	});
 
 	it('skips null select values', () => {
-		const requests = buildFieldInfoRequests(
-			{ x: 'price', y: null },
-			't',
-			'linear',
-			'linear'
-		);
+		const requests = buildFieldInfoRequests({ x: 'price', y: null }, 't', 'linear', 'linear');
 		expect(requests).toHaveLength(1);
 	});
 });
@@ -141,7 +131,10 @@ describe('buildQueryParts', () => {
 describe('assembleQuery', () => {
 	const noopCompiler = new TransformCompiler([]);
 
-	function simpleParts(select: Record<string, unknown>, connected?: { seriesChannel: string | null; dimensionChannel: string }) {
+	function simpleParts(
+		select: Record<string, unknown>,
+		connected?: { seriesChannel: string | null; dimensionChannel: string }
+	) {
 		return buildQueryParts(select, connected, false);
 	}
 

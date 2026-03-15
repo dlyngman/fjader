@@ -143,8 +143,9 @@ export async function fetchCategoricalDomains(
 						row.min_time,
 						row.max_time
 					]);
-					(timeScaleState as unknown as { addDatetimeExtent: (e: unknown[], id: string) => void })
-						.addDatetimeExtent([row.min_time, row.max_time], markId);
+					(
+						timeScaleState as unknown as { addDatetimeExtent: (e: unknown[], id: string) => void }
+					).addDatetimeExtent([row.min_time, row.max_time], markId);
 				}
 			})
 		);
@@ -227,7 +228,10 @@ export async function fetchCategoricalDomains(
 	// Fetch series domain if series scale is set and there's a series field
 	if (seriesScaleState && seriesChannel && select[seriesChannel]) {
 		const seriesField = select[seriesChannel];
-		const q = Query.from(table).select({ series: sqlColumn(String(seriesField)) }).distinct().orderby('series');
+		const q = Query.from(table)
+			.select({ series: sqlColumn(String(seriesField)) })
+			.distinct()
+			.orderby('series');
 
 		fetches.push(
 			coordinator.query(q).then((result) => {
