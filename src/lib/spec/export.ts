@@ -95,6 +95,12 @@ function entryToMarkSpec(entry: MarkEntry): MarkSpec | null {
 		spec[prop] = val;
 	}
 
+	// LOD: strip runtime-only properties (onLODChange callback) from exported spec
+	if (spec.lod && typeof spec.lod === 'object') {
+		const { onLODChange, ...lodSpec } = spec.lod as Record<string, unknown>;
+		spec.lod = Object.keys(lodSpec).length > 0 ? lodSpec : true;
+	}
+
 	// Transforms — use stored spec, skip implicit stacks
 	if (entry.transforms && Array.isArray(entry.transforms)) {
 		const transformSpecs = serializeTransforms(entry.transforms);

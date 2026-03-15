@@ -102,7 +102,9 @@
 				{/snippet}
 			</ChartContainer>
 		</div>
-		<div class="chart-wrapper">
+		<!-- TODO: fix ViewManager — __facet__grp column not found when creating view
+		     for tables that don't have a physical facet column (derived from fx prop) -->
+		<!-- <div class="chart-wrapper">
 			<h3>Hourly Distribution</h3>
 			<ChartContainer xLabel="hour" yLabel="value" fx="grp">
 				{#snippet canvas()}
@@ -136,7 +138,7 @@
 					<Crosshair />
 				{/snippet}
 			</ChartContainer>
-		</div>
+		</div> -->
 	</div>
 </div>
 

@@ -273,6 +273,8 @@ export interface LODConfig {
 	dots?: LODDotsConfig | false;
 	/** Decimation behavior: 'auto' (density-based), true (always), false (never). Default: 'auto'. */
 	decimate?: boolean | 'auto';
+	/** Bin step multiplier (binned mode). Default: 1.0. */
+	multiplier?: number;
 	/** Callback fired on LOD state transitions (decimation toggle, dots appear/disappear). */
 	onLODChange?: (state: LODChangeState) => void;
 }
@@ -381,6 +383,7 @@ export interface ChartContext {
 
 	readonly binStepMultiplier: number | undefined;
 	adjustBinMultiplier?: (delta: number) => void;
+	setBinStepMultiplier?: (value: number) => void;
 
 	// Client registration
 	registerClient: (client: MosaicClient) => () => void;

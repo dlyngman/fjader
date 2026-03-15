@@ -23,6 +23,8 @@
 		NumericGroupDef
 	} from './palette-channels';
 	import { exportSpecJSON } from '$lib/spec/export';
+	import type { LODState } from '$lib/lod/LODController.svelte';
+	import type { LODController } from '$lib/lod/LODController.svelte';
 
 	interface Props {
 		onclose: () => void;
@@ -80,6 +82,7 @@
 	let scrubberInput: HTMLInputElement | null = $state(null);
 	let groupInputs: HTMLInputElement[] = $state([]);
 	let valueListEl: HTMLDivElement | null = $state(null);
+	let channelListEl: HTMLDivElement | null = $state(null);
 	let panelEl: HTMLDivElement | null = $state(null);
 
 	// Initial focus — tick() waits for DOM, then focuses the panel
@@ -120,7 +123,9 @@
 		const nums = Object.keys(getNumericChannels(targetEntry.markType)).filter(
 			(n) => !cols.includes(n)
 		); // exclude channels already in column list (e.g. 'r')
-		return [...cols, ...opts, ...nums];
+		const result = [...cols, ...opts, ...nums];
+		if (lodState) result.push('lod');
+		return result;
 	});
 
 	const expandedOptionDef: OptionChannelDef | null = $derived.by(() => {
@@ -156,6 +161,36 @@
 		if (isChartTab) return CHART_NUMERIC_GROUPS[expandedChannel] ?? null;
 		return null;
 	});
+
+	// ---- Derived: LOD for active mark tab ----
+	const lodController: LODController | null = $derived.by(() => {
+		if (!targetEntry) return null;
+		return chartContext.config.getLodController(targetEntry.id) ?? null;
+	});
+
+	const lodState: LODState | null = $derived(lodController?.state ?? null);
+
+	/** Update an LOD tunable via ChartConfig (persists for undo/redo + spec export). */
+	function setLodTunable(key: 'dotsThreshold' | 'baseRadius' | 'multiplier', value: number): void {
+		if (!targetEntry) return;
+		const current = targetEntry.lod;
+		const cfg = typeof current === 'object' && current ? current : {};
+		let updated: Record<string, unknown>;
+
+		if (key === 'dotsThreshold') {
+			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
+			dots.threshold = value;
+			updated = { ...cfg, dots };
+		} else if (key === 'baseRadius') {
+			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
+			dots.r = value;
+			updated = { ...cfg, dots };
+		} else {
+			updated = { ...cfg, multiplier: value };
+		}
+
+		chartContext.config.setMarkProp(targetEntry.id, 'lod', updated);
+	}
 
 	const channelListSize: number = $derived(currentChannels.length + 1);
 
@@ -233,6 +268,14 @@
 
 	// ---- Current value display for channel rows ----
 	function currentValue(channel: string): string {
+		// LOD summary
+		if (channel === 'lod' && lodState) {
+			if (lodState.mode === 'line') {
+				return `${lodState.density.toFixed(1)} pt/px`;
+			}
+			return `${Math.round(lodState.numVisibleBins)} bins`;
+		}
+
 		// Chart-level numeric group (margins)
 		if (isChartTab && CHART_NUMERIC_GROUPS[channel]) {
 			const cp = chartContext.config.chartProps;
@@ -346,6 +389,13 @@
 			collapseCommit();
 		}
 		expandedChannel = channel;
+
+		// LOD panel — edits apply immediately, no checkpoint/preview needed
+		if (channel === 'lod') {
+			focusZone = 'values';
+			tick().then(() => panelEl?.focus());
+			return;
+		}
 
 		// Numeric group (e.g. margins) — checkpoint and show group panel
 		if (isChartTab && CHART_NUMERIC_GROUPS[channel]) {
@@ -736,6 +786,14 @@
 	}
 
 	function handleValueKeys(event: KeyboardEvent) {
+		// LOD panel — edits already applied, just collapse
+		if (expandedChannel === 'lod') {
+			if (event.key === 'ArrowLeft' || event.key === 'Escape') {
+				event.preventDefault();
+				collapseToChannels();
+			}
+			return;
+		}
 		// Numeric group mode — up/down navigates items, left/escape exits
 		if (expandedNumericGroup) {
 			handleGroupKeys(event);
@@ -917,7 +975,8 @@
 		tabindex="-1"
 		onkeydown={handleKeydown}
 		onwheel={(e) => {
-			if (!valueListEl?.contains(e.target as Node)) e.preventDefault();
+			const t = e.target as Node;
+			if (!valueListEl?.contains(t) && !channelListEl?.contains(t)) e.preventDefault();
 		}}
 		onpointermove={() => {
 			keyboardNav = false;
@@ -942,7 +1001,7 @@
 		<!-- Body -->
 		<div class={['palette-body', { split: expandedChannel != null }]}>
 			<!-- Channel list -->
-			<div class="channel-list">
+			<div class="channel-list" bind:this={channelListEl}>
 				{#each currentChannels as ch, i (ch)}
 					<button
 						class={[
@@ -1030,6 +1089,99 @@
 									/>
 								</div>
 							{/each}
+						</div>
+					{:else if expandedChannel === 'lod' && lodState && lodController}
+						<div class="group-panel">
+							{#if lodState.mode === 'line'}
+								<div class="group-row">
+									<span class="group-label">visible</span>
+									<span class="lod-readout">{lodState.visibleCount.toLocaleString()}</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">density</span>
+									<span class="lod-readout">{lodState.density.toFixed(1)} pt/px</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">M4</span>
+									<span class="lod-readout {lodState.shouldDecimate ? 'lod-active' : ''}">{lodState.shouldDecimate ? 'on' : 'off'}</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">dots threshold</span>
+									<input
+										type="number"
+										class="scrubber-input"
+										value={lodState.dotsThreshold}
+										min={10}
+										max={100}
+										step={1}
+										oninput={(e) => {
+											const v = parseFloat((e.target as HTMLInputElement).value);
+											if (!isNaN(v)) setLodTunable('dotsThreshold', Math.max(10, Math.min(100, v)));
+										}}
+										onwheel={(e) => {
+											e.preventDefault();
+											const step = e.shiftKey ? 5 : 1;
+											const delta = e.deltaY < 0 ? step : -step;
+											setLodTunable('dotsThreshold', Math.max(10, Math.min(100, lodState.dotsThreshold + delta)));
+										}}
+									/>
+								</div>
+								<div class="group-row">
+									<span class="group-label">dot radius</span>
+									<input
+										type="number"
+										class="scrubber-input"
+										value={lodState.baseRadius}
+										min={0.5}
+										max={20}
+										step={0.5}
+										oninput={(e) => {
+											const v = parseFloat((e.target as HTMLInputElement).value);
+											if (!isNaN(v)) setLodTunable('baseRadius', Math.max(0.5, Math.min(20, v)));
+										}}
+										onwheel={(e) => {
+											e.preventDefault();
+											const step = e.shiftKey ? 2 : 0.5;
+											const delta = e.deltaY < 0 ? step : -step;
+											setLodTunable('baseRadius', Math.max(0.5, Math.min(20, lodState.baseRadius + delta)));
+										}}
+									/>
+								</div>
+							{:else}
+								<div class="group-row">
+									<span class="group-label">bins</span>
+									<span class="lod-readout">{Math.round(lodState.numVisibleBins)}</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">bin width</span>
+									<span class="lod-readout">{lodState.binWidthPx.toFixed(1)} px</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">step</span>
+									<span class="lod-readout">{lodState.binStep.toPrecision(3)}</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">multiplier</span>
+									<input
+										type="number"
+										class="scrubber-input"
+										value={lodState.binMultiplier.toFixed(2)}
+										min={0.1}
+										max={20}
+										step={0.1}
+										oninput={(e) => {
+											const v = parseFloat((e.target as HTMLInputElement).value);
+											if (!isNaN(v)) setLodTunable('multiplier', Math.max(0.1, Math.min(20, v)));
+										}}
+										onwheel={(e) => {
+											e.preventDefault();
+											const step = e.shiftKey ? 0.5 : 0.1;
+											const delta = e.deltaY < 0 ? step : -step;
+											setLodTunable('multiplier', Math.max(0.1, Math.min(20, lodState.binMultiplier + delta)));
+										}}
+									/>
+								</div>
+							{/if}
 						</div>
 					{:else if expandedNumericDef}
 						{@const def = expandedNumericDef}
@@ -1467,5 +1619,23 @@
 	.constant-entry {
 		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
 		margin-bottom: 2px;
+	}
+
+	/* ---- LOD panel ---- */
+	.lod-readout {
+		font-size: 10px;
+		font-variant-numeric: tabular-nums;
+		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+	}
+
+	.lod-readout.lod-active {
+		color: var(--diveplot-palette-text, #ffffff);
+	}
+
+	.lod-hint {
+		font-size: 9px;
+		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		font-style: italic;
+		padding: 3px 6px 0;
 	}
 </style>

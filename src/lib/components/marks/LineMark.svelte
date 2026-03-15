@@ -16,7 +16,6 @@
 		resolveTip,
 		resolveSelection
 	} from './utils';
-	import { isNode } from '@uwdata/mosaic-sql';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { LODController } from '$lib/lod';
@@ -234,37 +233,42 @@
 	const faceted = !!chartContext.fx;
 	const entryLod = $derived(entry.lod);
 
-	// Parse lod prop: boolean | LODConfig → resolved config values
-	const lodConfig = $derived.by(() => {
+	// Structural config — individual primitives so Svelte 5 can compare by value.
+	// Only changes to these recreate the LODController.
+	const lodEnabled = $derived(entryLod !== false);
+	const lodDotsEnabled = $derived.by(() => {
+		if (entryLod === false) return false;
+		const cfg = typeof entryLod === 'object' ? entryLod : {};
+		return cfg.dots !== false;
+	});
+	const lodDecimate = $derived.by(() => {
+		if (entryLod === false) return 'auto' as boolean | 'auto';
+		const cfg = typeof entryLod === 'object' ? entryLod : {};
+		return cfg.decimate ?? ('auto' as boolean | 'auto');
+	});
+	const lodOnChange = $derived.by(() => {
 		if (entryLod === false) return null;
 		const cfg = typeof entryLod === 'object' ? entryLod : {};
-		const dr = entry.dotRadius ?? 0;
-		const dotsEnabled = cfg.dots !== false;
-		const dotsR =
-			(dotsEnabled && typeof cfg.dots === 'object' ? cfg.dots.r : undefined) ?? (dr > 0 ? dr : 2.5);
-		const dotsThreshold =
-			dotsEnabled && typeof cfg.dots === 'object' ? (cfg.dots.threshold ?? 18) : 18;
-		const decimate = cfg.decimate ?? 'auto';
-		const onLODChange = cfg.onLODChange ?? null;
-		return { dotsEnabled, dotsR, dotsThreshold, decimate, onLODChange };
+		return cfg.onLODChange ?? null;
 	});
 
-	// TEMPORARY Phase 0 guard: LOD count queries use `String(x)` as a raw column
-	// name in SQL. Expression nodes (aggregates, bins, sql`...`) would produce
-	// invalid SQL. When LOD gains CTE-wrapping (proposal Section 3.3), this guard
-	// can be removed and expression nodes will work via the general counting path.
-	const lodEligible = !isNode(entry.x);
-
-	// LODController is on by default — it owns density evaluation, M4 control,
-	// and auto-dots spring animation. Only disabled for expression x fields
-	// (pending CTE-wrapping) or explicit lod={false}.
-	const effectiveLod = lodEligible && lodConfig !== null;
+	// Tunable values — read from entry.lod, synced to controller without recreation.
+	const lodTunables = $derived.by(() => {
+		const cfg = typeof entryLod === 'object' ? entryLod : {};
+		const dr = entry.dotRadius ?? 0;
+		const dotsR =
+			(typeof cfg.dots === 'object' ? cfg.dots.r : undefined) ?? (dr > 0 ? dr : 2.5);
+		const dotsThreshold =
+			typeof cfg.dots === 'object' ? (cfg.dots.threshold ?? 18) : 18;
+		const multiplier = cfg.multiplier ?? 1.0;
+		return { dotsR, dotsThreshold, multiplier };
+	});
 
 	// M4 created only when LODController is active and decimation isn't disabled.
 	// No LODController = no M4 (raw data passthrough, correct for sparse data).
 	const m4Eligible = $derived.by(() => {
-		if (!effectiveLod) return false;
-		if (lodConfig?.decimate === false || faceted) return false;
+		if (!lodEnabled) return false;
+		if (lodDecimate === false || faceted) return false;
 		const xType = chartContext.scaleTypes?.x;
 		if (xType === 'log' || xType === 'symlog') return false;
 		return true;
@@ -274,7 +278,7 @@
 	// via its frame callback — no reactive chain. We set 0 here as a placeholder.
 	// Without LOD: dotRadius > 0 shows fixed dots, 0 = no dots.
 	const effectiveDotRadius = $derived.by(() => {
-		if (effectiveLod && lodController) return 0; // LODController writes directly to GPU
+		if (lodEnabled && lodController) return 0; // LODController writes directly to GPU
 		return entry.dotRadius ?? 0;
 	});
 
@@ -293,26 +297,53 @@
 		}
 	});
 
+	// Write-back: when LODController tunables change (shift+scroll), persist to entry.lod
+	function updateEntryLod(key: string, value: number): void {
+		const current = entry.lod;
+		const cfg = typeof current === 'object' && current ? current : {};
+		let updated: Record<string, unknown>;
+
+		if (key === 'dotsThreshold') {
+			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
+			dots.threshold = value;
+			updated = { ...cfg, dots };
+		} else if (key === 'baseRadius') {
+			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
+			dots.r = value;
+			updated = { ...cfg, dots };
+		} else {
+			updated = { ...cfg, multiplier: value };
+		}
+
+		chartContext.config.setMarkProp(markId, 'lod', updated);
+	}
+
 	// --- LOD CONTROLLER ---
 	let lodController: LODController | null = $state(null);
 
 	$effect(() => {
-		if (!effectiveLod || !lodConfig || !setup || !coordinator || !gpuCoordinator) {
+		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) {
 			lodController?.destroy();
 			lodController = null;
 			onLodController?.(null);
 			return;
 		}
+		// Read structural primitives — these are tracked, recreation happens only
+		// when they change. Tunables synced via separate effect below.
+		const dotsEnabled = lodDotsEnabled;
+		const decimate = lodDecimate;
+		const onLODChange = lodOnChange;
+		const initTunables = lodTunables;
 		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
 			mode: 'line',
-			table: entry.table,
-			xField: String(entry.x),
-			setup,
-			baseR: lodConfig.dotsR,
-			dotsEnabled: lodConfig.dotsEnabled,
-			dotsThreshold: lodConfig.dotsThreshold,
-			decimate: lodConfig.decimate,
-			onLODChange: lodConfig.onLODChange
+			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
+				setup.buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi),
+			baseR: initTunables.dotsR,
+			dotsEnabled,
+			dotsThreshold: initTunables.dotsThreshold,
+			decimate,
+			onLODChange,
+			onTunableChange: (key, value) => updateEntryLod(key, value)
 		});
 		lodController = ctrl;
 		onLodController?.(ctrl);
@@ -321,6 +352,19 @@
 			lodController = null;
 			onLodController?.(null);
 		};
+	});
+
+	// Sync tunable changes to controller without recreating it.
+	// Palette writes to entry.lod → lodTunables updates → this effect pushes to controller.
+	$effect(() => {
+		if (!lodController) return;
+		const t = lodTunables;
+		lodController.setDotsThreshold(t.dotsThreshold);
+		lodController.setBaseRadius(t.dotsR);
+		// Multiplier is chart-level state but we persist the mark's requested value
+		if (lodController.mode === 'binned') {
+			lodController.setBinMultiplier(t.multiplier);
+		}
 	});
 
 	// Sync M4 decimator to LODController — decoupled so M4 recreation

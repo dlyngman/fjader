@@ -24,8 +24,7 @@
 // and restores it when the controller detaches.
 // =============================================================================
 
-import { Query, column as sqlColumn, sql, and } from '@uwdata/mosaic-sql';
-import type { ExprValue } from '@uwdata/mosaic-sql';
+import type { Query } from '@uwdata/mosaic-sql';
 import { Priority } from '@uwdata/mosaic-core';
 import type { Coordinator } from '@uwdata/mosaic-core';
 import { Spring, DT } from '$lib/animation/Spring';
@@ -44,10 +43,13 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 
 export interface LineConfig {
 	mode: 'line';
-	table: string;
-	xField: string;
 	baseR: number;
-	setup?: { currentFilter: unknown[] } | null;
+	/**
+	 * Builds viewport count query by wrapping the mark's assembled query as a
+	 * derived table: SELECT COUNT(*) FROM (mark_query) WHERE x/y BETWEEN ...
+	 * Handles type coercion (time scales), aggregates, bins — one path for all marks.
+	 */
+	countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => Query | null;
 	dotsEnabled?: boolean;
 	dotsThreshold?: number;
 	decimate?: boolean | 'auto';
@@ -55,6 +57,8 @@ export interface LineConfig {
 	countDebounceMs?: number;
 	domainChangeThreshold?: number;
 	onLODChange?: ((state: LODChangeState) => void) | null;
+	/** Fired when a tunable value changes (shift+scroll, programmatic). Lets the mark persist to ChartConfig. */
+	onTunableChange?: ((key: 'dotsThreshold' | 'baseRadius', value: number) => void) | null;
 }
 
 export interface BinnedConfig {
@@ -62,6 +66,8 @@ export interface BinnedConfig {
 	markLifecycle: MarkLifecycle;
 	binAxes: ('x' | 'y')[];
 	binningThreshold?: number; // domain ratio threshold for re-bin (default 1.25)
+	/** Fired when multiplier changes (shift+scroll). Lets the mark persist to ChartConfig. */
+	onTunableChange?: ((key: 'multiplier', value: number) => void) | null;
 }
 
 export type LODControllerConfig = LineConfig | BinnedConfig;
@@ -70,14 +76,19 @@ export type LODControllerConfig = LineConfig | BinnedConfig;
 export interface LODState {
 	mode: 'line' | 'binned';
 	density: number;
-	// Line mode
+	// Line mode — diagnostic
 	visibleCount: number;
 	shouldDecimate: boolean;
 	dotsVisible: boolean;
-	// Binned mode
+	// Line mode — tunable
+	dotsThreshold: number;
+	baseRadius: number;
+	// Binned mode — diagnostic
 	binStep: number;
 	numVisibleBins: number;
 	binWidthPx: number;
+	// Binned mode — tunable
+	binMultiplier: number;
 }
 
 export class LODController {
@@ -90,10 +101,10 @@ export class LODController {
 
 	// --- Line mode state ---
 	#coordinator: Coordinator | null = null;
-	#table: string = '';
-	#xField: string = '';
+	#countQueryBuilder:
+		| ((xLo: number, xHi: number, yLo: number, yHi: number) => Query | null)
+		| null = null;
 	#baseR: number = 0;
-	#setup: { currentFilter: unknown[] } | null = null;
 	#m4Decimator: M4Decimator | null = null;
 	#dotsEnabled: boolean = true;
 	#dotsThreshold: number = 18;
@@ -111,6 +122,7 @@ export class LODController {
 	#writeDotRadius: ((r: number) => void) | null = null;
 	#invalidateLayer: (() => void) | null = null;
 	#onLODChange: ((state: LODChangeState) => void) | null = null;
+	#onTunableChange: ((key: string, value: number) => void) | null = null;
 	#prevDecimating: boolean = false;
 	#prevDotsVisible: boolean = false;
 
@@ -153,9 +165,12 @@ export class LODController {
 		visibleCount: 0,
 		shouldDecimate: false,
 		dotsVisible: false,
+		dotsThreshold: 18,
+		baseRadius: 0,
 		binStep: 0,
 		numVisibleBins: 0,
-		binWidthPx: 0
+		binWidthPx: 0,
+		binMultiplier: 1.0
 	});
 
 	// --- Derived ---
@@ -190,10 +205,8 @@ export class LODController {
 
 		if (config.mode === 'line') {
 			this.#coordinator = coordinator!;
-			this.#table = config.table;
-			this.#xField = config.xField;
 			this.#baseR = config.baseR;
-			this.#setup = config.setup ?? null;
+			this.#countQueryBuilder = config.countQueryBuilder;
 			this.#dotsEnabled = config.dotsEnabled ?? true;
 			this.#dotsThreshold = config.dotsThreshold ?? 18;
 			this.#decimate = config.decimate ?? 'auto';
@@ -201,14 +214,19 @@ export class LODController {
 			this.#countDebounceMs = config.countDebounceMs ?? 150;
 			this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
 			this.#onLODChange = config.onLODChange ?? null;
+			this.#onTunableChange = config.onTunableChange ?? null;
 			this.#dotRadiusSpring = this.#dotsEnabled ? new Spring(0, 400) : null;
 			this.#lastSpringTime = performance.now();
+			this.state.dotsThreshold = this.#dotsThreshold;
+			this.state.baseRadius = this.#baseR;
 		} else {
 			// Binned mode
 			this.#markLifecycle = config.markLifecycle;
 			this.#binAxes = config.binAxes;
 			this.#binningThreshold = config.binningThreshold ?? 1.25;
+			this.#onTunableChange = config.onTunableChange ?? null;
 			this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
+			this.state.binMultiplier = this.#prevMultiplier;
 		}
 
 		// Both modes use frame callbacks
@@ -249,14 +267,50 @@ export class LODController {
 	/**
 	 * Adjust resolution. Called by ChartCell when shift+scroll targets this mark.
 	 * For binned mode: adjusts binStepMultiplier on the chart context.
-	 * For line mode: adjusts density threshold offset (future).
+	 * For line mode: adjusts dots threshold (scroll up = more detail = dots sooner).
 	 */
 	adjustResolution(deltaY: number): void {
 		if (this.#mode === 'binned') {
 			const delta = deltaY < 0 ? 0.025 : -0.025;
 			this.#chartContext.adjustBinMultiplier?.(delta);
+		} else {
+			// Scroll up (deltaY < 0) = lower threshold = dots appear sooner
+			const step = deltaY < 0 ? -1 : 1;
+			this.setDotsThreshold(this.#dotsThreshold + step);
 		}
-		// Line mode: future — adjust density threshold offset
+	}
+
+	// =========================================================================
+	// PALETTE — tunable value setters
+	// =========================================================================
+
+	/** Set dots average-spacing threshold (line mode). Range: 10–100. */
+	setDotsThreshold(value: number): void {
+		if (this.#mode !== 'line') return;
+		const clamped = Math.max(10, Math.min(100, value));
+		if (clamped === this.#dotsThreshold) return;
+		this.#dotsThreshold = clamped;
+		this.state.dotsThreshold = clamped;
+		this.#evaluateLOD();
+		this.#onTunableChange?.('dotsThreshold', clamped);
+	}
+
+	/** Set base dot radius in px (line mode). Range: 0.5–20. */
+	setBaseRadius(value: number): void {
+		if (this.#mode !== 'line') return;
+		const clamped = Math.max(0.5, Math.min(20, value));
+		if (clamped === this.#baseR) return;
+		this.#baseR = clamped;
+		this.state.baseRadius = clamped;
+		this.#evaluateLOD();
+		this.#onTunableChange?.('baseRadius', clamped);
+	}
+
+	/** Set bin step multiplier (binned mode). Range: 0.1–20. */
+	setBinMultiplier(value: number): void {
+		if (this.#mode !== 'binned') return;
+		this.#chartContext.setBinStepMultiplier?.(value);
+		this.#onTunableChange?.('multiplier', value);
 	}
 
 	// =========================================================================
@@ -295,8 +349,23 @@ export class LODController {
 		if (typeof lo !== 'number' || typeof hi !== 'number') return;
 		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return;
 
+		// Read y domain if available (continuous y scale)
+		let yLo = -Infinity,
+			yHi = Infinity;
+		const yState = this.#chartContext.yScaleState;
+		if (yState && 'domain' in yState) {
+			const yDomain = (yState as { domain?: { target?: [number, number] } }).domain;
+			if (yDomain?.target) {
+				const [y0, y1] = yDomain.target;
+				if (typeof y0 === 'number' && typeof y1 === 'number' && isFinite(y0) && isFinite(y1)) {
+					yLo = y0;
+					yHi = y1;
+				}
+			}
+		}
+
 		if (this.#shouldQueryCount(lo, hi)) {
-			this.#issueCountQuery(lo, hi);
+			this.#issueCountQuery(lo, hi, yLo, yHi);
 		}
 	}
 
@@ -318,7 +387,12 @@ export class LODController {
 		return false;
 	}
 
-	async #issueCountQuery(lo: number, hi: number): Promise<void> {
+	async #issueCountQuery(
+		lo: number,
+		hi: number,
+		yLo: number,
+		yHi: number
+	): Promise<void> {
 		if (this.#countQueryPending || this.#destroyed || !this.#coordinator) return;
 
 		this.#countQueryPending = true;
@@ -326,20 +400,8 @@ export class LODController {
 		const t0 = performance.now();
 
 		try {
-			const xCol = sqlColumn(this.#xField);
-			const viewportClause = sql`${xCol} BETWEEN ${lo} AND ${hi}`;
-
-			const filters: ExprValue[] = [viewportClause];
-			if (this.#setup) {
-				const crossfilter = this.#setup.currentFilter;
-				if (crossfilter.length > 0) {
-					filters.push(...(crossfilter as ExprValue[]));
-				}
-			}
-
-			const q = Query.from(this.#table)
-				.select({ cnt: sql`COUNT(*)` })
-				.where(and(filters));
+			const q = this.#countQueryBuilder!(lo, hi, yLo, yHi);
+			if (!q) return;
 
 			const result = await this.#coordinator.query(q, { priority: Priority.Low });
 			const t1 = performance.now();
@@ -463,6 +525,7 @@ export class LODController {
 		const multiplier = this.#chartContext.binStepMultiplier ?? 1.0;
 		if (multiplier !== this.#prevMultiplier) {
 			this.#prevMultiplier = multiplier;
+			this.state.binMultiplier = multiplier;
 			const domain = this.#readDomain(this.#binAxes[0]);
 			if (domain) {
 				this.#markLifecycle.triggerReBin(this.#binAxes[0], domain);
