@@ -383,6 +383,7 @@ export interface ChartContext {
 
 	readonly binStepMultiplier: number | undefined;
 	adjustBinMultiplier?: (delta: number) => void;
+	setBinStepMultiplier?: (value: number) => void;
 
 	// Client registration
 	registerClient: (client: MosaicClient) => () => void;

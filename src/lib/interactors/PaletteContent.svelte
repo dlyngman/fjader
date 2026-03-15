@@ -1122,9 +1122,7 @@
 											e.preventDefault();
 											const step = e.shiftKey ? 5 : 1;
 											const delta = e.deltaY < 0 ? step : -step;
-											const next = Math.max(10, Math.min(100, lodState.dotsThreshold + delta));
-											setLodTunable('dotsThreshold', next);
-											(e.target as HTMLInputElement).value = String(next);
+											setLodTunable('dotsThreshold', Math.max(10, Math.min(100, lodState.dotsThreshold + delta)));
 										}}
 									/>
 								</div>
@@ -1145,9 +1143,7 @@
 											e.preventDefault();
 											const step = e.shiftKey ? 2 : 0.5;
 											const delta = e.deltaY < 0 ? step : -step;
-											const next2 = Math.max(0.5, Math.min(20, lodState.baseRadius + delta));
-											setLodTunable('baseRadius', next2);
-											(e.target as HTMLInputElement).value = String(next2);
+											setLodTunable('baseRadius', Math.max(0.5, Math.min(20, lodState.baseRadius + delta)));
 										}}
 									/>
 								</div>
@@ -1181,9 +1177,7 @@
 											e.preventDefault();
 											const step = e.shiftKey ? 0.5 : 0.1;
 											const delta = e.deltaY < 0 ? step : -step;
-											const next3 = Math.max(0.1, Math.min(20, lodState.binMultiplier + delta));
-											setLodTunable('multiplier', next3);
-											(e.target as HTMLInputElement).value = String(next3.toFixed(2));
+											setLodTunable('multiplier', Math.max(0.1, Math.min(20, lodState.binMultiplier + delta)));
 										}}
 									/>
 								</div>

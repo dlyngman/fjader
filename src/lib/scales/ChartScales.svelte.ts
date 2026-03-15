@@ -658,14 +658,16 @@ export class ChartScales {
 		return (this.baseYScale as D3BandScale).bandwidth();
 	});
 
+	setBinStepMultiplier(value: number): void {
+		const clamped = Math.max(0.1, Math.min(20.0, value));
+		if (Math.abs(clamped - this.binStepMultiplier) > 0.001) {
+			this.binStepMultiplier = clamped;
+		}
+	}
+
 	adjustBinMultiplier(delta: number): void {
 		const current = this.binStepMultiplier;
-		const absoluteDelta = current * delta;
-		const newValue = Math.max(0.1, Math.min(20.0, current + absoluteDelta));
-
-		if (Math.abs(newValue - current) > 0.001) {
-			this.binStepMultiplier = newValue;
-		}
+		this.setBinStepMultiplier(current + current * delta);
 	}
 
 	getContextData() {
@@ -740,7 +742,8 @@ export class ChartScales {
 			get binStepMultiplier() {
 				return coordinator.binStepMultiplier;
 			},
-			adjustBinMultiplier: (d: number) => coordinator.adjustBinMultiplier(d)
+			adjustBinMultiplier: (d: number) => coordinator.adjustBinMultiplier(d),
+			setBinStepMultiplier: (v: number) => coordinator.setBinStepMultiplier(v)
 		};
 	}
 

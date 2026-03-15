@@ -309,13 +309,8 @@ export class LODController {
 	/** Set bin step multiplier (binned mode). Range: 0.1–20. */
 	setBinMultiplier(value: number): void {
 		if (this.#mode !== 'binned') return;
-		const clamped = Math.max(0.1, Math.min(20, value));
-		const current = this.#chartContext.binStepMultiplier ?? 1.0;
-		if (Math.abs(clamped - current) < 0.001) return;
-		// adjustBinMultiplier uses relative delta: absoluteDelta = current * delta
-		const delta = (clamped - current) / current;
-		this.#chartContext.adjustBinMultiplier?.(delta);
-		this.#onTunableChange?.('multiplier', clamped);
+		this.#chartContext.setBinStepMultiplier?.(value);
+		this.#onTunableChange?.('multiplier', value);
 	}
 
 	// =========================================================================
