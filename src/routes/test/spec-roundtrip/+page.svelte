@@ -3,36 +3,72 @@
 	import { render } from '$lib/spec';
 
 	const dataUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/data/penguins.parquet`;
+	const aaplUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/data/aapl.csv`;
 
-	const DEFAULT_SPEC = {
-		data: {
-			penguins: { url: dataUrl, type: 'parquet' }
-		},
-		plot: {
-			marks: [
-				{
-					mark: 'dot',
-					table: 'penguins',
-					x: 'bill_length',
-					y: 'bill_depth',
-					fill: 'species',
-					opacity: 0.6,
-					tooltip: true
+	const PRESETS = {
+		dots: {
+			label: 'Dots (penguins)',
+			spec: {
+				data: {
+					penguins: { url: dataUrl, type: 'parquet' }
+				},
+				plot: {
+					marks: [
+						{
+							mark: 'dot',
+							table: 'penguins',
+							x: 'bill_length',
+							y: 'bill_depth',
+							fill: 'species',
+							opacity: 0.6,
+							tooltip: true
+						}
+					]
 				}
-			]
+			}
+		},
+		lineLod: {
+			label: 'Line + LOD tunables',
+			spec: {
+				data: {
+					aapl: { url: aaplUrl, type: 'csv' }
+				},
+				plot: {
+					marks: [
+						{
+							mark: 'line',
+							table: 'aapl',
+							x: 'Date',
+							y: 'Close',
+							strokeWidth: 2,
+							lod: {
+								dots: { r: 4, threshold: 25 },
+								decimate: 'auto'
+							}
+						}
+					]
+				}
+			}
 		}
 	};
 
+	let activePreset = $state('dots');
 	let containerA = $state(null);
 	let containerB = $state(null);
 	let handleA = $state(null);
 	let handleB = $state(null);
-	let specTextA = $state(JSON.stringify(DEFAULT_SPEC, null, 2));
+	let specTextA = $state(JSON.stringify(PRESETS.dots.spec, null, 2));
 	let specTextB = $state('');
 	let statusA = $state('Ready');
 	let statusB = $state('Ready');
 	let errorA = $state('');
 	let errorB = $state('');
+
+	function loadPreset(key) {
+		activePreset = key;
+		specTextA = JSON.stringify(PRESETS[key].spec, null, 2);
+		renderChart('A');
+	}
 
 	async function renderChart(which) {
 		const isA = which === 'A';
@@ -53,9 +89,9 @@
 
 		try {
 			const parsed = JSON.parse(specText);
-			// Accept both full DivePlotSpec ({ data, plot }) and bare PlotSpec ({ marks })
-			const spec = parsed.marks
-				? { data: { penguins: { url: dataUrl, type: 'parquet' } }, plot: parsed }
+			// Bare PlotSpec (has marks but no data) — wrap with the active preset's data
+			const spec = parsed.marks && !parsed.data
+				? { data: PRESETS[activePreset].spec.data, plot: parsed }
 				: parsed;
 			handle = await render(container, spec);
 			if (isA) {
@@ -96,6 +132,11 @@
 	<div class="pane">
 		<div class="toolbar">
 			<span class="label">Original</span>
+			<select onchange={(e) => loadPreset(e.target.value)} value={activePreset}>
+				{#each Object.entries(PRESETS) as [key, preset]}
+					<option value={key}>{preset.label}</option>
+				{/each}
+			</select>
 			<button onclick={() => renderChart('A')}>Render</button>
 			<span class="status">{statusA}</span>
 		</div>
@@ -178,6 +219,15 @@
 
 	.toolbar button:hover {
 		background: #3b7;
+	}
+
+	.toolbar select {
+		padding: 2px 6px;
+		background: #222;
+		color: #ccc;
+		border: 1px solid #444;
+		border-radius: 3px;
+		font-size: 11px;
 	}
 
 	.status {

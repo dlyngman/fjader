@@ -240,9 +240,26 @@ export class MarkLifecycle {
 				mode: 'binned',
 				markLifecycle: this,
 				binAxes,
-				binningThreshold: this.#binningThreshold
+				binningThreshold: this.#binningThreshold,
+				onTunableChange: (_key, value) => {
+					// Persist multiplier change to entry.lod for spec export
+					const entry = chartContext.config.entries.get(this.#markId);
+					if (!entry) return;
+					const current = entry.lod;
+					const cfg = typeof current === 'object' && current ? current : {};
+					chartContext.config.setMarkProp(this.#markId, 'lod', { ...cfg, multiplier: value });
+				}
 			});
 			this.#onLodController?.(this.#lodController);
+
+			// Apply initial multiplier from entry's lod config (spec roundtrip)
+			const entry = chartContext.config.entries.get(this.#markId);
+			if (entry) {
+				const lodCfg = entry.lod;
+				if (typeof lodCfg === 'object' && lodCfg && typeof lodCfg.multiplier === 'number') {
+					this.#lodController.setBinMultiplier(lodCfg.multiplier);
+				}
+			}
 		}
 
 		// Detect which channels need data-derived domains (aggregates)
@@ -1145,8 +1162,8 @@ export class MarkLifecycle {
 
 	/**
 	 * Build a viewport count query by wrapping this mark's assembled query as a
-	 * subquery. Used by LODController for marks with aggregates/windows where a
-	 * simple COUNT(*) against the raw table would give the wrong count.
+	 * derived table. Used by LODController for all viewport counting — the inner
+	 * query handles type coercion (time scales), aggregates, bins, and view columns.
 	 *
 	 * Uses forMosaic=false so the inner query's SELECT aliases are channel names.
 	 * The outer query counts rows where the given channel falls within [lo, hi].

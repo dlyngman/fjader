@@ -24,8 +24,7 @@
 // and restores it when the controller detaches.
 // =============================================================================
 
-import { Query, column as sqlColumn, sql, and } from '@uwdata/mosaic-sql';
-import type { ExprValue } from '@uwdata/mosaic-sql';
+import type { Query } from '@uwdata/mosaic-sql';
 import { Priority } from '@uwdata/mosaic-core';
 import type { Coordinator } from '@uwdata/mosaic-core';
 import { Spring, DT } from '$lib/animation/Spring';
@@ -44,15 +43,13 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
 
 export interface LineConfig {
 	mode: 'line';
-	table: string;
-	xField: string;
-	yField?: string | null;
 	baseR: number;
-	setup?: { currentFilter: unknown[] } | null;
-	/** CTE count query builder for aggregated marks. Overrides simple COUNT path. */
-	countQueryBuilder?:
-		| ((xLo: number, xHi: number, yLo: number, yHi: number) => Query | null)
-		| null;
+	/**
+	 * Builds viewport count query by wrapping the mark's assembled query as a
+	 * derived table: SELECT COUNT(*) FROM (mark_query) WHERE x/y BETWEEN ...
+	 * Handles type coercion (time scales), aggregates, bins — one path for all marks.
+	 */
+	countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => Query | null;
 	dotsEnabled?: boolean;
 	dotsThreshold?: number;
 	decimate?: boolean | 'auto';
@@ -60,6 +57,8 @@ export interface LineConfig {
 	countDebounceMs?: number;
 	domainChangeThreshold?: number;
 	onLODChange?: ((state: LODChangeState) => void) | null;
+	/** Fired when a tunable value changes (shift+scroll, programmatic). Lets the mark persist to ChartConfig. */
+	onTunableChange?: ((key: 'dotsThreshold' | 'baseRadius', value: number) => void) | null;
 }
 
 export interface BinnedConfig {
@@ -67,6 +66,8 @@ export interface BinnedConfig {
 	markLifecycle: MarkLifecycle;
 	binAxes: ('x' | 'y')[];
 	binningThreshold?: number; // domain ratio threshold for re-bin (default 1.25)
+	/** Fired when multiplier changes (shift+scroll). Lets the mark persist to ChartConfig. */
+	onTunableChange?: ((key: 'multiplier', value: number) => void) | null;
 }
 
 export type LODControllerConfig = LineConfig | BinnedConfig;
@@ -100,14 +101,10 @@ export class LODController {
 
 	// --- Line mode state ---
 	#coordinator: Coordinator | null = null;
-	#table: string = '';
-	#xField: string = '';
-	#yField: string | null = null;
 	#countQueryBuilder:
 		| ((xLo: number, xHi: number, yLo: number, yHi: number) => Query | null)
 		| null = null;
 	#baseR: number = 0;
-	#setup: { currentFilter: unknown[] } | null = null;
 	#m4Decimator: M4Decimator | null = null;
 	#dotsEnabled: boolean = true;
 	#dotsThreshold: number = 18;
@@ -125,6 +122,7 @@ export class LODController {
 	#writeDotRadius: ((r: number) => void) | null = null;
 	#invalidateLayer: (() => void) | null = null;
 	#onLODChange: ((state: LODChangeState) => void) | null = null;
+	#onTunableChange: ((key: string, value: number) => void) | null = null;
 	#prevDecimating: boolean = false;
 	#prevDotsVisible: boolean = false;
 
@@ -207,11 +205,8 @@ export class LODController {
 
 		if (config.mode === 'line') {
 			this.#coordinator = coordinator!;
-			this.#table = config.table;
-			this.#xField = config.xField;
-			this.#yField = config.yField ?? null;
 			this.#baseR = config.baseR;
-			this.#setup = config.setup ?? null;
+			this.#countQueryBuilder = config.countQueryBuilder;
 			this.#dotsEnabled = config.dotsEnabled ?? true;
 			this.#dotsThreshold = config.dotsThreshold ?? 18;
 			this.#decimate = config.decimate ?? 'auto';
@@ -219,7 +214,7 @@ export class LODController {
 			this.#countDebounceMs = config.countDebounceMs ?? 150;
 			this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
 			this.#onLODChange = config.onLODChange ?? null;
-			this.#countQueryBuilder = config.countQueryBuilder ?? null;
+			this.#onTunableChange = config.onTunableChange ?? null;
 			this.#dotRadiusSpring = this.#dotsEnabled ? new Spring(0, 400) : null;
 			this.#lastSpringTime = performance.now();
 			this.state.dotsThreshold = this.#dotsThreshold;
@@ -229,6 +224,7 @@ export class LODController {
 			this.#markLifecycle = config.markLifecycle;
 			this.#binAxes = config.binAxes;
 			this.#binningThreshold = config.binningThreshold ?? 1.25;
+			this.#onTunableChange = config.onTunableChange ?? null;
 			this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
 			this.state.binMultiplier = this.#prevMultiplier;
 		}
@@ -291,17 +287,23 @@ export class LODController {
 	/** Set dots average-spacing threshold (line mode). Range: 10–100. */
 	setDotsThreshold(value: number): void {
 		if (this.#mode !== 'line') return;
-		this.#dotsThreshold = Math.max(10, Math.min(100, value));
-		this.state.dotsThreshold = this.#dotsThreshold;
+		const clamped = Math.max(10, Math.min(100, value));
+		if (clamped === this.#dotsThreshold) return;
+		this.#dotsThreshold = clamped;
+		this.state.dotsThreshold = clamped;
 		this.#evaluateLOD();
+		this.#onTunableChange?.('dotsThreshold', clamped);
 	}
 
 	/** Set base dot radius in px (line mode). Range: 0.5–20. */
 	setBaseRadius(value: number): void {
 		if (this.#mode !== 'line') return;
-		this.#baseR = Math.max(0.5, Math.min(20, value));
-		this.state.baseRadius = this.#baseR;
+		const clamped = Math.max(0.5, Math.min(20, value));
+		if (clamped === this.#baseR) return;
+		this.#baseR = clamped;
+		this.state.baseRadius = clamped;
 		this.#evaluateLOD();
+		this.#onTunableChange?.('baseRadius', clamped);
 	}
 
 	/** Set bin step multiplier (binned mode). Range: 0.1–20. */
@@ -313,6 +315,7 @@ export class LODController {
 		// adjustBinMultiplier uses relative delta: absoluteDelta = current * delta
 		const delta = (clamped - current) / current;
 		this.#chartContext.adjustBinMultiplier?.(delta);
+		this.#onTunableChange?.('multiplier', clamped);
 	}
 
 	// =========================================================================
@@ -402,34 +405,8 @@ export class LODController {
 		const t0 = performance.now();
 
 		try {
-			let q: Query | null;
-
-			if (this.#countQueryBuilder) {
-				// CTE path: wrap the mark's assembled query as a subquery
-				q = this.#countQueryBuilder(lo, hi, yLo, yHi);
-				if (!q) return;
-			} else {
-				// Simple path: COUNT(*) against the raw table
-				const xCol = sqlColumn(this.#xField);
-				const filters: ExprValue[] = [sql`${xCol} BETWEEN ${lo} AND ${hi}`];
-
-				// Add y filter when we have a y field and finite bounds
-				if (this.#yField && isFinite(yLo) && isFinite(yHi)) {
-					const yCol = sqlColumn(this.#yField);
-					filters.push(sql`${yCol} BETWEEN ${yLo} AND ${yHi}`);
-				}
-
-				if (this.#setup) {
-					const crossfilter = this.#setup.currentFilter;
-					if (crossfilter.length > 0) {
-						filters.push(...(crossfilter as ExprValue[]));
-					}
-				}
-
-				q = Query.from(this.#table)
-					.select({ cnt: sql`COUNT(*)` })
-					.where(and(filters));
-			}
+			const q = this.#countQueryBuilder!(lo, hi, yLo, yHi);
+			if (!q) return;
 
 			const result = await this.#coordinator.query(q, { priority: Priority.Low });
 			const t1 = performance.now();

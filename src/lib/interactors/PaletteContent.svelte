@@ -170,6 +170,28 @@
 
 	const lodState: LODState | null = $derived(lodController?.state ?? null);
 
+	/** Update an LOD tunable via ChartConfig (persists for undo/redo + spec export). */
+	function setLodTunable(key: 'dotsThreshold' | 'baseRadius' | 'multiplier', value: number): void {
+		if (!targetEntry) return;
+		const current = targetEntry.lod;
+		const cfg = typeof current === 'object' && current ? current : {};
+		let updated: Record<string, unknown>;
+
+		if (key === 'dotsThreshold') {
+			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
+			dots.threshold = value;
+			updated = { ...cfg, dots };
+		} else if (key === 'baseRadius') {
+			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
+			dots.r = value;
+			updated = { ...cfg, dots };
+		} else {
+			updated = { ...cfg, multiplier: value };
+		}
+
+		chartContext.config.setMarkProp(targetEntry.id, 'lod', updated);
+	}
+
 	const channelListSize: number = $derived(currentChannels.length + 1);
 
 	// ---- Clamped highlights (derived, not effects) ----
@@ -368,7 +390,7 @@
 		}
 		expandedChannel = channel;
 
-		// LOD panel — read-only inspection, no checkpoint
+		// LOD panel — edits apply immediately, no checkpoint/preview needed
 		if (channel === 'lod') {
 			focusZone = 'values';
 			tick().then(() => panelEl?.focus());
@@ -764,7 +786,7 @@
 	}
 
 	function handleValueKeys(event: KeyboardEvent) {
-		// LOD panel — read-only, just collapse on left/escape
+		// LOD panel — edits already applied, just collapse
 		if (expandedChannel === 'lod') {
 			if (event.key === 'ArrowLeft' || event.key === 'Escape') {
 				event.preventDefault();
@@ -1094,14 +1116,15 @@
 										step={1}
 										oninput={(e) => {
 											const v = parseFloat((e.target as HTMLInputElement).value);
-											if (!isNaN(v)) lodController.setDotsThreshold(v);
+											if (!isNaN(v)) setLodTunable('dotsThreshold', Math.max(10, Math.min(100, v)));
 										}}
 										onwheel={(e) => {
 											e.preventDefault();
 											const step = e.shiftKey ? 5 : 1;
 											const delta = e.deltaY < 0 ? step : -step;
-											lodController.setDotsThreshold(lodState.dotsThreshold + delta);
-											(e.target as HTMLInputElement).value = String(lodState.dotsThreshold);
+											const next = Math.max(10, Math.min(100, lodState.dotsThreshold + delta));
+											setLodTunable('dotsThreshold', next);
+											(e.target as HTMLInputElement).value = String(next);
 										}}
 									/>
 								</div>
@@ -1116,14 +1139,15 @@
 										step={0.5}
 										oninput={(e) => {
 											const v = parseFloat((e.target as HTMLInputElement).value);
-											if (!isNaN(v)) lodController.setBaseRadius(v);
+											if (!isNaN(v)) setLodTunable('baseRadius', Math.max(0.5, Math.min(20, v)));
 										}}
 										onwheel={(e) => {
 											e.preventDefault();
 											const step = e.shiftKey ? 2 : 0.5;
 											const delta = e.deltaY < 0 ? step : -step;
-											lodController.setBaseRadius(lodState.baseRadius + delta);
-											(e.target as HTMLInputElement).value = String(lodState.baseRadius);
+											const next2 = Math.max(0.5, Math.min(20, lodState.baseRadius + delta));
+											setLodTunable('baseRadius', next2);
+											(e.target as HTMLInputElement).value = String(next2);
 										}}
 									/>
 								</div>
@@ -1151,14 +1175,15 @@
 										step={0.1}
 										oninput={(e) => {
 											const v = parseFloat((e.target as HTMLInputElement).value);
-											if (!isNaN(v)) lodController.setBinMultiplier(v);
+											if (!isNaN(v)) setLodTunable('multiplier', Math.max(0.1, Math.min(20, v)));
 										}}
 										onwheel={(e) => {
 											e.preventDefault();
 											const step = e.shiftKey ? 0.5 : 0.1;
 											const delta = e.deltaY < 0 ? step : -step;
-											lodController.setBinMultiplier(lodState.binMultiplier + delta);
-											(e.target as HTMLInputElement).value = String(lodState.binMultiplier.toFixed(2));
+											const next3 = Math.max(0.1, Math.min(20, lodState.binMultiplier + delta));
+											setLodTunable('multiplier', next3);
+											(e.target as HTMLInputElement).value = String(next3.toFixed(2));
 										}}
 									/>
 								</div>
