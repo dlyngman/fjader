@@ -22,6 +22,7 @@
 		NumericChannelDef,
 		NumericGroupDef
 	} from './palette-channels';
+	import { exportSpecJSON } from '$lib/spec/export';
 
 	interface Props {
 		onclose: () => void;
@@ -71,6 +72,8 @@
 	let groupFocusIndex = $state(0);
 	/** Whether we're editing the focused group input (vs navigating rows). */
 	let groupEditing = $state(false);
+	/** Brief feedback after copying spec to clipboard. */
+	let copyFeedback = $state(false);
 
 	// DOM refs
 	let filterInput: HTMLInputElement | null = $state(null);
@@ -591,6 +594,13 @@
 
 		event.stopPropagation();
 
+		// Cmd+E: copy spec to clipboard
+		if ((event.metaKey || event.ctrlKey) && event.key === 'e') {
+			event.preventDefault();
+			copySpec();
+			return;
+		}
+
 		// [/] cycle tabs
 		if (event.key === '[' || event.key === ']') {
 			event.preventDefault();
@@ -872,6 +882,13 @@
 	}
 
 	// ---- Outside click ----
+	async function copySpec() {
+		const json = exportSpecJSON(chartContext.config);
+		await navigator.clipboard.writeText(json);
+		copyFeedback = true;
+		setTimeout(() => (copyFeedback = false), 1500);
+	}
+
 	function handleWindowPointerDown(event: PointerEvent) {
 		if (!panelEl) return;
 		if (!panelEl.contains(event.target as Node)) {
@@ -962,6 +979,13 @@
 					}}
 				>
 					<span class="ch-name reset-label">reset all</span>
+				</button>
+				<button
+					class="ch-row reset-row"
+					onclick={copySpec}
+				>
+					<span class="ch-name reset-label">{copyFeedback ? 'copied!' : 'copy spec'}</span>
+					<span class="ch-value" style:font-size="9px">⌘E</span>
 				</button>
 			</div>
 

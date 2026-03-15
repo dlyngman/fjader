@@ -23,6 +23,7 @@ export function filter(condition: ExprNode): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'filter',
+		spec: { transform: 'filter', condition: condition.toString() },
 		apply(query: Query) {
 			return query.where(condition);
 		},
@@ -36,6 +37,7 @@ export function having(condition: ExprNode): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'having',
+		spec: { transform: 'having', condition: condition.toString() },
 		apply(query: Query) {
 			return query.having(condition);
 		},
@@ -49,6 +51,7 @@ export function limit(n: number): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'limit',
+		spec: { transform: 'limit', value: n },
 		apply(query: Query) {
 			return query.limit(n);
 		},
@@ -62,6 +65,7 @@ export function orderby(...expressions: ExprNode[]): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'orderby',
+		spec: { transform: 'orderby', fields: expressions.map((e) => e.toString()) },
 		apply(query: Query) {
 			return query.orderby(...expressions);
 		},
@@ -88,6 +92,12 @@ export function topN(n: number, options: TopNOptions = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'topN',
+		spec: {
+			transform: 'topN',
+			n,
+			...(options.by ? { by: options.by } : {}),
+			...(options.includeOthers ? { includeOthers: true } : {})
+		},
 		apply(data: DataAccessor, config: MarkConfig) {
 			if (data.length === 0) return data;
 
@@ -278,6 +288,7 @@ export function stackY(options: StackYOptions = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'stack',
+		spec: { transform: 'stackY', ...(options.offset ? { offset: options.offset } : {}) },
 		channels: ['y0', 'y1'],
 		apply(data: DataAccessor, config: MarkConfig) {
 			return computeStack(data, config.x!, config.y!, 'y0', 'y1', options.offset ?? null);
@@ -298,6 +309,7 @@ export function stackX(options: StackXOptions = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'stack',
+		spec: { transform: 'stackX', ...(options.offset ? { offset: options.offset } : {}) },
 		channels: ['x0', 'x1'],
 		apply(data: DataAccessor, config: MarkConfig) {
 			return computeStack(data, config.y!, config.x!, 'x0', 'x1', options.offset ?? null);
@@ -396,6 +408,7 @@ export function normalize(_options: Record<string, unknown> = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'normalize',
+		spec: { transform: 'normalize' },
 		apply(data: DataAccessor, config: MarkConfig) {
 			if (data.length === 0) return data;
 
@@ -473,6 +486,7 @@ export function dodge(options: DodgeOptions = {}): JsTransform {
 	return {
 		stage: 'js',
 		type: 'dodge',
+		spec: { transform: 'dodge', ...(options.bandwidth ? { bandwidth: options.bandwidth } : {}) },
 		apply(data: DataAccessor, config: MarkConfig, scales?: ScaleMap) {
 			if (data.length === 0) return data;
 

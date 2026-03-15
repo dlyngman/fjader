@@ -1,10 +1,12 @@
 /**
- * Converts FieldSpec values from JSON specs into FieldRef values
- * that mark components accept (column strings or Mosaic SQL expression nodes).
+ * Bidirectional conversion between FieldSpec (JSON) and FieldRef (runtime).
+ *
+ * resolveFieldSpec: spec → runtime (used by PlotFromSpec)
+ * fieldRefToSpec:   runtime → spec (used by spec export)
  */
 
-import { count, sum, avg, min, max, median, column } from '@uwdata/mosaic-sql';
-import { bin, type AutoBinNode } from '$lib/sql/bin';
+import { count, sum, avg, min, max, median, column, isNode } from '@uwdata/mosaic-sql';
+import { bin, isBinExpression, type AutoBinNode } from '$lib/sql/bin';
 import type { FieldRef } from '$lib/types';
 import type { FieldSpec, AggregateFieldSpec, BinFieldSpec } from './types';
 
@@ -24,6 +26,8 @@ export type ResolvedField = FieldRef | AutoBinNode;
  * - `{ bin: "field", steps: 30 }` → AutoBinNode from $lib/sql/bin
  */
 export function resolveFieldSpec(spec: FieldSpec): ResolvedField {
+	// Numbers are constants (e.g. r=3), pass through unchanged
+	if (typeof spec === 'number') return spec as unknown as ResolvedField;
 	if (typeof spec === 'string') {
 		const match = spec.match(AGG_PATTERN);
 		if (match) {
@@ -64,4 +68,54 @@ function isAggregateFieldSpec(spec: FieldSpec): spec is AggregateFieldSpec {
 
 function isBinFieldSpec(spec: FieldSpec): spec is BinFieldSpec {
 	return typeof spec === 'object' && 'bin' in spec;
+}
+
+// =============================================================================
+// Runtime → Spec (inverse of resolveFieldSpec)
+// =============================================================================
+
+/** Known aggregate function names (same set as AGG_FUNCTIONS above). */
+const AGG_NAMES = new Set(Object.keys(AGG_FUNCTIONS));
+
+/**
+ * Convert a runtime FieldRef (or AutoBinNode) back to a FieldSpec for JSON export.
+ *
+ * - string → pass through (column name)
+ * - number → pass through (constant)
+ * - AutoBinNode → { bin, steps? }
+ * - AggregateNode → "count()" / "sum(field)" shorthand
+ * - Other ExprNode → toString() fallback
+ */
+export function fieldRefToSpec(value: unknown): FieldSpec | null {
+	if (value == null) return null;
+	if (typeof value === 'string') return value;
+	if (typeof value === 'number') return value as unknown as FieldSpec;
+	if (typeof value === 'function') return null; // can't serialize functions
+
+	// AutoBinNode → { bin, steps? }
+	if (isBinExpression(value)) {
+		const fieldName = typeof value.field === 'string' ? value.field : String(value.field);
+		const spec: BinFieldSpec = { bin: fieldName };
+		if (value.options.steps != null) spec.steps = value.options.steps;
+		return spec;
+	}
+
+	// Mosaic ExprNode — check for aggregate
+	if (isNode(value)) {
+		const node = value as { type?: string; name?: string; args?: unknown[] };
+		if (node.type === 'AGGREGATE' && node.name && AGG_NAMES.has(node.name.toLowerCase())) {
+			const fnName = node.name.toLowerCase();
+			if (fnName === 'count' && (!node.args || node.args.length === 0)) {
+				return 'count()';
+			}
+			// Extract field name from first arg (ColumnNameRefNode)
+			const firstArg = node.args?.[0] as { column?: string } | undefined;
+			const argName = firstArg?.column;
+			return argName ? `${fnName}(${argName})` : `${fnName}()`;
+		}
+		// Fallback: produce SQL string
+		return value.toString();
+	}
+
+	return null;
 }
