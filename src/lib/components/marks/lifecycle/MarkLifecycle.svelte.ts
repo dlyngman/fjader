@@ -1178,13 +1178,26 @@ export class MarkLifecycle {
 	}
 
 	/**
-	 * Get the channel names for a given axis from the mark's select config.
-	 * Returns all channels that contribute to that axis (e.g., ['y', 'y1', 'y2']).
+	 * Get the channel names for a given axis from the mark's select config
+	 * and transform output channels. Includes stack outputs (y0/y1, x0/x1)
+	 * which hold the actual rendered extent for stacked marks.
 	 */
 	#getFitDomainChannels(axis: 'x' | 'y'): string[] {
 		const select = this.#config.select;
 		const candidates = [axis, `${axis}1`, `${axis}2`];
-		return candidates.filter((c) => c in select);
+		const channels = candidates.filter((c) => c in select);
+
+		// Stack transforms output y0/y1 (or x0/x1) which hold the cumulative
+		// extent. These are the actual rendered positions and must be included.
+		const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+		const stackCandidates = [`${axis}0`, `${axis}1`];
+		for (const ch of stackCandidates) {
+			if (additionalChannels.includes(ch) && !channels.includes(ch)) {
+				channels.push(ch);
+			}
+		}
+
+		return channels;
 	}
 
 	/**
@@ -1193,12 +1206,12 @@ export class MarkLifecycle {
 	 */
 	async #issueFitDomainQuery(
 		fittedAxis: 'x' | 'y',
-		drivingDomain: [number, number],
+		drivingDomain: [number, number] | null,
 		force: boolean = false
 	): Promise<void> {
 		// Skip if driving domain hasn't changed significantly (unless forced by
 		// cross-filter data change where the domain is the same but the data differs)
-		if (!force) {
+		if (!force && drivingDomain) {
 			const [lastLo, lastHi] = this.#fitDomainLastTarget;
 			const lastWidth = lastHi - lastLo;
 			const curWidth = drivingDomain[1] - drivingDomain[0];
@@ -1243,8 +1256,7 @@ export class MarkLifecycle {
 				hi = Math.max(0, hi);
 			}
 
-			// Update the fitted axis scale. The scale is isolated (via __fitDomain config
-			// discriminator in ChartScales) so addMark only affects this chart's instance.
+			// Update the fitted axis scale.
 			const scaleState =
 				fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 			const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
@@ -1254,7 +1266,7 @@ export class MarkLifecycle {
 				(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId);
 			}
 
-			this.#fitDomainLastTarget = [...drivingDomain];
+			if (drivingDomain) this.#fitDomainLastTarget = [...drivingDomain];
 		} catch (e) {
 			// Silently ignore — query may fail during teardown or table recreation
 		}
@@ -1267,9 +1279,8 @@ export class MarkLifecycle {
 	 */
 	#buildFitDomainQuery(
 		fittedAxis: 'x' | 'y',
-		drivingDomain: [number, number]
+		drivingDomain: [number, number] | null
 	): Query | null {
-		const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
 		const fittedChannels = this.#getFitDomainChannels(fittedAxis);
 		if (fittedChannels.length === 0) return null;
 
@@ -1280,15 +1291,21 @@ export class MarkLifecycle {
 			outerSelect[`max_${ch}`] = sqlMax(sqlColumn(ch));
 		}
 
-		// Build WHERE clause on the driving axis
-		const drivingChannels = this.#getFitDomainChannels(drivingAxis);
-		const whereClause = this.#buildFitDomainWhere(drivingChannels, drivingDomain);
+		// Build WHERE clause on the driving axis (null for band driving axes —
+		// crossfilter already filtered the data, no viewport constraint needed)
+		let whereClause: unknown = undefined;
+		if (drivingDomain) {
+			const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
+			const drivingChannels = this.#getFitDomainChannels(drivingAxis);
+			whereClause = this.#buildFitDomainWhere(drivingChannels, drivingDomain);
+		}
 
 		// Path B: JS transforms exist and tooltip table is ready → query the tooltip table
 		if (this.#transformCompiler.hasJSTransforms() && this.#tooltipTableReady) {
-			return Query.from(this.#tooltipTableName)
-				.select(outerSelect as Record<string, ExprValue>)
-				.where(whereClause as FilterExpr);
+			const q = Query.from(this.#tooltipTableName)
+				.select(outerSelect as Record<string, ExprValue>);
+			if (whereClause) q.where(whereClause as FilterExpr);
+			return q;
 		}
 
 		// Path A: CTE-wrap the mark's base query
@@ -1427,7 +1444,15 @@ export class MarkLifecycle {
 		const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
 		const drivingSS =
 			drivingAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
-		if (!drivingSS || drivingSS.scaleType === 'band') return;
+		if (!drivingSS) return;
+
+		// Band driving axes (e.g. bar charts): no continuous domain to filter by,
+		// but crossfilter already filtered the data — just query MIN/MAX directly.
+		if (drivingSS.scaleType === 'band') {
+			this.#issueFitDomainQuery(fittedAxis, null, true);
+			return;
+		}
+
 		const target = drivingSS.domain?.target;
 		if (!target) return;
 

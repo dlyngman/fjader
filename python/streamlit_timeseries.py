@@ -5,7 +5,7 @@ crossfilter via day-of-week toggle — all in a single render call
 so selections work across charts.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import polars as pl
@@ -81,7 +81,39 @@ df = pl.DataFrame({
     "group": group_col,
 })
 
-st.caption(f"{len(df):,} rows · {N_HOURS:,} hours × {N_GROUPS} groups")
+# ---------------------------------------------------------------------------
+# Holidays — add is_holiday / holiday_name columns + a separate rect DataFrame
+# ---------------------------------------------------------------------------
+HOLIDAYS = [
+    ("New Year's Day", datetime(2024, 1, 1)),
+    ("MLK Day", datetime(2024, 1, 15)),
+    ("Presidents' Day", datetime(2024, 2, 19)),
+    ("Easter", datetime(2024, 3, 31)),
+    ("Memorial Day", datetime(2024, 5, 27)),
+    ("Independence Day", datetime(2024, 7, 4)),
+    ("Labor Day", datetime(2024, 9, 2)),
+    ("Columbus Day", datetime(2024, 10, 14)),
+    ("Veterans Day", datetime(2024, 11, 11)),
+    ("Thanksgiving", datetime(2024, 11, 28)),
+    ("Christmas", datetime(2024, 12, 25)),
+]
+holiday_dates = {d.date() for _, d in HOLIDAYS}
+
+# Add holiday columns to main df
+df = df.with_columns(
+    pl.col("ts").dt.date().is_in(list(holiday_dates)).alias("is_holiday"),
+    pl.col("ts").dt.date().replace_strict(
+        {d.date(): name for name, d in HOLIDAYS}, default=""
+    ).alias("holiday_name"),
+)
+
+# Separate DataFrame for holiday strip (one row per holiday-hour for binned rect)
+holidays_df = pl.DataFrame({
+    "ts": [d for _, d in HOLIDAYS],
+    "holiday_name": [name for name, _ in HOLIDAYS],
+})
+
+st.caption(f"{len(df):,} rows · {N_HOURS:,} hours × {N_GROUPS} groups · {len(HOLIDAYS)} holidays")
 
 # ---------------------------------------------------------------------------
 # Build all charts — single render call so crossfilter works across them
@@ -98,6 +130,7 @@ detail = dp.plot(
         preferred_x_scale_type="time",
         lod={"decimate": True},
         fit_domain="y",
+        tooltip_proximity="x",
     ),
     dp.line(
         data=df,
@@ -109,6 +142,7 @@ detail = dp.plot(
         preferred_x_scale_type="time",
         lod={"decimate": True},
         fit_domain="y",
+        tooltip_proximity="x",
     ),
     height=380,
     x_label="Date",
@@ -117,7 +151,24 @@ detail = dp.plot(
     legend=True,
 )
 
-# Overview: unfiltered, provides brush for detail zoom
+# Holiday strip: colored bars at holiday dates (shares time scale via x_label)
+holiday_strip = dp.plot(
+    dp.rect_y(
+        data=df,
+        x=dp.bin("ts", steps=365),
+        y=dp.count(),
+        fill="holiday_name",
+        selection="daysel",
+        preferred_x_scale_type="time",
+        tip=["holiday_name"],
+        transforms=[dp.filter("is_holiday = true")],
+    ),
+    height=200,
+    x_label="Date",
+    use_selection="x",
+)
+
+# Overview: provides brush for detail zoom (implicit selection for use_selection)
 overview = dp.plot(
     dp.line(
         data=df,
@@ -126,25 +177,41 @@ overview = dp.plot(
         stroke="group",
         preferred_x_scale_type="time",
         lod={"decimate": True},
+        tooltip_proximity="x",
     ),
     height=90,
     x_label="Date",
     interactors=[dp.interval_x()],
 )
 
-# Hourly profile: avg by hour of day, stacked by group, filtered by day toggle
+# Hourly profile: min/max range (area) + avg (line), per group
 hourly = dp.plot(
-    dp.bar_y(
+    dp.area_y(
+        data=df,
+        x="hour",
+        y1=dp.min_("value"),
+        y2=dp.max_("value"),
+        fill="group",
+        fill_opacity=0.2,
+        selection="daysel",
+        fit_domain="y",
+        curve="monotone",
+        tooltip_proximity="x",
+    ),
+    dp.line(
         data=df,
         x="hour",
         y=dp.avg("value"),
-        fill="group",
+        stroke="group",
+        stroke_width=2,
         selection="daysel",
-        transforms=[dp.stack_y()],
+        fit_domain="y",
+        curve="monotone",
+        tooltip_proximity="x",
     ),
     height=340,
     x_label="Hour of Day",
-    y_label="Avg kWh",
+    y_label="kWh",
     legend=True,
 )
 
@@ -158,6 +225,7 @@ day_selector = dp.plot(
         selection="daysel",
         transforms=[dp.stack_y()],
         sort={"x": "dow_num", "order": "asc"},
+        fit_domain="y",
     ),
     height=340,
     x_label="Day of Week",
@@ -166,8 +234,8 @@ day_selector = dp.plot(
     legend=True,
 )
 
-# Single layout: detail + overview stacked, then hourly | day_selector side-by-side
+# Single layout: detail + holidays + overview stacked, then hourly | day_selector
 dp.streamlit.render(
-    dp.vconcat(detail, overview, dp.hconcat(hourly, day_selector)),
+    dp.vconcat(detail, holiday_strip, overview, dp.hconcat(hourly, day_selector)),
     server_duckdb=USE_SERVER,
 )
