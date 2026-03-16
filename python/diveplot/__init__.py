@@ -55,6 +55,9 @@ from .data import sql
 # Display helpers
 from ._display import show
 
+# Spec import
+from ._from_spec import from_spec
+
 # Lazy submodule access — import only when accessed (avoids hard dep on streamlit)
 import importlib as _importlib
 
@@ -87,6 +90,8 @@ __all__ = [
     "sql",
     # Display
     "show",
+    # Spec import
+    "from_spec",
     # Types
     "FieldSpec", "ColorScheme", "CurveType", "ScaleType",
     "SortConfig", "TextAnchor", "LineAnchor",

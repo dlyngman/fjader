@@ -1051,7 +1051,10 @@
 
 	function handleWindowPointerDown(event: PointerEvent) {
 		if (!panelEl) return;
-		if (!panelEl.contains(event.target as Node)) {
+		// Use composedPath() to correctly detect clicks inside the palette
+		// even when the widget is inside a shadow DOM (e.g. marimo/anywidget).
+		const path = event.composedPath();
+		if (!path.includes(panelEl)) {
 			close();
 		}
 	}

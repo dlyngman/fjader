@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount, onDestroy, untrack } from 'svelte';
+	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
@@ -429,9 +429,10 @@
 	// Write uniforms when configuration changes
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
-			// Guard: skip uniform write when colorMode=1 but color data hasn't arrived.
-			// Prevents a retained renderer from flashing with stale/dummy color buffer.
-			if (colorMode === 1 && !untrack(() => colorValueData)) return;
+			// Guard: skip uniform write when colorMode=1 but color data hasn't
+			// arrived yet. colorValueData is tracked reactively so the effect
+			// re-fires once data loads.
+			if (colorMode === 1 && !colorValueData) return;
 
 			const buffer = new ArrayBuffer(48);
 			const view = new DataView(buffer);
