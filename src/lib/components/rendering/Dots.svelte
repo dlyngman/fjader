@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount, onDestroy, untrack } from 'svelte';
+	import { getContext, onMount, onDestroy } from 'svelte';
 	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
@@ -242,14 +242,12 @@
 	// Uniforms
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
-			// Guard: when switching to field-based color (colorMode=1), the uniform
-			// update fires before the parent's setup lifecycle effect has a chance to
-			// unmount this component and retain the renderer. Without this guard the
-			// retained renderer would draw one frame with colorMode=1 but a stale/dummy
-			// color buffer, producing a visible flash. Reading colorValueData via
-			// untrack avoids adding it as a dependency — on subsequent field→field
-			// changes colorMode stays 1 (no trigger), so the old valid state is kept.
-			if (colorMode === 1 && !untrack(() => colorValueData)) return;
+			// Guard: skip uniform write when colorMode=1 but color data hasn't
+			// arrived yet. This prevents drawing with an uninitialised color buffer.
+			// colorValueData is tracked reactively so the effect re-fires once data
+			// loads — safe because colorValueData goes null during field transitions,
+			// which re-triggers the guard and avoids stale-buffer flashes.
+			if (colorMode === 1 && !colorValueData) return;
 
 			const buffer = new ArrayBuffer(32);
 			const view = new DataView(buffer);

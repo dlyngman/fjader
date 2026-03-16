@@ -250,3 +250,86 @@ dp.streamlit.render(
     ),
     server_duckdb=USE_SERVER,
 )
+
+# --- from_spec: render from a raw JSON spec (e.g. exported from the palette) ---
+st.header("from_spec — render from exported palette spec")
+
+st.subheader("Inline data via `data=` kwarg")
+
+spec_df = pl.DataFrame({
+    "species": ["Adelie", "Chinstrap", "Gentoo"],
+    "count": [152, 68, 124],
+})
+
+dp.streamlit.render(
+    dp.from_spec(
+        {
+            "marks": [{
+                "mark": "barY",
+                "table": "penguins_summary",
+                "x": "species",
+                "y": "count",
+                "fill": "species",
+            }],
+            "height": 350,
+        },
+        data={"penguins_summary": spec_df},
+    ),
+    server_duckdb=USE_SERVER,
+)
+
+st.subheader("Editable spec textarea")
+
+default_spec = """{
+  "marks": [
+    {
+      "mark": "dot",
+      "table": "weather",
+      "x": "date",
+      "y": "temp_max",
+      "fill": "weather",
+      "opacity": 0.6
+    }
+  ],
+  "height": 400
+}"""
+
+spec_text = st.text_area("Paste a spec (JSON)", value=default_spec, height=250)
+
+try:
+    dp.streamlit.render(
+        dp.from_spec(spec_text, data={"weather": weather}),
+        server_duckdb=USE_SERVER,
+    )
+except Exception as e:
+    st.error(f"Invalid spec: {e}")
+
+st.subheader("Multi-mark overlay from spec")
+
+dp.streamlit.render(
+    dp.from_spec(
+        {
+            "marks": [
+                {
+                    "mark": "dot",
+                    "table": "weather",
+                    "x": "date",
+                    "y": "temp_max",
+                    "fill": "weather",
+                    "opacity": 0.3,
+                    "r": 2,
+                },
+                {
+                    "mark": "line",
+                    "table": "weather",
+                    "x": "date",
+                    "y": "temp_max",
+                    "strokeWidth": 1,
+                },
+            ],
+            "height": 350,
+        },
+        data={"weather": weather},
+    ),
+    server_duckdb=USE_SERVER,
+)

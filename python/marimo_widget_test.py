@@ -88,7 +88,7 @@ def _(Path, dp, pl):
         y_label="weather",
     )
     dp.show(dp.vconcat(dots, bars))
-    return (bars,)
+    return bars, weather
 
 
 @app.cell
@@ -201,6 +201,96 @@ def _(dp, pl):
         x_label="Date",
         y_label="Price (dots = raw, line = trailing avg 10)",
     ))
+    return
+
+
+@app.cell
+def _(dp, pl):
+    # --- from_spec: render a chart from a raw JSON spec ---
+    # This is how you'd render a spec exported from the palette (Cmd+E)
+
+    spec_df = pl.DataFrame({
+        "species": ["Adelie", "Chinstrap", "Gentoo"],
+        "count": [152, 68, 124],
+    })
+
+    dp.show(dp.from_spec(
+        {
+            "marks": [{
+                "mark": "barY",
+                "table": "penguins_summary",
+                "x": "species",
+                "y": "count",
+                "fill": "species",
+            }],
+            "height": 350,
+        },
+        data={"penguins_summary": spec_df},
+    ))
+    return
+
+
+@app.cell
+def _(dp, weather):
+    # --- from_spec: render from exported palette spec ---
+    # NOTE: Known issue — GPU marks may not render on first page load when
+    # this cell shares a DuckDB table with other widgets and marimo's
+    # destroy-recreate cycle races with ViewManager. See python/ISSUES.md #1.
+    dp.show(dp.from_spec(
+        {
+            "marks": [
+                {
+                    "mark": "dot",
+                    "table": "weather",
+                    "x": "date",
+                    "y": "temp_max",
+                    "fill": "weather",
+                    "opacity": 0.7,
+                    "r": "precipitation",
+                    "preferredXScaleType": "time",
+                },
+            ],
+            "height": 350,
+        },
+        data={"weather": weather},
+    ))
+    return
+
+
+@app.cell
+def _(dp, pl):
+    # --- from_spec: JSON string input (works on first load) ---
+    import json
+
+    spec_json = json.dumps({
+        "marks": [{
+            "mark": "dot",
+            "table": "t",
+            "x": "x",
+            "y": "y",
+            "fill": "cat",
+            "opacity": 0.8,
+        }],
+        "height": 300,
+    })
+
+    tiny = pl.DataFrame({
+        "x": list(range(100)),
+        "y": [i ** 0.5 * 3 for i in range(100)],
+        "cat": ["A", "B", "C", "D"] * 25,
+    })
+
+    dp.show(dp.from_spec(spec_json, data={"t": tiny}))
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
+def _():
     return
 
 
