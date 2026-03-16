@@ -194,22 +194,19 @@ export class ChartScales {
 		const useSelection = axis === 'x' ? this.config.useXSelection : this.config.useYSelection;
 		if (!useSelection) return;
 
-		// Helper: find the source (overview) scale by name match in the type bucket.
-		// Iterates the bucket to find a LinearScaleState with matching name, skipping
-		// the consumer's own isolated instance. The SvelteMap read creates a dependency
-		// so the effect re-runs when the source scale is first created.
+		// Helper: find the source (overview) scale by direct key lookup.
+		// The source scale's config is #buildAxisScaleConfig() WITHOUT the
+		// __selectionConsumer / __fitDomain discriminators that consumer
+		// charts add. Direct lookup is O(1) and immune to bucket iteration
+		// order (which caused bugs when multiple consumers shared a name).
 		const findSourceScale = (): LinearScaleState | null => {
 			const config = axis === 'x' ? this.scaleConfigurations?.x : this.scaleConfigurations?.y;
 			if (!config) return null;
 			const label = axis === 'x' ? this.xLabel : this.yLabel;
 			const name = label || config.columnName || axis;
-			const renderInst = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
-			const bucket = this.#scaleRegistry.scales[config.type];
-			if (!bucket) return null;
-			for (const scale of bucket.values()) {
-				if (scale === renderInst) continue; // skip our own isolated instance
-				if (scale instanceof LinearScaleState && scale.name === name) return scale;
-			}
+			const sourceConfig = this.#buildAxisScaleConfig(config);
+			const scale = this.#scaleRegistry.findScale(name, config.type, sourceConfig);
+			if (scale instanceof LinearScaleState) return scale;
 			return null;
 		};
 
@@ -292,11 +289,19 @@ export class ChartScales {
 	 */
 	#buildAxisScaleConfig(axisConfig: ResolvedScaleConfiguration): Record<string, unknown> {
 		const cfg: Record<string, unknown> = { ...(axisConfig.config || {}) };
-		if (axisConfig.columnName) {
-			// Pass the actual data column name so scale states (Band, Time, etc.)
-			// can use it for SQL queries instead of the scale registry key (which
-			// may be a display label like xLabel rather than a column name).
-			cfg.sourceField = axisConfig.columnName;
+		const col = axisConfig.columnName;
+		if (typeof col === 'string') {
+			// Band/point: sourceField for ViewManager index columns.
+			// Time: sourceField for EPOCH() SQL in TimeScaleState.
+			// sourceField is NOT added to linear scales to avoid changing their
+			// config hash, which would break scale sharing for use_selection.
+			if (
+				axisConfig.type === 'band' ||
+				axisConfig.type === 'point' ||
+				axisConfig.type === 'time'
+			) {
+				cfg.sourceField = col;
+			}
 		}
 		return cfg;
 	}
