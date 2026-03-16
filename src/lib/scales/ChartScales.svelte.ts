@@ -292,7 +292,10 @@ export class ChartScales {
 	 */
 	#buildAxisScaleConfig(axisConfig: ResolvedScaleConfiguration): Record<string, unknown> {
 		const cfg: Record<string, unknown> = { ...(axisConfig.config || {}) };
-		if ((axisConfig.type === 'band' || axisConfig.type === 'point') && axisConfig.columnName) {
+		if (axisConfig.columnName) {
+			// Pass the actual data column name so scale states (Band, Time, etc.)
+			// can use it for SQL queries instead of the scale registry key (which
+			// may be a display label like xLabel rather than a column name).
 			cfg.sourceField = axisConfig.columnName;
 		}
 		return cfg;

@@ -1,0 +1,253 @@
+"""Time Series Explorer — Streamlit test app for DivePlot.
+
+Demonstrates overview+detail, hourly/weekly distributions, and
+crossfilter via day-of-week toggle.
+"""
+
+from datetime import datetime
+
+import numpy as np
+import polars as pl
+import streamlit as st
+
+import diveplot as dp
+
+st.set_page_config(layout="wide", page_title="Time Series Explorer")
+st.title("Time Series Explorer")
+
+USE_SERVER = st.toggle("Use server-side DuckDB", value=False)
+
+# ---------------------------------------------------------------------------
+# Generate synthetic hourly energy-usage data (1 year, 3 groups)
+# ---------------------------------------------------------------------------
+np.random.seed(42)
+
+GROUPS = ["Residential", "Commercial", "Industrial"]
+GROUP_MULTS = np.array([1.0, 1.4, 0.7])
+N_GROUPS = len(GROUPS)
+
+# Timestamps (one per hour, repeated per group)
+base_ts = pl.datetime_range(
+    datetime(2024, 1, 1), datetime(2024, 12, 31, 23), interval="1h", eager=True
+)
+N_HOURS = len(base_ts)  # 8784 (2024 is a leap year)
+TOTAL = N_HOURS * N_GROUPS
+
+# Extract time features via polars (no Python loop)
+hours_np = base_ts.dt.hour().to_numpy()
+dows_np = base_ts.dt.weekday().to_numpy() - 1  # polars: 1=Mon → 0=Mon
+doys_np = base_ts.dt.ordinal_day().to_numpy()
+
+# Tile for each group
+ts_col = pl.concat([base_ts] * N_GROUPS)
+hours = np.tile(hours_np, N_GROUPS)
+dows = np.tile(dows_np, N_GROUPS)
+doys = np.tile(doys_np, N_GROUPS)
+group_mult = np.repeat(GROUP_MULTS, N_HOURS)
+
+group_col: list[str] = []
+for g in GROUPS:
+    group_col.extend([g] * N_HOURS)
+
+# --- Realistic seasonal patterns ---
+# Daily: trough at 4am, peak at 1pm
+daily = 0.05 + 0.95 * np.maximum(0, np.cos((hours - 13) * np.pi / 12)) ** 2
+
+# Weekly: weekdays higher, weekends lower
+WEEKLY_MAP = np.array([1.0, 1.1, 1.15, 1.2, 1.05, 0.5, 0.4])
+weekly = WEEKLY_MAP[dows]
+
+# Annual: summer peak
+seasonal = 1.0 + 0.3 * np.sin((doys - 80) * 2 * np.pi / 365)
+
+base = 200.0 * daily * weekly * seasonal * group_mult
+noise = base * (0.85 + 0.3 * np.random.random(TOTAL))
+
+# Occasional spikes (2 % of hours)
+spike = np.random.random(TOTAL) < 0.02
+noise[spike] *= 1.5 + np.random.random(int(spike.sum()))
+
+values = np.maximum(1.0, noise)
+
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+df = pl.DataFrame({
+    "ts": ts_col,
+    "hour": hours.astype(np.int32),
+    "day_of_week": [DAY_NAMES[d] for d in dows],
+    "dow_num": dows.astype(np.int32),
+    "value": values,
+    "group": group_col,
+})
+
+st.caption(f"{len(df):,} rows · {N_HOURS:,} hours × {N_GROUPS} groups")
+
+# ---------------------------------------------------------------------------
+# 1. Overview + Detail
+# ---------------------------------------------------------------------------
+st.header("Overview + Detail")
+
+detail = dp.plot(
+    # Raw hourly line per group
+    dp.line(
+        data=df,
+        x="ts",
+        y="value",
+        stroke="group",
+        selection="daysel",
+        preferred_x_scale_type="time",
+        lod={"decimate": True},
+        fit_domain="y",
+    ),
+    # 7-day rolling average overlay (thicker)
+    dp.line(
+        data=df,
+        x="ts",
+        y=dp.window("avg", "value", order_by="ts", partition_by="group", frame=[-168, 0]),
+        stroke="group",
+        stroke_width=2,
+        selection="daysel",
+        preferred_x_scale_type="time",
+        lod={"decimate": True},
+        fit_domain="y",
+    ),
+    height=380,
+    x_label="Date",
+    y_label="Energy (kWh)",
+    use_selection="x",
+    legend=True,
+)
+
+overview = dp.plot(
+    dp.line(
+        data=df,
+        x="ts",
+        y="value",
+        stroke="group",
+        preferred_x_scale_type="time",
+        lod={"decimate": True},
+    ),
+    height=90,
+    x_label="Date",
+    interactors=[dp.interval_x()],
+)
+
+dp.streamlit.render(dp.vconcat(detail, overview), server_duckdb=USE_SERVER)
+
+# ---------------------------------------------------------------------------
+# 2. Hourly Profile  |  3. Day-of-Week Selector
+# ---------------------------------------------------------------------------
+st.header("Distribution Analysis")
+
+col_left, col_right = st.columns(2)
+
+with col_left:
+    st.subheader("Hourly Profile")
+    st.caption("Average value by hour of day — filtered by day-of-week toggle →")
+    hourly_chart = dp.plot(
+        dp.bar_y(
+            data=df,
+            x="hour",
+            y=dp.avg("value"),
+            fill="group",
+            selection="daysel",
+            transforms=[dp.stack_y()],
+        ),
+        height=340,
+        x_label="Hour of Day",
+        y_label="Avg kWh",
+        legend=True,
+    )
+    dp.streamlit.render(hourly_chart, server_duckdb=USE_SERVER)
+
+with col_right:
+    st.subheader("Day-of-Week Selector")
+    st.caption("Click bars to toggle which days are included in all other charts")
+    day_chart = dp.plot(
+        dp.bar_y(
+            data=df,
+            x="day_of_week",
+            y=dp.sum("value"),
+            fill="group",
+            selection="daysel",
+            transforms=[dp.stack_y()],
+            sort={"x": "dow_num", "order": "asc"},
+        ),
+        height=340,
+        x_label="Day of Week",
+        y_label="Total kWh",
+        interactors=[dp.toggle(field="day_of_week")],
+        legend=True,
+    )
+    dp.streamlit.render(day_chart, server_duckdb=USE_SERVER)
+
+# ---------------------------------------------------------------------------
+# 4. Weekly Pattern (hour × day_of_week)
+# ---------------------------------------------------------------------------
+st.header("Weekly Pattern")
+st.caption("Average energy usage by hour and day of week (dot size + color)")
+
+# Pre-aggregate: need a cell mark for a proper heatmap, using dots as stand-in
+heatmap_df = (
+    df.group_by(["hour", "day_of_week", "dow_num"])
+    .agg(pl.col("value").mean().alias("avg_value"))
+    .sort(["dow_num", "hour"])
+)
+
+weekly_chart = dp.plot(
+    dp.dot(
+        data=heatmap_df,
+        x="hour",
+        y="day_of_week",
+        fill="avg_value",
+        r="avg_value",
+        radius_range=[4, 14],
+        scheme="ylgnbu",
+        sort={"y": "dow_num", "order": "asc"},
+    ),
+    height=280,
+    x_label="Hour of Day",
+    y_label="Day of Week",
+)
+dp.streamlit.render(weekly_chart, server_duckdb=USE_SERVER)
+
+# ---------------------------------------------------------------------------
+# 5. Stacked Area — daily totals by group
+# ---------------------------------------------------------------------------
+st.header("Stacked Area — Daily Totals by Group")
+
+area_chart = dp.plot(
+    dp.area_y(
+        data=df,
+        x="ts",
+        y=dp.sum("value"),
+        fill="group",
+        preferred_x_scale_type="time",
+        curve="monotone",
+        fill_opacity=0.7,
+        transforms=[dp.stack_y()],
+        selection="daysel",
+    ),
+    height=320,
+    x_label="Date",
+    y_label="Total kWh",
+    legend=True,
+    use_selection="x",
+)
+
+area_overview = dp.plot(
+    dp.area_y(
+        data=df,
+        x="ts",
+        y=dp.sum("value"),
+        fill="group",
+        preferred_x_scale_type="time",
+        curve="monotone",
+        fill_opacity=0.5,
+        transforms=[dp.stack_y()],
+    ),
+    height=80,
+    interactors=[dp.interval_x()],
+)
+
+dp.streamlit.render(dp.vconcat(area_chart, area_overview), server_duckdb=USE_SERVER)

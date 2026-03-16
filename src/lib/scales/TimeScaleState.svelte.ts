@@ -38,15 +38,22 @@ export class TimeScaleState extends LinearScaleState {
 	// --- Batching ---
 	#suppressUpdate: boolean = false;
 
+	/**
+	 * The actual database column name for SQL queries.
+	 * May differ from `this.name` when xLabel overrides the scale registry key.
+	 */
+	#sourceField: string;
+
 	constructor(
 		name: string,
 		extent: [number, number],
 		type: string,
 		zoomLimits: [number, number],
-		options: LinearScaleOptions,
+		options: LinearScaleOptions & { sourceField?: string },
 		gpuCoordinator: GPUCoordinator | null
 	) {
 		super(name, extent, type ?? 'time', zoomLimits, options, gpuCoordinator);
+		this.#sourceField = options?.sourceField ?? name;
 	}
 
 	// ===========================================================================
@@ -169,9 +176,14 @@ export class TimeScaleState extends LinearScaleState {
 	// VIEWMANAGER INTEGRATION
 	// ===========================================================================
 
+	/** The actual database column name (may differ from scale registry key). */
+	get sourceField(): string {
+		return this.#sourceField;
+	}
+
 	/** The derived column name for this time scale's offsets. */
 	get offsetColumnName(): string {
-		return ViewManagerService.timeOffsetColumn(this.name);
+		return ViewManagerService.timeOffsetColumn(this.#sourceField);
 	}
 
 	/**
@@ -195,12 +207,13 @@ export class TimeScaleState extends LinearScaleState {
 		this.#viewsCreated.add(sourceTable);
 
 		const alias = this.offsetColumnName;
+		const field = this.#sourceField;
 		const t0Epoch = Math.floor(this.#t0.getTime() / 1000);
-		const sql = `CAST((EPOCH("${this.name}") - ${t0Epoch}) AS REAL)`;
+		const sql = `CAST((EPOCH("${field}") - ${t0Epoch}) AS REAL)`;
 
 		viewManager.registerColumn(sourceTable, alias, {
 			sql,
-			source: this.name,
+			source: field,
 			scaleId: this.id
 		});
 
