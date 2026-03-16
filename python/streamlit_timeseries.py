@@ -1,7 +1,8 @@
 """Time Series Explorer — Streamlit test app for DivePlot.
 
 Demonstrates overview+detail, hourly/weekly distributions, and
-crossfilter via day-of-week toggle.
+crossfilter via day-of-week toggle — all in a single render call
+so selections work across charts.
 """
 
 from datetime import datetime
@@ -83,12 +84,11 @@ df = pl.DataFrame({
 st.caption(f"{len(df):,} rows · {N_HOURS:,} hours × {N_GROUPS} groups")
 
 # ---------------------------------------------------------------------------
-# 1. Overview + Detail
+# Build all charts — single render call so crossfilter works across them
 # ---------------------------------------------------------------------------
-st.header("Overview + Detail")
 
+# Detail: hourly lines per group, zoomed by overview brush, filtered by day toggle
 detail = dp.plot(
-    # Raw hourly line per group
     dp.line(
         data=df,
         x="ts",
@@ -99,7 +99,6 @@ detail = dp.plot(
         lod={"decimate": True},
         fit_domain="y",
     ),
-    # 7-day rolling average overlay (thicker)
     dp.line(
         data=df,
         x="ts",
@@ -118,6 +117,7 @@ detail = dp.plot(
     legend=True,
 )
 
+# Overview: unfiltered, provides brush for detail zoom
 overview = dp.plot(
     dp.line(
         data=df,
@@ -132,122 +132,42 @@ overview = dp.plot(
     interactors=[dp.interval_x()],
 )
 
-dp.streamlit.render(dp.vconcat(detail, overview), server_duckdb=USE_SERVER)
-
-# ---------------------------------------------------------------------------
-# 2. Hourly Profile  |  3. Day-of-Week Selector
-# ---------------------------------------------------------------------------
-st.header("Distribution Analysis")
-
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.subheader("Hourly Profile")
-    st.caption("Average value by hour of day — filtered by day-of-week toggle →")
-    hourly_chart = dp.plot(
-        dp.bar_y(
-            data=df,
-            x="hour",
-            y=dp.avg("value"),
-            fill="group",
-            selection="daysel",
-            transforms=[dp.stack_y()],
-        ),
-        height=340,
-        x_label="Hour of Day",
-        y_label="Avg kWh",
-        legend=True,
-    )
-    dp.streamlit.render(hourly_chart, server_duckdb=USE_SERVER)
-
-with col_right:
-    st.subheader("Day-of-Week Selector")
-    st.caption("Click bars to toggle which days are included in all other charts")
-    day_chart = dp.plot(
-        dp.bar_y(
-            data=df,
-            x="day_of_week",
-            y=dp.sum("value"),
-            fill="group",
-            selection="daysel",
-            transforms=[dp.stack_y()],
-            sort={"x": "dow_num", "order": "asc"},
-        ),
-        height=340,
-        x_label="Day of Week",
-        y_label="Total kWh",
-        interactors=[dp.toggle(field="day_of_week")],
-        legend=True,
-    )
-    dp.streamlit.render(day_chart, server_duckdb=USE_SERVER)
-
-# ---------------------------------------------------------------------------
-# 4. Weekly Pattern (hour × day_of_week)
-# ---------------------------------------------------------------------------
-st.header("Weekly Pattern")
-st.caption("Average energy usage by hour and day of week (dot size + color)")
-
-# Pre-aggregate: need a cell mark for a proper heatmap, using dots as stand-in
-heatmap_df = (
-    df.group_by(["hour", "day_of_week", "dow_num"])
-    .agg(pl.col("value").mean().alias("avg_value"))
-    .sort(["dow_num", "hour"])
-)
-
-weekly_chart = dp.plot(
-    dp.dot(
-        data=heatmap_df,
+# Hourly profile: avg by hour of day, stacked by group, filtered by day toggle
+hourly = dp.plot(
+    dp.bar_y(
+        data=df,
         x="hour",
-        y="day_of_week",
-        fill="avg_value",
-        r="avg_value",
-        radius_range=[4, 14],
-        scheme="ylgnbu",
-        sort={"y": "dow_num", "order": "asc"},
-    ),
-    height=280,
-    x_label="Hour of Day",
-    y_label="Day of Week",
-)
-dp.streamlit.render(weekly_chart, server_duckdb=USE_SERVER)
-
-# ---------------------------------------------------------------------------
-# 5. Stacked Area — daily totals by group
-# ---------------------------------------------------------------------------
-st.header("Stacked Area — Daily Totals by Group")
-
-area_chart = dp.plot(
-    dp.area_y(
-        data=df,
-        x="ts",
-        y=dp.sum("value"),
+        y=dp.avg("value"),
         fill="group",
-        preferred_x_scale_type="time",
-        curve="monotone",
-        fill_opacity=0.7,
-        transforms=[dp.stack_y()],
         selection="daysel",
-    ),
-    height=320,
-    x_label="Date",
-    y_label="Total kWh",
-    legend=True,
-    use_selection="x",
-)
-
-area_overview = dp.plot(
-    dp.area_y(
-        data=df,
-        x="ts",
-        y=dp.sum("value"),
-        fill="group",
-        preferred_x_scale_type="time",
-        curve="monotone",
-        fill_opacity=0.5,
         transforms=[dp.stack_y()],
     ),
-    height=80,
-    interactors=[dp.interval_x()],
+    height=340,
+    x_label="Hour of Day",
+    y_label="Avg kWh",
+    legend=True,
 )
 
-dp.streamlit.render(dp.vconcat(area_chart, area_overview), server_duckdb=USE_SERVER)
+# Day-of-week selector: toggle bars to filter all other charts
+day_selector = dp.plot(
+    dp.bar_y(
+        data=df,
+        x="day_of_week",
+        y=dp.sum("value"),
+        fill="group",
+        selection="daysel",
+        transforms=[dp.stack_y()],
+        sort={"x": "dow_num", "order": "asc"},
+    ),
+    height=340,
+    x_label="Day of Week",
+    y_label="Total kWh",
+    interactors=[dp.toggle(field="day_of_week")],
+    legend=True,
+)
+
+# Single layout: detail + overview stacked, then hourly | day_selector side-by-side
+dp.streamlit.render(
+    dp.vconcat(detail, overview, dp.hconcat(hourly, day_selector)),
+    server_duckdb=USE_SERVER,
+)

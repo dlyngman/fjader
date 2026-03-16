@@ -116,6 +116,11 @@ def _setup_server_fallback(dataframes: dict[str, Any]) -> None:
 _VCONCAT_GAP = 8  # matches CSS gap in LayoutFromSpec.svelte
 
 
+def _is_layout(item: dict[str, Any]) -> bool:
+    """True if the item is a nested layout (has hconcat or vconcat key)."""
+    return "hconcat" in item or "vconcat" in item
+
+
 def _inject_height(spec: dict[str, Any], height: int) -> int:
     """Set height on plot specs and return the iframe height to use.
 
@@ -123,6 +128,7 @@ def _inject_height(spec: dict[str, Any], height: int) -> int:
     For vconcat: if all items have explicit heights the iframe expands to fit;
     otherwise the remaining space from ``height`` is split among unset items.
     For hconcat: each item gets the full ``height`` (CSS flex splits width).
+    Nested layouts are handled recursively.
     """
     if "plot" in spec:
         spec["plot"].setdefault("height", height)
@@ -130,20 +136,33 @@ def _inject_height(spec: dict[str, Any], height: int) -> int:
 
     items = spec.get("vconcat", [])
     if items:
-        unset = [item for item in items if "height" not in item]
-        explicit_total = sum(item.get("height", 0) for item in items)
+        unset = [item for item in items if not _is_layout(item) and "height" not in item]
+        explicit_total = 0
+        for item in items:
+            if _is_layout(item):
+                # Recurse: nested layout gets remaining height budget, returns its own.
+                explicit_total += _inject_height(item, height)
+            elif "height" in item:
+                explicit_total += item["height"]
         total_gap = _VCONCAT_GAP * (len(items) - 1)
 
         if not unset:
-            # All heights explicit — expand iframe to fit.
             return explicit_total + total_gap
-        # Divide remaining space among items without a height.
         remaining = height - explicit_total - total_gap
         per_item = max(remaining // len(unset), 50)
         for item in unset:
             item["height"] = per_item
         return height
 
-    for item in spec.get("hconcat", []):
-        item.setdefault("height", height)
+    items = spec.get("hconcat", [])
+    if items:
+        max_h = 0
+        for item in items:
+            if _is_layout(item):
+                max_h = max(max_h, _inject_height(item, height))
+            else:
+                item.setdefault("height", height)
+                max_h = max(max_h, item.get("height", height))
+        return max_h
+
     return height
