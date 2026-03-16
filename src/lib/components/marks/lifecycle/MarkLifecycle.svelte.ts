@@ -26,6 +26,7 @@ import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
+import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isContinuousScale } from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { isWindowExpression } from '$lib/sql/expression-utils';
@@ -115,6 +116,9 @@ export interface MarkLifecycleConfig {
 	_filterNulls?: unknown[];
 	viewportLocalDomain?: boolean;
 	zeroBaseline?: { x?: boolean; y?: boolean };
+	/** Skip scale registration and domain contribution. The mark renders into
+	 *  the chart's existing scales without affecting them (LOD overlays). */
+	passiveScales?: boolean;
 }
 
 export interface MarkLifecycleOptions {
@@ -150,6 +154,7 @@ export class MarkLifecycle {
 	// --- Transform Support ---
 	#transformCompiler: TransformCompiler;
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
+	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
 
 	// --- Tooltip Write-Back ---
 	#tooltipWanted: boolean;
@@ -272,11 +277,19 @@ export class MarkLifecycle {
 		this.#setupReactiveEffects();
 	}
 
-	// Detect AutoBinNodes in config
+	// Detect AutoBinNodes and RollingAvgNodes in config
 	#detectAutoBins(): void {
 		for (const [channel, value] of Object.entries(this.#config.select)) {
 			if (isBinExpression(value)) {
 				this.#autoBinNodes.set(channel, value);
+			} else if (isRollingAvgExpression(value)) {
+				this.#rollingAvgNodes.set(channel, value);
+				// Register invalidation callback: when windowSize changes,
+				// clear query cache and re-query (same pattern as triggerReBin).
+				value.registerInvalidation(() => {
+					this.#cachedQueryParts = null;
+					this.client?.requestUpdate();
+				});
 			}
 		}
 	}
@@ -319,6 +332,21 @@ export class MarkLifecycle {
 			if (!this.#categoricalFetchStarted || (colorReady && !this.#colorDomainFetched)) {
 				this.#categoricalFetchStarted = true;
 
+				// Passive scales: skip domain fetching, just advance the chain
+				if (this.#config.passiveScales) {
+					this.categoricalDataFetched = true;
+					this.#colorDomainFetched = true;
+					setScalesReady(
+						this.#scaleMap,
+						this.#channelsNeedingDataDomain,
+						this.actualXScaleType,
+						this.actualYScaleType,
+						false,
+						false
+					);
+					return;
+				}
+
 				// Fetch both categorical and aggregated domains in parallel
 				const seriesKey2 = this.#config._connectedConfig?.seriesChannel ?? null;
 				const catPromise = fetchCategoricalDomains(
@@ -343,7 +371,7 @@ export class MarkLifecycle {
 				);
 				const aggPromise = fetchGlobalAggregates(
 					this.#coordinator!,
-					this.#config.table,
+					this.effectiveTable,
 					this.#config.select,
 					this.#channelsNeedingDataDomain,
 					this.#autoBinNodes.size,
@@ -411,14 +439,16 @@ export class MarkLifecycle {
 		// Effect 5: Set initial continuous domains when fieldInfo arrives (merged 5+6)
 		$effect(() => {
 			if (this.#clientCreated && this.client?.fieldInfo && !this.#continuousDomainsSet) {
-				setInitialContinuousDomains(
-					this.client.fieldInfo,
-					this.#scaleMap,
-					this.#config.select,
-					this.actualXScaleType,
-					this.actualYScaleType,
-					this.#markId
-				);
+				if (!this.#config.passiveScales) {
+					setInitialContinuousDomains(
+						this.client.fieldInfo,
+						this.#scaleMap,
+						this.#config.select,
+						this.actualXScaleType,
+						this.actualYScaleType,
+						this.#markId
+					);
+				}
 				this.#continuousDomainsSet = true;
 			}
 		});
@@ -461,27 +491,32 @@ export class MarkLifecycle {
 			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
 			const xState = this.#chartContext.xScaleState as ContinuousScaleState | null;
 			const yState = this.#chartContext.yScaleState as ContinuousScaleState | null;
-			const result = registerDataDerivedDomains(
-				data,
-				this.#channelsNeedingDataDomain,
-				additionalChannels,
-				this.#skipDomainUpdateForAxis,
-				this.#config.viewportLocalDomain,
-				this.#config.zeroBaseline,
-				this.actualXScaleType,
-				this.actualYScaleType,
-				xState,
-				yState,
-				(xState as ContinuousScaleState | null)?.hasDomain ?? false,
-				(yState as ContinuousScaleState | null)?.hasDomain ?? false,
-				this.#transformCompiler.hasCategoryReducingTransforms(),
-				this.#chartContext.xScaleState as BandScaleState | null,
-				this.#chartContext.yScaleState as BandScaleState | null,
-				this.#markId,
-				isRebinning
-			);
-			this.#dataDerivedDomainsSet = result.dataDerivedDomainsSet;
-			this.#skipDomainUpdateForAxis = result.skipDomainUpdateForAxis;
+			if (this.#config.passiveScales) {
+				// Skip domain registration — overlay renders in parent's scale space
+				this.#dataDerivedDomainsSet = true;
+			} else {
+				const result = registerDataDerivedDomains(
+					data,
+					this.#channelsNeedingDataDomain,
+					additionalChannels,
+					this.#skipDomainUpdateForAxis,
+					this.#config.viewportLocalDomain,
+					this.#config.zeroBaseline,
+					this.actualXScaleType,
+					this.actualYScaleType,
+					xState,
+					yState,
+					(xState as ContinuousScaleState | null)?.hasDomain ?? false,
+					(yState as ContinuousScaleState | null)?.hasDomain ?? false,
+					this.#transformCompiler.hasCategoryReducingTransforms(),
+					this.#chartContext.xScaleState as BandScaleState | null,
+					this.#chartContext.yScaleState as BandScaleState | null,
+					this.#markId,
+					isRebinning
+				);
+				this.#dataDerivedDomainsSet = result.dataDerivedDomainsSet;
+				this.#skipDomainUpdateForAxis = result.skipDomainUpdateForAxis;
+			}
 		});
 
 		// Effect 7: Mark deferred scales ready when data-derived domains are set
@@ -563,6 +598,16 @@ export class MarkLifecycle {
 
 	#registerScaleRequirements(): void {
 		const { scaleRequirements, inferredScaleColumns } = this.#config;
+
+		// Passive scales: skip registration but still gate the effect chain.
+		// The mark reads the parent chart's scales without contributing to them.
+		if (this.#config.passiveScales) {
+			this.#scaleRequirementsRegistered = !!(
+				scaleRequirements?.x?.type && scaleRequirements?.y?.type
+			);
+			return;
+		}
+
 		const hasCatReducing = this.#transformCompiler.hasCategoryReducingTransforms();
 
 		const table = this.#config.table;
@@ -885,6 +930,11 @@ export class MarkLifecycle {
 				select = this.#resolveAutoBins(config.select);
 			}
 
+			// Resolve RollingAvgNodes to window expressions
+			if (this.#rollingAvgNodes.size > 0) {
+				select = this.#resolveRollingAvgNodes(select);
+			}
+
 			// Convert temporal values to float offsets from t0.
 			const hasView = viewManager.hasView(this.#config.table);
 			select = this.#applyTimeOffsets(select, hasView);
@@ -947,6 +997,18 @@ export class MarkLifecycle {
 			}
 		}
 
+		return resolved;
+	}
+
+	#resolveRollingAvgNodes(select: Record<string, unknown>): Record<string, unknown> {
+		const resolved: Record<string, unknown> = {};
+		for (const [channel, value] of Object.entries(select)) {
+			if (isRollingAvgExpression(value)) {
+				resolved[channel] = value.resolve();
+			} else {
+				resolved[channel] = value;
+			}
+		}
 		return resolved;
 	}
 
@@ -1324,6 +1386,11 @@ export class MarkLifecycle {
 			this.#lodController = null;
 		}
 
+		// Clear RollingAvgNode invalidation callbacks
+		for (const node of this.#rollingAvgNodes.values()) {
+			node.clearInvalidation();
+		}
+
 		clearTimeout(this.#viewportDomainUpdateTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
@@ -1337,10 +1404,11 @@ export class MarkLifecycle {
 		this.#unregisterClient?.();
 		this.#unregisterClient = null;
 
-		this.#chartContext.unregisterScaleType('x', this.#markId);
-		this.#chartContext.unregisterScaleType('y', this.#markId);
-
-		Object.values(this.#scaleMap).forEach((scale) => scale?.removeMark(this.#markId));
+		if (!this.#config.passiveScales) {
+			this.#chartContext.unregisterScaleType('x', this.#markId);
+			this.#chartContext.unregisterScaleType('y', this.#markId);
+			Object.values(this.#scaleMap).forEach((scale) => scale?.removeMark(this.#markId));
+		}
 
 		if (this.client) {
 			this.client.destroy();

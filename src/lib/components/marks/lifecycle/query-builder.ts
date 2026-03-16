@@ -12,6 +12,7 @@ import type { ExprNode } from '@uwdata/mosaic-sql';
 import type { FieldInfoRequest } from '@uwdata/mosaic-core';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { isBinExpression } from '$lib/sql/bin';
+import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isNumericScale } from '$lib/scales/scale-categories';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
@@ -63,6 +64,9 @@ export function buildFieldInfoRequests(
 			}
 			continue;
 		}
+
+		// Skip RollingAvgNodes — domain derived from query results
+		if (isRollingAvgExpression(fieldValue)) continue;
 
 		// Handle regular fields
 		if (processedFields.has(String(fieldValue))) continue;

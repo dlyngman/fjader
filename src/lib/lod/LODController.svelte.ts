@@ -29,6 +29,7 @@ import { Priority } from '@uwdata/mosaic-core';
 import type { Coordinator } from '@uwdata/mosaic-core';
 import { Spring, DT } from '$lib/animation/Spring';
 import type { ChartContext, LODChangeState } from '$lib/types';
+import type { SmoothMode } from '$lib/sql/rolling-avg';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 import type { MarkLifecycle } from '$lib/components/marks/lifecycle/MarkLifecycle.svelte';
@@ -56,9 +57,15 @@ export interface LineConfig {
 	densityThreshold?: number;
 	countDebounceMs?: number;
 	domainChangeThreshold?: number;
+	/** Initial smoothing window size (from persisted config). Default: 0 (off). */
+	smoothWindow?: number;
+	/** Initial smooth mode. Default: 'centered'. */
+	smoothMode?: SmoothMode;
 	onLODChange?: ((state: LODChangeState) => void) | null;
 	/** Fired when a tunable value changes (shift+scroll, programmatic). Lets the mark persist to ChartConfig. */
-	onTunableChange?: ((key: 'dotsThreshold' | 'baseRadius', value: number) => void) | null;
+	onTunableChange?:
+		| ((key: string, value: number | string) => void)
+		| null;
 }
 
 export interface BinnedConfig {
@@ -83,6 +90,10 @@ export interface LODState {
 	// Line mode — tunable
 	dotsThreshold: number;
 	baseRadius: number;
+	// Line mode — smoothing overlay
+	smoothWindow: number;
+	smoothActive: boolean;
+	smoothMode: SmoothMode;
 	// Binned mode — diagnostic
 	binStep: number;
 	numVisibleBins: number;
@@ -122,9 +133,12 @@ export class LODController {
 	#writeDotRadius: ((r: number) => void) | null = null;
 	#invalidateLayer: (() => void) | null = null;
 	#onLODChange: ((state: LODChangeState) => void) | null = null;
-	#onTunableChange: ((key: string, value: number) => void) | null = null;
+	#onTunableChange: ((key: string, value: number | string) => void) | null = null;
 	#prevDecimating: boolean = false;
 	#prevDotsVisible: boolean = false;
+	#smoothWindow: number = 0;
+	#smoothMode: SmoothMode = 'centered';
+	#smoothScrollAccum: number = 0;
 
 	// --- Binned mode state ---
 	#markLifecycle: MarkLifecycle | null = null;
@@ -167,6 +181,9 @@ export class LODController {
 		dotsVisible: false,
 		dotsThreshold: 18,
 		baseRadius: 0,
+		smoothWindow: 0,
+		smoothActive: false,
+		smoothMode: 'centered' as SmoothMode,
 		binStep: 0,
 		numVisibleBins: 0,
 		binWidthPx: 0,
@@ -215,10 +232,15 @@ export class LODController {
 			this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
 			this.#onLODChange = config.onLODChange ?? null;
 			this.#onTunableChange = config.onTunableChange ?? null;
+			this.#smoothWindow = config.smoothWindow ?? 0;
+			this.#smoothMode = config.smoothMode ?? 'centered';
 			this.#dotRadiusSpring = this.#dotsEnabled ? new Spring(0, 400) : null;
 			this.#lastSpringTime = performance.now();
 			this.state.dotsThreshold = this.#dotsThreshold;
 			this.state.baseRadius = this.#baseR;
+			this.state.smoothWindow = this.#smoothWindow;
+			this.state.smoothActive = this.#smoothWindow > 0;
+			this.state.smoothMode = this.#smoothMode;
 		} else {
 			// Binned mode
 			this.#markLifecycle = config.markLifecycle;
@@ -267,16 +289,31 @@ export class LODController {
 	/**
 	 * Adjust resolution. Called by ChartCell when shift+scroll targets this mark.
 	 * For binned mode: adjusts binStepMultiplier on the chart context.
-	 * For line mode: adjusts dots threshold (scroll up = more detail = dots sooner).
+	 * For line mode: density-contextual routing along a single resolution axis:
+	 *   scroll down (decrease detail) → add/increase smoothing
+	 *   scroll up (increase detail) → reduce smoothing, then control dots
 	 */
 	adjustResolution(deltaY: number): void {
 		if (this.#mode === 'binned') {
 			const delta = deltaY < 0 ? 0.025 : -0.025;
 			this.#chartContext.adjustBinMultiplier?.(delta);
 		} else {
-			// Scroll up (deltaY < 0) = lower threshold = dots appear sooner
-			const step = deltaY < 0 ? -1 : 1;
-			this.setDotsThreshold(this.#dotsThreshold + step);
+			const decreaseDetail = deltaY > 0;
+
+			if (this.#smoothWindow > 0 || (decreaseDetail && this.visibleCount > 50)) {
+				// Smoothing active or starting — accumulate scroll before stepping
+				this.#smoothScrollAccum += deltaY;
+				const threshold = 60; // px of scroll per window step
+				if (Math.abs(this.#smoothScrollAccum) >= threshold) {
+					const steps = Math.trunc(this.#smoothScrollAccum / threshold);
+					this.#smoothScrollAccum -= steps * threshold;
+					this.setSmoothWindow(this.#smoothWindow + steps);
+				}
+			} else {
+				// Control dots threshold
+				const step = deltaY < 0 ? -1 : 1;
+				this.setDotsThreshold(this.#dotsThreshold + step);
+			}
 		}
 	}
 
@@ -311,6 +348,26 @@ export class LODController {
 		if (this.#mode !== 'binned') return;
 		this.#chartContext.setBinStepMultiplier?.(value);
 		this.#onTunableChange?.('multiplier', value);
+	}
+
+	/** Set rolling average smoothing window (line mode). Range: 0–100. 0 = off. */
+	setSmoothWindow(value: number): void {
+		if (this.#mode !== 'line') return;
+		const clamped = Math.max(0, Math.min(100, value));
+		if (clamped === this.#smoothWindow) return;
+		this.#smoothWindow = clamped;
+		this.state.smoothWindow = clamped;
+		this.state.smoothActive = clamped > 0;
+		this.#onTunableChange?.('smoothWindow', clamped);
+	}
+
+	/** Set smooth mode: 'centered' (±N) or 'trailing' (←N). */
+	setSmoothMode(mode: SmoothMode): void {
+		if (this.#mode !== 'line') return;
+		if (mode === this.#smoothMode) return;
+		this.#smoothMode = mode;
+		this.state.smoothMode = mode;
+		this.#onTunableChange?.('smoothMode', mode as string);
 	}
 
 	// =========================================================================
@@ -481,7 +538,8 @@ export class LODController {
 				decimating,
 				dotRadius: this.dotRadius,
 				visibleCount: this.visibleCount,
-				density: this.density
+				density: this.density,
+				smoothingWindow: this.#smoothWindow
 			});
 		}
 	}
