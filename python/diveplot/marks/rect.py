@@ -49,7 +49,6 @@ class RectXMark(Mark):
     dx: float | None = None
     dy: float | None = None
     preferred_y_scale_type: ScaleType | None = None
-    viewport_local_domain: bool | None = None
 
 
 @dataclass
@@ -68,4 +67,3 @@ class RectYMark(Mark):
     dx: float | None = None
     dy: float | None = None
     preferred_x_scale_type: ScaleType | None = None
-    viewport_local_domain: bool | None = None

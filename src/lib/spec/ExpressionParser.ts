@@ -5,10 +5,30 @@
  * fieldRefToSpec:   runtime → spec (used by spec export)
  */
 
-import { count, sum, avg, min, max, median, column, isNode } from '@uwdata/mosaic-sql';
+import {
+	count,
+	sum,
+	avg,
+	min,
+	max,
+	median,
+	column,
+	isNode,
+	sql,
+	frameRows,
+	preceding,
+	following,
+	currentRow
+} from '@uwdata/mosaic-sql';
 import { bin, isBinExpression, type AutoBinNode } from '$lib/sql/bin';
 import type { FieldRef } from '$lib/types';
-import type { FieldSpec, AggregateFieldSpec, BinFieldSpec } from './types';
+import type {
+	FieldSpec,
+	AggregateFieldSpec,
+	BinFieldSpec,
+	WindowFieldSpec,
+	RawSqlFieldSpec
+} from './types';
 
 const AGG_PATTERN = /^(count|sum|avg|min|max|median)\(([^)]*)\)$/;
 
@@ -47,6 +67,14 @@ export function resolveFieldSpec(spec: FieldSpec): ResolvedField {
 		return bin(spec.bin, spec.steps != null ? { steps: spec.steps } : {});
 	}
 
+	if (isWindowFieldSpec(spec)) {
+		return resolveWindowSpec(spec);
+	}
+
+	if (isRawSqlFieldSpec(spec)) {
+		return rawSql(spec.sql) as unknown as ResolvedField;
+	}
+
 	// Fallback: treat as string
 	return String(spec);
 }
@@ -68,6 +96,60 @@ function isAggregateFieldSpec(spec: FieldSpec): spec is AggregateFieldSpec {
 
 function isBinFieldSpec(spec: FieldSpec): spec is BinFieldSpec {
 	return typeof spec === 'object' && 'bin' in spec;
+}
+
+function isWindowFieldSpec(spec: FieldSpec): spec is WindowFieldSpec {
+	return typeof spec === 'object' && 'window' in spec;
+}
+
+function isRawSqlFieldSpec(spec: FieldSpec): spec is RawSqlFieldSpec {
+	return typeof spec === 'object' && 'sql' in spec;
+}
+
+/** Convert a raw SQL string into a Mosaic SQL expression node. */
+function rawSql(str: string) {
+	const strings = Object.assign([str], { raw: [str] }) as TemplateStringsArray;
+	return sql(strings);
+}
+
+/**
+ * Convert a frame boundary integer to a Mosaic frame boundary.
+ * Negative = preceding(|n|), 0 = currentRow(), positive = following(n).
+ */
+function frameBoundary(n: number) {
+	if (n < 0) return preceding(-n);
+	if (n > 0) return following(n);
+	return currentRow();
+}
+
+function resolveWindowSpec(spec: WindowFieldSpec): ResolvedField {
+	const fnName = spec.window as keyof typeof AGG_FUNCTIONS;
+	const fn = AGG_FUNCTIONS[fnName];
+	if (!fn) throw new Error(`Unknown window aggregate: "${spec.window}"`);
+
+	// Build the aggregate base
+	let base;
+	if (fnName === 'count') {
+		base = spec.field ? (fn as typeof count)(column(spec.field)) : (fn as typeof count)();
+	} else {
+		if (!spec.field) throw new Error(`Window aggregate "${fnName}" requires a field`);
+		base = fn(column(spec.field));
+	}
+
+	// Chain window clauses
+	let windowed = base;
+	if (spec.partitionBy) {
+		windowed = windowed.partitionby(spec.partitionBy);
+	}
+	if (spec.orderBy) {
+		windowed = windowed.orderby(spec.orderBy);
+	}
+	if (spec.frame) {
+		const [start, end] = spec.frame;
+		windowed = windowed.frame(frameRows([frameBoundary(start), frameBoundary(end)]));
+	}
+
+	return windowed as unknown as ResolvedField;
 }
 
 // =============================================================================

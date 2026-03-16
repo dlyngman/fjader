@@ -47,7 +47,7 @@ from .transforms import (
 )
 
 # Field spec helpers
-from .fields import count, sum, avg, min_, max_, median, bin
+from .fields import count, sum, avg, min_, max_, median, bin, window, sql_expr
 
 # Data helpers
 from .data import sql
@@ -82,7 +82,7 @@ __all__ = [
     "filter", "having", "limit", "orderby",
     "topN", "stack_y", "stack_x", "normalize", "dodge",
     # Fields
-    "count", "sum", "avg", "min_", "max_", "median", "bin",
+    "count", "sum", "avg", "min_", "max_", "median", "bin", "window", "sql_expr",
     # Data
     "sql",
     # Display

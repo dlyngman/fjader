@@ -26,6 +26,7 @@ class AreaYMark(Mark):
     """CSS color for area outline (e.g. ``'#333'``, ``'steelblue'``). Not data-driven."""
     stroke_width: float | None = None
     dot_radius: float | None = None
+    auto_dots: bool | None = None
     curve: CurveType | None = None
     preferred_x_scale_type: ScaleType | None = None
     preferred_y_scale_type: ScaleType | None = None
@@ -47,6 +48,7 @@ class AreaXMark(Mark):
     """CSS color for area outline (e.g. ``'#333'``, ``'steelblue'``). Not data-driven."""
     stroke_width: float | None = None
     dot_radius: float | None = None
+    auto_dots: bool | None = None
     curve: CurveType | None = None
     preferred_x_scale_type: ScaleType | None = None
     preferred_y_scale_type: ScaleType | None = None

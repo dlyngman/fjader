@@ -33,6 +33,7 @@ class Mark:
     tooltip: bool | None = None
     tooltip_proximity: Literal["x", "y", "xy"] | None = None
     tip: list[str] | Literal[False] | None = None
+    fit_domain: Literal["x", "y"] | bool | None = None
 
     # DataFrame attachment (not serialized — data travels via binary traitlets)
     data: Any = field(default=None, repr=False, compare=False)

@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.20.2"
+__generated_with = "0.20.4"
 app = marimo.App(width="full")
 
 
@@ -104,6 +104,103 @@ def _(dp, pl):
         "count": [640, 641, 101, 26, 53],
     })
     dp.show(dp.bar_x(data=simple, x="count", y="weather", fill="weather"))
+    return
+
+
+@app.cell
+def _(dp, pl):
+    # --- fitDomain: auto-fit y-axis to visible data in overview+detail ---
+    import math
+
+    ts = pl.DataFrame({
+        "t": list(range(500)),
+        "value": [math.sin(i / 20) * 10 + i * 0.05 for i in range(500)],
+    })
+
+    detail = dp.plot(
+        dp.line(data=ts, x="t", y="value", fit_domain="y"),
+        height=300,
+        x_label="Time",
+        y_label="Value (auto-fit)",
+        use_selection="x",
+    )
+    overview = dp.plot(
+        dp.line(data=ts, x="t", y="value"),
+        height=100,
+        x_label="Time",
+        interactors=[dp.interval_x()],
+    )
+    dp.show(dp.vconcat(detail, overview))
+    return
+
+
+@app.cell
+def _(dp, pl):
+    # --- autoDots: density-based dot fading on area marks ---
+    area_df = pl.DataFrame({
+        "x": list(range(30)),
+        "y": [abs((i - 15) ** 2) + 5 for i in range(30)],
+        "group": ["A"] * 15 + ["B"] * 15,
+    })
+
+    dp.show(dp.area_y(
+        data=area_df,
+        x="x",
+        y="y",
+        fill="group",
+        auto_dots=True,
+        curve="monotone",
+        transforms=[dp.stack_y()],
+    ))
+    return
+
+
+@app.cell
+def _(dp, pl):
+    # --- LOD config on line marks (replaces old optimize) ---
+    import math as _math
+
+    big_line = pl.DataFrame({
+        "x": list(range(5000)),
+        "y": [_math.sin(i / 50) * 100 + (i % 7) for i in range(5000)],
+    })
+
+    dp.show(dp.plot(
+        dp.line(
+            data=big_line,
+            x="x",
+            y="y",
+            lod={"decimate": True, "smooth": {"window": 50}},
+        ),
+        height=350,
+        x_label="X",
+        y_label="Y (LOD: decimate + smooth)",
+    ))
+    return
+
+
+@app.cell
+def _(dp, pl):
+    # --- Window function: rolling average as a channel value ---
+    import math as _m
+
+    window_df = pl.DataFrame({
+        "date": list(range(200)),
+        "price": [50 + _m.sin(i / 10) * 20 + (i % 3) * 2 for i in range(200)],
+    })
+
+    dp.show(dp.plot(
+        dp.dot(data=window_df, x="date", y="price", opacity=0.3, r=2)
+        * dp.line(
+            data=window_df,
+            x="date",
+            y=dp.window("avg", "price", order_by="date", frame=[-50, 0]),
+            stroke_width=2,
+        ),
+        height=350,
+        x_label="Date",
+        y_label="Price (dots = raw, line = trailing avg 10)",
+    ))
     return
 
 
