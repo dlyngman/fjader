@@ -103,6 +103,7 @@ export class M4Decimator {
 
 	// Non-reactive internal state
 	#xScaleIndex = 0;
+	#resolveXScaleIndex: (() => number) | null = null;
 	#pointCount = 0;
 	#outputCapacity = 0;
 
@@ -149,16 +150,17 @@ export class M4Decimator {
 
 	/**
 	 * Configure dimensions and allocate buffers.
-	 * Call when chart width, series count, or scale index changes.
+	 * Call when chart width or series count changes.
+	 * @param resolveXScaleIndex — called at dispatch time to get the current
+	 *   SSBO slot index, so it's always fresh even after ScaleIndexManager rebuilds.
 	 */
-	configure(numBins: number, numSeries: number, xScaleIndex: number): void {
+	configure(numBins: number, numSeries: number, resolveXScaleIndex: () => number): void {
 		const internalBins = numBins + 2;
 		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
-		const configChanged = xScaleIndex !== this.#xScaleIndex;
 
-		if (!dimsChanged && !configChanged) return;
+		this.#resolveXScaleIndex = resolveXScaleIndex;
 
-		this.#xScaleIndex = xScaleIndex;
+		if (!dimsChanged) return;
 
 		if (dimsChanged) {
 			this.#numBins = internalBins;
@@ -198,7 +200,12 @@ export class M4Decimator {
 	): void {
 		if (!this.#configured || this.#numBins === 0 || pointCount === 0) return;
 
-		if (pointCount !== this.#pointCount) {
+		// Resolve xScaleIndex fresh each frame — immune to ScaleIndexManager rebuilds
+		const freshIndex = this.#resolveXScaleIndex?.() ?? 0;
+		const indexChanged = freshIndex !== this.#xScaleIndex;
+		if (indexChanged) this.#xScaleIndex = freshIndex;
+
+		if (pointCount !== this.#pointCount || indexChanged) {
 			this.#pointCount = pointCount;
 			this.#updateConfig(pointCount);
 			this.#ensureOutputCapacity(pointCount);
