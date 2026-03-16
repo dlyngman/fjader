@@ -471,6 +471,20 @@ export class ScaleRegistry {
 		});
 	}
 
+	/**
+	 * Look up a scale by name/type/config without creating it.
+	 * Returns null if no matching scale exists. The read on the
+	 * SvelteMap is reactive, so callers inside $effect will re-run
+	 * when the scale is later created.
+	 */
+	findScale(name: string, type: string, config: Record<string, unknown> = {}): AnyScaleState | null {
+		const bucket = this.scales[type];
+		if (!bucket) return null;
+		const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
+		const key = `${name}-${type}${configKey}`;
+		return bucket.get(key) ?? null;
+	}
+
 	getScaleByField(field: string, type: string): AnyScaleState | null {
 		const scaleMap = this.scales[type];
 		if (!scaleMap) return null;

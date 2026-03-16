@@ -1,26 +1,38 @@
 <script lang="ts">
 	import PlotFromSpec from './PlotFromSpec.svelte';
-	import type { DivePlotSpec } from './types';
+	import type { DivePlotSpec, LayoutItem } from './types';
 
 	interface Props {
 		spec: DivePlotSpec;
 	}
 
 	let { spec }: Props = $props();
+
+	function isPlot(item: LayoutItem): item is import('./types').PlotSpec {
+		return 'marks' in item;
+	}
 </script>
 
 {#if spec.hconcat?.length}
 	<div class="diveplot-hconcat">
-		{#each spec.hconcat as plotSpec, i (i)}
+		{#each spec.hconcat as item, i (i)}
 			<div class="diveplot-hconcat-item">
-				<PlotFromSpec spec={plotSpec} />
+				{#if isPlot(item)}
+					<PlotFromSpec spec={item} />
+				{:else}
+					<svelte:self spec={item} />
+				{/if}
 			</div>
 		{/each}
 	</div>
 {:else if spec.vconcat?.length}
 	<div class="diveplot-vconcat">
-		{#each spec.vconcat as plotSpec, i (i)}
-			<PlotFromSpec spec={plotSpec} />
+		{#each spec.vconcat as item, i (i)}
+			{#if isPlot(item)}
+				<PlotFromSpec spec={item} />
+			{:else}
+				<svelte:self spec={item} />
+			{/if}
 		{/each}
 	</div>
 {:else if spec.plot}

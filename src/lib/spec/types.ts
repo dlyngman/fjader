@@ -10,11 +10,14 @@ import type { Coordinator } from '@uwdata/mosaic-core';
 // Top-level spec
 // =============================================================================
 
+/** A layout item: either a single plot or a nested layout. */
+export type LayoutItem = PlotSpec | { hconcat: LayoutItem[] } | { vconcat: LayoutItem[] };
+
 export interface DivePlotSpec {
 	data?: Record<string, DataSpec>;
 	plot?: PlotSpec;
-	hconcat?: PlotSpec[];
-	vconcat?: PlotSpec[];
+	hconcat?: LayoutItem[];
+	vconcat?: LayoutItem[];
 }
 
 // =============================================================================
