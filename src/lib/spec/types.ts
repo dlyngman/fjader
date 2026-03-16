@@ -210,6 +210,7 @@ export interface LineMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 		| boolean
 		| {
 				dots?: { r?: number; threshold?: number } | false;
+				smooth?: { window?: number; mode?: 'centered' | 'trailing' | 'leading' } | false;
 				decimate?: boolean | 'auto';
 				multiplier?: number;
 		  };

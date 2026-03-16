@@ -31,7 +31,8 @@
 		COLOR_MODE: 8, // u32
 		COLOR_SCALE_INDEX: 12, // u32
 		CONSTANT_COLOR: 16, // vec4<f32>
-		DOT_RADIUS: 32 // f32
+		DOT_RADIUS: 32, // f32
+		GLOBAL_ALPHA: 36 // f32
 	};
 
 	interface Props {
@@ -50,6 +51,7 @@
 		constantColor?: [number, number, number, number];
 		m4Decimator?: M4Decimator | null;
 		lodController?: import('$lib/lod/LODController.svelte').LODController | null;
+		globalAlpha?: number;
 		markId?: string;
 	}
 
@@ -69,6 +71,7 @@
 		constantColor = DEFAULT_STROKE_COLOR,
 		m4Decimator = null,
 		lodController = null,
+		globalAlpha = 1.0,
 		markId = ''
 	}: Props = $props();
 
@@ -127,7 +130,7 @@
     colorScaleIndex: u32,
     constantColor: vec4<f32>,
     dotRadius: f32,
-    _pad0: u32,
+    globalAlpha: f32,
     _pad1: u32
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
@@ -187,7 +190,7 @@
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
-      output.alpha = 1.0;
+      output.alpha = markConstants.globalAlpha;
       output.circleUV = quadPosition;
       output.circleRadius = circleR;
       return output;
@@ -282,7 +285,7 @@
     var output: VertexOutput;
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
-    output.alpha = 1.0;
+    output.alpha = markConstants.globalAlpha;
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
     return output;
@@ -396,6 +399,7 @@
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
 			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
+			view.setFloat32(UNIFORM_OFFSETS.GLOBAL_ALPHA, globalAlpha, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 

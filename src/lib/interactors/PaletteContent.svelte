@@ -80,7 +80,7 @@
 	// DOM refs
 	let filterInput: HTMLInputElement | null = $state(null);
 	let scrubberInput: HTMLInputElement | null = $state(null);
-	let groupInputs: HTMLInputElement[] = $state([]);
+	let groupInputs: (HTMLInputElement | HTMLSpanElement)[] = $state([]);
 	let valueListEl: HTMLDivElement | null = $state(null);
 	let channelListEl: HTMLDivElement | null = $state(null);
 	let panelEl: HTMLDivElement | null = $state(null);
@@ -170,8 +170,35 @@
 
 	const lodState: LODState | null = $derived(lodController?.state ?? null);
 
+	/** LOD editable items as a virtual numeric group (reuses group keyboard navigation). */
+	interface LodGroupItem {
+		label: string;
+		key: 'smoothWindow' | 'dotsThreshold' | 'baseRadius' | 'multiplier' | 'smoothMode';
+		min: number;
+		max: number;
+		step: number;
+		bigStep?: number;
+		getValue: () => number | string;
+		/** If set, this item cycles between options instead of numeric stepping. */
+		options?: string[];
+	}
+	const lodGroupItems: LodGroupItem[] = $derived.by(() => {
+		if (!lodState) return [];
+		if (lodState.mode === 'line') {
+			return [
+				{ label: 'smooth', key: 'smoothWindow', min: 0, max: 100, step: 1, bigStep: 5, getValue: () => lodState.smoothWindow },
+				{ label: 'mode', key: 'smoothMode', min: 0, max: 1, step: 1, getValue: () => lodState.smoothMode, options: ['centered', 'trailing', 'leading'] },
+				{ label: 'dots threshold', key: 'dotsThreshold', min: 10, max: 100, step: 1, bigStep: 5, getValue: () => lodState.dotsThreshold },
+				{ label: 'dot radius', key: 'baseRadius', min: 0.5, max: 20, step: 0.5, bigStep: 2, getValue: () => lodState.baseRadius }
+			];
+		}
+		return [
+			{ label: 'multiplier', key: 'multiplier', min: 0.1, max: 20, step: 0.1, bigStep: 0.5, getValue: () => lodState.binMultiplier }
+		];
+	});
+
 	/** Update an LOD tunable via ChartConfig (persists for undo/redo + spec export). */
-	function setLodTunable(key: 'dotsThreshold' | 'baseRadius' | 'multiplier', value: number): void {
+	function setLodTunable(key: 'dotsThreshold' | 'baseRadius' | 'multiplier' | 'smoothWindow' | 'smoothMode', value: number | string): void {
 		if (!targetEntry) return;
 		const current = targetEntry.lod;
 		const cfg = typeof current === 'object' && current ? current : {};
@@ -179,14 +206,19 @@
 
 		if (key === 'dotsThreshold') {
 			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
-			dots.threshold = value;
+			dots.threshold = value as number;
 			updated = { ...cfg, dots };
 		} else if (key === 'baseRadius') {
 			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
-			dots.r = value;
+			dots.r = value as number;
 			updated = { ...cfg, dots };
+		} else if (key === 'smoothWindow' || key === 'smoothMode') {
+			const smooth = typeof cfg.smooth === 'object' && cfg.smooth ? { ...cfg.smooth } : {};
+			if (key === 'smoothWindow') smooth.window = value as number;
+			else smooth.mode = value as 'centered' | 'trailing' | 'leading';
+			updated = { ...cfg, smooth };
 		} else {
-			updated = { ...cfg, multiplier: value };
+			updated = { ...cfg, multiplier: value as number };
 		}
 
 		chartContext.config.setMarkProp(targetEntry.id, 'lod', updated);
@@ -271,7 +303,10 @@
 		// LOD summary
 		if (channel === 'lod' && lodState) {
 			if (lodState.mode === 'line') {
-				return `${lodState.density.toFixed(1)} pt/px`;
+				const suffix = lodState.smoothActive
+					? ` ${lodState.smoothMode === 'trailing' ? '←' : lodState.smoothMode === 'leading' ? '→' : '±'}${lodState.smoothWindow}`
+					: '';
+				return `${lodState.density.toFixed(1)} pt/px${suffix}`;
 			}
 			return `${Math.round(lodState.numVisibleBins)} bins`;
 		}
@@ -343,9 +378,14 @@
 	// ---- Focus helper (replaces focus management effect) ----
 	async function updateFocus() {
 		await tick();
-		if (focusZone === 'values' && expandedNumericGroup && groupEditing && groupInputs[groupFocusIndex]) {
-			groupInputs[groupFocusIndex].focus();
-			groupInputs[groupFocusIndex].select();
+		if (focusZone === 'values' && expandedChannel === 'lod' && groupEditing && groupInputs[groupFocusIndex]) {
+			const el = groupInputs[groupFocusIndex];
+			el.focus();
+			if ('select' in el) el.select();
+		} else if (focusZone === 'values' && expandedNumericGroup && groupEditing && groupInputs[groupFocusIndex]) {
+			const el = groupInputs[groupFocusIndex];
+			el.focus();
+			if ('select' in el) el.select();
 		} else if (focusZone === 'values' && expandedNumericDef && scrubberInput) {
 			scrubberInput.focus();
 			scrubberInput.select();
@@ -391,7 +431,10 @@
 		expandedChannel = channel;
 
 		// LOD panel — edits apply immediately, no checkpoint/preview needed
+		// Uses group navigation (same as margins)
 		if (channel === 'lod') {
+			groupFocusIndex = 0;
+			groupEditing = false;
 			focusZone = 'values';
 			tick().then(() => panelEl?.focus());
 			return;
@@ -786,17 +829,14 @@
 	}
 
 	function handleValueKeys(event: KeyboardEvent) {
-		// LOD panel — edits already applied, just collapse
-		if (expandedChannel === 'lod') {
-			if (event.key === 'ArrowLeft' || event.key === 'Escape') {
-				event.preventDefault();
-				collapseToChannels();
-			}
-			return;
-		}
 		// Numeric group mode — up/down navigates items, left/escape exits
+		// LOD panel reuses the same group navigation pattern
 		if (expandedNumericGroup) {
 			handleGroupKeys(event);
+			return;
+		}
+		if (expandedChannel === 'lod' && lodGroupItems.length > 0) {
+			handleLodGroupKeys(event);
 			return;
 		}
 		// Numeric scrubber mode — arrow keys step value
@@ -882,6 +922,68 @@
 		}
 	}
 
+	function handleLodGroupKeys(event: KeyboardEvent) {
+		const items = lodGroupItems;
+		if (!items.length) return;
+		const key = event.key;
+		const count = items.length;
+
+		if (groupEditing) {
+			const item = items[groupFocusIndex];
+			if (key === 'Escape' || key === 'ArrowLeft') {
+				event.preventDefault();
+				groupEditing = false;
+				panelEl?.focus();
+			} else if (key === 'Enter' && !event.repeat) {
+				event.preventDefault();
+				groupEditing = false;
+				panelEl?.focus();
+			} else if (key === 'Tab') {
+				event.preventDefault();
+				groupFocusIndex = event.shiftKey
+					? (groupFocusIndex - 1 + count) % count
+					: (groupFocusIndex + 1) % count;
+				updateFocus();
+			} else if ((key === 'ArrowUp' || key === 'ArrowDown' || key === 'j' || key === 'k') && item) {
+				event.preventDefault();
+				if (item.options) {
+					// Cycle through options
+					const curIdx = item.options.indexOf(String(item.getValue()));
+					const dir = key === 'ArrowUp' || key === 'k' ? -1 : 1;
+					const nextIdx = (curIdx + dir + item.options.length) % item.options.length;
+					setLodTunable(item.key, item.options[nextIdx] as any);
+					const el = groupInputs[groupFocusIndex];
+					if (el) el.textContent = item.options[nextIdx];
+				} else {
+					const step = event.shiftKey ? (item.bigStep ?? item.step * 10) : item.step;
+					const delta = key === 'ArrowUp' || key === 'k' ? step : -step;
+					const cur = item.getValue() as number;
+					const clamped = Math.max(item.min, Math.min(item.max, cur + delta));
+					setLodTunable(item.key, clamped);
+					const el = groupInputs[groupFocusIndex] as HTMLInputElement;
+					if (el) el.value = String(clamped);
+				}
+			}
+			return;
+		}
+
+		// Navigation mode
+		if (key === 'ArrowDown') {
+			event.preventDefault();
+			groupFocusIndex = (groupFocusIndex + 1) % count;
+		} else if (key === 'ArrowUp') {
+			event.preventDefault();
+			groupFocusIndex = (groupFocusIndex - 1 + count) % count;
+		} else if (key === 'ArrowRight' || key === 'Enter') {
+			event.preventDefault();
+			groupEditing = true;
+			updateFocus();
+		} else if (key === 'Escape' || key === 'ArrowLeft') {
+			event.preventDefault();
+			collapseToChannels();
+		}
+	}
+
 	function handleGroupKeys(event: KeyboardEvent) {
 		const group = expandedNumericGroup;
 		if (!group) return;
@@ -913,8 +1015,8 @@
 				const cur = getGroupValue(def.prop, def.min);
 				const clamped = clampScrubber(cur + delta, def);
 				chartContext.config.setChartProp(def.prop, clamped);
-				const input = groupInputs[groupFocusIndex];
-				if (input) input.value = String(clamped);
+				const el = groupInputs[groupFocusIndex] as HTMLInputElement;
+				if (el) el.value = String(clamped);
 			}
 			return;
 		}
@@ -1092,6 +1194,7 @@
 						</div>
 					{:else if expandedChannel === 'lod' && lodState && lodController}
 						<div class="group-panel">
+							<!-- Diagnostic readouts -->
 							{#if lodState.mode === 'line'}
 								<div class="group-row">
 									<span class="group-label">visible</span>
@@ -1105,48 +1208,12 @@
 									<span class="group-label">M4</span>
 									<span class="lod-readout {lodState.shouldDecimate ? 'lod-active' : ''}">{lodState.shouldDecimate ? 'on' : 'off'}</span>
 								</div>
-								<div class="group-row">
-									<span class="group-label">dots threshold</span>
-									<input
-										type="number"
-										class="scrubber-input"
-										value={lodState.dotsThreshold}
-										min={10}
-										max={100}
-										step={1}
-										oninput={(e) => {
-											const v = parseFloat((e.target as HTMLInputElement).value);
-											if (!isNaN(v)) setLodTunable('dotsThreshold', Math.max(10, Math.min(100, v)));
-										}}
-										onwheel={(e) => {
-											e.preventDefault();
-											const step = e.shiftKey ? 5 : 1;
-											const delta = e.deltaY < 0 ? step : -step;
-											setLodTunable('dotsThreshold', Math.max(10, Math.min(100, lodState.dotsThreshold + delta)));
-										}}
-									/>
-								</div>
-								<div class="group-row">
-									<span class="group-label">dot radius</span>
-									<input
-										type="number"
-										class="scrubber-input"
-										value={lodState.baseRadius}
-										min={0.5}
-										max={20}
-										step={0.5}
-										oninput={(e) => {
-											const v = parseFloat((e.target as HTMLInputElement).value);
-											if (!isNaN(v)) setLodTunable('baseRadius', Math.max(0.5, Math.min(20, v)));
-										}}
-										onwheel={(e) => {
-											e.preventDefault();
-											const step = e.shiftKey ? 2 : 0.5;
-											const delta = e.deltaY < 0 ? step : -step;
-											setLodTunable('baseRadius', Math.max(0.5, Math.min(20, lodState.baseRadius + delta)));
-										}}
-									/>
-								</div>
+								{#if lodState.smoothActive}
+									<div class="group-row">
+										<span class="group-label"></span>
+										<span class="lod-readout lod-active">{lodState.smoothMode === 'trailing' ? `←${lodState.smoothWindow}` : lodState.smoothMode === 'leading' ? `${lodState.smoothWindow}→` : `±${lodState.smoothWindow}`} avg</span>
+									</div>
+								{/if}
 							{:else}
 								<div class="group-row">
 									<span class="group-label">bins</span>
@@ -1160,28 +1227,57 @@
 									<span class="group-label">step</span>
 									<span class="lod-readout">{lodState.binStep.toPrecision(3)}</span>
 								</div>
-								<div class="group-row">
-									<span class="group-label">multiplier</span>
-									<input
-										type="number"
-										class="scrubber-input"
-										value={lodState.binMultiplier.toFixed(2)}
-										min={0.1}
-										max={20}
-										step={0.1}
-										oninput={(e) => {
-											const v = parseFloat((e.target as HTMLInputElement).value);
-											if (!isNaN(v)) setLodTunable('multiplier', Math.max(0.1, Math.min(20, v)));
-										}}
-										onwheel={(e) => {
-											e.preventDefault();
-											const step = e.shiftKey ? 0.5 : 0.1;
-											const delta = e.deltaY < 0 ? step : -step;
-											setLodTunable('multiplier', Math.max(0.1, Math.min(20, lodState.binMultiplier + delta)));
-										}}
-									/>
-								</div>
 							{/if}
+							<!-- Editable tunables (group navigation) -->
+							{#each lodGroupItems as item, gi (item.key)}
+								<div class="group-row" class:highlighted={gi === groupFocusIndex}>
+									<span class="group-label">{item.label}</span>
+									{#if item.options}
+										<span
+											bind:this={groupInputs[gi]}
+											class="lod-readout lod-option"
+											tabindex="0"
+											role="button"
+											onfocus={() => { groupFocusIndex = gi; groupEditing = true; }}
+											onclick={() => {
+												const curIdx = item.options!.indexOf(String(item.getValue()));
+												const next = item.options![(curIdx + 1) % item.options!.length];
+												setLodTunable(item.key, next as any);
+											}}
+										>{item.getValue()}</span>
+									{:else}
+										<input
+											bind:this={groupInputs[gi]}
+											type="number"
+											class="scrubber-input"
+											value={item.getValue()}
+											min={item.min}
+											max={item.max}
+											step={item.step}
+											onfocus={() => {
+												groupFocusIndex = gi;
+												groupEditing = true;
+											}}
+											oninput={(e) => {
+												const v = parseFloat((e.target as HTMLInputElement).value);
+												if (!isNaN(v)) {
+													const clamped = Math.max(item.min, Math.min(item.max, v));
+													setLodTunable(item.key, clamped);
+												}
+											}}
+											onwheel={(e) => {
+												e.preventDefault();
+												const step = e.shiftKey ? (item.bigStep ?? item.step * 10) : item.step;
+												const delta = e.deltaY < 0 ? step : -step;
+												const cur = item.getValue() as number;
+												const clamped = Math.max(item.min, Math.min(item.max, cur + delta));
+												setLodTunable(item.key, clamped);
+												(e.target as HTMLInputElement).value = String(clamped);
+											}}
+										/>
+									{/if}
+								</div>
+							{/each}
 						</div>
 					{:else if expandedNumericDef}
 						{@const def = expandedNumericDef}

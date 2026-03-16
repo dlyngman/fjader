@@ -265,12 +265,23 @@ export interface LODChangeState {
 	dotRadius: number;
 	visibleCount: number;
 	density: number;
+	smoothingWindow: number;
+}
+
+/** Configuration for rolling average smoothing overlay on line marks. */
+export interface LODSmoothConfig {
+	/** Rolling avg window size (rows in each direction for centered, total for trailing). 0 = off. */
+	window?: number;
+	/** Window mode: 'centered' (±N, no lag) or 'trailing' (←N, backward-only). Default: 'centered'. */
+	mode?: 'centered' | 'trailing' | 'leading';
 }
 
 /** Object-form LOD configuration. */
 export interface LODConfig {
 	/** Auto-dots config, or false to disable dots while keeping decimation. */
 	dots?: LODDotsConfig | false;
+	/** Rolling average smoothing overlay config, or false to disable. */
+	smooth?: LODSmoothConfig | false;
 	/** Decimation behavior: 'auto' (density-based), true (always), false (never). Default: 'auto'. */
 	decimate?: boolean | 'auto';
 	/** Bin step multiplier (binned mode). Default: 1.0. */

@@ -19,6 +19,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { LODController } from '$lib/lod';
+	import { RollingAvgNode, type SmoothMode } from '$lib/sql/rolling-avg';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -29,6 +30,20 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { Snippet } from 'svelte';
+
+	// Self-import for overlay rendering (Svelte 5 replacement for <svelte:self>)
+	import LineMark from './LineMark.svelte';
+
+	interface SmoothRungContext {
+		table: string;
+		x: FieldRef;
+		y: FieldRef;
+		smoothY: RollingAvgNode;
+		stroke: FieldRef | null;
+		z: FieldRef | null;
+		windowSize: number;
+	}
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
 		x: FieldRef;
@@ -38,6 +53,10 @@
 		dotRadius?: number;
 		lod?: boolean | LODConfig;
 		onLodController?: (ctrl: LODController | null) => void;
+		/** Custom rendering for the smoothing overlay rung. */
+		rung_smooth?: Snippet<[SmoothRungContext]>;
+		/** @internal Prevents recursive overlay spawning. */
+		_isOverlay?: boolean;
 	}
 
 	let {
@@ -61,7 +80,9 @@
 		tooltipProximity,
 		tip = undefined,
 		lod = true,
-		onLodController = undefined
+		onLodController = undefined,
+		rung_smooth = undefined,
+		_isOverlay = false
 	}: Props = $props();
 
 	// Map user-facing aliases to axis-specific variants
@@ -178,7 +199,8 @@
 			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
 		},
 		sort: normalizeSortConfig(entry.sort ?? null),
-		tooltip: entry.tip === false ? false : entry.tooltip
+		tooltip: entry.tip === false ? false : entry.tooltip,
+		passiveScales: _isOverlay
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -261,7 +283,11 @@
 		const dotsThreshold =
 			typeof cfg.dots === 'object' ? (cfg.dots.threshold ?? 18) : 18;
 		const multiplier = cfg.multiplier ?? 1.0;
-		return { dotsR, dotsThreshold, multiplier };
+		const smoothWindow =
+			typeof cfg.smooth === 'object' ? (cfg.smooth?.window ?? 0) : 0;
+		const smoothMode =
+			(typeof cfg.smooth === 'object' ? cfg.smooth?.mode : undefined) ?? 'centered';
+		return { dotsR, dotsThreshold, multiplier, smoothWindow, smoothMode };
 	});
 
 	// M4 created only when LODController is active and decimation isn't disabled.
@@ -298,21 +324,27 @@
 	});
 
 	// Write-back: when LODController tunables change (shift+scroll), persist to entry.lod
-	function updateEntryLod(key: string, value: number): void {
+	function updateEntryLod(key: string, value: number | string): void {
 		const current = entry.lod;
 		const cfg = typeof current === 'object' && current ? current : {};
 		let updated: Record<string, unknown>;
 
 		if (key === 'dotsThreshold') {
 			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
-			dots.threshold = value;
+			dots.threshold = value as number;
 			updated = { ...cfg, dots };
 		} else if (key === 'baseRadius') {
 			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
-			dots.r = value;
+			dots.r = value as number;
 			updated = { ...cfg, dots };
+		} else if (key === 'smoothWindow' || key === 'smoothMode') {
+			const smooth =
+				typeof cfg.smooth === 'object' && cfg.smooth ? { ...cfg.smooth } : {};
+			if (key === 'smoothWindow') smooth.window = value as number;
+			else smooth.mode = value as SmoothMode;
+			updated = { ...cfg, smooth };
 		} else {
-			updated = { ...cfg, multiplier: value };
+			updated = { ...cfg, multiplier: value as number };
 		}
 
 		chartContext.config.setMarkProp(markId, 'lod', updated);
@@ -333,7 +365,9 @@
 		const dotsEnabled = lodDotsEnabled;
 		const decimate = lodDecimate;
 		const onLODChange = lodOnChange;
-		const initTunables = lodTunables;
+		// Read tunables WITHOUT tracking — tunable changes are synced via separate effect.
+		// Tracking here would re-create the controller on every tunable edit (flicker).
+		const initTunables = untrack(() => lodTunables);
 		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
 			mode: 'line',
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
@@ -341,6 +375,8 @@
 			baseR: initTunables.dotsR,
 			dotsEnabled,
 			dotsThreshold: initTunables.dotsThreshold,
+			smoothWindow: initTunables.smoothWindow,
+			smoothMode: initTunables.smoothMode as SmoothMode,
 			decimate,
 			onLODChange,
 			onTunableChange: (key, value) => updateEntryLod(key, value)
@@ -361,6 +397,8 @@
 		const t = lodTunables;
 		lodController.setDotsThreshold(t.dotsThreshold);
 		lodController.setBaseRadius(t.dotsR);
+		lodController.setSmoothWindow(t.smoothWindow);
+		lodController.setSmoothMode(t.smoothMode as SmoothMode);
 		// Multiplier is chart-level state but we persist the mark's requested value
 		if (lodController.mode === 'binned') {
 			lodController.setBinMultiplier(t.multiplier);
@@ -424,6 +462,42 @@
 		return () => tm.unregisterMark(markId);
 	});
 
+	// --- SMOOTHING OVERLAY ---
+	const smoothWindow = $derived(lodController?.state?.smoothWindow ?? 0);
+	const smoothMode = $derived(lodController?.state?.smoothMode ?? 'centered');
+	const overlayActive = $derived(!_isOverlay && smoothWindow > 0);
+	const effectiveGlobalAlpha = $derived(overlayActive ? 0.3 : 1.0);
+
+	// Stable RollingAvgNode — created once, mutated on window size changes.
+	// MarkLifecycle resolves it during buildQuery() and re-queries via invalidation
+	// callback (same pattern as AutoBinNode + triggerReBin). No lifecycle recreation.
+	let rollingAvgNode: RollingAvgNode | null = $state(null);
+	$effect(() => {
+		if (!overlayActive) {
+			rollingAvgNode = null;
+			return;
+		}
+		// Create once when overlay activates, reuse across window changes
+		if (!rollingAvgNode) {
+			const seriesField = entry.z ?? entry.stroke;
+			rollingAvgNode = new RollingAvgNode(
+				String(entry.y),
+				String(entry.x),
+				seriesField ? String(seriesField) : null,
+				smoothWindow,
+				smoothMode as SmoothMode
+			);
+		}
+	});
+
+	// Sync window size and mode to the node — triggers invalidation callback → re-query
+	$effect(() => {
+		if (rollingAvgNode && smoothWindow > 0) {
+			rollingAvgNode.setWindowSize(smoothWindow);
+			rollingAvgNode.setMode(smoothMode as SmoothMode);
+		}
+	});
+
 	onDestroy(() => {
 		lodController?.destroy();
 		m4Decimator?.destroy();
@@ -447,12 +521,41 @@
 			constantColor={markColor.constantColor}
 			strokeWidth={entry.strokeWidth ?? 2}
 			dotRadius={effectiveDotRadius}
+			globalAlpha={effectiveGlobalAlpha}
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
 			{lodController}
 		/>
 	{/key}
+	{#if overlayActive && rollingAvgNode}
+		{#if rung_smooth}
+			{@render rung_smooth({
+				table: entry.table,
+				x: entry.x,
+				y: entry.y,
+				smoothY: rollingAvgNode,
+				stroke: entry.stroke ?? null,
+				z: entry.z ?? null,
+				windowSize: smoothWindow
+			})}
+		{:else}
+			<LineMark
+				table={entry.table}
+				selection={entry.selection}
+				x={entry.x}
+				y={rollingAvgNode as any}
+				stroke={entry.stroke}
+				z={entry.z}
+				scheme={entry.scheme}
+				curve={effectiveCurve}
+				strokeWidth={(entry.strokeWidth ?? 2) + 1}
+				tooltip={false}
+				lod={false}
+				_isOverlay={true}
+			/>
+		{/if}
+	{/if}
 {:else if setup?.client?.error}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
 		Error: {setup.client.error.message}
