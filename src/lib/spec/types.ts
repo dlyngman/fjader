@@ -50,6 +50,8 @@ export interface LegendSpec {
 	swatchRadius?: number;
 	position?: 'top' | 'right';
 	orientation?: 'horizontal' | 'vertical' | null;
+	/** Explicit selection name for legend toggle filtering. Auto-derived from first mark if omitted. */
+	selection?: string;
 }
 
 export interface PlotSpec {
@@ -107,7 +109,7 @@ export interface ToggleSpec {
 // =============================================================================
 
 /** A column name, aggregate shorthand ("count()"), or structured object. */
-export type FieldSpec = string | AggregateFieldSpec | BinFieldSpec;
+export type FieldSpec = string | AggregateFieldSpec | BinFieldSpec | WindowFieldSpec | RawSqlFieldSpec;
 
 export interface AggregateFieldSpec {
 	aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'median';
@@ -117,6 +119,27 @@ export interface AggregateFieldSpec {
 export interface BinFieldSpec {
 	bin: string;
 	steps?: number;
+}
+
+export interface RawSqlFieldSpec {
+	/** Raw SQL expression, e.g. 'EXTRACT(HOUR FROM "ts")'. */
+	sql: string;
+}
+
+export interface WindowFieldSpec {
+	/** Aggregate function to apply over the window. */
+	window: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'median';
+	/** Column to aggregate (omit for 'count'). */
+	field?: string;
+	/** Column to order rows by within the window. */
+	orderBy?: string;
+	/** Column to partition (group) the window by. */
+	partitionBy?: string;
+	/**
+	 * Row frame as [start, end]. Negative = preceding, 0 = current row, positive = following.
+	 * E.g. [-10, 0] = trailing 10 rows, [-5, 5] = centered ±5.
+	 */
+	frame?: [number, number];
 }
 
 // =============================================================================

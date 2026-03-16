@@ -126,7 +126,7 @@
 			{#if legendConfig}
 				<Legend
 					color={legendConfig.color}
-					selection={selectionName ?? undefined}
+					selection={legendConfig.selection ?? selectionName ?? undefined}
 					title={legendConfig.title ?? null}
 					columns={legendConfig.columns ?? null}
 					swatchSize={legendConfig.swatchSize}

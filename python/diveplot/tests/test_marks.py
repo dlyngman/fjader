@@ -84,15 +84,15 @@ class TestLineMark:
             "stroke": "category",
         }
 
-    def test_with_curve_and_optimize(self):
+    def test_with_curve_and_lod(self):
         m = dp.line(
             table="t", x="date", y="value",
-            stroke_width=2, curve="monotone", optimize="auto",
+            stroke_width=2, curve="monotone", lod={"decimate": "auto"},
         )
         d = m.to_mark_dict()
         assert d["strokeWidth"] == 2
         assert d["curve"] == "monotone"
-        assert d["optimize"] == "auto"
+        assert d["lod"] == {"decimate": "auto"}
 
 
 class TestAreaMarks:
@@ -120,10 +120,10 @@ class TestRectMarks:
         assert d["opacity"] == 0.8
 
     def test_rect_x(self):
-        m = dp.rect_x(table="t", x="value", fill="category", viewport_local_domain=True)
+        m = dp.rect_x(table="t", x="value", fill="category", fit_domain="y")
         d = m.to_mark_dict()
         assert d["mark"] == "rectX"
-        assert d["viewportLocalDomain"] is True
+        assert d["fitDomain"] == "y"
 
     def test_rect_y(self):
         m = dp.rect_y(table="t", y="value", fill="density", preferred_x_scale_type="log")

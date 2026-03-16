@@ -61,6 +61,13 @@ export class AutoBinNode {
 			this.options.interval !== undefined || type === 'date' || isTemporalScale(scaleType);
 
 		let binOptions = { ...this.options };
+
+		// Default to 30 steps when no step/steps/interval specified,
+		// so dynamic re-binning on zoom always works
+		if (!binOptions.steps && !binOptions.step && !binOptions.interval) {
+			binOptions.steps = 30;
+		}
+
 		if (currentDomain && binOptions.steps && !binOptions.step && !binOptions.interval) {
 			const viewportWidth = currentDomain[1] - currentDomain[0];
 			const globalWidth = isTemporal

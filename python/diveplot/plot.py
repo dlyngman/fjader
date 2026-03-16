@@ -43,7 +43,16 @@ class Plot:
             raise TypeError(
                 f"plot() got unexpected keyword argument(s): {', '.join(sorted(unexpected))}"
             )
-        self._marks = list(marks)
+        # Flatten Overlays so _marks is always a flat list of Mark instances
+        from .layout import Overlay
+
+        flat: list[Mark] = []
+        for m in marks:
+            if isinstance(m, Overlay):
+                flat.extend(m.marks)
+            else:
+                flat.append(m)
+        self._marks = flat
         for key in _PLOT_FIELDS:
             setattr(self, key, kwargs.get(key))
 

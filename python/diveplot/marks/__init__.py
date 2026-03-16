@@ -49,6 +49,7 @@ def dot(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> DotMark:
     """Scatter/dot mark.
 
@@ -71,6 +72,7 @@ def dot(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return DotMark(
         data=data, table=table, x=x, y=y, fill=fill, opacity=opacity, r=r,
@@ -81,6 +83,7 @@ def dot(
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -110,6 +113,7 @@ def bar_x(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> BarXMark:
     """Horizontal bar mark (bars extend along x-axis).
 
@@ -137,6 +141,7 @@ def bar_x(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return BarXMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
@@ -146,6 +151,7 @@ def bar_x(
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -175,6 +181,7 @@ def bar_y(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> BarYMark:
     """Vertical bar mark (bars extend along y-axis).
 
@@ -202,6 +209,7 @@ def bar_y(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return BarYMark(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
@@ -211,6 +219,7 @@ def bar_y(
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -225,7 +234,7 @@ def line(
     stroke_width: float | None = None,
     dot_radius: float | None = None,
     curve: CurveType | None = None,
-    optimize: bool | Literal["auto"] | None = None,
+    lod: bool | dict | None = None,
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
@@ -237,6 +246,7 @@ def line(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> LineMark:
     """Line mark for connected data points.
 
@@ -249,7 +259,8 @@ def line(
         stroke_width: Line width in pixels.
         dot_radius: Radius of dots at data points (0 to hide).
         curve: Interpolation curve type (e.g. ``'monotone'``, ``'step'``, ``'catmull-rom'``).
-        optimize: M4 decimation — ``True``, ``False``, or ``'auto'`` (default).
+        lod: Level-of-detail config — ``True``/``False`` to enable/disable, or a dict
+            with keys ``dots``, ``smooth``, ``decimate``, ``multiplier``.
         preferred_x_scale_type: Force x-axis scale type (e.g. ``'time'``).
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
@@ -261,17 +272,19 @@ def line(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return LineMark(
         data=data, table=table, x=x, y=y, stroke=stroke, z=z,
         stroke_width=stroke_width, dot_radius=dot_radius,
-        curve=curve, optimize=optimize,
+        curve=curve, lod=lod,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -289,6 +302,7 @@ def area_y(
     stroke: str | None = None,
     stroke_width: float | None = None,
     dot_radius: float | None = None,
+    auto_dots: bool | None = None,
     curve: CurveType | None = None,
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
@@ -301,6 +315,7 @@ def area_y(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> AreaYMark:
     """Vertical area mark (x dimension, y1/y2 boundaries).
 
@@ -316,6 +331,7 @@ def area_y(
         stroke: CSS color for area outline (e.g. ``'#333'``). Not data-driven.
         stroke_width: Outline width in pixels.
         dot_radius: Radius of dots at data points (0 to hide).
+        auto_dots: Density-based dot fading — show dots when data is sparse.
         curve: Interpolation curve type (e.g. ``'monotone'``, ``'step'``).
         preferred_x_scale_type: Force x-axis scale type.
         preferred_y_scale_type: Force y-axis scale type.
@@ -328,17 +344,19 @@ def area_y(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return AreaYMark(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, z=z,
         fill_opacity=fill_opacity, stroke=stroke, stroke_width=stroke_width,
-        dot_radius=dot_radius, curve=curve,
+        dot_radius=dot_radius, auto_dots=auto_dots, curve=curve,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -356,6 +374,7 @@ def area_x(
     stroke: str | None = None,
     stroke_width: float | None = None,
     dot_radius: float | None = None,
+    auto_dots: bool | None = None,
     curve: CurveType | None = None,
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
@@ -368,6 +387,7 @@ def area_x(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> AreaXMark:
     """Horizontal area mark (y dimension, x1/x2 boundaries).
 
@@ -383,6 +403,7 @@ def area_x(
         stroke: CSS color for area outline (e.g. ``'#333'``). Not data-driven.
         stroke_width: Outline width in pixels.
         dot_radius: Radius of dots at data points (0 to hide).
+        auto_dots: Density-based dot fading — show dots when data is sparse.
         curve: Interpolation curve type.
         preferred_x_scale_type: Force x-axis scale type.
         preferred_y_scale_type: Force y-axis scale type.
@@ -395,17 +416,19 @@ def area_x(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return AreaXMark(
         data=data, table=table, y=y, x=x, x1=x1, x2=x2, fill=fill, z=z,
         fill_opacity=fill_opacity, stroke=stroke, stroke_width=stroke_width,
-        dot_radius=dot_radius, curve=curve,
+        dot_radius=dot_radius, auto_dots=auto_dots, curve=curve,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -439,6 +462,7 @@ def rect(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> RectMark:
     """Rectangle mark for 2D binning or heatmaps.
 
@@ -470,6 +494,7 @@ def rect(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return RectMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
@@ -482,6 +507,7 @@ def rect(
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -501,7 +527,6 @@ def rect_x(
     dx: float | None = None,
     dy: float | None = None,
     preferred_y_scale_type: ScaleType | None = None,
-    viewport_local_domain: bool | None = None,
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -511,6 +536,7 @@ def rect_x(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> RectXMark:
     """Horizontal rect mark (e.g. histograms along x-axis).
 
@@ -528,7 +554,6 @@ def rect_x(
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
         preferred_y_scale_type: Force y-axis scale type.
-        viewport_local_domain: Derive y-domain from visible viewport only.
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
@@ -538,16 +563,17 @@ def rect_x(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return RectXMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_y_scale_type=preferred_y_scale_type,
-        viewport_local_domain=viewport_local_domain,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -567,7 +593,6 @@ def rect_y(
     dx: float | None = None,
     dy: float | None = None,
     preferred_x_scale_type: ScaleType | None = None,
-    viewport_local_domain: bool | None = None,
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -577,6 +602,7 @@ def rect_y(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> RectYMark:
     """Vertical rect mark (e.g. histograms along y-axis).
 
@@ -594,7 +620,6 @@ def rect_y(
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
         preferred_x_scale_type: Force x-axis scale type.
-        viewport_local_domain: Derive x-domain from visible viewport only.
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
@@ -604,16 +629,17 @@ def rect_y(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return RectYMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_x_scale_type=preferred_x_scale_type,
-        viewport_local_domain=viewport_local_domain,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )
 
 
@@ -644,6 +670,7 @@ def text(
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
+    fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> TextMark:
     """Text mark for labels and annotations.
 
@@ -672,6 +699,7 @@ def text(
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+        fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return TextMark(
         data=data, table=table, x=x, y=y, text=text, fill=fill,
@@ -684,4 +712,5 @@ def text(
         filter_nulls=filter_nulls, transforms=transforms,
         sort=sort, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
+        fit_domain=fit_domain,
     )

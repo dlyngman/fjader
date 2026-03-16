@@ -1416,11 +1416,11 @@
 <style>
 	.palette-panel {
 		position: absolute;
-		top: 8px;
+		top: 12px;
 		right: 8px;
 		z-index: 1100;
 		width: 260px;
-		max-height: calc(100% - 16px);
+		max-height: calc(100% - 20px);
 		display: flex;
 		flex-direction: column;
 		background: var(--diveplot-palette-bg, rgba(0, 0, 0, 0.92));

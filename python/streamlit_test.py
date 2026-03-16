@@ -155,3 +155,98 @@ overview = dp.plot(
     interactors=[dp.interval_x()],
 )
 dp.streamlit.render(dp.vconcat(detail, overview), server_duckdb=USE_SERVER)
+
+# --- fitDomain: auto-fit y-axis to visible range ---
+st.header("fitDomain (y-axis auto-fits to visible data)")
+
+import math
+
+ts = pl.DataFrame({
+    "t": list(range(500)),
+    "value": [math.sin(i / 20) * 10 + i * 0.05 for i in range(500)],
+})
+
+fit_detail = dp.plot(
+    dp.line(data=ts, x="t", y="value", fit_domain="y"),
+    height=300,
+    x_label="Time",
+    y_label="Value (auto-fit)",
+    use_selection="x",
+)
+fit_overview = dp.plot(
+    dp.line(data=ts, x="t", y="value"),
+    height=100,
+    x_label="Time",
+    interactors=[dp.interval_x()],
+)
+dp.streamlit.render(dp.vconcat(fit_detail, fit_overview), server_duckdb=USE_SERVER)
+
+# --- autoDots: density-based dot fading on area marks ---
+st.header("autoDots on AreaY (dots appear when data is sparse)")
+
+area_df = pl.DataFrame({
+    "x": list(range(30)),
+    "y": [abs((i - 15) ** 2) + 5 for i in range(30)],
+    "group": ["A"] * 15 + ["B"] * 15,
+})
+
+dp.streamlit.render(
+    dp.area_y(
+        data=area_df,
+        x="x",
+        y="y",
+        fill="group",
+        auto_dots=True,
+        curve="monotone",
+        transforms=[dp.stack_y()],
+    ),
+    height=400,
+    server_duckdb=USE_SERVER,
+)
+
+# --- LOD config on line marks (replaces old optimize) ---
+st.header("LOD config on LineMark (decimate + smooth)")
+
+big_line = pl.DataFrame({
+    "x": list(range(5000)),
+    "y": [math.sin(i / 50) * 100 + (i % 7) for i in range(5000)],
+})
+
+dp.streamlit.render(
+    dp.plot(
+        dp.line(
+            data=big_line,
+            x="x",
+            y="y",
+            lod={"decimate": True, "smooth": {"window": 50}},
+        ),
+        height=350,
+        x_label="X",
+        y_label="Y (LOD: decimate + smooth)",
+    ),
+    server_duckdb=USE_SERVER,
+)
+
+# --- Window function: rolling average as a channel value ---
+st.header("Window function (rolling average)")
+
+window_df = pl.DataFrame({
+    "date": list(range(200)),
+    "price": [math.sin(i / 10) * 20 + 50 + (i % 3) * 2 for i in range(200)],
+})
+
+dp.streamlit.render(
+    dp.plot(
+        dp.dot(data=window_df, x="date", y="price", opacity=0.3, r=2)
+        * dp.line(
+            data=window_df,
+            x="date",
+            y=dp.window("avg", "price", order_by="date", frame=[-10, 0]),
+            stroke_width=2,
+        ),
+        height=350,
+        x_label="Date",
+        y_label="Price (dots = raw, line = trailing avg 10)",
+    ),
+    server_duckdb=USE_SERVER,
+)
