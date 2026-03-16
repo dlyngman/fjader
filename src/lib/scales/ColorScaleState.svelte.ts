@@ -155,10 +155,10 @@ export class ColorScaleState {
 
 	/**
 	 * The column name used in derived views for this scale's index.
-	 * Format: __dplot_{field}_idx (shared with band scales)
+	 * Format: __dplot_{field}_color_idx
 	 */
 	get indexColumnName(): string {
-		return ViewManagerService.bandIndexColumn(this.#field);
+		return ViewManagerService.colorIndexColumn(this.#field);
 	}
 
 	/**
@@ -384,7 +384,7 @@ export class ColorScaleState {
 
 		const alias = this.indexColumnName;
 		const sql = ViewManagerService.buildCaseExpression(this.#field, this.domain as string[], {
-			oneBased: false // 0-based indices (shared with band scales, -1 = null/unknown)
+			oneBased: false // 0-based indices, -1 = null/unknown
 		});
 
 		viewManager.registerColumn(sourceTable, alias, {
