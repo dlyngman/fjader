@@ -40,7 +40,7 @@
 		fill?: FieldRef | null;
 		opacity?: number;
 		preferredXScaleType?: ScaleType | null;
-		viewportLocalDomain?: boolean;
+		fitDomain?: 'x' | 'y' | boolean;
 		onLodController?: (ctrl: LODController | null) => void;
 	}
 
@@ -60,7 +60,7 @@
 		filterNulls = false,
 		preferredXScaleType = null,
 		transforms = [],
-		viewportLocalDomain = false,
+		fitDomain = undefined,
 		inset = 0.5,
 		dx = 0,
 		dy = 0,
@@ -96,7 +96,7 @@
 		limit: () => limit,
 		filterNulls: () => filterNulls,
 		preferredXScaleType: () => preferredXScaleType,
-		viewportLocalDomain: () => viewportLocalDomain,
+		fitDomain: () => fitDomain,
 		inset: () => inset,
 		dx: () => dx,
 		dy: () => dy,
@@ -150,7 +150,7 @@
 		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
 		// NOTE: This detection is currently broken (AggregateNode has no .aggregate prop
 		// and constructor name is 'AggregateNode' not '_AggregateNode'). Fixing it would
-		// enable disableZoom + zeroBaseline which needs viewportLocalDomain race fix first.
+		// enable disableZoom + zeroBaseline which needs fitDomain race fix first.
 		const hasAggregateY =
 			(y2 as unknown as Record<string, unknown>)?.aggregate ||
 			(typeof y2 === 'object' && y2?.constructor?.name === '_AggregateNode');
@@ -199,8 +199,7 @@
 		},
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { y: true } : null,
-		// Viewport-local domain: compute Y extent from visible X range only
-		viewportLocalDomain: entry.viewportLocalDomain,
+		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
 		sort: normalizeSortConfig(entry.sort ?? null),
 		tooltip: entry.tip === false ? false : entry.tooltip
 	});

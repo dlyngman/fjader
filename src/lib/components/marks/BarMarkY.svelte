@@ -57,7 +57,8 @@
 		dy = 0,
 		sort = null,
 		tooltip = true,
-		tip = undefined
+		tip = undefined,
+		fitDomain = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('bary');
@@ -89,7 +90,8 @@
 		dy: () => dy,
 		sort: () => sort,
 		tooltip: () => tooltip,
-		tip: () => tip
+		tip: () => tip,
+		fitDomain: () => fitDomain
 	});
 
 	// Observable Plot pattern: y shorthand → auto-stack, explicit y1/y2 → opt-out
@@ -167,7 +169,8 @@
 		// Bar charts with aggregates should start at zero baseline
 		zeroBaseline: hasAggregateY ? { y: true } : null,
 		sort: normalizeSortConfig(entry.sort ?? null),
-		tooltip: entry.tip === false ? false : entry.tooltip
+		tooltip: entry.tip === false ? false : entry.tooltip,
+		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);

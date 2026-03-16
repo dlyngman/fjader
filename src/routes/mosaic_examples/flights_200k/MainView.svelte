@@ -15,13 +15,13 @@
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 
-	let viewportLocal = $state(true);
+	let fitY = $state(true);
 </script>
 
 <div class="main-view-container">
 	<label>
-		<input type="checkbox" bind:checked={viewportLocal} />
-		viewportLocalDomain
+		<input type="checkbox" bind:checked={fitY} />
+		fitDomain
 	</label>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="delay" yLabel="Count">
@@ -44,7 +44,7 @@
 							y={count()}
 							inset={0.5}
 							fill="steelblue"
-							viewportLocalDomain={viewportLocal}
+							fitDomain={fitY}
 							selection="brush"
 						/>
 					{/snippet}
@@ -81,7 +81,7 @@
 							y={count()}
 							inset={0.5}
 							fill="steelblue"
-							viewportLocalDomain={viewportLocal}
+							fitDomain={fitY}
 							selection="brush"
 						/>
 					{/snippet}
@@ -118,7 +118,7 @@
 							y={count()}
 							inset={0.5}
 							fill="steelblue"
-							viewportLocalDomain={viewportLocal}
+							fitDomain={fitY}
 							selection="brush"
 						/>
 					{/snippet}

@@ -3,9 +3,10 @@
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data/DataClient.svelte';
 import type { DataClientConfig, DataClientOptions } from '$lib/data/DataClient.svelte';
-import { Query, isNode, sql, column as sqlColumn } from '@uwdata/mosaic-sql';
+import { Query, isNode, sql, column as sqlColumn, min as sqlMin, max as sqlMax } from '@uwdata/mosaic-sql';
 import type { ExprValue, FilterExpr } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, FieldInfoRequest } from '@uwdata/mosaic-core';
+import { Priority } from '@uwdata/mosaic-core';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
@@ -30,11 +31,7 @@ import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-av
 import { isContinuousScale } from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { isWindowExpression } from '$lib/sql/expression-utils';
-import {
-	computeExtentFromData,
-	detectChannelsNeedingDataDomain,
-	type ExtentFilterOptions
-} from './domain-computation';
+import { computeExtentFromData, detectChannelsNeedingDataDomain } from './domain-computation';
 import {
 	buildFieldInfoRequests,
 	buildQueryParts,
@@ -74,7 +71,8 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 //             Calls: markDeferredScalesReady()     [domain-registration.ts]
 //  Effect 8:  LODController + tooltipManager      → register LODController with tooltip
 //  Effect 9:  client.dataVersion                 → tooltip table [side effect]
-//  Effect 10: domain.target + data               → viewport-local domain
+//  Effect 10: domain.target + fitDomain           → DuckDB MIN/MAX sidecar query
+//  (Cross-filter fitDomain updates: #onTooltipTableWritten after tooltip table write)
 //
 //  gpuReady = scalesReady && categoricalDataFetched && xReady && yReady
 //
@@ -114,7 +112,7 @@ export interface MarkLifecycleConfig {
 	sizeChannel?: string; // Key in select for size data ('r')
 	_connectedConfig?: ConnectedConfig;
 	_filterNulls?: unknown[];
-	viewportLocalDomain?: boolean;
+	fitDomain?: 'x' | 'y' | boolean;
 	zeroBaseline?: { x?: boolean; y?: boolean };
 	/** Skip scale registration and domain contribution. The mark renders into
 	 *  the chart's existing scales without affecting them (LOD overlays). */
@@ -177,8 +175,11 @@ export class MarkLifecycle {
 	// only apply the WHERE clause. Invalidated on re-bin or multiplier change.
 	#cachedQueryParts: QueryParts | null = null;
 
-	// --- Viewport-Local Domain Support ---
-	#viewportDomainUpdateTimeout: ReturnType<typeof setTimeout> | null = null;
+	// --- fitDomain Support ---
+	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
+	#fitDomainLastTarget: [number, number] = [0, 0];
+	#fitDomainQuerySequence = 0;
+	#fitDomainSuppressed = false;
 
 	// --- Data-Derived Domain Support ---
 	#channelsNeedingDataDomain: Set<string> = new Set();
@@ -216,7 +217,8 @@ export class MarkLifecycle {
 		this.#markId = stableId || generateMarkId(config.markType);
 
 		// Tooltip write-back
-		this.#tooltipWanted = config.tooltip !== false;
+		// Write tooltip table if tooltips are enabled OR fitDomain needs it for Path B
+		this.#tooltipWanted = config.tooltip !== false || !!config.fitDomain;
 		this.#tooltipSortTable =
 			typeof config.tooltip === 'object' ? config.tooltip.sortTable !== false : true;
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
@@ -483,7 +485,6 @@ export class MarkLifecycle {
 
 			// Check if this is a rebinning update before clearing the flag
 			const isRebinning = this.#rebinPendingDataVersion !== null;
-
 			// Clear pending state - we have new data
 			this.#rebinPendingDataVersion = null;
 
@@ -500,14 +501,11 @@ export class MarkLifecycle {
 					this.#channelsNeedingDataDomain,
 					additionalChannels,
 					this.#skipDomainUpdateForAxis,
-					this.#config.viewportLocalDomain,
 					this.#config.zeroBaseline,
 					this.actualXScaleType,
 					this.actualYScaleType,
 					xState,
 					yState,
-					(xState as ContinuousScaleState | null)?.hasDomain ?? false,
-					(yState as ContinuousScaleState | null)?.hasDomain ?? false,
 					this.#transformCompiler.hasCategoryReducingTransforms(),
 					this.#chartContext.xScaleState as BandScaleState | null,
 					this.#chartContext.yScaleState as BandScaleState | null,
@@ -559,41 +557,65 @@ export class MarkLifecycle {
 			});
 		});
 
-		// Effect 10: Viewport-local domain - update aggregate axis when viewport pans
+		// Effect 10: fitDomain - query DuckDB for fitted axis extent on driving axis change.
+		// Suppressed when the user directly interacts with the fitted axis (zoom/pan).
+		// Re-enabled when the driving axis changes from a non-user source (e.g., overview brush).
+		// NOTE: Cross-filter domain updates (data changes without driving axis change) are
+		// handled by the normal data-derived domain flow (registerDataDerivedDomains in Effect 6),
+		// not here. This effect only handles viewport-driven domain fitting.
 		$effect(() => {
-			if (!this.#config.viewportLocalDomain) return;
-			if (!this.data || !this.#dataDerivedDomainsSet) return;
+			const fitDomain = this.#config.fitDomain;
+			if (!fitDomain) return;
+			if (!this.#dataDerivedDomainsSet) return;
 
-			// Determine which axis has bins (vs aggregates)
-			const xHasBins = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
-			const yHasBins = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+			const fittedAxis = this.#resolveFittedAxis(fitDomain);
+			if (!fittedAxis) return;
 
-			// For RectYMark: X has bins, Y has aggregate → watch X TARGET, update Y
-			if (xHasBins && !yHasBins) {
-				const xSS = this.#chartContext.xScaleState;
-				const xDomain = xSS && xSS.scaleType !== 'band' ? xSS.domain?.target : undefined;
-				if (xDomain && this.actualXScaleType !== 'band') {
-					// Skip viewport update if we're about to re-bin anyway
-					if (this.#shouldReBin(xDomain, 'x')) {
-						return; // Re-binning will update Y with new data
-					}
-					this.#updateViewportLocalDomain('y', xDomain);
-				}
+			const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
+			const drivingSS =
+				drivingAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+			if (!drivingSS || drivingSS.scaleType === 'band') return;
+
+			const target = drivingSS.domain?.target;
+			if (!target) return;
+
+			// Read userDriven on both axes (reactive — re-runs when interaction state changes)
+			const fittedSS =
+				fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+			const fittedUserDriven = (fittedSS as ContinuousScaleState | null)?.userDriven ?? false;
+			const drivingUserDriven = (drivingSS as ContinuousScaleState).userDriven;
+
+			// Tell the fitted scale to skip disjoint-domain instant snap — fitDomain
+			// intentionally produces large domain jumps that should animate smoothly.
+			if (fittedSS) {
+				(fittedSS as ContinuousScaleState).fitDomainActive = true;
 			}
 
-			// For RectXMark: Y has bins, X has aggregate → watch Y TARGET, update X
-			if (yHasBins && !xHasBins) {
-				const ySS = this.#chartContext.yScaleState;
-				const yDomain = ySS && ySS.scaleType !== 'band' ? ySS.domain?.target : undefined;
-				if (yDomain && this.actualYScaleType !== 'band') {
-					// Skip viewport update if we're about to re-bin anyway
-					if (this.#shouldReBin(yDomain, 'y')) {
-						return; // Re-binning will update X with new data
-					}
-					this.#updateViewportLocalDomain('x', yDomain);
+			untrack(() => {
+				// User interacted with the fitted axis → suppress
+				if (fittedUserDriven) {
+					this.#fitDomainSuppressed = true;
 				}
-			}
+
+				// Driving axis changed from non-user source (brush/external) → re-enable
+				if (this.#fitDomainSuppressed && !drivingUserDriven) {
+					this.#fitDomainSuppressed = false;
+				}
+
+				if (this.#fitDomainSuppressed) return;
+
+				// For binned marks, skip if we're about to re-bin anyway
+				if (this.#shouldReBin(target as number[], drivingAxis)) return;
+
+				clearTimeout(this.#fitDomainTimeout!);
+				this.#fitDomainTimeout = setTimeout(() => {
+					this.#issueFitDomainQuery(fittedAxis, target as [number, number]);
+				}, 200);
+			});
 		});
+
+		// Cross-filter fitDomain updates are triggered from #writeTooltipTable
+		// completion via #onTooltipTableWritten — no separate effect needed.
 	}
 
 	#registerScaleRequirements(): void {
@@ -1115,55 +1137,189 @@ export class MarkLifecycle {
 	}
 
 	// ===========================================================================
-	// VIEWPORT-LOCAL DOMAIN
+	// FIT DOMAIN (viewport-local domain via DuckDB queries)
 	// ===========================================================================
 
 	/**
-	 * Update the aggregate axis domain based on current viewport.
-	 * Called when panning (without re-querying data).
-	 * Debounced to avoid excessive updates during active pan/zoom.
+	 * Build a sidecar query by wrapping this mark's assembled query as a derived table.
+	 * Shared primitive used by LODController (COUNT), fitDomain (MIN/MAX), etc.
+	 * The inner query reuses #cachedQueryParts — only the filter varies per call.
 	 */
-	#updateViewportLocalDomain(aggregateAxis: string, viewportDomain: number[]): void {
-		clearTimeout(this.#viewportDomainUpdateTimeout!);
-		this.#viewportDomainUpdateTimeout = setTimeout(() => {
-			if (!this.data) return;
+	buildSidecarQuery(
+		outerSelect: Record<string, unknown>,
+		where?: unknown
+	): Query | null {
+		if (!this.client) return null;
+		const innerQuery = this.buildQuery(
+			this.effectiveTable,
+			this.client.config,
+			this.currentFilter,
+			false
+		);
+		if (!innerQuery) return null;
+		const q = Query.from({ mark_data: innerQuery }).select(outerSelect as Record<string, ExprValue>);
+		if (where) q.where(where as FilterExpr);
+		return q;
+	}
 
-			const scaleType = aggregateAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			if (
-				scaleType !== 'linear' &&
-				scaleType !== 'log' &&
-				scaleType !== 'symlog' &&
-				scaleType !== 'time'
-			)
-				return;
+	/**
+	 * Resolve the fitted axis from the fitDomain prop.
+	 * 'x' | 'y' pass through. true: infer from mark structure (bins → aggregate axis, else 'y').
+	 */
+	#resolveFittedAxis(fitDomain: 'x' | 'y' | boolean): 'x' | 'y' | null {
+		if (fitDomain === 'x') return 'x';
+		if (fitDomain === 'y') return 'y';
+		// Boolean true: infer from mark structure
+		const xHasBins = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+		const yHasBins = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+		if (xHasBins && !yHasBins) return 'y';
+		if (yHasBins && !xHasBins) return 'x';
+		return 'y'; // Default: fit Y based on X viewport
+	}
 
-			// Determine which axis is binned (opposite of aggregate)
-			const binnedAxis = aggregateAxis === 'x' ? 'y' : 'x';
+	/**
+	 * Get the channel names for a given axis from the mark's select config.
+	 * Returns all channels that contribute to that axis (e.g., ['y', 'y1', 'y2']).
+	 */
+	#getFitDomainChannels(axis: 'x' | 'y'): string[] {
+		const select = this.#config.select;
+		const candidates = [axis, `${axis}1`, `${axis}2`];
+		return candidates.filter((c) => c in select);
+	}
 
-			// Build channel list for aggregate axis
-			const channels = aggregateAxis === 'x' ? ['x', 'x1', 'x2'] : ['y', 'y1', 'y2'];
+	/**
+	 * Issue a low-priority DuckDB query to compute the fitted axis extent
+	 * within the current driving axis viewport.
+	 */
+	async #issueFitDomainQuery(
+		fittedAxis: 'x' | 'y',
+		drivingDomain: [number, number],
+		force: boolean = false
+	): Promise<void> {
+		// Skip if driving domain hasn't changed significantly (unless forced by
+		// cross-filter data change where the domain is the same but the data differs)
+		if (!force) {
+			const [lastLo, lastHi] = this.#fitDomainLastTarget;
+			const lastWidth = lastHi - lastLo;
+			const curWidth = drivingDomain[1] - drivingDomain[0];
+			if (lastWidth > 0 && curWidth > 0) {
+				const ratio = lastWidth / curWidth;
+				const shift = Math.abs(drivingDomain[0] - lastLo) / curWidth;
+				if (ratio > 0.95 && ratio < 1.05 && shift < 0.02) return; // negligible change
+			}
+		}
 
-			// Compute extent with viewport filtering
-			const filterOptions: ExtentFilterOptions = {
-				filterAxis: binnedAxis,
-				filterDomain: viewportDomain as [number, number]
-			};
+		const seq = ++this.#fitDomainQuerySequence;
 
-			let extent = computeExtentFromData(this.data, channels, filterOptions);
-			if (!extent) return;
+		try {
+			const q = this.#buildFitDomainQuery(fittedAxis, drivingDomain);
+			if (!q) return;
+
+			// cache: false — the sidecar queries a temp table that gets DROP'd and
+			// recreated with new data between calls. The SQL string is identical but
+			// the underlying data differs, so cached results would be stale.
+			// TODO: Use versioned tooltip table names (e.g., _tt_mark_v3) so each
+			// query string is unique and Mosaic's LRU cache works naturally. Would
+			// need to drop the old table after creating the new one (atomic swap).
+			const result = await this.#coordinator.query(q, { priority: Priority.Low, cache: false });
+			if (seq !== this.#fitDomainQuerySequence) return; // stale
+
+			const row = Array.from(result)[0] as Record<string, number> | undefined;
+			if (!row) return;
+
+			// Collect extent from all MIN/MAX columns
+			let lo = Infinity;
+			let hi = -Infinity;
+			for (const [key, val] of Object.entries(row)) {
+				if (val == null || !isFinite(val as number)) continue;
+				if (key.startsWith('min_') && (val as number) < lo) lo = val as number;
+				if (key.startsWith('max_') && (val as number) > hi) hi = val as number;
+			}
+			if (lo >= hi) return;
 
 			// Apply zero baseline if configured
-			if (this.#config.zeroBaseline?.[aggregateAxis as 'x' | 'y']) {
-				extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
+			if (this.#config.zeroBaseline?.[fittedAxis]) {
+				lo = Math.min(0, lo);
+				hi = Math.max(0, hi);
 			}
 
-			const scaleState = this.#chartContext[`${aggregateAxis}ScaleState`];
-			if (scaleType === 'time' && scaleState?.addOffsetExtent) {
-				scaleState.addOffsetExtent(extent, this.#markId);
-			} else if (scaleState?.addMark) {
-				scaleState.addMark(extent, this.#markId);
+			// Update the fitted axis scale. The scale is isolated (via __fitDomain config
+			// discriminator in ChartScales) so addMark only affects this chart's instance.
+			const scaleState =
+				fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+			const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType === 'time' && scaleState && 'addOffsetExtent' in scaleState) {
+				(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId);
+			} else if (scaleState && 'addMark' in scaleState) {
+				(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId);
 			}
-		}, 16); // One frame (~60fps) - very responsive for in-memory computation
+
+			this.#fitDomainLastTarget = [...drivingDomain];
+		} catch (e) {
+			// Silently ignore — query may fail during teardown or table recreation
+		}
+	}
+
+	/**
+	 * Build the fitDomain MIN/MAX query.
+	 * Path A (no JS transforms): sidecar CTE wrapping the mark's base query.
+	 * Path B (JS transforms): query the tooltip temp table directly.
+	 */
+	#buildFitDomainQuery(
+		fittedAxis: 'x' | 'y',
+		drivingDomain: [number, number]
+	): Query | null {
+		const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
+		const fittedChannels = this.#getFitDomainChannels(fittedAxis);
+		if (fittedChannels.length === 0) return null;
+
+		// Build outer SELECT: MIN/MAX for each fitted channel
+		const outerSelect: Record<string, unknown> = {};
+		for (const ch of fittedChannels) {
+			outerSelect[`min_${ch}`] = sqlMin(sqlColumn(ch));
+			outerSelect[`max_${ch}`] = sqlMax(sqlColumn(ch));
+		}
+
+		// Build WHERE clause on the driving axis
+		const drivingChannels = this.#getFitDomainChannels(drivingAxis);
+		const whereClause = this.#buildFitDomainWhere(drivingChannels, drivingDomain);
+
+		// Path B: JS transforms exist and tooltip table is ready → query the tooltip table
+		if (this.#transformCompiler.hasJSTransforms() && this.#tooltipTableReady) {
+			return Query.from(this.#tooltipTableName)
+				.select(outerSelect as Record<string, ExprValue>)
+				.where(whereClause as FilterExpr);
+		}
+
+		// Path A: CTE-wrap the mark's base query
+		return this.buildSidecarQuery(outerSelect, whereClause);
+	}
+
+	/**
+	 * Build WHERE clause for fitDomain viewport filtering.
+	 * Point channels (x): x BETWEEN lo AND hi
+	 * Range channels (x1, x2): x2 >= lo AND x1 <= hi (intersection)
+	 */
+	#buildFitDomainWhere(
+		drivingChannels: string[],
+		domain: [number, number]
+	): unknown {
+		const [lo, hi] = domain;
+
+		// Range channels: intersection check
+		const ch1 = drivingChannels.find((c) => c.endsWith('1'));
+		const ch2 = drivingChannels.find((c) => c.endsWith('2'));
+		if (ch1 && ch2) {
+			return sql`${sqlColumn(ch2)} >= ${lo} AND ${sqlColumn(ch1)} <= ${hi}`;
+		}
+
+		// Point channel
+		const ch = drivingChannels[0];
+		if (ch) {
+			return sql`${sqlColumn(ch)} BETWEEN ${lo} AND ${hi}`;
+		}
+
+		return undefined;
 	}
 
 	// ===========================================================================
@@ -1198,7 +1354,7 @@ export class MarkLifecycle {
 	}
 
 	get tooltipEnabled(): boolean {
-		return this.#tooltipWanted && this.#tooltipTableReady;
+		return this.#config.tooltip !== false && this.#tooltipTableReady;
 	}
 
 	/** Channel → original field name mapping (single source of truth for display). */
@@ -1238,14 +1394,6 @@ export class MarkLifecycle {
 		yLo: number,
 		yHi: number
 	): Query | null {
-		if (!this.client) return null;
-		const sourceTable = this.client._sourceTable;
-		const config = this.client.config;
-		const filter = this.currentFilter;
-
-		const innerQuery = this.buildQuery(sourceTable, config, filter, false);
-		if (!innerQuery) return null;
-
 		const xCol = sqlColumn(xChannel);
 		let whereClause = sql`${xCol} BETWEEN ${xLo} AND ${xHi}`;
 
@@ -1254,9 +1402,36 @@ export class MarkLifecycle {
 			whereClause = sql`${xCol} BETWEEN ${xLo} AND ${xHi} AND ${yCol} BETWEEN ${yLo} AND ${yHi}`;
 		}
 
-		return Query.from({ mark_data: innerQuery })
-			.select({ cnt: sql`COUNT(*)` })
-			.where(whereClause);
+		return this.buildSidecarQuery({ cnt: sql`COUNT(*)` }, whereClause);
+	}
+
+	/**
+	 * Called after the tooltip table is written. If fitDomain is active, issue
+	 * a sidecar query against the fresh tooltip table to update the fitted axis
+	 * domain. This handles cross-filter data changes where the driving axis
+	 * doesn't move but the data (and thus the Y extent) changes.
+	 */
+	/**
+	 * Called after the tooltip table is written with fresh data.
+	 * If fitDomain is active, issue a sidecar MIN/MAX query against the
+	 * now-guaranteed-fresh tooltip table.
+	 */
+	#onTooltipTableWritten(): void {
+		const fitDomain = this.#config.fitDomain;
+		if (!fitDomain) return;
+		if (this.#fitDomainSuppressed) return;
+
+		const fittedAxis = this.#resolveFittedAxis(fitDomain);
+		if (!fittedAxis) return;
+
+		const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
+		const drivingSS =
+			drivingAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+		if (!drivingSS || drivingSS.scaleType === 'band') return;
+		const target = drivingSS.domain?.target;
+		if (!target) return;
+
+		this.#issueFitDomainQuery(fittedAxis, target as [number, number], true);
 	}
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
@@ -1313,6 +1488,7 @@ export class MarkLifecycle {
 					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
 				this.#tooltipTableReady = true;
+				this.#onTooltipTableWritten();
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
 				// JS transforms produce small datasets (tens of rows).
@@ -1372,6 +1548,7 @@ export class MarkLifecycle {
 				]);
 
 				this.#tooltipTableReady = true;
+				this.#onTooltipTableWritten();
 			}
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
@@ -1391,7 +1568,7 @@ export class MarkLifecycle {
 			node.clearInvalidation();
 		}
 
-		clearTimeout(this.#viewportDomainUpdateTimeout!);
+		clearTimeout(this.#fitDomainTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
 		// Drop tooltip temp table

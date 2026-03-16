@@ -15,25 +15,25 @@
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
-	const logs = [];
-	const queryLogger = {
-		...console,
+	// const logs = [];
+	// const queryLogger = {
+	// 	...console,
 
-		debug(...values) {
-			if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
-				const queryLog = values[1];
+	// 	debug(...values) {
+	// 		if (values.length > 0 && typeof values[0] === 'string' && values[0].includes('Query')) {
+	// 			const queryLog = values[1];
 
-				if (queryLog && queryLog.sql) {
-					const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false });
-					console.log(`[${timestamp}] \n${queryLog.sql}`);
-					logs.push({ query: queryLog.sql, time: new Date() });
-				}
-			}
-		},
-		getLogs() {
-			return logs;
-		}
-	};
+	// 			if (queryLog && queryLog.sql) {
+	// 				const timestamp = new Date().toLocaleTimeString('sv-SE', { hour12: false });
+	// 				// console.log(`[${timestamp}] \n${queryLog.sql}`);
+	// 				logs.push({ query: queryLog.sql, time: new Date() });
+	// 			}
+	// 		}
+	// 	},
+	// 	getLogs() {
+	// 		return logs;
+	// 	}
+	// };
 
 	onMount(async () => {
 		try {
@@ -41,8 +41,8 @@
 			coord = new Coordinator();
 			coord.databaseConnector(wasm);
 
-			coord.manager.logQueries(true);
-			coord.manager.logger(queryLogger);
+			// coord.manager.logQueries(true);
+			// coord.manager.logger(queryLogger);
 
 			setContext('mosaic-coordinator', coord);
 

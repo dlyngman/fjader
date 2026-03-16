@@ -33,19 +33,7 @@ describe('computeExtentFromData', () => {
 		expect(computeExtentFromData(data, ['x1', 'x2'])).toEqual([0, 20]);
 	});
 
-	it('filters by viewport when options provided', () => {
-		const data = new ObjectDataAccessor([
-			{ x: 100, y1: 0, y2: 5 },
-			{ x: 200, y1: 10, y2: 15 },
-			{ x: 300, y1: 20, y2: 25 }
-		]);
-		// Only rows where y range intersects [8, 18]
-		const result = computeExtentFromData(data, ['x'], {
-			filterAxis: 'y',
-			filterDomain: [8, 18]
-		});
-		expect(result).toEqual([200, 200]);
-	});
+	// Viewport filtering now handled by DuckDB queries (fitDomain), not JS-side iteration
 
 	it('ignores NaN values', () => {
 		const data = new ObjectDataAccessor([{ y: NaN }, { y: 10 }, { y: NaN }]);

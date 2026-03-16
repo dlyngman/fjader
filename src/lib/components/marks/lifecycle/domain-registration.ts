@@ -12,7 +12,6 @@ import {
 } from '$lib/scales/scale-categories';
 import { isBinExpression } from '$lib/sql/bin';
 import { computeExtentFromData, extractCategoriesFromData } from './domain-computation';
-import type { ExtentFilterOptions } from './domain-computation';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,14 +158,11 @@ export function registerDataDerivedDomains(
 	channelsNeedingDataDomain: Set<string>,
 	additionalChannels: string[],
 	skipDomainUpdateForAxis: string | null,
-	viewportLocalDomain: boolean,
 	zeroBaseline: { x?: boolean; y?: boolean } | undefined,
 	actualXScaleType: string,
 	actualYScaleType: string,
 	xScaleState: ContinuousScaleState | null,
 	yScaleState: ContinuousScaleState | null,
-	xHasDomain: boolean,
-	yHasDomain: boolean,
 	hasCategoryReducingTransforms: boolean,
 	xBandScaleState: BandScaleState | null,
 	yBandScaleState: BandScaleState | null,
@@ -219,24 +215,7 @@ export function registerDataDerivedDomains(
 		xChannelsToCheck.length > 0 &&
 		isContinuousScale(actualXScaleType)
 	) {
-		// For viewport-local domains, filter to visible Y range
-		// Only apply if the Y scale already has a data-derived domain — on initial load
-		// the Y domain is still at its default [0, 100] which would incorrectly exclude
-		// most bins from the X domain computation.
-		let filterOptions: ExtentFilterOptions = {};
-		if (viewportLocalDomain && actualYScaleType !== 'band') {
-			if (yHasDomain && yScaleState) {
-				const yDomain = yScaleState.domain?.current;
-				if (yDomain) {
-					filterOptions = { filterAxis: 'y', filterDomain: [yDomain[0], yDomain[1]] };
-					console.log(
-						`🔍 [${markId}] Computing X domain from viewport-local data (Y: [${yDomain[0].toFixed(1)}, ${yDomain[1].toFixed(1)}])`
-					);
-				}
-			}
-		}
-
-		let extent = computeExtentFromData(data, xChannelsToCheck, filterOptions);
+		let extent = computeExtentFromData(data, xChannelsToCheck);
 		if (extent) {
 			// Apply zero baseline if mark requests it
 			if (zeroBaseline?.x) {
@@ -254,22 +233,7 @@ export function registerDataDerivedDomains(
 		yChannelsToCheck.length > 0 &&
 		isContinuousScale(actualYScaleType)
 	) {
-		// For viewport-local domains, filter to visible X range
-		// Only apply if the X scale already has a data-derived domain.
-		let filterOptions: ExtentFilterOptions = {};
-		if (viewportLocalDomain && actualXScaleType !== 'band') {
-			if (xHasDomain && xScaleState) {
-				const xDomain = xScaleState.domain?.current;
-				if (xDomain) {
-					filterOptions = { filterAxis: 'x', filterDomain: [xDomain[0], xDomain[1]] };
-					console.log(
-						`🔍 [${markId}] Computing Y domain from viewport-local data (X: [${xDomain[0].toFixed(1)}, ${xDomain[1].toFixed(1)}])`
-					);
-				}
-			}
-		}
-
-		let extent = computeExtentFromData(data, yChannelsToCheck, filterOptions);
+		let extent = computeExtentFromData(data, yChannelsToCheck);
 		if (extent) {
 			// Apply zero baseline if mark requests it
 			if (zeroBaseline?.y) {

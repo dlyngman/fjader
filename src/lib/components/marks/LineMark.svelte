@@ -51,6 +51,7 @@
 		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
+		fitDomain?: 'x' | 'y' | boolean;
 		lod?: boolean | LODConfig;
 		onLodController?: (ctrl: LODController | null) => void;
 		/** Custom rendering for the smoothing overlay rung. */
@@ -79,6 +80,7 @@
 		tooltip = true,
 		tooltipProximity,
 		tip = undefined,
+		fitDomain = undefined,
 		lod = true,
 		onLodController = undefined,
 		rung_smooth = undefined,
@@ -120,6 +122,7 @@
 		tooltip: () => tooltip,
 		tooltipProximity: () => tooltipProximity,
 		tip: () => tip,
+		fitDomain: () => fitDomain,
 		lod: () => lod
 	});
 
@@ -166,6 +169,13 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	// Resolve fitted axis for scale isolation (fitDomain gets its own scale instance)
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+	});
+
 	const config = $derived({
 		markType: 'line',
 		supportedScaleTypes: {
@@ -174,10 +184,18 @@
 		},
 		scaleRequirements: {
 			x: effectiveXScaleType
-				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+				? {
+						type: effectiveXScaleType,
+						priority: SCALE_PRIORITIES.PREFER,
+						config: resolvedFitAxis === 'x' ? { __fitDomain: true } : {}
+					}
 				: null,
 			y: effectiveYScaleType
-				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+				? {
+						type: effectiveYScaleType,
+						priority: SCALE_PRIORITIES.PREFER,
+						config: resolvedFitAxis === 'y' ? { __fitDomain: true } : {}
+					}
 				: null
 		},
 		inferredScaleColumns: {
@@ -200,6 +218,7 @@
 		},
 		sort: normalizeSortConfig(entry.sort ?? null),
 		tooltip: entry.tip === false ? false : entry.tooltip,
+		fitDomain: _isOverlay ? undefined : (entry.fitDomain as 'x' | 'y' | boolean | undefined),
 		passiveScales: _isOverlay
 	});
 
