@@ -39,7 +39,7 @@
 		fill?: FieldRef | null;
 		opacity?: number;
 		preferredYScaleType?: ScaleType | null;
-		viewportLocalDomain?: boolean;
+		fitDomain?: 'x' | 'y' | boolean;
 	}
 
 	let {
@@ -58,7 +58,7 @@
 		filterNulls = false,
 		preferredYScaleType = null,
 		transforms = [],
-		viewportLocalDomain = false,
+		fitDomain = undefined,
 		inset = 0.5,
 		dx = 0,
 		dy = 0,
@@ -93,7 +93,7 @@
 		limit: () => limit,
 		filterNulls: () => filterNulls,
 		preferredYScaleType: () => preferredYScaleType,
-		viewportLocalDomain: () => viewportLocalDomain,
+		fitDomain: () => fitDomain,
 		inset: () => inset,
 		dx: () => dx,
 		dy: () => dy,
@@ -191,8 +191,7 @@
 		},
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { x: true } : null,
-		// Viewport-local domain: compute X extent from visible Y range only
-		viewportLocalDomain: entry.viewportLocalDomain,
+		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
 		sort: normalizeSortConfig(entry.sort ?? null),
 		tooltip: entry.tip === false ? false : entry.tooltip
 	});

@@ -318,6 +318,14 @@ export class ChartScales {
 		if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
 		if (this.config.useYSelection) yScaleConfig.__selectionConsumer = this.chartId;
 
+		// fitDomain isolation: if any mark has __fitDomain in its raw scale config,
+		// add chartId discriminator to create a per-chart scale instance.
+		// Read from raw requirements (not resolved config, which strips unknown props).
+		if (this.scaleRequirements.x?.some((r) => r.config?.__fitDomain))
+			xScaleConfig.__fitDomain = this.chartId;
+		if (this.scaleRequirements.y?.some((r) => r.config?.__fitDomain))
+			yScaleConfig.__fitDomain = this.chartId;
+
 		const neededXScale = this.#scaleRegistry.getOrCreateScale(
 			xKey,
 			xConfig.type,

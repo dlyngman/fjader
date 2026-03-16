@@ -218,6 +218,7 @@ export interface BaseMarkProps {
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
 	tip?: (FieldRef | '*')[] | false;
+	fitDomain?: 'x' | 'y' | boolean;
 }
 
 /** Props for marks that support band scale padding/alignment (Bar, Rect). */

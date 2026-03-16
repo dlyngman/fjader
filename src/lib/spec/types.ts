@@ -146,6 +146,7 @@ interface BaseMarkSpec {
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
 	tip?: (string | '*')[] | false;
+	fitDomain?: 'x' | 'y' | boolean;
 }
 
 interface ContinuousScaleTypeSpec {
@@ -281,7 +282,7 @@ export interface RectXMarkSpec extends BaseMarkSpec {
 	dx?: number;
 	dy?: number;
 	preferredYScaleType?: ScaleType | null;
-	viewportLocalDomain?: boolean;
+	fitDomain?: 'x' | 'y' | boolean;
 }
 
 export interface RectYMarkSpec extends BaseMarkSpec {
@@ -298,7 +299,7 @@ export interface RectYMarkSpec extends BaseMarkSpec {
 	dx?: number;
 	dy?: number;
 	preferredXScaleType?: ScaleType | null;
-	viewportLocalDomain?: boolean;
+	fitDomain?: 'x' | 'y' | boolean;
 }
 
 export interface TextMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {

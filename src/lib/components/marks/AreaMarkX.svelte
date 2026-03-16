@@ -66,7 +66,8 @@
 		sort = null,
 		tooltip = true,
 		tooltipProximity,
-		tip = undefined
+		tip = undefined,
+		fitDomain = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('areax');
@@ -103,7 +104,8 @@
 		sort: () => sort,
 		tooltip: () => tooltip,
 		tooltipProximity: () => tooltipProximity,
-		tip: () => tip
+		tip: () => tip,
+		fitDomain: () => fitDomain
 	});
 
 	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
@@ -178,6 +180,12 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+	});
+
 	const config = $derived({
 		markType: 'areax',
 		supportedScaleTypes: {
@@ -186,10 +194,18 @@
 		},
 		scaleRequirements: {
 			x: effectiveXScaleType
-				? { type: effectiveXScaleType, priority: SCALE_PRIORITIES.PREFER }
+				? {
+						type: effectiveXScaleType,
+						priority: SCALE_PRIORITIES.PREFER,
+						config: resolvedFitAxis === 'x' ? { __fitDomain: true } : {}
+					}
 				: null,
 			y: effectiveYScaleType
-				? { type: effectiveYScaleType, priority: SCALE_PRIORITIES.PREFER }
+				? {
+						type: effectiveYScaleType,
+						priority: SCALE_PRIORITIES.PREFER,
+						config: resolvedFitAxis === 'y' ? { __fitDomain: true } : {}
+					}
 				: null
 		},
 		inferredScaleColumns: {
@@ -212,7 +228,8 @@
 		// Area charts with aggregates should include zero in the domain
 		zeroBaseline: hasAggregateX ? { x: true } : null,
 		sort: normalizeSortConfig(entry.sort ?? null),
-		tooltip: entry.tip === false ? false : entry.tooltip
+		tooltip: entry.tip === false ? false : entry.tooltip,
+		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);

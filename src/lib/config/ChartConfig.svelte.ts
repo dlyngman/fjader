@@ -68,7 +68,7 @@ export interface MarkEntry {
 	inset?: number;
 	dx?: number;
 	dy?: number;
-	viewportLocalDomain?: boolean;
+	fitDomain?: 'x' | 'y' | boolean;
 	[key: string]: unknown;
 }
 

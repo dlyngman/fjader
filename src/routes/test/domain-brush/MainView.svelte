@@ -26,7 +26,7 @@
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} />
+							<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} fitDomain="y" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

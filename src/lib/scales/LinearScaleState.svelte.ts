@@ -139,6 +139,17 @@ export class LinearScaleState {
 	// --- External Domain (suppresses data-driven resetZoom while active) ---
 	#externalDomainActive = false;
 
+	// --- User Input Tracking (for fitDomain suppression) ---
+	// True when the last domain change was from direct user zoom/pan.
+	// Set false by data-driven (addMark/resetZoom) or external (setExternalDomain) changes.
+	#userDriven = $state(false);
+
+	// --- fitDomain flag ---
+	// When true, skip the disjoint-domain instant snap in resetZoom. fitDomain intentionally
+	// produces large domain jumps (e.g., brush moves to a region with very different Y values)
+	// that should still animate smoothly.
+	#fitDomainActive = false;
+
 	// --- Mark Extent Tracking ---
 	#extents: Map<string, [number, number]> = new Map();
 	#enableUpdates: boolean = $state(true);
@@ -282,6 +293,16 @@ export class LinearScaleState {
 		return this.#selectionActive ? this.#selectionBuffer : null;
 	}
 
+	/** Whether the last domain change was from direct user zoom/pan (vs data-driven or external). */
+	get userDriven(): boolean {
+		return this.#userDriven;
+	}
+
+	/** Mark this scale as a fitDomain target — skips disjoint-domain instant snap in resetZoom. */
+	set fitDomainActive(value: boolean) {
+		this.#fitDomainActive = value;
+	}
+
 	/** Whether the last selection change came from 'brush' or 'external' (detail pan/zoom). */
 	get selectionSource(): 'brush' | 'external' | null {
 		return this.#selectionSource;
@@ -320,6 +341,7 @@ export class LinearScaleState {
 	/** Set domain from external source (suppresses data-driven resetZoom). */
 	setExternalDomain(min: number, max: number): void {
 		this.#externalDomainActive = true;
+		this.#userDriven = false;
 		this.#setStiffness(SCALE_SPRING_PRESETS.externalDomain);
 		this.domain.set([min, max]);
 	}
@@ -401,6 +423,7 @@ export class LinearScaleState {
 		initialScreenPos: number;
 	}): void {
 		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
+		this.#userDriven = true;
 
 		const panMin = this.fromSpringSpace(this.#springPair.currentA);
 		const panMax = this.fromSpringSpace(this.#springPair.currentB);
@@ -458,6 +481,7 @@ export class LinearScaleState {
 	 */
 	accumulateZoom(visualCenter: number, scaleFactor: number): void {
 		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
+		this.#userDriven = true;
 
 		this.#zoomAccumulator.logScale += Math.log(scaleFactor);
 		this.#zoomAccumulator.center = visualCenter;
@@ -476,7 +500,10 @@ export class LinearScaleState {
 		// Snap when the new extent is completely disjoint from the current domain.
 		// This handles column reassignment (e.g., bill_length → body_mass) where
 		// animating between unrelated domains looks like random motion.
-		if (!instant && this.ready) {
+		// Skip this when fitDomainActive — fitDomain intentionally produces large
+		// domain jumps (brush moves to a region with very different values) that
+		// should still animate smoothly.
+		if (!instant && this.ready && !this.#fitDomainActive) {
 			if (min > this.#renderMax || max < this.#renderMin) {
 				instant = true;
 			}
@@ -682,6 +709,7 @@ export class LinearScaleState {
 
 		this.#extent[0] = newMin;
 		this.#extent[1] = newMax;
+		this.#userDriven = false;
 
 		this.resetDomainLimits();
 		if (!this.#externalDomainActive) {

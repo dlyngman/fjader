@@ -74,7 +74,7 @@
 							x={bin('distance', { steps: 50 })}
 							y={count()}
 							fill="red"
-							viewportLocalDomain={true}
+							fitDomain
 							selection="brush"
 						/>
 					{/snippet}
