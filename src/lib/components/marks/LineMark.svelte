@@ -446,10 +446,12 @@
 
 		const dpr = window.devicePixelRatio || 1;
 		const numBins = Math.ceil(chartContext.innerWidth * dpr);
-		const xScaleIndex = chartContext.xScaleState
-			? (gpuCoordinator.getScaleIndex?.(chartContext.xScaleState.id) ?? 0)
-			: 0;
-		m4Decimator.configure(numBins, numSeries, xScaleIndex);
+		// Resolver is called at dispatch time — always gets the current index
+		// even after ScaleIndexManager rebuilds shift slot assignments.
+		const scaleState = chartContext.xScaleState;
+		const resolveIndex = () =>
+			scaleState ? (gpuCoordinator.getScaleIndex?.(scaleState.id) ?? 0) : 0;
+		m4Decimator.configure(numBins, numSeries, resolveIndex);
 	});
 
 	// LODController registration with ChartConfig (palette access + shift+scroll routing via TooltipManager delegation)
