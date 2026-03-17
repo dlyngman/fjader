@@ -43,6 +43,8 @@ interface ChartScalesConfig {
 	yZoomLimit?: number;
 	xPanLimit?: number;
 	yPanLimit?: number;
+	xDisableZoom?: boolean;
+	yDisableZoom?: boolean;
 	useXSelection?: boolean;
 	useYSelection?: boolean;
 }
@@ -131,7 +133,7 @@ export class ChartScales {
 				}
 			}
 
-			// Apply zoom/pan limits
+			// Apply zoom/pan limits and disable flags
 			{
 				const xInst = this.#xScaleInstance;
 				const yInst = this.#yScaleInstance;
@@ -146,6 +148,12 @@ export class ChartScales {
 				}
 				if (this.config.yPanLimit !== undefined && isPanZoomScale(yInst)) {
 					yInst.setPanLimit(this.config.yPanLimit);
+				}
+				if (this.config.xDisableZoom && isPanZoomScale(xInst)) {
+					xInst.disableZoom = true;
+				}
+				if (this.config.yDisableZoom && isPanZoomScale(yInst)) {
+					yInst.disableZoom = true;
 				}
 			}
 		});

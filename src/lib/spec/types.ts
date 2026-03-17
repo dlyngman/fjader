@@ -73,6 +73,8 @@ export interface PlotSpec {
 	yZoomLimit?: number;
 	xPanLimit?: number;
 	yPanLimit?: number;
+	xDisableZoom?: boolean;
+	yDisableZoom?: boolean;
 	legend?: LegendSpec | boolean;
 }
 

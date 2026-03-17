@@ -29,6 +29,8 @@
 		yZoomLimit?: number;
 		xPanLimit?: number;
 		yPanLimit?: number;
+		xDisableZoom?: boolean;
+		yDisableZoom?: boolean;
 		margin?: Partial<Margin>;
 		useXSelection?: boolean;
 		useYSelection?: boolean;
@@ -56,6 +58,8 @@
 		yZoomLimit = undefined,
 		xPanLimit = undefined,
 		yPanLimit = undefined,
+		xDisableZoom = undefined,
+		yDisableZoom = undefined,
 		margin: marginOverride = {},
 		useXSelection = false,
 		useYSelection = false
@@ -137,6 +141,8 @@
 			yZoomLimit,
 			xPanLimit,
 			yPanLimit,
+			xDisableZoom,
+			yDisableZoom,
 			useXSelection,
 			useYSelection
 		});

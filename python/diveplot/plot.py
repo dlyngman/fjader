@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 _PLOT_FIELDS = (
     "width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend",
-    "interactors", "use_selection", "zoom_limit", "pan_limit",
+    "interactors", "use_selection", "zoom_limit", "pan_limit", "disable_zoom",
 )
 
 
@@ -36,6 +36,7 @@ class Plot:
     use_selection: str | None = None  # 'x' | 'y' | 'xy'
     zoom_limit: int | float | tuple[int | float, int | float] | None = None
     pan_limit: int | float | tuple[int | float, int | float] | None = None
+    disable_zoom: str | bool | None = None  # 'x', 'y', 'xy', or True (both)
 
     def __init__(self, *marks: Mark, **kwargs: Any) -> None:
         unexpected = set(kwargs) - set(_PLOT_FIELDS)
@@ -99,6 +100,15 @@ class Plot:
                 self._expand_axis_pair(val, "xZoomLimit", "yZoomLimit", spec)
             elif key == "pan_limit":
                 self._expand_axis_pair(val, "xPanLimit", "yPanLimit", spec)
+            elif key == "disable_zoom":
+                if val is True or val == "xy":
+                    spec["xDisableZoom"] = True
+                    spec["yDisableZoom"] = True
+                elif isinstance(val, str):
+                    if "x" in val:
+                        spec["xDisableZoom"] = True
+                    if "y" in val:
+                        spec["yDisableZoom"] = True
             else:
                 spec[to_camel_case(key)] = serialize_value(val)
         return spec
@@ -163,6 +173,7 @@ def plot(
     use_selection: str | None = None,
     zoom_limit: int | float | tuple[int | float, int | float] | None = None,
     pan_limit: int | float | tuple[int | float, int | float] | None = None,
+    disable_zoom: str | bool | None = None,
 ) -> Plot:
     """Create a chart with one or more marks and chart-level configuration.
 
@@ -184,6 +195,9 @@ def plot(
             a ``(x, y)`` tuple sets per-axis limits.
         pan_limit: How far past data edges the user can pan. A number
             applies to both axes; a ``(x, y)`` tuple sets per-axis limits.
+        disable_zoom: Disable user zoom/pan on axes — ``'x'``, ``'y'``,
+            ``'xy'``, or ``True`` (both). Useful for auto-scaled axes
+            driven by ``fit_domain``.
     """
     return Plot(
         *marks,
@@ -192,4 +206,5 @@ def plot(
         legend=legend, interactors=interactors,
         use_selection=use_selection,
         zoom_limit=zoom_limit, pan_limit=pan_limit,
+        disable_zoom=disable_zoom,
     )
