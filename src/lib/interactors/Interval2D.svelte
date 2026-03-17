@@ -312,7 +312,7 @@
 		(event.target as Element).releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
-		if (!hasDragged && brush.active && brush.phase === 'idle') {
+		if (!hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
 			clearBrush();
 			return true;
 		}
@@ -333,6 +333,7 @@
 		event.stopPropagation();
 		(event.target as Element).setPointerCapture(event.pointerId);
 		isCapturing = true;
+		hasDragged = false;
 
 		point.x = event.offsetX;
 		point.y = event.offsetY;

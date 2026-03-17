@@ -19,6 +19,7 @@
 		resolveSelection
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
+	import { isNode } from '@uwdata/mosaic-sql';
 	import type {
 		FieldRef,
 		ScaleType,
@@ -141,11 +142,7 @@
 		// Check if y1 is a bin (AutoBinNode)
 		const hasBinnedY =
 			ey1 != null && typeof ey1 === 'object' && 'isAutoBinNode' in ey1 && ey1.isAutoBinNode;
-		// Check if x2 is an aggregate expression (has aggregate property or is SQL aggregate)
-		const hasAggregateX =
-			typeof x2 === 'object' &&
-			x2 != null &&
-			('aggregate' in x2 || x2.constructor?.name === '_AggregateNode');
+		const hasAggregateX = isNode(x2) && x2.type === 'AGGREGATE';
 		return hasBinnedY && hasAggregateX;
 	});
 

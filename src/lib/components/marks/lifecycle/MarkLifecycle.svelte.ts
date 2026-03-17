@@ -514,6 +514,7 @@ export class MarkLifecycle {
 				);
 				this.#dataDerivedDomainsSet = result.dataDerivedDomainsSet;
 				this.#skipDomainUpdateForAxis = result.skipDomainUpdateForAxis;
+
 			}
 		});
 
@@ -603,9 +604,6 @@ export class MarkLifecycle {
 				}
 
 				if (this.#fitDomainSuppressed) return;
-
-				// For binned marks, skip if we're about to re-bin anyway
-				if (this.#shouldReBin(target as number[], drivingAxis)) return;
 
 				clearTimeout(this.#fitDomainTimeout!);
 				this.#fitDomainTimeout = setTimeout(() => {
@@ -997,10 +995,15 @@ export class MarkLifecycle {
 					currentDomain = this.#lastBinningDomain[axis as 'x' | 'y'] as [number, number] | null;
 
 					if (!currentDomain) {
-						currentDomain = (scaleState as ContinuousScaleState | null | undefined)?.domain
-							?.current as unknown as [number, number] | null;
-						if (currentDomain) {
-							this.#lastBinningDomain[axis as 'x' | 'y'] = [...currentDomain];
+						// Only seed from scale domain if the scale has real data.
+						// Before data arrives, domain.current is a default (e.g., [0,100])
+						// that would produce wrong bin boundaries.
+						const ss = scaleState as ContinuousScaleState | null | undefined;
+						if (ss?.ready) {
+							currentDomain = ss.domain?.current as unknown as [number, number] | null;
+							if (currentDomain) {
+								this.#lastBinningDomain[axis as 'x' | 'y'] = [...currentDomain];
+							}
 						}
 					}
 				}
@@ -1182,18 +1185,22 @@ export class MarkLifecycle {
 	 * and transform output channels. Includes stack outputs (y0/y1, x0/x1)
 	 * which hold the actual rendered extent for stacked marks.
 	 */
-	#getFitDomainChannels(axis: 'x' | 'y'): string[] {
+	#getFitDomainChannels(axis: 'x' | 'y', includeTransformChannels: boolean): string[] {
 		const select = this.#config.select;
 		const candidates = [axis, `${axis}1`, `${axis}2`];
 		const channels = candidates.filter((c) => c in select);
 
 		// Stack transforms output y0/y1 (or x0/x1) which hold the cumulative
-		// extent. These are the actual rendered positions and must be included.
-		const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-		const stackCandidates = [`${axis}0`, `${axis}1`];
-		for (const ch of stackCandidates) {
-			if (additionalChannels.includes(ch) && !channels.includes(ch)) {
-				channels.push(ch);
+		// extent. Only include when querying the tooltip temp table (Path B)
+		// which has these columns. Path A queries DuckDB directly where they
+		// don't exist.
+		if (includeTransformChannels) {
+			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+			const stackCandidates = [`${axis}0`, `${axis}1`];
+			for (const ch of stackCandidates) {
+				if (additionalChannels.includes(ch) && !channels.includes(ch)) {
+					channels.push(ch);
+				}
 			}
 		}
 
@@ -1281,7 +1288,11 @@ export class MarkLifecycle {
 		fittedAxis: 'x' | 'y',
 		drivingDomain: [number, number] | null
 	): Query | null {
-		const fittedChannels = this.#getFitDomainChannels(fittedAxis);
+		// Determine path: Path B uses tooltip table (has transform columns),
+		// Path A uses raw DB (no transform columns like y0/y1).
+		const useTooltipTable = this.#transformCompiler.hasJSTransforms() && this.#tooltipTableReady;
+
+		const fittedChannels = this.#getFitDomainChannels(fittedAxis, useTooltipTable);
 		if (fittedChannels.length === 0) return null;
 
 		// Build outer SELECT: MIN/MAX for each fitted channel
@@ -1296,12 +1307,12 @@ export class MarkLifecycle {
 		let whereClause: unknown = undefined;
 		if (drivingDomain) {
 			const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
-			const drivingChannels = this.#getFitDomainChannels(drivingAxis);
+			const drivingChannels = this.#getFitDomainChannels(drivingAxis, useTooltipTable);
 			whereClause = this.#buildFitDomainWhere(drivingChannels, drivingDomain);
 		}
 
 		// Path B: JS transforms exist and tooltip table is ready → query the tooltip table
-		if (this.#transformCompiler.hasJSTransforms() && this.#tooltipTableReady) {
+		if (useTooltipTable) {
 			const q = Query.from(this.#tooltipTableName)
 				.select(outerSelect as Record<string, ExprValue>);
 			if (whereClause) q.where(whereClause as FilterExpr);

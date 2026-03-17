@@ -175,13 +175,16 @@ overview = dp.plot(
         x="ts",
         y="value",
         stroke="group",
+        selection="daysel",
         preferred_x_scale_type="time",
         lod={"decimate": True},
         tooltip_proximity="x",
+        fit_domain="y",
     ),
     height=90,
     x_label="Date",
-    interactors=[dp.interval_x()],
+    interactors=[dp.interval_x(selection="daysel")],
+    disable_zoom="y",
 )
 
 # Hourly profile: min/max range (area) + avg (line), per group
