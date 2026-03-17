@@ -16,10 +16,28 @@ import diveplot as dp
 st.set_page_config(layout="wide", page_title="Time Series Explorer")
 st.title("Time Series Explorer")
 
-USE_SERVER = st.toggle("Use server-side DuckDB", value=False)
+# ---------------------------------------------------------------------------
+# Sidebar controls
+# ---------------------------------------------------------------------------
+USE_SERVER = st.sidebar.toggle("Use server-side DuckDB", value=False)
+
+show_comparison = st.sidebar.toggle("Show comparison period", value=False)
+comparison_offset = st.sidebar.selectbox(
+    "Compare with",
+    options=["-1yw", "-52w", "-1y", "-1mo", "-7d"],
+    format_func={
+        "-1yw": "Last year (week-aligned)",
+        "-52w": "52 weeks ago",
+        "-1y": "1 year ago",
+        "-1mo": "1 month ago",
+        "-7d": "1 week ago",
+    }.get,
+    index=0,
+    disabled=not show_comparison,
+)
 
 # ---------------------------------------------------------------------------
-# Generate synthetic hourly energy-usage data (1 year, 3 groups)
+# Generate synthetic hourly energy-usage data (2 years, 3 groups)
 # ---------------------------------------------------------------------------
 np.random.seed(42)
 
@@ -29,9 +47,9 @@ N_GROUPS = len(GROUPS)
 
 # Timestamps (one per hour, repeated per group)
 base_ts = pl.datetime_range(
-    datetime(2024, 1, 1), datetime(2024, 12, 31, 23), interval="1h", eager=True
+    datetime(2023, 1, 1), datetime(2024, 12, 31, 23), interval="1h", eager=True
 )
-N_HOURS = len(base_ts)  # 8784 (2024 is a leap year)
+N_HOURS = len(base_ts)
 TOTAL = N_HOURS * N_GROUPS
 
 # Extract time features via polars (no Python loop)
@@ -44,6 +62,7 @@ ts_col = pl.concat([base_ts] * N_GROUPS)
 hours = np.tile(hours_np, N_GROUPS)
 dows = np.tile(dows_np, N_GROUPS)
 doys = np.tile(doys_np, N_GROUPS)
+idx = np.tile(np.arange(N_HOURS), N_GROUPS)
 group_mult = np.repeat(GROUP_MULTS, N_HOURS)
 
 group_col: list[str] = []
@@ -61,7 +80,10 @@ weekly = WEEKLY_MAP[dows]
 # Annual: summer peak
 seasonal = 1.0 + 0.3 * np.sin((doys - 80) * 2 * np.pi / 365)
 
-base = 200.0 * daily * weekly * seasonal * group_mult
+# Growth trend: +40% over 2 years
+trend = 1.0 + 0.4 * (idx / N_HOURS)
+
+base = 200.0 * daily * weekly * seasonal * trend * group_mult
 noise = base * (0.85 + 0.3 * np.random.random(TOTAL))
 
 # Occasional spikes (2 % of hours)
@@ -82,9 +104,22 @@ df = pl.DataFrame({
 })
 
 # ---------------------------------------------------------------------------
-# Holidays — add is_holiday / holiday_name columns + a separate rect DataFrame
+# Holidays — add is_holiday / holiday_name columns
 # ---------------------------------------------------------------------------
 HOLIDAYS = [
+    # 2023
+    ("New Year's Day", datetime(2023, 1, 1)),
+    ("MLK Day", datetime(2023, 1, 16)),
+    ("Presidents' Day", datetime(2023, 2, 20)),
+    ("Easter", datetime(2023, 4, 9)),
+    ("Memorial Day", datetime(2023, 5, 29)),
+    ("Independence Day", datetime(2023, 7, 4)),
+    ("Labor Day", datetime(2023, 9, 4)),
+    ("Columbus Day", datetime(2023, 10, 9)),
+    ("Veterans Day", datetime(2023, 11, 11)),
+    ("Thanksgiving", datetime(2023, 11, 23)),
+    ("Christmas", datetime(2023, 12, 25)),
+    # 2024
     ("New Year's Day", datetime(2024, 1, 1)),
     ("MLK Day", datetime(2024, 1, 15)),
     ("Presidents' Day", datetime(2024, 2, 19)),
@@ -106,12 +141,6 @@ df = df.with_columns(
         {d.date(): name for name, d in HOLIDAYS}, default=""
     ).alias("holiday_name"),
 )
-
-# Separate DataFrame for holiday strip (one row per holiday-hour for binned rect)
-holidays_df = pl.DataFrame({
-    "ts": [d for _, d in HOLIDAYS],
-    "holiday_name": [name for name, _ in HOLIDAYS],
-})
 
 st.caption(f"{len(df):,} rows · {N_HOURS:,} hours × {N_GROUPS} groups · {len(HOLIDAYS)} holidays")
 
@@ -151,11 +180,11 @@ detail = dp.plot(
     legend=True,
 )
 
-# Holiday strip: colored bars at holiday dates (shares time scale via x_label)
+# Holiday strip: colored bars at holiday dates
 holiday_strip = dp.plot(
     dp.rect_y(
         data=df,
-        x=dp.bin("ts", steps=365),
+        x=dp.bin("ts", steps=730),
         y=dp.count(),
         fill="holiday_name",
         selection="daysel",
@@ -168,7 +197,13 @@ holiday_strip = dp.plot(
     use_selection="x",
 )
 
-# Overview: provides brush for detail zoom (implicit selection for use_selection)
+# Overview: provides brush for detail zoom
+overview_interactors = [dp.interval_x(selection="daysel")]
+if show_comparison:
+    overview_interactors.append(
+        dp.derived_interval(source="daysel", selection="cmpsel", offset=comparison_offset)
+    )
+
 overview = dp.plot(
     dp.line(
         data=df,
@@ -183,7 +218,7 @@ overview = dp.plot(
     ),
     height=90,
     x_label="Date",
-    interactors=[dp.interval_x(selection="daysel")],
+    interactors=overview_interactors,
     disable_zoom="y",
 )
 
@@ -197,7 +232,6 @@ hourly = dp.plot(
         fill="group",
         fill_opacity=0.2,
         selection="daysel",
-        fit_domain="y",
         curve="monotone",
         tooltip_proximity="x",
     ),
@@ -208,7 +242,6 @@ hourly = dp.plot(
         stroke="group",
         stroke_width=2,
         selection="daysel",
-        fit_domain="y",
         curve="monotone",
         tooltip_proximity="x",
     ),
@@ -217,6 +250,36 @@ hourly = dp.plot(
     y_label="kWh",
     legend=True,
 )
+
+# Comparison hourly profile (only when comparison is enabled)
+if show_comparison:
+    hourly_cmp = dp.plot(
+        dp.area_y(
+            data=df,
+            x="hour",
+            y1=dp.min_("value"),
+            y2=dp.max_("value"),
+            fill="group",
+            fill_opacity=0.2,
+            selection="cmpsel",
+            curve="monotone",
+            tooltip_proximity="x",
+        ),
+        dp.line(
+            data=df,
+            x="hour",
+            y=dp.avg("value"),
+            stroke="group",
+            stroke_width=2,
+            selection="cmpsel",
+            curve="monotone",
+            tooltip_proximity="x",
+        ),
+        height=340,
+        x_label="Hour of Day",
+        y_label="kWh",
+        legend=True,
+    )
 
 # Day-of-week selector: toggle bars to filter all other charts
 day_selector = dp.plot(
@@ -237,8 +300,15 @@ day_selector = dp.plot(
     legend=True,
 )
 
-# Single layout: detail + holidays + overview stacked, then hourly | day_selector
+# ---------------------------------------------------------------------------
+# Layout
+# ---------------------------------------------------------------------------
+if show_comparison:
+    bottom_row = dp.hconcat(hourly, hourly_cmp, day_selector)
+else:
+    bottom_row = dp.hconcat(hourly, day_selector)
+
 dp.streamlit.render(
-    dp.vconcat(detail, holiday_strip, overview, dp.hconcat(hourly, day_selector)),
+    dp.vconcat(detail, holiday_strip, overview, bottom_row),
     server_duckdb=USE_SERVER,
 )

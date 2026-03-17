@@ -233,6 +233,7 @@ def line(
     z: FieldSpec | None = None,
     stroke_width: float | None = None,
     dot_radius: float | None = None,
+    opacity: float | None = None,
     curve: CurveType | None = None,
     lod: bool | dict | None = None,
     preferred_x_scale_type: ScaleType | None = None,
@@ -276,7 +277,7 @@ def line(
     """
     return LineMark(
         data=data, table=table, x=x, y=y, stroke=stroke, z=z,
-        stroke_width=stroke_width, dot_radius=dot_radius,
+        stroke_width=stroke_width, dot_radius=dot_radius, opacity=opacity,
         curve=curve, lod=lod,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,

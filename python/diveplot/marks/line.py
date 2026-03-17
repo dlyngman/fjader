@@ -22,6 +22,7 @@ class LineMark(Mark):
     """Explicit series grouping (overrides implicit grouping from stroke)."""
     stroke_width: float | None = None
     dot_radius: float | None = None
+    opacity: float | None = None
     curve: CurveType | None = None
     lod: bool | dict | None = None
     preferred_x_scale_type: ScaleType | None = None

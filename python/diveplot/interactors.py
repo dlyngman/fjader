@@ -112,3 +112,38 @@ def toggle(
         selection: Selection group name. Defaults to the first mark's selection.
     """
     return ToggleSpec(field=field, selection=selection)
+
+
+@dataclass(frozen=True)
+class DerivedIntervalSpec(InteractorSpec):
+    """Derived interval that follows a source brush at a calendar offset."""
+
+    _interactor_type: ClassVar[str] = "derivedInterval"
+    source: str | None = None
+    selection: str | None = None
+    offset: str | None = None
+    axis: str | None = None
+
+
+def derived_interval(
+    source: str,
+    offset: str,
+    *,
+    selection: str | None = None,
+    axis: str | None = None,
+) -> DerivedIntervalSpec:
+    """Create a derived interval that follows another brush at a calendar offset.
+
+    The derived interval renders a non-interactive visual overlay showing the
+    comparison time range. It emits its own Mosaic selection so comparison marks
+    can filter by the derived range.
+
+    Args:
+        source: Name of the source selection group to follow.
+        offset: Calendar offset string, e.g. ``"-1y"``, ``"-7d"``, ``"-1mo"``.
+        selection: Selection group name for the derived filter.
+        axis: Axis to follow (``"x"`` or ``"y"``). Defaults to ``"x"``.
+    """
+    return DerivedIntervalSpec(
+        source=source, offset=offset, selection=selection, axis=axis
+    )
