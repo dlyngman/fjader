@@ -206,6 +206,12 @@ export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' 
 // Mark prop building blocks
 // ---------------------------------------------------------------------------
 
+/** Explicit category domain for band/point scales. */
+export interface DomainConfig {
+	x?: string[];
+	y?: string[];
+}
+
 /** Props shared by every mark component. */
 export interface BaseMarkProps {
 	table: string;
@@ -215,6 +221,7 @@ export interface BaseMarkProps {
 	filterNulls?: boolean;
 	transforms?: Transform[];
 	sort?: SortConfig | null;
+	domain?: DomainConfig | null;
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
 	tip?: (FieldRef | '*')[] | false;

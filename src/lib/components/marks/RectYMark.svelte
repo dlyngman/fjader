@@ -65,6 +65,7 @@
 		dx = 0,
 		dy = 0,
 		sort = null,
+		domain = null,
 		tooltip = true,
 		tip = undefined,
 		onLodController = undefined
@@ -101,6 +102,7 @@
 		dx: () => dx,
 		dy: () => dy,
 		sort: () => sort,
+		domain: () => domain,
 		tooltip: () => tooltip,
 		tip: () => tip
 	});
@@ -196,6 +198,7 @@
 		zeroBaseline: isHistogram ? { y: true } : null,
 		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
 		sort: normalizeSortConfig(entry.sort ?? null),
+		domain: entry.domain ?? null,
 		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 

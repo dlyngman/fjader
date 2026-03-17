@@ -106,6 +106,7 @@ export interface MarkLifecycleConfig {
 	select: Record<string, unknown>;
 	clientOptions?: { limit?: number; filterNulls?: unknown[] | null };
 	sort?: NormalizedSortConfig;
+	domain?: { x?: string[]; y?: string[] } | null;
 	tooltip?: boolean | { sortTable?: boolean };
 	constants?: Record<string, number>;
 	colorChannel?: string; // Key in select for color data ('fill' or 'stroke')
@@ -369,7 +370,8 @@ export class MarkLifecycle {
 					this.#seriesScaleState,
 					seriesKey2,
 					this.#transformCompiler.hasCategoryReducingTransforms(),
-					this.#markId
+					this.#markId,
+					this.#config.domain
 				);
 				const aggPromise = fetchGlobalAggregates(
 					this.#coordinator!,
@@ -386,9 +388,20 @@ export class MarkLifecycle {
 				);
 				Promise.all([catPromise, aggPromise])
 					.then(([fetchCount, aggResult]) => {
-						this.categoricalDataFetched = true;
 						if (colorReady) this.#colorDomainFetched = true;
 						if (aggResult.globalAggregatesSet) this.#globalAggregatesSet = true;
+
+						// Ordinal color scales need a __dplot_*_color_idx column
+						// in the view. Don't advance to client creation until the
+						// color domain is fetched and that column is registered.
+						// Sequential/continuous scales don't use index columns.
+						const ordinalColorPending =
+							!!this.#config.select?.[colorKey] &&
+							(!this.#colorScaleState || this.#colorScaleState.isOrdinal) &&
+							!this.#colorDomainFetched;
+						if (!ordinalColorPending) {
+							this.categoricalDataFetched = true;
+						}
 						setScalesReady(
 							this.#scaleMap,
 							this.#channelsNeedingDataDomain,

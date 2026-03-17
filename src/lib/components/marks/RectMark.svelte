@@ -66,6 +66,7 @@
 		dx = 0,
 		dy = 0,
 		sort = null,
+		domain = null,
 		tooltip = true,
 		tip = undefined
 	}: Props = $props();
@@ -105,6 +106,7 @@
 		dx: () => dx,
 		dy: () => dy,
 		sort: () => sort,
+		domain: () => domain,
 		tooltip: () => tooltip,
 		tip: () => tip
 	});
@@ -204,6 +206,7 @@
 		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
 		// (could be heatmap, 2D histogram, etc.). Use RectXMark/RectYMark for histograms.
 		sort: normalizeSortConfig(entry.sort ?? null),
+		domain: entry.domain ?? null,
 		tooltip: entry.tip === false ? false : entry.tooltip
 	});
 

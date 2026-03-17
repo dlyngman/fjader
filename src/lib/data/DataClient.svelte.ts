@@ -41,6 +41,7 @@ export interface DataClientConfig {
 	_dataFormat: DataFormat;
 	select?: Record<string, unknown>;
 	sort?: { channel: string; direction: 'asc' | 'desc' } | null;
+	domain?: { x?: string[]; y?: string[] } | null;
 	limit?: number;
 	[key: string]: unknown;
 }

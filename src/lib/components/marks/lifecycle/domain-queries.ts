@@ -44,7 +44,8 @@ export async function fetchCategoricalDomains(
 	seriesScaleState: ColorScaleState | null,
 	seriesChannel: string | null,
 	hasCategoryReducingTransforms: boolean,
-	markId: string
+	markId: string,
+	explicitDomain?: { x?: string[]; y?: string[] } | null
 ): Promise<number> {
 	const fetches: Promise<void>[] = [];
 
@@ -99,11 +100,27 @@ export async function fetchCategoricalDomains(
 	// Skip band fetch for marks with category-reducing transforms (topN):
 	// domain will be populated post-transform in registerDataDerivedDomains
 	const skipBandFetch = hasCategoryReducingTransforms;
+	// Track explicit domains to apply after all async fetches complete —
+	// other scales (color, series) register ViewManager columns in their
+	// fetch callbacks, so the band view must be created after those finish.
+	let deferredExplicitX: string[] | null = null;
+	let deferredExplicitY: string[] | null = null;
+
 	if ((actualXScaleType === 'band' || actualXScaleType === 'point') && !skipBandFetch) {
-		setupFetch('x', select.x, xScaleState);
+		if (explicitDomain?.x && xScaleState) {
+			deferredExplicitX = explicitDomain.x;
+		} else {
+			setupFetch('x', select.x, xScaleState);
+		}
 	}
 	if ((actualYScaleType === 'band' || actualYScaleType === 'point') && !skipBandFetch) {
-		setupFetch('y', select.y, yScaleState);
+		if (explicitDomain?.y && yScaleState) {
+			// Y band scale maps index 0 → bottom, so reverse the user's
+			// top-to-bottom array to match GPU rendering order.
+			deferredExplicitY = [...explicitDomain.y].reverse();
+		} else {
+			setupFetch('y', select.y, yScaleState);
+		}
 	}
 
 	// Facet: register categories with the facet BandScaleState
@@ -158,9 +175,12 @@ export async function fetchCategoricalDomains(
 		setupTimeFetch('y', select.y || select.y1);
 	}
 
-	// Fetch color domain if color scale is set and there's a color field
+	// Fetch color domain if color scale is set and there's a color field.
+	// Eagerly register the table so setDomain → #maybeCreateView can create
+	// the index column even if MarkColor's $effect hasn't fired yet.
 	const colorKey = colorChannel || 'fill';
 	if (colorScaleState && select[colorKey]) {
+		colorScaleState.registerTable(table);
 		const colorValue = select[colorKey];
 		const colorField =
 			typeof colorValue === 'object' && 'field' in colorValue && !isNode(colorValue)
@@ -244,6 +264,17 @@ export async function fetchCategoricalDomains(
 	}
 
 	if (fetches.length > 0) await Promise.all(fetches);
+
+	// Apply explicit domains after all async fetches — ViewManager columns
+	// from color/series scales are now registered, so the band view will
+	// include all necessary index columns.
+	if (deferredExplicitX && xScaleState) {
+		xScaleState.addMark(deferredExplicitX, markId, { explicit: true });
+	}
+	if (deferredExplicitY && yScaleState) {
+		yScaleState.addMark(deferredExplicitY, markId, { explicit: true });
+	}
+
 	return fetches.length;
 }
 

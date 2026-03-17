@@ -77,6 +77,7 @@
 									r="precipitation"
 									preferredXScaleType="time"
 									selection="brush"
+									domain={{ y: ["sun", "fog", "drizzle", "rain", "snow"] }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -114,6 +115,7 @@
 									y="weather"
 									fill="weather"
 									selection="brush"
+									domain={{ y: ["sun", "fog", "drizzle", "rain", "snow"] }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

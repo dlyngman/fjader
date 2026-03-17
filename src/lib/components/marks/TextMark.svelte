@@ -67,6 +67,7 @@
 		preferredYScaleType = null,
 		transforms = [],
 		sort = null,
+		domain = null,
 		tooltip = false,
 		tooltipProximity,
 		tip = undefined
@@ -130,6 +131,7 @@
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
+		domain: domain ?? null,
 		tooltip: tip === false ? false : tooltip
 	});
 

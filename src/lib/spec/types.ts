@@ -184,6 +184,7 @@ interface BaseMarkSpec {
 	filterNulls?: boolean;
 	transforms?: TransformSpec[];
 	sort?: SortConfig | null;
+	domain?: { x?: string[]; y?: string[] } | null;
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
 	tip?: (string | '*')[] | false;

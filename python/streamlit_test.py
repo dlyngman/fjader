@@ -81,7 +81,10 @@ simple = pl.DataFrame({
     "count": [640, 641, 101, 26, 53],
 })
 dp.streamlit.render(
-    dp.bar_x(data=simple, x="count", y="weather", fill="weather"),
+    dp.bar_x(
+        data=simple, x="count", y="weather", fill="weather",
+        domain={"y": ["sun", "fog", "drizzle", "rain", "snow"]},
+    ),
     height=300,
     server_duckdb=USE_SERVER,
 )
@@ -134,6 +137,7 @@ brush_bars = dp.plot(
     dp.bar_y(
         data=penguins, x="species", y=dp.count(), fill="species",
         selection="brush2d",
+        domain={"x": ["Chinstrap", "Gentoo", "Adelie"]},
     ),
     width=600, height=300,
 )

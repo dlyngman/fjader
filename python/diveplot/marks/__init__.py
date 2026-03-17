@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .._types import (
         ColorScheme,
         CurveType,
+        DomainConfig,
         LineAnchor,
         ScaleType,
         SortConfig,
@@ -46,6 +47,7 @@ def dot(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -69,6 +71,7 @@ def dot(
         filter_nulls: Whether to filter null values from the query.
         transforms: List of transforms (e.g. ``[dp.topN(10), dp.filter(...)]``).
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
+        domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -81,7 +84,7 @@ def dot(
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -110,6 +113,7 @@ def bar_x(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -138,6 +142,7 @@ def bar_x(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
+        domain: Explicit category order for band scales, e.g. ``{'y': ['sun', 'rain', ...]}``.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -149,7 +154,7 @@ def bar_x(
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -178,6 +183,7 @@ def bar_y(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -206,6 +212,7 @@ def bar_y(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'x': 'name', 'order': 'asc'}``.
+        domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -217,7 +224,7 @@ def bar_y(
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -244,6 +251,7 @@ def line(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -270,6 +278,7 @@ def line(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -283,7 +292,7 @@ def line(
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -313,6 +322,7 @@ def area_y(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -342,6 +352,7 @@ def area_y(
         filter_nulls: Filter null values.
         transforms: List of transforms (e.g. ``[dp.stack_y()]``).
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -355,7 +366,7 @@ def area_y(
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -385,6 +396,7 @@ def area_x(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -414,6 +426,7 @@ def area_x(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -427,7 +440,7 @@ def area_x(
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -460,6 +473,7 @@ def rect(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -492,6 +506,7 @@ def rect(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -506,7 +521,7 @@ def rect(
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -534,6 +549,7 @@ def rect_x(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -561,6 +577,7 @@ def rect_x(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -572,7 +589,7 @@ def rect_x(
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -600,6 +617,7 @@ def rect_y(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -627,6 +645,7 @@ def rect_y(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -638,7 +657,7 @@ def rect_y(
         preferred_x_scale_type=preferred_x_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
@@ -668,6 +687,7 @@ def text(
     filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
+    domain: DomainConfig | None = None,
     tooltip: bool | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
@@ -697,6 +717,7 @@ def text(
         filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
+        domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
@@ -711,7 +732,7 @@ def text(
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
         filter_nulls=filter_nulls, transforms=transforms,
-        sort=sort, tooltip=tooltip,
+        sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
     )
