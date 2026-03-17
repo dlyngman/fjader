@@ -75,6 +75,7 @@ export class BandScaleState {
 	#domain: string[] = $state([]);
 	#extents: Map<string, string[]> = new Map(); // Stores domains from different marks
 	#sortOrder: string[] | null = null; // Preferred category ordering from a mark with sort config
+	#explicitDomain: string[] | null = null; // Highest-priority ordering from explicit domain prop
 	#domainUpdateScheduled: boolean = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
@@ -192,6 +193,7 @@ export class BandScaleState {
 
 		this.#activeValues = null;
 		this.#frozenDomain = null;
+		this.#explicitDomain = null;
 		this.#extents.clear();
 	}
 
@@ -336,13 +338,15 @@ export class BandScaleState {
 	addMark(
 		categories: string[],
 		identifier: string,
-		{ sorted = false }: { sorted?: boolean } = {}
+		{ sorted = false, explicit = false }: { sorted?: boolean; explicit?: boolean } = {}
 	): this {
 		const uniqueCategories = [...new Set(categories.filter((c) => c != null))];
 
 		this.#extents.set(identifier, uniqueCategories);
 
-		if (sorted) {
+		if (explicit) {
+			this.#explicitDomain = uniqueCategories;
+		} else if (sorted) {
 			this.#sortOrder = uniqueCategories;
 		}
 
@@ -403,9 +407,11 @@ export class BandScaleState {
 		const allCategories: string[] = [];
 		const seen = new Set<string>();
 
-		// If a sort order exists, use it as the base (filtering to valid categories)
-		if (this.#sortOrder) {
-			for (const cat of this.#sortOrder) {
+		// Priority 1: Explicit domain from mark prop (highest specificity)
+		// Priority 2: Sort order from sidecar query
+		const preferredOrder = this.#explicitDomain ?? this.#sortOrder;
+		if (preferredOrder) {
+			for (const cat of preferredOrder) {
 				if (validCategories.has(cat) && !seen.has(cat)) {
 					seen.add(cat);
 					allCategories.push(cat);

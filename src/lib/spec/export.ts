@@ -122,6 +122,9 @@ function entryToMarkSpec(entry: MarkEntry): MarkSpec | null {
 	// Sort
 	if (entry.sort) spec.sort = entry.sort;
 
+	// Domain
+	if (entry.domain) spec.domain = entry.domain;
+
 	// Tooltip
 	if (entry.tooltip === false) spec.tooltip = false;
 

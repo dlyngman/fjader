@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from .._convert import clean_dict, serialize_value, to_camel_case
 
 if TYPE_CHECKING:
-    from .._types import ColorScheme, SortConfig
+    from .._types import ColorScheme, DomainConfig, SortConfig
     from ..transforms._base import TransformSpec
 
 
@@ -30,6 +30,7 @@ class Mark:
     filter_nulls: bool | None = None
     transforms: list[TransformSpec] | None = None
     sort: SortConfig | None = None
+    domain: DomainConfig | None = None
     tooltip: bool | None = None
     tooltip_proximity: Literal["x", "y", "xy"] | None = None
     tip: list[str] | Literal[False] | None = None

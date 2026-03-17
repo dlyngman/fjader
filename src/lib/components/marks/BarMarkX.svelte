@@ -57,6 +57,7 @@
 		dx = 0,
 		dy = 0,
 		sort = null,
+		domain = null,
 		tooltip = true,
 		tip = undefined,
 		fitDomain = undefined
@@ -90,6 +91,7 @@
 		dx: () => dx,
 		dy: () => dy,
 		sort: () => sort,
+		domain: () => domain,
 		tooltip: () => tooltip,
 		tip: () => tip,
 		fitDomain: () => fitDomain
@@ -168,6 +170,7 @@
 		// Bar charts with aggregates should start at zero baseline
 		zeroBaseline: hasAggregateX ? { x: true } : null,
 		sort: normalizeSortConfig(entry.sort ?? null),
+		domain: entry.domain ?? null,
 		tooltip: entry.tip === false ? false : entry.tooltip,
 		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
 	});

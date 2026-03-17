@@ -78,6 +78,7 @@
 		preferredYScaleType = null,
 		transforms = [],
 		sort = null,
+		domain = null,
 		tooltip = true,
 		tooltipProximity,
 		tip = undefined,
@@ -121,6 +122,7 @@
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,
 		sort: () => sort,
+		domain: () => domain,
 		tooltip: () => tooltip,
 		tooltipProximity: () => tooltipProximity,
 		tip: () => tip,
@@ -219,6 +221,7 @@
 			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
 		},
 		sort: normalizeSortConfig(entry.sort ?? null),
+		domain: entry.domain ?? null,
 		tooltip: entry.tip === false ? false : entry.tooltip,
 		fitDomain: _isOverlay ? undefined : (entry.fitDomain as 'x' | 'y' | boolean | undefined),
 		passiveScales: _isOverlay

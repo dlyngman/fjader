@@ -60,3 +60,23 @@ class SortConfig(TypedDict, total=False):
 
     order: SortOrder
     """Sort direction: ``'asc'`` (default) or ``'desc'``."""
+
+
+class DomainConfig(TypedDict, total=False):
+    """Explicit category domain for band/point scales.
+
+    Specifies the exact categories and their order for the axis.
+    Values not in the domain are excluded; domain values with no data
+    get an empty slot.
+
+    Examples::
+
+        domain={'x': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']}
+        domain={'y': ['low', 'medium', 'high']}
+    """
+
+    x: list[str]
+    """Explicit category order for the x-axis."""
+
+    y: list[str]
+    """Explicit category order for the y-axis."""
