@@ -28,7 +28,7 @@ from .marks import dot, bar_x, bar_y, line, area_y, area_x, rect, rect_x, rect_y
 from .plot import plot
 
 # Interactors
-from .interactors import interval_x, interval_y, interval_2d, toggle
+from .interactors import interval_x, interval_y, interval_2d, toggle, derived_interval
 
 # Layout helpers
 from .layout import hconcat, vconcat
@@ -78,7 +78,7 @@ __all__ = [
     # Chart
     "plot",
     # Interactors
-    "interval_x", "interval_y", "interval_2d", "toggle",
+    "interval_x", "interval_y", "interval_2d", "toggle", "derived_interval",
     # Layout
     "hconcat", "vconcat",
     # Transforms

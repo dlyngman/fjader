@@ -82,7 +82,12 @@ export interface PlotSpec {
 // Interactor specs — discriminated union on `interactor`
 // =============================================================================
 
-export type InteractorSpec = IntervalXSpec | IntervalYSpec | Interval2DSpec | ToggleSpec;
+export type InteractorSpec =
+	| IntervalXSpec
+	| IntervalYSpec
+	| Interval2DSpec
+	| ToggleSpec
+	| DerivedIntervalSpec;
 
 export interface IntervalXSpec {
 	interactor: 'intervalX';
@@ -107,6 +112,14 @@ export interface ToggleSpec {
 	interactor: 'toggle';
 	selection?: string;
 	field: string;
+}
+
+export interface DerivedIntervalSpec {
+	interactor: 'derivedInterval';
+	source: string;
+	selection?: string;
+	offset: string;
+	axis?: 'x' | 'y';
 }
 
 // =============================================================================
@@ -234,6 +247,7 @@ export interface LineMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	z?: FieldSpec | null;
 	strokeWidth?: number;
 	dotRadius?: number;
+	opacity?: number;
 	curve?: CurveType;
 	lod?:
 		| boolean

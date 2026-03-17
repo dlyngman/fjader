@@ -51,6 +51,7 @@
 		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
+		opacity?: number;
 		fitDomain?: 'x' | 'y' | boolean;
 		lod?: boolean | LODConfig;
 		onLodController?: (ctrl: LODController | null) => void;
@@ -81,6 +82,7 @@
 		tooltipProximity,
 		tip = undefined,
 		fitDomain = undefined,
+		opacity = 1,
 		lod = true,
 		onLodController = undefined,
 		rung_smooth = undefined,
@@ -487,7 +489,7 @@
 	const smoothWindow = $derived(lodController?.state?.smoothWindow ?? 0);
 	const smoothMode = $derived(lodController?.state?.smoothMode ?? 'centered');
 	const overlayActive = $derived(!_isOverlay && smoothWindow > 0);
-	const effectiveGlobalAlpha = $derived(overlayActive ? 0.3 : 1.0);
+	const effectiveGlobalAlpha = $derived(opacity * (overlayActive ? 0.3 : 1.0));
 
 	// Stable RollingAvgNode — created once, mutated on window size changes.
 	// MarkLifecycle resolves it during buildQuery() and re-queries via invalidation

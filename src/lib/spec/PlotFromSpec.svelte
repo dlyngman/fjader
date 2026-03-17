@@ -10,6 +10,7 @@
 	import IntervalY from '$lib/interactors/IntervalY.svelte';
 	import Interval2D from '$lib/interactors/Interval2D.svelte';
 	import Toggle from '$lib/interactors/Toggle.svelte';
+	import DerivedIntervalX from '$lib/interactors/DerivedIntervalX.svelte';
 	import { resolveMarkEntry } from './MarkRegistry';
 	import type { LegendSpec, PlotSpec } from './types';
 
@@ -119,6 +120,12 @@
 					<Toggle
 						selection={interactor.selection ?? selectionName ?? undefined}
 						field={interactor.field}
+					/>
+				{:else if interactor.interactor === 'derivedInterval'}
+					<DerivedIntervalX
+						sourceSelection={interactor.source}
+						selection={interactor.selection}
+						offset={interactor.offset}
 					/>
 				{/if}
 			{/each}
