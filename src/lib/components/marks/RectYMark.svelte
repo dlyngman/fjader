@@ -147,13 +147,8 @@
 			x1Expanded != null &&
 			'isAutoBinNode' in x1Expanded &&
 			x1Expanded.isAutoBinNode;
-		// Check if y2 is an aggregate expression (has aggregate property or is SQL aggregate)
-		// NOTE: This detection is currently broken (AggregateNode has no .aggregate prop
-		// and constructor name is 'AggregateNode' not '_AggregateNode'). Fixing it would
-		// enable disableZoom + zeroBaseline which needs fitDomain race fix first.
 		const hasAggregateY =
-			(y2 as unknown as Record<string, unknown>)?.aggregate ||
-			(typeof y2 === 'object' && y2?.constructor?.name === '_AggregateNode');
+			typeof y2 === 'object' && y2 != null && (y2 as any).type === 'AGGREGATE';
 		return hasBinnedX && hasAggregateY;
 	});
 
