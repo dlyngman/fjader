@@ -91,11 +91,23 @@ export function resolveMarkEntry(markSpec: MarkSpec): {
 	}
 
 	// Resolve FieldSpec entries in tip (e.g., { aggregate: "min", field: "value" } → Mosaic node)
+	// Also resolves labeled entries: { value: { aggregate: "min", field: "v" }, label: "Min" }
 	if (props.tip && Array.isArray(props.tip)) {
 		props.tip = (props.tip as unknown[]).map((entry) => {
 			if (typeof entry === 'string') return entry;
-			if (typeof entry === 'object' && entry !== null && 'aggregate' in entry) {
-				return resolveFieldSpec(entry as FieldSpec);
+			if (typeof entry === 'object' && entry !== null) {
+				// Labeled entry
+				if ('value' in entry && 'label' in entry) {
+					const labeled = entry as { value: unknown; label: string };
+					if (typeof labeled.value === 'object' && labeled.value !== null && 'aggregate' in labeled.value) {
+						return { value: resolveFieldSpec(labeled.value as FieldSpec), label: labeled.label };
+					}
+					return entry;
+				}
+				// Raw aggregate
+				if ('aggregate' in entry) {
+					return resolveFieldSpec(entry as FieldSpec);
+				}
 			}
 			return entry;
 		});

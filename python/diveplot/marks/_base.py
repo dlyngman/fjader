@@ -14,6 +14,25 @@ if TYPE_CHECKING:
     from ..transforms._base import TransformSpec
 
 
+def _serialize_tip_entry(entry: Any) -> Any:
+    """Serialize a single tip array entry.
+
+    Handles: strings, AggregateField, and labeled entries via either:
+    - tuple: ``("Min", dp.min_("value"))``
+    - dict:  ``{"Min": dp.min_("value")}``
+    Both serialize to ``{"value": {...}, "label": "Min"}``.
+    """
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, tuple) and len(entry) == 2:
+        label, expr = entry
+        return {"value": serialize_value(expr), "label": label}
+    if isinstance(entry, dict) and len(entry) == 1:
+        label, expr = next(iter(entry.items()))
+        return {"value": serialize_value(expr), "label": label}
+    return serialize_value(entry)
+
+
 @dataclass
 class Mark:
     """Base class for all mark specs.
@@ -34,7 +53,7 @@ class Mark:
     domain: DomainConfig | None = None
     tooltip: bool | None = None
     tooltip_proximity: Literal["x", "y", "xy"] | None = None
-    tip: list[str | AggregateField] | Literal[False] | None = None
+    tip: list[str | AggregateField | dict[str, AggregateField]] | Literal[False] | None = None
     fit_domain: Literal["x", "y"] | bool | None = None
 
     # DataFrame attachment (not serialized — data travels via binary traitlets)
@@ -67,6 +86,8 @@ class Mark:
             key = to_camel_case(f.name)
             if f.name == "transforms":
                 result[key] = [serialize_value(t) for t in val]
+            elif f.name == "tip" and isinstance(val, list):
+                result[key] = [_serialize_tip_entry(v) for v in val]
             else:
                 result[key] = serialize_value(val)
         return clean_dict(result)

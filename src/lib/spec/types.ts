@@ -135,6 +135,12 @@ export interface AggregateFieldSpec {
 	field?: string;
 }
 
+/** Labeled tip field: pairs an aggregate expression with a custom display label. */
+export interface LabeledTipFieldSpec {
+	value: AggregateFieldSpec;
+	label: string;
+}
+
 export interface BinFieldSpec {
 	bin: string;
 	steps?: number;
@@ -188,7 +194,7 @@ interface BaseMarkSpec {
 	domain?: { x?: string[]; y?: string[] } | null;
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
-	tip?: (string | '*' | AggregateFieldSpec)[] | false;
+	tip?: (string | '*' | AggregateFieldSpec | LabeledTipFieldSpec)[] | false;
 	fitDomain?: 'x' | 'y' | boolean;
 }
 

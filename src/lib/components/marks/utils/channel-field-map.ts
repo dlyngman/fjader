@@ -69,6 +69,22 @@ export function buildChannelFieldMap(select: Record<string, unknown>): Record<st
 // Expression label helper
 // ---------------------------------------------------------------------------
 
+/** A labeled tip entry: pairs an expression with a custom display label. */
+export interface LabeledTipEntry {
+	value: unknown;
+	label: string;
+}
+
+export function isLabeledTipEntry(entry: unknown): entry is LabeledTipEntry {
+	return (
+		typeof entry === 'object' &&
+		entry !== null &&
+		'value' in entry &&
+		'label' in entry &&
+		typeof (entry as LabeledTipEntry).label === 'string'
+	);
+}
+
 /**
  * Build a descriptive label for an expression node, e.g. "min(value)", "count()".
  * Used as both the SQL alias and the tooltip display name.
@@ -149,6 +165,15 @@ export function resolveTip(
 		// Field name already in a channel (e.g., 'species' when fill='species')
 		if (typeof entry === 'string' && knownFields.has(entry)) {
 			if (!displayFields.includes(entry)) displayFields.push(entry);
+			continue;
+		}
+
+		// Labeled tip entry: { value: expr, label: "Min" }
+		if (isLabeledTipEntry(entry)) {
+			const innerExpr = entry.value;
+			if (isNode(innerExpr)) {
+				if (!displayFields.includes(entry.label)) displayFields.push(entry.label);
+			}
 			continue;
 		}
 

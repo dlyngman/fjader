@@ -30,7 +30,7 @@ import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isContinuousScale } from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
-import { buildExpressionLabel } from '../utils/channel-field-map';
+import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { computeExtentFromData, detectChannelsNeedingDataDomain } from './domain-computation';
 import {
@@ -1494,6 +1494,14 @@ export class MarkLifecycle {
 		if (!tipEntries || tipEntries === false) return extras;
 		for (const entry of tipEntries) {
 			if (entry === '*' || typeof entry === 'string') continue;
+			// Labeled entry: { value: exprNode, label: "Min" }
+			if (isLabeledTipEntry(entry)) {
+				if (isNode(entry.value)) {
+					extras[entry.label] = entry.value;
+				}
+				continue;
+			}
+			// Raw expression node
 			if (!isNode(entry)) continue;
 			const label = buildExpressionLabel(entry);
 			if (label) extras[label] = entry;
