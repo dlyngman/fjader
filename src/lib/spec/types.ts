@@ -120,6 +120,7 @@ export interface DerivedIntervalSpec {
 	selection?: string;
 	offset: string;
 	axis?: 'x' | 'y';
+	relayClauses?: boolean;
 }
 
 // =============================================================================

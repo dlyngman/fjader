@@ -123,6 +123,7 @@ class DerivedIntervalSpec(InteractorSpec):
     selection: str | None = None
     offset: str | None = None
     axis: str | None = None
+    relay_clauses: bool | None = None
 
 
 def derived_interval(
@@ -131,6 +132,7 @@ def derived_interval(
     *,
     selection: str | None = None,
     axis: str | None = None,
+    relay_clauses: bool | None = None,
 ) -> DerivedIntervalSpec:
     """Create a derived interval that follows another brush at a calendar offset.
 
@@ -143,7 +145,10 @@ def derived_interval(
         offset: Calendar offset string, e.g. ``"-1y"``, ``"-7d"``, ``"-1mo"``.
         selection: Selection group name for the derived filter.
         axis: Axis to follow (``"x"`` or ``"y"``). Defaults to ``"x"``.
+        relay_clauses: Forward non-axis clauses (toggles, other filters) from
+            the source selection to the derived selection. Defaults to ``True``.
     """
     return DerivedIntervalSpec(
-        source=source, offset=offset, selection=selection, axis=axis
+        source=source, offset=offset, selection=selection, axis=axis,
+        relay_clauses=relay_clauses,
     )

@@ -282,6 +282,22 @@ export class SelectionGroup {
 		this.filterSel.update(c);
 		this.#syncItems();
 	}
+
+	removeManual(key: string): void {
+		const source = `manual:${key}`;
+		const entry = this.#entries.get(source);
+		if (!entry) return;
+		// Clear the predicate from the Mosaic filterSel (clear() can't do this
+		// for manual entries because sel is null)
+		this.filterSel.update({
+			predicate: null,
+			source: source as unknown as SelectionClause['source'],
+			clients: entry.clause?.clients,
+			value: null
+		} as SelectionClause);
+		this.#entries.delete(source);
+		this.#syncItems();
+	}
 }
 
 // ---------------------------------------------------------------------------

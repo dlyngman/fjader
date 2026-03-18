@@ -15,13 +15,15 @@
 		selection?: string;
 		offset: string;
 		axis?: 'x' | 'y';
+		relayClauses?: boolean;
 	}
 
 	let {
 		sourceSelection,
 		selection: selectionName = 'derived',
 		offset,
-		axis = 'x'
+		axis = 'x',
+		relayClauses = true
 	}: Props = $props();
 
 	const registry = getSelectionRegistry()!;
@@ -171,6 +173,42 @@
 		selection.update(clause);
 	});
 
+	// =========================================================================
+	// Relay non-axis clauses from source → derived
+	// =========================================================================
+
+	let relayedKeys = new Set<string>();
+
+	$effect(() => {
+		if (!relayClauses) {
+			for (const key of relayedKeys) derivedGroup.removeManual(key);
+			relayedKeys = new Set();
+			return;
+		}
+
+		const items = sourceGroup.items;
+		const fieldStr =
+			typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? '');
+
+		const currentKeys = new Set<string>();
+		for (const item of items) {
+			// Skip the range clause on the axis column — we replace it with the shifted version
+			if (item.schema?.kind === 'range' && item.schema?.column === fieldStr) continue;
+
+			if (item.clause?.predicate) {
+				const key = `relay:${item.source}`;
+				currentKeys.add(key);
+				derivedGroup.upsertManual(key, item.clause, item.schema ?? {});
+			}
+		}
+
+		// Remove stale relayed clauses
+		for (const key of relayedKeys) {
+			if (!currentKeys.has(key)) derivedGroup.removeManual(key);
+		}
+		relayedKeys = currentKeys;
+	});
+
 	// Pre-aggregation on pointer enter
 	function handlePointerEnter() {
 		if (!selection?.activate) return;
@@ -199,6 +237,8 @@
 
 	onMount(() => {
 		return () => {
+			for (const key of relayedKeys) derivedGroup.removeManual(key);
+			relayedKeys = new Set();
 			unregister?.();
 		};
 	});

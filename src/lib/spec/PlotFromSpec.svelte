@@ -126,6 +126,7 @@
 						sourceSelection={interactor.source}
 						selection={interactor.selection}
 						offset={interactor.offset}
+						relayClauses={interactor.relayClauses}
 					/>
 				{/if}
 			{/each}

@@ -73,21 +73,66 @@ dp.streamlit.render(
     server_duckdb=USE_SERVER,
 )
 
-# --- Simple bar from inline data ---
-st.header("Simple Bar (inline data)")
+# --- Explicit domain comparison ---
+# Each chart in its own render context (st.columns) so they get independent
+# BandScaleStates — hconcat would share one scale and the explicit domain
+# would override the default order on both charts.
+st.header("Explicit Domain — BarX (horizontal)")
+st.markdown("Left: default order (data order). Right: explicit domain controls category order.")
 
 simple = pl.DataFrame({
     "weather": ["sun", "rain", "fog", "snow", "drizzle"],
     "count": [640, 641, 101, 26, 53],
 })
-dp.streamlit.render(
-    dp.bar_x(
-        data=simple, x="count", y="weather", fill="weather",
-        domain={"y": ["sun", "fog", "drizzle", "rain", "snow"]},
-    ),
-    height=300,
-    server_duckdb=USE_SERVER,
-)
+
+col1, col2 = st.columns(2)
+with col1:
+    dp.streamlit.render(
+        dp.plot(
+            dp.bar_x(data=simple, x="count", y="weather", selection="togX1"),
+            width=450, height=250, y_label="default order",
+            interactors=[dp.toggle(field="weather", selection="togX1")],
+        ),
+        server_duckdb=USE_SERVER,
+    )
+with col2:
+    dp.streamlit.render(
+        dp.plot(
+            dp.bar_x(
+                data=simple, x="count", y="weather", selection="togX2",
+                domain={"y": ["snow", "drizzle", "fog", "rain", "sun"]},
+            ),
+            width=450, height=250, y_label="explicit domain",
+            interactors=[dp.toggle(field="weather", selection="togX2")],
+        ),
+        server_duckdb=USE_SERVER,
+    )
+
+st.header("Explicit Domain — BarY (vertical)")
+st.markdown("Left: default order. Right: explicit domain controls category order.")
+
+col3, col4 = st.columns(2)
+with col3:
+    dp.streamlit.render(
+        dp.plot(
+            dp.bar_y(data=simple, x="weather", y="count", selection="togY1"),
+            width=450, height=250, x_label="default order",
+            interactors=[dp.toggle(field="weather", selection="togY1")],
+        ),
+        server_duckdb=USE_SERVER,
+    )
+with col4:
+    dp.streamlit.render(
+        dp.plot(
+            dp.bar_y(
+                data=simple, x="weather", y="count", selection="togY2",
+                domain={"x": ["snow", "drizzle", "fog", "rain", "sun"]},
+            ),
+            width=450, height=250, x_label="explicit domain",
+            interactors=[dp.toggle(field="weather", selection="togY2")],
+        ),
+        server_duckdb=USE_SERVER,
+    )
 
 # --- Crossfilter: brush dots to filter bars ---
 st.header("Crossfilter (brush dots → filters bars)")
