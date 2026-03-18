@@ -210,6 +210,7 @@
 		selection: resolveSelection(entry.selection),
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		tip: entry.tip,
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
 		_connectedConfig: {

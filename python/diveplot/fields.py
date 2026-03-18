@@ -130,6 +130,8 @@ def median(field: str) -> AggregateField:
     return AggregateField(aggregate="median", field=field)
 
 
+
+
 def bin(field: str, *, steps: int | None = None) -> BinField:  # noqa: A001
     return BinField(bin=field, steps=steps)
 

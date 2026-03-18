@@ -11,7 +11,10 @@
 -->
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import { format as d3format } from 'd3-format';
 	import type { ChartContext, ContinuousScaleState } from '$lib/types';
+
+	const commaFormat = d3format(',.4~g');
 
 	interface Props {
 		fields?: string[] | null;
@@ -112,7 +115,7 @@
 			const channel = getChannel(key);
 			const fmt = channel === 'x' ? xFormat : channel === 'y' ? yFormat : null;
 			if (fmt) return fmt(value);
-			return Number.isInteger(value) ? value.toString() : value.toFixed(2);
+			return commaFormat(value);
 		}
 		return String(value);
 	}

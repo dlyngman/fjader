@@ -129,6 +129,7 @@
 		selection: resolveSelection(selection),
 		transforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		tip,
 		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
 		sort: normalizeSortConfig(sort),
 		domain: domain ?? null,

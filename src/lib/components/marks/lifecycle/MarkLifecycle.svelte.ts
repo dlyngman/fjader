@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { DataClient } from '$lib/data/DataClient.svelte';
 import type { DataClientConfig, DataClientOptions } from '$lib/data/DataClient.svelte';
-import { Query, isNode, sql, column as sqlColumn, min as sqlMin, max as sqlMax } from '@uwdata/mosaic-sql';
+import { Query, isNode, isAggregateExpression, sql, column as sqlColumn, min as sqlMin, max as sqlMax } from '@uwdata/mosaic-sql';
 import type { ExprValue, FilterExpr } from '@uwdata/mosaic-sql';
 import type { Selection, Coordinator, FieldInfoRequest } from '@uwdata/mosaic-core';
 import { Priority } from '@uwdata/mosaic-core';
@@ -30,6 +30,7 @@ import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isContinuousScale } from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
+import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { computeExtentFromData, detectChannelsNeedingDataDomain } from './domain-computation';
 import {
@@ -118,6 +119,9 @@ export interface MarkLifecycleConfig {
 	/** Skip scale registration and domain contribution. The mark renders into
 	 *  the chart's existing scales without affecting them (LOD overlays). */
 	passiveScales?: boolean;
+	/** Raw resolved tip array — expression entries are injected lazily into the
+	 *  tooltip temp table query (not into the main rendering query). */
+	tip?: (unknown | '*')[] | false;
 }
 
 export interface MarkLifecycleOptions {
@@ -1483,6 +1487,92 @@ export class MarkLifecycle {
 		this.#issueFitDomainQuery(fittedAxis, target as [number, number], true);
 	}
 
+	/** Extract expression nodes from the tip prop as { label: exprNode } pairs. */
+	#getTipExtras(): Record<string, unknown> {
+		const extras: Record<string, unknown> = {};
+		const tipEntries = this.#config.tip;
+		if (!tipEntries || tipEntries === false) return extras;
+		for (const entry of tipEntries) {
+			if (entry === '*' || typeof entry === 'string') continue;
+			// Labeled entry: { value: exprNode, label: "Min" }
+			if (isLabeledTipEntry(entry)) {
+				if (isNode(entry.value)) {
+					extras[entry.label] = entry.value;
+				}
+				continue;
+			}
+			// Raw expression node
+			if (!isNode(entry)) continue;
+			const label = buildExpressionLabel(entry);
+			if (label) extras[label] = entry;
+		}
+		return extras;
+	}
+
+	/**
+	 * Merge tip expression extras into an existing tooltip temp table via a
+	 * sidecar DB query. Computes the aggregates against the source table using
+	 * the same GROUP BY as the main query, then ALTER+UPDATE the temp table.
+	 * Works uniformly for both Path A and Path B.
+	 */
+	async #mergeTipExtras(
+		tableName: string,
+		tipExtras: Record<string, unknown>
+	): Promise<void> {
+		if (!this.#cachedQueryParts) return;
+
+		// Identify non-aggregate channel columns — these are the GROUP BY / join keys
+		const joinCols: string[] = [];
+		for (const [ch, expr] of Object.entries(this.#cachedQueryParts.selectDef)) {
+			if (!isAggregateExpression(expr) && !isWindowExpression(expr)) {
+				joinCols.push(ch);
+			}
+		}
+
+		// Build sidecar select: group-by columns + tip extras
+		const sidecarSelect: Record<string, unknown> = {};
+		for (const ch of joinCols) {
+			sidecarSelect[ch] = this.#cachedQueryParts.selectDef[ch];
+		}
+		Object.assign(sidecarSelect, tipExtras);
+
+		const sidecarParts = buildQueryParts(
+			sidecarSelect,
+			undefined,
+			this.#transformCompiler.hasSQLTransforms()
+		);
+
+		let filter: unknown[] = [];
+		const selection = this.#config.selection;
+		if (selection && this.client) {
+			const pred = selection.predicate(this.client);
+			if (Array.isArray(pred)) filter = pred;
+		}
+
+		const sidecarQuery = assembleQuery(
+			this.effectiveTable,
+			sidecarParts,
+			filter,
+			this.#config._filterNulls as unknown[] | null | undefined,
+			this.#transformCompiler,
+			false
+		);
+
+		// ALTER TABLE to add columns, then UPDATE from sidecar query
+		const alterStmts = Object.keys(tipExtras).map(
+			(col) => `ALTER TABLE "${tableName}" ADD COLUMN "${col}" DOUBLE`
+		);
+		const setClauses = Object.keys(tipExtras)
+			.map((col) => `"${col}" = _s."${col}"`)
+			.join(', ');
+		const joinCondition = joinCols
+			.map((ch) => `"${tableName}"."${ch}" = _s."${ch}"`)
+			.join(' AND ');
+		const updateStmt = `UPDATE "${tableName}" SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
+
+		await this.#coordinator.exec([...alterStmts, updateStmt]);
+	}
+
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
 		const tableName = this.#tooltipTableName;
 		try {
@@ -1536,8 +1626,6 @@ export class MarkLifecycle {
 					`DROP TABLE IF EXISTS "${tableName}"`,
 					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery.toString()})${orderClause}`
 				]);
-				this.#tooltipTableReady = true;
-				this.#onTooltipTableWritten();
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
 				// JS transforms produce small datasets (tens of rows).
@@ -1595,10 +1683,21 @@ export class MarkLifecycle {
 					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 				]);
-
-				this.#tooltipTableReady = true;
-				this.#onTooltipTableWritten();
 			}
+
+			// Merge tip expression extras (aggregates/windows) via sidecar query.
+			// Runs after either path creates the base temp table.
+			const tipExtras = this.#getTipExtras();
+			if (Object.keys(tipExtras).length > 0) {
+				try {
+					await this.#mergeTipExtras(tableName, tipExtras);
+				} catch (err) {
+					console.warn('Failed to merge tip extras into tooltip table:', err);
+				}
+			}
+
+			this.#tooltipTableReady = true;
+			this.#onTooltipTableWritten();
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
 		}

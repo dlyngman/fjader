@@ -162,6 +162,7 @@
 		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		tip: entry.tip,
 		constants: buildConstantsFromChannels({ x1, x2, y: entry.y }),
 		clientOptions: {
 			limit: entry.limit,

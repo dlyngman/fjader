@@ -5,9 +5,10 @@
 		sourceSelection: string;
 		selection?: string;
 		offset: string;
+		relayClauses?: boolean;
 	}
 
-	let { sourceSelection, selection, offset }: Props = $props();
+	let { sourceSelection, selection, offset, relayClauses }: Props = $props();
 </script>
 
-<DerivedInterval1D {sourceSelection} {selection} {offset} axis="x" />
+<DerivedInterval1D {sourceSelection} {selection} {offset} axis="x" {relayClauses} />

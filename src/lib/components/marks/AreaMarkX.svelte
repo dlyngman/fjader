@@ -218,6 +218,7 @@
 		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		tip: entry.tip,
 		// Connected topology - ordered by dimension (y)
 		_connectedConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,

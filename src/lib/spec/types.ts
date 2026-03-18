@@ -120,6 +120,7 @@ export interface DerivedIntervalSpec {
 	selection?: string;
 	offset: string;
 	axis?: 'x' | 'y';
+	relayClauses?: boolean;
 }
 
 // =============================================================================
@@ -132,6 +133,12 @@ export type FieldSpec = string | AggregateFieldSpec | BinFieldSpec | WindowField
 export interface AggregateFieldSpec {
 	aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'median';
 	field?: string;
+}
+
+/** Labeled tip field: pairs an aggregate expression with a custom display label. */
+export interface LabeledTipFieldSpec {
+	value: AggregateFieldSpec;
+	label: string;
 }
 
 export interface BinFieldSpec {
@@ -187,7 +194,7 @@ interface BaseMarkSpec {
 	domain?: { x?: string[]; y?: string[] } | null;
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
-	tip?: (string | '*')[] | false;
+	tip?: (string | '*' | AggregateFieldSpec | LabeledTipFieldSpec)[] | false;
 	fitDomain?: 'x' | 'y' | boolean;
 }
 
