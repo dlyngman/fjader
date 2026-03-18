@@ -1,6 +1,6 @@
 <script>
 	import { getContext } from 'svelte';
-	import { count, avg, sum } from '@uwdata/mosaic-sql';
+	import { count, avg, sum, min, max } from '@uwdata/mosaic-sql';
 	import {
 		ChartContainer,
 		Grid,
@@ -11,7 +11,8 @@
 		WebGPUCanvas,
 		DotsMark,
 		BarMarkY,
-		LineMark
+		LineMark,
+		AreaMarkY
 	} from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');
@@ -187,6 +188,71 @@
 									y="revenue"
 									stroke="region"
 									tip={['x', 'y', 'country']}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</section>
+		<!-- 7. LineMark with aggregate expressions in tip (lazy tooltip fields) -->
+		<section>
+			<h2>LineMark — tip with aggregate expressions</h2>
+			<p class="desc">
+				Should show: species, avg(body_mass), min(body_mass), max(body_mass).
+				The min/max are computed lazily in the tooltip query only (Path A, no JS transforms).
+			</p>
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="species" yLabel="body_mass">
+					{#snippet background()}
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<LineMark
+									table="penguins"
+									x="bill_length"
+									y={avg('body_mass')}
+									stroke="species"
+									tooltipProximity="x"
+									tip={['x', 'stroke', 'y', min('body_mass'), max('body_mass')]}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</section>
+		<!-- 8. BarMarkY with tip extras (Path B — has implicit stack JS transform) -->
+		<section>
+			<h2>BarMarkY — tip with aggregate expressions (Path B)</h2>
+			<p class="desc">
+				Should show: species, avg(body_mass), min(body_mass), max(body_mass).
+				Uses sidecar query since BarMarkY has implicit stack (JS transform → Path B).
+			</p>
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="species" yLabel="body_mass">
+					{#snippet background()}
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<BarMarkY
+									table="penguins"
+									x="species"
+									y={avg('body_mass')}
+									fill="species"
+									tip={['x', 'fill', 'y', min('body_mass'), max('body_mass')]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

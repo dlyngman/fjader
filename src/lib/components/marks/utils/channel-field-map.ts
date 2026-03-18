@@ -1,5 +1,6 @@
 import { isNode, isColumnRef, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { isBinExpression } from '$lib/sql/bin';
+import { isWindowExpression } from '$lib/sql/expression-utils';
 import type { FieldRef } from '$lib/types';
 
 /**
@@ -65,6 +66,28 @@ export function buildChannelFieldMap(select: Record<string, unknown>): Record<st
 }
 
 // ---------------------------------------------------------------------------
+// Expression label helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a descriptive label for an expression node, e.g. "min(value)", "count()".
+ * Used as both the SQL alias and the tooltip display name.
+ */
+export function buildExpressionLabel(value: unknown): string | null {
+	if (!isNode(value)) return null;
+
+	if (isAggregateExpression(value) || isWindowExpression(value)) {
+		const node = value as { name?: string; args?: unknown[] };
+		const fnName = node.name ?? 'expr';
+		const arg = node.args?.[0];
+		const fieldName = arg && isColumnRef(arg) ? (arg as { column: string }).column : null;
+		return fieldName ? `${fnName}(${fieldName})` : `${fnName}()`;
+	}
+
+	return null;
+}
+
+// ---------------------------------------------------------------------------
 // Tip resolution
 // ---------------------------------------------------------------------------
 
@@ -80,7 +103,9 @@ export interface ResolvedTip {
  * - `'*'` → all channel fields in select order
  * - Channel name ('x', 'y', 'fill', …) → that channel's field
  * - Field name already in a channel → included directly
- * - Unknown string or expression → extra DB column to fetch and display
+ * - Unknown string → extra DB column to fetch (added to extraSelect)
+ * - Expression node (aggregate/window) → tooltip-only, NOT added to extraSelect.
+ *   These are injected lazily into the tooltip temp table query by MarkLifecycle.
  *
  * Returns `displayFields: null` when tip is unset (show-all default).
  */
@@ -127,11 +152,18 @@ export function resolveTip(
 			continue;
 		}
 
-		// Extra field — add to select and display list
-		const key = extractFieldName(entry) ?? `_tip_${i}`;
+		// Expression node (aggregate/window) — tooltip-only, handled by MarkLifecycle.
+		// Add its label to displayFields but NOT to extraSelect (avoids polluting main query).
+		const exprLabel = buildExpressionLabel(entry);
+		if (exprLabel) {
+			if (!displayFields.includes(exprLabel)) displayFields.push(exprLabel);
+			continue;
+		}
+
+		// Extra string field — add to select and display list
+		const key = typeof entry === 'string' ? entry : (extractFieldName(entry) ?? `_tip_${i}`);
 		if (!(key in channelSelect)) extraSelect[key] = entry;
-		const displayName = extractFieldName(entry) ?? key;
-		if (!displayFields.includes(displayName)) displayFields.push(displayName);
+		if (!displayFields.includes(key)) displayFields.push(key);
 	}
 
 	return { extraSelect, displayFields };

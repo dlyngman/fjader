@@ -90,6 +90,17 @@ export function resolveMarkEntry(markSpec: MarkSpec): {
 		props.transforms = parseTransforms(props.transforms);
 	}
 
+	// Resolve FieldSpec entries in tip (e.g., { aggregate: "min", field: "value" } → Mosaic node)
+	if (props.tip && Array.isArray(props.tip)) {
+		props.tip = (props.tip as unknown[]).map((entry) => {
+			if (typeof entry === 'string') return entry;
+			if (typeof entry === 'object' && entry !== null && 'aggregate' in entry) {
+				return resolveFieldSpec(entry as FieldSpec);
+			}
+			return entry;
+		});
+	}
+
 	// selection stays as a string — mark components resolve it from SelectionRegistry context
 	return { component, props };
 }

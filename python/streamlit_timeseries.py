@@ -233,7 +233,7 @@ hourly = dp.plot(
         fill_opacity=0.2,
         selection="daysel",
         curve="monotone",
-        tooltip_proximity="x",
+        tip=False,
     ),
     dp.line(
         data=df,
@@ -244,6 +244,7 @@ hourly = dp.plot(
         selection="daysel",
         curve="monotone",
         tooltip_proximity="x",
+        tip=["x", "stroke", "y", dp.min_("value"), dp.max_("value")],
     ),
     height=340,
     x_label="Hour of Day",
@@ -263,7 +264,7 @@ if show_comparison:
             fill_opacity=0.2,
             selection="cmpsel",
             curve="monotone",
-            tooltip_proximity="x",
+            tip=False,
         ),
         dp.line(
             data=df,
@@ -274,6 +275,7 @@ if show_comparison:
             selection="cmpsel",
             curve="monotone",
             tooltip_proximity="x",
+            tip=["x", "stroke", "y", dp.min_("value"), dp.max_("value")],
         ),
         height=340,
         x_label="Hour of Day",

@@ -480,8 +480,11 @@
 		refreshSvgOrigin();
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
-		// Focus so [ / ] keyboard shortcuts work for tooltip cycling
-		if (document.activeElement === document.body || document.activeElement === null) {
+		// Focus so [ / ] keyboard shortcuts work for tooltip cycling.
+		// Relax the check: focus unless something inside the chart cell already has focus
+		// (e.g., palette input). The strict body/null check fails in iframes (Streamlit)
+		// where activeElement is the iframe container or a wrapper div.
+		if (!chartCellEl?.contains(document.activeElement)) {
 			chartCellEl?.focus({ preventScroll: true });
 		}
 	}

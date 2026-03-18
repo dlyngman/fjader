@@ -188,7 +188,7 @@ interface BaseMarkSpec {
 	domain?: { x?: string[]; y?: string[] } | null;
 	tooltip?: boolean;
 	tooltipProximity?: 'x' | 'y' | 'xy';
-	tip?: (string | '*')[] | false;
+	tip?: (string | '*' | AggregateFieldSpec)[] | false;
 	fitDomain?: 'x' | 'y' | boolean;
 }
 

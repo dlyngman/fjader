@@ -190,6 +190,7 @@
 		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		tip: entry.tip,
 		clientOptions: {
 			limit: entry.limit,
 			filterNulls: entry.filterNulls ? ([x1Expanded, x2Expanded, y1, y2] as FieldRef[]) : null

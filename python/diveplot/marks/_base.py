@@ -10,6 +10,7 @@ from .._convert import clean_dict, serialize_value, to_camel_case
 
 if TYPE_CHECKING:
     from .._types import ColorScheme, DomainConfig, SortConfig
+    from ..fields import AggregateField
     from ..transforms._base import TransformSpec
 
 
@@ -33,7 +34,7 @@ class Mark:
     domain: DomainConfig | None = None
     tooltip: bool | None = None
     tooltip_proximity: Literal["x", "y", "xy"] | None = None
-    tip: list[str] | Literal[False] | None = None
+    tip: list[str | AggregateField] | Literal[False] | None = None
     fit_domain: Literal["x", "y"] | bool | None = None
 
     # DataFrame attachment (not serialized — data travels via binary traitlets)
