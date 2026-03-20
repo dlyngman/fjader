@@ -232,6 +232,17 @@
 		};
 	});
 
+	// --- Viewport visibility: pause Mosaic clients when chart is off-screen ---
+	const removeVisibilityCallback = gpuCoordinator.setVisibilityCallback(
+		layout.chartId,
+		(visible) => {
+			for (const client of scales.markClients) {
+				client.enabled = visible;
+			}
+		}
+	);
+	onMount(() => removeVisibilityCallback);
+
 	// --- Scale readiness effect ---
 	$effect(() => {
 		const xScale = scales?.xScaleState;

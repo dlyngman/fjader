@@ -239,6 +239,16 @@ export class GPUCoordinator {
 	#hoveredCharts = new Set<string>();
 
 	// =========================================================================
+	// VIEWPORT VISIBILITY (IntersectionObserver + Page Visibility API)
+	// =========================================================================
+	#visibilityObserver: IntersectionObserver | null = null;
+	#observedElements = new Map<string, HTMLElement>(); // chartId -> element
+	#visibilityCallbacks = new Map<string, (visible: boolean) => void>();
+	#chartIOVisible = new Map<string, boolean>(); // per-chart IO state
+	#pageVisible = true;
+	#boundPageVisibilityHandler: (() => void) | null = null;
+
+	// =========================================================================
 	// PER-FRAME CALLBACKS (for tooltip scheduling, etc.)
 	// =========================================================================
 	#frameCallbacks: FrameCallback[] = [];
@@ -341,6 +351,31 @@ export class GPUCoordinator {
 			onRender: this.#renderFrame,
 			onIdleCheck: this.#idleCheck
 		});
+
+		// Viewport visibility observer — shared across all charts.
+		// rootMargin provides 200px lookahead so charts pre-warm before scrolling into view.
+		if (typeof IntersectionObserver !== 'undefined') {
+			this.#visibilityObserver = new IntersectionObserver(
+				(entries) => {
+					for (const entry of entries) {
+						const chartId = (entry.target as HTMLElement).dataset.chartId;
+						if (chartId) this.#handleVisibilityChange(chartId, entry.isIntersecting);
+					}
+				},
+				{ rootMargin: '200px' }
+			);
+		}
+
+		// Page Visibility API — pause all charts when tab is hidden
+		if (typeof document !== 'undefined') {
+			this.#boundPageVisibilityHandler = () => {
+				this.#pageVisible = !document.hidden;
+				for (const [chartId, ioVisible] of this.#chartIOVisible) {
+					this.#applyVisibility(chartId, this.#pageVisible && ioVisible);
+				}
+			};
+			document.addEventListener('visibilitychange', this.#boundPageVisibilityHandler);
+		}
 	}
 
 	// =========================================================================
@@ -1433,6 +1468,14 @@ export class GPUCoordinator {
 
 		this.#registeredCharts.set(chartId, chartConfig);
 
+		// Observe canvas for viewport visibility
+		if (this.#visibilityObserver) {
+			canvas.dataset.chartId = chartId;
+			this.#visibilityObserver.observe(canvas);
+			this.#observedElements.set(chartId, canvas);
+			this.#chartIOVisible.set(chartId, true); // assume visible until IO fires
+		}
+
 		const pendingMapping = this.#pendingScaleMappings.get(chartId);
 		if (pendingMapping) {
 			this.setChartScaleMapping(chartId, pendingMapping);
@@ -1490,6 +1533,15 @@ export class GPUCoordinator {
 			this.#registeredCharts.delete(chartId);
 			this.#hoveredCharts.delete(chartId);
 
+			// Stop observing visibility
+			const observed = this.#observedElements.get(chartId);
+			if (observed && this.#visibilityObserver) {
+				this.#visibilityObserver.unobserve(observed);
+			}
+			this.#observedElements.delete(chartId);
+			this.#chartIOVisible.delete(chartId);
+			this.#visibilityCallbacks.delete(chartId);
+
 			// const msaa = this.#msaaCache.get(chartId);
 			// if (msaa) {
 			// 	msaa.texture.destroy();
@@ -1497,6 +1549,38 @@ export class GPUCoordinator {
 			// }
 
 			this.#pendingScaleMappings.delete(chartId);
+		}
+	}
+
+	// =========================================================================
+	// VIEWPORT VISIBILITY
+	// =========================================================================
+
+	/**
+	 * Register a callback invoked when a chart's effective visibility changes.
+	 * Effective visibility = IntersectionObserver visible AND page visible.
+	 * Used by ChartCell to toggle Mosaic client.enabled.
+	 */
+	setVisibilityCallback(chartId: string, callback: (visible: boolean) => void): () => void {
+		this.#visibilityCallbacks.set(chartId, callback);
+		return () => this.#visibilityCallbacks.delete(chartId);
+	}
+
+	#handleVisibilityChange(chartId: string, ioVisible: boolean): void {
+		this.#chartIOVisible.set(chartId, ioVisible);
+		this.#applyVisibility(chartId, this.#pageVisible && ioVisible);
+	}
+
+	#applyVisibility(chartId: string, visible: boolean): void {
+		const cfg = this.#registeredCharts.get(chartId);
+		if (!cfg || cfg.visible === visible) return;
+
+		cfg.visible = visible;
+		this.#visibilityCallbacks.get(chartId)?.(visible);
+
+		if (visible) {
+			// Chart became visible — trigger re-render with current state
+			this.invalidateChart(chartId);
 		}
 	}
 
@@ -1784,21 +1868,20 @@ export class GPUCoordinator {
 
 		for (const zLevel of sortedZLevels) {
 			const layersInZLevel = zIndexGroups.get(zLevel)!;
-			const markTypeGroups = new Map<string, LayerConfig[]>();
 
+			// Cache pipeline references, then group by pipeline identity
+			// to minimize setPipeline calls within a render pass
+			const pipelineGroups = new Map<GPURenderPipeline | null, LayerConfig[]>();
 			for (const layer of layersInZLevel) {
-				const markType = layer.markType || 'unknown';
-				if (!markTypeGroups.has(markType)) markTypeGroups.set(markType, []);
-				markTypeGroups.get(markType)!.push(layer);
+				layer.cachedPipeline = layer.renderer?.pipeline ?? null;
+				const key = layer.cachedPipeline;
+				if (!pipelineGroups.has(key)) pipelineGroups.set(key, []);
+				pipelineGroups.get(key)!.push(layer);
 			}
 
-			for (const batchedLayers of markTypeGroups.values()) {
+			for (const batchedLayers of pipelineGroups.values()) {
 				newPlan.push(...batchedLayers);
 			}
-		}
-
-		for (const layer of newPlan) {
-			layer.cachedPipeline = layer.renderer?.pipeline;
 		}
 
 		chartConfig.renderPlan = newPlan;
@@ -1891,11 +1974,17 @@ export class GPUCoordinator {
 
 				msaa?.texture.destroy();
 
+				// TRANSIENT_ATTACHMENT (Chrome 146+) hints that the MSAA texture is only
+				// needed within this render pass. On tile-based GPUs (Apple Silicon), this
+				// avoids VRAM allocation and keeps the texture in fast on-chip tile memory.
+				const transient =
+					((GPUTextureUsage as unknown as Record<string, number>).TRANSIENT_ATTACHMENT ?? 0);
+
 				const newTexture = this.#device!.createTexture({
 					size: { width: canvas.width, height: canvas.height },
 					sampleCount: this.#msaaSampleCount,
 					format: this.#presentationFormat!,
-					usage: GPUTextureUsage.RENDER_ATTACHMENT
+					usage: GPUTextureUsage.RENDER_ATTACHMENT | transient
 				});
 
 				msaa = { texture: newTexture, view: newTexture.createView() };
