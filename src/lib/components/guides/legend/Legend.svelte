@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
 	import OrdinalColorLegend from './OrdinalColorLegend.svelte';
+	import ContinuousColorLegend from './ContinuousColorLegend.svelte';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	interface Props {
@@ -52,5 +53,13 @@
 		{swatchRadius}
 		{className}
 		orientation={effectiveOrientation}
+	/>
+{:else if colorScaleState?.ready && (colorScaleState as ColorScaleState).isContinuous}
+	<ContinuousColorLegend
+		scaleState={colorScaleState as ColorScaleState}
+		selection={selectionName}
+		title={effectiveTitle}
+		orientation={effectiveOrientation}
+		{className}
 	/>
 {/if}

@@ -14,6 +14,7 @@
 	let colorField = $state('distance');
 	let colorScheme = $state('tableau10');
 	let markType = $state('dots');
+	let legendPosition = $state('top');
 
 	// Available options
 	const categoricalFields = [
@@ -98,6 +99,16 @@
 
 		<div class="control-group">
 			<label>
+				<strong>Legend Position:</strong>
+				<select bind:value={legendPosition}>
+					<option value="top">Top (horizontal)</option>
+					<option value="right">Right (vertical)</option>
+				</select>
+			</label>
+		</div>
+
+		<div class="control-group">
+			<label>
 				<strong>Color Scheme:</strong>
 				<select bind:value={colorScheme}>
 					{#each availableSchemes as scheme (scheme)}
@@ -129,9 +140,9 @@
 	</div>
 
 	<div class="chart-container">
-		<ChartContainer>
+		<ChartContainer {legendPosition}>
 			{#snippet legend()}
-				<Legend color={colorField} />
+				<Legend color={colorField} selection="legend" />
 			{/snippet}
 
 			{#snippet canvas()}
@@ -148,6 +159,7 @@
 								opacity={0.5}
 								r={2}
 								limit={50000}
+								selection="legend"
 							/>
 						{:else}
 							<!-- Bar chart with origin on X axis and colored by configurable field -->
@@ -157,6 +169,7 @@
 								y={sum('delay')}
 								fill={colorField}
 								scheme={colorScheme}
+								selection="legend"
 							/>
 						{/if}
 					{/snippet}
