@@ -48,9 +48,9 @@ export class ColorScaleState {
 	#rampSlot: number = -1; // Used by continuous scales
 	#paletteSlot: number = -1; // Used by ordinal scales
 
-	// Scale configuration
-	#scheme: string;
-	#scaleType: ColorScaleType; // 'ordinal' | 'sequential' | 'diverging' | 'cyclical'
+	// Scale configuration (scheme is reactive so legends re-render on scheme change)
+	#scheme: string = $state('');
+	#scaleType: ColorScaleType = $state('sequential');
 	#reverse: boolean;
 	#midpoint: number | undefined; // For diverging scales
 
