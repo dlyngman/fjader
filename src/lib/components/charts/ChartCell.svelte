@@ -412,6 +412,14 @@
 			scales?.registerParallelColumn(column, markId),
 		unregisterParallelColumn: (column, markId) =>
 			scales?.unregisterParallelColumn(column, markId),
+		reorderParallelAxis: (from, to) =>
+			scales?.reorderParallelAxis(from, to),
+		get parallelReorderState() {
+			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };
+		},
+		get animatedAxisXPositions() {
+			return scales?.animatedAxisXPositions ?? [];
+		},
 		get parallelScales() {
 			return scales?.parallelScales ?? null;
 		},
@@ -476,6 +484,7 @@
 	let isPanning = $state(false);
 	let activePanX = $state(false);
 	let activePanY = $state(false);
+	let isReordering = $state(false);
 
 	// Touch/pinch zoom state
 	let initialTouchDistance = $state(0);
@@ -696,6 +705,14 @@
 			return;
 		}
 
+		// Parallel axis reorder: pointer in bottom margin near a label
+		if (!yInBounds && innerPoint.y > 0 && scales.parallelScales &&
+			scales.startParallelReorder(innerPoint.x, layout.innerWidth)) {
+			isReordering = true;
+			(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
+			return;
+		}
+
 		activePanX = xInBounds && !!scales.xScaleState?.supportsPanZoom;
 		activePanY = yInBounds && !!scales.yScaleState?.supportsPanZoom;
 
@@ -718,6 +735,11 @@
 	function processPointerMove(event: PointerEvent) {
 		const x = ptrX(event);
 		const y = ptrY(event);
+		if (isReordering) {
+			const innerX = x - layout.margin.left;
+			scales.updateParallelReorder(innerX, layout.innerWidth);
+			return;
+		}
 		if (isPanning) {
 			scales.updatePanPosition(x, y);
 			tooltipManager?.suppress(150);
@@ -770,6 +792,12 @@
 	}
 
 	function handlePointerUp(event: PointerEvent) {
+		if (isReordering) {
+			isReordering = false;
+			(event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
+			scales.endParallelReorder();
+			return;
+		}
 		if (chartContext.onInteractorPointerUp?.(event)) return;
 		isPanning = false;
 		activePanX = false;

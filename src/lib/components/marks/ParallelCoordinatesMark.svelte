@@ -145,7 +145,16 @@
 
 	const rowCount = $derived(setup?.data?.length ?? 0);
 
-	const currentAxisOrder = $derived(columnNames.map((_: string, i: number) => i));
+	const currentAxisOrder = $derived(chartContext.parallelScales?.axisOrder ?? columnNames.map((_: string, i: number) => i));
+
+	// Per-axis normalized x-positions (0–1) — animated by ChartScales.
+	// Falls back to evenly spaced if no animated positions available.
+	const currentAxisXPositions = $derived.by(() => {
+		const animated = chartContext.animatedAxisXPositions;
+		if (animated && animated.length === columnNames.length) return animated;
+		const n = columnNames.length;
+		return Array.from({ length: n }, (_, i) => (n > 1 ? i / (n - 1) : 0.5));
+	});
 
 	// Scale SSBO indices — resolved from scale state IDs (UUIDs), not column names
 	const currentScaleIndices = $derived.by(() => {
@@ -173,6 +182,7 @@
 		constantColor={markColor.constantColor}
 		axisOrder={currentAxisOrder}
 		axisScaleIndices={currentScaleIndices}
+		axisXPositions={currentAxisXPositions}
 		{strokeWidth}
 		{opacity}
 		{curve}

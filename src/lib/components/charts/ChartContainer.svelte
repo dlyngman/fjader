@@ -324,6 +324,14 @@
 			scales?.registerParallelColumn(column, markId),
 		unregisterParallelColumn: (column, markId) =>
 			scales?.unregisterParallelColumn(column, markId),
+		reorderParallelAxis: (from, to) =>
+			scales?.reorderParallelAxis(from, to),
+		get parallelReorderState() {
+			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };
+		},
+		get animatedAxisXPositions() {
+			return scales?.animatedAxisXPositions ?? [];
+		},
 
 		get parallelScales() {
 			return scales?.parallelScales ?? null;

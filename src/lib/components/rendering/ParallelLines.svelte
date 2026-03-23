@@ -7,7 +7,7 @@
 	import type { ChartContext, CurveType, WebGPUCanvasContext } from '$lib/types';
 
 	const MAX_AXES = 16;
-	const UNIFORM_SIZE = 176; // bytes, must match WGSL struct layout
+	const UNIFORM_SIZE = 240; // bytes, must match WGSL struct layout
 
 	// Both x and y so ScaleTemplateSystem generates scaleX(), scaleLinearY(), pixelsToClip()
 	const rendererDefinition = {
@@ -31,6 +31,7 @@
 		constantColor?: [number, number, number, number];
 		axisOrder: number[];
 		axisScaleIndices: number[];
+		axisXPositions: number[];
 		strokeWidth?: number;
 		opacity?: number;
 		curve?: CurveType;
@@ -48,6 +49,7 @@
 		constantColor = DEFAULT_STROKE_COLOR,
 		axisOrder,
 		axisScaleIndices,
+		axisXPositions,
 		strokeWidth = 2,
 		opacity = 1,
 		curve = 'linear',
@@ -88,6 +90,7 @@
     constantColor: vec4<f32>,
     axisOrder: array<vec4<u32>, 4>,
     axisScaleIndices: array<vec4<u32>, 4>,
+    axisXPositions: array<vec4<f32>, 4>,
   };
 
   struct VertexOutput {
@@ -117,9 +120,9 @@
     return data[colIdx * config.rowCount + rowIdx];
   }
 
-  // Evenly space axes across the x range — bypasses x-scale domain entirely.
+  // Axis x-position from per-axis normalized positions (0–1 mapped to range).
   fn axisXPosition(visualIdx: u32) -> f32 {
-    let t = f32(visualIdx) / f32(config.axisCount - 1u);
+    let t = config.axisXPositions[visualIdx / 4u][visualIdx % 4u];
     return frameUniforms.rangeMin.x + t * (frameUniforms.rangeMax.x - frameUniforms.rangeMin.x);
   }
 
@@ -354,6 +357,10 @@
 		// axisScaleIndices: offset 112 = u32 index 28
 		for (let i = 0; i < MAX_AXES; i++) {
 			u32[28 + i] = i < axisScaleIndices.length ? axisScaleIndices[i] : 0;
+		}
+		// axisXPositions: offset 176 = f32 index 44
+		for (let i = 0; i < MAX_AXES; i++) {
+			f32[44 + i] = i < axisXPositions.length ? axisXPositions[i] : 0;
 		}
 
 		renderer.writeUniform(BINDINGS.CONFIG, new Uint8Array(buffer));

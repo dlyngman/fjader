@@ -419,6 +419,9 @@ export interface ChartContext {
 	} | null;
 	registerParallelColumn: (column: string, markId: string) => void;
 	unregisterParallelColumn: (column: string, markId: string) => void;
+	reorderParallelAxis: (from: number, to: number) => void;
+	readonly parallelReorderState?: { dataIdx: number | null; currentX: number | null };
+	readonly animatedAxisXPositions?: number[];
 
 	// Faceting
 	fx: string | null;

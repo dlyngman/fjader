@@ -48,13 +48,17 @@
 	let hasDragged = false;
 	const point = { x: 0, y: 0 };
 
-	// Axis x-positions (pixels, matching GPU shader axisXPosition formula)
+	// Axis x-positions indexed by DATA index — maps each column to its visual x-position
+	// using axisOrder (which maps visual → data). We invert to get data → visual.
 	const axisPositions = $derived.by(() => {
 		if (!ps) return [];
 		const n = ps.columns.length;
-		return ps.columns.map((_, i) =>
-			n > 1 ? (i / (n - 1)) * chart.innerWidth : chart.innerWidth / 2
-		);
+		const positions = new Array<number>(n);
+		for (let visualIdx = 0; visualIdx < n; visualIdx++) {
+			const dataIdx = ps.axisOrder[visualIdx];
+			positions[dataIdx] = n > 1 ? (visualIdx / (n - 1)) * chart.innerWidth : chart.innerWidth / 2;
+		}
+		return positions;
 	});
 
 	// Half the gap between axes — defines the brush strip width
