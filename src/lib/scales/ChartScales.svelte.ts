@@ -4,6 +4,7 @@ import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
 import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './ScalePriorities';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { ParallelAxisReorder } from './ParallelAxisReorder.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 import type {
 	ScaleStateInstance,
@@ -32,6 +33,10 @@ interface PanContext {
 	lastScreenPos: number;
 }
 
+/**
+ * Adapter that registers axis position springs with GPUCoordinator's animation loop.
+ * Implements the ScaleInstance interface so the existing 360Hz physics step drives the springs.
+ */
 interface ChartScalesConfig {
 	gpuCoordinator: GPUCoordinator;
 	scaleRegistry: ScaleRegistry;
@@ -58,6 +63,15 @@ export class ChartScales {
 
 	#xScaleInstance = $state<ScaleStateInstance | null>(null);
 	#yScaleInstance = $state<ScaleStateInstance | null>(null);
+
+	// --- PARALLEL COORDINATES SCALES ---
+	// Ref-counted per column: multiple marks sharing a column share the same scale.
+	#parallelColumnMarks = new Map<string, Set<string>>(); // column → markIds
+	#parallelScaleInstances = $state(new Map<string, LinearScaleState>());
+	#parallelAxisOrder = $state<number[]>([]);
+
+	// Lazily instantiated when parallel columns are registered
+	#reorder: ParallelAxisReorder | null = null;
 
 	active = $state(false);
 
@@ -323,59 +337,57 @@ export class ChartScales {
 	#resolveScaleInstances(): void {
 		const xConfig = this.scaleConfigurations.x;
 		const yConfig = this.scaleConfigurations.y;
-		if (!xConfig || !yConfig) return;
 
-		const xKey = this.xLabel || xConfig.columnName || 'x';
-		const yKey = this.yLabel || yConfig.columnName || 'y';
+		// Resolve each axis independently — parallel coordinates only registers x.
+		if (xConfig) {
+			const xKey = this.xLabel || xConfig.columnName || 'x';
+			const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
+			if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
+			if (this.scaleRequirements.x?.some((r) => r.config?.__fitDomain))
+				xScaleConfig.__fitDomain = this.chartId;
 
-		const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
-		const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
+			const neededXScale = this.#scaleRegistry.getOrCreateScale(
+				xKey,
+				xConfig.type,
+				xScaleConfig,
+				this.chartId
+			) as ScaleStateInstance;
 
-		if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
-		if (this.config.useYSelection) yScaleConfig.__selectionConsumer = this.chartId;
-
-		// fitDomain isolation: if any mark has __fitDomain in its raw scale config,
-		// add chartId discriminator to create a per-chart scale instance.
-		// Read from raw requirements (not resolved config, which strips unknown props).
-		if (this.scaleRequirements.x?.some((r) => r.config?.__fitDomain))
-			xScaleConfig.__fitDomain = this.chartId;
-		if (this.scaleRequirements.y?.some((r) => r.config?.__fitDomain))
-			yScaleConfig.__fitDomain = this.chartId;
-
-		const neededXScale = this.#scaleRegistry.getOrCreateScale(
-			xKey,
-			xConfig.type,
-			xScaleConfig,
-			this.chartId
-		) as ScaleStateInstance;
-
-		const neededYScale = this.#scaleRegistry.getOrCreateScale(
-			yKey,
-			yConfig.type,
-			yScaleConfig,
-			this.chartId
-		) as ScaleStateInstance;
-
-		if (this.#xScaleInstance !== neededXScale) {
-			const wasReplacement = !!this.#xScaleInstance;
-			if (this.#xScaleInstance) {
-				this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
-			}
-			this.#xScaleInstance = neededXScale;
-			// Skip zoom-in intro when replacing an existing scale (column reassignment)
-			if (wasReplacement && neededXScale instanceof LinearScaleState) {
-				neededXScale.zoomInEffect.enabled = false;
+			if (this.#xScaleInstance !== neededXScale) {
+				const wasReplacement = !!this.#xScaleInstance;
+				if (this.#xScaleInstance) {
+					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
+				}
+				this.#xScaleInstance = neededXScale;
+				if (wasReplacement && neededXScale instanceof LinearScaleState) {
+					neededXScale.zoomInEffect.enabled = false;
+				}
 			}
 		}
 
-		if (this.#yScaleInstance !== neededYScale) {
-			const wasReplacement = !!this.#yScaleInstance;
-			if (this.#yScaleInstance) {
-				this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
-			}
-			this.#yScaleInstance = neededYScale;
-			if (wasReplacement && neededYScale instanceof LinearScaleState) {
-				neededYScale.zoomInEffect.enabled = false;
+		if (yConfig) {
+			const yKey = this.yLabel || yConfig.columnName || 'y';
+			const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
+			if (this.config.useYSelection) yScaleConfig.__selectionConsumer = this.chartId;
+			if (this.scaleRequirements.y?.some((r) => r.config?.__fitDomain))
+				yScaleConfig.__fitDomain = this.chartId;
+
+			const neededYScale = this.#scaleRegistry.getOrCreateScale(
+				yKey,
+				yConfig.type,
+				yScaleConfig,
+				this.chartId
+			) as ScaleStateInstance;
+
+			if (this.#yScaleInstance !== neededYScale) {
+				const wasReplacement = !!this.#yScaleInstance;
+				if (this.#yScaleInstance) {
+					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
+				}
+				this.#yScaleInstance = neededYScale;
+				if (wasReplacement && neededYScale instanceof LinearScaleState) {
+					neededYScale.zoomInEffect.enabled = false;
+				}
 			}
 		}
 	}
@@ -497,6 +509,74 @@ export class ChartScales {
 		if (filtered.length !== requirements.length) {
 			this.scaleRequirements[dimension] = filtered;
 		}
+	};
+
+	// --- PARALLEL COLUMN SCALE MANAGEMENT ---
+
+	#ensureReorder(): ParallelAxisReorder {
+		if (!this.#reorder) {
+			this.#reorder = new ParallelAxisReorder({
+				gpuCoordinator: this.gpuCoordinator,
+				chartId: this.chartId,
+				getAxisOrder: () => this.#parallelAxisOrder,
+				setAxisOrder: (order) => { this.#parallelAxisOrder = order; }
+			});
+		}
+		return this.#reorder;
+	}
+
+	registerParallelColumn = (column: string, markId: string): void => {
+		if (!this.#parallelColumnMarks.has(column)) {
+			this.#parallelColumnMarks.set(column, new Set());
+			// Create scale instance via ScaleRegistry — uses raw column name as key
+			// so it shares with any other chart using the same column (domain sync).
+			const scale = this.#scaleRegistry.getOrCreateScale(
+				column,
+				'linear',
+				{},
+				this.chartId
+			) as LinearScaleState;
+			const updated = new Map(this.#parallelScaleInstances);
+			updated.set(column, scale);
+			this.#parallelScaleInstances = updated;
+			// Initialize axis order as identity when columns are first registered
+			this.#parallelAxisOrder = [...this.#parallelScaleInstances.keys()].map((_, i) => i);
+			this.#ensureReorder().resetSprings();
+		}
+		this.#parallelColumnMarks.get(column)!.add(markId);
+	};
+
+	unregisterParallelColumn = (column: string, markId: string): void => {
+		const marks = this.#parallelColumnMarks.get(column);
+		if (!marks) return;
+		marks.delete(markId);
+		if (marks.size === 0) {
+			const scale = this.#parallelScaleInstances.get(column);
+			if (scale) this.#scaleRegistry.deregisterChart(scale, this.chartId);
+			this.#parallelColumnMarks.delete(column);
+			const updated = new Map(this.#parallelScaleInstances);
+			updated.delete(column);
+			this.#parallelScaleInstances = updated;
+			this.#parallelAxisOrder = [...this.#parallelScaleInstances.keys()].map((_, i) => i);
+			this.#reorder?.resetSprings();
+		}
+	};
+
+	get parallelScales(): { scaleStates: LinearScaleState[]; columns: string[]; axisOrder: number[] } | null {
+		if (this.#parallelScaleInstances.size === 0) return null;
+		return {
+			scaleStates: [...this.#parallelScaleInstances.values()],
+			columns: [...this.#parallelScaleInstances.keys()],
+			axisOrder: this.#parallelAxisOrder
+		};
+	}
+
+	/** Reorder parallel axes: move the axis at visual position `from` to position `to`. */
+	reorderParallelAxis = (from: number, to: number): void => {
+		const order = [...this.#parallelAxisOrder];
+		const [moved] = order.splice(from, 1);
+		order.splice(to, 0, moved);
+		this.#parallelAxisOrder = order;
 	};
 
 	getRegisteredScaleRequirementsSummary = () => {
@@ -648,6 +728,121 @@ export class ChartScales {
 		if (this.activePanY && isPanZoomScale(yInst)) {
 			yInst.updatePanPosition(0, screenY);
 		}
+		// Parallel axis pan
+		if (this.#parallelPanAxis) {
+			this.#parallelPanAxis.updatePanPosition(0, screenY);
+		}
+	};
+
+	// --- PARALLEL AXIS PAN/ZOOM ---
+
+	#parallelPanAxis: LinearScaleState | null = null;
+
+	// --- PARALLEL AXIS REORDER (delegated to ParallelAxisReorder) ---
+
+	get reorderCurrentX(): number | null { return this.#reorder?.reorderCurrentX ?? null; }
+	get reorderDataIdx(): number | null { return this.#reorder?.reorderDataIdx ?? null; }
+	get animatedAxisXPositions(): number[] { return this.#reorder?.animatedAxisXPositions ?? []; }
+
+	startParallelReorder = (innerX: number, innerWidth: number): boolean => {
+		return this.#reorder?.startReorder(innerX, innerWidth) ?? false;
+	};
+	updateParallelReorder = (innerX: number, innerWidth: number): void => {
+		this.#reorder?.updateReorder(innerX, innerWidth);
+	};
+	endParallelReorder = (): void => {
+		this.#reorder?.endReorder();
+	};
+	cancelParallelReorder = (): void => {
+		this.#reorder?.cancelReorder();
+	};
+
+	/** Find the nearest parallel axis DATA index from an inner x-coordinate.
+	 *  Uses axisOrder for visual positioning. */
+	#nearestParallelAxis(innerX: number, innerWidth: number): number | null {
+		const order = this.#parallelAxisOrder;
+		const n = order.length;
+		if (n === 0) return null;
+		const gap = n > 1 ? innerWidth / (n - 1) : innerWidth;
+		let bestVisual = 0;
+		let bestDist = Infinity;
+		for (let v = 0; v < n; v++) {
+			const axisX = n > 1 ? (v / (n - 1)) * innerWidth : innerWidth / 2;
+			const dist = Math.abs(innerX - axisX);
+			if (dist < bestDist) {
+				bestDist = dist;
+				bestVisual = v;
+			}
+		}
+		return bestDist <= gap * 0.5 ? order[bestVisual] : null;
+	}
+
+	/** Get the parallel scale state by data index. */
+	#parallelScaleAt(dataIdx: number): LinearScaleState | null {
+		const values = [...this.#parallelScaleInstances.values()];
+		return values[dataIdx] ?? null;
+	}
+
+	/** Start a pan on the nearest parallel axis. Returns true if a parallel axis was found. */
+	startParallelPan = (
+		screenY: number,
+		innerX: number,
+		innerWidth: number,
+		innerHeight: number
+	): boolean => {
+		const idx = this.#nearestParallelAxis(innerX, innerWidth);
+		if (idx == null) return false;
+		const scale = this.#parallelScaleAt(idx);
+		if (!scale || !scale.supportsPanZoom) return false;
+
+		const currentDomain = scale.domain.current;
+		scale.setPanContext({
+			screenToDataRatio: (currentDomain[1] - currentDomain[0]) / innerHeight,
+			axis: 'y',
+			initialScreenPos: screenY
+		});
+		this.#parallelPanAxis = scale;
+		return true;
+	};
+
+	endParallelPan = (): void => {
+		if (this.#parallelPanAxis) {
+			this.#parallelPanAxis.endPan();
+			this.#parallelPanAxis = null;
+		}
+	};
+
+	/** Reset zoom on the nearest parallel axis, or all if no position given. */
+	resetParallelZoom = (innerX?: number, innerWidth?: number): boolean => {
+		if (this.#parallelScaleInstances.size === 0) return false;
+		if (innerX != null && innerWidth != null) {
+			const idx = this.#nearestParallelAxis(innerX, innerWidth);
+			if (idx == null) return false;
+			this.#parallelScaleAt(idx)?.resetZoom();
+		} else {
+			for (const scale of this.#parallelScaleInstances.values()) {
+				scale.resetZoom();
+			}
+		}
+		return true;
+	};
+
+	/** Zoom the nearest parallel axis. Returns true if a parallel axis was found. */
+	zoomParallelAxis = (
+		innerX: number,
+		innerY: number,
+		scaleFactor: number,
+		innerWidth: number,
+		innerHeight: number
+	): boolean => {
+		const idx = this.#nearestParallelAxis(innerX, innerWidth);
+		if (idx == null) return false;
+		const scale = this.#parallelScaleAt(idx);
+		if (!scale || !scale.supportsPanZoom) return false;
+
+		const visualCenter = 1 - innerY / innerHeight;
+		scale.accumulateZoom(visualCenter, scaleFactor);
+		return true;
 	};
 
 	xCategoryPositions = $derived.by(() => {
@@ -762,6 +957,21 @@ export class ChartScales {
 			},
 			registerScaleType: coordinator.registerScaleType,
 			unregisterScaleType: coordinator.unregisterScaleType,
+			registerParallelColumn: coordinator.registerParallelColumn,
+			unregisterParallelColumn: coordinator.unregisterParallelColumn,
+			reorderParallelAxis: coordinator.reorderParallelAxis,
+			get parallelReorderState() {
+				return {
+					dataIdx: coordinator.reorderDataIdx,
+					currentX: coordinator.reorderCurrentX
+				};
+			},
+			get parallelScales() {
+				return coordinator.parallelScales;
+			},
+			get animatedAxisXPositions() {
+				return coordinator.animatedAxisXPositions;
+			},
 			getRegisteredScaleRequirementsSummary: coordinator.getRegisteredScaleRequirementsSummary,
 			get binStepMultiplier() {
 				return coordinator.binStepMultiplier;
@@ -772,9 +982,19 @@ export class ChartScales {
 	}
 
 	destroy(): void {
+		this.#reorder?.destroy();
+		this.#reorder = null;
+
 		if (this.#scaleRegistry) {
 			this.#scaleRegistry.removeChartUsage(this.chartId);
 		}
+
+		// Clean up parallel column scales
+		for (const scale of this.#parallelScaleInstances.values()) {
+			this.#scaleRegistry.deregisterChart(scale, this.chartId);
+		}
+		this.#parallelScaleInstances = new Map();
+		this.#parallelColumnMarks.clear();
 
 		this.#xScaleInstance = null;
 		this.#yScaleInstance = null;

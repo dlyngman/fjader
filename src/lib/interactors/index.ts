@@ -10,3 +10,4 @@ export { default as HoverIndicator } from './HoverIndicator.svelte';
 export { default as Toggle } from './Toggle.svelte';
 export { default as DerivedIntervalX } from './DerivedIntervalX.svelte';
 export { default as CommandPalette } from './CommandPalette.svelte';
+export { default as ParallelBrushes } from './ParallelBrushes.svelte';

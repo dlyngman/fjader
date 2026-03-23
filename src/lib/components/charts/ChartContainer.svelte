@@ -32,6 +32,7 @@
 		xDisableZoom?: boolean;
 		yDisableZoom?: boolean;
 		margin?: Partial<Margin>;
+		clipPadding?: number;
 		useXSelection?: boolean;
 		useYSelection?: boolean;
 	}
@@ -61,6 +62,7 @@
 		xDisableZoom = undefined,
 		yDisableZoom = undefined,
 		margin: marginOverride = {},
+		clipPadding = 0,
 		useXSelection = false,
 		useYSelection = false
 	}: Props = $props();
@@ -71,7 +73,8 @@
 	// Layout — used for chartId (stable UUID) and legend positioning
 	const layout = new ChartLayout({
 		margin: cellMargin,
-		height: 250
+		height: 250,
+		clipPadding
 	});
 
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
@@ -317,6 +320,23 @@
 		unregisterScaleType: (dimension, markId) =>
 			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
 
+		registerParallelColumn: (column, markId) =>
+			scales?.registerParallelColumn(column, markId),
+		unregisterParallelColumn: (column, markId) =>
+			scales?.unregisterParallelColumn(column, markId),
+		reorderParallelAxis: (from, to) =>
+			scales?.reorderParallelAxis(from, to),
+		get parallelReorderState() {
+			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };
+		},
+		get animatedAxisXPositions() {
+			return scales?.animatedAxisXPositions ?? [];
+		},
+
+		get parallelScales() {
+			return scales?.parallelScales ?? null;
+		},
+
 		get binStepMultiplier() {
 			return scales?.binStepMultiplier;
 		},
@@ -404,6 +424,7 @@
 		<ChartCell
 			cellChartId={layout.chartId}
 			margin={cellMargin}
+			{clipPadding}
 			{scales}
 			{chartConfig}
 			{facetingProps}

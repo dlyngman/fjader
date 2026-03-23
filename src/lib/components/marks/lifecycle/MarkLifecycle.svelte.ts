@@ -122,6 +122,10 @@ export interface MarkLifecycleConfig {
 	/** Raw resolved tip array — expression entries are injected lazily into the
 	 *  tooltip temp table query (not into the main rendering query). */
 	tip?: (unknown | '*')[] | false;
+	/** Parallel coordinates mode — x is an array of columns, each with its own y-scale. */
+	parallelMode?: boolean;
+	/** Original column names for parallel axes (used for fieldInfo requests). */
+	parallelColumns?: string[];
 }
 
 export interface MarkLifecycleOptions {
@@ -308,7 +312,11 @@ export class MarkLifecycle {
 		$effect(() => {
 			if (!this.#scaleRequirementsRegistered) return;
 			const { scaleTypes, xScaleState, yScaleState } = this.#chartContext;
-			if (!!(scaleTypes && xScaleState && yScaleState) && !this.#scaleStatesReady) {
+			// Parallel mode: only x-scale needed (per-column y-scales managed separately)
+			const ready = this.#config.parallelMode
+				? !!(scaleTypes && xScaleState)
+				: !!(scaleTypes && xScaleState && yScaleState);
+			if (ready && !this.#scaleStatesReady) {
 				this.#scaleStatesReady = true;
 			}
 		});
@@ -446,7 +454,8 @@ export class MarkLifecycle {
 						this.#config.select,
 						tableToQuery,
 						this.actualXScaleType,
-						this.actualYScaleType
+						this.actualYScaleType,
+						this.#config.parallelColumns
 					);
 					this.#createClient(tableToQuery, fieldRequests);
 					this.#currentClientTable = tableToQuery;
@@ -680,12 +689,22 @@ export class MarkLifecycle {
 			);
 		}
 
-		// Gate: both axes must have resolved types before the effect chain proceeds.
+		// Parallel mode: register each column with ChartScales for chart-level scale management.
+		// Uses raw column name as ScaleRegistry key — shares scale instances with other charts
+		// using the same column (domain sync on zoom/pan).
+		if (this.#config.parallelMode && this.#config.parallelColumns) {
+			for (const col of this.#config.parallelColumns) {
+				this.#chartContext.registerParallelColumn(col, this.#markId);
+			}
+		}
+
+		// Gate: axes must have resolved types before the effect chain proceeds.
 		// When inference is pending (null scaleRequirements), this stays false,
 		// preventing premature DataClient creation and domain queries.
-		this.#scaleRequirementsRegistered = !!(
-			scaleRequirements?.x?.type && scaleRequirements?.y?.type
-		);
+		// Parallel mode: only x is required (each column gets its own y-scale).
+		this.#scaleRequirementsRegistered = this.#config.parallelMode
+			? !!scaleRequirements?.x?.type
+			: !!(scaleRequirements?.x?.type && scaleRequirements?.y?.type);
 	}
 
 	get actualXScaleType(): string {
@@ -773,6 +792,7 @@ export class MarkLifecycle {
 		this.#sizeScaleState = sizeScaleState;
 	}
 
+
 	scaleCompatibilityError: string | null = $derived.by(() => {
 		const { supportedScaleTypes, markType } = this.#config;
 		if (!this.actualXScaleType || !this.actualYScaleType) return null;
@@ -789,13 +809,27 @@ export class MarkLifecycle {
 	});
 
 	gpuReady: boolean = $derived.by(() => {
-		if (!this.#chartContext.scalesReady || !this.categoricalDataFetched) return false;
+		if (!this.categoricalDataFetched) return false;
 
 		const xSS = this.#chartContext.xScaleState;
 		const xReady =
 			this.actualXScaleType === 'band' || this.actualXScaleType === 'point'
 				? (xSS as BandScaleState | null | undefined)?.isReadyForGPU
 				: xSS?.ready;
+
+		// Parallel mode: x-scale + all parallel column scales must be ready.
+		// Bypasses chartContext.scalesReady which requires both x and y.
+		if (this.#config.parallelMode) {
+			if (!xReady) return false;
+			// Check parallel column scales (merged into #scaleMap via setParallelScales)
+			for (const [key, scale] of Object.entries(this.#scaleMap)) {
+				if (key === 'x' || key === 'y') continue;
+				if (scale && !scale.ready) return false;
+			}
+			return true;
+		}
+
+		if (!this.#chartContext.scalesReady) return false;
 
 		const ySS = this.#chartContext.yScaleState;
 		const yReady =
@@ -1128,6 +1162,17 @@ export class MarkLifecycle {
 			x: this.#chartContext.xScaleState,
 			y: this.#chartContext.yScaleState
 		};
+
+		// Parallel mode: merge chart-level parallel column scales into scaleMap
+		// so domain registration (setInitialContinuousDomains, setScalesReady) handles them.
+		if (this.#config.parallelMode) {
+			const ps = this.#chartContext.parallelScales;
+			if (ps) {
+				for (let i = 0; i < ps.columns.length; i++) {
+					this.#scaleMap[ps.columns[i]] = ps.scaleStates[i];
+				}
+			}
+		}
 
 		// Register table with band/time scales for ViewManager integration
 		// This must happen BEFORE categorical domain fetch so views can be created
@@ -1732,6 +1777,12 @@ export class MarkLifecycle {
 		if (!this.#config.passiveScales) {
 			this.#chartContext.unregisterScaleType('x', this.#markId);
 			this.#chartContext.unregisterScaleType('y', this.#markId);
+			// Unregister parallel columns from ChartScales
+			if (this.#config.parallelMode && this.#config.parallelColumns) {
+				for (const col of this.#config.parallelColumns) {
+					this.#chartContext.unregisterParallelColumn(col, this.#markId);
+				}
+			}
 			Object.values(this.#scaleMap).forEach((scale) => scale?.removeMark(this.#markId));
 		}
 

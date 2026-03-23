@@ -662,10 +662,15 @@ export class GPUCoordinator {
 	 * Physics step - called at fixed rate (360Hz).
 	 * Steps all animated scales.
 	 */
+	#physicsCallbacks: (() => void)[] = [];
+
 	#physicsStep = (): void => {
 		const len = this.#animatedScalesArray.length;
 		for (let i = 0; i < len; i++) {
 			this.#animatedScalesArray[i].step();
+		}
+		for (let i = 0; i < this.#physicsCallbacks.length; i++) {
+			this.#physicsCallbacks[i]();
 		}
 	};
 
@@ -1434,6 +1439,15 @@ export class GPUCoordinator {
 	removeFrameCallback(fn: FrameCallback): void {
 		const idx = this.#frameCallbacks.indexOf(fn);
 		if (idx !== -1) this.#frameCallbacks.splice(idx, 1);
+	}
+
+	addPhysicsCallback(fn: () => void): void {
+		this.#physicsCallbacks.push(fn);
+	}
+
+	removePhysicsCallback(fn: () => void): void {
+		const idx = this.#physicsCallbacks.indexOf(fn);
+		if (idx !== -1) this.#physicsCallbacks.splice(idx, 1);
 	}
 
 	registerChart(

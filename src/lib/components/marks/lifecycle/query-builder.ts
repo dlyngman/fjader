@@ -46,7 +46,8 @@ export function buildFieldInfoRequests(
 	select: Record<string, unknown>,
 	table: string,
 	actualXScaleType: string,
-	actualYScaleType: string
+	actualYScaleType: string,
+	parallelColumns?: string[] | null
 ): FieldInfoRequest[] {
 	const requests: FieldInfoRequest[] = [];
 	const processedFields = new Set<string>();
@@ -79,7 +80,9 @@ export function buildFieldInfoRequests(
 				? actualXScaleType
 				: alias === 'y' || alias === 'y1' || alias === 'y2'
 					? actualYScaleType
-					: null;
+					: parallelColumns?.includes(alias)
+						? 'linear'
+						: null;
 
 		// Time scales get their domain from sidecar query in fetchCategoricalDomains,
 		// not from fieldInfo (which would return values from the offset column)
