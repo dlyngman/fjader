@@ -4,7 +4,7 @@ import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
 import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './ScalePriorities';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { Spring, DT } from '$lib/animation';
+import { ParallelAxisReorder } from './ParallelAxisReorder.svelte';
 import type { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 import type {
 	ScaleStateInstance,
@@ -70,6 +70,9 @@ export class ChartScales {
 	#parallelScaleInstances = $state(new Map<string, LinearScaleState>());
 	#parallelAxisOrder = $state<number[]>([]);
 
+	// Lazily instantiated when parallel columns are registered
+	#reorder: ParallelAxisReorder | null = null;
+
 	active = $state(false);
 
 	// --- MEMORY POOLS ---
@@ -113,10 +116,6 @@ export class ChartScales {
 		if (!this.#scaleRegistry) {
 			console.error('ChartScales initialized without scaleRegistry!');
 		}
-
-		this.gpuCoordinator.addPhysicsCallback(this.#axisPhysicsCallback);
-		this.gpuCoordinator.addFrameCallback(this.#axisFrameCallback);
-
 
 		// Effect: Update scale instances when requirements or labels change.
 		// Scale resolution also runs eagerly from registerScaleType() so that
@@ -514,6 +513,18 @@ export class ChartScales {
 
 	// --- PARALLEL COLUMN SCALE MANAGEMENT ---
 
+	#ensureReorder(): ParallelAxisReorder {
+		if (!this.#reorder) {
+			this.#reorder = new ParallelAxisReorder({
+				gpuCoordinator: this.gpuCoordinator,
+				chartId: this.chartId,
+				getAxisOrder: () => this.#parallelAxisOrder,
+				setAxisOrder: (order) => { this.#parallelAxisOrder = order; }
+			});
+		}
+		return this.#reorder;
+	}
+
 	registerParallelColumn = (column: string, markId: string): void => {
 		if (!this.#parallelColumnMarks.has(column)) {
 			this.#parallelColumnMarks.set(column, new Set());
@@ -530,6 +541,7 @@ export class ChartScales {
 			this.#parallelScaleInstances = updated;
 			// Initialize axis order as identity when columns are first registered
 			this.#parallelAxisOrder = [...this.#parallelScaleInstances.keys()].map((_, i) => i);
+			this.#ensureReorder().resetSprings();
 		}
 		this.#parallelColumnMarks.get(column)!.add(markId);
 	};
@@ -546,6 +558,7 @@ export class ChartScales {
 			updated.delete(column);
 			this.#parallelScaleInstances = updated;
 			this.#parallelAxisOrder = [...this.#parallelScaleInstances.keys()].map((_, i) => i);
+			this.#reorder?.resetSprings();
 		}
 	};
 
@@ -725,192 +738,23 @@ export class ChartScales {
 
 	#parallelPanAxis: LinearScaleState | null = null;
 
-	// --- PARALLEL AXIS REORDER DRAG ---
-	#reorderFrom: number | null = null; // original visual index being dragged
-	#reorderStartX = 0;
-	#reorderAxisOrigX = 0;
-	#reorderOriginalOrder: number[] = []; // saved on drag start
-	#reorderLastSlot: number | null = null;
-	reorderCurrentX = $state<number | null>(null); // exposed for visual feedback
-	reorderDataIdx = $state<number | null>(null); // DATA index of the dragged axis (stable)
+	// --- PARALLEL AXIS REORDER (delegated to ParallelAxisReorder) ---
 
-	// --- ANIMATED AXIS POSITIONS (normalized 0–1) ---
-	// Spring-driven per-axis positions using GPUCoordinator's physics (360Hz)
-	// and frame callbacks. Springs step in physics, $state syncs in frame.
-	#axisSprings: Spring[] = [];
-	#axisAnimating = false;
-	animatedAxisXPositions = $state<number[]>([]);
+	get reorderCurrentX(): number | null { return this.#reorder?.reorderCurrentX ?? null; }
+	get reorderDataIdx(): number | null { return this.#reorder?.reorderDataIdx ?? null; }
+	get animatedAxisXPositions(): number[] { return this.#reorder?.animatedAxisXPositions ?? []; }
 
-	static AXIS_REORDER_STIFFNESS = 120;
-
-	// Springs indexed by DATA index (stable). Order maps visual → data,
-	// so animatedPositions[v] = springs[order[v]].current.
-	#axisPhysicsCallback = (): void => {
-		if (!this.#axisAnimating) return;
-		for (let d = 0; d < this.#axisSprings.length; d++) {
-			if (d === this.reorderDataIdx) continue;
-			this.#axisSprings[d].step();
-		}
-	};
-
-	#axisFrameCallback = (): void => {
-		if (!this.#axisAnimating && this.reorderDataIdx == null) return;
-		const order = this.#parallelAxisOrder;
-		const n = order.length;
-		let allAtRest = true;
-		const positions = new Array<number>(n);
-		for (let v = 0; v < n; v++) {
-			const d = order[v];
-			positions[v] = this.#axisSprings[d].current;
-			if (d !== this.reorderDataIdx && !this.#axisSprings[d].isAtRest(0.0005)) {
-				allAtRest = false;
-			}
-		}
-		this.animatedAxisXPositions = positions;
-		if (allAtRest && this.#axisAnimating) {
-			for (const s of this.#axisSprings) {
-				s.current = s.target; s.velocity = 0;
-				s.configure(ChartScales.AXIS_REORDER_STIFFNESS);
-			}
-			// Re-sync after snap
-			for (let v = 0; v < n; v++) positions[v] = this.#axisSprings[order[v]].current;
-			this.animatedAxisXPositions = positions;
-			this.#axisAnimating = false;
-		} else if (!allAtRest) {
-			this.gpuCoordinator.invalidateChart(this.chartId);
-		}
-	};
-
-	#ensureAxisPositionsInit(): void {
-		const n = this.#parallelAxisOrder.length;
-		if (this.#axisSprings.length !== n) {
-			// Initialize each data axis spring to its initial visual position
-			const order = this.#parallelAxisOrder;
-			this.#axisSprings = new Array(n);
-			for (let v = 0; v < n; v++) {
-				const d = order[v];
-				const pos = n > 1 ? v / (n - 1) : 0.5;
-				this.#axisSprings[d] = new Spring(pos, ChartScales.AXIS_REORDER_STIFFNESS, 0.0005);
-			}
-			const positions = new Array<number>(n);
-			for (let v = 0; v < n; v++) positions[v] = this.#axisSprings[order[v]].current;
-			this.animatedAxisXPositions = positions;
-		}
-	}
-
-	#updateAxisTargets(): void {
-		const order = this.#parallelAxisOrder;
-		const n = order.length;
-		for (let v = 0; v < n; v++) {
-			const d = order[v];
-			this.#axisSprings[d].target = n > 1 ? v / (n - 1) : 0.5;
-		}
-		this.#axisAnimating = true;
-		this.gpuCoordinator.invalidateChart(this.chartId);
-	}
-
-	#setDraggedAxisPosition(normalizedX: number): void {
-		if (this.reorderDataIdx == null) return;
-		this.#axisSprings[this.reorderDataIdx].set(Math.max(0, Math.min(1, normalizedX)));
-	}
-
-	/** Start a reorder drag. Returns true if near a parallel axis. */
 	startParallelReorder = (innerX: number, innerWidth: number): boolean => {
-		const order = this.#parallelAxisOrder;
-		const n = order.length;
-		if (n === 0) return false;
-		const gap = n > 1 ? innerWidth / (n - 1) : innerWidth;
-		let bestVisual = 0;
-		let bestDist = Infinity;
-		for (let v = 0; v < n; v++) {
-			const axisX = n > 1 ? (v / (n - 1)) * innerWidth : innerWidth / 2;
-			const dist = Math.abs(innerX - axisX);
-			if (dist < bestDist) {
-				bestDist = dist;
-				bestVisual = v;
-			}
-		}
-		if (bestDist > gap * 0.5) return false;
-		this.#reorderFrom = bestVisual;
-		this.#reorderStartX = innerX;
-		this.#reorderAxisOrigX = n > 1 ? (bestVisual / (n - 1)) * innerWidth : innerWidth / 2;
-		this.reorderCurrentX = this.#reorderAxisOrigX;
-		this.reorderDataIdx = order[bestVisual]; // stable data index
-		this.#reorderOriginalOrder = [...this.#parallelAxisOrder];
-		this.#reorderLastSlot = bestVisual;
-		this.#ensureAxisPositionsInit();
-		this.gpuCoordinator.invalidateChart(this.chartId);
-		return true;
+		return this.#reorder?.startReorder(innerX, innerWidth) ?? false;
 	};
-
-	/** Update reorder drag position — also updates axisOrder for live line preview. */
 	updateParallelReorder = (innerX: number, innerWidth: number): void => {
-		if (this.#reorderFrom == null) return;
-		this.reorderCurrentX = this.#reorderAxisOrigX + (innerX - this.#reorderStartX);
-
-		// Dragged axis follows cursor continuously
-		this.#setDraggedAxisPosition(this.reorderCurrentX / innerWidth);
-
-		// Compute preview slot and update axis order if changed
-		const n = this.#reorderOriginalOrder.length;
-		let closestSlot = 0;
-		let closestDist = Infinity;
-		for (let v = 0; v < n; v++) {
-			const slotX = n > 1 ? (v / (n - 1)) * innerWidth : innerWidth / 2;
-			const dist = Math.abs(this.reorderCurrentX - slotX);
-			if (dist < closestDist) {
-				closestDist = dist;
-				closestSlot = v;
-			}
-		}
-		if (closestSlot !== this.#reorderLastSlot) {
-			this.#reorderLastSlot = closestSlot;
-			const order = [...this.#reorderOriginalOrder];
-			const [moved] = order.splice(this.#reorderFrom, 1);
-			order.splice(closestSlot, 0, moved);
-			this.#parallelAxisOrder = order;
-			// Non-dragged axes animate to new evenly-spaced targets
-			this.#updateAxisTargets();
-		}
-		this.gpuCoordinator.invalidateChart(this.chartId);
+		this.#reorder?.updateReorder(innerX, innerWidth);
 	};
-
-	/** Finalize reorder drag — animate dragged axis to its final slot. */
 	endParallelReorder = (): void => {
-		const releasedIdx = this.reorderDataIdx;
-		this.reorderDataIdx = null;
-		this.reorderCurrentX = null;
-		this.#updateAxisTargets();
-		if (releasedIdx != null && this.#axisSprings[releasedIdx]) {
-			const spring = this.#axisSprings[releasedIdx];
-			spring.configure(600);
-			const displacement = spring.target - spring.current;
-			spring.velocity = displacement * spring.omega;
-			// Pre-step a few times and sync immediately so the first rendered
-			// frame already shows movement (avoids frame-callback latency).
-			for (let i = 0; i < 6; i++) spring.step();
-		}
-		// Force-sync positions now so Svelte picks them up before next render
-		const order = this.#parallelAxisOrder;
-		const n = order.length;
-		const positions = new Array<number>(n);
-		for (let v = 0; v < n; v++) positions[v] = this.#axisSprings[order[v]].current;
-		this.animatedAxisXPositions = positions;
-
-		this.#reorderFrom = null;
-		this.#reorderOriginalOrder = [];
-		this.#reorderLastSlot = null;
+		this.#reorder?.endReorder();
 	};
-
 	cancelParallelReorder = (): void => {
-		if (this.#reorderOriginalOrder.length > 0) {
-			this.#parallelAxisOrder = this.#reorderOriginalOrder;
-		}
-		this.#reorderFrom = null;
-		this.reorderCurrentX = null;
-		this.reorderDataIdx = null;
-		this.#reorderOriginalOrder = [];
-		this.#reorderLastSlot = null;
+		this.#reorder?.cancelReorder();
 	};
 
 	/** Find the nearest parallel axis DATA index from an inner x-coordinate.
@@ -1138,8 +982,8 @@ export class ChartScales {
 	}
 
 	destroy(): void {
-		this.gpuCoordinator.removePhysicsCallback(this.#axisPhysicsCallback);
-		this.gpuCoordinator.removeFrameCallback(this.#axisFrameCallback);
+		this.#reorder?.destroy();
+		this.#reorder = null;
 
 		if (this.#scaleRegistry) {
 			this.#scaleRegistry.removeChartUsage(this.chartId);
