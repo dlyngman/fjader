@@ -8,3 +8,4 @@ export { default as RectMark } from './RectMark.svelte';
 export { default as RectXMark } from './RectXMark.svelte';
 export { default as RectYMark } from './RectYMark.svelte';
 export { default as TextMark } from './TextMark.svelte';
+export { default as ParallelCoordinatesMark } from './ParallelCoordinatesMark.svelte';

@@ -411,6 +411,15 @@ export interface ChartContext {
 	// Tooltip
 	readonly tooltipManager: TooltipManager | null;
 
+	// Parallel coordinates
+	readonly parallelScales?: {
+		scaleStates: ScaleStateInstance[];
+		columns: string[];
+		axisOrder: number[];
+	} | null;
+	registerParallelColumn: (column: string, markId: string) => void;
+	unregisterParallelColumn: (column: string, markId: string) => void;
+
 	// Faceting
 	fx: string | null;
 	readonly isFaceted: boolean;

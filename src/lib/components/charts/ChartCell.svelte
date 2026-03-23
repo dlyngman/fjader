@@ -35,6 +35,7 @@
 		facetLabel?: string | null;
 		margin?: Margin;
 		height?: number;
+		clipPadding?: number;
 		scales: ChartScales;
 		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
@@ -55,6 +56,7 @@
 		facetLabel = null,
 		margin = { top: 30, right: 50, bottom: 35, left: 75 },
 		height = 250,
+		clipPadding = 0,
 		scales,
 		chartConfig,
 		facetingProps = { fx: null, isFaceted: false, facetChartIds: [], facetBandScale: null },
@@ -70,7 +72,7 @@
 	}: Props = $props();
 
 	// --- Layout ---
-	const layout = new ChartLayout({ margin, height });
+	const layout = new ChartLayout({ margin, height, clipPadding });
 	layout.chartId = cellChartId;
 
 	// Track container dimensions
@@ -406,6 +408,13 @@
 			scales?.registerScaleType(dimension as 'x' | 'y', type, priority, markId, config, columnName),
 		unregisterScaleType: (dimension, markId) =>
 			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
+		registerParallelColumn: (column, markId) =>
+			scales?.registerParallelColumn(column, markId),
+		unregisterParallelColumn: (column, markId) =>
+			scales?.unregisterParallelColumn(column, markId),
+		get parallelScales() {
+			return scales?.parallelScales ?? null;
+		},
 		get binStepMultiplier() {
 			return scales?.binStepMultiplier;
 		},
@@ -537,14 +546,25 @@
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
-		scales.accumulateZoom(
-			innerPoint,
+		// Parallel axis zoom takes priority — yInBounds is sufficient (same margin logic as regular axes)
+		if ((yInBounds && !!scales.parallelScales) && scales.zoomParallelAxis(
+			innerPoint.x,
+			innerPoint.y,
 			scaleFactor,
-			xInBounds,
-			yInBounds,
 			layout.innerWidth,
 			layout.innerHeight
-		);
+		)) {
+			// handled by parallel axis
+		} else {
+			scales.accumulateZoom(
+				innerPoint,
+				scaleFactor,
+				xInBounds,
+				yInBounds,
+				layout.innerWidth,
+				layout.innerHeight
+			);
+		}
 		tooltipManager?.suppress(100);
 	}
 
@@ -577,8 +597,11 @@
 		event.preventDefault();
 		pointerBuffer.x = ptrX(event);
 		pointerBuffer.y = ptrY(event);
-		const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
-		scales.resetZoom(xInBounds, yInBounds);
+		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
+		if (!(yInBounds && !!scales.parallelScales) ||
+			!scales.resetParallelZoom(innerPoint.x, layout.innerWidth)) {
+			scales.resetZoom(xInBounds, yInBounds);
+		}
 		tooltipManager?.suppress(300);
 	}
 
@@ -646,11 +669,30 @@
 		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
-		if (xInBounds && yInBounds && chartContext.onInteractorPointerDown?.(event, innerPoint)) {
+		// Parallel axes are vertical — yInBounds is sufficient, nearestParallelAxis handles x-proximity.
+		// This mirrors how regular charts let margin interactions target the in-bounds axis.
+		const parallelInBounds = yInBounds && !!scales.parallelScales;
+
+		if ((xInBounds && yInBounds || parallelInBounds) && chartContext.onInteractorPointerDown?.(event, innerPoint)) {
 			currentInnerX = null;
 			currentInnerY = null;
 			scales.clearCurrentDataPoints();
 			tooltipManager?.updatePosition(null, null);
+			return;
+		}
+
+		// Parallel axis pan takes priority (parallel chart's x-scale is for layout, not pan)
+		if (parallelInBounds && scales.startParallelPan(
+			pointerBuffer.y,
+			innerPoint.x,
+			layout.innerWidth,
+			layout.innerHeight
+		)) {
+			isPanning = true;
+			scales.clearCurrentDataPoints();
+			currentInnerX = null;
+			currentInnerY = null;
+			(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
 			return;
 		}
 
@@ -734,6 +776,7 @@
 		activePanY = false;
 		(event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
 		scales.endPan();
+		scales.endParallelPan();
 	}
 
 	function handleInnerMouseEnter() {
@@ -805,7 +848,12 @@
 			>
 				<defs>
 					<clipPath id={layout.clipPathId}>
-						<rect x={0} y={0} width={layout.innerWidth} height={layout.innerHeight} />
+						<rect
+							x={-layout.config.clipPadding}
+							y={0}
+							width={layout.innerWidth + layout.config.clipPadding * 2}
+							height={layout.innerHeight}
+						/>
 					</clipPath>
 				</defs>
 
