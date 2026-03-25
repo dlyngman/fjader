@@ -46,7 +46,8 @@ import {
 	registerDataDerivedDomains
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
-import { LODController } from '$lib/lod';
+import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
+import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 // ---------------------------------------------------------------------------
@@ -70,7 +71,7 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 //             Calls: registerDataDerivedDomains()  [domain-registration.ts]
 //  Effect 7:  dataDerivedDomainsSet              → scales.setReady()
 //             Calls: markDeferredScalesReady()     [domain-registration.ts]
-//  Effect 8:  LODController + tooltipManager      → register LODController with tooltip
+//  Effect 8:  AdaptiveBinRung                     → registerMarkLOD for binned marks
 //  Effect 9:  client.dataVersion                 → tooltip table [side effect]
 //  Effect 10: domain.target + fitDomain           → DuckDB MIN/MAX sidecar query
 //  (Cross-filter fitDomain updates: #onTooltipTableWritten after tooltip table write)
@@ -130,7 +131,7 @@ export interface MarkLifecycleConfig {
 
 export interface MarkLifecycleOptions {
 	gpuCoordinator?: GPUCoordinator | null;
-	onLodController?: ((ctrl: LODController | null) => void) | null;
+	onMarkLOD?: ((surface: MarkLODSurface | null) => void) | null;
 }
 
 export class MarkLifecycle {
@@ -176,7 +177,7 @@ export class MarkLifecycle {
 	#skipDomainUpdateForAxis: string | null = null;
 	#rebinPendingDataVersion: number | null = null;
 	#gpuCoordinator: GPUCoordinator | null = null;
-	#lodController: LODController | null = null;
+	#adaptiveBinRung: AdaptiveBinRung | null = null;
 
 	// --- Query Build Cache ---
 	// Caches all filter-independent query state (resolved select, classification,
@@ -211,7 +212,7 @@ export class MarkLifecycle {
 		}
 	}
 
-	#onLodController: ((ctrl: LODController | null) => void) | null = null;
+	#onMarkLOD: ((surface: MarkLODSurface | null) => void) | null = null;
 
 	constructor(
 		config: MarkLifecycleConfig,
@@ -235,9 +236,9 @@ export class MarkLifecycle {
 		// Ensure services have coordinator (idempotent)
 		MarkLifecycle.ensureServices(coordinator);
 
-		// Store options for LODController creation
+		// Store options for rung creation
 		this.#gpuCoordinator = options?.gpuCoordinator ?? null;
-		this.#onLodController = options?.onLodController ?? null;
+		this.#onMarkLOD = options?.onMarkLOD ?? null;
 
 		// Create transform compiler
 		this.#transformCompiler = new TransformCompiler(config.transforms || []);
@@ -245,37 +246,40 @@ export class MarkLifecycle {
 		// Detect auto bins in select
 		this.#detectAutoBins();
 
-		// Create LODController for binned marks (owns adaptive re-binning + shift+scroll)
+		// Create AdaptiveBinRung for binned marks (owns re-binning + shift+scroll)
 		if (this.#autoBinNodes.size > 0 && this.#gpuCoordinator) {
 			const xHasBin = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
 			const yHasBin = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
 			const binAxes: ('x' | 'y')[] = [];
 			if (xHasBin) binAxes.push('x');
 			if (yHasBin) binAxes.push('y');
-			this.#lodController = new LODController(coordinator, this.#gpuCoordinator, chartContext, {
-				mode: 'binned',
-				markLifecycle: this,
+
+			// Read initial multiplier from entry.lod (spec roundtrip)
+			const entry = chartContext.config.entries.get(this.#markId);
+			const lodCfg = entry?.lod;
+			const initialMultiplier =
+				typeof lodCfg === 'object' && lodCfg && typeof lodCfg.multiplier === 'number'
+					? lodCfg.multiplier
+					: 1.0;
+
+			// Apply initial multiplier to chartContext so AutoBinNode picks it up
+			if (initialMultiplier !== 1.0) {
+				chartContext.setBinStepMultiplier?.(initialMultiplier);
+			}
+
+			this.#adaptiveBinRung = new AdaptiveBinRung(this.#gpuCoordinator, chartContext, {
 				binAxes,
 				binningThreshold: this.#binningThreshold,
-				onTunableChange: (_key, value) => {
-					// Persist multiplier change to entry.lod for spec export
-					const entry = chartContext.config.entries.get(this.#markId);
-					if (!entry) return;
-					const current = entry.lod;
+				setParam: (_key, value) => {
+					const e = chartContext.config.entries.get(this.#markId);
+					if (!e) return;
+					const current = e.lod;
 					const cfg = typeof current === 'object' && current ? current : {};
 					chartContext.config.setMarkProp(this.#markId, 'lod', { ...cfg, multiplier: value });
-				}
+				},
+				getData: () => this.data,
+				triggerReBin: (axis, domain) => this.triggerReBin(axis, domain)
 			});
-			this.#onLodController?.(this.#lodController);
-
-			// Apply initial multiplier from entry's lod config (spec roundtrip)
-			const entry = chartContext.config.entries.get(this.#markId);
-			if (entry) {
-				const lodCfg = entry.lod;
-				if (typeof lodCfg === 'object' && lodCfg && typeof lodCfg.multiplier === 'number') {
-					this.#lodController.setBinMultiplier(lodCfg.multiplier);
-				}
-			}
 		}
 
 		// Detect which channels need data-derived domains (aggregates)
@@ -558,12 +562,23 @@ export class MarkLifecycle {
 			}
 		});
 
-		// Effect 8: Register binned LODController with ChartConfig
+		// Effect 8: Register binned AdaptiveBinRung with ChartConfig
 		// (palette access + shift+scroll routing via TooltipManager delegation)
 		$effect(() => {
-			if (!this.#lodController) return;
-			this.#chartContext.config.registerLodController(this.#markId, this.#lodController);
-			return () => this.#chartContext.config.unregisterLodController(this.#markId);
+			const rung = this.#adaptiveBinRung;
+			if (!rung) return;
+			const surface: MarkLODSurface = {
+				adjustResolution: (deltaY: number) => rung.adjustResolution(deltaY),
+				getRungs: () => (rung.destroyed ? [] : [rung]),
+				getDensityCtx: () => null,
+				getDensityHost: () => null
+			};
+			this.#chartContext.config.registerMarkLOD(this.#markId, surface);
+			this.#onMarkLOD?.(surface);
+			return () => {
+				this.#chartContext.config.unregisterMarkLOD(this.#markId);
+				this.#onMarkLOD?.(null);
+			};
 		});
 
 		// Effect 9: Write tooltip table when data updates (debounced).
@@ -724,7 +739,7 @@ export class MarkLifecycle {
 	}
 
 	/**
-	 * Trigger a re-bin operation. Called by LODController when domain change
+	 * Trigger a re-bin operation. Called by AdaptiveBinRung when domain change
 	 * exceeds threshold or when the user adjusts resolution via shift+scroll.
 	 * Performs the query cache invalidation and requests a Mosaic re-query.
 	 */
@@ -740,11 +755,11 @@ export class MarkLifecycle {
 	}
 
 	/**
-	 * Get the LODController (if active). Used by mark components for line-mode
-	 * LODController to check if binned LOD is already active.
+	 * Get the AdaptiveBinRung (if active). Used by mark components to check
+	 * if binned LOD is active.
 	 */
-	get lodController(): LODController | null {
-		return this.#lodController;
+	get adaptiveBinRung(): AdaptiveBinRung | null {
+		return this.#adaptiveBinRung;
 	}
 
 	/**
@@ -1207,7 +1222,7 @@ export class MarkLifecycle {
 
 	/**
 	 * Build a sidecar query by wrapping this mark's assembled query as a derived table.
-	 * Shared primitive used by LODController (COUNT), fitDomain (MIN/MAX), etc.
+	 * Shared primitive used by DensityHost (COUNT), fitDomain (MIN/MAX), etc.
 	 * The inner query reuses #cachedQueryParts — only the filter varies per call.
 	 */
 	buildSidecarQuery(
@@ -1416,25 +1431,6 @@ export class MarkLifecycle {
 	// ADAPTIVE BINNING
 	// ===========================================================================
 
-	/**
-	 * Check if domain change is significant enough to trigger re-binning.
-	 */
-	#shouldReBin(currentDomain: number[], axis: string): boolean {
-		const lastDomain = this.#lastBinningDomain[axis as 'x' | 'y'];
-		if (!lastDomain) return false; // First run, no baseline
-		if (!currentDomain || currentDomain.length !== 2) return false;
-
-		const lastWidth = lastDomain[1] - lastDomain[0];
-		const currentWidth = currentDomain[1] - currentDomain[0];
-
-		if (lastWidth <= 0 || currentWidth <= 0) return false;
-
-		const ratio = lastWidth / currentWidth;
-
-		// Re-bin if zoomed in/out beyond threshold
-		return ratio > this.#binningThreshold || ratio < 1 / this.#binningThreshold;
-	}
-
 	// ===========================================================================
 	// TOOLTIP WRITE-BACK
 	// ===========================================================================
@@ -1470,7 +1466,7 @@ export class MarkLifecycle {
 
 	/**
 	 * Build a viewport count query by wrapping this mark's assembled query as a
-	 * derived table. Used by LODController for all viewport counting — the inner
+	 * derived table. Used by DensityHost for all viewport counting — the inner
 	 * query handles type coercion (time scales), aggregates, bins, and view columns.
 	 *
 	 * Uses forMosaic=false so the inner query's SELECT aliases are channel names.
@@ -1749,11 +1745,10 @@ export class MarkLifecycle {
 	}
 
 	destroy(): void {
-		// Destroy LODController (binned mode)
-		if (this.#lodController) {
-			this.#onLodController?.(null);
-			this.#lodController.destroy();
-			this.#lodController = null;
+		// Destroy AdaptiveBinRung (binned mode)
+		if (this.#adaptiveBinRung) {
+			this.#adaptiveBinRung.destroy();
+			this.#adaptiveBinRung = null;
 		}
 
 		// Clear RollingAvgNode invalidation callbacks

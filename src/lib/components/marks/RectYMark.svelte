@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
-	import type { LODController } from '$lib/lod';
+	import type { MarkLODSurface } from '$lib/lod/rung-types';
 	import { Rects } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { getGPUContext } from '$lib/gpu';
@@ -41,7 +41,7 @@
 		opacity?: number;
 		preferredXScaleType?: ScaleType | null;
 		fitDomain?: 'x' | 'y' | boolean;
-		onLodController?: (ctrl: LODController | null) => void;
+		onMarkLOD?: (surface: MarkLODSurface | null) => void;
 	}
 
 	let {
@@ -68,7 +68,7 @@
 		domain = null,
 		tooltip = true,
 		tip = undefined,
-		onLodController = undefined
+		onMarkLOD = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('recty');
@@ -292,7 +292,7 @@
 			if (entry.table && effectiveXScaleType) {
 				setup = new MarkLifecycle(config, coordinator, chartContext, markId, {
 					gpuCoordinator,
-					onLodController
+					onMarkLOD
 				});
 			}
 		});
