@@ -25,6 +25,8 @@
 	import { exportSpecJSON } from '$lib/spec/export';
 	import type { LODState } from '$lib/lod/LODController.svelte';
 	import type { LODController } from '$lib/lod/LODController.svelte';
+	import type { MarkLODSurface } from '$lib/lod/rung-types';
+	import type { DensityContext } from '$lib/lod/DensityHost.svelte';
 
 	interface Props {
 		onclose: () => void;
@@ -124,7 +126,7 @@
 			(n) => !cols.includes(n)
 		); // exclude channels already in column list (e.g. 'r')
 		const result = [...cols, ...opts, ...nums];
-		if (lodState) result.push('lod');
+		if (markLOD || lodState) result.push('lod');
 		return result;
 	});
 
@@ -170,6 +172,15 @@
 
 	const lodState: LODState | null = $derived(lodController?.state ?? null);
 
+	// Rung-based LOD surface (new API, coexists with lodController during migration)
+	const markLOD: MarkLODSurface | null = $derived.by(() => {
+		if (!targetEntry) return null;
+		return chartContext.config.getMarkLOD(targetEntry.id) ?? null;
+	});
+	const densityCtx: DensityContext | null = $derived(markLOD?.getDensityCtx() ?? null);
+	// densityHost exposed for diagnostic polling (queryLatencyMs, etc.)
+	// shouldDecimate is on ctx (deep proxy) for reactive template reads
+
 	/** LOD editable items as a virtual numeric group (reuses group keyboard navigation). */
 	interface LodGroupItem {
 		label: string;
@@ -183,22 +194,118 @@
 		options?: string[];
 	}
 	const lodGroupItems: LodGroupItem[] = $derived.by(() => {
+		// Rung-based (line mode via new API)
+		if (markLOD) {
+			const rungs = markLOD.getRungs();
+			const items: LodGroupItem[] = [];
+			for (const rung of rungs) {
+				if (rung.destroyed) continue;
+				if (rung.name === 'smooth') {
+					items.push(
+						{
+							label: 'smooth',
+							key: 'smoothWindow',
+							min: 0,
+							max: 100,
+							step: 1,
+							bigStep: 5,
+							getValue: () => (rung.props.window as number) ?? 0
+						},
+						{
+							label: 'mode',
+							key: 'smoothMode',
+							min: 0,
+							max: 1,
+							step: 1,
+							getValue: () => (rung.props.mode as string) ?? 'centered',
+							options: ['centered', 'trailing', 'leading']
+						}
+					);
+				} else if (rung.name === 'dots') {
+					items.push(
+						{
+							label: 'dots threshold',
+							key: 'dotsThreshold',
+							min: 10,
+							max: 100,
+							step: 1,
+							bigStep: 5,
+							getValue: () => (rung.props.threshold as number) ?? 18
+						},
+						{
+							label: 'dot radius',
+							key: 'baseRadius',
+							min: 0.5,
+							max: 20,
+							step: 0.5,
+							bigStep: 2,
+							getValue: () => (rung.props.baseR as number) ?? 2.5
+						}
+					);
+				}
+			}
+			return items;
+		}
+		// LODController-based (binned mode, legacy line mode)
 		if (!lodState) return [];
 		if (lodState.mode === 'line') {
 			return [
-				{ label: 'smooth', key: 'smoothWindow', min: 0, max: 100, step: 1, bigStep: 5, getValue: () => lodState.smoothWindow },
-				{ label: 'mode', key: 'smoothMode', min: 0, max: 1, step: 1, getValue: () => lodState.smoothMode, options: ['centered', 'trailing', 'leading'] },
-				{ label: 'dots threshold', key: 'dotsThreshold', min: 10, max: 100, step: 1, bigStep: 5, getValue: () => lodState.dotsThreshold },
-				{ label: 'dot radius', key: 'baseRadius', min: 0.5, max: 20, step: 0.5, bigStep: 2, getValue: () => lodState.baseRadius }
+				{
+					label: 'smooth',
+					key: 'smoothWindow',
+					min: 0,
+					max: 100,
+					step: 1,
+					bigStep: 5,
+					getValue: () => lodState.smoothWindow
+				},
+				{
+					label: 'mode',
+					key: 'smoothMode',
+					min: 0,
+					max: 1,
+					step: 1,
+					getValue: () => lodState.smoothMode,
+					options: ['centered', 'trailing', 'leading']
+				},
+				{
+					label: 'dots threshold',
+					key: 'dotsThreshold',
+					min: 10,
+					max: 100,
+					step: 1,
+					bigStep: 5,
+					getValue: () => lodState.dotsThreshold
+				},
+				{
+					label: 'dot radius',
+					key: 'baseRadius',
+					min: 0.5,
+					max: 20,
+					step: 0.5,
+					bigStep: 2,
+					getValue: () => lodState.baseRadius
+				}
 			];
 		}
 		return [
-			{ label: 'multiplier', key: 'multiplier', min: 0.1, max: 20, step: 0.1, bigStep: 0.5, getValue: () => lodState.binMultiplier }
+			{
+				label: 'multiplier',
+				key: 'multiplier',
+				min: 0.1,
+				max: 20,
+				step: 0.1,
+				bigStep: 0.5,
+				getValue: () => lodState.binMultiplier
+			}
 		];
 	});
 
 	/** Update an LOD tunable via ChartConfig (persists for undo/redo + spec export). */
-	function setLodTunable(key: 'dotsThreshold' | 'baseRadius' | 'multiplier' | 'smoothWindow' | 'smoothMode', value: number | string): void {
+	function setLodTunable(
+		key: 'dotsThreshold' | 'baseRadius' | 'multiplier' | 'smoothWindow' | 'smoothMode',
+		value: number | string
+	): void {
 		if (!targetEntry) return;
 		const current = targetEntry.lod;
 		const cfg = typeof current === 'object' && current ? current : {};
@@ -301,14 +408,27 @@
 	// ---- Current value display for channel rows ----
 	function currentValue(channel: string): string {
 		// LOD summary
-		if (channel === 'lod' && lodState) {
-			if (lodState.mode === 'line') {
-				const suffix = lodState.smoothActive
-					? ` ${lodState.smoothMode === 'trailing' ? '←' : lodState.smoothMode === 'leading' ? '→' : '±'}${lodState.smoothWindow}`
-					: '';
-				return `${lodState.density.toFixed(1)} pt/px${suffix}`;
+		if (channel === 'lod' && (markLOD || lodState)) {
+			if (densityCtx) {
+				const rungs = markLOD?.getRungs() ?? [];
+				const smooth = rungs.find((r) => r.name === 'smooth' && !r.destroyed);
+				const w = smooth ? (smooth.props.window as number) ?? 0 : 0;
+				const mode = smooth ? (smooth.props.mode as string) ?? 'centered' : 'centered';
+				const suffix =
+					w > 0
+						? ` ${mode === 'trailing' ? '←' : mode === 'leading' ? '→' : '±'}${w}`
+						: '';
+				return `${densityCtx.density.toFixed(1)} pt/px${suffix}`;
 			}
-			return `${Math.round(lodState.numVisibleBins)} bins`;
+			if (lodState) {
+				if (lodState.mode === 'line') {
+					const suffix = lodState.smoothActive
+						? ` ${lodState.smoothMode === 'trailing' ? '←' : lodState.smoothMode === 'leading' ? '→' : '±'}${lodState.smoothWindow}`
+						: '';
+					return `${lodState.density.toFixed(1)} pt/px${suffix}`;
+				}
+				return `${Math.round(lodState.numVisibleBins)} bins`;
+			}
 		}
 
 		// Chart-level numeric group (margins)
@@ -378,11 +498,21 @@
 	// ---- Focus helper (replaces focus management effect) ----
 	async function updateFocus() {
 		await tick();
-		if (focusZone === 'values' && expandedChannel === 'lod' && groupEditing && groupInputs[groupFocusIndex]) {
+		if (
+			focusZone === 'values' &&
+			expandedChannel === 'lod' &&
+			groupEditing &&
+			groupInputs[groupFocusIndex]
+		) {
 			const el = groupInputs[groupFocusIndex];
 			el.focus();
 			if ('select' in el) el.select();
-		} else if (focusZone === 'values' && expandedNumericGroup && groupEditing && groupInputs[groupFocusIndex]) {
+		} else if (
+			focusZone === 'values' &&
+			expandedNumericGroup &&
+			groupEditing &&
+			groupInputs[groupFocusIndex]
+		) {
 			const el = groupInputs[groupFocusIndex];
 			el.focus();
 			if ('select' in el) el.select();
@@ -706,7 +836,10 @@
 		}
 
 		// Cmd+Up jumps to tab bar, Cmd+Down jumps back to channels
-		if ((event.metaKey || event.ctrlKey) && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+		if (
+			(event.metaKey || event.ctrlKey) &&
+			(event.key === 'ArrowUp' || event.key === 'ArrowDown')
+		) {
 			event.preventDefault();
 			if (event.key === 'ArrowUp') {
 				if (focusZone === 'values') collapseCommit();
@@ -1134,7 +1267,12 @@
 					class={[
 						'ch-row',
 						'reset-row',
-						{ highlighted: keyboardNav && focusZone === 'channels' && channelHighlight === currentChannels.length }
+						{
+							highlighted:
+								keyboardNav &&
+								focusZone === 'channels' &&
+								channelHighlight === currentChannels.length
+						}
 					]}
 					onclick={resetAll}
 					onpointerenter={() => {
@@ -1144,10 +1282,7 @@
 				>
 					<span class="ch-name reset-label">reset all</span>
 				</button>
-				<button
-					class="ch-row reset-row"
-					onclick={copySpec}
-				>
+				<button class="ch-row reset-row" onclick={copySpec}>
 					<span class="ch-name reset-label">{copyFeedback ? 'copied!' : 'copy spec'}</span>
 					<span class="ch-value" style:font-size="9px">⌘E</span>
 				</button>
@@ -1195,10 +1330,23 @@
 								</div>
 							{/each}
 						</div>
-					{:else if expandedChannel === 'lod' && lodState && lodController}
+					{:else if expandedChannel === 'lod' && (markLOD || (lodState && lodController))}
 						<div class="group-panel">
 							<!-- Diagnostic readouts -->
-							{#if lodState.mode === 'line'}
+							{#if densityCtx}
+								<div class="group-row">
+									<span class="group-label">visible</span>
+									<span class="lod-readout">{densityCtx.visibleCount.toLocaleString()}</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">density</span>
+									<span class="lod-readout">{densityCtx.density.toFixed(1)} pt/px</span>
+								</div>
+								<div class="group-row">
+									<span class="group-label">M4</span>
+									<span class="lod-readout {densityCtx.shouldDecimate ? 'lod-active' : ''}">{densityCtx.shouldDecimate ? 'on' : 'off'}</span>
+								</div>
+							{:else if lodState && lodState.mode === 'line'}
 								<div class="group-row">
 									<span class="group-label">visible</span>
 									<span class="lod-readout">{lodState.visibleCount.toLocaleString()}</span>
@@ -1209,15 +1357,23 @@
 								</div>
 								<div class="group-row">
 									<span class="group-label">M4</span>
-									<span class="lod-readout {lodState.shouldDecimate ? 'lod-active' : ''}">{lodState.shouldDecimate ? 'on' : 'off'}</span>
+									<span class="lod-readout {lodState.shouldDecimate ? 'lod-active' : ''}"
+										>{lodState.shouldDecimate ? 'on' : 'off'}</span
+									>
 								</div>
 								{#if lodState.smoothActive}
 									<div class="group-row">
 										<span class="group-label"></span>
-										<span class="lod-readout lod-active">{lodState.smoothMode === 'trailing' ? `←${lodState.smoothWindow}` : lodState.smoothMode === 'leading' ? `${lodState.smoothWindow}→` : `±${lodState.smoothWindow}`} avg</span>
+										<span class="lod-readout lod-active"
+											>{lodState.smoothMode === 'trailing'
+												? `←${lodState.smoothWindow}`
+												: lodState.smoothMode === 'leading'
+													? `${lodState.smoothWindow}→`
+													: `±${lodState.smoothWindow}`} avg</span
+										>
 									</div>
 								{/if}
-							{:else}
+							{:else if lodState}
 								<div class="group-row">
 									<span class="group-label">bins</span>
 									<span class="lod-readout">{Math.round(lodState.numVisibleBins)}</span>
@@ -1241,13 +1397,16 @@
 											class="lod-readout lod-option"
 											tabindex="0"
 											role="button"
-											onfocus={() => { groupFocusIndex = gi; groupEditing = true; }}
+											onfocus={() => {
+												groupFocusIndex = gi;
+												groupEditing = true;
+											}}
 											onclick={() => {
 												const curIdx = item.options!.indexOf(String(item.getValue()));
 												const next = item.options![(curIdx + 1) % item.options!.length];
 												setLodTunable(item.key, next as any);
-											}}
-										>{item.getValue()}</span>
+											}}>{item.getValue()}</span
+										>
 									{:else}
 										<input
 											bind:this={groupInputs[gi]}
@@ -1394,7 +1553,9 @@
 										'clear-row',
 										{
 											highlighted:
-												keyboardNav && focusZone === 'values' && valueHighlight === filteredValues.length
+												keyboardNav &&
+												focusZone === 'values' &&
+												valueHighlight === filteredValues.length
 										}
 									]}
 									onpointerenter={() => {

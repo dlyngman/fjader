@@ -14,7 +14,7 @@ interface ParallelAxisReorderConfig {
 }
 
 const REORDER_STIFFNESS = 120;
-const RELEASE_STIFFNESS = 600;
+const RELEASE_STIFFNESS = 300;
 const REST_PRECISION = 0.0005;
 
 export class ParallelAxisReorder {

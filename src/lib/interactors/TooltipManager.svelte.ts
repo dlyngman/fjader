@@ -6,6 +6,7 @@ import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { LODController } from '$lib/lod';
+import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 
 type DataRow = Record<string, unknown>;
@@ -196,6 +197,15 @@ export class TooltipManager {
 	get currentLodController(): LODController | null {
 		if (!this.currentMarkId || !this.#chartConfig) return null;
 		return this.#chartConfig.getLodController(this.currentMarkId) ?? null;
+	}
+
+	/**
+	 * Get the MarkLODSurface for the currently active (hovered) mark, if any.
+	 * New rung-based API — coexists with currentLodController during migration.
+	 */
+	get currentMarkLOD(): MarkLODSurface | null {
+		if (!this.currentMarkId || !this.#chartConfig) return null;
+		return this.#chartConfig.getMarkLOD(this.currentMarkId) ?? null;
 	}
 
 	/**

@@ -408,12 +408,9 @@
 			scales?.registerScaleType(dimension as 'x' | 'y', type, priority, markId, config, columnName),
 		unregisterScaleType: (dimension, markId) =>
 			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
-		registerParallelColumn: (column, markId) =>
-			scales?.registerParallelColumn(column, markId),
-		unregisterParallelColumn: (column, markId) =>
-			scales?.unregisterParallelColumn(column, markId),
-		reorderParallelAxis: (from, to) =>
-			scales?.reorderParallelAxis(from, to),
+		registerParallelColumn: (column, markId) => scales?.registerParallelColumn(column, markId),
+		unregisterParallelColumn: (column, markId) => scales?.unregisterParallelColumn(column, markId),
+		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
 			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };
 		},
@@ -538,14 +535,19 @@
 		event.preventDefault();
 
 		if (event.shiftKey) {
-			// Per-mark routing: if the hovered mark has an LODController, route to it
-			const lodCtrl = tooltipManager?.currentLodController;
-			if (lodCtrl) {
-				lodCtrl.adjustResolution(event.deltaY);
+			// Per-mark routing: try rung-based API first, fall back to LODController
+			const lodSurface = tooltipManager?.currentMarkLOD;
+			if (lodSurface) {
+				lodSurface.adjustResolution(event.deltaY);
 			} else {
-				// Fallback: chart-level bin multiplier
-				const delta = event.deltaY < 0 ? 0.025 : -0.025;
-				scales.adjustBinMultiplier(delta);
+				const lodCtrl = tooltipManager?.currentLodController;
+				if (lodCtrl) {
+					lodCtrl.adjustResolution(event.deltaY);
+				} else {
+					// Fallback: chart-level bin multiplier
+					const delta = event.deltaY < 0 ? 0.025 : -0.025;
+					scales.adjustBinMultiplier(delta);
+				}
 			}
 			return;
 		}
@@ -556,13 +558,17 @@
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
 		// Parallel axis zoom takes priority — yInBounds is sufficient (same margin logic as regular axes)
-		if ((yInBounds && !!scales.parallelScales) && scales.zoomParallelAxis(
-			innerPoint.x,
-			innerPoint.y,
-			scaleFactor,
-			layout.innerWidth,
-			layout.innerHeight
-		)) {
+		if (
+			yInBounds &&
+			!!scales.parallelScales &&
+			scales.zoomParallelAxis(
+				innerPoint.x,
+				innerPoint.y,
+				scaleFactor,
+				layout.innerWidth,
+				layout.innerHeight
+			)
+		) {
 			// handled by parallel axis
 		} else {
 			scales.accumulateZoom(
@@ -607,8 +613,10 @@
 		pointerBuffer.x = ptrX(event);
 		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
-		if (!(yInBounds && !!scales.parallelScales) ||
-			!scales.resetParallelZoom(innerPoint.x, layout.innerWidth)) {
+		if (
+			!(yInBounds && !!scales.parallelScales) ||
+			!scales.resetParallelZoom(innerPoint.x, layout.innerWidth)
+		) {
 			scales.resetZoom(xInBounds, yInBounds);
 		}
 		tooltipManager?.suppress(300);
@@ -682,7 +690,10 @@
 		// This mirrors how regular charts let margin interactions target the in-bounds axis.
 		const parallelInBounds = yInBounds && !!scales.parallelScales;
 
-		if ((xInBounds && yInBounds || parallelInBounds) && chartContext.onInteractorPointerDown?.(event, innerPoint)) {
+		if (
+			((xInBounds && yInBounds) || parallelInBounds) &&
+			chartContext.onInteractorPointerDown?.(event, innerPoint)
+		) {
 			currentInnerX = null;
 			currentInnerY = null;
 			scales.clearCurrentDataPoints();
@@ -691,12 +702,10 @@
 		}
 
 		// Parallel axis pan takes priority (parallel chart's x-scale is for layout, not pan)
-		if (parallelInBounds && scales.startParallelPan(
-			pointerBuffer.y,
-			innerPoint.x,
-			layout.innerWidth,
-			layout.innerHeight
-		)) {
+		if (
+			parallelInBounds &&
+			scales.startParallelPan(pointerBuffer.y, innerPoint.x, layout.innerWidth, layout.innerHeight)
+		) {
 			isPanning = true;
 			scales.clearCurrentDataPoints();
 			currentInnerX = null;
@@ -706,8 +715,12 @@
 		}
 
 		// Parallel axis reorder: pointer in bottom margin near a label
-		if (!yInBounds && innerPoint.y > 0 && scales.parallelScales &&
-			scales.startParallelReorder(innerPoint.x, layout.innerWidth)) {
+		if (
+			!yInBounds &&
+			innerPoint.y > 0 &&
+			scales.parallelScales &&
+			scales.startParallelReorder(innerPoint.x, layout.innerWidth)
+		) {
 			isReordering = true;
 			(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
 			return;

@@ -18,8 +18,11 @@
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
-	import { LODController } from '$lib/lod';
-	import { RollingAvgNode, type SmoothMode } from '$lib/sql/rolling-avg';
+	import { DensityHost } from '$lib/lod/DensityHost.svelte';
+	import { DotsRung } from '$lib/lod/DotsRung.svelte';
+	import { SmoothRung } from '$lib/lod/SmoothRung.svelte';
+	import type { MarkLODSurface } from '$lib/lod/rung-types';
+	import type { SmoothMode } from '$lib/sql/rolling-avg';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -54,7 +57,8 @@
 		opacity?: number;
 		fitDomain?: 'x' | 'y' | boolean;
 		lod?: boolean | LODConfig;
-		onLodController?: (ctrl: LODController | null) => void;
+		onLodController?: (ctrl: unknown | null) => void;
+		onMarkLOD?: (surface: MarkLODSurface | null) => void;
 		/** Custom rendering for the smoothing overlay rung. */
 		rung_smooth?: Snippet<[SmoothRungContext]>;
 		/** @internal Prevents recursive overlay spawning. */
@@ -86,6 +90,7 @@
 		opacity = 1,
 		lod = true,
 		onLodController = undefined,
+		onMarkLOD = undefined,
 		rung_smooth = undefined,
 		_isOverlay = false
 	}: Props = $props();
@@ -280,8 +285,7 @@
 	const faceted = !!chartContext.fx;
 	const entryLod = $derived(entry.lod);
 
-	// Structural config — individual primitives so Svelte 5 can compare by value.
-	// Only changes to these recreate the LODController.
+	// Structural config — gates rung creation
 	const lodEnabled = $derived(entryLod !== false);
 	const lodDotsEnabled = $derived.by(() => {
 		if (entryLod === false) return false;
@@ -299,24 +303,7 @@
 		return cfg.onLODChange ?? null;
 	});
 
-	// Tunable values — read from entry.lod, synced to controller without recreation.
-	const lodTunables = $derived.by(() => {
-		const cfg = typeof entryLod === 'object' ? entryLod : {};
-		const dr = entry.dotRadius ?? 0;
-		const dotsR =
-			(typeof cfg.dots === 'object' ? cfg.dots.r : undefined) ?? (dr > 0 ? dr : 2.5);
-		const dotsThreshold =
-			typeof cfg.dots === 'object' ? (cfg.dots.threshold ?? 18) : 18;
-		const multiplier = cfg.multiplier ?? 1.0;
-		const smoothWindow =
-			typeof cfg.smooth === 'object' ? (cfg.smooth?.window ?? 0) : 0;
-		const smoothMode =
-			(typeof cfg.smooth === 'object' ? cfg.smooth?.mode : undefined) ?? 'centered';
-		return { dotsR, dotsThreshold, multiplier, smoothWindow, smoothMode };
-	});
-
-	// M4 created only when LODController is active and decimation isn't disabled.
-	// No LODController = no M4 (raw data passthrough, correct for sparse data).
+	// M4 created only when LOD is active and decimation isn't disabled.
 	const m4Eligible = $derived.by(() => {
 		if (!lodEnabled) return false;
 		if (lodDecimate === false || faceted) return false;
@@ -325,11 +312,9 @@
 		return true;
 	});
 
-	// When LOD is active, LODController writes dotRadius directly to the GPU buffer
-	// via its frame callback — no reactive chain. We set 0 here as a placeholder.
-	// Without LOD: dotRadius > 0 shows fixed dots, 0 = no dots.
+	// When LOD is active, DotsRung writes dotRadius directly to the GPU buffer.
 	const effectiveDotRadius = $derived.by(() => {
-		if (lodEnabled && lodController) return 0; // LODController writes directly to GPU
+		if (lodEnabled && dotsRung) return 0;
 		return entry.dotRadius ?? 0;
 	});
 
@@ -348,96 +333,138 @@
 		}
 	});
 
-	// Write-back: when LODController tunables change (shift+scroll), persist to entry.lod
-	function updateEntryLod(key: string, value: number | string): void {
+	// Write-back: when rung tunables change (shift+scroll), persist to entry.lod
+	function setRungParam(rungName: string, key: string, value: number | string): void {
 		const current = entry.lod;
 		const cfg = typeof current === 'object' && current ? current : {};
-		let updated: Record<string, unknown>;
-
-		if (key === 'dotsThreshold') {
-			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
-			dots.threshold = value as number;
-			updated = { ...cfg, dots };
-		} else if (key === 'baseRadius') {
-			const dots = typeof cfg.dots === 'object' && cfg.dots ? { ...cfg.dots } : {};
-			dots.r = value as number;
-			updated = { ...cfg, dots };
-		} else if (key === 'smoothWindow' || key === 'smoothMode') {
-			const smooth =
-				typeof cfg.smooth === 'object' && cfg.smooth ? { ...cfg.smooth } : {};
-			if (key === 'smoothWindow') smooth.window = value as number;
-			else smooth.mode = value as SmoothMode;
-			updated = { ...cfg, smooth };
-		} else {
-			updated = { ...cfg, multiplier: value as number };
-		}
-
-		chartContext.config.setMarkProp(markId, 'lod', updated);
+		const rungCfg =
+			typeof (cfg as Record<string, unknown>)[rungName] === 'object'
+				? { ...(cfg as Record<string, Record<string, unknown>>)[rungName] }
+				: {};
+		rungCfg[key] = value;
+		chartContext.config.setMarkProp(markId, 'lod', { ...cfg, [rungName]: rungCfg });
 	}
 
-	// --- LOD CONTROLLER ---
-	let lodController: LODController | null = $state(null);
+	// --- DENSITY HOST ---
+	let densityHost: DensityHost | null = $state(null);
 
 	$effect(() => {
 		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) {
-			lodController?.destroy();
-			lodController = null;
-			onLodController?.(null);
+			densityHost?.destroy();
+			densityHost = null;
 			return;
 		}
-		// Read structural primitives — these are tracked, recreation happens only
-		// when they change. Tunables synced via separate effect below.
-		const dotsEnabled = lodDotsEnabled;
 		const decimate = lodDecimate;
-		const onLODChange = lodOnChange;
-		// Read tunables WITHOUT tracking — tunable changes are synced via separate effect.
-		// Tracking here would re-create the controller on every tunable edit (flicker).
-		const initTunables = untrack(() => lodTunables);
-		const ctrl = new LODController(coordinator, gpuCoordinator, chartContext, {
-			mode: 'line',
+		const host = new DensityHost(gpuCoordinator, chartContext, coordinator, {
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
 				setup.buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi),
-			baseR: initTunables.dotsR,
-			dotsEnabled,
-			dotsThreshold: initTunables.dotsThreshold,
-			smoothWindow: initTunables.smoothWindow,
-			smoothMode: initTunables.smoothMode as SmoothMode,
-			decimate,
-			onLODChange,
-			onTunableChange: (key, value) => updateEntryLod(key, value)
+			decimate
 		});
-		lodController = ctrl;
-		onLodController?.(ctrl);
+		densityHost = host;
 		return () => {
-			ctrl.destroy();
-			lodController = null;
-			onLodController?.(null);
+			host.destroy();
+			densityHost = null;
 		};
 	});
 
-	// Sync tunable changes to controller without recreating it.
-	// Palette writes to entry.lod → lodTunables updates → this effect pushes to controller.
+	// --- DOTS RUNG (only when dots enabled) ---
+	let dotsRung: DotsRung | null = $state(null);
+
 	$effect(() => {
-		if (!lodController) return;
-		const t = lodTunables;
-		lodController.setDotsThreshold(t.dotsThreshold);
-		lodController.setBaseRadius(t.dotsR);
-		lodController.setSmoothWindow(t.smoothWindow);
-		lodController.setSmoothMode(t.smoothMode as SmoothMode);
-		// Multiplier is chart-level state but we persist the mark's requested value
-		if (lodController.mode === 'binned') {
-			lodController.setBinMultiplier(t.multiplier);
+		const enabled = lodDotsEnabled;
+		const host = densityHost;
+		if (!enabled || !host || !gpuCoordinator) {
+			dotsRung?.destroy();
+			dotsRung = null;
+			return;
+		}
+		const rung = new DotsRung(
+			host,
+			gpuCoordinator,
+			() => {
+				const cfg = typeof entry.lod === 'object' ? entry.lod : {};
+				return typeof cfg.dots === 'object' ? (cfg.dots?.threshold ?? 18) : 18;
+			},
+			() => {
+				const cfg = typeof entry.lod === 'object' ? entry.lod : {};
+				const dr = entry.dotRadius ?? 0;
+				return (typeof cfg.dots === 'object' ? cfg.dots?.r : undefined) ?? (dr > 0 ? dr : 2.5);
+			},
+			(key, val) => setRungParam('dots', key, val)
+		);
+		dotsRung = rung;
+		return () => {
+			rung.destroy();
+			dotsRung = null;
+		};
+	});
+
+	// --- SMOOTH RUNG ---
+	let smoothRung: SmoothRung | null = $state(null);
+
+	$effect(() => {
+		const enabled = lodEnabled;
+		if (!enabled) {
+			smoothRung?.destroy();
+			smoothRung = null;
+			return;
+		}
+		const rung = new SmoothRung(
+			() => {
+				const cfg = typeof entry.lod === 'object' ? entry.lod : {};
+				return typeof cfg.smooth === 'object' ? (cfg.smooth?.window ?? 0) : 0;
+			},
+			() => {
+				const cfg = typeof entry.lod === 'object' ? entry.lod : {};
+				return ((typeof cfg.smooth === 'object' ? cfg.smooth?.mode : undefined) ??
+					'centered') as SmoothMode;
+			},
+			{
+				y: () => entry.y,
+				x: () => entry.x,
+				partition: () => entry.z ?? entry.stroke
+			},
+			(key, val) => setRungParam('smooth', key, val)
+		);
+		smoothRung = rung;
+		return () => {
+			rung.destroy();
+			smoothRung = null;
+		};
+	});
+
+	// --- M4 SYNC (reads DensityHost.shouldDecimate directly) ---
+	$effect(() => {
+		if (!m4Decimator || !densityHost) return;
+		const should = densityHost.ctx.shouldDecimate;
+		m4Decimator.setDecimationMode(should ? 'decimate' : 'passthrough');
+	});
+
+	// --- onLODChange fire (replaces LODController's #fireChangeIfNeeded) ---
+	let prevDecimating = false;
+	let prevDotsVisible = false;
+	$effect(() => {
+		const onChange = lodOnChange;
+		if (!onChange || !densityHost) return;
+		const decimating = densityHost.ctx.shouldDecimate;
+		const dotsVisible = (dotsRung?.dotRadius ?? 0) > 0;
+		if (decimating !== prevDecimating || dotsVisible !== prevDotsVisible) {
+			prevDecimating = decimating;
+			prevDotsVisible = dotsVisible;
+			const { visibleCount, density } = densityHost.ctx;
+			const cfg = typeof entry.lod === 'object' ? entry.lod : {};
+			const smoothWindow = typeof cfg.smooth === 'object' ? (cfg.smooth?.window ?? 0) : 0;
+			onChange({
+				decimating,
+				dotRadius: dotsRung?.dotRadius ?? 0,
+				visibleCount,
+				density,
+				smoothingWindow: smoothWindow
+			});
 		}
 	});
 
-	// Sync M4 decimator to LODController — decoupled so M4 recreation
-	// (e.g. on resize) doesn't tear down the controller and lose state.
-	$effect(() => {
-		lodController?.setM4Decimator(m4Decimator);
-	});
-
 	// Configure M4 decimator when chart dimensions or series count change.
-	// When stroke is set, wait for the series domain to be populated (async fetch).
 	$effect(() => {
 		if (!m4Decimator || !chartContext.innerWidth) return;
 
@@ -452,19 +479,42 @@
 
 		const dpr = window.devicePixelRatio || 1;
 		const numBins = Math.ceil(chartContext.innerWidth * dpr);
-		// Resolver is called at dispatch time — always gets the current index
-		// even after ScaleIndexManager rebuilds shift slot assignments.
 		const scaleState = chartContext.xScaleState;
 		const resolveIndex = () =>
 			scaleState ? (gpuCoordinator.getScaleIndex?.(scaleState.id) ?? 0) : 0;
 		m4Decimator.configure(numBins, numSeries, resolveIndex);
 	});
 
-	// LODController registration with ChartConfig (palette access + shift+scroll routing via TooltipManager delegation)
+	// --- MARK LOD SURFACE REGISTRATION ---
 	$effect(() => {
-		if (!lodController) return;
-		chartContext.config.registerLodController(markId, lodController);
-		return () => chartContext.config.unregisterLodController(markId);
+		if (!lodEnabled) return;
+		const host = densityHost;
+		const dots = dotsRung;
+		const smooth = smoothRung;
+		const surface: MarkLODSurface = {
+			adjustResolution(deltaY: number) {
+				if (smooth?.active || deltaY > 0) {
+					smooth?.adjustResolution(deltaY);
+				} else {
+					dots?.adjustResolution(deltaY);
+				}
+			},
+			getRungs() {
+				return [dots, smooth].filter((r): r is DotsRung | SmoothRung => r != null && !r.destroyed);
+			},
+			getDensityCtx() {
+				return host?.ctx ?? null;
+			},
+			getDensityHost() {
+				return host ?? null;
+			}
+		};
+		chartContext.config.registerMarkLOD(markId, surface);
+		onMarkLOD?.(surface);
+		return () => {
+			chartContext.config.unregisterMarkLOD(markId);
+			onMarkLOD?.(null);
+		};
 	});
 
 	// Tooltip registration — reads from entry
@@ -490,43 +540,12 @@
 	});
 
 	// --- SMOOTHING OVERLAY ---
-	const smoothWindow = $derived(lodController?.state?.smoothWindow ?? 0);
-	const smoothMode = $derived(lodController?.state?.smoothMode ?? 'centered');
-	const overlayActive = $derived(!_isOverlay && smoothWindow > 0);
-	const effectiveGlobalAlpha = $derived(opacity * (overlayActive ? 0.3 : 1.0));
-
-	// Stable RollingAvgNode — created once, mutated on window size changes.
-	// MarkLifecycle resolves it during buildQuery() and re-queries via invalidation
-	// callback (same pattern as AutoBinNode + triggerReBin). No lifecycle recreation.
-	let rollingAvgNode: RollingAvgNode | null = $state(null);
-	$effect(() => {
-		if (!overlayActive) {
-			rollingAvgNode = null;
-			return;
-		}
-		// Create once when overlay activates, reuse across window changes
-		if (!rollingAvgNode) {
-			const seriesField = entry.z ?? entry.stroke;
-			rollingAvgNode = new RollingAvgNode(
-				String(entry.y),
-				String(entry.x),
-				seriesField ? String(seriesField) : null,
-				smoothWindow,
-				smoothMode as SmoothMode
-			);
-		}
-	});
-
-	// Sync window size and mode to the node — triggers invalidation callback → re-query
-	$effect(() => {
-		if (rollingAvgNode && smoothWindow > 0) {
-			rollingAvgNode.setWindowSize(smoothWindow);
-			rollingAvgNode.setMode(smoothMode as SmoothMode);
-		}
-	});
+	const effectiveGlobalAlpha = $derived(opacity * (smoothRung?.active ? 0.3 : 1.0));
 
 	onDestroy(() => {
-		lodController?.destroy();
+		dotsRung?.destroy();
+		smoothRung?.destroy();
+		densityHost?.destroy();
 		m4Decimator?.destroy();
 		setup?.destroy();
 		chartContext.config.unregisterMark(markId);
@@ -552,26 +571,26 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.client?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
-			{lodController}
+			{dotsRung}
 		/>
 	{/key}
-	{#if overlayActive && rollingAvgNode}
+	{#if smoothRung?.active && smoothRung.node}
 		{#if rung_smooth}
 			{@render rung_smooth({
 				table: entry.table,
 				x: entry.x,
 				y: entry.y,
-				smoothY: rollingAvgNode,
+				smoothY: smoothRung.node,
 				stroke: entry.stroke ?? null,
 				z: entry.z ?? null,
-				windowSize: smoothWindow
+				windowSize: smoothRung.props.window as number
 			})}
 		{:else}
 			<LineMark
 				table={entry.table}
 				selection={entry.selection}
 				x={entry.x}
-				y={rollingAvgNode as any}
+				y={smoothRung.node as any}
 				stroke={entry.stroke}
 				z={entry.z}
 				scheme={entry.scheme}
