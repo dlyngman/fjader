@@ -55,9 +55,14 @@ export class DensityHost {
 	#countDebounceMs: number;
 	#domainChangeThreshold: number;
 	#lastCountTime: number = 0;
-	#lastCountDomain: [number, number] = [0, 0];
+	#lastCountDomainLo: number = 0;
+	#lastCountDomainHi: number = 0;
 	#countQueryPending: boolean = false;
 	#querySequence: number = 0;
+
+	// --- Fast-path domain change detection (avoid full check when domain unchanged) ---
+	#lastSeenLo: number = NaN;
+	#lastSeenHi: number = NaN;
 
 	// --- Frame callback ---
 	#frameCallback: ((isAnimating: boolean) => void) | null = null;
@@ -106,33 +111,40 @@ export class DensityHost {
 	#onFrame(): void {
 		if (this.#destroyed) return;
 		this.frameCallbackCount++;
+
+		// Fast path: read x domain target directly, skip everything if unchanged.
+		// Two number comparisons — no property chain traversal, no allocations.
+		const xState = this.#chartContext.xScaleState;
+		if (!xState) return;
+		const target = (xState as { domain?: { target?: [number, number] } }).domain?.target;
+		if (!target) return;
+		const lo = target[0];
+		const hi = target[1];
+		if (lo === this.#lastSeenLo && hi === this.#lastSeenHi) return;
+		this.#lastSeenLo = lo;
+		this.#lastSeenHi = hi;
+
+		// Domain changed — run full check
 		this.timeSinceLastQuery = performance.now() - this.#lastCountTime;
-		this.#checkDomainAndQuery();
+		this.#checkDomainAndQuery(lo, hi);
 	}
 
 	// =========================================================================
 	// Domain checking + count query scheduling
 	// =========================================================================
 
-	#checkDomainAndQuery(): void {
-		const xState = this.#chartContext.xScaleState;
-		if (!xState || !('domain' in xState)) return;
-
-		const domain = (xState as { domain?: { target?: [number, number] } }).domain;
-		if (!domain || !domain.target) return;
-
-		const [lo, hi] = domain.target;
-		if (typeof lo !== 'number' || typeof hi !== 'number') return;
+	#checkDomainAndQuery(lo: number, hi: number): void {
 		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return;
 
 		// Read y domain if available (continuous y scale)
-		let yLo = -Infinity,
-			yHi = Infinity;
+		let yLo = -Infinity;
+		let yHi = Infinity;
 		const yState = this.#chartContext.yScaleState;
-		if (yState && 'domain' in yState) {
-			const yDomain = (yState as { domain?: { target?: [number, number] } }).domain;
-			if (yDomain?.target) {
-				const [y0, y1] = yDomain.target;
+		if (yState) {
+			const yTarget = (yState as { domain?: { target?: [number, number] } }).domain?.target;
+			if (yTarget) {
+				const y0 = yTarget[0];
+				const y1 = yTarget[1];
 				if (typeof y0 === 'number' && typeof y1 === 'number' && isFinite(y0) && isFinite(y1)) {
 					yLo = y0;
 					yHi = y1;
@@ -150,8 +162,7 @@ export class DensityHost {
 		const elapsed = now - this.#lastCountTime;
 		if (elapsed > this.#countDebounceMs) return true;
 
-		const [lastLo, lastHi] = this.#lastCountDomain;
-		const lastWidth = lastHi - lastLo;
+		const lastWidth = this.#lastCountDomainHi - this.#lastCountDomainLo;
 		if (lastWidth <= 0) return true;
 
 		const currentWidth = hi - lo;
@@ -183,7 +194,9 @@ export class DensityHost {
 
 			if (seq !== this.#querySequence || this.#destroyed) return;
 
-			const row = Array.from(result)[0] as { cnt: number } | undefined;
+			// Iterator-based first row — avoids Array.from() allocation
+			const iter = result[Symbol.iterator]();
+			const row = iter.next().value as { cnt: number } | undefined;
 			const count = Number(row?.cnt ?? 0);
 
 			// Update diagnostics (non-reactive)
@@ -191,7 +204,8 @@ export class DensityHost {
 			this.queryLatencyMs = t1 - t0;
 			this.queriesIssued++;
 			this.#lastCountTime = t1;
-			this.#lastCountDomain = [lo, hi];
+			this.#lastCountDomainLo = lo;
+			this.#lastCountDomainHi = hi;
 
 			// Update reactive context
 			const pw = this.#getPixelWidth();
