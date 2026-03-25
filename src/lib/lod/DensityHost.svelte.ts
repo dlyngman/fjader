@@ -2,7 +2,7 @@
 // DensityHost — density measurement + decimation hysteresis
 //
 // Owns DuckDB count queries for viewport density and publishes results as
-// reactive $state. Consumers (LODController, future rung classes) read
+// reactive $state. Consumers (rung classes like DotsRung) read
 // ctx and shouldDecimate via $derived/$effect.
 //
 // Fire-and-forget: updates ctx and shouldDecimate, then it's done.

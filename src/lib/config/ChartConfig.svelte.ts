@@ -24,7 +24,6 @@ import type {
 	CurveType,
 	Transform
 } from '$lib/types';
-import type { LODController } from '$lib/lod';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 
 // ---- MarkEntry ----
@@ -109,10 +108,7 @@ export class ChartConfig {
 	/** Reactive entries — SvelteMap so iteration/size reads are tracked. */
 	#entries = new SvelteMap<string, MarkEntry>();
 
-	/** LOD controllers per mark — single registration point for palette + TooltipManager. */
-	#lodControllers = new Map<string, LODController>();
-
-	/** Mark LOD surfaces (rung-based) — new API, coexists with lodControllers during migration. */
+	/** Mark LOD surfaces (rung-based) — per-mark LOD registration for palette + routing. */
 	#markLODSurfaces = new Map<string, MarkLODSurface>();
 
 	/** Preview stack — records previous values for cancel. */
@@ -168,7 +164,6 @@ export class ChartConfig {
 	unregisterMark(id: string): void {
 		this.#entries.delete(id);
 		this.#channels.delete(id);
-		this.#lodControllers.delete(id);
 	}
 
 	// ---- Chart-level props ----
@@ -214,24 +209,7 @@ export class ChartConfig {
 		}
 	}
 
-	// ---- LODController registration ----
-
-	/** Register a mark's LODController. Called by mark components after creation. */
-	registerLodController(markId: string, controller: LODController): void {
-		this.#lodControllers.set(markId, controller);
-	}
-
-	/** Unregister a mark's LODController. Called on controller destroy. */
-	unregisterLodController(markId: string): void {
-		this.#lodControllers.delete(markId);
-	}
-
-	/** Get LODController for a mark — palette reads runtime state, TooltipManager delegates here. */
-	getLodController(markId: string): LODController | undefined {
-		return this.#lodControllers.get(markId);
-	}
-
-	// ---- MarkLODSurface registration (rung-based, new API) ----
+	// ---- MarkLODSurface registration ----
 
 	registerMarkLOD(markId: string, surface: MarkLODSurface): void {
 		this.#markLODSurfaces.set(markId, surface);

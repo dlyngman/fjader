@@ -426,7 +426,7 @@
 		m4Decimator.setDecimationMode(should ? 'decimate' : 'passthrough');
 	});
 
-	// --- onLODChange fire (replaces LODController's #fireChangeIfNeeded) ---
+	// --- onLODChange fire ---
 	let prevDecimating = false;
 	let prevDotsVisible = false;
 	$effect(() => {

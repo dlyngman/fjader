@@ -14,7 +14,7 @@
  *   Pass 5a (passthroughXY): Copy raw x,y → output + set indirect count
  *   Pass 5b (passthroughSC): Copy raw series,color → output
  *
- * JS owns the decimate/passthrough decision via LODController. The decision
+ * JS owns the decimate/passthrough decision via DensityHost. The decision
  * is written to config.decimationMode (1=decimate, 2=passthrough) and read by INIT_BINS.
  * drawIndirect lets the GPU control its own instance count.
  *

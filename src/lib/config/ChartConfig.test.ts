@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ChartConfig } from './ChartConfig.svelte';
-import type { LODController } from '$lib/lod';
+import type { MarkLODSurface } from '$lib/lod/rung-types';
 
 function createTestConfig() {
 	const config = new ChartConfig();
@@ -207,46 +207,37 @@ describe('ChartConfig', () => {
 		});
 	});
 
-	describe('LODController registration', () => {
-		it('registers and retrieves an LODController', () => {
+	describe('MarkLODSurface registration', () => {
+		it('registers and retrieves a MarkLODSurface', () => {
 			const { config } = createTestConfig();
-			const mockCtrl = { mode: 'line' } as unknown as LODController;
+			const mockSurface = { adjustResolution: () => {} } as unknown as MarkLODSurface;
 
-			config.registerLodController('dot-test', mockCtrl);
-			expect(config.getLodController('dot-test')).toBe(mockCtrl);
+			config.registerMarkLOD('dot-test', mockSurface);
+			expect(config.getMarkLOD('dot-test')).toBe(mockSurface);
 		});
 
 		it('returns undefined for unregistered mark', () => {
 			const { config } = createTestConfig();
-			expect(config.getLodController('nonexistent')).toBeUndefined();
+			expect(config.getMarkLOD('nonexistent')).toBeUndefined();
 		});
 
-		it('unregisters an LODController', () => {
+		it('unregisters a MarkLODSurface', () => {
 			const { config } = createTestConfig();
-			const mockCtrl = { mode: 'line' } as unknown as LODController;
+			const mockSurface = { adjustResolution: () => {} } as unknown as MarkLODSurface;
 
-			config.registerLodController('dot-test', mockCtrl);
-			config.unregisterLodController('dot-test');
-			expect(config.getLodController('dot-test')).toBeUndefined();
+			config.registerMarkLOD('dot-test', mockSurface);
+			config.unregisterMarkLOD('dot-test');
+			expect(config.getMarkLOD('dot-test')).toBeUndefined();
 		});
 
-		it('unregisterMark also removes LODController', () => {
+		it('replaces existing surface on re-register', () => {
 			const { config } = createTestConfig();
-			const mockCtrl = { mode: 'line' } as unknown as LODController;
+			const surface1 = { adjustResolution: () => {}, id: 1 } as unknown as MarkLODSurface;
+			const surface2 = { adjustResolution: () => {}, id: 2 } as unknown as MarkLODSurface;
 
-			config.registerLodController('dot-test', mockCtrl);
-			config.unregisterMark('dot-test');
-			expect(config.getLodController('dot-test')).toBeUndefined();
-		});
-
-		it('replaces existing controller on re-register', () => {
-			const { config } = createTestConfig();
-			const ctrl1 = { mode: 'line', id: 1 } as unknown as LODController;
-			const ctrl2 = { mode: 'line', id: 2 } as unknown as LODController;
-
-			config.registerLodController('dot-test', ctrl1);
-			config.registerLodController('dot-test', ctrl2);
-			expect(config.getLodController('dot-test')).toBe(ctrl2);
+			config.registerMarkLOD('dot-test', surface1);
+			config.registerMarkLOD('dot-test', surface2);
+			expect(config.getMarkLOD('dot-test')).toBe(surface2);
 		});
 	});
 });

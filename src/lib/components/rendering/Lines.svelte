@@ -182,7 +182,7 @@
       }
       let center = projectToPixels(vec2<f32>(x, y));
 
-      // JS computes dotRadius via LODController. 0 = no dots. >0 = show at this size.
+      // JS computes dotRadius via DotsRung. 0 = no dots. >0 = show at this size.
       let circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio,
         markConstants.dotRadius > 0.0);
       let pos = center + quadPosition * circleR * 1.2;
