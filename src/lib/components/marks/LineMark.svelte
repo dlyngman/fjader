@@ -57,7 +57,6 @@
 		opacity?: number;
 		fitDomain?: 'x' | 'y' | boolean;
 		lod?: boolean | LODConfig;
-		onLodController?: (ctrl: unknown | null) => void;
 		onMarkLOD?: (surface: MarkLODSurface | null) => void;
 		/** Custom rendering for the smoothing overlay rung. */
 		rung_smooth?: Snippet<[SmoothRungContext]>;
@@ -89,7 +88,6 @@
 		fitDomain = undefined,
 		opacity = 1,
 		lod = true,
-		onLodController = undefined,
 		onMarkLOD = undefined,
 		rung_smooth = undefined,
 		_isOverlay = false
@@ -349,11 +347,7 @@
 	let densityHost: DensityHost | null = $state(null);
 
 	$effect(() => {
-		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) {
-			densityHost?.destroy();
-			densityHost = null;
-			return;
-		}
+		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) return;
 		const decimate = lodDecimate;
 		const host = new DensityHost(gpuCoordinator, chartContext, coordinator, {
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
@@ -373,11 +367,7 @@
 	$effect(() => {
 		const enabled = lodDotsEnabled;
 		const host = densityHost;
-		if (!enabled || !host || !gpuCoordinator) {
-			dotsRung?.destroy();
-			dotsRung = null;
-			return;
-		}
+		if (!enabled || !host || !gpuCoordinator) return;
 		const rung = new DotsRung(
 			host,
 			gpuCoordinator,
@@ -404,11 +394,7 @@
 
 	$effect(() => {
 		const enabled = lodEnabled;
-		if (!enabled) {
-			smoothRung?.destroy();
-			smoothRung = null;
-			return;
-		}
+		if (!enabled) return;
 		const rung = new SmoothRung(
 			() => {
 				const cfg = typeof entry.lod === 'object' ? entry.lod : {};
@@ -440,7 +426,7 @@
 		m4Decimator.setDecimationMode(should ? 'decimate' : 'passthrough');
 	});
 
-	// --- onLODChange fire (replaces LODController's #fireChangeIfNeeded) ---
+	// --- onLODChange fire ---
 	let prevDecimating = false;
 	let prevDotsVisible = false;
 	$effect(() => {

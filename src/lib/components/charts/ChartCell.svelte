@@ -535,19 +535,14 @@
 		event.preventDefault();
 
 		if (event.shiftKey) {
-			// Per-mark routing: try rung-based API first, fall back to LODController
+			// Per-mark routing via rung-based API
 			const lodSurface = tooltipManager?.currentMarkLOD;
 			if (lodSurface) {
 				lodSurface.adjustResolution(event.deltaY);
 			} else {
-				const lodCtrl = tooltipManager?.currentLodController;
-				if (lodCtrl) {
-					lodCtrl.adjustResolution(event.deltaY);
-				} else {
-					// Fallback: chart-level bin multiplier
-					const delta = event.deltaY < 0 ? 0.025 : -0.025;
-					scales.adjustBinMultiplier(delta);
-				}
+				// Fallback: chart-level bin multiplier
+				const delta = event.deltaY < 0 ? 0.035 : -0.035;
+				scales.adjustBinMultiplier(delta);
 			}
 			return;
 		}

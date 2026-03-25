@@ -2,6 +2,7 @@
 	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
 
 	let smoothWindow = $state(0);
+	let pollInterval = null;
 </script>
 
 <div class="container">
@@ -33,13 +34,14 @@
 							strokeWidth={1.5}
 							lod
 							onMarkLOD={(surface) => {
+								clearInterval(pollInterval);
+								pollInterval = null;
 								if (surface) {
-									const iv = setInterval(() => {
+									pollInterval = setInterval(() => {
 										const rungs = surface.getRungs();
 										const smooth = rungs.find((r) => r.name === 'smooth');
 										smoothWindow = smooth ? (smooth.props.window ?? 0) : 0;
 									}, 100);
-									return () => clearInterval(iv);
 								}
 							}}
 						/>

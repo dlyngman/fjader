@@ -23,8 +23,6 @@
 		NumericGroupDef
 	} from './palette-channels';
 	import { exportSpecJSON } from '$lib/spec/export';
-	import type { LODState } from '$lib/lod/LODController.svelte';
-	import type { LODController } from '$lib/lod/LODController.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
 	import type { DensityContext } from '$lib/lod/DensityHost.svelte';
 
@@ -126,7 +124,7 @@
 			(n) => !cols.includes(n)
 		); // exclude channels already in column list (e.g. 'r')
 		const result = [...cols, ...opts, ...nums];
-		if (markLOD || lodState) result.push('lod');
+		if (markLOD) result.push('lod');
 		return result;
 	});
 
@@ -165,14 +163,6 @@
 	});
 
 	// ---- Derived: LOD for active mark tab ----
-	const lodController: LODController | null = $derived.by(() => {
-		if (!targetEntry) return null;
-		return chartContext.config.getLodController(targetEntry.id) ?? null;
-	});
-
-	const lodState: LODState | null = $derived(lodController?.state ?? null);
-
-	// Rung-based LOD surface (new API, coexists with lodController during migration)
 	const markLOD: MarkLODSurface | null = $derived.by(() => {
 		if (!targetEntry) return null;
 		return chartContext.config.getMarkLOD(targetEntry.id) ?? null;
@@ -242,63 +232,21 @@
 							getValue: () => (rung.props.baseR as number) ?? 2.5
 						}
 					);
+				} else if (rung.name === 'bins') {
+					items.push({
+						label: 'multiplier',
+						key: 'multiplier',
+						min: 0.1,
+						max: 20,
+						step: 0.1,
+						bigStep: 0.5,
+						getValue: () => (rung.props.multiplier as number) ?? 1.0
+					});
 				}
 			}
 			return items;
 		}
-		// LODController-based (binned mode, legacy line mode)
-		if (!lodState) return [];
-		if (lodState.mode === 'line') {
-			return [
-				{
-					label: 'smooth',
-					key: 'smoothWindow',
-					min: 0,
-					max: 100,
-					step: 1,
-					bigStep: 5,
-					getValue: () => lodState.smoothWindow
-				},
-				{
-					label: 'mode',
-					key: 'smoothMode',
-					min: 0,
-					max: 1,
-					step: 1,
-					getValue: () => lodState.smoothMode,
-					options: ['centered', 'trailing', 'leading']
-				},
-				{
-					label: 'dots threshold',
-					key: 'dotsThreshold',
-					min: 10,
-					max: 100,
-					step: 1,
-					bigStep: 5,
-					getValue: () => lodState.dotsThreshold
-				},
-				{
-					label: 'dot radius',
-					key: 'baseRadius',
-					min: 0.5,
-					max: 20,
-					step: 0.5,
-					bigStep: 2,
-					getValue: () => lodState.baseRadius
-				}
-			];
-		}
-		return [
-			{
-				label: 'multiplier',
-				key: 'multiplier',
-				min: 0.1,
-				max: 20,
-				step: 0.1,
-				bigStep: 0.5,
-				getValue: () => lodState.binMultiplier
-			}
-		];
+		return [];
 	});
 
 	/** Update an LOD tunable via ChartConfig (persists for undo/redo + spec export). */
@@ -408,9 +356,9 @@
 	// ---- Current value display for channel rows ----
 	function currentValue(channel: string): string {
 		// LOD summary
-		if (channel === 'lod' && (markLOD || lodState)) {
+		if (channel === 'lod' && markLOD) {
+			const rungs = markLOD.getRungs();
 			if (densityCtx) {
-				const rungs = markLOD?.getRungs() ?? [];
 				const smooth = rungs.find((r) => r.name === 'smooth' && !r.destroyed);
 				const w = smooth ? (smooth.props.window as number) ?? 0 : 0;
 				const mode = smooth ? (smooth.props.mode as string) ?? 'centered' : 'centered';
@@ -420,14 +368,9 @@
 						: '';
 				return `${densityCtx.density.toFixed(1)} pt/px${suffix}`;
 			}
-			if (lodState) {
-				if (lodState.mode === 'line') {
-					const suffix = lodState.smoothActive
-						? ` ${lodState.smoothMode === 'trailing' ? '←' : lodState.smoothMode === 'leading' ? '→' : '±'}${lodState.smoothWindow}`
-						: '';
-					return `${lodState.density.toFixed(1)} pt/px${suffix}`;
-				}
-				return `${Math.round(lodState.numVisibleBins)} bins`;
+			const bins = rungs.find((r) => r.name === 'bins' && !r.destroyed);
+			if (bins) {
+				return `${Math.round((bins.props.numVisibleBins as number) ?? 0)} bins`;
 			}
 		}
 
@@ -1330,7 +1273,9 @@
 								</div>
 							{/each}
 						</div>
-					{:else if expandedChannel === 'lod' && (markLOD || (lodState && lodController))}
+					{:else if expandedChannel === 'lod' && markLOD}
+						{@const lodRungs = markLOD.getRungs()}
+						{@const binsRung = lodRungs.find((r) => r.name === 'bins' && !r.destroyed)}
 						<div class="group-panel">
 							<!-- Diagnostic readouts -->
 							{#if densityCtx}
@@ -1346,45 +1291,18 @@
 									<span class="group-label">M4</span>
 									<span class="lod-readout {densityCtx.shouldDecimate ? 'lod-active' : ''}">{densityCtx.shouldDecimate ? 'on' : 'off'}</span>
 								</div>
-							{:else if lodState && lodState.mode === 'line'}
-								<div class="group-row">
-									<span class="group-label">visible</span>
-									<span class="lod-readout">{lodState.visibleCount.toLocaleString()}</span>
-								</div>
-								<div class="group-row">
-									<span class="group-label">density</span>
-									<span class="lod-readout">{lodState.density.toFixed(1)} pt/px</span>
-								</div>
-								<div class="group-row">
-									<span class="group-label">M4</span>
-									<span class="lod-readout {lodState.shouldDecimate ? 'lod-active' : ''}"
-										>{lodState.shouldDecimate ? 'on' : 'off'}</span
-									>
-								</div>
-								{#if lodState.smoothActive}
-									<div class="group-row">
-										<span class="group-label"></span>
-										<span class="lod-readout lod-active"
-											>{lodState.smoothMode === 'trailing'
-												? `←${lodState.smoothWindow}`
-												: lodState.smoothMode === 'leading'
-													? `${lodState.smoothWindow}→`
-													: `±${lodState.smoothWindow}`} avg</span
-										>
-									</div>
-								{/if}
-							{:else if lodState}
+							{:else if binsRung}
 								<div class="group-row">
 									<span class="group-label">bins</span>
-									<span class="lod-readout">{Math.round(lodState.numVisibleBins)}</span>
+									<span class="lod-readout">{Math.round((binsRung.props.numVisibleBins as number) ?? 0)}</span>
 								</div>
 								<div class="group-row">
 									<span class="group-label">bin width</span>
-									<span class="lod-readout">{lodState.binWidthPx.toFixed(1)} px</span>
+									<span class="lod-readout">{((binsRung.props.binWidthPx as number) ?? 0).toFixed(1)} px</span>
 								</div>
 								<div class="group-row">
 									<span class="group-label">step</span>
-									<span class="lod-readout">{lodState.binStep.toPrecision(3)}</span>
+									<span class="lod-readout">{((binsRung.props.binStep as number) ?? 0).toPrecision(3)}</span>
 								</div>
 							{/if}
 							<!-- Editable tunables (group navigation) -->

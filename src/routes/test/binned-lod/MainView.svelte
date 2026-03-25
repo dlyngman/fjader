@@ -6,28 +6,30 @@
 
 	const coordinator = getContext('mosaic-coordinator');
 
-	// LOD controller diagnostics (polled periodically)
-	let lodRef = $state(null);
+	// LOD rung diagnostics (polled periodically)
+	let lodSurface = $state(null);
 	let diagnostics = $state({
-		mode: '',
 		binStep: 0,
 		numVisibleBins: 0,
 		binWidthPx: 0,
-		density: 0,
+		multiplier: 1.0,
 		frameCallbackCount: 0
 	});
 
 	$effect(() => {
-		if (lodRef) {
+		if (lodSurface) {
 			const interval = setInterval(() => {
-				diagnostics = {
-					mode: lodRef.mode,
-					binStep: lodRef.binStep,
-					numVisibleBins: lodRef.numVisibleBins,
-					binWidthPx: lodRef.binWidthPx,
-					density: lodRef.density,
-					frameCallbackCount: lodRef.frameCallbackCount
-				};
+				const rungs = lodSurface.getRungs();
+				const bins = rungs.find((r) => r.name === 'bins' && !r.destroyed);
+				if (bins) {
+					diagnostics = {
+						binStep: bins.binStep,
+						numVisibleBins: bins.numVisibleBins,
+						binWidthPx: bins.binWidthPx,
+						multiplier: (bins.props.multiplier) ?? 1.0,
+						frameCallbackCount: bins.frameCallbackCount
+					};
+				}
 			}, 100);
 			return () => clearInterval(interval);
 		}
@@ -35,16 +37,16 @@
 </script>
 
 <div class="page">
-	<h2>Binned LOD Controller Test</h2>
+	<h2>Binned LOD Rung Test</h2>
 	<p class="description">
-		LODController in binned mode: geometric metric derivation, adaptive re-binning, per-mark
+		AdaptiveBinRung: geometric metric derivation, adaptive re-binning, per-mark
 		shift+scroll routing. Hover a bar and shift+scroll to adjust bin resolution.
 	</p>
 
 	<div class="layout">
 		<div class="charts">
 			<div class="chart-section">
-				<h3>Histogram with LOD (auto-created for binned marks)</h3>
+				<h3>Histogram with AdaptiveBinRung (auto-created for binned marks)</h3>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="value" yLabel="count">
 						{#snippet canvas()}
@@ -56,8 +58,8 @@
 										x={bin('value', { steps: 50 })}
 										y2={count()}
 										fill="steelblue"
-										onLodController={(ctrl) => {
-											lodRef = ctrl;
+										onMarkLOD={(surface) => {
+											lodSurface = surface;
 										}}
 									/>
 								{/snippet}
@@ -72,20 +74,19 @@
 		</div>
 
 		<div class="diagnostics">
-			<h3>LOD Controller Diagnostics</h3>
-			{#if lodRef}
+			<h3>AdaptiveBinRung Diagnostics</h3>
+			{#if lodSurface}
 				<table>
 					<tbody>
-						<tr><td>Mode</td><td>{diagnostics.mode}</td></tr>
 						<tr><td>Bin Step</td><td>{diagnostics.binStep.toFixed(4)}</td></tr>
 						<tr><td>Visible Bins</td><td>{diagnostics.numVisibleBins.toFixed(1)}</td></tr>
 						<tr><td>Bin Width (px)</td><td>{diagnostics.binWidthPx.toFixed(1)}</td></tr>
-						<tr><td>Density (bins/px)</td><td>{diagnostics.density.toFixed(6)}</td></tr>
+						<tr><td>Multiplier</td><td>{diagnostics.multiplier.toFixed(3)}</td></tr>
 						<tr><td>Frame Callbacks</td><td>{diagnostics.frameCallbackCount}</td></tr>
 					</tbody>
 				</table>
 			{:else}
-				<p class="no-data">No LODController registered yet</p>
+				<p class="no-data">No MarkLODSurface registered yet</p>
 			{/if}
 		</div>
 	</div>
