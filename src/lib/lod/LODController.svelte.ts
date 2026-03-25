@@ -3,21 +3,17 @@
 //
 // Two modes:
 //
-// LINE MODE (Phase 0):
-//   Owns density measurement via DuckDB count queries and LOD evaluation.
-//   Controls M4 decimation mode and spring-animated dot radius.
-//   All per-frame work lives in a single frame callback — no Svelte effects.
+// LINE MODE:
+//   Delegates density measurement to DensityHost. Consumes DensityHost.ctx
+//   and shouldDecimate reactively via $derived/$effect. Dot radius spring
+//   is stepped by GPUCoordinator's 360Hz physics loop. Frame callback does
+//   GPU writes only (read spring.current → writeDotRadius → invalidateLayer).
 //
-// BINNED MODE (Phase 1):
-//   Owns adaptive re-binning for marks with bin() channels. Replaces Effect 8
-//   in MarkLifecycle. Derives bin metrics geometrically from data + scale state.
-//   No DuckDB queries, no spring, no GPU writes — just metric derivation and
-//   re-bin triggering via frame callback.
-//
-// Frame callback contract: LODController runs as a post-render frame callback
-// via GPUCoordinator.addFrameCallback(). LOD state updates are next-frame
-// policy updates, not same-frame render control. The 1-frame lag is intentional
-// and imperceptible — LOD is a policy decision, not a frame-perfect requirement.
+// BINNED MODE:
+//   Owns adaptive re-binning for marks with bin() channels. Derives bin
+//   metrics geometrically from data + scale state. No DuckDB queries, no
+//   spring, no GPU writes — just metric derivation and re-bin triggering
+//   via frame callback.
 //
 // Decimation mode ownership (line mode only): LODController controls M4's
 // decimation mode only while attached. LineMark owns the default ('decimate')
@@ -25,14 +21,13 @@
 // =============================================================================
 
 import type { Query } from '@uwdata/mosaic-sql';
-import { Priority } from '@uwdata/mosaic-core';
-import type { Coordinator } from '@uwdata/mosaic-core';
-import { Spring, DT } from '$lib/animation/Spring';
+import { Spring } from '$lib/animation/Spring';
 import type { ChartContext, LODChangeState } from '$lib/types';
 import type { SmoothMode } from '$lib/sql/rolling-avg';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 import type { MarkLifecycle } from '$lib/components/marks/lifecycle/MarkLifecycle.svelte';
+import { DensityHost } from './DensityHost.svelte';
 
 // JS implementation of GLSL smoothstep (Hermite interpolation)
 function smoothstep(edge0: number, edge1: number, x: number): number {
@@ -63,9 +58,7 @@ export interface LineConfig {
 	smoothMode?: SmoothMode;
 	onLODChange?: ((state: LODChangeState) => void) | null;
 	/** Fired when a tunable value changes (shift+scroll, programmatic). Lets the mark persist to ChartConfig. */
-	onTunableChange?:
-		| ((key: string, value: number | string) => void)
-		| null;
+	onTunableChange?: ((key: string, value: number | string) => void) | null;
 }
 
 export interface BinnedConfig {
@@ -111,27 +104,15 @@ export class LODController {
 	#destroyed = false;
 
 	// --- Line mode state ---
-	#coordinator: Coordinator | null = null;
-	#countQueryBuilder:
-		| ((xLo: number, xHi: number, yLo: number, yHi: number) => Query | null)
-		| null = null;
-	#baseR: number = 0;
-	#m4Decimator: M4Decimator | null = null;
-	#dotsEnabled: boolean = true;
-	#dotsThreshold: number = 18;
-	#decimate: boolean | 'auto' = 'auto';
-	#densityThreshold: number = 4;
-	#decimateHysteresis: number = 0.5;
-	#countDebounceMs: number = 150;
-	#domainChangeThreshold: number = 2.0;
-	#lastCountTime: number = 0;
-	#lastCountDomain: [number, number] = [0, 0];
-	#countQueryPending: boolean = false;
-	#querySequence: number = 0;
+	#densityHost: DensityHost | null = null;
 	#dotRadiusSpring: Spring | null = null;
-	#lastSpringTime: number = 0;
+	#physicsCallback: (() => void) | null = null;
 	#writeDotRadius: ((r: number) => void) | null = null;
 	#invalidateLayer: (() => void) | null = null;
+	#m4Decimator: M4Decimator | null = null;
+	#baseR: number = $state(0);
+	#dotsEnabled: boolean = true;
+	#dotsThreshold: number = $state(18);
 	#onLODChange: ((state: LODChangeState) => void) | null = null;
 	#onTunableChange: ((key: string, value: number | string) => void) | null = null;
 	#prevDecimating: boolean = false;
@@ -139,6 +120,13 @@ export class LODController {
 	#smoothWindow: number = 0;
 	#smoothMode: SmoothMode = 'centered';
 	#smoothScrollAccum: number = 0;
+
+	// --- Line mode — reactive spring target from DensityHost.ctx ---
+	#springTarget = $derived.by(() => {
+		if (!this.#dotsEnabled || !this.#densityHost) return 0;
+		const { avgSpacing } = this.#densityHost.ctx;
+		return this.#baseR * smoothstep(8, this.#dotsThreshold, avgSpacing);
+	});
 
 	// --- Binned mode state ---
 	#markLifecycle: MarkLifecycle | null = null;
@@ -153,13 +141,21 @@ export class LODController {
 	#lastPublishedBinStep: number = 0;
 
 	// --- Diagnostic state (plain properties, NOT reactive — polled by test page) ---
-	// Line mode diagnostics
-	visibleCount: number = 0;
-	queryLatencyMs: number = 0;
-	timeSinceLastQuery: number = 0;
+	// Line mode diagnostics — forwarded from DensityHost
+	get visibleCount(): number {
+		return this.#densityHost?.visibleCount ?? 0;
+	}
+	get queryLatencyMs(): number {
+		return this.#densityHost?.queryLatencyMs ?? 0;
+	}
+	get timeSinceLastQuery(): number {
+		return this.#densityHost?.timeSinceLastQuery ?? 0;
+	}
+	get queriesIssued(): number {
+		return this.#densityHost?.queriesIssued ?? 0;
+	}
 	dotRadius: number = 0;
 	shouldDecimate: boolean = false;
-	queriesIssued: number = 0;
 
 	// Binned mode diagnostics
 	binStep: number = 0;
@@ -167,12 +163,15 @@ export class LODController {
 	binWidthPx: number = 0;
 
 	// Shared diagnostics
-	frameCallbackCount: number = 0;
+	get frameCallbackCount(): number {
+		if (this.#mode === 'line') {
+			return this.#densityHost?.frameCallbackCount ?? 0;
+		}
+		return this.#binnedFrameCallbackCount;
+	}
+	#binnedFrameCallbackCount: number = 0;
 
 	// --- Reactive display state — palette reads this ---
-	// Written at well-defined moments (count query returns, rung transition,
-	// re-bin data arrival), NOT every frame. Plain diagnostics above stay
-	// for test-page polling with zero proxy overhead.
 	readonly state: LODState = $state({
 		mode: 'line' as 'line' | 'binned',
 		density: 0,
@@ -210,7 +209,7 @@ export class LODController {
 	}
 
 	constructor(
-		coordinator: Coordinator | null,
+		coordinator: import('@uwdata/mosaic-core').Coordinator | null,
 		gpuCoordinator: GPUCoordinator,
 		chartContext: ChartContext,
 		config: LODControllerConfig
@@ -221,39 +220,74 @@ export class LODController {
 		this.state.mode = config.mode;
 
 		if (config.mode === 'line') {
-			this.#coordinator = coordinator!;
+			// Create DensityHost — owns count queries + decimation hysteresis
+			this.#densityHost = new DensityHost(gpuCoordinator, chartContext, coordinator!, {
+				countQueryBuilder: config.countQueryBuilder,
+				decimate: config.decimate,
+				densityThreshold: config.densityThreshold,
+				countDebounceMs: config.countDebounceMs,
+				domainChangeThreshold: config.domainChangeThreshold
+			});
+
 			this.#baseR = config.baseR;
-			this.#countQueryBuilder = config.countQueryBuilder;
 			this.#dotsEnabled = config.dotsEnabled ?? true;
 			this.#dotsThreshold = config.dotsThreshold ?? 18;
-			this.#decimate = config.decimate ?? 'auto';
-			this.#densityThreshold = config.densityThreshold ?? 4;
-			this.#countDebounceMs = config.countDebounceMs ?? 150;
-			this.#domainChangeThreshold = config.domainChangeThreshold ?? 2.0;
 			this.#onLODChange = config.onLODChange ?? null;
 			this.#onTunableChange = config.onTunableChange ?? null;
 			this.#smoothWindow = config.smoothWindow ?? 0;
 			this.#smoothMode = config.smoothMode ?? 'centered';
-			this.#dotRadiusSpring = this.#dotsEnabled ? new Spring(0, 400) : null;
-			this.#lastSpringTime = performance.now();
 			this.state.dotsThreshold = this.#dotsThreshold;
 			this.state.baseRadius = this.#baseR;
 			this.state.smoothWindow = this.#smoothWindow;
 			this.state.smoothActive = this.#smoothWindow > 0;
 			this.state.smoothMode = this.#smoothMode;
+
+			// Create dot radius spring, step via GPUCoordinator's 360Hz physics loop
+			if (this.#dotsEnabled) {
+				this.#dotRadiusSpring = new Spring(0, 400);
+				this.#physicsCallback = () => this.#dotRadiusSpring!.step();
+				gpuCoordinator.addPhysicsCallback(this.#physicsCallback);
+			}
+
+			// Bridge derived spring target → spring.setTarget()
+			$effect(() => {
+				this.#dotRadiusSpring?.setTarget(this.#springTarget);
+			});
+
+			// M4 sync from reactive shouldDecimate
+			$effect(() => {
+				if (!this.#m4Decimator || !this.#densityHost) return;
+				const should = this.#densityHost.shouldDecimate;
+				this.#m4Decimator.setDecimationMode(should ? 'decimate' : 'passthrough');
+			});
+
+			// LODState publication from reactive ctx
+			$effect(() => {
+				if (!this.#densityHost) return;
+				const { visibleCount, density } = this.#densityHost.ctx;
+				const shouldDecimate = this.#densityHost.shouldDecimate;
+				this.shouldDecimate = shouldDecimate;
+				this.state.visibleCount = visibleCount;
+				this.state.density = density;
+				this.state.shouldDecimate = shouldDecimate;
+				this.#fireChangeIfNeeded();
+			});
+
+			// Frame callback for GPU spring writes only (once per RAF)
+			this.#frameCallback = (_isAnimating: boolean) => this.#onFrameLine();
+			this.#gpuCoordinator.addFrameCallback(this.#frameCallback);
 		} else {
-			// Binned mode
+			// Binned mode — unchanged
 			this.#markLifecycle = config.markLifecycle;
 			this.#binAxes = config.binAxes;
 			this.#binningThreshold = config.binningThreshold ?? 1.25;
 			this.#onTunableChange = config.onTunableChange ?? null;
 			this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
 			this.state.binMultiplier = this.#prevMultiplier;
-		}
 
-		// Both modes use frame callbacks
-		this.#frameCallback = (_isAnimating: boolean) => this.#onFrame();
-		this.#gpuCoordinator.addFrameCallback(this.#frameCallback);
+			this.#frameCallback = (_isAnimating: boolean) => this.#onFrameBinned();
+			this.#gpuCoordinator.addFrameCallback(this.#frameCallback);
+		}
 	}
 
 	// =========================================================================
@@ -277,8 +311,8 @@ export class LODController {
 	setM4Decimator(decimator: M4Decimator | null): void {
 		this.#m4Decimator = decimator;
 		// Sync current decimation state to the new decimator
-		if (decimator) {
-			decimator.setDecimationMode(this.shouldDecimate ? 'decimate' : 'passthrough');
+		if (decimator && this.#densityHost) {
+			decimator.setDecimationMode(this.#densityHost.shouldDecimate ? 'decimate' : 'passthrough');
 		}
 	}
 
@@ -328,7 +362,6 @@ export class LODController {
 		if (clamped === this.#dotsThreshold) return;
 		this.#dotsThreshold = clamped;
 		this.state.dotsThreshold = clamped;
-		this.#evaluateLOD();
 		this.#onTunableChange?.('dotsThreshold', clamped);
 	}
 
@@ -339,7 +372,6 @@ export class LODController {
 		if (clamped === this.#baseR) return;
 		this.#baseR = clamped;
 		this.state.baseRadius = clamped;
-		this.#evaluateLOD();
 		this.#onTunableChange?.('baseRadius', clamped);
 	}
 
@@ -371,161 +403,28 @@ export class LODController {
 	}
 
 	// =========================================================================
-	// FRAME CALLBACK — dispatches to mode-specific handler
-	// =========================================================================
-
-	#onFrame(): void {
-		if (this.#destroyed) return;
-		this.frameCallbackCount++;
-
-		if (this.#mode === 'line') {
-			this.#onFrameLine();
-		} else {
-			this.#onFrameBinned();
-		}
-	}
-
-	// =========================================================================
-	// LINE MODE — count query scheduling + spring + GPU write
+	// LINE MODE — frame callback (GPU spring write only)
 	// =========================================================================
 
 	#onFrameLine(): void {
-		this.timeSinceLastQuery = performance.now() - this.#lastCountTime;
-		this.#checkDomainAndQuery();
-		this.#stepSpringAndWrite();
-	}
+		if (this.#destroyed) return;
+		if (!this.#dotRadiusSpring || this.#dotRadiusSpring.isAtRest()) return;
 
-	#checkDomainAndQuery(): void {
-		const xState = this.#chartContext.xScaleState;
-		if (!xState || !('domain' in xState)) return;
+		const r = this.#dotRadiusSpring.current;
+		this.#writeDotRadius?.(r);
+		this.#invalidateLayer?.();
+		this.dotRadius = r;
 
-		const domain = (xState as { domain?: { target?: [number, number] } }).domain;
-		if (!domain || !domain.target) return;
-
-		const [lo, hi] = domain.target;
-		if (typeof lo !== 'number' || typeof hi !== 'number') return;
-		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return;
-
-		// Read y domain if available (continuous y scale)
-		let yLo = -Infinity,
-			yHi = Infinity;
-		const yState = this.#chartContext.yScaleState;
-		if (yState && 'domain' in yState) {
-			const yDomain = (yState as { domain?: { target?: [number, number] } }).domain;
-			if (yDomain?.target) {
-				const [y0, y1] = yDomain.target;
-				if (typeof y0 === 'number' && typeof y1 === 'number' && isFinite(y0) && isFinite(y1)) {
-					yLo = y0;
-					yHi = y1;
-				}
-			}
-		}
-
-		if (this.#shouldQueryCount(lo, hi)) {
-			this.#issueCountQuery(lo, hi, yLo, yHi);
+		// Publish dotsVisible on threshold crossing (not every frame)
+		const nowVisible = r > 0;
+		if (nowVisible !== this.state.dotsVisible) {
+			this.state.dotsVisible = nowVisible;
 		}
 	}
 
-	#shouldQueryCount(lo: number, hi: number): boolean {
-		const now = performance.now();
-		const elapsed = now - this.#lastCountTime;
-		if (elapsed > this.#countDebounceMs) return true;
-
-		const [lastLo, lastHi] = this.#lastCountDomain;
-		const lastWidth = lastHi - lastLo;
-		if (lastWidth <= 0) return true;
-
-		const currentWidth = hi - lo;
-		const ratio = lastWidth / currentWidth;
-		if (ratio > this.#domainChangeThreshold || ratio < 1 / this.#domainChangeThreshold) {
-			return true;
-		}
-
-		return false;
-	}
-
-	async #issueCountQuery(
-		lo: number,
-		hi: number,
-		yLo: number,
-		yHi: number
-	): Promise<void> {
-		if (this.#countQueryPending || this.#destroyed || !this.#coordinator) return;
-
-		this.#countQueryPending = true;
-		const seq = ++this.#querySequence;
-		const t0 = performance.now();
-
-		try {
-			const q = this.#countQueryBuilder!(lo, hi, yLo, yHi);
-			if (!q) return;
-
-			const result = await this.#coordinator.query(q, { priority: Priority.Low });
-			const t1 = performance.now();
-
-			if (seq !== this.#querySequence || this.#destroyed) return;
-
-			const row = Array.from(result)[0] as { cnt: number } | undefined;
-			const count = Number(row?.cnt ?? 0);
-
-			this.visibleCount = count;
-			this.queryLatencyMs = t1 - t0;
-			this.queriesIssued++;
-			this.#lastCountTime = t1;
-			this.#lastCountDomain = [lo, hi];
-
-			this.#evaluateLOD();
-		} catch (e) {
-			console.warn('[LODController] Count query failed:', e);
-		} finally {
-			if (seq === this.#querySequence) {
-				this.#countQueryPending = false;
-			}
-		}
-	}
-
-	#evaluateLOD(): void {
-		const pw = this.pixelWidth;
-		if (pw <= 0) return;
-
-		const count = this.visibleCount;
-		const ppp = count / pw;
-
-		// Decimation decision: respect explicit decimate config
-		let newShouldDecimate: boolean;
-		if (this.#decimate === true) {
-			newShouldDecimate = true;
-		} else if (this.#decimate === false) {
-			newShouldDecimate = false;
-		} else {
-			// 'auto': hysteresis — decimate at threshold, un-decimate at threshold - margin
-			newShouldDecimate = this.shouldDecimate
-				? ppp >= this.#densityThreshold - this.#decimateHysteresis
-				: ppp >= this.#densityThreshold;
-		}
-
-		if (newShouldDecimate !== this.shouldDecimate) {
-			this.shouldDecimate = newShouldDecimate;
-			if (this.#m4Decimator) {
-				this.#m4Decimator.setDecimationMode(newShouldDecimate ? 'decimate' : 'passthrough');
-			}
-		}
-
-		// Dots: compute target radius (0 when disabled)
-		if (this.#dotsEnabled) {
-			const avgSpacing = pw / Math.max(count, 1);
-			const targetR = this.#baseR * smoothstep(8, this.#dotsThreshold, avgSpacing);
-			this.#dotRadiusSpring?.setTarget(targetR);
-		}
-
-		// Publish to reactive state (count query is a well-defined moment)
-		this.state.visibleCount = count;
-		this.state.density = ppp;
-		this.state.shouldDecimate = newShouldDecimate;
-
-		// Fire onLODChange on state transitions
-		this.#fireChangeIfNeeded();
-	}
+	// =========================================================================
+	// LINE MODE — onLODChange fire
+	// =========================================================================
 
 	#fireChangeIfNeeded(): void {
 		if (!this.#onLODChange) return;
@@ -544,35 +443,13 @@ export class LODController {
 		}
 	}
 
-	#stepSpringAndWrite(): void {
-		if (!this.#dotRadiusSpring || this.#dotRadiusSpring.isAtRest()) return;
-
-		const now = performance.now();
-		const elapsed = now - this.#lastSpringTime;
-		this.#lastSpringTime = now;
-
-		const steps = Math.min(Math.floor(elapsed / (DT * 1000)), 20);
-		for (let i = 0; i < steps; i++) {
-			this.#dotRadiusSpring.step();
-		}
-
-		const r = this.#dotRadiusSpring.current;
-		this.#writeDotRadius?.(r);
-		this.#invalidateLayer?.();
-		this.dotRadius = r;
-
-		// Publish dotsVisible on threshold crossing (not every frame)
-		const nowVisible = r > 0;
-		if (nowVisible !== this.state.dotsVisible) {
-			this.state.dotsVisible = nowVisible;
-		}
-	}
-
 	// =========================================================================
 	// BINNED MODE — geometric metric derivation + re-bin triggering
 	// =========================================================================
 
 	#onFrameBinned(): void {
+		if (this.#destroyed) return;
+		this.#binnedFrameCallbackCount++;
 		if (!this.#markLifecycle) return;
 
 		// 1. Check multiplier changes BEFORE data gate — shift+scroll must
@@ -685,18 +562,29 @@ export class LODController {
 	destroy(): void {
 		this.#destroyed = true;
 
+		// Line mode: clean up DensityHost + physics callback + frame callback
+		if (this.#densityHost) {
+			this.#densityHost.destroy();
+			this.#densityHost = null;
+		}
+
+		if (this.#physicsCallback) {
+			this.#gpuCoordinator.removePhysicsCallback(this.#physicsCallback);
+			this.#physicsCallback = null;
+		}
+
 		if (this.#frameCallback) {
 			this.#gpuCoordinator.removeFrameCallback(this.#frameCallback);
 			this.#frameCallback = null;
 		}
 
+		// Binned mode cleanup
 		if (this.#rebinTimeout !== null) {
 			clearTimeout(this.#rebinTimeout);
 			this.#rebinTimeout = null;
 		}
 
 		this.#markLifecycle = null;
-
 		this.#writeDotRadius = null;
 		this.#invalidateLayer = null;
 	}

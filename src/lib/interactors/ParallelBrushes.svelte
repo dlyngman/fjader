@@ -48,15 +48,23 @@
 	let hasDragged = false;
 	const point = { x: 0, y: 0 };
 
+	// Animated x-positions from ChartScales (smooth transitions during reorder)
+	const animPositions = $derived(chart.animatedAxisXPositions ?? []);
+
 	// Axis x-positions indexed by DATA index — maps each column to its visual x-position
-	// using axisOrder (which maps visual → data). We invert to get data → visual.
+	// using axisOrder (which maps visual → data). Uses animated positions during reorder.
 	const axisPositions = $derived.by(() => {
 		if (!ps) return [];
 		const n = ps.columns.length;
 		const positions = new Array<number>(n);
+		const useAnim = animPositions.length === n;
 		for (let visualIdx = 0; visualIdx < n; visualIdx++) {
 			const dataIdx = ps.axisOrder[visualIdx];
-			positions[dataIdx] = n > 1 ? (visualIdx / (n - 1)) * chart.innerWidth : chart.innerWidth / 2;
+			positions[dataIdx] = useAnim
+				? animPositions[visualIdx] * chart.innerWidth
+				: n > 1
+					? (visualIdx / (n - 1)) * chart.innerWidth
+					: chart.innerWidth / 2;
 		}
 		return positions;
 	});
