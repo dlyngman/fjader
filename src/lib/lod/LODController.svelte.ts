@@ -257,7 +257,7 @@ export class LODController {
 			// M4 sync from reactive shouldDecimate
 			$effect(() => {
 				if (!this.#m4Decimator || !this.#densityHost) return;
-				const should = this.#densityHost.shouldDecimate;
+				const should = this.#densityHost.ctx.shouldDecimate;
 				this.#m4Decimator.setDecimationMode(should ? 'decimate' : 'passthrough');
 			});
 
@@ -265,7 +265,7 @@ export class LODController {
 			$effect(() => {
 				if (!this.#densityHost) return;
 				const { visibleCount, density } = this.#densityHost.ctx;
-				const shouldDecimate = this.#densityHost.shouldDecimate;
+				const shouldDecimate = this.#densityHost.ctx.shouldDecimate;
 				this.shouldDecimate = shouldDecimate;
 				this.state.visibleCount = visibleCount;
 				this.state.density = density;
@@ -312,7 +312,7 @@ export class LODController {
 		this.#m4Decimator = decimator;
 		// Sync current decimation state to the new decimator
 		if (decimator && this.#densityHost) {
-			decimator.setDecimationMode(this.#densityHost.shouldDecimate ? 'decimate' : 'passthrough');
+			decimator.setDecimationMode(this.#densityHost.ctx.shouldDecimate ? 'decimate' : 'passthrough');
 		}
 	}
 

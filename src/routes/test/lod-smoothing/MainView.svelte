@@ -1,11 +1,5 @@
 <script>
-	import {
-		ChartContainer,
-		Grid,
-		Crosshair,
-		WebGPUCanvas,
-		LineMark
-	} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
 
 	let smoothWindow = $state(0);
 </script>
@@ -13,8 +7,8 @@
 <div class="container">
 	<h2>LOD Smoothing Overlay Test</h2>
 	<p>
-		Zoomed out: shift+scroll to add rolling average smoothing (one lag at a time).
-		Zoomed in: shift+scroll to control dots threshold.
+		Zoomed out: shift+scroll to add rolling average smoothing (one lag at a time). Zoomed in:
+		shift+scroll to control dots threshold.
 	</p>
 	<p class="hint">
 		Current smooth window: <strong>{smoothWindow}</strong>
@@ -38,11 +32,12 @@
 							stroke="series"
 							strokeWidth={1.5}
 							lod
-							onLodController={(ctrl) => {
-								if (ctrl) {
-									// Poll smooth window for display
+							onMarkLOD={(surface) => {
+								if (surface) {
 									const iv = setInterval(() => {
-										smoothWindow = ctrl.state.smoothWindow;
+										const rungs = surface.getRungs();
+										const smooth = rungs.find((r) => r.name === 'smooth');
+										smoothWindow = smooth ? (smooth.props.window ?? 0) : 0;
 									}, 100);
 									return () => clearInterval(iv);
 								}
@@ -65,13 +60,7 @@
 				<WebGPUCanvas>
 					{#snippet canvasComponents()}
 						<Grid />
-						<LineMark
-							table="noisy_timeseries"
-							x="time"
-							y="value"
-							strokeWidth={1}
-							lod
-						/>
+						<LineMark table="noisy_timeseries" x="time" y="value" strokeWidth={1} lod />
 					{/snippet}
 				</WebGPUCanvas>
 			{/snippet}
@@ -92,7 +81,8 @@
 		gap: 16px;
 	}
 
-	h2, h3 {
+	h2,
+	h3 {
 		margin: 0;
 	}
 

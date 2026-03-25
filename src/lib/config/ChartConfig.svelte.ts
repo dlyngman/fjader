@@ -25,6 +25,7 @@ import type {
 	Transform
 } from '$lib/types';
 import type { LODController } from '$lib/lod';
+import type { MarkLODSurface } from '$lib/lod/rung-types';
 
 // ---- MarkEntry ----
 
@@ -110,6 +111,9 @@ export class ChartConfig {
 
 	/** LOD controllers per mark — single registration point for palette + TooltipManager. */
 	#lodControllers = new Map<string, LODController>();
+
+	/** Mark LOD surfaces (rung-based) — new API, coexists with lodControllers during migration. */
+	#markLODSurfaces = new Map<string, MarkLODSurface>();
 
 	/** Preview stack — records previous values for cancel. */
 	#previewStack: Array<{ id: string; key: string; prev: unknown }> = [];
@@ -225,6 +229,20 @@ export class ChartConfig {
 	/** Get LODController for a mark — palette reads runtime state, TooltipManager delegates here. */
 	getLodController(markId: string): LODController | undefined {
 		return this.#lodControllers.get(markId);
+	}
+
+	// ---- MarkLODSurface registration (rung-based, new API) ----
+
+	registerMarkLOD(markId: string, surface: MarkLODSurface): void {
+		this.#markLODSurfaces.set(markId, surface);
+	}
+
+	unregisterMarkLOD(markId: string): void {
+		this.#markLODSurfaces.delete(markId);
+	}
+
+	getMarkLOD(markId: string): MarkLODSurface | undefined {
+		return this.#markLODSurfaces.get(markId);
 	}
 
 	// ---- Mutation (palette / programmatic) ----

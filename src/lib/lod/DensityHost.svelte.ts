@@ -25,6 +25,7 @@ export interface DensityContext {
 	pixelWidth: number;
 	density: number; // points per pixel
 	avgSpacing: number; // pixels per point
+	shouldDecimate: boolean;
 }
 
 export interface DensityHostConfig {
@@ -67,10 +68,9 @@ export class DensityHost {
 		visibleCount: 0,
 		pixelWidth: 0,
 		density: 0,
-		avgSpacing: Infinity
+		avgSpacing: Infinity,
+		shouldDecimate: false
 	});
-
-	shouldDecimate: boolean = $state(false);
 
 	// --- Diagnostics (non-reactive, polled by test pages) ---
 	visibleCount: number = 0;
@@ -220,12 +220,12 @@ export class DensityHost {
 
 	#evaluateDecimation(density: number): void {
 		if (this.#decimate === true) {
-			this.shouldDecimate = true;
+			this.ctx.shouldDecimate = true;
 		} else if (this.#decimate === false) {
-			this.shouldDecimate = false;
+			this.ctx.shouldDecimate = false;
 		} else {
 			// 'auto': hysteresis — decimate at threshold, un-decimate at threshold - margin
-			this.shouldDecimate = this.shouldDecimate
+			this.ctx.shouldDecimate = this.ctx.shouldDecimate
 				? density >= this.#densityThreshold - this.#hysteresis
 				: density >= this.#densityThreshold;
 		}

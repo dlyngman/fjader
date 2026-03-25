@@ -5,7 +5,7 @@
 
 	const coordinator = getContext('mosaic-coordinator');
 
-	// Diagnostic state from the LOD controller
+	// Diagnostic state from the LOD surface
 	let lodState = $state({
 		visibleCount: 0,
 		queryLatencyMs: 0,
@@ -17,21 +17,25 @@
 		queriesIssued: 0
 	});
 
-	// Poll LOD controller state (registered via onLodController callback)
-	let lodRef = $state(null);
+	// Poll via MarkLODSurface (registered via onMarkLOD callback)
+	let lodSurface = $state(null);
 
 	$effect(() => {
-		if (lodRef) {
+		if (lodSurface) {
 			const interval = setInterval(() => {
+				const host = lodSurface.getDensityHost();
+				const ctx = lodSurface.getDensityCtx();
+				const rungs = lodSurface.getRungs();
+				const dotsRung = rungs.find((r) => r.name === 'dots');
 				lodState = {
-					visibleCount: lodRef.visibleCount,
-					queryLatencyMs: lodRef.queryLatencyMs,
-					timeSinceLastQuery: lodRef.timeSinceLastQuery,
-					dotRadius: lodRef.dotRadius,
-					shouldDecimate: lodRef.shouldDecimate,
-					density: lodRef.density,
-					frameCallbackCount: lodRef.frameCallbackCount,
-					queriesIssued: lodRef.queriesIssued
+					visibleCount: ctx?.visibleCount ?? 0,
+					queryLatencyMs: host?.queryLatencyMs ?? 0,
+					timeSinceLastQuery: host?.timeSinceLastQuery ?? 0,
+					dotRadius: dotsRung?.dotRadius ?? 0,
+					shouldDecimate: ctx?.shouldDecimate ?? false,
+					density: ctx?.density ?? 0,
+					frameCallbackCount: host?.frameCallbackCount ?? 0,
+					queriesIssued: host?.queriesIssued ?? 0
 				};
 			}, 100);
 			return () => clearInterval(interval);
@@ -88,7 +92,7 @@
 								dotRadius={4}
 								lod={true}
 								selection="lod-brush"
-								onLodController={(ctrl) => (lodRef = ctrl)}
+								onMarkLOD={(surface) => (lodSurface = surface)}
 							/>
 						{/snippet}
 					</WebGPUCanvas>
