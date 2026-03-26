@@ -158,6 +158,7 @@ export class MarkLifecycle {
 	#seriesScaleState = $state<ColorScaleState | null>(null);
 	#sizeScaleState = $state<SizeScaleState | null>(null);
 	#currentClientTable = $state<string | null>(null);
+	#lastViewVersion = 0; // Tracks ViewManager version to detect view rebuilds
 
 	// --- Transform Support ---
 	#transformCompiler: TransformCompiler;
@@ -434,7 +435,9 @@ export class MarkLifecycle {
 		});
 
 		// Effect 4: Create client - waits for view to be ready before creating
-		// This prevents creating a throwaway client against the source table
+		// This prevents creating a throwaway client against the source table.
+		// Also triggers re-query when the ViewManager view is rebuilt (e.g. band
+		// scale domain reorder changes the CASE expression for index columns).
 		$effect(() => {
 			// Prerequisites
 			if (!this.categoricalDataFetched) return;
@@ -442,8 +445,9 @@ export class MarkLifecycle {
 			// Wait until ViewManager is ready (no pending view creation)
 			if (!viewManager.isReadyForClient(this.#config.table)) return;
 
-			// REACTIVITY: Track effectiveTable
+			// REACTIVITY: Track effectiveTable + per-table view version
 			const tableToQuery = this.effectiveTable;
+			const viewVersion = viewManager.getVersion(this.#config.table);
 
 			// Check if table changed (using tracked state)
 			if (this.#currentClientTable !== tableToQuery) {
@@ -463,7 +467,16 @@ export class MarkLifecycle {
 					);
 					this.#createClient(tableToQuery, fieldRequests);
 					this.#currentClientTable = tableToQuery;
+					this.#lastViewVersion = viewVersion;
 					this.#clientCreated = true;
+				});
+			} else if (this.client && viewVersion !== this.#lastViewVersion) {
+				// Same table but view definition changed (e.g. band domain reorder
+				// rebuilt the CASE expression) — re-query to get fresh index data
+				untrack(() => {
+					this.#lastViewVersion = viewVersion;
+					this.#cachedQueryParts = null;
+					this.client!.requestUpdate();
 				});
 			}
 		});

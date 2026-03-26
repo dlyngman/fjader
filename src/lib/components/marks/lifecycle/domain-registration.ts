@@ -254,7 +254,11 @@ export function registerDataDerivedDomains(
 			const categories = extractCategoriesFromData(data, axis);
 			const bandScale = axis === 'x' ? xBandScaleState : yBandScaleState;
 			if (bandScale?.addMark && categories.length > 0) {
-				bandScale.addMark(categories, markId, { sorted: true });
+				// Don't pass { sorted: true } — the data row order is not necessarily
+				// the desired sort order (e.g. _orderConfig adds ORDER BY series, dim).
+				// If a sort sidecar ran (from a sibling mark sharing this scale),
+				// its #sortOrder is already set and should not be overwritten.
+				bandScale.addMark(categories, markId);
 				bandScale.updateDomainFromExtents();
 			}
 		}

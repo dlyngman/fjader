@@ -93,7 +93,7 @@
 				<h3>1. Baseline (all 10 categories)</h3>
 				<p class="desc">All 10 bars visible, sorted by revenue descending. No transforms.</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category" yLabel="Revenue">
+					<ChartContainer xLabel="Sales Category" yLabel="Revenue">
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -126,7 +126,7 @@
 					before JS transform runs.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category" yLabel="Revenue">
+					<ChartContainer xLabel="Top 5 Category" yLabel="Revenue">
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -160,7 +160,7 @@
 					to index -1, invisible.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category" yLabel="Revenue">
+					<ChartContainer xLabel="Top 5+ Category" yLabel="Revenue">
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -191,7 +191,7 @@
 				<h3>4. BarMarkX + topN(3)</h3>
 				<p class="desc">Horizontal bars. topN auto-detects value axis from mark type.</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Revenue" yLabel="Category">
+					<ChartContainer xLabel="Revenue" yLabel="Sales Category">
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
