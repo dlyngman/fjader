@@ -89,7 +89,7 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 // Local interfaces
 // ---------------------------------------------------------------------------
 
-interface ConnectedConfig {
+interface OrderConfig {
 	seriesChannel: string | null;
 	dimensionChannel: string;
 }
@@ -113,7 +113,7 @@ export interface MarkLifecycleConfig {
 	constants?: Record<string, number>;
 	colorChannel?: string; // Key in select for color data ('fill' or 'stroke')
 	sizeChannel?: string; // Key in select for size data ('r')
-	_connectedConfig?: ConnectedConfig;
+	_orderConfig?: OrderConfig;
 	_filterNulls?: unknown[];
 	fitDomain?: 'x' | 'y' | boolean;
 	zeroBaseline?: { x?: boolean; y?: boolean };
@@ -343,7 +343,7 @@ export class MarkLifecycle {
 
 			// Track color/series scale states for reactive re-entry
 			const colorKey = this.#config.colorChannel || 'fill';
-			const seriesKey = this.#config._connectedConfig?.seriesChannel;
+			const seriesKey = this.#config._orderConfig?.seriesChannel;
 			const colorReady = !this.#config.select?.[colorKey] || !!this.#colorScaleState;
 			const seriesReady =
 				!seriesKey || !this.#config.select?.[seriesKey] || !!this.#seriesScaleState;
@@ -367,7 +367,7 @@ export class MarkLifecycle {
 				}
 
 				// Fetch both categorical and aggregated domains in parallel
-				const seriesKey2 = this.#config._connectedConfig?.seriesChannel ?? null;
+				const seriesKey2 = this.#config._orderConfig?.seriesChannel ?? null;
 				const catPromise = fetchCategoricalDomains(
 					this.#coordinator!,
 					this.#config.table,
@@ -1027,7 +1027,7 @@ export class MarkLifecycle {
 
 			this.#cachedQueryParts = buildQueryParts(
 				select,
-				this.#config._connectedConfig,
+				this.#config._orderConfig,
 				this.#transformCompiler.hasSQLTransforms()
 			);
 		}

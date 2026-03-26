@@ -20,7 +20,7 @@ import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 // Types
 // ---------------------------------------------------------------------------
 
-interface ConnectedConfig {
+interface OrderConfig {
 	seriesChannel: string | null;
 	dimensionChannel: string;
 }
@@ -103,7 +103,7 @@ export function buildFieldInfoRequests(
  */
 export function buildQueryParts(
 	select: Record<string, unknown>,
-	connectedConfig: ConnectedConfig | undefined,
+	orderConfig: OrderConfig | undefined,
 	hasSQLTransforms: boolean
 ): QueryParts {
 	const selectDef: Record<string, unknown> = {};
@@ -142,8 +142,8 @@ export function buildQueryParts(
 	// sqlColumn() nodes are built at query assembly time using
 	// the appropriate alias convention (channel or field-based).
 	let orderChannels: string[] | null = null;
-	if (connectedConfig) {
-		const { seriesChannel, dimensionChannel } = connectedConfig;
+	if (orderConfig) {
+		const { seriesChannel, dimensionChannel } = orderConfig;
 		const chans: string[] = [];
 
 		if (aliasMap.has('__facet')) chans.push('__facet');

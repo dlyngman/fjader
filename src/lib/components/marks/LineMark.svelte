@@ -165,7 +165,7 @@
 		chartContext
 	);
 
-	// Config with _connectedConfig for automatic ORDER BY — reads from entry
+	// Config with _orderConfig for automatic ORDER BY (series, dimension) — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
 			x: entry.x,
@@ -216,7 +216,7 @@
 		tip: entry.tip,
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
-		_connectedConfig: {
+		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'x'
 		},

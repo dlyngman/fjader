@@ -1,5 +1,5 @@
 <script>
-	import { Coordinator, wasmConnector, Selection } from '@uwdata/mosaic-core';
+	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
@@ -13,6 +13,7 @@
 		WebGPUCanvas,
 		BarMarkX,
 		DotsMark,
+		LineMark,
 		TextMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -31,7 +32,8 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
+				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`),
+				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`)
 			]);
 
 			isLoaded = true;
@@ -117,6 +119,54 @@
 							dy={-10}
 							fontSize={9}
 							fill="species"
+						/>
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Connected Scatterplot</h1>
+		<div class="charts">
+			<div class="chart-wrapper-tall">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<LineMark
+									table="driving"
+									x="miles"
+									y="gas"
+									strokeWidth={1}
+									curve="catmull-rom"
+								/>
+								<DotsMark
+									table="driving"
+									x="miles"
+									y="gas"
+									r={2}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<TextMark
+							table="driving"
+							x="miles"
+							y="gas"
+							text="year"
+							fontSize={9}
+							dy={-8}
 						/>
 					{/snippet}
 				</ChartContainer>

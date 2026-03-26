@@ -12,6 +12,7 @@
 		Crosshair,
 		WebGPUCanvas,
 		AreaMarkY,
+		AreaMarkX,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -30,9 +31,9 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				// loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`)
 				loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
-				loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`)
+				loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
+				loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
 			]);
 
 			isLoaded = true;
@@ -49,14 +50,11 @@
 	<p class="status">Loading...</p>
 {:else}
 	<div class="container">
-		<h1>Seattle Weather</h1>
+		<h1>AAPL Stock Price</h1>
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+				<ChartContainer>
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -72,7 +70,6 @@
 									table="aapl"
 									x="Date"
 									y="Close"
-									dotRadius={3}
 									curve="monotone"
 									strokeWidth={2}
 								/>
@@ -83,23 +80,17 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
-
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
-					{/snippet}
 				</ChartContainer>
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>SF temp</h1>
+		<h1>SF Temperature Band</h1>
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+				<ChartContainer>
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -116,7 +107,6 @@
 									x="date"
 									y1="low"
 									y2="high"
-									dotRadius={3}
 									curve="monotone"
 									strokeWidth={2}
 								/>
@@ -127,9 +117,124 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
 
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
+	<div class="container">
+		<h1>AAPL Stock Price (vertical)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkX
+									table="aapl"
+									y="Date"
+									x="Close"
+									fillOpacity={0.3}
+									curve="monotone"
+									strokeWidth={2}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Industry Unemployment (stacked)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer legendPosition="top">
+					{#snippet legend()}
+						<Legend color="industry" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="unemployment"
+									x="date"
+									y="unemployed"
+									fill="industry"
+									curve="monotone"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Industry Unemployment (overlapping)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer legendPosition="top">
+					{#snippet legend()}
+						<Legend color="industry" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="unemployment"
+									x="date"
+									y1={0}
+									y2="unemployed"
+									z="industry"
+									fill="industry"
+									fillOpacity={0.1}
+									curve="monotone"
+									strokeWidth={1}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -139,7 +244,6 @@
 
 <style>
 	.container {
-		/* max-width: 1400px; */
 		margin: 0 auto;
 		padding: 2rem 1.5rem;
 	}

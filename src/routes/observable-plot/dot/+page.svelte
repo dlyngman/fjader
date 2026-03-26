@@ -7,18 +7,13 @@
 		ChartContainer,
 		Frame,
 		AxisLeft,
-		AxisCenter,
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		BarMarkY,
-		BarMarkX,
-		TextMark,
-		Legend
+		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
-	import { orderby, stack } from '$lib/transforms';
 
 	setCoordinators();
 
@@ -34,14 +29,9 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`),
-				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`),
-				msql.loadCSV(
-					'statepop',
-					`${window.location.origin}/data/us-state-population-2010-2019.csv`,
-					{ header: true }
-				),
-				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
+				msql.loadCSV('cars', `${window.location.origin}/data/cars.csv`),
+				msql.loadCSV('gistemp', `${window.location.origin}/data/gistemp.csv`),
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`)
 			]);
 
 			isLoaded = true;
@@ -58,14 +48,11 @@
 	<p class="status">Loading...</p>
 {:else}
 	<div class="container">
-		<h1>Alpahabet</h1>
+		<h1>Scatterplot</h1>
 
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -77,7 +64,11 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<BarMarkY table="alphabet" x="letter" y="frequency" />
+								<DotsMark
+									table="cars"
+									x={msql.column('economy (mpg)')}
+									y={msql.column('power (hp)')}
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -89,15 +80,13 @@
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>Penguins</h1>
+		<h1>Fuel Efficiency (derived value)</h1>
 
 		<div class="charts">
-			<div class="chart-wrapper" style="max-height: 200px;">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+			<div class="chart-wrapper">
+				<ChartContainer>
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -109,14 +98,10 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<BarMarkX
-									table="penguins"
-									x={1}
-									y="species"
-									inset={0.5}
-									fill="body_mass"
-									scheme="turbo"
-									transforms={[orderby(msql.asc('body_mass')), stack({ direction: 'horizontal' })]}
+								<DotsMark
+									table="cars"
+									x={msql.sql`100.0 / ${msql.column('economy (mpg)')}`}
+									y={msql.column('power (hp)')}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -125,26 +110,20 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
-
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
-					{/snippet}
 				</ChartContainer>
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>Civilizations</h1>
+		<h1>Global Surface Temperature Anomaly</h1>
 
 		<div class="charts">
-			<div class="chart-wrapper" style="max-height:700px;">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+			<div class="chart-wrapper">
+				<ChartContainer>
 					{#snippet background()}
-						<!-- <Frame /> -->
-						<!-- <AxisLeft /> -->
+						<Frame />
+						<AxisLeft />
 						<AxisBottom />
 						<MarginLabel />
 					{/snippet}
@@ -152,14 +131,13 @@
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<Grid axis="x" />
-								<BarMarkX
-									table="civilizations"
-									x1="start"
-									x2="end"
-									y="civilization"
-									inset={0.5}
-									sort={{ y: 'x1', order: 'asc' }}
+								<Grid />
+								<DotsMark
+									table="gistemp"
+									x="Date"
+									y="Anomaly"
+									fill="Anomaly"
+									scheme="BuRd"
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -167,53 +145,43 @@
 
 					{#snippet foreground()}
 						<Crosshair />
-						<TextMark
-							table="civilizations"
-							x="start"
-							y="civilization"
-							text="civilization"
-							textAnchor="end"
-							dx={-3}
-						/>
-					{/snippet}
-
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>Population change, 2010–2019</h1>
+		<h1>AAPL Daily Change vs. Volume</h1>
 
 		<div class="charts">
-			<div class="chart-wrapper" style="max-height:1000px;">
-				<ChartContainer legendPosition="top">
+			<div class="chart-wrapper">
+				<ChartContainer>
 					{#snippet background()}
-						<AxisBottom tickFormat="+%" />
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
 						<MarginLabel />
 					{/snippet}
 
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<Grid axis="x" />
-								<BarMarkX
-									table="statepop"
-									x={msql.sql`(${msql.column('2019')} - ${msql.column('2010')}) * 1.0 / ${msql.column('2010')}`}
-									y="State"
-									fill={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
-									scheme="piyg"
-									sort={{ y: 'x2', order: 'desc' }}
-									inset={0.5}
+								<Grid />
+								<DotsMark
+									table="aapl"
+									x={msql.sql`(${msql.column('Close')} - ${msql.column('Open')}) / ${msql.column('Open')}`}
+									y="Volume"
+									r="Volume"
+									radiusRange={[1, 8]}
+									opacity={0.3}
+									preferredYScaleType="log"
 								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
-						<AxisCenter />
 						<Crosshair />
 					{/snippet}
 				</ChartContainer>
@@ -224,7 +192,6 @@
 
 <style>
 	.container {
-		max-width: 1400px;
 		margin: 0 auto;
 		padding: 2rem 1.5rem;
 	}
@@ -243,9 +210,9 @@
 
 	.chart-wrapper {
 		width: 100%;
-		aspect-ratio: 2 / 1;
-		min-height: 200px;
-		max-height: 1000px;
+		aspect-ratio: 4 / 3;
+		min-height: 300px;
+		max-height: 600px;
 		position: relative;
 	}
 

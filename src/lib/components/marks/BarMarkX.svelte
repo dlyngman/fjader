@@ -168,6 +168,13 @@
 			limit: entry.limit,
 			filterNulls: entry.filterNulls ? ([x1, x2, entry.y] as FieldRef[]) : null
 		},
+		// Ensures SQL ORDER BY series, dimension for consistent stacking
+		...(markColor.selectField && {
+			_orderConfig: {
+				seriesChannel: 'fill',
+				dimensionChannel: 'y'
+			}
+		}),
 		// Bar charts with aggregates should start at zero baseline
 		zeroBaseline: hasAggregateX ? { x: true } : null,
 		sort: normalizeSortConfig(entry.sort ?? null),
