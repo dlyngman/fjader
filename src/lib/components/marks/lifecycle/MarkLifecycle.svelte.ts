@@ -183,8 +183,11 @@ export class MarkLifecycle {
 	// --- Query Build Cache ---
 	// Caches all filter-independent query state (resolved select, classification,
 	// transforms, ordering) so repeated buildQuery calls during interaction
-	// only apply the WHERE clause. Invalidated on re-bin or multiplier change.
+	// only apply the WHERE clause. Invalidated on re-bin or multiplier change
+	// via #queryPartsStale (NOT by nulling — the data derived reads aliasMap
+	// from the cache, so it must remain available until buildQuery replaces it).
 	#cachedQueryParts: QueryParts | null = null;
+	#queryPartsStale = false;
 
 	// --- fitDomain Support ---
 	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -303,7 +306,7 @@ export class MarkLifecycle {
 				// Register invalidation callback: when windowSize changes,
 				// clear query cache and re-query (same pattern as triggerReBin).
 				value.registerInvalidation(() => {
-					this.#cachedQueryParts = null;
+					this.#queryPartsStale = true;
 					this.client?.requestUpdate();
 				});
 			}
@@ -475,7 +478,7 @@ export class MarkLifecycle {
 				// rebuilt the CASE expression) — re-query to get fresh index data
 				untrack(() => {
 					this.#lastViewVersion = viewVersion;
-					this.#cachedQueryParts = null;
+					this.#queryPartsStale = true;
 					this.client!.requestUpdate();
 				});
 			}
@@ -761,7 +764,7 @@ export class MarkLifecycle {
 		this.#skipDomainUpdateForAxis = axis;
 		this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
 		this.#dataDerivedDomainsSet = false;
-		this.#cachedQueryParts = null;
+		this.#queryPartsStale = true;
 		if (this.client) {
 			this.client.requestUpdate();
 		}
@@ -1018,7 +1021,8 @@ export class MarkLifecycle {
 	): Query | null {
 		// Build and cache all filter-independent query parts on first call.
 		// Subsequent calls (e.g. during brush interaction) reuse the cache.
-		if (!this.#cachedQueryParts) {
+		if (!this.#cachedQueryParts || this.#queryPartsStale) {
+			this.#queryPartsStale = false;
 			let select: Record<string, unknown> = config.select;
 
 			// Resolve auto bins if we have field info.
