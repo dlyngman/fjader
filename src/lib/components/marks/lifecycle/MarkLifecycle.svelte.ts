@@ -556,7 +556,8 @@ export class MarkLifecycle {
 					this.#chartContext.xScaleState as BandScaleState | null,
 					this.#chartContext.yScaleState as BandScaleState | null,
 					this.#markId,
-					isRebinning
+					isRebinning,
+					this.#colorScaleState
 				);
 				this.#dataDerivedDomainsSet = result.dataDerivedDomainsSet;
 				this.#skipDomainUpdateForAxis = result.skipDomainUpdateForAxis;

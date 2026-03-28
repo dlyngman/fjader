@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import type { MarkLODSurface } from '$lib/lod/rung-types';
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -39,6 +40,8 @@
 		y2?: FieldRef | null;
 		fill?: FieldRef | null;
 		opacity?: number;
+		fitDomain?: 'x' | 'y' | boolean;
+		onMarkLOD?: (surface: MarkLODSurface | null) => void;
 	}
 
 	let {
@@ -68,7 +71,9 @@
 		sort = null,
 		domain = null,
 		tooltip = true,
-		tip = undefined
+		tip = undefined,
+		fitDomain = undefined,
+		onMarkLOD = undefined
 	}: Props = $props();
 
 	const markId = generateMarkId('rect');
@@ -98,6 +103,7 @@
 		filterNulls: () => filterNulls,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,
+		fitDomain: () => fitDomain,
 		padding: () => padding,
 		paddingInner: () => paddingInner,
 		paddingOuter: () => paddingOuter,
@@ -204,8 +210,7 @@
 			limit: entry.limit,
 			filterNulls: entry.filterNulls ? ([ex1, ex2, ey1, ey2] as FieldRef[]) : null
 		},
-		// Note: RectMark supports bins on both axes, but zero baseline is less clear-cut
-		// (could be heatmap, 2D histogram, etc.). Use RectXMark/RectYMark for histograms.
+		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
 		sort: normalizeSortConfig(entry.sort ?? null),
 		domain: entry.domain ?? null,
 		tooltip: entry.tip === false ? false : entry.tooltip
@@ -306,7 +311,10 @@
 			setup = null;
 			// Gate on BOTH scale types being resolved
 			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+				setup = new MarkLifecycle(config, coordinator, chartContext, markId, {
+					gpuCoordinator,
+					onMarkLOD
+				});
 			}
 		});
 	});

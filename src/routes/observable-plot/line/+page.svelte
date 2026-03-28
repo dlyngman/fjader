@@ -1,6 +1,6 @@
 <script>
 	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { loadCSV } from '@uwdata/mosaic-sql';
+	import * as msql from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
 	import {
@@ -30,8 +30,8 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
-				loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
+				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
 			]);
 
 			isLoaded = true;
@@ -120,6 +120,42 @@
 			</div>
 		</div>
 	</div>
+
+	<div class="container">
+		<h1>Line with Missing Data</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<LineMark
+									table="aapl"
+									x="Date"
+									y={msql.sql`CASE WHEN EXTRACT(MONTH FROM ${msql.column('Date')}) < 4 THEN NULL ELSE ${msql.column('Close')} END`}
+									curve="monotone"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
 {/if}
 
 <style>

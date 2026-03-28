@@ -3,6 +3,7 @@ import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
+import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ScaleStateInstance, ContinuousScaleState } from '$lib/types';
 import {
 	isContinuousScale,
@@ -167,7 +168,8 @@ export function registerDataDerivedDomains(
 	xBandScaleState: BandScaleState | null,
 	yBandScaleState: BandScaleState | null,
 	markId: string,
-	isRebinning: boolean
+	isRebinning: boolean,
+	colorScaleState?: ColorScaleState | null
 ): RegisterDomainsResult {
 	if (!data || data.length === 0) {
 		return { dataDerivedDomainsSet: false, skipDomainUpdateForAxis };
@@ -260,6 +262,21 @@ export function registerDataDerivedDomains(
 				// its #sortOrder is already set and should not be overwritten.
 				bandScale.addMark(categories, markId);
 				bandScale.updateDomainFromExtents();
+			}
+		}
+	}
+
+	// Color domain from query results (needed when sidecar is skipped, e.g. binned marks)
+	if (colorScaleState && !colorScaleState.isOrdinal) {
+		const colorChannel = channelsNeedingDataDomain.has('fill')
+			? 'fill'
+			: channelsNeedingDataDomain.has('stroke')
+				? 'stroke'
+				: null;
+		if (colorChannel) {
+			const extent = computeExtentFromData(data, [colorChannel]);
+			if (extent) {
+				colorScaleState.setDomain(extent as (string | number)[]);
 			}
 		}
 	}

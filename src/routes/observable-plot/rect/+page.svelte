@@ -13,10 +13,12 @@
 		WebGPUCanvas,
 		RectYMark,
 		RectXMark,
+		RectMark,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
+	import { filter } from '$lib/transforms';
 
 	setCoordinators();
 
@@ -32,7 +34,8 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				msql.loadCSV('olympians', `${window.location.origin}/data/olympians.csv`)
+				msql.loadCSV('olympians', `${window.location.origin}/data/olympians.csv`),
+				msql.loadCSV('diamonds', `${window.location.origin}/data/diamonds.csv`)
 			]);
 
 			isLoaded = true;
@@ -141,6 +144,88 @@
 									table="olympians"
 									y={bin('weight')}
 									x={msql.count()}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>2D Histogram (heatmap)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<RectMark
+									table="diamonds"
+									x={bin('carat', { steps: 100 })}
+									y={bin('price', { steps: 100 })}
+									fill={msql.count()}
+									scheme="ylgnbu"
+									inset={0.5}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Overlapping Histograms</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<RectYMark
+									table="olympians"
+									x={bin('weight')}
+									y={msql.count()}
+									fill="#4269d0"
+									opacity={0.5}
+									transforms={[filter(msql.sql`sex = 'male'`)]}
+								/>
+								<RectYMark
+									table="olympians"
+									x={bin('weight')}
+									y={msql.count()}
+									fill="#ff725c"
+									opacity={0.5}
+									transforms={[filter(msql.sql`sex = 'female'`)]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

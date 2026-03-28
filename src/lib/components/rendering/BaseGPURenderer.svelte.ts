@@ -296,7 +296,7 @@ export class BaseGPURenderer {
 	get #sharedDummyBuffer(): GPUBuffer {
 		if (!this.#dummyBuffer) {
 			this.#dummyBuffer = this.#device!.createBuffer({
-				size: 16, // Minimum size
+				size: 48, // Must fit the largest uniform struct (e.g. Rects MarkConstants = 48 bytes)
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 				label: `${this.#markType}-dummy`
 			});
