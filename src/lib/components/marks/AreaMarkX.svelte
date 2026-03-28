@@ -169,7 +169,7 @@
 	let hasStackTransform = $derived(effectiveTransforms.some((t) => t.type === 'stack'));
 	let showBothBoundaries = $derived(typeof entry.x1 === 'string' && !hasStackTransform);
 
-	// Config with _connectedConfig for automatic ORDER BY (dimension is y) — reads from entry
+	// Config with _orderConfig for automatic ORDER BY (series, dimension) — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
 			x: x2, // Alias for tooltip nearest-point query (expects 'x' column)
@@ -220,7 +220,7 @@
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip: entry.tip,
 		// Connected topology - ordered by dimension (y)
-		_connectedConfig: {
+		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: 'y'
 		},

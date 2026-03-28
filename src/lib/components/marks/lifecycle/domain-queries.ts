@@ -49,9 +49,13 @@ export async function fetchCategoricalDomains(
 ): Promise<number> {
 	const fetches: Promise<void>[] = [];
 
-	const setupFetch = (axis: string, field: unknown, scaleState: BandScaleState | null): void => {
+	const setupFetch = (
+		axis: string,
+		field: unknown,
+		scaleState: BandScaleState | null,
+		{ sortOnly = false } = {}
+	): void => {
 		if (!field || !scaleState) return;
-		let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
 
 		// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
 		// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
@@ -59,6 +63,11 @@ export async function fetchCategoricalDomains(
 		const sortField = sort
 			? select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1']
 			: null;
+
+		// sortOnly mode: only fetch sort order, skip if no sort config
+		if (sortOnly && !sortField) return;
+
+		let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
 		if (sortField) {
 			if (isAggregateExpression(sortField as ExprNode)) {
 				// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
@@ -91,14 +100,19 @@ export async function fetchCategoricalDomains(
 					categories.reverse();
 				}
 				if (categories.length > 0) {
-					scaleState.addMark(categories, markId, { sorted: !!sortField });
+					if (sortOnly) {
+						scaleState.setSortOrder(categories);
+					} else {
+						scaleState.addMark(categories, markId, { sorted: !!sortField });
+					}
 				}
 			})
 		);
 	};
 
 	// Skip band fetch for marks with category-reducing transforms (topN):
-	// domain will be populated post-transform in registerDataDerivedDomains
+	// domain will be populated post-transform in registerDataDerivedDomains.
+	// BUT still run the sort sidecar so #sortOrder is set on the shared scale.
 	const skipBandFetch = hasCategoryReducingTransforms;
 	// Track explicit domains to apply after all async fetches complete —
 	// other scales (color, series) register ViewManager columns in their
@@ -106,15 +120,19 @@ export async function fetchCategoricalDomains(
 	let deferredExplicitX: string[] | null = null;
 	let deferredExplicitY: string[] | null = null;
 
-	if ((actualXScaleType === 'band' || actualXScaleType === 'point') && !skipBandFetch) {
-		if (explicitDomain?.x && xScaleState) {
+	if (actualXScaleType === 'band' || actualXScaleType === 'point') {
+		if (skipBandFetch) {
+			setupFetch('x', select.x, xScaleState, { sortOnly: true });
+		} else if (explicitDomain?.x && xScaleState) {
 			deferredExplicitX = explicitDomain.x;
 		} else {
 			setupFetch('x', select.x, xScaleState);
 		}
 	}
-	if ((actualYScaleType === 'band' || actualYScaleType === 'point') && !skipBandFetch) {
-		if (explicitDomain?.y && yScaleState) {
+	if (actualYScaleType === 'band' || actualYScaleType === 'point') {
+		if (skipBandFetch) {
+			setupFetch('y', select.y, yScaleState, { sortOnly: true });
+		} else if (explicitDomain?.y && yScaleState) {
 			// Y band scale maps index 0 → bottom, so reverse the user's
 			// top-to-bottom array to match GPU rendering order.
 			deferredExplicitY = [...explicitDomain.y].reverse();

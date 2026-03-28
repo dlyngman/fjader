@@ -317,6 +317,11 @@ FROM ${sourceTable}`;
 		try {
 			await this.#coordinator!.exec(sql);
 
+			// Invalidate Mosaic's query cache — the SQL strings for SELECT queries
+			// against this view haven't changed, but the view definition has.
+			// Without this, Mosaic serves stale cached results.
+			(this.#coordinator as any).manager?.cache()?.clear();
+
 			// Update table state (view name + version) but DON'T clear pendingViews —
 			// the caller (#createOrUpdateView) handles that after confirming no more
 			// dirty columns arrived.

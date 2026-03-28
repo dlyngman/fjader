@@ -89,7 +89,7 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 // Local interfaces
 // ---------------------------------------------------------------------------
 
-interface ConnectedConfig {
+interface OrderConfig {
 	seriesChannel: string | null;
 	dimensionChannel: string;
 }
@@ -113,7 +113,7 @@ export interface MarkLifecycleConfig {
 	constants?: Record<string, number>;
 	colorChannel?: string; // Key in select for color data ('fill' or 'stroke')
 	sizeChannel?: string; // Key in select for size data ('r')
-	_connectedConfig?: ConnectedConfig;
+	_orderConfig?: OrderConfig;
 	_filterNulls?: unknown[];
 	fitDomain?: 'x' | 'y' | boolean;
 	zeroBaseline?: { x?: boolean; y?: boolean };
@@ -158,6 +158,7 @@ export class MarkLifecycle {
 	#seriesScaleState = $state<ColorScaleState | null>(null);
 	#sizeScaleState = $state<SizeScaleState | null>(null);
 	#currentClientTable = $state<string | null>(null);
+	#lastViewVersion = 0; // Tracks ViewManager version to detect view rebuilds
 
 	// --- Transform Support ---
 	#transformCompiler: TransformCompiler;
@@ -182,8 +183,11 @@ export class MarkLifecycle {
 	// --- Query Build Cache ---
 	// Caches all filter-independent query state (resolved select, classification,
 	// transforms, ordering) so repeated buildQuery calls during interaction
-	// only apply the WHERE clause. Invalidated on re-bin or multiplier change.
+	// only apply the WHERE clause. Invalidated on re-bin or multiplier change
+	// via #queryPartsStale (NOT by nulling — the data derived reads aliasMap
+	// from the cache, so it must remain available until buildQuery replaces it).
 	#cachedQueryParts: QueryParts | null = null;
+	#queryPartsStale = false;
 
 	// --- fitDomain Support ---
 	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -302,7 +306,7 @@ export class MarkLifecycle {
 				// Register invalidation callback: when windowSize changes,
 				// clear query cache and re-query (same pattern as triggerReBin).
 				value.registerInvalidation(() => {
-					this.#cachedQueryParts = null;
+					this.#queryPartsStale = true;
 					this.client?.requestUpdate();
 				});
 			}
@@ -343,7 +347,7 @@ export class MarkLifecycle {
 
 			// Track color/series scale states for reactive re-entry
 			const colorKey = this.#config.colorChannel || 'fill';
-			const seriesKey = this.#config._connectedConfig?.seriesChannel;
+			const seriesKey = this.#config._orderConfig?.seriesChannel;
 			const colorReady = !this.#config.select?.[colorKey] || !!this.#colorScaleState;
 			const seriesReady =
 				!seriesKey || !this.#config.select?.[seriesKey] || !!this.#seriesScaleState;
@@ -367,7 +371,7 @@ export class MarkLifecycle {
 				}
 
 				// Fetch both categorical and aggregated domains in parallel
-				const seriesKey2 = this.#config._connectedConfig?.seriesChannel ?? null;
+				const seriesKey2 = this.#config._orderConfig?.seriesChannel ?? null;
 				const catPromise = fetchCategoricalDomains(
 					this.#coordinator!,
 					this.#config.table,
@@ -434,7 +438,9 @@ export class MarkLifecycle {
 		});
 
 		// Effect 4: Create client - waits for view to be ready before creating
-		// This prevents creating a throwaway client against the source table
+		// This prevents creating a throwaway client against the source table.
+		// Also triggers re-query when the ViewManager view is rebuilt (e.g. band
+		// scale domain reorder changes the CASE expression for index columns).
 		$effect(() => {
 			// Prerequisites
 			if (!this.categoricalDataFetched) return;
@@ -442,8 +448,9 @@ export class MarkLifecycle {
 			// Wait until ViewManager is ready (no pending view creation)
 			if (!viewManager.isReadyForClient(this.#config.table)) return;
 
-			// REACTIVITY: Track effectiveTable
+			// REACTIVITY: Track effectiveTable + per-table view version
 			const tableToQuery = this.effectiveTable;
+			const viewVersion = viewManager.getVersion(this.#config.table);
 
 			// Check if table changed (using tracked state)
 			if (this.#currentClientTable !== tableToQuery) {
@@ -463,7 +470,16 @@ export class MarkLifecycle {
 					);
 					this.#createClient(tableToQuery, fieldRequests);
 					this.#currentClientTable = tableToQuery;
+					this.#lastViewVersion = viewVersion;
 					this.#clientCreated = true;
+				});
+			} else if (this.client && viewVersion !== this.#lastViewVersion) {
+				// Same table but view definition changed (e.g. band domain reorder
+				// rebuilt the CASE expression) — re-query to get fresh index data
+				untrack(() => {
+					this.#lastViewVersion = viewVersion;
+					this.#queryPartsStale = true;
+					this.client!.requestUpdate();
 				});
 			}
 		});
@@ -540,7 +556,8 @@ export class MarkLifecycle {
 					this.#chartContext.xScaleState as BandScaleState | null,
 					this.#chartContext.yScaleState as BandScaleState | null,
 					this.#markId,
-					isRebinning
+					isRebinning,
+					this.#colorScaleState
 				);
 				this.#dataDerivedDomainsSet = result.dataDerivedDomainsSet;
 				this.#skipDomainUpdateForAxis = result.skipDomainUpdateForAxis;
@@ -748,7 +765,7 @@ export class MarkLifecycle {
 		this.#skipDomainUpdateForAxis = axis;
 		this.#rebinPendingDataVersion = this.client?.dataVersion ?? null;
 		this.#dataDerivedDomainsSet = false;
-		this.#cachedQueryParts = null;
+		this.#queryPartsStale = true;
 		if (this.client) {
 			this.client.requestUpdate();
 		}
@@ -1005,7 +1022,8 @@ export class MarkLifecycle {
 	): Query | null {
 		// Build and cache all filter-independent query parts on first call.
 		// Subsequent calls (e.g. during brush interaction) reuse the cache.
-		if (!this.#cachedQueryParts) {
+		if (!this.#cachedQueryParts || this.#queryPartsStale) {
+			this.#queryPartsStale = false;
 			let select: Record<string, unknown> = config.select;
 
 			// Resolve auto bins if we have field info.
@@ -1027,7 +1045,7 @@ export class MarkLifecycle {
 
 			this.#cachedQueryParts = buildQueryParts(
 				select,
-				this.#config._connectedConfig,
+				this.#config._orderConfig,
 				this.#transformCompiler.hasSQLTransforms()
 			);
 		}

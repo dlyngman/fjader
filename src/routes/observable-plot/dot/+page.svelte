@@ -1,6 +1,6 @@
 <script>
 	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { loadCSV } from '@uwdata/mosaic-sql';
+	import * as msql from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
 	import {
@@ -11,8 +11,7 @@
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		AreaMarkY,
-		Legend
+		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
@@ -30,9 +29,9 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				// loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`)
-				loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
-				loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`)
+				msql.loadCSV('cars', `${window.location.origin}/data/cars.csv`),
+				msql.loadCSV('gistemp', `${window.location.origin}/data/gistemp.csv`),
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`)
 			]);
 
 			isLoaded = true;
@@ -49,14 +48,11 @@
 	<p class="status">Loading...</p>
 {:else}
 	<div class="container">
-		<h1>Seattle Weather</h1>
+		<h1>Scatterplot</h1>
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+				<ChartContainer>
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -68,13 +64,10 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<AreaMarkY
-									table="aapl"
-									x="Date"
-									y="Close"
-									dotRadius={3}
-									curve="monotone"
-									strokeWidth={2}
+								<DotsMark
+									table="cars"
+									x={msql.column('economy (mpg)')}
+									y={msql.column('power (hp)')}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -82,24 +75,18 @@
 
 					{#snippet foreground()}
 						<Crosshair />
-					{/snippet}
-
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
 					{/snippet}
 				</ChartContainer>
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>SF temp</h1>
+		<h1>Fuel Efficiency (derived value)</h1>
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+				<ChartContainer>
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -111,14 +98,10 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<AreaMarkY
-									table="sftemp"
-									x="date"
-									y1="low"
-									y2="high"
-									dotRadius={3}
-									curve="monotone"
-									strokeWidth={2}
+								<DotsMark
+									table="cars"
+									x={msql.sql`100.0 / ${msql.column('economy (mpg)')}`}
+									y={msql.column('power (hp)')}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -127,9 +110,79 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
 
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
+	<div class="container">
+		<h1>Global Surface Temperature Anomaly</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<DotsMark
+									table="gistemp"
+									x="Date"
+									y="Anomaly"
+									fill="Anomaly"
+									scheme="BuRd"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>AAPL Daily Change vs. Volume</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<DotsMark
+									table="aapl"
+									x={msql.sql`(${msql.column('Close')} - ${msql.column('Open')}) / ${msql.column('Open')}`}
+									y="Volume"
+									r="Volume"
+									radiusRange={[1, 8]}
+									opacity={0.3}
+									preferredYScaleType="log"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -139,7 +192,6 @@
 
 <style>
 	.container {
-		/* max-width: 1400px; */
 		margin: 0 auto;
 		padding: 2rem 1.5rem;
 	}
@@ -158,8 +210,8 @@
 
 	.chart-wrapper {
 		width: 100%;
-		aspect-ratio: 2 / 1;
-		min-height: 200px;
+		aspect-ratio: 4 / 3;
+		min-height: 300px;
 		max-height: 600px;
 		position: relative;
 	}

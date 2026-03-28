@@ -358,6 +358,15 @@ export class BandScaleState {
 	}
 
 	/**
+	 * Set the preferred sort order without registering categories in #extents.
+	 * Used by topN marks: the sort sidecar runs against the full dataset but
+	 * the domain should only contain post-transform categories.
+	 */
+	setSortOrder(categories: string[]): void {
+		this.#sortOrder = [...new Set(categories.filter((c) => c != null))];
+	}
+
+	/**
 	 * Remove a mark's categories from domain calculation
 	 */
 	removeMark(identifier: string): this {

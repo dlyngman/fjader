@@ -7,18 +7,15 @@
 		ChartContainer,
 		Frame,
 		AxisLeft,
-		AxisCenter,
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
 		WebGPUCanvas,
-		BarMarkY,
-		BarMarkX,
-		TextMark,
+		AreaMarkY,
+		AreaMarkX,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
-	import { orderby, stack } from '$lib/transforms';
 
 	setCoordinators();
 
@@ -34,14 +31,9 @@
 			setContext('mosaic-coordinator', coord);
 
 			await coord.exec([
-				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`),
-				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`),
-				msql.loadCSV(
-					'statepop',
-					`${window.location.origin}/data/us-state-population-2010-2019.csv`,
-					{ header: true }
-				),
-				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
+				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
+				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
 			]);
 
 			isLoaded = true;
@@ -58,13 +50,123 @@
 	<p class="status">Loading...</p>
 {:else}
 	<div class="container">
-		<h1>Alpahabet</h1>
+		<h1>AAPL Stock Price</h1>
 
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="aapl"
+									x="Date"
+									y="Close"
+									curve="monotone"
+									strokeWidth={2}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>SF Temperature Band</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="sftemp"
+									x="date"
+									y1="low"
+									y2="high"
+									curve="monotone"
+									strokeWidth={2}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>AAPL Stock Price (vertical)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkX
+									table="aapl"
+									y="Date"
+									x="Close"
+									fillOpacity={0.3}
+									curve="monotone"
+									strokeWidth={2}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Industry Unemployment (stacked)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
+						<Legend color="industry" />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -77,7 +179,13 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<BarMarkY table="alphabet" x="letter" y="frequency" />
+								<AreaMarkY
+									table="unemployment"
+									x="date"
+									y="unemployed"
+									fill="industry"
+									curve="monotone"
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -89,14 +197,15 @@
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>Penguins</h1>
+		<h1>Industry Unemployment (overlapping)</h1>
 
 		<div class="charts">
-			<div class="chart-wrapper" style="max-height: 200px;">
+			<div class="chart-wrapper">
 				<ChartContainer legendPosition="top">
 					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
+						<Legend color="industry" />
 					{/snippet}
 					{#snippet background()}
 						<Frame />
@@ -109,14 +218,16 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<BarMarkX
-									table="penguins"
-									x={1}
-									y="species"
-									inset={0.5}
-									fill="body_mass"
-									scheme="turbo"
-									transforms={[orderby(msql.asc('body_mass')), stack({ direction: 'horizontal' })]}
+								<AreaMarkY
+									table="unemployment"
+									x="date"
+									y1={0}
+									y2="unemployed"
+									z="industry"
+									fill="industry"
+									fillOpacity={0.1}
+									curve="monotone"
+									strokeWidth={1}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -125,26 +236,20 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
-
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
-					{/snippet}
 				</ChartContainer>
 			</div>
 		</div>
 	</div>
+
 	<div class="container">
-		<h1>Civilizations</h1>
+		<h1>Area with Missing Data</h1>
 
 		<div class="charts">
-			<div class="chart-wrapper" style="max-height:700px;">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+			<div class="chart-wrapper">
+				<ChartContainer>
 					{#snippet background()}
-						<!-- <Frame /> -->
-						<!-- <AxisLeft /> -->
+						<Frame />
+						<AxisLeft />
 						<AxisBottom />
 						<MarginLabel />
 					{/snippet}
@@ -152,68 +257,19 @@
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<Grid axis="x" />
-								<BarMarkX
-									table="civilizations"
-									x1="start"
-									x2="end"
-									y="civilization"
-									inset={0.5}
-									sort={{ y: 'x1', order: 'asc' }}
+								<Grid />
+								<AreaMarkY
+									table="aapl"
+									x="Date"
+									y={msql.sql`CASE WHEN EXTRACT(MONTH FROM ${msql.column('Date')}) < 4 THEN NULL ELSE ${msql.column('Close')} END`}
+									curve="monotone"
+									strokeWidth={2}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
-						<Crosshair />
-						<TextMark
-							table="civilizations"
-							x="start"
-							y="civilization"
-							text="civilization"
-							textAnchor="end"
-							dx={-3}
-						/>
-					{/snippet}
-
-					{#snippet interactors()}
-						<!-- <IntervalX selection="brush" field={dateMonthDay('date')} /> -->
-					{/snippet}
-				</ChartContainer>
-			</div>
-		</div>
-	</div>
-	<div class="container">
-		<h1>Population change, 2010–2019</h1>
-
-		<div class="charts">
-			<div class="chart-wrapper" style="max-height:1000px;">
-				<ChartContainer legendPosition="top">
-					{#snippet background()}
-						<AxisBottom tickFormat="+%" />
-						<MarginLabel />
-					{/snippet}
-
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid axis="x" />
-								<BarMarkX
-									table="statepop"
-									x={msql.sql`(${msql.column('2019')} - ${msql.column('2010')}) * 1.0 / ${msql.column('2010')}`}
-									y="State"
-									fill={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
-									scheme="piyg"
-									sort={{ y: 'x2', order: 'desc' }}
-									inset={0.5}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-
-					{#snippet foreground()}
-						<AxisCenter />
 						<Crosshair />
 					{/snippet}
 				</ChartContainer>
@@ -224,7 +280,6 @@
 
 <style>
 	.container {
-		max-width: 1400px;
 		margin: 0 auto;
 		padding: 2rem 1.5rem;
 	}
@@ -245,7 +300,7 @@
 		width: 100%;
 		aspect-ratio: 2 / 1;
 		min-height: 200px;
-		max-height: 1000px;
+		max-height: 600px;
 		position: relative;
 	}
 

@@ -195,6 +195,13 @@
 			limit: entry.limit,
 			filterNulls: entry.filterNulls ? ([x1Expanded, x2Expanded, y1, y2] as FieldRef[]) : null
 		},
+		// Ensures SQL ORDER BY series, dimension for consistent stacking
+		...(markColor.selectField && {
+			_orderConfig: {
+				seriesChannel: 'fill',
+				dimensionChannel: 'x1'
+			}
+		}),
 		// Histograms should start at zero baseline for the aggregate dimension
 		zeroBaseline: isHistogram ? { y: true } : null,
 		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
