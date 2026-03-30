@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { column as sqlColumn, count, sum, sql } from '@uwdata/mosaic-sql';
+import { column as sqlColumn, count, sum, sql, avg } from '@uwdata/mosaic-sql';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { buildFieldInfoRequests, buildQueryParts, assembleQuery } from './query-builder';
 
@@ -197,6 +197,25 @@ describe('assembleQuery', () => {
 		expect(s).toContain('ORDER BY');
 	});
 
+	it('casts numeric channel expressions to REAL for zero-copy Arrow access', () => {
+		const parts = simpleParts({ x: 'date', y: 'value' });
+		const numericChannels = new Set(['x', 'y']);
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, numericChannels);
+		const s = String(q);
+		// COALESCE(CAST(expr AS REAL), 'NaN'::REAL) for null-safe zero-copy
+		expect(s).toMatch(/coalesce\(\("value"\)::REAL, 'NaN'::REAL\)/);
+		expect(s).toMatch(/coalesce\(\("date"\)::REAL, 'NaN'::REAL\)/);
+	});
+
+	it('does not cast channels outside numericCastChannels', () => {
+		const parts = simpleParts({ x: 'species', y: count() });
+		// No numericCastChannels passed — nothing gets cast
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true);
+		const s = String(q);
+		expect(s).not.toMatch(/::REAL/);
+		expect(s).not.toContain('coalesce');
+	});
+
 	it('ORDER BY uses field aliases when forMosaic=true', () => {
 		const parts = simpleParts(
 			{ x: 'date', y: 'value', stroke: 'series' },
@@ -207,5 +226,115 @@ describe('assembleQuery', () => {
 		// Should use 'series' and 'date' (field names), not 'stroke' and 'x' (channel names)
 		expect(s).toContain('"series"');
 		expect(s).toContain('"date"');
+	});
+
+	// -----------------------------------------------------------------------
+	// COALESCE null-safe casting — proposal validation
+	// -----------------------------------------------------------------------
+
+	it('wraps aggregates (count, sum, avg) with COALESCE+CAST', () => {
+		const parts = simpleParts({ x: 'category', y: count() });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
+		const s = String(q);
+		// count() gets COALESCE wrapping; x (band) does not
+		expect(s).toMatch(/coalesce\(\(count\(\*\)\)::REAL, 'NaN'::REAL\)/);
+		expect(s).not.toMatch(/coalesce\(\("category"\)/);
+	});
+
+	it('wraps sum aggregate with COALESCE+CAST', () => {
+		const parts = simpleParts({ x: 'region', y: sum('revenue') });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
+		const s = String(q);
+		expect(s).toMatch(/coalesce\(\(sum\("revenue"\)\)::REAL, 'NaN'::REAL\)/);
+	});
+
+	it('wraps inline SQL expressions with COALESCE+CAST', () => {
+		const binExpr = sql`(30 + (5 * floor(("weight" - 30) / 5)))`;
+		const parts = simpleParts({ x: binExpr, y: count() });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x']));
+		const s = String(q);
+		expect(s).toMatch(/coalesce\(\(\(30 \+ \(5 \* floor\(\("weight" - 30\) \/ 5\)\)\)\)::REAL, 'NaN'::REAL\)/);
+	});
+
+	it('preserves field-name aliases when COALESCE wrapping simple columns', () => {
+		const parts = simpleParts({ x: 'date', y: 'value' });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x', 'y']));
+		const s = String(q);
+		// Aliases should be field names (date, value), not channel names (x, y)
+		expect(s).toMatch(/coalesce\(\("date"\)::REAL, 'NaN'::REAL\) AS "date"/);
+		expect(s).toMatch(/coalesce\(\("value"\)::REAL, 'NaN'::REAL\) AS "value"/);
+	});
+
+	it('preserves channel-name aliases for expression nodes', () => {
+		const parts = simpleParts({ x: 'species', y: count() });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
+		const s = String(q);
+		// count() alias should be channel name 'y'
+		expect(s).toMatch(/coalesce\(\(count\(\*\)\)::REAL, 'NaN'::REAL\) AS "y"/);
+	});
+
+	it('GROUP BY uses unwrapped expressions (not COALESCE-wrapped)', () => {
+		const parts = simpleParts({ x: 'category', y: count() });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
+		const s = String(q);
+		// GROUP BY should reference raw column, not wrapped
+		expect(s).toMatch(/GROUP BY "category"/);
+		expect(s).not.toMatch(/GROUP BY.*coalesce/);
+	});
+
+	it('GROUP BY is correct with COALESCE on non-aggregate numeric channels', () => {
+		// Histogram-style: both x channels are non-aggregate expressions, y is count
+		const parts = simpleParts({ x: 'bin_start', x2: 'bin_end', y: count() });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x', 'x2', 'y']));
+		const s = String(q);
+		// GROUP BY should have both bin columns, unwrapped
+		expect(s).toMatch(/GROUP BY "bin_start", "bin_end"/);
+		// SELECT should have COALESCE wrappers
+		expect(s).toMatch(/coalesce\(\("bin_start"\)::REAL/);
+		expect(s).toMatch(/coalesce\(\("bin_end"\)::REAL/);
+		expect(s).toMatch(/coalesce\(\(count\(\*\)\)::REAL/);
+	});
+
+	it('does not COALESCE-wrap when forMosaic=false (sidecar queries)', () => {
+		const parts = simpleParts({ x: 'date', y: 'value' });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, false, new Set(['x', 'y']));
+		const s = String(q);
+		expect(s).not.toContain('coalesce');
+		expect(s).not.toMatch(/::REAL/);
+	});
+
+	it('selectively wraps only numericCastChannels, leaving others untouched', () => {
+		const parts = simpleParts({ x: 'species', y: 'value', stroke: 'series' });
+		// Only y is numeric
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
+		const s = String(q);
+		expect(s).toMatch(/coalesce\(\("value"\)::REAL, 'NaN'::REAL\)/);
+		expect(s).not.toMatch(/coalesce\(\("species"\)/);
+		expect(s).not.toMatch(/coalesce\(\("series"\)/);
+	});
+
+	it('ORDER BY works correctly alongside COALESCE-wrapped SELECT', () => {
+		const parts = simpleParts(
+			{ x: 'date', y: 'value', stroke: 'series' },
+			{ seriesChannel: 'stroke', dimensionChannel: 'x' }
+		);
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x', 'y']));
+		const s = String(q);
+		// ORDER BY uses field aliases (not COALESCE-wrapped)
+		expect(s).toMatch(/ORDER BY "series", "date"/);
+		// SELECT has COALESCE wrapping
+		expect(s).toMatch(/coalesce\(\("date"\)::REAL/);
+		expect(s).toMatch(/coalesce\(\("value"\)::REAL/);
+	});
+
+	it('COALESCE wrapping a REAL column is harmless (no double-cast)', () => {
+		// CAST(REAL AS REAL) is a no-op in DuckDB; COALESCE just adds null check
+		const parts = simpleParts({ x: 'already_real_col', y: count() });
+		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x']));
+		const s = String(q);
+		// Should produce exactly one layer of COALESCE(CAST(...))
+		expect(s).toMatch(/coalesce\(\("already_real_col"\)::REAL, 'NaN'::REAL\)/);
+		// No nested coalesce
+		expect(s).not.toMatch(/coalesce\(coalesce/);
 	});
 });

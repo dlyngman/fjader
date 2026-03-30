@@ -33,11 +33,15 @@ export class ArrowDataAccessor {
 			dtype?.toString?.().includes('Utf8') ||
 			dtype?.toString?.().includes('Dictionary');
 
-		// FAST PATH: Single chunk numeric - try to return underlying buffer directly
+		// FAST PATH: Single chunk numeric - try to return underlying buffer directly.
+		// NULL handling: Query-level COALESCE(CAST(expr AS REAL), 'NaN'::REAL)
+		// converts SQL NULLs to the NaN float value, so Arrow columns from DivePlot
+		// queries have nullCount=0 and clean buffers. GPU shaders detect NaN (v != v)
+		// and discard those vertices to create gaps in lines/areas.
 		if (!isStringType && col.data.length === 1) {
-			const raw = col.data[0].values;
+			const chunk = col.data[0];
+			const raw = chunk.values;
 
-			// Already Float32Array - zero copy!
 			if (raw instanceof Float32Array) {
 				return raw;
 			}
