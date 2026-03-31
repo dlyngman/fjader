@@ -286,20 +286,22 @@ export class ColorScaleState {
 			return;
 		}
 
-		const effectiveDomain = this.#effectiveDomain();
-
-		// Create D3 scale with effective domain (for CPU/legend use)
-		this.#d3Scale = createD3Scale(this.#scheme, effectiveDomain, {
-			reverse: this.#reverse,
-			midpoint: this.#midpoint,
-			transform: this.#scaleType,
-			constant: this.#constant,
-			exponent: this.#exponent
-		});
-
 		if (this.isOrdinal) {
+			// Ordinal: D3 scale needs the full categorical domain (strings).
+			// effectiveDomain is only meaningful for continuous scales.
+			this.#d3Scale = createD3Scale(this.#scheme, this.domain as number[], {
+				reverse: this.#reverse
+			});
 			this.#uploadOrdinal();
 		} else {
+			const effectiveDomain = this.#effectiveDomain();
+			this.#d3Scale = createD3Scale(this.#scheme, effectiveDomain, {
+				reverse: this.#reverse,
+				midpoint: this.#midpoint,
+				transform: this.#scaleType,
+				constant: this.#constant,
+				exponent: this.#exponent
+			});
 			this.#uploadContinuous(effectiveDomain);
 		}
 
