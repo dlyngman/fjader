@@ -28,7 +28,7 @@ import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
-import { isContinuousScale } from '$lib/scales/scale-categories';
+import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { isWindowExpression } from '$lib/sql/expression-utils';
@@ -187,6 +187,7 @@ export class MarkLifecycle {
 	// via #queryPartsStale (NOT by nulling — the data derived reads aliasMap
 	// from the cache, so it must remain available until buildQuery replaces it).
 	#cachedQueryParts: QueryParts | null = null;
+	#numericCastChannels: Set<string> | undefined;
 	#queryPartsStale = false;
 
 	// --- fitDomain Support ---
@@ -1043,6 +1044,17 @@ export class MarkLifecycle {
 			const hasView = viewManager.hasView(this.#config.table);
 			select = this.#applyTimeOffsets(select, hasView);
 
+			// Determine which channels need CAST to REAL for zero-copy Float32Array.
+			// Time channels are already REAL (via #applyTimeOffsets).
+			// Band/color channels are already REAL (via ViewManager index columns).
+			// Only linear/log/symlog channels need explicit casting.
+			this.#numericCastChannels = new Set<string>();
+			for (const ch of ['x', 'x1', 'x2', 'y', 'y1', 'y2']) {
+				if (!(ch in select)) continue;
+				const scaleType = ch.startsWith('x') ? this.actualXScaleType : this.actualYScaleType;
+				if (isNumericScale(scaleType)) this.#numericCastChannels.add(ch);
+			}
+
 			this.#cachedQueryParts = buildQueryParts(
 				select,
 				this.#config._orderConfig,
@@ -1056,7 +1068,8 @@ export class MarkLifecycle {
 			filter,
 			config._filterNulls as unknown[] | null | undefined,
 			this.#transformCompiler,
-			forMosaic
+			forMosaic,
+			forMosaic ? this.#numericCastChannels : undefined
 		);
 	}
 
