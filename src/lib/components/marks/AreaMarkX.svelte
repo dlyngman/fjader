@@ -112,10 +112,12 @@
 
 	// Observable Plot pattern: x shorthand → auto-stack, explicit x1/x2 → opt-out
 	const hasExplicitBounds = $derived(entry.x1 !== undefined || entry.x2 !== undefined);
+	const hasSeriesGrouping = $derived(entry.fill != null || entry.z != null);
 	let x1 = $derived(entry.x1 ?? 0);
 	let x2 = $derived(entry.x2 ?? entry.x);
+	// Skip implicit stack for single-series areas: no-op that breaks zero-copy
 	let effectiveTransforms = $derived(
-		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x')
+		withImplicitStack(entry.transforms ?? [], hasExplicitBounds || !hasSeriesGrouping, 'x')
 	);
 
 	// Map user-facing 'monotone' to the correct axis-specific variant (y is dim for AreaX)

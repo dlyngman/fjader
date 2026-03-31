@@ -359,11 +359,17 @@ function computeStack(
 
 	for (let i = 0; i < n; i++) {
 		const group = groupCol[i];
+		const rawValue = Number(valueCol[i]);
+		if (rawValue !== rawValue) {
+			// NaN (null in Arrow) — preserve so shaders create gaps
+			lo[i] = NaN;
+			hi[i] = NaN;
+			continue;
+		}
 		const cumulative = cumulatives.get(group) || 0;
-		const value = Number(valueCol[i]) || 0;
 		lo[i] = cumulative;
-		hi[i] = cumulative + value;
-		cumulatives.set(group, cumulative + value);
+		hi[i] = cumulative + rawValue;
+		cumulatives.set(group, cumulative + rawValue);
 	}
 
 	// Apply offset using group totals (cumulatives map now holds totals)
