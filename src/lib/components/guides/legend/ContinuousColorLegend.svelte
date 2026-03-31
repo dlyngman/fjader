@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import { ticks } from 'd3-array';
 	import { format } from 'd3-format';
 	import { clauseInterval, type ClauseSource } from '@uwdata/mosaic-core';
 	import { column, type ScaleDomain } from '@uwdata/mosaic-sql';
@@ -51,14 +50,14 @@
 	// --- Gradient ---
 	const gradientStops = $derived.by(() => {
 		void scaleState.scheme;
-		const d3Scale = scaleState.d3Scale;
-		if (!d3Scale || min === max) return [];
+		void scaleState._version; // re-render on any visual-config change (transform, constant, exponent)
+		if (!scaleState.d3Scale || min === max) return [];
 		return Array.from({ length: STOP_COUNT }, (_, i) => {
 			const t = i / (STOP_COUNT - 1);
 			const value = min + t * (max - min);
 			return {
 				offset: `${t * 100}%`,
-				color: (d3Scale as (v: number) => string)(value)
+				color: scaleState.getColor(value)
 			};
 		});
 	});
@@ -72,9 +71,30 @@
 	const gradY2 = $derived(isVertical ? '0' : '0');
 
 	// --- Ticks ---
+	const MIN_TICK_PX = 36; // minimum pixels between tick labels
+
 	const tickValues = $derived.by(() => {
+		void scaleState._version;
 		if (min === max) return [min];
-		return ticks(min, max, tickCount);
+		const range = max - min;
+		// Ask for generous candidates — D3 picks nice values,
+		// then the pixel filter keeps only the ones that fit.
+		const raw = scaleState.ticks(tickCount * 4);
+		if (raw.length <= 1 || barLength <= 0) return raw;
+
+		const valToPx = (v: number) => ((v - min) / range) * barLength;
+
+		// Greedily keep ticks that are far enough apart in pixel space
+		const result: number[] = [raw[0]];
+		let lastPx = valToPx(raw[0]);
+		for (let i = 1; i < raw.length; i++) {
+			const px = valToPx(raw[i]);
+			if (px - lastPx >= MIN_TICK_PX) {
+				result.push(raw[i]);
+				lastPx = px;
+			}
+		}
+		return result;
 	});
 
 	const formatTick = format('~s');

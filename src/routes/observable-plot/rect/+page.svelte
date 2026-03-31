@@ -56,7 +56,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer>
+				<ChartContainer yLabel="Count" xLabel="Weight (kg)">
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -90,7 +90,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
+				<ChartContainer legendPosition="top" yLabel="Count (stacked)" xLabel="Weight (kg, stacked)">
 					{#snippet legend()}
 						<Legend color="sex" />
 					{/snippet}
@@ -128,7 +128,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer>
+				<ChartContainer xLabel="Count (horizontal)" yLabel="Weight (kg, horizontal)">
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -162,7 +162,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer>
+				<ChartContainer yLabel="Price" xLabel="Carat">
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -178,8 +178,8 @@
 									table="diamonds"
 									x={bin('carat', { steps: 100 })}
 									y={bin('price', { steps: 100 })}
-									fill={msql.count()}
-									scheme="ylgnbu"
+									fill={{ field: msql.count(), type: 'symlog' }}
+									scheme="turbo"
 									inset={0.5}
 								/>
 							{/snippet}
@@ -199,7 +199,10 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer>
+				<ChartContainer legendPosition="top" yLabel="Count (overlapping)" xLabel="Weight (kg, overlapping)">
+					{#snippet legend()}
+						<Legend color="sex" />
+					{/snippet}
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -214,18 +217,9 @@
 								<RectYMark
 									table="olympians"
 									x={bin('weight')}
-									y={msql.count()}
-									fill="#4269d0"
+									y2={msql.count()}
+									fill="sex"
 									opacity={0.5}
-									transforms={[filter(msql.sql`sex = 'male'`)]}
-								/>
-								<RectYMark
-									table="olympians"
-									x={bin('weight')}
-									y={msql.count()}
-									fill="#ff725c"
-									opacity={0.5}
-									transforms={[filter(msql.sql`sex = 'female'`)]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

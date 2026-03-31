@@ -4,6 +4,9 @@ import {
 	isColumnRef,
 	isColumnParam,
 	column as sqlColumn,
+	cast,
+	coalesce,
+	sql,
 	isNotNull,
 	and,
 	Query
@@ -175,7 +178,8 @@ export function assembleQuery(
 	filter: unknown[],
 	filterNulls: unknown[] | null | undefined,
 	transformCompiler: TransformCompiler,
-	forMosaic: boolean
+	forMosaic: boolean,
+	numericCastChannels?: Set<string>
 ): Query {
 	const {
 		selectDef,
@@ -193,7 +197,15 @@ export function assembleQuery(
 	if (forMosaic) {
 		effectiveSelectDef = {};
 		for (const [channel, expr] of Object.entries(selectDef)) {
-			effectiveSelectDef[aliasMap.get(channel) ?? channel] = expr;
+			const alias = aliasMap.get(channel) ?? channel;
+			// Wrap numeric-scale channels in COALESCE(CAST(... AS REAL), 'NaN'::REAL)
+			// so DuckDB returns Float32Array (zero-copy in DataAccessor).
+			// COALESCE converts SQL NULL to the NaN float value, ensuring the Arrow
+			// column has nullCount=0 and garbage-free buffers for GPU shaders.
+			const finalExpr = numericCastChannels?.has(channel)
+				? coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`)
+				: expr;
+			effectiveSelectDef[alias] = finalExpr;
 		}
 	} else {
 		effectiveSelectDef = selectDef;

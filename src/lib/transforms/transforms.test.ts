@@ -1,7 +1,7 @@
 // src/lib/transforms/transforms.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { filter, topN, stack, stackY, stackX, normalize } from './index';
+import { filter, topN, stack, stackY, stackX, normalize, withImplicitStack } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
@@ -127,6 +127,42 @@ describe('Transforms', () => {
 			expect(y1[1]).toBeCloseTo(1); // 30/30
 		});
 
+		it('stackY() preserves NaN for gap semantics', () => {
+			// NaN in value column (represents Arrow null from DuckDB) must propagate
+			// to y0/y1 so GPU shaders can discard vertices and create gaps.
+			// stackY groups by x, accumulates y — NaN rows get NaN output
+			// without poisoning the group's cumulative sum.
+			const data = toAccessor([
+				{ x: 'Jan', y: 10, series: 'A' },
+				{ x: 'Feb', y: NaN, series: 'A' },
+				{ x: 'Mar', y: 20, series: 'A' },
+				{ x: 'Jan', y: 5, series: 'B' },
+				{ x: 'Feb', y: 15, series: 'B' }
+			]);
+
+			const transform = stackY();
+			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
+
+			const y0 = result.getColumn('y0') as Float32Array;
+			const y1 = result.getColumn('y1') as Float32Array;
+
+			// Row 0: A at Jan → first in group, y0=0, y1=10
+			expect(y0[0]).toBe(0);
+			expect(y1[0]).toBe(10);
+			// Row 1: A at Feb → NaN propagates to both y0 and y1
+			expect(y0[1]).toBeNaN();
+			expect(y1[1]).toBeNaN();
+			// Row 2: A at Mar → new group, y0=0, y1=20
+			expect(y0[2]).toBe(0);
+			expect(y1[2]).toBe(20);
+			// Row 3: B at Jan → stacks on A's Jan (cum=10), y0=10, y1=15
+			expect(y0[3]).toBe(10);
+			expect(y1[3]).toBe(15);
+			// Row 4: B at Feb → NaN didn't increment Feb's cumulative, y0=0, y1=15
+			expect(y0[4]).toBe(0);
+			expect(y1[4]).toBe(15);
+		});
+
 		it('stackX() creates x0 and x1', () => {
 			const data = toAccessor([
 				{ y: 'A', x: 10 },
@@ -175,6 +211,24 @@ describe('Transforms', () => {
 			expect(y1[0]).toBeCloseTo(100 / 3); // (10/30)*100
 			expect(y0[1]).toBeCloseTo(100 / 3);
 			expect(y1[1]).toBeCloseTo(100);
+		});
+	});
+
+	describe('withImplicitStack', () => {
+		it('adds stack when series grouping exists and no explicit bounds', () => {
+			const result = withImplicitStack([], false, 'y');
+			expect(result).toHaveLength(1);
+			expect(result[0].type).toBe('stack');
+		});
+
+		it('skips stack when explicit bounds are set', () => {
+			const result = withImplicitStack([], true, 'y');
+			expect(result).toHaveLength(0);
+		});
+
+		it('skips stack when already present in transforms', () => {
+			const result = withImplicitStack([stackY()], false, 'y');
+			expect(result).toHaveLength(1); // no duplicate
 		});
 	});
 
