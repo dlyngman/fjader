@@ -5,7 +5,7 @@ import { isNode } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import { inferScaleType } from '$lib/scales/scale-inference';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-import type { ColorProp, ChartContext } from '$lib/types';
+import type { ColorProp, ColorScaleType, ChartContext } from '$lib/types';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import type { MarkSetupState } from './mark-types';
 
@@ -15,6 +15,9 @@ interface ColorConfig {
 	field?: string | object;
 	scaleType: string | null;
 	scheme: string | null | undefined;
+	explicitType?: string; // User-specified color scale type (log/symlog/sqrt/pow)
+	constant?: number; // symlog constant C
+	exponent?: number; // pow exponent
 }
 
 export class MarkColor {
@@ -61,14 +64,16 @@ export class MarkColor {
 					// This ensures each unique aggregate expression gets its own scale
 					const scaleKey = isNode(field) ? field.toString() : field;
 
-					// Pass type and scheme in config
+					// Pass type, scheme, and transform params in config
 					// Registry will use only 'type' for caching, 'scheme' for initialization/updates
 					this.scaleState = this.#scaleRegistry.getOrCreateScale(
 						scaleKey as string,
 						'color',
 						{
 							type: type,
-							scheme: this.config.scheme
+							scheme: this.config.scheme,
+							constant: this.config.constant,
+							exponent: this.config.exponent
 						},
 						this.#chartContext.chartId
 					) as ColorScaleState;
@@ -96,6 +101,21 @@ export class MarkColor {
 			const scheme = this.config.scheme;
 			if (this.scaleState && scheme) {
 				this.scaleState.setScheme(scheme);
+			}
+		});
+
+		// 2b. Lifecycle: Update Transform (Fast Path - no scale recreation)
+		$effect(() => {
+			const type = this.config.explicitType;
+			const constant = this.config.constant;
+			const exponent = this.config.exponent;
+			if (this.scaleState) {
+				// When explicitType is set, apply it; when cleared, reset to 'sequential'
+				this.scaleState.setTransform(
+					(type || 'sequential') as ColorScaleType,
+					constant,
+					exponent
+				);
 			}
 		});
 
@@ -178,22 +198,33 @@ export class MarkColor {
 		// Case 2: Field / Expression
 		let field: string | object = c as string | object;
 		let explicitScheme = s;
+		let explicitType: string | undefined;
 
-		// Handle object wrapper format { field: "species", scheme: "dark2" }
+		let constant: number | undefined;
+		let exponent: number | undefined;
+
+		// Handle object wrapper format { field: "species", scheme: "dark2", type: "symlog" }
 		if (typeof c === 'object' && 'field' in c && !isNode(c)) {
-			field = (c as { field: string; scheme?: string }).field;
-			explicitScheme = (c as { field: string; scheme?: string }).scheme || s;
+			field = c.field;
+			explicitScheme = c.scheme || s;
+			explicitType = c.type;
+			constant = c.constant;
+			exponent = c.exponent;
 		}
 
 		// 1. Determine Type from field semantics + schema (may return null if waiting for schema)
-		const scaleType = this.#resolveScaleType(field);
+		// If an explicit type is given (log/symlog/sqrt/pow), use it directly.
+		const scaleType = explicitType || this.#resolveScaleType(field);
 
 		// 2. Pass explicit scheme if provided, otherwise undefined (registry will apply default)
 		return {
 			mode: 'field',
 			field,
 			scaleType, // Can be null if waiting for schema
-			scheme: explicitScheme // undefined if not specified
+			scheme: explicitScheme, // undefined if not specified
+			explicitType,
+			constant,
+			exponent
 		};
 	});
 

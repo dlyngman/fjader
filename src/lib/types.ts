@@ -48,8 +48,11 @@ export interface D3BandScale extends D3Scale {
 /** A column name (string) or inline Mosaic SQL expression node. */
 export type FieldRef = string | ExprNode;
 
-/** Color prop: CSS constant, column name, object wrapper {field, scheme?}, SQL node, or null. */
-export type ColorProp = FieldRef | { field: string; scheme?: ColorScheme } | null;
+/** Color prop: CSS constant, column name, object wrapper {field, scheme?, type?}, SQL node, or null. */
+export type ColorProp =
+	| FieldRef
+	| { field: string; scheme?: ColorScheme; type?: ColorScaleType; constant?: number; exponent?: number }
+	| null;
 
 // ---------------------------------------------------------------------------
 // Transforms
@@ -165,7 +168,23 @@ export type ColorScheme =
 	| ColorSchemeDiverging
 	| ColorSchemeCyclical;
 
-export type ColorScaleType = 'ordinal' | 'sequential' | 'diverging' | 'cyclical';
+export type ColorScaleType =
+	| 'ordinal'
+	| 'sequential'
+	| 'diverging'
+	| 'cyclical'
+	| 'log'
+	| 'symlog'
+	| 'sqrt'
+	| 'pow';
+
+/**
+ * The normalization transform applied to continuous color values before
+ * mapping into the [0,1] ramp coordinate. 'linear' is the default for
+ * ordinal/sequential/diverging/cyclical; the others correspond to
+ * ColorScaleType values that imply a non-linear mapping.
+ */
+export type ColorTransformType = 'linear' | 'log' | 'symlog' | 'sqrt' | 'pow';
 
 // ---------------------------------------------------------------------------
 // Curve types — must match the keys in src/lib/gpu/CurveShaderLib.js

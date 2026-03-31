@@ -21,6 +21,7 @@
 	} from './utils';
 	import type {
 		FieldRef,
+		ColorProp,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
 		Coordinator,
@@ -31,7 +32,7 @@
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
 		x: FieldRef;
 		y: FieldRef;
-		fill?: FieldRef | null;
+		fill?: ColorProp;
 		opacity?: number;
 		r?: number | string | ((point: { x: number; y: number }) => number);
 		radiusRange?: [number, number];

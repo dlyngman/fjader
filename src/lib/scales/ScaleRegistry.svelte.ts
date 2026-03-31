@@ -11,6 +11,7 @@ import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { ColorScaleType } from '$lib/types';
+import { isTransformType } from './color-utils';
 
 export type AnyScaleState =
 	| LinearScaleState
@@ -233,9 +234,13 @@ export class ScaleRegistry {
 			let key: string;
 
 			if (type === 'color') {
-				// Color scales: key by field + type only (scheme is mutable state)
-				const scaleType = config.type || 'sequential';
-				key = `${name}-color-${scaleType}`;
+				// Color scales: key by field + render type only (scheme and transform
+				// are mutable state). Transform types (log/symlog/sqrt/pow) are all
+				// continuous — they share one cache entry per field and update the
+				// normalization via setTransform().
+				const scaleType = (config.type as string) || 'sequential';
+				const keyType = isTransformType(scaleType) ? 'sequential' : scaleType;
+				key = `${name}-color-${keyType}`;
 			} else {
 				// Other scales: key by full config (padding, align, etc. matter)
 				const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
@@ -308,7 +313,9 @@ export class ScaleRegistry {
 								scheme: (config.scheme as string | undefined) || defaultScheme,
 								domain: (config.domain as number[] | undefined) || [],
 								reverse: (config.reverse as boolean | undefined) ?? false,
-								midpoint: config.midpoint as number | undefined
+								midpoint: config.midpoint as number | undefined,
+								constant: config.constant as number | undefined,
+								exponent: config.exponent as number | undefined
 							},
 							this,
 							this.#gpuCoordinator

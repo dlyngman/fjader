@@ -3,7 +3,20 @@
 
 import { color } from 'd3-color';
 import type { RGBColor, HSLColor } from 'd3-color';
-import { scaleOrdinal, scaleSequential, scaleDiverging } from 'd3-scale';
+import {
+	scaleOrdinal,
+	scaleSequential,
+	scaleDiverging,
+	scaleSequentialLog,
+	scaleSequentialSymlog,
+	scaleSequentialPow,
+	scaleDivergingLog,
+	scaleDivergingSymlog,
+	scaleDivergingPow,
+	scaleLog,
+	scalePow
+} from 'd3-scale';
+import { ticks as linearTicks } from 'd3-array';
 import type { ScaleOrdinal, ScaleSequential, ScaleDiverging } from 'd3-scale';
 import {
 	// Sequential single-hue
@@ -426,7 +439,9 @@ export function getAllSchemeNames(): {
 	};
 }
 
-export function getSchemeType(scheme: string): ColorScaleType | null {
+export function getSchemeType(
+	scheme: string
+): 'ordinal' | 'sequential' | 'diverging' | 'cyclical' | null {
 	const key = scheme.toLowerCase();
 	if (ORDINAL_SCHEMES[key]) return 'ordinal';
 	if (SEQUENTIAL_SCHEMES[key]) return 'sequential';
@@ -464,6 +479,32 @@ export function bakeGradient(d3Scale: GradientScale, steps: number = 256): Float
 
 		// Pass data value through d3Scale - this handles diverging logic, midpoints, etc.
 		const c = color(d3Scale(value))!.rgb();
+
+		const idx = i * 4;
+		result[idx] = c.r / 255;
+		result[idx + 1] = c.g / 255;
+		result[idx + 2] = c.b / 255;
+		result[idx + 3] = c.opacity;
+	}
+
+	return result;
+}
+
+/**
+ * Bake a raw interpolator into a GPU-ready Float32Array.
+ * Unlike bakeGradient, this produces a linearly-spaced ramp in interpolator
+ * space — the GPU shader is responsible for the domain transform (log, symlog,
+ * sqrt, pow) before indexing into this ramp.
+ */
+export function bakeInterpolator(
+	interpolator: Interpolator,
+	steps: number = 256
+): Float32Array {
+	const result = new Float32Array(steps * 4);
+
+	for (let i = 0; i < steps; i++) {
+		const t = i / (steps - 1);
+		const c = color(interpolator(t))!.rgb();
 
 		const idx = i * 4;
 		result[idx] = c.r / 255;
@@ -529,11 +570,18 @@ export type D3ColorScale =
 interface CreateD3ScaleOptions {
 	reverse?: boolean;
 	midpoint?: number;
+	transform?: ColorScaleType;
+	constant?: number;
+	exponent?: number;
 }
 
 /**
  * Create a D3 scale for a color scheme.
  * Used for legends, CPU-side color lookups, AND as input to bakeGradient.
+ *
+ * When `transform` is log/symlog/sqrt/pow, the returned D3 scale applies
+ * the transform internally (using scaleSequentialLog etc.), so CPU-side
+ * lookups (legends, tooltips) are correct.
  */
 export function createD3Scale(
 	scheme: string,
@@ -541,7 +589,7 @@ export function createD3Scale(
 	options: CreateD3ScaleOptions = {}
 ): D3ColorScale {
 	const schemeType = getSchemeType(scheme);
-	const { reverse = false, midpoint } = options;
+	const { reverse = false, midpoint, transform, constant = 1, exponent = 1 } = options;
 
 	if (schemeType === 'ordinal') {
 		let colors = getOrdinalColors(scheme)!;
@@ -563,15 +611,72 @@ export function createD3Scale(
 		interpolator = (t: number) => original(1 - t);
 	}
 
+	const [min, max] = [domain[0], domain[domain.length - 1]];
+
 	// Diverging scales use scaleDiverging with 3-point domain
 	if (schemeType === 'diverging') {
-		const [min, max] = [domain[0], domain[domain.length - 1]];
 		const mid = midpoint ?? (min + max) / 2;
-		return scaleDiverging(interpolator).domain([min, mid, max]);
+		return createDivergingScale(interpolator, [min, mid, max], transform, constant, exponent);
 	}
 
-	// Sequential and cyclical use scaleSequential
-	return scaleSequential(interpolator).domain([domain[0], domain[domain.length - 1]]);
+	// Sequential and cyclical
+	return createSequentialScale(interpolator, [min, max], transform, constant, exponent);
+}
+
+// D3's type definitions for scaleSequentialPow/Symlog and scaleDivergingPow/Symlog
+// return ScaleSequential/ScaleDiverging without .exponent()/.constant() methods,
+// even though the runtime objects support them.  We use 'as any' to work around this.
+
+/** Create a sequential (or cyclical) D3 scale, optionally with a non-linear transform. */
+function createSequentialScale(
+	interpolator: Interpolator,
+	domain: [number, number],
+	transform?: ColorScaleType,
+	constant?: number,
+	exponent?: number
+): ScaleSequential<string> {
+	switch (transform) {
+		case 'log':
+			return scaleSequentialLog(interpolator).domain(domain);
+		case 'symlog':
+			return (scaleSequentialSymlog(interpolator).domain(domain) as any).constant(
+				constant ?? 1
+			);
+		case 'sqrt':
+			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(0.5);
+		case 'pow':
+			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(
+				exponent ?? 1
+			);
+		default:
+			return scaleSequential(interpolator).domain(domain);
+	}
+}
+
+/** Create a diverging D3 scale, optionally with a non-linear transform. */
+function createDivergingScale(
+	interpolator: Interpolator,
+	domain: [number, number, number],
+	transform?: ColorScaleType,
+	constant?: number,
+	exponent?: number
+): ScaleDiverging<string> {
+	switch (transform) {
+		case 'log':
+			return scaleDivergingLog(interpolator).domain(domain);
+		case 'symlog':
+			return (scaleDivergingSymlog(interpolator).domain(domain) as any).constant(
+				constant ?? 1
+			);
+		case 'sqrt':
+			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(0.5);
+		case 'pow':
+			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(
+				exponent ?? 1
+			);
+		default:
+			return scaleDiverging(interpolator).domain(domain);
+	}
 }
 
 /**
@@ -593,3 +698,170 @@ export function isColorConstant(value: string): boolean {
 
 	return false;
 }
+
+// ---------------------------------------------------------------------------
+// Color scale transform helpers
+// ---------------------------------------------------------------------------
+
+/** ColorScaleType values that imply a non-linear normalization transform. */
+const TRANSFORM_TYPES = new Set(['log', 'symlog', 'sqrt', 'pow']);
+
+/** Whether a ColorScaleType is a non-linear transform (vs a scheme rendering type). */
+export function isTransformType(type: ColorScaleType | string): boolean {
+	return TRANSFORM_TYPES.has(type);
+}
+
+/**
+ * Resolve a user-facing ColorScaleType into the two internal concepts:
+ *   renderType — controls ramp vs palette and cyclical wrapping (always one of the 4 base types)
+ *   transformType — controls the normalization math on the GPU
+ *
+ * When the user specifies a transform type (log/symlog/sqrt/pow), the render
+ * type is inferred from the scheme name.  When the user specifies a base type
+ * (sequential/diverging/cyclical/ordinal), the transform is linear.
+ */
+type RenderType = 'ordinal' | 'sequential' | 'diverging' | 'cyclical';
+type TransformType = 'linear' | 'log' | 'symlog' | 'sqrt' | 'pow';
+
+export function resolveColorScaleTypes(
+	scaleType: ColorScaleType,
+	scheme: string
+): { renderType: RenderType; transformType: TransformType } {
+	if (
+		scaleType === 'log' ||
+		scaleType === 'symlog' ||
+		scaleType === 'sqrt' ||
+		scaleType === 'pow'
+	) {
+		// Transform type — infer render type from the scheme
+		const inferred = getSchemeType(scheme);
+		return {
+			renderType: inferred || 'sequential',
+			transformType: scaleType
+		};
+	}
+	// Base type — no transform
+	return { renderType: scaleType, transformType: 'linear' };
+}
+
+/**
+ * Get the (possibly reversed) interpolator for a scheme.
+ * Returns null for ordinal schemes.
+ */
+export function getResolvedInterpolator(
+	scheme: string,
+	reverse: boolean
+): Interpolator | null {
+	let interpolator = getInterpolator(scheme);
+	if (!interpolator) return null;
+	if (reverse) {
+		const orig = interpolator;
+		interpolator = (t: number) => orig(1 - t);
+	}
+	return interpolator;
+}
+
+/** GPU integer constant for a color transform type. */
+export function transformTypeToGPU(
+	type: 'linear' | 'log' | 'symlog' | 'sqrt' | 'pow'
+): number {
+	switch (type) {
+		case 'linear':
+			return 0;
+		case 'log':
+			return 1;
+		case 'symlog':
+			return 2;
+		case 'sqrt':
+			return 3;
+		case 'pow':
+			return 4;
+	}
+}
+
+/** CPU-side transform functions matching the GPU shader's applyColorTransform. */
+export function applyTransform(
+	value: number,
+	type: 'linear' | 'log' | 'symlog' | 'sqrt' | 'pow',
+	param: number
+): number {
+	switch (type) {
+		case 'log':
+			return Math.log(Math.max(value, 1e-38));
+		case 'symlog':
+			return Math.sign(value) * Math.log1p(Math.abs(value / param));
+		case 'sqrt':
+			return Math.sign(value) * Math.sqrt(Math.abs(value));
+		case 'pow':
+			return Math.sign(value) * Math.pow(Math.abs(value), param);
+		default:
+			return value;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Transform-aware tick generation for color legends
+// ---------------------------------------------------------------------------
+
+const LOG_CLAMP = 1e-6;
+
+/**
+ * Generate ticks appropriate for a color scale's transform type.
+ * Results are hard-limited to `count` entries to prevent label overlap
+ * in compact legend bars.
+ *
+ * - log: powers of 10 only (sub-decade ticks filtered out)
+ * - symlog: powers of 10 for each half ± zero
+ * - sqrt/pow: d3 pow scale ticks
+ * - linear: d3-array linear ticks
+ */
+export function colorScaleTicks(
+	lo: number,
+	hi: number,
+	count: number,
+	transformType: TransformType,
+	constant: number = 1,
+	exponent: number = 1
+): number[] {
+	switch (transformType) {
+		case 'log':
+			return scaleLog()
+				.domain([Math.max(lo, LOG_CLAMP), Math.max(hi, LOG_CLAMP)])
+				.ticks();
+
+		case 'symlog':
+			return symlogTicks(lo, hi, constant);
+
+		case 'sqrt':
+			return scalePow().exponent(0.5).domain([lo, hi]).ticks(count);
+
+		case 'pow':
+			return scalePow().exponent(exponent).domain([lo, hi]).ticks(count);
+
+		default:
+			return linearTicks(lo, hi, count);
+	}
+}
+
+/** Symlog ticks: D3 log ticks for each half, plus zero if the domain spans it. */
+function symlogTicks(lo: number, hi: number, constant: number): number[] {
+	const result: number[] = [];
+	if (lo <= 0 && hi >= 0) result.push(0);
+
+	if (hi > constant) {
+		const posLo = Math.max(constant, lo > 0 ? lo : constant);
+		for (const t of scaleLog().domain([posLo, hi]).ticks()) {
+			if (t > 0 && t >= lo && t <= hi) result.push(t);
+		}
+	}
+
+	if (lo < -constant) {
+		const negHi = Math.max(constant, hi < 0 ? -hi : constant);
+		for (const t of scaleLog().domain([negHi, -lo]).ticks()) {
+			if (t > 0 && -t >= lo && -t <= hi) result.push(-t);
+		}
+	}
+
+	return [...new Set(result)].sort((a, b) => a - b);
+}
+

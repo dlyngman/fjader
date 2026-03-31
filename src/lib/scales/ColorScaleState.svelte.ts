@@ -2,13 +2,19 @@
 import {
 	createD3Scale,
 	bakeGradient,
+	bakeInterpolator,
 	bakePalette,
 	getSchemeType,
-	parseColorToRGBA
+	parseColorToRGBA,
+	resolveColorScaleTypes,
+	getResolvedInterpolator,
+	transformTypeToGPU,
+	applyTransform,
+	colorScaleTicks
 } from './color-utils';
 import type { RGBA, D3ColorScale } from './color-utils';
 import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
-import type { ColorScaleType } from '$lib/types';
+import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
@@ -19,6 +25,8 @@ interface ColorScaleConfig {
 	domain?: (string | number)[];
 	reverse?: boolean;
 	midpoint?: number;
+	constant?: number; // symlog constant C (default 1)
+	exponent?: number; // pow exponent (default 1)
 }
 
 interface ColorConfigParams {
@@ -28,6 +36,8 @@ interface ColorConfigParams {
 	paletteSize?: number;
 	domainMin?: number;
 	domainMax?: number;
+	transformType?: number;
+	transformParam?: number;
 }
 
 /**
@@ -51,13 +61,21 @@ export class ColorScaleState {
 	// Scale configuration (scheme is reactive so legends re-render on scheme change)
 	#scheme: string = $state('');
 	#scaleType: ColorScaleType = $state('sequential');
+	#renderType: 'ordinal' | 'sequential' | 'diverging' | 'cyclical' = 'sequential';
+	#transformType: ColorTransformType = 'linear';
 	#reverse: boolean;
 	#midpoint: number | undefined; // For diverging scales
+	#constant: number; // symlog C parameter
+	#exponent: number; // pow exponent
 
 	// Reactive state
 	domain: (string | number)[] = $state([]);
 	ready: boolean = $state(false);
 	#activeValues: Set<string | number> | null = $state(null); // null = all active, Set = only these active
+
+	// Bumped on any visual-config change (transform type, constant, exponent, scheme).
+	// Legend components read this to know when to re-render the gradient.
+	_version: number = $state(0);
 
 	// D3 scale instance (for legends and CPU lookups)
 	#d3Scale: D3ColorScale | null = null;
@@ -78,14 +96,21 @@ export class ColorScaleState {
 		this.#scheme = config.scheme || 'viridis';
 		this.#reverse = config.reverse ?? false;
 		this.#midpoint = config.midpoint;
+		this.#constant = config.constant ?? 1;
+		this.#exponent = config.exponent ?? 1;
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
 
 		// Explicit type wins, fallback to inference from scheme
 		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
 
+		// Resolve into render type (ramp vs palette) + transform type (normalization math)
+		const resolved = resolveColorScaleTypes(this.#scaleType, this.#scheme);
+		this.#renderType = resolved.renderType;
+		this.#transformType = resolved.transformType;
+
 		console.log(
-			`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, scheme=${this.#scheme}`
+			`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, render=${this.#renderType}, transform=${this.#transformType}, scheme=${this.#scheme}`
 		);
 
 		// Set initial domain
@@ -121,11 +146,11 @@ export class ColorScaleState {
 	}
 
 	get isOrdinal(): boolean {
-		return this.#scaleType === 'ordinal';
+		return this.#renderType === 'ordinal';
 	}
 
 	get isContinuous(): boolean {
-		return this.#scaleType !== 'ordinal';
+		return this.#renderType !== 'ordinal';
 	}
 
 	/**
@@ -235,6 +260,22 @@ export class ColorScaleState {
 	// GPU UPLOAD
 	// ============================================================
 
+	/**
+	 * Domain clamped to valid values for the current transform.
+	 * Log requires strictly positive bounds; other transforms pass through.
+	 * The raw `domain` is preserved so the legend can show the full data range
+	 * (with nullColor for out-of-domain values).
+	 */
+	#effectiveDomain(): number[] {
+		const lo = this.domain[0] as number;
+		const hi = this.domain[this.domain.length - 1] as number;
+		if (this.#transformType === 'log') {
+			const LOG_CLAMP = 1e-6;
+			return [Math.max(lo, LOG_CLAMP), Math.max(hi, LOG_CLAMP)];
+		}
+		return [lo, hi];
+	}
+
 	#uploadToGPU(): void {
 		if (!this.#gpuCoordinator) {
 			console.warn('[ColorScaleState] No GPU coordinator, skipping upload');
@@ -245,37 +286,76 @@ export class ColorScaleState {
 			return;
 		}
 
-		// Create D3 scale with current domain (for CPU/legend use)
-		this.#d3Scale = createD3Scale(this.#scheme, this.domain as number[], {
+		const effectiveDomain = this.#effectiveDomain();
+
+		// Create D3 scale with effective domain (for CPU/legend use)
+		this.#d3Scale = createD3Scale(this.#scheme, effectiveDomain, {
 			reverse: this.#reverse,
-			midpoint: this.#midpoint
+			midpoint: this.#midpoint,
+			transform: this.#scaleType,
+			constant: this.#constant,
+			exponent: this.#exponent
 		});
 
 		if (this.isOrdinal) {
 			this.#uploadOrdinal();
 		} else {
-			this.#uploadContinuous();
+			this.#uploadContinuous(effectiveDomain);
 		}
 
 		this.ready = true;
 	}
 
-	#uploadContinuous(): void {
-		// Bake gradient from configured D3 scale
-		const rampData = bakeGradient(
-			this.#d3Scale as Parameters<typeof bakeGradient>[0],
-			COLOR_RAMP_RESOLUTION
-		);
-		this.#gpuCoordinator.writeColorRamp(this.#rampSlot, rampData as Float32Array<ArrayBuffer>);
+	#uploadContinuous(effectiveDomain: number[]): void {
+		const hasTransform = this.#transformType !== 'linear';
+		const isDiverging = this.#renderType === 'diverging';
 
-		// Build and upload config struct
+		let rampData: Float32Array;
+
+		if (hasTransform && !isDiverging) {
+			// Non-linear sequential/cyclical: bake from raw interpolator so the ramp
+			// is linearly spaced in color space.  The GPU shader applies the transform
+			// to normalize data values before indexing into this ramp.
+			const interpolator = getResolvedInterpolator(this.#scheme, this.#reverse);
+			if (interpolator) {
+				rampData = bakeInterpolator(interpolator, COLOR_RAMP_RESOLUTION);
+			} else {
+				rampData = bakeGradient(
+					this.#d3Scale as Parameters<typeof bakeGradient>[0],
+					COLOR_RAMP_RESOLUTION
+				);
+			}
+		} else {
+			// Linear, or diverging+transform: bake from D3 scale.
+			// For diverging, the D3 scale bakes the midpoint into the ramp, so the
+			// GPU can use linear normalization. (Diverging+transform quantizes the
+			// transform into 256 ramp stops — acceptable for typical diverging data.)
+			rampData = bakeGradient(
+				this.#d3Scale as Parameters<typeof bakeGradient>[0],
+				COLOR_RAMP_RESOLUTION
+			);
+		}
+
+		this.#gpuCoordinator!.writeColorRamp(this.#rampSlot, rampData as Float32Array<ArrayBuffer>);
+
+		// For sequential/cyclical + transform: GPU does the transform, so upload
+		// pre-transformed bounds.  For diverging + transform: GPU does linear
+		// normalization (transform is baked into ramp), so upload raw bounds.
+		const gpuTransformType =
+			hasTransform && !isDiverging ? this.#transformType : ('linear' as const);
+		const param = this.#transformType === 'symlog' ? this.#constant : this.#exponent;
+		const domainMin = applyTransform(effectiveDomain[0], gpuTransformType, param);
+		const domainMax = applyTransform(effectiveDomain[1], gpuTransformType, param);
+
 		const config = this.#buildColorConfig({
-			type: this.#getScaleTypeInt(),
+			type: this.#getRenderTypeInt(),
 			rampOffset: this.#rampSlot * COLOR_RAMP_RESOLUTION,
-			domainMin: this.domain[0] as number,
-			domainMax: this.domain[this.domain.length - 1] as number
+			domainMin,
+			domainMax,
+			transformType: transformTypeToGPU(gpuTransformType),
+			transformParam: param
 		});
-		this.#gpuCoordinator.writeColorConfig(this.#configSlot, config);
+		this.#gpuCoordinator!.writeColorConfig(this.#configSlot, config);
 	}
 
 	#uploadOrdinal(): void {
@@ -300,10 +380,10 @@ export class ColorScaleState {
 	}
 
 	/**
-	 * Get integer type code for scale type.
+	 * Get integer type code for the render type (matches GPU constants).
 	 */
-	#getScaleTypeInt(): number {
-		switch (this.#scaleType) {
+	#getRenderTypeInt(): number {
+		switch (this.#renderType) {
 			case 'ordinal':
 				return 0;
 			case 'sequential':
@@ -323,13 +403,14 @@ export class ColorScaleState {
 	 *
 	 * MUST MATCH WGSL LAYOUT:
 	 * struct ColorConfig {
-	 *   domainMin: f32,      // byte 0
-	 *   domainMax: f32,      // byte 4
-	 *   rampOffset: u32,     // byte 8
-	 *   paletteOffset: u32,  // byte 12
-	 *   paletteSize: u32,    // byte 16
-	 *   scaleType: u32,      // byte 20
-	 *   _pad: vec2<u32>,     // byte 24, 28
+	 *   domainMin: f32,         // byte 0  — pre-transformed for non-linear
+	 *   domainMax: f32,         // byte 4  — pre-transformed for non-linear
+	 *   rampOffset: u32,        // byte 8
+	 *   paletteOffset: u32,     // byte 12
+	 *   paletteSize: u32,       // byte 16
+	 *   scaleType: u32,         // byte 20 — render type
+	 *   transformType: u32,     // byte 24 — normalization transform
+	 *   transformParam: f32,    // byte 28 — symlog C or pow exponent
 	 * }; // 32 bytes total
 	 */
 	#buildColorConfig(params: ColorConfigParams): ArrayBuffer {
@@ -346,8 +427,8 @@ export class ColorScaleState {
 		view.setUint32(12, params.paletteOffset ?? 0, LE);
 		view.setUint32(16, params.paletteSize ?? 0, LE);
 		view.setUint32(20, params.type ?? 0, LE);
-
-		// bytes 24-31 are padding (left as 0)
+		view.setUint32(24, params.transformType ?? 0, LE);
+		view.setFloat32(28, params.transformParam ?? 0, LE);
 
 		return buffer;
 	}
@@ -445,9 +526,18 @@ export class ColorScaleState {
 	setScheme(newScheme: string): void {
 		if (newScheme === this.#scheme) return;
 
-		const newType = getSchemeType(newScheme);
+		const newSchemeType = getSchemeType(newScheme);
 		const wasOrdinal = this.isOrdinal;
-		const nowOrdinal = newType === 'ordinal';
+
+		// Re-resolve render/transform types with new scheme
+		// If the scale type is a transform type (log/symlog/etc.), keep it;
+		// otherwise infer from the new scheme.
+		const effectiveType =
+			this.#transformType !== 'linear'
+				? this.#scaleType
+				: (newSchemeType || 'sequential');
+		const resolved = resolveColorScaleTypes(effectiveType, newScheme);
+		const nowOrdinal = resolved.renderType === 'ordinal';
 
 		// Swap slots if changing between ordinal and continuous
 		if (wasOrdinal !== nowOrdinal) {
@@ -455,11 +545,48 @@ export class ColorScaleState {
 		}
 
 		this.#scheme = newScheme;
-		this.#scaleType = newType || 'sequential';
+		this.#scaleType = effectiveType;
+		this.#renderType = resolved.renderType;
+		this.#transformType = resolved.transformType;
+		this._version++;
 
 		if (this.domain.length > 0) {
 			this.#uploadToGPU();
 			// Trigger re-render - registry will invalidate charts using this scale
+			this.#registry.invalidateChartsUsingScale(this);
+		}
+	}
+
+	/**
+	 * Update the normalization transform. Triggers GPU re-upload.
+	 * Called when the user changes the color scale type (e.g., linear → symlog)
+	 * while keeping the same field.
+	 */
+	setTransform(
+		scaleType: ColorScaleType,
+		constant?: number,
+		exponent?: number
+	): void {
+		const resolved = resolveColorScaleTypes(scaleType, this.#scheme);
+
+		// No change — bail
+		if (
+			resolved.transformType === this.#transformType &&
+			(constant ?? 1) === this.#constant &&
+			(exponent ?? 1) === this.#exponent
+		) {
+			return;
+		}
+
+		this.#scaleType = scaleType;
+		this.#renderType = resolved.renderType;
+		this.#transformType = resolved.transformType;
+		this.#constant = constant ?? 1;
+		this.#exponent = exponent ?? 1;
+		this._version++;
+
+		if (this.domain.length > 0) {
+			this.#uploadToGPU();
 			this.#registry.invalidateChartsUsingScale(this);
 		}
 	}
@@ -485,14 +612,40 @@ export class ColorScaleState {
 	}
 
 	// ============================================================
-	// CPU-SIDE COLOR LOOKUP
+	// CPU-SIDE COLOR LOOKUP & TICKS
 	// ============================================================
 
 	/**
+	 * Generate transform-aware tick values for the legend.
+	 *
+	 * For log/sqrt/pow: delegates to a d3 log/pow scale's .ticks() which
+	 * produces decade-spaced values.
+	 * For symlog: mirrors SymlogScaleState.getTicks() — D3 symlog's .ticks()
+	 * is linear, so we delegate to scaleLog for each half ± zero.
+	 * For linear: uses d3-array's linear ticks.
+	 */
+	ticks(count: number = 5): number[] {
+		if (this.domain.length < 2) return [];
+		const lo = this.domain[0] as number;
+		const hi = this.domain[this.domain.length - 1] as number;
+		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return [];
+
+		return colorScaleTicks(lo, hi, count, this.#transformType, this.#constant, this.#exponent);
+	}
+
+	/** CSS color for the null/unmappable sentinel (matches GPU default nullColor). */
+	static readonly NULL_COLOR = '#808080';
+
+	/**
 	 * Get color for a value (CPU-side lookup).
+	 * Returns NULL_COLOR for values that are unmappable under the current
+	 * transform (e.g. non-positive values under log), mirroring the GPU shader.
 	 */
 	getColor(value: string | number): string {
 		if (!this.#d3Scale) return '#000000';
+		if (this.#transformType === 'log' && typeof value === 'number' && value <= 0) {
+			return ColorScaleState.NULL_COLOR;
+		}
 		return (this.#d3Scale as (v: string | number) => string)(value);
 	}
 
