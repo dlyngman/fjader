@@ -98,8 +98,8 @@
 
 	// Color via MarkColor (stroke channel)
 	const markColor = new MarkColor(
-		() => (table ? stroke : null),
-		() => scheme,
+		() => (entry ? entry.stroke : null),
+		() => (entry ? entry.scheme : scheme),
 		'stroke',
 		() => table,
 		() => setup,
@@ -228,7 +228,7 @@
 
 	let opacityData = $derived(
 		resolveChannelData({
-			value: opacity,
+			value: entry?.opacity ?? opacity,
 			channel: 'opacity',
 			dataAccessor: setup?.data,
 			instanceCount,
