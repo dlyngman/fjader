@@ -146,6 +146,7 @@
 									table="driving"
 									x="miles"
 									y="gas"
+									order="year"
 									strokeWidth={1}
 									curve="catmull-rom"
 								/>

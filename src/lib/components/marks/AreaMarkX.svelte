@@ -51,6 +51,7 @@
 		x2: x2Prop,
 		fill = null,
 		z = null,
+		order = undefined,
 		scheme,
 		curve = 'linear',
 		fillOpacity = 0.5,
@@ -89,6 +90,7 @@
 		x2: () => x2Prop,
 		fill: () => fill,
 		z: () => z,
+		order: () => order,
 		scheme: () => scheme,
 		curve: () => curve,
 		fillOpacity: () => fillOpacity,
@@ -179,7 +181,8 @@
 			x1,
 			x2,
 			...(markColor.selectField && { fill: markColor.selectField }),
-			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField })
+			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField }),
+			...(entry.order != null && { __order: entry.order })
 		})
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
@@ -224,7 +227,7 @@
 		// Connected topology - ordered by dimension (y)
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
-			dimensionChannel: 'y'
+			dimensionChannel: entry.order != null ? '__order' : 'y'
 		},
 		clientOptions: {
 			limit: entry.limit,
