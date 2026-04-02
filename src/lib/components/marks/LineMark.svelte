@@ -17,6 +17,7 @@
 		resolveSelection
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
+	import { isColorConstant } from '$lib/scales/color-utils';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { DensityHost } from '$lib/lod/DensityHost.svelte';
 	import { DotsRung } from '$lib/lod/DotsRung.svelte';
@@ -71,6 +72,7 @@
 		y,
 		stroke = null,
 		z = null,
+		order = undefined,
 		scheme,
 		curve = 'linear',
 		strokeWidth = 2,
@@ -114,6 +116,7 @@
 		y: () => y,
 		stroke: () => stroke,
 		z: () => z,
+		order: () => order,
 		scheme: () => scheme,
 		curve: () => curve,
 		strokeWidth: () => strokeWidth,
@@ -171,7 +174,8 @@
 			x: entry.x,
 			y: entry.y,
 			...(markColor.selectField && { stroke: markColor.selectField }),
-			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField })
+			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField }),
+			...(entry.order != null && { __order: entry.order })
 		})
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
@@ -218,7 +222,7 @@
 		// Connected topology config - ensures data is ordered for line connectivity
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
-			dimensionChannel: 'x'
+			dimensionChannel: entry.order != null ? '__order' : 'x'
 		},
 		clientOptions: {
 			limit: entry.limit,
@@ -408,7 +412,11 @@
 			{
 				y: () => entry.y,
 				x: () => entry.x,
-				partition: () => entry.z ?? entry.stroke
+				partition: () => {
+					const val = entry.z ?? entry.stroke;
+					if (typeof val === 'string' && isColorConstant(val)) return null;
+					return val;
+				}
 			},
 			(key, val) => setRungParam('smooth', key, val)
 		);

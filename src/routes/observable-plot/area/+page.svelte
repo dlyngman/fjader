@@ -16,6 +16,7 @@
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
+	import { stackY } from '$lib/transforms';
 
 	setCoordinators();
 
@@ -33,7 +34,8 @@
 			await coord.exec([
 				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
 				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
-				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
+				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`),
+				`CREATE TABLE random_walk AS SELECT i, SUM(random() - 0.5) OVER (ORDER BY i) AS value FROM generate_series(1, 600) AS t(i)`
 			]);
 
 			isLoaded = true;
@@ -123,6 +125,36 @@
 	</div>
 
 	<div class="container">
+		<h1>Random Walk</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY table="random_walk" x="i" y="value" curve="monotone" />
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
 		<h1>AAPL Stock Price (vertical)</h1>
 
 		<div class="charts">
@@ -164,7 +196,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
+				<ChartContainer legendPosition="top" xLabel="date (unemployment)">
 					{#snippet legend()}
 						<Legend color="industry" />
 					{/snippet}
@@ -184,7 +216,49 @@
 									x="date"
 									y="unemployed"
 									fill="industry"
+									fillOpacity={1}
 									curve="monotone"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Industry Unemployment (centered)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer legendPosition="top" xLabel="date (unemployment)">
+					{#snippet legend()}
+						<Legend color="industry" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="unemployment"
+									x="date"
+									y="unemployed"
+									fill="industry"
+									fillOpacity={1}
+									curve="monotone"
+									transforms={[stackY({ offset: 'center' })]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -203,7 +277,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
+				<ChartContainer legendPosition="top" xLabel="date (unemployment)">
 					{#snippet legend()}
 						<Legend color="industry" />
 					{/snippet}
@@ -276,6 +350,48 @@
 			</div>
 		</div>
 	</div>
+
+	<div class="container">
+		<h1>Variable Fill Area</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="Date (aapl-vfill)" legendPosition="top">
+					{#snippet legend()}
+						<Legend color="Volume" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="aapl"
+									x="Date"
+									y="Close"
+									fill={{ field: 'Volume', type: 'log' }}
+									fillOpacity={1}
+									scheme="turbo"
+									curve="monotone"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
 {/if}
 
 <style>

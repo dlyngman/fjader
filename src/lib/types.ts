@@ -272,6 +272,8 @@ export interface RectOffsetProps {
 export interface ConnectedTopologyProps {
 	z?: FieldRef | null;
 	curve?: CurveType;
+	/** Field to control vertex connection order. Defaults to the dimension channel (x for lines/areaY, y for areaX). */
+	order?: FieldRef;
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@
 		Crosshair,
 		WebGPUCanvas,
 		LineMark,
+		DotsMark,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -31,7 +32,10 @@
 
 			await coord.exec([
 				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
-				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
+				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`),
+				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`),
+				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
+				`CREATE TABLE random_walk AS SELECT i, SUM(random() - 0.5) OVER (ORDER BY i) AS value FROM generate_series(1, 600) AS t(i)`
 			]);
 
 			isLoaded = true;
@@ -143,6 +147,122 @@
 									x="Date"
 									y={msql.sql`CASE WHEN EXTRACT(MONTH FROM ${msql.column('Date')}) < 4 THEN NULL ELSE ${msql.column('Close')} END`}
 									curve="monotone"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Random Walk</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<LineMark table="random_walk" x="i" y="value" curve="monotone" />
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>Connected Scatterplot</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer>
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<LineMark
+									table="driving"
+									x="miles"
+									y="gas"
+									order="year"
+									curve="catmull-rom"
+								/>
+								<DotsMark
+									table="driving"
+									x="miles"
+									y="gas"
+									r={3}
+									fill="black"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+
+					{#snippet foreground()}
+						<Crosshair />
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+	</div>
+
+	<div class="container">
+		<h1>SF Temperature (Moving Average)</h1>
+
+		<div class="charts">
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="date (sftemp)" yLabel="Temperature (°F)">
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<LineMark
+									table="sftemp"
+									x="date"
+									y="low"
+									stroke="steelblue"
+									lod={{ smooth: { window: 7 }, dots: false }}
+								/>
+								<LineMark
+									table="sftemp"
+									x="date"
+									y="high"
+									stroke="orange"
+									lod={{ smooth: { window: 7 }, dots: false }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

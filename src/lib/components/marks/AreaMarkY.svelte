@@ -51,6 +51,7 @@
 		y2: y2Prop,
 		fill = null,
 		z = null,
+		order = undefined,
 		scheme,
 		curve = 'linear',
 		fillOpacity = 0.5,
@@ -89,6 +90,7 @@
 		y2: () => y2Prop,
 		fill: () => fill,
 		z: () => z,
+		order: () => order,
 		scheme: () => scheme,
 		curve: () => curve,
 		fillOpacity: () => fillOpacity,
@@ -179,7 +181,8 @@
 			y1,
 			y2,
 			...(markColor.selectField && { fill: markColor.selectField }),
-			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField })
+			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField }),
+			...(entry.order != null && { __order: entry.order })
 		})
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
@@ -224,7 +227,7 @@
 		// Ensures SQL ORDER BY series, dimension for consistent stacking and path rendering
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
-			dimensionChannel: 'x'
+			dimensionChannel: entry.order != null ? '__order' : 'x'
 		},
 		clientOptions: {
 			limit: entry.limit,

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { RuleX, RuleY } from '../rendering';
+	import { GridLineX, GridLineY } from '../rendering';
 	import type { ChartContext, ScaleStateInstance } from '$lib/types';
 
 	interface Props {
@@ -59,8 +59,8 @@
 </script>
 
 {#if xTickValues}
-	<RuleX positions={xTickValues} {color} {lineWidth} {zIndex} />
+	<GridLineX positions={xTickValues} {color} {lineWidth} {zIndex} />
 {/if}
 {#if yTickValues}
-	<RuleY positions={yTickValues} {color} {lineWidth} {zIndex} />
+	<GridLineY positions={yTickValues} {color} {lineWidth} {zIndex} />
 {/if}
