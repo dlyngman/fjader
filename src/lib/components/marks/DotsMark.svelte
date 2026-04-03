@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Dots } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
@@ -28,6 +29,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
 		x: FieldRef;
@@ -63,17 +66,17 @@
 
 	const markId = generateMarkId('dot');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 	const gpuCoordinator = getGPUContext();
 
 	// Ensure services are ready before inference (idempotent)
+	// Still needed during transition for TableSchemaService (scale type inference)
 	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
-	// Each entry property is a writable $derived from the prop getter.
-	// Props flow through automatically; palette overrides stick until
-	// the prop changes upstream (then the override auto-clears).
 	const entry = chartContext.config.registerMark(markId, 'dot', {
 		table: () => table,
 		x: () => x,
@@ -97,7 +100,7 @@
 		fitDomain: () => fitDomain
 	});
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// 0. Scale Type Inference — reads from entry
 	const effectiveXScaleType = $derived.by(() =>
@@ -171,7 +174,6 @@
 			y: entry.y
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip: entry.tip,
@@ -227,7 +229,8 @@
 			if (!xArr || !yArr) return null;
 			const rFn = entry.r;
 			const radii = new Float32Array(instanceCount);
-			for (let i = 0; i < instanceCount; i++) radii[i] = rFn({ x: xArr[i], y: yArr[i] });
+			for (let i = 0; i < instanceCount; i++)
+				radii[i] = rFn({ x: xArr[i] as number, y: yArr[i] as number });
 			return radii;
 		}
 		// Constant or column name
@@ -260,8 +263,14 @@
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null
+				);
 			}
 		});
 	});
@@ -310,6 +319,6 @@
 		sizeMode={markSize.sizeMode}
 		sizeScaleIndex={markSize.sizeScaleIndex}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 	/>
 {/if}

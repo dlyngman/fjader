@@ -9,6 +9,7 @@ import {
 } from '@uwdata/mosaic-sql';
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { Coordinator } from '@uwdata/mosaic-core';
+import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
@@ -27,7 +28,7 @@ import type { DataClientConfig } from '$lib/data/DataClient.svelte';
  * Returns the number of fetches executed (for logging).
  */
 export async function fetchCategoricalDomains(
-	coordinator: Coordinator,
+	coordinator: Coordinator | QueryEngine,
 	table: string,
 	select: Record<string, unknown>,
 	sort: NormalizedSortConfig,
@@ -309,7 +310,7 @@ export async function fetchCategoricalDomains(
  * update its reactive state.
  */
 export async function fetchGlobalAggregates(
-	coordinator: Coordinator,
+	coordinator: Coordinator | QueryEngine,
 	table: string,
 	select: Record<string, unknown>,
 	channelsNeedingDataDomain: Set<string>,

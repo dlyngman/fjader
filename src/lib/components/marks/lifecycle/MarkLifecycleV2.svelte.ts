@@ -324,7 +324,7 @@ export class MarkLifecycleV2 {
 			// Batch all domain queries in parallel
 			const [fetchCount, aggResult] = await Promise.all([
 				fetchCategoricalDomains(
-					this.#queryEngine as any, // TODO: adapt domain-queries.ts parameter type
+					this.#queryEngine,
 					this.#config.table,
 					this.#config.select,
 					this.#config.sort,
@@ -345,7 +345,7 @@ export class MarkLifecycleV2 {
 					this.#config.domain
 				),
 				fetchGlobalAggregates(
-					this.#queryEngine as any, // TODO: adapt domain-queries.ts parameter type
+					this.#queryEngine,
 					this.#config.table,
 					this.#config.select,
 					this.#channelsNeedingDataDomain,
