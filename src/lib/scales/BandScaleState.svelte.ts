@@ -219,6 +219,17 @@ export class BandScaleState {
 	}
 
 	/**
+	 * Inline CASE expression mapping domain values to 0-based indices.
+	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
+	 * Reactive — recomputes when effectiveDomain changes (e.g. band reorder).
+	 */
+	get caseExpression(): string {
+		return ViewManagerService.buildCaseExpression(this.sourceField, this.effectiveDomain, {
+			oneBased: false
+		});
+	}
+
+	/**
 	 * Unique scale ID for ViewManager registration.
 	 */
 	get scaleId(): string {

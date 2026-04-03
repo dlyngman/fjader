@@ -46,6 +46,15 @@ describe('QueryEngine', () => {
 			expect(conn.queries).toEqual(['SELECT 1']);
 		});
 
+		it('accepts objects with toString()', async () => {
+			const conn = createMockConnection();
+			const engine = new QueryEngine(conn);
+
+			const queryObj = { toString: () => 'SELECT 1 FROM t' };
+			await engine.query(queryObj);
+			expect(conn.queries).toEqual(['SELECT 1 FROM t']);
+		});
+
 		it('executes multiple queries sequentially', async () => {
 			const conn = createMockConnection();
 			const engine = new QueryEngine(conn);

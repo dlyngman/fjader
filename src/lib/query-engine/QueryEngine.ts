@@ -62,13 +62,16 @@ export class QueryEngine {
 
 	/**
 	 * Execute a query and return the Arrow result table.
+	 * Accepts a SQL string or any object with toString() (e.g. mosaic-sql Query).
 	 * If callerId is provided, any in-flight query for that caller is
 	 * cancelled before the new query starts.
 	 */
-	async query(sql: string, opts?: QueryOpts): Promise<Table> {
+	async query(sql: string | { toString(): string }, opts?: QueryOpts): Promise<Table> {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
+
+		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
 
 		// Cancel-on-supersede: abort previous query for same caller
 		if (opts?.callerId) {
@@ -94,7 +97,7 @@ export class QueryEngine {
 					throw new DOMException('Query superseded', 'AbortError');
 				}
 
-				const result = await this.#conn.query(sql);
+				const result = await this.#conn.query(sqlStr);
 
 				// Check if superseded while awaiting
 				if (controller.signal.aborted) {
@@ -116,14 +119,14 @@ export class QueryEngine {
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
-			const result = await this.#conn.query(sql);
+			const result = await this.#conn.query(sqlStr);
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
 			return result;
 		}
 
-		return this.#conn.query(sql);
+		return this.#conn.query(sqlStr);
 	}
 
 	/**

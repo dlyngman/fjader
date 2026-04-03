@@ -187,6 +187,17 @@ export class TimeScaleState extends LinearScaleState {
 	}
 
 	/**
+	 * Inline SQL expression converting datetime to offset (seconds from t0).
+	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
+	 * Returns empty string if t0 is not yet known.
+	 */
+	get offsetExpression(): string {
+		if (!this.#t0) return '';
+		const t0Epoch = Math.floor(this.#t0.getTime() / 1000);
+		return `CAST((EPOCH("${this.#sourceField}") - ${t0Epoch}) AS REAL)`;
+	}
+
+	/**
 	 * Register a source table for derived view column creation.
 	 * View is created once t0 is known.
 	 */

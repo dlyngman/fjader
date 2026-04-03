@@ -187,6 +187,18 @@ export class ColorScaleState {
 	}
 
 	/**
+	 * Inline CASE expression mapping ordinal domain values to 0-based indices.
+	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
+	 * Returns empty string for non-ordinal scales (they don't need CASE mapping).
+	 */
+	get caseExpression(): string {
+		if (!this.isOrdinal || !this.domain.length) return '';
+		return ViewManagerService.buildCaseExpression(this.#field, this.domain as string[], {
+			oneBased: false
+		});
+	}
+
+	/**
 	 * Unique scale ID for ViewManager registration.
 	 */
 	get scaleId(): string {
