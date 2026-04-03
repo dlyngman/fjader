@@ -4,6 +4,7 @@ import {
 	sql,
 	column as sqlColumn,
 	isAggregateExpression,
+	cast,
 	min,
 	max
 } from '@uwdata/mosaic-sql';
@@ -225,8 +226,8 @@ export async function fetchCategoricalDomains(
 			} else {
 				const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
 				const q = Query.from(table).select({
-					min_color: min(colExpr),
-					max_color: max(colExpr)
+					min_color: cast(min(colExpr), 'REAL'),
+					max_color: cast(max(colExpr), 'REAL')
 				});
 
 				fetches.push(
@@ -250,8 +251,8 @@ export async function fetchCategoricalDomains(
 	if (sizeScaleState && select[sizeKey]) {
 		const sizeField = select[sizeKey];
 		const q = Query.from(table).select({
-			min_radius: min(sqlColumn(String(sizeField))),
-			max_radius: max(sqlColumn(String(sizeField)))
+			min_radius: cast(min(sqlColumn(String(sizeField))), 'REAL'),
+			max_radius: cast(max(sqlColumn(String(sizeField))), 'REAL')
 		});
 
 		fetches.push(
@@ -357,21 +358,21 @@ export async function fetchGlobalAggregates(
 
 		if (channelsNeedingDataDomain.has('x')) {
 			if ('x' in select) {
-				outerSelect.min_x = min('x');
-				outerSelect.max_x = max('x');
+				outerSelect.min_x = cast(min('x'), 'REAL');
+				outerSelect.max_x = cast(max('x'), 'REAL');
 			} else {
-				if ('x1' in select) outerSelect.min_x = min('x1');
-				if ('x2' in select) outerSelect.max_x = max('x2');
+				if ('x1' in select) outerSelect.min_x = cast(min('x1'), 'REAL');
+				if ('x2' in select) outerSelect.max_x = cast(max('x2'), 'REAL');
 			}
 		}
 
 		if (channelsNeedingDataDomain.has('y')) {
 			if ('y' in select) {
-				outerSelect.min_y = min('y');
-				outerSelect.max_y = max('y');
+				outerSelect.min_y = cast(min('y'), 'REAL');
+				outerSelect.max_y = cast(max('y'), 'REAL');
 			} else {
-				if ('y1' in select) outerSelect.min_y = min('y1');
-				if ('y2' in select) outerSelect.max_y = max('y2');
+				if ('y1' in select) outerSelect.min_y = cast(min('y1'), 'REAL');
+				if ('y2' in select) outerSelect.max_y = cast(max('y2'), 'REAL');
 			}
 		}
 
@@ -382,8 +383,8 @@ export async function fetchGlobalAggregates(
 				? 'stroke'
 				: null;
 		if (colorChannel) {
-			outerSelect.min_color = min(colorChannel);
-			outerSelect.max_color = max(colorChannel);
+			outerSelect.min_color = cast(min(colorChannel), 'REAL');
+			outerSelect.max_color = cast(max(colorChannel), 'REAL');
 		}
 
 		// Skip if no aggregation expressions were generated

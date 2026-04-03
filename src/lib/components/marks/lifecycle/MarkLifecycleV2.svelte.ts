@@ -21,11 +21,14 @@ import type { Table } from '@uwdata/flechette';
 import {
 	Query,
 	isNode,
+	isColumnRef,
 	isAggregateExpression,
 	sql,
 	column as sqlColumn,
 	cast,
 	coalesce,
+	min,
+	max,
 	isNotNull,
 	and
 } from '@uwdata/mosaic-sql';
@@ -58,6 +61,7 @@ import { buildQueryParts, assembleQuery, type QueryParts } from './query-builder
 import {
 	setScalesReady,
 	markDeferredScalesReady,
+	setInitialContinuousDomains,
 	registerDataDerivedDomains
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
@@ -122,7 +126,6 @@ export class MarkLifecycleV2 {
 
 	// --- Query Cache ---
 	#cachedQueryParts: QueryParts | null = null;
-	#numericCastChannels: Set<string> | undefined;
 	#queryPartsStale = false;
 
 	// --- Domain State ---
@@ -322,7 +325,7 @@ export class MarkLifecycleV2 {
 			const seriesKey = this.#config._orderConfig?.seriesChannel ?? null;
 
 			// Batch all domain queries in parallel
-			const [fetchCount, aggResult] = await Promise.all([
+			const [fetchCount, aggResult, fieldStats] = await Promise.all([
 				fetchCategoricalDomains(
 					this.#queryEngine,
 					this.#config.table,
@@ -356,12 +359,25 @@ export class MarkLifecycleV2 {
 					this.#chartContext.yScaleState as ContinuousScaleState | null,
 					this.#colorScaleState,
 					this.#markId
-				)
+				),
+				this.#fetchFieldStats()
 			]);
 
 			if (this.#destroyed) return;
 
 			if (aggResult.globalAggregatesSet) this.#globalAggregatesSet = true;
+
+			// Set continuous domains from field stats (replaces old Effect 5 fieldInfo path)
+			if (fieldStats) {
+				setInitialContinuousDomains(
+					fieldStats,
+					this.#scaleMap,
+					this.#config.select,
+					this.actualXScaleType,
+					this.actualYScaleType,
+					this.#markId
+				);
+			}
 
 			// Mark scales ready
 			setScalesReady(
@@ -395,14 +411,6 @@ export class MarkLifecycleV2 {
 			// For now, leave bin expressions unresolved — they'll be handled
 			// when we migrate binned marks (RectMark). DotsMark has no bins.
 
-			// Detect which channels need numeric cast for Float32 zero-copy
-			this.#numericCastChannels = new Set<string>();
-			for (const [ch, expr] of Object.entries(resolvedSelect)) {
-				if (isNode(expr) && isAggregateExpression(expr as any)) {
-					this.#numericCastChannels.add(ch);
-				}
-			}
-
 			// Inline CASE expressions for band/color scales (replaces ViewManager)
 			this.#inlineCaseExpressions(resolvedSelect);
 
@@ -414,22 +422,23 @@ export class MarkLifecycleV2 {
 				this.#config._orderConfig ?? null,
 				this.#transformCompiler.hasSQLTransforms()
 			);
-		}
 
-		// Apply numeric CAST wrapping for zero-copy Float32 columns.
-		// assembleQuery with forMosaic=false skips this, so we do it here.
-		if (this.#numericCastChannels?.size) {
-			for (const ch of this.#numericCastChannels) {
-				const expr = this.#cachedQueryParts.selectDef[ch];
-				if (expr != null) {
-					this.#cachedQueryParts.selectDef[ch] = coalesce(
-						cast(expr, 'REAL'),
-						sql`'NaN'::REAL`
-					);
-				}
+			// Wrap ALL channels in COALESCE(CAST(... AS REAL), 'NaN'::REAL) for
+			// zero-copy Float32Array. Without Mosaic's type conversion layer,
+			// DuckDB-WASM returns INT64 as BigInt64Array which JS can't mix with
+			// Number. CAST to REAL ensures Float32 throughout.
+			// Skip channels that are already CASE expressions (they CAST to REAL
+			// internally) and non-aggregate GROUP BY columns (strings).
+			const { selectDef, nonAggregateGroupBy } = this.#cachedQueryParts;
+			const groupByKeys = new Set(
+				nonAggregateGroupBy.map((g) => String(g))
+			);
+			for (const [ch, expr] of Object.entries(selectDef)) {
+				if (expr == null) continue;
+				// Skip group-by columns (categorical strings — not numeric)
+				if (groupByKeys.has(ch)) continue;
+				selectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
 			}
-			// Only apply once — clear to avoid double-wrapping on re-entry
-			this.#numericCastChannels = undefined;
 		}
 
 		const q = assembleQuery(
@@ -503,6 +512,74 @@ export class MarkLifecycleV2 {
 				select.y = sql`${yScale.offsetExpression}`;
 			}
 		}
+	}
+
+	/**
+	 * Fetch MIN/MAX stats for continuous scale fields.
+	 * Replaces Mosaic's queryFieldInfo (old Effect 5 fieldInfo path).
+	 * Returns a fieldInfo-shaped map for setInitialContinuousDomains.
+	 */
+	async #fetchFieldStats(): Promise<Record<string, { column: string; min: number; max: number }> | null> {
+		const select = this.#config.select;
+		const fields: { key: string; expr: unknown }[] = [];
+
+		for (const [axis, scaleType] of [
+			['x', this.actualXScaleType],
+			['y', this.actualYScaleType]
+		] as const) {
+			if (!isNumericScale(scaleType)) continue;
+
+			for (const key of [axis, `${axis}1`, `${axis}2`]) {
+				const expr = select[key];
+				if (expr == null || isBinExpression(expr)) continue;
+				if (isNode(expr) && isAggregateExpression(expr as any)) continue;
+				if (isNode(expr) && isWindowExpression(expr as any)) continue;
+				fields.push({ key, expr });
+			}
+		}
+
+		if (fields.length === 0) return null;
+
+		// Deduplicate by string representation
+		const seen = new Set<string>();
+		const unique = fields.filter((f) => {
+			const s = String(f.expr);
+			if (seen.has(s)) return false;
+			seen.add(s);
+			return true;
+		});
+
+		// Build a single query with MIN/MAX for each field, CAST to REAL
+		const selectDef: Record<string, unknown> = {};
+		for (let i = 0; i < unique.length; i++) {
+			const colExpr = isNode(unique[i].expr)
+				? unique[i].expr
+				: sqlColumn(String(unique[i].expr));
+			selectDef[`min_${i}`] = cast(min(colExpr as ExprValue), 'REAL');
+			selectDef[`max_${i}`] = cast(max(colExpr as ExprValue), 'REAL');
+		}
+
+		const q = Query.from(this.#config.table).select(selectDef as Record<string, ExprValue>);
+		const result = await this.#queryEngine.query(q);
+		const row = result.get(0) as Record<string, unknown> | null;
+		if (!row) return null;
+
+		// Build fieldInfo-shaped result keyed by the field's string representation
+		// (matches how setInitialContinuousDomains looks up by String(fieldValue))
+		const stats: Record<string, { column: string; min: number; max: number }> = {};
+		for (let i = 0; i < unique.length; i++) {
+			const minVal = row[`min_${i}`];
+			const maxVal = row[`max_${i}`];
+			if (minVal != null && maxVal != null) {
+				const fieldStr = String(unique[i].expr).replace(/^["']|["']$/g, '');
+				stats[fieldStr] = {
+					column: fieldStr,
+					min: Number(minVal),
+					max: Number(maxVal)
+				};
+			}
+		}
+		return stats;
 	}
 
 	async #executeQuery(sqlStr: string): Promise<void> {
@@ -613,10 +690,9 @@ export class MarkLifecycleV2 {
 	data: DataAccessor | null = $derived.by(() => {
 		if (!this.#arrowTable) return null;
 
-		let accessor: DataAccessor = new ArrowDataAccessor(
-			this.#arrowTable,
-			this.#cachedQueryParts?.aliasMap
-		);
+		// No aliasMap needed — with forMosaic=false, the query SELECT uses
+		// channel names as aliases, so Arrow column names are already x, y, fill, etc.
+		let accessor: DataAccessor = new ArrowDataAccessor(this.#arrowTable);
 
 		// Fast path: no JS transforms
 		if (!this.#transformCompiler.hasJSTransforms()) {
