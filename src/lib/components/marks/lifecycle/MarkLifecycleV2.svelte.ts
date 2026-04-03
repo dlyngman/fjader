@@ -284,11 +284,10 @@ export class MarkLifecycleV2 {
 			// Read filter from CrossfilterSelection (reactive via SvelteMap)
 			const filter = this.#selection?.predicate(this.#markId) ?? [];
 
-			// Read scale states that affect the query (CASE expressions, offsets)
-			// Reading these inside the effect establishes reactive dependencies
-			// so the query re-fires when domains change (band reorder, etc.)
-			const xScaleState = this.#chartContext.xScaleState;
-			const yScaleState = this.#chartContext.yScaleState;
+			// Establish reactive dependencies on scale states so the query
+			// re-fires when domains change (band reorder, color domain update)
+			void this.#chartContext.xScaleState;
+			void this.#chartContext.yScaleState;
 
 			// Build the SQL (synchronous — uses cached query parts)
 			const sqlStr = this.#buildQueryString(filter);
@@ -422,33 +421,42 @@ export class MarkLifecycleV2 {
 				this.#config._orderConfig ?? null,
 				this.#transformCompiler.hasSQLTransforms()
 			);
+		}
 
-			// Wrap ALL channels in COALESCE(CAST(... AS REAL), 'NaN'::REAL) for
-			// zero-copy Float32Array. Without Mosaic's type conversion layer,
-			// DuckDB-WASM returns INT64 as BigInt64Array which JS can't mix with
-			// Number. CAST to REAL ensures Float32 throughout.
-			// Skip channels that are already CASE expressions (they CAST to REAL
-			// internally) and non-aggregate GROUP BY columns (strings).
-			const { selectDef, nonAggregateGroupBy } = this.#cachedQueryParts;
-			const groupByKeys = new Set(
-				nonAggregateGroupBy.map((g) => String(g))
-			);
+		// Build a Float32-safe selectDef for the query. COALESCE(CAST(... AS REAL), 'NaN'::REAL)
+		// on all numeric channels ensures DuckDB returns Float32Array (not BigInt64Array).
+		// GROUP BY keys (categorical strings) are excluded — they stay as-is.
+		const { selectDef, nonAggregateGroupBy, hasAggregates } = this.#cachedQueryParts;
+		const castSelectDef = { ...selectDef };
+		if (hasAggregates) {
+			// Only aggregate queries have GROUP BY columns to protect
+			const groupByChannels = new Set<string>();
 			for (const [ch, expr] of Object.entries(selectDef)) {
+				if (nonAggregateGroupBy.some((g) => String(g) === String(expr))) {
+					groupByChannels.add(ch);
+				}
+			}
+			for (const [ch, expr] of Object.entries(castSelectDef)) {
+				if (expr == null || groupByChannels.has(ch)) continue;
+				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
+			}
+		} else {
+			// Non-aggregate query: wrap all channels
+			for (const [ch, expr] of Object.entries(castSelectDef)) {
 				if (expr == null) continue;
-				// Skip group-by columns (categorical strings — not numeric)
-				if (groupByKeys.has(ch)) continue;
-				selectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
+				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
 			}
 		}
 
+		const castParts = { ...this.#cachedQueryParts, selectDef: castSelectDef };
 		const q = assembleQuery(
 			this.#config.table,
-			this.#cachedQueryParts,
+			castParts,
 			filter as unknown[],
 			this.#config._filterNulls ?? null,
 			this.#transformCompiler,
 			false, // forMosaic — always false in V2 (channel names throughout)
-			undefined // numeric cast already applied above
+			undefined
 		);
 
 		// Apply LIMIT if configured
