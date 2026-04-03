@@ -111,7 +111,18 @@ export class QueryEngine {
 			}
 		}
 
-		// No callerId: simple direct execution
+		// No callerId: direct execution, still respect external signal
+		if (opts?.signal) {
+			if (opts.signal.aborted) {
+				throw new DOMException('Query aborted', 'AbortError');
+			}
+			const result = await this.#conn.query(sql);
+			if (opts.signal.aborted) {
+				throw new DOMException('Query aborted', 'AbortError');
+			}
+			return result;
+		}
+
 		return this.#conn.query(sql);
 	}
 
@@ -143,7 +154,8 @@ export class QueryEngine {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
-		const result = await this.#conn.query(`DESCRIBE "${table}"`);
+		const escaped = table.replaceAll('"', '""');
+		const result = await this.#conn.query(`DESCRIBE "${escaped}"`);
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);

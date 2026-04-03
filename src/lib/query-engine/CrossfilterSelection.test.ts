@@ -84,6 +84,21 @@ describe('CrossfilterSelection', () => {
 		});
 	});
 
+	describe('get()', () => {
+		it('returns clause by sourceId', () => {
+			const sel = new CrossfilterSelection();
+			const clause = makeClause('x > 0', ['m1'], 42);
+			sel.update('src-1', clause);
+
+			expect(sel.get('src-1')).toEqual(clause);
+		});
+
+		it('returns undefined for unknown sourceId', () => {
+			const sel = new CrossfilterSelection();
+			expect(sel.get('nonexistent')).toBeUndefined();
+		});
+	});
+
 	describe('items', () => {
 		it('returns all active clauses with sourceId', () => {
 			const sel = new CrossfilterSelection();

@@ -79,6 +79,11 @@ export class CrossfilterSelection {
 		return this.#clauses.has(sourceId);
 	}
 
+	/** O(1) lookup of a clause by source ID. */
+	get(sourceId: string): Clause | undefined {
+		return this.#clauses.get(sourceId);
+	}
+
 	/** Reactive list of all active clauses with their source IDs. */
 	get items(): ClauseEntry[] {
 		const result: ClauseEntry[] = [];

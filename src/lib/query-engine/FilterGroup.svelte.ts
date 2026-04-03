@@ -39,6 +39,9 @@ export interface BrushOpts {
 	excludeMarkIds: () => Set<string>;
 	augment?: (value: unknown) => FilterSchema | null;
 	scaleStates?: () => ActiveValueScale[];
+	/** Extract values to project onto scales from the clause value.
+	 *  Required when scaleStates is provided — FilterGroup does not assume value shape. */
+	extractProjectionValues?: (value: unknown) => Set<unknown> | null;
 }
 
 export interface BrushHandle {
@@ -112,6 +115,8 @@ export class FilterGroup {
 	#augmenters = new Map<string, (value: unknown) => FilterSchema | null>();
 	// Scale state accessors for active-value projection
 	#scaleStateFns = new Map<string, () => ActiveValueScale[]>();
+	// Value extractors for scale projection — caller owns the shape
+	#valueExtractors = new Map<string, (value: unknown) => Set<unknown> | null>();
 	// Toggle instances, shared by field name
 	#toggles = new Map<string, ToggleState>();
 	// Track which scales we projected to, so we can clear them
@@ -144,10 +149,11 @@ export class FilterGroup {
 	// -----------------------------------------------------------------
 
 	createBrush(opts: BrushOpts): BrushHandle {
-		const { sourceId, excludeMarkIds, augment, scaleStates } = opts;
+		const { sourceId, excludeMarkIds, augment, scaleStates, extractProjectionValues } = opts;
 
 		if (augment) this.#augmenters.set(sourceId, augment);
 		if (scaleStates) this.#scaleStateFns.set(sourceId, scaleStates);
+		if (extractProjectionValues) this.#valueExtractors.set(sourceId, extractProjectionValues);
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
@@ -166,6 +172,7 @@ export class FilterGroup {
 				this.selection.update(sourceId, null);
 				this.#augmenters.delete(sourceId);
 				this.#scaleStateFns.delete(sourceId);
+				this.#valueExtractors.delete(sourceId);
 				this.#projectToScales();
 			}
 		};
@@ -263,21 +270,22 @@ export class FilterGroup {
 		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();
 
 		for (const [sourceId, scalesFn] of this.#scaleStateFns) {
-			if (!this.selection.isActive(sourceId)) continue;
-
-			const clauses = this.selection.items;
-			const clause = clauses.find((c) => c.sourceId === sourceId);
+			const clause = this.selection.get(sourceId);
 			if (!clause) continue;
 
-			const tuples = clause.value as unknown[][] | undefined;
-			if (!tuples?.length) continue;
+			const extractor = this.#valueExtractors.get(sourceId);
+			if (!extractor) continue;
+
+			const values = extractor(clause.value);
+			if (!values?.size) continue;
 
 			for (const scale of scalesFn()) {
-				if (!activeByScale.has(scale)) {
-					activeByScale.set(scale, new Set());
+				const existing = activeByScale.get(scale);
+				if (existing) {
+					for (const v of values) existing.add(v);
+				} else {
+					activeByScale.set(scale, new Set(values));
 				}
-				const set = activeByScale.get(scale)!;
-				for (const t of tuples) set.add(t[0]);
 			}
 		}
 

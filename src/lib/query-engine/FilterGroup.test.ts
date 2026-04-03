@@ -100,26 +100,14 @@ describe('FilterGroup', () => {
 			const scale = mockScale();
 			const group = new FilterGroup();
 
-			group.createBrush({
-				sourceId: 'toggle-species',
-				excludeMarkIds: () => new Set(),
-				scaleStates: () => [scale]
-			});
-
-			// Simulate a toggle selection with tuples
-			group.selection.update('toggle-species', {
-				predicate: "species IN ('Adelie', 'Gentoo')",
-				excludeMarkIds: () => new Set(),
-				value: [['Adelie'], ['Gentoo']]
-			});
-
-			// Manually trigger projection (normally called by createBrush.update)
 			const handle = group.createBrush({
 				sourceId: 'toggle-species',
 				excludeMarkIds: () => new Set(),
-				scaleStates: () => [scale]
+				scaleStates: () => [scale],
+				extractProjectionValues: (v) => new Set(v as string[])
 			});
-			handle.update("species IN ('Adelie', 'Gentoo')", [['Adelie'], ['Gentoo']]);
+
+			handle.update("species IN ('Adelie', 'Gentoo')", ['Adelie', 'Gentoo']);
 
 			expect(scale.active).toEqual(new Set(['Adelie', 'Gentoo']));
 		});
@@ -131,13 +119,28 @@ describe('FilterGroup', () => {
 			const handle = group.createBrush({
 				sourceId: 'brush-x',
 				excludeMarkIds: () => new Set(),
-				scaleStates: () => [scale]
+				scaleStates: () => [scale],
+				extractProjectionValues: (v) => new Set(v as string[])
 			});
 
-			handle.update('x > 0', [['A'], ['B']]);
+			handle.update('x > 0', ['A', 'B']);
 			expect(scale.active).toBeDefined();
 
 			handle.clear();
+			expect(scale.active).toBeNull();
+		});
+
+		it('does not project when no extractProjectionValues is provided', () => {
+			const scale = mockScale();
+			const group = new FilterGroup();
+
+			const handle = group.createBrush({
+				sourceId: 'brush-x',
+				excludeMarkIds: () => new Set(),
+				scaleStates: () => [scale]
+			});
+
+			handle.update('x > 0', ['A', 'B']);
 			expect(scale.active).toBeNull();
 		});
 	});

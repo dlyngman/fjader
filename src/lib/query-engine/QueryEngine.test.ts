@@ -138,6 +138,45 @@ describe('QueryEngine', () => {
 		});
 	});
 
+	describe('external signal without callerId', () => {
+		it('rejects if signal is already aborted', async () => {
+			const conn = createMockConnection();
+			const engine = new QueryEngine(conn);
+			const controller = new AbortController();
+			controller.abort();
+
+			await expect(
+				engine.query('SELECT 1', { signal: controller.signal })
+			).rejects.toThrow('aborted');
+			expect(conn.queries).toEqual([]);
+		});
+
+		it('rejects if signal is aborted while awaiting', async () => {
+			const controller = new AbortController();
+			const conn = createMockConnection({
+				queryFn: () => {
+					// Abort during the query
+					controller.abort();
+					return { numRows: 0, get: () => ({}) };
+				}
+			});
+			const engine = new QueryEngine(conn);
+
+			await expect(
+				engine.query('SELECT 1', { signal: controller.signal })
+			).rejects.toThrow('aborted');
+		});
+
+		it('succeeds if signal is never aborted', async () => {
+			const conn = createMockConnection();
+			const engine = new QueryEngine(conn);
+			const controller = new AbortController();
+
+			const result = await engine.query('SELECT 1', { signal: controller.signal });
+			expect(result).toBeDefined();
+		});
+	});
+
 	describe('cancel()', () => {
 		it('cancels an in-flight query by callerId', async () => {
 			let resolver: ((v: unknown) => void) | null = null;
@@ -187,6 +226,16 @@ describe('QueryEngine', () => {
 	});
 
 	describe('describe()', () => {
+		it('escapes table names with double quotes', async () => {
+			const conn = createMockConnection({
+				queryFn: () => ({ numRows: 0, get: () => ({}) })
+			});
+			const engine = new QueryEngine(conn);
+
+			await engine.describe('table"injection');
+			expect(conn.queries).toEqual(['DESCRIBE "table""injection"']);
+		});
+
 		it('returns column info from DESCRIBE', async () => {
 			const conn = createMockConnection({
 				queryFn: (sql) => {

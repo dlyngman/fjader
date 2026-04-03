@@ -21,6 +21,7 @@ import { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { SelectionRegistry } from '$lib/selection';
 import { getOrCreateCoordinator, loadData } from './LazyCoordinator';
+import { getOrCreateQueryEngine } from './LazyQueryEngine';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
 import type { DivePlotSpec, RenderOptions, DivePlotHandle } from './types';
 
@@ -44,7 +45,10 @@ export async function render(
 		await loadData(coordinator, spec.data, options.baseUrl);
 	}
 
-	// 3. Create per-render DivePlot services
+	// 3. Create shared QueryEngine (lazy singleton, same DuckDB instance)
+	const queryEngine = await getOrCreateQueryEngine(coordinator);
+
+	// 4. Create per-render DivePlot services
 	const scaleRegistry = new ScaleRegistry();
 	const gpuCoordinator = new GPUCoordinator({ msaaSampleCount: 4 });
 
@@ -57,23 +61,24 @@ export async function render(
 		await gpuCoordinator.initialize();
 	}
 
-	// 4. Build context map — injected into Svelte mount() so child components
+	// 5. Build context map — injected into Svelte mount() so child components
 	//    find these via getContext() calls (same keys as setCoordinators())
 	const selectionRegistry = new SelectionRegistry(Selection);
 	const context = new Map<string, unknown>();
 	context.set('mosaic-coordinator', coordinator);
+	context.set('query-engine', queryEngine);
 	context.set('gpu-coordinator', gpuCoordinator);
 	context.set('scale-registry', scaleRegistry);
 	context.set('selection-registry', selectionRegistry);
 
-	// 5. Mount the Svelte component tree
+	// 6. Mount the Svelte component tree
 	const component = mount(LayoutFromSpec, {
 		target,
 		props: { spec },
 		context
 	});
 
-	// 6. Return handle for cleanup
+	// 7. Return handle for cleanup
 	return {
 		destroy() {
 			unmount(component);
