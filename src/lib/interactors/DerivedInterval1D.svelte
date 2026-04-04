@@ -1,48 +1,20 @@
 <script lang="ts">
 	/**
-	 * TODO: Migrate to FilterGroup (V2 query engine).
+	 * DerivedInterval1D — reads a brush from a source FilterGroup, applies a
+	 * calendar offset, and writes the shifted predicate to a target FilterGroup.
 	 *
-	 * This component still uses Mosaic's SelectionRegistry. Migration is blocked
-	 * by a design question: DerivedInterval1D reads from a "source" named selection
-	 * (e.g. "brush") and writes to a separate "derived" named selection (e.g.
-	 * "comparison"). Marks opt into which selection filters them via selection="brush"
-	 * or selection="comparison".
-	 *
-	 * In V2, there is one FilterGroup/CrossfilterSelection per page — no named
-	 * selections. All marks share one predicate set, with cross-filter skip via
-	 * excludeMarkIds. To migrate DerivedInterval1D:
-	 *
-	 * 1. Read source brush extent from filterGroup.items (find item with
-	 *    schema.kind === 'range' matching the axis field) instead of sourceGroup.items.
-	 *
-	 * 2. Write derived extent via filterGroup.upsertManual() with a predicate built
-	 *    from isBetween() — same as other interactors.
-	 *
-	 * 3. Solve the targeting problem: the derived predicate should only affect
-	 *    "comparison" marks, not "brush" marks. Options:
-	 *    a) Add a mark-group concept to FilterGroup (marks declare a group ID,
-	 *       clauses target specific groups).
-	 *    b) Use excludeMarkIds to exclude "brush" marks from the derived clause.
-	 *       Requires the interactor to know which marks are "brush" vs "comparison"
-	 *       — could be inferred from mark selection prop.
-	 *    c) Support multiple FilterGroups per page (one per named selection).
-	 *
-	 * 4. Relay logic (non-axis clauses from source → derived) needs equivalent
-	 *    FilterGroup API — currently uses sourceGroup.items + derivedGroup.upsertManual.
-	 *
-	 * The test/derived-interval route is temporarily broken until this is resolved.
-	 * The SelectionBridge components in that route are preserved for now.
+	 * Uses FilterGroupRegistry for named groups: sourceSelection → source group,
+	 * selection → target group. Marks declare which group they belong to via
+	 * their own `selection` prop.
 	 */
 	import { getContext, onMount } from 'svelte';
-	import { clauseInterval } from '@uwdata/mosaic-core';
+	import { isBetween, column as sqlColumn } from '@uwdata/mosaic-sql';
 	import GhostBrushOverlay from './GhostBrushOverlay.svelte';
 	import { buildColumnRef } from './brush-utils';
 	import { parseOffset, applyOffset, formatOffsetLabel } from './calendar-offset';
 	import type { ChartContext } from '$lib/types';
 	import { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
-	import { getSelectionRegistry } from '$lib/selection';
-	import type { ClauseSource } from '@uwdata/mosaic-core';
-	import type { ScaleDomain } from '@uwdata/mosaic-sql';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
 		sourceSelection: string;
@@ -60,8 +32,9 @@
 		relayClauses = true
 	}: Props = $props();
 
-	const registry = getSelectionRegistry()!;
-	const sourceGroup = registry.getGroup(sourceSelection);
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const sourceGroup = filterGroups.get(sourceSelection);
+	const targetGroup = filterGroups.get(selectionName);
 	const chart = getContext<ChartContext>('chart');
 	const isX = axis === 'x';
 	const parsedOffset = parseOffset(offset);
@@ -75,28 +48,10 @@
 		(isX ? chart.xColumnName : chart.yColumnName) ?? (isX ? chart.xLabel : chart.yLabel)
 	);
 
-	// Source string for this derived interactor
-	const source = `derived-${axis}-${chart.chartId}`;
+	// Source key for this derived interactor
+	const sourceKey = `derived-${axis}-${chart.chartId}`;
 
-	// Own Mosaic selection (for comparison mark filtering)
-	const derivedGroup = registry.getGroup(selectionName);
-	const { sel: selection, off: unregister } = derivedGroup.createLocal('single', {
-		source,
-		augment: (clause) => ({
-			kind: 'range',
-			column:
-				typeof resolvedField === 'string'
-					? resolvedField
-					: (resolvedField?.toString() ?? ''),
-			label:
-				typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
-			values: clause?.value
-				? [(clause.value as number[])[0], (clause.value as number[])[1]]
-				: []
-		})
-	});
-
-	// Column reference for Mosaic clause emission
+	// Column reference for SQL predicate building
 	const columnRef = $derived.by(() =>
 		buildColumnRef(
 			resolvedField,
@@ -105,7 +60,7 @@
 	);
 
 	// =========================================================================
-	// Filter Bridge: Watch source selection items → compute derived extent
+	// Filter Bridge: Watch source group items → compute derived extent
 	// =========================================================================
 
 	// Extract primary range from source group's active filter items
@@ -150,27 +105,19 @@
 	});
 
 	// =========================================================================
-	// Emit derived Mosaic clause
+	// Emit derived filter clause to target FilterGroup
 	// =========================================================================
 
-	// Deduplication
 	let lastEmittedMin: number | null = null;
 	let lastEmittedMax: number | null = null;
 
 	$effect(() => {
 		if (!derivedExtent) {
-			// Clear derived selection when primary is cleared
+			// Clear derived filter when primary is cleared
 			if (lastEmittedMin != null) {
 				lastEmittedMin = null;
 				lastEmittedMax = null;
-				if (selection) {
-					selection.update({
-						predicate: null,
-						source: source as unknown as ClauseSource,
-						clients: chart.markClients,
-						value: null
-					});
-				}
+				targetGroup.removeManual(sourceKey);
 			}
 			return;
 		}
@@ -190,32 +137,34 @@
 		lastEmittedMin = dataMin;
 		lastEmittedMax = dataMax;
 
-		if (!selection || !columnRef) return;
+		if (!columnRef) return;
 
-		const s = getScale();
-		if (!s) return;
+		const fieldStr =
+			typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? '');
 
-		const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
-			source: source as unknown as ClauseSource,
-			clients: chart.markClients,
-			scale: {
-				type: 'linear',
-				domain: s.domain() as ScaleDomain,
-				range: s.range() as [number, number]
+		targetGroup.upsertManual(
+			sourceKey,
+			isBetween(columnRef, [dataMin, dataMax]),
+			[dataMin, dataMax],
+			new Set<string>(), // No excludeMarkIds — target group only has comparison marks
+			{
+				kind: 'range',
+				column: fieldStr,
+				label: fieldStr,
+				values: [dataMin, dataMax]
 			}
-		});
-		selection.update(clause);
+		);
 	});
 
 	// =========================================================================
-	// Relay non-axis clauses from source → derived
+	// Relay non-axis clauses from source → target
 	// =========================================================================
 
 	let relayedKeys = new Set<string>();
 
 	$effect(() => {
 		if (!relayClauses) {
-			for (const key of relayedKeys) derivedGroup.removeManual(key);
+			for (const key of relayedKeys) targetGroup.removeManual(key);
 			relayedKeys = new Set();
 			return;
 		}
@@ -229,51 +178,31 @@
 			// Skip the range clause on the axis column — we replace it with the shifted version
 			if (item.schema?.kind === 'range' && item.schema?.column === fieldStr) continue;
 
-			if (item.clause?.predicate) {
-				const key = `relay:${item.source}`;
+			if (item.predicate) {
+				const key = `relay:${item.sourceId}`;
 				currentKeys.add(key);
-				derivedGroup.upsertManual(key, item.clause, item.schema ?? {});
+				targetGroup.upsertManual(
+					key,
+					item.predicate,
+					item.value,
+					new Set<string>(),
+					item.schema ?? undefined
+				);
 			}
 		}
 
 		// Remove stale relayed clauses
 		for (const key of relayedKeys) {
-			if (!currentKeys.has(key)) derivedGroup.removeManual(key);
+			if (!currentKeys.has(key)) targetGroup.removeManual(key);
 		}
 		relayedKeys = currentKeys;
 	});
 
-	// Pre-aggregation on pointer enter
-	function handlePointerEnter() {
-		if (!selection?.activate) return;
-		const s = getScale();
-		if (!s || !columnRef) return;
-
-		const range: ScaleDomain = derivedExtent
-			? [
-					Math.min(derivedExtent[0], derivedExtent[1]),
-					Math.max(derivedExtent[0], derivedExtent[1])
-				]
-			: [0, 1];
-
-		selection.activate(
-			clauseInterval(columnRef, range, {
-				source: source as unknown as ClauseSource,
-				clients: chart.markClients,
-				scale: {
-					type: 'linear',
-					domain: s.domain() as ScaleDomain,
-					range: s.range() as [number, number]
-				}
-			})
-		);
-	}
-
 	onMount(() => {
 		return () => {
-			for (const key of relayedKeys) derivedGroup.removeManual(key);
+			targetGroup.removeManual(sourceKey);
+			for (const key of relayedKeys) targetGroup.removeManual(key);
 			relayedKeys = new Set();
-			unregister?.();
 		};
 	});
 </script>

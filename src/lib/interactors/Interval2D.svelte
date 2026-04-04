@@ -11,18 +11,20 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
-	import type { FilterGroup, BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
-		/** @deprecated No longer used — FilterGroup is obtained from context. */
+		/** Filter group name — selects which FilterGroup this brush writes to. */
 		selection?: string;
 		xField?: FieldRef;
 		yField?: FieldRef;
 	}
 
-	let { xField, yField }: Props = $props();
+	let { selection, xField, yField }: Props = $props();
 
-	const filterGroup = getContext<FilterGroup>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const filterGroup = filterGroups.get(selection);
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();

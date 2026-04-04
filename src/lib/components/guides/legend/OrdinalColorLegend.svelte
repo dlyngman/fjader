@@ -3,11 +3,11 @@
 	import { column, isIn, literal } from '@uwdata/mosaic-sql';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { FilterGroup, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
 		scaleState: ColorScaleState;
-		/** @deprecated No longer used — FilterGroup is obtained from context. */
 		selection?: string;
 		field?: string | null;
 		title?: string | null;
@@ -29,7 +29,8 @@
 		orientation = 'horizontal'
 	}: Props = $props();
 
-	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
+	const filterGroup = filterGroups?.get();
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Reactive: re-renders when domain or scheme changes

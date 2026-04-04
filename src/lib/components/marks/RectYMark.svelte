@@ -30,7 +30,7 @@
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props extends BaseMarkProps, RectOffsetProps {
 		x?: FieldRef | null;
@@ -78,7 +78,7 @@
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
-	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
 
 	MarkLifecycle.ensureServices(coordinator);
@@ -304,7 +304,7 @@
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroup?.selection ?? null,
+					filterGroups.get(entry.selection as string | undefined).selection,
 					{ gpuCoordinator, onMarkLOD }
 				);
 			}

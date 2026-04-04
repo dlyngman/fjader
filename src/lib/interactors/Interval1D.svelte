@@ -13,21 +13,23 @@
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import type { FilterGroup, BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	/** Helper: cast D3Scale to one with invert() for continuous scales. */
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
 
 	interface Props {
-		/** @deprecated No longer used — FilterGroup is obtained from context. */
+		/** Filter group name — selects which FilterGroup this brush writes to. */
 		selection?: string;
 		field?: FieldRef;
 		axis?: 'x' | 'y';
 	}
 
-	let { field, axis = 'x' }: Props = $props();
+	let { selection, field, axis = 'x' }: Props = $props();
 
-	const filterGroup = getContext<FilterGroup>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const filterGroup = filterGroups.get(selection);
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();

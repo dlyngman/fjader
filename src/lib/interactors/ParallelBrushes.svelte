@@ -6,12 +6,13 @@
 	import { closeTo, isDragging, createPanModeHandlers } from './brush-utils';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
-	import type { FilterGroup, BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	type InvertibleScale = { (v: unknown): number; invert(v: number): number; domain(): number[]; range(): number[] };
 
 	interface Props {
-		/** @deprecated No longer used — FilterGroup is obtained from context. */
+		/** Filter group name — selects which FilterGroup these brushes write to. */
 		selection?: string;
 		/** When true, the parallel chart excludes itself from its own brush filters
 		 *  (standard crossfilter behavior). When false (default), brushes self-filter
@@ -19,10 +20,11 @@
 		cross?: boolean;
 	}
 
-	let { cross = false }: Props = $props();
+	let { selection, cross = false }: Props = $props();
 
 	const chart = getContext<ChartContext>('chart');
-	const filterGroup = getContext<FilterGroup>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const filterGroup = filterGroups.get(selection);
 
 	const ps = $derived(chart.parallelScales);
 

@@ -3,18 +3,20 @@
 	import { column, isIn, literal, or, and as sqlAnd, isNotDistinct } from '@uwdata/mosaic-sql';
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { FilterGroup, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 
 	interface Props {
-		/** @deprecated No longer used — FilterGroup is obtained from context. */
+		/** Filter group name — selects which FilterGroup this toggle writes to. */
 		selection?: string;
 		field: string | string[];
 	}
 
-	let { field }: Props = $props();
+	let { selection, field }: Props = $props();
 
-	const filterGroup = getContext<FilterGroup>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const filterGroup = filterGroups.get(selection);
 	const chart = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 

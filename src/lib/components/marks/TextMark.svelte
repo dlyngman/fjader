@@ -24,7 +24,7 @@
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { D3BandScale } from '$lib/types';
 
@@ -79,7 +79,7 @@
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
-	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	MarkLifecycle.ensureServices(coordinator);
@@ -315,7 +315,7 @@
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroup?.selection ?? null
+					filterGroups.get(selection as string | undefined).selection
 				);
 			}
 		});

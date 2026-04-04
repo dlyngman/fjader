@@ -4,11 +4,11 @@
 	import { isBetween, column } from '@uwdata/mosaic-sql';
 	import { scaleBrushExtent1D, WHEEL_SENSITIVITY } from '$lib/interactors/brush-utils';
 	import { getContext, onDestroy } from 'svelte';
-	import type { FilterGroup, BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
 		scaleState: ColorScaleState;
-		/** @deprecated No longer used — FilterGroup is obtained from context. */
 		selection?: string;
 		title?: string | null;
 		width?: number;
@@ -140,7 +140,8 @@
 	}
 
 	// --- Brush state ---
-	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
+	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
+	const filterGroup = filterGroups?.get();
 	const isInteractive = $derived(filterGroup != null);
 
 	let brushT0: number | null = $state(null);
