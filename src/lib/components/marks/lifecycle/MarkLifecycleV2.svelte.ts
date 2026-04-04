@@ -675,25 +675,33 @@ export class MarkLifecycleV2 {
 	 * Inline time offset expressions for time scales.
 	 * Replaces ViewManager's offset column with direct SQL in the SELECT.
 	 */
+	/**
+	 * Inline time offset expressions for time scales.
+	 * Replaces ViewManager's offset column with direct SQL in the SELECT.
+	 * Handles base channel + extent variants (x1/x2, y1/y2 from bin expansion).
+	 */
 	#inlineTimeOffsets(select: Record<string, unknown>): void {
-		for (const [axis, scaleType] of [
-			['x', this.actualXScaleType],
-			['y', this.actualYScaleType]
+		for (const [axis, channels] of [
+			['x', ['x', 'x1', 'x2']],
+			['y', ['y', 'y1', 'y2']]
 		] as const) {
+			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			if (scaleType !== 'time') continue;
 			const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState | null;
 			if (!scaleState?.t0) continue;
 
-			const val = this.#config.select[axis];
-			if (typeof val === 'string') {
-				// Raw column name — use the pre-built offset expression from TimeScaleState
-				if (scaleState.offsetExpression) {
-					select[axis] = sql`${scaleState.offsetExpression}`;
+			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
+
+			for (const ch of channels) {
+				if (!(ch in select)) continue;
+				const val = select[ch];
+				if (typeof val === 'string') {
+					if (scaleState.offsetExpression) {
+						select[ch] = sql`${scaleState.offsetExpression}`;
+					}
+				} else if (isNode(val)) {
+					select[ch] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
 				}
-			} else if (isNode(val)) {
-				// Expression node (e.g. dateMonthDay) — wrap with epoch offset conversion
-				const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
-				select[axis] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
 			}
 		}
 	}
@@ -743,14 +751,26 @@ export class MarkLifecycleV2 {
 			return true;
 		});
 
-		// Build a single query with MIN/MAX for each field, CAST to REAL
+		// Build a single query with MIN/MAX for each field.
+		// Numeric fields get CAST to REAL. Date/timestamp fields from bin
+		// expressions are left uncast — DuckDB returns Date objects that
+		// we convert to epoch ms in JS (same as fetchCategoricalDomains).
+		const schema = tableSchemaService.getSchema(this.#config.table);
 		const selectDef: Record<string, unknown> = {};
 		for (let i = 0; i < unique.length; i++) {
 			const colExpr = isNode(unique[i].expr)
 				? unique[i].expr
 				: sqlColumn(String(unique[i].expr));
-			selectDef[`min_${i}`] = cast(min(colExpr as ExprValue), 'REAL');
-			selectDef[`max_${i}`] = cast(max(colExpr as ExprValue), 'REAL');
+			const colName = String(unique[i].expr).replace(/^["']|["']$/g, '');
+			const jsType = schema?.get(colName)?.jsType;
+			if (jsType === 'date') {
+				// Date columns: raw MIN/MAX, convert to epoch ms in JS
+				selectDef[`min_${i}`] = min(colExpr as ExprValue);
+				selectDef[`max_${i}`] = max(colExpr as ExprValue);
+			} else {
+				selectDef[`min_${i}`] = cast(min(colExpr as ExprValue), 'REAL');
+				selectDef[`max_${i}`] = cast(max(colExpr as ExprValue), 'REAL');
+			}
 		}
 
 		const q = Query.from(this.#config.table).select(selectDef as Record<string, ExprValue>);
