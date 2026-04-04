@@ -714,16 +714,18 @@ export class MarkLifecycleV2 {
 			const scaleType = alias === 'x' ? this.actualXScaleType
 				: alias === 'y' ? this.actualYScaleType
 				: 'linear'; // parallel columns are always linear
-			if (!isNumericScale(scaleType)) continue;
 
 			// Check alias + extent variants (x1/x2, y1/y2)
 			for (const key of [alias, `${alias}1`, `${alias}2`]) {
 				const expr = select[key];
 				if (expr == null) continue;
+				// Bin expressions always need field stats (MIN/MAX for bin boundaries),
+				// regardless of scale type (including time scales).
 				if (isBinExpression(expr)) {
 					fields.push({ key, expr: expr.field });
 					continue;
 				}
+				if (!isNumericScale(scaleType)) continue;
 				if (isNode(expr) && isAggregateExpression(expr as any)) continue;
 				if (isNode(expr) && isWindowExpression(expr as any)) continue;
 				fields.push({ key, expr });
