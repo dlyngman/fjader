@@ -20,6 +20,7 @@
 
 	let {
 		scaleState,
+		selection = undefined,
 		field = null,
 		title,
 		columns = null,
@@ -30,7 +31,7 @@
 	}: Props = $props();
 
 	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
-	const filterGroup = filterGroups?.get();
+	const filterGroup = filterGroups?.get(selection);
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Reactive: re-renders when domain or scheme changes

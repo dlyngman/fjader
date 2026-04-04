@@ -20,6 +20,7 @@
 
 	let {
 		scaleState,
+		selection = undefined,
 		title = null,
 		width = 200,
 		height = 12,
@@ -141,7 +142,7 @@
 
 	// --- Brush state ---
 	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
-	const filterGroup = filterGroups?.get();
+	const filterGroup = filterGroups?.get(selection);
 	const isInteractive = $derived(filterGroup != null);
 
 	let brushT0: number | null = $state(null);
