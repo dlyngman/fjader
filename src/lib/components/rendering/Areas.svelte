@@ -457,8 +457,8 @@
 
 	// Instance count = number of data points (last instance per series discards)
 	$effect(() => {
-		if (renderer?.resourcesCreated && dimData && dimData.length > 1) {
-			renderer.updateInstanceCount(dimData.length);
+		if (renderer?.resourcesCreated) {
+			renderer.updateInstanceCount(dimData && dimData.length > 1 ? dimData.length : 0);
 		}
 	});
 

@@ -368,7 +368,7 @@
 
 	// --- Instance count ---
 	$effect(() => {
-		if (renderer?.resourcesCreated && rowCount > 0) {
+		if (renderer?.resourcesCreated) {
 			renderer.updateInstanceCount(rowCount);
 		}
 	});

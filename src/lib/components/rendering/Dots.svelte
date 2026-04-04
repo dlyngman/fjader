@@ -268,8 +268,8 @@
 
 	// Instance Count
 	$effect(() => {
-		if (renderer?.resourcesCreated && xData) {
-			renderer.updateInstanceCount(xData.length);
+		if (renderer?.resourcesCreated) {
+			renderer.updateInstanceCount(xData?.length ?? 0);
 		}
 	});
 
