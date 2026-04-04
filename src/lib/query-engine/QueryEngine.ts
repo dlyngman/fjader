@@ -52,13 +52,31 @@ export interface DuckDBConnection {
 // ---------------------------------------------------------------------------
 
 export class QueryEngine {
-	#conn: DuckDBConnection;
+	#conn: DuckDBConnection | null = null;
+	#connPromise: Promise<DuckDBConnection> | null = null;
 	#inflight = new Map<string, AbortController>();
 	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void }>();
 	#destroyed = false;
 
-	constructor(connection: DuckDBConnection) {
-		this.#conn = connection;
+	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
+		if (connection instanceof Promise) {
+			this.#connPromise = connection;
+			connection.then((c) => {
+				this.#conn = c;
+			});
+		} else {
+			this.#conn = connection;
+		}
+	}
+
+	/** Resolve #conn from #connPromise if needed. No-op when already resolved. */
+	#ensureConnection(): Promise<void> | void {
+		if (this.#conn) return;
+		if (this.#connPromise) {
+			return this.#connPromise.then((c) => {
+				this.#conn = c;
+			});
+		}
 	}
 
 	/**
@@ -74,6 +92,7 @@ export class QueryEngine {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
+		if (!this.#conn) await this.#ensureConnection();
 
 		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
 
@@ -104,14 +123,14 @@ export class QueryEngine {
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
-			const result = await this.#conn.query(sqlStr);
+			const result = await this.#conn!.query(sqlStr);
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
 			return result;
 		}
 
-		return this.#conn.query(sqlStr);
+		return this.#conn!.query(sqlStr);
 	}
 
 	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal): Promise<Table> {
@@ -127,7 +146,7 @@ export class QueryEngine {
 				throw new DOMException('Query superseded', 'AbortError');
 			}
 
-			const result = await this.#conn.query(sqlStr);
+			const result = await this.#conn!.query(sqlStr);
 
 			if (controller.signal.aborted) {
 				throw new DOMException('Query superseded', 'AbortError');
@@ -161,13 +180,14 @@ export class QueryEngine {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
+		if (!this.#conn) await this.#ensureConnection();
 		const statements = Array.isArray(sql) ? sql : [sql];
-		const execFn = this.#conn.exec?.bind(this.#conn);
+		const execFn = this.#conn!.exec?.bind(this.#conn!);
 		for (const stmt of statements) {
 			if (execFn) {
 				await execFn(stmt);
 			} else {
-				await this.#conn.query(stmt);
+				await this.#conn!.query(stmt);
 			}
 		}
 	}
@@ -180,8 +200,9 @@ export class QueryEngine {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
+		if (!this.#conn) await this.#ensureConnection();
 		const escaped = table.replaceAll('"', '""');
-		const result = await this.#conn.query(`DESCRIBE "${escaped}"`);
+		const result = await this.#conn!.query(`DESCRIBE "${escaped}"`);
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);
@@ -230,6 +251,7 @@ export class QueryEngine {
 			pending.reject(new DOMException('Engine destroyed', 'AbortError'));
 		}
 		this.#pending.clear();
-		await this.#conn.close();
+		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
+		if (conn) await conn.close();
 	}
 }

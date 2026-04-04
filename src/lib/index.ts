@@ -35,6 +35,9 @@ export * from './transforms';
 export * from './sql/bin';
 export * from './types';
 
+// Query engine setup
+export { setQueryContext } from './query-engine';
+
 // Spec-driven rendering API
 export { DivePlot, render } from './spec';
 export type { DivePlotSpec, DivePlotHandle, RenderOptions } from './spec';

@@ -20,6 +20,7 @@ import { Selection } from '@uwdata/mosaic-core';
 import { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { SelectionRegistry } from '$lib/selection';
+import { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 import { getOrCreateCoordinator, loadData } from './LazyCoordinator';
 import { getOrCreateQueryEngine } from './LazyQueryEngine';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
@@ -64,9 +65,11 @@ export async function render(
 	// 5. Build context map — injected into Svelte mount() so child components
 	//    find these via getContext() calls (same keys as setCoordinators())
 	const selectionRegistry = new SelectionRegistry(Selection);
+	const filterGroups = new FilterGroupRegistry();
 	const context = new Map<string, unknown>();
 	context.set('mosaic-coordinator', coordinator);
 	context.set('query-engine', queryEngine);
+	context.set('filter-groups', filterGroups);
 	context.set('gpu-coordinator', gpuCoordinator);
 	context.set('scale-registry', scaleRegistry);
 	context.set('selection-registry', selectionRegistry);

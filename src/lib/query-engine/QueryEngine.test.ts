@@ -63,6 +63,14 @@ describe('QueryEngine', () => {
 			await engine.query('SELECT 2');
 			expect(conn.queries).toEqual(['SELECT 1', 'SELECT 2']);
 		});
+
+		it('accepts a Promise<DuckDBConnection> and defers until resolved', async () => {
+			const conn = createMockConnection();
+			const engine = new QueryEngine(Promise.resolve(conn));
+
+			await engine.query('SELECT 1');
+			expect(conn.queries).toEqual(['SELECT 1']);
+		});
 	});
 
 	describe('cancel-on-supersede', () => {
