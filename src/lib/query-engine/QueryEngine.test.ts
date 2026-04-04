@@ -66,7 +66,7 @@ describe('QueryEngine', () => {
 	});
 
 	describe('cancel-on-supersede', () => {
-		it('aborts previous query for same callerId', async () => {
+		it('queues second query as pending when first is inflight', async () => {
 			let resolvers: Array<(v: unknown) => void> = [];
 
 			const conn = createMockConnection({
@@ -77,21 +77,27 @@ describe('QueryEngine', () => {
 			});
 			const engine = new QueryEngine(conn);
 
-			// Start first query
+			// Start first query (goes inflight)
 			const p1 = engine.query('SELECT 1', { callerId: 'mark-1' });
 
-			// Start second query for same caller — should supersede first
+			// Second query for same caller — goes to pending slot (not inflight)
 			const p2 = engine.query('SELECT 2', { callerId: 'mark-1' });
 
-			// Resolve both connection queries
+			// Only one query on the connection (first inflight)
+			expect(resolvers).toHaveLength(1);
+
+			// Resolve the inflight query — p1 succeeds, pending p2 starts
 			resolvers[0]({ numRows: 0, get: () => ({}) });
+			const r1 = await p1;
+			expect(r1).toBeDefined();
+
+			// Wait for pending query to reach the connection and resolve it
+			await new Promise((r) => setTimeout(r, 0));
+			expect(resolvers).toHaveLength(2);
 			resolvers[1]({ numRows: 0, get: () => ({}) });
 
-			// First query should reject with AbortError
-			await expect(p1).rejects.toThrow('superseded');
-
-			// Second query should succeed
-			await expect(p2).resolves.toBeDefined();
+			const r2 = await p2;
+			expect(r2).toBeDefined();
 		});
 
 		it('does not interfere with different callerIds', async () => {
@@ -126,7 +132,9 @@ describe('QueryEngine', () => {
 			});
 			const engine = new QueryEngine(conn);
 
-			// Simulate rapid filter changes (like brushing)
+			// Simulate rapid filter changes (like brushing).
+			// Execute-latest: first query goes inflight (completes instantly
+			// with sync mock), all subsequent replace the pending slot.
 			const promises = [];
 			for (let i = 0; i < 10; i++) {
 				promises.push(
@@ -138,12 +146,16 @@ describe('QueryEngine', () => {
 
 			const results = await Promise.all(promises);
 
-			// Only the last query should succeed
+			// First query succeeds (inflight, completes immediately).
+			// Last query succeeds (pending, fires after first completes).
+			// Intermediate queries are rejected from the pending slot.
 			const succeeded = results.filter((r) => r !== 'aborted');
-			expect(succeeded).toHaveLength(1);
+			expect(succeeded).toHaveLength(2);
 
-			// All queries were sent to the connection (sync, no delay)
-			expect(queryCount).toBe(10);
+			// Only 2 queries hit the connection
+			expect(queryCount).toBe(2);
+			expect(conn.queries[0]).toBe('SELECT 0');
+			expect(conn.queries[1]).toBe('SELECT 9');
 		});
 	});
 

@@ -22,6 +22,7 @@ class TableSchemaServiceImpl {
 	#coordinator: Coordinator | null = null;
 	#schemas = $state(new Map<string, Map<string, ColumnSchemaEntry>>());
 	#pending = new Set<string>(); // Tables currently being fetched
+	#pendingPromises = new Map<string, Promise<void>>(); // Awaitable fetch promises
 	#deferredRequests = new Set<string>(); // Tables requested before coordinator was available
 
 	// Reactive version counter - external code reads this to establish dependency
@@ -69,9 +70,34 @@ class TableSchemaServiceImpl {
 		return this.#schemas.has(tableName);
 	}
 
+	/**
+	 * Ensure the schema for a table is loaded. Returns immediately if cached,
+	 * otherwise awaits the fetch. Safe to call from multiple marks — deduplicates.
+	 */
+	async ensure(tableName: string): Promise<Map<string, ColumnSchemaEntry>> {
+		if (this.#schemas.has(tableName)) {
+			return this.#schemas.get(tableName)!;
+		}
+		const existing = this.#pendingPromises.get(tableName);
+		if (existing) {
+			await existing;
+			return this.#schemas.get(tableName) ?? new Map();
+		}
+		if (this.#coordinator) {
+			await this.#fetchSchema(tableName);
+		}
+		return this.#schemas.get(tableName) ?? new Map();
+	}
+
 	async #fetchSchema(tableName: string): Promise<void> {
 		if (this.#pending.has(tableName)) return;
 		this.#pending.add(tableName);
+		const promise = this.#doFetch(tableName);
+		this.#pendingPromises.set(tableName, promise);
+		return promise;
+	}
+
+	async #doFetch(tableName: string): Promise<void> {
 
 		try {
 			// DuckDB DESCRIBE returns: column_name, column_type, null, key, default, extra
@@ -94,6 +120,7 @@ class TableSchemaServiceImpl {
 			this.version++;
 		} finally {
 			this.#pending.delete(tableName);
+			this.#pendingPromises.delete(tableName);
 		}
 	}
 

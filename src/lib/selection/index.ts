@@ -13,3 +13,5 @@ export type {
 	FilterItem,
 	CreateLocalOpts
 } from './SelectionRegistry.svelte';
+
+export { default as SelectionBridge } from './SelectionBridge.svelte';

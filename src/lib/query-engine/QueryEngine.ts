@@ -54,6 +54,7 @@ export interface DuckDBConnection {
 export class QueryEngine {
 	#conn: DuckDBConnection;
 	#inflight = new Map<string, AbortController>();
+	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void }>();
 	#destroyed = false;
 
 	constructor(connection: DuckDBConnection) {
@@ -63,8 +64,11 @@ export class QueryEngine {
 	/**
 	 * Execute a query and return the Arrow result table.
 	 * Accepts a SQL string or any object with toString() (e.g. mosaic-sql Query).
-	 * If callerId is provided, any in-flight query for that caller is
-	 * cancelled before the new query starts.
+	 *
+	 * If callerId is provided, uses execute-latest semantics: at most one
+	 * query is inflight per caller, plus one pending. New queries while
+	 * inflight replace the pending slot (the connection isn't blocked with
+	 * a queue of queries that will all be discarded anyway).
 	 */
 	async query(sql: string | { toString(): string }, opts?: QueryOpts): Promise<Table> {
 		if (this.#destroyed) {
@@ -73,45 +77,26 @@ export class QueryEngine {
 
 		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
 
-		// Cancel-on-supersede: abort previous query for same caller
 		if (opts?.callerId) {
-			const prev = this.#inflight.get(opts.callerId);
-			if (prev) {
-				prev.abort();
-			}
-			const controller = new AbortController();
-			this.#inflight.set(opts.callerId, controller);
+			const callerId = opts.callerId;
 
-			// Also respect external signal
-			if (opts.signal) {
-				opts.signal.addEventListener(
-					'abort',
-					() => controller.abort(),
-					{ once: true }
-				);
-			}
-
-			try {
-				// Check if already aborted before starting
-				if (controller.signal.aborted) {
-					throw new DOMException('Query superseded', 'AbortError');
+			// Execute-latest: at most 1 inflight + 1 pending per caller.
+			// Don't abort inflight — let it complete and show its result for
+			// continuous visual updates during brushing. Only collapse the
+			// pending slot so we don't pile up queries on the connection.
+			if (this.#inflight.has(callerId)) {
+				// Reject any existing pending query for this caller
+				const prev = this.#pending.get(callerId);
+				if (prev) {
+					prev.reject(new DOMException('Query superseded', 'AbortError'));
 				}
-
-				const result = await this.#conn.query(sqlStr);
-
-				// Check if superseded while awaiting
-				if (controller.signal.aborted) {
-					throw new DOMException('Query superseded', 'AbortError');
-				}
-
-				return result;
-			} finally {
-				// Only clean up if we're still the current query for this caller
-				const current = this.#inflight.get(opts.callerId);
-				if (current === controller) {
-					this.#inflight.delete(opts.callerId);
-				}
+				// Store as pending — will be executed when inflight completes
+				return new Promise<Table>((resolve, reject) => {
+					this.#pending.set(callerId, { sql: sqlStr, resolve, reject });
+				});
 			}
+
+			return this.#executeForCaller(callerId, sqlStr, opts.signal);
 		}
 
 		// No callerId: direct execution, still respect external signal
@@ -127,6 +112,44 @@ export class QueryEngine {
 		}
 
 		return this.#conn.query(sqlStr);
+	}
+
+	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal): Promise<Table> {
+		const controller = new AbortController();
+		this.#inflight.set(callerId, controller);
+
+		if (signal) {
+			signal.addEventListener('abort', () => controller.abort(), { once: true });
+		}
+
+		try {
+			if (controller.signal.aborted) {
+				throw new DOMException('Query superseded', 'AbortError');
+			}
+
+			const result = await this.#conn.query(sqlStr);
+
+			if (controller.signal.aborted) {
+				throw new DOMException('Query superseded', 'AbortError');
+			}
+
+			return result;
+		} finally {
+			// Only clean up if we're still the current query for this caller
+			const current = this.#inflight.get(callerId);
+			if (current === controller) {
+				this.#inflight.delete(callerId);
+			}
+
+			// If there's a pending query for this caller, execute it now
+			const pending = this.#pending.get(callerId);
+			if (pending) {
+				this.#pending.delete(callerId);
+				this.#executeForCaller(callerId, pending.sql, undefined)
+					.then(pending.resolve)
+					.catch(pending.reject);
+			}
+		}
 	}
 
 	/**
@@ -179,13 +202,18 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Cancel any in-flight query for the given callerId.
+	 * Cancel any in-flight or pending query for the given callerId.
 	 */
 	cancel(callerId: string): void {
 		const controller = this.#inflight.get(callerId);
 		if (controller) {
 			controller.abort();
 			this.#inflight.delete(callerId);
+		}
+		const pending = this.#pending.get(callerId);
+		if (pending) {
+			pending.reject(new DOMException('Query cancelled', 'AbortError'));
+			this.#pending.delete(callerId);
 		}
 	}
 
@@ -194,11 +222,14 @@ export class QueryEngine {
 	 */
 	async destroy(): Promise<void> {
 		this.#destroyed = true;
-		// Cancel all in-flight queries
 		for (const controller of this.#inflight.values()) {
 			controller.abort();
 		}
 		this.#inflight.clear();
+		for (const pending of this.#pending.values()) {
+			pending.reject(new DOMException('Engine destroyed', 'AbortError'));
+		}
+		this.#pending.clear();
 		await this.#conn.close();
 	}
 }
