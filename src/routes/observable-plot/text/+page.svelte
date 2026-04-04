@@ -18,24 +18,22 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
+	import { setQueryContext } from '$lib/query-engine';
 	setCoordinators();
 
 	const wasm = wasmConnector();
 	const coord = new Coordinator();
 	coord.databaseConnector(wasm);
 	setContext('mosaic-coordinator', coord);
+	let resolveConn;
+	setQueryContext(new Promise((r) => { resolveConn = r; }));
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
-	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const connection = await wasm.getConnection();
-			queryEngine = new QueryEngine(connection);
+			resolveConn(await wasm.getConnection());
 
 			await coord.exec([
 				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`),
@@ -54,8 +52,7 @@
 	<p class="status error">Error loading data: {loadError}</p>
 {:else if !isLoaded}
 	<p class="status">Loading...</p>
-{:else if queryEngine}
-<QueryEngineProvider {queryEngine}>
+{:else}
 	<div class="container">
 		<h1>Bar Labels</h1>
 		<div class="charts">
@@ -181,7 +178,6 @@
 			</div>
 		</div>
 	</div>
-</QueryEngineProvider>
 {/if}
 
 <style>

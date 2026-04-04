@@ -1,8 +1,7 @@
 <script>
 	import { Coordinator, coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadCSV, loadParquet } from '@uwdata/mosaic-sql';
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
+	import { setQueryContext } from '$lib/query-engine';
 	import { setCoordinators } from '$lib';
 	import { onMount, onDestroy, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
@@ -13,11 +12,11 @@
 	const coord = new Coordinator();
 	coord.databaseConnector(wasm);
 	setContext('mosaic-coordinator', coord);
+	let resolveConn;
+	setQueryContext(new Promise((r) => { resolveConn = r; }));
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
-	let queryEngine = $state(null);
 
 	// const logs = [];
 	// const queryLogger = {
@@ -41,8 +40,7 @@
 
 	onMount(async () => {
 		try {
-			const connection = await wasm.getConnection();
-			queryEngine = new QueryEngine(connection);
+			resolveConn(await wasm.getConnection());
 
 			await coord.exec(
 				loadParquet('flights', `${window.location.origin}/data/flights-200k.parquet`)
@@ -61,10 +59,8 @@
 		<div class="error-container">Error loading data: {loadError}</div>
 	{:else if !isLoaded}
 		<div class="loading-container">Loading parquet data...</div>
-	{:else if queryEngine}
-		<QueryEngineProvider {queryEngine}>
-			<MainView />
-		</QueryEngineProvider>
+	{:else}
+		<MainView />
 	{/if}
 </div>
 

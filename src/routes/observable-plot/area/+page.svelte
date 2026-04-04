@@ -18,23 +18,21 @@
 	import { Grid } from '$lib/components/guides';
 	import { stackY } from '$lib/transforms';
 
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
+	import { setQueryContext } from '$lib/query-engine';
 	setCoordinators();
 
 	const wasm = wasmConnector();
 	const coord = new Coordinator();
 	coord.databaseConnector(wasm);
 	setContext('mosaic-coordinator', coord);
+	let resolveConn;
+	setQueryContext(new Promise((r) => { resolveConn = r; }));
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
-	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const connection = await wasm.getConnection();
-			queryEngine = new QueryEngine(connection);
+			resolveConn(await wasm.getConnection());
 			await coord.exec([
 				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
 				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
@@ -54,8 +52,7 @@
 	<p class="status error">Error loading data: {loadError}</p>
 {:else if !isLoaded}
 	<p class="status">Loading...</p>
-{:else if queryEngine}
-<QueryEngineProvider {queryEngine}>
+{:else}
 	<div class="container">
 		<h1>AAPL Stock Price</h1>
 
@@ -397,7 +394,6 @@
 		</div>
 	</div>
 
-</QueryEngineProvider>
 {/if}
 
 <style>

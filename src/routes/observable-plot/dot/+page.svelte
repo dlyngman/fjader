@@ -1,7 +1,7 @@
 <script>
 	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import { setQueryContext } from '$lib/query-engine';
 	import { setCoordinators } from '$lib';
 	import { onMount, setContext } from 'svelte';
 	import {
@@ -15,7 +15,6 @@
 		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 
 	setCoordinators();
 
@@ -24,16 +23,15 @@
 	const coord = new Coordinator();
 	coord.databaseConnector(wasm);
 	setContext('mosaic-coordinator', coord);
+	let resolveConn;
+	setQueryContext(new Promise((r) => { resolveConn = r; }));
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
-	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const connection = await wasm.getConnection();
-			queryEngine = new QueryEngine(connection);
+			resolveConn(await wasm.getConnection());
 
 			await coord.exec([
 				msql.loadCSV('cars', `${window.location.origin}/data/cars.csv`),
@@ -53,8 +51,7 @@
 	<p class="status error">Error loading data: {loadError}</p>
 {:else if !isLoaded}
 	<p class="status">Loading...</p>
-{:else if queryEngine}
-<QueryEngineProvider {queryEngine}>
+{:else}
 	<div class="container">
 		<h1>Scatterplot</h1>
 
@@ -196,7 +193,6 @@
 			</div>
 		</div>
 	</div>
-</QueryEngineProvider>
 {/if}
 
 <style>

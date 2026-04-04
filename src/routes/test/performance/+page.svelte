@@ -16,8 +16,7 @@
 	} from '$lib/components';
 	import Frame from '$lib/components/background/Frame.svelte';
 
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
+	import { setQueryContext } from '$lib/query-engine';
 	// ✅ Initialize enhanced coordination
 	console.log('🚀 Initializing enhanced coordination for performance demo...');
 	const coordinators = setCoordinators({
@@ -26,11 +25,14 @@
 	});
 
 	// State management
-	let mosaicCoordinator;
+	const wasm = wasmConnector();
+	const mosaicCoordinator = new Coordinator();
+	mosaicCoordinator.databaseConnector(wasm);
+	setContext('mosaic-coordinator', mosaicCoordinator);
+	let resolveConn;
+	setQueryContext(new Promise((r) => { resolveConn = r; }));
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
-	let queryEngine = $state(null);
 	let performanceReport = $state(null);
 	let isMonitoring = $state(false);
 	let monitoringDuration = $state(0);
@@ -67,11 +69,7 @@
 
 	onMount(async () => {
 		try {
-			// Initialize Mosaic
-			const wasm = wasmConnector();
-			mosaicCoordinator = new Coordinator();
-			mosaicCoordinator.databaseConnector(wasm);
-			setContext('mosaic-coordinator', mosaicCoordinator);
+			resolveConn(await wasm.getConnection());
 
 			await mosaicCoordinator.exec(
 				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
@@ -241,8 +239,7 @@
 			<h3>⏳ Loading...</h3>
 			<p>Initializing enhanced coordination and loading data...</p>
 		</div>
-	{:else if queryEngine}
-	<QueryEngineProvider {queryEngine}>
+	{:else}
 		<!-- Performance Control Panel -->
 		<div class="control-panel">
 			<h2>🔧 Performance Monitoring Demo</h2>
@@ -423,7 +420,6 @@
 				</div>
 			</div>
 		</div>
-	</QueryEngineProvider>
 	{/if}
 </div>
 

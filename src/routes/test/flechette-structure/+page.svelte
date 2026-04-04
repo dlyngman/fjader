@@ -4,8 +4,6 @@
 	import { loadParquet, sql } from '@uwdata/mosaic-sql';
 	import { DataClient } from '$lib/data/DataClient.svelte';
 
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	let status = $state('Initializing...');
 	let dictionaryData = $state(null);
 	let dataSample = $state([]);

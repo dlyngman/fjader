@@ -18,23 +18,21 @@
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { topN } from '$lib/transforms';
 
-	import { QueryEngine } from '$lib/query-engine/QueryEngine';
-	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
+	import { setQueryContext } from '$lib/query-engine';
 	setCoordinators();
 
 	const wasm = wasmConnector();
 	const coord = new Coordinator();
 	coord.databaseConnector(wasm);
 	setContext('mosaic-coordinator', coord);
+	let resolveConn;
+	setQueryContext(new Promise((r) => { resolveConn = r; }));
 	let isLoaded = $state(false);
 	let loadError = $state(null);
-	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
-	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const connection = await wasm.getConnection();
-			queryEngine = new QueryEngine(connection);
+			resolveConn(await wasm.getConnection());
 			// Table 1: 10 categories, pre-aggregated (1 row each)
 			await coord.exec(`
 				CREATE TABLE top_n_sales AS
@@ -86,8 +84,7 @@
 	<p class="status error">Error: {loadError}</p>
 {:else if !isLoaded}
 	<p class="status">Loading...</p>
-{:else if queryEngine}
-<QueryEngineProvider {queryEngine}>
+{:else}
 	<div class="container">
 		<h1>topN Transform Test</h1>
 		<p class="subtitle">Testing band scale domain behavior with JS transforms</p>
@@ -306,7 +303,6 @@
 			</div>
 		</div>
 	</div>
-</QueryEngineProvider>
 {/if}
 
 <style>
