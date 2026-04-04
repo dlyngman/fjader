@@ -5,6 +5,8 @@
 	import { onMount, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	setCoordinators();
 
 	// Create coordinator synchronously so context is available
@@ -17,9 +19,14 @@
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
+	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
+	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
+			const connection = await wasm.getConnection();
+			queryEngine = new QueryEngine(connection);
+
 			// Load penguins dataset for the brush demo
 			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
 
@@ -36,8 +43,10 @@
 		<h2>Error loading data</h2>
 		<p>{loadError}</p>
 	</div>
-{:else if isLoaded}
-	<MainView />
+{:else if isLoaded && queryEngine}
+	<QueryEngineProvider {queryEngine}>
+		<MainView />
+	</QueryEngineProvider>
 {:else}
 	<div style="padding: 2rem;">Loading DuckDB and penguins dataset...</div>
 {/if}

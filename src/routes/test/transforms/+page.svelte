@@ -12,19 +12,22 @@
 
 	import Plot from './Plot.svelte';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	// const coordinator = getContext('mosaic-coordinator');
 	const brushSeletion = Selection.crossfilter();
 
 	setCoordinators();
 
-	let coord;
+	const wasm = wasmConnector();
+	const coord = new Coordinator();
+	coord.databaseConnector(wasm);
+	setContext('mosaic-coordinator', coord);
 	let isLoaded = $state(false);
 
 	onMount(async () => {
-		const wasm = wasmConnector();
-		coord = new Coordinator();
-		coord.databaseConnector(wasm);
-		setContext('mosaic-coordinator', coord);
+			const connection = await wasm.getConnection();
+			queryEngine = new QueryEngine(connection);
 		await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
 		isLoaded = true;
 	});
@@ -35,7 +38,8 @@
 
 	{#if !isLoaded}
 		<p>Loading...</p>
-	{:else}
+	{:else if queryEngine}
+	<QueryEngineProvider {queryEngine}>
 		<!-- <div class="chart-section">
 			<h2>All Penguins (binned)</h2>
 			<p>Should show ~12 bins</p>
@@ -182,6 +186,7 @@
 		<div class="chart-section">
 			<Plot selection={brushSeletion} />
 		</div>
+	</QueryEngineProvider>
 	{/if}
 </div>
 

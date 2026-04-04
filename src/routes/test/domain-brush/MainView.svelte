@@ -6,8 +6,7 @@
 		Crosshair,
 		WebGPUCanvas,
 		LineMark,
-		IntervalX
-	} from '$lib/components';
+		IntervalX} from '$lib/components';
 
 	const coordinator = getContext('mosaic-coordinator');
 </script>

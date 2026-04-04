@@ -19,19 +19,23 @@
 	import { Grid } from '$lib/components/guides';
 	import { orderby, stack } from '$lib/transforms';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	setCoordinators();
 
-	let coord;
+	const wasm = wasmConnector();
+	const coord = new Coordinator();
+	coord.databaseConnector(wasm);
+	setContext('mosaic-coordinator', coord);
 	let isLoaded = $state(false);
 	let loadError = $state(null);
+	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
+	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
+			const connection = await wasm.getConnection();
+			queryEngine = new QueryEngine(connection);
 			await coord.exec([
 				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`),
 				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`),
@@ -55,7 +59,8 @@
 	<p class="status error">Error loading data: {loadError}</p>
 {:else if !isLoaded}
 	<p class="status">Loading...</p>
-{:else}
+{:else if queryEngine}
+<QueryEngineProvider {queryEngine}>
 	<div class="container">
 		<h1>Alphabet</h1>
 
@@ -209,6 +214,7 @@
 		</div>
 	</div>
 
+</QueryEngineProvider>
 {/if}
 
 <style>

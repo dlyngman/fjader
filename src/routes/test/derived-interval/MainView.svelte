@@ -8,9 +8,12 @@
 		LineMark,
 		AreaMarkY,
 		IntervalX,
-		DerivedIntervalX
-	} from '$lib/components';
+		DerivedIntervalX,
+		SelectionBridge} from '$lib/components';
 </script>
+
+<SelectionBridge selection="brush" />
+<SelectionBridge selection="comparison" />
 
 <div class="main-view-container">
 	<div class="charts-stack">

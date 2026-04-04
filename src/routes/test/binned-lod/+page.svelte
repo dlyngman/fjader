@@ -4,19 +4,23 @@
 	import { onMount, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	setCoordinators();
 
-	let coord;
+	const wasm = wasmConnector();
+	const coord = new Coordinator();
+	coord.databaseConnector(wasm);
+	setContext('mosaic-coordinator', coord);
 	let isLoaded = $state(false);
 	let loadError = $state(null);
+	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
+	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
+			const connection = await wasm.getConnection();
+			queryEngine = new QueryEngine(connection);
 			// Generate 50K normally-distributed values for histogram testing
 			await coord.exec(`
 				CREATE TABLE histogram_data AS
@@ -41,8 +45,10 @@
 
 {#if loadError}
 	<p style="color: red; padding: 1rem;">Error: {loadError}</p>
-{:else if isLoaded}
-	<MainView />
+{:else if isLoaded && queryEngine}
+	<QueryEngineProvider {queryEngine}>
+		<MainView />
+	</QueryEngineProvider>
 {:else}
 	<p style="padding: 1rem;">Loading DuckDB...</p>
 {/if}

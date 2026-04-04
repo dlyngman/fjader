@@ -4,22 +4,23 @@
 	import { onMount, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	setCoordinators();
 
-	let coord;
+	const wasm = wasmConnector();
+	const coord = new Coordinator();
+	coord.databaseConnector(wasm);
+	setContext('mosaic-coordinator', coord);
 	let isLoaded = $state(false);
 	let loadError = $state(null);
+	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
+	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-
-			coord.manager.logQueries(true);
-
-			setContext('mosaic-coordinator', coord);
-
+			const connection = await wasm.getConnection();
+			queryEngine = new QueryEngine(connection);
 			// Generate synthetic time series data with DuckDB
 			await coord.exec(`
 				CREATE TABLE timeseries AS
@@ -43,8 +44,10 @@
 		<div class="error-container">Error: {loadError}</div>
 	{:else if !isLoaded}
 		<div class="loading-container">Loading time series data...</div>
-	{:else}
-		<MainView />
+	{:else if queryEngine}
+		<QueryEngineProvider {queryEngine}>
+			<MainView />
+		</QueryEngineProvider>
 	{/if}
 </div>
 

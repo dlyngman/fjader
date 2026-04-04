@@ -16,6 +16,8 @@
 	} from '$lib/components';
 	import Frame from '$lib/components/background/Frame.svelte';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	// ✅ Initialize enhanced coordination
 	console.log('🚀 Initializing enhanced coordination for performance demo...');
 	const coordinators = setCoordinators({
@@ -27,6 +29,8 @@
 	let mosaicCoordinator;
 	let isLoaded = $state(false);
 	let loadError = $state(null);
+	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
+	let queryEngine = $state(null);
 	let performanceReport = $state(null);
 	let isMonitoring = $state(false);
 	let monitoringDuration = $state(0);
@@ -237,7 +241,8 @@
 			<h3>⏳ Loading...</h3>
 			<p>Initializing enhanced coordination and loading data...</p>
 		</div>
-	{:else}
+	{:else if queryEngine}
+	<QueryEngineProvider {queryEngine}>
 		<!-- Performance Control Panel -->
 		<div class="control-panel">
 			<h2>🔧 Performance Monitoring Demo</h2>
@@ -418,6 +423,7 @@
 				</div>
 			</div>
 		</div>
+	</QueryEngineProvider>
 	{/if}
 </div>
 

@@ -4,6 +4,8 @@
 	import { onMount, setContext } from 'svelte';
 	import MainView from './MainView.svelte';
 
+	import { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import QueryEngineProvider from '$lib/components/QueryEngineProvider.svelte';
 	setCoordinators();
 
 	const wasm = wasmConnector();
@@ -13,9 +15,14 @@
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
+	/** @type {import('$lib/query-engine/QueryEngine').QueryEngine | null} */
+	let queryEngine = $state(null);
 
 	onMount(async () => {
 		try {
+			const connection = await wasm.getConnection();
+			queryEngine = new QueryEngine(connection);
+
 			// Small aggregated dataset: 6 months x 5 categories
 			await coord.exec(`
 				CREATE TABLE stacked_categories AS
@@ -78,8 +85,10 @@
 		<div class="status">Error: {loadError}</div>
 	{:else if !isLoaded}
 		<div class="status">Generating data...</div>
-	{:else}
-		<MainView />
+	{:else if queryEngine}
+		<QueryEngineProvider {queryEngine}>
+			<MainView />
+		</QueryEngineProvider>
 	{/if}
 </div>
 
