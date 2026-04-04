@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { isColorConstant } from '$lib/scales/color-utils';
@@ -12,8 +13,7 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
 	import type {
 		FieldRef,
@@ -23,6 +23,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { D3BandScale } from '$lib/types';
 
@@ -75,12 +77,14 @@
 
 	const markId = generateMarkId('text');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	MarkLifecycle.ensureServices(coordinator);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// --- Scale Type Inference ---
 	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
@@ -126,7 +130,6 @@
 		},
 		inferredScaleColumns: { x, y },
 		table,
-		selection: resolveSelection(selection),
 		transforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip,
@@ -306,8 +309,14 @@
 		untrack(() => {
 			setup?.destroy();
 			setup = null;
-			if (table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null
+				);
 			}
 		});
 	});

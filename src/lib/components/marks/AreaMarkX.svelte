@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Areas, Lines } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
@@ -15,8 +16,7 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -28,6 +28,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
 		y: FieldRef;
@@ -74,11 +76,12 @@
 
 	const markId = generateMarkId('areax');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 	const gpuCoordinator = getGPUContext();
 
-	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
@@ -128,7 +131,7 @@
 		return c === 'monotone' ? 'monotone-y' : c === 'bump' ? 'bump-y' : c;
 	});
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// 0. Scale Type Inference — reads from entry
 	// x2 is the value column for X scale inference (x1 is baseline)
@@ -220,7 +223,6 @@
 			y: entry.y
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip: entry.tip,
@@ -316,8 +318,14 @@
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null
+				);
 			}
 		});
 	});
@@ -372,7 +380,7 @@
 			showBottomDots={showBothBoundaries}
 			orientation="horizontal"
 			facetData={setup?.facetData}
-			dataVersion={setup?.client?.dataVersion || 0}
+			dataVersion={setup?.dataVersion || 0}
 		/>
 		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines
@@ -387,7 +395,7 @@
 				strokeWidth={entry.strokeWidth ?? 0}
 				zIndex={1}
 				facetData={setup?.facetData}
-				dataVersion={setup?.client?.dataVersion || 0}
+				dataVersion={setup?.dataVersion || 0}
 			/>
 			{#if showBothBoundaries}
 				<Lines
@@ -402,21 +410,9 @@
 					strokeWidth={entry.strokeWidth ?? 0}
 					zIndex={1}
 					facetData={setup?.facetData}
-					dataVersion={setup?.client?.dataVersion || 0}
+					dataVersion={setup?.dataVersion || 0}
 				/>
 			{/if}
 		{/if}
 	{/key}
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-		Error: {setup.client.error.message}
-	</text>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-		Loading data...
-	</text>
-{:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-		Initializing area...
-	</text>
 {/if}

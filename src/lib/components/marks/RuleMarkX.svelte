@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { RuleX, GridLineX } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
@@ -14,11 +15,12 @@
 		MarkColor,
 		normalizeSortConfig,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
 	import type { FieldRef, BaseMarkProps, ColorProp, Coordinator, ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 
 	interface Props extends BaseMarkProps {
 		x: FieldRef | number;
@@ -53,9 +55,14 @@
 
 	const markId = generateMarkId('rulex');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 	const gpuCoordinator = getGPUContext();
+
+	// Still needed during transition for TableSchemaService
+	MarkLifecycle.ensureServices(coordinator);
 
 	// --- Constant-only path ---
 	// When no table and x is a number, render directly via GridLineX
@@ -94,7 +101,7 @@
 
 	const hasExtent = $derived(y1 !== undefined && y2 !== undefined);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// Color via MarkColor (stroke channel)
 	const markColor = new MarkColor(
@@ -142,15 +149,10 @@
 
 	const resolvedTip = $derived(resolveTip(entry?.tip, channelSelect));
 
-	const scaleRequirements = $derived.by(() => {
-		const reqs: Record<string, unknown> = {
-			x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
-		};
-		if (hasExtent) {
-			reqs.y = { type: 'linear', priority: SCALE_PRIORITIES.ACCEPT };
-		}
-		return reqs;
-	});
+	const scaleRequirements = $derived.by(() => ({
+		x: { type: 'linear', priority: SCALE_PRIORITIES.PREFER } as const,
+		y: hasExtent ? { type: 'linear' as const, priority: SCALE_PRIORITIES.ACCEPT } : null
+	}));
 
 	const config = $derived.by(() => {
 		if (!entry) return null;
@@ -166,7 +168,6 @@
 				...(hasExtent && { y: entry.y2 })
 			},
 			table: entry.table,
-			selection: resolveSelection(entry.selection),
 			transforms: entry.transforms ?? [],
 			select: { ...channelSelect, ...resolvedTip.extraSelect },
 			tip: entry.tip,
@@ -247,7 +248,15 @@
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry?.table) setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry?.table && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null
+				);
+			}
 		});
 	});
 
@@ -298,14 +307,6 @@
 		constantColor={markColor.constantColor}
 		{strokeWidth}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
 {/if}

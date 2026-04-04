@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Lines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -13,8 +14,7 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
 	import { getGPUContext } from '$lib/gpu';
 	import { isColorConstant } from '$lib/scales/color-utils';
@@ -23,7 +23,7 @@
 	import { DotsRung } from '$lib/lod/DotsRung.svelte';
 	import { SmoothRung } from '$lib/lod/SmoothRung.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
-	import type { SmoothMode } from '$lib/sql/rolling-avg';
+	import type { SmoothMode, RollingAvgNode } from '$lib/sql/rolling-avg';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -34,6 +34,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 	import type { Snippet } from 'svelte';
 
 	// Self-import for overlay rendering (Svelte 5 replacement for <svelte:self>)
@@ -103,10 +105,11 @@
 
 	const markId = generateMarkId('line');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 
-	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
@@ -136,7 +139,7 @@
 		lod: () => lod
 	});
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// 0. Scale Type Inference — reads from entry
 	const effectiveXScaleType = $derived.by(() =>
@@ -214,7 +217,6 @@
 			y: entry.y
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip: entry.tip,
@@ -266,16 +268,29 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId);
+		// Depend on fields that warrant lifecycle recreation (table, channels,
+		// scale types) — NOT config as a whole, which recomputes when entry.lod
+		// changes via setRungParam (LOD window size adjustments should re-query,
+		// not recreate the lifecycle).
+		void channelSelect;
+		void xScaleId;
+		void yScaleId;
+		void effectiveXScaleType;
+		void effectiveYScaleType;
 		untrack(() => {
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);
 			}
 			setup?.destroy();
 			setup = null;
-			// Don't create MarkLifecycle until scale type inference has resolved.
-			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null
+				);
 			}
 		});
 	});
@@ -352,10 +367,12 @@
 
 	$effect(() => {
 		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) return;
+		// LOD requires buildViewportCountQuery (V1 MarkLifecycle only — not yet ported to V2)
+		if (!('buildViewportCountQuery' in setup)) return;
 		const decimate = lodDecimate;
 		const host = new DensityHost(gpuCoordinator, chartContext, coordinator, {
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
-				setup.buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi),
+				(setup as any).buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi),
 			decimate
 		});
 		densityHost = host;
@@ -563,7 +580,7 @@
 			dotRadius={effectiveDotRadius}
 			globalAlpha={effectiveGlobalAlpha}
 			facetData={setup?.facetData}
-			dataVersion={setup?.client?.dataVersion || 0}
+			dataVersion={setup?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
 			{dotsRung}
 		/>
@@ -596,14 +613,6 @@
 			/>
 		{/if}
 	{/if}
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-		Error: {setup.client.error.message}
-	</text>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-		Loading data...
-	</text>
 {:else}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
 		Initializing mark...

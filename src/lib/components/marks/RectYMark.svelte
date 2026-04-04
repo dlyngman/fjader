@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
 	import { Rects } from '../rendering';
@@ -16,8 +17,7 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -29,6 +29,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 
 	interface Props extends BaseMarkProps, RectOffsetProps {
 		x?: FieldRef | null;
@@ -73,11 +75,12 @@
 
 	const markId = generateMarkId('recty');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 	const gpuCoordinator = getGPUContext();
 
-	// Ensure services are ready before inference (idempotent)
 	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
@@ -115,7 +118,7 @@
 		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'y')
 	);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// --- INTERNAL BIN EXPANSION --- reads from entry
 	const expandedX = $derived.by(() => {
@@ -187,7 +190,6 @@
 			y: y2 ?? undefined
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip: entry.tip,
@@ -296,11 +298,15 @@
 			setup?.destroy();
 			setup = null;
 			// Gate on effectiveXScaleType (blocks while schema loads)
-			if (entry.table && effectiveXScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId, {
-					gpuCoordinator,
-					onMarkLOD
-				});
+			if (entry.table && effectiveXScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null,
+					{ gpuCoordinator, onMarkLOD }
+				);
 			}
 		});
 	});
@@ -346,21 +352,10 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 		inset={entry.inset ?? 0.5}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
-{:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Initializing rects...</text
 	>
 {/if}

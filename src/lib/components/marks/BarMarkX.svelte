@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
@@ -13,8 +14,7 @@
 		MarkColor,
 		normalizeSortConfig,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -26,6 +26,8 @@
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 
 	interface Props extends BaseMarkProps, BandScaleProps, RectOffsetProps {
 		x: FieldRef;
@@ -65,9 +67,13 @@
 
 	const markId = generateMarkId('barx');
 	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroup = getContext<FilterGroup | undefined>('filter-group');
 	const gpuCoordinator = getGPUContext();
+
+	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'barx', {
@@ -105,7 +111,7 @@
 		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x')
 	);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// 1. Color Logic — reads from entry
 	const markColor = new MarkColor(
@@ -159,7 +165,6 @@
 			y: entry.y // Y scale uses categorical column
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		tip: entry.tip,
@@ -255,7 +260,15 @@
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry.table) setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroup?.selection ?? null
+				);
+			}
 		});
 	});
 
@@ -304,21 +317,9 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 		inset={entry.inset ?? 0}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
-{:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Initializing bars...</text
-	>
 {/if}
