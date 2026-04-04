@@ -1,19 +1,17 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
-	import { clauseInterval } from '@uwdata/mosaic-core';
-	import { column } from '@uwdata/mosaic-sql';
+	import { isBetween, column } from '@uwdata/mosaic-sql';
 	import { BrushState1D } from './brush-state.svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import { closeTo, isDragging, createPanModeHandlers } from './brush-utils';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import { getSelectionRegistry } from '$lib/selection';
 	import type { ChartContext, Point } from '$lib/types';
-	import type { ClauseSource, Selection } from '@uwdata/mosaic-core';
-	import type { ScaleDomain } from '@uwdata/mosaic-sql';
+	import type { FilterGroup, BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
 
 	type InvertibleScale = { (v: unknown): number; invert(v: number): number; domain(): number[]; range(): number[] };
 
 	interface Props {
+		/** @deprecated No longer used — FilterGroup is obtained from context. */
 		selection?: string;
 		/** When true, the parallel chart excludes itself from its own brush filters
 		 *  (standard crossfilter behavior). When false (default), brushes self-filter
@@ -21,17 +19,16 @@
 		cross?: boolean;
 	}
 
-	let { selection: selectionName = 'brush', cross = false }: Props = $props();
+	let { cross = false }: Props = $props();
 
 	const chart = getContext<ChartContext>('chart');
-	const group = getSelectionRegistry()!.getGroup(selectionName);
+	const filterGroup = getContext<FilterGroup>('filter-group');
 
 	const ps = $derived(chart.parallelScales);
 
-	// --- Per-axis state (created once per column) ---
-	const brushes: BrushState1D[] = [];
-	const selections: (Selection | null)[] = [];
-	const unregisters: (() => void)[] = [];
+	// --- Per-axis state (one per column, grown when columns are added) ---
+	let brushes = $state<BrushState1D[]>([]);
+	const handles: BrushHandle[] = [];
 	const lastEmitted: { min: number | null; max: number | null }[] = [];
 
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
@@ -75,6 +72,12 @@
 		return Math.min(30, (chart.innerWidth / (ps.columns.length - 1)) * 0.35);
 	});
 
+	// Cross-filter: when cross=true, exclude chart's own marks (standard crossfilter).
+	// When cross=false (default for parallel coords), empty set — all marks self-filter.
+	const excludeMarkIds = cross
+		? () => new Set(chart.config.entries.keys())
+		: () => new Set<string>();
+
 	// Ensure per-axis arrays are sized correctly
 	function ensureAxisState(n: number) {
 		while (brushes.length < n) {
@@ -83,24 +86,21 @@
 			brushes.push(new BrushState1D());
 			lastEmitted.push({ min: null, max: null });
 
-			const source = `parallel-brush-${col}-${chart.chartId}`;
-			const { sel, off } = group.createLocal('single', {
-				source,
-				augment: (clause) => ({
-					kind: 'range',
-					column: col,
-					label: col,
-					values: clause?.value
-						? [(clause.value as number[])[0], (clause.value as number[])[1]]
-						: []
-				}),
-				onVisualClear: () => {
-					brushes[i].clear();
-					lastEmitted[i] = { min: null, max: null };
-				}
-			});
-			selections.push(sel);
-			unregisters.push(off);
+			const sourceId = `parallel-brush-${col}-${chart.chartId}`;
+			handles.push(
+				filterGroup.createBrush({
+					sourceId,
+					excludeMarkIds,
+					augment: (value) => ({
+						kind: 'range',
+						column: col,
+						label: col,
+						values: value
+							? [(value as number[])[0], (value as number[])[1]]
+							: []
+					})
+				})
+			);
 		}
 	}
 
@@ -139,38 +139,14 @@
 		if (closeTo(dataMin, lastEmitted[i].min) && closeTo(dataMax, lastEmitted[i].max)) return;
 		lastEmitted[i] = { min: dataMin, max: dataMax };
 
-		const sel = selections[i];
-		if (!sel) return;
-
 		const col = ps.columns[i];
-		const s = getAxisScale(i);
-		if (!s) return;
-
-		const clause = clauseInterval(column(col), [dataMin, dataMax] as ScaleDomain, {
-			source: `parallel-brush-${col}-${chart.chartId}` as unknown as ClauseSource,
-			clients: cross ? chart.markClients : new Set(),
-			scale: {
-				type: 'linear',
-				domain: s.domain() as ScaleDomain,
-				range: s.range() as [number, number]
-			}
-		});
-		sel.update(clause);
+		handles[i].update(isBetween(column(col), [dataMin, dataMax]), [dataMin, dataMax]);
 	}
 
 	function clearBrush(i: number) {
 		brushes[i].clear();
 		lastEmitted[i] = { min: null, max: null };
-
-		const sel = selections[i];
-		if (sel && ps) {
-			sel.update({
-				predicate: null,
-				source: `parallel-brush-${ps.columns[i]}-${chart.chartId}` as unknown as ClauseSource,
-				clients: cross ? chart.markClients : new Set(),
-				value: null
-			});
-		}
+		handles[i].clear();
 	}
 
 	// --- Pointer handlers ---
@@ -220,7 +196,10 @@
 			brush.shiftByScreen(delta, s);
 			anchor = current;
 		} else if (brush.phase === 'resizing') {
-			const anchorData = brush.resizeEdge === 'start' ? brush.dataMax : brush.dataMin;
+			// Parallel axes use inverted Y scales (top=max, bottom=min).
+			// 'start'=top → moving dataMax, anchor is dataMin.
+			// 'end'=bottom → moving dataMin, anchor is dataMax.
+			const anchorData = brush.resizeEdge === 'start' ? brush.dataMin : brush.dataMax;
 			const currentData = s.invert(current);
 			brush.setExtent(
 				Math.min(anchorData as number, currentData as number),
@@ -256,35 +235,10 @@
 		return true;
 	}
 
-	function handlePointerEnter() {
-		if (!ps) return;
-		ensureAxisState(ps.columns.length);
-		for (let i = 0; i < ps.columns.length; i++) {
-			const sel = selections[i];
-			if (!sel?.activate) continue;
-			const col = ps.columns[i];
-			const s = getAxisScale(i);
-			if (!s) continue;
-			const brush = brushes[i];
-			const range: ScaleDomain = brush.active
-				? [
-						Math.min(brush.dataMin as number, brush.dataMax as number),
-						Math.max(brush.dataMin as number, brush.dataMax as number)
-					]
-				: [0, 1];
-			sel.activate(
-				clauseInterval(column(col), range, {
-					source: `parallel-brush-${col}-${chart.chartId}` as unknown as ClauseSource,
-					clients: cross ? chart.markClients : new Set(),
-					scale: {
-						type: 'linear',
-						domain: s.domain() as ScaleDomain,
-						range: s.range() as [number, number]
-					}
-				})
-			);
-		}
-	}
+	// TODO: Re-implement pre-aggregation for V2 query engine.
+	// Mosaic used selection.activate() to hint at upcoming queries;
+	// the V2 equivalent is not yet designed.
+	function handlePointerEnter() {}
 
 	function handleMoveStart(i: number, event: PointerEvent) {
 		event.stopPropagation();
@@ -314,13 +268,13 @@
 		brushes[i].resizeEdge = edge === 'top' ? 'start' : 'end';
 	}
 
-	// Brush screen extents — derived for smooth reactive updates
+	// Brush screen extents — derived for smooth reactive updates.
+	// brushes is $state so Svelte tracks element access, and each
+	// BrushState1D's $state fields (dataMin/dataMax) are tracked transitively.
 	const brushScreens = $derived.by(() => {
-		if (!ps) return [];
-		ensureAxisState(ps.columns.length);
-		return ps.scaleStates.map((state, i) => {
-			const brush = brushes[i];
-			if (!brush?.active) return null;
+		if (!ps || brushes.length === 0) return [];
+		return brushes.map((brush, i) => {
+			if (!brush.active) return null;
 			const s = getAxisScale(i);
 			if (!s) return null;
 			const [min, max] = brush.screenExtent(s);
@@ -347,7 +301,7 @@
 			chart.onInteractorPointerEnter = null;
 			window.removeEventListener('keydown', handleKeyDown);
 			window.removeEventListener('keyup', handleKeyUp);
-			for (const off of unregisters) off?.();
+			for (const h of handles) h.destroy();
 		};
 	});
 </script>

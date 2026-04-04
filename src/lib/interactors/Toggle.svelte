@@ -1,22 +1,20 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
-	import { clausePoints } from '@uwdata/mosaic-core';
-	import { column } from '@uwdata/mosaic-sql';
+	import { column, isIn, literal, or, and as sqlAnd, isNotDistinct } from '@uwdata/mosaic-sql';
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import { getSelectionRegistry } from '$lib/selection';
+	import type { FilterGroup, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-	import type { ClauseSource } from '@uwdata/mosaic-core';
 
 	interface Props {
+		/** @deprecated No longer used — FilterGroup is obtained from context. */
 		selection?: string;
 		field: string | string[];
 	}
 
-	let { selection: selectionName = 'brush', field }: Props = $props();
+	let { field }: Props = $props();
 
-	const group = getSelectionRegistry()!.getGroup(selectionName);
-
+	const filterGroup = getContext<FilterGroup>('filter-group');
 	const chart = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
@@ -25,8 +23,8 @@
 	const columnRefs = fields.map((f) => column(f));
 
 	// Key helpers — identity for single field, JSON for multi
-	const toKey = fields.length === 1 ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple);
-	const fromKey = fields.length === 1 ? (key) => [key] : (key) => JSON.parse(key);
+	const toKey = fields.length === 1 ? (tuple: unknown[]) => tuple[0] : (tuple: unknown[]) => JSON.stringify(tuple);
+	const fromKey = fields.length === 1 ? (key: unknown) => [key] : (key: unknown) => JSON.parse(key as string);
 
 	// Getter for scale states — resolved lazily since scales may not be ready at init
 	function getToggleScaleStates() {
@@ -40,55 +38,45 @@
 		}[];
 	}
 
-	// Shared toggle Selection — deduplicated by column across Toggle + Legend
-	const {
-		sel: selection,
-		source,
-		off: unregister
-	} = group.createToggle(fields[0], {
-		scaleStates: getToggleScaleStates
-	});
+	// Shared toggle state — deduplicated by field across Toggle + Legend
+	const toggleState: ToggleState = filterGroup.getOrCreateToggle(fields[0]);
 
-	// Derive selected set reactively from scale state (projected by SelectionGroup)
-	const selectedSet = $derived.by(() => {
+	// Build predicate from current toggle values and sync to FilterGroup + scales
+	function syncFilter() {
+		const values = toggleState.values;
 		const scales = getToggleScaleStates();
-		for (const s of scales) {
-			if (s && 'activeValues' in s) {
-				const av = (s as BandScaleState).activeValues;
-				if (av != null) return av;
-			}
+
+		if (values.size === 0) {
+			filterGroup.syncToggle(fields[0], null, null, () => new Set<string>());
+			for (const s of scales) s.clearActiveValues();
+			return;
 		}
-		return null;
-	});
+
+		const tuples = Array.from(values).map(fromKey);
+		let predicate;
+		if (fields.length === 1) {
+			predicate = isIn(columnRefs[0], tuples.map((t) => literal(t[0])));
+		} else {
+			const clauses = tuples.map((t) =>
+				sqlAnd(t.map((v: unknown, i: number) => isNotDistinct(columnRefs[i], literal(v))))
+			);
+			predicate = clauses.length === 1 ? clauses[0] : or(clauses);
+		}
+
+		filterGroup.syncToggle(
+			fields[0],
+			predicate,
+			tuples,
+			() => new Set<string>()
+		);
+		for (const s of scales) s.setActiveValues(values);
+	}
 
 	function toggle(tuple: unknown[], event: MouseEvent) {
-		if (!selection) return;
-
 		const isMulti = event.shiftKey || event.metaKey;
 		const key = toKey(tuple);
-		let newValues;
-
-		if (isMulti && selectedSet) {
-			const next = new Set(selectedSet);
-			if (next.has(key)) {
-				next.delete(key);
-			} else {
-				next.add(key);
-			}
-			newValues = next.size === 0 ? null : Array.from(next).map(fromKey);
-		} else if (selectedSet?.size === 1 && selectedSet.has(key)) {
-			newValues = null;
-		} else {
-			newValues = [tuple];
-		}
-
-		if (newValues === null) {
-			group.clearToggle(fields[0]);
-		} else {
-			selection.update(
-				clausePoints(columnRefs, newValues, { source: source as unknown as ClauseSource })
-			);
-		}
+		toggleState.toggle(key, isMulti);
+		syncFilter();
 	}
 
 	chart.onChartClick = (event) => {
@@ -126,13 +114,16 @@
 		}
 
 		// Path 3: Click on empty space — clear
-		if (selectedSet) {
-			group.clearToggle(fields[0]);
+		if (toggleState.active) {
+			toggleState.clear();
+			syncFilter();
 		}
 	};
 
 	onDestroy(() => {
-		unregister();
+		// Clear filter and scale projection
+		toggleState.clear();
+		syncFilter();
 		chart.onChartClick = null;
 	});
 </script>

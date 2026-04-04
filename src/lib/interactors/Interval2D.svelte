@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
-	import { clauseIntervals, type ClauseSource } from '@uwdata/mosaic-core';
+	import { and, isBetween } from '@uwdata/mosaic-sql';
 	import { BrushState2D } from './brush-state.svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import {
@@ -11,17 +11,18 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
-	import { getSelectionRegistry } from '$lib/selection';
+	import type { FilterGroup, BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
 
 	interface Props {
+		/** @deprecated No longer used — FilterGroup is obtained from context. */
 		selection?: string;
 		xField?: FieldRef;
 		yField?: FieldRef;
 	}
 
-	let { selection: selectionName = 'brush', xField, yField }: Props = $props();
+	let { xField, yField }: Props = $props();
 
-	const group = getSelectionRegistry()!.getGroup(selectionName);
+	const filterGroup = getContext<FilterGroup>('filter-group');
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();
@@ -38,17 +39,17 @@
 
 	const source = `interval-2d-${chart.chartId}`;
 
-	const { sel: selection, off: unregister } = group.createLocal('single', {
-		source,
-		augment: (clause) => ({
+	const brushHandle: BrushHandle = filterGroup.createBrush({
+		sourceId: source,
+		excludeMarkIds: () => new Set(chart.config.entries.keys()),
+		augment: (value) => ({
 			kind: 'range',
 			label: `${typeof resolvedXField === 'string' ? resolvedXField : resolvedXField?.toString()} × ${typeof resolvedYField === 'string' ? resolvedYField : resolvedYField?.toString()}`,
 			xColumn: resolvedXField,
 			yColumn: resolvedYField,
-			xValues: clause?.value?.[0],
-			yValues: clause?.value?.[1]
-		}),
-		onVisualClear: () => brush.clear()
+			xValues: (value as unknown[][])?.[0],
+			yValues: (value as unknown[][])?.[1]
+		})
 	});
 
 	// Pointer state (reused to avoid GC)
@@ -105,7 +106,6 @@
 		return { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 };
 	});
 
-	// Emit Mosaic clause
 	function emitClause() {
 		if (!brush.active || !xColumnRef || !yColumnRef) return;
 
@@ -128,69 +128,20 @@
 		lastEmittedMinY = yMin;
 		lastEmittedMaxY = yMax;
 
-		const clause = clauseIntervals(
-			[xColumnRef, yColumnRef],
-			[
-				[xMin, xMax],
-				[yMin, yMax]
-			],
-			{
-				source: source as unknown as ClauseSource,
-				clients: chart.markClients,
-				scales: [
-					{
-						type: 'linear',
-						domain: chart.xScale.domain() as [number, number],
-						range: chart.xScale.range() as [number, number]
-					},
-					{
-						type: 'linear',
-						domain: chart.yScale.domain() as [number, number],
-						range: chart.yScale.range() as [number, number]
-					}
-				]
-			}
-		);
-
-		selection.update(clause);
+		const predicate = and([
+			isBetween(xColumnRef, [xMin, xMax]),
+			isBetween(yColumnRef, [yMin, yMax])
+		]);
+		brushHandle.update(predicate, [
+			[xMin, xMax],
+			[yMin, yMax]
+		]);
 	}
 
-	// Pre-aggregation on pointer enter
-	function handlePointerEnter() {
-		if (!selection.activate || !chart.xScale || !chart.yScale || !xColumnRef || !yColumnRef) return;
-
-		const xRange: [number, number] = brush.x.active
-			? [
-					Math.min(brush.x.dataMin as number, brush.x.dataMax as number),
-					Math.max(brush.x.dataMin as number, brush.x.dataMax as number)
-				]
-			: [0, 1];
-		const yRange: [number, number] = brush.y.active
-			? [
-					Math.min(brush.y.dataMin as number, brush.y.dataMax as number),
-					Math.max(brush.y.dataMin as number, brush.y.dataMax as number)
-				]
-			: [0, 1];
-
-		selection.activate(
-			clauseIntervals([xColumnRef, yColumnRef], [xRange, yRange], {
-				source: source as unknown as ClauseSource,
-				clients: chart.markClients,
-				scales: [
-					{
-						type: 'linear',
-						domain: chart.xScale.domain() as [number, number],
-						range: chart.xScale.range() as [number, number]
-					},
-					{
-						type: 'linear',
-						domain: chart.yScale.domain() as [number, number],
-						range: chart.yScale.range() as [number, number]
-					}
-				]
-			})
-		);
-	}
+	// TODO: Re-implement pre-aggregation for V2 query engine.
+	// Mosaic used selection.activate() to hint at upcoming queries;
+	// the V2 equivalent is not yet designed.
+	function handlePointerEnter() {}
 
 	function handleWheel(event: WheelEvent) {
 		if (!event.shiftKey) return;
@@ -218,12 +169,11 @@
 
 	function clearBrush() {
 		brush.clear();
-		selection.update({
-			predicate: null,
-			source: source as unknown as ClauseSource,
-			clients: chart.markClients,
-			value: null
-		});
+		lastEmittedMinX = null;
+		lastEmittedMaxX = null;
+		lastEmittedMinY = null;
+		lastEmittedMaxY = null;
+		brushHandle.clear();
 	}
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
@@ -390,7 +340,7 @@
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
 			chart.onInteractorPointerEnter = null;
-			unregister();
+			brushHandle.destroy();
 		};
 	});
 </script>

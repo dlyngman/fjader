@@ -1,4 +1,38 @@
 <script lang="ts">
+	/**
+	 * TODO: Migrate to FilterGroup (V2 query engine).
+	 *
+	 * This component still uses Mosaic's SelectionRegistry. Migration is blocked
+	 * by a design question: DerivedInterval1D reads from a "source" named selection
+	 * (e.g. "brush") and writes to a separate "derived" named selection (e.g.
+	 * "comparison"). Marks opt into which selection filters them via selection="brush"
+	 * or selection="comparison".
+	 *
+	 * In V2, there is one FilterGroup/CrossfilterSelection per page — no named
+	 * selections. All marks share one predicate set, with cross-filter skip via
+	 * excludeMarkIds. To migrate DerivedInterval1D:
+	 *
+	 * 1. Read source brush extent from filterGroup.items (find item with
+	 *    schema.kind === 'range' matching the axis field) instead of sourceGroup.items.
+	 *
+	 * 2. Write derived extent via filterGroup.upsertManual() with a predicate built
+	 *    from isBetween() — same as other interactors.
+	 *
+	 * 3. Solve the targeting problem: the derived predicate should only affect
+	 *    "comparison" marks, not "brush" marks. Options:
+	 *    a) Add a mark-group concept to FilterGroup (marks declare a group ID,
+	 *       clauses target specific groups).
+	 *    b) Use excludeMarkIds to exclude "brush" marks from the derived clause.
+	 *       Requires the interactor to know which marks are "brush" vs "comparison"
+	 *       — could be inferred from mark selection prop.
+	 *    c) Support multiple FilterGroups per page (one per named selection).
+	 *
+	 * 4. Relay logic (non-axis clauses from source → derived) needs equivalent
+	 *    FilterGroup API — currently uses sourceGroup.items + derivedGroup.upsertManual.
+	 *
+	 * The test/derived-interval route is temporarily broken until this is resolved.
+	 * The SelectionBridge components in that route are preserved for now.
+	 */
 	import { getContext, onMount } from 'svelte';
 	import { clauseInterval } from '@uwdata/mosaic-core';
 	import GhostBrushOverlay from './GhostBrushOverlay.svelte';
