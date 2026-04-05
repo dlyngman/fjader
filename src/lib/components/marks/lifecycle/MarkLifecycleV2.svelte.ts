@@ -757,7 +757,9 @@ export class MarkLifecycleV2 {
 		// Numeric fields get CAST to REAL. Date/timestamp fields from bin
 		// expressions are left uncast — DuckDB returns Date objects that
 		// we convert to epoch ms in JS (same as fetchCategoricalDomains).
-		const schema = this.#schema;
+		// describe() is cached on QueryEngine, so this await is free if
+		// it's already running in parallel from the same Promise.all.
+		const schema = buildSchemaMap(await this.#queryEngine.describe(this.#config.table));
 		const selectDef: Record<string, unknown> = {};
 		for (let i = 0; i < unique.length; i++) {
 			const colExpr = isNode(unique[i].expr)
