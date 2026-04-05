@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { ParallelLines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -12,7 +11,6 @@
 	import { getGPUContext } from '$lib/gpu';
 	import type {
 		FieldRef,
-		Coordinator,
 		ChartContext,
 		ColorScheme,
 		CurveType,
@@ -48,14 +46,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('parallel');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'parallel', {

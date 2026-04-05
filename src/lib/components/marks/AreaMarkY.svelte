@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Areas, Lines } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
@@ -24,7 +23,6 @@
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
 		ConnectedTopologyProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -75,14 +73,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('areay');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'areay', {

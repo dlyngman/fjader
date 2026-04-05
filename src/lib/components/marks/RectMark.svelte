@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
@@ -26,7 +25,6 @@
 		BandScaleProps,
 		ContinuousScaleTypeProps,
 		RectOffsetProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -79,14 +77,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('rect');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'rect', {

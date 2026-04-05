@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Lines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -109,8 +108,6 @@
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'line', {

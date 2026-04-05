@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { Dots } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -25,7 +24,6 @@
 		ColorProp,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -65,16 +63,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('dot');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	// Ensure services are ready before inference (idempotent)
-	// Still needed during transition for TableSchemaService (scale type inference)
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'dot', {

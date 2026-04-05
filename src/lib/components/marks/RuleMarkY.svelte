@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { RuleY, GridLineY } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -17,7 +16,7 @@
 		generateMarkId,
 		resolveTip
 	} from './utils';
-	import type { FieldRef, BaseMarkProps, ColorProp, Coordinator, ChartContext } from '$lib/types';
+	import type { FieldRef, BaseMarkProps, ColorProp, ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -54,14 +53,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('ruley');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- Constant-only path ---
 	const isConstant = $derived(!table && typeof y === 'number');

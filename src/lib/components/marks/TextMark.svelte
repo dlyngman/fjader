@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { isColorConstant } from '$lib/scales/color-utils';
 	import {
@@ -19,7 +18,6 @@
 		FieldRef,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -76,13 +74,10 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('text');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
