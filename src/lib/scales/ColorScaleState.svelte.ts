@@ -13,7 +13,7 @@ import {
 	colorScaleTicks
 } from './color-utils';
 import type { RGBA, D3ColorScale } from './color-utils';
-import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
+import { buildCaseExpression, colorIndexColumn } from '$lib/sql/case-expression';
 import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -183,7 +183,7 @@ export class ColorScaleState {
 	 * Format: __dplot_{field}_color_idx
 	 */
 	get indexColumnName(): string {
-		return ViewManagerService.colorIndexColumn(this.#field);
+		return colorIndexColumn(this.#field);
 	}
 
 	/**
@@ -193,7 +193,7 @@ export class ColorScaleState {
 	 */
 	get caseExpression(): string {
 		if (!this.isOrdinal || !this.domain.length) return '';
-		return ViewManagerService.buildCaseExpression(this.#field, this.domain as string[], {
+		return buildCaseExpression(this.#field, this.domain as string[], {
 			oneBased: false
 		});
 	}
@@ -476,32 +476,9 @@ export class ColorScaleState {
 		}
 
 		this.#viewsCreated.add(sourceTable);
-
-		const alias = this.indexColumnName;
-		const sql = ViewManagerService.buildCaseExpression(this.#field, this.domain as string[], {
-			oneBased: false // 0-based indices, -1 = null/unknown
-		});
-
-		viewManager.registerColumn(sourceTable, alias, {
-			sql,
-			source: this.#field,
-			scaleId: this.#scaleId
-		});
-
-		console.log(`[ColorScaleState] Created view column ${alias} for table ${sourceTable}`);
 	}
 
-	/**
-	 * Unregister this scale's columns from ViewManager.
-	 * Called during destroy().
-	 */
 	#unregisterFromViewManager(): void {
-		const alias = this.indexColumnName;
-
-		for (const table of this.#registeredTables) {
-			viewManager.unregisterColumn(table, alias, this.#scaleId);
-		}
-
 		this.#registeredTables.clear();
 		this.#viewsCreated.clear();
 	}
