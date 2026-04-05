@@ -35,6 +35,31 @@ export interface ColumnInfo {
 	nullable: boolean;
 }
 
+export type JsColumnType = 'number' | 'string' | 'date' | 'boolean';
+
+/** Map a DuckDB SQL type string to a JS type category. */
+export function mapSqlTypeToJs(sqlType: string): JsColumnType {
+	const upper = (sqlType || '').toUpperCase();
+	if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper)) return 'number';
+	if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(upper)) return 'date';
+	if (/BOOL/.test(upper)) return 'boolean';
+	return 'string';
+}
+
+export interface ColumnSchema {
+	sqlType: string;
+	jsType: JsColumnType;
+}
+
+/** Build a schema map from ColumnInfo[] with JS type mapping. */
+export function buildSchemaMap(columns: ColumnInfo[]): Map<string, ColumnSchema> {
+	const map = new Map<string, ColumnSchema>();
+	for (const col of columns) {
+		map.set(col.name, { sqlType: col.type, jsType: mapSqlTypeToJs(col.type) });
+	}
+	return map;
+}
+
 /**
  * Minimal connection interface matching DuckDB-WASM's AsyncDuckDBConnection.
  * Allows testing with a mock connection.
@@ -56,6 +81,7 @@ export class QueryEngine {
 	#connPromise: Promise<DuckDBConnection> | null = null;
 	#inflight = new Map<string, AbortController>();
 	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void }>();
+	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#destroyed = false;
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
@@ -194,12 +220,21 @@ export class QueryEngine {
 
 	/**
 	 * Get column info for a table via DESCRIBE.
-	 * Replaces Mosaic's queryFieldInfo for type introspection.
+	 * Results are cached — same table returns the same promise.
 	 */
-	async describe(table: string): Promise<ColumnInfo[]> {
+	describe(table: string): Promise<ColumnInfo[]> {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
+		const cached = this.#describeCache.get(table);
+		if (cached) return cached;
+
+		const promise = this.#fetchDescribe(table);
+		this.#describeCache.set(table, promise);
+		return promise;
+	}
+
+	async #fetchDescribe(table: string): Promise<ColumnInfo[]> {
 		if (!this.#conn) await this.#ensureConnection();
 		const escaped = table.replaceAll('"', '""');
 		const result = await this.#conn!.query(`DESCRIBE "${escaped}"`);
@@ -213,6 +248,15 @@ export class QueryEngine {
 			});
 		}
 		return columns;
+	}
+
+	/** Clear cached DESCRIBE results. Pass a table name to clear one, or omit for all. */
+	clearDescribeCache(table?: string): void {
+		if (table) {
+			this.#describeCache.delete(table);
+		} else {
+			this.#describeCache.clear();
+		}
 	}
 
 	/**

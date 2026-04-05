@@ -14,6 +14,7 @@ import { setContext, getContext } from 'svelte';
 import { QueryEngine } from './QueryEngine';
 import type { DuckDBConnection } from './QueryEngine';
 import { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
+import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 
 /**
  * Create QueryEngine + FilterGroupRegistry and set Svelte contexts.
@@ -23,6 +24,7 @@ import { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 export function setQueryContext(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 	const queryEngine = new QueryEngine(connection);
 	const filterGroups = new FilterGroupRegistry();
+	tableSchemaService.setQueryEngine(queryEngine);
 	setContext('query-engine', queryEngine);
 	setContext('filter-groups', filterGroups);
 	return { queryEngine, filterGroups };
@@ -35,7 +37,8 @@ export function getFilterGroups(): FilterGroupRegistry {
 
 // Re-exports
 export { QueryEngine } from './QueryEngine';
-export type { DuckDBConnection, QueryOpts, ColumnInfo } from './QueryEngine';
+export type { DuckDBConnection, QueryOpts, ColumnInfo, ColumnSchema, JsColumnType } from './QueryEngine';
+export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';
 export { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 export { FilterGroup } from './FilterGroup.svelte';
 export type { BrushOpts, BrushHandle, FilterItem, ActiveValueScale } from './FilterGroup.svelte';

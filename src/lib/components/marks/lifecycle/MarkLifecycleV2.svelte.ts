@@ -52,7 +52,7 @@ import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { CrossfilterSelection, FilterExpr } from '$lib/query-engine/CrossfilterSelection.svelte';
 import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
-import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
+import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
@@ -132,6 +132,7 @@ export class MarkLifecycleV2 {
 	#cachedQueryParts: QueryParts | null = null;
 	#queryPartsStale = $state(false);
 	#fieldStats: Record<string, { column: string; min: number; max: number }> | null = null;
+	#schema: Map<string, ColumnSchema> | null = null;
 	#lastBinDomain: Record<string, [number, number]> = {};
 	#adaptiveBinRung: AdaptiveBinRung | null = null;
 
@@ -448,9 +449,9 @@ export class MarkLifecycleV2 {
 			const seriesKey = this.#config._orderConfig?.seriesChannel ?? null;
 
 			// Batch all domain queries + schema fetch in parallel
-			const [, fetchCount, aggResult, fieldStats] = await Promise.all([
-				// Ensure table schema is cached (needed for CAST type decisions)
-				tableSchemaService.ensure(this.#config.table),
+			const [schemaColumns, fetchCount, aggResult, fieldStats] = await Promise.all([
+				// Fetch table schema (cached on QueryEngine, needed for CAST type decisions)
+				this.#queryEngine.describe(this.#config.table),
 				fetchCategoricalDomains(
 					this.#queryEngine,
 					this.#config.table,
@@ -490,6 +491,7 @@ export class MarkLifecycleV2 {
 
 			if (this.#destroyed) return;
 
+			this.#schema = buildSchemaMap(schemaColumns);
 			if (aggResult.globalAggregatesSet) this.#globalAggregatesSet = true;
 
 			// Store field stats for autobin resolution in #buildQueryString
@@ -588,7 +590,7 @@ export class MarkLifecycleV2 {
 		// are skipped (dates use epoch offset via #inlineTimeOffsets instead).
 		const { selectDef, nonAggregateGroupBy, hasAggregates } = this.#cachedQueryParts;
 		const castSelectDef = { ...selectDef };
-		const schema = tableSchemaService.getSchema(this.#config.table);
+		const schema = this.#schema;
 
 		for (const [ch, expr] of Object.entries(castSelectDef)) {
 			if (expr == null) continue;
@@ -755,7 +757,7 @@ export class MarkLifecycleV2 {
 		// Numeric fields get CAST to REAL. Date/timestamp fields from bin
 		// expressions are left uncast — DuckDB returns Date objects that
 		// we convert to epoch ms in JS (same as fetchCategoricalDomains).
-		const schema = tableSchemaService.getSchema(this.#config.table);
+		const schema = this.#schema;
 		const selectDef: Record<string, unknown> = {};
 		for (let i = 0; i < unique.length; i++) {
 			const colExpr = isNode(unique[i].expr)
