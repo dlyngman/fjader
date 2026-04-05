@@ -12,7 +12,6 @@ import {
 	Query
 } from '@uwdata/mosaic-sql';
 import type { ExprNode } from '@uwdata/mosaic-sql';
-import type { FieldInfoRequest } from '@uwdata/mosaic-core';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { isBinExpression } from '$lib/sql/bin';
 import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
@@ -40,63 +39,6 @@ export interface QueryParts {
 // ---------------------------------------------------------------------------
 // Pure functions
 // ---------------------------------------------------------------------------
-
-/**
- * Build field info requests for Mosaic fieldInfo queries.
- * Determines which fields need min/max stats for domain computation.
- */
-export function buildFieldInfoRequests(
-	select: Record<string, unknown>,
-	table: string,
-	actualXScaleType: string,
-	actualYScaleType: string,
-	parallelColumns?: string[] | null
-): FieldInfoRequest[] {
-	const requests: FieldInfoRequest[] = [];
-	const processedFields = new Set<string>();
-
-	for (const alias in select) {
-		const fieldValue = select[alias];
-		if (fieldValue == null) continue;
-
-		// Handle AutoBinNodes
-		if (isBinExpression(fieldValue)) {
-			const stats = fieldValue.stats;
-			if (!processedFields.has(stats.column)) {
-				requests.push({ table, column: stats.column, stats: stats.stats });
-				processedFields.add(stats.column);
-			}
-			continue;
-		}
-
-		// Skip RollingAvgNodes — domain derived from query results
-		if (isRollingAvgExpression(fieldValue)) continue;
-
-		// Handle regular fields
-		if (processedFields.has(String(fieldValue))) continue;
-
-		const exprNode = isNode(fieldValue) ? fieldValue : sqlColumn(String(fieldValue));
-		if (isAggregateExpression(exprNode) || isWindowExpression(exprNode)) continue;
-
-		const scaleType =
-			alias === 'x' || alias === 'x1' || alias === 'x2'
-				? actualXScaleType
-				: alias === 'y' || alias === 'y1' || alias === 'y2'
-					? actualYScaleType
-					: parallelColumns?.includes(alias)
-						? 'linear'
-						: null;
-
-		// Time scales get their domain from sidecar query in fetchCategoricalDomains,
-		// not from fieldInfo (which would return values from the offset column)
-		if (isNumericScale(scaleType)) {
-			requests.push({ table, column: exprNode, stats: ['min', 'max'] });
-			processedFields.add(String(fieldValue));
-		}
-	}
-
-	return requests;
-}
 
 /**
  * Classify select expressions and build the SQL alias map + query parts.

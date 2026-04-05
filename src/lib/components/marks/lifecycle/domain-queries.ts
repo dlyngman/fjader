@@ -9,14 +9,20 @@ import {
 	max
 } from '@uwdata/mosaic-sql';
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
-import type { Coordinator } from '@uwdata/mosaic-core';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { ContinuousScaleState, NormalizedSortConfig } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
-import type { DataClientConfig } from '$lib/data/DataClient.svelte';
+interface DataClientConfig {
+	_filterNulls: unknown[] | null;
+	select?: Record<string, unknown>;
+	sort?: { channel: string; direction: 'asc' | 'desc' } | null;
+	domain?: { x?: string[]; y?: string[] } | null;
+	limit?: number;
+	[key: string]: unknown;
+}
 
 // ---------------------------------------------------------------------------
 // fetchCategoricalDomains
@@ -29,7 +35,7 @@ import type { DataClientConfig } from '$lib/data/DataClient.svelte';
  * Returns the number of fetches executed (for logging).
  */
 export async function fetchCategoricalDomains(
-	coordinator: Coordinator | QueryEngine,
+	coordinator: QueryEngine,
 	table: string,
 	select: Record<string, unknown>,
 	sort: NormalizedSortConfig,
@@ -311,7 +317,7 @@ export async function fetchCategoricalDomains(
  * update its reactive state.
  */
 export async function fetchGlobalAggregates(
-	coordinator: Coordinator | QueryEngine,
+	coordinator: QueryEngine,
 	table: string,
 	select: Record<string, unknown>,
 	channelsNeedingDataDomain: Set<string>,

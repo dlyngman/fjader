@@ -1,57 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { column as sqlColumn, count, sum, sql, avg } from '@uwdata/mosaic-sql';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { buildFieldInfoRequests, buildQueryParts, assembleQuery } from './query-builder';
-
-// ---------------------------------------------------------------------------
-// buildFieldInfoRequests
-// ---------------------------------------------------------------------------
-
-describe('buildFieldInfoRequests', () => {
-	it('creates requests for numeric scale columns', () => {
-		const requests = buildFieldInfoRequests(
-			{ x: 'price', y: 'quantity' },
-			'products',
-			'linear',
-			'linear'
-		);
-		expect(requests).toHaveLength(2);
-		expect(requests[0]).toMatchObject({ table: 'products', stats: ['min', 'max'] });
-		expect(requests[1]).toMatchObject({ table: 'products', stats: ['min', 'max'] });
-	});
-
-	it('skips aggregate expressions', () => {
-		const requests = buildFieldInfoRequests(
-			{ x: 'species', y: count() },
-			'penguins',
-			'band',
-			'linear'
-		);
-		// x is band (not numeric) -> skipped; y is aggregate -> skipped
-		expect(requests).toHaveLength(0);
-	});
-
-	it('skips time scale columns', () => {
-		const requests = buildFieldInfoRequests(
-			{ x: 'date', y: 'value' },
-			'timeseries',
-			'time',
-			'linear'
-		);
-		// x is time -> skipped; y is linear -> included
-		expect(requests).toHaveLength(1);
-	});
-
-	it('deduplicates same field used in multiple channels', () => {
-		const requests = buildFieldInfoRequests({ x: 'value', y: 'value' }, 't', 'linear', 'linear');
-		expect(requests).toHaveLength(1);
-	});
-
-	it('skips null select values', () => {
-		const requests = buildFieldInfoRequests({ x: 'price', y: null }, 't', 'linear', 'linear');
-		expect(requests).toHaveLength(1);
-	});
-});
+import { buildQueryParts, assembleQuery } from './query-builder';
 
 // ---------------------------------------------------------------------------
 // buildQueryParts
