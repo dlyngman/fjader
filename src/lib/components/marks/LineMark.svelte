@@ -29,7 +29,6 @@
 		ContinuousScaleTypeProps,
 		ConnectedTopologyProps,
 		LODConfig,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -103,7 +102,6 @@
 	});
 
 	const markId = generateMarkId('line');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
@@ -363,13 +361,12 @@
 	let densityHost: DensityHost | null = $state(null);
 
 	$effect(() => {
-		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) return;
-		// LOD requires buildViewportCountQuery (V1 MarkLifecycle only — not yet ported to V2)
-		if (!('buildViewportCountQuery' in setup)) return;
+		if (!lodEnabled || !setup || !queryEngine || !gpuCoordinator) return;
 		const decimate = lodDecimate;
-		const host = new DensityHost(gpuCoordinator, chartContext, coordinator, {
+		const host = new DensityHost(gpuCoordinator, chartContext, queryEngine, {
+			callerId: markId,
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
-				(setup as any).buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi),
+				setup.buildViewportCountQuery(xLo, xHi, yLo, yHi),
 			decimate
 		});
 		densityHost = host;
@@ -525,25 +522,31 @@
 		};
 	});
 
-	// Tooltip registration — reads from entry
+	// Tooltip registration — only guard conditions are tracked.
+	// The registration body runs in untrack to avoid reactive dependencies
+	// on scaleTypes, colorScaleState, etc. that recompute when overlay marks
+	// register scale requirements (causing spurious unregister/re-register
+	// cycles that clear currentMarkId).
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'line',
-				chartContext,
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'stroke',
-				markColor,
-				proximityAxis: entry.tooltipProximity,
-				constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'line',
+					chartContext,
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'stroke',
+					markColor,
+					proximityAxis: entry.tooltipProximity,
+					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 

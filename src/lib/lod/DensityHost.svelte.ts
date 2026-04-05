@@ -12,11 +12,9 @@
 // scheduling. Domain change detection + debounce before issuing count query.
 // =============================================================================
 
-import type { Query } from '@uwdata/mosaic-sql';
-import { Priority } from '@uwdata/mosaic-core';
-import type { Coordinator } from '@uwdata/mosaic-core';
 import type { ChartContext } from '$lib/types';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 // ---- Public types ----
 
@@ -29,7 +27,9 @@ export interface DensityContext {
 }
 
 export interface DensityHostConfig {
-	countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => Query | null;
+	/** Unique identifier for cancel-on-supersede in QueryEngine (use markId). */
+	callerId: string;
+	countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => string | null;
 	decimate?: boolean | 'auto';
 	densityThreshold?: number; // default 4
 	hysteresis?: number; // default 0.5
@@ -43,8 +43,9 @@ export class DensityHost {
 	// --- Dependencies ---
 	#gpuCoordinator: GPUCoordinator;
 	#chartContext: ChartContext;
-	#coordinator: Coordinator;
-	#countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => Query | null;
+	#queryEngine: QueryEngine;
+	#callerId: string;
+	#countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => string | null;
 
 	// --- Decimation config ---
 	#decimate: boolean | 'auto';
@@ -87,12 +88,13 @@ export class DensityHost {
 	constructor(
 		gpuCoordinator: GPUCoordinator,
 		chartContext: ChartContext,
-		coordinator: Coordinator,
+		queryEngine: QueryEngine,
 		config: DensityHostConfig
 	) {
 		this.#gpuCoordinator = gpuCoordinator;
 		this.#chartContext = chartContext;
-		this.#coordinator = coordinator;
+		this.#queryEngine = queryEngine;
+		this.#callerId = `lod-${config.callerId}`;
 		this.#countQueryBuilder = config.countQueryBuilder;
 		this.#decimate = config.decimate ?? 'auto';
 		this.#densityThreshold = config.densityThreshold ?? 4;
@@ -121,10 +123,11 @@ export class DensityHost {
 		const lo = target[0];
 		const hi = target[1];
 		if (lo === this.#lastSeenLo && hi === this.#lastSeenHi) return;
-		this.#lastSeenLo = lo;
-		this.#lastSeenHi = hi;
 
-		// Domain changed — run full check
+		// Domain changed — run full check.
+		// Only update lastSeen after a successful query attempt — if the
+		// query builder returns null (setup not complete), we must re-detect
+		// this domain on the next frame.
 		this.timeSinceLastQuery = performance.now() - this.#lastCountTime;
 		this.#checkDomainAndQuery(lo, hi);
 	}
@@ -181,15 +184,20 @@ export class DensityHost {
 	async #issueCountQuery(lo: number, hi: number, yLo: number, yHi: number): Promise<void> {
 		if (this.#countQueryPending || this.#destroyed) return;
 
+		const sqlStr = this.#countQueryBuilder(lo, hi, yLo, yHi);
+		if (!sqlStr) return; // Setup not ready — don't update lastSeen, retry next frame
+
+		// Query builder succeeded — commit this domain as seen
+		this.#lastSeenLo = lo;
+		this.#lastSeenHi = hi;
+
 		this.#countQueryPending = true;
 		const seq = ++this.#querySequence;
 		const t0 = performance.now();
 
 		try {
-			const q = this.#countQueryBuilder(lo, hi, yLo, yHi);
-			if (!q) return;
 
-			const result = await this.#coordinator.query(q, { priority: Priority.Low });
+			const result = await this.#queryEngine.query(sqlStr, { callerId: this.#callerId });
 			const t1 = performance.now();
 
 			if (seq !== this.#querySequence || this.#destroyed) return;

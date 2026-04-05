@@ -13,6 +13,11 @@
  *
  * Future layers (cache, batching, PreAggregator) add capabilities without
  * changing the external interface.
+ *
+ * v3 consideration: query priority. The engine knows callers by callerId
+ * and can infer priority from caller metadata (e.g. density-host queries
+ * are always deferrable, mark data queries after filter changes are urgent).
+ * Priority scheduling belongs here, not at callsites.
  */
 
 import type { Table } from '@uwdata/flechette';

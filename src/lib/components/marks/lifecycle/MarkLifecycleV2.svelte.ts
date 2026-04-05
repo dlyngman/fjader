@@ -431,8 +431,11 @@ export class MarkLifecycleV2 {
 	async #runSetup(colorReady: boolean): Promise<void> {
 		if (this.#destroyed) return;
 
-		// Passive scales: skip domain fetching
+		// Passive scales: skip domain fetching but still need schema for CAST decisions
 		if (this.#config.passiveScales) {
+			this.#schema = buildSchemaMap(
+				await this.#queryEngine.describe(this.#config.table)
+			);
 			setScalesReady(
 				this.#scaleMap,
 				this.#channelsNeedingDataDomain,
@@ -885,6 +888,33 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 	// PUBLIC API (consumed by mark components)
 	// ===========================================================================
+
+	/**
+	 * Build a viewport count query for DensityHost LOD measurement.
+	 * Wraps the mark's assembled query as a subquery and counts rows within
+	 * the given viewport bounds. Returns null before setup completes (scale
+	 * domains and time offsets aren't available yet).
+	 */
+	buildViewportCountQuery(
+		xLo: number,
+		xHi: number,
+		yLo: number,
+		yHi: number
+	): string | null {
+		if (!this.setupComplete) return null;
+
+		const filter = this.#selection?.predicate(this.#markId) ?? [];
+		const sqlStr = this.#buildQueryString(filter);
+		if (!sqlStr) return null;
+
+		const parts: string[] = [`SELECT COUNT(*) AS cnt FROM (${sqlStr}) AS _vp`];
+		const conditions: string[] = [`_vp.x BETWEEN ${xLo} AND ${xHi}`];
+		if (isFinite(yLo) && isFinite(yHi)) {
+			conditions.push(`_vp.y BETWEEN ${yLo} AND ${yHi}`);
+		}
+		parts.push(`WHERE ${conditions.join(' AND ')}`);
+		return parts.join(' ');
+	}
 
 	get actualXScaleType(): string {
 		return this.#chartContext.scaleTypes?.x || 'linear';
