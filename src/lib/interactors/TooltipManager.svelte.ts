@@ -1,7 +1,6 @@
 // src/lib/interactors/TooltipManager.svelte.ts
 
-import { Priority } from '@uwdata/mosaic-core';
-import type { Coordinator } from '@uwdata/mosaic-core';
+import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import { isTemporalScale } from '$lib/scales/scale-categories';
@@ -68,7 +67,7 @@ interface QueryResult {
  * Created per-chart and made available via Svelte context.
  */
 export class TooltipManager {
-	#coordinator: Coordinator;
+	#queryEngine: QueryEngine;
 	#scaleProvider: ScaleProvider;
 	#chartConfig: ChartConfig | null;
 	#marks: Map<string, TooltipMarkRegistration> = new Map();
@@ -116,8 +115,8 @@ export class TooltipManager {
 		return this.matchedPoints[0]?.screenY ?? null;
 	}
 
-	constructor(coordinator: Coordinator, scaleProvider: ScaleProvider, chartConfig?: ChartConfig) {
-		this.#coordinator = coordinator;
+	constructor(queryEngine: QueryEngine, scaleProvider: ScaleProvider, chartConfig?: ChartConfig) {
+		this.#queryEngine = queryEngine;
 		this.#scaleProvider = scaleProvider;
 		this.#chartConfig = chartConfig ?? null;
 	}
@@ -244,8 +243,8 @@ export class TooltipManager {
 				if (!sql) continue;
 
 				queryPromises.push(
-					this.#coordinator
-						.query(sql, { priority: Priority.Low })
+					this.#queryEngine
+						.query(sql, { callerId: 'tooltip' })
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
 							return rows.length > 0 ? { markId, config, rows } : null;

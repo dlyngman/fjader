@@ -5,7 +5,8 @@
 	import type { Margin } from '$lib/types';
 	import { WheelInteractionControl } from '$lib/interactors/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
-	import type { ChartContext, Coordinator } from '$lib/types';
+	import type { ChartContext } from '$lib/types';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import type { ChartConfig } from '$lib/config';
 	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -40,7 +41,6 @@
 		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
-		coordinator: Coordinator;
 		wheelInteraction?: WheelInteractionConfig;
 		background?: Snippet;
 		foreground?: Snippet;
@@ -61,7 +61,6 @@
 		chartConfig,
 		facetingProps = { fx: null, isFaceted: false, facetChartIds: [], facetBandScale: null },
 		gpuCoordinator,
-		coordinator,
 		wheelInteraction = { dwellTimeMs: 250, momentumThreshold: 150, enabled: true },
 		background = undefined,
 		foreground = undefined,
@@ -70,6 +69,8 @@
 		interactors = undefined,
 		overlay = undefined
 	}: Props = $props();
+
+	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	// --- Layout ---
 	const layout = new ChartLayout({ margin, height, clipPadding });
@@ -205,7 +206,7 @@
 	let tooltipManager = $state<TooltipManager | null>(null);
 
 	$effect(() => {
-		if (!scales || !coordinator || isFacetedCell) return;
+		if (!scales || !queryEngine || isFacetedCell) return;
 
 		const scaleProvider = {
 			get xScale() {
@@ -222,7 +223,7 @@
 			}
 		};
 
-		const tm = new TooltipManager(coordinator, scaleProvider, chartConfig);
+		const tm = new TooltipManager(queryEngine, scaleProvider, chartConfig);
 		tooltipManager = tm;
 
 		const frameCallback = () => tm.tick();

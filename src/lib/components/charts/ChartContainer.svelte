@@ -7,7 +7,7 @@
 	import { ChartConfig } from '$lib/config';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ChartContext, Coordinator, FieldRef } from '$lib/types';
+	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import ChartCell from './ChartCell.svelte';
 
@@ -79,7 +79,6 @@
 
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const gpuCoordinator = getGPUContext();
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 
 	// --- Faceting ---
 	const facetBandScale = fx
@@ -406,7 +405,6 @@
 						{chartConfig}
 						{facetingProps}
 						{gpuCoordinator}
-						{coordinator}
 						{wheelInteraction}
 						{background}
 						{foreground}
@@ -429,7 +427,6 @@
 			{chartConfig}
 			{facetingProps}
 			{gpuCoordinator}
-			{coordinator}
 			{wheelInteraction}
 			{background}
 			{foreground}
