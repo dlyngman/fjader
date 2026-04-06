@@ -283,16 +283,6 @@ describe('Transforms', () => {
 			expect(without.hasStackTransform()).toBe(false);
 		});
 
-		it('detects CTEs', () => {
-			const compiler = new TransformCompiler([]);
-
-			// Simulate a query with CTE
-			const badQuery = {
-				toString: () => 'WITH temp AS (SELECT * FROM t) SELECT * FROM temp'
-			};
-
-			expect(() => compiler.validateQuery(badQuery as unknown as SelectQuery)).toThrow(/CTE/);
-		});
 	});
 
 	describe('Auto Binning', () => {

@@ -58,7 +58,7 @@ export async function render(
 	}
 
 	// 4. Build context map — injected into Svelte mount() so child components
-	//    find these via getContext() calls (same keys as setCoordinators())
+	//    find these via getContext() calls (same keys as initDivePlot())
 	const filterGroups = new FilterGroupRegistry();
 	tableSchemaService.setQueryEngine(queryEngine);
 	const context = new Map<string, unknown>();

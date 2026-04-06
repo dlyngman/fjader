@@ -1,38 +1,35 @@
-// src/lib/index.js
+// src/lib/index.ts
 import { setScaleRegistry } from '$lib/scales';
 import { setGPUCoordinator } from '$lib/gpu';
+import { setQueryContext, initDuckDB } from '$lib/query-engine';
+import type { DuckDBConnection } from '$lib/query-engine';
 
 /**
- * Initialize all coordinators for the charting library
- * Call this once at the top level of your application
+ * Initialize DivePlot: QueryEngine, ScaleRegistry, GPUCoordinator, FilterGroups.
+ * Call once in a top-level component's <script> block.
+ *
+ *   import { initDivePlot } from 'diveplot';
+ *   const { queryEngine } = initDivePlot();
+ *
+ * Pass an existing DuckDB connection to skip internal DuckDB-WASM init:
+ *   const { queryEngine } = initDivePlot(myConnection);
  */
-export function setCoordinators(config: { msaaSampleCount?: number } = {}) {
+export function initDivePlot(connection?: DuckDBConnection | Promise<DuckDBConnection>) {
+	const { queryEngine, filterGroups } = setQueryContext(connection ?? initDuckDB());
+
 	const scaleRegistry = setScaleRegistry();
-	const gpuCoordinator = setGPUCoordinator({
-		msaaSampleCount: config.msaaSampleCount ?? 4
-	});
+	const gpuCoordinator = setGPUCoordinator({ msaaSampleCount: 4 });
 
-	if (gpuCoordinator && scaleRegistry) {
-		gpuCoordinator.setScaleRegistry(scaleRegistry);
+	gpuCoordinator.setScaleRegistry(scaleRegistry);
+	scaleRegistry.setGPUCoordinator(gpuCoordinator);
 
-		if (scaleRegistry.setGPUCoordinator) {
-			scaleRegistry.setGPUCoordinator(gpuCoordinator);
-		}
-	}
-
-	return {
-		scaleRegistry,
-		gpuCoordinator
-	};
+	return { queryEngine, filterGroups, scaleRegistry, gpuCoordinator };
 }
 
 export * from './components';
 export * from './transforms';
 export * from './sql/bin';
 export * from './types';
-
-// Query engine setup
-export { setQueryContext } from './query-engine';
 
 // Spec-driven rendering API
 export { DivePlot, render } from './spec';

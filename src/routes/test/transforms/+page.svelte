@@ -2,18 +2,12 @@
 <script>
 	import { onMount } from 'svelte';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
+	import { initDivePlot } from '$lib';
 	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX } from '$lib/components';
 	import { filter, topN, normalize, stack } from '$lib/transforms';
 	import { bin } from '$lib/sql/bin';
 
-	import Plot from './Plot.svelte';
-
-	import { setQueryContext, initDuckDB } from '$lib/query-engine';
-
-	setCoordinators();
-
-	const { queryEngine } = setQueryContext(initDuckDB());
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 
 	onMount(async () => {
@@ -171,9 +165,6 @@
 			</div>
 		</div>
 
-		<div class="chart-section">
-			<Plot selection="brush" />
-		</div>
 	{/if}
 </div>
 

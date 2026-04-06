@@ -83,30 +83,6 @@ export class TransformCompiler {
 		return this.jsTransforms.some((t) => t.type === 'stack');
 	}
 
-	validateQuery(query: SelectQuery): void {
-		const sql = query.toString();
-
-		if (/\bWITH\s+/i.test(sql)) {
-			throw new Error(
-				'Transform pipeline generated a CTE (WITH clause). ' +
-					"This breaks Mosaic's PreAggregator optimization. " +
-					'CTEs prevent the optimizer from recognizing GROUP BY patterns. ' +
-					'Problematic transforms: ' +
-					this.sqlTransforms.map((t) => t.type).join(', ')
-			);
-		}
-
-		if (/\(\s*SELECT\s+/i.test(sql)) {
-			throw new Error(
-				'Transform pipeline generated a subquery. ' +
-					"This breaks Mosaic's PreAggregator optimization. " +
-					'Subqueries prevent the optimizer from building materialized cubes. ' +
-					'Problematic transforms: ' +
-					this.sqlTransforms.map((t) => t.type).join(', ')
-			);
-		}
-	}
-
 	describe(): string {
 		const parts: string[] = [];
 

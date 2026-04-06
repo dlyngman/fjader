@@ -325,27 +325,30 @@
 		});
 	});
 
-	// Tooltip registration — reads from entry
+	// Tooltip registration — guard conditions are tracked; registration body
+	// runs in untrack() to avoid reactive deps on scaleTypes/colorScaleState
+	// that cause spurious unregister/re-register cycles.
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
-
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'areay',
-				chartContext,
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'fill',
-				// Stacked areas: containment-based proximity (y0 ≤ cursor ≤ y1)
-				...(hasStackTransform && { columns: { y: 'y1', yLow: 'y0', yHigh: 'y1' } }),
-				markColor,
-				proximityAxis: entry.tooltipProximity,
-				constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'areay',
+					chartContext,
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'fill',
+					// Stacked areas: containment-based proximity (y0 ≤ cursor ≤ y1)
+					...(hasStackTransform && { columns: { y: 'y1', yLow: 'y0', yHigh: 'y1' } }),
+					markColor,
+					proximityAxis: entry.tooltipProximity,
+					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 

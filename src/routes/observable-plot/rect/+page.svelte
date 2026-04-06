@@ -1,6 +1,6 @@
 <script>
 	import * as msql from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
+	import { initDivePlot } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -19,10 +19,8 @@
 	import { bin } from '$lib/sql/bin';
 	import { filter } from '$lib/transforms';
 
-	import { setQueryContext, initDuckDB } from '$lib/query-engine';
-	setCoordinators();
 
-	const { queryEngine } = setQueryContext(initDuckDB());
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 

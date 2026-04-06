@@ -26,12 +26,8 @@ describe('Transform Pipeline Integration', () => {
 		// Apply SQL transforms
 		query = compiler.applyToQuery(query);
 
-		// Validate flat query
-		expect(() => compiler.validateQuery(query)).not.toThrow();
-
 		const sql = query.toString();
 		expect(sql).toMatch(/WHERE.*revenue.*> 0/);
-		expect(sql).not.toContain('WITH'); // No CTE
 
 		// Simulate query results
 		const mockData = new ObjectDataAccessor([

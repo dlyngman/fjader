@@ -1,7 +1,7 @@
 <!-- src/routes/performance-demo/+page.svelte -->
 <script>
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
+	import { initDivePlot } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -15,16 +15,7 @@
 	} from '$lib/components';
 	import Frame from '$lib/components/background/Frame.svelte';
 
-	import { setQueryContext, initDuckDB } from '$lib/query-engine';
-	// ✅ Initialize enhanced coordination
-	console.log('🚀 Initializing enhanced coordination for performance demo...');
-	const coordinators = setCoordinators({
-		msaaSampleCount: 4,
-		enableDebugging: false
-	});
-
-	// State management
-	const { queryEngine } = setQueryContext(initDuckDB());
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 	let performanceReport = $state(null);

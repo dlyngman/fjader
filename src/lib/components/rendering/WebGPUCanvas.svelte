@@ -36,7 +36,7 @@
 
 			if (!gpuCoordinator) {
 				throw new Error(
-					'GPUCoordinator not found. Ensure setCoordinators() was called in a parent component.'
+					'GPUCoordinator not found. Ensure initDivePlot() was called in a parent component.'
 				);
 			}
 

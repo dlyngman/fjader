@@ -1,13 +1,11 @@
 <script>
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { setQueryContext, initDuckDB } from '$lib/query-engine';
-	import { setCoordinators } from '$lib';
+	import { initDivePlot } from '$lib';
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	setCoordinators();
 
-	const { queryEngine } = setQueryContext(initDuckDB());
+	const { queryEngine } = initDivePlot();
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);

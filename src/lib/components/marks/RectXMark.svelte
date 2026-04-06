@@ -299,24 +299,28 @@
 		});
 	});
 
-	// Tooltip registration — reads from entry
+	// Tooltip registration — guard conditions are tracked; registration body
+	// runs in untrack() to avoid reactive deps on scaleTypes/colorScaleState
+	// that cause spurious unregister/re-register cycles.
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'rectx',
-				chartContext,
-				columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'fill',
-				bandAxes: { y: true },
-				markColor,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'rectx',
+					chartContext,
+					columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'fill',
+					bandAxes: { y: true },
+					markColor,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 
