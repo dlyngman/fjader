@@ -6,19 +6,7 @@
  * concurrent loads of the same table from racing.
  */
 
-import type { Coordinator } from '@uwdata/mosaic-core';
-
-/** Minimal typing for DuckDB-WASM connector accessed through Mosaic. */
-interface DuckDBConnection {
-	insertArrowFromIPCStream(
-		data: Uint8Array,
-		options: { name: string; create: boolean }
-	): Promise<void>;
-}
-
-interface WasmConnector {
-	getConnection(): Promise<DuckDBConnection>;
-}
+import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 /** tableName → content hash of the currently loaded data. */
 const _loaded = new Map<string, string>();
@@ -27,7 +15,7 @@ const _loaded = new Map<string, string>();
 const _pending = new Map<string, Promise<void>>();
 
 export async function loadArrowIPCTable(
-	coordinator: Coordinator,
+	queryEngine: QueryEngine,
 	tableName: string,
 	ipcBytes: Uint8Array,
 	hash: string
@@ -41,10 +29,8 @@ export async function loadArrowIPCTable(
 	if (_loaded.get(tableName) === hash) return;
 
 	const loadPromise = (async () => {
-		await coordinator.exec(`DROP TABLE IF EXISTS "${tableName}"`);
-		const connector = coordinator.databaseConnector() as unknown as WasmConnector;
-		const connection = await connector.getConnection();
-		await connection.insertArrowFromIPCStream(ipcBytes, {
+		await queryEngine.exec(`DROP TABLE IF EXISTS "${tableName}"`);
+		await queryEngine.insertArrowFromIPCStream(ipcBytes, {
 			name: tableName,
 			create: true
 		});

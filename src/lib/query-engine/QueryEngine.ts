@@ -75,6 +75,11 @@ export interface DuckDBConnection {
 	 *  Falls back to query() if not provided. */
 	exec?(sql: string): Promise<void>;
 	close(): Promise<void>;
+	/** DuckDB-WASM specific: load Arrow IPC data as a named table. */
+	insertArrowFromIPCStream?(
+		data: Uint8Array,
+		options: { name: string; create: boolean }
+	): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +290,22 @@ export class QueryEngine {
 			pending.reject(new DOMException('Query cancelled', 'AbortError'));
 			this.#pending.delete(callerId);
 		}
+	}
+
+	/**
+	 * Load Arrow IPC bytes as a named table (DuckDB-WASM only).
+	 * Throws if the underlying connection doesn't support it (e.g. REST).
+	 */
+	async insertArrowFromIPCStream(
+		data: Uint8Array,
+		options: { name: string; create: boolean }
+	): Promise<void> {
+		if (!this.#conn) await this.#ensureConnection();
+		const conn = this.#conn!;
+		if (!conn.insertArrowFromIPCStream) {
+			throw new Error('Arrow IPC loading requires a DuckDB-WASM connection');
+		}
+		await conn.insertArrowFromIPCStream(data, options);
 	}
 
 	/**

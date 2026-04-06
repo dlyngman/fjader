@@ -4,7 +4,7 @@
  */
 
 import type { ColorScheme, CurveType, ScaleType, SortConfig } from '$lib/types';
-import type { Coordinator } from '@uwdata/mosaic-core';
+import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 // =============================================================================
 // Top-level spec
@@ -436,8 +436,8 @@ export interface DodgeTransformSpec {
 export interface RenderOptions {
 	/** Base URL for resolving relative data URLs */
 	baseUrl?: string;
-	/** Provide an existing Mosaic Coordinator instead of creating one */
-	coordinator?: Coordinator;
+	/** Provide an existing QueryEngine instead of creating one */
+	queryEngine?: QueryEngine;
 }
 
 export interface DivePlotHandle {

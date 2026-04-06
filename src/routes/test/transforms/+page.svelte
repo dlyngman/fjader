@@ -1,7 +1,6 @@
 <!-- src/routes/transform-test/+page.svelte -->
 <script>
 	import { onMount } from 'svelte';
-	import { Selection } from '@uwdata/mosaic-core';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX } from '$lib/components';
@@ -11,7 +10,6 @@
 	import Plot from './Plot.svelte';
 
 	import { setQueryContext, initDuckDB } from '$lib/query-engine';
-	const brushSeletion = Selection.crossfilter();
 
 	setCoordinators();
 
@@ -40,7 +38,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -63,7 +61,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -87,7 +85,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -111,7 +109,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -136,7 +134,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -161,7 +159,7 @@
 							{#snippet canvasComponents()}
 								<BarMarkX
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									y={bin('body_mass', { step: 500 })}
 									x={count()}
 									transforms={[stack({ direction: 'horizontal' })]}
@@ -174,7 +172,7 @@
 		</div>
 
 		<div class="chart-section">
-			<Plot selection={brushSeletion} />
+			<Plot selection="brush" />
 		</div>
 	{/if}
 </div>

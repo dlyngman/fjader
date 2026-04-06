@@ -8,7 +8,7 @@
 import { Streamlit, type RenderData } from 'streamlit-component-lib';
 import type { ArrowTable } from 'streamlit-component-lib';
 import { renderFromData, showError, type DivePlotHandle, type ManifestEntry } from '../widget/core';
-import { configureForceServer } from '$lib/spec/LazyCoordinator';
+import { configureForceServer } from '$lib/spec/LazyQueryEngine';
 import '$lib/theme.css';
 
 const root = document.getElementById('root')!;

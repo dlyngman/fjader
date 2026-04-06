@@ -1,8 +1,8 @@
 <script>
 	import { onMount } from 'svelte';
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet, sql } from '@uwdata/mosaic-sql';
-	import { DataClient } from '$lib/data/DataClient.svelte';
+	// NOTE: This route is broken — DataClient was deleted in the V1 cleanup.
+	// import { DataClient } from '$lib/data/DataClient.svelte';
 
 	let status = $state('Initializing...');
 	let dictionaryData = $state(null);
