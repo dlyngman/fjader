@@ -235,14 +235,10 @@
 		};
 	});
 
-	// --- Viewport visibility: pause Mosaic clients when chart is off-screen ---
+	// --- Viewport visibility callback (reserved for future use) ---
 	const removeVisibilityCallback = gpuCoordinator.setVisibilityCallback(
 		layout.chartId,
-		(visible) => {
-			for (const client of scales.markClients) {
-				client.enabled = visible;
-			}
-		}
+		(_visible) => {}
 	);
 	onMount(() => removeVisibilityCallback);
 
@@ -425,15 +421,6 @@
 			return scales?.binStepMultiplier;
 		},
 		adjustBinMultiplier: (delta: number) => scales?.adjustBinMultiplier(delta),
-
-		// Client registration
-		registerClient(client) {
-			if (!client || !scales) return () => {};
-			return scales.registerClient(client);
-		},
-		get markClients() {
-			return scales?.markClients;
-		},
 
 		// Tooltip — cell-local
 		get tooltipManager() {

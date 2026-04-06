@@ -11,8 +11,7 @@ import type {
 	ContinuousScaleState,
 	D3Scale,
 	D3BandScale,
-	FieldRef,
-	MosaicClient
+	FieldRef
 } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
 import { isContinuousScale } from '$lib/scales/scale-categories';
@@ -97,8 +96,6 @@ export class ChartScales {
 	};
 
 	binStepMultiplier = $state(1.0);
-
-	markClients = new Set<MosaicClient>();
 
 	config: ChartScalesConfig;
 	gpuCoordinator: GPUCoordinator;
@@ -595,11 +592,6 @@ export class ChartScales {
 	#isContinuous(axis: 'x' | 'y'): boolean {
 		return isContinuousScale(this.scaleTypes?.[axis]);
 	}
-
-	registerClient = (client: MosaicClient): (() => void) => {
-		this.markClients.add(client);
-		return () => this.markClients.delete(client);
-	};
 
 	updateCurrentDataPoints = (
 		innerPoint: { x: number; y: number },

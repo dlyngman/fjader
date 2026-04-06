@@ -1,8 +1,6 @@
 // src/lib/index.js
-import { Selection } from '@uwdata/mosaic-core';
 import { setScaleRegistry } from '$lib/scales';
 import { setGPUCoordinator } from '$lib/gpu';
-import { setSelectionRegistry } from '$lib/selection';
 
 /**
  * Initialize all coordinators for the charting library
@@ -13,7 +11,6 @@ export function setCoordinators(config: { msaaSampleCount?: number } = {}) {
 	const gpuCoordinator = setGPUCoordinator({
 		msaaSampleCount: config.msaaSampleCount ?? 4
 	});
-	const selectionRegistry = setSelectionRegistry(Selection);
 
 	if (gpuCoordinator && scaleRegistry) {
 		gpuCoordinator.setScaleRegistry(scaleRegistry);
@@ -25,8 +22,7 @@ export function setCoordinators(config: { msaaSampleCount?: number } = {}) {
 
 	return {
 		scaleRegistry,
-		gpuCoordinator,
-		selectionRegistry
+		gpuCoordinator
 	};
 }
 

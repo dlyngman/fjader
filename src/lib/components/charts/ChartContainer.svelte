@@ -340,14 +340,6 @@
 			return scales?.binStepMultiplier;
 		},
 
-		registerClient(client) {
-			if (!client || !scales) return () => {};
-			return scales.registerClient(client);
-		},
-		get markClients() {
-			return scales?.markClients;
-		},
-
 		get tooltipManager() {
 			return null;
 		},

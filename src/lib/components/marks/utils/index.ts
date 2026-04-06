@@ -24,17 +24,7 @@ export function generateMarkId(prefix: string): string {
 	return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-import type { Selection } from '@uwdata/mosaic-core';
 import type { SortConfig, NormalizedSortConfig } from '$lib/types';
-import { getSelectionRegistry } from '$lib/selection';
-
-/** Resolve a selection prop: strings look up from SelectionRegistry, Selection objects pass through. */
-export function resolveSelection(selection: string | Selection | undefined): Selection | undefined {
-	if (typeof selection === 'string') {
-		return getSelectionRegistry()?.getSelection(selection);
-	}
-	return selection;
-}
 
 export function normalizeSortConfig(sort: SortConfig | null | undefined): NormalizedSortConfig {
 	if (!sort) return null;

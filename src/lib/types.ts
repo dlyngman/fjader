@@ -4,7 +4,6 @@
 // This file is the single source of truth for types that cross module boundaries.
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
-import type { Selection, Coordinator, MosaicClient } from '@uwdata/mosaic-core';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 
@@ -204,12 +203,6 @@ export type CurveType =
 	| 'bump-y';
 
 // ---------------------------------------------------------------------------
-// Re-export Mosaic types for convenience
-// ---------------------------------------------------------------------------
-
-export type { Selection, Coordinator, MosaicClient };
-
-// ---------------------------------------------------------------------------
 // Sort configuration for marks
 // ---------------------------------------------------------------------------
 
@@ -234,7 +227,7 @@ export interface DomainConfig {
 /** Props shared by every mark component. */
 export interface BaseMarkProps {
 	table: string;
-	selection?: string | Selection;
+	selection?: string;
 	scheme?: ColorScheme;
 	limit?: number;
 	filterNulls?: boolean;
@@ -424,10 +417,6 @@ export interface ChartContext {
 	readonly binStepMultiplier: number | undefined;
 	adjustBinMultiplier?: (delta: number) => void;
 	setBinStepMultiplier?: (value: number) => void;
-
-	// Client registration
-	registerClient: (client: MosaicClient) => () => void;
-	readonly markClients: Set<MosaicClient> | undefined;
 
 	// Tooltip
 	readonly tooltipManager: TooltipManager | null;

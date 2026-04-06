@@ -15,7 +15,6 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { createOverridable, type Overridable } from './overridable.svelte';
-import type { Selection } from '@uwdata/mosaic-core';
 import type {
 	FieldRef,
 	LODConfig,
@@ -47,7 +46,7 @@ export interface MarkEntry {
 	fillOpacity?: number;
 	scheme?: ColorScheme;
 	transforms?: Transform[];
-	selection?: string | Selection;
+	selection?: string;
 	limit?: number;
 	filterNulls?: boolean;
 	preferredXScaleType?: string | null;

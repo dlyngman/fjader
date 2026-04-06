@@ -17,7 +17,6 @@
 		Transform
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { Selection } from '@uwdata/mosaic-core';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
@@ -29,7 +28,7 @@
 		opacity?: number;
 		strokeWidth?: number;
 		curve?: CurveType;
-		selection?: string | Selection;
+		selection?: string;
 		transforms?: Transform[];
 	}
 
