@@ -3,7 +3,7 @@
 # dependencies = [
 #     "anywidget>=0.9.21",
 #     "diveplot",
-#     "marimo>=0.19.10",
+#     "marimo>=0.20.2",
 #     "polars>=1.38.1",
 #     "pyzmq>=27.1.0",
 # ]
