@@ -1,30 +1,20 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { setCoordinators } from '$lib';
-	import { setQueryContext } from '$lib/query-engine';
-	import { onMount, setContext } from 'svelte';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-
-	// Deferred connection — wasm.getConnection() spawns a Worker, only safe in browser
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-
 			// Generate 2 years of hourly time series with 2 groups
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE timeseries AS
 				WITH hours AS (
 					SELECT

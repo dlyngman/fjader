@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { sum } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		WebGPUCanvas,
@@ -14,23 +13,17 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
 			// Create test data tables in DuckDB
-			await coord.exec([
+			await queryEngine.exec([
 				// Test 1: Negative-only values (losses)
 				`CREATE TABLE losses AS SELECT * FROM (VALUES
 					('Q1', -50),

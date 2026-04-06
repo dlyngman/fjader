@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -18,26 +17,19 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-
-			await coord.exec([
-				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`),
-				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`)
+			await queryEngine.exec([
+				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString(),
+				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`).toString()
 			]);
 
 			isLoaded = true;

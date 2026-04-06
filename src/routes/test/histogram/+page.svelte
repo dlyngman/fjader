@@ -1,28 +1,21 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-			await coord.exec([
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`),
-				loadParquet('travelers', `${window.location.origin}/data/travelers.parquet`)
+			await queryEngine.exec([
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString(),
+				loadParquet('travelers', `${window.location.origin}/data/travelers.parquet`).toString()
 			]);
 
 			isLoaded = true;

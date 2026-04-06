@@ -1,5 +1,4 @@
 <script>
-	import { getContext } from 'svelte';
 	import {
 		ChartContainer,
 		Grid,
@@ -10,8 +9,6 @@
 	} from '$lib/components';
 	import { stackY, stackX, normalize } from '$lib';
 	import { sum } from '@uwdata/mosaic-sql';
-
-	const coordinator = getContext('mosaic-coordinator');
 
 	let stackMode = $state('stack');
 </script>

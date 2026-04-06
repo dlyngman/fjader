@@ -1,5 +1,4 @@
 <script>
-	import { getContext } from 'svelte';
 	import { count } from '@uwdata/mosaic-sql';
 	import {
 		ChartContainer,
@@ -13,8 +12,6 @@
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 	import RectYMark from '$lib/components/marks/RectYMark.svelte';
-
-	const coordinator = getContext('mosaic-coordinator');
 </script>
 
 <div class="main-view-container">

@@ -1,36 +1,25 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	// Create coordinator synchronously so context is available
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-
-	// Set context synchronously during initialization
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-
 			// Load penguins dataset for the brush demo
-			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
+			await queryEngine.exec([loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()]);
 
 			isLoaded = true;
 		} catch (error) {
-			console.error('Failed to initialize Mosaic:', error);
+			console.error('Failed to initialize:', error);
 			loadError = error.message;
 		}
 	});

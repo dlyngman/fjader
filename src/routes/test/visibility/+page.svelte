@@ -1,26 +1,19 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
 			// Generate time series with multiple series for crossfilter testing
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE timeseries AS
 				WITH RECURSIVE points AS (
 					SELECT 0 as idx
@@ -36,7 +29,7 @@
 
 			// Penguins for scatter + bar charts
 			const base = window.location.origin;
-			await coord.exec(
+			await queryEngine.exec(
 				`CREATE TABLE penguins AS SELECT * FROM read_parquet('${base}/data/penguins.parquet')`
 			);
 

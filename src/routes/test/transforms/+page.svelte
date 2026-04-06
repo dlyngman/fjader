@@ -1,34 +1,25 @@
 <!-- src/routes/transform-test/+page.svelte -->
 <script>
-	import { onMount, setContext } from 'svelte';
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
+	import { onMount } from 'svelte';
+	import { Selection } from '@uwdata/mosaic-core';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
 	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX } from '$lib/components';
 	import { filter, topN, normalize, stack } from '$lib/transforms';
 	import { bin } from '$lib/sql/bin';
 
-	import { Selection } from '@uwdata/mosaic-core';
-
 	import Plot from './Plot.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
-	// const coordinator = getContext('mosaic-coordinator');
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	const brushSeletion = Selection.crossfilter();
 
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 
 	onMount(async () => {
-		resolveConn(await wasm.getConnection());
-		await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
+		await queryEngine.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString());
 		isLoaded = true;
 	});
 </script>

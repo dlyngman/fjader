@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet, count, dateMonthDay } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -18,23 +17,17 @@
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 	import Toggle from '$lib/interactors/Toggle.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-			await coord.exec(
-				loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`)
+			await queryEngine.exec(
+				loadParquet('weather', `${window.location.origin}/data/seattle-weather.parquet`).toString()
 			);
 
 			isLoaded = true;

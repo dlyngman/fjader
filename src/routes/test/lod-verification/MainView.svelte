@@ -1,9 +1,6 @@
 <script>
-	import { getContext } from 'svelte';
 	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark} from '$lib/components';
 	import { IntervalX } from '$lib/interactors';
-
-	const coordinator = getContext('mosaic-coordinator');
 
 	// Diagnostic state from the LOD surface
 	let lodState = $state({

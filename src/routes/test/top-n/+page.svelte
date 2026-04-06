@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { sum } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -18,23 +17,17 @@
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { topN } from '$lib/transforms';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
 			// Table 1: 10 categories, pre-aggregated (1 row each)
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE top_n_sales AS
 				SELECT * FROM (VALUES
 					('Electronics', 500),
@@ -56,7 +49,7 @@
 			//   North only:  Music(200), Garden(180), Health(150), Auto(140), Sports(130)
 			//   South only:  Electronics(400), Clothing(250), Food(200), Books(170), Toys(130)
 			//   West only:   Electronics(90), Food(45), Clothing(40), Books(25), Toys(15)
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE top_n_by_region AS
 				SELECT * FROM (VALUES
 					('Electronics', 'North', 10),  ('Electronics', 'South', 400), ('Electronics', 'West', 90),

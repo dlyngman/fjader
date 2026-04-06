@@ -1,29 +1,22 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
+			await queryEngine.exec([loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()]);
 
 			// Synthetic timeseries for line/area facet tests
-			await coord.exec(`
+			await queryEngine.exec([`
 				CREATE TABLE facet_timeseries AS
 				WITH RECURSIVE
 					points AS (
@@ -39,7 +32,7 @@
 					p.idx as x,
 					s.amp * sin((p.idx + s.offset) * 0.15) + 0.3 * random() + 2.0 as y
 				FROM points p CROSS JOIN series s
-			`);
+			`]);
 
 			isLoaded = true;
 		} catch (error) {

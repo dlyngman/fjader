@@ -1,7 +1,6 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { sum, min, max, count, avg, y } from '@uwdata/mosaic-sql';
-	import { setContext, getContext } from 'svelte';
+	import { setContext } from 'svelte';
 	import {
 		ChartContainer,
 		ColumnSelector,
@@ -18,9 +17,6 @@
 	} from '$lib/components';
 	import { stack, normalize } from '$lib/transforms';
 	import Rects from '$lib/components/rendering/Rects.svelte';
-
-	const coordinator = getContext('mosaic-coordinator');
-	const selection = Selection.crossfilter();
 
 	// Color mode options
 	const colorModes = [

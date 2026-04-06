@@ -1,7 +1,6 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { sum, min, max } from '@uwdata/mosaic-sql';
-	import { setContext, getContext, onMount } from 'svelte';
+	import { setContext } from 'svelte';
 	import {
 		ChartContainer,
 		ColumnSelector,
@@ -18,9 +17,6 @@
 	} from '$lib/components';
 
 	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
-
-	const coordinator = getContext('mosaic-coordinator');
-	const selection = Selection.crossfilter();
 
 	let chartConfig = $state([
 		{

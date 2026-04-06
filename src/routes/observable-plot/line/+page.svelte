@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -17,26 +16,20 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-			await coord.exec([
-				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
-				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`),
-				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`),
-				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
+			await queryEngine.exec([
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`).toString(),
+				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`).toString(),
+				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`).toString(),
+				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`).toString(),
 				`CREATE TABLE random_walk AS SELECT i, SUM(random() - 0.5) OVER (ORDER BY i) AS value FROM generate_series(1, 600) AS t(i)`
 			]);
 

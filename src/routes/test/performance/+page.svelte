@@ -1,9 +1,8 @@
 <!-- src/routes/performance-demo/+page.svelte -->
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
 	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		WebGPUCanvas,
@@ -16,7 +15,7 @@
 	} from '$lib/components';
 	import Frame from '$lib/components/background/Frame.svelte';
 
-	import { setQueryContext } from '$lib/query-engine';
+	import { setQueryContext, initDuckDB } from '$lib/query-engine';
 	// ✅ Initialize enhanced coordination
 	console.log('🚀 Initializing enhanced coordination for performance demo...');
 	const coordinators = setCoordinators({
@@ -25,12 +24,7 @@
 	});
 
 	// State management
-	const wasm = wasmConnector();
-	const mosaicCoordinator = new Coordinator();
-	mosaicCoordinator.databaseConnector(wasm);
-	setContext('mosaic-coordinator', mosaicCoordinator);
-	let resolveConn;
-	setQueryContext(new Promise((r) => { resolveConn = r; }));
+	const { queryEngine } = setQueryContext(initDuckDB());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 	let performanceReport = $state(null);
@@ -69,10 +63,8 @@
 
 	onMount(async () => {
 		try {
-			resolveConn(await wasm.getConnection());
-
-			await mosaicCoordinator.exec(
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
+			await queryEngine.exec(
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
 			);
 
 			isLoaded = true;

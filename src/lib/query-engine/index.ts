@@ -36,6 +36,7 @@ export function getFilterGroups(): FilterGroupRegistry {
 }
 
 // Re-exports
+export { initDuckDB } from './duckdb';
 export { QueryEngine } from './QueryEngine';
 export type { DuckDBConnection, QueryOpts, ColumnInfo, ColumnSchema, JsColumnType } from './QueryEngine';
 export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';

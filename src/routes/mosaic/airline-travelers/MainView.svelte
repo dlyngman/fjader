@@ -1,7 +1,5 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { sum, min, max, avg } from '@uwdata/mosaic-sql';
-	import { setContext, getContext } from 'svelte';
 	// import Plot from './Plot.svelte';
 
 	import {
@@ -19,8 +17,6 @@
 	import { bin } from '$lib';
 	import LineMark from '$lib/components/marks/LineMark.svelte';
 
-	const coordinator = getContext('mosaic-coordinator');
-	const brushSeletion = Selection.crossfilter();
 </script>
 
 <div class="main-view-container">

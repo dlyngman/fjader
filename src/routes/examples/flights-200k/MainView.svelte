@@ -1,6 +1,5 @@
 <script>
 	import { min, avg, count } from '@uwdata/mosaic-sql';
-	import { getContext } from 'svelte';
 
 	import {
 		ChartContainer,
