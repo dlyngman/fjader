@@ -62,7 +62,6 @@
 		"svelte": "^5.0.0"
 	},
 	"dependencies": {
-		"@uwdata/mosaic-core": "^0.21.1",
 		"@uwdata/vgplot": "^0.21.1",
 		"d3-scale": "^4.0.2"
 	}
