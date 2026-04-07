@@ -8,6 +8,7 @@
 		MarkColor,
 		generateMarkId
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { getGPUContext } from '$lib/gpu';
 	import type {
 		FieldRef,
@@ -104,13 +105,11 @@
 		transforms: entry.transforms ?? [],
 		select: channelSelect,
 		colorChannel: 'stroke',
-		clientOptions: {},
-		sort: null,
-		domain: null,
-		tooltip: false,
 		parallelMode: true,
 		parallelColumns: columnNames
 	});
+
+	const reactiveConfig = buildReactiveConfig(entry);
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 
@@ -124,10 +123,11 @@
 			if (entry.table && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined).selection
+					filterGroups.get(entry.selection as string | undefined)
 				);
 			}
 		});

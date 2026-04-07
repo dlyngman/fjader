@@ -18,6 +18,7 @@
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import type {
 		FieldRef,
 		ColorProp,
@@ -167,16 +168,11 @@
 		},
 		table: entry.table,
 		transforms: entry.transforms ?? [],
-		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
-		},
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip,
-		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
+		select: { ...channelSelect, ...resolvedTip.extraSelect }
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry, {
+		resolveFitDomain: () => resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -258,10 +254,11 @@
 			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined).selection
+					filterGroups.get(entry.selection as string | undefined)
 				);
 			}
 		});

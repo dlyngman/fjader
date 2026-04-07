@@ -13,6 +13,7 @@
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
 	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	interface Props {
 		/** Filter group name — selects which FilterGroup this brush writes to. */
@@ -25,6 +26,7 @@
 
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
+	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();
@@ -140,10 +142,9 @@
 		]);
 	}
 
-	// TODO: Re-implement pre-aggregation for V2 query engine.
-	// Mosaic used selection.activate() to hint at upcoming queries;
-	// the V2 equivalent is not yet designed.
-	function handlePointerEnter() {}
+	function handlePointerEnter() {
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()));
+	}
 
 	function handleWheel(event: WheelEvent) {
 		if (!event.shiftKey) return;

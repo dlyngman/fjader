@@ -9,11 +9,11 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import type {
 		FieldRef,
 		BaseMarkProps,
@@ -126,12 +126,16 @@
 		inferredScaleColumns: { x, y },
 		table,
 		transforms,
-		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip,
-		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
-		sort: normalizeSortConfig(sort),
-		domain: domain ?? null,
-		tooltip: tip === false ? false : tooltip
+		select: { ...channelSelect, ...resolvedTip.extraSelect }
+	});
+
+	const reactiveConfig = buildReactiveConfig({
+		get sort() { return sort; },
+		get limit() { return limit; },
+		get filterNulls() { return filterNulls; },
+		get domain() { return domain; },
+		get tip() { return tip; },
+		get tooltip() { return tooltip; }
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -307,10 +311,11 @@
 			if (table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(selection as string | undefined).selection
+					filterGroups.get(selection as string | undefined)
 				);
 			}
 		});

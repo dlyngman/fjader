@@ -8,6 +8,7 @@
 	import type { ChartContext, Point } from '$lib/types';
 	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	type InvertibleScale = { (v: unknown): number; invert(v: number): number; domain(): number[]; range(): number[] };
 
@@ -25,6 +26,7 @@
 	const chart = getContext<ChartContext>('chart');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
+	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const ps = $derived(chart.parallelScales);
 
@@ -237,10 +239,9 @@
 		return true;
 	}
 
-	// TODO: Re-implement pre-aggregation for V2 query engine.
-	// Mosaic used selection.activate() to hint at upcoming queries;
-	// the V2 equivalent is not yet designed.
-	function handlePointerEnter() {}
+	function handlePointerEnter() {
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()));
+	}
 
 	function handleMoveStart(i: number, event: PointerEvent) {
 		event.stopPropagation();

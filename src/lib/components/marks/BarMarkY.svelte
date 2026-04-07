@@ -14,6 +14,7 @@
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
 		FieldRef,
@@ -164,11 +165,6 @@
 		table: entry.table,
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([entry.x, y1, y2] as FieldRef[]) : null
-		},
 		// Ensures SQL ORDER BY series, dimension for consistent stacking
 		...(markColor.selectField && {
 			_orderConfig: {
@@ -177,12 +173,10 @@
 			}
 		}),
 		// Bar charts with aggregates should start at zero baseline
-		zeroBaseline: hasAggregateY ? { y: true } : null,
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip,
-		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
+		zeroBaseline: hasAggregateY ? { y: true } : null
 	});
+
+	const reactiveConfig = buildReactiveConfig(entry);
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
@@ -259,10 +253,11 @@
 			if (entry.table && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined).selection
+					filterGroups.get(entry.selection as string | undefined)
 				);
 			}
 		});

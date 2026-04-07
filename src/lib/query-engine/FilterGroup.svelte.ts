@@ -11,6 +11,7 @@
 
 import { CrossfilterSelection } from './CrossfilterSelection.svelte';
 import type { FilterExpr, FilterSchema, Clause, ClauseEntry } from './CrossfilterSelection.svelte';
+import type { QueryEngine } from './QueryEngine';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,6 +111,11 @@ export class ToggleState {
 
 export class FilterGroup {
 	readonly selection = new CrossfilterSelection();
+	#engine: QueryEngine | null = null;
+
+	setEngine(engine: QueryEngine): void {
+		this.#engine = engine;
+	}
 
 	// Augmenters produce schema metadata for UI display (filter pills)
 	#augmenters = new Map<string, (value: unknown) => FilterSchema | null>();
@@ -162,18 +168,18 @@ export class FilterGroup {
 					excludeMarkIds: excludeMarkIds(),
 					value
 				});
-				this.#projectToScales();
+				this.#afterUpdate();
 			},
 			clear: () => {
 				this.selection.update(sourceId, null);
-				this.#projectToScales();
+				this.#afterUpdate();
 			},
 			destroy: () => {
 				this.selection.update(sourceId, null);
 				this.#augmenters.delete(sourceId);
 				this.#scaleStateFns.delete(sourceId);
 				this.#valueExtractors.delete(sourceId);
-				this.#projectToScales();
+				this.#afterUpdate();
 			}
 		};
 	}
@@ -212,7 +218,7 @@ export class FilterGroup {
 		} else {
 			this.selection.update(sourceId, null);
 		}
-		this.#projectToScales();
+		this.#afterUpdate();
 	}
 
 	// -----------------------------------------------------------------
@@ -233,12 +239,12 @@ export class FilterGroup {
 			value,
 			schema
 		});
-		this.#projectToScales();
+		this.#afterUpdate();
 	}
 
 	removeManual(key: string): void {
 		this.selection.update(`manual:${key}`, null);
-		this.#projectToScales();
+		this.#afterUpdate();
 	}
 
 	// -----------------------------------------------------------------
@@ -247,7 +253,7 @@ export class FilterGroup {
 
 	clearSource(sourceId: string): void {
 		this.selection.update(sourceId, null);
-		this.#projectToScales();
+		this.#afterUpdate();
 	}
 
 	clearAll(): void {
@@ -256,6 +262,7 @@ export class FilterGroup {
 			toggle.clear();
 		}
 		this.#clearAllScaleProjections();
+		this.#engine?.onFilterChange(this);
 	}
 
 	// -----------------------------------------------------------------
@@ -263,8 +270,16 @@ export class FilterGroup {
 	// -----------------------------------------------------------------
 
 	/**
+	 * After any filter update: project to scales (visual dimming) and notify
+	 * the engine to re-query affected marks.
+	 */
+	#afterUpdate(): void {
+		this.#projectToScales();
+		this.#engine?.onFilterChange(this);
+	}
+
+	/**
 	 * Project active filter values onto scales (dim unselected categories).
-	 * Called after every selection change.
 	 */
 	#projectToScales(): void {
 		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();

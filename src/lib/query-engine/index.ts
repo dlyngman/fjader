@@ -24,6 +24,7 @@ import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 export function setQueryContext(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 	const queryEngine = new QueryEngine(connection);
 	const filterGroups = new FilterGroupRegistry();
+	filterGroups.setEngine(queryEngine);
 	tableSchemaService.setQueryEngine(queryEngine);
 	setContext('query-engine', queryEngine);
 	setContext('filter-groups', filterGroups);
@@ -38,8 +39,10 @@ export function getFilterGroups(): FilterGroupRegistry {
 // Re-exports
 export { initDuckDB } from './duckdb';
 export { QueryEngine } from './QueryEngine';
-export type { DuckDBConnection, QueryOpts, ColumnInfo, ColumnSchema, JsColumnType } from './QueryEngine';
+export type { DuckDBConnection, QueryOpts, ColumnInfo, ColumnSchema, JsColumnType, QueryDescriptor } from './QueryEngine';
 export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';
+export { MarkHandle } from './MarkHandle.svelte';
+export type { QueryParams } from './MarkHandle.svelte';
 export { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 export { FilterGroup } from './FilterGroup.svelte';
 export type { BrushOpts, BrushHandle, FilterItem, ActiveValueScale } from './FilterGroup.svelte';

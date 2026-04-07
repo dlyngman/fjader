@@ -15,6 +15,7 @@
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	/** Helper: cast D3Scale to one with invert() for continuous scales. */
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
@@ -30,6 +31,7 @@
 
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
+	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();
@@ -165,10 +167,9 @@
 		emitFilterClause(dataMin, dataMax);
 	}
 
-	// TODO: Re-implement pre-aggregation for V2 query engine.
-	// Mosaic used selection.activate() to hint at upcoming queries;
-	// the V2 equivalent is not yet designed.
-	function handlePointerEnter() {}
+	function handlePointerEnter() {
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()));
+	}
 
 	function handleWheel(event: WheelEvent) {
 		if (!event.shiftKey) return;

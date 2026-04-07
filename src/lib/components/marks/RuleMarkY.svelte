@@ -12,10 +12,10 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import type { FieldRef, BaseMarkProps, ColorProp, ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
@@ -146,6 +146,12 @@
 		y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER } as const
 	}));
 
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry?.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+	});
+
 	const config = $derived.by(() => {
 		if (!entry) return null;
 		return {
@@ -162,23 +168,16 @@
 			table: entry.table,
 			transforms: entry.transforms ?? [],
 			select: { ...channelSelect, ...resolvedTip.extraSelect },
-			tip: entry.tip,
 			constants: buildConstantsFromChannels({
 				y: entry.y,
 				...(hasExtent && { x1: entry.x1, x2: entry.x2 })
 			}),
-			clientOptions: {
-				limit: entry.limit,
-				filterNulls: entry.filterNulls
-					? ([entry.y, ...(hasExtent ? [x1, x2] : [])] as FieldRef[])
-					: null
-			},
-			zeroBaseline: xShorthand !== undefined ? { x: true } : null,
-			sort: normalizeSortConfig(entry.sort ?? null),
-			domain: entry.domain ?? null,
-			tooltip: entry.tip === false ? false : entry.tooltip,
-			fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
+			zeroBaseline: xShorthand !== undefined ? { x: true } : null
 		};
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry ?? {}, {
+		resolveFitDomain: () => resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -242,10 +241,11 @@
 			if (entry?.table && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry?.selection as string | undefined).selection
+					filterGroups.get(entry?.selection as string | undefined)
 				);
 			}
 		});

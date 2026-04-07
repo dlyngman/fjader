@@ -13,11 +13,11 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
 		FieldRef,
@@ -164,6 +164,12 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+	});
+
 	const config = $derived({
 		markType: 'recty',
 		supportedScaleTypes: {
@@ -187,11 +193,6 @@
 		table: entry.table,
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([x1Expanded, x2Expanded, y1, y2] as FieldRef[]) : null
-		},
 		// Ensures SQL ORDER BY series, dimension for consistent stacking
 		...(markColor.selectField && {
 			_orderConfig: {
@@ -200,11 +201,11 @@
 			}
 		}),
 		// Histograms should start at zero baseline for the aggregate dimension
-		zeroBaseline: isHistogram ? { y: true } : null,
-		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip
+		zeroBaseline: isHistogram ? { y: true } : null
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry, {
+		resolveFitDomain: () => resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -296,10 +297,11 @@
 			if (entry.table && effectiveXScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined).selection,
+					filterGroups.get(entry.selection as string | undefined),
 					{ gpuCoordinator, onMarkLOD }
 				);
 			}

@@ -15,6 +15,7 @@
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { getGPUContext } from '$lib/gpu';
 	import { isColorConstant } from '$lib/scales/color-utils';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -214,22 +215,17 @@
 		table: entry.table,
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'x'
 		},
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
-		},
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip,
-		fitDomain: _isOverlay ? undefined : (entry.fitDomain as 'x' | 'y' | boolean | undefined),
 		passiveScales: _isOverlay
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry, {
+		resolveFitDomain: () => _isOverlay ? undefined : resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -281,10 +277,11 @@
 			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined).selection
+					filterGroups.get(entry.selection as string | undefined)
 				);
 			}
 		});

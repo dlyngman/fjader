@@ -1,26 +1,36 @@
 /**
- * QueryEngine v1-v2 — thin DuckDB-WASM wrapper with cancel-on-supersede.
+ * QueryEngine v1-v3 — DuckDB-WASM wrapper with cancel-on-supersede and
+ * mark registration for batch filter-driven re-queries.
  *
  * The mark layer's only interface to DuckDB. All query execution goes through
- * queryEngine.query(sql, opts). Batching, caching, and priority are internal —
- * marks never manage cancellation tokens or think about query scheduling.
+ * queryEngine.query(sql, opts) for ad-hoc queries, or registerMark() +
+ * onFilterChange() for the reactive registration path.
  *
  * v1: Direct execution (await connection.query(sql))
  * v2: Cancel-on-supersede — keyed on callerId, drops stale in-flight queries.
  *     Note: DuckDB-WASM doesn't support aborting in-flight queries, so "cancel"
  *     means the result is discarded (the DuckDB work still completes). This
  *     prevents stale results from being applied but doesn't save compute.
- *
- * Future layers (cache, batching, PreAggregator) add capabilities without
- * changing the external interface.
- *
- * v3 consideration: query priority. The engine knows callers by callerId
- * and can infer priority from caller metadata (e.g. density-host queries
- * are always deferrable, mark data queries after filter changes are urgent).
- * Priority scheduling belongs here, not at callsites.
+ * v3: Mark registration — marks register structural query descriptors with the
+ *     engine. Filter changes fan through the engine as a single imperative batch
+ *     instead of N independent reactive chains. Preagg routing for aggregated
+ *     marks during brushing.
  */
 
 import type { Table } from '@uwdata/flechette';
+import {
+	isNode,
+	isColumnRef,
+	isAggregateExpression,
+	coalesce,
+	cast,
+	sql as sqlTag
+} from '@uwdata/mosaic-sql';
+import { isWindowExpression } from '$lib/sql/expression-utils';
+import { assembleQuery, type QueryParts } from '$lib/components/marks/lifecycle/query-builder';
+import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
+import type { FilterGroup } from './FilterGroup.svelte';
+import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,6 +93,26 @@ export interface DuckDBConnection {
 }
 
 // ---------------------------------------------------------------------------
+// v3 Registration types
+// ---------------------------------------------------------------------------
+
+export interface QueryDescriptor {
+	table: string;
+	parts: QueryParts;
+	schema: Map<string, ColumnSchema>;
+	transformCompiler: TransformCompiler;
+}
+
+interface MarkRegistration {
+	descriptor: QueryDescriptor;
+	handle: MarkHandle;
+	filterGroup: FilterGroup;
+	preaggTable: string | null;
+	preaggReady: boolean;
+	lastPreaggParts: QueryParts | null;
+}
+
+// ---------------------------------------------------------------------------
 // QueryEngine
 // ---------------------------------------------------------------------------
 
@@ -92,6 +122,7 @@ export class QueryEngine {
 	#inflight = new Map<string, AbortController>();
 	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void }>();
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
+	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
@@ -308,11 +339,234 @@ export class QueryEngine {
 		await conn.insertArrowFromIPCStream(data, options);
 	}
 
+	// -----------------------------------------------------------------
+	// v3: Mark registration + batch filter queries
+	// -----------------------------------------------------------------
+
+	/**
+	 * Register a mark with the engine. Returns a MarkHandle for reading results.
+	 *
+	 * On first registration: returns a new handle, does NOT fire an initial
+	 * query — the mark's params $effect calls handle.updateParams() which
+	 * triggers _onParamsChange → #queryMark.
+	 *
+	 * On re-registration (same markId, e.g. rebin): reuses the existing handle
+	 * so arrowTable stays populated during the re-query (no flash-of-empty).
+	 * Fires a re-query immediately since the params effect won't trigger
+	 * (handle reference is unchanged).
+	 */
+	registerMark(
+		markId: string,
+		descriptor: QueryDescriptor,
+		filterGroup: FilterGroup
+	): MarkHandle {
+		const prev = this.#marks.get(markId);
+		if (prev) {
+			// Don't cancel inflight queries — let them complete for intermediate
+			// visual updates (e.g. smooth rebin steps during shift+scroll).
+			// Execute-latest in query() handles supersession naturally.
+			this.#dropPreagg(prev);
+		}
+
+		// Reuse existing handle to preserve arrowTable during re-query
+		const handle = prev?.handle ?? new MarkHandle();
+		const reg: MarkRegistration = {
+			descriptor,
+			handle,
+			filterGroup,
+			preaggTable: null,
+			preaggReady: false,
+			lastPreaggParts: null
+		};
+		this.#marks.set(markId, reg);
+
+		handle._onParamsChange = () => this.#queryMark(markId, reg);
+
+		handle.destroy = () => {
+			this.cancel(markId);
+			this.#dropPreagg(reg);
+			this.#marks.delete(markId);
+			handle._onParamsChange = null;
+		};
+
+		// Re-registration: trigger re-query immediately with updated descriptor.
+		// The params effect won't fire since the handle reference didn't change.
+		if (prev) {
+			this.#queryMark(markId, reg);
+		}
+
+		return handle;
+	}
+
+	/**
+	 * Called by FilterGroup when any filter clause changes.
+	 * Iterates registered marks for this group and batch-queries them.
+	 */
+	onFilterChange(group: FilterGroup): void {
+		const batch: Array<[string, MarkRegistration]> = [];
+		for (const [markId, reg] of this.#marks) {
+			if (reg.filterGroup === group) {
+				batch.push([markId, reg]);
+			}
+		}
+		if (batch.length > 0) {
+			this.#executeBatch(batch, group.selection);
+		}
+	}
+
+	#executeBatch(
+		batch: Array<[string, MarkRegistration]>,
+		selection: { predicate(markId: string): unknown[] }
+	): void {
+		for (const [markId, reg] of batch) {
+			const filter = selection.predicate(markId);
+			const { descriptor, handle } = reg;
+
+			// Preagg routing: use preagg table if available and parts haven't changed.
+			// Reference equality — $derived memoization ensures same object when
+			// dependencies don't change.
+			const usePreagg =
+				reg.preaggReady &&
+				reg.preaggTable &&
+				descriptor.parts === reg.lastPreaggParts;
+			const sourceTable = usePreagg ? reg.preaggTable! : descriptor.table;
+
+			const sqlStr = this.#assembleSQL(descriptor, sourceTable, filter, handle.params);
+			if (!sqlStr) continue;
+
+			// Use the public query() path — its execute-latest logic ensures
+			// at most 1 inflight + 1 pending per callerId during rapid brushing.
+			this.query(sqlStr, { callerId: markId })
+				.then((table) => handle._setResult(table))
+				.catch((e) => {
+					if ((e as Error)?.name === 'AbortError') return;
+					handle._setError(e as Error);
+				});
+		}
+	}
+
+	/**
+	 * Query a single mark (triggered by params change via _onParamsChange).
+	 */
+	#queryMark(markId: string, reg: MarkRegistration): void {
+		const filter = reg.filterGroup.selection.predicate(markId);
+		const { descriptor, handle } = reg;
+
+		const usePreagg =
+			reg.preaggReady &&
+			reg.preaggTable &&
+			descriptor.parts === reg.lastPreaggParts;
+		const sourceTable = usePreagg ? reg.preaggTable! : descriptor.table;
+
+		const sqlStr = this.#assembleSQL(descriptor, sourceTable, filter, handle.params);
+		if (!sqlStr) return;
+
+		this.query(sqlStr, { callerId: markId })
+			.then((table) => handle._setResult(table))
+			.catch((e) => {
+				if ((e as Error)?.name === 'AbortError') return;
+				handle._setError(e as Error);
+			});
+	}
+
+	/**
+	 * Assemble SQL from a query descriptor + filter + per-mark params.
+	 * Moves CAST wrapping logic from MarkLifecycleV2.#buildQueryString.
+	 */
+	#assembleSQL(
+		descriptor: QueryDescriptor,
+		sourceTable: string,
+		filter: unknown[],
+		params: QueryParams
+	): string | null {
+		const { parts, schema, transformCompiler } = descriptor;
+		const { selectDef } = parts;
+
+		// CAST wrapping: COALESCE(CAST(... AS REAL), 'NaN'::REAL) on numeric channels.
+		// Ensures DuckDB returns Float32Array (zero-copy in DataAccessor).
+		// COALESCE converts SQL NULL to NaN float, giving nullCount=0 Arrow buffers.
+		const castSelectDef = { ...selectDef };
+
+		for (const [ch, expr] of Object.entries(castSelectDef)) {
+			if (expr == null) continue;
+
+			// Aggregates and window functions always produce numeric output
+			if (isAggregateExpression(expr as any) || isWindowExpression(expr as any)) {
+				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
+				continue;
+			}
+
+			// Non-column SQL nodes (CASE expressions from scale inlining) are numeric
+			if (isNode(expr) && !isColumnRef(expr as any)) {
+				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
+				continue;
+			}
+
+			// Column references: check source column type from schema
+			if (isColumnRef(expr as any)) {
+				const colName = (expr as any).column as string;
+				const jsType = schema?.get(colName)?.jsType;
+				if (jsType === 'number') {
+					castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
+				}
+			}
+		}
+
+		const castParts = { ...parts, selectDef: castSelectDef };
+		const q = assembleQuery(
+			sourceTable,
+			castParts,
+			filter,
+			params.filterNulls ?? null,
+			transformCompiler,
+			false, // forMosaic — always false in v2/v3 (channel names throughout)
+			undefined
+		);
+
+		if (params.limit) {
+			q.limit(params.limit);
+		}
+
+		return q?.toString() ?? null;
+	}
+
+	/**
+	 * Pre-aggregate marks for a filter group before brushing begins.
+	 * Called by interactors on pointerenter — before the first brush drag.
+	 *
+	 * TODO: Implement Mosaic-style data cube pre-aggregation. The cube would
+	 * include filter dimensions in GROUP BY so brushing queries re-aggregate
+	 * from the cube (hundreds of rows) instead of the raw table (millions).
+	 * Requires knowing filter dimensions upfront and rewriting the brush
+	 * query to SUM pre-computed counts. For now, this is a no-op — marks
+	 * query the base table directly during brushing.
+	 */
+	async activate(
+		_filterGroup: FilterGroup,
+		_sourceChartMarkIds: Set<string>
+	): Promise<void> {
+		// No-op until data cube preagg is implemented.
+	}
+
+	#dropPreagg(reg: MarkRegistration): void {
+		if (reg.preaggTable) {
+			this.exec(`DROP TABLE IF EXISTS "${reg.preaggTable}"`).catch(() => {});
+			reg.preaggTable = null;
+			reg.preaggReady = false;
+			reg.lastPreaggParts = null;
+		}
+	}
+
 	/**
 	 * Destroy the engine and close the connection.
 	 */
 	async destroy(): Promise<void> {
 		this.#destroyed = true;
+		// Clean up mark registrations
+		for (const reg of this.#marks.values()) {
+			this.#dropPreagg(reg);
+		}
+		this.#marks.clear();
 		for (const controller of this.#inflight.values()) {
 			controller.abort();
 		}

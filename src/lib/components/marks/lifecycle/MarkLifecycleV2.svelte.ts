@@ -1,19 +1,20 @@
 /**
- * MarkLifecycleV2 — Svelte-native mark lifecycle with 2 effects + 1 flag.
+ * MarkLifecycleV2 — Svelte-native mark lifecycle with reactive registration.
  *
  * Replaces the 10-effect state machine in MarkLifecycle.svelte.ts by
  * eliminating DataClient, ViewManager, and the Mosaic callback protocol.
- * Uses QueryEngine for direct DuckDB queries and CrossfilterSelection
- * for reactive crossfilter predicates.
+ * Uses QueryEngine registration for filter-driven batch re-queries and
+ * MarkHandle as the reactive result channel.
  *
  * Phase 1: Setup (one-shot async, one $effect)
  *   Batch all domain queries → register domains → mark scales ready
  *   → setupComplete = true
  *
- * Phase 2: Query (reactive, re-runs on filter change)
- *   filter ← $derived from CrossfilterSelection.predicate(markId)
- *   sql ← $derived from (table + select + caseExprs + filter)
- *   $effect: queryEngine.query(sql, { callerId: markId }) → arrowTable
+ * Registration: watches #resolvedQueryParts, registers with engine.
+ *   Engine handles filter-driven re-queries via onFilterChange().
+ *
+ * Params: watches sort/limit/filterNulls on ReactiveConfig.
+ *   Changes trigger re-query for this mark only, no teardown.
  */
 
 import { untrack } from 'svelte';
@@ -21,18 +22,16 @@ import type { Table } from '@uwdata/flechette';
 import {
 	Query,
 	isNode,
-	isColumnRef,
 	isAggregateExpression,
 	sql,
 	column as sqlColumn,
 	cast,
-	coalesce,
 	min,
 	max,
 	isNotNull,
 	and
 } from '@uwdata/mosaic-sql';
-import type { ExprValue } from '@uwdata/mosaic-sql';
+import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
@@ -50,7 +49,8 @@ import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
-import type { CrossfilterSelection, FilterExpr } from '$lib/query-engine/CrossfilterSelection.svelte';
+import { MarkHandle } from '$lib/query-engine/MarkHandle.svelte';
+import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
 import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
@@ -85,21 +85,29 @@ export interface MarkLifecycleV2Config {
 	table: string;
 	transforms: Transform[];
 	select: Record<string, unknown>;
-	clientOptions?: { limit?: number; filterNulls?: unknown[] | null };
-	sort?: NormalizedSortConfig;
-	domain?: { x?: string[]; y?: string[] } | null;
-	tooltip?: boolean | { sortTable?: boolean };
 	constants?: Record<string, number>;
 	colorChannel?: string;
 	sizeChannel?: string;
 	_orderConfig?: { seriesChannel: string | null; dimensionChannel: string };
-	_filterNulls?: unknown[];
-	fitDomain?: 'x' | 'y' | boolean;
 	zeroBaseline?: { x?: boolean; y?: boolean };
 	passiveScales?: boolean;
-	tip?: (unknown | '*')[] | false;
 	parallelMode?: boolean;
 	parallelColumns?: string[];
+}
+
+/**
+ * ReactiveConfig — per-query and side-concern parameters that don't require
+ * lifecycle teardown on change. Object with getters that read through to the
+ * mark's reactive state (entry.*).
+ */
+export interface ReactiveConfig {
+	readonly sort: NormalizedSortConfig | undefined;
+	readonly limit: number | undefined;
+	readonly filterNulls: unknown[] | null | undefined;
+	readonly domain: { x?: string[]; y?: string[] } | null | undefined;
+	readonly tooltip: boolean | { sortTable?: boolean };
+	readonly fitDomain: 'x' | 'y' | boolean | undefined;
+	readonly tip: (unknown | '*')[] | false | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,15 +117,14 @@ export interface MarkLifecycleV2Config {
 export class MarkLifecycleV2 {
 	// --- Public Reactive State ---
 	setupComplete = $state(false);
-	#arrowTable = $state<Table | null>(null);
-	#dataVersion = $state(0);
 
 	// --- Private Properties ---
 	#config: MarkLifecycleV2Config;
+	#reactiveConfig: ReactiveConfig;
 	#queryEngine: QueryEngine;
 	#chartContext: ChartContext;
 	#markId: string;
-	#selection: CrossfilterSelection | null;
+	#filterGroup: FilterGroup;
 	#scaleMap: Record<string, ScaleStateInstance | null> = {};
 	#colorScaleState = $state<ColorScaleState | null>(null);
 	#seriesScaleState = $state<ColorScaleState | null>(null);
@@ -127,14 +134,61 @@ export class MarkLifecycleV2 {
 	#transformCompiler: TransformCompiler;
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
+	#rollingAvgVersion = $state(0);
 
-	// --- Query Cache ---
-	#cachedQueryParts: QueryParts | null = null;
-	#queryPartsStale = $state(false);
-	#fieldStats: Record<string, { column: string; min: number; max: number }> | null = null;
-	#schema: Map<string, ColumnSchema> | null = null;
-	#lastBinDomain: Record<string, [number, number]> = {};
+	// --- Query State (reactive — feed #resolvedQueryParts $derived) ---
+	#fieldStats = $state<Record<string, { column: string; min: number; max: number }> | null>(null);
+	#schema = $state<Map<string, ColumnSchema> | null>(null);
+	#lastBinDomain = $state<Record<string, [number, number]>>({});
 	#adaptiveBinRung: AdaptiveBinRung | null = null;
+
+	// --- Engine Registration ---
+	#handle = $state<MarkHandle | null>(null);
+
+	// --- Structural query parts ($derived — recomputes on bin/scale/config changes) ---
+	#resolvedQueryParts: QueryParts | null = $derived.by(() => {
+		if (!this.setupComplete) return null;
+
+		const resolvedSelect = { ...this.#config.select };
+
+		// Resolve AutoBinNodes — reads #fieldStats ($state), #lastBinDomain ($state),
+		// binStepMultiplier (reactive on chartContext)
+		if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
+			const binStepMultiplier = this.#chartContext.binStepMultiplier || 1.0;
+			for (const [ch, value] of Object.entries(resolvedSelect)) {
+				if (isBinExpression(value)) {
+					const axis = ch.startsWith('x') ? 'x' : 'y';
+					const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+					const currentDomain = this.#lastBinDomain[axis] ?? null;
+					resolvedSelect[ch] = value.resolve(
+						this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
+						scaleType,
+						null,
+						currentDomain,
+						binStepMultiplier
+					);
+				}
+			}
+		}
+
+		// Resolve RollingAvgNodes — track invalidation counter
+		void this.#rollingAvgVersion;
+		for (const [ch, value] of Object.entries(resolvedSelect)) {
+			if (isRollingAvgExpression(value)) {
+				resolvedSelect[ch] = value.resolve();
+			}
+		}
+
+		// Inline CASE expressions — reads scale states reactively
+		this.#inlineCaseExpressions(resolvedSelect);
+		this.#inlineTimeOffsets(resolvedSelect);
+
+		return buildQueryParts(
+			resolvedSelect,
+			this.#config._orderConfig ?? null,
+			this.#transformCompiler.hasSQLTransforms()
+		);
+	});
 
 	// --- Domain State ---
 	#channelsNeedingDataDomain: Set<string> = new Set();
@@ -144,10 +198,8 @@ export class MarkLifecycleV2 {
 	#lastBandDomainDataVersion: number | null = null;
 
 	// --- Tooltip ---
-	#tooltipWanted: boolean;
 	#tooltipTableName: string;
 	#tooltipTableReady = $state(false);
-	#tooltipSortTable: boolean;
 	#tooltipWriteTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- fitDomain ---
@@ -161,22 +213,21 @@ export class MarkLifecycleV2 {
 
 	constructor(
 		config: MarkLifecycleV2Config,
+		reactiveConfig: ReactiveConfig,
 		queryEngine: QueryEngine,
 		chartContext: ChartContext,
 		markId: string,
-		selection: CrossfilterSelection | null,
+		filterGroup: FilterGroup,
 		options?: { gpuCoordinator?: GPUCoordinator | null; onMarkLOD?: ((surface: any) => void) | null }
 	) {
 		this.#config = config;
+		this.#reactiveConfig = reactiveConfig;
 		this.#queryEngine = queryEngine;
 		this.#chartContext = chartContext;
 		this.#markId = markId;
-		this.#selection = selection;
+		this.#filterGroup = filterGroup;
 
-		// Tooltip config
-		this.#tooltipWanted = config.tooltip !== false || !!config.fitDomain;
-		this.#tooltipSortTable =
-			typeof config.tooltip === 'object' ? config.tooltip.sortTable !== false : true;
+		// Tooltip table name
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
 
 		// Transform compiler
@@ -203,7 +254,7 @@ export class MarkLifecycleV2 {
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
 					this.#skipDomainUpdateForAxis = axis;
 					this.#dataDerivedDomainsSet = false;
-					this.#queryPartsStale = true;
+					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
 				}
 			});
 			if (options.onMarkLOD) {
@@ -251,8 +302,7 @@ export class MarkLifecycleV2 {
 			} else if (isRollingAvgExpression(value)) {
 				this.#rollingAvgNodes.set(channel, value);
 				value.registerInvalidation(() => {
-					this.#queryPartsStale = true;
-					// TODO: trigger re-query via dataVersion bump
+					this.#rollingAvgVersion++;
 				});
 			}
 		}
@@ -327,44 +377,85 @@ export class MarkLifecycleV2 {
 			});
 		});
 
-		// Phase 2: Query (reactive — re-runs on filter or SQL change)
+		// Registration: watches #resolvedQueryParts, registers with engine.
+		// Re-registers on structural change (new parts reference).
+		// Does NOT fire an initial query — the params effect runs
+		// immediately after and triggers the first query via _onParamsChange.
 		$effect(() => {
-			if (!this.setupComplete) return;
-
-			// Read filter from CrossfilterSelection (reactive via SvelteMap)
-			const filter = this.#selection?.predicate(this.#markId) ?? [];
-
-			// Establish reactive dependencies on scale states so the query
-			// re-fires when domains change (band reorder, color domain update)
-			void this.#chartContext.xScaleState;
-			void this.#chartContext.yScaleState;
-			// Re-fire when query parts are invalidated (e.g. LOD window size change)
-			void this.#queryPartsStale;
-
-			// Build the SQL (synchronous — uses cached query parts)
-			const sqlStr = this.#buildQueryString(filter);
-			if (!sqlStr) return;
+			const parts = this.#resolvedQueryParts;
+			if (!parts || !this.setupComplete) return;
+			const schema = this.#schema;
+			if (!schema) return;
 
 			untrack(() => {
-				this.#executeQuery(sqlStr);
+				// registerMark handles cleanup of previous registration for this
+				// markId and reuses the existing handle (preserves arrowTable
+				// during re-query so the chart doesn't flash empty on rebin).
+				this.#handle = this.#queryEngine.registerMark(
+					this.#markId,
+					{
+						table: this.#config.table,
+						parts,
+						schema,
+						transformCompiler: this.#transformCompiler
+					},
+					this.#filterGroup
+				);
 			});
 		});
 
-		// Side concern: Invalidate query cache when binStepMultiplier changes
-		// (shift+scroll on binned marks). Phase 2 reads #queryPartsStale and rebuilds.
-		if (this.#autoBinNodes.size > 0) {
-			$effect(() => {
-				void this.#chartContext.binStepMultiplier;
-				this.#queryPartsStale = true;
-			});
-		}
-
-		// Side concern: Write tooltip table when data updates (debounced).
-		// Trigger on dataVersion rather than this.data — data recomputes on
-		// every scale change which would reset the debounce timer indefinitely.
+		// Push per-mark params and trigger query. Runs immediately after
+		// registration (Svelte flushes effects in creation order), providing
+		// the initial query. On subsequent changes to sort/limit/filterNulls,
+		// re-queries this mark only via _onParamsChange.
 		$effect(() => {
-			if (!this.#tooltipWanted) return;
-			const dataVersion = this.#dataVersion;
+			if (!this.#handle) return;
+			const sort = this.#reactiveConfig.sort;
+			const limit = this.#reactiveConfig.limit;
+			const filterNulls = this.#reactiveConfig.filterNulls;
+			untrack(() => {
+				this.#handle!.updateParams({ sort, limit, filterNulls });
+			});
+		});
+
+		// Domain registration: when data arrives, register data-derived domains.
+		$effect(() => {
+			if (!this.setupComplete) return;
+			const dv = this.dataVersion;
+			if (dv === 0) return;
+
+			untrack(() => {
+				this.#handleDataDomains(dv);
+			});
+		});
+
+		// Band re-sort: lightweight re-sort when sort config changes.
+		// Fires a targeted domain query — no teardown, no schema re-fetch.
+		$effect(() => {
+			if (!this.setupComplete) return;
+			const sort = this.#reactiveConfig.sort;
+
+			untrack(() => {
+				for (const [axis, scaleType] of [
+					['x', this.actualXScaleType],
+					['y', this.actualYScaleType]
+				] as const) {
+					if (scaleType !== 'band' && scaleType !== 'point') continue;
+					const scaleState = this.#scaleMap[axis] as BandScaleState | null;
+					if (!scaleState) continue;
+					this.#refetchSortedDomain(axis, scaleState, sort);
+				}
+			});
+		});
+
+		// Tooltip: write tooltip table when data updates (debounced).
+		$effect(() => {
+			const tooltipConfig = this.#reactiveConfig.tooltip;
+			const fitDomain = this.#reactiveConfig.fitDomain;
+			const tooltipWanted = tooltipConfig !== false || !!fitDomain;
+			if (!tooltipWanted) return;
+
+			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
 
 			untrack(() => {
@@ -374,14 +465,20 @@ export class MarkLifecycleV2 {
 					if (data && data.length > 0) this.#writeTooltipTable(data);
 				}, 300);
 			});
+
+			// Cleanup: when tooltip goes true→false, drop the temp table.
+			return () => {
+				clearTimeout(this.#tooltipWriteTimeout!);
+				this.#tooltipTableReady = false;
+				this.#queryEngine
+					.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`)
+					.catch(() => {});
+			};
 		});
 
-		// Side concern: fitDomain — query DuckDB for fitted axis extent on
-		// driving axis change. Suppressed when the user directly interacts with
-		// the fitted axis. Re-enabled when the driving axis changes from a
-		// non-user source (e.g., overview brush).
+		// fitDomain — query DuckDB for fitted axis extent on driving axis change.
 		$effect(() => {
-			const fitDomain = this.#config.fitDomain;
+			const fitDomain = this.#reactiveConfig.fitDomain;
 			if (!fitDomain) return;
 			if (!this.#dataDerivedDomainsSet) return;
 
@@ -401,8 +498,6 @@ export class MarkLifecycleV2 {
 			const fittedUserDriven = (fittedSS as ContinuousScaleState | null)?.userDriven ?? false;
 			const drivingUserDriven = (drivingSS as ContinuousScaleState).userDriven;
 
-			// Tell the fitted scale to skip disjoint-domain instant snap —
-			// fitDomain intentionally produces large domain jumps that should animate.
 			if (fittedSS) {
 				(fittedSS as ContinuousScaleState).fitDomainActive = true;
 			}
@@ -459,7 +554,7 @@ export class MarkLifecycleV2 {
 					this.#queryEngine,
 					this.#config.table,
 					this.#config.select,
-					this.#config.sort,
+					this.#reactiveConfig.sort,
 					this.actualXScaleType,
 					this.actualYScaleType,
 					this.#chartContext.xScaleState as BandScaleState | null,
@@ -474,7 +569,7 @@ export class MarkLifecycleV2 {
 					seriesKey,
 					this.#transformCompiler.hasCategoryReducingTransforms(),
 					this.#markId,
-					this.#config.domain
+					this.#reactiveConfig.domain
 				),
 				fetchGlobalAggregates(
 					this.#queryEngine,
@@ -522,10 +617,8 @@ export class MarkLifecycleV2 {
 				this.#dataDerivedDomainsSet
 			);
 
-			// Invalidate cached query parts — setup resolved scale domains that
-			// enable CASE expression inlining (ordinal color, band scales).
-			// Phase 2 will rebuild with the now-available expressions.
-			this.#queryPartsStale = true;
+			// Setting #fieldStats and #schema via $state triggers #resolvedQueryParts
+			// recomputation, which then triggers the registration effect.
 			this.setupComplete = true;
 		} catch (error) {
 			if ((error as Error)?.name === 'AbortError') return;
@@ -534,111 +627,8 @@ export class MarkLifecycleV2 {
 	}
 
 	// ===========================================================================
-	// PHASE 2: QUERY
+	// QUERY HELPERS
 	// ===========================================================================
-
-	#buildQueryString(filter: FilterExpr[]): string | null {
-		// Resolve query parts (cached unless stale)
-		if (!this.#cachedQueryParts || this.#queryPartsStale) {
-			this.#queryPartsStale = false;
-
-			const resolvedSelect = { ...this.#config.select };
-
-			// Resolve AutoBinNodes to SQL bin expressions.
-			// Uses #lastBinDomain (set by AdaptiveBinRung on zoom threshold crossing)
-			// for viewport-adaptive bin count. Falls back to null (full field extent)
-			// for initial render.
-			if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
-				const binStepMultiplier = this.#chartContext.binStepMultiplier || 1.0;
-				for (const [ch, value] of Object.entries(resolvedSelect)) {
-					if (isBinExpression(value)) {
-						const axis = ch.startsWith('x') ? 'x' : 'y';
-						const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-						const currentDomain = this.#lastBinDomain[axis] ?? null;
-						resolvedSelect[ch] = value.resolve(
-							this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
-							scaleType,
-							null,
-							currentDomain,
-							binStepMultiplier
-						);
-					}
-				}
-			}
-
-			// Resolve RollingAvgNodes to SQL window expressions
-			for (const [ch, value] of Object.entries(resolvedSelect)) {
-				if (isRollingAvgExpression(value)) {
-					resolvedSelect[ch] = value.resolve();
-				}
-			}
-
-			// Inline CASE expressions for band/color scales (replaces ViewManager)
-			this.#inlineCaseExpressions(resolvedSelect);
-
-			// Inline time offset expressions (replaces ViewManager time columns)
-			this.#inlineTimeOffsets(resolvedSelect);
-
-			this.#cachedQueryParts = buildQueryParts(
-				resolvedSelect,
-				this.#config._orderConfig ?? null,
-				this.#transformCompiler.hasSQLTransforms()
-			);
-		}
-
-		// Build a Float32-safe selectDef for the query. COALESCE(CAST(... AS REAL), 'NaN'::REAL)
-		// on numeric channels ensures DuckDB returns Float32Array (not BigInt64Array).
-		// Uses the cached table schema to determine column types — only numeric columns
-		// and computed expressions (aggregates, CASE) get CAST. String and date columns
-		// are skipped (dates use epoch offset via #inlineTimeOffsets instead).
-		const { selectDef, nonAggregateGroupBy, hasAggregates } = this.#cachedQueryParts;
-		const castSelectDef = { ...selectDef };
-		const schema = this.#schema;
-
-		for (const [ch, expr] of Object.entries(castSelectDef)) {
-			if (expr == null) continue;
-
-			// Aggregates and window functions always produce numeric output — CAST them
-			if (isAggregateExpression(expr as any) || isWindowExpression(expr as any)) {
-				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
-				continue;
-			}
-
-			// Non-column SQL nodes (CASE expressions from inlining) are already numeric
-			if (isNode(expr) && !isColumnRef(expr as any)) {
-				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
-				continue;
-			}
-
-			// Column references: check the source column type from the schema
-			if (isColumnRef(expr as any)) {
-				const colName = (expr as any).column as string;
-				const jsType = schema?.get(colName)?.jsType;
-				// Only CAST numeric columns (skip string, date, boolean)
-				if (jsType === 'number') {
-					castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`);
-				}
-			}
-		}
-
-		const castParts = { ...this.#cachedQueryParts, selectDef: castSelectDef };
-		const q = assembleQuery(
-			this.#config.table,
-			castParts,
-			filter as unknown[],
-			this.#config._filterNulls ?? null,
-			this.#transformCompiler,
-			false, // forMosaic — always false in V2 (channel names throughout)
-			undefined
-		);
-
-		// Apply LIMIT if configured
-		if (this.#config.clientOptions?.limit) {
-			q.limit(this.#config.clientOptions.limit);
-		}
-
-		return q?.toString() ?? null;
-	}
 
 	/**
 	 * Inline CASE index expressions for band/point and ordinal color scales.
@@ -676,10 +666,6 @@ export class MarkLifecycleV2 {
 		}
 	}
 
-	/**
-	 * Inline time offset expressions for time scales.
-	 * Replaces ViewManager's offset column with direct SQL in the SELECT.
-	 */
 	/**
 	 * Inline time offset expressions for time scales.
 	 * Replaces ViewManager's offset column with direct SQL in the SELECT.
@@ -803,86 +789,145 @@ export class MarkLifecycleV2 {
 		return stats;
 	}
 
-	async #executeQuery(sqlStr: string): Promise<void> {
-		if (this.#destroyed) return;
+	/**
+	 * Register data-derived domains after query results arrive.
+	 * Called from the domain registration effect when dataVersion changes.
+	 */
+	#handleDataDomains(dv: number): void {
+		const arrowTable = this.#handle?.arrowTable;
+		if (!arrowTable || arrowTable.numRows === 0) return;
+		if (this.#config.passiveScales) return;
+
+		// Once domains are derived from the first query result, skip
+		// re-registration on subsequent results (e.g., crossfilter updates).
+		// Exception: topN marks need band domain re-derivation on new data.
+		if (this.#dataDerivedDomainsSet) {
+			if (
+				this.#transformCompiler.hasCategoryReducingTransforms() &&
+				dv !== this.#lastBandDomainDataVersion
+			) {
+				this.#lastBandDomainDataVersion = dv;
+			} else {
+				return;
+			}
+		}
+
+		const data = this.data;
+		if (data) {
+			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
+			const xState = this.#chartContext.xScaleState as ContinuousScaleState | null;
+			const yState = this.#chartContext.yScaleState as ContinuousScaleState | null;
+
+			const domainResult = registerDataDerivedDomains(
+				data,
+				this.#channelsNeedingDataDomain,
+				additionalChannels,
+				this.#skipDomainUpdateForAxis,
+				this.#config.zeroBaseline,
+				this.actualXScaleType,
+				this.actualYScaleType,
+				xState,
+				yState,
+				this.#transformCompiler.hasCategoryReducingTransforms(),
+				this.#chartContext.xScaleState as BandScaleState | null,
+				this.#chartContext.yScaleState as BandScaleState | null,
+				this.#markId,
+				false, // isRebinning
+				this.#colorScaleState
+			);
+			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
+			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
+
+			markDeferredScalesReady(
+				this.#scaleMap,
+				this.#channelsNeedingDataDomain,
+				this.actualXScaleType,
+				this.actualYScaleType
+			);
+		}
+	}
+
+	/**
+	 * Re-fetch band domain ordering when sort config changes reactively.
+	 * Builds a SELECT DISTINCT + ORDER BY query, calls setSortOrder on the
+	 * band scale. No teardown, no schema re-fetch, no re-registration.
+	 */
+	async #refetchSortedDomain(
+		axis: string,
+		scaleState: BandScaleState,
+		sort: NormalizedSortConfig | undefined
+	): Promise<void> {
+		const field = this.#config.select[axis];
+		if (!field) return;
+
+		let q = Query.from(this.#config.table)
+			.select({ [axis]: sqlColumn(String(field)) });
+
+		if (sort) {
+			const sortField = this.#config.select[sort.channel]
+				|| this.#config.select[sort.channel + '2']
+				|| this.#config.select[sort.channel + '1'];
+			if (!sortField) return;
+
+			if (isAggregateExpression(sortField as ExprNode)) {
+				q = q.groupby(field as GroupByExpr)
+					.select({ _sort: sortField as ExprValue });
+			}
+			const sortExpr = isAggregateExpression(sortField as ExprNode)
+				? sqlColumn('_sort')
+				: isNode(sortField) ? sortField : sqlColumn(String(sortField));
+
+			q.orderby(sort.direction === 'desc'
+				? sql`${sortExpr} DESC`
+				: sortExpr);
+		} else {
+			q.distinct();
+		}
 
 		try {
-			const result = await this.#queryEngine.query(sqlStr, { callerId: this.#markId });
+			const result = await this.#queryEngine.query(q);
 			if (this.#destroyed) return;
 
-			this.#arrowTable = result;
-			this.#dataVersion++;
+			const categories = Array.from(result).map((row: any) => row[axis]);
+			if (axis === 'y' && sort) categories.reverse();
 
-			// Register data-derived domains (aggregates, transforms)
-			if (!this.#config.passiveScales && result.numRows > 0) {
-				// Once domains are derived from the first query result, skip
-				// re-registration on subsequent results (e.g., crossfilter updates).
-				// Exception: topN marks need band domain re-derivation on new data.
-				if (this.#dataDerivedDomainsSet) {
-					if (
-						this.#transformCompiler.hasCategoryReducingTransforms() &&
-						this.#dataVersion !== this.#lastBandDomainDataVersion
-					) {
-						this.#lastBandDomainDataVersion = this.#dataVersion;
-					} else {
-						return;
-					}
-				}
-
-				const data = this.data;
-				if (data) {
-					const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-					const xState = this.#chartContext.xScaleState as ContinuousScaleState | null;
-					const yState = this.#chartContext.yScaleState as ContinuousScaleState | null;
-
-					const domainResult = registerDataDerivedDomains(
-						data,
-						this.#channelsNeedingDataDomain,
-						additionalChannels,
-						this.#skipDomainUpdateForAxis,
-						this.#config.zeroBaseline,
-						this.actualXScaleType,
-						this.actualYScaleType,
-						xState,
-						yState,
-						this.#transformCompiler.hasCategoryReducingTransforms(),
-						this.#chartContext.xScaleState as BandScaleState | null,
-						this.#chartContext.yScaleState as BandScaleState | null,
-						this.#markId,
-						false, // isRebinning
-						this.#colorScaleState
-					);
-					this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
-					this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
-
-					// Mark deferred scales ready
-					markDeferredScalesReady(
-						this.#scaleMap,
-						this.#channelsNeedingDataDomain,
-						this.actualXScaleType,
-						this.actualYScaleType
-					);
-				}
+			if (categories.length > 0) {
+				scaleState.setSortOrder(categories);
 			}
-		} catch (error) {
-			if ((error as Error)?.name === 'AbortError') return; // Superseded — not an error
-			console.error(`[MarkLifecycleV2] Query failed for ${this.#markId}:`, error);
+		} catch (e) {
+			if ((e as Error)?.name === 'AbortError') return;
+			console.warn(`[MarkLifecycleV2] Sort domain fetch failed:`, e);
 		}
 	}
 
 	/**
 	 * Build a query for fetchGlobalAggregates.
-	 * This is the queryBuilder callback that the aggregates fetcher uses
-	 * to wrap the mark's query as a derived table for MIN/MAX computation.
+	 * Standalone assembly — doesn't depend on #resolvedQueryParts
+	 * (which isn't available yet during Phase 1 setup).
 	 */
 	#buildQueryForAggregates(
 		_table: string,
 		_config: any,
 		filter: unknown[]
 	): Query | null {
-		const sqlStr = this.#buildQueryString(filter as FilterExpr[]);
-		if (!sqlStr) return null;
-		return Query.from(sql`(${sqlStr})` as any).select('*');
+		// Build raw query parts directly from config.select (no CASE inlining,
+		// no bin resolution — scale states aren't ready yet during Phase 1).
+		const parts = buildQueryParts(
+			this.#config.select,
+			this.#config._orderConfig ?? null,
+			this.#transformCompiler.hasSQLTransforms()
+		);
+		const q = assembleQuery(
+			this.#config.table,
+			parts,
+			filter,
+			this.#reactiveConfig.filterNulls ?? null,
+			this.#transformCompiler,
+			false,
+			undefined
+		);
+		if (!q) return null;
+		return Query.from(sql`(${q.toString()})` as any).select('*');
 	}
 
 	// ===========================================================================
@@ -901,11 +946,21 @@ export class MarkLifecycleV2 {
 		yLo: number,
 		yHi: number
 	): string | null {
-		if (!this.setupComplete) return null;
+		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
 
-		const filter = this.#selection?.predicate(this.#markId) ?? [];
-		const sqlStr = this.#buildQueryString(filter);
-		if (!sqlStr) return null;
+		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const q = assembleQuery(
+			this.#config.table,
+			this.#resolvedQueryParts,
+			filter as unknown[],
+			this.#reactiveConfig.filterNulls ?? null,
+			this.#transformCompiler,
+			false,
+			undefined
+		);
+		if (!q) return null;
+		if (this.#reactiveConfig.limit) q.limit(this.#reactiveConfig.limit);
+		const sqlStr = q.toString();
 
 		const parts: string[] = [`SELECT COUNT(*) AS cnt FROM (${sqlStr}) AS _vp`];
 		const conditions: string[] = [`_vp.x BETWEEN ${xLo} AND ${xHi}`];
@@ -933,7 +988,7 @@ export class MarkLifecycleV2 {
 	}
 
 	get tooltipEnabled(): boolean {
-		return this.#config.tooltip !== false && this.#tooltipTableReady;
+		return this.#reactiveConfig.tooltip !== false && this.#tooltipTableReady;
 	}
 
 	get channelFieldMap(): Record<string, string> {
@@ -941,20 +996,21 @@ export class MarkLifecycleV2 {
 	}
 
 	get dataVersion(): number {
-		return this.#dataVersion;
+		return this.#handle?.dataVersion ?? 0;
 	}
 
 	get hasCategoryReducingTransforms(): boolean {
 		return this.#transformCompiler.hasCategoryReducingTransforms();
 	}
 
-	// Processed data with JS transforms applied
+	// Processed data with JS transforms applied — reads from MarkHandle
 	data: DataAccessor | null = $derived.by(() => {
-		if (!this.#arrowTable) return null;
+		const arrow = this.#handle?.arrowTable;
+		if (!arrow) return null;
 
 		// No aliasMap needed — with forMosaic=false, the query SELECT uses
 		// channel names as aliases, so Arrow column names are already x, y, fill, etc.
-		let accessor: DataAccessor = new ArrowDataAccessor(this.#arrowTable);
+		let accessor: DataAccessor = new ArrowDataAccessor(arrow);
 
 		// Fast path: no JS transforms
 		if (!this.#transformCompiler.hasJSTransforms()) {
@@ -1091,7 +1147,9 @@ export class MarkLifecycleV2 {
 
 				// Optional ORDER BY for zone-map skipping in bounding-box queries.
 				let orderClause = '';
-				if (this.#tooltipSortTable) {
+				const tooltipSortTable = typeof this.#reactiveConfig.tooltip === 'object'
+					? this.#reactiveConfig.tooltip.sortTable !== false : true;
+				if (tooltipSortTable) {
 					const orderCol = ['x', 'x1', 'x2'].find((c) => c in selectConfig);
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
 				}
@@ -1180,21 +1238,21 @@ export class MarkLifecycleV2 {
 	 * Uses the same query assembly path but without Float32 coercion.
 	 */
 	#buildTooltipQuery(): string | null {
-		if (!this.#cachedQueryParts) return null;
-		const filter = this.#selection?.predicate(this.#markId) ?? [];
+		if (!this.#resolvedQueryParts) return null;
+		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 
 		const q = assembleQuery(
 			this.#config.table,
-			this.#cachedQueryParts,
+			this.#resolvedQueryParts,
 			filter as unknown[],
-			this.#config._filterNulls ?? null,
+			this.#reactiveConfig.filterNulls ?? null,
 			this.#transformCompiler,
 			false,
 			undefined
 		);
 		if (!q) return null;
-		if (this.#config.clientOptions?.limit) {
-			q.limit(this.#config.clientOptions.limit);
+		if (this.#reactiveConfig.limit) {
+			q.limit(this.#reactiveConfig.limit);
 		}
 		return q.toString();
 	}
@@ -1202,7 +1260,7 @@ export class MarkLifecycleV2 {
 	/** Extract expression nodes from the tip prop as { label: exprNode } pairs. */
 	#getTipExtras(): Record<string, unknown> {
 		const extras: Record<string, unknown> = {};
-		const tipEntries = this.#config.tip;
+		const tipEntries = this.#reactiveConfig.tip;
 		if (!tipEntries) return extras;
 		for (const entry of tipEntries) {
 			if (entry === '*' || typeof entry === 'string') continue;
@@ -1228,11 +1286,11 @@ export class MarkLifecycleV2 {
 		tableName: string,
 		tipExtras: Record<string, unknown>
 	): Promise<void> {
-		if (!this.#cachedQueryParts) return;
+		if (!this.#resolvedQueryParts) return;
 
 		// Identify non-aggregate channel columns — these are the join keys
 		const joinCols: string[] = [];
-		for (const [ch, expr] of Object.entries(this.#cachedQueryParts.selectDef)) {
+		for (const [ch, expr] of Object.entries(this.#resolvedQueryParts.selectDef)) {
 			if (!isAggregateExpression(expr as any) && !isWindowExpression(expr as any)) {
 				joinCols.push(ch);
 			}
@@ -1241,7 +1299,7 @@ export class MarkLifecycleV2 {
 		// Build sidecar select: group-by columns + tip extras
 		const sidecarSelect: Record<string, unknown> = {};
 		for (const ch of joinCols) {
-			sidecarSelect[ch] = this.#cachedQueryParts.selectDef[ch];
+			sidecarSelect[ch] = this.#resolvedQueryParts.selectDef[ch];
 		}
 		Object.assign(sidecarSelect, tipExtras);
 
@@ -1251,12 +1309,12 @@ export class MarkLifecycleV2 {
 			this.#transformCompiler.hasSQLTransforms()
 		);
 
-		const filter = this.#selection?.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 		const sidecarQuery = assembleQuery(
 			this.#config.table,
 			sidecarParts,
 			filter as unknown[],
-			this.#config._filterNulls ?? null,
+			this.#reactiveConfig.filterNulls ?? null,
 			this.#transformCompiler,
 			false
 		);
@@ -1439,7 +1497,7 @@ export class MarkLifecycleV2 {
 	 * sidecar MIN/MAX query against the fresh tooltip table.
 	 */
 	#onTooltipTableWritten(): void {
-		const fitDomain = this.#config.fitDomain;
+		const fitDomain = this.#reactiveConfig.fitDomain;
 		if (!fitDomain) return;
 		if (this.#fitDomainSuppressed) return;
 
@@ -1468,7 +1526,7 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
-		this.#queryEngine.cancel(this.#markId);
+		this.#handle?.destroy();
 		clearTimeout(this.#fitDomainTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
@@ -1481,12 +1539,11 @@ export class MarkLifecycleV2 {
 			node.clearInvalidation();
 		}
 
-		// Drop tooltip temp table
+		// Defensive tooltip table cleanup. The tooltip $effect cleanup
+		// also drops the table on unmount. This explicit DROP covers the case
+		// where destroy() is called synchronously before Svelte processes
+		// effect teardown.
 		this.#tooltipTableReady = false;
-		if (this.#tooltipWanted) {
-			this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
-		}
-
-		this.#arrowTable = null;
+		this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 	}
 }

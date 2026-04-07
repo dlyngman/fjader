@@ -13,11 +13,11 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
 		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import type {
 		FieldRef,
 		ScaleType,
@@ -173,6 +173,12 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+	});
+
 	const config = $derived({
 		markType: 'rect',
 		supportedScaleTypes: {
@@ -201,16 +207,11 @@
 		},
 		table: entry.table,
 		transforms: entry.transforms ?? [],
-		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([ex1, ex2, ey1, ey2] as FieldRef[]) : null
-		},
-		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip
+		select: { ...channelSelect, ...resolvedTip.extraSelect }
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry, {
+		resolveFitDomain: () => resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -310,10 +311,11 @@
 			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
+					reactiveConfig,
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined).selection,
+					filterGroups.get(entry.selection as string | undefined),
 					{ gpuCoordinator, onMarkLOD }
 				);
 			}
