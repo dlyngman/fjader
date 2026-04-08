@@ -1390,7 +1390,8 @@ export class MarkLifecycleV2 {
 			if (!q) return;
 
 			const result = await this.#queryEngine.query(q.toString(), {
-				callerId: `${this.#markId}:fitDomain`
+				callerId: `${this.#markId}:fitDomain`,
+				cache: false
 			});
 			if (seq !== this.#fitDomainQuerySequence) return;
 

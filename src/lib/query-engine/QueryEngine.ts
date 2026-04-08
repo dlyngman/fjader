@@ -50,6 +50,9 @@ export interface QueryOpts {
 	callerId?: string;
 	/** AbortSignal for external cancellation. */
 	signal?: AbortSignal;
+	/** Enable query result caching. Default true. Set false for queries against
+	 *  volatile temp tables whose contents change without the SQL changing. */
+	cache?: boolean;
 }
 
 export interface ColumnInfo {
@@ -139,7 +142,7 @@ export class QueryEngine {
 	#conn: DuckDBConnection | null = null;
 	#connPromise: Promise<DuckDBConnection> | null = null;
 	#inflight = new Map<string, AbortController>();
-	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void }>();
+	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void; cache: boolean }>();
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
@@ -149,6 +152,8 @@ export class QueryEngine {
 	#lastSourceChartMarkIds: Set<string> | null = null;
 	/** Hash-named preagg tables created this session (for cleanup on destroy). */
 	#preaggTables = new Set<string>();
+	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
+	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 		if (connection instanceof Promise) {
@@ -202,6 +207,18 @@ export class QueryEngine {
 
 		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
 
+		// Cache check: return cached result immediately, bypassing
+		// inflight/pending bookkeeping entirely.
+		// Opt out with cache: false for queries against volatile temp tables.
+		const useCache = opts?.cache !== false;
+		if (useCache) {
+			const cached = this.#queryCache.get(sqlStr);
+			if (cached !== undefined) {
+				console.log(`[cache] hit | ${sqlStr.slice(0, 60)}...`);
+				return cached instanceof Promise ? cached : Promise.resolve(cached);
+			}
+		}
+
 		if (opts?.callerId) {
 			const callerId = opts.callerId;
 
@@ -217,11 +234,11 @@ export class QueryEngine {
 				}
 				// Store as pending — will be executed when inflight completes
 				return new Promise<Table>((resolve, reject) => {
-					this.#pending.set(callerId, { sql: sqlStr, resolve, reject });
+					this.#pending.set(callerId, { sql: sqlStr, resolve, reject, cache: useCache });
 				});
 			}
 
-			return this.#executeForCaller(callerId, sqlStr, opts.signal);
+			return this.#executeForCaller(callerId, sqlStr, opts.signal, useCache);
 		}
 
 		// No callerId: direct execution, still respect external signal
@@ -239,7 +256,7 @@ export class QueryEngine {
 		return this.#queryRaw(sqlStr);
 	}
 
-	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal): Promise<Table> {
+	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal, cache: boolean = true): Promise<Table> {
 		const controller = new AbortController();
 		this.#inflight.set(callerId, controller);
 
@@ -252,9 +269,16 @@ export class QueryEngine {
 				throw new DOMException('Query superseded', 'AbortError');
 			}
 
+			// Cache the Promise so concurrent identical queries share one inflight
+			const queryPromise = this.#queryRaw(sqlStr);
+			if (cache) this.#queryCache.set(sqlStr, queryPromise);
+
 			const _t0 = performance.now();
-			const result = await this.#queryRaw(sqlStr);
+			const result = await queryPromise;
 			const _dt = performance.now() - _t0;
+
+			// Replace Promise with resolved data for future lookups
+			if (cache) this.#queryCache.set(sqlStr, result);
 
 			// Log actual DuckDB execution time (excludes queue wait)
 			if (sqlStr.includes('__dplot_cube_')) {
@@ -264,10 +288,16 @@ export class QueryEngine {
 			}
 
 			if (controller.signal.aborted) {
+				// Don't cache results from aborted queries
+				this.#queryCache.delete(sqlStr);
 				throw new DOMException('Query superseded', 'AbortError');
 			}
 
 			return result;
+		} catch (e) {
+			// Remove failed query from cache so we don't serve a rejected Promise
+			this.#queryCache.delete(sqlStr);
+			throw e;
 		} finally {
 			// Only clean up if we're still the current query for this caller
 			const current = this.#inflight.get(callerId);
@@ -279,7 +309,7 @@ export class QueryEngine {
 			const pending = this.#pending.get(callerId);
 			if (pending) {
 				this.#pending.delete(callerId);
-				this.#executeForCaller(callerId, pending.sql, undefined)
+				this.#executeForCaller(callerId, pending.sql, undefined, pending.cache)
 					.then(pending.resolve)
 					.catch(pending.reject);
 			}
@@ -346,6 +376,11 @@ export class QueryEngine {
 		} else {
 			this.#describeCache.clear();
 		}
+	}
+
+	/** Clear the query result cache. Call on data reload (parquet swap). */
+	clearQueryCache(): void {
+		this.#queryCache.clear();
 	}
 
 	/**
@@ -861,6 +896,7 @@ export class QueryEngine {
 			this.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {});
 		}
 		this.#preaggTables.clear();
+		this.#queryCache.clear();
 		for (const controller of this.#inflight.values()) {
 			controller.abort();
 		}
@@ -890,4 +926,62 @@ function fnvHash(s: string): number {
 		h = Math.imul(h, 0x01000193);
 	}
 	return h >>> 0;
+}
+
+// ---------------------------------------------------------------------------
+// LRU query cache
+// ---------------------------------------------------------------------------
+
+const requestIdle = typeof requestIdleCallback !== 'undefined' ? requestIdleCallback : setTimeout;
+
+interface LruCacheOptions {
+	max: number;
+	ttl: number;
+}
+
+interface LruCache<T> {
+	get(key: string): T | Promise<T> | undefined;
+	set(key: string, value: T | Promise<T>): void;
+	delete(key: string): void;
+	clear(): void;
+}
+
+function lruCache<T>({ max, ttl }: LruCacheOptions): LruCache<T> {
+	let entries = new Map<string, { last: number; value: T | Promise<T> }>();
+
+	function evict() {
+		const expire = performance.now() - ttl;
+		let lruKey: string | null = null;
+		let lruLast = Infinity;
+		for (const [key, entry] of entries) {
+			if (entry.last < lruLast) {
+				lruKey = key;
+				lruLast = entry.last;
+			}
+			if (expire > entry.last) {
+				entries.delete(key);
+			}
+		}
+		if (lruKey) entries.delete(lruKey);
+	}
+
+	return {
+		get(key: string) {
+			const entry = entries.get(key);
+			if (entry) {
+				entry.last = performance.now();
+				return entry.value;
+			}
+		},
+		set(key: string, value: T | Promise<T>) {
+			entries.set(key, { last: performance.now(), value });
+			if (entries.size > max) requestIdle(evict);
+		},
+		delete(key: string) {
+			entries.delete(key);
+		},
+		clear() {
+			entries = new Map();
+		}
+	};
 }
