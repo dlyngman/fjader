@@ -136,6 +136,47 @@ describe('CrossfilterSelection', () => {
 		});
 	});
 
+	describe('predicateExcluding()', () => {
+		it('returns all predicates when excludeSourceIds is empty', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20', ['mark-a']));
+			sel.update('brush-y', makeClause('y > 5', ['mark-b']));
+
+			const result = sel.predicateExcluding('mark-c', new Set());
+			expect(result).toEqual(['x BETWEEN 10 AND 20', 'y > 5']);
+		});
+
+		it('excludes clauses from specified source IDs', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20', ['mark-a']));
+			sel.update('brush-y', makeClause('y > 5', ['mark-b']));
+
+			const result = sel.predicateExcluding('mark-c', new Set(['brush-x']));
+			expect(result).toEqual(['y > 5']);
+		});
+
+		it('still respects mark-level exclusion', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20', ['mark-a']));
+			sel.update('brush-y', makeClause('y > 5', ['mark-a']));
+
+			// mark-a is excluded from both clauses
+			const result = sel.predicateExcluding('mark-a', new Set());
+			expect(result).toEqual([]);
+		});
+
+		it('combines source and mark exclusion', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20', ['mark-a']));
+			sel.update('brush-y', makeClause('y > 5', ['mark-b']));
+			sel.update('brush-z', makeClause('z = 1', ['mark-c']));
+
+			// Exclude brush-x by source, mark-b is excluded from brush-y
+			const result = sel.predicateExcluding('mark-b', new Set(['brush-x']));
+			expect(result).toEqual(['z = 1']);
+		});
+	});
+
 	describe('multi-chart crossfilter scenario', () => {
 		it('handles overlapping brushes from different charts', () => {
 			const sel = new CrossfilterSelection();

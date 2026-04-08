@@ -93,6 +93,20 @@ export class CrossfilterSelection {
 		return result;
 	}
 
+	/**
+	 * Compute the filter predicate for a mark, excluding clauses from specific sources.
+	 * Used at cube creation time to bake non-active-brush filters into the cube.
+	 */
+	predicateExcluding(markId: string, excludeSourceIds: Set<string>): FilterExpr[] {
+		const result: FilterExpr[] = [];
+		for (const [sourceId, clause] of this.#clauses) {
+			if (excludeSourceIds.has(sourceId)) continue;
+			if (clause.excludeMarkIds.has(markId)) continue;
+			if (clause.predicate) result.push(clause.predicate);
+		}
+		return result;
+	}
+
 	/** Number of active clauses. */
 	get activeCount(): number {
 		return this.#clauses.size;

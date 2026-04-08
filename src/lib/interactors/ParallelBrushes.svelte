@@ -240,7 +240,8 @@
 	}
 
 	function handlePointerEnter() {
-		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()));
+		// ParallelBrushes operates on raw rows — no aggregation to pre-aggregate.
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), []);
 	}
 
 	function handleMoveStart(i: number, event: PointerEvent) {

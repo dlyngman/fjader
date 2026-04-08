@@ -168,7 +168,15 @@
 	}
 
 	function handlePointerEnter() {
-		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()));
+		const scale = getScale();
+		if (!scale || !columnRef) return;
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), [
+			{
+				columnRef,
+				domain: scale.domain() as [number, number],
+				pixelExtent: isX ? chart.innerWidth : chart.innerHeight
+			}
+		]);
 	}
 
 	function handleWheel(event: WheelEvent) {

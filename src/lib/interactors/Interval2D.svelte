@@ -143,7 +143,19 @@
 	}
 
 	function handlePointerEnter() {
-		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()));
+		if (!xColumnRef || !yColumnRef) return;
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), [
+			{
+				columnRef: xColumnRef,
+				domain: chart.xScale.domain() as [number, number],
+				pixelExtent: chart.innerWidth
+			},
+			{
+				columnRef: yColumnRef,
+				domain: chart.yScale.domain() as [number, number],
+				pixelExtent: chart.innerHeight
+			}
+		]);
 	}
 
 	function handleWheel(event: WheelEvent) {

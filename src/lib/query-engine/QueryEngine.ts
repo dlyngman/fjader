@@ -17,16 +17,24 @@
  *     marks during brushing.
  */
 
-import type { Table } from '@uwdata/flechette';
+import { tableFromIPC, type Table } from '@uwdata/flechette';
 import {
 	isNode,
 	isColumnRef,
 	isAggregateExpression,
 	coalesce,
 	cast,
-	sql as sqlTag
+	sql as sqlTag,
+	column,
+	and,
+	isBetween,
+	literal,
+	Query,
+	type ExprNode
 } from '@uwdata/mosaic-sql';
 import { isWindowExpression } from '$lib/sql/expression-utils';
+import { rewriteForPreagg, buildBinExpr, type BrushActivation } from './sufficient-statistics';
+export type { BrushActivation } from './sufficient-statistics';
 import { assembleQuery, type QueryParts } from '$lib/components/marks/lifecycle/query-builder';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
 import type { FilterGroup } from './FilterGroup.svelte';
@@ -76,10 +84,15 @@ export function buildSchemaMap(columns: ColumnInfo[]): Map<string, ColumnSchema>
 }
 
 /**
- * Minimal connection interface matching DuckDB-WASM's AsyncDuckDBConnection.
- * Allows testing with a mock connection.
+ * Minimal connection interface.
+ * Supports two query paths:
+ * - queryIPC (fast): returns raw Arrow IPC bytes, decoded by flechette (zero-copy)
+ * - query (fallback): returns a Table directly (for mocks/testing)
  */
 export interface DuckDBConnection {
+	/** Fast path: raw Arrow IPC bytes → flechette tableFromIPC → zero-copy typed arrays. */
+	queryIPC?(sql: string): Promise<Uint8Array>;
+	/** Fallback query path. Used when queryIPC is not available (mocks, testing). */
 	query(sql: string): Promise<Table>;
 	/** DDL/DML execution without Arrow deserialization overhead.
 	 *  Falls back to query() if not provided. */
@@ -110,6 +123,12 @@ interface MarkRegistration {
 	preaggTable: string | null;
 	preaggReady: boolean;
 	lastPreaggParts: QueryParts | null;
+	/** Rewritten select expressions that recombine partials at query time. */
+	preaggOutputSelect: Record<string, ExprNode> | null;
+	/** Bin dimension metadata for computing bin filters at query time. */
+	preaggBinMeta: Array<{ alias: string; d0: number; scaleFactor: number }> | null;
+	/** Mark IDs of the source chart (for identifying active-source clauses). */
+	preaggSourceChartMarkIds: Set<string> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +143,12 @@ export class QueryEngine {
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
+	/** Active source IDs for the current preagg session. */
+	#activeSourceIds: Set<string> | null = null;
+	/** Source chart mark IDs from the last activate() call. */
+	#lastSourceChartMarkIds: Set<string> | null = null;
+	/** Hash-named preagg tables created this session (for cleanup on destroy). */
+	#preaggTables = new Set<string>();
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 		if (connection instanceof Promise) {
@@ -134,6 +159,20 @@ export class QueryEngine {
 		} else {
 			this.#conn = connection;
 		}
+	}
+
+	/**
+	 * Execute a SQL query and return a flechette Table.
+	 * Uses the fast IPC path (queryIPC → tableFromIPC) when available,
+	 * falling back to the standard conn.query() for mocks/testing.
+	 */
+	async #queryRaw(sql: string): Promise<Table> {
+		const conn = this.#conn!;
+		if (conn.queryIPC) {
+			const ipc = await conn.queryIPC(sql);
+			return tableFromIPC(ipc);
+		}
+		return conn.query(sql);
 	}
 
 	/** Resolve #conn from #connPromise if needed. No-op when already resolved. */
@@ -190,14 +229,14 @@ export class QueryEngine {
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
-			const result = await this.#conn!.query(sqlStr);
+			const result = await this.#queryRaw(sqlStr);
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
 			return result;
 		}
 
-		return this.#conn!.query(sqlStr);
+		return this.#queryRaw(sqlStr);
 	}
 
 	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal): Promise<Table> {
@@ -213,7 +252,16 @@ export class QueryEngine {
 				throw new DOMException('Query superseded', 'AbortError');
 			}
 
-			const result = await this.#conn!.query(sqlStr);
+			const _t0 = performance.now();
+			const result = await this.#queryRaw(sqlStr);
+			const _dt = performance.now() - _t0;
+
+			// Log actual DuckDB execution time (excludes queue wait)
+			if (sqlStr.includes('__dplot_cube_')) {
+				console.log(`[preagg] DuckDB exec ${_dt.toFixed(1)}ms | ${sqlStr.slice(0, 80)}...`);
+			} else if (callerId?.startsWith('rect') || callerId?.startsWith('dot') || callerId?.startsWith('line')) {
+				console.log(`[base] DuckDB exec ${_dt.toFixed(1)}ms | ${callerId}`);
+			}
 
 			if (controller.signal.aborted) {
 				throw new DOMException('Query superseded', 'AbortError');
@@ -278,7 +326,7 @@ export class QueryEngine {
 	async #fetchDescribe(table: string): Promise<ColumnInfo[]> {
 		if (!this.#conn) await this.#ensureConnection();
 		const escaped = table.replaceAll('"', '""');
-		const result = await this.#conn!.query(`DESCRIBE "${escaped}"`);
+		const result = await this.#queryRaw(`DESCRIBE "${escaped}"`);
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);
@@ -376,7 +424,10 @@ export class QueryEngine {
 			filterGroup,
 			preaggTable: null,
 			preaggReady: false,
-			lastPreaggParts: null
+			lastPreaggParts: null,
+			preaggOutputSelect: null,
+			preaggBinMeta: null,
+			preaggSourceChartMarkIds: null
 		};
 		this.#marks.set(markId, reg);
 
@@ -419,7 +470,6 @@ export class QueryEngine {
 		selection: { predicate(markId: string): unknown[] }
 	): void {
 		for (const [markId, reg] of batch) {
-			const filter = selection.predicate(markId);
 			const { descriptor, handle } = reg;
 
 			// Preagg routing: use preagg table if available and parts haven't changed.
@@ -429,9 +479,10 @@ export class QueryEngine {
 				reg.preaggReady &&
 				reg.preaggTable &&
 				descriptor.parts === reg.lastPreaggParts;
-			const sourceTable = usePreagg ? reg.preaggTable! : descriptor.table;
 
-			const sqlStr = this.#assembleSQL(descriptor, sourceTable, filter, handle.params);
+			const sqlStr = usePreagg
+				? this.#assemblePreaggSQL(markId, reg, handle.params)
+				: this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
 			if (!sqlStr) continue;
 
 			// Use the public query() path — its execute-latest logic ensures
@@ -449,16 +500,16 @@ export class QueryEngine {
 	 * Query a single mark (triggered by params change via _onParamsChange).
 	 */
 	#queryMark(markId: string, reg: MarkRegistration): void {
-		const filter = reg.filterGroup.selection.predicate(markId);
 		const { descriptor, handle } = reg;
 
 		const usePreagg =
 			reg.preaggReady &&
 			reg.preaggTable &&
 			descriptor.parts === reg.lastPreaggParts;
-		const sourceTable = usePreagg ? reg.preaggTable! : descriptor.table;
 
-		const sqlStr = this.#assembleSQL(descriptor, sourceTable, filter, handle.params);
+		const sqlStr = usePreagg
+			? this.#assemblePreaggSQL(markId, reg, handle.params)
+			: this.#assembleSQL(descriptor, descriptor.table, reg.filterGroup.selection.predicate(markId), handle.params);
 		if (!sqlStr) return;
 
 		this.query(sqlStr, { callerId: markId })
@@ -534,27 +585,265 @@ export class QueryEngine {
 	 * Pre-aggregate marks for a filter group before brushing begins.
 	 * Called by interactors on pointerenter — before the first brush drag.
 	 *
-	 * TODO: Implement Mosaic-style data cube pre-aggregation. The cube would
-	 * include filter dimensions in GROUP BY so brushing queries re-aggregate
-	 * from the cube (hundreds of rows) instead of the raw table (millions).
-	 * Requires knowing filter dimensions upfront and rewriting the brush
-	 * query to SUM pre-computed counts. For now, this is a no-op — marks
-	 * query the base table directly during brushing.
+	 * Builds materialized data cubes (temp tables) for all aggregate marks
+	 * in the filter group that are NOT on the source chart. Each cube includes
+	 * pixel-binned brush dimensions so brush queries operate on thousands of
+	 * rows instead of hundreds of thousands.
 	 */
 	async activate(
-		_filterGroup: FilterGroup,
-		_sourceChartMarkIds: Set<string>
+		filterGroup: FilterGroup,
+		sourceChartMarkIds: Set<string>,
+		brushDims: BrushActivation[]
 	): Promise<void> {
-		// No-op until data cube preagg is implemented.
+		if (this.#destroyed || brushDims.length === 0) return;
+
+		// If the source chart changed (user hovered a different chart),
+		// invalidate all cubes — they have stale sourceChartMarkIds and
+		// potentially stale baked-in static filters.
+		if (
+			this.#lastSourceChartMarkIds &&
+			!setsEqual(this.#lastSourceChartMarkIds, sourceChartMarkIds)
+		) {
+			for (const reg of this.#marks.values()) {
+				if (reg.filterGroup === filterGroup) this.#dropPreagg(reg);
+			}
+		}
+		this.#lastSourceChartMarkIds = sourceChartMarkIds;
+
+		// Identify active source IDs: clauses whose excludeMarkIds intersect
+		// with the source chart (i.e., the brush lives on this chart)
+		const activeSourceIds = new Set<string>();
+		for (const entry of filterGroup.selection.items) {
+			for (const markId of entry.excludeMarkIds) {
+				if (sourceChartMarkIds.has(markId)) {
+					activeSourceIds.add(entry.sourceId);
+					break;
+				}
+			}
+		}
+
+		// If active source IDs changed (e.g. a new brush appeared),
+		// also invalidate cubes — baked-in static filters may be stale.
+		if (this.#activeSourceIds && !setsEqual(this.#activeSourceIds, activeSourceIds)) {
+			for (const reg of this.#marks.values()) {
+				if (reg.filterGroup === filterGroup) this.#dropPreagg(reg);
+			}
+		}
+		this.#activeSourceIds = activeSourceIds;
+
+		const promises: Promise<void>[] = [];
+
+		for (const [markId, reg] of this.#marks) {
+			if (reg.filterGroup !== filterGroup) continue;
+			if (sourceChartMarkIds.has(markId)) continue;
+
+			// Skip if preagg still valid (same query parts, already built)
+			if (reg.preaggReady && reg.descriptor.parts === reg.lastPreaggParts) continue;
+
+			// Drop stale preagg
+			this.#dropPreagg(reg);
+
+			const { parts, table, schema } = reg.descriptor;
+			if (!parts.hasAggregates) continue;
+
+			// Analyze selectDef for preagg compatibility
+			const analysis = rewriteForPreagg(parts.selectDef);
+			if (!analysis) continue; // unsupported — mark stays on base table
+
+			const { cubeCols, outputSelect, cubeGroupBy } = analysis;
+
+			// Add pixel-binned brush dimensions to cube
+			const binMeta: Array<{ alias: string; d0: number; scaleFactor: number }> = [];
+			const binGroupBy: ExprNode[] = [];
+			for (let i = 0; i < brushDims.length; i++) {
+				const alias = `__active${i}`;
+				const { expr, d0, scaleFactor } = buildBinExpr(
+					brushDims[i].columnRef,
+					brushDims[i].domain,
+					brushDims[i].pixelExtent
+				);
+				cubeCols[alias] = expr;
+				binGroupBy.push(column(alias));
+				binMeta.push({ alias, d0, scaleFactor });
+			}
+
+			// CAST-wrap dimension cubeCols (bake CAST into the cube)
+			for (const [ch, expr] of Object.entries(cubeCols)) {
+				if (ch.startsWith('__ps') || ch.startsWith('__active')) continue;
+
+				if (isAggregateExpression(expr as any)) continue;
+
+				// Non-column SQL nodes (CASE expressions) are numeric
+				if (isNode(expr) && !isColumnRef(expr as any)) {
+					cubeCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
+					continue;
+				}
+
+				// Column references: check schema
+				if (isColumnRef(expr as any)) {
+					const colName = (expr as any).column as string;
+					const jsType = schema?.get(colName)?.jsType;
+					if (jsType === 'number') {
+						cubeCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
+					}
+				}
+			}
+
+			// Bake non-active filters into the cube
+			const staticFilters = filterGroup.selection.predicateExcluding(
+				markId,
+				activeSourceIds
+			);
+
+			// Build cube creation query, sorted by active columns for fast range scans
+			const cubeQuery = Query.from(table)
+				.select(cubeCols as Record<string, ExprNode>)
+				.groupby([...cubeGroupBy, ...binGroupBy] as ExprNode[])
+				.orderby(binGroupBy as ExprNode[]);
+
+			if (staticFilters.length > 0) {
+				cubeQuery.where(and(staticFilters as ExprNode[]));
+			}
+
+			// Hash-based naming: identical cube SQL reuses the same table (like Mosaic).
+			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
+			const cubeSQL = cubeQuery.toString();
+			const preaggTable = `__dplot_cube_${fnvHash(cubeSQL).toString(16)}`;
+			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${cubeSQL}`;
+
+			// Store rewrite info for query-time use
+			reg.preaggOutputSelect = outputSelect;
+			reg.preaggBinMeta = binMeta;
+			reg.preaggSourceChartMarkIds = sourceChartMarkIds;
+
+			this.#preaggTables.add(preaggTable);
+			promises.push(
+				this.exec(createSQL)
+					.then(() => {
+						reg.preaggTable = preaggTable;
+						reg.preaggReady = true;
+						reg.lastPreaggParts = parts;
+						console.log(`[preagg] cube created for ${markId}: ${preaggTable}\n${createSQL}`);
+					})
+					.catch((e) => {
+						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
+						this.#dropPreagg(reg);
+					})
+			);
+		}
+
+		await Promise.all(promises);
 	}
 
-	#dropPreagg(reg: MarkRegistration): void {
-		if (reg.preaggTable) {
-			this.exec(`DROP TABLE IF EXISTS "${reg.preaggTable}"`).catch(() => {});
-			reg.preaggTable = null;
-			reg.preaggReady = false;
-			reg.lastPreaggParts = null;
+	/**
+	 * Assemble SQL for a preagg brush query.
+	 * Builds modified QueryParts from the stored outputSelect + bin filters,
+	 * then delegates to assembleQuery().
+	 */
+	#assemblePreaggSQL(
+		markId: string,
+		reg: MarkRegistration,
+		params: QueryParams
+	): string | null {
+		const { preaggTable, preaggOutputSelect, preaggBinMeta, preaggSourceChartMarkIds } = reg;
+		if (!preaggTable || !preaggOutputSelect || !preaggBinMeta || !preaggSourceChartMarkIds) {
+			return null;
 		}
+
+		const { descriptor } = reg;
+		const { parts, schema, transformCompiler } = descriptor;
+
+		// --- Compute bin filters from active brush extent ---
+		const binFilters: ExprNode[] = [];
+		for (const entry of reg.filterGroup.selection.items) {
+			// Is this clause from the active source?
+			let isActiveSource = false;
+			for (const mid of entry.excludeMarkIds) {
+				if (preaggSourceChartMarkIds.has(mid)) {
+					isActiveSource = true;
+					break;
+				}
+			}
+			if (!isActiveSource) continue;
+			if (entry.excludeMarkIds.has(markId)) continue;
+
+			// Extract extent values and create bin filters
+			const value = entry.value;
+			if (preaggBinMeta.length === 1) {
+				// Interval1D: value = [lo, hi]
+				const [lo, hi] = value as [number, number];
+				const { alias, d0, scaleFactor } = preaggBinMeta[0];
+				const binLo = Math.floor((lo - d0) * scaleFactor);
+				const binHi = Math.floor((hi - d0) * scaleFactor);
+				binFilters.push(isBetween(column(alias), [literal(binLo), literal(binHi)]) as ExprNode);
+			} else if (preaggBinMeta.length === 2) {
+				// Interval2D: value = [[xLo, xHi], [yLo, yHi]]
+				const extents = value as [[number, number], [number, number]];
+				for (let i = 0; i < 2; i++) {
+					const [lo, hi] = extents[i];
+					const { alias, d0, scaleFactor } = preaggBinMeta[i];
+					const binLo = Math.floor((lo - d0) * scaleFactor);
+					const binHi = Math.floor((hi - d0) * scaleFactor);
+					binFilters.push(isBetween(column(alias), [literal(binLo), literal(binHi)]) as ExprNode);
+				}
+			}
+		}
+
+		// --- Build modified selectDef with CAST wrapping on aggregate outputs ---
+		const castSelect: Record<string, unknown> = {};
+		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
+			if (isAggregateExpression(expr)) {
+				// Recombined aggregate output — needs CAST
+				castSelect[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
+			} else {
+				// Dimension column reference — already CAST in the cube
+				castSelect[ch] = expr;
+			}
+		}
+
+		// --- Build modified QueryParts ---
+		// GROUP BY: dimension columns from the cube (referenced by alias)
+		const preaggGroupBy: ExprNode[] = [];
+		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
+			if (!isAggregateExpression(expr)) {
+				preaggGroupBy.push(column(ch));
+			}
+		}
+
+		const preaggParts: QueryParts = {
+			selectDef: castSelect,
+			nonAggregateGroupBy: preaggGroupBy,
+			hasAggregates: true,
+			hasSQLTransforms: parts.hasSQLTransforms,
+			orderChannels: parts.orderChannels,
+			aliasMap: parts.aliasMap
+		};
+
+		const q = assembleQuery(
+			preaggTable,
+			preaggParts,
+			binFilters,
+			null, // filterNulls not needed — cube already filtered
+			transformCompiler,
+			false
+		);
+
+		if (params.limit) {
+			q.limit(params.limit);
+		}
+
+		return q?.toString() ?? null;
+	}
+
+	/** Clear preagg state for a registration. Does NOT drop the table —
+	 *  hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
+	#dropPreagg(reg: MarkRegistration): void {
+		reg.preaggTable = null;
+		reg.preaggReady = false;
+		reg.lastPreaggParts = null;
+		reg.preaggOutputSelect = null;
+		reg.preaggBinMeta = null;
+		reg.preaggSourceChartMarkIds = null;
 	}
 
 	/**
@@ -567,6 +856,11 @@ export class QueryEngine {
 			this.#dropPreagg(reg);
 		}
 		this.#marks.clear();
+		// Drop all preagg tables created this session
+		for (const table of this.#preaggTables) {
+			this.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {});
+		}
+		this.#preaggTables.clear();
 		for (const controller of this.#inflight.values()) {
 			controller.abort();
 		}
@@ -578,4 +872,22 @@ export class QueryEngine {
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
 		if (conn) await conn.close();
 	}
+}
+
+function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
+	if (a.size !== b.size) return false;
+	for (const v of a) {
+		if (!b.has(v)) return false;
+	}
+	return true;
+}
+
+/** FNV-1a hash (same algorithm as Mosaic). */
+function fnvHash(s: string): number {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return h >>> 0;
 }
