@@ -7,13 +7,29 @@
 // the same cache-invalidation pattern as triggerReBin.
 // =============================================================================
 
-import { avg, frameRows, preceding, following, currentRow } from '@uwdata/mosaic-sql';
+import {
+	avg,
+	frameRows,
+	preceding,
+	following,
+	currentRow,
+	isAggregateExpression,
+	type AggregateNode
+} from '@uwdata/mosaic-sql';
 
 export type SmoothMode = 'centered' | 'trailing' | 'leading';
 
+/**
+ * Inner expression for the rolling average. Either:
+ *   - a column name (string) — wrapped in avg() automatically
+ *   - an AggregateNode (e.g. avg(...), sum(...)) — used as-is, the window
+ *     smooths the per-group result
+ */
+export type RollingAvgInner = string | AggregateNode;
+
 export class RollingAvgNode {
-	/** The column to average. */
-	field: string;
+	/** The column or aggregate expression to roll. */
+	inner: RollingAvgInner;
 	/** The column to ORDER BY in the window frame. */
 	orderByField: string;
 	/** Optional PARTITION BY column (series grouping). */
@@ -28,13 +44,13 @@ export class RollingAvgNode {
 	#onInvalidate: (() => void) | null = null;
 
 	constructor(
-		field: string,
+		inner: RollingAvgInner,
 		orderByField: string,
 		partitionByField: string | null,
 		windowSize: number = 1,
 		mode: SmoothMode = 'centered'
 	) {
-		this.field = field;
+		this.inner = inner;
 		this.orderByField = orderByField;
 		this.partitionByField = partitionByField;
 		this.windowSize = windowSize;
@@ -74,7 +90,12 @@ export class RollingAvgNode {
 				: this.mode === 'leading'
 					? frameRows([currentRow(), following(w)])
 					: frameRows([preceding(w), following(w)]);
-		const base = avg(this.field);
+		// String inner → wrap in avg() (raw column smoothing).
+		// AggregateNode inner → use as-is (smooth the aggregated value).
+		const base =
+			typeof this.inner === 'string' || !isAggregateExpression(this.inner)
+				? avg(this.inner as string)
+				: this.inner;
 		const windowed = this.partitionByField
 			? base.partitionby(this.partitionByField).orderby(this.orderByField)
 			: base.orderby(this.orderByField);

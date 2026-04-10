@@ -8,6 +8,10 @@ import {
 	div,
 	column,
 	add,
+	rank,
+	frameRows,
+	preceding,
+	following,
 	type ExprNode,
 	type AggregateNode
 } from '@uwdata/mosaic-sql';
@@ -163,5 +167,146 @@ describe('buildBinExpr', () => {
 		const { d0, scaleFactor } = buildBinExpr(column('price'), [50, 150], 800);
 		expect(d0).toBe(50);
 		expect(scaleFactor).toBe(8); // 800 / 100
+	});
+});
+
+// Helper: build a window expression (aggregate OVER (ORDER BY orderCol ROWS frame))
+function windowExpr(agg: ExprNode, orderCol: string) {
+	return (agg as any).orderby(column(orderCol)).frame(frameRows([preceding(3), following(3)]));
+}
+
+describe('rewriteForPreagg — window expressions', () => {
+	it('handles window expression wrapping AVG', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowExpr(avg(column('revenue')), 'date')
+			})
+		);
+		expect(result).not.toBeNull();
+		expect(result!.windowChannels).not.toBeNull();
+		expect(result!.windowChannels!.y).toBeDefined();
+
+		// Two partials for AVG (sum + count)
+		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		expect(partials).toHaveLength(2);
+
+		// outputSelect.y is the recombined aggregate (no window wrapping)
+		const outputY = result!.outputSelect.y.toString();
+		expect(outputY).toMatch(/\//); // division for AVG decomposition
+
+		// WindowNode keeps original field names (extra dims added to cube)
+		const windowSQL = result!.windowChannels!.y.toString();
+		expect(windowSQL).toMatch(/OVER/i);
+		expect(windowSQL).toMatch(/"date"/); // ORDER BY uses original field name
+	});
+
+	it('handles window expression wrapping COUNT', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('category'),
+				y: windowExpr(count() as unknown as ExprNode, 'category')
+			})
+		);
+		expect(result).not.toBeNull();
+		expect(result!.windowChannels).not.toBeNull();
+
+		// One partial for COUNT
+		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		expect(partials).toHaveLength(1);
+
+		// Outer func should be SUM(y), not COUNT(y)
+		const windowSQL = result!.windowChannels!.y.toString();
+		expect(windowSQL).toMatch(/SUM\("y"\)/i);
+		expect(windowSQL).not.toMatch(/COUNT\("y"\)/i);
+	});
+
+	it('handles window expression wrapping SUM', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowExpr(sum(column('amount')) as unknown as ExprNode, 'date')
+			})
+		);
+		expect(result).not.toBeNull();
+		expect(result!.windowChannels).not.toBeNull();
+
+		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		expect(partials).toHaveLength(1);
+
+		// Outer func should be SUM(y) — SUM is idempotent
+		const windowSQL = result!.windowChannels!.y.toString();
+		expect(windowSQL).toMatch(/SUM\("y"\)/i);
+	});
+
+	it('returns null for window with WindowFunctionNode (RANK)', () => {
+		const windowNode = rank().orderby(column('date'));
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowNode as unknown as ExprNode
+			})
+		);
+		expect(result).toBeNull();
+	});
+
+	it('returns null for window with DISTINCT inner aggregate', () => {
+		const distinctAvg = (avg(column('revenue')) as AggregateNode).distinct();
+		const windowNode = windowExpr(distinctAvg as unknown as ExprNode, 'date');
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowNode
+			})
+		);
+		expect(result).toBeNull();
+	});
+
+	it('handles mixed regular aggregate + window aggregate channels', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: count() as unknown as ExprNode,
+				z: windowExpr(avg(column('revenue')), 'date')
+			})
+		);
+		expect(result).not.toBeNull();
+		// y is a regular aggregate, z is a window aggregate
+		expect(result!.windowChannels).not.toBeNull();
+		expect(result!.windowChannels!.z).toBeDefined();
+		expect(result!.windowChannels!.y).toBeUndefined();
+
+		// All partials present: 1 for count (y) + 2 for avg (z)
+		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		expect(partials).toHaveLength(3);
+	});
+
+	it('adds window-referenced columns as extra dimensions', () => {
+		// Window orders by 'unknown_col' which is not in selectDef —
+		// it gets added as an extra dimension in the cube
+		const windowNode = (avg(column('revenue')) as any)
+			.orderby(column('unknown_col'))
+			.frame(frameRows([preceding(3), following(3)]));
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowNode
+			})
+		);
+		expect(result).not.toBeNull();
+		// 'unknown_col' added as extra dimension
+		expect(result!.cubeCols.unknown_col).toBeDefined();
+		expect(result!.outputSelect.unknown_col).toBeDefined();
+	});
+
+	it('returns null windowChannels when no window expressions', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('category'),
+				y: count() as unknown as ExprNode
+			})
+		);
+		expect(result).not.toBeNull();
+		expect(result!.windowChannels).toBeNull();
 	});
 });

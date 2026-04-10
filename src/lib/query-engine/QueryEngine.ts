@@ -55,6 +55,10 @@ export interface QueryOpts {
 	cache?: boolean;
 }
 
+/** TEMPORARY: flip to false to bypass preagg routing and force base-table queries.
+ *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
+const PREAGG_ENABLED = true;
+
 export interface ColumnInfo {
 	name: string;
 	type: string;
@@ -132,6 +136,8 @@ interface MarkRegistration {
 	preaggBinMeta: Array<{ alias: string; d0: number; scaleFactor: number }> | null;
 	/** Mark IDs of the source chart (for identifying active-source clauses). */
 	preaggSourceChartMarkIds: Set<string> | null;
+	/** Window channels needing CTE wrapping in the preagg query. */
+	preaggWindowChannels: Record<string, import('@uwdata/mosaic-sql').WindowNode> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +468,8 @@ export class QueryEngine {
 			lastPreaggParts: null,
 			preaggOutputSelect: null,
 			preaggBinMeta: null,
-			preaggSourceChartMarkIds: null
+			preaggSourceChartMarkIds: null,
+			preaggWindowChannels: null
 		};
 		this.#marks.set(markId, reg);
 
@@ -511,6 +518,7 @@ export class QueryEngine {
 			// Reference equality — $derived memoization ensures same object when
 			// dependencies don't change.
 			const usePreagg =
+				PREAGG_ENABLED &&
 				reg.preaggReady &&
 				reg.preaggTable &&
 				descriptor.parts === reg.lastPreaggParts;
@@ -538,6 +546,7 @@ export class QueryEngine {
 		const { descriptor, handle } = reg;
 
 		const usePreagg =
+			PREAGG_ENABLED &&
 			reg.preaggReady &&
 			reg.preaggTable &&
 			descriptor.parts === reg.lastPreaggParts;
@@ -679,11 +688,17 @@ export class QueryEngine {
 			this.#dropPreagg(reg);
 
 			const { parts, table, schema } = reg.descriptor;
-			if (!parts.hasAggregates) continue;
+			if (!parts.hasAggregates && !parts.hasWindowAggregates) continue;
 
 			// Analyze selectDef for preagg compatibility
 			const analysis = rewriteForPreagg(parts.selectDef);
-			if (!analysis) continue; // unsupported — mark stays on base table
+			if (!analysis) {
+				console.log(`[preagg] skip ${markId} — unsupported (window/distinct)`);
+				continue;
+			}
+			if (analysis.windowChannels) {
+				console.log(`[preagg] ${markId} has window channels: ${Object.keys(analysis.windowChannels).join(', ')}`);
+			}
 
 			const { cubeCols, outputSelect, cubeGroupBy } = analysis;
 
@@ -750,6 +765,7 @@ export class QueryEngine {
 			reg.preaggOutputSelect = outputSelect;
 			reg.preaggBinMeta = binMeta;
 			reg.preaggSourceChartMarkIds = sourceChartMarkIds;
+			reg.preaggWindowChannels = analysis.windowChannels;
 
 			this.#preaggTables.add(preaggTable);
 			promises.push(
@@ -825,13 +841,16 @@ export class QueryEngine {
 		}
 
 		// --- Build modified selectDef with CAST wrapping on aggregate outputs ---
+		// Skip CAST on windowed channels — the outer CTE will CAST them.
+		const windowChannels = reg.preaggWindowChannels;
 		const castSelect: Record<string, unknown> = {};
 		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
-			if (isAggregateExpression(expr)) {
+			if (isAggregateExpression(expr) && !(windowChannels && ch in windowChannels)) {
 				// Recombined aggregate output — needs CAST
 				castSelect[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
 			} else {
-				// Dimension column reference — already CAST in the cube
+				// Dimension column reference (already CAST in cube),
+				// or windowed channel (CAST deferred to outer CTE)
 				castSelect[ch] = expr;
 			}
 		}
@@ -849,8 +868,9 @@ export class QueryEngine {
 			selectDef: castSelect,
 			nonAggregateGroupBy: preaggGroupBy,
 			hasAggregates: true,
+			hasWindowAggregates: false,
 			hasSQLTransforms: parts.hasSQLTransforms,
-			orderChannels: parts.orderChannels,
+			orderChannels: windowChannels ? null : parts.orderChannels, // ORDER BY goes on outer CTE
 			aliasMap: parts.aliasMap
 		};
 
@@ -863,11 +883,44 @@ export class QueryEngine {
 			false
 		);
 
-		if (params.limit) {
-			q.limit(params.limit);
+		// --- If no windows, return flat query (existing path) ---
+		if (!windowChannels) {
+			if (params.limit) {
+				q.limit(params.limit);
+			}
+			return q?.toString() ?? null;
 		}
 
-		return q?.toString() ?? null;
+		// --- CTE path: wrap inner query, apply window functions ---
+		// Preagg runs the window over per-dimension-group rows, not raw rows.
+		// This is correct — DivePlot marks aggregate by dimension for rendering,
+		// so one-row-per-group is the expected shape.
+		const outerSelect: Record<string, unknown> = {};
+		for (const ch of Object.keys(preaggOutputSelect)) {
+			if (ch in windowChannels) {
+				outerSelect[ch] = coalesce(
+					cast(windowChannels[ch] as unknown as ExprNode, 'REAL'),
+					sqlTag`'NaN'::REAL`
+				);
+			} else {
+				outerSelect[ch] = column(ch);
+			}
+		}
+
+		const outerQuery = Query.from('__preagg_cte')
+			.select(outerSelect as Record<string, ExprNode>)
+			.with({ __preagg_cte: q });
+
+		if (parts.orderChannels) {
+			outerQuery.orderby(...parts.orderChannels.map((ch) => column(ch)));
+		}
+		if (params.limit) {
+			outerQuery.limit(params.limit);
+		}
+
+		const cteSQL = outerQuery.toString();
+		console.log(`[preagg:cte] window preagg for ${markId}:\n${cteSQL}`);
+		return cteSQL;
 	}
 
 	/** Clear preagg state for a registration. Does NOT drop the table —
@@ -879,6 +932,7 @@ export class QueryEngine {
 		reg.preaggOutputSelect = null;
 		reg.preaggBinMeta = null;
 		reg.preaggSourceChartMarkIds = null;
+		reg.preaggWindowChannels = null;
 	}
 
 	/**

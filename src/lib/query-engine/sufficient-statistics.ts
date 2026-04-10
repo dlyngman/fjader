@@ -12,7 +12,9 @@
 
 import {
 	collectAggregates,
+	collectColumns,
 	rewrite,
+	avg,
 	sum,
 	count,
 	min,
@@ -26,8 +28,8 @@ import {
 	mul,
 	sub,
 	isNode,
-	isColumnRef,
 	isAggregateExpression,
+	WindowNode,
 	type AggregateNode,
 	type ExprNode
 } from '@uwdata/mosaic-sql';
@@ -53,6 +55,8 @@ export interface PreaggAnalysis {
 	outputSelect: Record<string, ExprNode>;
 	/** GROUP BY expressions for the cube (dimension columns only, no bin cols). */
 	cubeGroupBy: ExprNode[];
+	/** Channels needing CTE window wrapping. null if no windows. */
+	windowChannels: Record<string, WindowNode> | null;
 }
 
 export interface BinExprResult {
@@ -65,6 +69,10 @@ export interface BinExprResult {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Maps inner aggregate name → outer CTE aggregate builder.
+ *  COUNT maps to SUM: the outer sums per-group counts, not counts CTE rows. */
+const outerAggBuilders = { count: sum, sum, avg, min, max } as const;
+
 /**
  * Analyze a mark's selectDef for pre-aggregation compatibility.
  * Returns null if any channel is unsupported (window functions, DISTINCT, etc.).
@@ -75,14 +83,59 @@ export function rewriteForPreagg(
 	const cubeCols: Record<string, ExprNode> = {};
 	const outputSelect: Record<string, ExprNode> = {};
 	const cubeGroupBy: ExprNode[] = [];
+	const windowChannels: Record<string, WindowNode> = {};
 
 	let statCounter = 0;
 
 	for (const [channel, expr] of Object.entries(selectDef)) {
 		if (expr == null || !isNode(expr)) return null;
 
-		// Window expressions → bail (v1: entire mark falls back)
-		if (isWindowExpression(expr)) return null;
+		if (isWindowExpression(expr)) {
+			const windowNode = expr as unknown as WindowNode;
+
+			// Only handle windows wrapping decomposable aggregates.
+			// WindowFunctionNode (ROW_NUMBER, RANK) has a different shape — bail.
+			if (!isAggregateExpression(windowNode.func)) return null;
+
+			const innerFunc = windowNode.func as AggregateNode;
+			const result = sufficientStats(innerFunc, cubeCols, statCounter);
+			if (!result) return null; // DISTINCT, unsupported aggregate, etc.
+			statCounter = result.nextCounter;
+
+			// Store recombined aggregate WITHOUT window wrapping
+			outputSelect[channel] = result.outputExpr;
+
+			// Window defs reference raw field names (e.g. PARTITION BY "series",
+			// ORDER BY "date") but the selectDef channels may wrap them in
+			// opaque expressions (epoch transforms, CASE expressions → FRAGMENT
+			// nodes) whose column refs can't be extracted or rewritten.
+			//
+			// Instead of rewriting the window def, we add all its referenced
+			// columns as extra dimensions in the cube. These pass through the
+			// inner CTE under their original field names, making them available
+			// to the outer CTE's window function. Extra columns in the final
+			// result are harmless — marks only read channels they declared.
+			for (const col of collectColumns(windowNode.def as unknown as ExprNode)) {
+				const fieldName = col.column;
+				if (!(fieldName in cubeCols)) {
+					const colRef = column(fieldName) as ExprNode;
+					cubeCols[fieldName] = colRef;
+					outputSelect[fieldName] = colRef;
+					cubeGroupBy.push(colRef);
+				}
+			}
+
+			// Build the outer CTE's aggregate: aggName(column(channel)).
+			// COUNT maps to SUM — sum of per-group counts, not count of CTE rows.
+			const aggName = innerFunc.name.toLowerCase() as keyof typeof outerAggBuilders;
+			const builder = outerAggBuilders[aggName];
+			if (!builder) return null;
+			const outerFunc = builder(column(channel)) as ExprNode;
+
+			// Keep original window def (references raw field names now in the CTE)
+			windowChannels[channel] = new WindowNode(outerFunc, windowNode.def);
+			continue;
+		}
 
 		const aggFlag = isAggregateExpression(expr as ExprNode);
 
@@ -109,7 +162,12 @@ export function rewriteForPreagg(
 		}
 	}
 
-	return { cubeCols, outputSelect, cubeGroupBy };
+	return {
+		cubeCols,
+		outputSelect,
+		cubeGroupBy,
+		windowChannels: Object.keys(windowChannels).length > 0 ? windowChannels : null
+	};
 }
 
 /**
@@ -231,3 +289,4 @@ function addStat(
 	cubeCols[colName] = finalExpr as ExprNode;
 	return [colName, counter + 1];
 }
+

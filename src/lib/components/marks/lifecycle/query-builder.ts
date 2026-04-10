@@ -31,6 +31,7 @@ export interface QueryParts {
 	selectDef: Record<string, unknown>;
 	nonAggregateGroupBy: unknown[];
 	hasAggregates: boolean;
+	hasWindowAggregates: boolean;
 	hasSQLTransforms: boolean;
 	orderChannels: string[] | null;
 	aliasMap: Map<string, string>;
@@ -55,6 +56,7 @@ export function buildQueryParts(
 	const nonAggregateGroupBy: unknown[] = [];
 	const groupByKeys = new Set<string>();
 	let hasAggregates = false;
+	let hasWindowAggregates = false;
 	const aliasMap = new Map<string, string>();
 
 	for (const channel in select) {
@@ -78,9 +80,10 @@ export function buildQueryParts(
 				groupByKeys.add(sqlAlias);
 				nonAggregateGroupBy.push(exprNode);
 			}
+		} else {
+			// Window expressions: skip GROUP BY but flag for preagg routing
+			hasWindowAggregates = true;
 		}
-		// Window expressions: skip both -- they don't trigger GROUP BY
-		// and shouldn't appear in GROUP BY themselves
 	}
 
 	// Store channel names for connected mark ordering.
@@ -104,6 +107,7 @@ export function buildQueryParts(
 		selectDef,
 		nonAggregateGroupBy,
 		hasAggregates,
+		hasWindowAggregates,
 		hasSQLTransforms,
 		orderChannels,
 		aliasMap
