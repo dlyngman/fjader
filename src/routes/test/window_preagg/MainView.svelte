@@ -19,7 +19,7 @@
 	<h2>Window Preagg CTE — Realistic Workload</h2>
 	<p class="instructions">
 		<strong>Setup:</strong> 1M web request events over 30 days × 5 regions. Each (date, region, payload_bin)
-		cell holds ~26 events, so the preagg cube collapses ~26×.
+		cell holds ~26 events, so the preagg table collapses ~26×.
 		<br /><br />
 		<strong>Test steps:</strong>
 		1. Shift+scroll on the line chart to activate rolling average smoothing.

@@ -287,7 +287,7 @@ export class QueryEngine {
 			if (cache) this.#queryCache.set(sqlStr, result);
 
 			// Log actual DuckDB execution time (excludes queue wait)
-			if (sqlStr.includes('__dplot_cube_')) {
+			if (sqlStr.includes('__dplot_preagg_')) {
 				console.log(`[preagg] DuckDB exec ${_dt.toFixed(1)}ms | ${sqlStr.slice(0, 80)}...`);
 			} else if (callerId?.startsWith('rect') || callerId?.startsWith('dot') || callerId?.startsWith('line')) {
 				console.log(`[base] DuckDB exec ${_dt.toFixed(1)}ms | ${callerId}`);
@@ -629,9 +629,9 @@ export class QueryEngine {
 	 * Pre-aggregate marks for a filter group before brushing begins.
 	 * Called by interactors on pointerenter — before the first brush drag.
 	 *
-	 * Builds materialized data cubes (temp tables) for all aggregate marks
-	 * in the filter group that are NOT on the source chart. Each cube includes
-	 * pixel-binned brush dimensions so brush queries operate on thousands of
+	 * Builds materialized preagg tables (temp tables) for all aggregate marks
+	 * in the filter group that are NOT on the source chart. Each preagg table
+	 * includes pixel-binned brush dimensions so brush queries operate on thousands of
 	 * rows instead of hundreds of thousands.
 	 */
 	async activate(
@@ -642,7 +642,7 @@ export class QueryEngine {
 		if (this.#destroyed || brushDims.length === 0) return;
 
 		// If the source chart changed (user hovered a different chart),
-		// invalidate all cubes — they have stale sourceChartMarkIds and
+		// invalidate all preagg tables — they have stale sourceChartMarkIds and
 		// potentially stale baked-in static filters.
 		if (
 			this.#lastSourceChartMarkIds &&
@@ -667,7 +667,7 @@ export class QueryEngine {
 		}
 
 		// If active source IDs changed (e.g. a new brush appeared),
-		// also invalidate cubes — baked-in static filters may be stale.
+		// also invalidate preagg tables — baked-in static filters may be stale.
 		if (this.#activeSourceIds && !setsEqual(this.#activeSourceIds, activeSourceIds)) {
 			for (const reg of this.#marks.values()) {
 				if (reg.filterGroup === filterGroup) this.#dropPreagg(reg);
@@ -700,9 +700,9 @@ export class QueryEngine {
 				console.log(`[preagg] ${markId} has window channels: ${Object.keys(analysis.windowChannels).join(', ')}`);
 			}
 
-			const { cubeCols, outputSelect, cubeGroupBy } = analysis;
+			const { preaggCols, outputSelect, preaggGroupBy } = analysis;
 
-			// Add pixel-binned brush dimensions to cube
+			// Add pixel-binned brush dimensions to preagg table
 			const binMeta: Array<{ alias: string; d0: number; scaleFactor: number }> = [];
 			const binGroupBy: ExprNode[] = [];
 			for (let i = 0; i < brushDims.length; i++) {
@@ -712,20 +712,20 @@ export class QueryEngine {
 					brushDims[i].domain,
 					brushDims[i].pixelExtent
 				);
-				cubeCols[alias] = expr;
+				preaggCols[alias] = expr;
 				binGroupBy.push(column(alias));
 				binMeta.push({ alias, d0, scaleFactor });
 			}
 
-			// CAST-wrap dimension cubeCols (bake CAST into the cube)
-			for (const [ch, expr] of Object.entries(cubeCols)) {
+			// CAST-wrap dimension preaggCols (bake CAST into the preagg table)
+			for (const [ch, expr] of Object.entries(preaggCols)) {
 				if (ch.startsWith('__ps') || ch.startsWith('__active')) continue;
 
 				if (isAggregateExpression(expr as any)) continue;
 
 				// Non-column SQL nodes (CASE expressions) are numeric
 				if (isNode(expr) && !isColumnRef(expr as any)) {
-					cubeCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
+					preaggCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
 					continue;
 				}
 
@@ -734,32 +734,32 @@ export class QueryEngine {
 					const colName = (expr as any).column as string;
 					const jsType = schema?.get(colName)?.jsType;
 					if (jsType === 'number') {
-						cubeCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
+						preaggCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
 					}
 				}
 			}
 
-			// Bake non-active filters into the cube
+			// Bake non-active filters into the preagg table
 			const staticFilters = filterGroup.selection.predicateExcluding(
 				markId,
 				activeSourceIds
 			);
 
-			// Build cube creation query, sorted by active columns for fast range scans
-			const cubeQuery = Query.from(table)
-				.select(cubeCols as Record<string, ExprNode>)
-				.groupby([...cubeGroupBy, ...binGroupBy] as ExprNode[])
+			// Build preagg creation query, sorted by active columns for fast range scans
+			const preaggQuery = Query.from(table)
+				.select(preaggCols as Record<string, ExprNode>)
+				.groupby([...preaggGroupBy, ...binGroupBy] as ExprNode[])
 				.orderby(binGroupBy as ExprNode[]);
 
 			if (staticFilters.length > 0) {
-				cubeQuery.where(and(staticFilters as ExprNode[]));
+				preaggQuery.where(and(staticFilters as ExprNode[]));
 			}
 
-			// Hash-based naming: identical cube SQL reuses the same table (like Mosaic).
+			// Hash-based naming: identical preagg SQL reuses the same table (like Mosaic).
 			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
-			const cubeSQL = cubeQuery.toString();
-			const preaggTable = `__dplot_cube_${fnvHash(cubeSQL).toString(16)}`;
-			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${cubeSQL}`;
+			const preaggSQL = preaggQuery.toString();
+			const preaggTable = `__dplot_preagg_${fnvHash(preaggSQL).toString(16)}`;
+			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${preaggSQL}`;
 
 			// Store rewrite info for query-time use
 			reg.preaggOutputSelect = outputSelect;
@@ -774,7 +774,7 @@ export class QueryEngine {
 						reg.preaggTable = preaggTable;
 						reg.preaggReady = true;
 						reg.lastPreaggParts = parts;
-						console.log(`[preagg] cube created for ${markId}: ${preaggTable}\n${createSQL}`);
+						console.log(`[preagg] table created for ${markId}: ${preaggTable}\n${createSQL}`);
 					})
 					.catch((e) => {
 						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
@@ -849,14 +849,14 @@ export class QueryEngine {
 				// Recombined aggregate output — needs CAST
 				castSelect[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
 			} else {
-				// Dimension column reference (already CAST in cube),
+				// Dimension column reference (already CAST in preagg table),
 				// or windowed channel (CAST deferred to outer CTE)
 				castSelect[ch] = expr;
 			}
 		}
 
 		// --- Build modified QueryParts ---
-		// GROUP BY: dimension columns from the cube (referenced by alias)
+		// GROUP BY: dimension columns from the preagg table (referenced by alias)
 		const preaggGroupBy: ExprNode[] = [];
 		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
 			if (!isAggregateExpression(expr)) {
@@ -878,7 +878,7 @@ export class QueryEngine {
 			preaggTable,
 			preaggParts,
 			binFilters,
-			null, // filterNulls not needed — cube already filtered
+			null, // filterNulls not needed — preagg table already filtered
 			transformCompiler,
 			false
 		);

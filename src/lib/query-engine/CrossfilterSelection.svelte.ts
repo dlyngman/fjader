@@ -95,7 +95,7 @@ export class CrossfilterSelection {
 
 	/**
 	 * Compute the filter predicate for a mark, excluding clauses from specific sources.
-	 * Used at cube creation time to bake non-active-brush filters into the cube.
+	 * Used at preagg table creation time to bake non-active-brush filters into the preagg table.
 	 */
 	predicateExcluding(markId: string, excludeSourceIds: Set<string>): FilterExpr[] {
 		const result: FilterExpr[] = [];

@@ -26,10 +26,10 @@ describe('rewriteForPreagg', () => {
 	it('handles pure dimension (no aggregates)', () => {
 		const result = rewriteForPreagg(selectDef({ x: column('category') }));
 		expect(result).not.toBeNull();
-		expect(result!.cubeGroupBy).toHaveLength(1);
-		// Dimension goes into cube as-is
-		expect(Object.keys(result!.cubeCols)).toContain('x');
-		// Output references the cube column
+		expect(result!.preaggGroupBy).toHaveLength(1);
+		// Dimension goes into preagg table as-is
+		expect(Object.keys(result!.preaggCols)).toContain('x');
+		// Output references the preagg column
 		expect(result!.outputSelect.x.toString()).toMatch(/\"x\"/);
 	});
 
@@ -42,7 +42,7 @@ describe('rewriteForPreagg', () => {
 		);
 		expect(result).not.toBeNull();
 		// One partial column for count
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(1);
 		// Output: COALESCE(SUM(partial), 0)
 		const output = result!.outputSelect.y.toString().toLowerCase();
@@ -58,7 +58,7 @@ describe('rewriteForPreagg', () => {
 			})
 		);
 		expect(result).not.toBeNull();
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(1);
 		// Output: SUM(partial_sum)
 		const output = result!.outputSelect.y.toString().toLowerCase();
@@ -73,7 +73,7 @@ describe('rewriteForPreagg', () => {
 			})
 		);
 		expect(result).not.toBeNull();
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(2); // sum + count
 		// Output should have division
 		const output = result!.outputSelect.y.toString();
@@ -123,7 +123,7 @@ describe('rewriteForPreagg', () => {
 		) as unknown as ExprNode;
 		const result = rewriteForPreagg(selectDef({ x: column('cat'), y: expr }));
 		expect(result).not.toBeNull();
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(2); // two separate SUM partials
 	});
 
@@ -148,7 +148,7 @@ describe('rewriteForPreagg', () => {
 			})
 		);
 		expect(result).not.toBeNull();
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(1);
 	});
 });
@@ -188,14 +188,14 @@ describe('rewriteForPreagg — window expressions', () => {
 		expect(result!.windowChannels!.y).toBeDefined();
 
 		// Two partials for AVG (sum + count)
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(2);
 
 		// outputSelect.y is the recombined aggregate (no window wrapping)
 		const outputY = result!.outputSelect.y.toString();
 		expect(outputY).toMatch(/\//); // division for AVG decomposition
 
-		// WindowNode keeps original field names (extra dims added to cube)
+		// WindowNode keeps original field names (extra dims added to preagg table)
 		const windowSQL = result!.windowChannels!.y.toString();
 		expect(windowSQL).toMatch(/OVER/i);
 		expect(windowSQL).toMatch(/"date"/); // ORDER BY uses original field name
@@ -212,7 +212,7 @@ describe('rewriteForPreagg — window expressions', () => {
 		expect(result!.windowChannels).not.toBeNull();
 
 		// One partial for COUNT
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(1);
 
 		// Outer func should be SUM(y), not COUNT(y)
@@ -231,7 +231,7 @@ describe('rewriteForPreagg — window expressions', () => {
 		expect(result).not.toBeNull();
 		expect(result!.windowChannels).not.toBeNull();
 
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(1);
 
 		// Outer func should be SUM(y) — SUM is idempotent
@@ -277,13 +277,13 @@ describe('rewriteForPreagg — window expressions', () => {
 		expect(result!.windowChannels!.y).toBeUndefined();
 
 		// All partials present: 1 for count (y) + 2 for avg (z)
-		const partials = Object.keys(result!.cubeCols).filter((k) => k.startsWith('__ps'));
+		const partials = Object.keys(result!.preaggCols).filter((k) => k.startsWith('__ps'));
 		expect(partials).toHaveLength(3);
 	});
 
 	it('adds window-referenced columns as extra dimensions', () => {
 		// Window orders by 'unknown_col' which is not in selectDef —
-		// it gets added as an extra dimension in the cube
+		// it gets added as an extra dimension in the preagg table
 		const windowNode = (avg(column('revenue')) as any)
 			.orderby(column('unknown_col'))
 			.frame(frameRows([preceding(3), following(3)]));
@@ -295,7 +295,7 @@ describe('rewriteForPreagg — window expressions', () => {
 		);
 		expect(result).not.toBeNull();
 		// 'unknown_col' added as extra dimension
-		expect(result!.cubeCols.unknown_col).toBeDefined();
+		expect(result!.preaggCols.unknown_col).toBeDefined();
 		expect(result!.outputSelect.unknown_col).toBeDefined();
 	});
 

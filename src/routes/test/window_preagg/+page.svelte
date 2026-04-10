@@ -11,7 +11,7 @@
 		try {
 			// 1M web request events: 30 days × 5 regions, with continuous payload_size for brushing.
 			// Each (date, region, payload_bin) cell holds ~26 events on average, so the preagg
-			// cube collapses 1M source rows down to ~38k cube rows. That collapse is what
+			// table collapses 1M source rows down to ~38k rows. That collapse is what
 			// makes window CTE preagg meaningfully faster than scanning the base table.
 			await queryEngine.exec(`
 				CREATE TABLE web_events AS

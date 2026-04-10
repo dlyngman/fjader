@@ -1,10 +1,10 @@
 /**
- * Sufficient statistics for pre-aggregation data cubes.
+ * Sufficient statistics for pre-aggregation tables.
  *
  * Pure functions that analyze a mark's selectDef and produce:
- * - cubeCols: columns for the materialized cube (dimensions + partial aggregates)
+ * - preaggCols: columns for the materialized preagg table (dimensions + partial aggregates)
  * - outputSelect: rewritten expressions that recombine partials at query time
- * - cubeGroupBy: GROUP BY expressions for the cube
+ * - preaggGroupBy: GROUP BY expressions for the preagg table
  *
  * Unsupported aggregates (DISTINCT, MEDIAN, etc.) cause the entire mark to
  * fall back to base-table queries — no partial preagg.
@@ -49,12 +49,12 @@ export interface BrushActivation {
 }
 
 export interface PreaggAnalysis {
-	/** Columns for the cube SELECT (dimensions as-is + partial aggregate cols). */
-	cubeCols: Record<string, ExprNode>;
+	/** Columns for the preagg SELECT (dimensions as-is + partial aggregate cols). */
+	preaggCols: Record<string, ExprNode>;
 	/** Rewritten expressions for the brush query (recombined partials). */
 	outputSelect: Record<string, ExprNode>;
-	/** GROUP BY expressions for the cube (dimension columns only, no bin cols). */
-	cubeGroupBy: ExprNode[];
+	/** GROUP BY expressions for the preagg table (dimension columns only, no bin cols). */
+	preaggGroupBy: ExprNode[];
 	/** Channels needing CTE window wrapping. null if no windows. */
 	windowChannels: Record<string, WindowNode> | null;
 }
@@ -80,9 +80,9 @@ const outerAggBuilders = { count: sum, sum, avg, min, max } as const;
 export function rewriteForPreagg(
 	selectDef: Record<string, unknown>
 ): PreaggAnalysis | null {
-	const cubeCols: Record<string, ExprNode> = {};
+	const preaggCols: Record<string, ExprNode> = {};
 	const outputSelect: Record<string, ExprNode> = {};
-	const cubeGroupBy: ExprNode[] = [];
+	const preaggGroupBy: ExprNode[] = [];
 	const windowChannels: Record<string, WindowNode> = {};
 
 	let statCounter = 0;
@@ -98,7 +98,7 @@ export function rewriteForPreagg(
 			if (!isAggregateExpression(windowNode.func)) return null;
 
 			const innerFunc = windowNode.func as AggregateNode;
-			const result = sufficientStats(innerFunc, cubeCols, statCounter);
+			const result = sufficientStats(innerFunc, preaggCols, statCounter);
 			if (!result) return null; // DISTINCT, unsupported aggregate, etc.
 			statCounter = result.nextCounter;
 
@@ -111,17 +111,17 @@ export function rewriteForPreagg(
 			// nodes) whose column refs can't be extracted or rewritten.
 			//
 			// Instead of rewriting the window def, we add all its referenced
-			// columns as extra dimensions in the cube. These pass through the
-			// inner CTE under their original field names, making them available
+			// columns as extra dimensions in the preagg table. These pass through
+			// the inner CTE under their original field names, making them available
 			// to the outer CTE's window function. Extra columns in the final
 			// result are harmless — marks only read channels they declared.
 			for (const col of collectColumns(windowNode.def as unknown as ExprNode)) {
 				const fieldName = col.column;
-				if (!(fieldName in cubeCols)) {
+				if (!(fieldName in preaggCols)) {
 					const colRef = column(fieldName) as ExprNode;
-					cubeCols[fieldName] = colRef;
+					preaggCols[fieldName] = colRef;
 					outputSelect[fieldName] = colRef;
-					cubeGroupBy.push(colRef);
+					preaggGroupBy.push(colRef);
 				}
 			}
 
@@ -141,9 +141,9 @@ export function rewriteForPreagg(
 
 		if (aggFlag === 0) {
 			// Pure dimension (column ref, CASE expression, etc.)
-			cubeCols[channel] = expr as ExprNode;
+			preaggCols[channel] = expr as ExprNode;
 			outputSelect[channel] = column(channel);
-			cubeGroupBy.push(column(channel));
+			preaggGroupBy.push(column(channel));
 		} else {
 			// Contains aggregate(s) — try to decompose
 			const aggNodes = collectAggregates(expr as ExprNode);
@@ -152,7 +152,7 @@ export function rewriteForPreagg(
 			const rewriteMap = new Map<ExprNode, ExprNode>();
 
 			for (const agg of aggNodes) {
-				const result = sufficientStats(agg, cubeCols, statCounter);
+				const result = sufficientStats(agg, preaggCols, statCounter);
 				if (!result) return null; // unsupported aggregate
 				rewriteMap.set(agg, result.outputExpr);
 				statCounter = result.nextCounter;
@@ -163,9 +163,9 @@ export function rewriteForPreagg(
 	}
 
 	return {
-		cubeCols,
+		preaggCols,
 		outputSelect,
-		cubeGroupBy,
+		preaggGroupBy,
 		windowChannels: Object.keys(windowChannels).length > 0 ? windowChannels : null
 	};
 }
@@ -201,12 +201,12 @@ interface StatResult {
 
 /**
  * Compute sufficient statistics for a single aggregate node.
- * Returns the recombined output expression and adds partial columns to cubeCols.
+ * Returns the recombined output expression and adds partial columns to preaggCols.
  * Returns null if the aggregate is not decomposable.
  */
 function sufficientStats(
 	agg: AggregateNode,
-	cubeCols: Record<string, ExprNode>,
+	preaggCols: Record<string, ExprNode>,
 	counter: number
 ): StatResult | null {
 	if (agg.isDistinct) return null;
@@ -216,7 +216,7 @@ function sufficientStats(
 
 	switch (name) {
 		case 'count': {
-			const [col, counter1] = addStat(cubeCols, count(...args), agg, counter);
+			const [col, counter1] = addStat(preaggCols, count(...args), agg, counter);
 			return {
 				outputExpr: coalesce(sum(column(col)), literal(0)) as ExprNode,
 				nextCounter: counter1
@@ -224,7 +224,7 @@ function sufficientStats(
 		}
 
 		case 'sum': {
-			const [col, counter1] = addStat(cubeCols, sum(args[0]), agg, counter);
+			const [col, counter1] = addStat(preaggCols, sum(args[0]), agg, counter);
 			return {
 				outputExpr: sum(column(col)) as ExprNode,
 				nextCounter: counter1
@@ -232,8 +232,8 @@ function sufficientStats(
 		}
 
 		case 'avg': {
-			const [sumCol, counter1] = addStat(cubeCols, sum(args[0]), agg, counter);
-			const [cntCol, counter2] = addStat(cubeCols, count(args[0]), agg, counter1);
+			const [sumCol, counter1] = addStat(preaggCols, sum(args[0]), agg, counter);
+			const [cntCol, counter2] = addStat(preaggCols, count(args[0]), agg, counter1);
 			return {
 				outputExpr: div(
 					sum(column(sumCol)),
@@ -244,7 +244,7 @@ function sufficientStats(
 		}
 
 		case 'min': {
-			const [col, counter1] = addStat(cubeCols, min(args[0]), agg, counter);
+			const [col, counter1] = addStat(preaggCols, min(args[0]), agg, counter);
 			return {
 				outputExpr: min(column(col)) as ExprNode,
 				nextCounter: counter1
@@ -252,7 +252,7 @@ function sufficientStats(
 		}
 
 		case 'max': {
-			const [col, counter1] = addStat(cubeCols, max(args[0]), agg, counter);
+			const [col, counter1] = addStat(preaggCols, max(args[0]), agg, counter);
 			return {
 				outputExpr: max(column(col)) as ExprNode,
 				nextCounter: counter1
@@ -265,11 +265,11 @@ function sufficientStats(
 }
 
 /**
- * Add a partial-statistic column to the cube, deduplicating by expression string.
+ * Add a partial-statistic column to the preagg table, deduplicating by expression string.
  * Returns [columnName, nextCounter].
  */
 function addStat(
-	cubeCols: Record<string, ExprNode>,
+	preaggCols: Record<string, ExprNode>,
 	expr: ExprNode,
 	sourceAgg: AggregateNode,
 	counter: number
@@ -279,14 +279,14 @@ function addStat(
 	const key = finalExpr.toString();
 
 	// Check for existing identical partial
-	for (const [name, existing] of Object.entries(cubeCols)) {
+	for (const [name, existing] of Object.entries(preaggCols)) {
 		if (name.startsWith('__ps') && existing.toString() === key) {
 			return [name, counter];
 		}
 	}
 
 	const colName = `__ps${counter}`;
-	cubeCols[colName] = finalExpr as ExprNode;
+	preaggCols[colName] = finalExpr as ExprNode;
 	return [colName, counter + 1];
 }
 
