@@ -35,6 +35,12 @@ export interface QueryParts {
 	hasSQLTransforms: boolean;
 	orderChannels: string[] | null;
 	aliasMap: Map<string, string>;
+	/** Channels whose raw config value was a column-name passthrough (string
+	 *  or plain ColumnRefNode). For these, the channel alias is provably 1:1
+	 *  with the source column under DivePlot's automatic wrappings (epoch /
+	 *  CAST for ORDER BY, ordinal CASE for PARTITION BY). Used by preagg to
+	 *  fold redundant window col refs into channel aliases. */
+	passthroughChannels: Map<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +56,8 @@ export interface QueryParts {
 export function buildQueryParts(
 	select: Record<string, unknown>,
 	orderConfig: OrderConfig | undefined,
-	hasSQLTransforms: boolean
+	hasSQLTransforms: boolean,
+	passthroughChannels: Map<string, string> = new Map()
 ): QueryParts {
 	const selectDef: Record<string, unknown> = {};
 	const nonAggregateGroupBy: unknown[] = [];
@@ -110,7 +117,8 @@ export function buildQueryParts(
 		hasWindowAggregates,
 		hasSQLTransforms,
 		orderChannels,
-		aliasMap
+		aliasMap,
+		passthroughChannels
 	};
 }
 

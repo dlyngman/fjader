@@ -70,20 +70,38 @@ export interface BinExprResult {
 // ---------------------------------------------------------------------------
 
 /** Maps inner aggregate name → outer CTE aggregate builder.
- *  COUNT maps to SUM: the outer sums per-group counts, not counts CTE rows. */
+ *  COUNT maps to SUM: the outer sums per-group counts, not counts CTE rows.
+ *  AVG maps to AVG: smooth the per-group means, not pooled mean. See
+ *  outerAggBuilders in QueryEngine.ts for the full rationale. */
 const outerAggBuilders = { count: sum, sum, avg, min, max } as const;
 
 /**
  * Analyze a mark's selectDef for pre-aggregation compatibility.
  * Returns null if any channel is unsupported (window functions, DISTINCT, etc.).
+ *
+ * `passthroughChannels` is a channel→field map for channels whose raw config
+ * value was a column-name passthrough. When a window expression references
+ * one of those source columns, we rewrite the window def to use the channel
+ * alias instead — folding away the redundant extra dimension.
  */
 export function rewriteForPreagg(
-	selectDef: Record<string, unknown>
+	selectDef: Record<string, unknown>,
+	passthroughChannels?: Map<string, string>
 ): PreaggAnalysis | null {
 	const preaggCols: Record<string, ExprNode> = {};
 	const outputSelect: Record<string, ExprNode> = {};
 	const preaggGroupBy: ExprNode[] = [];
 	const windowChannels: Record<string, WindowNode> = {};
+
+	// Inverse map: source field → channel alias. Built from passthroughChannels
+	// (which only includes provably 1:1 channel→field mappings). Used to
+	// rewrite window def col refs to channel aliases when applicable.
+	const fieldToChannel = new Map<string, string>();
+	if (passthroughChannels) {
+		for (const [ch, field] of passthroughChannels) {
+			fieldToChannel.set(field, ch);
+		}
+	}
 
 	let statCounter = 0;
 
@@ -105,24 +123,39 @@ export function rewriteForPreagg(
 			// Store recombined aggregate WITHOUT window wrapping
 			outputSelect[channel] = result.outputExpr;
 
-			// Window defs reference raw field names (e.g. PARTITION BY "series",
-			// ORDER BY "date") but the selectDef channels may wrap them in
-			// opaque expressions (epoch transforms, CASE expressions → FRAGMENT
-			// nodes) whose column refs can't be extracted or rewritten.
+			// Window defs reference raw field names (e.g. PARTITION BY "region",
+			// ORDER BY "date"). For each ref, we either:
 			//
-			// Instead of rewriting the window def, we add all its referenced
-			// columns as extra dimensions in the preagg table. These pass through
-			// the inner CTE under their original field names, making them available
-			// to the outer CTE's window function. Extra columns in the final
-			// result are harmless — marks only read channels they declared.
+			//   (a) Rewrite to a channel alias, when another non-window channel
+			//       passes through the same source column. The channel's CAST/
+			//       EPOCH/CASE wrapping is provably 1:1 with the source value
+			//       under DivePlot's automatic transforms — monotonic for ORDER
+			//       BY, distinct-preserving for PARTITION BY. This avoids
+			//       carrying redundant raw columns through the preagg table.
+			//
+			//   (b) Add the raw column as an extra preagg dimension. Used for
+			//       window-referenced columns that no channel covers, including
+			//       any selectDef channel that's already wrapped in an opaque
+			//       expression we can't analyze (CASE, FRAGMENT, etc.). Extra
+			//       output columns are harmless — marks only read channels they
+			//       declared.
+			const windowRewriteMap = new Map<ExprNode, ExprNode>();
 			for (const col of collectColumns(windowNode.def as unknown as ExprNode)) {
 				const fieldName = col.column;
-				if (!(fieldName in preaggCols)) {
-					const colRef = column(fieldName) as ExprNode;
-					preaggCols[fieldName] = colRef;
-					outputSelect[fieldName] = colRef;
-					preaggGroupBy.push(colRef);
+				if (fieldName in preaggCols) continue;
+
+				const channelAlias = fieldToChannel.get(fieldName);
+				if (channelAlias) {
+					// (a) — rewrite to channel alias
+					windowRewriteMap.set(col, column(channelAlias) as ExprNode);
+					continue;
 				}
+
+				// (b) — add as raw extra dimension
+				const colRef = column(fieldName) as ExprNode;
+				preaggCols[fieldName] = colRef;
+				outputSelect[fieldName] = colRef;
+				preaggGroupBy.push(colRef);
 			}
 
 			// Build the outer CTE's aggregate: aggName(column(channel)).
@@ -132,8 +165,16 @@ export function rewriteForPreagg(
 			if (!builder) return null;
 			const outerFunc = builder(column(channel)) as ExprNode;
 
-			// Keep original window def (references raw field names now in the CTE)
-			windowChannels[channel] = new WindowNode(outerFunc, windowNode.def);
+			// Apply col ref rewrites to the window def, if any.
+			const rewrittenDef =
+				windowRewriteMap.size > 0
+					? (rewrite(
+							windowNode.def as unknown as ExprNode,
+							windowRewriteMap
+						) as unknown as typeof windowNode.def)
+					: windowNode.def;
+
+			windowChannels[channel] = new WindowNode(outerFunc, rewrittenDef);
 			continue;
 		}
 

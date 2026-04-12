@@ -23,6 +23,8 @@ import {
 	Query,
 	isNode,
 	isAggregateExpression,
+	isColumnRef,
+	isColumnParam,
 	sql,
 	column as sqlColumn,
 	cast,
@@ -179,6 +181,18 @@ export class MarkLifecycleV2 {
 			}
 		}
 
+		// Capture passthrough channels BEFORE inline wrappings mutate the select.
+		// String values and plain ColumnRefNodes are 1:1 with their source column;
+		// preagg uses this to fold redundant window col refs into channel aliases.
+		const passthroughChannels = new Map<string, string>();
+		for (const [ch, val] of Object.entries(resolvedSelect)) {
+			if (typeof val === 'string') {
+				passthroughChannels.set(ch, val);
+			} else if (isNode(val) && isColumnRef(val) && !isColumnParam(val)) {
+				passthroughChannels.set(ch, (val as { column: string }).column);
+			}
+		}
+
 		// Inline CASE expressions — reads scale states reactively
 		this.#inlineCaseExpressions(resolvedSelect);
 		this.#inlineTimeOffsets(resolvedSelect);
@@ -186,7 +200,8 @@ export class MarkLifecycleV2 {
 		return buildQueryParts(
 			resolvedSelect,
 			this.#config._orderConfig ?? null,
-			this.#transformCompiler.hasSQLTransforms()
+			this.#transformCompiler.hasSQLTransforms(),
+			passthroughChannels
 		);
 	});
 

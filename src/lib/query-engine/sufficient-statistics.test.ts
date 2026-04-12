@@ -309,4 +309,80 @@ describe('rewriteForPreagg — window expressions', () => {
 		expect(result).not.toBeNull();
 		expect(result!.windowChannels).toBeNull();
 	});
+
+	it('rewrites window col refs to channel aliases when passthroughChannels covers them', () => {
+		// Window orders by 'date' AND partitions by 'region'. Both are covered
+		// by passthrough channels (x→date, stroke→region), so they should NOT
+		// be added as extra preagg dimensions, and the rewritten window node
+		// should reference the channel aliases ("x", "stroke") instead.
+		const windowNode = (avg(column('value')) as any)
+			.partitionby(column('region'))
+			.orderby(column('date'))
+			.frame(frameRows([preceding(3), following(3)]));
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				stroke: column('region'),
+				y: windowNode
+			}),
+			new Map([
+				['x', 'date'],
+				['stroke', 'region']
+			])
+		);
+		expect(result).not.toBeNull();
+		// No extra dims added — date and region were folded into x and stroke
+		expect(result!.preaggCols.date).toBeUndefined();
+		expect(result!.preaggCols.region).toBeUndefined();
+		// Channel passthrough dims still present
+		expect(result!.preaggCols.x).toBeDefined();
+		expect(result!.preaggCols.stroke).toBeDefined();
+		// Window def references channel aliases now, not raw column names
+		const windowSQL = result!.windowChannels!.y.toString();
+		expect(windowSQL).toMatch(/PARTITION BY "stroke"/i);
+		expect(windowSQL).toMatch(/ORDER BY "x"/i);
+		expect(windowSQL).not.toMatch(/PARTITION BY "region"/i);
+		expect(windowSQL).not.toMatch(/ORDER BY "date"/i);
+	});
+
+	it('falls back to extra dims when passthroughChannels is missing', () => {
+		// No passthroughChannels passed → current behavior (raw col extra dims)
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowExpr(avg(column('revenue')), 'date')
+			})
+		);
+		expect(result).not.toBeNull();
+		// 'date' added as extra dim (no fold-in possible without the map)
+		expect(result!.preaggCols.date).toBeDefined();
+		// Window def still references the raw column name
+		const windowSQL = result!.windowChannels!.y.toString();
+		expect(windowSQL).toMatch(/ORDER BY "date"/i);
+	});
+
+	it('mixes folded and unfolded window col refs', () => {
+		// Window references 'date' (covered by x channel) and 'unknown_col'
+		// (NOT covered). Expect 'date' folded to 'x' alias, 'unknown_col' added
+		// as extra dim.
+		const windowNode = (avg(column('value')) as any)
+			.partitionby(column('unknown_col'))
+			.orderby(column('date'))
+			.frame(frameRows([preceding(3), following(3)]));
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowNode
+			}),
+			new Map([['x', 'date']])
+		);
+		expect(result).not.toBeNull();
+		// 'date' folded — not in preaggCols
+		expect(result!.preaggCols.date).toBeUndefined();
+		// 'unknown_col' added as raw extra dim
+		expect(result!.preaggCols.unknown_col).toBeDefined();
+		const windowSQL = result!.windowChannels!.y.toString();
+		expect(windowSQL).toMatch(/ORDER BY "x"/i);
+		expect(windowSQL).toMatch(/PARTITION BY "unknown_col"/i);
+	});
 });
