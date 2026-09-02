@@ -139,7 +139,7 @@
 				transforms = [stack({ direction: 'horizontal' })];
 				break;
 			case 'stack-normalize':
-				transforms = [stack({ direction: 'horizontal' }), normalize()];
+				transforms = [normalize(), stack({ direction: 'horizontal' })];
 				break;
 			default:
 				transforms = [];
@@ -160,7 +160,7 @@
 				stackDescription = `x={count()} transforms={[stack()]} - stacked by color field${colorWarning}`;
 				break;
 			case 'stack-normalize':
-				stackDescription = `x={count()} transforms={[stack(), normalize()]} - 100% stacked${colorWarning}`;
+				stackDescription = `x={count()} transforms={[normalize(), stack()]} - 100% stacked${colorWarning}`;
 				break;
 			default:
 				stackDescription = '';

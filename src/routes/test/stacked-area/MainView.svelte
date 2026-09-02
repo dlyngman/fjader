@@ -158,7 +158,7 @@
 								x="x"
 								y="y"
 								fill="series"
-								transforms={[stackY(), normalize()]}
+								transforms={[normalize(), stackY()]}
 								tooltip
 							/>
 						{/snippet}

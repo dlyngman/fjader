@@ -27,15 +27,15 @@ export class TransformCompiler {
 	}
 
 	#validateStaging(): void {
-		let seenJS = false;
+		let precedingJS: string | null = null;
 
 		for (const transform of this.transforms) {
 			if (transform.stage === 'js') {
-				seenJS = true;
-			} else if (transform.stage === 'sql' && seenJS) {
+				precedingJS = transform.type;
+			} else if (transform.stage === 'sql' && precedingJS) {
 				throw new Error(
-					`Invalid transform order: SQL transform "${transform.type}" appears after JS transform. ` +
-						`SQL transforms must come before JS transforms in the pipeline.`
+					`Invalid transform order: SQL transform "${transform.type}" appears after JS transform ` +
+						`"${precedingJS}". Move ${transform.type}() before ${precedingJS}() in the transforms array.`
 				);
 			}
 		}

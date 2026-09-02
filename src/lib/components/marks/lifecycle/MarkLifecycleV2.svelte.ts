@@ -889,6 +889,14 @@ export class MarkLifecycleV2 {
 		const field = this.#config.select[axis];
 		if (!field) return;
 
+		// KNOWN BUG: assumes `field` is a plain column name / ColumnRefNode.
+		// A band/point axis backed by a computed expression (e.g. y={bin(...)}
+		// on a BarMarkX, binning the mark's categorical axis) hits
+		// sqlColumn(String(field)) below, stringifying the expression object
+		// to "[object Object]" and producing an invalid query. Pre-existing,
+		// unrelated to the SQL normalize/topN transform work — filed for a
+		// separate fix. Repro: /test/transforms, BarMarkX with
+		// y={bin('body_mass', {step:500})}.
 		let q = Query.from(this.#config.table)
 			.select({ [axis]: sqlColumn(String(field)) });
 

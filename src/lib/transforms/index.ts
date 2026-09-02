@@ -115,32 +115,45 @@ function passthroughSelect(aliases: string[]): Record<string, ExprNode> {
 }
 
 /**
- * Resolve the value/band/series aliases for topN from the mark config,
- * validated against the query's own select list. Mirrors the JS path:
- * value axis is y for vertical marks, x for horizontal (barx); the mark
- * lifecycle has already resolved y → y2 etc. for extent-based marks.
+ * Resolve the value/band aliases for a channel-aware SQL transform from the
+ * mark config, validated against the query's own select list. Mirrors the
+ * JS path: value axis is y for vertical marks, x for horizontal (barx); the
+ * mark lifecycle has already resolved y → y2 etc. for extent-based marks.
+ * Shared by topN and normalize — the two transforms that need "which
+ * channel is the measure, which is the group" (proposals/review_preagg_v2_phase2.md).
  */
+function resolveValueAndBand(
+	aliases: string[],
+	options: { by?: string },
+	config: MarkConfig | undefined,
+	transformName: string
+): { by: string; band: string } {
+	const isHorizontal = config?.markType === 'barx';
+	const by = options.by ?? (isHorizontal ? config?.x : config?.y);
+	const band = isHorizontal ? config?.y : config?.x;
+
+	if (!by || !aliases.includes(by)) {
+		throw new Error(
+			`${transformName}: value column "${by ?? '(none)'}" not in query select [${aliases.join(', ')}]`
+		);
+	}
+	if (!band || !aliases.includes(band)) {
+		throw new Error(
+			`${transformName}: band column "${band ?? '(none)'}" not in query select [${aliases.join(', ')}]`
+		);
+	}
+	return { by, band };
+}
+
+/** topN also needs the series (fill) channel, when present in the select list. */
 function resolveTopNColumns(
 	aliases: string[],
 	options: TopNOptions,
 	config: MarkConfig | undefined
 ): { by: string; band: string; series: string | null } {
-	const isHorizontal = config?.markType === 'barx';
-	const by = options.by ?? (isHorizontal ? config?.x : config?.y);
-	const band = isHorizontal ? config?.y : config?.x;
+	const { by, band } = resolveValueAndBand(aliases, options, config, 'topN');
 	const fill = config?.fill;
 	const series = typeof fill === 'string' && aliases.includes(fill) ? fill : null;
-
-	if (!by || !aliases.includes(by)) {
-		throw new Error(
-			`topN: value column "${by ?? '(none)'}" not in query select [${aliases.join(', ')}]`
-		);
-	}
-	if (!band || !aliases.includes(band)) {
-		throw new Error(
-			`topN: band column "${band ?? '(none)'}" not in query select [${aliases.join(', ')}]`
-		);
-	}
 	return { by, band, series };
 }
 
@@ -504,25 +517,70 @@ export function stack(options: LegacyStackOptions = {}): JsTransform {
 
 // -----------------------------------------------------------------------------
 // normalize — rescale values to percentages within each group
+//
+// SQL path (default): window aggregate, value * 100 / SUM(value) OVER (band).
+// Operates on the raw (pre-stack) value column, so it must precede stackY/
+// stackX in the transforms array — normalize-then-stack commutes with
+// stack-then-normalize (scaling by a constant commutes with cumulative sum),
+// so this produces identical y0/y1 to the old stack-then-normalize order.
+// JS path (engine: 'js'): legacy post-query behavior, including the
+// stacked-data (y0/y1) special case, kept for callers that still order
+// [stack(), normalize()].
 // -----------------------------------------------------------------------------
 
-export function normalize(_options: Record<string, unknown> = {}): JsTransform {
+interface NormalizeOptions {
+	/** Value channel to normalize. Default: the mark's value axis (y, or x for barx). */
+	by?: string;
+	/** Force JS execution path. Default: SQL. */
+	engine?: 'sql' | 'js';
+}
+
+export function normalize(options: NormalizeOptions & { engine: 'js' }): JsTransform;
+export function normalize(options?: NormalizeOptions): SqlTransform;
+export function normalize(options: NormalizeOptions = {}): SqlTransform | JsTransform {
+	if (options.engine === 'js') return normalizeJS(options);
+	return normalizeSQL(options);
+}
+
+function normalizeSQL(options: NormalizeOptions): SqlTransform {
+	return {
+		stage: 'sql',
+		type: 'normalize',
+		spec: { transform: 'normalize', ...(options.by ? { by: options.by } : {}) },
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const { by, band } = resolveValueAndBand(aliases, options, config, 'normalize');
+
+			const outSelect = passthroughSelect(aliases);
+			outSelect[by] = sqlTag`${column(by)} * 100 / NULLIF(SUM(${column(by)}) OVER (PARTITION BY ${column(band)}), 0)`;
+
+			return Query.from({ __normalize_base: query }).select(outSelect);
+		},
+		describe() {
+			return 'Normalize to percentages (SQL)';
+		}
+	};
+}
+
+function normalizeJS(_options: NormalizeOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'normalize',
-		spec: { transform: 'normalize' },
+		spec: { transform: 'normalize', engine: 'js' },
 		apply(data: DataAccessor, config: MarkConfig) {
 			if (data.length === 0) return data;
 
 			const n = data.length;
-			const groupField = config.x!;
-			const valueField = config.y!;
+			// barx swaps value/band axes, same convention as topNJS.
+			const isHorizontal = config.markType === 'barx';
+			const groupField = (isHorizontal ? config.y : config.x)!;
+			const valueField = (isHorizontal ? config.x : config.y)!;
 
 			const groupCol = data.getColumn(groupField);
 			const valueCol = data.getColumn(valueField);
 			if (!groupCol || !valueCol) return data;
 
-			// Check if stacked (y0/y1 overlays exist)
+			// Check if stacked (y0/y1 overlays exist; x0/x1 for barx not handled here — SQL path is default)
 			const y0Col = data.getColumn('y0');
 			const y1Col = data.getColumn('y1');
 			const isStacked = y0Col !== null && y1Col !== null;
@@ -571,7 +629,7 @@ export function normalize(_options: Record<string, unknown> = {}): JsTransform {
 			}
 		},
 		describe() {
-			return 'Normalize to percentages';
+			return 'Normalize to percentages (JS)';
 		}
 	};
 }

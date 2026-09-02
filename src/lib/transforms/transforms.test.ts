@@ -196,7 +196,7 @@ describe('Transforms', () => {
 				y: 'y'
 			});
 
-			const normalizeTransform = normalize();
+			const normalizeTransform = normalize({ engine: 'js' });
 			const result = normalizeTransform.apply(stackedResult, {
 				markType: 'area',
 				table: 't',
