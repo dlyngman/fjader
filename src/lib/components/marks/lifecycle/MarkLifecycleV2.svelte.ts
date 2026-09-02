@@ -946,15 +946,13 @@ export class MarkLifecycleV2 {
 			this.#config._orderConfig ?? null,
 			this.#transformCompiler.hasSQLTransforms()
 		);
-		const q = assembleQuery(
-			this.#config.table,
+		const q = assembleQuery({
+			table: this.#config.table,
 			parts,
 			filter,
-			this.#reactiveConfig.filterNulls ?? null,
-			this.#transformCompiler,
-			false,
-			undefined
-		);
+			filterNulls: this.#reactiveConfig.filterNulls ?? null,
+			transformCompiler: this.#transformCompiler
+		});
 		if (!q) return null;
 		return Query.from(sql`(${q.toString()})` as any).select('*');
 	}
@@ -978,17 +976,15 @@ export class MarkLifecycleV2 {
 		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
-		const q = assembleQuery(
-			this.#config.table,
-			this.#resolvedQueryParts,
-			filter as unknown[],
-			this.#reactiveConfig.filterNulls ?? null,
-			this.#transformCompiler,
-			false,
-			undefined
-		);
+		const q = assembleQuery({
+			table: this.#config.table,
+			parts: this.#resolvedQueryParts,
+			filter: filter as unknown[],
+			filterNulls: this.#reactiveConfig.filterNulls ?? null,
+			transformCompiler: this.#transformCompiler,
+			limit: this.#reactiveConfig.limit
+		});
 		if (!q) return null;
-		if (this.#reactiveConfig.limit) q.limit(this.#reactiveConfig.limit);
 		const sqlStr = q.toString();
 
 		const parts: string[] = [`SELECT COUNT(*) AS cnt FROM (${sqlStr}) AS _vp`];
@@ -1262,19 +1258,15 @@ export class MarkLifecycleV2 {
 		if (!this.#resolvedQueryParts) return null;
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 
-		const q = assembleQuery(
-			this.#config.table,
-			this.#resolvedQueryParts,
-			filter as unknown[],
-			this.#reactiveConfig.filterNulls ?? null,
-			this.#transformCompiler,
-			false,
-			undefined
-		);
+		const q = assembleQuery({
+			table: this.#config.table,
+			parts: this.#resolvedQueryParts,
+			filter: filter as unknown[],
+			filterNulls: this.#reactiveConfig.filterNulls ?? null,
+			transformCompiler: this.#transformCompiler,
+			limit: this.#reactiveConfig.limit
+		});
 		if (!q) return null;
-		if (this.#reactiveConfig.limit) {
-			q.limit(this.#reactiveConfig.limit);
-		}
 		return q.toString();
 	}
 
@@ -1331,14 +1323,13 @@ export class MarkLifecycleV2 {
 		);
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
-		const sidecarQuery = assembleQuery(
-			this.#config.table,
-			sidecarParts,
-			filter as unknown[],
-			this.#reactiveConfig.filterNulls ?? null,
-			this.#transformCompiler,
-			false
-		);
+		const sidecarQuery = assembleQuery({
+			table: this.#config.table,
+			parts: sidecarParts,
+			filter: filter as unknown[],
+			filterNulls: this.#reactiveConfig.filterNulls ?? null,
+			transformCompiler: this.#transformCompiler
+		});
 		if (!sidecarQuery) return;
 
 		// ALTER TABLE to add columns, then UPDATE from sidecar query

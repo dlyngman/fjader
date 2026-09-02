@@ -14,7 +14,6 @@ import {
 	collectAggregates,
 	collectColumns,
 	rewrite,
-	avg,
 	sum,
 	count,
 	min,
@@ -34,6 +33,7 @@ import {
 	type ExprNode
 } from '@uwdata/mosaic-sql';
 import { isWindowExpression } from '$lib/sql/expression-utils';
+import { buildOuterWindow } from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,12 +68,6 @@ export interface BinExprResult {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-/** Maps inner aggregate name → outer CTE aggregate builder.
- *  COUNT maps to SUM: the outer sums per-group counts, not counts CTE rows.
- *  AVG maps to AVG: smooth the per-group means, not pooled mean. See
- *  outerAggBuilders in QueryEngine.ts for the full rationale. */
-const outerAggBuilders = { count: sum, sum, avg, min, max } as const;
 
 /**
  * Analyze a mark's selectDef for pre-aggregation compatibility.
@@ -158,23 +152,11 @@ export function rewriteForPreagg(
 				preaggGroupBy.push(colRef);
 			}
 
-			// Build the outer CTE's aggregate: aggName(column(channel)).
-			// COUNT maps to SUM — sum of per-group counts, not count of CTE rows.
-			const aggName = innerFunc.name.toLowerCase() as keyof typeof outerAggBuilders;
-			const builder = outerAggBuilders[aggName];
-			if (!builder) return null;
-			const outerFunc = builder(column(channel)) as ExprNode;
-
-			// Apply col ref rewrites to the window def, if any.
-			const rewrittenDef =
-				windowRewriteMap.size > 0
-					? (rewrite(
-							windowNode.def as unknown as ExprNode,
-							windowRewriteMap
-						) as unknown as typeof windowNode.def)
-					: windowNode.def;
-
-			windowChannels[channel] = new WindowNode(outerFunc, rewrittenDef);
+			// Outer CTE window: outerAgg(column(channel)) OVER (rewritten def).
+			// Shared with the base path so both produce identical numbers.
+			const outer = buildOuterWindow(channel, windowNode, windowRewriteMap);
+			if (!outer) return null; // no outer counterpart for this aggregate
+			windowChannels[channel] = outer;
 			continue;
 		}
 

@@ -19,32 +19,23 @@
 
 import { tableFromIPC, type Table } from '@uwdata/flechette';
 import {
-	isNode,
-	isColumnRef,
 	isAggregateExpression,
-	collectColumns,
-	rewrite,
-	coalesce,
-	cast,
-	sql as sqlTag,
 	column,
 	and,
 	isBetween,
-	isNotNull,
 	literal,
-	sum,
-	avg,
-	min,
-	max,
 	Query,
-	WindowNode,
-	type AggregateNode,
 	type ExprNode
 } from '@uwdata/mosaic-sql';
-import { isWindowExpression } from '$lib/sql/expression-utils';
 import { rewriteForPreagg, buildBinExpr, type BrushActivation } from './sufficient-statistics';
 export type { BrushActivation } from './sufficient-statistics';
-import { assembleQuery, type QueryParts } from '$lib/components/marks/lifecycle/query-builder';
+import {
+	assembleQuery,
+	castNumeric,
+	castReal,
+	splitWindowSelect,
+	type QueryParts
+} from '$lib/components/marks/lifecycle/query-builder';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
 import type { FilterGroup } from './FilterGroup.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
@@ -68,56 +59,9 @@ export interface QueryOpts {
  *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
 const PREAGG_ENABLED = true;
 
-/** Maps inner aggregate name → outer CTE aggregate builder.
- *  COUNT maps to SUM: the outer sums per-group counts, not counts CTE rows.
- *
- *  AVG maps to AVG (not SUM/SUM pooled mean). This is intentional: the smooth
- *  overlay is a visual smoothing of the rendered line, where each point is a
- *  per-group mean. AVG-of-per-group-means matches what the user sees and expects.
- *  A pooled mean (SUM(sum)/SUM(count) OVER window) would weight groups by row
- *  count, pulling the smoothed line toward high-traffic dates — surprising UX
- *  for a "smooth the line" action. Both paths (base CTE and preagg CTE) use
- *  this same mapping so they produce identical results. */
-const outerAggBuilders: Record<string, typeof sum> = { count: sum, sum, avg, min, max };
-
-/**
- * Wrap an inner query in a CTE, applying window functions in the outer SELECT.
- * Shared by both the base path (raw table → GROUP BY → window) and the preagg
- * path (cube → recombined aggregates → window).
- */
-function wrapWithWindowCTE(
-	innerQuery: Query,
-	cteName: string,
-	channels: string[],
-	windowChannels: Record<string, WindowNode>,
-	orderChannels: string[] | null,
-	limit: number | undefined
-): Query {
-	const outerSelect: Record<string, unknown> = {};
-	for (const ch of channels) {
-		if (ch in windowChannels) {
-			outerSelect[ch] = coalesce(
-				cast(windowChannels[ch] as unknown as ExprNode, 'REAL'),
-				sqlTag`'NaN'::REAL`
-			);
-		} else {
-			outerSelect[ch] = column(ch);
-		}
-	}
-
-	const outerQuery = Query.from(cteName)
-		.select(outerSelect as Record<string, ExprNode>)
-		.with({ [cteName]: innerQuery });
-
-	if (orderChannels) {
-		outerQuery.orderby(...orderChannels.map((ch) => column(ch)));
-	}
-	if (limit) {
-		outerQuery.limit(limit);
-	}
-
-	return outerQuery;
-}
+// outerAggBuilders + window CTE wrapping now live in query-builder.ts
+// (splitWindowSelect / buildOuterWindow / assembleQuery) so the base path,
+// preagg path, and sufficient-statistics analysis share one implementation.
 
 export interface ColumnInfo {
 	name: string;
@@ -637,157 +581,41 @@ export class QueryEngine {
 		const { parts, schema, transformCompiler } = descriptor;
 		const { selectDef } = parts;
 
-		// --- Window CTE path ---
-		// When the selectDef has window aggregates (e.g. smooth overlay), DuckDB
-		// requires the inner aggregate's columns to be in GROUP BY or inside a
-		// regular aggregate. We split into: inner CTE (GROUP BY dims + raw
-		// aggregate), outer query (window over grouped results).
+		// Window aggregates (e.g. smooth overlay): DuckDB requires the inner
+		// aggregate's columns to be in GROUP BY or inside a regular aggregate,
+		// so split into inner GROUP BY + outer window CTE.
 		if (parts.hasWindowAggregates) {
-			const innerSelect: Record<string, unknown> = {};
-			const innerGroupBy: ExprNode[] = [];
-			const windowChs: Record<string, WindowNode> = {};
-			const channels: string[] = [];
-
-			// Inverse map: source field → channel alias. Used to rewrite window
-			// defs so they reference channel aliases (which are the column names
-			// in the inner CTE) instead of raw source column names.
-			const fieldToChannel = new Map<string, string>();
-			for (const [ch, field] of parts.passthroughChannels) {
-				fieldToChannel.set(field, ch);
-			}
-
-			for (const [ch, expr] of Object.entries(selectDef)) {
-				if (expr == null) continue;
-				channels.push(ch);
-
-				if (isWindowExpression(expr)) {
-					const windowNode = expr as unknown as WindowNode;
-					const innerFunc = windowNode.func as AggregateNode;
-
-					// Inner CTE: raw aggregate with CAST
-					innerSelect[ch] = coalesce(cast(innerFunc as unknown as ExprNode, 'REAL'), sqlTag`'NaN'::REAL`);
-
-					// Rewrite window def col refs to channel aliases
-					const windowRewriteMap = new Map<ExprNode, ExprNode>();
-					for (const col of collectColumns(windowNode.def as unknown as ExprNode)) {
-						const alias = fieldToChannel.get(col.column);
-						if (alias) {
-							windowRewriteMap.set(col, column(alias) as ExprNode);
-						}
-					}
-					const rewrittenDef = windowRewriteMap.size > 0
-						? rewrite(windowNode.def as unknown as ExprNode, windowRewriteMap) as unknown as typeof windowNode.def
-						: windowNode.def;
-
-					// Build outer window: outerAgg(channel) OVER (rewritten def)
-					const aggName = innerFunc.name.toLowerCase();
-					const builder = outerAggBuilders[aggName] ?? avg;
-					const outerFunc = builder(column(ch)) as ExprNode;
-					windowChs[ch] = new WindowNode(outerFunc, rewrittenDef);
-				} else if (isAggregateExpression(expr as any)) {
-					// Regular aggregate: CAST in inner, passthrough in outer
-					innerSelect[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-				} else {
-					// Dimension: CAST if numeric, add to GROUP BY
-					innerSelect[ch] = this.#castDimExpr(expr, ch, schema);
-					innerGroupBy.push(column(ch));
-				}
-			}
-
-			const innerQuery = Query.from(sourceTable)
-				.select(innerSelect as Record<string, ExprNode>)
-				.groupby(innerGroupBy);
-
-			// Apply filters
-			const allFilters = [...(filter as ExprNode[])];
-			if (params.filterNulls) {
-				allFilters.push(...params.filterNulls.map((col) => isNotNull(col as ExprNode)));
-			}
-			if (allFilters.length > 0) {
-				innerQuery.where(and(allFilters));
-			}
-
-			// Apply SQL transforms to inner query
-			const innerWithTransforms = parts.hasSQLTransforms
-				? transformCompiler.applyToQuery(innerQuery)
-				: innerQuery;
-
-			return wrapWithWindowCTE(
-				innerWithTransforms,
-				'__window_cte',
-				channels,
-				windowChs,
-				parts.orderChannels,
-				params.limit
-			).toString();
+			const split = splitWindowSelect(selectDef, parts.passthroughChannels, schema);
+			return assembleQuery({
+				table: sourceTable,
+				parts: {
+					...parts,
+					selectDef: split.innerSelect,
+					nonAggregateGroupBy: split.innerGroupBy,
+					hasAggregates: true
+				},
+				filter,
+				filterNulls: params.filterNulls ?? null,
+				transformCompiler,
+				limit: params.limit,
+				window: { channels: split.windowChannels, cteName: '__window_cte' }
+			}).toString();
 		}
 
-		// --- Flat path (no window aggregates) ---
-		// CAST wrapping: COALESCE(CAST(... AS REAL), 'NaN'::REAL) on numeric channels.
-		// Ensures DuckDB returns Float32Array (zero-copy in DataAccessor).
-		// COALESCE converts SQL NULL to NaN float, giving nullCount=0 Arrow buffers.
-		const castSelectDef = { ...selectDef };
-
-		for (const [ch, expr] of Object.entries(castSelectDef)) {
-			if (expr == null) continue;
-
-			// Aggregates and window functions always produce numeric output
-			if (isAggregateExpression(expr as any) || isWindowExpression(expr as any)) {
-				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-				continue;
-			}
-
-			// Non-column SQL nodes (CASE expressions from scale inlining) are numeric
-			if (isNode(expr) && !isColumnRef(expr as any)) {
-				castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-				continue;
-			}
-
-			// Column references: check source column type from schema
-			if (isColumnRef(expr as any)) {
-				const colName = (expr as any).column as string;
-				const jsType = schema?.get(colName)?.jsType;
-				if (jsType === 'number') {
-					castSelectDef[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-				}
-			}
+		// Flat path: CAST-wrap numeric channels so DuckDB returns Float32Array.
+		const castSelectDef: Record<string, unknown> = {};
+		for (const [ch, expr] of Object.entries(selectDef)) {
+			castSelectDef[ch] = castNumeric(expr, schema);
 		}
 
-		const castParts = { ...parts, selectDef: castSelectDef };
-		const q = assembleQuery(
-			sourceTable,
-			castParts,
+		return assembleQuery({
+			table: sourceTable,
+			parts: { ...parts, selectDef: castSelectDef },
 			filter,
-			params.filterNulls ?? null,
+			filterNulls: params.filterNulls ?? null,
 			transformCompiler,
-			false, // forMosaic — always false in v2/v3 (channel names throughout)
-			undefined
-		);
-
-		if (params.limit) {
-			q.limit(params.limit);
-		}
-
-		return q?.toString() ?? null;
-	}
-
-	/** CAST-wrap a dimension expression based on schema type. */
-	#castDimExpr(
-		expr: unknown,
-		channel: string,
-		schema: Map<string, ColumnSchema> | null
-	): unknown {
-		if (isNode(expr) && !isColumnRef(expr as any)) {
-			return coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-		}
-		if (isColumnRef(expr as any)) {
-			const colName = (expr as any).column as string;
-			const jsType = schema?.get(colName)?.jsType;
-			if (jsType === 'number') {
-				return coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-			}
-		}
-		return expr;
+			limit: params.limit
+		}).toString();
 	}
 
 	/**
@@ -882,26 +710,12 @@ export class QueryEngine {
 				binMeta.push({ alias, d0, scaleFactor });
 			}
 
-			// CAST-wrap dimension preaggCols (bake CAST into the preagg table)
+			// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
+			// Partial-aggregate and bin columns stay raw for recombination.
 			for (const [ch, expr] of Object.entries(preaggCols)) {
 				if (ch.startsWith('__ps') || ch.startsWith('__active')) continue;
-
-				if (isAggregateExpression(expr as any)) continue;
-
-				// Non-column SQL nodes (CASE expressions) are numeric
-				if (isNode(expr) && !isColumnRef(expr as any)) {
-					preaggCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
-					continue;
-				}
-
-				// Column references: check schema
-				if (isColumnRef(expr as any)) {
-					const colName = (expr as any).column as string;
-					const jsType = schema?.get(colName)?.jsType;
-					if (jsType === 'number') {
-						preaggCols[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`) as ExprNode;
-					}
-				}
+				if (isAggregateExpression(expr)) continue;
+				preaggCols[ch] = castNumeric(expr, schema) as ExprNode;
 			}
 
 			// Bake non-active filters into the preagg table
@@ -967,7 +781,7 @@ export class QueryEngine {
 		}
 
 		const { descriptor } = reg;
-		const { parts, schema, transformCompiler } = descriptor;
+		const { parts, transformCompiler } = descriptor;
 
 		// --- Compute bin filters from active brush extent ---
 		const binFilters: ExprNode[] = [];
@@ -1005,27 +819,19 @@ export class QueryEngine {
 			}
 		}
 
-		// --- Build modified selectDef with CAST wrapping on aggregate outputs ---
-		// Skip CAST on windowed channels — the outer CTE will CAST them.
+		// --- Build selectDef: CAST recombined aggregates; dimensions are already
+		// CAST in the preagg table; windowed channels are CAST by the outer CTE.
 		const windowChannels = reg.preaggWindowChannels;
 		const castSelect: Record<string, unknown> = {};
-		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
-			if (isAggregateExpression(expr) && !(windowChannels && ch in windowChannels)) {
-				// Recombined aggregate output — needs CAST
-				castSelect[ch] = coalesce(cast(expr, 'REAL'), sqlTag`'NaN'::REAL`);
-			} else {
-				// Dimension column reference (already CAST in preagg table),
-				// or windowed channel (CAST deferred to outer CTE)
-				castSelect[ch] = expr;
-			}
-		}
-
-		// --- Build modified QueryParts ---
-		// GROUP BY: dimension columns from the preagg table (referenced by alias)
 		const preaggGroupBy: ExprNode[] = [];
 		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
 			if (!isAggregateExpression(expr)) {
+				castSelect[ch] = expr;
 				preaggGroupBy.push(column(ch));
+			} else if (windowChannels && ch in windowChannels) {
+				castSelect[ch] = expr;
+			} else {
+				castSelect[ch] = castReal(expr);
 			}
 		}
 
@@ -1035,41 +841,20 @@ export class QueryEngine {
 			hasAggregates: true,
 			hasWindowAggregates: false,
 			hasSQLTransforms: parts.hasSQLTransforms,
-			orderChannels: windowChannels ? null : parts.orderChannels, // ORDER BY goes on outer CTE
+			orderChannels: parts.orderChannels,
 			aliasMap: parts.aliasMap,
 			passthroughChannels: parts.passthroughChannels
 		};
 
-		const q = assembleQuery(
-			preaggTable,
-			preaggParts,
-			binFilters,
-			null, // filterNulls not needed — preagg table already filtered
+		return assembleQuery({
+			table: preaggTable,
+			parts: preaggParts,
+			filter: binFilters,
+			filterNulls: null, // preagg table already filtered
 			transformCompiler,
-			false
-		);
-
-		// --- If no windows, return flat query (existing path) ---
-		if (!windowChannels) {
-			if (params.limit) {
-				q.limit(params.limit);
-			}
-			return q?.toString() ?? null;
-		}
-
-		// --- CTE path: wrap inner query, apply window functions ---
-		const cteQuery = wrapWithWindowCTE(
-			q,
-			'__preagg_cte',
-			Object.keys(preaggOutputSelect),
-			windowChannels,
-			parts.orderChannels,
-			params.limit
-		);
-
-		const cteSQL = cteQuery.toString();
-		console.log(`[preagg:cte] window preagg for ${markId}:\n${cteSQL}`);
-		return cteSQL;
+			limit: params.limit,
+			window: windowChannels ? { channels: windowChannels, cteName: '__preagg_cte' } : null
+		}).toString();
 	}
 
 	/** Clear preagg state for a registration. Does NOT drop the table —

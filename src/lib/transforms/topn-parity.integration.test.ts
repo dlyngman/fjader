@@ -120,13 +120,23 @@ async function runBothPaths(db: DB, s: Scenario) {
 	// --- SQL path: real assembly with topN as a SQL transform ---
 	const sqlCompiler = new TransformCompiler([topN(s.n)], s.config);
 	const sqlParts = buildQueryParts(s.select, s.orderConfig, true);
-	const sqlQuery = assembleQuery('sales', sqlParts, filter, null, sqlCompiler, false);
+	const sqlQuery = assembleQuery({
+		table: 'sales',
+		parts: sqlParts,
+		filter,
+		transformCompiler: sqlCompiler
+	});
 	const sqlRows = canonical(await db.all(sqlQuery.toString()));
 
 	// --- JS path: untransformed query, then JS topN on the result ---
 	const jsCompiler = new TransformCompiler([topN(s.n, { engine: 'js' })], s.config);
 	const baseParts = buildQueryParts(s.select, s.orderConfig, false);
-	const baseQuery = assembleQuery('sales', baseParts, filter, null, jsCompiler, false);
+	const baseQuery = assembleQuery({
+		table: 'sales',
+		parts: baseParts,
+		filter,
+		transformCompiler: jsCompiler
+	});
 	const baseRows = await db.all(baseQuery.toString());
 	const jsRows = accessorToRows(jsCompiler.applyToData(rowsToAccessor(baseRows), s.config));
 

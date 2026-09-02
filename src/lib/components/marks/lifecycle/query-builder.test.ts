@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest';
-import { column as sqlColumn, count, sum, sql, avg } from '@uwdata/mosaic-sql';
+import {
+	column as sqlColumn,
+	count,
+	sum,
+	sql,
+	avg,
+	median,
+	frameRows,
+	preceding,
+	following
+} from '@uwdata/mosaic-sql';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { buildQueryParts, assembleQuery } from './query-builder';
+import { topN } from '$lib/transforms';
+import { buildSchemaMap } from '$lib/query-engine/QueryEngine';
+import {
+	buildQueryParts,
+	assembleQuery,
+	castNumeric,
+	splitWindowSelect,
+	buildOuterWindow
+} from './query-builder';
 
 // ---------------------------------------------------------------------------
 // buildQueryParts
@@ -39,6 +57,7 @@ describe('buildQueryParts', () => {
 		const windowNode = sum('x').partitionby('category').orderby('date');
 		const parts = buildQueryParts({ x: 'date', y: windowNode }, undefined, false);
 		expect(parts.hasAggregates).toBe(false);
+		expect(parts.hasWindowAggregates).toBe(true);
 		// Only 'date' in GROUP BY, window skipped
 		expect(parts.nonAggregateGroupBy).toHaveLength(1);
 	});
@@ -75,6 +94,44 @@ describe('buildQueryParts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// castNumeric — the single CAST policy
+// ---------------------------------------------------------------------------
+
+describe('castNumeric', () => {
+	const schema = buildSchemaMap([
+		{ name: 'value', type: 'DOUBLE', nullable: true },
+		{ name: 'species', type: 'VARCHAR', nullable: true }
+	]);
+	const WRAP = /^coalesce\(\(.*\)::REAL, 'NaN'::REAL\)$/;
+
+	it('always wraps aggregates', () => {
+		expect(String(castNumeric(count(), schema))).toMatch(WRAP);
+		expect(String(castNumeric(sum('revenue'), null))).toMatch(WRAP);
+	});
+
+	it('always wraps window functions', () => {
+		const w = avg('value').partitionby('series').orderby('date');
+		expect(String(castNumeric(w, null))).toMatch(WRAP);
+	});
+
+	it('wraps non-column SQL nodes (CASE / bin expressions)', () => {
+		const binExpr = sql`(30 + (5 * floor(("weight" - 30) / 5)))`;
+		expect(String(castNumeric(binExpr, null))).toMatch(WRAP);
+	});
+
+	it('wraps column refs only when the schema says numeric', () => {
+		expect(String(castNumeric(sqlColumn('value'), schema))).toMatch(WRAP);
+		expect(String(castNumeric(sqlColumn('species'), schema))).toBe('"species"');
+		// Unknown schema: column refs pass through untouched
+		expect(String(castNumeric(sqlColumn('value'), null))).toBe('"value"');
+	});
+
+	it('passes null through', () => {
+		expect(castNumeric(null, schema)).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
 // assembleQuery
 // ---------------------------------------------------------------------------
 
@@ -88,52 +145,41 @@ describe('assembleQuery', () => {
 		return buildQueryParts(select, connected, false);
 	}
 
+	function assemble(
+		parts: ReturnType<typeof buildQueryParts>,
+		extra: Partial<Parameters<typeof assembleQuery>[0]> = {}
+	) {
+		return String(assembleQuery({ table: 't', parts, transformCompiler: noopCompiler, ...extra }));
+	}
+
 	it('produces a basic SELECT query', () => {
-		const parts = simpleParts({ x: 'species', y: count() });
-		const q = assembleQuery('penguins', parts, [], null, noopCompiler, false);
-		const sql = String(q);
-		expect(sql).toContain('SELECT');
-		expect(sql).toContain('FROM "penguins"');
+		const s = assemble(simpleParts({ x: 'species', y: count() }));
+		expect(s).toContain('SELECT');
+		expect(s).toContain('FROM "t"');
 	});
 
 	it('adds GROUP BY when aggregates are present', () => {
-		const parts = simpleParts({ x: 'species', y: count() });
-		const q = assembleQuery('penguins', parts, [], null, noopCompiler, false);
-		const sql = String(q);
-		expect(sql).toContain('GROUP BY');
+		expect(assemble(simpleParts({ x: 'species', y: count() }))).toContain('GROUP BY');
 	});
 
 	it('omits GROUP BY when no aggregates', () => {
-		const parts = simpleParts({ x: 'a', y: 'b' });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, false);
-		const sql = String(q);
-		expect(sql).not.toContain('GROUP BY');
+		expect(assemble(simpleParts({ x: 'a', y: 'b' }))).not.toContain('GROUP BY');
 	});
 
-	it('translates to field-based aliases when forMosaic=true', () => {
-		const parts = simpleParts({ x: 'species', y: count() });
-		const qMosaic = assembleQuery('t', parts, [], null, noopCompiler, true);
-		const qInternal = assembleQuery('t', parts, [], null, noopCompiler, false);
-		const sqlMosaic = String(qMosaic);
-		const sqlInternal = String(qInternal);
-		// forMosaic uses field name 'species' as alias; internal uses channel 'x'
-		expect(sqlMosaic).toContain('"species"');
-		expect(sqlInternal).toContain('"x"');
+	it('uses channel names as aliases for expressions, field names for columns', () => {
+		const s = assemble(simpleParts({ x: 'species', y: count() }));
+		expect(s).toContain('"species"');
+		expect(s).toMatch(/count\(\*\) AS "y"/);
 	});
 
 	it('applies filter predicates', () => {
-		const parts = simpleParts({ x: 'a', y: 'b' });
-		const filter = [sql`"a" > 10`];
-		const q = assembleQuery('t', parts, filter, null, noopCompiler, false);
-		const s = String(q);
+		const s = assemble(simpleParts({ x: 'a', y: 'b' }), { filter: [sql`"a" > 10`] });
 		expect(s).toContain('WHERE');
 		expect(s).toContain('"a" > 10');
 	});
 
 	it('applies null filters', () => {
-		const parts = simpleParts({ x: 'a', y: 'b' });
-		const q = assembleQuery('t', parts, [], [sqlColumn('a')], noopCompiler, false);
-		const s = String(q);
+		const s = assemble(simpleParts({ x: 'a', y: 'b' }), { filterNulls: [sqlColumn('a')] });
 		expect(s).toContain('NOT NULL');
 	});
 
@@ -142,149 +188,124 @@ describe('assembleQuery', () => {
 			{ x: 'date', y: 'value', stroke: 'series' },
 			{ seriesChannel: 'stroke', dimensionChannel: 'x' }
 		);
-		const q = assembleQuery('t', parts, [], null, noopCompiler, false);
-		const s = String(q);
-		expect(s).toContain('ORDER BY');
+		expect(assemble(parts)).toMatch(/ORDER BY "stroke", "x"$/);
 	});
 
-	it('casts numeric channel expressions to REAL for zero-copy Arrow access', () => {
-		const parts = simpleParts({ x: 'date', y: 'value' });
-		const numericChannels = new Set(['x', 'y']);
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, numericChannels);
-		const s = String(q);
-		// COALESCE(CAST(expr AS REAL), 'NaN'::REAL) for null-safe zero-copy
-		expect(s).toMatch(/coalesce\(\("value"\)::REAL, 'NaN'::REAL\)/);
-		expect(s).toMatch(/coalesce\(\("date"\)::REAL, 'NaN'::REAL\)/);
-	});
-
-	it('does not cast channels outside numericCastChannels', () => {
-		const parts = simpleParts({ x: 'species', y: count() });
-		// No numericCastChannels passed — nothing gets cast
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true);
-		const s = String(q);
-		expect(s).not.toMatch(/::REAL/);
-		expect(s).not.toContain('coalesce');
-	});
-
-	it('ORDER BY uses field aliases when forMosaic=true', () => {
+	it('applies LIMIT last', () => {
 		const parts = simpleParts(
 			{ x: 'date', y: 'value', stroke: 'series' },
 			{ seriesChannel: 'stroke', dimensionChannel: 'x' }
 		);
-		const qMosaic = assembleQuery('t', parts, [], null, noopCompiler, true);
-		const s = String(qMosaic);
-		// Should use 'series' and 'date' (field names), not 'stroke' and 'x' (channel names)
-		expect(s).toContain('"series"');
-		expect(s).toContain('"date"');
+		expect(assemble(parts, { limit: 500 })).toMatch(/ORDER BY "stroke", "x" LIMIT 500$/);
 	});
 
-	// -----------------------------------------------------------------------
-	// COALESCE null-safe casting — proposal validation
-	// -----------------------------------------------------------------------
-
-	it('wraps aggregates (count, sum, avg) with COALESCE+CAST', () => {
+	it('GROUP BY uses unwrapped expressions when selectDef is CAST-wrapped', () => {
 		const parts = simpleParts({ x: 'category', y: count() });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
-		const s = String(q);
-		// count() gets COALESCE wrapping; x (band) does not
-		expect(s).toMatch(/coalesce\(\(count\(\*\)\)::REAL, 'NaN'::REAL\)/);
-		expect(s).not.toMatch(/coalesce\(\("category"\)/);
-	});
-
-	it('wraps sum aggregate with COALESCE+CAST', () => {
-		const parts = simpleParts({ x: 'region', y: sum('revenue') });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
-		const s = String(q);
-		expect(s).toMatch(/coalesce\(\(sum\("revenue"\)\)::REAL, 'NaN'::REAL\)/);
-	});
-
-	it('wraps inline SQL expressions with COALESCE+CAST', () => {
-		const binExpr = sql`(30 + (5 * floor(("weight" - 30) / 5)))`;
-		const parts = simpleParts({ x: binExpr, y: count() });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x']));
-		const s = String(q);
-		expect(s).toMatch(/coalesce\(\(\(30 \+ \(5 \* floor\(\("weight" - 30\) \/ 5\)\)\)\)::REAL, 'NaN'::REAL\)/);
-	});
-
-	it('preserves field-name aliases when COALESCE wrapping simple columns', () => {
-		const parts = simpleParts({ x: 'date', y: 'value' });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x', 'y']));
-		const s = String(q);
-		// Aliases should be field names (date, value), not channel names (x, y)
-		expect(s).toMatch(/coalesce\(\("date"\)::REAL, 'NaN'::REAL\) AS "date"/);
-		expect(s).toMatch(/coalesce\(\("value"\)::REAL, 'NaN'::REAL\) AS "value"/);
-	});
-
-	it('preserves channel-name aliases for expression nodes', () => {
-		const parts = simpleParts({ x: 'species', y: count() });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
-		const s = String(q);
-		// count() alias should be channel name 'y'
+		parts.selectDef = {
+			x: castNumeric(parts.selectDef.x, null),
+			y: castNumeric(parts.selectDef.y, null)
+		};
+		const s = assemble(parts);
 		expect(s).toMatch(/coalesce\(\(count\(\*\)\)::REAL, 'NaN'::REAL\) AS "y"/);
-	});
-
-	it('GROUP BY uses unwrapped expressions (not COALESCE-wrapped)', () => {
-		const parts = simpleParts({ x: 'category', y: count() });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
-		const s = String(q);
-		// GROUP BY should reference raw column, not wrapped
 		expect(s).toMatch(/GROUP BY "category"/);
 		expect(s).not.toMatch(/GROUP BY.*coalesce/);
 	});
 
-	it('GROUP BY is correct with COALESCE on non-aggregate numeric channels', () => {
-		// Histogram-style: both x channels are non-aggregate expressions, y is count
-		const parts = simpleParts({ x: 'bin_start', x2: 'bin_end', y: count() });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x', 'x2', 'y']));
-		const s = String(q);
-		// GROUP BY should have both bin columns, unwrapped
-		expect(s).toMatch(/GROUP BY "bin_start", "bin_end"/);
-		// SELECT should have COALESCE wrappers
-		expect(s).toMatch(/coalesce\(\("bin_start"\)::REAL/);
-		expect(s).toMatch(/coalesce\(\("bin_end"\)::REAL/);
-		expect(s).toMatch(/coalesce\(\(count\(\*\)\)::REAL/);
-	});
-
-	it('does not COALESCE-wrap when forMosaic=false (sidecar queries)', () => {
-		const parts = simpleParts({ x: 'date', y: 'value' });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, false, new Set(['x', 'y']));
-		const s = String(q);
-		expect(s).not.toContain('coalesce');
-		expect(s).not.toMatch(/::REAL/);
-	});
-
-	it('selectively wraps only numericCastChannels, leaving others untouched', () => {
-		const parts = simpleParts({ x: 'species', y: 'value', stroke: 'series' });
-		// Only y is numeric
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['y']));
-		const s = String(q);
-		expect(s).toMatch(/coalesce\(\("value"\)::REAL, 'NaN'::REAL\)/);
-		expect(s).not.toMatch(/coalesce\(\("species"\)/);
-		expect(s).not.toMatch(/coalesce\(\("series"\)/);
-	});
-
-	it('ORDER BY works correctly alongside COALESCE-wrapped SELECT', () => {
-		const parts = simpleParts(
-			{ x: 'date', y: 'value', stroke: 'series' },
-			{ seriesChannel: 'stroke', dimensionChannel: 'x' }
+	it('applies filters to the base scan before SQL transform CTEs', () => {
+		const compiler = new TransformCompiler([topN(3)], {
+			markType: 'bary',
+			table: 't',
+			x: 'x',
+			y: 'y2'
+		});
+		const parts = buildQueryParts({ x: 'category', y2: sum('revenue') }, undefined, true);
+		const s = String(
+			assembleQuery({
+				table: 't',
+				parts,
+				filter: [sql`"region" = 'North'`],
+				transformCompiler: compiler
+			})
 		);
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x', 'y']));
-		const s = String(q);
-		// ORDER BY uses field aliases (not COALESCE-wrapped)
-		expect(s).toMatch(/ORDER BY "series", "date"/);
-		// SELECT has COALESCE wrapping
-		expect(s).toMatch(/coalesce\(\("date"\)::REAL/);
-		expect(s).toMatch(/coalesce\(\("value"\)::REAL/);
+		// Predicate appears once, inside the ranked subquery (before its alias).
+		expect(s.split(`"region" = 'North'`).length - 1).toBe(1);
+		expect(s.indexOf(`"region" = 'North'`)).toBeLessThan(s.indexOf('"__topn_base"'));
+		expect(s).toMatch(/ROW_NUMBER/);
 	});
 
-	it('COALESCE wrapping a REAL column is harmless (no double-cast)', () => {
-		// CAST(REAL AS REAL) is a no-op in DuckDB; COALESCE just adds null check
-		const parts = simpleParts({ x: 'already_real_col', y: count() });
-		const q = assembleQuery('t', parts, [], null, noopCompiler, true, new Set(['x']));
-		const s = String(q);
-		// Should produce exactly one layer of COALESCE(CAST(...))
-		expect(s).toMatch(/coalesce\(\("already_real_col"\)::REAL, 'NaN'::REAL\)/);
-		// No nested coalesce
-		expect(s).not.toMatch(/coalesce\(coalesce/);
+	describe('window CTE wrapping', () => {
+		const rolling = avg('value')
+			.partitionby('series')
+			.orderby('date')
+			.frame(frameRows([preceding(1), following(1)]));
+		const selectDef = { x: sqlColumn('date'), stroke: sqlColumn('series'), y: rolling };
+		const passthrough = new Map([
+			['x', 'date'],
+			['stroke', 'series']
+		]);
+
+		function windowed(extra: Partial<Parameters<typeof assembleQuery>[0]> = {}) {
+			const parts = buildQueryParts(
+				selectDef,
+				{ seriesChannel: 'stroke', dimensionChannel: 'x' },
+				false,
+				passthrough
+			);
+			const split = splitWindowSelect(selectDef, passthrough, null);
+			return String(
+				assembleQuery({
+					table: 't',
+					parts: {
+						...parts,
+						selectDef: split.innerSelect,
+						nonAggregateGroupBy: split.innerGroupBy,
+						hasAggregates: true
+					},
+					transformCompiler: noopCompiler,
+					window: { channels: split.windowChannels, cteName: '__window_cte' },
+					...extra
+				})
+			);
+		}
+
+		it('splits into inner GROUP BY and outer window over channel aliases', () => {
+			const split = splitWindowSelect(selectDef, passthrough, null);
+			expect(Object.keys(split.innerSelect)).toEqual(['x', 'stroke', 'y']);
+			expect(String(split.innerSelect.y)).toMatch(/coalesce\(\(avg\("value"\)\)::REAL/);
+			expect(split.innerGroupBy.map(String)).toEqual(['"x"', '"stroke"']);
+			// Outer: AVG-of-means over the channel alias, def rewritten to aliases
+			expect(String(split.windowChannels.y)).toMatch(
+				/^avg\("y"\) OVER \(PARTITION BY "stroke" ORDER BY "x" ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING\)$/
+			);
+		});
+
+		it('COUNT maps to SUM in the outer window', () => {
+			const w = count().partitionby('series').orderby('date');
+			const outer = buildOuterWindow('y', w as never, new Map());
+			expect(String(outer)).toMatch(/^sum\("y"\) OVER/);
+		});
+
+		it('wraps in a CTE with ORDER BY and LIMIT on the outer query', () => {
+			const s = windowed({ limit: 100 });
+			expect(s).toMatch(/^WITH "__window_cte" AS \(SELECT .* GROUP BY "x", "stroke"\) SELECT /);
+			expect(s).toMatch(/coalesce\(\(avg\("y"\) OVER \(.*\)\)::REAL, 'NaN'::REAL\) AS "y"/);
+			expect(s).toMatch(/FROM "__window_cte" ORDER BY "stroke", "x" LIMIT 100$/);
+			// Inner query carries no ORDER BY / LIMIT
+			expect(s.indexOf('ORDER BY "stroke"')).toBeGreaterThan(s.indexOf('FROM "__window_cte"'));
+		});
+
+		it('applies filters inside the CTE, not on the windowed output', () => {
+			const s = windowed({ filter: [sql`"series" = 'A'`] });
+			expect(s.indexOf(`"series" = 'A'`)).toBeLessThan(s.indexOf(') SELECT'));
+		});
+
+		it('rejects a window whose inner aggregate has no outer counterpart', () => {
+			// MEDIAN of per-group medians is not a median; there is no valid outer agg.
+			const medianWindow = median('value').partitionby('series').orderby('date');
+			expect(buildOuterWindow('y', medianWindow as never, new Map())).toBeNull();
+			expect(() => splitWindowSelect({ y: medianWindow }, new Map(), null)).toThrow(
+				/no outer aggregate/
+			);
+		});
 	});
 });

@@ -9,6 +9,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
+import { column, avg, frameRows, preceding, following } from '@uwdata/mosaic-sql';
+import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import {
+	buildQueryParts,
+	assembleQuery,
+	splitWindowSelect
+} from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
 // DuckDB helper — promise wrapper around callback API
@@ -182,6 +189,50 @@ describe('window CTE correctness (skewed group sizes)', () => {
 			expect(baseRows[i].x).toBe(preaggRows[i].x);
 			expect(baseRows[i].stroke).toBe(preaggRows[i].stroke);
 			expect(baseRows[i].y).toBeCloseTo(preaggRows[i].y as number, 10);
+		}
+	});
+
+	it('engine-assembled base path (splitWindowSelect + assembleQuery) matches expected', async () => {
+		// The same shape MarkLifecycleV2 registers for a smooth overlay:
+		// dims as column refs, window aggregate on y, passthrough map for both dims.
+		const selectDef = {
+			x: column('date'),
+			stroke: column('series'),
+			y: avg('value')
+				.partitionby('series')
+				.orderby('date')
+				.frame(frameRows([preceding(1), following(1)]))
+		};
+		const passthrough = new Map([
+			['x', 'date'],
+			['stroke', 'series']
+		]);
+		const parts = buildQueryParts(
+			selectDef,
+			{ seriesChannel: 'stroke', dimensionChannel: 'x' },
+			false,
+			passthrough
+		);
+		const split = splitWindowSelect(selectDef, passthrough, null);
+		const q = assembleQuery({
+			table: 'skewed',
+			parts: {
+				...parts,
+				selectDef: split.innerSelect,
+				nonAggregateGroupBy: split.innerGroupBy,
+				hasAggregates: true
+			},
+			transformCompiler: new TransformCompiler([]),
+			window: { channels: split.windowChannels, cteName: '__window_cte' }
+		});
+
+		const rows = await db.all(q.toString());
+		expect(rows).toHaveLength(EXPECTED.length);
+		for (let i = 0; i < rows.length; i++) {
+			expect(rows[i].x).toBe(EXPECTED[i].x);
+			expect(rows[i].stroke).toBe(EXPECTED[i].stroke);
+			// Aggregates are CAST to REAL (float32) on this path
+			expect(rows[i].y).toBeCloseTo(EXPECTED[i].y, 4);
 		}
 	});
 

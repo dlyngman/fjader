@@ -6,17 +6,23 @@ import {
 	column as sqlColumn,
 	cast,
 	coalesce,
+	collectColumns,
+	rewrite,
 	sql,
 	isNotNull,
 	and,
-	Query
+	sum,
+	avg,
+	min,
+	max,
+	Query,
+	WindowNode,
+	type AggregateNode,
+	type ExprNode
 } from '@uwdata/mosaic-sql';
-import type { ExprNode } from '@uwdata/mosaic-sql';
 import { isWindowExpression } from '$lib/sql/expression-utils';
-import { isBinExpression } from '$lib/sql/bin';
-import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
-import { isNumericScale } from '$lib/scales/scale-categories';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import type { ColumnSchema } from '$lib/query-engine/QueryEngine';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,8 +49,172 @@ export interface QueryParts {
 	passthroughChannels: Map<string, string>;
 }
 
+/** Window functions to apply in an outer CTE over the assembled inner query. */
+export interface WindowWrap {
+	/** channel → outer WindowNode (already rewritten to reference channel aliases). */
+	channels: Record<string, WindowNode>;
+	cteName: string;
+}
+
+export interface AssembleOptions {
+	table: string;
+	parts: QueryParts;
+	/** Per-call filter predicates (crossfilter, bin filters). */
+	filter?: unknown[];
+	/** Columns to add IS NOT NULL predicates for. */
+	filterNulls?: unknown[] | null;
+	transformCompiler: TransformCompiler;
+	limit?: number | null;
+	/** When set, the inner query is wrapped in a CTE and these window
+	 *  functions are applied in the outer SELECT. ORDER BY / LIMIT move to
+	 *  the outer query. */
+	window?: WindowWrap | null;
+}
+
 // ---------------------------------------------------------------------------
-// Pure functions
+// Numeric CAST policy (single rule for every assembly path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap an expression so DuckDB returns a Float32-compatible REAL with NULLs
+ * mapped to NaN: COALESCE(CAST(expr AS REAL), 'NaN'::REAL). Arrow columns then
+ * have nullCount=0 and clean buffers for zero-copy GPU upload; shaders detect
+ * NaN and discard.
+ */
+export function castReal(expr: unknown): ExprNode {
+	return coalesce(cast(expr as ExprNode, 'REAL'), sql`'NaN'::REAL`) as ExprNode;
+}
+
+/**
+ * The one rule for which select expressions get CAST-wrapped:
+ * - aggregates and window functions: always numeric
+ * - non-column SQL nodes (CASE from scale inlining, bin expressions): numeric
+ * - column references: only when the schema says the column is numeric
+ * - anything else (string columns, params): passthrough
+ *
+ * Every assembly path (flat, window CTE, preagg cube, preagg query) uses
+ * this so the GPU sees one consistent column shape.
+ */
+export function castNumeric(expr: unknown, schema: Map<string, ColumnSchema> | null): unknown {
+	if (expr == null) return expr;
+	if (isAggregateExpression(expr as ExprNode) || isWindowExpression(expr)) {
+		return castReal(expr);
+	}
+	if (isNode(expr) && !isColumnRef(expr)) {
+		return castReal(expr);
+	}
+	if (isColumnRef(expr)) {
+		const jsType = schema?.get(expr.column)?.jsType;
+		if (jsType === 'number') return castReal(expr);
+	}
+	return expr;
+}
+
+// ---------------------------------------------------------------------------
+// Window splitting (shared by the base path and the preagg analysis)
+// ---------------------------------------------------------------------------
+
+/**
+ * Outer-CTE aggregate for each inner aggregate. AVG maps to AVG-of-per-group-
+ * means, NOT a pooled mean: for a rolling-average overlay the user expects
+ * the smoothed line to track the rendered per-group means, weighting every
+ * group equally regardless of row count. COUNT maps to SUM (sum of per-group
+ * counts, not count of CTE rows). Both the base path and the preagg path use
+ * this mapping so they produce identical results — guarded by
+ * window-correctness.integration.test.ts.
+ */
+export const outerAggBuilders: Record<string, typeof sum> = { count: sum, sum, avg, min, max };
+
+/**
+ * Build the outer window node for a channel: outerAgg(column(channel)) OVER
+ * (def), with column refs inside the window def rewritten via `rewriteMap`
+ * (source field → channel alias) so they resolve against the inner CTE.
+ * Returns null when the inner aggregate has no outer counterpart.
+ */
+export function buildOuterWindow(
+	channel: string,
+	windowNode: WindowNode,
+	rewriteMap: Map<ExprNode, ExprNode>
+): WindowNode | null {
+	const innerFunc = windowNode.func as AggregateNode;
+	const builder = outerAggBuilders[innerFunc.name.toLowerCase()];
+	if (!builder) return null;
+	const outerFunc = builder(sqlColumn(channel)) as AggregateNode;
+	const rewrittenDef =
+		rewriteMap.size > 0
+			? (rewrite(
+					windowNode.def as unknown as ExprNode,
+					rewriteMap
+				) as unknown as typeof windowNode.def)
+			: windowNode.def;
+	return new WindowNode(outerFunc, rewrittenDef);
+}
+
+export interface WindowSplit {
+	/** Inner CTE select: dims (CAST if numeric) + raw aggregates (CAST). */
+	innerSelect: Record<string, unknown>;
+	/** Inner GROUP BY: one column ref per dimension channel. */
+	innerGroupBy: ExprNode[];
+	/** Outer window functions keyed by channel. */
+	windowChannels: Record<string, WindowNode>;
+}
+
+/**
+ * Split a selectDef containing window aggregates (e.g. a smooth overlay)
+ * into an inner GROUP BY query and outer window functions. DuckDB requires
+ * the inner aggregate's columns to be in GROUP BY or inside an aggregate,
+ * so the window cannot sit directly on the grouped query.
+ *
+ * Window defs reference raw source columns (PARTITION BY "region"); they are
+ * rewritten to channel aliases when a passthrough channel covers the column.
+ * Throws when a window's inner aggregate has no outer counterpart, since
+ * that would silently produce wrong numbers.
+ */
+export function splitWindowSelect(
+	selectDef: Record<string, unknown>,
+	passthroughChannels: Map<string, string>,
+	schema: Map<string, ColumnSchema> | null
+): WindowSplit {
+	const innerSelect: Record<string, unknown> = {};
+	const innerGroupBy: ExprNode[] = [];
+	const windowChannels: Record<string, WindowNode> = {};
+
+	const fieldToChannel = new Map<string, string>();
+	for (const [ch, field] of passthroughChannels) fieldToChannel.set(field, ch);
+
+	for (const [ch, expr] of Object.entries(selectDef)) {
+		if (expr == null) continue;
+
+		if (isWindowExpression(expr)) {
+			const windowNode = expr as unknown as WindowNode;
+			innerSelect[ch] = castReal(windowNode.func);
+
+			const rewriteMap = new Map<ExprNode, ExprNode>();
+			for (const col of collectColumns(windowNode.def as unknown as ExprNode)) {
+				const alias = fieldToChannel.get(col.column);
+				if (alias) rewriteMap.set(col, sqlColumn(alias) as ExprNode);
+			}
+			const outer = buildOuterWindow(ch, windowNode, rewriteMap);
+			if (!outer) {
+				throw new Error(
+					`splitWindowSelect: no outer aggregate for window on channel "${ch}" ` +
+						`(inner ${(windowNode.func as AggregateNode).name})`
+				);
+			}
+			windowChannels[ch] = outer;
+		} else if (isAggregateExpression(expr as ExprNode)) {
+			innerSelect[ch] = castReal(expr);
+		} else {
+			innerSelect[ch] = castNumeric(expr, schema);
+			innerGroupBy.push(sqlColumn(ch));
+		}
+	}
+
+	return { innerSelect, innerGroupBy, windowChannels };
+}
+
+// ---------------------------------------------------------------------------
+// Query parts
 // ---------------------------------------------------------------------------
 
 /**
@@ -55,7 +225,7 @@ export interface QueryParts {
  */
 export function buildQueryParts(
 	select: Record<string, unknown>,
-	orderConfig: OrderConfig | undefined,
+	orderConfig: OrderConfig | undefined | null,
 	hasSQLTransforms: boolean,
 	passthroughChannels: Map<string, string> = new Map()
 ): QueryParts {
@@ -94,8 +264,6 @@ export function buildQueryParts(
 	}
 
 	// Store channel names for connected mark ordering.
-	// sqlColumn() nodes are built at query assembly time using
-	// the appropriate alias convention (channel or field-based).
 	let orderChannels: string[] | null = null;
 	if (orderConfig) {
 		const { seriesChannel, dimensionChannel } = orderConfig;
@@ -122,61 +290,36 @@ export function buildQueryParts(
 	};
 }
 
+// ---------------------------------------------------------------------------
+// Assembly — the one sequence every query path follows
+// ---------------------------------------------------------------------------
+
 /**
- * Assemble a Query from cached query parts + per-call filter.
- * This is the part that runs on every Mosaic re-query (filter changes).
+ * Assemble a Query from cached parts + per-call filter.
+ *
+ * Order is fixed and shared by the flat, window-CTE, and preagg paths:
+ *
+ *   SELECT parts.selectDef FROM table [GROUP BY dims]
+ *   WHERE filter AND nulls          — on the base scan, so transform CTEs
+ *                                     (topN ranking etc.) see filtered rows
+ *   → SQL transforms (CTE wrapping)
+ *   → [window CTE: outer SELECT applies window fns over the inner result]
+ *   → ORDER BY orderChannels        — on the outermost query
+ *   → LIMIT
+ *
+ * Callers decide what is CAST-wrapped by preparing parts.selectDef with
+ * castNumeric(); assembly never inspects expression types.
  */
-export function assembleQuery(
-	sourceTable: string,
-	parts: QueryParts,
-	filter: unknown[],
-	filterNulls: unknown[] | null | undefined,
-	transformCompiler: TransformCompiler,
-	forMosaic: boolean,
-	numericCastChannels?: Set<string>
-): Query {
-	const {
-		selectDef,
-		nonAggregateGroupBy,
-		hasAggregates,
-		hasSQLTransforms,
-		orderChannels,
-		aliasMap
-	} = parts;
+export function assembleQuery(opts: AssembleOptions): Query {
+	const { table, parts, filter = [], filterNulls, transformCompiler, limit, window } = opts;
+	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;
 
-	// When forMosaic is true, translate channel-named selectDef to field-based
-	// aliases so Mosaic's PreAggregator sees the column names it expects.
-	// Internal callers (sidecar, tooltip) pass false to keep channel names.
-	let effectiveSelectDef: Record<string, unknown>;
-	if (forMosaic) {
-		effectiveSelectDef = {};
-		for (const [channel, expr] of Object.entries(selectDef)) {
-			const alias = aliasMap.get(channel) ?? channel;
-			// Wrap numeric-scale channels in COALESCE(CAST(... AS REAL), 'NaN'::REAL)
-			// so DuckDB returns Float32Array (zero-copy in DataAccessor).
-			// COALESCE converts SQL NULL to the NaN float value, ensuring the Arrow
-			// column has nullCount=0 and garbage-free buffers for GPU shaders.
-			const finalExpr = numericCastChannels?.has(channel)
-				? coalesce(cast(expr, 'REAL'), sql`'NaN'::REAL`)
-				: expr;
-			effectiveSelectDef[alias] = finalExpr;
-		}
-	} else {
-		effectiveSelectDef = selectDef;
-	}
-
-	// Build fresh Query (cheap object construction)
-	const q = Query.from(sourceTable).select(effectiveSelectDef as Record<string, ExprNode>);
+	const q = Query.from(table).select(selectDef as Record<string, ExprNode>);
 
 	if (hasAggregates && nonAggregateGroupBy.length > 0) {
 		q.groupby(nonAggregateGroupBy as ExprNode[]);
 	}
 
-	// Apply filters (the only part that varies per-call) to the base scan,
-	// BEFORE SQL transforms wrap it. Transforms like topN wrap the query in
-	// CTEs; filtering their output would rank first and filter second, so a
-	// crossfilter brush would prune the top-N result instead of re-ranking
-	// within the brushed subset. Matches the window-CTE path in QueryEngine.
 	const allFilters = [...filter] as ExprNode[];
 	if (filterNulls && Array.isArray(filterNulls)) {
 		allFilters.push(...filterNulls.map((col) => isNotNull(col as ExprNode)));
@@ -185,19 +328,28 @@ export function assembleQuery(
 		q.where(and(allFilters));
 	}
 
-	let queryWithTransforms = q;
+	let result: Query = q;
 	if (hasSQLTransforms) {
-		queryWithTransforms = transformCompiler.applyToQuery(q);
+		result = transformCompiler.applyToQuery(q);
 	}
 
-	// ORDER BY uses the appropriate alias convention
+	if (window) {
+		const outerSelect: Record<string, unknown> = {};
+		for (const ch of Object.keys(selectDef)) {
+			if (selectDef[ch] == null) continue;
+			outerSelect[ch] = ch in window.channels ? castReal(window.channels[ch]) : sqlColumn(ch);
+		}
+		result = Query.from(window.cteName)
+			.select(outerSelect as Record<string, ExprNode>)
+			.with({ [window.cteName]: result });
+	}
+
 	if (orderChannels) {
-		const orderCols = orderChannels.map((ch) => {
-			const name = forMosaic ? (aliasMap.get(ch) ?? ch) : ch;
-			return sqlColumn(name);
-		});
-		queryWithTransforms = queryWithTransforms.orderby(...orderCols);
+		result = result.orderby(...orderChannels.map((ch) => sqlColumn(ch)));
+	}
+	if (limit) {
+		result = result.limit(limit);
 	}
 
-	return queryWithTransforms;
+	return result;
 }
