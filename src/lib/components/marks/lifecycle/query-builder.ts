@@ -172,18 +172,22 @@ export function assembleQuery(
 		q.groupby(nonAggregateGroupBy as ExprNode[]);
 	}
 
-	let queryWithTransforms = q;
-	if (hasSQLTransforms) {
-		queryWithTransforms = transformCompiler.applyToQuery(q);
-	}
-
-	// Apply filters (the only part that varies per-call)
+	// Apply filters (the only part that varies per-call) to the base scan,
+	// BEFORE SQL transforms wrap it. Transforms like topN wrap the query in
+	// CTEs; filtering their output would rank first and filter second, so a
+	// crossfilter brush would prune the top-N result instead of re-ranking
+	// within the brushed subset. Matches the window-CTE path in QueryEngine.
 	const allFilters = [...filter] as ExprNode[];
 	if (filterNulls && Array.isArray(filterNulls)) {
 		allFilters.push(...filterNulls.map((col) => isNotNull(col as ExprNode)));
 	}
 	if (allFilters.length > 0) {
-		queryWithTransforms = queryWithTransforms.where(and(allFilters));
+		q.where(and(allFilters));
+	}
+
+	let queryWithTransforms = q;
+	if (hasSQLTransforms) {
+		queryWithTransforms = transformCompiler.applyToQuery(q);
 	}
 
 	// ORDER BY uses the appropriate alias convention

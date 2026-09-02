@@ -6,9 +6,17 @@ export class TransformCompiler {
 	transforms: Transform[];
 	sqlTransforms: SqlTransform[];
 	jsTransforms: JsTransform[];
+	/**
+	 * Mark context forwarded to SQL transforms at query assembly time.
+	 * The same object the mark lifecycle passes to applyToData(); SQL
+	 * transforms need it for the same reason JS ones do (barx axis swap,
+	 * y → y2 alias resolution for extent-based marks).
+	 */
+	markConfig: MarkConfig | undefined;
 
-	constructor(transforms: Transform[] = []) {
+	constructor(transforms: Transform[] = [], markConfig?: MarkConfig) {
 		this.transforms = transforms;
+		this.markConfig = markConfig;
 
 		// Separate by stage
 		this.sqlTransforms = transforms.filter((t): t is SqlTransform => t.stage === 'sql');
@@ -38,7 +46,7 @@ export class TransformCompiler {
 
 		for (const transform of this.sqlTransforms) {
 			try {
-				result = transform.apply(result);
+				result = transform.apply(result, this.markConfig);
 			} catch (error) {
 				throw new Error(
 					`Failed to apply ${transform.type} transform: ${(error as Error).message}`,
@@ -116,12 +124,12 @@ export class TransformCompiler {
 	}
 
 	hasCategoryReducingTransforms(): boolean {
-		return this.jsTransforms.some((t) => t.type === 'topN');
+		return this.transforms.some((t) => t.type === 'topN');
 	}
 
 	getCategoryTransformKey(): string | null {
 		const parts: string[] = [];
-		for (const t of this.jsTransforms) {
+		for (const t of this.transforms) {
 			if (t.type === 'topN') parts.push(t.describe?.() || t.type);
 		}
 		return parts.length > 0 ? parts.join('+') : null;

@@ -2,18 +2,14 @@
  * Transform Pipeline for Mosaic-based visualizations
  *
  * Transforms are divided into two stages:
- * - SQL: Modify the Query AST (WHERE, HAVING, LIMIT, ORDER BY)
+ * - SQL: Modify the Query AST (WHERE, HAVING, LIMIT, ORDER BY, CTE wrapping)
  * - JS: Process data via the DataAccessor interface (zero-copy on Arrow data)
- *
- * SQL transforms must maintain flat queries (no CTEs) to preserve
- * Mosaic's PreAggregator optimization.
  */
 
+import { Query, column, sql as sqlTag } from '@uwdata/mosaic-sql';
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { SqlTransform, JsTransform, Transform, MarkConfig, ScaleMap } from '$lib/types';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
-
-type Query = SelectQuery;
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
@@ -24,7 +20,7 @@ export function filter(condition: ExprNode): SqlTransform {
 		stage: 'sql',
 		type: 'filter',
 		spec: { transform: 'filter', condition: condition.toString() },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.where(condition);
 		},
 		describe() {
@@ -38,7 +34,7 @@ export function having(condition: ExprNode): SqlTransform {
 		stage: 'sql',
 		type: 'having',
 		spec: { transform: 'having', condition: condition.toString() },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.having(condition);
 		},
 		describe() {
@@ -52,7 +48,7 @@ export function limit(n: number): SqlTransform {
 		stage: 'sql',
 		type: 'limit',
 		spec: { transform: 'limit', value: n },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.limit(n);
 		},
 		describe() {
@@ -66,7 +62,7 @@ export function orderby(...expressions: ExprNode[]): SqlTransform {
 		stage: 'sql',
 		type: 'orderby',
 		spec: { transform: 'orderby', fields: expressions.map((e) => e.toString()) },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.orderby(...expressions);
 		},
 		describe() {
@@ -80,15 +76,115 @@ export function orderby(...expressions: ExprNode[]): SqlTransform {
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// topN — sorts and takes top N rows (row-level operation, converts to objects)
+// topN — filter to top N categories by aggregate value
+//
+// SQL path (default): CTE wrapping with ROW_NUMBER / LIMIT ranking.
+// JS path (engine: 'js'): post-query DataAccessor processing.
+// includeOthers only supported on JS path.
 // -----------------------------------------------------------------------------
 
 interface TopNOptions {
+	/** Value channel to rank by. Default: the mark's value axis (y, or x for barx). */
 	by?: string;
 	includeOthers?: boolean;
+	/** Force JS execution path. Default: SQL. */
+	engine?: 'sql' | 'js';
 }
 
-export function topN(n: number, options: TopNOptions = {}): JsTransform {
+export function topN(n: number, options: TopNOptions & { engine: 'js' }): JsTransform;
+export function topN(n: number, options: TopNOptions & { includeOthers: true }): JsTransform;
+export function topN(n: number, options?: TopNOptions): SqlTransform;
+export function topN(n: number, options: TopNOptions = {}): SqlTransform | JsTransform {
+	// includeOthers requires JS path (complex aggregation not yet in SQL)
+	if (options.includeOthers || options.engine === 'js') {
+		return topNJS(n, options);
+	}
+	return topNSQL(n, options);
+}
+
+/** Output aliases of a SelectQuery (the column names its result exposes). */
+function getSelectAliases(query: SelectQuery): string[] {
+	return query._select.map((s) => s.alias).filter(Boolean);
+}
+
+/** Build a passthrough select: all aliases as column refs. */
+function passthroughSelect(aliases: string[]): Record<string, ExprNode> {
+	const sel: Record<string, ExprNode> = {};
+	for (const a of aliases) sel[a] = column(a);
+	return sel;
+}
+
+/**
+ * Resolve the value/band/series aliases for topN from the mark config,
+ * validated against the query's own select list. Mirrors the JS path:
+ * value axis is y for vertical marks, x for horizontal (barx); the mark
+ * lifecycle has already resolved y → y2 etc. for extent-based marks.
+ */
+function resolveTopNColumns(
+	aliases: string[],
+	options: TopNOptions,
+	config: MarkConfig | undefined
+): { by: string; band: string; series: string | null } {
+	const isHorizontal = config?.markType === 'barx';
+	const by = options.by ?? (isHorizontal ? config?.x : config?.y);
+	const band = isHorizontal ? config?.y : config?.x;
+	const fill = config?.fill;
+	const series = typeof fill === 'string' && aliases.includes(fill) ? fill : null;
+
+	if (!by || !aliases.includes(by)) {
+		throw new Error(
+			`topN: value column "${by ?? '(none)'}" not in query select [${aliases.join(', ')}]`
+		);
+	}
+	if (!band || !aliases.includes(band)) {
+		throw new Error(
+			`topN: band column "${band ?? '(none)'}" not in query select [${aliases.join(', ')}]`
+		);
+	}
+	return { by, band, series };
+}
+
+function topNSQL(n: number, options: TopNOptions): SqlTransform {
+	return {
+		stage: 'sql',
+		type: 'topN',
+		spec: { transform: 'topN', n, ...(options.by ? { by: options.by } : {}) },
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const { by, band, series } = resolveTopNColumns(aliases, options, config);
+
+			if (series) {
+				// Grouped: compute total per band category, take top N, filter.
+				// Ranks categories by SUM(value) across all series, then keeps
+				// all series rows for the winning categories.
+				const topCatsQuery = Query.from({ __topn_base: query })
+					.select({ [band]: column(band) })
+					.groupby(column(band))
+					.orderby(sqlTag`SUM(${column(by)}) DESC`)
+					.limit(n);
+
+				return Query.from({ __topn_src: query })
+					.select(passthroughSelect(aliases))
+					.where(sqlTag`${column(band)} IN (${topCatsQuery})`);
+			}
+
+			// Simple: rank rows by value, filter to top N.
+			const ranked = Query.from({ __topn_base: query }).select({
+				...passthroughSelect(aliases),
+				__topn_rank: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+			});
+
+			return Query.from({ __topn: ranked })
+				.select(passthroughSelect(aliases))
+				.where(sqlTag`"__topn_rank" <= ${n}`);
+		},
+		describe() {
+			return `Top ${n} (SQL)`;
+		}
+	};
+}
+
+function topNJS(n: number, options: TopNOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'topN',
@@ -131,7 +227,7 @@ export function topN(n: number, options: TopNOptions = {}): JsTransform {
 			return topNSimple(data, n, valueCol, bandField, options);
 		},
 		describe() {
-			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''}`;
+			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''} (JS)`;
 		}
 	};
 }

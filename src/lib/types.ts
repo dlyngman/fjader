@@ -57,13 +57,17 @@ export type ColorProp =
 // Transforms
 // ---------------------------------------------------------------------------
 
-/** A SQL transform modifies the Mosaic Query AST before execution. */
+/**
+ * A SQL transform modifies the Mosaic Query AST before execution.
+ * Receives the same MarkConfig as JS transforms (mark type + resolved
+ * channel aliases) so it can locate value/band columns in the select list.
+ */
 export interface SqlTransform {
 	stage: 'sql';
 	type: string;
 	/** Spec-format representation for export. Set by factory functions. */
 	spec?: Record<string, unknown>;
-	apply(query: SelectQuery): SelectQuery;
+	apply(query: SelectQuery, config?: MarkConfig): SelectQuery;
 	describe?(): string;
 }
 

@@ -42,6 +42,7 @@ import type {
 	FieldRef,
 	NormalizedSortConfig,
 	Transform,
+	MarkConfig,
 	ChartContext,
 	ScaleStateInstance,
 	ContinuousScaleState
@@ -134,6 +135,7 @@ export class MarkLifecycleV2 {
 
 	// --- Transforms ---
 	#transformCompiler: TransformCompiler;
+	#transformConfig: MarkConfig;
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
 	#rollingAvgVersion = $state(0);
@@ -246,7 +248,19 @@ export class MarkLifecycleV2 {
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
 
 		// Transform compiler
-		this.#transformCompiler = new TransformCompiler(config.transforms || []);
+		// Shared by SQL transforms (query assembly) and JS transforms (data stage).
+		// Built once: markType/select/constants are all structural config.
+		this.#transformConfig = {
+			markType: config.markType,
+			table: config.table,
+			x: this.#getFieldName('x'),
+			y: this.#getFieldName('y'),
+			fill: this.#getFieldName('fill')
+		};
+		this.#transformCompiler = new TransformCompiler(
+			config.transforms || [],
+			this.#transformConfig
+		);
 		this.#detectAutoBins();
 
 		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin)
@@ -1048,15 +1062,7 @@ export class MarkLifecycleV2 {
 			}
 		}
 
-		const transformConfig = {
-			markType: this.#config.markType,
-			table: this.#config.table,
-			x: this.#getFieldName('x'),
-			y: this.#getFieldName('y'),
-			fill: this.#getFieldName('fill')
-		};
-
-		return this.#transformCompiler.applyToData(accessor, transformConfig, {
+		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale
 		});

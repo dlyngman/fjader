@@ -78,7 +78,9 @@
 {:else}
 	<div class="container">
 		<h1>topN Transform Test</h1>
-		<p class="subtitle">Testing band scale domain behavior with JS transforms</p>
+		<p class="subtitle">
+			topN runs as a SQL CTE by default (charts 2, 4, 6); includeOthers falls back to JS (chart 3)
+		</p>
 
 		<div class="charts-grid">
 			<!-- Chart 1: Baseline -->
@@ -113,10 +115,10 @@
 
 			<!-- Chart 2: topN(5) -->
 			<div class="chart-panel">
-				<h3>2. topN(5)</h3>
+				<h3>2. topN(5) — SQL</h3>
 				<p class="desc">
-					Should show 5 bars. Known issue: band scale fetches all 10 categories from raw table
-					before JS transform runs.
+					Expect exactly 5 bars: Electronics, Clothing, Food, Books, Toys. Band domain is derived
+					from the SQL result, so the axis must show only these 5.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5 Category" yLabel="Revenue">
@@ -147,10 +149,10 @@
 
 			<!-- Chart 3: topN(5, includeOthers) -->
 			<div class="chart-panel">
-				<h3>3. topN(5, includeOthers: true)</h3>
+				<h3>3. topN(5, includeOthers: true) — JS fallback</h3>
 				<p class="desc">
-					Should show 5 + "Other" bar (revenue 320). Known issue: "Other" not in band domain, maps
-					to index -1, invisible.
+					includeOthers is JS-only. Should show 5 + "Other" bar (revenue 320). Known issue: "Other"
+					not in band domain, maps to index -1, invisible.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5+ Category" yLabel="Revenue">
@@ -181,8 +183,11 @@
 
 			<!-- Chart 4: BarMarkX horizontal -->
 			<div class="chart-panel">
-				<h3>4. BarMarkX + topN(3)</h3>
-				<p class="desc">Horizontal bars. topN auto-detects value axis from mark type.</p>
+				<h3>4. BarMarkX + topN(3) — SQL</h3>
+				<p class="desc">
+					Horizontal bars; value axis resolved from mark type (x2). Expect exactly 3 bars:
+					Electronics, Clothing, Food.
+				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Sales Category">
 						{#snippet background()}
@@ -253,10 +258,11 @@
 
 			<!-- Chart 6: Selection + topN(5) -->
 			<div class="chart-panel">
-				<h3>6. Selection + topN(5)</h3>
+				<h3>6. Selection + topN(5) — SQL, crossfiltered</h3>
 				<p class="desc">
-					topN(5) with shared region filter. Toggling regions should change which categories make
-					the top 5 and update the band domain.
+					Filter is applied before ranking, so toggling regions re-ranks within the subset. No
+					filter: Electronics, Clothing, Food, Music, Books. North only: Music, Garden, Health,
+					Auto, Sports. West only: Electronics, Food, Clothing, Books, Toys.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">

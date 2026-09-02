@@ -34,7 +34,7 @@ describe('Transforms', () => {
 				{ x: 'C', y: 50 }
 			]);
 
-			const transform = topN(2);
+			const transform = topN(2, { engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			expect(result.length).toBe(2);
@@ -238,13 +238,13 @@ describe('Transforms', () => {
 
 			const compiler = new TransformCompiler(transforms);
 
-			expect(compiler.sqlTransforms).toHaveLength(1);
-			expect(compiler.jsTransforms).toHaveLength(2);
+			expect(compiler.sqlTransforms).toHaveLength(2); // filter + topN (SQL by default)
+			expect(compiler.jsTransforms).toHaveLength(1); // stack
 		});
 
 		it('throws on invalid ordering', () => {
 			const transforms = [
-				topN(10), // JS
+				stack(), // JS
 				filter(gt('x', 0)) // SQL - wrong order!
 			];
 
@@ -259,6 +259,54 @@ describe('Transforms', () => {
 
 			expect(result.toString()).toContain('revenue');
 			expect(result.toString()).toContain('> 0');
+		});
+
+		it('applies SQL topN CTE to query using mark config aliases', () => {
+			const compiler = new TransformCompiler([topN(3)], {
+				markType: 'bary',
+				table: 'sales',
+				x: 'x',
+				y: 'y2'
+			});
+
+			const q = Query.from('sales')
+				.select({ x: column('category'), y2: sum('revenue') })
+				.groupby(column('category'));
+			const sql = compiler.applyToQuery(q).toString();
+
+			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC\)/);
+			expect(sql).toMatch(/"__topn_rank" <= 3/);
+		});
+
+		it('SQL topN swaps axes for barx', () => {
+			const compiler = new TransformCompiler([topN(3)], {
+				markType: 'barx',
+				table: 'sales',
+				x: 'x2',
+				y: 'y'
+			});
+
+			const q = Query.from('sales')
+				.select({ x2: sum('revenue'), y: column('category') })
+				.groupby(column('category'));
+			const sql = compiler.applyToQuery(q).toString();
+
+			expect(sql).toMatch(/ORDER BY "x2" DESC/);
+		});
+
+		it('SQL topN throws a clear error when the value alias is missing', () => {
+			const compiler = new TransformCompiler([topN(3)], {
+				markType: 'bary',
+				table: 'sales',
+				x: 'x',
+				y: 'y'
+			});
+
+			const q = Query.from('sales')
+				.select({ x: column('category'), y2: sum('revenue') })
+				.groupby(column('category'));
+
+			expect(() => compiler.applyToQuery(q)).toThrow(/value column "y" not in query select/);
 		});
 
 		it('applies JS transforms via DataAccessor', () => {
