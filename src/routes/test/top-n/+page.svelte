@@ -217,10 +217,12 @@
 
 			<!-- Chart 5: Stacked bars with selection (no topN) -->
 			<div class="chart-panel">
-				<h3>5. Stacked bars with region filter</h3>
+				<h3>5. Stacked bars with region + category toggles</h3>
 				<p class="desc">
-					All 10 categories, stacked by region. Shares filter with chart 6 to test cross-filter
-					interaction with topN.
+					Click a rect or legend swatch to toggle its region; click a band label to toggle that
+					category. Both AND together. This chart is the source, so it is excluded from its own
+					toggles (axis labels and legend dim; bar dimming is a separate proposal); chart 6
+					filters. Shift-click for multi-select, click empty space to clear.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">

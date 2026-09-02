@@ -51,9 +51,15 @@ export interface BrushHandle {
 	destroy(): void;
 }
 
-export interface ToggleOpts {
-	excludeMarkIds: Set<string>;
+export interface ToggleSyncOpts {
+	/** Mark IDs to exclude from this toggle's filter (the source chart, for
+	 *  crossfilter semantics: it dims instead of filtering itself). */
+	excludeMarkIds: () => Set<string>;
+	/** Scales to project the toggled values onto (dimming). Registered under
+	 *  the toggle's source id so #projectToScales handles it like brushes. */
 	scaleStates?: () => ActiveValueScale[];
+	/** Values to project. Required when scaleStates is provided. */
+	projectionValues?: () => Set<unknown> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,9 +211,18 @@ export class FilterGroup {
 		field: string,
 		predicate: FilterExpr | null,
 		value: unknown,
-		excludeMarkIds: () => Set<string>
+		opts: ToggleSyncOpts
 	): void {
 		const sourceId = `toggle-${field}`;
+		const { excludeMarkIds, scaleStates, projectionValues } = opts;
+
+		// Scale projection goes through the shared #projectToScales path so
+		// toggles and brushes dim consistently and clear each other correctly.
+		if (scaleStates && projectionValues) {
+			this.#scaleStateFns.set(sourceId, scaleStates);
+			this.#valueExtractors.set(sourceId, () => projectionValues());
+		}
+
 		if (predicate) {
 			this.selection.update(sourceId, {
 				predicate,

@@ -3,7 +3,7 @@
 	import { column, isIn, literal } from '@uwdata/mosaic-sql';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
@@ -46,13 +46,11 @@
 	const columnRef = field ? column(field) : null;
 	const isInteractive = $derived(filterGroup != null && field != null);
 
-	// Getter for scale states — includes color scale + any band scale for same field
-	function getLegendScaleStates() {
-		const band = scaleRegistry?.getScaleByField(field, 'band');
-		return [scaleState, band].filter(Boolean) as {
-			setActiveValues(values: Set<unknown>): void;
-			clearActiveValues(): void;
-		}[];
+	// Scales to dim: this color scale + any band scale for the same field.
+	// Projection itself is handled by FilterGroup, shared with Toggle/brushes.
+	function getLegendScaleStates(): ActiveValueScale[] {
+		const band = scaleRegistry?.getScaleByField(field!, 'band');
+		return [scaleState, band].filter(Boolean) as unknown as ActiveValueScale[];
 	}
 
 	// Shared toggle state — deduplicated by field across Toggle + Legend
@@ -64,24 +62,24 @@
 		toggleState?.active ? toggleState.values : null
 	);
 
-	// Sync toggle values to FilterGroup + scale projection
+	// Sync toggle values to FilterGroup (filter + scale projection).
+	// A legend is not a chart, so it excludes no marks: every chart filters.
 	function syncFilter() {
 		if (!toggleState || !filterGroup || !field) return;
 		const values = toggleState.values;
-		const scales = getLegendScaleStates();
+		const opts = {
+			excludeMarkIds: () => new Set<string>(),
+			scaleStates: getLegendScaleStates,
+			projectionValues: () => (toggleState.values.size ? new Set(toggleState.values) : null)
+		};
 
 		if (values.size === 0) {
-			filterGroup.syncToggle(field, null, null, () =>
-				chart ? new Set(chart.config.entries.keys()) : new Set()
-			);
-			for (const s of scales) s.clearActiveValues();
+			filterGroup.syncToggle(field, null, null, opts);
 			return;
 		}
 
 		const predicate = isIn(columnRef!, Array.from(values).map((v) => literal(v)));
-		filterGroup.syncToggle(field, predicate, [...values], () => new Set<string>()
-		);
-		for (const s of scales) s.setActiveValues(values);
+		filterGroup.syncToggle(field, predicate, [...values], opts);
 	}
 
 	function handleClick(value: string | number, event: MouseEvent) {

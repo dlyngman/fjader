@@ -190,6 +190,64 @@ describe('FilterGroup', () => {
 	});
 });
 
+describe('FilterGroup.syncToggle', () => {
+	it('projects toggled values onto registered scales and clears them on empty', () => {
+		const group = new FilterGroup();
+		const scale = mockScale();
+		const toggle = group.getOrCreateToggle('region');
+		const opts = {
+			excludeMarkIds: () => new Set(['mark-source']),
+			scaleStates: () => [scale],
+			projectionValues: () => (toggle.values.size ? new Set(toggle.values) : null)
+		};
+
+		toggle.select('North');
+		group.syncToggle('region', "region IN ('North')", ['North'], opts);
+
+		expect(scale.active).toEqual(new Set(['North']));
+		// Source chart excluded, others filtered
+		expect(group.selection.predicate('mark-source')).toEqual([]);
+		expect(group.selection.predicate('mark-other')).toEqual(["region IN ('North')"]);
+
+		toggle.clear();
+		group.syncToggle('region', null, null, opts);
+
+		expect(scale.active).toBeNull();
+		expect(scale.clearCount).toBe(1);
+		expect(group.selection.activeCount).toBe(0);
+	});
+
+	it('toggles on different fields coexist and AND together', () => {
+		const group = new FilterGroup();
+		const bandScale = mockScale();
+		const colorScale = mockScale();
+		const noScales = { excludeMarkIds: () => new Set<string>() };
+
+		group.syncToggle('region', "region IN ('North')", ['North'], {
+			...noScales,
+			scaleStates: () => [colorScale],
+			projectionValues: () => new Set(['North'])
+		});
+		group.syncToggle('category', "category IN ('Books')", ['Books'], {
+			...noScales,
+			scaleStates: () => [bandScale],
+			projectionValues: () => new Set(['Books'])
+		});
+
+		expect(group.selection.predicate('mark-x')).toEqual([
+			"region IN ('North')",
+			"category IN ('Books')"
+		]);
+		// Each field projects only onto its own scale
+		expect(colorScale.active).toEqual(new Set(['North']));
+		expect(bandScale.active).toEqual(new Set(['Books']));
+
+		group.syncToggle('region', null, null, noScales);
+		expect(colorScale.active).toBeNull();
+		expect(bandScale.active).toEqual(new Set(['Books']));
+	});
+});
+
 describe('ToggleState', () => {
 	it('single-select replaces current selection', () => {
 		const toggle = new ToggleState('species');
