@@ -151,8 +151,8 @@
 			<div class="chart-panel">
 				<h3>3. topN(5, includeOthers: true) — JS fallback</h3>
 				<p class="desc">
-					includeOthers is JS-only. Should show 5 + "Other" bar (revenue 320). Known issue: "Other"
-					not in band domain, maps to index -1, invisible.
+					includeOthers is JS-only. Should show 5 + "Other" bar (revenue 320), with "Other" in
+					the band domain.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5+ Category" yLabel="Revenue">
