@@ -108,7 +108,10 @@
 									inset={0.5}
 									fill="body_mass"
 									scheme="turbo"
-									transforms={[orderby(msql.asc('body_mass')), stack({ direction: 'horizontal' })]}
+									transforms={[
+										orderby(msql.asc('body_mass')),
+										stack({ direction: 'horizontal', engine: 'js' })
+									]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

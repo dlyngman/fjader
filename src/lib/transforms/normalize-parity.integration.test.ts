@@ -228,14 +228,14 @@ describe('normalize SQL/JS parity (native DuckDB)', () => {
 			transformCompiler: newCompiler
 		});
 		const normalizedRows = await db.all(newQuery.toString());
-		const stacked = stackY().apply(rowsToAccessor(normalizedRows), config);
+		const stacked = stackY({ engine: 'js' }).apply(rowsToAccessor(normalizedRows), config);
 
 		// Legacy order: JS stackY first, then legacy JS normalize (y0/y1-aware).
 		const oldCompiler = new TransformCompiler([], config);
 		const oldParts = buildQueryParts(select, orderConfig, false);
 		const oldQuery = assembleQuery({ table: 'sales', parts: oldParts, transformCompiler: oldCompiler });
 		const rawRows = await db.all(oldQuery.toString());
-		const preStacked = stackY().apply(rowsToAccessor(rawRows), config);
+		const preStacked = stackY({ engine: 'js' }).apply(rowsToAccessor(rawRows), config);
 		const legacyNormalized = normalize({ engine: 'js' }).apply(preStacked, config);
 
 		const newRows = accessorToRows(stacked);

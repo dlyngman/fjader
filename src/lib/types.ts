@@ -68,6 +68,8 @@ export interface SqlTransform {
 	/** Spec-format representation for export. Set by factory functions. */
 	spec?: Record<string, unknown>;
 	apply(query: SelectQuery, config?: MarkConfig): SelectQuery;
+	/** Channel aliases this transform adds to the result beyond the base select (e.g. stack's y0/y1). */
+	channels?: string[];
 	describe?(): string;
 }
 

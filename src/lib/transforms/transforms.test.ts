@@ -1,7 +1,7 @@
 // src/lib/transforms/transforms.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { filter, topN, stack, stackY, stackX, normalize, withImplicitStack } from './index';
+import { filter, topN, stack, stackY, stackX, normalize, dodge, withImplicitStack } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
@@ -64,7 +64,7 @@ describe('Transforms', () => {
 				{ x: 'Feb', y: 15, region: 'North' }
 			]);
 
-			const transform = stack();
+			const transform = stackY({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0');
@@ -89,7 +89,7 @@ describe('Transforms', () => {
 				{ x: 'Feb', y: 25, series: 'South' }
 			]);
 
-			const transform = stackY();
+			const transform = stackY({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0') as Float32Array;
@@ -115,7 +115,7 @@ describe('Transforms', () => {
 				{ x: 'Jan', y: 20, region: 'South' }
 			]);
 
-			const transform = stackY({ offset: 'expand' });
+			const transform = stackY({ offset: 'expand', engine: 'js' });
 			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0') as Float32Array;
@@ -140,7 +140,7 @@ describe('Transforms', () => {
 				{ x: 'Feb', y: 15, series: 'B' }
 			]);
 
-			const transform = stackY();
+			const transform = stackY({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0') as Float32Array;
@@ -169,7 +169,7 @@ describe('Transforms', () => {
 				{ y: 'A', x: 20 }
 			]);
 
-			const transform = stackX();
+			const transform = stackX({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			const x0 = result.getColumn('x0') as Float32Array;
@@ -188,7 +188,7 @@ describe('Transforms', () => {
 				{ x: 'Jan', y: 20, region: 'South' }
 			]);
 
-			const stackTransform = stackY();
+			const stackTransform = stackY({ engine: 'js' });
 			const stackedResult = stackTransform.apply(stacked, {
 				markType: 'area',
 				table: 't',
@@ -234,17 +234,17 @@ describe('Transforms', () => {
 
 	describe('TransformCompiler', () => {
 		it('separates SQL and JS transforms', () => {
-			const transforms = [filter(gt('revenue', 0)), topN(10), stack()];
+			const transforms = [filter(gt('revenue', 0)), topN(10), stack(), dodge()];
 
 			const compiler = new TransformCompiler(transforms);
 
-			expect(compiler.sqlTransforms).toHaveLength(2); // filter + topN (SQL by default)
-			expect(compiler.jsTransforms).toHaveLength(1); // stack
+			expect(compiler.sqlTransforms).toHaveLength(3); // filter + topN + stack (SQL by default)
+			expect(compiler.jsTransforms).toHaveLength(1); // dodge
 		});
 
 		it('throws on invalid ordering', () => {
 			const transforms = [
-				stack(), // JS
+				stackY({ engine: 'js' }), // JS
 				filter(gt('x', 0)) // SQL - wrong order!
 			];
 

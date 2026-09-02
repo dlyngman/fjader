@@ -75,10 +75,11 @@ export class TransformCompiler {
 		return result;
 	}
 
+	/** Channels a transform adds beyond the base select (e.g. stack's y0/y1) — SQL or JS stage. */
 	getAdditionalChannels(): string[] {
 		const channels: string[] = [];
 
-		for (const transform of this.jsTransforms) {
+		for (const transform of this.transforms) {
 			if (transform.channels) {
 				channels.push(...transform.channels);
 			}
@@ -88,7 +89,7 @@ export class TransformCompiler {
 	}
 
 	hasStackTransform(): boolean {
-		return this.jsTransforms.some((t) => t.type === 'stack');
+		return this.transforms.some((t) => t.type === 'stack');
 	}
 
 	describe(): string {

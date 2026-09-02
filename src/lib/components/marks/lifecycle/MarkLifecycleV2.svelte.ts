@@ -1452,8 +1452,14 @@ export class MarkLifecycleV2 {
 		drivingDomain: [number, number] | null
 	): Query | null {
 		const useTooltipTable = this.#transformCompiler.hasJSTransforms() && this.#tooltipTableReady;
+		// Whether to include transform-generated channels (stack's y0/y1) — tied
+		// to the transform actually adding channels, not to which query path
+		// (tooltip table vs. sidecar-wrapped query) supplies them. A SQL-stage
+		// stack has no tooltip table but #buildSidecarQuery still re-assembles
+		// the full query (transforms included), so y0/y1 are there either way.
+		const includeTransformChannels = this.#transformCompiler.getAdditionalChannels().length > 0;
 
-		const fittedChannels = this.#getFitDomainChannels(fittedAxis, useTooltipTable);
+		const fittedChannels = this.#getFitDomainChannels(fittedAxis, includeTransformChannels);
 		if (fittedChannels.length === 0) return null;
 
 		const outerSelect: Record<string, unknown> = {};
@@ -1465,7 +1471,7 @@ export class MarkLifecycleV2 {
 		let whereClause: unknown = undefined;
 		if (drivingDomain) {
 			const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
-			const drivingChannels = this.#getFitDomainChannels(drivingAxis, useTooltipTable);
+			const drivingChannels = this.#getFitDomainChannels(drivingAxis, includeTransformChannels);
 			whereClause = this.#buildFitDomainWhere(drivingChannels, drivingDomain);
 		}
 
