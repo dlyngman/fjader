@@ -85,7 +85,7 @@
 		? (scaleRegistry.getOrCreateScale(
 				`__facet__${fx}`,
 				'band',
-				{ sourceColumn: fx },
+				{ sourceField: fx },
 				layout.chartId
 			) as BandScaleState)
 		: null;

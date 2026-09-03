@@ -694,6 +694,18 @@ export class MarkLifecycleV2 {
 		if (this.#colorScaleState?.caseExpression) {
 			select[colorKey] = sql`${this.#colorScaleState.caseExpression}`;
 		}
+
+		// Facet cell index. The renderers compile a faceted pipeline whenever
+		// chartContext.fx is set and discard instances whose __facet differs
+		// from the active cell, so the column has to be in the select or the
+		// facet vertex buffer is never written. V1 set this from ViewManager's
+		// index column; V2 dropped it in the migration.
+		if (this.#chartContext.fx) {
+			const facetScale = this.#chartContext.facetBandScale as BandScaleState | null;
+			if (facetScale?.caseExpression) {
+				select.__facet = sql`${facetScale.caseExpression}`;
+			}
+		}
 	}
 
 	/**
