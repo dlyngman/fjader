@@ -230,6 +230,19 @@ describe('Transforms', () => {
 			const result = withImplicitStack([stackY()], false, 'y');
 			expect(result).toHaveLength(1); // no duplicate
 		});
+
+		it('adds SQL stack by default (no preceding JS transform)', () => {
+			const result = withImplicitStack([topN(5)], false, 'y');
+			expect(result[1].stage).toBe('sql');
+		});
+
+		it('adds JS stack after a JS-stage transform (e.g. topN includeOthers), never SQL-after-JS', () => {
+			const result = withImplicitStack([topN(5, { includeOthers: true })], false, 'y');
+			expect(result[1].stage).toBe('js');
+			// Must not throw — this is the regression: the auto-injected stack
+			// used to always default to SQL, appended after a JS transform.
+			expect(() => new TransformCompiler(result)).not.toThrow();
+		});
 	});
 
 	describe('TransformCompiler', () => {

@@ -833,6 +833,12 @@ export function dodge(options: DodgeOptions = {}): JsTransform {
  * Mirrors Observable Plot's maybeStackY/maybeStackX: marks that specify only
  * `y` (not `y1`/`y2`) get automatic stacking. Specifying explicit bounds
  * opts out.
+ *
+ * Stack defaults to SQL, but appending it after a JS-stage transform (e.g.
+ * topN with includeOthers) would violate "SQL must precede JS" — and
+ * correctly so: stacking has to run on the JS-transformed result in that
+ * case, which only JS can do. Force the JS engine when a JS transform
+ * already precedes it; otherwise take the SQL default.
  */
 export function withImplicitStack(
 	transforms: Transform[],
@@ -841,7 +847,15 @@ export function withImplicitStack(
 ): Transform[] {
 	if (hasExplicitBounds) return transforms;
 	if (transforms.some((t) => t.type === 'stack')) return transforms;
-	return [...transforms, direction === 'y' ? stackY() : stackX()];
+	const needsJS = transforms.some((t) => t.stage === 'js');
+	const implicitStack = needsJS
+		? direction === 'y'
+			? stackY({ engine: 'js' })
+			: stackX({ engine: 'js' })
+		: direction === 'y'
+			? stackY()
+			: stackX();
+	return [...transforms, implicitStack];
 }
 
 export { TransformCompiler } from './TransformCompiler';
