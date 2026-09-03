@@ -500,7 +500,12 @@ export class BandScaleState {
 					return index;
 				} else {
 					unmappedCategories.add(category);
-					return 0; // Default to first category index
+					// -1 = no identity, 0+ = valid categories. Matches
+					// buildCaseExpression's ELSE -1 (case-expression.ts) and
+					// ColorScaleState.processDataForGPU, so the SQL and JS paths
+					// agree. Returning 0 here drew unmapped rows stacked on top of
+					// the first real category. scaleBand discards negatives.
+					return -1;
 				}
 			})
 		);

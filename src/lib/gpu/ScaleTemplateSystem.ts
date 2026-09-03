@@ -213,7 +213,18 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		implementation: (suffix, axis) => `
 			fn scaleBand${suffix}(value: f32, scaleIndex: u32) -> f32 {
 				let scale = scaleParams[scaleIndex];
-				
+
+				// -1 = no identity (unmapped category), matching
+				// buildCaseExpression's ELSE -1 and the value < 0.0 check in
+				// getColorFromScale. Must be rejected before the cast below:
+				// u32() of a negative f32 is an indeterminate value in WGSL, so
+				// an unmapped row would otherwise land at an arbitrary band.
+				// Off-screen rather than a true discard — a per-instance discard
+				// belongs in each mark's vertex shader, alongside FACET_DISCARD.
+				if (value < 0.0) {
+					return -1.0e6;
+				}
+
 				let categoryIndex = u32(value);
 				let categoryCount = scale.p1;
 				let paddingInner = scale.p2;
