@@ -310,8 +310,13 @@
 		if (!lineGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, lineGeometryBuffer);
 		if (faceted) {
+			// The faceted pipeline declares vertex slot 1, so drawing without it is
+			// a validation error that invalidates the entire command buffer — every
+			// other mark on the canvas disappears too, with an error naming only
+			// the pipeline. Skip this mark's draw until the facet data lands. (#193)
 			const facetBuffer = renderer.getVertexBuffer(FACET_VERTEX_SLOT);
-			if (facetBuffer) passEncoder.setVertexBuffer(1, facetBuffer);
+			if (!facetBuffer) return;
+			passEncoder.setVertexBuffer(1, facetBuffer);
 		}
 		passEncoder.draw(6, renderer.instanceCount);
 	}
