@@ -224,7 +224,6 @@ export class QueryEngine {
 		if (useCache) {
 			const cached = this.#queryCache.get(sqlStr);
 			if (cached !== undefined) {
-				console.log(`[cache] hit | ${sqlStr.slice(0, 60)}...`);
 				return cached instanceof Promise ? cached : Promise.resolve(cached);
 			}
 		}
@@ -283,19 +282,10 @@ export class QueryEngine {
 			const queryPromise = this.#queryRaw(sqlStr);
 			if (cache) this.#queryCache.set(sqlStr, queryPromise);
 
-			const _t0 = performance.now();
 			const result = await queryPromise;
-			const _dt = performance.now() - _t0;
 
 			// Replace Promise with resolved data for future lookups
 			if (cache) this.#queryCache.set(sqlStr, result);
-
-			// Log actual DuckDB execution time (excludes queue wait)
-			if (sqlStr.includes('__dplot_preagg_')) {
-				console.log(`[preagg] DuckDB exec ${_dt.toFixed(1)}ms | ${sqlStr.slice(0, 80)}...`);
-			} else if (callerId?.startsWith('rect') || callerId?.startsWith('dot') || callerId?.startsWith('line')) {
-				console.log(`[base] DuckDB exec ${_dt.toFixed(1)}ms | ${callerId}`);
-			}
 
 			if (controller.signal.aborted) {
 				// Don't cache results from aborted queries
@@ -388,8 +378,25 @@ export class QueryEngine {
 		}
 	}
 
-	/** Clear the query result cache. Call on data reload (parquet swap). */
+	/**
+	 * Call after a data reload (e.g. re-running loadParquet/CREATE OR REPLACE
+	 * TABLE against an existing table name). Clears everything keyed off the
+	 * old data: the query result cache, DESCRIBE cache (schema may have
+	 * changed), and materialized preagg cubes (`CREATE TABLE IF NOT EXISTS`
+	 * means a stale cube would otherwise keep serving pre-reload aggregates
+	 * indefinitely). Registered marks are left as-is — this only invalidates
+	 * caches; callers still need to trigger a re-query (e.g. a filter change)
+	 * to see fresh data rendered.
+	 */
 	clearQueryCache(): void {
+		this.clearDescribeCache();
+		for (const reg of this.#marks.values()) {
+			this.#dropPreagg(reg);
+		}
+		for (const preaggTable of this.#preaggTables) {
+			this.exec(`DROP TABLE IF EXISTS "${preaggTable}"`).catch(() => {});
+		}
+		this.#preaggTables.clear();
 		this.#queryCache.clear();
 	}
 
@@ -685,13 +692,7 @@ export class QueryEngine {
 
 			// Analyze selectDef for preagg compatibility
 			const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels);
-			if (!analysis) {
-				console.log(`[preagg] skip ${markId} — unsupported (window/distinct)`);
-				continue;
-			}
-			if (analysis.windowChannels) {
-				console.log(`[preagg] ${markId} has window channels: ${Object.keys(analysis.windowChannels).join(', ')}`);
-			}
+			if (!analysis) continue; // unsupported (window/distinct)
 
 			const { preaggCols, outputSelect, preaggGroupBy } = analysis;
 
@@ -753,7 +754,6 @@ export class QueryEngine {
 						reg.preaggTable = preaggTable;
 						reg.preaggReady = true;
 						reg.lastPreaggParts = parts;
-						console.log(`[preagg] table created for ${markId}: ${preaggTable}\n${createSQL}`);
 					})
 					.catch((e) => {
 						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);

@@ -290,6 +290,39 @@ describe('QueryEngine', () => {
 		});
 	});
 
+	describe('clearQueryCache()', () => {
+		it('forces cached queries to re-hit the connection', async () => {
+			const conn = createMockConnection();
+			const engine = new QueryEngine(conn);
+
+			await engine.query('SELECT 1', { callerId: 'mark-1' });
+			await engine.query('SELECT 1', { callerId: 'mark-1' });
+			expect(conn.queries).toEqual(['SELECT 1']); // second hit was a cache hit
+
+			engine.clearQueryCache();
+
+			await engine.query('SELECT 1', { callerId: 'mark-1' });
+			expect(conn.queries).toEqual(['SELECT 1', 'SELECT 1']); // cache was cleared
+		});
+
+		it('also clears the DESCRIBE cache', async () => {
+			const conn = createMockConnection({
+				queryFn: (sql) =>
+					sql.startsWith('DESCRIBE') ? { numRows: 0, get: () => ({}) } : { numRows: 0, get: () => ({}) }
+			});
+			const engine = new QueryEngine(conn);
+
+			await engine.describe('t');
+			await engine.describe('t');
+			expect(conn.queries).toEqual(['DESCRIBE "t"']); // second call was cached
+
+			engine.clearQueryCache();
+
+			await engine.describe('t');
+			expect(conn.queries).toEqual(['DESCRIBE "t"', 'DESCRIBE "t"']); // cache was cleared
+		});
+	});
+
 	describe('destroy()', () => {
 		it('rejects queries after destroy', async () => {
 			const conn = createMockConnection();
