@@ -59,6 +59,7 @@ import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
+import { buildCaseExpression } from '$lib/sql/case-expression';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
@@ -1162,13 +1163,44 @@ export class MarkLifecycleV2 {
 				if (!tooltipQuery) return;
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow
-				// in distance math). Build REPLACE clause dynamically.
+				// in distance math). A band/point axis stays un-CASE-inlined (real
+				// category strings, not an ordinal index) in the main query when a
+				// category-reducing transform like topN is present
+				// (#inlineCaseExpressions' skipBandIndex — the top-N set can
+				// change, so a static CASE baked into that query would go stale).
+				// But TooltipManager's hit-test universally assumes band axes hold
+				// the scale's ordinal index (CAST(col AS INTEGER) = hoveredIndex),
+				// same as every other band-axis mark — so CASE-inline it here
+				// instead, safe because by tooltip-write time the domain is
+				// already resolved from the actual (post-transform) results.
 				const selectConfig = this.#config.select;
-				const castCols = ['x', 'x1', 'x2', 'y', 'y1', 'y2'].filter((c) => c in selectConfig);
-				const replaceClause =
-					castCols.length > 0
-						? ` REPLACE (${castCols.map((c) => `CAST(${c} AS DOUBLE) AS ${c}`).join(', ')})`
-						: '';
+				const resolvedSelect = this.#resolvedQueryParts?.selectDef ?? {};
+				const schema = this.#schema;
+				const xScaleState = this.#chartContext.xScaleState as BandScaleState | null;
+				const yScaleState = this.#chartContext.yScaleState as BandScaleState | null;
+				const replaceExprs: string[] = [];
+				for (const c of ['x', 'x1', 'x2', 'y', 'y1', 'y2'] as const) {
+					if (!(c in selectConfig)) continue;
+					const expr = resolvedSelect[c];
+					const isRawColumnRef =
+						expr != null && isColumnRef(expr as ExprNode) && !isColumnParam(expr as ExprNode);
+					const jsType = isRawColumnRef
+						? schema?.get((expr as { column: string }).column)?.jsType
+						: undefined;
+
+					if (isRawColumnRef && jsType && jsType !== 'number') {
+						const axis = c.startsWith('x') ? 'x' : 'y';
+						const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+						const scaleState = axis === 'x' ? xScaleState : yScaleState;
+						if ((scaleType === 'band' || scaleType === 'point') && scaleState?.effectiveDomain?.length) {
+							replaceExprs.push(`${buildCaseExpression(c, scaleState.effectiveDomain)} AS ${c}`);
+						}
+						// Else: unexpected non-numeric, non-band column — leave as-is.
+						continue;
+					}
+					replaceExprs.push(`CAST(${c} AS DOUBLE) AS ${c}`);
+				}
+				const replaceClause = replaceExprs.length > 0 ? ` REPLACE (${replaceExprs.join(', ')})` : '';
 
 				// Optional ORDER BY for zone-map skipping in bounding-box queries.
 				let orderClause = '';
