@@ -1,11 +1,11 @@
 <script lang="ts">
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import { format } from 'd3-format';
-	import { clauseInterval, type ClauseSource } from '@uwdata/mosaic-core';
-	import { column, type ScaleDomain } from '@uwdata/mosaic-sql';
-	import { getSelectionRegistry } from '$lib/selection';
+	import { isBetween, column } from '@uwdata/mosaic-sql';
 	import { scaleBrushExtent1D, WHEEL_SENSITIVITY } from '$lib/interactors/brush-utils';
-	import { onDestroy } from 'svelte';
+	import { getContext, onDestroy } from 'svelte';
+	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
 		scaleState: ColorScaleState;
@@ -20,7 +20,7 @@
 
 	let {
 		scaleState,
-		selection: selectionName = undefined,
+		selection = undefined,
 		title = null,
 		width = 200,
 		height = 12,
@@ -133,22 +133,17 @@
 		hoverT = getTFromPointer(e, true);
 	}
 
-	function onPointerEnter() {
-		if (!sel?.activate || !columnRef) return;
-		const range: ScaleDomain = hasBrush ? [brushMin!, brushMax!] : [min, max];
-		sel.activate(
-			clauseInterval(columnRef, range, {
-				source: source as unknown as ClauseSource
-			})
-		);
-	}
+	// TODO: Re-implement pre-aggregation for V2 query engine.
+	function onPointerEnter() {}
 
 	function onPointerLeave() {
 		if (!isDragging) hoverT = null;
 	}
 
 	// --- Brush state ---
-	const isInteractive = $derived(selectionName != null);
+	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
+	const filterGroup = filterGroups?.get(selection);
+	const isInteractive = $derived(filterGroup != null);
 
 	let brushT0: number | null = $state(null);
 	let brushT1: number | null = $state(null);
@@ -164,40 +159,33 @@
 	const brushMax = $derived(brushT1 != null ? min + brushT1 * (max - min) : null);
 
 	// --- Selection wiring ---
-	const source = `legend-color-${scaleState.field}`;
+	const sourceId = `legend-color-${scaleState.field}`;
 	const columnRef = $derived(column(scaleState.field));
 
-	const registry = getSelectionRegistry();
-	const group = selectionName ? registry?.getGroup(selectionName) : null;
-	const localSel = group
-		? group.createLocal('single', {
-				source,
-				augment: (clause) => ({
+	const brushHandle: BrushHandle | null = filterGroup
+		? filterGroup.createBrush({
+				sourceId,
+				excludeMarkIds: () => new Set<string>(),
+				augment: (value) => ({
 					kind: 'range',
 					column: scaleState.field,
 					label: scaleState.field,
-					values: clause?.value ? [clause.value[0], clause.value[1]] : []
-				}),
-				onVisualClear: () => clearBrush()
+					values: value ? [(value as number[])[0], (value as number[])[1]] : []
+				})
 			})
 		: null;
 
-	const sel = localSel?.sel;
-	onDestroy(() => localSel?.off());
+	onDestroy(() => brushHandle?.destroy());
 
 	function emitBrush() {
-		if (!sel || brushMin == null || brushMax == null) return;
-		sel.update(
-			clauseInterval(columnRef, [brushMin, brushMax] as ScaleDomain, {
-				source: source as unknown as ClauseSource
-			})
-		);
+		if (!brushHandle || brushMin == null || brushMax == null) return;
+		brushHandle.update(isBetween(columnRef, [brushMin, brushMax]), [brushMin, brushMax]);
 	}
 
 	function clearBrush() {
 		brushT0 = null;
 		brushT1 = null;
-		if (sel && group) group.remove(source);
+		brushHandle?.clear();
 	}
 
 	// --- Drag interaction ---

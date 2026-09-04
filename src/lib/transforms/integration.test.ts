@@ -2,15 +2,21 @@
 
 import { describe, it, expect } from 'vitest';
 import { Query, sum, count, gt, column } from '@uwdata/mosaic-sql';
-import { filter, topN, stack } from './index';
+import { filter, topN, stackY } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin } from '../sql/bin';
 import { ObjectDataAccessor } from '$lib/data/DataAccessor';
 
 describe('Transform Pipeline Integration', () => {
 	it('full pipeline: SQL + JS transforms', () => {
-		// Simulate a bar chart with stacking
-		const transforms = [filter(gt('revenue', 0)), topN(10, { includeOthers: true }), stack()];
+		// Simulate a bar chart with stacking. topN(includeOthers) forces JS, so
+		// the stack that follows it must also be JS — SQL can't wrap client-side
+		// transformed data.
+		const transforms = [
+			filter(gt('revenue', 0)),
+			topN(10, { includeOthers: true }),
+			stackY({ engine: 'js' })
+		];
 
 		const compiler = new TransformCompiler(transforms);
 
@@ -26,12 +32,8 @@ describe('Transform Pipeline Integration', () => {
 		// Apply SQL transforms
 		query = compiler.applyToQuery(query);
 
-		// Validate flat query
-		expect(() => compiler.validateQuery(query)).not.toThrow();
-
 		const sql = query.toString();
 		expect(sql).toMatch(/WHERE.*revenue.*> 0/);
-		expect(sql).not.toContain('WITH'); // No CTE
 
 		// Simulate query results
 		const mockData = new ObjectDataAccessor([

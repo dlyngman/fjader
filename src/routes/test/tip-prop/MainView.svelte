@@ -1,5 +1,4 @@
 <script>
-	import { getContext } from 'svelte';
 	import { count, avg, sum, min, max } from '@uwdata/mosaic-sql';
 	import {
 		ChartContainer,
@@ -14,8 +13,6 @@
 		LineMark,
 		AreaMarkY
 	} from '$lib/components';
-
-	const coordinator = getContext('mosaic-coordinator');
 </script>
 
 <div class="page">

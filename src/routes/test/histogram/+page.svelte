@@ -1,26 +1,19 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	setCoordinators();
 
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			const coord = new Coordinator();
-			coord.databaseConnector(wasm);
-
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec([
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`),
-				loadParquet('travelers', `${window.location.origin}/data/travelers.parquet`)
+			await queryEngine.exec([
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString(),
+				loadParquet('travelers', `${window.location.origin}/data/travelers.parquet`).toString()
 			]);
 
 			isLoaded = true;

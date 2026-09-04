@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -13,19 +13,20 @@
 		MarkColor,
 		normalizeSortConfig,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
 		FieldRef,
 		BaseMarkProps,
 		BandScaleProps,
 		RectOffsetProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props extends BaseMarkProps, BandScaleProps, RectOffsetProps {
 		x: FieldRef;
@@ -64,9 +65,10 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('barx');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
 
 	// --- ChartConfig registration ---
@@ -105,7 +107,7 @@
 		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x')
 	);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// 1. Color Logic — reads from entry
 	const markColor = new MarkColor(
@@ -159,15 +161,9 @@
 			y: entry.y // Y scale uses categorical column
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
 		constants: buildConstantsFromChannels({ x1, x2, y: entry.y }),
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([x1, x2, entry.y] as FieldRef[]) : null
-		},
 		// Ensures SQL ORDER BY series, dimension for consistent stacking
 		...(markColor.selectField && {
 			_orderConfig: {
@@ -176,12 +172,10 @@
 			}
 		}),
 		// Bar charts with aggregates should start at zero baseline
-		zeroBaseline: hasAggregateX ? { x: true } : null,
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip,
-		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
+		zeroBaseline: hasAggregateX ? { x: true } : null
 	});
+
+	const reactiveConfig = buildReactiveConfig(entry);
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 	let yScaleId = $derived(chartContext.yScaleState?.id);
@@ -255,32 +249,45 @@
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry.table) setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					reactiveConfig,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroups.get(entry.selection as string | undefined)
+				);
+			}
 		});
 	});
 
-	// Tooltip registration — reads from entry
+	// Tooltip registration — guard conditions are tracked; registration body
+	// runs in untrack() to avoid reactive deps on scaleTypes/colorScaleState
+	// that cause spurious unregister/re-register cycles.
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'barx',
-				chartContext,
-				columns: {
-					xLow: hasStackTransform ? 'x0' : typeof x1 === 'number' ? x1 : 'x1',
-					xHigh: hasStackTransform ? 'x1' : 'x2',
-					y: 'y'
-				},
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'fill',
-				bandAxes: { y: true },
-				markColor,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'barx',
+					chartContext,
+					columns: {
+						xLow: hasStackTransform ? 'x0' : typeof x1 === 'number' ? x1 : 'x1',
+						xHigh: hasStackTransform ? 'x1' : 'x2',
+						y: 'y'
+					},
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'fill',
+					bandAxes: { y: true },
+					markColor,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -304,21 +311,9 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 		inset={entry.inset ?? 0}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
-{:else}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Initializing bars...</text
-	>
 {/if}

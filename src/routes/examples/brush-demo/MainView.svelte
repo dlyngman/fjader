@@ -1,5 +1,6 @@
 <script>
 	import { count } from '@uwdata/mosaic-sql';
+	import { getContext } from 'svelte';
 	import {
 		Interval2D,
 		ChartContainer,
@@ -10,11 +11,9 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		MarginLabel
-	} from '$lib/components';
-	import { getSelectionRegistry } from '$lib/selection';
+		MarginLabel} from '$lib/components';
 
-	const group = getSelectionRegistry()?.getGroup('brush') ?? null;
+	const filterGroup = getContext('filter-group');
 </script>
 
 <div class="demo-container">
@@ -84,10 +83,10 @@
 
 	<!-- Filter status display -->
 	<div class="filter-status">
-		<h3>Active Filters: {group?.activeCount ?? 0}</h3>
-		{#if group?.items.length}
+		<h3>Active Filters: {filterGroup?.activeCount ?? 0}</h3>
+		{#if filterGroup?.items.length}
 			<div class="filter-chips">
-				{#each group.items as item (item.source)}
+				{#each filterGroup.items as item (item.sourceId)}
 					<div class="filter-chip">
 						<span class="chip-label"
 							>{item.schema?.label || 'Filter'}:
@@ -105,7 +104,7 @@
 								active
 							{/if}
 						</span>
-						<button class="chip-clear" onclick={() => group?.clear(item.source)}>×</button>
+						<button class="chip-clear" onclick={() => filterGroup?.clearSource(item.sourceId)}>×</button>
 					</div>
 				{/each}
 			</div>

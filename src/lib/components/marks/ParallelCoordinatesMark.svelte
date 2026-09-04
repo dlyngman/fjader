@@ -1,25 +1,25 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { ParallelLines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
 		buildSelectFromChannels,
 		MarkColor,
-		generateMarkId,
-		resolveSelection
+		generateMarkId
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { getGPUContext } from '$lib/gpu';
 	import type {
 		FieldRef,
-		Coordinator,
 		ChartContext,
 		ColorScheme,
 		CurveType,
 		Transform
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { Selection } from '@uwdata/mosaic-core';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
 		table: string;
@@ -29,7 +29,7 @@
 		opacity?: number;
 		strokeWidth?: number;
 		curve?: CurveType;
-		selection?: string | Selection;
+		selection?: string;
 		transforms?: Transform[];
 	}
 
@@ -46,12 +46,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('parallel');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'parallel', {
@@ -63,7 +62,7 @@
 		transforms: () => transforms
 	});
 
-	let setup = $state<MarkLifecycle | null>(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// Column names as strings (handles both string column names and ExprNode)
 	const columnNames = $derived((entry.columns as unknown as FieldRef[]).map(String));
@@ -103,17 +102,14 @@
 		},
 		inferredScaleColumns: { x: undefined },
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: entry.transforms ?? [],
 		select: channelSelect,
 		colorChannel: 'stroke',
-		clientOptions: {},
-		sort: null,
-		domain: null,
-		tooltip: false,
 		parallelMode: true,
 		parallelColumns: columnNames
 	});
+
+	const reactiveConfig = buildReactiveConfig(entry);
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
 
@@ -124,8 +120,15 @@
 		untrack(() => {
 			setup?.destroy();
 			setup = null;
-			if (entry.table) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					reactiveConfig,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroups.get(entry.selection as string | undefined)
+				);
 			}
 		});
 	});
@@ -189,6 +192,4 @@
 		{rowCount}
 		axisCount={columnNames.length}
 	/>
-{:else if setup?.client?.error}
-	<div style="color: red; padding: 1rem;">Error: {(setup.client.error as Error).message}</div>
 {/if}

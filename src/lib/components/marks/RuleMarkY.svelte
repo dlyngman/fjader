@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { RuleY, GridLineY } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -12,13 +12,14 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
-	import type { FieldRef, BaseMarkProps, ColorProp, Coordinator, ChartContext } from '$lib/types';
+	import { buildReactiveConfig } from './utils/reactive-config';
+	import type { FieldRef, BaseMarkProps, ColorProp, ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props extends BaseMarkProps {
 		y: FieldRef | number;
@@ -52,9 +53,10 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('ruley');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
 
 	// --- Constant-only path ---
@@ -93,7 +95,7 @@
 
 	const hasExtent = $derived(x1 !== undefined && x2 !== undefined);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	const markColor = new MarkColor(
 		() => (entry ? entry.stroke : null),
@@ -139,14 +141,15 @@
 
 	const resolvedTip = $derived(resolveTip(entry?.tip, channelSelect));
 
-	const scaleRequirements = $derived.by(() => {
-		const reqs: Record<string, unknown> = {
-			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
-		};
-		if (hasExtent) {
-			reqs.x = { type: 'linear', priority: SCALE_PRIORITIES.ACCEPT };
-		}
-		return reqs;
+	const scaleRequirements = $derived.by(() => ({
+		x: hasExtent ? { type: 'linear' as const, priority: SCALE_PRIORITIES.ACCEPT } : null,
+		y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER } as const
+	}));
+
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry?.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
 	});
 
 	const config = $derived.by(() => {
@@ -163,26 +166,18 @@
 				...(hasExtent && { x: entry.x2 })
 			},
 			table: entry.table,
-			selection: resolveSelection(entry.selection),
 			transforms: entry.transforms ?? [],
 			select: { ...channelSelect, ...resolvedTip.extraSelect },
-			tip: entry.tip,
 			constants: buildConstantsFromChannels({
 				y: entry.y,
 				...(hasExtent && { x1: entry.x1, x2: entry.x2 })
 			}),
-			clientOptions: {
-				limit: entry.limit,
-				filterNulls: entry.filterNulls
-					? ([entry.y, ...(hasExtent ? [x1, x2] : [])] as FieldRef[])
-					: null
-			},
-			zeroBaseline: xShorthand !== undefined ? { x: true } : null,
-			sort: normalizeSortConfig(entry.sort ?? null),
-			domain: entry.domain ?? null,
-			tooltip: entry.tip === false ? false : entry.tooltip,
-			fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined
+			zeroBaseline: xShorthand !== undefined ? { x: true } : null
 		};
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry ?? {}, {
+		resolveFitDomain: () => resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -243,30 +238,43 @@
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry?.table) setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry?.table && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					reactiveConfig,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroups.get(entry?.selection as string | undefined)
+				);
+			}
 		});
 	});
 
-	// Tooltip registration
+	// Tooltip registration — guard conditions are tracked; registration body
+	// runs in untrack() to avoid reactive deps on scaleTypes/colorScaleState
+	// that cause spurious unregister/re-register cycles.
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry?.tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'ruley',
-				chartContext,
-				columns: {
-					y: 'y',
-					...(hasExtent && { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2' })
-				},
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'stroke',
-				markColor,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'ruley',
+					chartContext,
+					columns: {
+						y: 'y',
+						...(hasExtent && { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2' })
+					},
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'stroke',
+					markColor,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -294,14 +302,6 @@
 		constantColor={markColor.constantColor}
 		{strokeWidth}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
 {/if}

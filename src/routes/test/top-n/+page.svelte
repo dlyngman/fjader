@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { sum } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -18,21 +17,15 @@
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { topN } from '$lib/transforms';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
 			// Table 1: 10 categories, pre-aggregated (1 row each)
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE top_n_sales AS
 				SELECT * FROM (VALUES
 					('Electronics', 500),
@@ -54,7 +47,7 @@
 			//   North only:  Music(200), Garden(180), Health(150), Auto(140), Sports(130)
 			//   South only:  Electronics(400), Clothing(250), Food(200), Books(170), Toys(130)
 			//   West only:   Electronics(90), Food(45), Clothing(40), Books(25), Toys(15)
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE top_n_by_region AS
 				SELECT * FROM (VALUES
 					('Electronics', 'North', 10),  ('Electronics', 'South', 400), ('Electronics', 'West', 90),
@@ -85,7 +78,9 @@
 {:else}
 	<div class="container">
 		<h1>topN Transform Test</h1>
-		<p class="subtitle">Testing band scale domain behavior with JS transforms</p>
+		<p class="subtitle">
+			topN runs as a SQL CTE by default (charts 2, 4, 6); includeOthers falls back to JS (chart 3)
+		</p>
 
 		<div class="charts-grid">
 			<!-- Chart 1: Baseline -->
@@ -120,10 +115,10 @@
 
 			<!-- Chart 2: topN(5) -->
 			<div class="chart-panel">
-				<h3>2. topN(5)</h3>
+				<h3>2. topN(5) — SQL</h3>
 				<p class="desc">
-					Should show 5 bars. Known issue: band scale fetches all 10 categories from raw table
-					before JS transform runs.
+					Expect exactly 5 bars: Electronics, Clothing, Food, Books, Toys. Band domain is derived
+					from the SQL result, so the axis must show only these 5.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5 Category" yLabel="Revenue">
@@ -154,10 +149,10 @@
 
 			<!-- Chart 3: topN(5, includeOthers) -->
 			<div class="chart-panel">
-				<h3>3. topN(5, includeOthers: true)</h3>
+				<h3>3. topN(5, includeOthers: true) — JS fallback</h3>
 				<p class="desc">
-					Should show 5 + "Other" bar (revenue 320). Known issue: "Other" not in band domain, maps
-					to index -1, invisible.
+					includeOthers is JS-only. Should show 5 + "Other" bar (revenue 320), with "Other" in
+					the band domain.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5+ Category" yLabel="Revenue">
@@ -188,8 +183,11 @@
 
 			<!-- Chart 4: BarMarkX horizontal -->
 			<div class="chart-panel">
-				<h3>4. BarMarkX + topN(3)</h3>
-				<p class="desc">Horizontal bars. topN auto-detects value axis from mark type.</p>
+				<h3>4. BarMarkX + topN(3) — SQL</h3>
+				<p class="desc">
+					Horizontal bars; value axis resolved from mark type (x2). Expect exactly 3 bars:
+					Electronics, Clothing, Food.
+				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Sales Category">
 						{#snippet background()}
@@ -219,10 +217,12 @@
 
 			<!-- Chart 5: Stacked bars with selection (no topN) -->
 			<div class="chart-panel">
-				<h3>5. Stacked bars with region filter</h3>
+				<h3>5. Stacked bars with region + category toggles</h3>
 				<p class="desc">
-					All 10 categories, stacked by region. Shares filter with chart 6 to test cross-filter
-					interaction with topN.
+					Click a rect or legend swatch to toggle its region; click a band label to toggle that
+					category. Both AND together. This chart is the source, so it is excluded from its own
+					toggles (axis labels and legend dim; bar dimming is a separate proposal); chart 6
+					filters. Shift-click for multi-select, click empty space to clear.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
@@ -260,10 +260,11 @@
 
 			<!-- Chart 6: Selection + topN(5) -->
 			<div class="chart-panel">
-				<h3>6. Selection + topN(5)</h3>
+				<h3>6. Selection + topN(5) — SQL, crossfiltered</h3>
 				<p class="desc">
-					topN(5) with shared region filter. Toggling regions should change which categories make
-					the top 5 and update the band domain.
+					Filter is applied before ranking, so toggling regions re-ranks within the subset. No
+					filter: Electronics, Clothing, Food, Music, Books. North only: Music, Garden, Health,
+					Auto, Sports. West only: Electronics, Food, Clothing, Books, Toys.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">

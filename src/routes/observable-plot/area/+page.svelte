@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -18,23 +17,17 @@
 	import { Grid } from '$lib/components/guides';
 	import { stackY } from '$lib/transforms';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec([
-				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`),
-				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`),
-				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`),
+			await queryEngine.exec([
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`).toString(),
+				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`).toString(),
+				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`).toString(),
 				`CREATE TABLE random_walk AS SELECT i, SUM(random() - 0.5) OVER (ORDER BY i) AS value FROM generate_series(1, 600) AS t(i)`
 			]);
 

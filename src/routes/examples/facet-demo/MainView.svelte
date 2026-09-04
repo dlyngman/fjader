@@ -1,5 +1,4 @@
 <script>
-	import { getContext } from 'svelte';
 	import { count } from '@uwdata/mosaic-sql';
 	import {
 		ChartContainer,
@@ -15,8 +14,6 @@
 		Crosshair
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
-
-	const coordinator = getContext('mosaic-coordinator');
 </script>
 
 <div class="demo-scroll">

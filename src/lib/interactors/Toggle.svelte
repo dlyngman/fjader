@@ -1,94 +1,139 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
-	import { clausePoints } from '@uwdata/mosaic-core';
-	import { column } from '@uwdata/mosaic-sql';
+	import { column, isIn, literal, or, and as sqlAnd, isNotDistinct } from '@uwdata/mosaic-sql';
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import { getSelectionRegistry } from '$lib/selection';
+	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-	import type { ClauseSource } from '@uwdata/mosaic-core';
+
+	/**
+	 * Click-to-filter interactor for categorical fields.
+	 *
+	 * Two click surfaces, each toggling its own field:
+	 * - Inner area (a mark): toggles the declared `field` using the hit row.
+	 * - Band axis label: toggles the axis's own source field, whatever the
+	 *   declared field is. Labels are a ready-made category picker.
+	 *
+	 * Toggles on different fields AND together. The source chart is excluded
+	 * from its own toggles (crossfilter semantics) and dims instead via scale
+	 * active-value projection; other charts in the filter group filter.
+	 */
 
 	interface Props {
+		/** Filter group name — selects which FilterGroup this toggle writes to. */
 		selection?: string;
 		field: string | string[];
 	}
 
-	let { selection: selectionName = 'brush', field }: Props = $props();
+	let { selection, field }: Props = $props();
 
-	const group = getSelectionRegistry()!.getGroup(selectionName);
-
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const filterGroup = filterGroups.get(selection);
 	const chart = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
-	const columnRefs = fields.map((f) => column(f));
 
-	// Key helpers — identity for single field, JSON for multi
-	const toKey = fields.length === 1 ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple);
-	const fromKey = fields.length === 1 ? (key) => [key] : (key) => JSON.parse(key);
+	/** One toggle per field key this interactor drives: the declared field
+	 *  (or tuple) plus, lazily, the band axis field for label clicks. */
+	interface OwnedToggle {
+		fields: string[];
+		columnRefs: ReturnType<typeof column>[];
+		state: ToggleState;
+		toKey: (tuple: unknown[]) => unknown;
+		fromKey: (key: unknown) => unknown[];
+	}
+	const owned = new Map<string, OwnedToggle>();
 
-	// Getter for scale states — resolved lazily since scales may not be ready at init
-	function getToggleScaleStates() {
-		const yIsBand = chart.scaleTypes?.y === 'band';
-		const xIsBand = chart.scaleTypes?.x === 'band';
-		const band = yIsBand ? chart.yScaleState : xIsBand ? chart.xScaleState : null;
-		const color = scaleRegistry?.getScaleByField(fields[0], 'color');
-		return [band, color].filter(Boolean) as {
-			setActiveValues(values: Set<unknown>): void;
-			clearActiveValues(): void;
-		}[];
+	function getToggle(toggleFields: string[]): OwnedToggle {
+		const id = toggleFields.join(' ');
+		let t = owned.get(id);
+		if (!t) {
+			const single = toggleFields.length === 1;
+			t = {
+				fields: toggleFields,
+				columnRefs: toggleFields.map((f) => column(f)),
+				state: filterGroup.getOrCreateToggle(toggleFields[0]),
+				toKey: single ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple),
+				fromKey: single ? (key) => [key] : (key) => JSON.parse(key as string)
+			};
+			owned.set(id, t);
+		}
+		return t;
 	}
 
-	// Shared toggle Selection — deduplicated by column across Toggle + Legend
-	const {
-		sel: selection,
-		source,
-		off: unregister
-	} = group.createToggle(fields[0], {
-		scaleStates: getToggleScaleStates
-	});
+	const declared = getToggle(fields);
 
-	// Derive selected set reactively from scale state (projected by SelectionGroup)
-	const selectedSet = $derived.by(() => {
-		const scales = getToggleScaleStates();
-		for (const s of scales) {
-			if (s && 'activeValues' in s) {
-				const av = (s as BandScaleState).activeValues;
-				if (av != null) return av;
-			}
+	/** Marks in this chart — excluded so the source dims rather than filters. */
+	const excludeMarkIds = () => new Set(chart.config.entries.keys());
+
+	/** Scales keyed by the toggled field: its color scale and any band scale
+	 *  whose source column is that field. Never a band scale for another field. */
+	function scalesFor(toggleField: string): ActiveValueScale[] {
+		const out: ActiveValueScale[] = [];
+		const color = scaleRegistry?.getScaleByField(toggleField, 'color');
+		if (color) out.push(color as unknown as ActiveValueScale);
+		for (const axis of ['x', 'y'] as const) {
+			if (chart.scaleTypes?.[axis] !== 'band') continue;
+			const band = chart[`${axis}ScaleState`] as BandScaleState | null | undefined;
+			if (band && band.sourceField === toggleField) out.push(band as unknown as ActiveValueScale);
 		}
-		return null;
-	});
+		return out;
+	}
 
-	function toggle(tuple: unknown[], event: MouseEvent) {
-		if (!selection) return;
+	function syncFilter(t: OwnedToggle) {
+		const values = t.state.values;
+		const single = t.fields.length === 1;
+		const opts = {
+			excludeMarkIds,
+			// Projection only makes sense for single-field toggles.
+			...(single && {
+				scaleStates: () => scalesFor(t.fields[0]),
+				projectionValues: () => (t.state.values.size ? new Set(t.state.values) : null)
+			})
+		};
 
-		const isMulti = event.shiftKey || event.metaKey;
-		const key = toKey(tuple);
-		let newValues;
-
-		if (isMulti && selectedSet) {
-			const next = new Set(selectedSet);
-			if (next.has(key)) {
-				next.delete(key);
-			} else {
-				next.add(key);
-			}
-			newValues = next.size === 0 ? null : Array.from(next).map(fromKey);
-		} else if (selectedSet?.size === 1 && selectedSet.has(key)) {
-			newValues = null;
-		} else {
-			newValues = [tuple];
+		if (values.size === 0) {
+			filterGroup.syncToggle(t.fields[0], null, null, opts);
+			return;
 		}
 
-		if (newValues === null) {
-			group.clearToggle(fields[0]);
-		} else {
-			selection.update(
-				clausePoints(columnRefs, newValues, { source: source as unknown as ClauseSource })
+		const tuples = Array.from(values).map(t.fromKey);
+		let predicate;
+		if (single) {
+			predicate = isIn(
+				t.columnRefs[0],
+				tuples.map((tuple) => literal(tuple[0]))
 			);
+		} else {
+			const clauses = tuples.map((tuple) =>
+				sqlAnd(tuple.map((v: unknown, i: number) => isNotDistinct(t.columnRefs[i], literal(v))))
+			);
+			predicate = clauses.length === 1 ? clauses[0] : or(clauses);
 		}
+
+		filterGroup.syncToggle(t.fields[0], predicate, tuples, opts);
+	}
+
+	function toggle(t: OwnedToggle, tuple: unknown[], event: MouseEvent) {
+		const isMulti = event.shiftKey || event.metaKey;
+		t.state.toggle(t.toKey(tuple), isMulti);
+		syncFilter(t);
+	}
+
+	/** Band axis click → category under the pointer on that axis, or null. */
+	function bandCategoryAt(
+		axis: 'x' | 'y',
+		innerPos: number
+	): { field: string; value: unknown } | null {
+		if (chart.scaleTypes?.[axis] !== 'band') return null;
+		const bandState = chart[`${axis}ScaleState`] as BandScaleState;
+		const extent = axis === 'x' ? chart.innerWidth : chart.innerHeight;
+		const index = bandState.invertScreenToData(innerPos, extent, axis === 'y');
+		const value = bandState.effectiveDomain[index] ?? null;
+		return value == null ? null : { field: bandState.sourceField, value };
 	}
 
 	chart.onChartClick = (event) => {
@@ -99,40 +144,38 @@
 		// Path 1: Inner area click — use tooltip hit data (don't require visible —
 		// pointer micro-movement during click hides tooltip but data stays valid)
 		if (xInBounds && yInBounds && tm?.currentPoint) {
-			const tuple = fields.map((f) => tm.currentPoint[f]);
+			const tuple = fields.map((f) => tm.currentPoint![f]);
 			if (tuple.some((v) => v == null)) return;
-			toggle(tuple, event);
+			toggle(declared, tuple, event);
 			return;
 		}
 
-		// Path 2: Band axis margin click — invert position to find category
-		if (!xInBounds && yInBounds && chart.scaleTypes?.y === 'band') {
-			const bandState = chart.yScaleState as BandScaleState;
-			const index = bandState.invertScreenToData(innerPoint.y, chart.innerHeight, true);
-			const category = bandState.effectiveDomain[index] ?? null;
-			if (category != null) {
-				toggle([category], event);
-				return;
-			}
-		}
-		if (xInBounds && !yInBounds && chart.scaleTypes?.x === 'band') {
-			const bandState = chart.xScaleState as BandScaleState;
-			const index = bandState.invertScreenToData(innerPoint.x, chart.innerWidth, false);
-			const category = bandState.effectiveDomain[index] ?? null;
-			if (category != null) {
-				toggle([category], event);
-				return;
-			}
+		// Path 2: Band axis margin click — toggle the axis's own field
+		const hit =
+			!xInBounds && yInBounds
+				? bandCategoryAt('y', innerPoint.y)
+				: xInBounds && !yInBounds
+					? bandCategoryAt('x', innerPoint.x)
+					: null;
+		if (hit) {
+			toggle(getToggle([hit.field]), [hit.value], event);
+			return;
 		}
 
-		// Path 3: Click on empty space — clear
-		if (selectedSet) {
-			group.clearToggle(fields[0]);
-		}
+		// Path 3: Click on empty space — clear everything this interactor owns
+		clearAll();
 	};
 
+	function clearAll() {
+		for (const t of owned.values()) {
+			if (!t.state.active) continue;
+			t.state.clear();
+			syncFilter(t);
+		}
+	}
+
 	onDestroy(() => {
-		unregister();
+		clearAll();
 		chart.onChartClick = null;
 	});
 </script>

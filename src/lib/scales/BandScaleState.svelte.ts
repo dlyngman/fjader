@@ -2,7 +2,7 @@
 
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
-import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
+import { buildCaseExpression, bandIndexColumn } from '$lib/sql/case-expression';
 
 interface BandScaleConfig {
 	padding?: number;
@@ -215,7 +215,18 @@ export class BandScaleState {
 	 * Format: __dplot_{field}_idx
 	 */
 	get indexColumnName(): string {
-		return ViewManagerService.bandIndexColumn(this.sourceField);
+		return bandIndexColumn(this.sourceField);
+	}
+
+	/**
+	 * Inline CASE expression mapping domain values to 0-based indices.
+	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
+	 * Reactive — recomputes when effectiveDomain changes (e.g. band reorder).
+	 */
+	get caseExpression(): string {
+		return buildCaseExpression(this.sourceField, this.effectiveDomain, {
+			oneBased: false
+		});
 	}
 
 	/**
@@ -250,32 +261,9 @@ export class BandScaleState {
 		}
 
 		this.#viewsCreated.add(sourceTable);
-
-		const alias = this.indexColumnName;
-		const sql = ViewManagerService.buildCaseExpression(this.sourceField, this.effectiveDomain, {
-			oneBased: false // Band indices are 0-based
-		});
-
-		viewManager.registerColumn(sourceTable, alias, {
-			sql,
-			source: this.sourceField,
-			scaleId: this.#scaleId
-		});
-
-		console.log(`[BandScaleState] Created view column ${alias} for table ${sourceTable}`);
 	}
 
-	/**
-	 * Unregister this scale's columns from ViewManager.
-	 * Called during destroy().
-	 */
 	#unregisterFromViewManager(): void {
-		const alias = this.indexColumnName;
-
-		for (const table of this.#registeredTables) {
-			viewManager.unregisterColumn(table, alias, this.#scaleId);
-		}
-
 		this.#registeredTables.clear();
 		this.#viewsCreated.clear();
 	}
@@ -512,7 +500,12 @@ export class BandScaleState {
 					return index;
 				} else {
 					unmappedCategories.add(category);
-					return 0; // Default to first category index
+					// -1 = no identity, 0+ = valid categories. Matches
+					// buildCaseExpression's ELSE -1 (case-expression.ts) and
+					// ColorScaleState.processDataForGPU, so the SQL and JS paths
+					// agree. Returning 0 here drew unmapped rows stacked on top of
+					// the first real category. scaleBand discards negatives.
+					return -1;
 				}
 			})
 		);

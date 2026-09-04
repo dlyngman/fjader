@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { getContext, onDestroy } from 'svelte';
-	import { clausePoints } from '@uwdata/mosaic-core';
-	import { column } from '@uwdata/mosaic-sql';
+	import { getContext } from 'svelte';
+	import { column, isIn, literal } from '@uwdata/mosaic-sql';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import { getSelectionRegistry, type SelectionGroup } from '$lib/selection';
+	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
 		scaleState: ColorScaleState;
@@ -20,7 +20,7 @@
 
 	let {
 		scaleState,
-		selection: selectionName = undefined,
+		selection = undefined,
 		field = null,
 		title,
 		columns = null,
@@ -30,6 +30,8 @@
 		orientation = 'horizontal'
 	}: Props = $props();
 
+	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
+	const filterGroup = filterGroups?.get(selection);
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Reactive: re-renders when domain or scheme changes
@@ -41,74 +43,62 @@
 	);
 
 	// --- Toggle interaction ---
-	const group: SelectionGroup | null = selectionName
-		? (getSelectionRegistry()?.getGroup(selectionName) ?? null)
-		: null;
-	const isInteractive = $derived(group != null && field != null);
 	const columnRef = field ? column(field) : null;
+	const isInteractive = $derived(filterGroup != null && field != null);
 
-	// Getter for scale states — includes color scale + any band scale for same field
-	function getLegendScaleStates() {
-		const band = scaleRegistry?.getScaleByField(field, 'band');
-		return [scaleState, band].filter(Boolean);
+	// Scales to dim: this color scale + any band scale for the same field.
+	// Projection itself is handled by FilterGroup, shared with Toggle/brushes.
+	function getLegendScaleStates(): ActiveValueScale[] {
+		const band = scaleRegistry?.getScaleByField(field!, 'band');
+		return [scaleState, band].filter(Boolean) as unknown as ActiveValueScale[];
 	}
 
-	// Shared toggle Selection — deduplicated by column across Toggle + Legend
-	const toggle =
-		group && field
-			? group.createToggle(field, {
-					scaleStates: getLegendScaleStates as () => {
-						setActiveValues(v: Set<unknown>): void;
-						clearActiveValues(): void;
-					}[]
-				})
-			: null;
+	// Shared toggle state — deduplicated by field across Toggle + Legend
+	const toggleState: ToggleState | null =
+		filterGroup && field ? filterGroup.getOrCreateToggle(field) : null;
 
-	const selection = toggle?.sel;
-	const source = toggle?.source;
+	// Derive visual state from toggle state
+	const selectedSet = $derived(
+		toggleState?.active ? toggleState.values : null
+	);
 
-	onDestroy(() => toggle?.off());
+	// Sync toggle values to FilterGroup (filter + scale projection).
+	// A legend is not a chart, so it excludes no marks: every chart filters.
+	function syncFilter() {
+		if (!toggleState || !filterGroup || !field) return;
+		const values = toggleState.values;
+		const opts = {
+			excludeMarkIds: () => new Set<string>(),
+			scaleStates: getLegendScaleStates,
+			projectionValues: () => (toggleState.values.size ? new Set(toggleState.values) : null)
+		};
 
-	// Derive visual state from scale's activeValues (projected by SelectionGroup)
-	const selectedSet = $derived(scaleState.activeValues);
+		if (values.size === 0) {
+			filterGroup.syncToggle(field, null, null, opts);
+			return;
+		}
+
+		const predicate = isIn(columnRef!, Array.from(values).map((v) => literal(v)));
+		filterGroup.syncToggle(field, predicate, [...values], opts);
+	}
 
 	function handleClick(value: string | number, event: MouseEvent) {
-		if (!selection || !columnRef) return;
+		if (!toggleState) return;
 
 		const isMulti = event.shiftKey || event.metaKey;
-		let newValues;
 
-		if (isMulti && selectedSet) {
-			// Shift/Cmd+click: toggle this item in the set
-			const next = new Set(selectedSet);
-			if (next.has(value)) {
-				next.delete(value);
-			} else {
-				next.add(value);
+		if (isMulti) {
+			toggleState.toggle(value, true);
+			// If all selected or none selected → clear
+			if (toggleState.values.size === scaleState.domain.length) {
+				toggleState.clear();
 			}
-			// All selected or none selected → clear filter
-			if (next.size === 0 || next.size === scaleState.domain.length) {
-				newValues = null;
-			} else {
-				newValues = Array.from(next).map((v) => [v]);
-			}
-		} else if (selectedSet?.size === 1 && selectedSet.has(value)) {
-			// Click on the only selected item → deselect all
-			newValues = null;
+		} else if (toggleState.values.size === 1 && toggleState.values.has(value)) {
+			toggleState.clear();
 		} else {
-			// Normal click → select only this item
-			newValues = [[value]];
+			toggleState.select(value);
 		}
-
-		if (newValues === null) {
-			group!.clearToggle(field);
-		} else {
-			selection.update(
-				clausePoints([columnRef], newValues, {
-					source: source as unknown as import('@uwdata/mosaic-core').ClauseSource
-				})
-			);
-		}
+		syncFilter();
 	}
 </script>
 

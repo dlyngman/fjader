@@ -16,18 +16,18 @@
  */
 
 import { mount, unmount } from 'svelte';
-import { Selection } from '@uwdata/mosaic-core';
 import { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { SelectionRegistry } from '$lib/selection';
-import { getOrCreateCoordinator, loadData } from './LazyCoordinator';
+import { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
+import { getOrCreateQueryEngine, loadData } from './LazyQueryEngine';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
 import type { DivePlotSpec, RenderOptions, DivePlotHandle } from './types';
 
 /**
  * Render a DivePlot chart from a JSON spec into a target DOM element.
  *
- * The Mosaic coordinator (DuckDB-WASM) is lazily created as a singleton —
+ * The QueryEngine (DuckDB-WASM) is lazily created as a singleton —
  * multiple render() calls share it. ScaleRegistry and GPUCoordinator are
  * per-call so each chart group gets independent scale/GPU state.
  */
@@ -36,12 +36,12 @@ export async function render(
 	spec: DivePlotSpec,
 	options: RenderOptions = {}
 ): Promise<DivePlotHandle> {
-	// 1. Lazy-create or reuse Mosaic coordinator
-	const coordinator = await getOrCreateCoordinator(options.coordinator);
+	// 1. Lazy-create or reuse QueryEngine
+	const queryEngine = await getOrCreateQueryEngine(options.queryEngine);
 
 	// 2. Load data tables (idempotent)
 	if (spec.data) {
-		await loadData(coordinator, spec.data, options.baseUrl);
+		await loadData(queryEngine, spec.data, options.baseUrl);
 	}
 
 	// 3. Create per-render DivePlot services
@@ -58,13 +58,14 @@ export async function render(
 	}
 
 	// 4. Build context map — injected into Svelte mount() so child components
-	//    find these via getContext() calls (same keys as setCoordinators())
-	const selectionRegistry = new SelectionRegistry(Selection);
+	//    find these via getContext() calls (same keys as initDivePlot())
+	const filterGroups = new FilterGroupRegistry();
+	tableSchemaService.setQueryEngine(queryEngine);
 	const context = new Map<string, unknown>();
-	context.set('mosaic-coordinator', coordinator);
+	context.set('query-engine', queryEngine);
+	context.set('filter-groups', filterGroups);
 	context.set('gpu-coordinator', gpuCoordinator);
 	context.set('scale-registry', scaleRegistry);
-	context.set('selection-registry', selectionRegistry);
 
 	// 5. Mount the Svelte component tree
 	const component = mount(LayoutFromSpec, {
@@ -83,9 +84,6 @@ export async function render(
 }
 
 export const DivePlot = { render };
-
-// Re-export coordinator factory for widget entry
-export { getOrCreateCoordinator } from './LazyCoordinator';
 
 // Re-export spec export
 export { exportSpec, exportSpecJSON } from './export';

@@ -1,17 +1,12 @@
 <script>
-	import { Coordinator, coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { loadCSV, loadParquet } from '@uwdata/mosaic-sql';
-	// import { setScaleRegistry } from "$lib/scales";
-	import { setCoordinators } from '$lib';
-	import { onMount, onDestroy, setContext } from 'svelte';
+	import { loadParquet } from '@uwdata/mosaic-sql';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	// setScaleRegistry();
-	setCoordinators();
 
-	let coord;
-	// setContext('mosaic-coordinator', coord);
-
+	const { queryEngine } = initDivePlot();
+	//
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
@@ -37,17 +32,8 @@
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-
-			// coord.manager.logQueries(true);
-			// coord.manager.logger(queryLogger);
-
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec(
-				loadParquet('flights', `${window.location.origin}/data/flights-200k.parquet`)
+			await queryEngine.exec(
+				loadParquet('flights', `${window.location.origin}/data/flights-200k.parquet`).toString()
 			);
 
 			isLoaded = true;

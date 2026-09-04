@@ -65,7 +65,7 @@
 				{/snippet}
 
 				{#snippet interactors()}
-					<IntervalX />
+					<IntervalX selection="brush" />
 					<DerivedIntervalX
 						sourceSelection="brush"
 						selection="comparison"

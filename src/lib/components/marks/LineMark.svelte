@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Lines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import {
@@ -13,9 +13,9 @@
 		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { getGPUContext } from '$lib/gpu';
 	import { isColorConstant } from '$lib/scales/color-utils';
 	import { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -23,17 +23,18 @@
 	import { DotsRung } from '$lib/lod/DotsRung.svelte';
 	import { SmoothRung } from '$lib/lod/SmoothRung.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
-	import type { SmoothMode } from '$lib/sql/rolling-avg';
+	import type { SmoothMode, RollingAvgNode } from '$lib/sql/rolling-avg';
 	import type {
 		FieldRef,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
 		ConnectedTopologyProps,
 		LODConfig,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { Snippet } from 'svelte';
 
 	// Self-import for overlay rendering (Svelte 5 replacement for <svelte:self>)
@@ -102,12 +103,10 @@
 	});
 
 	const markId = generateMarkId('line');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
-
-	// Ensure services are ready before inference (idempotent)
-	MarkLifecycle.ensureServices(coordinator);
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'line', {
@@ -136,7 +135,7 @@
 		lod: () => lod
 	});
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// 0. Scale Type Inference — reads from entry
 	const effectiveXScaleType = $derived.by(() =>
@@ -214,25 +213,19 @@
 			y: entry.y
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'x'
 		},
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([entry.x, entry.y] as FieldRef[]) : null
-		},
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip,
-		fitDomain: _isOverlay ? undefined : (entry.fitDomain as 'x' | 'y' | boolean | undefined),
 		passiveScales: _isOverlay
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry, {
+		resolveFitDomain: () => _isOverlay ? undefined : resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -266,16 +259,30 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId);
+		// Depend on fields that warrant lifecycle recreation (table, channels,
+		// scale types) — NOT config as a whole, which recomputes when entry.lod
+		// changes via setRungParam (LOD window size adjustments should re-query,
+		// not recreate the lifecycle).
+		void channelSelect;
+		void xScaleId;
+		void yScaleId;
+		void effectiveXScaleType;
+		void effectiveYScaleType;
 		untrack(() => {
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);
 			}
 			setup?.destroy();
 			setup = null;
-			// Don't create MarkLifecycle until scale type inference has resolved.
-			if (entry.table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					reactiveConfig,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroups.get(entry.selection as string | undefined)
+				);
 			}
 		});
 	});
@@ -351,11 +358,12 @@
 	let densityHost: DensityHost | null = $state(null);
 
 	$effect(() => {
-		if (!lodEnabled || !setup || !coordinator || !gpuCoordinator) return;
+		if (!lodEnabled || !setup || !queryEngine || !gpuCoordinator) return;
 		const decimate = lodDecimate;
-		const host = new DensityHost(gpuCoordinator, chartContext, coordinator, {
+		const host = new DensityHost(gpuCoordinator, chartContext, queryEngine, {
+			callerId: markId,
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
-				setup.buildViewportCountQuery('x', xLo, xHi, 'y', yLo, yHi),
+				setup.buildViewportCountQuery(xLo, xHi, yLo, yHi),
 			decimate
 		});
 		densityHost = host;
@@ -511,25 +519,31 @@
 		};
 	});
 
-	// Tooltip registration — reads from entry
+	// Tooltip registration — only guard conditions are tracked.
+	// The registration body runs in untrack to avoid reactive dependencies
+	// on scaleTypes, colorScaleState, etc. that recompute when overlay marks
+	// register scale requirements (causing spurious unregister/re-register
+	// cycles that clear currentMarkId).
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
 
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'line',
-				chartContext,
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'stroke',
-				markColor,
-				proximityAxis: entry.tooltipProximity,
-				constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'line',
+					chartContext,
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'stroke',
+					markColor,
+					proximityAxis: entry.tooltipProximity,
+					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -563,7 +577,7 @@
 			dotRadius={effectiveDotRadius}
 			globalAlpha={effectiveGlobalAlpha}
 			facetData={setup?.facetData}
-			dataVersion={setup?.client?.dataVersion || 0}
+			dataVersion={setup?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
 			{dotsRung}
 		/>
@@ -596,14 +610,6 @@
 			/>
 		{/if}
 	{/if}
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12">
-		Error: {setup.client.error.message}
-	</text>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
-		Loading data...
-	</text>
 {:else}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12">
 		Initializing mark...

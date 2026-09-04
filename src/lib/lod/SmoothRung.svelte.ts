@@ -6,7 +6,8 @@
 // Field references are getters so the node picks up channel reassignments.
 // =============================================================================
 
-import { RollingAvgNode } from '$lib/sql/rolling-avg';
+import { isNode, isAggregateExpression, type AggregateNode } from '@uwdata/mosaic-sql';
+import { RollingAvgNode, type RollingAvgInner } from '$lib/sql/rolling-avg';
 import type { SmoothMode } from '$lib/sql/rolling-avg';
 import type { LODRung } from './rung-types';
 
@@ -56,8 +57,16 @@ export class SmoothRung implements LODRung {
 			}
 			if (!this.node) {
 				const seriesField = this.#fields.partition();
+				// y may be a raw column name or an aggregate expression
+				// (e.g. avg('response_time')). Pass aggregates through as-is;
+				// stringify everything else to a column name.
+				const yField = this.#fields.y();
+				const inner: RollingAvgInner =
+					isNode(yField) && isAggregateExpression(yField)
+						? (yField as AggregateNode)
+						: String(yField);
 				this.node = new RollingAvgNode(
-					String(this.#fields.y()),
+					inner,
 					String(this.#fields.x()),
 					seriesField ? String(seriesField) : null,
 					this.#getWindow(),

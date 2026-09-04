@@ -4,7 +4,6 @@
 // This file is the single source of truth for types that cross module boundaries.
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
-import type { Selection, Coordinator, MosaicClient } from '@uwdata/mosaic-core';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 
@@ -58,13 +57,19 @@ export type ColorProp =
 // Transforms
 // ---------------------------------------------------------------------------
 
-/** A SQL transform modifies the Mosaic Query AST before execution. */
+/**
+ * A SQL transform modifies the Mosaic Query AST before execution.
+ * Receives the same MarkConfig as JS transforms (mark type + resolved
+ * channel aliases) so it can locate value/band columns in the select list.
+ */
 export interface SqlTransform {
 	stage: 'sql';
 	type: string;
 	/** Spec-format representation for export. Set by factory functions. */
 	spec?: Record<string, unknown>;
-	apply(query: SelectQuery): SelectQuery;
+	apply(query: SelectQuery, config?: MarkConfig): SelectQuery;
+	/** Channel aliases this transform adds to the result beyond the base select (e.g. stack's y0/y1). */
+	channels?: string[];
 	describe?(): string;
 }
 
@@ -204,12 +209,6 @@ export type CurveType =
 	| 'bump-y';
 
 // ---------------------------------------------------------------------------
-// Re-export Mosaic types for convenience
-// ---------------------------------------------------------------------------
-
-export type { Selection, Coordinator, MosaicClient };
-
-// ---------------------------------------------------------------------------
 // Sort configuration for marks
 // ---------------------------------------------------------------------------
 
@@ -234,7 +233,7 @@ export interface DomainConfig {
 /** Props shared by every mark component. */
 export interface BaseMarkProps {
 	table: string;
-	selection?: string | Selection;
+	selection?: string;
 	scheme?: ColorScheme;
 	limit?: number;
 	filterNulls?: boolean;
@@ -424,10 +423,6 @@ export interface ChartContext {
 	readonly binStepMultiplier: number | undefined;
 	adjustBinMultiplier?: (delta: number) => void;
 	setBinStepMultiplier?: (value: number) => void;
-
-	// Client registration
-	registerClient: (client: MosaicClient) => () => void;
-	readonly markClients: Set<MosaicClient> | undefined;
 
 	// Tooltip
 	readonly tooltipManager: TooltipManager | null;

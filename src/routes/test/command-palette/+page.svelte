@@ -1,26 +1,21 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
+	const { queryEngine } = initDivePlot();
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
+			await queryEngine.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString());
 
 			// Synthetic time series for line/area marks
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE timeseries AS
 				WITH RECURSIVE
 					points AS (

@@ -1,27 +1,18 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-
-			coord.manager.logQueries(true);
-			setContext('mosaic-coordinator', coord);
-
 			// Create a synthetic time series dataset for testing lines
 			// Multiple series with gaps and different patterns
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE timeseries AS
 				WITH RECURSIVE
 					-- Generate 200 points per series

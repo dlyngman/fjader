@@ -227,7 +227,6 @@
 			<a class="card" href="/test/debug">/test/debug</a>
 			<a class="card" href="/test/derived-interval">/test/derived-interval</a>
 			<a class="card" href="/test/domain-brush">/test/domain-brush</a>
-			<a class="card" href="/test/flechette-structure">/test/flechette-structure</a>
 			<a class="card" href="/test/gpu-minimal">/test/gpu-minimal</a>
 			<a class="card" href="/test/histogram">/test/histogram</a>
 			<a class="card" href="/test/jank-bisect">/test/jank-bisect</a>

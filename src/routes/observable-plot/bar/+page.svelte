@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -19,28 +18,22 @@
 	import { Grid } from '$lib/components/guides';
 	import { orderby, stack } from '$lib/transforms';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec([
-				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`),
-				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`),
+			await queryEngine.exec([
+				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`).toString(),
+				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`).toString(),
 				msql.loadCSV(
 					'statepop',
 					`${window.location.origin}/data/us-state-population-2010-2019.csv`,
 					{ header: true }
-				),
-				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
+				).toString(),
+				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
 			]);
 
 			isLoaded = true;
@@ -115,7 +108,10 @@
 									inset={0.5}
 									fill="body_mass"
 									scheme="turbo"
-									transforms={[orderby(msql.asc('body_mass')), stack({ direction: 'horizontal' })]}
+									transforms={[
+										orderby(msql.asc('body_mass')),
+										stack({ direction: 'horizontal', engine: 'js' })
+									]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

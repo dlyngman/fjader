@@ -1,7 +1,5 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { count } from '@uwdata/mosaic-sql';
-	import { getContext } from 'svelte';
 	import {
 		ChartContainer,
 		Grid,
@@ -14,8 +12,6 @@
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 
-	const coordinator = getContext('mosaic-coordinator');
-	const selection = Selection.crossfilter();
 </script>
 
 <div class="demo-container">

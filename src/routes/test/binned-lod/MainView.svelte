@@ -1,10 +1,7 @@
 <script>
 	import { count } from '@uwdata/mosaic-sql';
-	import { getContext } from 'svelte';
 	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, RectYMark } from '$lib/components';
 	import { bin } from '$lib/sql/bin';
-
-	const coordinator = getContext('mosaic-coordinator');
 
 	// LOD rung diagnostics (polled periodically)
 	let lodSurface = $state(null);

@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -18,22 +17,17 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
+
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec([
-				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`),
-				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`)
+			await queryEngine.exec([
+				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString(),
+				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`).toString()
 			]);
 
 			isLoaded = true;

@@ -1,7 +1,7 @@
 // src/lib/transforms/transforms.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { filter, topN, stack, stackY, stackX, normalize, withImplicitStack } from './index';
+import { filter, topN, stack, stackY, stackX, normalize, dodge, withImplicitStack } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
@@ -34,7 +34,7 @@ describe('Transforms', () => {
 				{ x: 'C', y: 50 }
 			]);
 
-			const transform = topN(2);
+			const transform = topN(2, { engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			expect(result.length).toBe(2);
@@ -64,7 +64,7 @@ describe('Transforms', () => {
 				{ x: 'Feb', y: 15, region: 'North' }
 			]);
 
-			const transform = stack();
+			const transform = stackY({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0');
@@ -89,7 +89,7 @@ describe('Transforms', () => {
 				{ x: 'Feb', y: 25, series: 'South' }
 			]);
 
-			const transform = stackY();
+			const transform = stackY({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0') as Float32Array;
@@ -115,7 +115,7 @@ describe('Transforms', () => {
 				{ x: 'Jan', y: 20, region: 'South' }
 			]);
 
-			const transform = stackY({ offset: 'expand' });
+			const transform = stackY({ offset: 'expand', engine: 'js' });
 			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0') as Float32Array;
@@ -140,7 +140,7 @@ describe('Transforms', () => {
 				{ x: 'Feb', y: 15, series: 'B' }
 			]);
 
-			const transform = stackY();
+			const transform = stackY({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'area', table: 't', x: 'x', y: 'y' });
 
 			const y0 = result.getColumn('y0') as Float32Array;
@@ -169,7 +169,7 @@ describe('Transforms', () => {
 				{ y: 'A', x: 20 }
 			]);
 
-			const transform = stackX();
+			const transform = stackX({ engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			const x0 = result.getColumn('x0') as Float32Array;
@@ -188,7 +188,7 @@ describe('Transforms', () => {
 				{ x: 'Jan', y: 20, region: 'South' }
 			]);
 
-			const stackTransform = stackY();
+			const stackTransform = stackY({ engine: 'js' });
 			const stackedResult = stackTransform.apply(stacked, {
 				markType: 'area',
 				table: 't',
@@ -196,7 +196,7 @@ describe('Transforms', () => {
 				y: 'y'
 			});
 
-			const normalizeTransform = normalize();
+			const normalizeTransform = normalize({ engine: 'js' });
 			const result = normalizeTransform.apply(stackedResult, {
 				markType: 'area',
 				table: 't',
@@ -230,21 +230,34 @@ describe('Transforms', () => {
 			const result = withImplicitStack([stackY()], false, 'y');
 			expect(result).toHaveLength(1); // no duplicate
 		});
+
+		it('adds SQL stack by default (no preceding JS transform)', () => {
+			const result = withImplicitStack([topN(5)], false, 'y');
+			expect(result[1].stage).toBe('sql');
+		});
+
+		it('adds JS stack after a JS-stage transform (e.g. topN includeOthers), never SQL-after-JS', () => {
+			const result = withImplicitStack([topN(5, { includeOthers: true })], false, 'y');
+			expect(result[1].stage).toBe('js');
+			// Must not throw — this is the regression: the auto-injected stack
+			// used to always default to SQL, appended after a JS transform.
+			expect(() => new TransformCompiler(result)).not.toThrow();
+		});
 	});
 
 	describe('TransformCompiler', () => {
 		it('separates SQL and JS transforms', () => {
-			const transforms = [filter(gt('revenue', 0)), topN(10), stack()];
+			const transforms = [filter(gt('revenue', 0)), topN(10), stack(), dodge()];
 
 			const compiler = new TransformCompiler(transforms);
 
-			expect(compiler.sqlTransforms).toHaveLength(1);
-			expect(compiler.jsTransforms).toHaveLength(2);
+			expect(compiler.sqlTransforms).toHaveLength(3); // filter + topN + stack (SQL by default)
+			expect(compiler.jsTransforms).toHaveLength(1); // dodge
 		});
 
 		it('throws on invalid ordering', () => {
 			const transforms = [
-				topN(10), // JS
+				stackY({ engine: 'js' }), // JS
 				filter(gt('x', 0)) // SQL - wrong order!
 			];
 
@@ -259,6 +272,54 @@ describe('Transforms', () => {
 
 			expect(result.toString()).toContain('revenue');
 			expect(result.toString()).toContain('> 0');
+		});
+
+		it('applies SQL topN CTE to query using mark config aliases', () => {
+			const compiler = new TransformCompiler([topN(3)], {
+				markType: 'bary',
+				table: 'sales',
+				x: 'x',
+				y: 'y2'
+			});
+
+			const q = Query.from('sales')
+				.select({ x: column('category'), y2: sum('revenue') })
+				.groupby(column('category'));
+			const sql = compiler.applyToQuery(q).toString();
+
+			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC\)/);
+			expect(sql).toMatch(/"__topn_rank" <= 3/);
+		});
+
+		it('SQL topN swaps axes for barx', () => {
+			const compiler = new TransformCompiler([topN(3)], {
+				markType: 'barx',
+				table: 'sales',
+				x: 'x2',
+				y: 'y'
+			});
+
+			const q = Query.from('sales')
+				.select({ x2: sum('revenue'), y: column('category') })
+				.groupby(column('category'));
+			const sql = compiler.applyToQuery(q).toString();
+
+			expect(sql).toMatch(/ORDER BY "x2" DESC/);
+		});
+
+		it('SQL topN throws a clear error when the value alias is missing', () => {
+			const compiler = new TransformCompiler([topN(3)], {
+				markType: 'bary',
+				table: 'sales',
+				x: 'x',
+				y: 'y'
+			});
+
+			const q = Query.from('sales')
+				.select({ x: column('category'), y2: sum('revenue') })
+				.groupby(column('category'));
+
+			expect(() => compiler.applyToQuery(q)).toThrow(/value column "y" not in query select/);
 		});
 
 		it('applies JS transforms via DataAccessor', () => {
@@ -283,16 +344,6 @@ describe('Transforms', () => {
 			expect(without.hasStackTransform()).toBe(false);
 		});
 
-		it('detects CTEs', () => {
-			const compiler = new TransformCompiler([]);
-
-			// Simulate a query with CTE
-			const badQuery = {
-				toString: () => 'WITH temp AS (SELECT * FROM t) SELECT * FROM temp'
-			};
-
-			expect(() => compiler.validateQuery(badQuery as unknown as SelectQuery)).toThrow(/CTE/);
-		});
 	});
 
 	describe('Auto Binning', () => {

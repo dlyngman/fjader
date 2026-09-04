@@ -6,7 +6,7 @@
  */
 
 import { render as divePlotRender } from '$lib/spec';
-import { getOrCreateCoordinator, isUsingRestConnector } from '$lib/spec/LazyCoordinator';
+import { getOrCreateQueryEngine, isUsingRestConnector } from '$lib/spec/LazyQueryEngine';
 import { loadArrowIPCTable } from './loadArrowIPC';
 
 export interface ManifestEntry {
@@ -35,7 +35,7 @@ export async function renderFromData(
 	const spec = JSON.parse(specJson);
 	const manifest: ManifestEntry[] = JSON.parse(manifestJson);
 
-	const coordinator = await getOrCreateCoordinator();
+	const queryEngine = await getOrCreateQueryEngine();
 
 	// Skip Arrow data loading when using REST connector — data is already
 	// loaded into Python-side DuckDB by the Streamlit render function.
@@ -43,12 +43,12 @@ export async function renderFromData(
 		await Promise.all(
 			manifest.map((entry) => {
 				const ipcBytes = getTableIPC(entry);
-				return loadArrowIPCTable(coordinator, entry.name, ipcBytes, entry.hash);
+				return loadArrowIPCTable(queryEngine, entry.name, ipcBytes, entry.hash);
 			})
 		);
 	}
 
-	return divePlotRender(el, spec, { coordinator });
+	return divePlotRender(el, spec, { queryEngine });
 }
 
 /** Display a styled error message inline in the target element. */

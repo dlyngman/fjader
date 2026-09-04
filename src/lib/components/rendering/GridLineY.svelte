@@ -135,8 +135,8 @@
 
 	// Update instance count
 	$effect(() => {
-		if (renderer?.resourcesCreated && positions) {
-			renderer.updateInstanceCount(positions.length);
+		if (renderer?.resourcesCreated) {
+			renderer.updateInstanceCount(positions?.length ?? 0);
 		}
 	});
 

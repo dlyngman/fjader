@@ -442,11 +442,15 @@
 	// Instance count — with drawIndirect the GPU controls the actual count,
 	// but we still set a CPU-side value so the renderer.instanceCount === 0 guard works.
 	$effect(() => {
-		if (renderer?.resourcesCreated && xData && xData.length > 1) {
-			const count = m4Decimator?.configured
-				? Math.max(m4Decimator.outputSize, xData.length)
-				: xData.length;
-			renderer.updateInstanceCount(count);
+		if (renderer?.resourcesCreated) {
+			if (xData && xData.length > 1) {
+				const count = m4Decimator?.configured
+					? Math.max(m4Decimator.outputSize, xData.length)
+					: xData.length;
+				renderer.updateInstanceCount(count);
+			} else {
+				renderer.updateInstanceCount(0);
+			}
 		}
 	});
 

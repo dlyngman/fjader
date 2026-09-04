@@ -1,15 +1,10 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	setCoordinators();
 
-	const wasm = wasmConnector();
-	const coord = new Coordinator();
-	coord.databaseConnector(wasm);
-	setContext('mosaic-coordinator', coord);
+	const { queryEngine } = initDivePlot();
 
 	let isLoaded = $state(false);
 	let loadError = $state(null);
@@ -17,7 +12,7 @@
 	onMount(async () => {
 		try {
 			// Small aggregated dataset: 6 months x 5 categories
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE stacked_categories AS
 				SELECT
 					month,
@@ -35,7 +30,7 @@
 			`);
 
 			// Fine-resolution dataset: 500 x-positions x 5 series
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE stacked_timeseries AS
 				WITH RECURSIVE
 					points AS (

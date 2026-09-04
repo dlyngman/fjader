@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
-	import { clauseInterval } from '@uwdata/mosaic-core';
+	import { isBetween } from '@uwdata/mosaic-sql';
 	import { BrushState1D } from './brush-state.svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import {
@@ -13,22 +13,25 @@
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import { getSelectionRegistry } from '$lib/selection';
-	import type { ClauseSource } from '@uwdata/mosaic-core';
-	import type { ScaleDomain } from '@uwdata/mosaic-sql';
+	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	/** Helper: cast D3Scale to one with invert() for continuous scales. */
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
 
 	interface Props {
+		/** Filter group name — selects which FilterGroup this brush writes to. */
 		selection?: string;
 		field?: FieldRef;
 		axis?: 'x' | 'y';
 	}
 
-	let { selection: selectionName = 'brush', field, axis = 'x' }: Props = $props();
+	let { selection, field, axis = 'x' }: Props = $props();
 
-	const group = getSelectionRegistry()!.getGroup(selectionName);
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
+	const filterGroup = filterGroups.get(selection);
+	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();
@@ -59,15 +62,15 @@
 		)
 	);
 
-	const { sel: selection, off: unregister } = group.createLocal('single', {
-		source,
-		augment: (clause) => ({
+	const brushHandle: BrushHandle = filterGroup.createBrush({
+		sourceId: source,
+		excludeMarkIds: () => new Set(chart.config.entries.keys()),
+		augment: (value) => ({
 			kind: 'range',
 			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
 			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
-			values: clause?.value ? [(clause.value as number[])[0], (clause.value as number[])[1]] : []
-		}),
-		onVisualClear: () => brush.clear()
+			values: value ? [(value as number[])[0], (value as number[])[1]] : []
+		})
 	});
 
 	// Pointer state (reused to avoid GC)
@@ -137,23 +140,9 @@
 		return isX ? innerPoint.x : innerPoint.y;
 	}
 
-	// Emit Mosaic filter clause for the given data range (bridge-only path)
 	function emitFilterClause(dataMin: number, dataMax: number) {
-		if (!selection || !columnRef) return;
-		const s = getScale();
-		// Always 'linear': DivePlot's columnRef already encodes time→offset,
-		// so values are plain floats. Declaring 'time' causes Mosaic to wrap
-		// with epoch_ms() which fails on FLOAT.
-		const clause = clauseInterval(columnRef, [dataMin, dataMax] as ScaleDomain, {
-			source: source as unknown as ClauseSource,
-			clients: chart.markClients,
-			scale: {
-				type: 'linear',
-				domain: s!.domain() as ScaleDomain,
-				range: s!.range() as [number, number]
-			}
-		});
-		selection.update(clause);
+		if (!columnRef) return;
+		brushHandle.update(isBetween(columnRef, [dataMin, dataMax]), [dataMin, dataMax]);
 	}
 
 	// Update scale selectionExtent and optionally emit Mosaic clause
@@ -178,30 +167,16 @@
 		emitFilterClause(dataMin, dataMax);
 	}
 
-	// Pre-aggregation on pointer enter (only with bridge)
 	function handlePointerEnter() {
-		if (!selection?.activate) return;
-		const s = getScale();
-		if (!s || !columnRef) return;
-
-		const range: ScaleDomain = brush.active
-			? [
-					Math.min(brush.dataMin as number, brush.dataMax as number),
-					Math.max(brush.dataMin as number, brush.dataMax as number)
-				]
-			: [0, 1];
-
-		selection.activate(
-			clauseInterval(columnRef, range, {
-				source: source as unknown as ClauseSource,
-				clients: chart.markClients,
-				scale: {
-					type: 'linear',
-					domain: s!.domain() as ScaleDomain,
-					range: s!.range() as [number, number]
-				}
-			})
-		);
+		const scale = getScale();
+		if (!scale || !columnRef) return;
+		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), [
+			{
+				columnRef,
+				domain: scale.domain() as [number, number],
+				pixelExtent: isX ? chart.innerWidth : chart.innerHeight
+			}
+		]);
 	}
 
 	function handleWheel(event: WheelEvent) {
@@ -226,20 +201,11 @@
 		lastEmittedMin = null;
 		lastEmittedMax = null;
 
-		// Clear selectionExtent on the scale
 		if (scaleState instanceof LinearScaleState) {
 			scaleState.clearSelectionExtent();
 		}
 
-		// Clear Mosaic selection if bridge is provided
-		if (selection) {
-			selection.update({
-				predicate: null,
-				source: source as unknown as ClauseSource,
-				clients: chart.markClients,
-				value: null
-			});
-		}
+		brushHandle.clear();
 	}
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
@@ -358,7 +324,7 @@
 			chart.onInteractorPointerEnter = null;
 			window.removeEventListener('keydown', handleKeyDown);
 			window.removeEventListener('keyup', handleKeyUp);
-			unregister?.();
+			brushHandle.destroy();
 		};
 	});
 </script>

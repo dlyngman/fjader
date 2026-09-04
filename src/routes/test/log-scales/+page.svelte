@@ -1,24 +1,17 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
 			// Generate data for log/symlog scale testing
-			await coord.exec(`
+			await queryEngine.exec(`
 				CREATE TABLE log_data AS
 				WITH RECURSIVE
 					points AS (

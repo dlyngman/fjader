@@ -2,18 +2,14 @@
  * Transform Pipeline for Mosaic-based visualizations
  *
  * Transforms are divided into two stages:
- * - SQL: Modify the Query AST (WHERE, HAVING, LIMIT, ORDER BY)
+ * - SQL: Modify the Query AST (WHERE, HAVING, LIMIT, ORDER BY, CTE wrapping)
  * - JS: Process data via the DataAccessor interface (zero-copy on Arrow data)
- *
- * SQL transforms must maintain flat queries (no CTEs) to preserve
- * Mosaic's PreAggregator optimization.
  */
 
+import { Query, column, sql as sqlTag } from '@uwdata/mosaic-sql';
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { SqlTransform, JsTransform, Transform, MarkConfig, ScaleMap } from '$lib/types';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
-
-type Query = SelectQuery;
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
@@ -24,7 +20,7 @@ export function filter(condition: ExprNode): SqlTransform {
 		stage: 'sql',
 		type: 'filter',
 		spec: { transform: 'filter', condition: condition.toString() },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.where(condition);
 		},
 		describe() {
@@ -38,7 +34,7 @@ export function having(condition: ExprNode): SqlTransform {
 		stage: 'sql',
 		type: 'having',
 		spec: { transform: 'having', condition: condition.toString() },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.having(condition);
 		},
 		describe() {
@@ -52,7 +48,7 @@ export function limit(n: number): SqlTransform {
 		stage: 'sql',
 		type: 'limit',
 		spec: { transform: 'limit', value: n },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.limit(n);
 		},
 		describe() {
@@ -66,7 +62,7 @@ export function orderby(...expressions: ExprNode[]): SqlTransform {
 		stage: 'sql',
 		type: 'orderby',
 		spec: { transform: 'orderby', fields: expressions.map((e) => e.toString()) },
-		apply(query: Query) {
+		apply(query: SelectQuery) {
 			return query.orderby(...expressions);
 		},
 		describe() {
@@ -80,15 +76,136 @@ export function orderby(...expressions: ExprNode[]): SqlTransform {
 // =============================================================================
 
 // -----------------------------------------------------------------------------
-// topN — sorts and takes top N rows (row-level operation, converts to objects)
+// topN — filter to top N categories by aggregate value
+//
+// SQL path (default): CTE wrapping with ROW_NUMBER / LIMIT ranking.
+// JS path (engine: 'js'): post-query DataAccessor processing.
+// includeOthers only supported on JS path.
 // -----------------------------------------------------------------------------
 
 interface TopNOptions {
+	/** Value channel to rank by. Default: the mark's value axis (y, or x for barx). */
 	by?: string;
 	includeOthers?: boolean;
+	/** Force JS execution path. Default: SQL. */
+	engine?: 'sql' | 'js';
 }
 
-export function topN(n: number, options: TopNOptions = {}): JsTransform {
+export function topN(n: number, options: TopNOptions & { engine: 'js' }): JsTransform;
+export function topN(n: number, options: TopNOptions & { includeOthers: true }): JsTransform;
+export function topN(n: number, options?: TopNOptions): SqlTransform;
+export function topN(n: number, options: TopNOptions = {}): SqlTransform | JsTransform {
+	// includeOthers requires JS path (complex aggregation not yet in SQL)
+	if (options.includeOthers || options.engine === 'js') {
+		return topNJS(n, options);
+	}
+	return topNSQL(n, options);
+}
+
+/** Output aliases of a SelectQuery (the column names its result exposes). */
+function getSelectAliases(query: SelectQuery): string[] {
+	return query._select.map((s) => s.alias).filter(Boolean);
+}
+
+/** Build a passthrough select: all aliases as column refs. */
+function passthroughSelect(aliases: string[]): Record<string, ExprNode> {
+	const sel: Record<string, ExprNode> = {};
+	for (const a of aliases) sel[a] = column(a);
+	return sel;
+}
+
+/**
+ * Resolve the value/band aliases for a channel-aware SQL transform from the
+ * mark config, validated against the query's own select list. Mirrors the
+ * JS path: value axis is y for vertical marks, x for horizontal (barx); the
+ * mark lifecycle has already resolved y → y2 etc. for extent-based marks.
+ * Shared by topN and normalize — the two transforms that need "which
+ * channel is the measure, which is the group" (proposals/review_preagg_v2_phase2.md).
+ */
+function resolveValueAndBand(
+	aliases: string[],
+	options: { by?: string },
+	config: MarkConfig | undefined,
+	transformName: string
+): { by: string; band: string } {
+	const isHorizontal = config?.markType === 'barx';
+	const by = options.by ?? (isHorizontal ? config?.x : config?.y);
+	const band = isHorizontal ? config?.y : config?.x;
+
+	if (!by || !aliases.includes(by)) {
+		throw new Error(
+			`${transformName}: value column "${by ?? '(none)'}" not in query select [${aliases.join(', ')}].` +
+				CONSTANT_CHANNEL_HINT
+		);
+	}
+	if (!band || !aliases.includes(band)) {
+		throw new Error(
+			`${transformName}: band column "${band ?? '(none)'}" not in query select [${aliases.join(', ')}].` +
+				CONSTANT_CHANNEL_HINT
+		);
+	}
+	return { by, band };
+}
+
+/** A resolved channel missing from the query select is usually a constant
+ *  (e.g. x={1}) — constants are injected client-side after the query runs,
+ *  so a SQL transform can never see them. Force the JS fallback instead. */
+const CONSTANT_CHANNEL_HINT =
+	' If this channel is a constant (a plain number prop), pass { engine: \'js\' } — SQL transforms run before constants are injected.';
+
+/** topN also needs the series (fill) channel, when present in the select list. */
+function resolveTopNColumns(
+	aliases: string[],
+	options: TopNOptions,
+	config: MarkConfig | undefined
+): { by: string; band: string; series: string | null } {
+	const { by, band } = resolveValueAndBand(aliases, options, config, 'topN');
+	const fill = config?.fill;
+	const series = typeof fill === 'string' && aliases.includes(fill) ? fill : null;
+	return { by, band, series };
+}
+
+function topNSQL(n: number, options: TopNOptions): SqlTransform {
+	return {
+		stage: 'sql',
+		type: 'topN',
+		spec: { transform: 'topN', n, ...(options.by ? { by: options.by } : {}) },
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const { by, band, series } = resolveTopNColumns(aliases, options, config);
+
+			if (series) {
+				// Grouped: compute total per band category, take top N, filter.
+				// Ranks categories by SUM(value) across all series, then keeps
+				// all series rows for the winning categories.
+				const topCatsQuery = Query.from({ __topn_base: query })
+					.select({ [band]: column(band) })
+					.groupby(column(band))
+					.orderby(sqlTag`SUM(${column(by)}) DESC`)
+					.limit(n);
+
+				return Query.from({ __topn_src: query })
+					.select(passthroughSelect(aliases))
+					.where(sqlTag`${column(band)} IN (${topCatsQuery})`);
+			}
+
+			// Simple: rank rows by value, filter to top N.
+			const ranked = Query.from({ __topn_base: query }).select({
+				...passthroughSelect(aliases),
+				__topn_rank: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+			});
+
+			return Query.from({ __topn: ranked })
+				.select(passthroughSelect(aliases))
+				.where(sqlTag`"__topn_rank" <= ${n}`);
+		},
+		describe() {
+			return `Top ${n} (SQL)`;
+		}
+	};
+}
+
+function topNJS(n: number, options: TopNOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'topN',
@@ -131,7 +248,7 @@ export function topN(n: number, options: TopNOptions = {}): JsTransform {
 			return topNSimple(data, n, valueCol, bandField, options);
 		},
 		describe() {
-			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''}`;
+			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''} (JS)`;
 		}
 	};
 }
@@ -266,17 +383,134 @@ function topNGrouped(
 }
 
 // -----------------------------------------------------------------------------
-// stackY / stackX — cumulative offset stacking (typed array native)
+// stackY / stackX — cumulative offset stacking
+//
+// SQL path (default): cumulative window SUM, PARTITION BY band ORDER BY the
+// series channel. The series channel is whatever's already in the select —
+// when the mark has an ordinal color scale on fill, MarkLifecycleV2 has
+// already CASE-inlined it to a domain-ordered integer index
+// (#inlineCaseExpressions), so ordering by it reproduces the legend's
+// stacking order for free. No color-domain plumbing needed here, unlike the
+// legacy JS path below, which never looks at fill at all and instead relies
+// on row encounter order (the query's plain ORDER BY on the raw fill value —
+// alphabetical, can diverge from an explicit non-alphabetical legend order).
+// NaN in the value column must not poison the running total for later rows
+// in the partition (matches the JS path's documented gap semantics) — done
+// with a FILTER clause excluding NaN rows from the SUM, and a CASE forcing
+// NaN back onto the row whose own value is NaN.
+// JS path (engine: 'js'): unchanged typed-array implementation, fallback.
 // -----------------------------------------------------------------------------
 
 type StackOffset = null | 'expand' | 'center';
 
 interface StackYOptions {
 	offset?: StackOffset;
+	/** Force JS execution path. Default: SQL. */
+	engine?: 'sql' | 'js';
 }
 
 interface StackXOptions {
 	offset?: StackOffset;
+	/** Force JS execution path. Default: SQL. */
+	engine?: 'sql' | 'js';
+}
+
+export function stackY(options: StackYOptions & { engine: 'js' }): JsTransform;
+export function stackY(options?: StackYOptions): SqlTransform;
+export function stackY(options: StackYOptions = {}): SqlTransform | JsTransform {
+	if (options.engine === 'js') return stackYJS(options);
+	return stackSQL('y', options);
+}
+
+export function stackX(options: StackXOptions & { engine: 'js' }): JsTransform;
+export function stackX(options?: StackXOptions): SqlTransform;
+export function stackX(options: StackXOptions = {}): SqlTransform | JsTransform {
+	if (options.engine === 'js') return stackXJS(options);
+	return stackSQL('x', options);
+}
+
+/** Resolve band (group) / value column aliases for a stack direction, validated against the select list. */
+function resolveStackColumns(
+	aliases: string[],
+	config: MarkConfig | undefined,
+	direction: 'y' | 'x'
+): { band: string; value: string; series: string | null } {
+	const bandAxis = direction === 'y' ? 'x' : 'y';
+	const band = config?.[bandAxis] as string | undefined;
+	const value = config?.[direction] as string | undefined;
+
+	if (!band || !aliases.includes(band)) {
+		throw new Error(
+			`stack${direction === 'y' ? 'Y' : 'X'}: band column "${band ?? '(none)'}" not in query select [${aliases.join(', ')}].` +
+				CONSTANT_CHANNEL_HINT
+		);
+	}
+	if (!value || !aliases.includes(value)) {
+		throw new Error(
+			`stack${direction === 'y' ? 'Y' : 'X'}: value column "${value ?? '(none)'}" not in query select [${aliases.join(', ')}].` +
+				CONSTANT_CHANNEL_HINT
+		);
+	}
+	const fill = config?.fill;
+	const series = typeof fill === 'string' && aliases.includes(fill) ? fill : null;
+	return { band, value, series };
+}
+
+function stackSQL(direction: 'y' | 'x', options: StackYOptions | StackXOptions): SqlTransform {
+	const [loName, hiName] = direction === 'y' ? ['y0', 'y1'] : ['x0', 'x1'];
+
+	return {
+		stage: 'sql',
+		type: 'stack',
+		spec: {
+			transform: direction === 'y' ? 'stackY' : 'stackX',
+			...(options.offset ? { offset: options.offset } : {})
+		},
+		channels: [loName, hiName],
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const { band, value, series } = resolveStackColumns(aliases, config, direction);
+
+			const valueCol = column(value);
+			const bandCol = column(band);
+			const notNaN = sqlTag`NOT isnan(${valueCol})`;
+
+			// Cumulative sum through the current row, excluding NaN rows from the
+			// running total (they don't poison later segments). Without a series
+			// column there's one row per band, so the "cumulative" total already
+			// equals that row's own value — correct degenerate case.
+			const cumulative = series
+				? sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${bandCol} ORDER BY ${column(series)})`
+				: sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${bandCol})`;
+
+			// Force this row's own boundaries to NaN when its value is NaN,
+			// instead of silently dropping it from the running total.
+			let hi: ExprNode = sqlTag`CASE WHEN ${notNaN} THEN ${cumulative} ELSE 'NaN'::REAL END`;
+			let lo: ExprNode = sqlTag`${hi} - ${valueCol}`;
+
+			if (options.offset === 'expand' || options.offset === 'center') {
+				const total = sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${bandCol})`;
+				if (options.offset === 'expand') {
+					lo = sqlTag`(${lo}) / NULLIF(${total}, 0)`;
+					hi = sqlTag`(${hi}) / NULLIF(${total}, 0)`;
+				} else {
+					lo = sqlTag`(${lo}) - (${total}) / 2`;
+					hi = sqlTag`(${hi}) - (${total}) / 2`;
+				}
+			}
+
+			const outSelect = passthroughSelect(aliases);
+			outSelect[loName] = lo;
+			outSelect[hiName] = hi;
+
+			return Query.from({ __stack_base: query }).select(outSelect);
+		},
+		describe() {
+			const parts = [direction === 'y' ? 'Stack Y (SQL)' : 'Stack X (SQL)'];
+			if (options.offset) parts.push(`(${options.offset})`);
+			return parts.join(' ');
+		}
+	};
 }
 
 /**
@@ -284,17 +518,17 @@ interface StackXOptions {
  * Follows Observable Plot's stackY convention.
  * Data must be sorted by (groupField, series) for correct results.
  */
-export function stackY(options: StackYOptions = {}): JsTransform {
+function stackYJS(options: StackYOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'stack',
-		spec: { transform: 'stackY', ...(options.offset ? { offset: options.offset } : {}) },
+		spec: { transform: 'stackY', engine: 'js', ...(options.offset ? { offset: options.offset } : {}) },
 		channels: ['y0', 'y1'],
 		apply(data: DataAccessor, config: MarkConfig) {
 			return computeStack(data, config.x!, config.y!, 'y0', 'y1', options.offset ?? null);
 		},
 		describe() {
-			const parts = ['Stack Y'];
+			const parts = ['Stack Y (JS)'];
 			if (options.offset) parts.push(`(${options.offset})`);
 			return parts.join(' ');
 		}
@@ -305,17 +539,17 @@ export function stackY(options: StackYOptions = {}): JsTransform {
  * Stack horizontally: groups on y, accumulates x values into x0/x1.
  * Follows Observable Plot's stackX convention.
  */
-export function stackX(options: StackXOptions = {}): JsTransform {
+function stackXJS(options: StackXOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'stack',
-		spec: { transform: 'stackX', ...(options.offset ? { offset: options.offset } : {}) },
+		spec: { transform: 'stackX', engine: 'js', ...(options.offset ? { offset: options.offset } : {}) },
 		channels: ['x0', 'x1'],
 		apply(data: DataAccessor, config: MarkConfig) {
 			return computeStack(data, config.y!, config.x!, 'x0', 'x1', options.offset ?? null);
 		},
 		describe() {
-			const parts = ['Stack X'];
+			const parts = ['Stack X (JS)'];
 			if (options.offset) parts.push(`(${options.offset})`);
 			return parts.join(' ');
 		}
@@ -398,35 +632,89 @@ function computeStack(
  */
 interface LegacyStackOptions {
 	direction?: 'vertical' | 'horizontal';
+	/** Force JS execution path. Default: SQL. Required when the stacked
+	 *  value/band channel is a constant (e.g. x={1}) — constants are
+	 *  injected client-side after the query runs, so they don't exist yet
+	 *  when a SQL transform assembles the query. */
+	engine?: 'sql' | 'js';
 }
 
-export function stack(options: LegacyStackOptions = {}): JsTransform {
-	const { direction = 'vertical' } = options;
-	if (direction === 'horizontal') return stackX();
-	return stackY();
+export function stack(options: LegacyStackOptions & { engine: 'js' }): JsTransform;
+export function stack(options?: LegacyStackOptions): SqlTransform;
+export function stack(options: LegacyStackOptions = {}): SqlTransform | JsTransform {
+	const { direction = 'vertical', ...rest } = options;
+	if (direction === 'horizontal') {
+		return rest.engine === 'js' ? stackXJS(rest) : stackSQL('x', rest);
+	}
+	return rest.engine === 'js' ? stackYJS(rest) : stackSQL('y', rest);
 }
 
 // -----------------------------------------------------------------------------
 // normalize — rescale values to percentages within each group
+//
+// SQL path (default): window aggregate, value * 100 / SUM(value) OVER (band).
+// Operates on the raw (pre-stack) value column, so it must precede stackY/
+// stackX in the transforms array — normalize-then-stack commutes with
+// stack-then-normalize (scaling by a constant commutes with cumulative sum),
+// so this produces identical y0/y1 to the old stack-then-normalize order.
+// JS path (engine: 'js'): legacy post-query behavior, including the
+// stacked-data (y0/y1) special case, kept for callers that still order
+// [stack(), normalize()].
 // -----------------------------------------------------------------------------
 
-export function normalize(_options: Record<string, unknown> = {}): JsTransform {
+interface NormalizeOptions {
+	/** Value channel to normalize. Default: the mark's value axis (y, or x for barx). */
+	by?: string;
+	/** Force JS execution path. Default: SQL. */
+	engine?: 'sql' | 'js';
+}
+
+export function normalize(options: NormalizeOptions & { engine: 'js' }): JsTransform;
+export function normalize(options?: NormalizeOptions): SqlTransform;
+export function normalize(options: NormalizeOptions = {}): SqlTransform | JsTransform {
+	if (options.engine === 'js') return normalizeJS(options);
+	return normalizeSQL(options);
+}
+
+function normalizeSQL(options: NormalizeOptions): SqlTransform {
+	return {
+		stage: 'sql',
+		type: 'normalize',
+		spec: { transform: 'normalize', ...(options.by ? { by: options.by } : {}) },
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const { by, band } = resolveValueAndBand(aliases, options, config, 'normalize');
+
+			const outSelect = passthroughSelect(aliases);
+			outSelect[by] = sqlTag`${column(by)} * 100 / NULLIF(SUM(${column(by)}) OVER (PARTITION BY ${column(band)}), 0)`;
+
+			return Query.from({ __normalize_base: query }).select(outSelect);
+		},
+		describe() {
+			return 'Normalize to percentages (SQL)';
+		}
+	};
+}
+
+function normalizeJS(_options: NormalizeOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'normalize',
-		spec: { transform: 'normalize' },
+		spec: { transform: 'normalize', engine: 'js' },
 		apply(data: DataAccessor, config: MarkConfig) {
 			if (data.length === 0) return data;
 
 			const n = data.length;
-			const groupField = config.x!;
-			const valueField = config.y!;
+			// barx swaps value/band axes, same convention as topNJS.
+			const isHorizontal = config.markType === 'barx';
+			const groupField = (isHorizontal ? config.y : config.x)!;
+			const valueField = (isHorizontal ? config.x : config.y)!;
 
 			const groupCol = data.getColumn(groupField);
 			const valueCol = data.getColumn(valueField);
 			if (!groupCol || !valueCol) return data;
 
-			// Check if stacked (y0/y1 overlays exist)
+			// Check if stacked (y0/y1 overlays exist; x0/x1 for barx not handled here — SQL path is default)
 			const y0Col = data.getColumn('y0');
 			const y1Col = data.getColumn('y1');
 			const isStacked = y0Col !== null && y1Col !== null;
@@ -475,7 +763,7 @@ export function normalize(_options: Record<string, unknown> = {}): JsTransform {
 			}
 		},
 		describe() {
-			return 'Normalize to percentages';
+			return 'Normalize to percentages (JS)';
 		}
 	};
 }
@@ -545,6 +833,12 @@ export function dodge(options: DodgeOptions = {}): JsTransform {
  * Mirrors Observable Plot's maybeStackY/maybeStackX: marks that specify only
  * `y` (not `y1`/`y2`) get automatic stacking. Specifying explicit bounds
  * opts out.
+ *
+ * Stack defaults to SQL, but appending it after a JS-stage transform (e.g.
+ * topN with includeOthers) would violate "SQL must precede JS" — and
+ * correctly so: stacking has to run on the JS-transformed result in that
+ * case, which only JS can do. Force the JS engine when a JS transform
+ * already precedes it; otherwise take the SQL default.
  */
 export function withImplicitStack(
 	transforms: Transform[],
@@ -553,7 +847,15 @@ export function withImplicitStack(
 ): Transform[] {
 	if (hasExplicitBounds) return transforms;
 	if (transforms.some((t) => t.type === 'stack')) return transforms;
-	return [...transforms, direction === 'y' ? stackY() : stackX()];
+	const needsJS = transforms.some((t) => t.stage === 'js');
+	const implicitStack = needsJS
+		? direction === 'y'
+			? stackY({ engine: 'js' })
+			: stackX({ engine: 'js' })
+		: direction === 'y'
+			? stackY()
+			: stackX();
+	return [...transforms, implicitStack];
 }
 
 export { TransformCompiler } from './TransformCompiler';

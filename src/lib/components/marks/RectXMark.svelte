@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -12,12 +12,11 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import { withImplicitStack } from '$lib/transforms';
 	import { isNode } from '@uwdata/mosaic-sql';
 	import type {
@@ -25,10 +24,11 @@
 		ScaleType,
 		BaseMarkProps,
 		RectOffsetProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props extends BaseMarkProps, RectOffsetProps {
 		x: FieldRef;
@@ -70,13 +70,11 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('rectx');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const gpuCoordinator = getGPUContext();
-
-	// Ensure services are ready before inference (idempotent)
-	MarkLifecycle.ensureServices(coordinator);
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'rectx', {
@@ -113,7 +111,7 @@
 		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'x')
 	);
 
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// --- INTERNAL BIN EXPANSION --- reads from entry
 	const expandedY = $derived.by(() => {
@@ -160,6 +158,12 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	const resolvedFitAxis = $derived.by(() => {
+		const fd = entry.fitDomain;
+		if (!fd) return null;
+		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+	});
+
 	const config = $derived({
 		markType: 'rectx',
 		supportedScaleTypes: {
@@ -181,14 +185,8 @@
 			y: ey1
 		},
 		table: entry.table,
-		selection: resolveSelection(entry.selection),
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip: entry.tip,
-		clientOptions: {
-			limit: entry.limit,
-			filterNulls: entry.filterNulls ? ([x1, x2, ey1, ey2] as FieldRef[]) : null
-		},
 		// Ensures SQL ORDER BY series, dimension for consistent stacking
 		...(markColor.selectField && {
 			_orderConfig: {
@@ -197,11 +195,11 @@
 			}
 		}),
 		// Histograms should start at zero baseline for the aggregate dimension
-		zeroBaseline: isHistogram ? { x: true } : null,
-		fitDomain: entry.fitDomain as 'x' | 'y' | boolean | undefined,
-		sort: normalizeSortConfig(entry.sort ?? null),
-		domain: entry.domain ?? null,
-		tooltip: entry.tip === false ? false : entry.tooltip
+		zeroBaseline: isHistogram ? { x: true } : null
+	});
+
+	const reactiveConfig = buildReactiveConfig(entry, {
+		resolveFitDomain: () => resolvedFitAxis
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -290,30 +288,41 @@
 			setup?.destroy();
 			setup = null;
 			// Gate on effectiveYScaleType (blocks while schema loads)
-			if (entry.table && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (entry.table && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					reactiveConfig,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroups.get(entry.selection as string | undefined)
+				);
 			}
 		});
 	});
 
-	// Tooltip registration — reads from entry
+	// Tooltip registration — guard conditions are tracked; registration body
+	// runs in untrack() to avoid reactive deps on scaleTypes/colorScaleState
+	// that cause spurious unregister/re-register cycles.
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !entry.tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'rectx',
-				chartContext,
-				columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'fill',
-				bandAxes: { y: true },
-				markColor,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'rectx',
+					chartContext,
+					columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'fill',
+					bandAxes: { y: true },
+					markColor,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 
@@ -337,19 +346,11 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
-		dataVersion={setup?.client?.dataVersion || 0}
+		dataVersion={setup?.dataVersion || 0}
 		inset={entry.inset ?? 0.5}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
 	/>
-{:else if setup?.client?.error}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="red" font-size="12"
-		>Error: {setup.client.error.message}</text
-	>
-{:else if setup?.client?.delayedLoading}
-	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
-		>Loading data...</text
-	>
 {:else}
 	<text x={chartContext.margin.left} y={chartContext.margin.top} fill="currentColor" font-size="12"
 		>Initializing rects...</text

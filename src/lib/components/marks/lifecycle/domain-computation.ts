@@ -122,14 +122,11 @@ export function detectChannelsNeedingDataDomain(
 		}
 	}
 
-	// Also add channels that transforms will generate
-	if (transformCompiler.hasJSTransforms()) {
-		const additionalChannels = transformCompiler.getAdditionalChannels();
-		for (const channel of additionalChannels) {
-			const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : null;
-			if (baseChannel) {
-				result.add(baseChannel);
-			}
+	// Also add channels that transforms will generate (SQL or JS stage — e.g. stack's y0/y1)
+	for (const channel of transformCompiler.getAdditionalChannels()) {
+		const baseChannel = channel.startsWith('x') ? 'x' : channel.startsWith('y') ? 'y' : null;
+		if (baseChannel) {
+			result.add(baseChannel);
 		}
 	}
 

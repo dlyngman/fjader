@@ -6,7 +6,7 @@ import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import type { LinearScaleOptions } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { viewManager, ViewManagerService } from '$lib/data/ViewManager.svelte';
+import { timeOffsetColumn } from '$lib/sql/case-expression';
 
 /**
  * TimeScaleState extends LinearScaleState with datetime awareness.
@@ -183,7 +183,18 @@ export class TimeScaleState extends LinearScaleState {
 
 	/** The derived column name for this time scale's offsets. */
 	get offsetColumnName(): string {
-		return ViewManagerService.timeOffsetColumn(this.#sourceField);
+		return timeOffsetColumn(this.#sourceField);
+	}
+
+	/**
+	 * Inline SQL expression converting datetime to offset (seconds from t0).
+	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
+	 * Returns empty string if t0 is not yet known.
+	 */
+	get offsetExpression(): string {
+		if (!this.#t0) return '';
+		const t0Epoch = Math.floor(this.#t0.getTime() / 1000);
+		return `CAST((EPOCH("${this.#sourceField}") - ${t0Epoch}) AS REAL)`;
 	}
 
 	/**
@@ -205,31 +216,9 @@ export class TimeScaleState extends LinearScaleState {
 		if (!this.#t0) return;
 
 		this.#viewsCreated.add(sourceTable);
-
-		const alias = this.offsetColumnName;
-		const field = this.#sourceField;
-		const t0Epoch = Math.floor(this.#t0.getTime() / 1000);
-		const sql = `CAST((EPOCH("${field}") - ${t0Epoch}) AS REAL)`;
-
-		viewManager.registerColumn(sourceTable, alias, {
-			sql,
-			source: field,
-			scaleId: this.id
-		});
-
-		console.log(
-			`[TimeScaleState] Created offset column ${alias} for ${sourceTable} (t0=${this.#t0.toISOString()})`
-		);
 	}
 
-	/**
-	 * Unregister from ViewManager. Called during destroy.
-	 */
 	#unregisterFromViewManager(): void {
-		const alias = this.offsetColumnName;
-		for (const table of this.#registeredTables) {
-			viewManager.unregisterColumn(table, alias, this.id);
-		}
 		this.#registeredTables.clear();
 		this.#viewsCreated.clear();
 	}

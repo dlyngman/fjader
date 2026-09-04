@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -15,23 +14,18 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
+
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec([
-				msql.loadCSV('cars', `${window.location.origin}/data/cars.csv`),
-				msql.loadCSV('gistemp', `${window.location.origin}/data/gistemp.csv`),
-				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`)
+			await queryEngine.exec([
+				msql.loadCSV('cars', `${window.location.origin}/data/cars.csv`).toString(),
+				msql.loadCSV('gistemp', `${window.location.origin}/data/gistemp.csv`).toString(),
+				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`).toString()
 			]);
 
 			isLoaded = true;

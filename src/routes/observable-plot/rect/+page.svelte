@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import * as msql from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -20,22 +19,16 @@
 	import { bin } from '$lib/sql/bin';
 	import { filter } from '$lib/transforms';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec([
-				msql.loadCSV('olympians', `${window.location.origin}/data/olympians.csv`),
-				msql.loadCSV('diamonds', `${window.location.origin}/data/diamonds.csv`)
+			await queryEngine.exec([
+				msql.loadCSV('olympians', `${window.location.origin}/data/olympians.csv`).toString(),
+				msql.loadCSV('diamonds', `${window.location.origin}/data/diamonds.csv`).toString()
 			]);
 
 			isLoaded = true;

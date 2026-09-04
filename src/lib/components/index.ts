@@ -8,6 +8,4 @@ export * from './foreground';
 export * from './ui';
 export * from './guides';
 
-// Export selection system
-export * from '$lib/selection';
 export * from '$lib/interactors';

@@ -1,8 +1,7 @@
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -15,20 +14,14 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	setCoordinators();
 
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			const wasm = wasmConnector();
-			coord = new Coordinator();
-			coord.databaseConnector(wasm);
-			setContext('mosaic-coordinator', coord);
-
-			await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
+			await queryEngine.exec([loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()]);
 
 			isLoaded = true;
 		} catch (error) {
@@ -44,7 +37,7 @@
 	{:else if !isLoaded}
 		<div class="loading-container">Loading parquet data...</div>
 	{:else}
-		<div class="demo-container">
+	<div class="demo-container">
 			<h1>GPU Grid Test</h1>
 			<p>Testing the new hybrid Grid architecture (GPU lines + SVG axes)</p>
 

@@ -7,7 +7,7 @@
 	import { ChartConfig } from '$lib/config';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ChartContext, Coordinator, FieldRef } from '$lib/types';
+	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import ChartCell from './ChartCell.svelte';
 
@@ -79,14 +79,13 @@
 
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const gpuCoordinator = getGPUContext();
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
 
 	// --- Faceting ---
 	const facetBandScale = fx
 		? (scaleRegistry.getOrCreateScale(
 				`__facet__${fx}`,
 				'band',
-				{ sourceColumn: fx },
+				{ sourceField: fx },
 				layout.chartId
 			) as BandScaleState)
 		: null;
@@ -341,14 +340,6 @@
 			return scales?.binStepMultiplier;
 		},
 
-		registerClient(client) {
-			if (!client || !scales) return () => {};
-			return scales.registerClient(client);
-		},
-		get markClients() {
-			return scales?.markClients;
-		},
-
 		get tooltipManager() {
 			return null;
 		},
@@ -406,7 +397,6 @@
 						{chartConfig}
 						{facetingProps}
 						{gpuCoordinator}
-						{coordinator}
 						{wheelInteraction}
 						{background}
 						{foreground}
@@ -429,7 +419,6 @@
 			{chartConfig}
 			{facetingProps}
 			{gpuCoordinator}
-			{coordinator}
 			{wheelInteraction}
 			{background}
 			{foreground}

@@ -1,5 +1,4 @@
 <script>
-	import { getContext } from 'svelte';
 	import {
 		ChartContainer,
 		WebGPUCanvas,
@@ -10,8 +9,6 @@
 		AxisBottom,
 		MarginLabel
 	} from '$lib/components';
-
-	const coordinator = getContext('mosaic-coordinator');
 </script>
 
 <div class="main-view-container">

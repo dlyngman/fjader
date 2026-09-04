@@ -1,9 +1,8 @@
 <!-- src/routes/performance-demo/+page.svelte -->
 <script>
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
-	import { onMount, setContext } from 'svelte';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
 		WebGPUCanvas,
@@ -16,15 +15,7 @@
 	} from '$lib/components';
 	import Frame from '$lib/components/background/Frame.svelte';
 
-	// ✅ Initialize enhanced coordination
-	console.log('🚀 Initializing enhanced coordination for performance demo...');
-	const coordinators = setCoordinators({
-		msaaSampleCount: 4,
-		enableDebugging: false
-	});
-
-	// State management
-	let mosaicCoordinator;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 	let performanceReport = $state(null);
@@ -63,14 +54,8 @@
 
 	onMount(async () => {
 		try {
-			// Initialize Mosaic
-			const wasm = wasmConnector();
-			mosaicCoordinator = new Coordinator();
-			mosaicCoordinator.databaseConnector(wasm);
-			setContext('mosaic-coordinator', mosaicCoordinator);
-
-			await mosaicCoordinator.exec(
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`)
+			await queryEngine.exec(
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
 			);
 
 			isLoaded = true;

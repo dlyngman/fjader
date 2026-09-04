@@ -6,8 +6,7 @@
 		WebGPUCanvas,
 		LineMark,
 		DotsMark,
-		BarMarkY
-	} from '$lib/components';
+		BarMarkY} from '$lib/components';
 	import { IntervalX } from '$lib/interactors';
 	import { count } from '@uwdata/mosaic-sql';
 

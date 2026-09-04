@@ -1,31 +1,17 @@
 <!-- src/routes/transform-test/+page.svelte -->
 <script>
-	import { onMount, setContext } from 'svelte';
-	import { Coordinator, wasmConnector } from '@uwdata/mosaic-core';
+	import { onMount } from 'svelte';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
-	import { setCoordinators } from '$lib';
+	import { initDivePlot } from '$lib';
 	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX } from '$lib/components';
 	import { filter, topN, normalize, stack } from '$lib/transforms';
 	import { bin } from '$lib/sql/bin';
 
-	import { Selection } from '@uwdata/mosaic-core';
-
-	import Plot from './Plot.svelte';
-
-	// const coordinator = getContext('mosaic-coordinator');
-	const brushSeletion = Selection.crossfilter();
-
-	setCoordinators();
-
-	let coord;
+	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 
 	onMount(async () => {
-		const wasm = wasmConnector();
-		coord = new Coordinator();
-		coord.databaseConnector(wasm);
-		setContext('mosaic-coordinator', coord);
-		await coord.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`));
+		await queryEngine.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString());
 		isLoaded = true;
 	});
 </script>
@@ -46,7 +32,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -69,7 +55,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -93,7 +79,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -117,7 +103,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -142,7 +128,7 @@
 							{#snippet canvasComponents()}
 								<DotsMark
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									x={bin('bill_length', { step: 5 })}
 									y={count()}
 									fill="species"
@@ -167,7 +153,7 @@
 							{#snippet canvasComponents()}
 								<BarMarkX
 									table="penguins"
-									selection={brushSeletion}
+									selection="brush"
 									y={bin('body_mass', { step: 500 })}
 									x={count()}
 									transforms={[stack({ direction: 'horizontal' })]}
@@ -179,9 +165,6 @@
 			</div>
 		</div>
 
-		<div class="chart-section">
-			<Plot selection={brushSeletion} />
-		</div>
 	{/if}
 </div>
 

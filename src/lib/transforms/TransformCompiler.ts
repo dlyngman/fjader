@@ -6,9 +6,17 @@ export class TransformCompiler {
 	transforms: Transform[];
 	sqlTransforms: SqlTransform[];
 	jsTransforms: JsTransform[];
+	/**
+	 * Mark context forwarded to SQL transforms at query assembly time.
+	 * The same object the mark lifecycle passes to applyToData(); SQL
+	 * transforms need it for the same reason JS ones do (barx axis swap,
+	 * y → y2 alias resolution for extent-based marks).
+	 */
+	markConfig: MarkConfig | undefined;
 
-	constructor(transforms: Transform[] = []) {
+	constructor(transforms: Transform[] = [], markConfig?: MarkConfig) {
 		this.transforms = transforms;
+		this.markConfig = markConfig;
 
 		// Separate by stage
 		this.sqlTransforms = transforms.filter((t): t is SqlTransform => t.stage === 'sql');
@@ -19,15 +27,15 @@ export class TransformCompiler {
 	}
 
 	#validateStaging(): void {
-		let seenJS = false;
+		let precedingJS: string | null = null;
 
 		for (const transform of this.transforms) {
 			if (transform.stage === 'js') {
-				seenJS = true;
-			} else if (transform.stage === 'sql' && seenJS) {
+				precedingJS = transform.type;
+			} else if (transform.stage === 'sql' && precedingJS) {
 				throw new Error(
-					`Invalid transform order: SQL transform "${transform.type}" appears after JS transform. ` +
-						`SQL transforms must come before JS transforms in the pipeline.`
+					`Invalid transform order: SQL transform "${transform.type}" appears after JS transform ` +
+						`"${precedingJS}". Move ${transform.type}() before ${precedingJS}() in the transforms array.`
 				);
 			}
 		}
@@ -38,7 +46,7 @@ export class TransformCompiler {
 
 		for (const transform of this.sqlTransforms) {
 			try {
-				result = transform.apply(result);
+				result = transform.apply(result, this.markConfig);
 			} catch (error) {
 				throw new Error(
 					`Failed to apply ${transform.type} transform: ${(error as Error).message}`,
@@ -67,10 +75,11 @@ export class TransformCompiler {
 		return result;
 	}
 
+	/** Channels a transform adds beyond the base select (e.g. stack's y0/y1) — SQL or JS stage. */
 	getAdditionalChannels(): string[] {
 		const channels: string[] = [];
 
-		for (const transform of this.jsTransforms) {
+		for (const transform of this.transforms) {
 			if (transform.channels) {
 				channels.push(...transform.channels);
 			}
@@ -80,31 +89,7 @@ export class TransformCompiler {
 	}
 
 	hasStackTransform(): boolean {
-		return this.jsTransforms.some((t) => t.type === 'stack');
-	}
-
-	validateQuery(query: SelectQuery): void {
-		const sql = query.toString();
-
-		if (/\bWITH\s+/i.test(sql)) {
-			throw new Error(
-				'Transform pipeline generated a CTE (WITH clause). ' +
-					"This breaks Mosaic's PreAggregator optimization. " +
-					'CTEs prevent the optimizer from recognizing GROUP BY patterns. ' +
-					'Problematic transforms: ' +
-					this.sqlTransforms.map((t) => t.type).join(', ')
-			);
-		}
-
-		if (/\(\s*SELECT\s+/i.test(sql)) {
-			throw new Error(
-				'Transform pipeline generated a subquery. ' +
-					"This breaks Mosaic's PreAggregator optimization. " +
-					'Subqueries prevent the optimizer from building materialized cubes. ' +
-					'Problematic transforms: ' +
-					this.sqlTransforms.map((t) => t.type).join(', ')
-			);
-		}
+		return this.transforms.some((t) => t.type === 'stack');
 	}
 
 	describe(): string {
@@ -140,12 +125,12 @@ export class TransformCompiler {
 	}
 
 	hasCategoryReducingTransforms(): boolean {
-		return this.jsTransforms.some((t) => t.type === 'topN');
+		return this.transforms.some((t) => t.type === 'topN');
 	}
 
 	getCategoryTransformKey(): string | null {
 		const parts: string[] = [];
-		for (const t of this.jsTransforms) {
+		for (const t of this.transforms) {
 			if (t.type === 'topN') parts.push(t.describe?.() || t.type);
 		}
 		return parts.length > 0 ? parts.join('+') : null;

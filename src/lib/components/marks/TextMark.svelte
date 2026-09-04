@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
-	import { MarkLifecycle } from './lifecycle/MarkLifecycle.svelte';
+	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { isColorConstant } from '$lib/scales/color-utils';
 	import {
@@ -9,20 +9,20 @@
 		computeInstanceCount,
 		buildTooltipConfig,
 		MarkColor,
-		normalizeSortConfig,
 		inferMarkScaleType,
 		generateMarkId,
-		resolveTip,
-		resolveSelection
+		resolveTip
 	} from './utils';
+	import { buildReactiveConfig } from './utils/reactive-config';
 	import type {
 		FieldRef,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
-		Coordinator,
 		ChartContext
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { D3BandScale } from '$lib/types';
 
@@ -74,13 +74,12 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('text');
-	const coordinator = getContext<Coordinator>('mosaic-coordinator');
+	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
+	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
-	MarkLifecycle.ensureServices(coordinator);
-
-	let setup = $state(null);
+	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// --- Scale Type Inference ---
 	const effectiveXScaleType = $derived.by(() => inferMarkScaleType(x, table, preferredXScaleType));
@@ -126,14 +125,17 @@
 		},
 		inferredScaleColumns: { x, y },
 		table,
-		selection: resolveSelection(selection),
 		transforms,
-		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		tip,
-		clientOptions: { limit, filterNulls: filterNulls ? [x, y] : null },
-		sort: normalizeSortConfig(sort),
-		domain: domain ?? null,
-		tooltip: tip === false ? false : tooltip
+		select: { ...channelSelect, ...resolvedTip.extraSelect }
+	});
+
+	const reactiveConfig = buildReactiveConfig({
+		get sort() { return sort; },
+		get limit() { return limit; },
+		get filterNulls() { return filterNulls; },
+		get domain() { return domain; },
+		get tip() { return tip; },
+		get tooltip() { return tooltip; }
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -306,30 +308,41 @@
 		untrack(() => {
 			setup?.destroy();
 			setup = null;
-			if (table && effectiveXScaleType && effectiveYScaleType) {
-				setup = new MarkLifecycle(config, coordinator, chartContext, markId);
+			if (table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+				setup = new MarkLifecycleV2(
+					config,
+					reactiveConfig,
+					queryEngine,
+					chartContext,
+					markId,
+					filterGroups.get(selection as string | undefined)
+				);
 			}
 		});
 	});
 
-	// Tooltip registration
+	// Tooltip registration — guard conditions are tracked; registration body
+	// runs in untrack() to avoid reactive deps on scaleTypes/colorScaleState
+	// that cause spurious unregister/re-register cycles.
 	$effect(() => {
 		const tm = chartContext.tooltipManager;
 		if (!tm || !tooltip || !setup?.tooltipEnabled) return;
-		tm.registerMark(
-			markId,
-			buildTooltipConfig({
-				tempTable: setup.tooltipTableName,
-				markType: 'text',
-				chartContext,
-				channelFields: setup.channelFieldMap,
-				colorColumn: 'fill',
-				bandAxes: { x: true, y: true },
-				markColor,
-				proximityAxis: tooltipProximity,
-				displayFields: resolvedTip.displayFields
-			})
-		);
+		untrack(() => {
+			tm.registerMark(
+				markId,
+				buildTooltipConfig({
+					tempTable: setup!.tooltipTableName,
+					markType: 'text',
+					chartContext,
+					channelFields: setup!.channelFieldMap,
+					colorColumn: 'fill',
+					bandAxes: { x: true, y: true },
+					markColor,
+					proximityAxis: tooltipProximity,
+					displayFields: resolvedTip.displayFields
+				})
+			);
+		});
 		return () => tm.unregisterMark(markId);
 	});
 

@@ -1,7 +1,6 @@
 <script>
-	import { Selection } from '@uwdata/mosaic-core';
 	import { sum, min, max, count, avg, y } from '@uwdata/mosaic-sql';
-	import { setContext, getContext } from 'svelte';
+	import { setContext } from 'svelte';
 	import {
 		ChartContainer,
 		ColumnSelector,
@@ -18,9 +17,6 @@
 	} from '$lib/components';
 	import { stack, normalize } from '$lib/transforms';
 	import Rects from '$lib/components/rendering/Rects.svelte';
-
-	const coordinator = getContext('mosaic-coordinator');
-	const selection = Selection.crossfilter();
 
 	// Color mode options
 	const colorModes = [
@@ -143,7 +139,7 @@
 				transforms = [stack({ direction: 'horizontal' })];
 				break;
 			case 'stack-normalize':
-				transforms = [stack({ direction: 'horizontal' }), normalize()];
+				transforms = [normalize(), stack({ direction: 'horizontal' })];
 				break;
 			default:
 				transforms = [];
@@ -164,7 +160,7 @@
 				stackDescription = `x={count()} transforms={[stack()]} - stacked by color field${colorWarning}`;
 				break;
 			case 'stack-normalize':
-				stackDescription = `x={count()} transforms={[stack(), normalize()]} - 100% stacked${colorWarning}`;
+				stackDescription = `x={count()} transforms={[normalize(), stack()]} - 100% stacked${colorWarning}`;
 				break;
 			default:
 				stackDescription = '';

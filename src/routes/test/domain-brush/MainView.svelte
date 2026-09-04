@@ -1,15 +1,11 @@
 <script>
-	import { getContext } from 'svelte';
 	import {
 		ChartContainer,
 		Grid,
 		Crosshair,
 		WebGPUCanvas,
 		LineMark,
-		IntervalX
-	} from '$lib/components';
-
-	const coordinator = getContext('mosaic-coordinator');
+		IntervalX} from '$lib/components';
 </script>
 
 <div class="main-view-container">

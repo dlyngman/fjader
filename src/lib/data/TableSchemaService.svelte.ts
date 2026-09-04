@@ -1,8 +1,9 @@
 // src/lib/data/TableSchemaService.svelte.ts
 
-import type { Coordinator } from '@uwdata/mosaic-core';
+import type { QueryEngine, ColumnInfo } from '$lib/query-engine/QueryEngine';
+import { mapSqlTypeToJs, type JsColumnType } from '$lib/query-engine/QueryEngine';
 
-export type JsColumnType = 'number' | 'string' | 'date' | 'boolean';
+export type { JsColumnType };
 
 export interface ColumnSchemaEntry {
 	sqlType: string;
@@ -10,36 +11,19 @@ export interface ColumnSchemaEntry {
 }
 
 /**
- * TableSchemaService caches table schemas from DuckDB.
- * Used for inferring column types (numeric vs categorical) for scale type detection.
- *
- * Pattern follows ViewManager:
- * - Singleton with lazy coordinator injection
- * - Reactive state for Svelte integration
- * - One DESCRIBE query per unique table
+ * TableSchemaService caches table schemas with JS type mapping.
+ * Uses QueryEngine.describe() for the raw DESCRIBE query (already cached/deduped).
+ * Adds the jsType mapping layer needed by inferMarkScaleType, MarkColor, etc.
  */
 class TableSchemaServiceImpl {
-	#coordinator: Coordinator | null = null;
+	#queryEngine: QueryEngine | null = null;
 	#schemas = $state(new Map<string, Map<string, ColumnSchemaEntry>>());
-	#pending = new Set<string>(); // Tables currently being fetched
-	#deferredRequests = new Set<string>(); // Tables requested before coordinator was available
 
-	// Reactive version counter - external code reads this to establish dependency
+	// Reactive version counter — read by $derived in inferMarkScaleType, MarkColor
 	version = $state(0);
 
-	setCoordinator(coordinator: Coordinator): void {
-		if (this.#coordinator === coordinator) return;
-		this.#coordinator = coordinator;
-
-		// Fetch schemas for tables that were requested before coordinator was available
-		for (const tableName of this.#deferredRequests) {
-			this.#fetchSchema(tableName);
-		}
-		this.#deferredRequests.clear();
-	}
-
-	getCoordinator(): Coordinator | null {
-		return this.#coordinator;
+	setQueryEngine(queryEngine: QueryEngine): void {
+		this.#queryEngine = queryEngine;
 	}
 
 	getSchema(tableName: string): Map<string, ColumnSchemaEntry> | null {
@@ -47,14 +31,9 @@ class TableSchemaServiceImpl {
 			return this.#schemas.get(tableName)!;
 		}
 
-		// Trigger fetch if coordinator available, otherwise defer
-		if (this.#coordinator) {
-			if (!this.#pending.has(tableName)) {
-				this.#fetchSchema(tableName);
-			}
-		} else {
-			// Coordinator not yet available - remember this request for later
-			this.#deferredRequests.add(tableName);
+		// Trigger async fetch — reactive consumers re-derive when version bumps
+		if (this.#queryEngine) {
+			this.#fetchSchema(tableName);
 		}
 
 		return null;
@@ -69,54 +48,40 @@ class TableSchemaServiceImpl {
 		return this.#schemas.has(tableName);
 	}
 
-	async #fetchSchema(tableName: string): Promise<void> {
-		if (this.#pending.has(tableName)) return;
-		this.#pending.add(tableName);
-
-		try {
-			// DuckDB DESCRIBE returns: column_name, column_type, null, key, default, extra
-			const result = await this.#coordinator!.query(`DESCRIBE "${tableName}"`);
-
-			const schema = new Map<string, ColumnSchemaEntry>();
-			for (const row of result) {
-				schema.set(row.column_name, {
-					sqlType: row.column_type,
-					jsType: this.#mapSqlTypeToJs(row.column_type)
-				});
-			}
-
-			this.#schemas.set(tableName, schema);
-			this.version++; // Trigger reactive updates
-		} catch (e) {
-			console.warn(`[TableSchemaService] Failed to query schema for ${tableName}:`, e);
-			// Mark as attempted with empty schema to avoid retry loops
-			this.#schemas.set(tableName, new Map());
-			this.version++;
-		} finally {
-			this.#pending.delete(tableName);
+	/**
+	 * Ensure the schema for a table is loaded. Returns immediately if cached,
+	 * otherwise awaits the fetch. Safe to call from multiple marks — deduplicates
+	 * via QueryEngine's describe cache.
+	 */
+	async ensure(tableName: string): Promise<Map<string, ColumnSchemaEntry>> {
+		if (this.#schemas.has(tableName)) {
+			return this.#schemas.get(tableName)!;
 		}
+		if (this.#queryEngine) {
+			await this.#fetchSchema(tableName);
+		}
+		return this.#schemas.get(tableName) ?? new Map();
 	}
 
-	#mapSqlTypeToJs(sqlType: string): JsColumnType {
-		const upper = (sqlType || '').toUpperCase();
+	async #fetchSchema(tableName: string): Promise<void> {
+		if (!this.#queryEngine) return;
 
-		// Numeric types
-		if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper)) {
-			return 'number';
+		try {
+			const columns = await this.#queryEngine.describe(tableName);
+			const schema = new Map<string, ColumnSchemaEntry>();
+			for (const col of columns) {
+				schema.set(col.name, {
+					sqlType: col.type,
+					jsType: mapSqlTypeToJs(col.type)
+				});
+			}
+			this.#schemas.set(tableName, schema);
+			this.version++;
+		} catch (e) {
+			console.warn(`[TableSchemaService] Failed to query schema for ${tableName}:`, e);
+			this.#schemas.set(tableName, new Map());
+			this.version++;
 		}
-
-		// Temporal types
-		if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(upper)) {
-			return 'date';
-		}
-
-		// Boolean
-		if (/BOOL/.test(upper)) {
-			return 'boolean';
-		}
-
-		// Default: string (VARCHAR, CHAR, BLOB, UUID, etc.)
-		return 'string';
 	}
 }
 

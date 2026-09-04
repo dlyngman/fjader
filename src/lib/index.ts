@@ -1,33 +1,29 @@
-// src/lib/index.js
-import { Selection } from '@uwdata/mosaic-core';
+// src/lib/index.ts
 import { setScaleRegistry } from '$lib/scales';
 import { setGPUCoordinator } from '$lib/gpu';
-import { setSelectionRegistry } from '$lib/selection';
+import { setQueryContext, initDuckDB } from '$lib/query-engine';
+import type { DuckDBConnection } from '$lib/query-engine';
 
 /**
- * Initialize all coordinators for the charting library
- * Call this once at the top level of your application
+ * Initialize DivePlot: QueryEngine, ScaleRegistry, GPUCoordinator, FilterGroups.
+ * Call once in a top-level component's <script> block.
+ *
+ *   import { initDivePlot } from 'diveplot';
+ *   const { queryEngine } = initDivePlot();
+ *
+ * Pass an existing DuckDB connection to skip internal DuckDB-WASM init:
+ *   const { queryEngine } = initDivePlot(myConnection);
  */
-export function setCoordinators(config: { msaaSampleCount?: number } = {}) {
+export function initDivePlot(connection?: DuckDBConnection | Promise<DuckDBConnection>) {
+	const { queryEngine, filterGroups } = setQueryContext(connection ?? initDuckDB());
+
 	const scaleRegistry = setScaleRegistry();
-	const gpuCoordinator = setGPUCoordinator({
-		msaaSampleCount: config.msaaSampleCount ?? 4
-	});
-	const selectionRegistry = setSelectionRegistry(Selection);
+	const gpuCoordinator = setGPUCoordinator({ msaaSampleCount: 4 });
 
-	if (gpuCoordinator && scaleRegistry) {
-		gpuCoordinator.setScaleRegistry(scaleRegistry);
+	gpuCoordinator.setScaleRegistry(scaleRegistry);
+	scaleRegistry.setGPUCoordinator(gpuCoordinator);
 
-		if (scaleRegistry.setGPUCoordinator) {
-			scaleRegistry.setGPUCoordinator(gpuCoordinator);
-		}
-	}
-
-	return {
-		scaleRegistry,
-		gpuCoordinator,
-		selectionRegistry
-	};
+	return { queryEngine, filterGroups, scaleRegistry, gpuCoordinator };
 }
 
 export * from './components';
