@@ -8,6 +8,7 @@ import {
 	div,
 	column,
 	add,
+	sql,
 	rank,
 	frameRows,
 	preceding,
@@ -384,5 +385,65 @@ describe('rewriteForPreagg — window expressions', () => {
 		const windowSQL = result!.windowChannels!.y.toString();
 		expect(windowSQL).toMatch(/ORDER BY "x"/i);
 		expect(windowSQL).toMatch(/PARTITION BY "unknown_col"/i);
+	});
+});
+
+describe('rewriteForPreagg — verbatim window fragments', () => {
+	// A verbatim fragment is not a WINDOW node, so it never reaches the window
+	// branch, and mosaic's isAggregateExpression reports 0 for it — the same
+	// value a plain column ref reports. Without a guard the pure-dimension
+	// branch puts it in preaggGroupBy, producing GROUP BY over a window.
+	// Bailing matches this function's documented contract.
+	it('returns null rather than grouping by a verbatim window', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('category'),
+				y: sql`SUM(${column('v')}) OVER (PARTITION BY ${column('g')})` as unknown as ExprNode
+			})
+		);
+		expect(result).toBeNull();
+	});
+
+	it('returns null for the stack transform shape (FILTER + OVER)', () => {
+		const notNaN = sql`NOT isnan(${column('v')})`;
+		const cumulative = sql`SUM(${column('v')}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${column('g')} ORDER BY ${column('s')})`;
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('category'),
+				y1: cumulative as unknown as ExprNode
+			})
+		);
+		expect(result).toBeNull();
+	});
+
+	it('returns null when the window is nested inside a wrapping fragment', () => {
+		const cumulative = sql`SUM(${column('v')}) OVER (PARTITION BY ${column('g')})`;
+		const wrapped = sql`CASE WHEN TRUE THEN ${cumulative} ELSE 'NaN'::REAL END`;
+		const result = rewriteForPreagg(
+			selectDef({ x: column('category'), y1: wrapped as unknown as ExprNode })
+		);
+		expect(result).toBeNull();
+	});
+
+	it('still accepts a verbatim fragment with no window as a dimension', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: sql`${column('a')} + ${column('b')}` as unknown as ExprNode,
+				y: sum(column('v'))
+			})
+		);
+		expect(result).not.toBeNull();
+		expect(result!.preaggGroupBy).toHaveLength(1);
+	});
+
+	it('still accepts structured window nodes', () => {
+		const result = rewriteForPreagg(
+			selectDef({
+				x: column('date'),
+				y: windowExpr(avg(column('revenue')), 'date')
+			})
+		);
+		expect(result).not.toBeNull();
+		expect(result!.windowChannels).not.toBeNull();
 	});
 });

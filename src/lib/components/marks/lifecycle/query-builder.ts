@@ -20,7 +20,7 @@ import {
 	type AggregateNode,
 	type ExprNode
 } from '@uwdata/mosaic-sql';
-import { isWindowExpression } from '$lib/sql/expression-utils';
+import { isWindowExpression, isVerbatimWindowExpression } from '$lib/sql/expression-utils';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import type { ColumnSchema } from '$lib/query-engine/QueryEngine';
 
@@ -248,6 +248,21 @@ export function buildQueryParts(
 
 		aliasMap.set(channel, sqlAlias);
 		selectDef[channel] = exprNode;
+
+		// A verbatim fragment containing a window reads as aggFlag 0 — the same
+		// value a plain column ref gives — so it would fall into the GROUP BY
+		// branch below and produce invalid SQL. It cannot be routed to the
+		// window path either: splitWindowSelect only destructures real WINDOW
+		// nodes and would group by it one layer down. Refuse it here, where the
+		// mistake is made, rather than surfacing as a confusing database error.
+		if (isVerbatimWindowExpression(exprNode)) {
+			throw new Error(
+				`buildQueryParts: channel "${channel}" is a verbatim SQL fragment containing a ` +
+					`window function, which the query engine cannot analyze. Build it as a ` +
+					`structured window node, or move it into a transform's apply() where it ` +
+					`wraps the query instead of becoming a channel.`
+			);
+		}
 
 		if (isAggregateExpression(exprNode)) {
 			hasAggregates = true;

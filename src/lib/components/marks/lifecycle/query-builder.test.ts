@@ -40,6 +40,60 @@ describe('buildQueryParts', () => {
 		expect(parts.nonAggregateGroupBy).toHaveLength(1);
 	});
 
+	describe('verbatim window fragments in channels', () => {
+		// mosaic's isAggregateExpression returns 0 for a verbatim fragment
+		// containing a window — the same value a plain column ref returns — so
+		// without a guard these land in nonAggregateGroupBy and emit
+		// `GROUP BY SUM(..) OVER (..)`, which no database accepts.
+		it('refuses a verbatim window rather than grouping by it', () => {
+			expect(() =>
+				buildQueryParts(
+					{ x: 'species', y: sql`SUM(${sqlColumn('v')}) OVER (PARTITION BY ${sqlColumn('g')})` },
+					undefined,
+					false
+				)
+			).toThrow(/verbatim SQL fragment containing a window function/);
+		});
+
+		it('refuses the stack transform shape (FILTER + OVER)', () => {
+			const notNaN = sql`NOT isnan(${sqlColumn('v')})`;
+			const cumulative = sql`SUM(${sqlColumn('v')}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${sqlColumn('g')} ORDER BY ${sqlColumn('s')})`;
+			expect(() => buildQueryParts({ x: 'species', y1: cumulative }, undefined, false)).toThrow(
+				/cannot analyze/
+			);
+		});
+
+		it('names the offending channel', () => {
+			expect(() =>
+				buildQueryParts(
+					{ x: 'species', y1: sql`SUM(${sqlColumn('v')}) OVER (PARTITION BY ${sqlColumn('g')})` },
+					undefined,
+					false
+				)
+			).toThrow(/"y1"/);
+		});
+
+		it('still accepts verbatim fragments with no window', () => {
+			const parts = buildQueryParts(
+				{ x: 'species', y: sql`${sqlColumn('a')} + ${sqlColumn('b')}` },
+				undefined,
+				false
+			);
+			expect(parts.hasAggregates).toBe(false);
+			expect(parts.nonAggregateGroupBy).toHaveLength(2);
+		});
+
+		it('still accepts structured window nodes', () => {
+			const win = (sum(sqlColumn('v')) as any)
+				.orderby(sqlColumn('date'))
+				.frame(frameRows([preceding(3), following(3)]));
+			const parts = buildQueryParts({ x: 'date', y: win }, undefined, false);
+			expect(parts.hasWindowAggregates).toBe(true);
+			// The window is kept out of GROUP BY, but via the window path.
+			expect(parts.nonAggregateGroupBy).toHaveLength(1);
+		});
+	});
+
 	it('maps simple column refs to field-name aliases', () => {
 		const parts = buildQueryParts({ x: 'species', y: count() }, undefined, false);
 		expect(parts.aliasMap.get('x')).toBe('species');
