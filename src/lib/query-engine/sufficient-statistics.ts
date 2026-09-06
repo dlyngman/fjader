@@ -32,7 +32,7 @@ import {
 	type AggregateNode,
 	type ExprNode
 } from '@uwdata/mosaic-sql';
-import { isWindowExpression } from '$lib/sql/expression-utils';
+import { isWindowExpression, isVerbatimWindowExpression } from '$lib/sql/expression-utils';
 import { buildOuterWindow } from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +160,13 @@ export function rewriteForPreagg(
 			continue;
 		}
 
+		// A verbatim fragment containing a window never reaches the WINDOW branch
+		// above (it is a FRAGMENT, not a WINDOW node) and reads as aggFlag 0 —
+		// indistinguishable from a plain column ref — so the pure-dimension
+		// branch below would put a window into GROUP BY. Bail, which is what
+		// this function's contract promises for unsupported channels.
+		if (isVerbatimWindowExpression(expr)) return null;
+
 		const aggFlag = isAggregateExpression(expr as ExprNode);
 
 		if (aggFlag === 0) {
@@ -258,10 +265,7 @@ function sufficientStats(
 			const [sumCol, counter1] = addStat(preaggCols, sum(args[0]), agg, counter);
 			const [cntCol, counter2] = addStat(preaggCols, count(args[0]), agg, counter1);
 			return {
-				outputExpr: div(
-					sum(column(sumCol)),
-					coalesce(sum(column(cntCol)), literal(1))
-				) as ExprNode,
+				outputExpr: div(sum(column(sumCol)), coalesce(sum(column(cntCol)), literal(1))) as ExprNode,
 				nextCounter: counter2
 			};
 		}
@@ -312,4 +316,3 @@ function addStat(
 	preaggCols[colName] = finalExpr as ExprNode;
 	return [colName, counter + 1];
 }
-
