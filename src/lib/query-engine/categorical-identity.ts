@@ -42,6 +42,8 @@
 /** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
 export interface IdentityExec {
 	exec(sql: string | string[]): Promise<void>;
+	/** Rows as plain objects. Callers adapt whatever their driver returns. */
+	queryRows(sql: string): Promise<Array<Record<string, unknown>>>;
 }
 
 interface DimEntry {
@@ -49,6 +51,15 @@ interface DimEntry {
 	name: string;
 	/** Source tables already folded into this dim. */
 	tables: Set<string>;
+	/**
+	 * Serializes work on this dim. The coalescer is per TABLE, so two tables
+	 * registering the same field run two independent drains, and without this
+	 * they interleave: both observe `tables.size === 0` — the first adds itself
+	 * only after its await — so both take the create branch and the second's
+	 * CREATE TABLE IF NOT EXISTS is a silent no-op. Its rows are then never
+	 * appended, and its categories vanish from a shared scale.
+	 */
+	chain: Promise<void>;
 }
 
 interface ViewEntry {
@@ -97,6 +108,25 @@ export class CategoricalIdentity {
 	#session: string;
 	#dims = new Map<string, DimEntry>();
 	#views = new Map<string, ViewEntry>();
+	/**
+	 * One value array per FIELD, indexed by id. §9.4.
+	 *
+	 * These are the dim's source values — the decode side of the string -> id
+	 * encode this module performed — NOT display labels. Formatting them for an
+	 * axis (dates, number formats, truncation) is presentation and stays in the
+	 * scale/axis layer.
+	 *
+	 *
+	 * Deliberately one shared array rather than a copy per scale or per mark: a
+	 * second table registering the same field appends to the dim afterwards, and
+	 * ids from it would index past the end of an older copy. That shows up as
+	 * blank axis labels in multi-table charts only — the kind of bug that
+	 * survives a long time. Refreshes mutate this array IN PLACE so every holder
+	 * of the reference sees the growth; because the dim is append-only and never
+	 * renumbers, an in-place extension is always consistent with ids already in
+	 * flight.
+	 */
+	#values = new Map<string, string[]>();
 
 	constructor(exec: IdentityExec, session: string) {
 		this.#exec = exec;
@@ -125,6 +155,20 @@ export class CategoricalIdentity {
 	 */
 	sourceFor(table: string): string {
 		return this.#views.has(table) ? this.viewTable(table) : table;
+	}
+
+	/**
+	 * Dim values for `field`, indexed by id — `values(f)[id]` is the source
+	 * value. The live array, not a copy: hold the reference rather than
+	 * snapshotting it. Empty until the field's dim has been built.
+	 */
+	values(field: string): string[] {
+		let arr = this.#values.get(field);
+		if (!arr) {
+			arr = [];
+			this.#values.set(field, arr);
+		}
+		return arr;
 	}
 
 	/** Fields the view for `table` currently exposes. Empty when there is no view. */
@@ -215,12 +259,23 @@ export class CategoricalIdentity {
 	 * continue rather than restart. WHERE is applied before the window function,
 	 * so ROW_NUMBER numbers only the new values.
 	 */
-	async #ensureDim(field: string, table: string): Promise<void> {
+	#ensureDim(field: string, table: string): Promise<void> {
 		let dim = this.#dims.get(field);
 		if (!dim) {
-			dim = { name: this.dimTable(field), tables: new Set() };
+			dim = { name: this.dimTable(field), tables: new Set(), chain: Promise.resolve() };
 			this.#dims.set(field, dim);
 		}
+
+		// Queue behind any work already running on this dim, so the next caller
+		// observes the completed `tables` set and takes the append branch. The
+		// stored chain swallows rejections so one failure does not poison every
+		// later append; the returned promise still rejects for this caller.
+		const next = dim.chain.then(() => this.#ensureDimNow(dim!, field, table));
+		dim.chain = next.catch(() => {});
+		return next;
+	}
+
+	async #ensureDimNow(dim: DimEntry, field: string, table: string): Promise<void> {
 		if (dim.tables.has(table)) return;
 
 		const dimName = quote(dim.name);
@@ -244,6 +299,28 @@ export class CategoricalIdentity {
 		}
 
 		dim.tables.add(table);
+		await this.#refreshValues(field);
+	}
+
+	/**
+	 * Re-read the dim into the field's value array, mutating in place.
+	 *
+	 * Re-reading the whole dim rather than only the new rows: categorical
+	 * cardinality is small, this runs once per (field, table) pair at setup, and
+	 * a full read cannot drift out of sync with the ids the way an incremental
+	 * one can if an append is ever missed.
+	 */
+	async #refreshValues(field: string): Promise<void> {
+		const rows = await this.#exec.queryRows(
+			`SELECT id, value FROM ${quote(this.dimTable(field))} ORDER BY id`
+		);
+
+		const arr = this.values(field);
+		arr.length = 0;
+		for (const row of rows) {
+			// Ids are dense and 0-based by construction, so position is the id.
+			arr.push(row.value as string);
+		}
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */
@@ -278,6 +355,9 @@ export class CategoricalIdentity {
 		const dims = [...this.#dims.values()].map((d) => d.name);
 		this.#views.clear();
 		this.#dims.clear();
+		// In place, so any scale still holding the reference empties with it.
+		for (const arr of this.#values.values()) arr.length = 0;
+		this.#values.clear();
 
 		for (const view of views) {
 			await this.#exec.exec(`DROP VIEW IF EXISTS ${quote(view)}`);

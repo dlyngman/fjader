@@ -176,8 +176,23 @@ export class QueryEngine {
 	 * ids already baked into live vertex buffers.
 	 */
 	#session = Math.random().toString(36).slice(2, 8);
-	/** Categorical identity: dim tables, per-table views, id columns. */
-	#identity = new CategoricalIdentity(this, this.#session);
+	/** Categorical identity: dim tables, per-table views, id columns, labels. */
+	#identity = new CategoricalIdentity(
+		{
+			exec: (sql) => this.exec(sql),
+			queryRows: async (sql) => {
+				// Never cached: the dim grows as tables register, and the SQL text
+				// does not change when it does.
+				const table = await this.query(sql, { cache: false });
+				const rows: Array<Record<string, unknown>> = [];
+				for (let i = 0; i < table.numRows; i++) {
+					rows.push(table.get(i) as Record<string, unknown>);
+				}
+				return rows;
+			}
+		},
+		this.#session
+	);
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 		if (connection instanceof Promise) {
@@ -218,6 +233,18 @@ export class QueryEngine {
 	/** The id column name a view exposes for `field`. */
 	identityColumn(field: string): string {
 		return this.#identity.idColumn(field);
+	}
+
+	/**
+	 * Dim values for `field`, indexed by id — the decode side of the string -> id
+	 * encode. Not display labels: formatting belongs to the scale/axis layer.
+	 *
+	 * The LIVE array — hold the reference, do not snapshot it. A second table
+	 * registering the same field appends to the dim afterwards and this array
+	 * grows in place (§9.4).
+	 */
+	identityValues(field: string): string[] {
+		return this.#identity.values(field);
 	}
 
 	/**

@@ -630,7 +630,8 @@ export class MarkLifecycleV2 {
 					this.#colorScaleState,
 					this.#markId
 				),
-				this.#fetchFieldStats()
+				this.#fetchFieldStats(),
+				this.#ensureIdentityColumns()
 			]);
 
 			if (this.#destroyed) return;
@@ -896,6 +897,48 @@ export class MarkLifecycleV2 {
 				this.actualXScaleType,
 				this.actualYScaleType
 			);
+		}
+	}
+
+	/**
+	 * Request identity id columns for this mark's categorical axes (band step 3a).
+	 *
+	 * Runs inside the setup Promise.all, so every mark on a chart calls it in the
+	 * same tick — which is what CategoricalIdentity's coalescer is built for: they
+	 * union into one CREATE OR REPLACE VIEW rather than one per mark.
+	 *
+	 * Only plain column names. An expression-backed categorical axis has no value
+	 * to key a dim on, and is refused earlier with a clearer message (issue #197).
+	 *
+	 * Band/point only for now. Ordinal colour, series and facet are steps 3b/3c,
+	 * which is why this reads the two positional axes rather than every channel.
+	 *
+	 * Nothing consumes these columns yet — the queries still CASE-inline. This is
+	 * the additive checkpoint (C0): the view exists, and nothing renders
+	 * differently.
+	 */
+	async #ensureIdentityColumns(): Promise<void> {
+		const categorical: string[] = [];
+
+		for (const [axis, scaleType] of [
+			['x', this.actualXScaleType],
+			['y', this.actualYScaleType]
+		] as const) {
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
+			const field = this.#config.select[axis];
+			if (typeof field === 'string') categorical.push(field);
+		}
+
+		if (categorical.length === 0) return;
+
+		try {
+			await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
+		} catch (e) {
+			// Non-fatal while nothing reads these columns. Once step 3a's queries
+			// depend on the view this has to fail setup instead — a mark querying a
+			// view that was never built would fail at the binder anyway, but with a
+			// worse message than this one.
+			console.warn(`[${this.#markId}] Identity columns unavailable:`, e);
 		}
 	}
 

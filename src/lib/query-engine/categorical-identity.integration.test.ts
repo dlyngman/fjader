@@ -46,6 +46,9 @@ function makeExec(db: DB) {
 				statements.push(stmt);
 				await db.run(stmt);
 			}
+		},
+		async queryRows(sql: string) {
+			return db.all(sql);
 		}
 	};
 }
@@ -205,6 +208,52 @@ describe('CategoricalIdentity', () => {
 		expect(rows).toEqual([]);
 	});
 
+	it('appends correctly when two TABLES register one field concurrently', async () => {
+		// The coalescer is per table, so this runs two independent drains against
+		// one dim. Without serializing per field they both see tables.size === 0
+		// and both take the create branch — the second's CREATE TABLE IF NOT
+		// EXISTS is a silent no-op and its categories never reach the dim.
+		// Caught in the browser on /test/band-identity chart 5: Emperor vanished.
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);
+
+		await Promise.all([
+			identity.ensureColumns('penguins', { categorical: ['species'] }),
+			identity.ensureColumns('more_penguins', { categorical: ['species'] })
+		]);
+
+		const values = (
+			await db.all(`SELECT value FROM "${identity.dimTable('species')}" ORDER BY id`)
+		).map((r) => r.value);
+		expect(values).toContain('Emperor');
+		expect(values).toHaveLength(4);
+
+		// And ids stay dense with no duplicates, whichever table won the race.
+		const ids = (await db.all(`SELECT id FROM "${identity.dimTable('species')}" ORDER BY id`)).map(
+			(r) => Number(r.id)
+		);
+		expect(ids).toEqual([0, 1, 2, 3]);
+	});
+
+	it('both views resolve ids for a concurrently-registered shared field', async () => {
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);
+
+		await Promise.all([
+			identity.ensureColumns('penguins', { categorical: ['species'] }),
+			identity.ensureColumns('more_penguins', { categorical: ['species'] })
+		]);
+
+		const col = identity.idColumn('species');
+		const emperor = await db.all(
+			`SELECT "${col}" AS idx FROM "${identity.sourceFor('more_penguins')}"`
+		);
+		// -1 would mean the row exists but has no identity — the sentinel, not a
+		// crash, which is how this would otherwise reach the GPU.
+		expect(emperor[0].idx).not.toBe(-1);
+		expect(identity.values('species')[emperor[0].idx as number]).toBe('Emperor');
+	});
+
 	// -----------------------------------------------------------------------
 	// The coalescer
 	// -----------------------------------------------------------------------
@@ -262,6 +311,43 @@ describe('CategoricalIdentity', () => {
 		// The view must exist by the time the second promise resolves.
 		const rows = await db.all(`SELECT COUNT(*) AS n FROM "${identity.sourceFor('penguins')}"`);
 		expect(Number(rows[0].n)).toBe(5);
+	});
+
+	// -----------------------------------------------------------------------
+	// Labels (§9.4)
+	// -----------------------------------------------------------------------
+
+	it('exposes values indexed by id', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		expect(identity.values('species')).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+	});
+
+	it('grows the SAME array in place when a second table appends', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		// A scale takes the reference at its own setup, before the second table
+		// exists. §9.4: a snapshot here is what breaks, and only in multi-table
+		// charts — ids from the later table index past the end of the copy.
+		const held = identity.values('species');
+
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);
+		await identity.ensureColumns('more_penguins', { categorical: ['species'] });
+
+		expect(held).toBe(identity.values('species'));
+		expect(held).toEqual(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
+	});
+
+	it('labels stay aligned with the ids in the view', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const labels = identity.values('species');
+
+		const rows = await db.all(
+			`SELECT species, "${identity.idColumn('species')}" AS idx ` +
+				`FROM "${identity.sourceFor('penguins')}" WHERE species IS NOT NULL`
+		);
+		for (const row of rows) {
+			expect(labels[row.idx as number]).toBe(row.species);
+		}
 	});
 
 	// -----------------------------------------------------------------------
