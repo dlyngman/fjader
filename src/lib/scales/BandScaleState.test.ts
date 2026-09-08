@@ -150,6 +150,26 @@ describe('BandScaleState.slotTable', () => {
 		expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
 	});
 
+	it('encodes a value added to the live array after identity was adopted', () => {
+		// The engine's value array grows IN PLACE when a second table appends to
+		// the dim (§9.4), and a mark can call addMark between that append and its
+		// own setIdentityValues. A value->id map snapshotted at adoption time
+		// drops the new category silently — a bar missing from multi-table charts
+		// on some interleavings only.
+		const live = ['Adelie', 'Chinstrap', 'Gentoo'];
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(live);
+
+		live.push('Emperor'); // the dim appended; no re-adoption yet
+
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		expect(scale.effectiveDomain).toContain('Emperor');
+		expect(Array.from(scale.displayOrder)).toEqual([0, 1, 2, 3]);
+		expect(scale.slotTable[3]).toBe(3);
+	});
+
 	it('accepts ids directly, as topN passes them', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);

@@ -315,8 +315,7 @@ export class BandScaleState {
 		this.#identityValues = values;
 		// The one encode table, built here rather than per reorder. Marks
 		// re-adopt after the dim appends, so this stays in step with growth.
-		this.#idOf = new Map();
-		for (let i = 0; i < values.length; i++) this.#idOf.set(values[i], i);
+		this.#refreshIdOf();
 
 		// Re-encode anything registered BEFORE identity arrived. Marks race here:
 		// a mark's domain fetch and its ensureColumns both resume off the same
@@ -333,7 +332,15 @@ export class BandScaleState {
 		this._version++;
 	}
 
-	/** value -> id. Empty for a scale whose data is not dim ids. */
+	/**
+	 * value -> id. A cache over #identityValues, which is a LIVE array that grows
+	 * in place when the dim appends — so this must never be treated as a
+	 * snapshot. #toIds refreshes it whenever the array has outgrown it.
+	 *
+	 * Cheap to keep correct for the same reason the value array is: the dim is
+	 * append-only and never renumbers, so a stale map is only ever *short*, and
+	 * length is a sufficient staleness test.
+	 */
 	#idOf: Map<string, number> = new Map();
 
 	/** True when this scale's channel carries dim ids rather than positions. */
@@ -352,8 +359,20 @@ export class BandScaleState {
 
 	#displayOrder: Int32Array = new Int32Array(0);
 
+	#refreshIdOf(): void {
+		const values = this.#identityValues;
+		this.#idOf = new Map();
+		for (let i = 0; i < values.length; i++) this.#idOf.set(values[i], i);
+	}
+
 	/** Encode a mix of values and ids to ids. Unknown values are dropped. */
 	#toIds(items: (string | number)[]): number[] {
+		// Refresh before use: a mark's addMark can land between another mark's
+		// dim append and its setIdentityValues, and an id missing from a stale map
+		// is silently dropped rather than erroring — a category that vanishes from
+		// multi-table charts only, and only on some interleavings.
+		if (this.#idOf.size !== this.#identityValues.length) this.#refreshIdOf();
+
 		const out: number[] = [];
 		const seen = new Set<number>();
 		for (const item of items) {
