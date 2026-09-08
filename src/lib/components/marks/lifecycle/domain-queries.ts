@@ -65,6 +65,31 @@ export async function fetchCategoricalDomains(
 	): void => {
 		if (!field || !scaleState) return;
 
+		// Binned band axes are not supported. bin() produces continuous values, but
+		// marks like BarMarkX/BarMarkY declare their categorical axis as
+		// SCALE_PRIORITIES.MANDATE band — so the mismatch is never negotiated and
+		// used to surface here as `SELECT DISTINCT "[object Object]"`, failing setup
+		// for the whole mark with no hint at the cause.
+		//
+		// It cannot be made to work at this point even in principle: resolving an
+		// AutoBinNode to SQL needs min/max field stats, and this function runs in the
+		// SAME Promise.all as the fetch that produces them (MarkLifecycleV2
+		// #runSetup). Nor does the domain arrive later — registerDataDerivedDomains
+		// only populates band domains for category-reducing transforms (topN).
+		//
+		// Say so plainly instead. A binned continuous axis is a rect mark's job.
+		// The general fix — validating channel expressions against mandated scale
+		// types at requirement-resolution time — is issue #197.
+		if (isBinExpression(field)) {
+			console.error(
+				`[${markId}] Unsupported: bin() on the "${axis}" axis, which this mark ` +
+					`mandates as a band scale. bin() produces continuous values — use a ` +
+					`rect mark (RectXMark / RectYMark) for binned axes. This mark will ` +
+					`render without a "${axis}" domain.`
+			);
+			return;
+		}
+
 		// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
 		// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
 		// 'x1'/'x2'/'y1'/'y2'. Fall back to channel+'2' then channel+'1' for those.
@@ -75,11 +100,14 @@ export async function fetchCategoricalDomains(
 		// sortOnly mode: only fetch sort order, skip if no sort config
 		if (sortOnly && !sortField) return;
 
-		let q = Query.from(table).select({ [axis]: sqlColumn(String(field)) });
+		// Only strings become column refs; expression nodes pass through as-is.
+		const axisExpr: ExprValue = isNode(field) ? (field as ExprNode) : sqlColumn(String(field));
+
+		let q = Query.from(table).select({ [axis]: axisExpr });
 		if (sortField) {
 			if (isAggregateExpression(sortField as ExprNode)) {
 				// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
-				q = q.groupby(field as GroupByExpr).select({ _sort: sortField as ExprValue });
+				q = q.groupby(axisExpr as GroupByExpr).select({ _sort: sortField as ExprValue });
 				if (sort!.direction === 'desc') {
 					q.orderby(sql`${sqlColumn('_sort')} DESC`);
 				} else {

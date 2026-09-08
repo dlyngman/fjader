@@ -150,8 +150,16 @@ export class MarkLifecycleV2 {
 	// --- Engine Registration ---
 	#handle = $state<MarkHandle | null>(null);
 
-	// --- Structural query parts ($derived — recomputes on bin/scale/config changes) ---
-	#resolvedQueryParts: QueryParts | null = $derived.by(() => {
+	// --- Semantic select ($derived — recomputes on bin/config changes) ---
+	//
+	// Channel expressions with their *meaning* resolved — an AutoBinNode becomes a
+	// concrete bin expression, a RollingAvgNode becomes a window function — but not
+	// yet encoded for the GPU.
+	//
+	// Split out of #resolvedQueryParts because #refetchSortedDomain needs exactly this
+	// form. It selects category *values*, so it must see resolved bins but must not see
+	// the CASE inlining below, which rewrites a band axis into an integer index.
+	#resolvedSelect: Record<string, unknown> | null = $derived.by(() => {
 		if (!this.setupComplete) return null;
 
 		const resolvedSelect = { ...this.#config.select };
@@ -183,6 +191,18 @@ export class MarkLifecycleV2 {
 				resolvedSelect[ch] = value.resolve();
 			}
 		}
+
+		return resolvedSelect;
+	});
+
+	// --- Structural query parts ($derived — recomputes on bin/scale/config changes) ---
+	#resolvedQueryParts: QueryParts | null = $derived.by(() => {
+		const semanticSelect = this.#resolvedSelect;
+		if (!semanticSelect) return null;
+
+		// Copy before the inline helpers below, which mutate in place — #resolvedSelect
+		// is shared with #refetchSortedDomain and must not carry GPU encodings.
+		const resolvedSelect = { ...semanticSelect };
 
 		// Capture passthrough channels BEFORE inline wrappings mutate the select.
 		// String values and plain ColumnRefNodes are 1:1 with their source column;
@@ -236,7 +256,10 @@ export class MarkLifecycleV2 {
 		chartContext: ChartContext,
 		markId: string,
 		filterGroup: FilterGroup,
-		options?: { gpuCoordinator?: GPUCoordinator | null; onMarkLOD?: ((surface: any) => void) | null }
+		options?: {
+			gpuCoordinator?: GPUCoordinator | null;
+			onMarkLOD?: ((surface: any) => void) | null;
+		}
 	) {
 		this.#config = config;
 		this.#reactiveConfig = reactiveConfig;
@@ -258,10 +281,7 @@ export class MarkLifecycleV2 {
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill')
 		};
-		this.#transformCompiler = new TransformCompiler(
-			config.transforms || [],
-			this.#transformConfig
-		);
+		this.#transformCompiler = new TransformCompiler(config.transforms || [], this.#transformConfig);
 		this.#detectAutoBins();
 
 		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin)
@@ -500,9 +520,7 @@ export class MarkLifecycleV2 {
 			return () => {
 				clearTimeout(this.#tooltipWriteTimeout!);
 				this.#tooltipTableReady = false;
-				this.#queryEngine
-					.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`)
-					.catch(() => {});
+				this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 			};
 		});
 
@@ -558,9 +576,7 @@ export class MarkLifecycleV2 {
 
 		// Passive scales: skip domain fetching but still need schema for CAST decisions
 		if (this.#config.passiveScales) {
-			this.#schema = buildSchemaMap(
-				await this.#queryEngine.describe(this.#config.table)
-			);
+			this.#schema = buildSchemaMap(await this.#queryEngine.describe(this.#config.table));
 			setScalesReady(
 				this.#scaleMap,
 				this.#channelsNeedingDataDomain,
@@ -668,10 +684,7 @@ export class MarkLifecycleV2 {
 		const skipBandIndex = this.#transformCompiler.hasCategoryReducingTransforms();
 
 		// Band/point x scale
-		if (
-			!skipBandIndex &&
-			(this.actualXScaleType === 'band' || this.actualXScaleType === 'point')
-		) {
+		if (!skipBandIndex && (this.actualXScaleType === 'band' || this.actualXScaleType === 'point')) {
 			const xScale = this.#chartContext.xScaleState as BandScaleState | null;
 			if (xScale?.caseExpression) {
 				select.x = sql`${xScale.caseExpression}`;
@@ -679,10 +692,7 @@ export class MarkLifecycleV2 {
 		}
 
 		// Band/point y scale
-		if (
-			!skipBandIndex &&
-			(this.actualYScaleType === 'band' || this.actualYScaleType === 'point')
-		) {
+		if (!skipBandIndex && (this.actualYScaleType === 'band' || this.actualYScaleType === 'point')) {
 			const yScale = this.#chartContext.yScaleState as BandScaleState | null;
 			if (yScale?.caseExpression) {
 				select.y = sql`${yScale.caseExpression}`;
@@ -744,7 +754,10 @@ export class MarkLifecycleV2 {
 	 * Replaces Mosaic's queryFieldInfo (old Effect 5 fieldInfo path).
 	 * Returns a fieldInfo-shaped map for setInitialContinuousDomains.
 	 */
-	async #fetchFieldStats(): Promise<Record<string, { column: string; min: number; max: number }> | null> {
+	async #fetchFieldStats(): Promise<Record<
+		string,
+		{ column: string; min: number; max: number }
+	> | null> {
 		const select = this.#config.select;
 		const fields: { key: string; expr: unknown }[] = [];
 
@@ -752,9 +765,8 @@ export class MarkLifecycleV2 {
 		// x/y for normal marks, plus each parallel column for parallel mode.
 		for (const alias of Object.keys(this.#scaleMap)) {
 			if (!this.#scaleMap[alias]) continue;
-			const scaleType = alias === 'x' ? this.actualXScaleType
-				: alias === 'y' ? this.actualYScaleType
-				: 'linear'; // parallel columns are always linear
+			const scaleType =
+				alias === 'x' ? this.actualXScaleType : alias === 'y' ? this.actualYScaleType : 'linear'; // parallel columns are always linear
 
 			// Check alias + extent variants (x1/x2, y1/y2)
 			for (const key of [alias, `${alias}1`, `${alias}2`]) {
@@ -793,9 +805,7 @@ export class MarkLifecycleV2 {
 		const schema = buildSchemaMap(await this.#queryEngine.describe(this.#config.table));
 		const selectDef: Record<string, unknown> = {};
 		for (let i = 0; i < unique.length; i++) {
-			const colExpr = isNode(unique[i].expr)
-				? unique[i].expr
-				: sqlColumn(String(unique[i].expr));
+			const colExpr = isNode(unique[i].expr) ? unique[i].expr : sqlColumn(String(unique[i].expr));
 			const colName = String(unique[i].expr).replace(/^["']|["']$/g, '');
 			const jsType = schema?.get(colName)?.jsType;
 			if (jsType === 'date') {
@@ -899,37 +909,51 @@ export class MarkLifecycleV2 {
 		scaleState: BandScaleState,
 		sort: NormalizedSortConfig | undefined
 	): Promise<void> {
-		const field = this.#config.select[axis];
+		// Read from #resolvedSelect, not #config.select. A band/point axis can be a
+		// computed expression (e.g. y={bin('body_mass', {step:500})} on a BarMarkX),
+		// and an AutoBinNode is a plain class rather than an ExprNode — so the raw
+		// config value both stringifies to "[object Object]" and carries none of the
+		// bin resolution the rendered query uses. Taking the resolved form fixes the
+		// invalid SQL and keeps this sidecar's binning identical to the chart's.
+		const select = this.#resolvedSelect;
+		if (!select) return;
+
+		const field = select[axis];
 		if (!field) return;
 
-		// KNOWN BUG: assumes `field` is a plain column name / ColumnRefNode.
-		// A band/point axis backed by a computed expression (e.g. y={bin(...)}
-		// on a BarMarkX, binning the mark's categorical axis) hits
-		// sqlColumn(String(field)) below, stringifying the expression object
-		// to "[object Object]" and producing an invalid query. Pre-existing,
-		// unrelated to the SQL normalize/topN transform work — filed for a
-		// separate fix. Repro: /test/transforms, BarMarkX with
-		// y={bin('body_mass', {step:500})}.
-		let q = Query.from(this.#config.table)
-			.select({ [axis]: sqlColumn(String(field)) });
+		// Anything that is neither a string nor an ExprNode would stringify to
+		// "[object Object]" and produce SQL that fails at the binder. AutoBinNode and
+		// RollingAvgNode are both such wrappers, and #resolvedSelect has already
+		// replaced them — so reaching this means resolution did not happen, which is
+		// worth a warning rather than a query that cannot be read.
+		if (!isNode(field) && typeof field !== 'string') {
+			console.warn(
+				`[MarkLifecycleV2] Sort domain skipped for ${axis}: unresolved expression`,
+				field
+			);
+			return;
+		}
+
+		// Only strings become column refs; expression nodes pass through as-is.
+		const axisExpr: ExprValue = isNode(field) ? (field as ExprNode) : sqlColumn(String(field));
+
+		let q = Query.from(this.#config.table).select({ [axis]: axisExpr });
 
 		if (sort) {
-			const sortField = this.#config.select[sort.channel]
-				|| this.#config.select[sort.channel + '2']
-				|| this.#config.select[sort.channel + '1'];
+			const sortField =
+				select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1'];
 			if (!sortField) return;
 
 			if (isAggregateExpression(sortField as ExprNode)) {
-				q = q.groupby(field as GroupByExpr)
-					.select({ _sort: sortField as ExprValue });
+				q = q.groupby(axisExpr as GroupByExpr).select({ _sort: sortField as ExprValue });
 			}
 			const sortExpr = isAggregateExpression(sortField as ExprNode)
 				? sqlColumn('_sort')
-				: isNode(sortField) ? sortField : sqlColumn(String(sortField));
+				: isNode(sortField)
+					? sortField
+					: sqlColumn(String(sortField));
 
-			q.orderby(sort.direction === 'desc'
-				? sql`${sortExpr} DESC`
-				: sortExpr);
+			q.orderby(sort.direction === 'desc' ? sql`${sortExpr} DESC` : sortExpr);
 		} else {
 			q.distinct();
 		}
@@ -955,11 +979,7 @@ export class MarkLifecycleV2 {
 	 * Standalone assembly — doesn't depend on #resolvedQueryParts
 	 * (which isn't available yet during Phase 1 setup).
 	 */
-	#buildQueryForAggregates(
-		_table: string,
-		_config: any,
-		filter: unknown[]
-	): Query | null {
+	#buildQueryForAggregates(_table: string, _config: any, filter: unknown[]): Query | null {
 		// Build raw query parts directly from config.select (no CASE inlining,
 		// no bin resolution — scale states aren't ready yet during Phase 1).
 		const parts = buildQueryParts(
@@ -988,12 +1008,7 @@ export class MarkLifecycleV2 {
 	 * the given viewport bounds. Returns null before setup completes (scale
 	 * domains and time offsets aren't available yet).
 	 */
-	buildViewportCountQuery(
-		xLo: number,
-		xHi: number,
-		yLo: number,
-		yHi: number
-	): string | null {
+	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
 		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
@@ -1204,7 +1219,10 @@ export class MarkLifecycleV2 {
 						const axis = c.startsWith('x') ? 'x' : 'y';
 						const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 						const scaleState = axis === 'x' ? xScaleState : yScaleState;
-						if ((scaleType === 'band' || scaleType === 'point') && scaleState?.effectiveDomain?.length) {
+						if (
+							(scaleType === 'band' || scaleType === 'point') &&
+							scaleState?.effectiveDomain?.length
+						) {
 							replaceExprs.push(`${buildCaseExpression(c, scaleState.effectiveDomain)} AS ${c}`);
 						}
 						// Else: unexpected non-numeric, non-band column — leave as-is.
@@ -1212,12 +1230,15 @@ export class MarkLifecycleV2 {
 					}
 					replaceExprs.push(`CAST(${c} AS DOUBLE) AS ${c}`);
 				}
-				const replaceClause = replaceExprs.length > 0 ? ` REPLACE (${replaceExprs.join(', ')})` : '';
+				const replaceClause =
+					replaceExprs.length > 0 ? ` REPLACE (${replaceExprs.join(', ')})` : '';
 
 				// Optional ORDER BY for zone-map skipping in bounding-box queries.
 				let orderClause = '';
-				const tooltipSortTable = typeof this.#reactiveConfig.tooltip === 'object'
-					? this.#reactiveConfig.tooltip.sortTable !== false : true;
+				const tooltipSortTable =
+					typeof this.#reactiveConfig.tooltip === 'object'
+						? this.#reactiveConfig.tooltip.sortTable !== false
+						: true;
 				if (tooltipSortTable) {
 					const orderCol = ['x', 'x1', 'x2'].find((c) => c in selectConfig);
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
@@ -1347,10 +1368,7 @@ export class MarkLifecycleV2 {
 	 * DB query. Computes aggregates against the source table using the same
 	 * GROUP BY as the main query, then ALTER+UPDATE the temp table.
 	 */
-	async #mergeTipExtras(
-		tableName: string,
-		tipExtras: Record<string, unknown>
-	): Promise<void> {
+	async #mergeTipExtras(tableName: string, tipExtras: Record<string, unknown>): Promise<void> {
 		if (!this.#resolvedQueryParts) return;
 
 		// Identify non-aggregate channel columns — these are the join keys
@@ -1391,9 +1409,7 @@ export class MarkLifecycleV2 {
 		const setClauses = Object.keys(tipExtras)
 			.map((col) => `"${col}" = _s."${col}"`)
 			.join(', ');
-		const joinCondition = joinCols
-			.map((ch) => `"${tableName}"."${ch}" = _s."${ch}"`)
-			.join(' AND ');
+		const joinCondition = joinCols.map((ch) => `"${tableName}"."${ch}" = _s."${ch}"`).join(' AND ');
 		const updateStmt = `UPDATE "${tableName}" SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
 
 		await this.#queryEngine.exec([...alterStmts, updateStmt]);
@@ -1520,8 +1536,7 @@ export class MarkLifecycleV2 {
 		}
 
 		if (useTooltipTable) {
-			const q = Query.from(this.#tooltipTableName)
-				.select(outerSelect as Record<string, ExprValue>);
+			const q = Query.from(this.#tooltipTableName).select(outerSelect as Record<string, ExprValue>);
 			if (whereClause) q.where(whereClause as any);
 			return q;
 		}
@@ -1530,10 +1545,7 @@ export class MarkLifecycleV2 {
 		return this.#buildSidecarQuery(outerSelect, whereClause);
 	}
 
-	#buildFitDomainWhere(
-		drivingChannels: string[],
-		domain: [number, number]
-	): unknown {
+	#buildFitDomainWhere(drivingChannels: string[], domain: [number, number]): unknown {
 		const [lo, hi] = domain;
 		const ch1 = drivingChannels.find((c) => c.endsWith('1'));
 		const ch2 = drivingChannels.find((c) => c.endsWith('2'));
@@ -1551,14 +1563,12 @@ export class MarkLifecycleV2 {
 	 * Build a sidecar query by wrapping this mark's base query as a derived table.
 	 * Used by fitDomain (MIN/MAX) and potentially DensityHost (COUNT).
 	 */
-	#buildSidecarQuery(
-		outerSelect: Record<string, unknown>,
-		where?: unknown
-	): Query | null {
+	#buildSidecarQuery(outerSelect: Record<string, unknown>, where?: unknown): Query | null {
 		const tooltipQuery = this.#buildTooltipQuery();
 		if (!tooltipQuery) return null;
-		const q = Query.from({ mark_data: sql`(${tooltipQuery})` as any })
-			.select(outerSelect as Record<string, ExprValue>);
+		const q = Query.from({ mark_data: sql`(${tooltipQuery})` as any }).select(
+			outerSelect as Record<string, ExprValue>
+		);
 		if (where) q.where(where as any);
 		return q;
 	}
