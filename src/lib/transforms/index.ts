@@ -151,7 +151,7 @@ function resolveValueAndBand(
  *  (e.g. x={1}) — constants are injected client-side after the query runs,
  *  so a SQL transform can never see them. Force the JS fallback instead. */
 const CONSTANT_CHANNEL_HINT =
-	' If this channel is a constant (a plain number prop), pass { engine: \'js\' } — SQL transforms run before constants are injected.';
+	" If this channel is a constant (a plain number prop), pass { engine: 'js' } — SQL transforms run before constants are injected.";
 
 /** topN also needs the series (fill) channel, when present in the select list. */
 function resolveTopNColumns(
@@ -453,6 +453,20 @@ function resolveStackColumns(
 	}
 	const fill = config?.fill;
 	const series = typeof fill === 'string' && aliases.includes(fill) ? fill : null;
+
+	// With no series column there is one row per band, so the cumulative sum equals
+	// that row's own value and the stack is arithmetically a no-op — the output is
+	// identical to an unstacked mark. That is the correct result, but it is
+	// indistinguishable from a broken stack to anyone looking at the chart, so say
+	// what is missing rather than silently drawing an ordinary bar.
+	if (!series) {
+		console.warn(
+			`stack${direction === 'y' ? 'Y' : 'X'}: no series column, so stacking has no effect ` +
+				`(one row per band). Stacking groups rows within a band by the ordinal ` +
+				`fill channel — add fill="<field>" to the mark. Select list: [${aliases.join(', ')}].`
+		);
+	}
+
 	return { band, value, series };
 }
 
@@ -522,7 +536,11 @@ function stackYJS(options: StackYOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'stack',
-		spec: { transform: 'stackY', engine: 'js', ...(options.offset ? { offset: options.offset } : {}) },
+		spec: {
+			transform: 'stackY',
+			engine: 'js',
+			...(options.offset ? { offset: options.offset } : {})
+		},
 		channels: ['y0', 'y1'],
 		apply(data: DataAccessor, config: MarkConfig) {
 			return computeStack(data, config.x!, config.y!, 'y0', 'y1', options.offset ?? null);
@@ -543,7 +561,11 @@ function stackXJS(options: StackXOptions): JsTransform {
 	return {
 		stage: 'js',
 		type: 'stack',
-		spec: { transform: 'stackX', engine: 'js', ...(options.offset ? { offset: options.offset } : {}) },
+		spec: {
+			transform: 'stackX',
+			engine: 'js',
+			...(options.offset ? { offset: options.offset } : {})
+		},
 		channels: ['x0', 'x1'],
 		apply(data: DataAccessor, config: MarkConfig) {
 			return computeStack(data, config.y!, config.x!, 'x0', 'x1', options.offset ?? null);
@@ -686,7 +708,8 @@ function normalizeSQL(options: NormalizeOptions): SqlTransform {
 			const { by, band } = resolveValueAndBand(aliases, options, config, 'normalize');
 
 			const outSelect = passthroughSelect(aliases);
-			outSelect[by] = sqlTag`${column(by)} * 100 / NULLIF(SUM(${column(by)}) OVER (PARTITION BY ${column(band)}), 0)`;
+			outSelect[by] =
+				sqlTag`${column(by)} * 100 / NULLIF(SUM(${column(by)}) OVER (PARTITION BY ${column(band)}), 0)`;
 
 			return Query.from({ __normalize_base: query }).select(outSelect);
 		},
