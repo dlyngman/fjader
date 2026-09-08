@@ -559,13 +559,27 @@ export class ScaleTemplateSystem {
     //
     // WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
     // vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
-    // default maxUniformBufferBindingSize — giving 16384 ids GLOBALLY across
-    // every band and point scale, at the per-scale offset carried in p4.
+    // default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
+    // every band and point scale, at the per-scale base carried in p4.
+    //
+    // Each scale's block is [count, slot0, slot1, ...]. The count is what makes
+    // the lookup safe: ids and the slot table can disagree for a moment while a
+    // dim appends, and without a per-scale bound an id past this scale's end
+    // reads the NEXT scale's slots — a plausible wrong position rather than a
+    // visible failure. Index 0 is a permanent zero-length block, which is where
+    // a scale that did not fit in the buffer points.
     @group(2) @binding(5) var<uniform> bandSlots: array<vec4<f32>, 4096>;
 
-    fn bandSlot(base: u32, id: u32) -> f32 {
-      let i = base + id;
+    fn bandSlotAt(i: u32) -> f32 {
       return bandSlots[i >> 2u][i & 3u];
+    }
+
+    fn bandSlot(base: u32, id: u32) -> f32 {
+      let count = u32(bandSlotAt(base));
+      if (id >= count) {
+        return -1.0;
+      }
+      return bandSlotAt(base + 1u + id);
     }
     
     // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:

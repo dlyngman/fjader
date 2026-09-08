@@ -109,6 +109,15 @@ export class CategoricalIdentity {
 	#dims = new Map<string, DimEntry>();
 	#views = new Map<string, ViewEntry>();
 	/**
+	 * Bumped by reset(). Work that started before a reset must not finish into
+	 * the state after it: the maps are cleared synchronously while the DROPs run
+	 * async, so without this a drain already in flight re-creates a dim that the
+	 * reset then drops, or records columns on a view that no longer exists.
+	 */
+	#generation = 0;
+	/** Serializes resets against each other. */
+	#resetChain: Promise<void> = Promise.resolve();
+	/**
 	 * A CACHE of the dim's id -> value mapping, one array per FIELD, indexed by
 	 * id. §9.4.
 	 *
@@ -166,11 +175,20 @@ export class CategoricalIdentity {
 
 	/**
 	 * The view to query for `table`, or the table itself when no identity
-	 * columns have been requested for it. Callers substitute this for the table
-	 * name; a table with no categorical channels is untouched.
+	 * columns are BUILT for it yet. Callers substitute this for the table name;
+	 * a table with no categorical channels is untouched.
+	 *
+	 * Gated on `current` — fields the view actually exposes — not on the entry
+	 * existing. ensureColumns registers the entry synchronously, well before the
+	 * CREATE OR REPLACE VIEW runs, so keying on the entry names a relation that
+	 * may not exist for the whole width of the first drain. Substituting the
+	 * base table meanwhile is always safe: the view is `SELECT t.*` plus id
+	 * columns, so the two differ only in columns a caller that has not awaited
+	 * ensureColumns cannot be selecting.
 	 */
 	sourceFor(table: string): string {
-		return this.#views.has(table) ? this.viewTable(table) : table;
+		const entry = this.#views.get(table);
+		return entry && entry.current.size > 0 ? this.viewTable(table) : table;
 	}
 
 	/**
@@ -220,6 +238,8 @@ export class CategoricalIdentity {
 			return;
 		}
 
+		const generation = this.#generation;
+
 		if (!entry.inflight) {
 			// Yield one microtask before reading `pending`. Every mark on a chart
 			// calls this from the same Promise.all, so they all run synchronously up
@@ -229,9 +249,21 @@ export class CategoricalIdentity {
 			// into a single CREATE OR REPLACE VIEW. Callers arriving later, after
 			// real I/O has begun, are the "during a rebuild" case and still cost
 			// exactly one more pass.
-			entry.inflight = Promise.resolve().then(() => this.#drain(table, entry));
+			entry.inflight = Promise.resolve().then(() => this.#drain(table, entry, generation));
 		}
-		return entry.inflight;
+		await entry.inflight;
+
+		// A reset landed while this was in flight, so the view this caller was
+		// promised no longer exists. Reject rather than resolve: the caller's
+		// next move is to select id columns FROM that view, and a silent resolve
+		// turns a reload into a binder error with no context, or worse, a query
+		// against a stale view that still resolves.
+		if (this.#generation !== generation) {
+			throw new Error(
+				`Categorical identity for "${table}" was reset while being built; ` +
+					`the mark must re-run setup.`
+			);
+		}
 	}
 
 	/**
@@ -245,15 +277,21 @@ export class CategoricalIdentity {
 	 * landing in that gap starts a fresh drain instead of awaiting a promise
 	 * that is already done with its work.
 	 */
-	async #drain(table: string, entry: ViewEntry): Promise<void> {
+	async #drain(table: string, entry: ViewEntry, generation: number): Promise<void> {
 		try {
 			while (entry.pending.size > 0) {
+				// Superseded by a reset: stop before issuing more DDL, which would
+				// re-create objects the reset is in the middle of dropping.
+				if (this.#generation !== generation) return;
+
 				const batch = [...entry.pending];
 				entry.pending.clear();
 
 				for (const field of batch) {
-					await this.#ensureDim(field, table);
+					await this.#ensureDim(field, table, generation);
 				}
+
+				if (this.#generation !== generation) return;
 
 				const all = new Set([...entry.current, ...batch]);
 				await this.#createView(table, [...all]);
@@ -275,7 +313,7 @@ export class CategoricalIdentity {
 	 * continue rather than restart. WHERE is applied before the window function,
 	 * so ROW_NUMBER numbers only the new values.
 	 */
-	#ensureDim(field: string, table: string): Promise<void> {
+	#ensureDim(field: string, table: string, generation: number): Promise<void> {
 		let dim = this.#dims.get(field);
 		if (!dim) {
 			dim = { name: this.dimTable(field), tables: new Set(), chain: Promise.resolve() };
@@ -286,13 +324,20 @@ export class CategoricalIdentity {
 		// observes the completed `tables` set and takes the append branch. The
 		// stored chain swallows rejections so one failure does not poison every
 		// later append; the returned promise still rejects for this caller.
-		const next = dim.chain.then(() => this.#ensureDimNow(dim!, field, table));
+		const next = dim.chain.then(() => this.#ensureDimNow(dim!, field, table, generation));
 		dim.chain = next.catch(() => {});
 		return next;
 	}
 
-	async #ensureDimNow(dim: DimEntry, field: string, table: string): Promise<void> {
+	async #ensureDimNow(
+		dim: DimEntry,
+		field: string,
+		table: string,
+		generation: number
+	): Promise<void> {
 		if (dim.tables.has(table)) return;
+		// Queued behind other dim work that outlived a reset.
+		if (this.#generation !== generation) return;
 
 		const dimName = quote(dim.name);
 		const src = quote(table);
@@ -366,7 +411,20 @@ export class CategoricalIdentity {
 	 *
 	 * Views go first: they depend on the dims.
 	 */
-	async reset(): Promise<void> {
+	reset(): Promise<void> {
+		// Serialized against other resets, so two reloads cannot interleave their
+		// DROPs with each other's bookkeeping. The generation bump is INSIDE the
+		// chained work, not before it, so it pairs with the drops it belongs to.
+		const next = this.#resetChain.then(() => this.#resetNow());
+		this.#resetChain = next.catch(() => {});
+		return next;
+	}
+
+	async #resetNow(): Promise<void> {
+		// Before any await: work already in flight compares against this and
+		// stops rather than re-creating what is about to be dropped.
+		this.#generation++;
+
 		const views = [...this.#views.keys()].map((t) => this.viewTable(t));
 		const dims = [...this.#dims.values()].map((d) => d.name);
 		this.#views.clear();

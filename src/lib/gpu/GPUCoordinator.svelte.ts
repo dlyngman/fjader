@@ -273,13 +273,28 @@ export class GPUCoordinator {
 	#cpuScaleBuffer: Float32Array | null = null; // Reusable CPU buffer for scale data
 	/**
 	 * Band identity id -> display slot, shared by every band and point scale at
-	 * a per-scale offset carried in that scale's p4 (§9.5, §14.3).
+	 * a per-scale base carried in that scale's p4 (§9.5, §14.3).
 	 *
 	 * A uniform buffer because the vertex stage is already at the default
 	 * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
-	 * maxUniformBufferBindingSize, so 16384 ids GLOBALLY across all such scales.
+	 * maxUniformBufferBindingSize, so 16384 floats GLOBALLY across all such
+	 * scales.
+	 *
+	 * Layout: index 0 is a permanent zero-length block, then one block per
+	 * scale of `[count, slot0, slot1, ...]`. The count makes each block
+	 * self-describing, so the shader can reject an id past this scale's end
+	 * instead of reading into the next scale's slots — the ids and the table
+	 * can disagree transiently while a dim appends. Budget is therefore
+	 * 16384 - 1 - (1 per scale) slots.
 	 */
 	#BAND_SLOT_CAPACITY = 16384;
+	/**
+	 * Base of the zero-length block. A scale that cannot be placed points here,
+	 * so every lookup finds count 0 and discards — which is what the capacity
+	 * warning claims happens. Pointing it at a stale base instead left the
+	 * scale rendering, from another scale's slots.
+	 */
+	#BAND_SLOT_EMPTY = 0;
 	#bandSlotBuffer: GPUBuffer | null = null;
 	#cpuBandSlots: Float32Array | null = null;
 	/** Last uploaded slotVersion per scale, so a static chart uploads nothing. */
@@ -666,6 +681,8 @@ export class GPUCoordinator {
 		if (this.#bandSlotBuffer) return;
 		this.#cpuBandSlots = new Float32Array(this.#BAND_SLOT_CAPACITY);
 		this.#cpuBandSlots.fill(-1);
+		// The permanent empty block: count 0, so it holds no slots.
+		this.#cpuBandSlots[this.#BAND_SLOT_EMPTY] = 0;
 		this.#bandSlotBuffer = this.#device!.createBuffer({
 			label: 'band-slot-table',
 			size: this.#BAND_SLOT_CAPACITY * 4,
@@ -685,8 +702,10 @@ export class GPUCoordinator {
 	#updateBandSlots(): void {
 		if (!this.#cpuBandSlots) return;
 
-		let offset = 0;
+		// Index 0 is the permanent empty block; real blocks start after it.
+		let offset = 1;
 		let dirty = false;
+		const seen = new Set<string>();
 
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
@@ -698,25 +717,46 @@ export class GPUCoordinator {
 			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
 
 			const table = scale.slotTable;
-			if (offset + table.length > this.#BAND_SLOT_CAPACITY) {
-				console.warn(
-					`[GPUCoordinator] Band slot capacity (${this.#BAND_SLOT_CAPACITY}) exhausted; ` +
-						`scale "${scale.id}" will not render.`
-				);
-				break;
-			}
+			seen.add(scale.id);
+
+			// One extra float for the block's count header.
+			const need = table.length + 1;
+			const fits = offset + need <= this.#BAND_SLOT_CAPACITY;
+			const base = fits ? offset : this.#BAND_SLOT_EMPTY;
+			if (fits) offset += need;
 
 			if (
-				this.#bandSlotOffsets.get(scale.id) !== offset ||
+				this.#bandSlotOffsets.get(scale.id) !== base ||
 				this.#bandSlotVersions.get(scale.id) !== scale.slotVersion
 			) {
-				this.#cpuBandSlots.set(table, offset);
-				this.#bandSlotOffsets.set(scale.id, offset);
+				if (fits) {
+					this.#cpuBandSlots[base] = table.length;
+					this.#cpuBandSlots.set(table, base + 1);
+				} else {
+					// Warn on the transition only — this runs every frame.
+					console.warn(
+						`[GPUCoordinator] Band slot capacity (${this.#BAND_SLOT_CAPACITY}) exhausted; ` +
+							`scale "${scale.id}" (${table.length} ids) will not render.`
+					);
+				}
+				this.#bandSlotOffsets.set(scale.id, base);
 				this.#bandSlotVersions.set(scale.id, scale.slotVersion ?? 0);
 				dirty = true;
 			}
+			// No break: a later scale with a smaller table may still fit, and one
+			// that does not is parked on the empty block rather than left holding
+			// a base that now belongs to someone else.
+		}
 
-			offset += table.length;
+		// Drop entries for scales that have gone away, so a re-registered id
+		// cannot inherit a base from a previous life.
+		if (this.#bandSlotOffsets.size !== seen.size) {
+			for (const id of this.#bandSlotOffsets.keys()) {
+				if (!seen.has(id)) {
+					this.#bandSlotOffsets.delete(id);
+					this.#bandSlotVersions.delete(id);
+				}
+			}
 		}
 
 		if (dirty) {
@@ -725,7 +765,7 @@ export class GPUCoordinator {
 				0,
 				this.#cpuBandSlots as Float32Array<ArrayBuffer>,
 				0,
-				offset > 0 ? offset : 1
+				offset
 			);
 		}
 	}

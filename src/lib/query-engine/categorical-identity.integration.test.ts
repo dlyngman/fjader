@@ -155,6 +155,33 @@ describe('CategoricalIdentity', () => {
 		expect(identity.sourceFor('penguins')).toBe('penguins');
 	});
 
+	it('returns the table itself while the view is still being built', async () => {
+		// ensureColumns registers the view entry synchronously, long before the
+		// CREATE runs. A sibling mark with no categorical channel never awaits
+		// that promise, so anything it asks for in the meantime must name a
+		// relation that exists — otherwise its very first query dies with
+		// "Catalog Error: Table with name penguins_v_s... does not exist".
+		// Two marks on one table, only one with a band axis: /examples/brush-demo.
+		const pending = identity.ensureColumns('penguins', { categorical: ['species'] });
+
+		expect(identity.sourceFor('penguins')).toBe('penguins');
+
+		await pending;
+		expect(identity.sourceFor('penguins')).toBe(identity.viewTable('penguins'));
+	});
+
+	it('keeps naming the base table when a rebuild adds a second field', async () => {
+		// A rebuild must not retract the view: the columns already there stay
+		// there, so callers mid-flight are still correct to use it.
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const pending = identity.ensureColumns('penguins', { categorical: ['island'] });
+
+		expect(identity.sourceFor('penguins')).toBe(identity.viewTable('penguins'));
+
+		await pending;
+		expect(identity.sourceFor('penguins')).toBe(identity.viewTable('penguins'));
+	});
+
 	// -----------------------------------------------------------------------
 	// Append from a second table
 	// -----------------------------------------------------------------------

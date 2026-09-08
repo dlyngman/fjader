@@ -148,15 +148,29 @@ export class MarkLifecycleV2 {
 	 * The relation any query built from #resolvedQueryParts must read.
 	 *
 	 * Those parts can carry identity id columns, which exist only on the view.
-	 * Degrades to the bare table when this mark requested no identity columns,
+	 * Degrades to the bare table when THIS mark requested no identity columns,
 	 * so a chart with no categorical axis is untouched. Safe for every query
 	 * shape because the view is `SELECT t.*` plus the id columns — anything
 	 * valid against the table is valid against the view.
+	 *
+	 * Gated on this mark's own #identityFields, NOT on whether a view exists for
+	 * the table. The engine's registry is per TABLE and is populated
+	 * synchronously when any mark calls ensureColumns, so asking it directly
+	 * hands the view's name to sibling marks that never requested identity and
+	 * therefore never awaited the CREATE — they then query a relation that does
+	 * not exist yet (`Catalog Error: Table with name <table>_v_s<session> does
+	 * not exist`). Two marks on one table where only one has a band axis is an
+	 * ordinary chart, not a corner case: see /examples/brush-demo.
+	 *
+	 * #identityFields is filled only after ensureColumns resolves, so a non-empty
+	 * set also means the view is built — this is the timing guarantee as well as
+	 * the scoping one.
 	 *
 	 * Not used by #buildQueryForAggregates, which runs in Phase 1 setup from the
 	 * raw config select before scales are ready, so it never names an id column.
 	 */
 	get #sourceTable(): string {
+		if (this.#identityFields.size === 0) return this.#config.table;
 		return this.#queryEngine.identitySourceFor(this.#config.table);
 	}
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();

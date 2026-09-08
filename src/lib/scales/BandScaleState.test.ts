@@ -174,7 +174,7 @@ describe('BandScaleState.slotTable', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
 		// Only two survived the transform, handed over as ids with no decode.
-		scale.addMark([2, 0], 'mark-1');
+		scale.addMark([2, 0], 'mark-1', { encoded: true });
 		scale.updateDomainFromExtents();
 
 		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
@@ -248,7 +248,7 @@ describe('BandScaleState identity <-> display translation', () => {
 	it('reports no id for a slot holding no category', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
-		scale.addMark([2, 0], 'mark-1'); // topN kept two of three
+		scale.addMark([2, 0], 'mark-1', { encoded: true }); // topN kept two of three
 		scale.updateDomainFromExtents();
 
 		expect(scale.idAtSlot(0)).toBe(2);
@@ -285,5 +285,59 @@ describe('BandScaleState identity <-> display translation', () => {
 		expect(captured).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
 		expect(scale.categoryAt(0)).toBe('Gentoo');
 		expect(scale.categoryAt(0)).not.toBe(captured[0]);
+	});
+});
+
+describe('BandScaleState id/value disambiguation', () => {
+	it('reads numbers as source values on a numeric band column', () => {
+		// A band axis over a year column: dim values are numbers, so a raw
+		// category is indistinguishable from an id by inspection. Guessing read
+		// 2021 as id 2021, which no dim has — the category vanished.
+		const scale = new BandScaleState('year');
+		scale.setIdentityValues([2019, 2020, 2021] as unknown as string[]);
+		scale.addMark([2021, 2019], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
+		expect(scale.effectiveDomain).toEqual([2021, 2019]);
+	});
+
+	it('reads the same numbers as ids when the caller says they are encoded', () => {
+		const scale = new BandScaleState('year');
+		scale.setIdentityValues([2019, 2020, 2021] as unknown as string[]);
+		scale.addMark([2, 0], 'mark-1', { encoded: true });
+		scale.updateDomainFromExtents();
+
+		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
+		expect(scale.effectiveDomain).toEqual([2021, 2019]);
+	});
+
+	it('drops an id past the end of the value array', () => {
+		// Such an id would survive into displayOrder but be dropped from #domain
+		// by the string projection, leaving the permutation a different length
+		// from the d3 band index space it must agree with.
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.addMark([0, 7, 2], 'mark-1', { encoded: true });
+		scale.updateDomainFromExtents();
+
+		expect(Array.from(scale.displayOrder)).toEqual([0, 2]);
+		expect(scale.displayOrder.length).toBe(scale.effectiveDomain.length);
+	});
+
+	it('survives every mark on a shared scale adopting identity in turn', () => {
+		// setIdentityValues runs once per mark with the same live array. The
+		// re-encode is a one-time transition: repeating it would look each stored
+		// id up as a value, miss, and empty the domain.
+		const live = ['Adelie', 'Chinstrap', 'Gentoo'];
+		const scale = new BandScaleState('species');
+		scale.addMark(['Gentoo', 'Adelie'], 'mark-1');
+
+		scale.setIdentityValues(live);
+		scale.setIdentityValues(live);
+		scale.setIdentityValues(live);
+
+		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
+		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
 	});
 });

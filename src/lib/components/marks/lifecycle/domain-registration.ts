@@ -267,7 +267,8 @@ export function registerDataDerivedDomains(
 			// back. Raw values only for a scale with no identity: an
 			// expression-backed axis has no dim, so its channel holds a
 			// CASE-produced position or the value itself.
-			const categories: (string | number)[] = bandScale?.hasIdentity
+			const encoded = !!bandScale?.hasIdentity;
+			const categories: (string | number)[] = encoded
 				? extractIdsFromData(data, axis)
 				: extractCategoriesFromData(data, axis);
 			if (bandScale?.addMark && categories.length > 0) {
@@ -275,7 +276,11 @@ export function registerDataDerivedDomains(
 				// the desired sort order (e.g. _orderConfig adds ORDER BY series, dim).
 				// If a sort sidecar ran (from a sibling mark sharing this scale),
 				// its #sortOrder is already set and should not be overwritten.
-				bandScale.addMark(categories, markId);
+				//
+				// `encoded` because this is the ONE caller already in id space: the
+				// channel carries dim ids. The scale cannot tell that by looking —
+				// on a numeric band column a source value is a number too.
+				bandScale.addMark(categories, markId, { encoded });
 				bandScale.updateDomainFromExtents();
 			}
 		}

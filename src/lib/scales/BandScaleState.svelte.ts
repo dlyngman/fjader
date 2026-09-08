@@ -94,6 +94,13 @@ export class BandScaleState {
 	 * past its end by ids from that table.
 	 */
 	#identityValues: string[] = $state.raw([]);
+	/**
+	 * Whether #extents, #sortOrder and #explicitDomain hold ids rather than
+	 * source values. Flips once, when identity is first adopted; see
+	 * setIdentityValues. Cleared if the dim is ever emptied, because the ids
+	 * stored under it stop meaning anything at that point.
+	 */
+	#extentsEncoded: boolean = false;
 	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
 
 	// =========================================================================
@@ -313,6 +320,9 @@ export class BandScaleState {
 	 */
 	setIdentityValues(values: string[]): void {
 		this.#identityValues = values;
+		// A reload empties the dim in place. The ids stored under it stop meaning
+		// anything, so the next adoption must re-encode from values again.
+		if (values.length === 0) this.#extentsEncoded = false;
 		// The one encode table, built here rather than per reorder. Marks
 		// re-adopt after the dim appends, so this stays in step with growth.
 		this.#refreshIdOf();
@@ -322,11 +332,21 @@ export class BandScaleState {
 		// coalesced promise, so addMark can run while hasIdentity is still false
 		// and store values. Leaving those as strings makes updateDomainFromExtents
 		// index the value array with a string and drop every category.
-		for (const [id, cats] of this.#extents) {
-			this.#extents.set(id, this.#toIds(cats));
+		//
+		// Exactly once, on the transition. Every mark on a shared scale calls
+		// this with the same live array, and after the first pass the stored
+		// lists are already ids — re-encoding them as VALUES would look each id
+		// up in #idOf, miss, and drop the entire domain. The old "a number is an
+		// id" heuristic made the repeat harmless by accident; #toIds no longer
+		// guesses, so the transition has to be tracked.
+		if (!this.#extentsEncoded && this.hasIdentity) {
+			this.#extentsEncoded = true;
+			for (const [id, cats] of this.#extents) {
+				this.#extents.set(id, this.#toIds(cats, false));
+			}
+			if (this.#sortOrder) this.#sortOrder = this.#toIds(this.#sortOrder, false);
+			if (this.#explicitDomain) this.#explicitDomain = this.#toIds(this.#explicitDomain, false);
 		}
-		if (this.#sortOrder) this.#sortOrder = this.#toIds(this.#sortOrder);
-		if (this.#explicitDomain) this.#explicitDomain = this.#toIds(this.#explicitDomain);
 
 		this.updateDomainFromExtents();
 		this._version++;
@@ -372,20 +392,39 @@ export class BandScaleState {
 		for (let i = 0; i < values.length; i++) this.#idOf.set(values[i], i);
 	}
 
-	/** Encode a mix of values and ids to ids. Unknown values are dropped. */
-	#toIds(items: (string | number)[]): number[] {
+	/**
+	 * Normalize a caller's list to ids, dropping anything the dim does not know.
+	 *
+	 * `encoded` says which space the caller is in, because the two are NOT
+	 * distinguishable by inspection. Treating any number as an id works only
+	 * while dim values are strings; on a band axis over a numeric column —
+	 * a year, a rating — a raw category value is a number too, and guessing
+	 * reads it as an id, which is the wrong-data class of failure rather than a
+	 * crash. Exactly one caller is in id space (the band channel of a scale
+	 * with identity, in registerDataDerivedDomains); everything else — explicit
+	 * domain props, the sort sidecar, the dim's own value list — supplies
+	 * source values.
+	 *
+	 * Ids are range-checked against the value array. An id past its end would
+	 * survive into #displayOrder but be dropped from #domain by the string
+	 * projection, desynchronizing the permutation from the d3 band index space
+	 * it has to agree with.
+	 */
+	#toIds(items: (string | number)[], encoded: boolean): number[] {
 		// Refresh before use: a mark's addMark can land between another mark's
 		// dim append and its setIdentityValues, and an id missing from a stale map
 		// is silently dropped rather than erroring — a category that vanishes from
 		// multi-table charts only, and only on some interleavings.
 		if (this.#idOf.size !== this.#identityValues.length) this.#refreshIdOf();
 
+		const limit = this.#identityValues.length;
 		const out: number[] = [];
 		const seen = new Set<number>();
 		for (const item of items) {
 			if (item == null) continue;
-			const id = typeof item === 'number' ? item : this.#idOf.get(item);
-			if (id === undefined || id < 0 || seen.has(id)) continue;
+			const id = encoded ? (item as number) : this.#idOf.get(item as string);
+			if (id === undefined || !Number.isInteger(id) || id < 0 || id >= limit) continue;
+			if (seen.has(id)) continue;
 			seen.add(id);
 			out.push(id);
 		}
@@ -538,14 +577,19 @@ export class BandScaleState {
 	addMark(
 		categories: (string | number)[],
 		identifier: string,
-		{ sorted = false, explicit = false }: { sorted?: boolean; explicit?: boolean } = {}
+		{
+			sorted = false,
+			explicit = false,
+			encoded = false
+		}: { sorted?: boolean; explicit?: boolean; encoded?: boolean } = {}
 	): this {
-		// Ids once identity exists, values otherwise. Callers may pass either:
-		// topN hands over ids straight from the data, an explicit domain prop
-		// hands over the user's strings. Encoding happens here, once, at the
-		// boundary — not by decoding to strings and re-encoding downstream.
+		// Ids once identity exists, values otherwise. `encoded` says which space
+		// `categories` is already in: the band channel of a scale with identity
+		// carries dim ids straight from the data, everything else supplies source
+		// values. Encoding happens here, once, at the boundary — not by decoding
+		// to strings and re-encoding downstream.
 		const uniqueCategories: (string | number)[] = this.hasIdentity
-			? this.#toIds(categories)
+			? this.#toIds(categories, encoded)
 			: [...new Set(categories.filter((c) => c != null))];
 
 		this.#extents.set(identifier, uniqueCategories);
@@ -569,8 +613,10 @@ export class BandScaleState {
 	 * the domain should only contain post-transform categories.
 	 */
 	setSortOrder(categories: (string | number)[]): void {
+		// The sidecar selects the raw column, so these are always source values
+		// (§15.6 item 2 would change that; until it does, never ids).
 		this.#sortOrder = this.hasIdentity
-			? this.#toIds(categories)
+			? this.#toIds(categories, false)
 			: [...new Set(categories.filter((c) => c != null))];
 	}
 
@@ -653,9 +699,9 @@ export class BandScaleState {
 		// strings for the consumers that need them: d3's scaleBand, axis ticks,
 		// TextMark, the tooltip decode. Strings are an output here, never state.
 		const values = this.#identityValues;
-		// #toIds is a no-op on a list that is already ids, and rescues one that
-		// is not — a mark registering values after identity exists, say.
-		const orderedIds = this.hasIdentity ? this.#toIds(allCategories) : [];
+		// Already ids: every path into #extents/#sortOrder/#explicitDomain
+		// encodes at the boundary. This pass de-duplicates and range-checks.
+		const orderedIds = this.hasIdentity ? this.#toIds(allCategories, true) : [];
 		const resolved: string[] = this.hasIdentity
 			? orderedIds.map((id) => values[id]).filter((v): v is string => v != null)
 			: (allCategories as string[]);

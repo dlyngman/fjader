@@ -464,11 +464,18 @@ export class QueryEngine {
 	 * caches; callers still need to trigger a re-query (e.g. a filter change)
 	 * to see fresh data rendered.
 	 */
-	clearQueryCache(): void {
+	clearQueryCache(): Promise<void> {
 		this.clearDescribeCache();
 		// Identity dims are CREATE TABLE IF NOT EXISTS, so a stale dim would keep
 		// serving pre-reload ids indefinitely — the same trap as preagg cubes.
-		this.#identity.reset().catch(() => {});
+		//
+		// Returned rather than fire-and-forget, so a caller reloading data can
+		// await the teardown before re-registering marks. Marks that hold
+		// identity columns MUST re-run setup afterwards: their query parts still
+		// name __dplot_*_idx columns on a view that no longer exists. An
+		// ensureColumns still in flight across this rejects rather than resolving
+		// against dropped state (see CategoricalIdentity's generation counter).
+		const identityReset = this.#identity.reset();
 		for (const reg of this.#marks.values()) {
 			this.#dropPreagg(reg);
 		}
@@ -477,6 +484,7 @@ export class QueryEngine {
 		}
 		this.#preaggTables.clear();
 		this.#queryCache.clear();
+		return identityReset;
 	}
 
 	/**
