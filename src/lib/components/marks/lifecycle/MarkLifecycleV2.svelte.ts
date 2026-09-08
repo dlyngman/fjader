@@ -65,7 +65,7 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
-import { buildQueryParts, assembleQuery, type QueryParts } from './query-builder';
+import { buildQueryParts, assembleQuery, castReal, type QueryParts } from './query-builder';
 import {
 	setScalesReady,
 	markDeferredScalesReady,
@@ -720,7 +720,6 @@ export class MarkLifecycleV2 {
 		// Expression-backed axes keep the CASE: there is no dim for a computed
 		// value, which is the same boundary #197 covers.
 		for (const axis of ['x', 'y'] as const) {
-			if (skipBandIndex) continue;
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			if (scaleType !== 'band' && scaleType !== 'point') continue;
 
@@ -729,10 +728,23 @@ export class MarkLifecycleV2 {
 			) as BandScaleState | null;
 			if (!scale) continue;
 
+			// A category-reducing transform still suppresses the CASE — its domain
+			// holds only the surviving categories, so a CASE built from it would
+			// map the filtered-out ones to -1 before the transform ever runs. It no
+			// longer suppresses the IDENTITY column: ids come from the dim, are
+			// independent of which categories survive, and the topN subquery's
+			// `band IN (...)` filters them as integers (§9.3).
 			const field = this.#config.select[axis];
 			if (typeof field === 'string' && this.#identityFields.has(field)) {
-				select[axis] = sqlColumn(this.#queryEngine.identityColumn(field));
-			} else if (scale.caseExpression) {
+				// CAST to REAL explicitly. processDataForGPU's zero-copy fast path
+				// keys on Float32Array, and castNumeric cannot help here: it casts a
+				// column ref only when the schema says the column is numeric, and
+				// the schema comes from DESCRIBE of the BASE table, which has no
+				// __dplot_*_idx columns. An INT column would arrive as an Int32Array
+				// and fall into the string mapping path, where every id misses and
+				// becomes -1. The CASE this replaces was cast for the same reason.
+				select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(field)));
+			} else if (!skipBandIndex && scale.caseExpression) {
 				select[axis] = sql`${scale.caseExpression}`;
 			}
 		}

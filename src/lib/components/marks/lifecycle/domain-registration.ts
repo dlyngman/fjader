@@ -15,7 +15,11 @@ import {
 	isTemporalScale
 } from '$lib/scales/scale-categories';
 import { isBinExpression } from '$lib/sql/bin';
-import { computeExtentFromData, extractCategoriesFromData } from './domain-computation';
+import {
+	computeExtentFromData,
+	extractCategoriesFromData,
+	extractIdsFromData
+} from './domain-computation';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -256,8 +260,22 @@ export function registerDataDerivedDomains(
 			const scaleType = axis === 'x' ? actualXScaleType : actualYScaleType;
 			if (scaleType !== 'band' && scaleType !== 'point') continue;
 
-			const categories = extractCategoriesFromData(data, axis);
 			const bandScale = axis === 'x' ? xBandScaleState : yBandScaleState;
+
+			// The band channel now carries dim ids, so decode them back to values
+			// before registering a domain — the scale's domain is still a list of
+			// category strings, and axis ticks read it directly.
+			//
+			// Falls back to raw values when the scale has no identity array: an
+			// expression-backed axis has no dim, so its channel still holds either
+			// a CASE-produced position or the raw value.
+			const identity = bandScale?.identityValues ?? [];
+			const categories =
+				identity.length > 0
+					? extractIdsFromData(data, axis)
+							.map((id) => identity[id])
+							.filter((v): v is string => v != null)
+					: extractCategoriesFromData(data, axis);
 			if (bandScale?.addMark && categories.length > 0) {
 				// Don't pass { sorted: true } — the data row order is not necessarily
 				// the desired sort order (e.g. _orderConfig adds ORDER BY series, dim).
