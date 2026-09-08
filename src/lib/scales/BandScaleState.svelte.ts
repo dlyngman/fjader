@@ -73,9 +73,10 @@ export class BandScaleState {
 	// DOMAIN STATE
 	// =========================================================================
 	#domain: string[] = $state([]);
-	#extents: Map<string, string[]> = new Map(); // Stores domains from different marks
-	#sortOrder: string[] | null = null; // Preferred category ordering from a mark with sort config
-	#explicitDomain: string[] | null = null; // Highest-priority ordering from explicit domain prop
+	// Ids when the scale has identity, values otherwise. See #toIds.
+	#extents: Map<string, (string | number)[]> = new Map();
+	#sortOrder: (string | number)[] | null = null;
+	#explicitDomain: (string | number)[] | null = null;
 	#domainUpdateScheduled: boolean = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
@@ -312,8 +313,57 @@ export class BandScaleState {
 	 */
 	setIdentityValues(values: string[]): void {
 		this.#identityValues = values;
-		this.#rebuildSlotTable();
+		// The one encode table, built here rather than per reorder. Marks
+		// re-adopt after the dim appends, so this stays in step with growth.
+		this.#idOf = new Map();
+		for (let i = 0; i < values.length; i++) this.#idOf.set(values[i], i);
+
+		// Re-encode anything registered BEFORE identity arrived. Marks race here:
+		// a mark's domain fetch and its ensureColumns both resume off the same
+		// coalesced promise, so addMark can run while hasIdentity is still false
+		// and store values. Leaving those as strings makes updateDomainFromExtents
+		// index the value array with a string and drop every category.
+		for (const [id, cats] of this.#extents) {
+			this.#extents.set(id, this.#toIds(cats));
+		}
+		if (this.#sortOrder) this.#sortOrder = this.#toIds(this.#sortOrder);
+		if (this.#explicitDomain) this.#explicitDomain = this.#toIds(this.#explicitDomain);
+
+		this.updateDomainFromExtents();
 		this._version++;
+	}
+
+	/** value -> id. Empty for a scale whose data is not dim ids. */
+	#idOf: Map<string, number> = new Map();
+
+	/** True when this scale's channel carries dim ids rather than positions. */
+	get hasIdentity(): boolean {
+		return this.#identityValues.length > 0;
+	}
+
+	/**
+	 * Ids in display order — the permutation the whole design is about (§9.5).
+	 * Primary state: #domain is derived from it, and the slot table is its
+	 * inverse. Empty for a scale without identity, which stays on strings.
+	 */
+	get displayOrder(): Int32Array {
+		return this.#displayOrder;
+	}
+
+	#displayOrder: Int32Array = new Int32Array(0);
+
+	/** Encode a mix of values and ids to ids. Unknown values are dropped. */
+	#toIds(items: (string | number)[]): number[] {
+		const out: number[] = [];
+		const seen = new Set<number>();
+		for (const item of items) {
+			if (item == null) continue;
+			const id = typeof item === 'number' ? item : this.#idOf.get(item);
+			if (id === undefined || id < 0 || seen.has(id)) continue;
+			seen.add(id);
+			out.push(id);
+		}
+		return out;
 	}
 
 	get identityValues(): string[] {
@@ -363,34 +413,29 @@ export class BandScaleState {
 	 * new identity value array.
 	 */
 	#rebuildSlotTable(): void {
-		const values = this.#identityValues;
-		const domain = this.effectiveDomain;
-
-		// No identity values means this scale's data does NOT arrive as dim ids:
-		// an expression-backed axis still CASE-inlines, and a category-reducing
-		// transform (skipBandIndex) sends raw values that JS maps to positions.
-		// Both already produce a display position, so the shader's lookup has to
-		// be a no-op for them — the identity permutation, not an empty table.
-		// Leaving it empty would give them offset 0 and another scale's slots.
-		if (values.length === 0) {
-			const passthrough = new Float32Array(domain.length);
-			for (let i = 0; i < domain.length; i++) passthrough[i] = i;
+		// Without identity the channel already carries a display position — an
+		// expression-backed axis CASE-inlines one — so the shader's lookup has to
+		// be a no-op. The identity permutation, not an empty table: empty would
+		// give the scale offset 0 and another scale's slots.
+		if (!this.hasIdentity) {
+			const n = this.#domain.length;
+			const passthrough = new Float32Array(n);
+			for (let i = 0; i < n; i++) passthrough[i] = i;
 			this.#slotTable = passthrough;
 			this.slotVersion++;
 			return;
 		}
 
-		const table = new Float32Array(values.length);
+		// The plain inverse of displayOrder. No Map and no strings: displayOrder
+		// is already ids, so this is an array walk. Everything not listed keeps
+		// -1 — filtered out by a transform, or belonging to another table on a
+		// shared scale.
+		const table = new Float32Array(this.#identityValues.length);
 		table.fill(-1);
-
-		{
-			const idOf = new Map<string, number>();
-			for (let i = 0; i < values.length; i++) idOf.set(values[i], i);
-
-			for (let slot = 0; slot < domain.length; slot++) {
-				const id = idOf.get(domain[slot]);
-				if (id !== undefined) table[id] = slot;
-			}
+		const order = this.#displayOrder;
+		for (let slot = 0; slot < order.length; slot++) {
+			const id = order[slot];
+			if (id >= 0 && id < table.length) table[id] = slot;
 		}
 
 		this.#slotTable = table;
@@ -421,11 +466,17 @@ export class BandScaleState {
 	 * Add categorical data from a mark
 	 */
 	addMark(
-		categories: string[],
+		categories: (string | number)[],
 		identifier: string,
 		{ sorted = false, explicit = false }: { sorted?: boolean; explicit?: boolean } = {}
 	): this {
-		const uniqueCategories = [...new Set(categories.filter((c) => c != null))];
+		// Ids once identity exists, values otherwise. Callers may pass either:
+		// topN hands over ids straight from the data, an explicit domain prop
+		// hands over the user's strings. Encoding happens here, once, at the
+		// boundary — not by decoding to strings and re-encoding downstream.
+		const uniqueCategories: (string | number)[] = this.hasIdentity
+			? this.#toIds(categories)
+			: [...new Set(categories.filter((c) => c != null))];
 
 		this.#extents.set(identifier, uniqueCategories);
 
@@ -447,8 +498,10 @@ export class BandScaleState {
 	 * Used by topN marks: the sort sidecar runs against the full dataset but
 	 * the domain should only contain post-transform categories.
 	 */
-	setSortOrder(categories: string[]): void {
-		this.#sortOrder = [...new Set(categories.filter((c) => c != null))];
+	setSortOrder(categories: (string | number)[]): void {
+		this.#sortOrder = this.hasIdentity
+			? this.#toIds(categories)
+			: [...new Set(categories.filter((c) => c != null))];
 	}
 
 	/**
@@ -488,19 +541,20 @@ export class BandScaleState {
 		}
 		if (this.#extents.size === 0) {
 			this.#domain = [];
+			this.#displayOrder = new Int32Array(0);
 			this.#rebuildSlotTable();
 			this._version++;
 			return;
 		}
 
 		// Collect all valid categories across all extents
-		const validCategories = new Set<string>();
+		const validCategories = new Set<string | number>();
 		for (const categories of this.#extents.values()) {
 			for (const cat of categories) validCategories.add(cat);
 		}
 
-		const allCategories: string[] = [];
-		const seen = new Set<string>();
+		const allCategories: (string | number)[] = [];
+		const seen = new Set<string | number>();
 
 		// Priority 1: Explicit domain from mark prop (highest specificity)
 		// Priority 2: Sort order from sidecar query
@@ -524,15 +578,35 @@ export class BandScaleState {
 			}
 		}
 
-		// Check if domain order actually changed
+		// allCategories is ids when the scale has identity. displayOrder is that
+		// list verbatim — the permutation — and #domain is its projection into
+		// strings for the consumers that need them: d3's scaleBand, axis ticks,
+		// TextMark, the tooltip decode. Strings are an output here, never state.
+		const values = this.#identityValues;
+		// #toIds is a no-op on a list that is already ids, and rescues one that
+		// is not — a mark registering values after identity exists, say.
+		const orderedIds = this.hasIdentity ? this.#toIds(allCategories) : [];
+		const resolved: string[] = this.hasIdentity
+			? orderedIds.map((id) => values[id]).filter((v): v is string => v != null)
+			: (allCategories as string[]);
+
 		const oldDomain = this.#domain;
 		const domainChanged =
-			oldDomain.length !== allCategories.length ||
-			allCategories.some((cat, i) => cat !== oldDomain[i]);
+			oldDomain.length !== resolved.length || resolved.some((cat, i) => cat !== oldDomain[i]);
 
-		if (!domainChanged) return;
+		// The permutation can change while its string projection does not — most
+		// obviously when identity arrives after the domain has already settled,
+		// which is the live ordering during setup. Guarding on the strings alone
+		// left displayOrder empty and the slot table stale.
+		const oldOrder = this.#displayOrder;
+		const orderChanged =
+			this.hasIdentity &&
+			(oldOrder.length !== orderedIds.length || orderedIds.some((id, i) => id !== oldOrder[i]));
 
-		this.#domain = allCategories;
+		if (!domainChanged && !orderChanged) return;
+
+		this.#domain = resolved;
+		this.#displayOrder = this.hasIdentity ? Int32Array.from(orderedIds) : new Int32Array(0);
 		this.#rebuildSlotTable();
 		this._version++;
 
@@ -799,9 +873,9 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Get all mark extents (for debugging)
+	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */
-	getExtents(): Record<string, string[]> {
+	getExtents(): Record<string, (string | number)[]> {
 		return Object.fromEntries(this.#extents);
 	}
 

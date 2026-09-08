@@ -123,6 +123,46 @@ describe('BandScaleState.slotTable', () => {
 		expect(scale.slotTable.length).toBe(0);
 	});
 
+	it('re-encodes categories registered before identity arrived', () => {
+		// The live ordering: a mark's domain fetch and its ensureColumns both
+		// resume off the same coalesced promise, so addMark can land while
+		// hasIdentity is still false. Those values must not be read as ids later.
+		const scale = new BandScaleState('species');
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+
+		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		expect(Array.from(scale.displayOrder)).toEqual([0, 1, 2]);
+		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+	});
+
+	it('keeps a pre-identity sort order after identity arrives', () => {
+		const scale = new BandScaleState('species');
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+
+		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
+		expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+	});
+
+	it('accepts ids directly, as topN passes them', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		// Only two survived the transform, handed over as ids with no decode.
+		scale.addMark([2, 0], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
+		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
+		// Chinstrap is not displayed.
+		expect(Array.from(scale.slotTable)).toEqual([1, -1, 0]);
+	});
+
 	it('passes positions through when the scale has no identity values', () => {
 		// An expression-backed axis or a topN mark sends display positions, not
 		// dim ids. The lookup must not remap them — and must not leave an empty
