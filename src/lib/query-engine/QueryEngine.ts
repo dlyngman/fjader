@@ -37,6 +37,7 @@ import {
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
+import { CategoricalIdentity } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
@@ -74,7 +75,8 @@ export type JsColumnType = 'number' | 'string' | 'date' | 'boolean';
 /** Map a DuckDB SQL type string to a JS type category. */
 export function mapSqlTypeToJs(sqlType: string): JsColumnType {
 	const upper = (sqlType || '').toUpperCase();
-	if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper)) return 'number';
+	if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper))
+		return 'number';
 	if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(upper)) return 'date';
 	if (/BOOL/.test(upper)) return 'boolean';
 	return 'string';
@@ -152,7 +154,10 @@ export class QueryEngine {
 	#conn: DuckDBConnection | null = null;
 	#connPromise: Promise<DuckDBConnection> | null = null;
 	#inflight = new Map<string, AbortController>();
-	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void; cache: boolean }>();
+	#pending = new Map<
+		string,
+		{ sql: string; resolve: (t: Table) => void; reject: (e: Error) => void; cache: boolean }
+	>();
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
@@ -164,6 +169,15 @@ export class QueryEngine {
 	#preaggTables = new Set<string>();
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
+	/**
+	 * Per-instance suffix for every table and view this engine creates.
+	 * Multiple render contexts (Streamlit iframes, notebook cells) can share one
+	 * DuckDB instance, and a competing instance rebuilding a dim would renumber
+	 * ids already baked into live vertex buffers.
+	 */
+	#session = Math.random().toString(36).slice(2, 8);
+	/** Categorical identity: dim tables, per-table views, id columns. */
+	#identity = new CategoricalIdentity(this, this.#session);
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 		if (connection instanceof Promise) {
@@ -174,6 +188,36 @@ export class QueryEngine {
 		} else {
 			this.#conn = connection;
 		}
+	}
+
+	/** This engine's per-instance suffix for created tables and views. */
+	get session(): string {
+		return this.#session;
+	}
+
+	/**
+	 * Ensure `table` has a view exposing a stable numeric id column for each
+	 * named categorical field, and resolve once it does. Concurrent callers
+	 * coalesce into one rebuild. See `categorical-identity.ts`.
+	 *
+	 * Nothing reads these columns yet — band step 3 switches the scale kinds
+	 * over one at a time.
+	 */
+	ensureColumns(table: string, fields: { categorical?: string[] }): Promise<void> {
+		if (this.#destroyed) {
+			throw new Error('QueryEngine has been destroyed');
+		}
+		return this.#identity.ensureColumns(table, fields);
+	}
+
+	/** The view carrying id columns for `table`, or `table` if it has none. */
+	identitySourceFor(table: string): string {
+		return this.#identity.sourceFor(table);
+	}
+
+	/** The id column name a view exposes for `field`. */
+	identityColumn(field: string): string {
+		return this.#identity.idColumn(field);
 	}
 
 	/**
@@ -265,7 +309,12 @@ export class QueryEngine {
 		return this.#queryRaw(sqlStr);
 	}
 
-	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal, cache: boolean = true): Promise<Table> {
+	async #executeForCaller(
+		callerId: string,
+		sqlStr: string,
+		signal?: AbortSignal,
+		cache: boolean = true
+	): Promise<Table> {
 		const controller = new AbortController();
 		this.#inflight.set(callerId, controller);
 
@@ -390,6 +439,9 @@ export class QueryEngine {
 	 */
 	clearQueryCache(): void {
 		this.clearDescribeCache();
+		// Identity dims are CREATE TABLE IF NOT EXISTS, so a stale dim would keep
+		// serving pre-reload ids indefinitely — the same trap as preagg cubes.
+		this.#identity.reset().catch(() => {});
 		for (const reg of this.#marks.values()) {
 			this.#dropPreagg(reg);
 		}
@@ -455,11 +507,7 @@ export class QueryEngine {
 	 * Fires a re-query immediately since the params effect won't trigger
 	 * (handle reference is unchanged).
 	 */
-	registerMark(
-		markId: string,
-		descriptor: QueryDescriptor,
-		filterGroup: FilterGroup
-	): MarkHandle {
+	registerMark(markId: string, descriptor: QueryDescriptor, filterGroup: FilterGroup): MarkHandle {
 		const prev = this.#marks.get(markId);
 		if (prev) {
 			// Don't cancel inflight queries — let them complete for intermediate
@@ -536,7 +584,12 @@ export class QueryEngine {
 
 			const sqlStr = usePreagg
 				? this.#assemblePreaggSQL(markId, reg, handle.params)
-				: this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
+				: this.#assembleSQL(
+						descriptor,
+						descriptor.table,
+						selection.predicate(markId),
+						handle.params
+					);
 			if (!sqlStr) continue;
 
 			// Use the public query() path — its execute-latest logic ensures
@@ -564,7 +617,12 @@ export class QueryEngine {
 
 		const sqlStr = usePreagg
 			? this.#assemblePreaggSQL(markId, reg, handle.params)
-			: this.#assembleSQL(descriptor, descriptor.table, reg.filterGroup.selection.predicate(markId), handle.params);
+			: this.#assembleSQL(
+					descriptor,
+					descriptor.table,
+					reg.filterGroup.selection.predicate(markId),
+					handle.params
+				);
 		if (!sqlStr) return;
 
 		this.query(sqlStr, { callerId: markId })
@@ -720,10 +778,7 @@ export class QueryEngine {
 			}
 
 			// Bake non-active filters into the preagg table
-			const staticFilters = filterGroup.selection.predicateExcluding(
-				markId,
-				activeSourceIds
-			);
+			const staticFilters = filterGroup.selection.predicateExcluding(markId, activeSourceIds);
 
 			// Build preagg creation query, sorted by active columns for fast range scans
 			const preaggQuery = Query.from(table)
@@ -770,11 +825,7 @@ export class QueryEngine {
 	 * Builds modified QueryParts from the stored outputSelect + bin filters,
 	 * then delegates to assembleQuery().
 	 */
-	#assemblePreaggSQL(
-		markId: string,
-		reg: MarkRegistration,
-		params: QueryParams
-	): string | null {
+	#assemblePreaggSQL(markId: string, reg: MarkRegistration, params: QueryParams): string | null {
 		const { preaggTable, preaggOutputSelect, preaggBinMeta, preaggSourceChartMarkIds } = reg;
 		if (!preaggTable || !preaggOutputSelect || !preaggBinMeta || !preaggSourceChartMarkIds) {
 			return null;
@@ -873,6 +924,9 @@ export class QueryEngine {
 	 * Destroy the engine and close the connection.
 	 */
 	async destroy(): Promise<void> {
+		// Before the destroyed flag: reset() goes through this.exec(), which
+		// throws once destroyed.
+		await this.#identity.reset().catch(() => {});
 		this.#destroyed = true;
 		// Clean up mark registrations
 		for (const reg of this.#marks.values()) {
