@@ -86,6 +86,13 @@ export class BandScaleState {
 	#paddingOuter: number | null = null;
 	#align: number = 0.5;
 	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
+	/**
+	 * The engine's id -> value array for this scale's field (§9.4). A live
+	 * reference, never a copy: the dim appends when a second table registers the
+	 * same field, and a snapshot taken at this scale's setup would be indexed
+	 * past its end by ids from that table.
+	 */
+	#identityValues: string[] = $state.raw([]);
 	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
 
 	// =========================================================================
@@ -300,6 +307,96 @@ export class BandScaleState {
 		return this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
 	}
 
+	/**
+	 * Adopt the engine's id -> value array for this field. Hold the reference.
+	 */
+	setIdentityValues(values: string[]): void {
+		this.#identityValues = values;
+		this.#rebuildSlotTable();
+		this._version++;
+	}
+
+	get identityValues(): string[] {
+		return this.#identityValues;
+	}
+
+	/**
+	 * Display slot per identity id: `slotTable[id]` is the position this
+	 * category occupies on the axis, or -1 when it is not currently displayed.
+	 *
+	 * This is the indirection that lets identity and position be different
+	 * things (§9.5). The query supplies a stable id that never changes when the
+	 * chart reorders; this table says where that id currently sits. A reorder
+	 * rewrites the table and leaves the SQL, the vertex buffers and the preagg
+	 * cubes alone.
+	 *
+	 * -1 covers two cases deliberately given one sentinel: an id filtered out by
+	 * a category-reducing transform, and an id belonging to another table on a
+	 * shared scale. Both must be discarded by the consumer, and -1 is already
+	 * the "no identity" sentinel (§3.2), so there is one comparison rather than
+	 * two.
+	 *
+	 * Recomputes with the domain. An in-place append to #identityValues alone
+	 * does not invalidate it, but an append is always followed by the addMark
+	 * that puts the new category into the domain, which does.
+	 */
+	get slotTable(): Float32Array {
+		return this.#slotTable;
+	}
+
+	#slotTable: Float32Array = new Float32Array(0);
+	/**
+	 * Bumped on every slot-table rebuild. The GPU upload path compares this
+	 * rather than the array contents, so an unchanged frame costs no writeBuffer
+	 * — the slot table changes on reorder, not per frame.
+	 */
+	slotVersion: number = 0;
+
+	/**
+	 * Rebuilt imperatively rather than as a $derived, for two reasons. Its
+	 * consumer is the per-frame GPU upload path, which is a plain rAF callback
+	 * and not a reactive context, so lazy invalidation cannot be relied on
+	 * there. And its inputs change on reorder — rarely — while a $derived read
+	 * per frame invites recomputing a Map every frame for no reason.
+	 *
+	 * Called from the two places its inputs move: a domain change and adopting a
+	 * new identity value array.
+	 */
+	#rebuildSlotTable(): void {
+		const values = this.#identityValues;
+		const domain = this.effectiveDomain;
+
+		// No identity values means this scale's data does NOT arrive as dim ids:
+		// an expression-backed axis still CASE-inlines, and a category-reducing
+		// transform (skipBandIndex) sends raw values that JS maps to positions.
+		// Both already produce a display position, so the shader's lookup has to
+		// be a no-op for them — the identity permutation, not an empty table.
+		// Leaving it empty would give them offset 0 and another scale's slots.
+		if (values.length === 0) {
+			const passthrough = new Float32Array(domain.length);
+			for (let i = 0; i < domain.length; i++) passthrough[i] = i;
+			this.#slotTable = passthrough;
+			this.slotVersion++;
+			return;
+		}
+
+		const table = new Float32Array(values.length);
+		table.fill(-1);
+
+		{
+			const idOf = new Map<string, number>();
+			for (let i = 0; i < values.length; i++) idOf.set(values[i], i);
+
+			for (let slot = 0; slot < domain.length; slot++) {
+				const id = idOf.get(domain[slot]);
+				if (id !== undefined) table[id] = slot;
+			}
+		}
+
+		this.#slotTable = table;
+		this.slotVersion++;
+	}
+
 	// =========================================================================
 	// GPU READINESS
 	// =========================================================================
@@ -391,6 +488,7 @@ export class BandScaleState {
 		}
 		if (this.#extents.size === 0) {
 			this.#domain = [];
+			this.#rebuildSlotTable();
 			this._version++;
 			return;
 		}
@@ -435,6 +533,7 @@ export class BandScaleState {
 		if (!domainChanged) return;
 
 		this.#domain = allCategories;
+		this.#rebuildSlotTable();
 		this._version++;
 
 		// Domain order changed — clear one-shot guard to force view recreation

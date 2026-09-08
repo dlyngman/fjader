@@ -109,12 +109,28 @@ export class CategoricalIdentity {
 	#dims = new Map<string, DimEntry>();
 	#views = new Map<string, ViewEntry>();
 	/**
-	 * One value array per FIELD, indexed by id. §9.4.
+	 * A CACHE of the dim's id -> value mapping, one array per FIELD, indexed by
+	 * id. §9.4.
 	 *
-	 * These are the dim's source values — the decode side of the string -> id
-	 * encode this module performed — NOT display labels. Formatting them for an
-	 * axis (dates, number formats, truncation) is presentation and stays in the
-	 * scale/axis layer.
+	 * DuckDB owns the mapping; this is a synchronously-readable copy of it,
+	 * because the readers cannot await. Axis ticks render domain values during
+	 * layout, tooltips decode a band index on pointermove, legends and toggles
+	 * do the same — none can block on a query. Rebuilding it from mark query
+	 * results instead would be per-mark rather than per-field, would see only
+	 * the rows surviving the current filter, and would be the per-row JS pass
+	 * §3 exists to delete.
+	 *
+	 * The cache is unusually safe because the dim is append-only and never
+	 * renumbers: it can only grow, and an entry's meaning never changes once
+	 * written. Invalidation collapses to extending the array, so holders can
+	 * keep a bare reference and there is no stale-entry case. If ids were ever
+	 * reassigned this would need real invalidation and a re-read protocol for
+	 * every holder — which is a concrete payoff of the append-only rule, not
+	 * just a nicety.
+	 *
+	 * These are source values — the decode side of the string -> id encode —
+	 * NOT display labels. Formatting them for an axis (dates, number formats,
+	 * truncation) is presentation and stays in the scale/axis layer.
 	 *
 	 *
 	 * Deliberately one shared array rather than a copy per scale or per mark: a

@@ -138,6 +138,27 @@ export class MarkLifecycleV2 {
 	#transformCompiler: TransformCompiler;
 	#transformConfig: MarkConfig;
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
+	/**
+	 * Categorical fields with an id column in this table's view. Only these may
+	 * be selected as identity ids; anything else still CASE-inlines.
+	 */
+	#identityFields: Set<string> = new Set();
+
+	/**
+	 * The relation any query built from #resolvedQueryParts must read.
+	 *
+	 * Those parts can carry identity id columns, which exist only on the view.
+	 * Degrades to the bare table when this mark requested no identity columns,
+	 * so a chart with no categorical axis is untouched. Safe for every query
+	 * shape because the view is `SELECT t.*` plus the id columns — anything
+	 * valid against the table is valid against the view.
+	 *
+	 * Not used by #buildQueryForAggregates, which runs in Phase 1 setup from the
+	 * raw config select before scales are ready, so it never names an id column.
+	 */
+	get #sourceTable(): string {
+		return this.#queryEngine.identitySourceFor(this.#config.table);
+	}
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
 	#rollingAvgVersion = $state(0);
 
@@ -444,7 +465,7 @@ export class MarkLifecycleV2 {
 				this.#handle = this.#queryEngine.registerMark(
 					this.#markId,
 					{
-						table: this.#config.table,
+						table: this.#sourceTable,
 						parts,
 						schema,
 						transformCompiler: this.#transformCompiler
@@ -684,19 +705,35 @@ export class MarkLifecycleV2 {
 	#inlineCaseExpressions(select: Record<string, unknown>): void {
 		const skipBandIndex = this.#transformCompiler.hasCategoryReducingTransforms();
 
-		// Band/point x scale
-		if (!skipBandIndex && (this.actualXScaleType === 'band' || this.actualXScaleType === 'point')) {
-			const xScale = this.#chartContext.xScaleState as BandScaleState | null;
-			if (xScale?.caseExpression) {
-				select.x = sql`${xScale.caseExpression}`;
-			}
-		}
+		// Band/point x and y.
+		//
+		// Band step 3a: a plain column axis selects the view's identity id column
+		// instead of a CASE built from the scale's domain. The query text then no
+		// longer depends on scale state, so a reorder stops invalidating preagg
+		// cubes and query-cache entries (§9.3).
+		//
+		// Until the slot table lands the id is used directly as the display slot,
+		// which is correct only while position-in-domain equals the id — true for
+		// any chart without sort, an explicit domain, or a category-reducing
+		// transform, because the domain now comes from the dim in id order.
+		//
+		// Expression-backed axes keep the CASE: there is no dim for a computed
+		// value, which is the same boundary #197 covers.
+		for (const axis of ['x', 'y'] as const) {
+			if (skipBandIndex) continue;
+			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
 
-		// Band/point y scale
-		if (!skipBandIndex && (this.actualYScaleType === 'band' || this.actualYScaleType === 'point')) {
-			const yScale = this.#chartContext.yScaleState as BandScaleState | null;
-			if (yScale?.caseExpression) {
-				select.y = sql`${yScale.caseExpression}`;
+			const scale = (
+				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+			) as BandScaleState | null;
+			if (!scale) continue;
+
+			const field = this.#config.select[axis];
+			if (typeof field === 'string' && this.#identityFields.has(field)) {
+				select[axis] = sqlColumn(this.#queryEngine.identityColumn(field));
+			} else if (scale.caseExpression) {
+				select[axis] = sql`${scale.caseExpression}`;
 			}
 		}
 
@@ -931,14 +968,30 @@ export class MarkLifecycleV2 {
 
 		if (categorical.length === 0) return;
 
-		try {
-			await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
-		} catch (e) {
-			// Non-fatal while nothing reads these columns. Once step 3a's queries
-			// depend on the view this has to fail setup instead — a mark querying a
-			// view that was never built would fail at the binder anyway, but with a
-			// worse message than this one.
-			console.warn(`[${this.#markId}] Identity columns unavailable:`, e);
+		// Fatal, unlike at C0: the query now selects these columns and reads FROM
+		// the view. Failing here gives a message naming the mark and the fields;
+		// continuing would fail at the binder with neither.
+		await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
+		for (const field of categorical) this.#identityFields.add(field);
+
+		// Hand each band scale the engine's live id -> value array, so it can build
+		// its slot table. This must happen for EVERY band axis, not only the ones
+		// whose domain came from the dim: a sorted axis takes the ranking-query
+		// path and an explicit domain skips the domain fetch altogether, and if
+		// either were left without identity values its slot table would be empty
+		// and the shader would read another scale's slots at offset 0.
+		for (const [axis, scaleType] of [
+			['x', this.actualXScaleType],
+			['y', this.actualYScaleType]
+		] as const) {
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
+			const field = this.#config.select[axis];
+			if (typeof field !== 'string' || !this.#identityFields.has(field)) continue;
+
+			const scale = (
+				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+			) as BandScaleState | null;
+			scale?.setIdentityValues(this.#queryEngine.identityValues(field));
 		}
 	}
 
@@ -1056,7 +1109,7 @@ export class MarkLifecycleV2 {
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 		const q = assembleQuery({
-			table: this.#config.table,
+			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
 			filter: filter as unknown[],
 			filterNulls: this.#reactiveConfig.filterNulls ?? null,
@@ -1375,7 +1428,7 @@ export class MarkLifecycleV2 {
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 
 		const q = assembleQuery({
-			table: this.#config.table,
+			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
 			filter: filter as unknown[],
 			filterNulls: this.#reactiveConfig.filterNulls ?? null,
@@ -1437,7 +1490,7 @@ export class MarkLifecycleV2 {
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 		const sidecarQuery = assembleQuery({
-			table: this.#config.table,
+			table: this.#sourceTable,
 			parts: sidecarParts,
 			filter: filter as unknown[],
 			filterNulls: this.#reactiveConfig.filterNulls ?? null,

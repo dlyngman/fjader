@@ -46,3 +46,91 @@ describe('BandScaleState.processDataForGPU', () => {
 		expect(scale.processDataForGPU(input)).toBe(input);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Slot table (band step 3a / §9.5)
+// ---------------------------------------------------------------------------
+
+describe('BandScaleState.slotTable', () => {
+	/** Build a scale whose identity ids are alphabetical, as the dim assigns them. */
+	function withIdentity(values: string[], domain: string[]) {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(values);
+		scale.addMark(domain, 'mark-1');
+		scale.updateDomainFromExtents();
+		return scale;
+	}
+
+	it('is the identity permutation when display order matches id order', () => {
+		const scale = withIdentity(
+			['Adelie', 'Chinstrap', 'Gentoo'],
+			['Adelie', 'Chinstrap', 'Gentoo']
+		);
+		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+	});
+
+	it('maps id to display slot under an explicit reorder', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		// Displayed as Gentoo, Adelie, Chinstrap.
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		// Adelie(id 0) -> slot 1, Chinstrap(id 1) -> slot 2, Gentoo(id 2) -> slot 0.
+		expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+	});
+
+	it('gives -1 to ids that are not displayed', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		// A category-reducing transform left only two.
+		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		const table = Array.from(scale.slotTable);
+		expect(table[1]).toBe(-1); // Chinstrap: filtered out
+		expect(table[0]).toBe(0);
+		expect(table[2]).toBe(1);
+	});
+
+	it('sizes to the id space, not the displayed count', () => {
+		// A second table added Emperor to the shared dim; this mark shows none.
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		// Indexable by Emperor's id without running off the end — the §9.4 failure.
+		expect(scale.slotTable.length).toBe(4);
+		expect(scale.slotTable[3]).toBe(-1);
+	});
+
+	it('follows a reorder without the ids changing', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+
+		// Sort by some measure: Gentoo, Chinstrap, Adelie. Ids are untouched.
+		scale.setSortOrder(['Gentoo', 'Chinstrap', 'Adelie']);
+		scale.updateDomainFromExtents();
+		expect(Array.from(scale.slotTable)).toEqual([2, 1, 0]);
+	});
+
+	it('is empty before identity values arrive', () => {
+		const scale = new BandScaleState('species');
+		expect(scale.slotTable.length).toBe(0);
+	});
+
+	it('passes positions through when the scale has no identity values', () => {
+		// An expression-backed axis or a topN mark sends display positions, not
+		// dim ids. The lookup must not remap them — and must not leave an empty
+		// table, which would share offset 0 with another scale.
+		const scale = new BandScaleState('species');
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+	});
+});

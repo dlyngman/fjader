@@ -120,6 +120,9 @@ export async function fetchCategoricalDomains(
 					// Idempotent and coalesced — the mark's own setup calls this too.
 					await coordinator.ensureColumns(table, { categorical: [field] });
 					const categories = coordinator.identityValues(field);
+					// The scale adopts this same array in MarkLifecycleV2's
+					// #ensureIdentityColumns, which covers sorted and explicit-domain
+					// axes that never reach this branch.
 					if (categories.length > 0) scaleState.addMark(categories, markId);
 				})()
 			);

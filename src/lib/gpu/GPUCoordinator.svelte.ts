@@ -271,6 +271,21 @@ export class GPUCoordinator {
 	#slotByteSize: number | null = null;
 	#globalScaleBindGroups: GPUBindGroup[] = [];
 	#cpuScaleBuffer: Float32Array | null = null; // Reusable CPU buffer for scale data
+	/**
+	 * Band identity id -> display slot, shared by every band and point scale at
+	 * a per-scale offset carried in that scale's p4 (§9.5, §14.3).
+	 *
+	 * A uniform buffer because the vertex stage is already at the default
+	 * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
+	 * maxUniformBufferBindingSize, so 16384 ids GLOBALLY across all such scales.
+	 */
+	#BAND_SLOT_CAPACITY = 16384;
+	#bandSlotBuffer: GPUBuffer | null = null;
+	#cpuBandSlots: Float32Array | null = null;
+	/** Last uploaded slotVersion per scale, so a static chart uploads nothing. */
+	#bandSlotVersions = new Map<string, number>();
+	/** Per-scale offset into #cpuBandSlots, written into p4 by #fillAllScales. */
+	#bandSlotOffsets = new Map<string, number>();
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -518,6 +533,17 @@ export class GPUCoordinator {
 					binding: 4,
 					visibility: GPUShaderStage.VERTEX,
 					buffer: { type: 'read-only-storage' }
+				},
+				{
+					// Binding 5: Band identity id -> display slot (vertex only).
+					// Uniform, not storage: the vertex stage is at the default
+					// storage limit of 8 (§14.1). Declared on every layout even
+					// though only band shaders read it — a pipeline layout may
+					// expose more than its shader uses, and uniform buffers are at
+					// 3 of a default 12.
+					binding: 5,
+					visibility: GPUShaderStage.VERTEX,
+					buffer: { type: 'uniform' }
 				}
 			]
 		});
@@ -526,6 +552,7 @@ export class GPUCoordinator {
 
 		// Create color scale buffers (must happen before bind group creation)
 		this.#createColorScaleBuffers();
+		this.#createBandSlotBuffer();
 
 		// Pre-create bind groups for each slot
 		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
@@ -569,6 +596,13 @@ export class GPUCoordinator {
 						binding: 4,
 						resource: {
 							buffer: this.#sizeConfigBuffer!
+						}
+					},
+					{
+						// Band identity slot table - full buffer, no offset
+						binding: 5,
+						resource: {
+							buffer: this.#bandSlotBuffer!
 						}
 					}
 				]
@@ -627,6 +661,75 @@ export class GPUCoordinator {
 	 * Fill CPU buffer with current scale GPU state.
 	 * Zero-allocation hot path.
 	 */
+	/** 64 KB uniform buffer for the shared band slot table. */
+	#createBandSlotBuffer(): void {
+		if (this.#bandSlotBuffer) return;
+		this.#cpuBandSlots = new Float32Array(this.#BAND_SLOT_CAPACITY);
+		this.#cpuBandSlots.fill(-1);
+		this.#bandSlotBuffer = this.#device!.createBuffer({
+			label: 'band-slot-table',
+			size: this.#BAND_SLOT_CAPACITY * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+		});
+	}
+
+	/**
+	 * Pack every band/point scale's slot table into the shared buffer and assign
+	 * each one an offset, which #fillAllScales then writes into its p4.
+	 *
+	 * Uploads only when something moved: slot tables change on reorder, not per
+	 * frame, so a static chart costs no writeBuffer here. Offsets are recomputed
+	 * every call because a scale appearing or disappearing shifts the ones after
+	 * it — cheap, since it is a running sum over a handful of scales.
+	 */
+	#updateBandSlots(): void {
+		if (!this.#cpuBandSlots) return;
+
+		let offset = 0;
+		let dirty = false;
+
+		for (let i = 0; i < this.#scaleArray.length; i++) {
+			const scale = this.#scaleArray[i].instance as unknown as {
+				id: string;
+				type: string;
+				slotTable?: Float32Array;
+				slotVersion?: number;
+			};
+			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
+
+			const table = scale.slotTable;
+			if (offset + table.length > this.#BAND_SLOT_CAPACITY) {
+				console.warn(
+					`[GPUCoordinator] Band slot capacity (${this.#BAND_SLOT_CAPACITY}) exhausted; ` +
+						`scale "${scale.id}" will not render.`
+				);
+				break;
+			}
+
+			if (
+				this.#bandSlotOffsets.get(scale.id) !== offset ||
+				this.#bandSlotVersions.get(scale.id) !== scale.slotVersion
+			) {
+				this.#cpuBandSlots.set(table, offset);
+				this.#bandSlotOffsets.set(scale.id, offset);
+				this.#bandSlotVersions.set(scale.id, scale.slotVersion ?? 0);
+				dirty = true;
+			}
+
+			offset += table.length;
+		}
+
+		if (dirty) {
+			this.#device!.queue.writeBuffer(
+				this.#bandSlotBuffer!,
+				0,
+				this.#cpuBandSlots as Float32Array<ArrayBuffer>,
+				0,
+				offset > 0 ? offset : 1
+			);
+		}
+	}
+
 	#fillAllScales(view: Float32Array): void {
 		const len = this.#scaleArray.length;
 		for (let i = 0; i < len; i++) {
@@ -641,7 +744,8 @@ export class GPUCoordinator {
 				view[off] = config.categoryCount;
 				view[off + 1] = config.paddingInner;
 				view[off + 2] = config.paddingOuter;
-				view[off + 3] = 0; // padding (unused)
+				// p4: this scale's base offset into the shared band slot table.
+				view[off + 3] = this.#bandSlotOffsets.get((scale as { id: string }).id) ?? 0;
 			} else {
 				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
 				const s = scale.gpuState!;
@@ -806,6 +910,7 @@ export class GPUCoordinator {
 		}
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
+		this.#updateBandSlots();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
 		const dstOffset = slot * this.#slotByteSize!;
@@ -1255,6 +1360,14 @@ export class GPUCoordinator {
 						{
 							binding: 4,
 							resource: { buffer: this.#sizeConfigBuffer! }
+						},
+						{
+							// Band slot table. Must be present here too — this path
+							// rebuilds the bind groups on SSBO growth, and a bind
+							// group missing an entry its layout declares is a
+							// validation error at draw time, not here.
+							binding: 5,
+							resource: { buffer: this.#bandSlotBuffer! }
 						}
 					]
 				});
@@ -1992,7 +2105,7 @@ export class GPUCoordinator {
 				// needed within this render pass. On tile-based GPUs (Apple Silicon), this
 				// avoids VRAM allocation and keeps the texture in fast on-chip tile memory.
 				const transient =
-					((GPUTextureUsage as unknown as Record<string, number>).TRANSIENT_ATTACHMENT ?? 0);
+					(GPUTextureUsage as unknown as Record<string, number>).TRANSIENT_ATTACHMENT ?? 0;
 
 				const newTexture = this.#device!.createTexture({
 					size: { width: canvas.width, height: canvas.height },
