@@ -352,6 +352,13 @@ export class BandScaleState {
 	 * Ids in display order — the permutation the whole design is about (§9.5).
 	 * Primary state: #domain is derived from it, and the slot table is its
 	 * inverse. Empty for a scale without identity, which stays on strings.
+	 *
+	 * Exposed for the animated reorder (§13 step 5) and for tests, NOT as a
+	 * lookup table. To answer "which id is displayed at this slot" call
+	 * idAtSlot, and to answer "which category is this channel value" call
+	 * categoryAt: both handle the no-identity case, which indexing this array
+	 * by hand does not. Consumers that indexed the raw arrays themselves are
+	 * how the tooltip came to compare a slot against an id.
 	 */
 	get displayOrder(): Int32Array {
 		return this.#displayOrder;
@@ -385,10 +392,6 @@ export class BandScaleState {
 		return out;
 	}
 
-	get identityValues(): string[] {
-		return this.#identityValues;
-	}
-
 	/**
 	 * Display slot per identity id: `slotTable[id]` is the position this
 	 * category occupies on the axis, or -1 when it is not currently displayed.
@@ -420,6 +423,54 @@ export class BandScaleState {
 	 * — the slot table changes on reorder, not per frame.
 	 */
 	slotVersion: number = 0;
+
+	// -------------------------------------------------------------------------
+	// IDENTITY <-> DISPLAY, FOR CPU CONSUMERS
+	// -------------------------------------------------------------------------
+	//
+	// The GPU crosses this boundary through slotTable, in the shader. Everything
+	// on the CPU side — tooltips, hit-testing, legends, toggles — crosses it
+	// here, so that the rule "with identity a channel value is a dim id, without
+	// identity it is already a display position" is stated once, by the object
+	// that owns both spaces, rather than re-derived by each consumer.
+	//
+	// Both degrade to the pre-identity behaviour when hasIdentity is false, so a
+	// caller never has to ask which kind of scale it is holding.
+
+	/**
+	 * Identity id currently displayed at `slot`, or null when the slot holds no
+	 * category. Use this to compare a display position — what invertScreenToData
+	 * returns — against a channel value.
+	 *
+	 * Without identity a channel value IS the display position, so the slot
+	 * passes through unchanged.
+	 */
+	idAtSlot(slot: number): number | null {
+		if (!this.hasIdentity) {
+			return slot >= 0 && slot < this.effectiveDomain.length ? slot : null;
+		}
+		const id = this.#displayOrder[slot];
+		return id == null || id < 0 ? null : id;
+	}
+
+	/**
+	 * Source value for a channel value — the decode side of the encode the query
+	 * performs. A dim id with identity, a display position without.
+	 *
+	 * Reads the live domain rather than any snapshot: a caller that captured the
+	 * domain once holds display order as of that moment, and reordering it is
+	 * the entire point of the identity split (§9.4's warning, which has already
+	 * been rediscovered twice).
+	 *
+	 * effectiveDomain, not #domain, so a frozen scale decodes to what is on
+	 * screen. The two coincide today — updateDomainFromExtents returns early
+	 * while frozen, so neither the domain nor displayOrder moves — but the
+	 * display pipeline reads effectiveDomain, and this must not drift from it.
+	 */
+	categoryAt(channelValue: number): string | undefined {
+		if (!this.hasIdentity) return this.effectiveDomain[channelValue];
+		return this.#identityValues[channelValue];
+	}
 
 	/**
 	 * Rebuilt imperatively rather than as a $derived, for two reasons. Its

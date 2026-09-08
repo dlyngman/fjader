@@ -37,6 +37,28 @@
 	// list. A bar in the right place with a wrong tooltip is the failure this
 	// page exists to catch.
 	//
+	// Every mark below carries an explicit `tip` naming its band channel, so
+	// the decoded category is ON SCREEN rather than something you have to infer
+	// from bar heights. Tooltips are on by default; the point of spelling `tip`
+	// out is that a wrong decode is then unmissable instead of merely available.
+	//
+	// WHAT A BAND TOOLTIP IS ACTUALLY TESTING. The channel holds an identity
+	// id; invertScreenToData and the d3 band scale both work in display slots.
+	// TooltipManager translates between them (its BAND IDENTITY section), so a
+	// bug there shows up in three distinguishable ways:
+	//
+	//   - hover a bar, get ANOTHER bar's numbers  -> hit-test compared slot to
+	//     id (#buildHitTestQuery / #buildNearestQuery)
+	//   - right numbers, wrong category NAME      -> label decode indexed the
+	//     display domain with an id (#resolveValue)
+	//   - right tooltip, indicator on the wrong
+	//     bar                                     -> #resolveScreenPos
+	//
+	// Charts 1 and 5 CANNOT catch any of this: they are in dim order, where
+	// slot == id and every wrong lookup returns the right answer anyway. Charts
+	// 2, 3 and 4 are the ones that matter — hover EVERY bar in each, not just
+	// the first, since slot 0 also agrees with id 0 in chart 2.
+	//
 	// WHY EVERY CHART USES ITS OWN FIELD NAME. ScaleRegistry keys scales by
 	// `${name}-${type}${configKey}` (ScaleRegistry.svelte.ts:247) — field name
 	// plus type plus config, NOT per chart or per table (§3.4). Five charts on
@@ -101,7 +123,8 @@
 	<h1>Band identity — step 3a verification</h1>
 	<p class="note">
 		Five band configurations. The expected result differs per checkpoint — see the comment at the
-		top of this file. Hover every chart: the tooltip has its own index path.
+		top of this file. Hover every bar of charts 2, 3 and 4: those are the ones where a band slot and
+		a dim id disagree, so they are the only ones a tooltip decode bug shows up in.
 	</p>
 
 	{#if error}
@@ -128,7 +151,7 @@
 							<WebGPUCanvas>
 								{#snippet canvasComponents()}
 									<Grid />
-									<BarMarkY table="band_plain" x="cat_plain" y={count()} />
+									<BarMarkY table="band_plain" x="cat_plain" y={count()} tip={['x', 'y']} />
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
@@ -161,6 +184,7 @@
 										x="cat_sorted"
 										y={count()}
 										sort={{ x: 'y', order: 'desc' }}
+										tip={['x', 'y']}
 									/>
 								{/snippet}
 							</WebGPUCanvas>
@@ -192,6 +216,7 @@
 										x="cat_explicit"
 										y={count()}
 										domain={{ x: ['Gentoo', 'Adelie', 'Chinstrap'] }}
+										tip={['x', 'y']}
 									/>
 								{/snippet}
 							</WebGPUCanvas>
@@ -218,7 +243,13 @@
 							<WebGPUCanvas>
 								{#snippet canvasComponents()}
 									<Grid />
-									<BarMarkY table="band_topn" x="cat_topn" y={count()} transforms={[topN(2)]} />
+									<BarMarkY
+										table="band_topn"
+										x="cat_topn"
+										y={count()}
+										transforms={[topN(2)]}
+										tip={['x', 'y']}
+									/>
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
@@ -245,8 +276,8 @@
 							<WebGPUCanvas>
 								{#snippet canvasComponents()}
 									<Grid />
-									<BarMarkX table="band_shared_a" y="cat_shared" x={count()} />
-									<BarMarkX table="band_shared_b" y="cat_shared" x={count()} />
+									<BarMarkX table="band_shared_a" y="cat_shared" x={count()} tip={['y', 'x']} />
+									<BarMarkX table="band_shared_b" y="cat_shared" x={count()} tip={['y', 'x']} />
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}

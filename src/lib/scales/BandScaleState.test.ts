@@ -194,3 +194,96 @@ describe('BandScaleState.slotTable', () => {
 		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
 	});
 });
+
+describe('BandScaleState identity <-> display translation', () => {
+	// The CPU-side counterpart of the shader's bandSlots lookup. Consumers —
+	// tooltips, hit-testing, toggles — ask in their own terms and never index
+	// displayOrder or identityValues themselves.
+
+	it('maps a display slot to the id sitting there', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+
+		// Display order is Gentoo, Adelie, Chinstrap; ids are alphabetical.
+		expect(scale.idAtSlot(0)).toBe(2);
+		expect(scale.idAtSlot(1)).toBe(0);
+		expect(scale.idAtSlot(2)).toBe(1);
+	});
+
+	it('decodes a channel id to its source value regardless of display order', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+
+		// The id decodes to the same value whatever slot it currently occupies —
+		// this is the whole point of the split. Indexing effectiveDomain with
+		// these ids would give Chinstrap, Gentoo, Adelie: the original bug.
+		expect(scale.categoryAt(0)).toBe('Adelie');
+		expect(scale.categoryAt(1)).toBe('Chinstrap');
+		expect(scale.categoryAt(2)).toBe('Gentoo');
+	});
+
+	it('round-trips slot -> id -> value back to the axis label', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+
+		// What a hover does: invert to a slot, translate to an id to match the
+		// row, decode the row's value back for the label. It must land on the
+		// same category the axis renders at that slot.
+		for (let slot = 0; slot < scale.effectiveDomain.length; slot++) {
+			const id = scale.idAtSlot(slot);
+			expect(id).not.toBeNull();
+			expect(scale.categoryAt(id as number)).toBe(scale.effectiveDomain[slot]);
+		}
+	});
+
+	it('reports no id for a slot holding no category', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.addMark([2, 0], 'mark-1'); // topN kept two of three
+		scale.updateDomainFromExtents();
+
+		expect(scale.idAtSlot(0)).toBe(2);
+		expect(scale.idAtSlot(1)).toBe(0);
+		// Past the displayed set: the cursor is over no bar, so the caller must
+		// build no query rather than one matching an arbitrary row.
+		expect(scale.idAtSlot(2)).toBeNull();
+	});
+
+	it('treats a channel value as a display position without identity', () => {
+		// Expression-backed axes have no dim, so the channel already carries a
+		// position and both translations are the identity function.
+		const scale = new BandScaleState('species');
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		expect(scale.hasIdentity).toBe(false);
+		expect(scale.idAtSlot(1)).toBe(1);
+		expect(scale.categoryAt(1)).toBe('Adelie');
+		expect(scale.idAtSlot(3)).toBeNull();
+	});
+
+	it('decodes against the live domain, not a snapshot taken before a reorder', () => {
+		// The bug this move exists to prevent: a consumer that captured the
+		// domain once decodes with stale display order after a sort.
+		const scale = new BandScaleState('species');
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		const captured = scale.effectiveDomain;
+
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+
+		expect(captured).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		expect(scale.categoryAt(0)).toBe('Gentoo');
+		expect(scale.categoryAt(0)).not.toBe(captured[0]);
+	});
+});

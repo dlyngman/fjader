@@ -1298,16 +1298,24 @@ export class MarkLifecycleV2 {
 				if (!tooltipQuery) return;
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow
-				// in distance math). A band/point axis stays un-CASE-inlined (real
-				// category strings, not an ordinal index) in the main query when a
-				// category-reducing transform like topN is present
-				// (#inlineCaseExpressions' skipBandIndex — the top-N set can
-				// change, so a static CASE baked into that query would go stale).
-				// But TooltipManager's hit-test universally assumes band axes hold
-				// the scale's ordinal index (CAST(col AS INTEGER) = hoveredIndex),
-				// same as every other band-axis mark — so CASE-inline it here
-				// instead, safe because by tooltip-write time the domain is
-				// already resolved from the actual (post-transform) results.
+				// in distance math).
+				//
+				// Band/point axes: an axis WITH identity already selects the view's
+				// id column, which is a cast node rather than a raw column ref, so
+				// it falls through to the plain CAST below and the tooltip table
+				// carries ids — matching TooltipManager, which translates slot <->
+				// id through the live scale (see its BAND IDENTITY section).
+				//
+				// An axis WITHOUT identity — expression-backed, or a category
+				// -reducing transform on a scale that never got a dim — still
+				// arrives here as a raw non-numeric column, because
+				// #inlineCaseExpressions' skipBandIndex leaves the real category
+				// strings in the main query (the top-N set can change, so a static
+				// CASE baked in there would go stale). TooltipManager expects a
+				// number either way, so CASE-inline it here instead: safe because
+				// by tooltip-write time the domain is resolved from the actual
+				// post-transform results, and for such a scale hasIdentity is
+				// false, so the tooltip reads that index as a display position.
 				const selectConfig = this.#config.select;
 				const resolvedSelect = this.#resolvedQueryParts?.selectDef ?? {};
 				const schema = this.#schema;
@@ -1370,6 +1378,9 @@ export class MarkLifecycleV2 {
 
 				// Band axis columns from category-reducing transforms contain
 				// strings — convert to integer indices for the tooltip pipeline.
+				// With identity they already arrive as numeric ids and pass
+				// straight through the string branch below, which is what
+				// TooltipManager expects for a scale reporting hasIdentity.
 				const bandIndexMaps: Record<string, ReadonlyMap<string, number>> = {};
 				const xss = this.#chartContext.xScaleState;
 				if (this.actualXScaleType === 'band' && xss && 'categoryIndexMap' in xss) {
