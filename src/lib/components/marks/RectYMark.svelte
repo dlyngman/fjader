@@ -147,8 +147,7 @@
 			x1Expanded != null &&
 			'isAutoBinNode' in x1Expanded &&
 			x1Expanded.isAutoBinNode;
-		const hasAggregateY =
-			typeof y2 === 'object' && y2 != null && (y2 as any).type === 'AGGREGATE';
+		const hasAggregateY = typeof y2 === 'object' && y2 != null && (y2 as any).type === 'AGGREGATE';
 		return hasBinnedX && hasAggregateY;
 	});
 
@@ -321,7 +320,15 @@
 					tempTable: setup!.tooltipTableName,
 					markType: 'recty',
 					chartContext,
-					columns: { xLow: 'x1', xHigh: 'x2', yLow: typeof y1 === 'number' ? y1 : 'y1', yHigh: 'y2' },
+					// Must mirror the render channels above (:260, :272): a stack transform
+					// emits y0/y1, so hit-testing y1/y2 would target the unstacked extents
+					// while the geometry is stacked.
+					columns: {
+						xLow: 'x1',
+						xHigh: 'x2',
+						yLow: hasStackTransform ? 'y0' : typeof y1 === 'number' ? y1 : 'y1',
+						yHigh: hasStackTransform ? 'y1' : 'y2'
+					},
 					channelFields: setup!.channelFieldMap,
 					colorColumn: 'fill',
 					bandAxes: { x: true },

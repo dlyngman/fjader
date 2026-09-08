@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
 	import { initDivePlot } from '$lib';
-	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX } from '$lib/components';
+	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX, RectXMark } from '$lib/components';
 	import { filter, topN, normalize, stack } from '$lib/transforms';
 	import { bin } from '$lib/sql/bin';
 
@@ -11,7 +11,9 @@
 	let isLoaded = $state(false);
 
 	onMount(async () => {
-		await queryEngine.exec(loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString());
+		await queryEngine.exec(
+			loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
+		);
 		isLoaded = true;
 	});
 </script>
@@ -122,7 +124,7 @@
 			<h2>Normalized Bins (JS Transform)</h2>
 			<p>Each bin shows percentage of total</p>
 			<div class="chart-wrapper">
-				<ChartContainer xLabel="bill_length_bin" yLabel="percentage">
+				<ChartContainer xLabel="count" yLabel="body_mass">
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
@@ -144,18 +146,23 @@
 		</div> -->
 
 		<div class="chart-section">
-			<h2>Bar</h2>
-			<p>Stacked</p>
+			<h2>Stacked binned histogram</h2>
+			<p>
+				Species stacked along x within each body_mass bin. The fill channel is what makes stack() do
+				anything: without it there is one row per bin, the cumulative sum equals that row's own
+				value, and the result is an ordinary histogram.
+			</p>
 			<div class="chart-wrapper">
-				<ChartContainer xLabel="bill_length_bin" yLabel="percentage">
+				<ChartContainer xLabel="count" yLabel="body_mass">
 					{#snippet canvas()}
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
-								<BarMarkX
+								<RectXMark
 									table="penguins"
 									selection="brush"
 									y={bin('body_mass', { step: 500 })}
 									x={count()}
+									fill="species"
 									transforms={[stack({ direction: 'horizontal' })]}
 								/>
 							{/snippet}
@@ -164,7 +171,6 @@
 				</ChartContainer>
 			</div>
 		</div>
-
 	{/if}
 </div>
 

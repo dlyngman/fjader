@@ -314,7 +314,15 @@
 					tempTable: setup!.tooltipTableName,
 					markType: 'rectx',
 					chartContext,
-					columns: { xLow: typeof x1 === 'number' ? x1 : 'x1', xHigh: 'x2', yLow: 'y1', yHigh: 'y2' },
+					// Must mirror the render channels above (:221, :233): a stack transform
+					// emits x0/x1, so hit-testing x1/x2 would target the unstacked extents
+					// while the geometry is stacked.
+					columns: {
+						xLow: hasStackTransform ? 'x0' : typeof x1 === 'number' ? x1 : 'x1',
+						xHigh: hasStackTransform ? 'x1' : 'x2',
+						yLow: 'y1',
+						yHigh: 'y2'
+					},
 					channelFields: setup!.channelFieldMap,
 					colorColumn: 'fill',
 					bandAxes: { y: true },
