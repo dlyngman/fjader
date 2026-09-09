@@ -198,8 +198,7 @@
 			instanceCount,
 			scaleState: chartContext.xScaleState,
 			scaleType,
-			markId,
-			suppressUnmappedWarning: setup?.hasCategoryReducingTransforms
+			markId
 		});
 		return arr ? { x0Data: arr, x1Data: arr } : null;
 	});

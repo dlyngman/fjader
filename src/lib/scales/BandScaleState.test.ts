@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { BandScaleState } from './BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import { buildCaseExpression } from '$lib/sql/case-expression';
@@ -11,34 +11,36 @@ describe('BandScaleState.processDataForGPU', () => {
 		return scale;
 	}
 
-	it('maps known categories to their 0-based domain index', () => {
-		const scale = scaleWith(['a', 'b', 'c']);
-		expect(Array.from(scale.processDataForGPU(['a', 'b', 'c', 'b']))).toEqual([0, 1, 2, 1]);
-	});
-
-	it('maps unmapped categories to -1, not to the first category', () => {
+	it('passes identity ids through untouched, zero-copy', () => {
 		const scale = scaleWith(['a', 'b']);
-		const out = scale.processDataForGPU(['a', 'zzz', 'b'], 'mark-1', {
-			suppressUnmappedWarning: true
-		});
-		expect(Array.from(out)).toEqual([0, -1, 1]);
+		const ids = new Float32Array([2, 0, 1]);
+		// The same object, not a copy: the query already produced GPU-ready floats.
+		expect(scale.processDataForGPU(ids)).toBe(ids);
 	});
 
-	it('agrees with the SQL CASE expression on both mapped and unmapped values', () => {
-		// The SQL path (buildCaseExpression) and the JS path (processDataForGPU)
-		// must produce the same index for the same category, including the
-		// unmapped sentinel — three call sites depend on that agreement.
-		const domain = ['a', 'b'];
-		const sql = buildCaseExpression('category', domain);
-		expect(sql).toContain('WHEN "category" = \'a\' THEN 0');
-		expect(sql).toContain('WHEN "category" = \'b\' THEN 1');
-		expect(sql).toContain('ELSE -1');
+	it('reports raw category strings instead of mapping them', () => {
+		// The per-row string mapping is gone (§16.10 item 3). Nothing produces
+		// strings on a band channel any more, so strings here mean a defect
+		// upstream — reported, and drawn as the no-identity sentinel so nothing
+		// renders rather than something wrong.
+		const scale = scaleWith(['a', 'b']);
+		const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-		const scale = scaleWith(domain);
-		const js = scale.processDataForGPU(['a', 'b', 'zzz'], 'mark-1', {
-			suppressUnmappedWarning: true
-		});
-		expect(Array.from(js)).toEqual([0, 1, -1]);
+		const out = scale.processDataForGPU(['a', 'b'], 'mark-1');
+
+		expect(Array.from(out)).toEqual([-1, -1]);
+		expect(spy).toHaveBeenCalledOnce();
+		expect(spy.mock.calls[0][0]).toContain('identity ids were expected');
+		spy.mockRestore();
+	});
+
+	it('still emits -1 for an unmapped value in the SQL CASE', () => {
+		// buildCaseExpression outlives this deletion: ordinal colour and facet
+		// still CASE-inline until steps 3b and 3c. The sentinel it emits has to
+		// keep matching the one scaleBand discards.
+		const sql = buildCaseExpression('category', ['a', 'b']);
+		expect(sql).toContain('WHEN "category" = \'a\' THEN 0');
+		expect(sql).toContain('ELSE -1');
 	});
 
 	it('passes a Float32Array through untouched', () => {

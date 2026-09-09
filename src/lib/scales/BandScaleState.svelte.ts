@@ -724,77 +724,32 @@ export class BandScaleState {
 	// =========================================================================
 
 	/**
-	 * Convert categorical data to indices for GPU processing
+	 * The band channel as GPU-ready floats.
 	 *
-	 * Fast path: If data is already a Float32Array (from ViewManager-derived view),
-	 * returns it directly without processing.
+	 * Zero-copy: the query selects the dim's id column CAST to REAL, so this
+	 * arrives as a Float32Array of identity ids and is handed straight through.
+	 *
+	 * There used to be a second path here that mapped category STRINGS to
+	 * domain positions, one row at a time, on every update — the per-row JS pass
+	 * §3 exists to delete. Nothing produces strings on a band channel any more:
+	 * #inlineCaseExpressions always selects the id column, and an axis it cannot
+	 * dim is reported at setup rather than silently falling back. Strings here
+	 * now mean a real defect upstream, so they are reported rather than mapped.
 	 */
 	processDataForGPU(
 		categoryData: string[] | Float32Array,
-		markId: string = 'unknown',
-		{ suppressUnmappedWarning = false }: { suppressUnmappedWarning?: boolean } = {}
+		markId: string = 'unknown'
 	): Float32Array {
-		// Fast path: already Float32Array from derived view (zero-copy)
-		if (categoryData instanceof Float32Array) {
-			return categoryData;
-		}
+		if (categoryData instanceof Float32Array) return categoryData;
 
-		const categoryMap = this.#categoryIndexMap;
-
-		// Safety check - ensure map is valid
-		if (!(categoryMap instanceof Map)) {
-			console.error(`🚨 BandScale "${this.name}": categoryMap is not a Map:`, categoryMap);
-			const fallbackMap = new Map<string, number>();
-			this.effectiveDomain.forEach((category, index) => {
-				fallbackMap.set(category, index);
-			});
-			return this.#processWithMap(categoryData, fallbackMap, markId, suppressUnmappedWarning);
-		}
-
-		return this.#processWithMap(categoryData, categoryMap, markId, suppressUnmappedWarning);
-	}
-
-	/**
-	 * Helper method to process data with a given category map
-	 */
-	#processWithMap(
-		categoryData: string[],
-		categoryMap: Map<string, number>,
-		markId: string,
-		suppressUnmappedWarning: boolean = false
-	): Float32Array {
-		const unmappedCategories = new Set<string>();
-
-		const indices = new Float32Array(
-			categoryData.map((category) => {
-				const index = categoryMap.get(category);
-				if (index !== undefined) {
-					return index;
-				} else {
-					unmappedCategories.add(category);
-					// -1 = no identity, 0+ = valid categories. Matches
-					// buildCaseExpression's ELSE -1 (case-expression.ts) and
-					// ColorScaleState.processDataForGPU, so the SQL and JS paths
-					// agree. Returning 0 here drew unmapped rows stacked on top of
-					// the first real category. scaleBand discards negatives.
-					return -1;
-				}
-			})
+		console.error(
+			`[${markId}] BandScale "${this.name}" received ${categoryData.length} raw category ` +
+				`values where identity ids were expected. The query should be selecting this ` +
+				`axis's __dplot_*_idx column; nothing will render.`
 		);
-
-		// Warn about unmapped categories in development
-		// (suppressed for topN marks where transient mismatches are expected during selection changes)
-		if (unmappedCategories.size > 0 && !suppressUnmappedWarning) {
-			console.warn(
-				`🔶 BandScale "${this.name}": Unmapped categories for mark "${markId}":`,
-				Array.from(unmappedCategories).slice(0, 5),
-				unmappedCategories.size > 5 ? `... and ${unmappedCategories.size - 5} more` : '',
-				`\nValid categories:`,
-				this.effectiveDomain
-			);
-		}
-
-		return indices;
+		// -1 is the no-identity sentinel: scaleBand discards it before the slot
+		// lookup, so this draws nothing rather than something wrong.
+		return new Float32Array(categoryData.length).fill(-1);
 	}
 
 	/**
@@ -967,10 +922,6 @@ export class BandScaleState {
 	 * Read-only view of the category→index mapping.
 	 * Derived from the effective domain; updates reactively.
 	 */
-	get categoryIndexMap(): ReadonlyMap<string, number> {
-		return this.#categoryIndexMap;
-	}
-
 	/**
 	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */

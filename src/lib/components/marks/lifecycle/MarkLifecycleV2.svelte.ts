@@ -59,7 +59,6 @@ import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
-import { buildCaseExpression } from '$lib/sql/case-expression';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
@@ -724,52 +723,35 @@ export class MarkLifecycleV2 {
 	 * Replaces ViewManager's view column with direct SQL in the SELECT.
 	 */
 	#inlineCaseExpressions(select: Record<string, unknown>): void {
-		const skipBandIndex = this.#transformCompiler.hasCategoryReducingTransforms();
-
-		// Band/point x and y.
+		// Band/point x and y: always the view's identity id column, never a CASE.
 		//
-		// Band step 3a: a plain column axis selects the view's identity id column
-		// instead of a CASE built from the scale's domain. The query text then no
-		// longer depends on scale state, so a reorder stops invalidating preagg
-		// cubes and query-cache entries (§9.3).
+		// The CASE this replaced was built from the scale's DOMAIN, so the query
+		// text depended on display order and a reorder invalidated preagg cubes
+		// and cache entries (§9.3). It also had to be suppressed whenever a
+		// category-reducing transform was present, because a domain holding only
+		// the survivors maps everything else to -1 before the transform runs —
+		// that was `skipBandIndex`, and it is gone with the CASE. Ids come from
+		// the dim, are independent of which categories survive, and topN filters
+		// them as integers.
 		//
-		// Until the slot table lands the id is used directly as the display slot,
-		// which is correct only while position-in-domain equals the id — true for
-		// any chart without sort, an explicit domain, or a category-reducing
-		// transform, because the domain now comes from the dim in id order.
-		//
-		// Expression-backed axes keep the CASE: there is no dim for a computed
-		// value, which is the same boundary #197 covers.
+		// An axis with no identity is one #identityKey refused: bin(), or an
+		// aggregate. #ensureIdentityColumns reports it; there is no fallback to
+		// fall into, which is the point of §16.10 item 3.
 		for (const axis of ['x', 'y'] as const) {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			if (scaleType !== 'band' && scaleType !== 'point') continue;
 
-			const scale = (
-				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
-			) as BandScaleState | null;
-			if (!scale) continue;
-
-			// A category-reducing transform still suppresses the CASE — its domain
-			// holds only the surviving categories, so a CASE built from it would
-			// map the filtered-out ones to -1 before the transform ever runs. It no
-			// longer suppresses the IDENTITY column: ids come from the dim, are
-			// independent of which categories survive, and the topN subquery's
-			// `band IN (...)` filters them as integers (§9.3).
 			// The same derivation #ensureIdentityColumns registered under, so a
 			// dimmed expression axis selects its id column like a dimmed column.
 			const key = this.#identityKey(axis)?.key;
-			if (key != null && this.#identityFields.has(key)) {
-				// CAST to REAL explicitly. processDataForGPU's zero-copy fast path
-				// keys on Float32Array, and castNumeric cannot help here: it casts a
-				// column ref only when the schema says the column is numeric, and
-				// the schema comes from DESCRIBE of the BASE table, which has no
-				// __dplot_*_idx columns. An INT column would arrive as an Int32Array
-				// and fall into the string mapping path, where every id misses and
-				// becomes -1. The CASE this replaces was cast for the same reason.
-				select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
-			} else if (!skipBandIndex && scale.caseExpression) {
-				select[axis] = sql`${scale.caseExpression}`;
-			}
+			if (key == null || !this.#identityFields.has(key)) continue;
+
+			// CAST to REAL explicitly. processDataForGPU's zero-copy path keys on
+			// Float32Array, and castNumeric cannot help: it casts a column ref only
+			// when the schema says the column is numeric, and the schema comes from
+			// DESCRIBE of the BASE table, which has no __dplot_*_idx columns. An INT
+			// column would arrive as an Int32Array and miss the fast path.
+			select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
 		}
 
 		// Ordinal color scale
@@ -1028,8 +1010,23 @@ export class MarkLifecycleV2 {
 	async #ensureIdentityColumns(): Promise<void> {
 		const axes: { axis: 'x' | 'y'; key: string; sql: string }[] = [];
 		for (const axis of ['x', 'y'] as const) {
+			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
+
 			const resolved = this.#identityKey(axis);
-			if (resolved) axes.push({ axis, ...resolved });
+			if (resolved) {
+				axes.push({ axis, ...resolved });
+				continue;
+			}
+			// A categorical axis this cannot dim. There is no CASE fallback any
+			// more (§16.10 item 3), so it draws nothing — say why rather than
+			// leaving an empty chart to be diagnosed.
+			console.error(
+				`[${this.#markId}] The ${axis} axis is categorical but cannot be given a stable ` +
+					`identity: bin() produces values that move with the viewport, and an aggregate ` +
+					`or window expression is not a row-level value to group by. Use a rect mark for ` +
+					`binned axes. This mark will render nothing on ${axis}.`
+			);
 		}
 		if (axes.length === 0) return;
 
@@ -1048,10 +1045,23 @@ export class MarkLifecycleV2 {
 		// either were left without identity values its slot table would be empty
 		// and the shader would read another scale's slots at offset 0.
 		for (const { axis, key } of axes) {
+			const identity = this.#queryEngine.identityFor(key);
+
+			// An all-NULL column builds an empty dim, which reads as "no identity"
+			// because hasIdentity is length > 0. The chart is then correctly empty
+			// but silently so, and once the string fallback is gone there is
+			// nothing else for it to fall back to. Say it out loud.
+			if (identity.values.length === 0) {
+				console.warn(
+					`[${this.#markId}] "${key}" has no non-NULL values, so the ${axis} axis has no ` +
+						`categories and this mark will render nothing.`
+				);
+			}
+
 			const scale = (
 				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 			) as BandScaleState | null;
-			scale?.setIdentity(this.#queryEngine.identityFor(key));
+			scale?.setIdentity(identity);
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to
@@ -1381,21 +1391,15 @@ export class MarkLifecycleV2 {
 				// carries ids — matching TooltipManager, which translates slot <->
 				// id through the live scale (see its BAND IDENTITY section).
 				//
-				// An axis WITHOUT identity — expression-backed, or a category
-				// -reducing transform on a scale that never got a dim — still
-				// arrives here as a raw non-numeric column, because
-				// #inlineCaseExpressions' skipBandIndex leaves the real category
-				// strings in the main query (the top-N set can change, so a static
-				// CASE baked in there would go stale). TooltipManager expects a
-				// number either way, so CASE-inline it here instead: safe because
-				// by tooltip-write time the domain is resolved from the actual
-				// post-transform results, and for such a scale hasIdentity is
-				// false, so the tooltip reads that index as a display position.
+				// There is no longer a band axis that arrives here as raw category
+				// strings: #inlineCaseExpressions always selects the id column, and
+				// an axis it cannot dim is reported at setup. The CASE re-inlining
+				// that used to live here — rebuilding a domain-ordered index for
+				// the tooltip because skipBandIndex had left strings in the main
+				// query — is deleted with it (§16.10 item 3).
 				const selectConfig = this.#config.select;
 				const resolvedSelect = this.#resolvedQueryParts?.selectDef ?? {};
 				const schema = this.#schema;
-				const xScaleState = this.#chartContext.xScaleState as BandScaleState | null;
-				const yScaleState = this.#chartContext.yScaleState as BandScaleState | null;
 				const replaceExprs: string[] = [];
 				for (const c of ['x', 'x1', 'x2', 'y', 'y1', 'y2'] as const) {
 					if (!(c in selectConfig)) continue;
@@ -1407,16 +1411,8 @@ export class MarkLifecycleV2 {
 						: undefined;
 
 					if (isRawColumnRef && jsType && jsType !== 'number') {
-						const axis = c.startsWith('x') ? 'x' : 'y';
-						const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-						const scaleState = axis === 'x' ? xScaleState : yScaleState;
-						if (
-							(scaleType === 'band' || scaleType === 'point') &&
-							scaleState?.effectiveDomain?.length
-						) {
-							replaceExprs.push(`${buildCaseExpression(c, scaleState.effectiveDomain)} AS ${c}`);
-						}
-						// Else: unexpected non-numeric, non-band column — leave as-is.
+						// A non-numeric raw column reaching a positional channel is not
+						// something the tooltip can measure distance on. Left as-is.
 						continue;
 					}
 					replaceExprs.push(`CAST(${c} AS DOUBLE) AS ${c}`);
@@ -1451,25 +1447,12 @@ export class MarkLifecycleV2 {
 					if (colData) columnArrays[col] = colData;
 				}
 
-				// Band axis columns from category-reducing transforms contain
-				// strings — convert to integer indices for the tooltip pipeline.
-				// With identity they already arrive as numeric ids and pass
-				// straight through the string branch below, which is what
-				// TooltipManager expects for a scale reporting hasIdentity.
-				const bandIndexMaps: Record<string, ReadonlyMap<string, number>> = {};
-				const xss = this.#chartContext.xScaleState;
-				if (this.actualXScaleType === 'band' && xss && 'categoryIndexMap' in xss) {
-					bandIndexMaps['x'] = xss.categoryIndexMap;
-				}
-				const yss = this.#chartContext.yScaleState;
-				if (this.actualYScaleType === 'band' && yss && 'categoryIndexMap' in yss) {
-					bandIndexMaps['y'] = yss.categoryIndexMap;
-				}
-
+				// Band axis columns arrive as numeric identity ids on every path now,
+				// so the string -> index conversion this used to do is gone with the
+				// rest of the string path (§16.10 item 3).
 				// Infer schema from first row
 				const schemaDef = columns
 					.map((col) => {
-						if (bandIndexMaps[col]) return `"${col}" INTEGER`;
 						const sample = columnArrays[col]?.[0];
 						const sqlType = typeof sample === 'number' ? 'DOUBLE' : 'VARCHAR';
 						return `"${col}" ${sqlType}`;
@@ -1482,11 +1465,6 @@ export class MarkLifecycleV2 {
 					const vals = columns.map((col) => {
 						const v = columnArrays[col]?.[i];
 						if (v == null || (typeof v === 'number' && isNaN(v))) return 'NULL';
-						const bandMap = bandIndexMaps[col];
-						if (bandMap && typeof v === 'string') {
-							const idx = bandMap.get(v);
-							return idx != null ? idx.toString() : 'NULL';
-						}
 						if (typeof v === 'number') return v.toString();
 						return `'${String(v).replace(/'/g, "''")}'`;
 					});

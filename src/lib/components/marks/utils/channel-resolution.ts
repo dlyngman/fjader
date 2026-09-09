@@ -18,7 +18,6 @@ interface ResolveChannelDataParams extends ResolveChannelParams {
 	scaleState?: AnyScaleState;
 	scaleType?: string;
 	markId?: string;
-	suppressUnmappedWarning?: boolean;
 }
 
 /**
@@ -104,8 +103,7 @@ export function resolveChannelData({
 	fallback,
 	scaleState,
 	scaleType,
-	markId,
-	suppressUnmappedWarning
+	markId
 }: ResolveChannelDataParams): Float32Array | null {
 	if (!instanceCount) return null;
 	const raw = resolveChannel({ value, channel, dataAccessor, tryColumns, instanceCount, fallback });
@@ -113,9 +111,7 @@ export function resolveChannelData({
 
 	if (isCategoricalScale(scaleType) && scaleState && 'processDataForGPU' in scaleState) {
 		return toFloat32(
-			(scaleState as BandScaleState).processDataForGPU(raw as string[] | Float32Array, markId, {
-				suppressUnmappedWarning
-			})
+			(scaleState as BandScaleState).processDataForGPU(raw as string[] | Float32Array, markId)
 		);
 	}
 

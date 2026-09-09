@@ -220,8 +220,7 @@
 			instanceCount,
 			scaleState: chartContext.yScaleState,
 			scaleType,
-			markId,
-			suppressUnmappedWarning: setup?.hasCategoryReducingTransforms
+			markId
 		});
 		return arr ? { y0Data: arr, y1Data: arr } : null;
 	});
