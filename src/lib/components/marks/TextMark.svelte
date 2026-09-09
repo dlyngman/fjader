@@ -14,12 +14,7 @@
 		resolveTip
 	} from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
-	import type {
-		FieldRef,
-		BaseMarkProps,
-		ContinuousScaleTypeProps,
-		ChartContext
-	} from '$lib/types';
+	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -130,12 +125,24 @@
 	});
 
 	const reactiveConfig = buildReactiveConfig({
-		get sort() { return sort; },
-		get limit() { return limit; },
-		get filterNulls() { return filterNulls; },
-		get domain() { return domain; },
-		get tip() { return tip; },
-		get tooltip() { return tooltip; }
+		get sort() {
+			return sort;
+		},
+		get limit() {
+			return limit;
+		},
+		get filterNulls() {
+			return filterNulls;
+		},
+		get domain() {
+			return domain;
+		},
+		get tip() {
+			return tip;
+		},
+		get tooltip() {
+			return tooltip;
+		}
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);
@@ -144,6 +151,23 @@
 	let instanceCount = $derived(computeInstanceCount(setup?.data, x, y));
 
 	// --- Data Resolution (raw values, not Float32) ---
+
+	/**
+	 * The category a raw band channel value denotes.
+	 *
+	 * resolveChannel gives the UNPROCESSED channel, so this is a string when the
+	 * query left real category values in place (an expression-backed axis, or a
+	 * category-reducing transform on a scale with no dim) and a number when it
+	 * carries an identity id or a CASE-produced position. A string is already
+	 * the answer; a number has to go through the scale, because with identity it
+	 * indexes the dim's values and without it a display position.
+	 *
+	 * The string case used to index the domain array by name, get undefined, and
+	 * pin every such label at pixel 0.
+	 */
+	function bandCategory(band: BandScaleState, raw: string | number): string | undefined {
+		return typeof raw === 'string' ? raw : band.categoryAt(raw);
+	}
 
 	let xRaw = $derived.by(() => {
 		if (!instanceCount) return null;
@@ -261,14 +285,16 @@
 
 		const xType = chartContext.scaleTypes?.x;
 		const yType = chartContext.scaleTypes?.y;
-		const xDomain =
-			xType === 'band' || xType === 'point'
-				? (chartContext.xScaleState as BandScaleState).effectiveDomain
-				: null;
-		const yDomain =
-			yType === 'band' || yType === 'point'
-				? (chartContext.yScaleState as BandScaleState).effectiveDomain
-				: null;
+		// The band scale itself, not its domain array. The channel carries an
+		// identity id, which indexes the scale's VALUES; the domain is in display
+		// order and indexing it with an id puts every label on the wrong row as
+		// soon as the axis is sorted (the GPU gets this right via bandSlots, so
+		// the symptom is correct bars with shuffled text). categoryAt handles
+		// both cases — see BandScaleState's IDENTITY <-> DISPLAY section.
+		const xBand =
+			xType === 'band' || xType === 'point' ? (chartContext.xScaleState as BandScaleState) : null;
+		const yBand =
+			yType === 'band' || yType === 'point' ? (chartContext.yScaleState as BandScaleState) : null;
 		const xBandHalf = xType === 'band' ? (xScale as D3BandScale).bandwidth() / 2 : 0;
 		const yBandHalf = yType === 'band' ? (yScale as D3BandScale).bandwidth() / 2 : 0;
 
@@ -277,15 +303,15 @@
 			const dataIdx = items[i].idx;
 			let px, py;
 
-			if (xDomain) {
-				const cat = xDomain[xRaw[dataIdx]];
+			if (xBand) {
+				const cat = bandCategory(xBand, xRaw[dataIdx]);
 				px = cat != null ? xScale(cat) + xBandHalf : 0;
 			} else {
 				px = xScale(xRaw[dataIdx]);
 			}
 
-			if (yDomain) {
-				const cat = yDomain[yRaw[dataIdx]];
+			if (yBand) {
+				const cat = bandCategory(yBand, yRaw[dataIdx]);
 				py = cat != null ? yScale(cat) + yBandHalf : 0;
 			} else {
 				py = yScale(yRaw[dataIdx]);
