@@ -183,6 +183,65 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// Synthetic ids (§16.9)
+	// -----------------------------------------------------------------------
+
+	it('reserves a synthetic id at the top of the space, through the same array', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const held = identity.identity('species');
+
+		const otherId = await identity.reserveSynthetic('species', 'Other');
+
+		// Non-negative — scaleBand discards value < 0 before the slot lookup.
+		expect(otherId).toBe(3);
+		// Reachable through the ordinary accessor: no consumer branches on it.
+		expect(held.values[otherId]).toBe('Other');
+		expect(held.ids.get('Other')).toBe(otherId);
+	});
+
+	it('reuses the id when a real category already carries the label', async () => {
+		await db.run(`CREATE TABLE labelled (species VARCHAR)`);
+		await db.run(`INSERT INTO labelled VALUES ('Adelie'), ('Other'), ('Gentoo')`);
+		await identity.ensureColumns('labelled', { categorical: ['species'] });
+
+		const before = identity.identity('species').values.length;
+		const realId = identity.identity('species').ids.get('Other');
+
+		const otherId = await identity.reserveSynthetic('species', 'Other');
+
+		// No duplicate row: #createView joins ON value, so two rows sharing a
+		// value would fan out every matching source row.
+		expect(otherId).toBe(realId);
+		expect(identity.identity('species').values.length).toBe(before);
+		const rows = await db.all(
+			`SELECT COUNT(*) AS n FROM "${identity.dimTable('species')}" WHERE value = 'Other'`
+		);
+		expect(Number(rows[0].n)).toBe(1);
+	});
+
+	it('a unique index makes the duplicate structurally impossible', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const dim = identity.dimTable('species');
+
+		await expect(db.run(`INSERT INTO "${dim}" VALUES ('Adelie', 99)`)).rejects.toThrow(
+			/[Cc]onstraint|unique/
+		);
+	});
+
+	it('an append after a reservation continues past it without renumbering', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const otherId = await identity.reserveSynthetic('species', 'Other');
+
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);
+		await identity.ensureColumns('more_penguins', { categorical: ['species'] });
+
+		const held = identity.identity('species');
+		expect(held.values[otherId]).toBe('Other');
+		expect(held.ids.get('Emperor')).toBe(otherId + 1);
+	});
+
+	// -----------------------------------------------------------------------
 	// Append from a second table
 	// -----------------------------------------------------------------------
 

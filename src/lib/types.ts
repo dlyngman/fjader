@@ -106,6 +106,13 @@ export interface MarkConfig {
 export interface ScaleMap {
 	x?: { bandwidth?(): number; domain?(): unknown[]; range?(): number[] };
 	y?: { bandwidth?(): number; domain?(): unknown[]; range?(): number[] };
+	/**
+	 * Reserved identity ids for synthetic rows a transform invents, by field —
+	 * the "Other" bucket from `topN({ includeOthers })` (§16.9). A band channel
+	 * carries dim ids, so a transform cannot fabricate one; it has to be handed
+	 * an id the engine reserved at setup.
+	 */
+	otherIds?: Record<string, number>;
 	[key: string]: unknown;
 }
 

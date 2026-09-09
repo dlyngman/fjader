@@ -143,6 +143,13 @@ export class MarkLifecycleV2 {
 	 * be selected as identity ids; anything else still CASE-inlines.
 	 */
 	#identityFields: Set<string> = new Set();
+	/**
+	 * Reserved ids for synthetic rows, by field (§16.9). Populated at setup
+	 * because the value array must already contain the label before any JS
+	 * transform writes its id — a transform runs on data, which is far too late
+	 * to be issuing DDL.
+	 */
+	#syntheticIds: Record<string, number> = {};
 
 	/**
 	 * The relation any query built from #resolvedQueryParts must read.
@@ -1028,6 +1035,40 @@ export class MarkLifecycleV2 {
 			) as BandScaleState | null;
 			scale?.setIdentity(this.#queryEngine.identityFor(field));
 		}
+
+		// The synthetic "Other" bucket has no row in any table, so its id has to
+		// be reserved before a transform can write it (§16.9). Reserved for every
+		// categorical field of this mark rather than guessing which axis topN
+		// will pick — at most two, and the transform looks its own field up.
+		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
+			for (const field of categorical) {
+				this.#syntheticIds[field] = await this.#queryEngine.reserveSyntheticIdentity(
+					field,
+					'Other'
+				);
+			}
+			// Re-adopt: the reservation appended to the value array, and a scale
+			// that adopted before it must see the new entry in its domain.
+			for (const field of categorical) {
+				const scale = this.#scaleForField(field);
+				scale?.setIdentity(this.#queryEngine.identityFor(field));
+			}
+		}
+	}
+
+	/** The band/point scale whose axis reads `field`, if any. */
+	#scaleForField(field: string): BandScaleState | null {
+		for (const [axis, scaleType] of [
+			['x', this.actualXScaleType],
+			['y', this.actualYScaleType]
+		] as const) {
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
+			if (this.#config.select[axis] !== field) continue;
+			return (
+				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+			) as BandScaleState | null;
+		}
+		return null;
 	}
 
 	/**
@@ -1227,7 +1268,8 @@ export class MarkLifecycleV2 {
 
 		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
 			x: this.#chartContext.xScale,
-			y: this.#chartContext.yScale
+			y: this.#chartContext.yScale,
+			otherIds: this.#syntheticIds
 		});
 	});
 

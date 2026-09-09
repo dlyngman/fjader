@@ -215,7 +215,7 @@ function topNJS(n: number, options: TopNOptions): JsTransform {
 			...(options.by ? { by: options.by } : {}),
 			...(options.includeOthers ? { includeOthers: true } : {})
 		},
-		apply(data: DataAccessor, config: MarkConfig) {
+		apply(data: DataAccessor, config: MarkConfig, scales?: ScaleMap) {
 			if (data.length === 0) return data;
 
 			// Value axis: x for horizontal marks (barx), y for vertical (bary, default)
@@ -229,6 +229,10 @@ function topNJS(n: number, options: TopNOptions): JsTransform {
 			const bandColData = data.getColumn(bandField);
 			if (!valueCol || !bandColData) return data;
 
+			// The band channel carries dim ids, so a synthetic "Other" row cannot
+			// invent one — the engine reserved it at setup (§16.9).
+			const otherId = scales?.otherIds?.[bandField];
+
 			const seriesCol = seriesField ? data.getColumn(seriesField) : null;
 			if (seriesCol) {
 				return topNGrouped(
@@ -239,13 +243,14 @@ function topNJS(n: number, options: TopNOptions): JsTransform {
 					bandField,
 					seriesCol,
 					options,
-					valueField
+					valueField,
+					otherId
 				);
 			}
 
 			// Simple path: no series column, rank individual rows
 			if (data.length <= n) return data;
-			return topNSimple(data, n, valueCol, bandField, options);
+			return topNSimple(data, n, valueCol, bandField, options, otherId);
 		},
 		describe() {
 			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''} (JS)`;
@@ -259,13 +264,38 @@ function topNSimple(
 	n: number,
 	valueCol: ArrayLike<unknown>,
 	bandField: string,
-	options: TopNOptions
+	options: TopNOptions,
+	otherId?: number
 ): DataAccessor {
 	const indices = Array.from({ length: data.length }, (_, i) => i);
 	indices.sort((a, b) => (Number(valueCol[b]) || 0) - (Number(valueCol[a]) || 0));
 
 	const topIndices = indices.slice(0, n);
-	const outLen = options.includeOthers ? n + 1 : n;
+	const bandCol = data.getColumn(bandField);
+	// A numeric band column holds identity ids; the Other row needs the reserved
+	// one. Summing it like any other numeric column — which is what this used to
+	// do — produces the sum of the EXCLUDED ids, an arbitrary number that either
+	// falls outside the scale's block or lands on a live category (§16.9).
+	const bandIsIds = bandCol instanceof Float32Array;
+
+	let includeOthers = !!options.includeOthers;
+	if (includeOthers && bandIsIds && otherId == null) {
+		console.warn(
+			`[topN] includeOthers on "${bandField}" needs a reserved identity id and has none; ` +
+				`omitting the Other row rather than fabricating a category.`
+		);
+		includeOthers = false;
+	}
+
+	// A real category may already carry the reserved id — reserveSynthetic reuses
+	// it rather than duplicating the value. If that category survived the cut,
+	// fold the excluded total into its row instead of appending a second row with
+	// the same id, which would draw two bars in one slot.
+	const foldIdx =
+		includeOthers && bandIsIds ? topIndices.findIndex((i) => bandCol[i] === otherId) : -1;
+	const appendOther = includeOthers && foldIdx < 0;
+
+	const outLen = appendOther ? n + 1 : n;
 	const columns: Record<string, Float32Array | unknown[]> = {};
 
 	for (const colName of data.columnNames) {
@@ -275,15 +305,21 @@ function topNSimple(
 		if (src instanceof Float32Array) {
 			const dst = new Float32Array(outLen);
 			for (let i = 0; i < n; i++) dst[i] = src[topIndices[i]];
-			if (options.includeOthers) {
-				let sum = 0;
-				for (let i = n; i < indices.length; i++) sum += src[indices[i]];
-				dst[n] = sum;
+			if (includeOthers) {
+				if (colName === bandField) {
+					// Identity, not an aggregate. Already correct when folding.
+					if (appendOther) dst[n] = otherId!;
+				} else {
+					let sum = 0;
+					for (let i = n; i < indices.length; i++) sum += src[indices[i]];
+					if (appendOther) dst[n] = sum;
+					else dst[foldIdx] += sum;
+				}
 			}
 			columns[colName] = dst;
 		} else {
 			const dst: unknown[] = topIndices.map((i) => src[i]);
-			if (options.includeOthers) {
+			if (appendOther) {
 				dst.push(colName === bandField ? 'Other' : null);
 			}
 			columns[colName] = dst;
@@ -302,7 +338,8 @@ function topNGrouped(
 	bandField: string,
 	seriesCol: ArrayLike<unknown>,
 	options: TopNOptions,
-	valueField: string
+	valueField: string,
+	otherId?: number
 ): DataAccessor {
 	// Sum values per category to rank them
 	const categoryTotals = new Map<unknown, number>();
@@ -343,6 +380,18 @@ function topNGrouped(
 		return new ColumnDataAccessor(columns, keepIndices.length);
 	}
 
+	// A numeric band column holds identity ids, so the Other rows need the
+	// reserved one. They used to get 0 — a real category id — which drew the
+	// Other bar on top of whichever category owned it (§16.9).
+	const bandIsIds = bandColData instanceof Float32Array;
+	if (bandIsIds && otherId == null) {
+		console.warn(
+			`[topN] includeOthers on "${bandField}" needs a reserved identity id and has none; ` +
+				`omitting the Other rows rather than fabricating a category.`
+		);
+		return gatherRows(data, keepIndices);
+	}
+
 	// includeOthers: sum excluded rows per series into synthetic "Other" rows
 	const seriesValues = new Map<unknown, number>();
 	const seriesOrder: unknown[] = [];
@@ -352,7 +401,22 @@ function topNGrouped(
 		seriesValues.set(s, (seriesValues.get(s) || 0) + (Number(valueCol[i]) || 0));
 	}
 
-	const outLen = keepIndices.length + seriesOrder.length;
+	// A real category may already carry the reserved id (reserveSynthetic reuses
+	// rather than duplicating). Where such a row survived the cut for a given
+	// series, fold that series' total into it instead of appending a duplicate
+	// (category, series) row.
+	const foldFor = new Map<unknown, number>();
+	if (bandIsIds) {
+		for (let k = 0; k < keepIndices.length; k++) {
+			const i = keepIndices[k];
+			if (bandColData[i] === otherId && seriesValues.has(seriesCol[i])) {
+				foldFor.set(seriesCol[i], k);
+			}
+		}
+	}
+	const appended = seriesOrder.filter((sv) => !foldFor.has(sv));
+
+	const outLen = keepIndices.length + appended.length;
 	const columns: Record<string, Float32Array | unknown[]> = {};
 
 	for (const colName of data.columnNames) {
@@ -362,17 +426,26 @@ function topNGrouped(
 		if (src instanceof Float32Array) {
 			const dst = new Float32Array(outLen);
 			for (let i = 0; i < keepIndices.length; i++) dst[i] = src[keepIndices[i]];
-			// "Other" rows: value column gets summed total per series, others get 0
-			for (let j = 0; j < seriesOrder.length; j++) {
+			// Folded series: add the excluded total into the surviving row.
+			if (colName === valueField) {
+				for (const [sv, k] of foldFor) dst[k] += seriesValues.get(sv) || 0;
+			}
+			// Appended "Other" rows: the value column gets the per-series total,
+			// the band column the reserved id, everything else 0.
+			for (let j = 0; j < appended.length; j++) {
 				dst[keepIndices.length + j] =
-					colName === valueField ? seriesValues.get(seriesOrder[j]) || 0 : 0;
+					colName === valueField
+						? seriesValues.get(appended[j]) || 0
+						: colName === bandField
+							? otherId!
+							: 0;
 			}
 			columns[colName] = dst;
 		} else {
 			const dst: unknown[] = keepIndices.map((i) => src[i]);
-			for (let j = 0; j < seriesOrder.length; j++) {
+			for (let j = 0; j < appended.length; j++) {
 				if (colName === bandField) dst.push('Other');
-				else if (src === seriesCol) dst.push(seriesOrder[j]);
+				else if (src === seriesCol) dst.push(appended[j]);
 				else dst.push(null);
 			}
 			columns[colName] = dst;
@@ -380,6 +453,23 @@ function topNGrouped(
 	}
 
 	return new ColumnDataAccessor(columns, outLen);
+}
+
+/** Gather the given row indices from every column, preserving typed arrays. */
+function gatherRows(data: DataAccessor, indices: number[]): DataAccessor {
+	const columns: Record<string, Float32Array | unknown[]> = {};
+	for (const colName of data.columnNames) {
+		const src = data.getColumn(colName);
+		if (!src) continue;
+		if (src instanceof Float32Array) {
+			const dst = new Float32Array(indices.length);
+			for (let i = 0; i < indices.length; i++) dst[i] = src[indices[i]];
+			columns[colName] = dst;
+		} else {
+			columns[colName] = indices.map((i) => src[i]);
+		}
+	}
+	return new ColumnDataAccessor(columns, indices.length);
 }
 
 // -----------------------------------------------------------------------------

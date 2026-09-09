@@ -258,6 +258,15 @@ export class QueryEngine {
 	}
 
 	/**
+	 * Reserve an id for a value present in no table — the synthetic "Other"
+	 * bucket from `topN({ includeOthers })` (§16.9). Call after ensureColumns.
+	 * Returns an existing id when a real category already carries the label.
+	 */
+	reserveSyntheticIdentity(field: string, label: string): Promise<number> {
+		return this.#identity.reserveSynthetic(field, label);
+	}
+
+	/**
 	 * Execute a SQL query and return a flechette Table.
 	 * Uses the fast IPC path (queryIPC → tableFromIPC) when available,
 	 * falling back to the standard conn.query() for mocks/testing.

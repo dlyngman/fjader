@@ -111,6 +111,11 @@ export class FieldIdentity {
 	}
 }
 
+/** Single-quote a string so it is safe as a SQL literal. */
+function literal(value: string): string {
+	return `'${value.replaceAll("'", "''")}'`;
+}
+
 /** Double any embedded quote so a name is safe inside "..." . */
 function quote(identifier: string): string {
 	return `"${identifier.replaceAll('"', '""')}"`;
@@ -379,6 +384,59 @@ export class CategoricalIdentity {
 		return next;
 	}
 
+	/**
+	 * Reserve an id for a value that exists in no table — the synthetic "Other"
+	 * bucket a `topN({ includeOthers })` produces (§16.9).
+	 *
+	 * Goes through the same writer as every other id, so `values(f)[otherId]` is
+	 * the label and no consumer has to know it was synthetic. Serialized on the
+	 * per-field chain, so it cannot interleave with an append.
+	 *
+	 * Non-negative by construction: `scaleBand` discards `value < 0.0` before the
+	 * slot lookup, so a negative sentinel could never render.
+	 *
+	 * **Reuses the id if a real category already carries this label**, rather
+	 * than inserting a duplicate value — see the fan-out note above. Callers get
+	 * an id that may already be in the data, which the transform has to fold
+	 * into rather than append beside.
+	 *
+	 * Requires the dim to exist: call after `ensureColumns` has resolved.
+	 */
+	reserveSynthetic(field: string, label: string): Promise<number> {
+		const dim = this.#dims.get(field);
+		if (!dim) {
+			return Promise.reject(
+				new Error(`No dim for "${field}" — reserveSynthetic must follow ensureColumns.`)
+			);
+		}
+		const next = dim.chain.then(() => this.#reserveSyntheticNow(dim, field, label));
+		// Drop both the value and any rejection: the chain only sequences work,
+		// and one failure must not poison every later append.
+		dim.chain = next.then(
+			() => {},
+			() => {}
+		);
+		return next;
+	}
+
+	async #reserveSyntheticNow(dim: DimEntry, field: string, label: string): Promise<number> {
+		const existing = this.identity(field).ids.get(label);
+		if (existing !== undefined) return existing;
+
+		const dimName = quote(dim.name);
+		await this.#exec.exec(
+			`INSERT INTO ${dimName} SELECT ${literal(label)}, ` +
+				`(SELECT COALESCE(MAX(id), -1) + 1 FROM ${dimName})::INT`
+		);
+		await this.#refreshValues(field);
+
+		const id = this.identity(field).ids.get(label);
+		if (id === undefined) {
+			throw new Error(`Reserved "${label}" for "${field}" but it is absent from the dim.`);
+		}
+		return id;
+	}
+
 	async #ensureDimNow(
 		dim: DimEntry,
 		field: string,
@@ -398,6 +456,15 @@ export class CategoricalIdentity {
 				`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
 					`SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
 					`FROM (SELECT DISTINCT ${src}.${col} AS value FROM ${src} WHERE ${src}.${col} IS NOT NULL)`
+			);
+			// A second statement: CTAS cannot carry a constraint. `value` is unique
+			// by construction here (DISTINCT) and on append (WHERE NOT EXISTS), but
+			// reserveSynthetic is a writer that could break it, and a duplicate
+			// value does not tie-break — #createView joins ON t.field = d.value, so
+			// it FANS OUT every matching source row in every query against the
+			// view. Cheap insurance against a future writer forgetting.
+			await this.#exec.exec(
+				`CREATE UNIQUE INDEX IF NOT EXISTS ${quote(`${dim.name}_value_uq`)} ON ${dimName}(value)`
 			);
 		} else {
 			await this.#exec.exec(
