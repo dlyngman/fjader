@@ -601,6 +601,20 @@ describe('CategoricalIdentity', () => {
 		expect(identity.dimTable('a.b')).not.toBe(identity.dimTable('a-b'));
 	});
 
+	it('names an expression key by hash, so identifiers stay short', () => {
+		// Sanitizing the text instead gave 150+ characters for this expression,
+		// growing without bound with the expression itself.
+		const expr = `CASE WHEN mass < 3700 THEN 'Light'
+		                   WHEN mass < 4500 THEN 'Medium'
+		                   ELSE 'Heavy' END`;
+		expect(identity.idColumn(expr).length).toBeLessThan(32);
+		expect(identity.dimTable(expr).length).toBeLessThan(40);
+
+		// Still keyed on the exact text: whitespace differences are different
+		// fields, which §16.3 accepts as duplicated-but-correct.
+		expect(identity.idColumn(expr)).not.toBe(identity.idColumn(expr.replace(/\s+/g, ' ')));
+	});
+
 	it('handles a field name needing sanitization end to end', async () => {
 		await db.run(`CREATE TABLE odd ("my field" VARCHAR)`);
 		await db.run(`INSERT INTO odd VALUES ('x'), ('y')`);

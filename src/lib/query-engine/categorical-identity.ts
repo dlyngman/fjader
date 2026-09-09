@@ -158,18 +158,23 @@ function shortHash(s: string): string {
 /**
  * A name safe to embed in an identifier.
  *
- * A field that is already a bare identifier is used as-is, so the common case
- * reads cleanly in a query plan (`__dplot_species_idx`). Anything else is
- * sanitized *and* suffixed with a hash of the original, because sanitizing
- * alone maps `a.b` and `a-b` onto the same name — two fields silently sharing
- * one dim, which is the wrong-data class of failure rather than a crash.
+ * A key that is already identifier-safe is used as-is, so the common case reads
+ * cleanly in a query plan (`__dplot_species_idx`).
  *
- * The residual collision (a field literally named `a_b_<hash of "a.b">`) is
- * left unhandled as adversarial.
+ * Anything else — an expression key (§16) or an exotic column name — is named
+ * by HASH ALONE, not by its sanitized text. Sanitizing produced identifiers of
+ * 150+ characters for an ordinary three-branch CASE, growing without bound with
+ * the expression and turning its whitespace into runs of underscores: neither
+ * readable, which was the point of keeping the text, nor bounded.
+ *
+ * The hash is over the exact original, which is what disambiguation actually
+ * needs — sanitizing alone would map `a.b` and `a-b` onto one name, two fields
+ * silently sharing a dim, the wrong-data class of failure rather than a crash.
+ * The residual 1-in-2^32 collision is left unhandled as adversarial.
  */
 function identityToken(field: string): string {
 	const sanitized = field.replace(/[^A-Za-z0-9_]/g, '_');
-	return sanitized === field ? field : `${sanitized}_${shortHash(field)}`;
+	return sanitized === field ? field : `h${shortHash(field)}`;
 }
 
 /**
