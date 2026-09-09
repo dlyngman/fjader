@@ -68,6 +68,15 @@
 	// What to look for: three bars in Light, Medium, Heavy order, labels
 	// matching, and tooltips naming the right class.
 	//
+	// CHART 7 is also outside the checkpoint sequence. It covers §20.4 A: a band
+	// axis over an INTEGER column, where the dim holds NUMBERS. Everything below
+	// assumes a category is a string, and the round trip only worked because
+	// both sides of every lookup come from the same driver — d3 resolves
+	// scale(2021) and returns undefined for scale('2021'), so a value coerced
+	// anywhere on the way through pins every label at pixel 0. Its reversed
+	// explicit domain makes slot != id, so decode bugs show as in 2-4.
+	// What to look for: bars labelled 2023, 2022, 2021, 2020 in that order.
+	//
 	// WHY EVERY CHART USES ITS OWN FIELD NAME. ScaleRegistry keys scales by
 	// `${name}-${type}${configKey}` (ScaleRegistry.svelte.ts:247) — field name
 	// plus type plus config, NOT per chart or per table (§3.4). Five charts on
@@ -121,7 +130,14 @@
 				`CREATE TABLE band_shared_b AS SELECT 'Emperor' AS cat_shared FROM range(60)`,
 				// Chart 6: a fixed expression over a numeric column. No categorical
 				// column at all — the categories exist only as the CASE's output.
-				`CREATE TABLE band_expr AS SELECT body_mass AS mass_expr FROM penguins WHERE body_mass IS NOT NULL`
+				`CREATE TABLE band_expr AS SELECT body_mass AS mass_expr FROM penguins WHERE body_mass IS NOT NULL`,
+				// Chart 7: an INTEGER band column. The dim keeps NUMBERS, not
+				// strings, and d3's scaleBand looks its domain up by the raw value
+				// — scale(2021) resolves, scale('2021') does not — so a value
+				// stringified anywhere on the way through pins every label at
+				// pixel 0. Nothing covered this until §20.4 A.
+				`CREATE TABLE band_numeric AS SELECT 2020 + (CAST(bill_length AS INTEGER) % 4) AS yr_numeric
+				   FROM penguins WHERE bill_length IS NOT NULL`
 			]);
 
 			isLoaded = true;
@@ -323,6 +339,41 @@
 										             ELSE 'Heavy' END`}
 										y={count()}
 										domain={{ x: ['Light', 'Medium', 'Heavy'] }}
+										tip={['x', 'y']}
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</section>
+
+			<section>
+				<h2>7. Numeric band column</h2>
+				<p>
+					An INTEGER axis, with <code>domain</code> reversing it so slot != id. The dim holds numbers
+					rather than strings (§20.4 A), and d3 resolves its domain by the raw value — a stringified
+					one silently returns undefined. What to look for: four bars labelled 2023, 2022, 2021, 2020
+					in that order, labels matching their bars, and tooltips naming the year under the cursor rather
+					than its neighbour.
+				</p>
+				<div class="chart">
+					<ChartContainer xLabel="year" yLabel="count">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="band_numeric"
+										x="yr_numeric"
+										y={count()}
+										domain={{ x: [2023, 2022, 2021, 2020] }}
 										tip={['x', 'y']}
 									/>
 								{/snippet}

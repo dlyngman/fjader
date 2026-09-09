@@ -3,7 +3,7 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import { buildCaseExpression } from '$lib/sql/case-expression';
-import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
+import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 interface BandScaleConfig {
 	padding?: number;
@@ -27,7 +27,7 @@ interface BandGpuConfig {
  * It owns two spaces and the permutation between them: IDENTITY, the dim id a
  * channel carries, and DISPLAY, the slot a category occupies on the axis.
  * `displayOrder` is the permutation, `slotTable` its inverse for the shader,
- * and `#domain` a string projection for d3 and the axis. See the IDENTITY <->
+ * and `#domain` a value projection for d3 and the axis. See the IDENTITY <->
  * DISPLAY section for the CPU-side translation.
  *
  * Key responsibilities:
@@ -73,11 +73,11 @@ export class BandScaleState {
 	// =========================================================================
 	// DOMAIN STATE
 	// =========================================================================
-	#domain: string[] = $state([]);
+	#domain: DimValue[] = $state([]);
 	// Ids when the scale has identity, values otherwise. See #toIds.
-	#extents: Map<string, (string | number)[]> = new Map();
-	#sortOrder: (string | number)[] | null = null;
-	#explicitDomain: (string | number)[] | null = null;
+	#extents: Map<string, (DimValue | number)[]> = new Map();
+	#sortOrder: (DimValue | number)[] | null = null;
+	#explicitDomain: (DimValue | number)[] | null = null;
 	#domainUpdateScheduled: boolean = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
@@ -112,12 +112,12 @@ export class BandScaleState {
 	// FREEZE/DEBOUNCE FUNCTIONALITY
 	// =========================================================================
 	#enableUpdates: boolean = $state(true);
-	#frozenDomain: string[] | null = null;
+	#frozenDomain: DimValue[] | null = null;
 
 	// =========================================================================
 	// D3 SCALE INSTANCE (Reused for performance)
 	// =========================================================================
-	#sharedScale: ScaleBand<string> = scaleBand();
+	#sharedScale: ScaleBand<DimValue> = scaleBand<DimValue>();
 
 	// =========================================================================
 	// DERIVED STATE
@@ -148,7 +148,7 @@ export class BandScaleState {
 	// CONSTRUCTOR
 	// =========================================================================
 
-	constructor(name: string, domain: string[] = [], config: BandScaleConfig = {}) {
+	constructor(name: string, domain: DimValue[] = [], config: BandScaleConfig = {}) {
 		this.name = name;
 		this.#domain = [...domain];
 
@@ -264,7 +264,7 @@ export class BandScaleState {
 		return this.#enableUpdates;
 	}
 
-	get effectiveDomain(): string[] {
+	get effectiveDomain(): DimValue[] {
 		return this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
 	}
 
@@ -363,7 +363,7 @@ export class BandScaleState {
 	 * projection, desynchronizing the permutation from the d3 band index space
 	 * it has to agree with.
 	 */
-	#toIds(items: (string | number)[], encoded: boolean): number[] {
+	#toIds(items: (DimValue | number)[], encoded: boolean): number[] {
 		// No staleness check: both directions come from the engine's live
 		// FieldIdentity, rewritten in one pass, so the map cannot lag the array.
 		const identity = this.#identity;
@@ -458,7 +458,7 @@ export class BandScaleState {
 	 * while frozen, so neither the domain nor displayOrder moves — but the
 	 * display pipeline reads effectiveDomain, and this must not drift from it.
 	 */
-	categoryAt(channelValue: number): string | undefined {
+	categoryAt(channelValue: number): DimValue | undefined {
 		if (!this.hasIdentity) return this.effectiveDomain[channelValue];
 		return this.#identity!.values[channelValue];
 	}
@@ -526,7 +526,7 @@ export class BandScaleState {
 	 * Add categorical data from a mark
 	 */
 	addMark(
-		categories: (string | number)[],
+		categories: (DimValue | number)[],
 		identifier: string,
 		{
 			sorted = false,
@@ -539,7 +539,7 @@ export class BandScaleState {
 		// carries dim ids straight from the data, everything else supplies source
 		// values. Encoding happens here, once, at the boundary — not by decoding
 		// to strings and re-encoding downstream.
-		const uniqueCategories: (string | number)[] = this.hasIdentity
+		const uniqueCategories: (DimValue | number)[] = this.hasIdentity
 			? this.#toIds(categories, encoded)
 			: [...new Set(categories.filter((c) => c != null))];
 
@@ -563,7 +563,7 @@ export class BandScaleState {
 	 * Used by topN marks: the sort sidecar runs against the full dataset but
 	 * the domain should only contain post-transform categories.
 	 */
-	setSortOrder(categories: (string | number)[]): void {
+	setSortOrder(categories: (DimValue | number)[]): void {
 		// The sidecar selects the raw column, so these are always source values
 		// (§15.6 item 2 would change that; until it does, never ids).
 		this.#sortOrder = this.hasIdentity
@@ -615,13 +615,13 @@ export class BandScaleState {
 		}
 
 		// Collect all valid categories across all extents
-		const validCategories = new Set<string | number>();
+		const validCategories = new Set<DimValue | number>();
 		for (const categories of this.#extents.values()) {
 			for (const cat of categories) validCategories.add(cat);
 		}
 
-		const allCategories: (string | number)[] = [];
-		const seen = new Set<string | number>();
+		const allCategories: (DimValue | number)[] = [];
+		const seen = new Set<DimValue | number>();
 
 		// Priority 1: Explicit domain from mark prop (highest specificity)
 		// Priority 2: Sort order from sidecar query
@@ -647,21 +647,24 @@ export class BandScaleState {
 
 		// allCategories is ids when the scale has identity. displayOrder is that
 		// list verbatim — the permutation — and #domain is its projection into
-		// strings for the consumers that need them: d3's scaleBand, axis ticks,
-		// TextMark, the tooltip decode. Strings are an output here, never state.
+		// source values for the consumers that need them: d3's scaleBand, axis
+		// ticks, TextMark, the tooltip decode. Values are an output here, never
+		// state — and they are not necessarily strings (see DimValue): a band axis
+		// over an INTEGER column carries numbers all the way to scaleBand, which
+		// looks its domain up by the raw value and misses on a stringified one.
 		const values = this.#identity?.values ?? [];
 		// Already ids: every path into #extents/#sortOrder/#explicitDomain
 		// encodes at the boundary. This pass de-duplicates and range-checks.
 		const orderedIds = this.hasIdentity ? this.#toIds(allCategories, true) : [];
-		const resolved: string[] = this.hasIdentity
-			? orderedIds.map((id) => values[id]).filter((v): v is string => v != null)
-			: (allCategories as string[]);
+		const resolved: DimValue[] = this.hasIdentity
+			? orderedIds.map((id) => values[id]).filter((v): v is DimValue => v != null)
+			: (allCategories as DimValue[]);
 
 		const oldDomain = this.#domain;
 		const domainChanged =
 			oldDomain.length !== resolved.length || resolved.some((cat, i) => cat !== oldDomain[i]);
 
-		// The permutation can change while its string projection does not — most
+		// The permutation can change while its value projection does not — most
 		// obviously when identity arrives after the domain has already settled,
 		// which is the live ordering during setup. Guarding on the strings alone
 		// left displayOrder empty and the slot table stale.
@@ -699,7 +702,7 @@ export class BandScaleState {
 	 * now mean a real defect upstream, so they are reported rather than mapped.
 	 */
 	processDataForGPU(
-		categoryData: string[] | Float32Array,
+		categoryData: DimValue[] | Float32Array,
 		markId: string = 'unknown'
 	): Float32Array {
 		if (categoryData instanceof Float32Array) return categoryData;
@@ -739,7 +742,7 @@ export class BandScaleState {
 	/**
 	 * Get D3 band scale configured for rendering
 	 */
-	getBaseScale(axis: string, innerWidthOrHeight: number): ScaleBand<string> {
+	getBaseScale(axis: string, innerWidthOrHeight: number): ScaleBand<DimValue> {
 		this.#sharedScale.range(axis === 'x' ? [0, innerWidthOrHeight] : [innerWidthOrHeight, 0]);
 
 		if (this.#paddingInner !== null && this.#paddingOuter !== null) {
@@ -758,7 +761,7 @@ export class BandScaleState {
 	/**
 	 * Update scale domain (for D3 scale)
 	 */
-	updateScaleDomain(scale: { domain(d: string[]): unknown }): unknown {
+	updateScaleDomain(scale: { domain(d: DimValue[]): unknown }): unknown {
 		this._version; // Register svelte dependency
 		scale.domain(this.effectiveDomain);
 		return scale; // Return the function itself
@@ -767,11 +770,11 @@ export class BandScaleState {
 	/**
 	 * Get the current domain (array of categories)
 	 */
-	domain(): string[] {
+	domain(): DimValue[] {
 		return [...this.effectiveDomain];
 	}
 
-	get domainForReactivity(): string[] {
+	get domainForReactivity(): DimValue[] {
 		this._version;
 		return this.effectiveDomain;
 	}
@@ -797,12 +800,16 @@ export class BandScaleState {
 
 	/**
 	 * Get a formatter to convert tick indices back to category labels.
-	 * Used by Axis components to display the string label for the underlying GPU index.
+	 *
+	 * Returns a STRING, unlike the rest of the value surface: this is the one
+	 * consumer that is genuinely rendering text rather than feeding a lookup, so
+	 * a numeric or bigint category is coerced here and nowhere else. Doing it any
+	 * earlier is what would break d3's domain lookup (see DimValue).
 	 */
 	tickFormat(): (index: number) => string {
 		// Capture domain reference
 		const d = this.effectiveDomain;
-		return (index: number) => d[index];
+		return (index: number) => String(d[index] ?? '');
 	}
 
 	/**
@@ -887,7 +894,7 @@ export class BandScaleState {
 	/**
 	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */
-	getExtents(): Record<string, (string | number)[]> {
+	getExtents(): Record<string, (DimValue | number)[]> {
 		return Object.fromEntries(this.#extents);
 	}
 

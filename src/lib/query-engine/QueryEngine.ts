@@ -39,6 +39,7 @@ import {
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
 import {
 	CategoricalIdentity,
+	type DimValue,
 	type FieldIdentity,
 	type IdentityField
 } from './categorical-identity';
@@ -254,7 +255,7 @@ export class QueryEngine {
 	 * registering the same field appends to the dim afterwards and this array
 	 * grows in place (§9.4).
 	 */
-	identityValues(field: string): string[] {
+	identityValues(field: string): DimValue[] {
 		return this.#identity.values(field);
 	}
 

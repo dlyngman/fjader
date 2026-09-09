@@ -391,7 +391,7 @@
 					<ChartCell
 						cellChartId={facetChartIds[i]}
 						facetIndex={i}
-						facetLabel={cat}
+						facetLabel={String(cat)}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
 						{chartConfig}

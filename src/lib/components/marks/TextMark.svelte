@@ -19,6 +19,7 @@
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import type { D3BandScale } from '$lib/types';
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
@@ -165,7 +166,7 @@
 	 * The string case used to index the domain array by name, get undefined, and
 	 * pin every such label at pixel 0.
 	 */
-	function bandCategory(band: BandScaleState, raw: string | number): string | undefined {
+	function bandCategory(band: BandScaleState, raw: string | number): DimValue | undefined {
 		return typeof raw === 'string' ? raw : band.categoryAt(raw);
 	}
 

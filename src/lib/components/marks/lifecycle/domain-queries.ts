@@ -10,6 +10,7 @@ import {
 } from '@uwdata/mosaic-sql';
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
@@ -53,7 +54,7 @@ export async function fetchCategoricalDomains(
 	seriesChannel: string | null,
 	hasCategoryReducingTransforms: boolean,
 	markId: string,
-	explicitDomain?: { x?: string[]; y?: string[] } | null
+	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null
 ): Promise<number> {
 	const fetches: Promise<void>[] = [];
 
@@ -182,8 +183,11 @@ export async function fetchCategoricalDomains(
 	// Track explicit domains to apply after all async fetches complete —
 	// other scales (color, series) register ViewManager columns in their
 	// fetch callbacks, so the band view must be created after those finish.
-	let deferredExplicitX: string[] | null = null;
-	let deferredExplicitY: string[] | null = null;
+	// DimValue, not string: a band axis over a numeric column takes a numeric
+	// explicit domain, and it reaches the scale uncoerced — which is what makes
+	// it work, since #toIds looks each entry up in a dim keyed by the same type.
+	let deferredExplicitX: DimValue[] | null = null;
+	let deferredExplicitY: DimValue[] | null = null;
 
 	if (actualXScaleType === 'band' || actualXScaleType === 'point') {
 		if (skipBandFetch) {

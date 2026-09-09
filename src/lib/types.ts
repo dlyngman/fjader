@@ -6,6 +6,7 @@
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -242,10 +243,16 @@ export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' 
 // Mark prop building blocks
 // ---------------------------------------------------------------------------
 
-/** Explicit category domain for band/point scales. */
+/**
+ * Explicit category domain for band/point scales.
+ *
+ * DimValue rather than string: a band axis over an INTEGER or BIGINT column has
+ * a numeric domain, and the entries are looked up in a dim keyed by the source
+ * type, so they must arrive uncoerced. See DimValue.
+ */
 export interface DomainConfig {
-	x?: string[];
-	y?: string[];
+	x?: DimValue[];
+	y?: DimValue[];
 }
 
 /** Props shared by every mark component. */

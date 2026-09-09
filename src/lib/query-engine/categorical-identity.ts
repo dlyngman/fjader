@@ -98,6 +98,34 @@ interface ViewEntry {
 }
 
 /**
+ * A source value held in a dim.
+ *
+ * NOT always a string, which the types here claimed until this was checked
+ * against DuckDB rather than assumed. A dim is built by `SELECT DISTINCT <expr>`
+ * over the source, so the value keeps whatever type that expression produced:
+ * a VARCHAR column gives strings, an INTEGER column gives numbers, and a BIGINT
+ * column gives **bigints**. A band axis over a year, a rating or a zip code is
+ * an ordinary chart, not a corner case.
+ *
+ * The type is load-bearing, not cosmetic, so this must never be normalized to a
+ * string on the way through:
+ *
+ *  - d3's `scaleBand` keys its lookup by the raw domain value. With a numeric
+ *    domain, `scale(2021)` returns a position and `scale('2021')` returns
+ *    **undefined** — verified. Every axis tick, TextMark label and tooltip
+ *    position goes through that lookup.
+ *  - `Toggle` puts a decoded category straight into `literal(v)` from
+ *    mosaic-sql, which emits `2021` for a number and `'2021'` for a string. A
+ *    stringified value would compare VARCHAR against an INTEGER column.
+ *
+ * Both directions of `FieldIdentity` are keyed by this, and both sides of every
+ * lookup come from the same driver, so a `Map` keyed on it matches by value
+ * (SameValueZero, which covers bigint). That is why the round trip is correct
+ * today; it is the declared types that were wrong.
+ */
+export type DimValue = string | number | bigint;
+
+/**
  * A field's id <-> value bijection, both directions in one object.
  *
  * The two used to live apart: the engine owned id -> value and every scale
@@ -113,16 +141,16 @@ interface ViewEntry {
  */
 export class FieldIdentity {
 	/** id -> source value. Dense and 0-based, so position is the id. */
-	readonly values: string[] = [];
+	readonly values: DimValue[] = [];
 	/** source value -> id. The exact inverse of `values`. */
-	readonly ids = new Map<string, number>();
+	readonly ids = new Map<DimValue, number>();
 
-	constructor(values?: readonly string[]) {
+	constructor(values?: readonly DimValue[]) {
 		if (values) this.reset(values);
 	}
 
 	/** Replace both directions. The only writer. */
-	reset(values: readonly string[]): void {
+	reset(values: readonly DimValue[]): void {
 		this.values.length = 0;
 		this.ids.clear();
 		for (let i = 0; i < values.length; i++) {
@@ -284,7 +312,7 @@ export class CategoricalIdentity {
 	 * value. The live array, not a copy: hold the reference rather than
 	 * snapshotting it. Empty until the field's dim has been built.
 	 */
-	values(field: string): string[] {
+	values(field: string): DimValue[] {
 		return this.identity(field).values;
 	}
 
@@ -592,7 +620,7 @@ export class CategoricalIdentity {
 		// Ordered by id and dense by construction, so position is the id — and
 		// reset() derives value -> id from the same pass, so the two directions
 		// cannot disagree.
-		this.identity(field).reset(rows.map((row) => row.value as string));
+		this.identity(field).reset(rows.map((row) => row.value as DimValue));
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */

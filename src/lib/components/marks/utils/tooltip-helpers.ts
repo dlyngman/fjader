@@ -1,5 +1,6 @@
 import type { ChartContext } from '$lib/types';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 
@@ -32,7 +33,13 @@ interface TooltipConfig {
 	channelFields: Record<string, string | undefined>;
 	colorColumn?: string;
 	constantColor?: string;
-	bandDomains: Record<string, string[]>;
+	/**
+	 * Gate only, never a lookup — see TooltipManager's BAND IDENTITY section.
+	 * DimValue rather than string because a band axis over a numeric column has
+	 * a numeric domain; nothing here reads the elements, but the type should not
+	 * claim otherwise.
+	 */
+	bandDomains: Record<string, DimValue[]>;
 	colorDomain: string[] | null;
 	colorScaleState: ColorScaleState | null;
 	proximityAxis?: 'x' | 'y' | 'xy';

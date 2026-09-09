@@ -4,6 +4,7 @@ import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
@@ -39,7 +40,7 @@ interface TooltipMarkRegistration {
 	 * BandScaleState.categoryAt, which reads the live domain. See the BAND
 	 * IDENTITY section below.
 	 */
-	bandDomains?: Record<string, string[]>;
+	bandDomains?: Record<string, DimValue[]>;
 	colorDomain?: string[];
 	colorScaleState?: { getColor: (value: unknown) => string | null };
 	sizeScaleState?: { getRenderedRadius: (value: number) => number };
