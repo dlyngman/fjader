@@ -984,9 +984,10 @@ export class MarkLifecycleV2 {
 	 * Band/point only for now. Ordinal colour, series and facet are steps 3b/3c,
 	 * which is why this reads the two positional axes rather than every channel.
 	 *
-	 * Nothing consumes these columns yet — the queries still CASE-inline. This is
-	 * the additive checkpoint (C0): the view exists, and nothing renders
-	 * differently.
+	 * These columns ARE consumed: since C2 (`a43018a`) #inlineCaseExpressions
+	 * selects the id column for any axis in #identityFields, and the scale reads
+	 * ids as its internal representation. Failing here is therefore fatal, not
+	 * additive — which is why the await below is unguarded.
 	 */
 	async #ensureIdentityColumns(): Promise<void> {
 		const categorical: string[] = [];
