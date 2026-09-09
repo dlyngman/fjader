@@ -145,11 +145,7 @@ describe('QueryEngine', () => {
 			// with sync mock), all subsequent replace the pending slot.
 			const promises = [];
 			for (let i = 0; i < 10; i++) {
-				promises.push(
-					engine
-						.query(`SELECT ${i}`, { callerId: 'mark-1' })
-						.catch(() => 'aborted')
-				);
+				promises.push(engine.query(`SELECT ${i}`, { callerId: 'mark-1' }).catch(() => 'aborted'));
 			}
 
 			const results = await Promise.all(promises);
@@ -174,9 +170,9 @@ describe('QueryEngine', () => {
 			const controller = new AbortController();
 			controller.abort();
 
-			await expect(
-				engine.query('SELECT 1', { signal: controller.signal })
-			).rejects.toThrow('aborted');
+			await expect(engine.query('SELECT 1', { signal: controller.signal })).rejects.toThrow(
+				'aborted'
+			);
 			expect(conn.queries).toEqual([]);
 		});
 
@@ -191,9 +187,9 @@ describe('QueryEngine', () => {
 			});
 			const engine = new QueryEngine(conn);
 
-			await expect(
-				engine.query('SELECT 1', { signal: controller.signal })
-			).rejects.toThrow('aborted');
+			await expect(engine.query('SELECT 1', { signal: controller.signal })).rejects.toThrow(
+				'aborted'
+			);
 		});
 
 		it('succeeds if signal is never aborted', async () => {
@@ -210,7 +206,10 @@ describe('QueryEngine', () => {
 		it('cancels an in-flight query by callerId', async () => {
 			let resolver: ((v: unknown) => void) | null = null;
 			const conn = createMockConnection({
-				queryFn: () => new Promise((r) => { resolver = r; })
+				queryFn: () =>
+					new Promise((r) => {
+						resolver = r;
+					})
 			});
 			const engine = new QueryEngine(conn);
 
@@ -308,7 +307,9 @@ describe('QueryEngine', () => {
 		it('also clears the DESCRIBE cache', async () => {
 			const conn = createMockConnection({
 				queryFn: (sql) =>
-					sql.startsWith('DESCRIBE') ? { numRows: 0, get: () => ({}) } : { numRows: 0, get: () => ({}) }
+					sql.startsWith('DESCRIBE')
+						? { numRows: 0, get: () => ({}) }
+						: { numRows: 0, get: () => ({}) }
 			});
 			const engine = new QueryEngine(conn);
 
@@ -392,7 +393,10 @@ describe('QueryEngine', () => {
 		it('cancels in-flight queries on destroy', async () => {
 			let resolver: ((v: unknown) => void) | null = null;
 			const conn = createMockConnection({
-				queryFn: () => new Promise((r) => { resolver = r; })
+				queryFn: () =>
+					new Promise((r) => {
+						resolver = r;
+					})
 			});
 			const engine = new QueryEngine(conn);
 
