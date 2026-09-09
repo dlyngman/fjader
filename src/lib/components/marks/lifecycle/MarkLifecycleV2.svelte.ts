@@ -1051,12 +1051,14 @@ export class MarkLifecycleV2 {
 
 				const id = await this.#queryEngine.reserveSyntheticIdentity(field, 'Other');
 
-				// Keyed by the DATA COLUMN NAME the transform will look up, not by
-				// the source field: the query aliases the id column to the channel,
-				// so #getFieldName('x') is 'x' and that is what a transform reads
-				// out of its MarkConfig. Keying by the source column here silently
-				// misses, and the transform then drops the Other row.
-				this.#syntheticIds[this.#getFieldName(axis)] = id;
+				// Keyed off #transformConfig itself, not recomputed. A transform
+				// reads its band column as config[axis] and passes that to
+				// getColumn, so taking the key from the same object makes the two
+				// literally one value rather than two derivations that agree. They
+				// did not agree once: keyed by the source field, every lookup
+				// missed and the Other row was silently dropped.
+				const key = this.#transformConfig[axis];
+				if (typeof key === 'string') this.#syntheticIds[key] = id;
 
 				// Re-adopt: the reservation appended to the value array, and a scale
 				// that adopted before it must see the new entry.
