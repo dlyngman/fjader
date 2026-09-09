@@ -554,8 +554,8 @@ export class GPUCoordinator {
 					// Uniform, not storage: the vertex stage is at the default
 					// storage limit of 8 (§14.1). Declared on every layout even
 					// though only band shaders read it — a pipeline layout may
-					// expose more than its shader uses, and uniform buffers are at
-					// 3 of a default 12.
+					// expose more than its shader uses, and this group's uniform
+					// buffers are nowhere near the default 12.
 					binding: 5,
 					visibility: GPUShaderStage.VERTEX,
 					buffer: { type: 'uniform' }

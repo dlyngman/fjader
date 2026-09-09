@@ -757,8 +757,13 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 
 	/**
-	 * Inline CASE index expressions for band/point and ordinal color scales.
-	 * Replaces ViewManager's view column with direct SQL in the SELECT.
+	 * Encode the categorical channels into the SELECT, replacing ViewManager's
+	 * view columns with direct SQL.
+	 *
+	 * Two encodings now live here, and the name is the older one. Band/point x
+	 * and y take the view's identity id column. Ordinal colour and facet still
+	 * take a CASE built from their scale's domain — steps 3b and 3c, and the
+	 * reason `caseExpression` still exists.
 	 */
 	#inlineCaseExpressions(select: Record<string, unknown>): void {
 		// Band/point x and y: always the view's identity id column, never a CASE.
@@ -993,32 +998,6 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Request identity id columns for this mark's categorical axes (band step 3a).
-	 *
-	 * Runs inside the setup Promise.all, so every mark on a chart calls it in the
-	 * same tick — which is what CategoricalIdentity's coalescer is built for: they
-	 * union into one CREATE OR REPLACE VIEW rather than one per mark.
-	 *
-	 * Only plain column names — `field` is emitted as a quoted IDENTIFIER by
-	 * CategoricalIdentity, so an expression node here would become
-	 * `"CASE WHEN ... END"` and fail at the binder.
-	 *
-	 * An expression-backed categorical axis is NOT refused: it falls back to the
-	 * CASE path in #inlineCaseExpressions, keeps hasIdentity false, and works.
-	 * Only bin() is refused, in domain-queries.ts, because a binned axis mandates
-	 * a band scale it cannot supply a stable domain for. Giving fixed expressions
-	 * a dim is issue #197; see §16 of the review, which also covers what
-	 * ensureColumns would need (a map key separate from the emitted SQL).
-	 *
-	 * Band/point only for now. Ordinal colour, series and facet are steps 3b/3c,
-	 * which is why this reads the two positional axes rather than every channel.
-	 *
-	 * These columns ARE consumed: since C2 (`a43018a`) #inlineCaseExpressions
-	 * selects the id column for any axis in #identityFields, and the scale reads
-	 * ids as its internal representation. Failing here is therefore fatal, not
-	 * additive — which is why the await below is unguarded.
-	 */
-	/**
 	 * The identity key for a categorical axis, or null when it cannot be dimmed.
 	 *
 	 * The key is the source column name, or an expression's SQL text — the same
@@ -1045,6 +1024,31 @@ export class MarkLifecycleV2 {
 		return sql ? { key: sql, sql } : null;
 	}
 
+	/**
+	 * Request identity id columns for this mark's categorical axes (band step 3a).
+	 *
+	 * Runs inside the setup Promise.all, so every mark on a chart calls it in the
+	 * same tick — which is what CategoricalIdentity's coalescer is built for: they
+	 * union into one CREATE OR REPLACE VIEW rather than one per mark. Also re-run
+	 * after an identity reset, which is a reload rebuilding the dims from scratch.
+	 *
+	 * Plain columns and fixed SQL expressions both get a dim (§16 / #197). They
+	 * are not two paths: #identityKey hands over a key and the SQL producing the
+	 * value, and CategoricalIdentity substitutes the latter into the same
+	 * templates either way. What #identityKey refuses is bin(), aggregates and
+	 * window expressions — see there for why — and a refusal is reported below
+	 * rather than falling back, because since `b7292b2` there is nothing to fall
+	 * back to: the CASE path for positional band channels is deleted.
+	 *
+	 * Band/point only. Ordinal colour, series and facet still CASE-inline a
+	 * display position (steps 3b/3c), which is why this reads the two positional
+	 * axes rather than every channel.
+	 *
+	 * These columns ARE consumed: #inlineCaseExpressions selects the id column for
+	 * any axis in #identityFields, and the scale keeps ids as its internal
+	 * representation. Failing here is therefore fatal, not additive — which is
+	 * why the await below is unguarded.
+	 */
 	async #ensureIdentityColumns(): Promise<void> {
 		const axes: { axis: 'x' | 'y'; key: string; sql: string }[] = [];
 		for (const axis of ['x', 'y'] as const) {

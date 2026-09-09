@@ -221,8 +221,10 @@ export class QueryEngine {
 	 * named categorical field, and resolve once it does. Concurrent callers
 	 * coalesce into one rebuild. See `categorical-identity.ts`.
 	 *
-	 * Nothing reads these columns yet — band step 3 switches the scale kinds
-	 * over one at a time.
+	 * Band and point positional axes read these columns today (step 3a): their
+	 * query selects the id column and the scale keeps ids as its internal
+	 * representation. Ordinal colour, series and facet still CASE-inline a
+	 * display position — steps 3b and 3c.
 	 */
 	ensureColumns(
 		table: string,

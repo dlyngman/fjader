@@ -203,7 +203,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
           p1: f32, // categoryCount
           p2: f32, // paddingInner
           p3: f32, // paddingOuter
-          p4: f32, // padding
+          p4: f32, // base offset of this scale's block in bandSlots
         };
       `;
 		},
@@ -555,7 +555,7 @@ export class ScaleTemplateSystem {
 
     // Identity id -> display slot (§9.5, §14.3). A UNIFORM buffer, not storage:
     // the vertex stage already sits at the default maxStorageBuffersPerShaderStage
-    // of 8, while uniform buffers are at 2 of 12.
+    // of 8, while its uniform buffers are nowhere near the default 12.
     //
     // WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
     // vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the

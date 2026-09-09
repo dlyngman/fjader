@@ -35,8 +35,10 @@
  * connection pool. A second render context is a second connection, which is why
  * both dims and views carry a session suffix.
  *
- * Nothing here is reactive. Nothing reads these columns yet — that is band
- * step 3, which switches each scale kind over one at a time.
+ * Nothing here is reactive, and nothing here knows which scale kind is reading.
+ * Band and point positional axes read these columns today (step 3a); ordinal
+ * colour, series and facet still CASE-inline a display position, and switch
+ * over one at a time in steps 3b and 3c.
  */
 
 /** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
