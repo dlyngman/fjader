@@ -75,7 +75,7 @@ describe('Transforms', () => {
 
 		it('topN() gives the Other row the reserved id, not a sum of excluded ids', () => {
 			const result = topN(2, { includeOthers: true }).apply(idBandData(), markCfg, {
-				otherIds: { x: 3 }
+				otherIdsByColumn: { x: 3 }
 			});
 
 			expect(result.length).toBe(3);
@@ -101,7 +101,7 @@ describe('Transforms', () => {
 				3
 			);
 			const result = topN(2, { includeOthers: true }).apply(data, markCfg, {
-				otherIds: { x: 1 }
+				otherIdsByColumn: { x: 1 }
 			});
 
 			expect(result.length).toBe(2);
@@ -137,7 +137,7 @@ describe('Transforms', () => {
 			const result = topN(1, { includeOthers: true }).apply(
 				data,
 				{ ...markCfg, fill: 'fill' },
-				{ otherIds: { x: 3 } }
+				{ otherIdsByColumn: { x: 3 } }
 			);
 
 			const xs = Array.from(result.getColumn('x') as Float32Array);

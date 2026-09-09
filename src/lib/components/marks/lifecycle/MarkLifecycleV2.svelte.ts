@@ -1041,34 +1041,31 @@ export class MarkLifecycleV2 {
 		// categorical field of this mark rather than guessing which axis topN
 		// will pick — at most two, and the transform looks its own field up.
 		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
-			for (const field of categorical) {
-				this.#syntheticIds[field] = await this.#queryEngine.reserveSyntheticIdentity(
-					field,
-					'Other'
-				);
-			}
-			// Re-adopt: the reservation appended to the value array, and a scale
-			// that adopted before it must see the new entry in its domain.
-			for (const field of categorical) {
-				const scale = this.#scaleForField(field);
+			for (const [axis, scaleType] of [
+				['x', this.actualXScaleType],
+				['y', this.actualYScaleType]
+			] as const) {
+				if (scaleType !== 'band' && scaleType !== 'point') continue;
+				const field = this.#config.select[axis];
+				if (typeof field !== 'string' || !this.#identityFields.has(field)) continue;
+
+				const id = await this.#queryEngine.reserveSyntheticIdentity(field, 'Other');
+
+				// Keyed by the DATA COLUMN NAME the transform will look up, not by
+				// the source field: the query aliases the id column to the channel,
+				// so #getFieldName('x') is 'x' and that is what a transform reads
+				// out of its MarkConfig. Keying by the source column here silently
+				// misses, and the transform then drops the Other row.
+				this.#syntheticIds[this.#getFieldName(axis)] = id;
+
+				// Re-adopt: the reservation appended to the value array, and a scale
+				// that adopted before it must see the new entry.
+				const scale = (
+					axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+				) as BandScaleState | null;
 				scale?.setIdentity(this.#queryEngine.identityFor(field));
 			}
 		}
-	}
-
-	/** The band/point scale whose axis reads `field`, if any. */
-	#scaleForField(field: string): BandScaleState | null {
-		for (const [axis, scaleType] of [
-			['x', this.actualXScaleType],
-			['y', this.actualYScaleType]
-		] as const) {
-			if (scaleType !== 'band' && scaleType !== 'point') continue;
-			if (this.#config.select[axis] !== field) continue;
-			return (
-				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
-			) as BandScaleState | null;
-		}
-		return null;
 	}
 
 	/**
@@ -1269,7 +1266,7 @@ export class MarkLifecycleV2 {
 		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
 			x: this.#chartContext.xScale,
 			y: this.#chartContext.yScale,
-			otherIds: this.#syntheticIds
+			otherIdsByColumn: this.#syntheticIds
 		});
 	});
 

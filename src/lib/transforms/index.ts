@@ -230,8 +230,9 @@ function topNJS(n: number, options: TopNOptions): JsTransform {
 			if (!valueCol || !bandColData) return data;
 
 			// The band channel carries dim ids, so a synthetic "Other" row cannot
-			// invent one — the engine reserved it at setup (§16.9).
-			const otherId = scales?.otherIds?.[bandField];
+			// invent one — the engine reserved it at setup (§16.9). Keyed by data
+			// column name, which is what bandField is.
+			const otherId = scales?.otherIdsByColumn?.[bandField];
 
 			const seriesCol = seriesField ? data.getColumn(seriesField) : null;
 			if (seriesCol) {
