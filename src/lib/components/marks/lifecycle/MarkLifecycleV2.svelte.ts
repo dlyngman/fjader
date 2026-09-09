@@ -970,8 +970,16 @@ export class MarkLifecycleV2 {
 	 * same tick — which is what CategoricalIdentity's coalescer is built for: they
 	 * union into one CREATE OR REPLACE VIEW rather than one per mark.
 	 *
-	 * Only plain column names. An expression-backed categorical axis has no value
-	 * to key a dim on, and is refused earlier with a clearer message (issue #197).
+	 * Only plain column names — `field` is emitted as a quoted IDENTIFIER by
+	 * CategoricalIdentity, so an expression node here would become
+	 * `"CASE WHEN ... END"` and fail at the binder.
+	 *
+	 * An expression-backed categorical axis is NOT refused: it falls back to the
+	 * CASE path in #inlineCaseExpressions, keeps hasIdentity false, and works.
+	 * Only bin() is refused, in domain-queries.ts, because a binned axis mandates
+	 * a band scale it cannot supply a stable domain for. Giving fixed expressions
+	 * a dim is issue #197; see §16 of the review, which also covers what
+	 * ensureColumns would need (a map key separate from the emitted SQL).
 	 *
 	 * Band/point only for now. Ordinal colour, series and facet are steps 3b/3c,
 	 * which is why this reads the two positional axes rather than every channel.
