@@ -183,6 +183,93 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// Fixed expressions (§16, #197)
+	// -----------------------------------------------------------------------
+
+	it('dims a fixed SQL expression the same way as a column', async () => {
+		const expr = `CASE WHEN mass < 3700 THEN 'Light' ELSE 'Heavy' END`;
+		await identity.ensureColumns('penguins', { categorical: [{ key: expr, sql: expr }] });
+
+		// Ids are content-addressed per creation: alphabetical over the outputs.
+		expect(identity.identity(expr).values).toEqual(['Heavy', 'Light']);
+
+		const rows = await db.all(
+			`SELECT mass, "${identity.idColumn(expr)}" AS idx ` +
+				`FROM "${identity.sourceFor('penguins')}" ORDER BY mass`
+		);
+		// masses 3600, 3700, 3750, 3800, 5000 -> only 3600 is under the threshold.
+		// The NULL-species row is one of them: the expression classifies it, since
+		// it is the expression's value that must be non-null, not the column's.
+		expect(rows.map((r) => r.idx)).toEqual([1, 0, 0, 0, 0]);
+	});
+
+	it('keys the dim on the expression text, so two spellings do not collide', async () => {
+		const a = `upper(species)`;
+		const b = `UPPER(species)`;
+		await identity.ensureColumns('penguins', { categorical: [{ key: a, sql: a }] });
+		await identity.ensureColumns('penguins', { categorical: [{ key: b, sql: b }] });
+
+		// Duplicated work, but each internally consistent — §16.3. The failure to
+		// avoid is one scale with two disagreeing dims, not two dims.
+		expect(identity.dimTable(a)).not.toBe(identity.dimTable(b));
+		expect(identity.identity(a).values).toEqual(identity.identity(b).values);
+	});
+
+	it('binds expression columns to the source, not to the dim', async () => {
+		// A column literally named `id` collides with the dim's own column if the
+		// join evaluates the expression in a scope containing both.
+		await db.run(`CREATE TABLE shadowed (id INT, value VARCHAR)`);
+		await db.run(`INSERT INTO shadowed VALUES (1, 'a'), (2, 'b'), (3, 'a')`);
+		const expr = `CASE WHEN id > 1 THEN 'big' ELSE 'small' END`;
+
+		await identity.ensureColumns('shadowed', { categorical: [{ key: expr, sql: expr }] });
+
+		const rows = await db.all(
+			`SELECT id, "${identity.idColumn(expr)}" AS idx FROM "${identity.sourceFor('shadowed')}" ORDER BY id`
+		);
+		expect(identity.identity(expr).values).toEqual(['big', 'small']);
+		expect(rows.map((r) => r.idx)).toEqual([1, 0, 0]);
+	});
+
+	it('leaves the view shaped like the source, helper columns excluded', async () => {
+		const expr = `CASE WHEN mass < 3700 THEN 'Light' ELSE 'Heavy' END`;
+		await identity.ensureColumns('penguins', {
+			categorical: ['species', { key: expr, sql: expr }]
+		});
+
+		const rows = await db.all(`SELECT * FROM "${identity.sourceFor('penguins')}" LIMIT 1`);
+		const cols = Object.keys(rows[0]);
+		expect(cols).toEqual(
+			expect.arrayContaining(['species', 'island', 'mass', identity.idColumn('species')])
+		);
+		expect(cols.filter((c) => c.startsWith('__dplot_key_'))).toEqual([]);
+	});
+
+	// -----------------------------------------------------------------------
+	// Cardinality gate (§16.6)
+	// -----------------------------------------------------------------------
+
+	it('refuses a field with more distinct values than can render', async () => {
+		await db.run(`CREATE TABLE wide AS SELECT i::VARCHAR AS k FROM range(20000) t(i)`);
+
+		await expect(identity.ensureColumns('wide', { categorical: ['k'] })).rejects.toThrow(
+			/distinct values/
+		);
+		// Refused before the dim exists: a runaway expression never materializes.
+		const tables = await db.all(
+			`SELECT table_name FROM information_schema.tables WHERE table_name = '${identity.dimTable('k')}'`
+		);
+		expect(tables).toHaveLength(0);
+	});
+
+	it('allows an ordinary categorical without complaint', async () => {
+		await expect(
+			identity.ensureColumns('penguins', { categorical: ['species'] })
+		).resolves.toBeUndefined();
+		expect(identity.identity('species').values).toHaveLength(3);
+	});
+
+	// -----------------------------------------------------------------------
 	// Synthetic ids (§16.9)
 	// -----------------------------------------------------------------------
 

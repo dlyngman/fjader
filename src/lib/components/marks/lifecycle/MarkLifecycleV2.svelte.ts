@@ -755,8 +755,10 @@ export class MarkLifecycleV2 {
 			// longer suppresses the IDENTITY column: ids come from the dim, are
 			// independent of which categories survive, and the topN subquery's
 			// `band IN (...)` filters them as integers (§9.3).
-			const field = this.#config.select[axis];
-			if (typeof field === 'string' && this.#identityFields.has(field)) {
+			// The same derivation #ensureIdentityColumns registered under, so a
+			// dimmed expression axis selects its id column like a dimmed column.
+			const key = this.#identityKey(axis)?.key;
+			if (key != null && this.#identityFields.has(key)) {
 				// CAST to REAL explicitly. processDataForGPU's zero-copy fast path
 				// keys on Float32Array, and castNumeric cannot help here: it casts a
 				// column ref only when the schema says the column is numeric, and
@@ -764,7 +766,7 @@ export class MarkLifecycleV2 {
 				// __dplot_*_idx columns. An INT column would arrive as an Int32Array
 				// and fall into the string mapping path, where every id misses and
 				// becomes -1. The CASE this replaces was cast for the same reason.
-				select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(field)));
+				select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
 			} else if (!skipBandIndex && scale.caseExpression) {
 				select[axis] = sql`${scale.caseExpression}`;
 			}
@@ -996,25 +998,48 @@ export class MarkLifecycleV2 {
 	 * ids as its internal representation. Failing here is therefore fatal, not
 	 * additive — which is why the await below is unguarded.
 	 */
-	async #ensureIdentityColumns(): Promise<void> {
-		const categorical: string[] = [];
+	/**
+	 * The identity key for a categorical axis, or null when it cannot be dimmed.
+	 *
+	 * The key is the source column name, or an expression's SQL text — the same
+	 * string `requestScale` puts in `columnName` and therefore the scale's
+	 * `sourceField` (§16.3). Deriving both from one place is what stops scale
+	 * identity and dim identity from diverging.
+	 *
+	 * Refused: bin() (values move with the viewport, §16.5), and aggregate or
+	 * window expressions, which are not a row-level value to group by.
+	 */
+	#identityKey(axis: 'x' | 'y'): { key: string; sql: string } | null {
+		const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+		if (scaleType !== 'band' && scaleType !== 'point') return null;
 
-		for (const [axis, scaleType] of [
-			['x', this.actualXScaleType],
-			['y', this.actualYScaleType]
-		] as const) {
-			if (scaleType !== 'band' && scaleType !== 'point') continue;
-			const field = this.#config.select[axis];
-			if (typeof field === 'string') categorical.push(field);
+		const field = this.#config.select[axis];
+		if (field == null) return null;
+		if (typeof field === 'string') return { key: field, sql: `"${field.replaceAll('"', '""')}"` };
+		if (!isNode(field) || isBinExpression(field)) return null;
+		if (isAggregateExpression(field as ExprNode) || isWindowExpression(field as ExprNode)) {
+			return null;
 		}
 
-		if (categorical.length === 0) return;
+		const sql = String(field);
+		return sql ? { key: sql, sql } : null;
+	}
+
+	async #ensureIdentityColumns(): Promise<void> {
+		const axes: { axis: 'x' | 'y'; key: string; sql: string }[] = [];
+		for (const axis of ['x', 'y'] as const) {
+			const resolved = this.#identityKey(axis);
+			if (resolved) axes.push({ axis, ...resolved });
+		}
+		if (axes.length === 0) return;
+
+		const categorical = axes.map(({ key, sql }) => ({ key, sql }));
 
 		// Fatal, unlike at C0: the query now selects these columns and reads FROM
 		// the view. Failing here gives a message naming the mark and the fields;
 		// continuing would fail at the binder with neither.
 		await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
-		for (const field of categorical) this.#identityFields.add(field);
+		for (const { key } of categorical) this.#identityFields.add(key);
 
 		// Hand each band scale the engine's live id -> value array, so it can build
 		// its slot table. This must happen for EVERY band axis, not only the ones
@@ -1022,18 +1047,11 @@ export class MarkLifecycleV2 {
 		// path and an explicit domain skips the domain fetch altogether, and if
 		// either were left without identity values its slot table would be empty
 		// and the shader would read another scale's slots at offset 0.
-		for (const [axis, scaleType] of [
-			['x', this.actualXScaleType],
-			['y', this.actualYScaleType]
-		] as const) {
-			if (scaleType !== 'band' && scaleType !== 'point') continue;
-			const field = this.#config.select[axis];
-			if (typeof field !== 'string' || !this.#identityFields.has(field)) continue;
-
+		for (const { axis, key } of axes) {
 			const scale = (
 				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 			) as BandScaleState | null;
-			scale?.setIdentity(this.#queryEngine.identityFor(field));
+			scale?.setIdentity(this.#queryEngine.identityFor(key));
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to
@@ -1041,15 +1059,8 @@ export class MarkLifecycleV2 {
 		// categorical field of this mark rather than guessing which axis topN
 		// will pick — at most two, and the transform looks its own field up.
 		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
-			for (const [axis, scaleType] of [
-				['x', this.actualXScaleType],
-				['y', this.actualYScaleType]
-			] as const) {
-				if (scaleType !== 'band' && scaleType !== 'point') continue;
-				const field = this.#config.select[axis];
-				if (typeof field !== 'string' || !this.#identityFields.has(field)) continue;
-
-				const id = await this.#queryEngine.reserveSyntheticIdentity(field, 'Other');
+			for (const { axis, key } of axes) {
+				const id = await this.#queryEngine.reserveSyntheticIdentity(key, 'Other');
 
 				// Keyed off #transformConfig itself, not recomputed. A transform
 				// reads its band column as config[axis] and passes that to
@@ -1057,15 +1068,15 @@ export class MarkLifecycleV2 {
 				// literally one value rather than two derivations that agree. They
 				// did not agree once: keyed by the source field, every lookup
 				// missed and the Other row was silently dropped.
-				const key = this.#transformConfig[axis];
-				if (typeof key === 'string') this.#syntheticIds[key] = id;
+				const column = this.#transformConfig[axis];
+				if (typeof column === 'string') this.#syntheticIds[column] = id;
 
 				// Re-adopt: the reservation appended to the value array, and a scale
 				// that adopted before it must see the new entry.
 				const scale = (
 					axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 				) as BandScaleState | null;
-				scale?.setIdentity(this.#queryEngine.identityFor(field));
+				scale?.setIdentity(this.#queryEngine.identityFor(key));
 			}
 		}
 	}

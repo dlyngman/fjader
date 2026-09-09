@@ -37,7 +37,11 @@ import {
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
-import { CategoricalIdentity, type FieldIdentity } from './categorical-identity';
+import {
+	CategoricalIdentity,
+	type FieldIdentity,
+	type IdentityField
+} from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
@@ -218,7 +222,10 @@ export class QueryEngine {
 	 * Nothing reads these columns yet — band step 3 switches the scale kinds
 	 * over one at a time.
 	 */
-	ensureColumns(table: string, fields: { categorical?: string[] }): Promise<void> {
+	ensureColumns(
+		table: string,
+		fields: { categorical?: (string | IdentityField)[] }
+	): Promise<void> {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}

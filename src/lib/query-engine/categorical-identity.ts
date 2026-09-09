@@ -46,9 +46,33 @@ export interface IdentityExec {
 	queryRows(sql: string): Promise<Array<Record<string, unknown>>>;
 }
 
+/**
+ * A thing that can have an identity: a source column, or a fixed SQL expression
+ * over one (§16). Both are dimmed identically — the only difference is how the
+ * value is produced.
+ */
+export interface IdentityField {
+	/**
+	 * Stable key for this identity. The column name, or the expression's SQL
+	 * text. Names the dim, the id column and the value array, and must be the
+	 * same string that becomes the scale's `sourceField`, so scale identity and
+	 * dim identity cannot diverge (§16.3).
+	 */
+	key: string;
+	/** SQL producing the value. A quoted identifier, or the expression itself. */
+	sql: string;
+}
+
+/** A bare string means a plain column. */
+function asField(field: string | IdentityField): IdentityField {
+	return typeof field === 'string' ? { key: field, sql: quote(field) } : field;
+}
+
 interface DimEntry {
 	/** Fully-qualified dim table name, without quotes. */
 	name: string;
+	/** SQL producing this field's value, from the first registration. */
+	sql: string;
 	/** Source tables already folded into this dim. */
 	tables: Set<string>;
 	/**
@@ -148,6 +172,16 @@ function identityToken(field: string): string {
 	return sanitized === field ? field : `${sanitized}_${shortHash(field)}`;
 }
 
+/**
+ * Above this many distinct values a band axis is refused outright (§16.6).
+ * The shared slot buffer holds 16384 floats across every band and point scale,
+ * so a single axis this large cannot render whatever else is on the page — the
+ * limit is capacity, not taste.
+ */
+export const MAX_IDENTITY_CARDINALITY = 10000;
+/** Above this it renders but is unreadable: ~1px per band on a wide axis. */
+export const WARN_IDENTITY_CARDINALITY = 1000;
+
 export class CategoricalIdentity {
 	#exec: IdentityExec;
 	#session: string;
@@ -197,6 +231,8 @@ export class CategoricalIdentity {
 	 * flight.
 	 */
 	#identities = new Map<string, FieldIdentity>();
+	/** key -> SQL producing the value. Set at registration, read by the drain. */
+	#sqlFor = new Map<string, string>();
 
 	constructor(exec: IdentityExec, session: string) {
 		this.#exec = exec;
@@ -271,8 +307,11 @@ export class CategoricalIdentity {
 	 * call concurrently from every mark during setup — callers union into one
 	 * rebuild rather than racing to CREATE OR REPLACE the same view.
 	 */
-	async ensureColumns(table: string, fields: { categorical?: string[] }): Promise<void> {
-		const categorical = fields.categorical ?? [];
+	async ensureColumns(
+		table: string,
+		fields: { categorical?: (string | IdentityField)[] }
+	): Promise<void> {
+		const categorical = (fields.categorical ?? []).map(asField);
 		if (categorical.length === 0) return;
 
 		let entry = this.#views.get(table);
@@ -282,7 +321,9 @@ export class CategoricalIdentity {
 		}
 
 		for (const field of categorical) {
-			if (!entry.current.has(field)) entry.pending.add(field);
+			// Remember the SQL before the drain needs it; the pending set is keys.
+			this.#sqlFor.set(field.key, field.sql);
+			if (!entry.current.has(field.key)) entry.pending.add(field.key);
 		}
 
 		// Nothing new. Still await any rebuild in flight, so a caller that asked
@@ -371,7 +412,12 @@ export class CategoricalIdentity {
 	#ensureDim(field: string, table: string, generation: number): Promise<void> {
 		let dim = this.#dims.get(field);
 		if (!dim) {
-			dim = { name: this.dimTable(field), tables: new Set(), chain: Promise.resolve() };
+			dim = {
+				name: this.dimTable(field),
+				sql: this.#sqlFor.get(field) ?? quote(field),
+				tables: new Set(),
+				chain: Promise.resolve()
+			};
 			this.#dims.set(field, dim);
 		}
 
@@ -449,13 +495,17 @@ export class CategoricalIdentity {
 
 		const dimName = quote(dim.name);
 		const src = quote(table);
-		const col = quote(field);
+		// The value expression: a quoted column, or a fixed SQL expression. Both
+		// are evaluated with only the source table in scope.
+		const expr = dim.sql;
+
+		await this.#checkCardinality(field, expr, src);
 
 		if (dim.tables.size === 0) {
 			await this.#exec.exec(
 				`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
 					`SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
-					`FROM (SELECT DISTINCT ${src}.${col} AS value FROM ${src} WHERE ${src}.${col} IS NOT NULL)`
+					`FROM (SELECT DISTINCT ${expr} AS value FROM ${src} WHERE ${expr} IS NOT NULL)`
 			);
 			// A second statement: CTAS cannot carry a constraint. `value` is unique
 			// by construction here (DISTINCT) and on append (WHERE NOT EXISTS), but
@@ -471,13 +521,52 @@ export class CategoricalIdentity {
 				`INSERT INTO ${dimName} ` +
 					`SELECT s.v, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
 					`ROW_NUMBER() OVER (ORDER BY s.v))::INT ` +
-					`FROM (SELECT DISTINCT ${src}.${col} AS v FROM ${src} WHERE ${src}.${col} IS NOT NULL) s ` +
+					`FROM (SELECT DISTINCT ${expr} AS v FROM ${src} WHERE ${expr} IS NOT NULL) s ` +
 					`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d WHERE d.value = s.v)`
 			);
 		}
 
 		dim.tables.add(table);
 		await this.#refreshValues(field);
+	}
+
+	/**
+	 * Refuse a band axis with more distinct values than can render (§16.6).
+	 *
+	 * Runs here rather than in `#fetchFieldStats` — that is a sibling of
+	 * `#ensureIdentityColumns` in the same `Promise.all`, so gating one on the
+	 * other would serialize two concurrent operations and put a round trip on
+	 * the critical path §3.3 protects. Here it costs a query only for fields
+	 * that actually get a dim, and it is where the refusal has to land anyway.
+	 *
+	 * `approx_count_distinct` rather than `COUNT(DISTINCT …)`: one HyperLogLog
+	 * pass with no materialization, which matters precisely for the runaway
+	 * expression this exists to catch.
+	 *
+	 * Neither syntax nor result type can answer this question — `year(ts)` is
+	 * numeric with a tiny distinct set, a CASE can have ten thousand branches —
+	 * so the count is the only honest gate.
+	 */
+	async #checkCardinality(field: string, expr: string, src: string): Promise<void> {
+		const rows = await this.#exec.queryRows(
+			`SELECT approx_count_distinct(${expr}) AS n FROM ${src}`
+		);
+		const n = Number(rows[0]?.n ?? 0);
+
+		if (n > MAX_IDENTITY_CARDINALITY) {
+			throw new Error(
+				`"${field}" has about ${n} distinct values, over the ${MAX_IDENTITY_CARDINALITY} ` +
+					`a categorical scale can render. The shared slot buffer holds 16384 ids across ` +
+					`every band and point scale on the page. Use a continuous scale, bin the values, ` +
+					`or reduce them with a transform.`
+			);
+		}
+		if (n > WARN_IDENTITY_CARDINALITY) {
+			console.warn(
+				`[identity] "${field}" has about ${n} distinct values; a band axis with more than ` +
+					`~${WARN_IDENTITY_CARDINALITY} categories is under a pixel per band on most charts.`
+			);
+		}
 	}
 
 	/**
@@ -504,17 +593,31 @@ export class CategoricalIdentity {
 		const src = quote(table);
 		const joins: string[] = [];
 		const columns: string[] = [];
+		const keyExprs: string[] = [];
+		const keyCols: string[] = [];
 
 		all.forEach((field, i) => {
 			const alias = `d${i}`;
+			const keyCol = `__dplot_key_${i}`;
 			const dimName = quote(this.#dims.get(field)!.name);
+			keyExprs.push(`(${this.#dims.get(field)!.sql}) AS ${quote(keyCol)}`);
+			keyCols.push(quote(keyCol));
 			columns.push(`COALESCE(${alias}.id, -1) AS ${quote(this.idColumn(field))}`);
-			joins.push(`LEFT JOIN ${dimName} ${alias} ON t.${quote(field)} = ${alias}.value`);
+			joins.push(`LEFT JOIN ${dimName} ${alias} ON t.${quote(keyCol)} = ${alias}.value`);
 		});
 
+		// The value expression is computed in an inner SELECT, where only the
+		// source table is in scope, and joined on the qualified helper column.
+		//
+		// Joining on the raw expression instead would evaluate it in a scope that
+		// also contains the dim, so an expression over a column named `id` or
+		// `value` — `id` is not a rare column name — would bind ambiguously or,
+		// worse, to the dim's column. EXCLUDE drops the helpers again, so the
+		// view's shape is still `SELECT *` plus one id column per field.
 		await this.#exec.exec(
 			`CREATE OR REPLACE VIEW ${quote(this.viewTable(table))} AS ` +
-				`SELECT t.*, ${columns.join(', ')} FROM ${src} t ${joins.join(' ')}`
+				`SELECT t.* EXCLUDE (${keyCols.join(', ')}), ${columns.join(', ')} ` +
+				`FROM (SELECT *, ${keyExprs.join(', ')} FROM ${src}) t ${joins.join(' ')}`
 		);
 	}
 
