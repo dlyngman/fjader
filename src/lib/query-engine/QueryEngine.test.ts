@@ -321,6 +321,63 @@ describe('QueryEngine', () => {
 			await engine.describe('t');
 			expect(conn.queries).toEqual(['DESCRIBE "t"', 'DESCRIBE "t"']); // cache was cleared
 		});
+
+		// The dims and views are dropped here, which invalidates the marks' SQL
+		// and not just their results: their query parts name __dplot_*_idx
+		// columns on a view that is now gone. Marks find that out through these
+		// listeners and nowhere else.
+		it('notifies identity reset listeners', async () => {
+			const engine = new QueryEngine(createMockConnection());
+			const seen: string[] = [];
+			engine.onIdentityReset(() => seen.push('a'));
+			engine.onIdentityReset(() => seen.push('b'));
+
+			await engine.clearQueryCache();
+
+			expect(seen).toEqual(['a', 'b']);
+		});
+
+		it('notifies before the returned promise resolves', async () => {
+			const engine = new QueryEngine(createMockConnection());
+			let notified = false;
+			engine.onIdentityReset(() => {
+				notified = true;
+			});
+
+			// The documented contract: awaiting clearQueryCache() means the
+			// rebuild has been asked for, not merely scheduled.
+			await engine.clearQueryCache();
+			expect(notified).toBe(true);
+		});
+
+		it('stops notifying after unsubscribe', async () => {
+			const engine = new QueryEngine(createMockConnection());
+			let calls = 0;
+			const off = engine.onIdentityReset(() => calls++);
+
+			await engine.clearQueryCache();
+			off();
+			await engine.clearQueryCache();
+
+			expect(calls).toBe(1);
+		});
+
+		it('still notifies the rest when one listener throws', async () => {
+			const engine = new QueryEngine(createMockConnection());
+			const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+			let reached = false;
+			engine.onIdentityReset(() => {
+				throw new Error('boom');
+			});
+			engine.onIdentityReset(() => {
+				reached = true;
+			});
+
+			await engine.clearQueryCache();
+
+			expect(reached).toBe(true);
+			spy.mockRestore();
+		});
 	});
 
 	describe('destroy()', () => {

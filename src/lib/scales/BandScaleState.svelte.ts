@@ -101,7 +101,8 @@ export class BandScaleState {
 	/**
 	 * Whether #extents, #sortOrder and #explicitDomain hold ids rather than
 	 * source values. Flips once, when identity is first adopted; see
-	 * setIdentity. Cleared if the dim is ever emptied, because the ids
+	 * setIdentity. Cleared whenever the dim behind those ids goes away — emptied
+	 * in place, or replaced by a fresh one after a reload — because the ids
 	 * stored under it stop meaning anything at that point.
 	 */
 	#extentsEncoded: boolean = false;
@@ -323,10 +324,30 @@ export class BandScaleState {
 	 * Adopt the engine's id -> value array for this field. Hold the reference.
 	 */
 	setIdentity(identity: FieldIdentity): void {
+		const previous = this.#identity;
 		this.#identity = identity;
+
 		// A reload empties the dim in place. The ids stored under it stop meaning
 		// anything, so the next adoption must re-encode from values again.
 		if (!identity.present) this.#extentsEncoded = false;
+
+		// The other half of that reload, and the one the emptied-in-place check
+		// cannot see: QueryEngine.reset() clears its map, so the mark re-running
+		// setup gets a DIFFERENT FieldIdentity for the same field and arrives here
+		// with it already populated. `present` is true on the way in and the flag
+		// would stay set from before the reload, leaving pre-reset ids in #extents
+		// to be range-checked against a new numbering they merely happen to fit —
+		// wrong categories, no error. The signature is unambiguous: the object we
+		// were holding has been emptied and a different one is replacing it. That
+		// only happens across a reset, since identityFor() is stable per field.
+		//
+		// Dropped rather than translated, by clearing the flag and letting the
+		// re-encode below treat the stale entries as VALUES: they miss and are
+		// discarded, while an entry a re-running mark has already refreshed is a
+		// real value and encodes correctly. That mixed state is the normal case —
+		// a mark's domain fetch and its ensureColumns resume off the same
+		// coalesced promise, so addMark can land on either side of this call.
+		if (previous && previous !== identity && !previous.present) this.#extentsEncoded = false;
 
 		// Re-encode anything registered BEFORE identity arrived. Marks race here:
 		// a mark's domain fetch and its ensureColumns both resume off the same

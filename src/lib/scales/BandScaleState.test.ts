@@ -346,3 +346,99 @@ describe('BandScaleState id/value disambiguation', () => {
 		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
 	});
 });
+
+describe('BandScaleState across an identity reset', () => {
+	// A data reload drops every dim and view. QueryEngine empties the
+	// FieldIdentity it handed out IN PLACE and clears its map, so the mark
+	// re-running setup adopts a DIFFERENT object for the same field. Everything
+	// the scale stored under the old numbering is garbage at that point.
+
+	/** What CategoricalIdentity.reset() does to an object a scale is holding. */
+	function emptyInPlace(identity: FieldIdentity) {
+		identity.reset([]);
+	}
+
+	it('drops pre-reset ids when a fresh identity arrives', () => {
+		const before = new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']);
+		const scale = new BandScaleState('species');
+		scale.setIdentity(before);
+		scale.addMark(['Gentoo', 'Adelie'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
+
+		// The reload: same field, but the data now has different categories, so
+		// the rebuilt dim numbers them differently. Ids 2 and 0 would still be
+		// IN RANGE against it — they just mean something else now.
+		emptyInPlace(before);
+		const after = new FieldIdentity(['Emperor', 'King', 'Rockhopper']);
+		scale.setIdentity(after);
+
+		// Not ['Rockhopper', 'Emperor'], which is what the stale ids decode to.
+		expect(scale.effectiveDomain).toEqual([]);
+		expect(Array.from(scale.displayOrder)).toEqual([]);
+	});
+
+	it('drops the ids of a mark that has not re-registered yet', () => {
+		// Two marks share the scale and re-run setup independently, so there is
+		// always a window where one has refreshed its extents and the other has
+		// not. A mark's own addMark overwrites its entry by markId — the peer's
+		// stale entry is the one with nothing to overwrite it.
+		const before = new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']);
+		const scale = new BandScaleState('species');
+		scale.setIdentity(before);
+		scale.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+		scale.addMark(['Gentoo'], 'mark-2');
+		scale.updateDomainFromExtents();
+
+		emptyInPlace(before);
+		const after = new FieldIdentity(['Emperor', 'King', 'Rockhopper']);
+		scale.setIdentity(after);
+		scale.addMark(['King', 'Emperor'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		// mark-2 still holds id 2, which is in range against the new dim and
+		// decodes to Rockhopper — a category nothing has registered.
+		expect(scale.effectiveDomain).toEqual(['King', 'Emperor']);
+		expect(Array.from(scale.displayOrder)).toEqual([1, 0]);
+		expect(Array.from(scale.slotTable)).toEqual([1, 0, -1]);
+	});
+
+	it('handles a mark that re-registers before the fresh identity is adopted', () => {
+		// The setup race, on the reload path: a mark's domain fetch resumes off
+		// the same coalesced promise as its ensureColumns, so addMark can land
+		// with the scale still holding the emptied object. Those are VALUES.
+		const before = new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']);
+		const scale = new BandScaleState('species');
+		scale.setIdentity(before);
+		scale.addMark(['Gentoo', 'Adelie'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		emptyInPlace(before);
+		scale.addMark(['King', 'Emperor'], 'mark-1');
+		scale.setIdentity(new FieldIdentity(['Emperor', 'King', 'Rockhopper']));
+
+		expect(scale.effectiveDomain).toEqual(['King', 'Emperor']);
+		expect(Array.from(scale.displayOrder)).toEqual([1, 0]);
+	});
+
+	it('drops a stale explicit domain', () => {
+		const before = new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']);
+		const scale = new BandScaleState('species');
+		scale.setIdentity(before);
+		// A reordering explicit domain: ids [2, 0, 1].
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		emptyInPlace(before);
+		const after = new FieldIdentity(['Emperor', 'King', 'Rockhopper']);
+		scale.setIdentity(after);
+		scale.addMark(['Emperor', 'King', 'Rockhopper'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		// Every one of those ids is in range against the new dim, so left in
+		// place the old permutation would silently reorder the new axis into
+		// Rockhopper, Emperor, King.
+		expect(scale.effectiveDomain).toEqual(['Emperor', 'King', 'Rockhopper']);
+	});
+});
+

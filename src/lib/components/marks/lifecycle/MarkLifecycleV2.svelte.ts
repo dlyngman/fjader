@@ -139,9 +139,16 @@ export class MarkLifecycleV2 {
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
 	/**
 	 * Categorical fields with an id column in this table's view. Only these may
-	 * be selected as identity ids; anything else still CASE-inlines.
+	 * be selected as identity ids; a positional axis that is not here has no
+	 * fallback and does not render (see #ensureIdentityColumns).
+	 *
+	 * Cleared by #onIdentityReset, because after a reload the columns it names
+	 * no longer exist — and #sourceTable and #inlineCaseExpressions both gate on
+	 * it being non-empty.
 	 */
 	#identityFields: Set<string> = new Set();
+	/** Unsubscribe from the engine's identity resets. */
+	#identityResetOff: (() => void) | null = null;
 	/**
 	 * Reserved ids for synthetic rows, by field (§16.9). Populated at setup
 	 * because the value array must already contain the label before any JS
@@ -378,8 +385,39 @@ export class MarkLifecycleV2 {
 			}
 		}
 
+		// A data reload drops the identity dims and views out from under this
+		// mark's query parts. Subscribed here rather than in an effect: it has to
+		// outlive setupComplete flipping, which is exactly what it manipulates.
+		this.#identityResetOff = this.#queryEngine.onIdentityReset(() => this.#onIdentityReset());
+
 		// Start reactive effects
 		this.#setupReactiveEffects();
+	}
+
+	/**
+	 * The engine dropped every identity dim and view (a data reload).
+	 *
+	 * Everything this mark holds from before the reset is invalid: the id
+	 * columns its query selects are gone with the view, and any id already in a
+	 * vertex buffer belongs to a numbering that no longer exists. Rather than
+	 * patch that up, hand the whole thing back to Phase 1 — clearing
+	 * setupComplete re-arms the setup effect, which re-runs #ensureIdentityColumns
+	 * and rebuilds the dims against the reloaded data.
+	 *
+	 * Clearing setupComplete also stops the bleeding immediately: #resolvedSelect
+	 * returns null without it, so #resolvedQueryParts goes null and the
+	 * registration effect stops re-registering. The mark's EXISTING registration
+	 * survives the gap, so a filter change landing in the few milliseconds before
+	 * setup completes can still assemble one query from the stale descriptor;
+	 * that query fails and is swallowed by the same handler that covers table
+	 * recreation. Tearing the handle down instead would flash every chart empty
+	 * on every reload, which registerMark goes out of its way to avoid.
+	 */
+	#onIdentityReset(): void {
+		if (this.#destroyed) return;
+		this.#identityFields.clear();
+		this.#syntheticIds = {};
+		this.setupComplete = false;
 	}
 
 	// ===========================================================================
@@ -1779,6 +1817,8 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
+		this.#identityResetOff?.();
+		this.#identityResetOff = null;
 		this.#handle?.destroy();
 		clearTimeout(this.#fitDomainTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);

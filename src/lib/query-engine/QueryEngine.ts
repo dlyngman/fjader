@@ -197,6 +197,8 @@ export class QueryEngine {
 		},
 		this.#session
 	);
+	/** Notified after clearQueryCache() drops the identity dims and views. */
+	#identityResetListeners = new Set<() => void>();
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 		if (connection instanceof Promise) {
@@ -271,6 +273,34 @@ export class QueryEngine {
 	 */
 	reserveSyntheticIdentity(field: string, label: string): Promise<number> {
 		return this.#identity.reserveSynthetic(field, label);
+	}
+
+	/**
+	 * Subscribe to identity resets. Returns an unsubscribe function.
+	 *
+	 * A mark that requested identity columns cannot survive one on its own: its
+	 * query parts name `__dplot_*_idx` columns on a view that has just been
+	 * dropped, and it has no way to notice. Listeners are how it finds out, and
+	 * the contract is that a listener re-runs the mark's setup — re-requesting
+	 * the columns rebuilds the dims against the reloaded data.
+	 *
+	 * Fired after the DROPs settle, and fired even if they failed: a partially
+	 * dropped state still invalidates every id handed out before it.
+	 */
+	onIdentityReset(listener: () => void): () => void {
+		this.#identityResetListeners.add(listener);
+		return () => this.#identityResetListeners.delete(listener);
+	}
+
+	#notifyIdentityReset(): void {
+		// Copied, so a listener unsubscribing during the sweep cannot skip a peer.
+		for (const listener of [...this.#identityResetListeners]) {
+			try {
+				listener();
+			} catch (error) {
+				console.error('[QueryEngine] Identity reset listener failed:', error);
+			}
+		}
 	}
 
 	/**
@@ -486,22 +516,32 @@ export class QueryEngine {
 	 * old data: the query result cache, DESCRIBE cache (schema may have
 	 * changed), and materialized preagg cubes (`CREATE TABLE IF NOT EXISTS`
 	 * means a stale cube would otherwise keep serving pre-reload aggregates
-	 * indefinitely). Registered marks are left as-is — this only invalidates
-	 * caches; callers still need to trigger a re-query (e.g. a filter change)
-	 * to see fresh data rendered.
+	 * indefinitely). Registered marks keep their registration — for everything
+	 * but identity this only invalidates caches, and callers still need to
+	 * trigger a re-query (e.g. a filter change) to see fresh data rendered.
+	 *
+	 * Identity is the exception, because dropping it invalidates the marks' SQL
+	 * rather than just their results. Marks that requested identity columns are
+	 * told to re-run setup via onIdentityReset() — see the note there. Await
+	 * this promise before assuming the rebuild has started.
 	 */
 	clearQueryCache(): Promise<void> {
 		this.clearDescribeCache();
 		// Identity dims are CREATE TABLE IF NOT EXISTS, so a stale dim would keep
 		// serving pre-reload ids indefinitely — the same trap as preagg cubes.
 		//
-		// Returned rather than fire-and-forget, so a caller reloading data can
-		// await the teardown before re-registering marks. Marks that hold
-		// identity columns MUST re-run setup afterwards: their query parts still
-		// name __dplot_*_idx columns on a view that no longer exists. An
+		// Dropping them is not enough on its own: a mark's query parts still name
+		// __dplot_*_idx columns on a view that no longer exists, and #sourceTable
+		// falls back to the base table the moment the view registry is cleared,
+		// so the next query would select a column the base table does not have.
+		// The listeners are what closes that — they re-run mark setup, which
+		// re-requests the columns and rebuilds the dims against the new data.
+		//
+		// Notified in a `finally` so a failed DROP still invalidates: partially
+		// dropped state is no more usable than fully dropped state. An
 		// ensureColumns still in flight across this rejects rather than resolving
 		// against dropped state (see CategoricalIdentity's generation counter).
-		const identityReset = this.#identity.reset();
+		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
 		for (const reg of this.#marks.values()) {
 			this.#dropPreagg(reg);
 		}
