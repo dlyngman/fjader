@@ -59,6 +59,15 @@
 	// 2, 3 and 4 are the ones that matter — hover EVERY bar in each, not just
 	// the first, since slot 0 also agrees with id 0 in chart 2.
 	//
+	// CHART 6 is not part of the checkpoint sequence. It covers §16.10 item 1:
+	// a band axis backed by a fixed SQL expression, dimmed on the expression
+	// text rather than a column name. Its table has NO categorical column — the
+	// categories are the CASE's output — so it exercises the path where the map
+	// key and the emitted SQL had to be separated. Its explicit domain also
+	// makes slot != id, so a decode bug shows there the same way it does in 2-4.
+	// What to look for: three bars in Light, Medium, Heavy order, labels
+	// matching, and tooltips naming the right class.
+	//
 	// WHY EVERY CHART USES ITS OWN FIELD NAME. ScaleRegistry keys scales by
 	// `${name}-${type}${configKey}` (ScaleRegistry.svelte.ts:247) — field name
 	// plus type plus config, NOT per chart or per table (§3.4). Five charts on
@@ -71,7 +80,7 @@
 	// shared field — that IS the case under test.
 
 	import { onMount } from 'svelte';
-	import { loadParquet, count } from '@uwdata/mosaic-sql';
+	import { loadParquet, count, sql } from '@uwdata/mosaic-sql';
 	import { initDivePlot } from '$lib';
 	import {
 		ChartContainer,
@@ -109,7 +118,10 @@
 				// label copy breaks exactly here — blank labels in multi-table
 				// charts — so watch for a bar with no label.
 				`CREATE TABLE band_shared_a AS SELECT species AS cat_shared FROM penguins`,
-				`CREATE TABLE band_shared_b AS SELECT 'Emperor' AS cat_shared FROM range(60)`
+				`CREATE TABLE band_shared_b AS SELECT 'Emperor' AS cat_shared FROM range(60)`,
+				// Chart 6: a fixed expression over a numeric column. No categorical
+				// column at all — the categories exist only as the CASE's output.
+				`CREATE TABLE band_expr AS SELECT body_mass AS mass_expr FROM penguins WHERE body_mass IS NOT NULL`
 			]);
 
 			isLoaded = true;
@@ -123,8 +135,8 @@
 	<h1>Band identity — step 3a verification</h1>
 	<p class="note">
 		Five band configurations. The expected result differs per checkpoint — see the comment at the
-		top of this file. Hover every bar of charts 2, 3 and 4: those are the ones where a band slot and
-		a dim id disagree, so they are the only ones a tooltip decode bug shows up in.
+		top of this file. Hover every bar of charts 2, 3, 4 and 6: those are the ones where a band slot
+		and a dim id disagree, so they are the only ones a tooltip decode bug shows up in.
 	</p>
 
 	{#if error}
@@ -278,6 +290,41 @@
 									<Grid />
 									<BarMarkX table="band_shared_a" y="cat_shared" x={count()} tip={['y', 'x']} />
 									<BarMarkX table="band_shared_b" y="cat_shared" x={count()} tip={['y', 'x']} />
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</section>
+
+			<section>
+				<h2>6. Fixed SQL expression</h2>
+				<p>
+					A CASE over a numeric column — the categories exist only as its output (§16). Dimmed on
+					the expression text; <code>domain</code> supplies the order, since ids are alphabetical. Expect
+					Light, Medium, Heavy.
+				</p>
+				<div class="chart">
+					<ChartContainer xLabel="weight class" yLabel="count">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="band_expr"
+										x={sql`CASE WHEN mass_expr < 3700 THEN 'Light'
+										             WHEN mass_expr < 4500 THEN 'Medium'
+										             ELSE 'Heavy' END`}
+										y={count()}
+										domain={{ x: ['Light', 'Medium', 'Heavy'] }}
+										tip={['x', 'y']}
+									/>
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
