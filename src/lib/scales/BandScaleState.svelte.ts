@@ -3,6 +3,7 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import { buildCaseExpression, bandIndexColumn } from '$lib/sql/case-expression';
+import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 interface BandScaleConfig {
 	padding?: number;
@@ -88,16 +89,19 @@ export class BandScaleState {
 	#align: number = 0.5;
 	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
 	/**
-	 * The engine's id -> value array for this scale's field (§9.4). A live
-	 * reference, never a copy: the dim appends when a second table registers the
-	 * same field, and a snapshot taken at this scale's setup would be indexed
-	 * past its end by ids from that table.
+	 * The engine's id <-> value bijection for this scale's field (§9.4, §17.2).
+	 * A live reference, never a copy: the dim appends when a second table
+	 * registers the same field, and a snapshot taken at this scale's setup would
+	 * be indexed past its end by ids from that table.
+	 *
+	 * Both directions come from here. The scale used to rebuild value -> id
+	 * itself and self-heal on a length mismatch; that seam is gone.
 	 */
-	#identityValues: string[] = $state.raw([]);
+	#identity: FieldIdentity | null = $state.raw(null);
 	/**
 	 * Whether #extents, #sortOrder and #explicitDomain hold ids rather than
 	 * source values. Flips once, when identity is first adopted; see
-	 * setIdentityValues. Cleared if the dim is ever emptied, because the ids
+	 * setIdentity. Cleared if the dim is ever emptied, because the ids
 	 * stored under it stop meaning anything at that point.
 	 */
 	#extentsEncoded: boolean = false;
@@ -318,14 +322,11 @@ export class BandScaleState {
 	/**
 	 * Adopt the engine's id -> value array for this field. Hold the reference.
 	 */
-	setIdentityValues(values: string[]): void {
-		this.#identityValues = values;
+	setIdentity(identity: FieldIdentity): void {
+		this.#identity = identity;
 		// A reload empties the dim in place. The ids stored under it stop meaning
 		// anything, so the next adoption must re-encode from values again.
-		if (values.length === 0) this.#extentsEncoded = false;
-		// The one encode table, built here rather than per reorder. Marks
-		// re-adopt after the dim appends, so this stays in step with growth.
-		this.#refreshIdOf();
+		if (!identity.present) this.#extentsEncoded = false;
 
 		// Re-encode anything registered BEFORE identity arrived. Marks race here:
 		// a mark's domain fetch and its ensureColumns both resume off the same
@@ -336,7 +337,7 @@ export class BandScaleState {
 		// Exactly once, on the transition. Every mark on a shared scale calls
 		// this with the same live array, and after the first pass the stored
 		// lists are already ids — re-encoding them as VALUES would look each id
-		// up in #idOf, miss, and drop the entire domain. The old "a number is an
+		// up in the engine's map, miss, and drop the entire domain. The old "a number is an
 		// id" heuristic made the repeat harmless by accident; #toIds no longer
 		// guesses, so the transition has to be tracked.
 		if (!this.#extentsEncoded && this.hasIdentity) {
@@ -352,20 +353,9 @@ export class BandScaleState {
 		this._version++;
 	}
 
-	/**
-	 * value -> id. A cache over #identityValues, which is a LIVE array that grows
-	 * in place when the dim appends — so this must never be treated as a
-	 * snapshot. #toIds refreshes it whenever the array has outgrown it.
-	 *
-	 * Cheap to keep correct for the same reason the value array is: the dim is
-	 * append-only and never renumbers, so a stale map is only ever *short*, and
-	 * length is a sufficient staleness test.
-	 */
-	#idOf: Map<string, number> = new Map();
-
 	/** True when this scale's channel carries dim ids rather than positions. */
 	get hasIdentity(): boolean {
-		return this.#identityValues.length > 0;
+		return this.#identity?.present ?? false;
 	}
 
 	/**
@@ -386,12 +376,6 @@ export class BandScaleState {
 
 	#displayOrder: Int32Array = new Int32Array(0);
 
-	#refreshIdOf(): void {
-		const values = this.#identityValues;
-		this.#idOf = new Map();
-		for (let i = 0; i < values.length; i++) this.#idOf.set(values[i], i);
-	}
-
 	/**
 	 * Normalize a caller's list to ids, dropping anything the dim does not know.
 	 *
@@ -411,18 +395,17 @@ export class BandScaleState {
 	 * it has to agree with.
 	 */
 	#toIds(items: (string | number)[], encoded: boolean): number[] {
-		// Refresh before use: a mark's addMark can land between another mark's
-		// dim append and its setIdentityValues, and an id missing from a stale map
-		// is silently dropped rather than erroring — a category that vanishes from
-		// multi-table charts only, and only on some interleavings.
-		if (this.#idOf.size !== this.#identityValues.length) this.#refreshIdOf();
+		// No staleness check: both directions come from the engine's live
+		// FieldIdentity, rewritten in one pass, so the map cannot lag the array.
+		const identity = this.#identity;
+		if (!identity) return [];
 
-		const limit = this.#identityValues.length;
+		const limit = identity.values.length;
 		const out: number[] = [];
 		const seen = new Set<number>();
 		for (const item of items) {
 			if (item == null) continue;
-			const id = encoded ? (item as number) : this.#idOf.get(item as string);
+			const id = encoded ? (item as number) : identity.ids.get(item as string);
 			if (id === undefined || !Number.isInteger(id) || id < 0 || id >= limit) continue;
 			if (seen.has(id)) continue;
 			seen.add(id);
@@ -447,7 +430,7 @@ export class BandScaleState {
 	 * the "no identity" sentinel (§3.2), so there is one comparison rather than
 	 * two.
 	 *
-	 * Recomputes with the domain. An in-place append to #identityValues alone
+	 * Recomputes with the domain. An in-place append to the identity values alone
 	 * does not invalidate it, but an append is always followed by the addMark
 	 * that puts the new category into the domain, which does.
 	 */
@@ -508,7 +491,7 @@ export class BandScaleState {
 	 */
 	categoryAt(channelValue: number): string | undefined {
 		if (!this.hasIdentity) return this.effectiveDomain[channelValue];
-		return this.#identityValues[channelValue];
+		return this.#identity!.values[channelValue];
 	}
 
 	/**
@@ -539,7 +522,7 @@ export class BandScaleState {
 		// is already ids, so this is an array walk. Everything not listed keeps
 		// -1 — filtered out by a transform, or belonging to another table on a
 		// shared scale.
-		const table = new Float32Array(this.#identityValues.length);
+		const table = new Float32Array(this.#identity!.values.length);
 		table.fill(-1);
 		const order = this.#displayOrder;
 		for (let slot = 0; slot < order.length; slot++) {
@@ -698,7 +681,7 @@ export class BandScaleState {
 		// list verbatim — the permutation — and #domain is its projection into
 		// strings for the consumers that need them: d3's scaleBand, axis ticks,
 		// TextMark, the tooltip decode. Strings are an output here, never state.
-		const values = this.#identityValues;
+		const values = this.#identity?.values ?? [];
 		// Already ids: every path into #extents/#sortOrder/#explicitDomain
 		// encodes at the boundary. This pass de-duplicates and range-checks.
 		const orderedIds = this.hasIdentity ? this.#toIds(allCategories, true) : [];

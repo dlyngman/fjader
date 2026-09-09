@@ -364,6 +364,37 @@ describe('CategoricalIdentity', () => {
 		expect(held).toEqual(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
 	});
 
+	it('owns both directions of the bijection, and they agree', async () => {
+		// §17.2: the reverse map used to be rebuilt per scale, with a
+		// length-based self-heal because the array it mirrored was live and owned
+		// elsewhere. One writer now rewrites both in a single pass.
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+
+		const fi = identity.identity('species');
+		expect(fi.values).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		for (let id = 0; id < fi.values.length; id++) {
+			expect(fi.ids.get(fi.values[id])).toBe(id);
+		}
+		expect(fi.ids.size).toBe(fi.values.length);
+	});
+
+	it('grows both directions together when a second table appends', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		// Adopted before the second table exists, as a scale does at setup.
+		const held = identity.identity('species');
+		expect(held.ids.get('Emperor')).toBeUndefined();
+
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);
+		await identity.ensureColumns('more_penguins', { categorical: ['species'] });
+
+		// Same object, both directions extended — no staleness test anywhere.
+		expect(held).toBe(identity.identity('species'));
+		expect(held.values[3]).toBe('Emperor');
+		expect(held.ids.get('Emperor')).toBe(3);
+		expect(held.ids.size).toBe(held.values.length);
+	});
+
 	it('labels stay aligned with the ids in the view', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const labels = identity.values('species');

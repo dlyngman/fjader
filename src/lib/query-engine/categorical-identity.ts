@@ -71,6 +71,46 @@ interface ViewEntry {
 	inflight: Promise<void> | null;
 }
 
+/**
+ * A field's id <-> value bijection, both directions in one object.
+ *
+ * The two used to live apart: the engine owned id -> value and every scale
+ * rebuilt value -> id for itself, self-healing on a length mismatch because the
+ * array it mirrored was live and owned elsewhere. §15.5 #5 was a bug in exactly
+ * that seam. Here `reset()` is the only writer and rewrites both directions in
+ * one pass, so the pair cannot be half-updated and no holder needs a staleness
+ * test.
+ *
+ * `values` and `ids` are mutated IN PLACE and never reassigned, so a holder
+ * keeps a bare reference and sees growth. That is what lets a scale adopt this
+ * once and stay correct when a second table appends to the dim (§9.4).
+ */
+export class FieldIdentity {
+	/** id -> source value. Dense and 0-based, so position is the id. */
+	readonly values: string[] = [];
+	/** source value -> id. The exact inverse of `values`. */
+	readonly ids = new Map<string, number>();
+
+	constructor(values?: readonly string[]) {
+		if (values) this.reset(values);
+	}
+
+	/** Replace both directions. The only writer. */
+	reset(values: readonly string[]): void {
+		this.values.length = 0;
+		this.ids.clear();
+		for (let i = 0; i < values.length; i++) {
+			this.values.push(values[i]);
+			this.ids.set(values[i], i);
+		}
+	}
+
+	/** True once the dim has been built and holds at least one value. */
+	get present(): boolean {
+		return this.values.length > 0;
+	}
+}
+
 /** Double any embedded quote so a name is safe inside "..." . */
 function quote(identifier: string): string {
 	return `"${identifier.replaceAll('"', '""')}"`;
@@ -151,7 +191,7 @@ export class CategoricalIdentity {
 	 * renumbers, an in-place extension is always consistent with ids already in
 	 * flight.
 	 */
-	#values = new Map<string, string[]>();
+	#identities = new Map<string, FieldIdentity>();
 
 	constructor(exec: IdentityExec, session: string) {
 		this.#exec = exec;
@@ -197,12 +237,22 @@ export class CategoricalIdentity {
 	 * snapshotting it. Empty until the field's dim has been built.
 	 */
 	values(field: string): string[] {
-		let arr = this.#values.get(field);
-		if (!arr) {
-			arr = [];
-			this.#values.set(field, arr);
+		return this.identity(field).values;
+	}
+
+	/**
+	 * The field's id <-> value bijection. The live object, not a copy: hold the
+	 * reference rather than snapshotting either direction. Empty until the
+	 * field's dim has been built, and created on first ask so a caller can adopt
+	 * it before the dim exists.
+	 */
+	identity(field: string): FieldIdentity {
+		let entry = this.#identities.get(field);
+		if (!entry) {
+			entry = new FieldIdentity();
+			this.#identities.set(field, entry);
 		}
-		return arr;
+		return entry;
 	}
 
 	/** Fields the view for `table` currently exposes. Empty when there is no view. */
@@ -376,12 +426,10 @@ export class CategoricalIdentity {
 			`SELECT id, value FROM ${quote(this.dimTable(field))} ORDER BY id`
 		);
 
-		const arr = this.values(field);
-		arr.length = 0;
-		for (const row of rows) {
-			// Ids are dense and 0-based by construction, so position is the id.
-			arr.push(row.value as string);
-		}
+		// Ordered by id and dense by construction, so position is the id — and
+		// reset() derives value -> id from the same pass, so the two directions
+		// cannot disagree.
+		this.identity(field).reset(rows.map((row) => row.value as string));
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */
@@ -430,8 +478,8 @@ export class CategoricalIdentity {
 		this.#views.clear();
 		this.#dims.clear();
 		// In place, so any scale still holding the reference empties with it.
-		for (const arr of this.#values.values()) arr.length = 0;
-		this.#values.clear();
+		for (const identity of this.#identities.values()) identity.reset([]);
+		this.#identities.clear();
 
 		for (const view of views) {
 			await this.#exec.exec(`DROP VIEW IF EXISTS ${quote(view)}`);

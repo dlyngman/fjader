@@ -37,7 +37,7 @@ import {
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
-import { CategoricalIdentity } from './categorical-identity';
+import { CategoricalIdentity, type FieldIdentity } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
@@ -245,6 +245,16 @@ export class QueryEngine {
 	 */
 	identityValues(field: string): string[] {
 		return this.#identity.values(field);
+	}
+
+	/**
+	 * The field's id <-> value bijection (§17.2). One live object owning both
+	 * directions, so a holder cannot end up with a value array and a reverse map
+	 * that disagree. Prefer this over identityValues() anywhere the reverse
+	 * direction is needed; do not rebuild it locally.
+	 */
+	identityFor(field: string): FieldIdentity {
+		return this.#identity.identity(field);
 	}
 
 	/**

@@ -1026,7 +1026,7 @@ export class MarkLifecycleV2 {
 			const scale = (
 				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 			) as BandScaleState | null;
-			scale?.setIdentityValues(this.#queryEngine.identityValues(field));
+			scale?.setIdentity(this.#queryEngine.identityFor(field));
 		}
 	}
 

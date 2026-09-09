@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { BandScaleState } from './BandScaleState.svelte';
+import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import { buildCaseExpression } from '$lib/sql/case-expression';
 
 describe('BandScaleState.processDataForGPU', () => {
@@ -55,7 +56,7 @@ describe('BandScaleState.slotTable', () => {
 	/** Build a scale whose identity ids are alphabetical, as the dim assigns them. */
 	function withIdentity(values: string[], domain: string[]) {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(values);
+		scale.setIdentity(new FieldIdentity(values));
 		scale.addMark(domain, 'mark-1');
 		scale.updateDomainFromExtents();
 		return scale;
@@ -71,7 +72,7 @@ describe('BandScaleState.slotTable', () => {
 
 	it('maps id to display slot under an explicit reorder', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		// Displayed as Gentoo, Adelie, Chinstrap.
 		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
 		scale.updateDomainFromExtents();
@@ -82,7 +83,7 @@ describe('BandScaleState.slotTable', () => {
 
 	it('gives -1 to ids that are not displayed', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		// A category-reducing transform left only two.
 		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
@@ -96,7 +97,7 @@ describe('BandScaleState.slotTable', () => {
 	it('sizes to the id space, not the displayed count', () => {
 		// A second table added Emperor to the shared dim; this mark shows none.
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
 
@@ -107,7 +108,7 @@ describe('BandScaleState.slotTable', () => {
 
 	it('follows a reorder without the ids changing', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
 		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
@@ -131,7 +132,7 @@ describe('BandScaleState.slotTable', () => {
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
 
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 
 		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
 		expect(Array.from(scale.displayOrder)).toEqual([0, 1, 2]);
@@ -144,7 +145,7 @@ describe('BandScaleState.slotTable', () => {
 		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 		scale.updateDomainFromExtents();
 
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 
 		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
 		expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
@@ -153,14 +154,16 @@ describe('BandScaleState.slotTable', () => {
 	it('encodes a value added to the live array after identity was adopted', () => {
 		// The engine's value array grows IN PLACE when a second table appends to
 		// the dim (§9.4), and a mark can call addMark between that append and its
-		// own setIdentityValues. A value->id map snapshotted at adoption time
+		// own setIdentity. A value->id map snapshotted at adoption time
 		// drops the new category silently — a bar missing from multi-table charts
 		// on some interleavings only.
-		const live = ['Adelie', 'Chinstrap', 'Gentoo'];
+		const live = new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']);
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(live);
+		scale.setIdentity(live);
 
-		live.push('Emperor'); // the dim appended; no re-adoption yet
+		// The dim appended; no re-adoption. reset() is the engine's single
+		// writer, so both directions move together and the scale sees both.
+		live.reset(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
 
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor'], 'mark-1');
 		scale.updateDomainFromExtents();
@@ -172,7 +175,7 @@ describe('BandScaleState.slotTable', () => {
 
 	it('accepts ids directly, as topN passes them', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		// Only two survived the transform, handed over as ids with no decode.
 		scale.addMark([2, 0], 'mark-1', { encoded: true });
 		scale.updateDomainFromExtents();
@@ -202,7 +205,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	it('maps a display slot to the id sitting there', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 		scale.updateDomainFromExtents();
@@ -215,7 +218,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	it('decodes a channel id to its source value regardless of display order', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 		scale.updateDomainFromExtents();
@@ -230,7 +233,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	it('round-trips slot -> id -> value back to the axis label', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 		scale.updateDomainFromExtents();
@@ -247,7 +250,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	it('reports no id for a slot holding no category', () => {
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark([2, 0], 'mark-1', { encoded: true }); // topN kept two of three
 		scale.updateDomainFromExtents();
 
@@ -294,7 +297,7 @@ describe('BandScaleState id/value disambiguation', () => {
 		// category is indistinguishable from an id by inspection. Guessing read
 		// 2021 as id 2021, which no dim has — the category vanished.
 		const scale = new BandScaleState('year');
-		scale.setIdentityValues([2019, 2020, 2021] as unknown as string[]);
+		scale.setIdentity(new FieldIdentity([2019, 2020, 2021] as unknown as string[]));
 		scale.addMark([2021, 2019], 'mark-1');
 		scale.updateDomainFromExtents();
 
@@ -304,7 +307,7 @@ describe('BandScaleState id/value disambiguation', () => {
 
 	it('reads the same numbers as ids when the caller says they are encoded', () => {
 		const scale = new BandScaleState('year');
-		scale.setIdentityValues([2019, 2020, 2021] as unknown as string[]);
+		scale.setIdentity(new FieldIdentity([2019, 2020, 2021] as unknown as string[]));
 		scale.addMark([2, 0], 'mark-1', { encoded: true });
 		scale.updateDomainFromExtents();
 
@@ -317,7 +320,7 @@ describe('BandScaleState id/value disambiguation', () => {
 		// by the string projection, leaving the permutation a different length
 		// from the d3 band index space it must agree with.
 		const scale = new BandScaleState('species');
-		scale.setIdentityValues(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark([0, 7, 2], 'mark-1', { encoded: true });
 		scale.updateDomainFromExtents();
 
@@ -326,16 +329,16 @@ describe('BandScaleState id/value disambiguation', () => {
 	});
 
 	it('survives every mark on a shared scale adopting identity in turn', () => {
-		// setIdentityValues runs once per mark with the same live array. The
+		// setIdentity runs once per mark with the same live object. The
 		// re-encode is a one-time transition: repeating it would look each stored
 		// id up as a value, miss, and empty the domain.
-		const live = ['Adelie', 'Chinstrap', 'Gentoo'];
+		const live = new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']);
 		const scale = new BandScaleState('species');
 		scale.addMark(['Gentoo', 'Adelie'], 'mark-1');
 
-		scale.setIdentityValues(live);
-		scale.setIdentityValues(live);
-		scale.setIdentityValues(live);
+		scale.setIdentity(live);
+		scale.setIdentity(live);
+		scale.setIdentity(live);
 
 		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
 		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
