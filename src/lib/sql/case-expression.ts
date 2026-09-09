@@ -43,10 +43,11 @@ export function buildCaseExpression(
 	return `CAST(CASE ${whenClauses} ELSE ${defaultValue} END AS REAL)`;
 }
 
-/** Column alias for band scale index. */
-export function bandIndexColumn(field: string): string {
-	return `__dplot_${field}_idx`;
-}
+// bandIndexColumn() lived here and is gone. It built `__dplot_<field>_idx` by
+// interpolation — the same shape CategoricalIdentity.idColumn() produces, but
+// without identityToken(), so the two disagreed for an expression key or an
+// exotic column name while looking interchangeable. The identity id column has
+// exactly one namer now, and it is that method.
 
 /** Column alias for color scale index. */
 export function colorIndexColumn(field: string): string {

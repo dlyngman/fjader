@@ -2,7 +2,7 @@
 
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
-import { buildCaseExpression, bandIndexColumn } from '$lib/sql/case-expression';
+import { buildCaseExpression } from '$lib/sql/case-expression';
 import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 interface BandScaleConfig {
@@ -24,16 +24,21 @@ interface BandGpuConfig {
 /**
  * BandScaleState manages categorical (band/point) scales.
  *
+ * It owns two spaces and the permutation between them: IDENTITY, the dim id a
+ * channel carries, and DISPLAY, the slot a category occupies on the axis.
+ * `displayOrder` is the permutation, `slotTable` its inverse for the shader,
+ * and `#domain` a string projection for d3 and the axis. See the IDENTITY <->
+ * DISPLAY section for the CPU-side translation.
+ *
  * Key responsibilities:
  * - Domain management (unique categories from multiple marks)
- * - Category-to-index mapping for GPU rendering
+ * - Identity <-> display translation, for the GPU and for CPU consumers
  * - D3 scale creation for axes and SVG components
  * - Configuration for GPU band scale calculations
  *
  * Features:
  * - Freeze/debounce support for performance
  * - Extent tracking from multiple marks
- * - GPU-ready index mapping
  * - Full D3 compatibility
  */
 export class BandScaleState {
@@ -50,15 +55,10 @@ export class BandScaleState {
 	}
 
 	id: string = crypto.randomUUID();
-	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
 	name: string = $state('');
 	type: string = 'band';
 	ready: boolean = $state(false);
 	_version: number = $state(0);
-
-	// ViewManager integration - tracks tables this scale has registered columns for
-	#registeredTables: Set<string> = new Set();
-	#viewsCreated: Set<string> = new Set(); // Tables that have had their view column created (one-shot)
 
 	// =========================================================================
 	// SELECTION STATE
@@ -124,25 +124,16 @@ export class BandScaleState {
 	// =========================================================================
 
 	/**
-	 * Category-to-index mapping (derived)
-	 * Used by marks to convert category strings to GPU indices
-	 */
-	#categoryIndexMap: Map<string, number> = $derived.by(() => {
-		const domain = this.#enableUpdates ? this.#domain : this.#frozenDomain || this.#domain;
-
-		const map = new Map<string, number>();
-		domain.forEach((category, index) => {
-			map.set(category, index);
-		});
-		return map;
-	});
-
-	/**
 	 * GPU state (derived) - for compatibility with coordinator
 	 */
 	gpuState: { domainMin: number; domainMax: number; p4: number; domainScale: number } = $derived.by(
 		() => {
-			const categoryCount = this.#categoryIndexMap.size;
+			// effectiveDomain.length, the same expression getConfig() uses for
+			// categoryCount. This used to be the size of a category -> index Map
+			// rebuilt on every domain change, which was the last consumer keeping
+			// that Map alive once the band channel stopped carrying positions.
+			// Two derivations of one number is one more than the GPU needs.
+			const categoryCount = this.effectiveDomain.length;
 
 			return {
 				domainMin: 0,
@@ -208,9 +199,6 @@ export class BandScaleState {
 	}
 
 	destroy(): void {
-		// Unregister from ViewManager
-		this.#unregisterFromViewManager();
-
 		this.#activeValues = null;
 		this.#frozenDomain = null;
 		this.#explicitDomain = null;
@@ -218,7 +206,7 @@ export class BandScaleState {
 	}
 
 	// =========================================================================
-	// VIEWMANAGER INTEGRATION
+	// SQL ENCODING
 	// =========================================================================
 
 	/**
@@ -231,61 +219,21 @@ export class BandScaleState {
 	}
 
 	/**
-	 * The column name used in derived views for this scale's index.
-	 * Format: __dplot_{field}_idx
-	 */
-	get indexColumnName(): string {
-		return bandIndexColumn(this.sourceField);
-	}
-
-	/**
-	 * Inline CASE expression mapping domain values to 0-based indices.
-	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
-	 * Reactive — recomputes when effectiveDomain changes (e.g. band reorder).
+	 * Inline CASE expression mapping domain values to 0-based positions.
+	 *
+	 * NOT for the positional band channel, which carries dim ids and takes the
+	 * view's id column instead (`b7292b2`). This survives for the two roles that
+	 * still put display positions through a BandScaleState: the facet scale's
+	 * `__facet`, and ordinal colour. Steps 3b and 3c migrate one each, and the
+	 * last one to land deletes this.
+	 *
+	 * Reactive — recomputes when effectiveDomain changes, which is why the CASE
+	 * text moves on a reorder and the id column does not.
 	 */
 	get caseExpression(): string {
 		return buildCaseExpression(this.sourceField, this.effectiveDomain, {
 			oneBased: false
 		});
-	}
-
-	/**
-	 * Unique scale ID for ViewManager registration.
-	 */
-	get scaleId(): string {
-		return this.#scaleId;
-	}
-
-	/**
-	 * Register this scale for a source table. After domain is set,
-	 * the view will be created with the index column (one-shot).
-	 */
-	registerTable(sourceTable: string): void {
-		this.#registeredTables.add(sourceTable);
-		this.#maybeCreateView(sourceTable);
-	}
-
-	/**
-	 * Create view for a table if both table is registered and domain is known.
-	 * Only creates once per table (one-shot).
-	 */
-	#maybeCreateView(sourceTable: string): void {
-		// Only create once per table
-		if (this.#viewsCreated.has(sourceTable)) {
-			return;
-		}
-
-		// Need domain to be ready
-		if (this.effectiveDomain.length === 0) {
-			return;
-		}
-
-		this.#viewsCreated.add(sourceTable);
-	}
-
-	#unregisterFromViewManager(): void {
-		this.#registeredTables.clear();
-		this.#viewsCreated.clear();
 	}
 
 	// =========================================================================
@@ -560,15 +508,14 @@ export class BandScaleState {
 	// =========================================================================
 
 	/**
-	 * Check if the scale is ready for GPU processing
+	 * Check if the scale is ready for GPU processing.
+	 *
+	 * There used to be a fourth clause, `#categoryIndexMap instanceof Map`,
+	 * which a field initializer made true before the constructor finished and
+	 * which therefore never once decided this. Dropped with the Map.
 	 */
 	get isReadyForGPU(): boolean {
-		return (
-			this.ready &&
-			this.effectiveDomain.length > 0 &&
-			this.#categoryIndexMap instanceof Map &&
-			this.#extents.size > 0
-		);
+		return this.ready && this.effectiveDomain.length > 0 && this.#extents.size > 0;
 	}
 
 	// =========================================================================
@@ -730,14 +677,8 @@ export class BandScaleState {
 		this.#rebuildSlotTable();
 		this._version++;
 
-		// Domain order changed — clear one-shot guard to force view recreation
-		this.#viewsCreated.clear();
 		// Notify GPU to re-render charts using this scale
 		this.#registry?.invalidateChartsUsingScale(this);
-
-		for (const table of this.#registeredTables) {
-			this.#maybeCreateView(table);
-		}
 	}
 
 	// =========================================================================
@@ -998,8 +939,16 @@ export class BandScaleState {
 			// GPU config
 			gpuConfig: this.getConfig(),
 
-			// Category mapping
-			categoryIndexMap: Object.fromEntries(this.#categoryIndexMap),
+			// Identity <-> display. Replaces the old category -> index map, which
+			// described a channel encoding this scale no longer uses: with
+			// identity the channel carries a dim id, and these two are what
+			// resolve it — displayOrder[slot] is the id shown there, slotTable[id]
+			// its position, and they are inverses. Dumping the domain alone hides
+			// a desync between them.
+			hasIdentity: this.hasIdentity,
+			identityCount: this.#identity?.values.length ?? 0,
+			displayOrder: Array.from(this.#displayOrder),
+			slotTable: Array.from(this.#slotTable),
 
 			// GPU state
 			gpuState: this.gpuState

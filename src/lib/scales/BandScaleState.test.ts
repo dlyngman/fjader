@@ -442,3 +442,84 @@ describe('BandScaleState across an identity reset', () => {
 	});
 });
 
+describe('BandScaleState GPU readiness and gpuState', () => {
+	// Both of these used to route through a category -> index Map. gpuState read
+	// its .size and isReadyForGPU asserted it was a Map at all.
+	//
+	// Note on what is NOT pinned here: swapping gpuState's effectiveDomain.length
+	// for #domain.length passes every one of these, because updateDomainFromExtents
+	// returns early while frozen, so the two arrays never actually diverge. The
+	// old Map read the same expression, and .size differed from .length only on a
+	// duplicate category — which the dim's unique index and the de-duplication in
+	// updateDomainFromExtents both prevent. That substitution is behaviour-
+	// preserving in every reachable state, so these pin the contract (domainMax
+	// tracks the displayed domain and agrees with getConfig) rather than the
+	// expression.
+
+	function ready(domain: string[]) {
+		const scale = new BandScaleState('species');
+		scale.setIdentity(new FieldIdentity(domain));
+		scale.addMark(domain, 'mark-1');
+		scale.updateDomainFromExtents();
+		scale.setReady();
+		return scale;
+	}
+
+	it('reports domainMax as the last displayed slot', () => {
+		expect(ready(['Adelie', 'Chinstrap', 'Gentoo']).gpuState.domainMax).toBe(2);
+	});
+
+	it('does not go negative on an empty domain', () => {
+		const scale = new BandScaleState('species');
+		expect(scale.gpuState.domainMax).toBe(0);
+	});
+
+	it('does not move while frozen', () => {
+		const scale = ready(['Adelie', 'Chinstrap', 'Gentoo']);
+		scale.setUpdatesEnabled(false);
+
+		// A category-reducing transform lands while frozen: extents change, and
+		// nothing the GPU sizes its band layout from may follow.
+		scale.addMark(['Adelie'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		expect(scale.gpuState.domainMax).toBe(2);
+		expect(scale.getConfig().categoryCount).toBe(3);
+		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+	});
+
+	it('agrees with getConfig().categoryCount', () => {
+		// They are the same quantity, and the GPU reads both — gpuState for the
+		// domain bounds, getConfig for the band layout.
+		const scale = ready(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
+		expect(scale.gpuState.domainMax + 1).toBe(scale.getConfig().categoryCount);
+	});
+
+	it('is not GPU-ready without a domain or before setReady', () => {
+		const bare = new BandScaleState('species');
+		expect(bare.isReadyForGPU).toBe(false);
+
+		const noReady = new BandScaleState('species');
+		noReady.setIdentity(new FieldIdentity(['Adelie']));
+		noReady.addMark(['Adelie'], 'mark-1');
+		noReady.updateDomainFromExtents();
+		expect(noReady.isReadyForGPU).toBe(false);
+
+		expect(ready(['Adelie']).isReadyForGPU).toBe(true);
+	});
+
+	it('is not GPU-ready in the window where the last mark has gone but the domain has not', () => {
+		// The one state the #extents clause decides on its own. removeMark
+		// debounces the domain update through a microtask, so synchronously
+		// after it the scale still has a full domain and no marks behind it —
+		// and a frame rendered there would draw bands nothing owns.
+		const scale = ready(['Adelie', 'Chinstrap']);
+		expect(scale.isReadyForGPU).toBe(true);
+
+		scale.removeMark('mark-1');
+
+		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap']);
+		expect(scale.isReadyForGPU).toBe(false);
+	});
+});
