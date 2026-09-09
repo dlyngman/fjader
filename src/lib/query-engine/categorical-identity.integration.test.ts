@@ -626,4 +626,35 @@ describe('CategoricalIdentity', () => {
 		);
 		expect(rows).toEqual([{ idx: 0 }, { idx: 1 }]);
 	});
+
+	describe('cardinality is a property of the dim, not of one table', () => {
+		// §20.4 B. The pre-flight check runs approx_count_distinct against a single
+		// source table, but the dim spans every table that registers the field, and
+		// the dim is what sizes the slot table. Two tables under the limit
+		// individually can union to a dim over it.
+
+		it('refuses when a second table pushes the dim over the limit', async () => {
+			await exec.exec(`CREATE TABLE lo AS SELECT 'a' || i AS k FROM range(6000) t(i)`);
+			await exec.exec(`CREATE TABLE hi AS SELECT 'b' || i AS k FROM range(6000) t(i)`);
+
+			// Each table on its own is comfortably under MAX_IDENTITY_CARDINALITY.
+			await identity.ensureColumns('lo', { categorical: ['k'] });
+			expect(identity.values('k').length).toBe(6000);
+
+			// Together they are not. The pre-flight cannot see this; the dim size can.
+			await expect(identity.ensureColumns('hi', { categorical: ['k'] })).rejects.toThrow(
+				/across every table registering it/
+			);
+		});
+
+		it('names the page-wide buffer budget only in the dim-size refusal', async () => {
+			await exec.exec(`CREATE TABLE huge AS SELECT 'v' || i AS k FROM range(12000) t(i)`);
+
+			// The single-table pre-flight fires first here, and it must NOT claim the
+			// shared-buffer reasoning — it has only looked at one table.
+			await expect(identity.ensureColumns('huge', { categorical: ['k'] })).rejects.toThrow(
+				/distinct values in this table/
+			);
+		});
+	});
 });

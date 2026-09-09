@@ -41,6 +41,8 @@
  * over one at a time in steps 3b and 3c.
  */
 
+import { BAND_SLOT_CAPACITY } from '$lib/gpu/band-slot-packing';
+
 /** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
 export interface IdentityExec {
 	exec(sql: string | string[]): Promise<void>;
@@ -216,6 +218,11 @@ function identityToken(field: string): string {
 export const MAX_IDENTITY_CARDINALITY = 10000;
 /** Above this it renders but is unreadable: ~1px per band on a wide axis. */
 export const WARN_IDENTITY_CARDINALITY = 1000;
+/**
+ * Quoted in the refusal above. Imported rather than written as a literal so the
+ * message cannot claim a budget the packer does not have.
+ */
+const BAND_SLOT_BUDGET = BAND_SLOT_CAPACITY;
 
 export class CategoricalIdentity {
 	#exec: IdentityExec;
@@ -563,6 +570,15 @@ export class CategoricalIdentity {
 
 		dim.tables.add(table);
 		await this.#refreshValues(field);
+
+		// The gate above saw ONE table. The dim spans every table that registers
+		// the field, so two tables of 6k each pass it individually and produce a
+		// 12k dim — and the limit is a property of the dim, since that is what
+		// sizes the slot table and therefore what the shared buffer has to hold.
+		// Exact rather than approximate here: the rows exist, COUNT(*) on a
+		// categorical dim is trivial, and this is the number the error should
+		// quote.
+		this.#checkDimSize(field, this.identity(field).values.length);
 	}
 
 	/**
@@ -590,15 +606,43 @@ export class CategoricalIdentity {
 
 		if (n > MAX_IDENTITY_CARDINALITY) {
 			throw new Error(
-				`"${field}" has about ${n} distinct values, over the ${MAX_IDENTITY_CARDINALITY} ` +
-					`a categorical scale can render. The shared slot buffer holds 16384 ids across ` +
-					`every band and point scale on the page. Use a continuous scale, bin the values, ` +
-					`or reduce them with a transform.`
+				`"${field}" has about ${n} distinct values in this table, over the ` +
+					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. Use a continuous ` +
+					`scale, bin the values, or reduce them with a transform.`
 			);
 		}
-		if (n > WARN_IDENTITY_CARDINALITY) {
+	}
+
+	/**
+	 * Refuse or warn on the DIM's size, which is what actually has to render.
+	 *
+	 * Separate from `#checkCardinality` because they answer different questions.
+	 * That one is a cheap pre-flight against a single table, run before any rows
+	 * are materialized so a runaway expression is refused without building
+	 * anything. This one is the real limit, and it can only be applied after the
+	 * append, because until then the union is unknown.
+	 *
+	 * Throwing here leaves the appended rows in place. That is deliberate: the
+	 * dim genuinely IS over the limit, so a later, smaller table registering the
+	 * same field should fail too rather than inherit a dim nothing can draw.
+	 * Rolling back would make the failure depend on which mark set up first.
+	 *
+	 * The buffer figure is quoted here and nowhere else, because this is the
+	 * only check that compares against the thing the buffer actually holds.
+	 */
+	#checkDimSize(field: string, size: number): void {
+		if (size > MAX_IDENTITY_CARDINALITY) {
+			throw new Error(
+				`"${field}" has ${size} distinct values across every table registering it, over the ` +
+					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. The shared slot ` +
+					`buffer holds ${BAND_SLOT_BUDGET} ids across every band and point scale on the ` +
+					`page, so this is a page-wide budget and not a per-axis one. Use a continuous ` +
+					`scale, bin the values, or reduce them with a transform.`
+			);
+		}
+		if (size > WARN_IDENTITY_CARDINALITY) {
 			console.warn(
-				`[identity] "${field}" has about ${n} distinct values; a band axis with more than ` +
+				`[identity] "${field}" has ${size} distinct values; a band axis with more than ` +
 					`~${WARN_IDENTITY_CARDINALITY} categories is under a pixel per band on most charts.`
 			);
 		}
