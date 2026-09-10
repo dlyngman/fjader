@@ -778,13 +778,20 @@ export class TooltipManager {
 				continue;
 			}
 
-			// Resolve color column: index → label (ordinal) or rename to field name (sequential)
+			// Resolve the colour column back to a label. The channel carries a dim
+			// id once the scale has identity (step 3b), so ask the scale rather
+			// than indexing the domain: an id is a position in the DIM, and
+			// colorDomain is a snapshot of this scale's own domain. The two
+			// coincide only while every category is present and unfiltered.
 			const colorCol = config.colorColumn;
 			if (colorCol && key === colorCol) {
 				const resolvedName = channelFields?.[key] || key;
-				if (colorDomain) {
-					const label = colorDomain[value as number];
-					point[resolvedName] = label ?? value;
+				const scale = config.colorScaleState as { categoryAt?(id: number): unknown } | null;
+				const decoded = scale?.categoryAt?.(value as number);
+				if (decoded !== undefined) {
+					point[resolvedName] = decoded;
+				} else if (colorDomain) {
+					point[resolvedName] = colorDomain[value as number] ?? value;
 				} else {
 					point[resolvedName] = value;
 				}

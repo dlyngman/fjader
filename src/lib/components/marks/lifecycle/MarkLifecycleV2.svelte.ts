@@ -798,10 +798,20 @@ export class MarkLifecycleV2 {
 			select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
 		}
 
-		// Ordinal color scale
-		const colorKey = this.#config.colorChannel || 'fill';
-		if (this.#colorScaleState?.caseExpression) {
-			select[colorKey] = sql`${this.#colorScaleState.caseExpression}`;
+		// Ordinal colour. The id column, like the positional channels — the
+		// fragment shader resolves it to this scale's palette rank through the
+		// shared slot table, so display order never reaches the query text.
+		//
+		// The CASE remains for a scale whose field could not be dimmed, which is
+		// the only reason buildCaseExpression still exists.
+		const colorChannel = this.#config.colorChannel || 'fill';
+		const colorField = this.#colorScaleState?.isOrdinal
+			? identityKeyFor(this.#config.select[colorChannel])?.key
+			: null;
+		if (colorField && this.#identityFields.has(colorField)) {
+			select[colorChannel] = castReal(sqlColumn(this.#queryEngine.identityColumn(colorField)));
+		} else if (this.#colorScaleState?.caseExpression) {
+			select[colorChannel] = sql`${this.#colorScaleState.caseExpression}`;
 		}
 
 		// Facet. The renderers compile a faceted pipeline whenever chartContext.fx
@@ -1068,6 +1078,13 @@ export class MarkLifecycleV2 {
 		// y — but it is a categorical channel over the same table, so it wants the
 		// same dim. Registered here rather than in its own pass so it joins the
 		// coalesced CREATE OR REPLACE VIEW the axes already trigger.
+		// Ordinal colour (step 3b). Continuous colour has no categories and wants
+		// no dim, so this gates on isOrdinal rather than on the channel existing.
+		const colorChannel = this.#config.colorChannel || 'fill';
+		const colorKey = this.#colorScaleState?.isOrdinal
+			? identityKeyFor(this.#config.select[colorChannel])
+			: null;
+
 		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx) : null;
 		if (this.#chartContext.fx && !facetKey) {
 			console.error(
@@ -1076,10 +1093,12 @@ export class MarkLifecycleV2 {
 			);
 		}
 
-		if (axes.length === 0 && !facetKey) return;
+		if (axes.length === 0 && !facetKey && !colorKey) return;
 
 		const categorical = [...axes.map(({ key, sql }) => ({ key, sql }))];
-		if (facetKey && !categorical.some((c) => c.key === facetKey.key)) categorical.push(facetKey);
+		for (const extra of [facetKey, colorKey]) {
+			if (extra && !categorical.some((c) => c.key === extra.key)) categorical.push(extra);
+		}
 
 		// Fatal, unlike at C0: the query now selects these columns and reads FROM
 		// the view. Failing here gives a message naming the mark and the fields;
@@ -1136,6 +1155,11 @@ export class MarkLifecycleV2 {
 			if (facetScale && fxDomain?.length) {
 				facetScale.addMark(fxDomain, '__fx-explicit', { explicit: true });
 			}
+		}
+
+		// The colour scale adopts too, and turns ids into stable palette ranks.
+		if (colorKey) {
+			this.#colorScaleState?.setIdentity(this.#queryEngine.identityFor(colorKey.key));
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to

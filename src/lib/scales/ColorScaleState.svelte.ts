@@ -1,6 +1,9 @@
 // src/lib/scales/ColorScaleState.svelte.ts
+import { scaleOrdinal } from 'd3-scale';
+import type { ScaleOrdinal } from 'd3-scale';
 import {
 	createD3Scale,
+	getOrdinalColors,
 	bakeGradient,
 	bakeInterpolator,
 	bakePalette,
@@ -308,6 +311,18 @@ export class ColorScaleState {
 		}
 
 		if (this.isOrdinal) {
+			if (this.hasIdentity) {
+				// The query selects the id column CAST to REAL, so this arrives as
+				// a Float32Array and returns above. Reaching here with raw values
+				// means something upstream stopped selecting it — and mapping them
+				// to domain positions would hand the shader positions where it
+				// expects ids, which it would resolve as some other category's
+				// rank rather than fail.
+				console.error(
+					`[ColorScaleState] "${this.#field}" has identity but received raw category ` +
+						`values; the query should select its __dplot_*_idx column. Colours will be wrong.`
+				);
+			}
 			const indices = new Float32Array(data.length);
 			for (let i = 0; i < data.length; i++) {
 				const val = data[i];
@@ -354,9 +369,18 @@ export class ColorScaleState {
 		if (this.isOrdinal) {
 			// Ordinal: D3 scale needs the full categorical domain (strings).
 			// effectiveDomain is only meaningful for continuous scales.
-			this.#d3Scale = createD3Scale(this.#scheme, this.domain as number[], {
-				reverse: this.#reverse
-			});
+			//
+			// The ranks have to be refreshed BEFORE this, because the CPU scale
+			// is built to agree with them: d3's scaleOrdinal assigns colours by
+			// position in its domain, and once a category's rank has outlived a
+			// disappearance its rank and its domain position differ. Left alone,
+			// the legend and the tooltip swatch would show one colour while the
+			// GPU drew another — the two disagreeing quietly, on exactly the
+			// charts the stable rank exists for.
+			this.#refreshRanks();
+			this.#d3Scale = this.#hasRanks()
+				? this.#buildRankedOrdinalScale()
+				: createD3Scale(this.#scheme, this.domain as number[], { reverse: this.#reverse });
 			this.#uploadOrdinal();
 		} else {
 			const effectiveDomain = this.#effectiveDomain();
@@ -470,6 +494,48 @@ export class ColorScaleState {
 		}
 		this.slotTable = table;
 		this.slotVersion++;
+	}
+
+	#hasRanks(): boolean {
+		return this.hasIdentity && this.#paletteRank.size > 0;
+	}
+
+	/**
+	 * An ordinal scale whose range is permuted to match the palette ranks, so
+	 * `getColor(value)` returns the colour the GPU actually draws.
+	 *
+	 * d3 would otherwise index its range by domain position. Handing it an
+	 * explicit range indexed the same way, with each entry taken at that
+	 * category's rank, makes the two agree by construction rather than by both
+	 * happening to be domain order.
+	 */
+	#buildRankedOrdinalScale(): ScaleOrdinal<string, string> {
+		let colors = getOrdinalColors(this.#scheme) ?? [];
+		if (this.#reverse) colors = [...colors].reverse();
+		const identity = this.#identity!;
+
+		const range = this.domain.map((value) => {
+			const id = identity.ids.get(value as never);
+			const rank = id === undefined ? undefined : this.#paletteRank.get(id);
+			// Same wrap the shader applies, so an over-32 palette agrees too.
+			return rank === undefined ? ColorScaleState.NULL_COLOR : colors[rank % colors.length];
+		});
+
+		// No .unknown(): it widens d3's third type param past D3ColorScale, and
+		// the unranked case is already handled by the range entries below. An
+		// out-of-domain value therefore cycles the range exactly as it does on
+		// the scale this replaces.
+		return scaleOrdinal<string, string>().domain(this.domain.map(String)).range(range);
+	}
+
+	/**
+	 * Source value for a channel id — the decode side of the encode the query
+	 * performs, for tooltips and legends. Undefined without identity, where the
+	 * channel carries a palette index and the caller should read the domain.
+	 */
+	categoryAt(id: number): string | number | undefined {
+		if (!this.hasIdentity) return undefined;
+		return this.#identity!.values[id] as string | number | undefined;
 	}
 
 	#uploadOrdinal(): void {
