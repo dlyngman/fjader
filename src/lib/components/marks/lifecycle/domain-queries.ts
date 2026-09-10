@@ -217,19 +217,27 @@ export async function fetchCategoricalDomains(
 		}
 	}
 
-	// Facet: register categories with the facet BandScaleState
-	if (facetBandScale && fx) {
-		const fxExpr = isNode(fx) ? fx : sqlColumn(String(fx));
-		const q = Query.from(table).select({ fx: fxExpr }).distinct();
+	// Facet: register categories with the facet BandScaleState.
+	//
+	// From the dim, like the positional axes (step 3c). The DISTINCT it replaces
+	// had no ORDER BY, so cell order was whatever DuckDB happened to return and
+	// then first-appearance order — arbitrary, and different between two marks on
+	// the same facet scale. Dim values are ordered by id, so cell order is
+	// deterministic and every mark agrees on it by construction.
+	const facetKey = fx ? identityKeyFor(fx) : null;
+	if (facetBandScale && facetKey) {
 		fetches.push(
-			coordinator.query(q).then((result) => {
-				const categories = Array.from(result).map((row) => row.fx);
-				if (categories.length > 0) {
-					facetBandScale.addMark(categories, markId);
-				}
-			})
+			(async () => {
+				// Idempotent and coalesced — the mark's own setup calls this too.
+				await coordinator.ensureColumns(table, { categorical: [facetKey] });
+				const categories = coordinator.identityValues(facetKey.key);
+				if (categories.length > 0) facetBandScale.addMark(categories, markId);
+			})()
 		);
 	}
+	// No fallback when the fx expression cannot be dimmed. #ensureIdentityColumns
+	// reports that case and the mark renders nothing, so populating a domain here
+	// would draw empty cells for categories no mark can put a row in.
 
 	// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
 	const setupTimeFetch = (axis: string, field: unknown): void => {

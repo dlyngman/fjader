@@ -24,7 +24,16 @@ interface ChartConfig {
 	chartId: string;
 	canvas: HTMLCanvasElement;
 	zIndex: number;
+	/** This cell's DISPLAY position in the facet grid. */
 	facetIndex: number;
+	/**
+	 * The facet BandScaleState's id, so the facet value for this cell can be
+	 * resolved per frame rather than baked in at registration. registerChart
+	 * runs once at mount, and a facet reorder changes which category sits at
+	 * this cell without remounting anything — so a value captured here would go
+	 * stale exactly when it matters.
+	 */
+	facetScaleId: string | null;
 	visible: boolean;
 	context: GPUCanvasContext;
 	contextConfigured: boolean;
@@ -86,6 +95,7 @@ interface GPUCoordinatorConfig {
 interface ChartRegistrationConfig {
 	zIndex?: number;
 	facetIndex?: number;
+	facetScaleId?: string | null;
 }
 
 export interface ChartRegistrationResult {
@@ -1578,6 +1588,7 @@ export class GPUCoordinator {
 			canvas,
 			zIndex: config.zIndex || 0,
 			facetIndex: config.facetIndex ?? 0,
+			facetScaleId: config.facetScaleId ?? null,
 			visible: true,
 			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
@@ -1900,7 +1911,24 @@ export class GPUCoordinator {
 		// f32[7] = padding
 		u32[8] = xScaleIndex >>> 0;
 		u32[9] = yScaleIndex >>> 0;
-		u32[10] = (chartConfig.facetIndex ?? 0) >>> 0;
+		// The facet value this cell renders. The vertex shaders compare their
+		// __facet channel against this, and that channel now carries a dim id
+		// rather than a cell index — so this has to be the id displayed at this
+		// cell, not the cell's position. idAtSlot handles both: with identity it
+		// is displayOrder[slot], without it the slot passes through unchanged,
+		// which is what makes this a no-op until the facet scale is migrated.
+		//
+		// Resolved per frame, deliberately. A reorder moves which id sits at this
+		// cell while registerChart, which runs once at mount, is long finished.
+		const facetSlot = chartConfig.facetIndex ?? 0;
+		const facetScale = chartConfig.facetScaleId
+			? (this.#scaleIdToInstance.get(chartConfig.facetScaleId) as unknown as
+					| {
+							idAtSlot?(slot: number): number | null;
+					  }
+					| undefined)
+			: undefined;
+		u32[10] = (facetScale?.idAtSlot?.(facetSlot) ?? facetSlot) >>> 0;
 		u32[11] = 0; // padding
 		f32[12] = nullColor[0]; // R
 		f32[13] = nullColor[1]; // G

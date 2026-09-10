@@ -2,7 +2,6 @@
 
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
-import { buildCaseExpression } from '$lib/sql/case-expression';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 interface BandScaleConfig {
@@ -216,24 +215,6 @@ export class BandScaleState {
 	 */
 	get sourceField(): string {
 		return this.#sourceField ?? this.name;
-	}
-
-	/**
-	 * Inline CASE expression mapping domain values to 0-based positions.
-	 *
-	 * NOT for the positional band channel, which carries dim ids and takes the
-	 * view's id column instead (`b7292b2`). This survives for the two roles that
-	 * still put display positions through a BandScaleState: the facet scale's
-	 * `__facet`, and ordinal colour. Steps 3b and 3c migrate one each, and the
-	 * last one to land deletes this.
-	 *
-	 * Reactive — recomputes when effectiveDomain changes, which is why the CASE
-	 * text moves on a reorder and the id column does not.
-	 */
-	get caseExpression(): string {
-		return buildCaseExpression(this.sourceField, this.effectiveDomain, {
-			oneBased: false
-		});
 	}
 
 	// =========================================================================

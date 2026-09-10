@@ -35,9 +35,9 @@ describe('BandScaleState.processDataForGPU', () => {
 	});
 
 	it('still emits -1 for an unmapped value in the SQL CASE', () => {
-		// buildCaseExpression outlives this deletion: ordinal colour and facet
-		// still CASE-inline until steps 3b and 3c. The sentinel it emits has to
-		// keep matching the one scaleBand discards.
+		// buildCaseExpression outlives this deletion: ordinal colour is the last
+		// CASE-inlined channel, until step 3b. The sentinel it emits has to keep
+		// matching the one scaleBand discards.
 		const sql = buildCaseExpression('category', ['a', 'b']);
 		expect(sql).toContain('WHEN "category" = \'a\' THEN 0');
 		expect(sql).toContain('ELSE -1');
@@ -521,5 +521,70 @@ describe('BandScaleState GPU readiness and gpuState', () => {
 
 		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap']);
 		expect(scale.isReadyForGPU).toBe(false);
+	});
+});
+
+describe('BandScaleState as a facet scale', () => {
+	// Step 3c. A facet scale is a BandScaleState whose "slots" are grid cells.
+	// The __facet channel carries the dim id, and GPUCoordinator resolves each
+	// cell's frame uniform through idAtSlot, so the shader compares id to id.
+	// These pin the two halves of that agreement.
+
+	function facetScale(values: string[], displayed: string[]) {
+		const scale = new BandScaleState('__facet__species', [], { sourceField: 'species' });
+		scale.setIdentity(new FieldIdentity(values));
+		scale.addMark(displayed, 'mark-1', { explicit: displayed.length !== values.length });
+		scale.updateDomainFromExtents();
+		return scale;
+	}
+
+	it('resolves a cell index to the id that cell renders', () => {
+		const scale = facetScale(['Adelie', 'Chinstrap', 'Gentoo'], ['Adelie', 'Chinstrap', 'Gentoo']);
+		// In dim order these coincide, which is why a default facet chart cannot
+		// catch a confusion between the two.
+		expect([0, 1, 2].map((cell) => scale.idAtSlot(cell))).toEqual([0, 1, 2]);
+	});
+
+	it('keeps cell index and id distinct once the cells are reordered', () => {
+		const scale = new BandScaleState('__facet__species', [], { sourceField: 'species' });
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		// Cell 0 shows Gentoo, whose id is 2. A uniform carrying the cell index
+		// would make every instance whose __facet is 0 (Adelie) render in cell 0.
+		expect(scale.idAtSlot(0)).toBe(2);
+		expect(scale.idAtSlot(1)).toBe(0);
+		expect(scale.idAtSlot(2)).toBe(1);
+	});
+
+	it('round-trips cell -> id -> label, which is what the cell heading shows', () => {
+		const scale = new BandScaleState('__facet__species', [], { sourceField: 'species' });
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		const labels = [0, 1, 2].map((cell) => scale.categoryAt(scale.idAtSlot(cell)!));
+		expect(labels).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
+		// And the same order the grid renders from.
+		expect(labels).toEqual(scale.effectiveDomain);
+	});
+
+	it('reports no id for a cell beyond the categories present', () => {
+		// The grid is sized from effectiveDomain, so this should not happen — but
+		// the uniform falls back to the raw cell index when it does, and that must
+		// not silently select a real category.
+		const scale = facetScale(['Adelie', 'Chinstrap', 'Gentoo'], ['Adelie', 'Chinstrap']);
+		expect(scale.idAtSlot(5)).toBeNull();
+	});
+
+	it('passes the cell index through when the scale has no identity', () => {
+		// The migration's no-op step: before the facet field is dimmed, idAtSlot
+		// returns the slot unchanged, so the uniform keeps carrying a cell index
+		// and nothing changes.
+		const scale = new BandScaleState('__facet__species');
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect([0, 1, 2].map((cell) => scale.idAtSlot(cell))).toEqual([0, 1, 2]);
 	});
 });

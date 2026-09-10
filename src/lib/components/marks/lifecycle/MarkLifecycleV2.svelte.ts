@@ -761,10 +761,10 @@ export class MarkLifecycleV2 {
 	 * Encode the categorical channels into the SELECT, replacing ViewManager's
 	 * view columns with direct SQL.
 	 *
-	 * Two encodings now live here, and the name is the older one. Band/point x
-	 * and y take the view's identity id column. Ordinal colour and facet still
-	 * take a CASE built from their scale's domain — steps 3b and 3c, and the
-	 * reason `caseExpression` still exists.
+	 * Two encodings still live here, and the name is the older one. Band/point x
+	 * and y and the facet channel take the view's identity id column. Ordinal
+	 * colour is the last CASE, built from its scale's domain — step 3b, and the
+	 * only reason `caseExpression` still exists anywhere.
 	 */
 	#inlineCaseExpressions(select: Record<string, unknown>): void {
 		// Band/point x and y: always the view's identity id column, never a CASE.
@@ -804,16 +804,19 @@ export class MarkLifecycleV2 {
 			select[colorKey] = sql`${this.#colorScaleState.caseExpression}`;
 		}
 
-		// Facet cell index. The renderers compile a faceted pipeline whenever
-		// chartContext.fx is set and discard instances whose __facet differs
-		// from the active cell, so the column has to be in the select or the
-		// facet vertex buffer is never written. V1 set this from ViewManager's
-		// index column; V2 dropped it in the migration.
-		if (this.#chartContext.fx) {
-			const facetScale = this.#chartContext.facetBandScale as BandScaleState | null;
-			if (facetScale?.caseExpression) {
-				select.__facet = sql`${facetScale.caseExpression}`;
-			}
+		// Facet. The renderers compile a faceted pipeline whenever chartContext.fx
+		// is set and discard instances whose __facet differs from the cell's
+		// value, so the column has to be in the select or the facet vertex buffer
+		// is never written.
+		//
+		// Carries the dim ID, not the cell index — the same move the positional
+		// channels made. The comparison still works because GPUCoordinator now
+		// resolves the frame uniform through idAtSlot, so both sides are ids.
+		// That is what takes display order out of the query text: a facet reorder
+		// changes which id sits in which cell and rewrites nothing.
+		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx)?.key : null;
+		if (facetKey && this.#identityFields.has(facetKey)) {
+			select.__facet = castReal(sqlColumn(this.#queryEngine.identityColumn(facetKey)));
 		}
 	}
 
@@ -1061,9 +1064,22 @@ export class MarkLifecycleV2 {
 					`binned axes. This mark will render nothing on ${axis}.`
 			);
 		}
-		if (axes.length === 0) return;
+		// The facet channel (step 3c). Not an axis — it has no scale type on x or
+		// y — but it is a categorical channel over the same table, so it wants the
+		// same dim. Registered here rather than in its own pass so it joins the
+		// coalesced CREATE OR REPLACE VIEW the axes already trigger.
+		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx) : null;
+		if (this.#chartContext.fx && !facetKey) {
+			console.error(
+				`[${this.#markId}] fx is set but cannot be given a stable identity, so this mark ` +
+					`will render nothing. Facet by a column or a fixed expression.`
+			);
+		}
 
-		const categorical = axes.map(({ key, sql }) => ({ key, sql }));
+		if (axes.length === 0 && !facetKey) return;
+
+		const categorical = [...axes.map(({ key, sql }) => ({ key, sql }))];
+		if (facetKey && !categorical.some((c) => c.key === facetKey.key)) categorical.push(facetKey);
 
 		// Fatal, unlike at C0: the query now selects these columns and reads FROM
 		// the view. Failing here gives a message naming the mark and the fields;
@@ -1095,6 +1111,13 @@ export class MarkLifecycleV2 {
 				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 			) as BandScaleState | null;
 			scale?.setIdentity(identity);
+		}
+
+		// The facet scale adopts too: its displayOrder is what turns a cell index
+		// into the id that cell renders, which the frame uniform reads per frame.
+		if (facetKey) {
+			const facetScale = this.#chartContext.facetBandScale as BandScaleState | null;
+			facetScale?.setIdentity(this.#queryEngine.identityFor(facetKey.key));
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to

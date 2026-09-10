@@ -8,9 +8,10 @@
 	interface Props {
 		canvasComponents?: Snippet | undefined;
 		facetIndex?: number;
+		facetScaleId?: string | null;
 	}
 
-	let { canvasComponents = undefined, facetIndex }: Props = $props();
+	let { canvasComponents = undefined, facetIndex, facetScaleId = null }: Props = $props();
 
 	const c = getContext<ChartContext>('chart');
 	const isFaceted = !!c.fx && facetIndex == null;
@@ -112,7 +113,8 @@
 		try {
 			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
 				zIndex: 0,
-				facetIndex: facetIndex ?? 0
+				facetIndex: facetIndex ?? 0,
+				facetScaleId
 			});
 
 			// Notify coordinator that context is ready
