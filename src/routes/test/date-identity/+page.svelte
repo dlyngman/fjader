@@ -1,67 +1,70 @@
 <script>
-	// Verification harness for §29.10 — a dim whose values are JS OBJECTS.
+	// Verification harness for §29.10a — a temporal categorical value is
+	// rendered as a raw epoch number.
 	//
-	// `DimValue` is declared `string | number | bigint`. That is what the driver
-	// returns for VARCHAR, INTEGER, BIGINT, HUGEINT, DECIMAL, DOUBLE and TIME.
-	// It is NOT what the driver returns for DATE and TIMESTAMP, which arrive as
-	// JS `Date` OBJECTS (also INTERVAL as a plain object, BLOB as a Buffer).
+	// WHAT THIS PAGE IS, AND WHAT IT REPLACED. The first version of this page
+	// demonstrated a different bug that does not exist: that a dim over a DATE
+	// column holds JS `Date` objects, and that FieldIdentity's Map therefore
+	// misses on reference identity. The measurement behind that was taken
+	// against the `duckdb` npm package, which the integration tests use and the
+	// APP DOES NOT. Recorded as §29.10b, because it is the more general trap:
 	//
-	// Why that is a correctness bug and not a typo. `FieldIdentity` holds both
-	// directions of the bijection, and the value -> id direction is a `Map`
-	// keyed by the value. A Map keyed by an OBJECT matches on reference
-	// identity, not on value. Two Dates for the same instant, produced by two
-	// different queries, are two different objects — so `ids.get(d)` misses
-	// every time the value crossed a query boundary.
+	//   the app     duckdb-wasm -> queryIPC -> flechette tableFromIPC
+	//   the tests   the `duckdb` npm package, db.all()
 	//
-	// Verified at the driver, not reasoned about:
+	// flechette's `useDate` defaults to FALSE — batch-type.js:26-37 reads
+	// `useDate && DateBatch`, so an unset option falls through to DateDayBatch
+	// and TimestampMicrosecondBatch, both numeric — and QueryEngine.#queryRaw
+	// passes no options. So in the app a DATE is epoch MILLISECONDS as a
+	// number (DateDayBatch: `86400000 * days`), and a TIMESTAMP likewise.
 	//
-	//   VARCHAR/INTEGER/BIGINT/HUGEINT/DECIMAL/DOUBLE/TIME -> primitive, hits
-	//   DATE / TIMESTAMP                                   -> Date object, MISSES
-	//   INTERVAL / BLOB                                    -> object, MISSES
-	//   BOOLEAN                                            -> boolean: hits, but
-	//                                                         is also outside
-	//                                                         DimValue's three
+	// That is good news for identity: a number is a primitive, so the Map
+	// round-trips and ordering works. The probe panel below proves it rather
+	// than asserting it, and it is the check that should have been run first.
 	//
-	// WHY FACETING IS THE PATH. Scale inference sends a date on an AXIS to a
-	// `time` scale (scale-inference.ts:55), so a band axis over a date is not
-	// reachable that way. Faceting is: ChartContainer.svelte:111 creates the
-	// facet scale as `'band'` UNCONDITIONALLY, with no inference at all. So
-	// `fx="a_date_column"` is an ordinary, public-API route to a Date-valued
-	// dim, and it is the only one.
+	// THE BUG THAT IS REAL. Every label path coerces with a bare `String(v)`:
 	//
-	// WHY fxDomain IS THE TRIGGER. The plain facet path does not miss, which is
-	// why this has gone unnoticed: domain-queries.ts:234 registers the dim's
-	// OWN array, so the objects on both sides are the same instances and the
-	// lookup hits. The miss needs values that did NOT come from the dim's read.
-	// `fxDomain` is exactly that — values written by hand in this file — and it
-	// goes through `#toIds(fxDomain, false)`, i.e. `ids.get(...)` per entry.
+	//   ChartContainer.svelte:411   facetLabel={String(cat)}       <- these cells
+	//   BandScaleState.tickFormat   String(d[index] ?? '')         <- a band axis
+	//
+	// Both are correct for VARCHAR, INTEGER and BIGINT — a year, a rating, a
+	// zip code are all rendered exactly right — and both are useless for DATE
+	// and TIMESTAMP. This is not a facet quirk; it is the same line of
+	// reasoning in two components, and faceting is simply where a temporal
+	// categorical is reachable at all (scale inference sends a date on an AXIS
+	// to a time scale, while ChartContainer.svelte:111 builds the facet scale
+	// as 'band' with no inference).
+	//
+	// WHY `String` CANNOT BE FIXED IN PLACE. An epoch millisecond and a zip
+	// code are both numbers. Nothing at the point of coercion can tell them
+	// apart, which is why chart 4 works and charts 2 and 3 cannot: the fix
+	// needs the dim's SQL TYPE carried on FieldIdentity, and only
+	// CategoricalIdentity is positioned to capture it. tickFormat's own comment
+	// already says formatting "stays in the scale/axis layer" — correct, and
+	// the scale layer has no way to know.
 	//
 	// WHAT TO LOOK FOR
 	//
-	//   Chart 1 (VARCHAR, the control) — cells MUST read C, B, A. This is the
-	//     same mechanism as facet-demo's reordered chart. If this one is wrong,
-	//     the bug is not the one this page is about.
+	//   Chart 1  VARCHAR, the control  -> cells read A, B, C.
+	//   Chart 2  DATE                  -> cells SHOULD read 2024-01-01 ... and
+	//   Chart 3  TIMESTAMP                TODAY read 1704067200000 and friends.
+	//   Chart 4  the workaround        -> cells read 2024-01, 2024-02, 2024-03.
 	//
-	//   Chart 2 (DATE)      — cells SHOULD read Mar, Feb, Jan and TODAY READ
-	//   Chart 3 (TIMESTAMP)   Jan, Feb, Mar. The fxDomain is silently discarded:
-	//     every entry misses, #explicitDomain becomes empty, and
-	//     updateDomainFromExtents falls through to first-appearance order.
+	// Chart 4 is what a user has to do today: pre-compute a VARCHAR column.
+	// Note it is a WORKAROUND and not the natural spelling — `fx` is typed
+	// `string | null` (ChartContainer.svelte:18), so a facet cannot be given a
+	// SQL expression and `fx={strftime(...)}` is not available. The column has
+	// to exist in the table.
 	//
-	// Note the failure is a SILENT WRONG ORDER, not an error. Nothing throws,
-	// nothing warns, and the chart looks entirely reasonable — which is the
-	// point, and why the panel below states the diagnosis in words rather than
-	// leaving it to be inferred from three headings.
-	//
-	// The panel is the real assertion. Cell order tells you something is wrong;
-	// the panel tells you it is object identity, by taking each dim value,
-	// re-reading the SAME value through a SECOND query, and reporting whether
-	// the Map finds it. That is the whole bug in one line per field.
+	// A SECOND TRAP, shown in the panel rather than as a chart. `fxDomain` is
+	// compared against dim values, so ordering a temporal facet means writing
+	// EPOCH NUMBERS in that prop — a JS `Date` there misses silently. The panel
+	// prints the exact numbers this page's data requires, which is the only way
+	// anyone would find them.
 	//
 	// EACH CHART FACETS ON ITS OWN COLUMN. ScaleRegistry keys scales by name
 	// plus type plus config and a facet scale is named `__facet__<fx>`, so two
-	// containers faceting on one field share a BandScaleState and an fxDomain
-	// on either reorders both (§25.3 bug 1, and facet-demo's note). Three
-	// columns, three scales.
+	// containers faceting on one field share a BandScaleState (§25.3 bug 1).
 
 	import { onMount } from 'svelte';
 	import { count } from '@uwdata/mosaic-sql';
@@ -81,37 +84,12 @@
 	let error = $state(null);
 	let probes = $state([]);
 
-	// Same instants as the rows below. Written as Dates rather than strings on
-	// purpose: supplying the CORRECT type still misses, which is what separates
-	// this from an ordinary type mismatch.
-	const dateDomain = [
-		new Date(Date.UTC(2024, 2, 1)),
-		new Date(Date.UTC(2024, 1, 1)),
-		new Date(Date.UTC(2024, 0, 1))
-	];
-	const tsDomain = [
-		new Date(Date.UTC(2024, 2, 1, 12)),
-		new Date(Date.UTC(2024, 1, 1, 12)),
-		new Date(Date.UTC(2024, 0, 1, 12))
-	];
-
 	/**
-	 * The assertion this page exists for: take each value the dim holds, re-read
-	 * the same value through a SECOND query, and ask the Map for it. A primitive
-	 * round-trips; an object cannot.
+	 * Report the JS type the dim actually holds, and what String() makes of it.
+	 * This is the whole question both drafts of §29.10 turned on.
 	 */
-	async function probe(field, table, column) {
+	function probe(field, expectation) {
 		const identity = queryEngine.identityFor(field);
-		// Uncached, so this is a genuinely SECOND read of the same values rather
-		// than the dim's own result handed back — which is the entire point.
-		const result = await queryEngine.query(
-			`SELECT DISTINCT ${JSON.stringify(column)} AS v FROM ${JSON.stringify(table)} ` +
-				`WHERE ${JSON.stringify(column)} IS NOT NULL ORDER BY 1`,
-			{ cache: false }
-		);
-		const rows = [];
-		for (let i = 0; i < result.numRows; i++) rows.push(result.get(i));
-
 		const first = identity.values[0];
 		const kind =
 			first === null || first === undefined
@@ -120,23 +98,24 @@
 					? `object(${first.constructor?.name ?? '?'})`
 					: typeof first;
 
-		const hits = rows.filter((r) => identity.ids.get(r.v) !== undefined).length;
 		return {
 			field,
 			kind,
 			count: identity.values.length,
-			hits,
-			total: rows.length,
-			ok: rows.length > 0 && hits === rows.length
+			// What the facet cell heading and the axis tick both produce.
+			rendered: identity.values.map((v) => String(v)).join(', '),
+			// A Map keyed by a primitive round-trips; one keyed by an object
+			// does not. Re-look-up every value through the public reverse map.
+			roundTrips: identity.values.every((v) => identity.ids.get(v) !== undefined),
+			expectation
 		};
 	}
 
 	onMount(async () => {
 		try {
-			// Three columns, three dims, three facet scales. Deliberately NOT in
-			// alphabetical/chronological order in the source, so "first-appearance
-			// order" and "dim order" are distinguishable from the reversal the
-			// fxDomain asks for.
+			// Four columns, four dims, four facet scales. `month_text` is
+			// pre-computed in SQL because `fx` takes a column name, not an
+			// expression — that limitation is the point of chart 4.
 			await queryEngine.exec([
 				`CREATE TABLE fx_varchar AS SELECT * FROM (VALUES
 					('A', 3), ('B', 7), ('C', 5), ('A', 2), ('B', 1), ('C', 9)
@@ -149,20 +128,22 @@
 					(TIMESTAMP '2024-01-01 12:00:00', 3), (TIMESTAMP '2024-02-01 12:00:00', 7),
 					(TIMESTAMP '2024-03-01 12:00:00', 5), (TIMESTAMP '2024-01-01 12:00:00', 2),
 					(TIMESTAMP '2024-02-01 12:00:00', 1), (TIMESTAMP '2024-03-01 12:00:00', 9)
-				) t(cat_ts, amount)`
+				) t(cat_ts, amount)`,
+				`CREATE TABLE fx_month AS
+					SELECT strftime(cat_date, '%Y-%m') AS month_text, amount FROM fx_date`
 			]);
 
 			isLoaded = true;
 
-			// After the marks have set up, so the dims exist. The panel reads the
-			// engine's live FieldIdentity — the same object the scales hold.
-			setTimeout(async () => {
+			// After the marks have set up, so the dims exist.
+			setTimeout(() => {
 				try {
-					probes = await Promise.all([
-						probe('cat_varchar', 'fx_varchar', 'cat_varchar'),
-						probe('cat_date', 'fx_date', 'cat_date'),
-						probe('cat_ts', 'fx_ts', 'cat_ts')
-					]);
+					probes = [
+						probe('cat_varchar', 'A, B, C'),
+						probe('cat_date', '2024-01-01, 2024-02-01, 2024-03-01'),
+						probe('cat_ts', '2024-01-01 12:00, 2024-02-01 12:00, 2024-03-01 12:00'),
+						probe('month_text', '2024-01, 2024-02, 2024-03')
+					];
 				} catch (e) {
 					error = String(e);
 				}
@@ -174,12 +155,13 @@
 </script>
 
 <div class="page">
-	<h1>DATE identity — §29.10</h1>
+	<h1>Temporal facet labels &mdash; §29.10a</h1>
 	<p class="lede">
-		A dim over a DATE or TIMESTAMP column holds JS <code>Date</code> objects.
-		<code>FieldIdentity.ids</code> is a Map keyed by the value, so it matches on reference identity
-		and every value&rarr;id lookup crossing a query boundary misses. Faceting is the one public path
-		to such a dim: <code>fx</code> builds a band scale with no type inference.
+		A DATE reaches the app as epoch <strong>milliseconds, as a number</strong> — flechette's
+		<code>useDate</code>
+		defaults to false and <code>#queryRaw</code> passes no options. Identity is fine: a number is a
+		primitive, so the Map round-trips. What is broken is every label path, because
+		<code>String(v)</code> cannot tell an epoch from a zip code.
 	</p>
 
 	{#if error}
@@ -187,37 +169,46 @@
 	{/if}
 
 	<div class="panel">
-		<h2>Round-trip probe</h2>
+		<h2>What the dim holds</h2>
 		{#if probes.length === 0}
 			<p class="muted">Waiting for the dims to be built&hellip;</p>
 		{:else}
 			<table>
 				<thead>
-					<tr><th>field</th><th>dim value type</th><th>values</th><th>re-read hits</th><th /></tr>
+					<tr>
+						<th>field</th>
+						<th>JS type</th>
+						<th>ids round-trip</th>
+						<th><code>String(v)</code> &mdash; what a cell heading shows</th>
+						<th>should read</th>
+					</tr>
 				</thead>
 				<tbody>
 					{#each probes as p (p.field)}
-						<tr class:bad={!p.ok}>
+						<tr class:bad={p.rendered !== p.expectation}>
 							<td><code>{p.field}</code></td>
 							<td><code>{p.kind}</code></td>
-							<td>{p.count}</td>
-							<td>{p.hits} / {p.total}</td>
-							<td>{p.ok ? 'round-trips' : 'MISSES — object identity'}</td>
+							<td>{p.roundTrips ? 'yes' : 'NO'}</td>
+							<td><code>{p.rendered}</code></td>
+							<td>{p.expectation}</td>
 						</tr>
 					{/each}
 				</tbody>
 			</table>
 			<p class="muted">
-				Each row re-reads the field's own values through a second query and asks
-				<code>identity.ids.get(v)</code> for each. A primitive hits; a <code>Date</code> cannot.
+				The <code>ids round-trip</code> column is the claim §29.10's first draft got wrong: it said
+				these were <code>Date</code> objects and therefore missed. They are numbers, and they do not
+				miss. The numbers under <code>String(v)</code> for the two temporal rows are also exactly
+				what an <code>fxDomain</code> would have to contain to order those grids &mdash; a JS
+				<code>Date</code> there compares against a number and is silently dropped.
 			</p>
 		{/if}
 	</div>
 
 	{#if isLoaded}
-		<h2>1. VARCHAR &mdash; the control. Cells must read C, B, A.</h2>
+		<h2>1. VARCHAR &mdash; the control. Cells read A, B, C.</h2>
 		<div class="chart">
-			<ChartContainer xLabel="cat" yLabel="count" fx="cat_varchar" fxDomain={['C', 'B', 'A']}>
+			<ChartContainer xLabel="cat" yLabel="count" fx="cat_varchar">
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
@@ -234,9 +225,9 @@
 			</ChartContainer>
 		</div>
 
-		<h2>2. DATE &mdash; should read Mar, Feb, Jan. Today reads Jan, Feb, Mar.</h2>
+		<h2>2. DATE &mdash; headings should be dates. Today they are epoch millis.</h2>
 		<div class="chart">
-			<ChartContainer xLabel="cat" yLabel="count" fx="cat_date" fxDomain={dateDomain}>
+			<ChartContainer xLabel="cat" yLabel="count" fx="cat_date">
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
@@ -253,14 +244,39 @@
 			</ChartContainer>
 		</div>
 
-		<h2>3. TIMESTAMP &mdash; should read Mar, Feb, Jan. Today reads Jan, Feb, Mar.</h2>
+		<h2>3. TIMESTAMP &mdash; same bug, same cause.</h2>
 		<div class="chart">
-			<ChartContainer xLabel="cat" yLabel="count" fx="cat_ts" fxDomain={tsDomain}>
+			<ChartContainer xLabel="cat" yLabel="count" fx="cat_ts">
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
 							<BarMarkY table="fx_ts" x="cat_ts" y={count()} fill="cat_ts" />
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+				{#snippet background()}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<h2>4. The workaround &mdash; a pre-computed VARCHAR month. Cells read 2024-01, 02, 03.</h2>
+		<p class="note">
+			<code>strftime</code> in the table definition, not in <code>fx</code>: the prop is typed
+			<code>string | null</code>, so a facet cannot take a SQL expression. This also truncates,
+			which is the operation a temporal facet almost always wants &mdash; one cell per distinct
+			TIMESTAMP is one cell per row, and nothing currently refuses that (§29.11).
+		</p>
+		<div class="chart">
+			<ChartContainer xLabel="cat" yLabel="count" fx="month_text">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<BarMarkY table="fx_month" x="month_text" y={count()} fill="month_text" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}
@@ -290,10 +306,16 @@
 		font-weight: 600;
 		margin: 2rem 0 0.5rem;
 	}
-	.lede {
-		max-width: 70ch;
+	.lede,
+	.note {
+		max-width: 74ch;
 		line-height: 1.5;
 		color: #333;
+	}
+	.note {
+		font-size: 0.85rem;
+		color: #555;
+		margin: 0 0 0.6rem;
 	}
 	.chart {
 		height: 260px;
@@ -312,13 +334,14 @@
 	}
 	table {
 		border-collapse: collapse;
-		font-size: 0.85rem;
+		font-size: 0.82rem;
 	}
 	th,
 	td {
 		text-align: left;
 		padding: 0.3rem 0.9rem 0.3rem 0;
 		border-bottom: 1px solid #e8e8e8;
+		vertical-align: top;
 	}
 	tr.bad td {
 		color: #b00020;
@@ -327,7 +350,8 @@
 	.muted {
 		color: #666;
 		font-size: 0.85rem;
-		max-width: 70ch;
+		max-width: 74ch;
+		line-height: 1.5;
 	}
 	.error {
 		color: #b00020;
