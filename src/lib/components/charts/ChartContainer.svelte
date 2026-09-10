@@ -9,12 +9,25 @@
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import ChartCell from './ChartCell.svelte';
 
 	interface Props {
 		xLabel?: string | null;
 		yLabel?: string | null;
 		fx?: string | null;
+		/**
+		 * Explicit cell order for the facet grid, as source values.
+		 *
+		 * Without it, cell order is the dim's — ordered by value, so id equals
+		 * cell index and the two are indistinguishable. This is what makes them
+		 * differ, which every part of the facet identity path depends on being
+		 * handled and no chart previously exercised.
+		 *
+		 * Read once, at init: a static ordering, not a reactive one. Changing it
+		 * after mount will not move the cells.
+		 */
+		fxDomain?: DimValue[] | null;
 		columns?: number | null;
 		background?: Snippet;
 		foreground?: Snippet;
@@ -41,6 +54,7 @@
 		xLabel = null,
 		yLabel = null,
 		fx = null,
+		fxDomain = null,
 		columns: facetColumns = null,
 		background = undefined,
 		foreground = undefined,
@@ -89,6 +103,13 @@
 				layout.chartId
 			) as BandScaleState)
 		: null;
+	// Registered at init rather than in an effect. The scale re-encodes an
+	// explicit domain when identity arrives (BandScaleState.setIdentity), so
+	// this is safe to hand over before the dim exists.
+	if (facetBandScale && fxDomain?.length) {
+		facetBandScale.addMark(fxDomain, `${layout.chartId}-fx-explicit`, { explicit: true });
+	}
+
 	const facetCategories = $derived(
 		facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null
 	);

@@ -130,6 +130,37 @@
 			{/snippet}
 		</ChartContainer>
 	</div>
+
+	<!-- 3. Reordered cells: the case where a facet id and a cell index differ -->
+	<h2>Faceted Bars — fx="species", cells reordered by fxDomain</h2>
+	<p class="note">
+		Cell order is Gentoo, Adelie, Chinstrap, while the dim numbers them alphabetically — so a cell's
+		index and the id it renders are different numbers in every cell but one. Every other facet chart
+		has them equal, which makes this the only place a confusion between the two is visible. Each
+		cell's bars must belong to the species in its own heading.
+	</p>
+	<div class="chart-wrapper">
+		<ChartContainer
+			xLabel="species"
+			yLabel="count"
+			fx="species"
+			fxDomain={['Gentoo', 'Adelie', 'Chinstrap']}
+		>
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+						<BarMarkY table="penguins" x="species" y={count()} fill="species" />
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+			{#snippet background()}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+			{/snippet}
+		</ChartContainer>
+	</div>
 </div>
 
 <style>
@@ -142,6 +173,13 @@
 
 	h2:first-child {
 		margin-top: 0;
+	}
+
+	.note {
+		margin: 0 0 8px 0;
+		font-size: 12px;
+		color: #666;
+		max-width: 80ch;
 	}
 
 	.demo-scroll {
