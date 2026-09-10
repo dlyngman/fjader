@@ -31,12 +31,19 @@
 	//     Wrong bars with no error is the failure — watch the labels, not the
 	//     bar count.
 	//
-	//   Reload (reordered only)
-	//     Same category set, different insertion order, so the dim assigns the
-	//     same ids (it orders by value) but the underlying rows move. Should be
-	//     indistinguishable from the first button; it is here because "the ids
-	//     happen to coincide" is exactly how the first draft of the unit tests
-	//     passed without the fix.
+	//   Reload (shuffled rows, new counts)
+	//     Same categories, rows in a different order, different counts. The BAR
+	//     HEIGHTS must change and the ORDER must not: the dim assigns ids by
+	//     ORDER BY value, and an unsorted band domain reads the dim's values in
+	//     id order, so display order comes from the dim and never from row order
+	//     (the C1 decision in §9.4 — arbitrary SELECT DISTINCT order became
+	//     deterministic dim order). Alphabetical here is the correct answer, not
+	//     a reorder that failed to happen.
+	//
+	//     The counts are what make this button able to fail. It first shipped
+	//     with the same counts as the initial load, which made the chart
+	//     byte-identical before and after — indistinguishable from a
+	//     clearQueryCache() that did nothing whatsoever.
 	//
 	// WHAT TO LOOK FOR, in all three: four (or three) bars, each label sitting
 	// on its own bar, counts matching the table below, and tooltips naming the
@@ -91,12 +98,15 @@
 			['delta', 6],
 			['echo', 13]
 		],
-		// Same set, different row order. Ids coincide; only the data moves.
-		reordered: [
-			['delta', 5],
-			['charlie', 11],
-			['alpha', 3],
-			['bravo', 7]
+		// Same categories, shuffled rows, and DIFFERENT counts. The counts are what
+		// make this button able to fail: with the original counts the chart was
+		// byte-identical before and after, so a clearQueryCache() that silently
+		// did nothing looked exactly like one that worked.
+		shuffled: [
+			['delta', 12],
+			['charlie', 4],
+			['alpha', 9],
+			['bravo', 2]
 		]
 	};
 
@@ -109,7 +119,14 @@
 		await queryEngine.exec(
 			`CREATE OR REPLACE TABLE reload_cats AS SELECT * FROM (VALUES ${valuesSql(rows)}) AS t(cat)`
 		);
-		expected = rows.map(([c, n]) => `${c}=${n}`).join('  ');
+		// Sorted, because that is the expectation being asserted: display order
+		// comes from the dim (ORDER BY value), never from the order the rows were
+		// inserted in. Printing the rows in table order instead would have made
+		// the shuffled reload look like a reorder that failed.
+		expected = [...rows]
+			.sort(([a], [b]) => (a < b ? -1 : 1))
+			.map(([c, n]) => `${c}=${n}`)
+			.join('   ');
 	}
 
 	async function reload(key, label) {
@@ -163,13 +180,18 @@
 			<button onclick={() => reload('renumbered', 'renumbered')} disabled={busy}>
 				Reload (renumbered — drops charlie, adds echo)
 			</button>
-			<button onclick={() => reload('reordered', 'reordered only')} disabled={busy}>
-				Reload (reordered only)
+			<button onclick={() => reload('shuffled', 'shuffled rows, new counts')} disabled={busy}>
+				Reload (shuffled rows, new counts — order must NOT move)
 			</button>
 			<span class="status">{status}</span>
 		</div>
 
-		<p class="note">Expected: <code>{expected}</code></p>
+		<p class="note">
+			Expected, left to right: <code>{expected}</code><br />
+			Order is always alphabetical — the dim numbers values with
+			<code>ORDER BY value</code> and an unsorted band axis reads them in id order, so row order in the
+			table never moves a bar. Heights are what change.
+		</p>
 
 		<div class="chart">
 			<ChartContainer xLabel="category" yLabel="count">
