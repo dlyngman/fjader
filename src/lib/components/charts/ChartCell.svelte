@@ -5,7 +5,7 @@
 	import type { Margin } from '$lib/types';
 	import { WheelInteractionControl } from '$lib/interactors/wheelInteractionControl';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
-	import type { ChartContext } from '$lib/types';
+	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import type { ChartConfig } from '$lib/config';
@@ -19,7 +19,8 @@
 	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
 
 	interface FacetingProps {
-		fx: string | null;
+		/** A column name or a fixed SQL expression. See ChartContainer's fx prop. */
+		fx: FieldRef | null;
 		fxDomain?: DimValue[] | null;
 		isFaceted: boolean;
 		facetChartIds: string[];

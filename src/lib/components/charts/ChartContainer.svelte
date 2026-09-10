@@ -10,12 +10,28 @@
 	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
+	import { identityKeyFor } from '$lib/query-engine/identity-key';
+	import { checkFacetCells } from './facet-limits';
 	import ChartCell from './ChartCell.svelte';
 
 	interface Props {
 		xLabel?: string | null;
 		yLabel?: string | null;
-		fx?: string | null;
+		/**
+		 * The facet channel: a column name, or a fixed SQL expression over one.
+		 *
+		 * Whatever a categorical channel accepts anywhere else, because it goes
+		 * through the same `identityKeyFor` and the same dim (§16 / #197) — an
+		 * expression is keyed on its own text and gets an identity exactly as a
+		 * column does. bin(), aggregates and window functions are refused for the
+		 * reasons stated there, and the mark reports the refusal.
+		 *
+		 * Expressions matter here more than on an axis: one cell per distinct
+		 * TIMESTAMP is one cell per row, so `date_trunc` is the operation a
+		 * temporal facet almost always wants, and before this it could only be
+		 * had by materialising a column in SQL first.
+		 */
+		fx?: FieldRef | null;
 		/**
 		 * Explicit cell order for the facet grid, as source values.
 		 *
@@ -108,20 +124,41 @@
 	const gpuCoordinator = getGPUContext();
 
 	// --- Faceting ---
-	const facetBandScale = fx
+	//
+	// Named and registered on the IDENTITY KEY, not on `fx` itself. For a column
+	// the two are the same string; for an expression the key is its SQL text,
+	// while `${fx}` on the node would name the scale after whatever toString
+	// happens to produce. The key is also what CategoricalIdentity names the dim
+	// after and what the mark looks the scale up by, so deriving all three from
+	// one function is what stops them diverging (see identity-key.ts).
+	const facetKey = identityKeyFor(fx);
+	const facetBandScale = facetKey
 		? (scaleRegistry.getOrCreateScale(
-				`__facet__${fx}`,
+				`__facet__${facetKey.key}`,
 				'band',
-				{ sourceField: fx },
+				{ sourceField: facetKey.key },
 				layout.chartId
 			) as BandScaleState)
 		: null;
 	const facetCategories = $derived(
 		facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null
 	);
-	const isFaceted = $derived(!!facetCategories);
+
+	// A grid of one chart per category, gated on the count (§29.11). The dim's
+	// own limit is three orders of magnitude higher and answers a different
+	// question — see facet-limits.ts.
+	const facetCheck = $derived(
+		facetCategories ? checkFacetCells(facetCategories.length, facetKey?.key ?? 'fx') : null
+	);
+	const facetRefusal = $derived(facetCheck && !facetCheck.ok ? facetCheck.message : null);
+	const isFaceted = $derived(!!facetCategories && !facetRefusal);
 	const effectiveColumns = $derived(facetColumns ?? facetCategories?.length ?? 1);
-	const facetChartIds = $derived(facetCategories?.map((_, i) => `${layout.chartId}-fx-${i}`) ?? []);
+	// Gated on isFaceted, not on facetCategories: a refused grid must not hand
+	// out cell ids, or the marks compile a faceted pipeline for cells that are
+	// never mounted.
+	const facetChartIds = $derived(
+		isFaceted ? (facetCategories?.map((_, i) => `${layout.chartId}-fx-${i}`) ?? []) : []
+	);
 
 	const facetingProps = {
 		fx,
@@ -402,7 +439,14 @@
 			{@render canvas?.()}
 		</div>
 
-		{#if facetCategories}
+		{#if facetRefusal}
+			<!-- Shown, not logged. A blank area plus a console line is the failure
+			     mode the dim's refusals were written to avoid (§16.6). -->
+			<div class="facet-refusal" role="alert">{facetRefusal}</div>
+		{:else if facetCategories}
+			{#if facetCheck?.message}
+				<div class="facet-warning">{facetCheck.message}</div>
+			{/if}
 			<div class="facet-grid" style:grid-template-columns="repeat({effectiveColumns}, 1fr)">
 				{#each facetCategories as cat, i (cat)}
 					<ChartCell
@@ -497,6 +541,29 @@
 		flex: 1;
 		min-height: 0;
 		gap: 4px;
+	}
+
+	.facet-refusal,
+	.facet-warning {
+		flex: 0 0 auto;
+		padding: 10px 12px;
+		border-radius: 4px;
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.facet-refusal {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		text-align: center;
+		color: var(--diveplot-error-text, #b00020);
+		background: var(--diveplot-error-bg, rgba(176, 0, 32, 0.06));
+	}
+
+	.facet-warning {
+		color: var(--diveplot-text-muted, #6b7280);
 	}
 
 	.facet-loading {

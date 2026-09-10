@@ -50,11 +50,17 @@
 	//   Chart 3  TIMESTAMP                TODAY read 1704067200000 and friends.
 	//   Chart 4  the workaround        -> cells read 2024-01, 2024-02, 2024-03.
 	//
-	// Chart 4 is what a user has to do today: pre-compute a VARCHAR column.
-	// Note it is a WORKAROUND and not the natural spelling — `fx` is typed
-	// `string | null` (ChartContainer.svelte:18), so a facet cannot be given a
-	// SQL expression and `fx={strftime(...)}` is not available. The column has
-	// to exist in the table.
+	//   Chart 5  the gate                -> refuses, in words, on the chart.
+	//
+	// Chart 4 is the fix for chart 2 and the reason `fx` was widened to accept
+	// an expression: truncating is the operation a temporal facet almost always
+	// wants, and it yields a VARCHAR, so the heading is right for the same
+	// reason chart 1's is. It previously needed a materialised column.
+	//
+	// Chart 5 facets on a raw TIMESTAMP with 200 distinct values. The dim's own
+	// limit is 10000 — sized for the slot buffer — so it passes comfortably and
+	// used to render 200 full charts. The two are a pair: the gate says no, and
+	// chart 4 is what it is telling you to do instead.
 	//
 	// A SECOND TRAP, shown in the panel rather than as a chart. `fxDomain` is
 	// compared against dim values, so ordering a temporal facet means writing
@@ -67,7 +73,7 @@
 	// containers faceting on one field share a BandScaleState (§25.3 bug 1).
 
 	import { onMount } from 'svelte';
-	import { count } from '@uwdata/mosaic-sql';
+	import { count, sql } from '@uwdata/mosaic-sql';
 	import { initDivePlot } from '$lib';
 	import {
 		ChartContainer,
@@ -83,6 +89,13 @@
 	let isLoaded = $state(false);
 	let error = $state(null);
 	let probes = $state([]);
+
+	// ONE expression, referenced three times. identityKeyFor keys a dim on the
+	// expression's TEXT, so three separately-constructed but identical nodes
+	// would agree anyway — but sharing the object makes that a fact rather than
+	// a coincidence, and it is the same string the probe below looks up.
+	const monthExpr = sql`strftime("cat_date", '%Y-%m')`;
+	const monthKey = String(monthExpr);
 
 	/**
 	 * Report the JS type the dim actually holds, and what String() makes of it.
@@ -129,8 +142,12 @@
 					(TIMESTAMP '2024-03-01 12:00:00', 5), (TIMESTAMP '2024-01-01 12:00:00', 2),
 					(TIMESTAMP '2024-02-01 12:00:00', 1), (TIMESTAMP '2024-03-01 12:00:00', 9)
 				) t(cat_ts, amount)`,
-				`CREATE TABLE fx_month AS
-					SELECT strftime(cat_date, '%Y-%m') AS month_text, amount FROM fx_date`
+				// Deliberately more distinct timestamps than a grid can hold, at a
+				// scale any real event table reaches immediately.
+				`CREATE TABLE fx_wide AS
+					SELECT TIMESTAMP '2024-01-01 00:00:00' + INTERVAL (i) MINUTE AS event_ts,
+					       (i % 7) + 1 AS amount
+					FROM range(200) t(i)`
 			]);
 
 			isLoaded = true;
@@ -142,7 +159,7 @@
 						probe('cat_varchar', 'A, B, C'),
 						probe('cat_date', '2024-01-01, 2024-02-01, 2024-03-01'),
 						probe('cat_ts', '2024-01-01 12:00, 2024-02-01 12:00, 2024-03-01 12:00'),
-						probe('month_text', '2024-01, 2024-02, 2024-03')
+						probe(monthKey, '2024-01, 2024-02, 2024-03')
 					];
 				} catch (e) {
 					error = String(e);
@@ -263,20 +280,47 @@
 			</ChartContainer>
 		</div>
 
-		<h2>4. The workaround &mdash; a pre-computed VARCHAR month. Cells read 2024-01, 02, 03.</h2>
+		<h2>4. The fix &mdash; truncate in <code>fx</code>. Cells read 2024-01, 02, 03.</h2>
 		<p class="note">
-			<code>strftime</code> in the table definition, not in <code>fx</code>: the prop is typed
-			<code>string | null</code>, so a facet cannot take a SQL expression. This also truncates,
-			which is the operation a temporal facet almost always wants &mdash; one cell per distinct
-			TIMESTAMP is one cell per row, and nothing currently refuses that (§29.11).
+			<code>fx</code> takes a fixed SQL expression, keyed on its own text and dimmed exactly as a
+			column is (§16 / #197). Truncating gives one cell per month instead of one per instant, and it
+			produces a VARCHAR, so the heading is right for the same reason chart 1's is. This is what
+			chart 5's refusal is telling you to do; before <code>fx</code> was widened it needed a materialised
+			column.
 		</p>
 		<div class="chart">
-			<ChartContainer xLabel="cat" yLabel="count" fx="month_text">
+			<ChartContainer xLabel="cat" yLabel="count" fx={monthExpr}>
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<BarMarkY table="fx_month" x="month_text" y={count()} fill="month_text" />
+							<BarMarkY table="fx_date" x={monthExpr} y={count()} fill={monthExpr} />
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+				{#snippet background()}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<h2>5. The gate &mdash; 200 distinct timestamps. Refuses, in words, on the chart.</h2>
+		<p class="note">
+			The dim's own limit is 10000, sized for the shared slot buffer, and 200 passes it without
+			complaint &mdash; a facet cell is a whole chart, not a bar, so the two numbers are three
+			orders of magnitude apart (§29.11, <code>facet-limits.ts</code>). The message names the field
+			and points at truncation, because &ldquo;use fewer categories&rdquo; is not something a user
+			can act on.
+		</p>
+		<div class="chart">
+			<ChartContainer xLabel="cat" yLabel="count" fx="event_ts">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<BarMarkY table="fx_wide" x="event_ts" y={count()} fill="event_ts" />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}

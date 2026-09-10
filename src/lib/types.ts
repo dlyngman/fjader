@@ -462,7 +462,8 @@ export interface ChartContext {
 	readonly animatedAxisXPositions?: number[];
 
 	// Faceting
-	fx: string | null;
+	/** A column name or a fixed SQL expression. See ChartContainer's fx prop. */
+	fx: FieldRef | null;
 	readonly isFaceted: boolean;
 	readonly facetChartIds: string[];
 	readonly facetBandScale: BandScaleState | null;
