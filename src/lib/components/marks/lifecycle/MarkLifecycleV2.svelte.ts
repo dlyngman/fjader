@@ -498,7 +498,16 @@ export class MarkLifecycleV2 {
 				: !!(scaleTypes && xScaleState && yScaleState);
 			if (!scalesAvailable) return;
 
-			// Track color/series scale states for reactive re-entry
+			// Read #colorScaleState REACTIVELY — outside the untrack below — so
+			// that attaching it re-enters this effect. #runSetup returns without
+			// completing while this is false, which is the only reason the
+			// re-entry has anything to do. See there.
+			//
+			// Colour only, despite what this comment used to say about "color/
+			// series": #seriesScaleState is not read here and so is not tracked.
+			// That is currently harmless because the series channel never takes a
+			// dim — it is passed to fetchCategoricalDomains and nowhere else — but
+			// it is not a guarantee anyone wrote down.
 			const colorKey = this.#config.colorChannel || 'fill';
 			const colorReady = !this.#config.select?.[colorKey] || !!this.#colorScaleState;
 
@@ -653,6 +662,38 @@ export class MarkLifecycleV2 {
 
 	async #runSetup(colorReady: boolean): Promise<void> {
 		if (this.#destroyed) return;
+
+		// Wait for the colour scale before completing setup.
+		//
+		// `colorReady` was computed and passed here from the moment this effect
+		// was written, and never read — so the deferral it describes did not
+		// happen, and whether a mark got colour identity came down to timing.
+		//
+		// The ordering is not a race that usually goes the right way; it CANNOT
+		// go the right way on the first pass. MarkColor attaches the scale from
+		// an $effect that requires `setup` to already exist
+		// (MarkColor.svelte.ts:123), so `#colorScaleState` is necessarily null
+		// when this runs for the first time. What saved most marks is the
+		// `scalesAvailable` gate above: they wait for BOTH x and y scale states,
+		// and MarkColor's effect lands in the gap. A parallel mark waits for x
+		// alone, reaches this one scale-resolution earlier, and completes setup
+		// with no colour scale — after which `if (this.setupComplete) return;`
+		// blocks the re-entry the comment there promises.
+		//
+		// The consequence was silent and specific: #ensureIdentityColumns saw no
+		// colour key, so the field was never dimmed and #identityFields never
+		// got it, and #inlineIdentityColumns — which gates on that Set — could
+		// never swap the id column in, however many times it re-derived. On a
+		// page where another mark dimmed the same field, the SHARED colour scale
+		// ended up with identity while this mark's query still selected raw
+		// strings, which is the error ColorScaleState.processDataForGPU raises.
+		//
+		// Returning WITHOUT setting setupComplete is the whole mechanism: the
+		// effect reads #colorScaleState reactively, so attaching it re-enters
+		// here. A mark with no colour channel is ready by definition — that is
+		// the `!select[colorKey]` half of the expression — so this cannot stall
+		// a chart that was never going to get a colour scale.
+		if (!colorReady) return;
 
 		// Passive scales: skip domain fetching but still need schema for CAST decisions
 		if (this.#config.passiveScales) {
