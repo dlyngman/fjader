@@ -133,13 +133,21 @@
 				`CREATE TABLE fx_varchar AS SELECT * FROM (VALUES
 					('A', 3), ('B', 7), ('C', 5), ('A', 2), ('B', 1), ('C', 9)
 				) t(cat_varchar, amount)`,
+				// SIX distinct dates across THREE months, unevenly. The first version
+				// of this table had one date per month, which made truncation
+				// unobservable: 3 dates collapse to 3 months, so a working strftime
+				// and no truncation at all drew the identical chart. Counts are
+				// deliberately unequal (3, 5, 2) for the same reason — equal bars
+				// hide both a pooled stack and a mis-grouped one.
+				//
 				// `bucket` is a plain VARCHAR so an expression can be tested on ONE
 				// channel at a time: chart 4a puts it only in fx, 4b only on the axis.
 				`CREATE TABLE fx_date AS SELECT * FROM (VALUES
-					(DATE '2024-01-01', 3, 'lo'), (DATE '2024-02-01', 7, 'hi'),
-					(DATE '2024-03-01', 5, 'hi'), (DATE '2024-01-01', 2, 'lo'),
-					(DATE '2024-02-01', 1, 'lo'), (DATE '2024-03-01', 9, 'hi')
-				) t(cat_date, amount, bucket)`,
+					(DATE '2024-01-05', 'lo'), (DATE '2024-01-05', 'hi'), (DATE '2024-01-20', 'lo'),
+					(DATE '2024-02-03', 'hi'), (DATE '2024-02-14', 'hi'), (DATE '2024-02-14', 'lo'),
+					(DATE '2024-02-28', 'hi'), (DATE '2024-02-28', 'hi'),
+					(DATE '2024-03-11', 'lo'), (DATE '2024-03-11', 'lo')
+				) t(cat_date, bucket)`,
 				`CREATE TABLE fx_ts AS SELECT * FROM (VALUES
 					(TIMESTAMP '2024-01-01 12:00:00', 3), (TIMESTAMP '2024-02-01 12:00:00', 7),
 					(TIMESTAMP '2024-03-01 12:00:00', 5), (TIMESTAMP '2024-01-01 12:00:00', 2),
@@ -160,7 +168,10 @@
 				try {
 					probes = [
 						probe('cat_varchar', 'A, B, C'),
-						probe('cat_date', '2024-01-01, 2024-02-01, 2024-03-01'),
+						probe(
+							'cat_date',
+							'2024-01-05, 2024-01-20, 2024-02-03, 2024-02-14, 2024-02-28, 2024-03-11'
+						),
 						probe('cat_ts', '2024-01-01 12:00, 2024-02-01 12:00, 2024-03-01 12:00'),
 						probe(monthKey, '2024-01, 2024-02, 2024-03')
 					];
@@ -245,7 +256,7 @@
 			</ChartContainer>
 		</div>
 
-		<h2>2. DATE &mdash; headings should be dates. Today they are epoch millis.</h2>
+		<h2>2. DATE &mdash; six cells; headings should be dates. Today they are epoch millis.</h2>
 		<div class="chart">
 			<ChartContainer xLabel="cat" yLabel="count" fx="cat_date">
 				{#snippet canvas()}
@@ -284,8 +295,8 @@
 		</div>
 
 		<h2>
-			4a. Expression in <code>fx</code> only &mdash; three cells headed 2024-01, 02, 03, each with lo/hi
-			bars.
+			4a. Expression in <code>fx</code> only &mdash; three cells headed 2024-01, 02, 03. Bars sit on
+			zero: Jan lo=2 hi=1, Feb hi=4 lo=1, Mar lo=2.
 		</h2>
 		<p class="note">
 			<code>fx</code> takes a fixed SQL expression, keyed on its own text and dimmed exactly as a
@@ -312,7 +323,10 @@
 			</ChartContainer>
 		</div>
 
-		<h2>4b. Expression on the band AXIS only &mdash; bars labelled 2024-01, 02, 03.</h2>
+		<h2>
+			4b. Expression on the band AXIS only &mdash; THREE bars labelled 2024-01, 02, 03, heights 3,
+			5, 2 &mdash; not six bars, one per date.
+		</h2>
 		<p class="note">
 			The other half of 4a, isolated. If 4a renders and this one does not, an expression in
 			<code>fx</code> is fine and the gap is an expression on a band axis, which is a different
