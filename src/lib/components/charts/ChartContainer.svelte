@@ -26,6 +26,14 @@
 		 *
 		 * Read once, at init: a static ordering, not a reactive one. Changing it
 		 * after mount will not move the cells.
+		 *
+		 * SHARED, and this will surprise you. ScaleRegistry keys scales by name
+		 * plus type plus config, and a facet scale is named `__facet__<fx>`, so
+		 * every ChartContainer faceting on the same field holds the SAME
+		 * BandScaleState. Setting this reorders the cells of all of them, not
+		 * just this one. Give a chart its own facet column when you want its
+		 * order to be its own — the same workaround the positional `domain` prop
+		 * needs, for the same reason.
 		 */
 		fxDomain?: DimValue[] | null;
 		columns?: number | null;
