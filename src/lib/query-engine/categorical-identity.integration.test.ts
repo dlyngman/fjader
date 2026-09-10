@@ -310,9 +310,12 @@ describe('CategoricalIdentity', () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const dim = identity.dimTable('species');
 
-		await expect(db.run(`INSERT INTO "${dim}" VALUES ('Adelie', 99)`)).rejects.toThrow(
-			/[Cc]onstraint|unique/
-		);
+		// Columns named: the dim carries (value, label, id), and a positional
+		// INSERT would fail at the binder before ever reaching the constraint
+		// this test is about.
+		await expect(
+			db.run(`INSERT INTO "${dim}" (value, label, id) VALUES ('Adelie', NULL, 99)`)
+		).rejects.toThrow(/[Cc]onstraint|unique/);
 	});
 
 	it('an append after a reservation continues past it without renumbering', async () => {

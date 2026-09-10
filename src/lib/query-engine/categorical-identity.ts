@@ -8,10 +8,12 @@
  * Three pieces:
  *
  * 1. A **dim table per source field**, `__dplot_dim_<field>_s<session>`, holding
- *    `(value, id)`. Built from the first table that requests the field; later
- *    tables APPEND unseen values with continuing ids. It never reorders and never
- *    renumbers, so an id already baked into a vertex buffer stays valid and no
- *    earlier mark has to requery.
+ *    `(value, label, id)`. Built from the first table that requests the field;
+ *    later tables APPEND unseen values with continuing ids. It never reorders and
+ *    never renumbers, so an id already baked into a vertex buffer stays valid and
+ *    no earlier mark has to requery. `value` carries the source column's own type
+ *    and `label` is NULL, except on a synthetic row (`reserveSynthetic`), where
+ *    that is inverted.
  *
  * 2. A **per-table view**, `<table>_v_s<session>`, selecting `*` plus one
  *    `__dplot_<field>_idx` column per requested field. Always LEFT JOIN with
@@ -512,8 +514,19 @@ export class CategoricalIdentity {
 		if (existing !== undefined) return existing;
 
 		const dimName = quote(dim.name);
+		// value NULL, label carrying the text. The label cannot go in `value`:
+		// that column has the source column's type, so 'Other' against a year or
+		// a rating is `Conversion Error: Could not convert string 'Other' to
+		// INT32` — includeOthers simply threw on every non-VARCHAR band axis.
+		//
+		// NULL is the right value rather than a placeholder of the column's type,
+		// because a synthetic row must never join to a source row and #createView
+		// joins ON t.key = d.value. Any in-range sentinel would collide with a
+		// real category the moment the data contained it; NULL cannot, since
+		// NULL = anything is never true.
 		await this.#exec.exec(
-			`INSERT INTO ${dimName} SELECT ${literal(label)}, ` +
+			`INSERT INTO ${dimName} (value, label, id) ` +
+				`SELECT NULL, ${literal(label)}, ` +
 				`(SELECT COALESCE(MAX(id), -1) + 1 FROM ${dimName})::INT`
 		);
 		await this.#refreshValues(field);
@@ -544,9 +557,15 @@ export class CategoricalIdentity {
 		await this.#checkCardinality(field, expr, src);
 
 		if (dim.tables.size === 0) {
+			// `label` is NULL for every real value and carries the text for a
+			// synthetic one (see reserveSynthetic). It exists because `value` takes
+			// the SOURCE column's type: on a band axis over a year or a rating
+			// there is no INTEGER that means "Other", and writing the string into
+			// that column is a conversion error, not a fallback.
 			await this.#exec.exec(
 				`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
-					`SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
+					`SELECT value, NULL::VARCHAR AS label, ` +
+					`(ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
 					`FROM (SELECT DISTINCT ${expr} AS value FROM ${src} WHERE ${expr} IS NOT NULL)`
 			);
 			// A second statement: CTAS cannot carry a constraint. `value` is unique
@@ -555,13 +574,19 @@ export class CategoricalIdentity {
 			// value does not tie-break — #createView joins ON t.field = d.value, so
 			// it FANS OUT every matching source row in every query against the
 			// view. Cheap insurance against a future writer forgetting.
+			//
+			// Synthetic rows hold value NULL, and SQL treats NULLs as distinct
+			// under a unique index, so any number of them coexist here — verified
+			// against DuckDB rather than assumed.
 			await this.#exec.exec(
 				`CREATE UNIQUE INDEX IF NOT EXISTS ${quote(`${dim.name}_value_uq`)} ON ${dimName}(value)`
 			);
 		} else {
+			// Columns named rather than positional: the table has three of them and
+			// a positional INSERT would silently put the id into `label`.
 			await this.#exec.exec(
-				`INSERT INTO ${dimName} ` +
-					`SELECT s.v, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
+				`INSERT INTO ${dimName} (value, label, id) ` +
+					`SELECT s.v, NULL, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
 					`ROW_NUMBER() OVER (ORDER BY s.v))::INT ` +
 					`FROM (SELECT DISTINCT ${expr} AS v FROM ${src} WHERE ${expr} IS NOT NULL) s ` +
 					`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d WHERE d.value = s.v)`
@@ -658,13 +683,19 @@ export class CategoricalIdentity {
 	 */
 	async #refreshValues(field: string): Promise<void> {
 		const rows = await this.#exec.queryRows(
-			`SELECT id, value FROM ${quote(this.dimTable(field))} ORDER BY id`
+			`SELECT id, value, label FROM ${quote(this.dimTable(field))} ORDER BY id`
 		);
 
 		// Ordered by id and dense by construction, so position is the id — and
 		// reset() derives value -> id from the same pass, so the two directions
 		// cannot disagree.
-		this.identity(field).reset(rows.map((row) => row.value as DimValue));
+		//
+		// `label` wins where it is set, which is only ever a synthetic row. Every
+		// real row has label NULL and keeps its native value, so this does not
+		// stringify anything the dim read from the source (see DimValue). It is
+		// the one place the two columns collapse back into one space, and it is
+		// why no consumer has to know a bucket was synthetic.
+		this.identity(field).reset(rows.map((row) => (row.label ?? row.value) as DimValue));
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */
