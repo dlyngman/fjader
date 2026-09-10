@@ -30,7 +30,18 @@ struct ColorConfig {
     scaleType: u32,         // byte 20 — scheme rendering type (ordinal/sequential/diverging/cyclical)
     transformType: u32,     // byte 24 — normalization transform (linear/log/symlog/sqrt/pow)
     transformParam: f32,    // byte 28 — symlog constant C, or pow exponent
+    slotBase: u32,          // byte 32 — base into identitySlots, or NO_SLOT_TABLE
+    _pad0: u32,             // byte 36
+    _pad1: u32,             // byte 40
+    _pad2: u32,             // byte 44
 }
+
+/**
+ * slotBase when this scale's channel already carries a palette index rather
+ * than an identity id. Distinct from base 0, which is a real block — the
+ * permanently empty one — so it cannot be confused with "not placed".
+ */
+const NO_SLOT_TABLE: u32 = 0xFFFFFFFFu;
 
 const COLOR_SCALE_ORDINAL: u32 = 0u;
 const COLOR_SCALE_SEQUENTIAL: u32 = 1u;
@@ -96,9 +107,20 @@ fn sampleRamp(config: ColorConfig, t: f32) -> vec4<f32> {
 }
 
 fn samplePalette(config: ColorConfig, categoryIndex: u32) -> vec4<f32> {
-    // 0-based indexing: category 0 maps to palette index 0
-    let idx = categoryIndex % config.paletteSize;
-    return ordinalPalettes[config.paletteOffset + idx];
+    // The channel carries an identity id, which is stable and has nothing to do
+    // with this scale's palette. Resolve it to this scale's own rank first; the
+    // palette is indexed by rank, so the plotted categories take palette colours
+    // in order and the wrap below is over the PLOTTED count, not the dim's.
+    var idx = categoryIndex;
+    if (config.slotBase != NO_SLOT_TABLE) {
+        let slot = identitySlot(config.slotBase, categoryIndex);
+        if (slot < 0.0) {
+            // Not ranked by this scale: a category outside its domain.
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+        idx = u32(slot);
+    }
+    return ordinalPalettes[config.paletteOffset + (idx % config.paletteSize)];
 }
 
 fn getColorFromScale(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<f32> {

@@ -29,6 +29,11 @@ interface ColorScaleConfig {
 	exponent?: number; // pow exponent (default 1)
 }
 
+/** Must match ColorConfig in ColorScaleShaderLib. */
+const COLOR_CONFIG_BYTES = 48;
+/** slotBase meaning "the channel already carries a palette index". */
+const NO_SLOT_TABLE = 0xffffffff;
+
 interface ColorConfigParams {
 	type: number;
 	rampOffset?: number;
@@ -38,6 +43,8 @@ interface ColorConfigParams {
 	domainMax?: number;
 	transformType?: number;
 	transformParam?: number;
+	/** Base into the shared identity slot table, or NO_SLOT_TABLE. */
+	slotBase?: number;
 }
 
 /**
@@ -428,7 +435,7 @@ export class ColorScaleState {
 	 * }; // 32 bytes total
 	 */
 	#buildColorConfig(params: ColorConfigParams): ArrayBuffer {
-		const buffer = new ArrayBuffer(32);
+		const buffer = new ArrayBuffer(COLOR_CONFIG_BYTES);
 		const view = new DataView(buffer);
 		const LE = true; // Little Endian (WebGPU standard)
 
@@ -443,6 +450,7 @@ export class ColorScaleState {
 		view.setUint32(20, params.type ?? 0, LE);
 		view.setUint32(24, params.transformType ?? 0, LE);
 		view.setFloat32(28, params.transformParam ?? 0, LE);
+		view.setUint32(32, params.slotBase ?? NO_SLOT_TABLE, LE);
 
 		return buffer;
 	}
@@ -524,9 +532,7 @@ export class ColorScaleState {
 		// If the scale type is a transform type (log/symlog/etc.), keep it;
 		// otherwise infer from the new scheme.
 		const effectiveType =
-			this.#transformType !== 'linear'
-				? this.#scaleType
-				: (newSchemeType || 'sequential');
+			this.#transformType !== 'linear' ? this.#scaleType : newSchemeType || 'sequential';
 		const resolved = resolveColorScaleTypes(effectiveType, newScheme);
 		const nowOrdinal = resolved.renderType === 'ordinal';
 
@@ -553,11 +559,7 @@ export class ColorScaleState {
 	 * Called when the user changes the color scale type (e.g., linear → symlog)
 	 * while keeping the same field.
 	 */
-	setTransform(
-		scaleType: ColorScaleType,
-		constant?: number,
-		exponent?: number
-	): void {
+	setTransform(scaleType: ColorScaleType, constant?: number, exponent?: number): void {
 		const resolved = resolveColorScaleTypes(scaleType, this.#scheme);
 
 		// No change — bail

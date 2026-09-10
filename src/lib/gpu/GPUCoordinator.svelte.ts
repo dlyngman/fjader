@@ -336,7 +336,9 @@ export class GPUCoordinator {
 	// COLOR BUFFER DECLARATIONS
 	// =========================================================================
 	// Color scale buffers (group 2, bindings 1-3)
-	#colorConfigBuffer: GPUBuffer | null = null; // 64 configs × 32 bytes = 2KB
+	#colorConfigBuffer: GPUBuffer | null = null; // 64 configs × 48 bytes = 3KB
+	/** Must match ColorConfig in ColorScaleShaderLib and ColorScaleState. */
+	#COLOR_CONFIG_BYTES = 48;
 	#colorRampBuffer: GPUBuffer | null = null; // 64 ramps × 256 colors × 16 bytes = 256KB
 	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
@@ -672,10 +674,10 @@ export class GPUCoordinator {
 	#createColorScaleBuffers(): void {
 		const device = this.#device!;
 
-		// ColorConfig buffer: 64 slots × 32 bytes each
+		// ColorConfig buffer: 64 slots × 48 bytes each
 		this.#colorConfigBuffer = device.createBuffer({
 			label: 'ColorConfig SSBO',
-			size: this.#maxColorSlots * 32,
+			size: this.#maxColorSlots * this.#COLOR_CONFIG_BYTES,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 
@@ -1449,7 +1451,7 @@ export class GPUCoordinator {
 	 * Write a ColorConfig struct to the config buffer.
 	 *
 	 * @param {number} slot - Config slot index (0-63)
-	 * @param {ArrayBuffer} configData - 32-byte config struct from ColorScaleState
+	 * @param {ArrayBuffer} configData - 48-byte config struct from ColorScaleState
 	 */
 	writeColorConfig(slot: number, configData: ArrayBufferLike): void {
 		if (!this.#colorConfigBuffer) {
@@ -1462,7 +1464,7 @@ export class GPUCoordinator {
 			return;
 		}
 
-		const byteOffset = slot * 32;
+		const byteOffset = slot * this.#COLOR_CONFIG_BYTES;
 		this.#device!.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
 	}
 
