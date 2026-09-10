@@ -901,26 +901,6 @@ export class BandScaleState {
 		return Math.max(0, Math.min(n - 1, bandIndex));
 	}
 
-	// =========================================================================
-	// LEGACY/COMPATIBILITY METHODS
-	// =========================================================================
-
-	/**
-	 * Get positioning information for a category (for compatibility)
-	 */
-	getPosition(category: string): { current: number } {
-		const index = this.effectiveDomain.indexOf(category);
-		if (index === -1) return { current: 0 };
-
-		return {
-			current: index / Math.max(1, this.effectiveDomain.length - 1)
-		};
-	}
-
-	/**
-	 * Read-only view of the category→index mapping.
-	 * Derived from the effective domain; updates reactively.
-	 */
 	/**
 	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */
