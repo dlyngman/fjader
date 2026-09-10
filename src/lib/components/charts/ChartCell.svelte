@@ -858,7 +858,7 @@
 				{#if canvas}
 					{@render canvas()}
 				{:else}
-					<WebGPUCanvas {facetIndex} facetScaleId={facetingProps?.facetBandScale?.id ?? null} />
+					<WebGPUCanvas {facetIndex} facetScale={facetingProps?.facetBandScale ?? null} />
 				{/if}
 			</div>
 

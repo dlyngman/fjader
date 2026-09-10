@@ -27,13 +27,19 @@ interface ChartConfig {
 	/** This cell's DISPLAY position in the facet grid. */
 	facetIndex: number;
 	/**
-	 * The facet BandScaleState's id, so the facet value for this cell can be
-	 * resolved per frame rather than baked in at registration. registerChart
-	 * runs once at mount, and a facet reorder changes which category sits at
-	 * this cell without remounting anything — so a value captured here would go
-	 * stale exactly when it matters.
+	 * The facet BandScaleState itself, not its id.
+	 *
+	 * An id would mean a registry lookup, and a facet scale is not in the
+	 * registry by the time this matters: ScaleRegistry.deregisterChart deletes
+	 * it from scaleUsage and storage when its chart-id usage hits zero, which a
+	 * faceted container always triggers when it stops being one chart and
+	 * becomes a grid. The instance survives — the container and the cells hold
+	 * it — but nothing can look it up. Holding the reference is what makes the
+	 * per-cell facet value resolvable at all.
 	 */
-	facetScaleId: string | null;
+	facetScale: FacetScaleRef | null;
+	/** Last _version whose value was written into this chart's uniform. */
+	_facetVersion: number;
 	visible: boolean;
 	context: GPUCanvasContext;
 	contextConfigured: boolean;
@@ -92,10 +98,17 @@ interface GPUCoordinatorConfig {
 	msaaSampleCount?: number;
 }
 
+/** What the coordinator needs from a facet scale: which id sits at a cell. */
+export interface FacetScaleRef {
+	idAtSlot(slot: number): number | null;
+	/** Bumped whenever the permutation could have moved. */
+	readonly _version: number;
+}
+
 interface ChartRegistrationConfig {
 	zIndex?: number;
 	facetIndex?: number;
-	facetScaleId?: string | null;
+	facetScale?: FacetScaleRef | null;
 }
 
 export interface ChartRegistrationResult {
@@ -313,11 +326,6 @@ export class GPUCoordinator {
 	#bandSlots: BandSlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
 	#bandSlotScales: BandSlotScale[] = [];
-	/**
-	 * Scales whose slot table moved this frame. Reused, and empty on almost
-	 * every frame — a slot table changes on a reorder, not per frame.
-	 */
-	#movedSlotScales = new Set<string>();
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -722,8 +730,6 @@ export class GPUCoordinator {
 		// allocator, the capacity fallback and the eviction sweep are tested.
 		const scales = this.#bandSlotScales;
 		scales.length = 0;
-		const moved = this.#movedSlotScales;
-		moved.clear();
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
 				id: string;
@@ -732,33 +738,10 @@ export class GPUCoordinator {
 				slotVersion?: number;
 			};
 			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
-			// Noted before packing, which is what overwrites the recorded version.
-			if (state.versions.get(scale.id) !== scale.slotVersion) moved.add(scale.id);
 			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
 		}
 
 		const { dirty, length } = packBandSlots(scales, state);
-
-		// A facet scale's permutation decides which id each cell renders, and that
-		// id lives in the cell's FRAME UNIFORM — which is written on mount and on
-		// scale-set changes, not per frame. Nothing else refreshes it: a domain
-		// change reaches invalidateChartsUsingScale, which invalidates the chart
-		// ids the scale is registered under (the container, not the cells) and in
-		// any case only marks them dirty for redraw.
-		//
-		// So without this a facet cell keeps whatever id it was given at mount —
-		// when the scale had no identity yet, so idAtSlot passed the CELL INDEX
-		// through. Ids and cell indices coincide while the dim order is the
-		// display order, which is every facet chart today, which is why this was
-		// invisible. Guarded on the version so it costs a set lookup per frame
-		// and a uniform write only when a permutation actually moves.
-		if (moved.size > 0) {
-			for (const chart of this.#registeredCharts.values()) {
-				if (chart.facetScaleId && moved.has(chart.facetScaleId)) {
-					this.updateChartFrameUniforms(chart.chartId);
-				}
-			}
-		}
 
 		if (!dirty) return;
 
@@ -769,6 +752,32 @@ export class GPUCoordinator {
 			0,
 			length
 		);
+	}
+
+	/**
+	 * Rewrite the frame uniform of any faceted chart whose facet permutation
+	 * moved.
+	 *
+	 * updateChartFrameUniforms is event-driven — mount, scale-set sync, a
+	 * pending queue — and none of those fire when a facet scale's displayOrder
+	 * changes. The scale is also absent from the registry by then (see
+	 * ChartConfig.facetScale), so nothing that walks registered scales can
+	 * notice either. Walking the charts is what is left, and it is cheap: one
+	 * property read and one compare per chart, and a uniform write only when a
+	 * permutation actually moved, which is a reorder rather than a frame.
+	 *
+	 * Without it a cell keeps the value it was given at mount — when the facet
+	 * scale had no identity yet, so idAtSlot passed the CELL INDEX through.
+	 * That agrees with the id whenever dim order is display order, which is
+	 * every facet chart that does not set fxDomain.
+	 */
+	#refreshMovedFacetUniforms(): void {
+		for (const chart of this.#registeredCharts.values()) {
+			const scale = chart.facetScale;
+			if (scale && scale._version !== chart._facetVersion) {
+				this.updateChartFrameUniforms(chart.chartId);
+			}
+		}
 	}
 
 	#fillAllScales(view: Float32Array): void {
@@ -953,6 +962,7 @@ export class GPUCoordinator {
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#updateBandSlots();
+		this.#refreshMovedFacetUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
 		const dstOffset = slot * this.#slotByteSize!;
@@ -1619,7 +1629,8 @@ export class GPUCoordinator {
 			canvas,
 			zIndex: config.zIndex || 0,
 			facetIndex: config.facetIndex ?? 0,
-			facetScaleId: config.facetScaleId ?? null,
+			facetScale: config.facetScale ?? null,
+			_facetVersion: -1,
 			visible: true,
 			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
@@ -1954,14 +1965,8 @@ export class GPUCoordinator {
 		// after. Note this method is event-driven, NOT per frame — #updateBandSlots
 		// is what notices a facet permutation moving and calls it.
 		const facetSlot = chartConfig.facetIndex ?? 0;
-		const facetScale = chartConfig.facetScaleId
-			? (this.#scaleIdToInstance.get(chartConfig.facetScaleId) as unknown as
-					| {
-							idAtSlot?(slot: number): number | null;
-					  }
-					| undefined)
-			: undefined;
-		u32[10] = (facetScale?.idAtSlot?.(facetSlot) ?? facetSlot) >>> 0;
+		u32[10] = (chartConfig.facetScale?.idAtSlot(facetSlot) ?? facetSlot) >>> 0;
+		chartConfig._facetVersion = chartConfig.facetScale?._version ?? -1;
 		u32[11] = 0; // padding
 		f32[12] = nullColor[0]; // R
 		f32[13] = nullColor[1]; // G

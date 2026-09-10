@@ -4,14 +4,15 @@
 	import type { Snippet } from 'svelte';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
+	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
 		facetIndex?: number;
-		facetScaleId?: string | null;
+		facetScale?: FacetScaleRef | null;
 	}
 
-	let { canvasComponents = undefined, facetIndex, facetScaleId = null }: Props = $props();
+	let { canvasComponents = undefined, facetIndex, facetScale = null }: Props = $props();
 
 	const c = getContext<ChartContext>('chart');
 	const isFaceted = !!c.fx && facetIndex == null;
@@ -114,7 +115,7 @@
 			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
 				zIndex: 0,
 				facetIndex: facetIndex ?? 0,
-				facetScaleId
+				facetScale
 			});
 
 			// Notify coordinator that context is ready
