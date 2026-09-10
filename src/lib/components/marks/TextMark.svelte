@@ -157,11 +157,12 @@
 	 * The category a raw band channel value denotes.
 	 *
 	 * resolveChannel gives the UNPROCESSED channel, so this is a string when the
-	 * query left real category values in place (an expression-backed axis, or a
-	 * category-reducing transform on a scale with no dim) and a number when it
-	 * carries an identity id or a CASE-produced position. A string is already
-	 * the answer; a number has to go through the scale, because with identity it
-	 * indexes the dim's values and without it a display position.
+	 * query left real category values in place — a category-reducing transform
+	 * on a scale with no dim — and a number when it carries an identity id.
+	 * (An expression-backed axis was in the first group until `c55e719` gave it
+	 * a dim; it is in the second now.) A string is already the answer; a number
+	 * has to go through the scale, because with identity it indexes the dim's
+	 * values and without it a display position.
 	 *
 	 * The string case used to index the domain array by name, get undefined, and
 	 * pin every such label at pixel 0.

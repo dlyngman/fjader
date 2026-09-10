@@ -502,10 +502,15 @@ export class BandScaleState {
 	 * new identity value array.
 	 */
 	#rebuildSlotTable(): void {
-		// Without identity the channel already carries a display position — an
-		// expression-backed axis CASE-inlines one — so the shader's lookup has to
-		// be a no-op. The identity permutation, not an empty table: empty would
-		// give the scale offset 0 and another scale's slots.
+		// Without identity the channel already carries a display position, so the
+		// shader's lookup has to be a no-op. This is now only a TRANSIENT state —
+		// the window before setIdentity arrives, and the all-NULL column that
+		// renders nothing anyway — because an expression-backed axis gets a dim
+		// like any other since `c55e719`. See §29.8: the pair of spaces this
+		// branch serves outlived the reason for it.
+		//
+		// The identity permutation, not an empty table: empty would give the
+		// scale offset 0 and another scale's slots.
 		if (!this.hasIdentity) {
 			const n = this.#domain.length;
 			const passthrough = new Float32Array(n);
