@@ -14,6 +14,7 @@ import {
 } from './color-utils';
 import type { RGBA, D3ColorScale } from './color-utils';
 import { buildCaseExpression, colorIndexColumn } from '$lib/sql/case-expression';
+import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -89,6 +90,51 @@ export class ColorScaleState {
 
 	// Ordinal category mapping (string -> 0-based index, -1 = null/unknown)
 	#categoryMap: Map<string | number, number> = new Map();
+	/**
+	 * The engine's id <-> value bijection for this scale's field (step 3b).
+	 * A live reference, never a copy — the dim appends when a second table
+	 * registers the same field.
+	 */
+	#identity: FieldIdentity | null = null;
+	/**
+	 * id -> palette rank, ASSIGNED ONCE AND NEVER REASSIGNED.
+	 *
+	 * Not the position in the current domain, which is what the CASE encoded and
+	 * what makes a colour move when its neighbours come and go. A category that
+	 * is filtered out keeps its rank reserved, so when it returns it returns in
+	 * the same colour. That is the whole point: a legend that reshuffles on
+	 * every filter is worse than a gap in the palette.
+	 *
+	 * Ranks are handed out in domain order on first sight, so an untouched chart
+	 * still gets palette colours 0, 1, 2... in order. Churn leaves gaps, and
+	 * enough churn walks past the palette's 32 entries and wraps — the same wrap
+	 * a chart with more than 32 categories already gets, reached sooner.
+	 *
+	 * Cleared only when identity itself is replaced (a data reload), where ids
+	 * stop meaning anything and holding colours to them would be wrong.
+	 */
+	#paletteRank: Map<number, number> = new Map();
+	#nextRank = 0;
+	/**
+	 * id -> rank as a dense array, packed into the shared identity slot table so
+	 * the fragment shader can resolve a channel id to a palette index. -1 for an
+	 * id this scale has never ranked.
+	 */
+	slotTable: Float32Array = new Float32Array(0);
+	/** Bumped on every slotTable rebuild; the packer uploads only on a change. */
+	slotVersion: number = 0;
+	/**
+	 * Where this scale's block sits in the shared identity slot table. Assigned
+	 * by the coordinator's packer, which also patches it into the uploaded
+	 * config — the config is written when the scale changes, while the base can
+	 * move on any frame a neighbouring scale resizes.
+	 */
+	#slotBase: number = -1;
+
+	/** Called by the packer when this scale's block moves. */
+	setSlotBase(base: number): void {
+		this.#slotBase = base;
+	}
 
 	// ViewManager integration - tracks tables this scale has registered columns for
 	#registeredTables: Set<string> = new Set();
@@ -379,10 +425,59 @@ export class ColorScaleState {
 		this.#gpuCoordinator!.writeColorConfig(this.#configSlot, config);
 	}
 
+	/**
+	 * Adopt the engine's id <-> value bijection for this field.
+	 *
+	 * A different FieldIdentity object means a rebuilt dim (a data reload), so
+	 * every rank is stale — the same object-swap signature BandScaleState uses,
+	 * and for the same reason: ids from the old dim are still in range against
+	 * the new one and simply mean other categories.
+	 */
+	setIdentity(identity: FieldIdentity): void {
+		const previous = this.#identity;
+		this.#identity = identity;
+		if (previous && previous !== identity && !previous.present) {
+			this.#paletteRank.clear();
+			this.#nextRank = 0;
+		}
+		this.#refreshRanks();
+	}
+
+	/** True once this scale's channel carries dim ids rather than palette indices. */
+	get hasIdentity(): boolean {
+		return this.isOrdinal && (this.#identity?.present ?? false);
+	}
+
+	/**
+	 * Hand a rank to every domain category that does not have one, then rebuild
+	 * the dense table. Existing ranks are never touched, which is what makes a
+	 * colour survive its category disappearing.
+	 */
+	#refreshRanks(): void {
+		const identity = this.#identity;
+		if (!identity?.present) return;
+
+		for (const value of this.domain) {
+			const id = identity.ids.get(value as never);
+			if (id === undefined || this.#paletteRank.has(id)) continue;
+			this.#paletteRank.set(id, this.#nextRank++);
+		}
+
+		const table = new Float32Array(identity.values.length);
+		table.fill(-1);
+		for (const [id, rank] of this.#paletteRank) {
+			if (id >= 0 && id < table.length) table[id] = rank;
+		}
+		this.slotTable = table;
+		this.slotVersion++;
+	}
+
 	#uploadOrdinal(): void {
 		// Rebuild category map (string -> 0-based index)
 		this.#categoryMap.clear();
 		this.domain.forEach((cat, i) => this.#categoryMap.set(cat, i));
+		// New categories in the domain need ranks before the palette is sized.
+		this.#refreshRanks();
 
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
@@ -392,10 +487,21 @@ export class ColorScaleState {
 		);
 
 		// Build and upload config struct
+		// paletteSize is the modulus the shader wraps a rank with, so it has to
+		// span the RANK space, not the current domain. Ranks outlive the
+		// categories that earned them, so after any churn nextRank exceeds
+		// domain.length — and wrapping a rank of 5 over a domain of 3 lands it on
+		// rank 2's colour, undoing exactly the stability the ranks are for.
+		//
+		// Capped at 32, the palette's size, so a chart with more categories than
+		// that wraps as it always has. Floored at 1: this is a u32 modulus and 0
+		// is undefined behaviour in WGSL.
+		const rankSpace = this.hasIdentity ? this.#nextRank : this.domain.length;
 		const config = this.#buildColorConfig({
 			type: 0, // ORDINAL
 			paletteOffset: this.#paletteSlot * 32,
-			paletteSize: Math.min(this.domain.length, 32)
+			paletteSize: Math.min(Math.max(rankSpace, 1), 32),
+			slotBase: this.hasIdentity ? this.#slotBase : undefined
 		});
 		this.#gpuCoordinator.writeColorConfig(this.#configSlot, config);
 	}

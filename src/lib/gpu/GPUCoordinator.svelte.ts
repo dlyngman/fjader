@@ -98,6 +98,12 @@ interface GPUCoordinatorConfig {
 	msaaSampleCount?: number;
 }
 
+/** A scale that carries its slot-table base in its own uploaded config. */
+interface SlotBaseConsumer {
+	setSlotBase(base: number): void;
+	readonly gpuSlots?: { configSlot: number };
+}
+
 /** What the coordinator needs from a facet scale: which id sits at a cell. */
 export interface FacetScaleRef {
 	idAtSlot(slot: number): number | null;
@@ -326,6 +332,12 @@ export class GPUCoordinator {
 	#identitySlots: IdentitySlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
 	#identitySlotScales: IdentitySlotScale[] = [];
+	/** Last slot base pushed back to a scale, so a static chart patches nothing. */
+	#slotBaseSeen = new Map<string, number>();
+	/** Index-aligned with #identitySlotScales. Reused; null where not applicable. */
+	#slotBaseConsumers: (SlotBaseConsumer | null)[] = [];
+	/** Reused for the four-byte config patch. */
+	#slotBasePatch = new Uint32Array(1);
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -736,6 +748,8 @@ export class GPUCoordinator {
 		// allocator, the capacity fallback and the eviction sweep are tested.
 		const scales = this.#identitySlotScales;
 		scales.length = 0;
+		const consumers = this.#slotBaseConsumers;
+		consumers.length = 0;
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
 				id: string;
@@ -743,11 +757,52 @@ export class GPUCoordinator {
 				slotTable?: Float32Array;
 				slotVersion?: number;
 			};
-			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
+			// Any scale that offers a slot table wants one packed. It used to gate
+			// on band|point, which was the same set at the time; ordinal colour
+			// offers one now, and gating on the type would have meant listing
+			// every kind here as each migrates.
+			if (!scale.slotTable) continue;
 			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
+			// Index-aligned with `scales`, so the base can be handed back after
+			// packing without searching for the instance again.
+			consumers.push(
+				(scale as unknown as SlotBaseConsumer).setSlotBase
+					? (scale as unknown as SlotBaseConsumer)
+					: null
+			);
 		}
 
 		const { dirty, length } = packIdentitySlots(scales, state);
+
+		// Hand back the base to any scale that reads it from its own config rather
+		// than from p4. A band scale's base is refilled into p4 every frame; an
+		// ordinal colour scale's lives in a config uploaded only when the scale
+		// changes, so it is patched directly — four bytes, and only when it
+		// moved. Without that a colour scale keeps a base that belonged to it
+		// before a neighbour resized, and reads another scale's ranks.
+		//
+		// Walks the parallel array captured during collection rather than
+		// searching #scaleArray per entry: this runs every frame.
+		for (let i = 0; i < consumers.length; i++) {
+			const scale = consumers[i];
+			if (!scale) continue;
+			const id = scales[i].id;
+			const base = state.offsets.get(id);
+			if (base === undefined || this.#slotBaseSeen.get(id) === base) continue;
+
+			scale.setSlotBase(base);
+			this.#slotBaseSeen.set(id, base);
+
+			const configSlot = scale.gpuSlots?.configSlot;
+			if (configSlot !== undefined && configSlot >= 0 && this.#colorConfigBuffer) {
+				this.#slotBasePatch[0] = base;
+				this.#device!.queue.writeBuffer(
+					this.#colorConfigBuffer,
+					configSlot * this.#COLOR_CONFIG_BYTES + 32,
+					this.#slotBasePatch
+				);
+			}
+		}
 
 		if (!dirty) return;
 
