@@ -657,4 +657,62 @@ describe('CategoricalIdentity', () => {
 			);
 		});
 	});
+
+	describe('dim id order and colour domain order', () => {
+		// The SQL stack path orders its cumulative window by the series channel,
+		// which since `58b0023` carries a dim id. Its comment claims that
+		// reproduces the legend's stacking order "for free". That is true only
+		// because TWO independent orderings agree:
+		//
+		//   the dim   ROW_NUMBER() OVER (ORDER BY value)      -> ids
+		//   the scale SELECT DISTINCT color ORDER BY color    -> legend order
+		//
+		// Nothing enforces the agreement, and nothing would fail if it broke —
+		// the chart would simply stack in a different order than it lists. These
+		// pin it, so whoever changes either side gets a failure instead.
+
+		beforeEach(async () => {
+			// Deliberately not inserted in alphabetical order: if either side
+			// happened to use insertion order, that would look correct here.
+			await db.run(`CREATE TABLE sales (grade VARCHAR)`);
+			await db.run(`INSERT INTO sales VALUES ('medium'), ('high'), ('low'), ('high')`);
+		});
+
+		it('assigns ids in the same order the colour domain is fetched in', async () => {
+			await identity.ensureColumns('sales', { categorical: ['grade'] });
+			const ids = identity.identity('grade').ids;
+
+			// Exactly the query domain-queries runs for an ordinal colour scale.
+			const domain = (await db.all(`SELECT DISTINCT grade FROM sales ORDER BY grade`)).map(
+				(r) => r.grade as string
+			);
+
+			const idsInDomainOrder = domain.map((v) => ids.get(v)!);
+			expect(idsInDomainOrder).toEqual([...idsInDomainOrder].sort((a, b) => a - b));
+			expect(idsInDomainOrder).toEqual([0, 1, 2]);
+		});
+
+		it('DIVERGES once a second table appends to the dim', async () => {
+			// The known limit, pinned as behaviour rather than left to be
+			// discovered. The dim is append-only, so a second table's new
+			// categories get ids AFTER every existing one instead of interleaving
+			// alphabetically. A stacked mark on that table then orders by
+			// insertion epoch, not by its legend.
+			await identity.ensureColumns('sales', { categorical: ['grade'] });
+			await db.run(`CREATE TABLE sales2 AS SELECT * FROM (VALUES ('critical'), ('low')) t(grade)`);
+			await identity.ensureColumns('sales2', { categorical: ['grade'] });
+
+			const ids = identity.identity('grade').ids;
+			const domain = (await db.all(`SELECT DISTINCT grade FROM sales2 ORDER BY grade`)).map(
+				(r) => r.grade as string
+			);
+
+			// 'critical' sorts first but was appended last, so domain order and
+			// id order disagree. If this ever starts passing as ascending, the
+			// dim stopped being append-only and §9.2's invariant is gone.
+			const idsInDomainOrder = domain.map((v) => ids.get(v)!);
+			expect(idsInDomainOrder).not.toEqual([...idsInDomainOrder].sort((a, b) => a - b));
+			expect(ids.get('critical')).toBeGreaterThan(ids.get('low')!);
+		});
+	});
 });

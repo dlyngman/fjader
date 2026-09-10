@@ -477,14 +477,40 @@ function gatherRows(data: DataAccessor, indices: number[]): DataAccessor {
 // stackY / stackX — cumulative offset stacking
 //
 // SQL path (default): cumulative window SUM, PARTITION BY band ORDER BY the
-// series channel. The series channel is whatever's already in the select —
-// when the mark has an ordinal color scale on fill, MarkLifecycleV2 has
-// already CASE-inlined it to a domain-ordered integer index
-// (#inlineCaseExpressions), so ordering by it reproduces the legend's
-// stacking order for free. No color-domain plumbing needed here, unlike the
-// legacy JS path below, which never looks at fill at all and instead relies
-// on row encounter order (the query's plain ORDER BY on the raw fill value —
-// alphabetical, can diverge from an explicit non-alphabetical legend order).
+// series channel. The series channel is whatever's already in the select — for
+// an ordinal color scale on fill, that is the dim's identity id (step 3b;
+// before `58b0023` it was a CASE-inlined domain-ordered index).
+//
+// Ordering by it still reproduces the legend's stacking order, but it is worth
+// knowing WHY, because nothing here enforces it. Two independent orderings
+// happen to agree:
+//
+//   the dim    ROW_NUMBER() OVER (ORDER BY value)     -> ids
+//   the scale  SELECT DISTINCT color ORDER BY color   -> legend order
+//
+// Both alphabetical, so id order IS legend order. There is no colour `domain`
+// prop today (MarkColor builds the scale with type/scheme/constant/exponent
+// only), so a non-alphabetical legend order is unreachable.
+//
+// Two things would break it, and neither would fail loudly — the chart would
+// stack in a different order than it lists:
+//
+//   - A second table appending to the dim. It is append-only, so that table's
+//     new categories get ids after every existing one rather than interleaved,
+//     and a stacked mark on it orders by insertion epoch.
+//   - Adding an explicit colour domain. That is the feature that turns this
+//     from a coincidence into a bug.
+//
+// Both are pinned in categorical-identity.integration.test.ts, including the
+// divergence, so a change to either side fails a test rather than a chart.
+//
+// Deliberately NOT fixed with a rank expression in the ORDER BY: that would put
+// display order back into the query text, so a legend reorder would rewrite the
+// SQL and invalidate preagg cubes — the exact coupling the identity work
+// removed, reintroduced for a case that does not currently exist.
+//
+// The legacy JS path below never looks at fill at all and instead relies on row
+// encounter order (the query's plain ORDER BY on the raw fill value).
 // NaN in the value column must not poison the running total for later rows
 // in the partition (matches the JS path's documented gap semantics) — done
 // with a FILTER clause excluding NaN rows from the SUM, and a CASE forcing
