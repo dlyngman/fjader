@@ -15,7 +15,11 @@ import {
 	isTemporalScale
 } from '$lib/scales/scale-categories';
 import { isBinExpression } from '$lib/sql/bin';
-import { computeExtentFromData, extractCategoriesFromData } from './domain-computation';
+import {
+	computeExtentFromData,
+	extractCategoriesFromData,
+	extractIdsFromData
+} from './domain-computation';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -256,14 +260,27 @@ export function registerDataDerivedDomains(
 			const scaleType = axis === 'x' ? actualXScaleType : actualYScaleType;
 			if (scaleType !== 'band' && scaleType !== 'point') continue;
 
-			const categories = extractCategoriesFromData(data, axis);
 			const bandScale = axis === 'x' ? xBandScaleState : yBandScaleState;
+
+			// The band channel carries dim ids, and the scale stores ids, so they
+			// go straight across — no decoding to strings for the scale to encode
+			// back. Raw values only for a scale with no identity: an
+			// expression-backed axis has no dim, so its channel holds a
+			// CASE-produced position or the value itself.
+			const encoded = !!bandScale?.hasIdentity;
+			const categories: (string | number)[] = encoded
+				? extractIdsFromData(data, axis)
+				: extractCategoriesFromData(data, axis);
 			if (bandScale?.addMark && categories.length > 0) {
 				// Don't pass { sorted: true } — the data row order is not necessarily
 				// the desired sort order (e.g. _orderConfig adds ORDER BY series, dim).
 				// If a sort sidecar ran (from a sibling mark sharing this scale),
 				// its #sortOrder is already set and should not be overwritten.
-				bandScale.addMark(categories, markId);
+				//
+				// `encoded` because this is the ONE caller already in id space: the
+				// channel carries dim ids. The scale cannot tell that by looking —
+				// on a numeric band column a source value is a number too.
+				bandScale.addMark(categories, markId, { encoded });
 				bandScale.updateDomainFromExtents();
 			}
 		}

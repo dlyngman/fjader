@@ -6,6 +6,7 @@
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -50,7 +51,13 @@ export type FieldRef = string | ExprNode;
 /** Color prop: CSS constant, column name, object wrapper {field, scheme?, type?}, SQL node, or null. */
 export type ColorProp =
 	| FieldRef
-	| { field: string; scheme?: ColorScheme; type?: ColorScaleType; constant?: number; exponent?: number }
+	| {
+			field: string;
+			scheme?: ColorScheme;
+			type?: ColorScaleType;
+			constant?: number;
+			exponent?: number;
+	  }
 	| null;
 
 // ---------------------------------------------------------------------------
@@ -106,6 +113,18 @@ export interface MarkConfig {
 export interface ScaleMap {
 	x?: { bandwidth?(): number; domain?(): unknown[]; range?(): number[] };
 	y?: { bandwidth?(): number; domain?(): unknown[]; range?(): number[] };
+	/**
+	 * Reserved identity ids for synthetic rows a transform invents — the "Other"
+	 * bucket from `topN({ includeOthers })` (§16.9). A band channel carries dim
+	 * ids, so a transform cannot fabricate one; it has to be handed an id the
+	 * engine reserved at setup.
+	 *
+	 * Keyed by DATA COLUMN NAME — what a transform passes to `getColumn`, which
+	 * is the channel alias the query produced ('x', or an extent variant like
+	 * 'x1'), NOT the source field the dim is built on. Keying it by the source
+	 * column silently misses and the synthetic row is dropped.
+	 */
+	otherIdsByColumn?: Record<string, number>;
 	[key: string]: unknown;
 }
 
@@ -224,10 +243,16 @@ export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' 
 // Mark prop building blocks
 // ---------------------------------------------------------------------------
 
-/** Explicit category domain for band/point scales. */
+/**
+ * Explicit category domain for band/point scales.
+ *
+ * DimValue rather than string: a band axis over an INTEGER or BIGINT column has
+ * a numeric domain, and the entries are looked up in a dim keyed by the source
+ * type, so they must arrive uncoerced. See DimValue.
+ */
 export interface DomainConfig {
-	x?: string[];
-	y?: string[];
+	x?: DimValue[];
+	y?: DimValue[];
 }
 
 /** Props shared by every mark component. */

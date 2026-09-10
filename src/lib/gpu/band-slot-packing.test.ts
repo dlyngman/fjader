@@ -1,0 +1,214 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+	BAND_SLOT_EMPTY,
+	createBandSlotState,
+	packBandSlots,
+	type BandSlotScale
+} from './band-slot-packing';
+
+/** A scale whose slot table is the given permutation. */
+function scale(id: string, slots: number[], version = 1): BandSlotScale {
+	return { id, slotTable: Float32Array.from(slots), slotVersion: version };
+}
+
+/** Read one scale's block back the way the shader's bandSlot() does. */
+function readBlock(buffer: Float32Array, base: number) {
+	const count = buffer[base];
+	return { count, slots: Array.from(buffer.slice(base + 1, base + 1 + count)) };
+}
+
+describe('packBandSlots layout', () => {
+	it('reserves index 0 as a permanent empty block', () => {
+		const state = createBandSlotState(64);
+		// Before anything is packed, and after: a scale parked here must find
+		// count 0 and discard, which is the whole point of the fallback.
+		expect(state.buffer[BAND_SLOT_EMPTY]).toBe(0);
+		packBandSlots([scale('a', [0, 1, 2])], state);
+		expect(state.buffer[BAND_SLOT_EMPTY]).toBe(0);
+	});
+
+	it('writes a count header before each block', () => {
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [2, 0, 1])], state);
+
+		const base = state.offsets.get('a')!;
+		expect(base).toBe(1); // straight after the empty block
+		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 0, 1] });
+	});
+
+	it('lays consecutive scales end to end with no overlap', () => {
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1]), scale('b', [1, 0, 2]), scale('c', [0])], state);
+
+		const [a, b, c] = ['a', 'b', 'c'].map((id) => state.offsets.get(id)!);
+		expect([a, b, c]).toEqual([1, 4, 8]); // 1 + (2+1) = 4, 4 + (3+1) = 8
+		expect(readBlock(state.buffer, a)).toEqual({ count: 2, slots: [0, 1] });
+		expect(readBlock(state.buffer, b)).toEqual({ count: 3, slots: [1, 0, 2] });
+		expect(readBlock(state.buffer, c)).toEqual({ count: 1, slots: [0] });
+	});
+
+	it('reports the used prefix so the caller uploads only that much', () => {
+		const state = createBandSlotState(16384);
+		const { length } = packBandSlots([scale('a', [0, 1]), scale('b', [0])], state);
+		// 1 empty + (2+1) + (1+1)
+		expect(length).toBe(6);
+	});
+
+	it('preserves -1 for ids that are not displayed', () => {
+		// A category filtered out by a transform, or one belonging to another
+		// table on a shared scale. The shader discards both on the same test.
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, -1, 1])], state);
+		expect(readBlock(state.buffer, state.offsets.get('a')!).slots).toEqual([0, -1, 1]);
+	});
+});
+
+describe('packBandSlots dirty tracking', () => {
+	it('is dirty on first pack and clean when nothing moved', () => {
+		const state = createBandSlotState(64);
+		const scales = [scale('a', [0, 1]), scale('b', [0])];
+
+		expect(packBandSlots(scales, state).dirty).toBe(true);
+		// A static chart must cost no writeBuffer, which is the only reason this
+		// function returns a flag rather than always uploading.
+		expect(packBandSlots(scales, state).dirty).toBe(false);
+	});
+
+	it('is dirty when a slot table is rebuilt', () => {
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1, 2], 1)], state);
+
+		// A reorder: same length, same base, new contents and a bumped version.
+		const { dirty } = packBandSlots([scale('a', [2, 1, 0], 2)], state);
+		expect(dirty).toBe(true);
+		expect(readBlock(state.buffer, state.offsets.get('a')!).slots).toEqual([2, 1, 0]);
+	});
+
+	it('re-packs a scale whose base shifted even if its version did not', () => {
+		// The reason bases are compared as well as versions. A scale inserted
+		// ahead of it moves it; its own table never changed, so version alone
+		// would leave it pointing at a base holding someone else's slots.
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1])], state);
+		const before = state.offsets.get('a')!;
+
+		packBandSlots([scale('big', [0, 1, 2, 3, 4]), scale('a', [0, 1])], state);
+		const after = state.offsets.get('a')!;
+
+		expect(after).not.toBe(before);
+		expect(readBlock(state.buffer, after)).toEqual({ count: 2, slots: [0, 1] });
+	});
+});
+
+describe('packBandSlots capacity', () => {
+	it('parks a scale that does not fit on the empty block', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const state = createBandSlotState(8);
+		// 1 empty + (4+1) = 6 used; the next needs 5 and only 2 remain.
+		packBandSlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
+
+		expect(state.offsets.get('a')).toBe(1);
+		expect(state.offsets.get('b')).toBe(BAND_SLOT_EMPTY);
+		// Parked, not merely unwritten: a lookup there finds count 0 and
+		// discards, rather than reading scale "a"'s slots.
+		expect(state.buffer[BAND_SLOT_EMPTY]).toBe(0);
+		warn.mockRestore();
+	});
+
+	it('still places a later scale small enough to fit', () => {
+		// The reason the loop does not break on the first scale that overflows.
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const state = createBandSlotState(10);
+		packBandSlots(
+			[scale('a', [0, 1, 2, 3]), scale('huge', new Array(20).fill(0)), scale('c', [0])],
+			state
+		);
+
+		expect(state.offsets.get('a')).toBe(1);
+		expect(state.offsets.get('huge')).toBe(BAND_SLOT_EMPTY);
+		expect(state.offsets.get('c')).toBe(6);
+		expect(readBlock(state.buffer, 6)).toEqual({ count: 1, slots: [0] });
+		warn.mockRestore();
+	});
+
+	it('warns on the transition only, not every frame', () => {
+		// The caller runs this per frame; a warning per frame is a log flood
+		// that hides everything else.
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const state = createBandSlotState(8);
+		const scales = [scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])];
+
+		packBandSlots(scales, state);
+		packBandSlots(scales, state);
+		packBandSlots(scales, state);
+
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0][0]).toContain('will not render');
+		warn.mockRestore();
+	});
+
+	it('places a scale that fits again once room is freed', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const state = createBandSlotState(8);
+		packBandSlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
+		expect(state.offsets.get('b')).toBe(BAND_SLOT_EMPTY);
+
+		// "a" unmounts; "b" should now be placed rather than left parked.
+		packBandSlots([scale('b', [0, 1, 2, 3])], state);
+		expect(state.offsets.get('b')).toBe(1);
+		expect(readBlock(state.buffer, 1)).toEqual({ count: 4, slots: [0, 1, 2, 3] });
+		warn.mockRestore();
+	});
+});
+
+describe('packBandSlots eviction', () => {
+	it('forgets a scale that has gone away', () => {
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1]), scale('b', [0])], state);
+
+		packBandSlots([scale('a', [0, 1])], state);
+
+		expect(state.offsets.has('b')).toBe(false);
+		expect(state.versions.has('b')).toBe(false);
+	});
+
+	it('does not let a re-registered id inherit a base from a previous life', () => {
+		// The failure this guards: "b" unmounts and remounts at a different
+		// size. A stale base plus a matching version would skip the re-pack and
+		// leave it reading whatever now occupies its old block.
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1, 2, 3, 4]), scale('b', [0, 1], 7)], state);
+		const staleBase = state.offsets.get('b')!;
+
+		packBandSlots([scale('a', [0, 1])], state); // b gone; a shrinks
+		packBandSlots([scale('a', [0, 1]), scale('b', [2, 1, 0], 7)], state); // b back, same version
+
+		const base = state.offsets.get('b')!;
+		expect(base).not.toBe(staleBase);
+		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 1, 0] });
+	});
+
+	it('evicts when one scale is swapped for another in the same pass', () => {
+		// offsets is a superset of seen by construction, so comparing sizes is a
+		// sound equality test — this is the case that would break it if it were
+		// merely a cheap approximation.
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1]), scale('b', [0])], state);
+
+		packBandSlots([scale('a', [0, 1]), scale('c', [0])], state);
+
+		expect([...state.offsets.keys()].sort()).toEqual(['a', 'c']);
+	});
+
+	it('handles every scale disappearing', () => {
+		const state = createBandSlotState(64);
+		packBandSlots([scale('a', [0, 1])], state);
+
+		const { dirty, length } = packBandSlots([], state);
+
+		expect(state.offsets.size).toBe(0);
+		expect(state.versions.size).toBe(0);
+		expect(dirty).toBe(false); // nothing to write; p4 falls back to the empty block
+		expect(length).toBe(1);
+	});
+});

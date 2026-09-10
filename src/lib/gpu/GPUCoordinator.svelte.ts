@@ -4,6 +4,14 @@ import { scaleTemplateSystem } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
+import {
+	BAND_SLOT_CAPACITY,
+	BAND_SLOT_EMPTY,
+	createBandSlotState,
+	packBandSlots,
+	type BandSlotScale,
+	type BandSlotState
+} from './band-slot-packing';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -271,6 +279,30 @@ export class GPUCoordinator {
 	#slotByteSize: number | null = null;
 	#globalScaleBindGroups: GPUBindGroup[] = [];
 	#cpuScaleBuffer: Float32Array | null = null; // Reusable CPU buffer for scale data
+	/**
+	 * Band identity id -> display slot, shared by every band and point scale at
+	 * a per-scale base carried in that scale's p4 (§9.5, §14.3).
+	 *
+	 * A uniform buffer because the vertex stage is already at the default
+	 * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
+	 * maxUniformBufferBindingSize, so 16384 floats GLOBALLY across all such
+	 * scales.
+	 *
+	 * Layout: index 0 is a permanent zero-length block, then one block per
+	 * scale of `[count, slot0, slot1, ...]`. The count makes each block
+	 * self-describing, so the shader can reject an id past this scale's end
+	 * instead of reading into the next scale's slots — the ids and the table
+	 * can disagree transiently while a dim appends. Budget is therefore
+	 * 16384 - 1 - (1 per scale) slots.
+	 */
+	#bandSlotBuffer: GPUBuffer | null = null;
+	/**
+	 * CPU mirror plus the per-scale bases and versions. Allocation lives in
+	 * band-slot-packing.ts; this class owns only the GPU buffer and the upload.
+	 */
+	#bandSlots: BandSlotState | null = null;
+	/** Reused per frame so the hot path allocates nothing. */
+	#bandSlotScales: BandSlotScale[] = [];
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -518,6 +550,17 @@ export class GPUCoordinator {
 					binding: 4,
 					visibility: GPUShaderStage.VERTEX,
 					buffer: { type: 'read-only-storage' }
+				},
+				{
+					// Binding 5: Band identity id -> display slot (vertex only).
+					// Uniform, not storage: the vertex stage is at the default
+					// storage limit of 8 (§14.1). Declared on every layout even
+					// though only band shaders read it — a pipeline layout may
+					// expose more than its shader uses, and this group's uniform
+					// buffers are nowhere near the default 12.
+					binding: 5,
+					visibility: GPUShaderStage.VERTEX,
+					buffer: { type: 'uniform' }
 				}
 			]
 		});
@@ -526,6 +569,7 @@ export class GPUCoordinator {
 
 		// Create color scale buffers (must happen before bind group creation)
 		this.#createColorScaleBuffers();
+		this.#createBandSlotBuffer();
 
 		// Pre-create bind groups for each slot
 		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
@@ -569,6 +613,13 @@ export class GPUCoordinator {
 						binding: 4,
 						resource: {
 							buffer: this.#sizeConfigBuffer!
+						}
+					},
+					{
+						// Band identity slot table - full buffer, no offset
+						binding: 5,
+						resource: {
+							buffer: this.#bandSlotBuffer!
 						}
 					}
 				]
@@ -627,6 +678,58 @@ export class GPUCoordinator {
 	 * Fill CPU buffer with current scale GPU state.
 	 * Zero-allocation hot path.
 	 */
+	/** 64 KB uniform buffer for the shared band slot table. */
+	#createBandSlotBuffer(): void {
+		if (this.#bandSlotBuffer) return;
+		this.#bandSlots = createBandSlotState(BAND_SLOT_CAPACITY);
+		this.#bandSlotBuffer = this.#device!.createBuffer({
+			label: 'band-slot-table',
+			size: BAND_SLOT_CAPACITY * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+		});
+	}
+
+	/**
+	 * Pack every band/point scale's slot table into the shared buffer and assign
+	 * each one an offset, which #fillAllScales then writes into its p4.
+	 *
+	 * Uploads only when something moved: slot tables change on reorder, not per
+	 * frame, so a static chart costs no writeBuffer here. Offsets are recomputed
+	 * every call because a scale appearing or disappearing shifts the ones after
+	 * it — cheap, since it is a running sum over a handful of scales.
+	 */
+	#updateBandSlots(): void {
+		const state = this.#bandSlots;
+		if (!state) return;
+
+		// Collect this frame's band/point scales into the reused array. The
+		// packing itself is pure — see band-slot-packing.ts, which is where the
+		// allocator, the capacity fallback and the eviction sweep are tested.
+		const scales = this.#bandSlotScales;
+		scales.length = 0;
+		for (let i = 0; i < this.#scaleArray.length; i++) {
+			const scale = this.#scaleArray[i].instance as unknown as {
+				id: string;
+				type: string;
+				slotTable?: Float32Array;
+				slotVersion?: number;
+			};
+			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
+			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
+		}
+
+		const { dirty, length } = packBandSlots(scales, state);
+		if (!dirty) return;
+
+		this.#device!.queue.writeBuffer(
+			this.#bandSlotBuffer!,
+			0,
+			state.buffer as Float32Array<ArrayBuffer>,
+			0,
+			length
+		);
+	}
+
 	#fillAllScales(view: Float32Array): void {
 		const len = this.#scaleArray.length;
 		for (let i = 0; i < len; i++) {
@@ -641,7 +744,9 @@ export class GPUCoordinator {
 				view[off] = config.categoryCount;
 				view[off + 1] = config.paddingInner;
 				view[off + 2] = config.paddingOuter;
-				view[off + 3] = 0; // padding (unused)
+				// p4: this scale's base offset into the shared band slot table.
+				view[off + 3] =
+					this.#bandSlots?.offsets.get((scale as { id: string }).id) ?? BAND_SLOT_EMPTY;
 			} else {
 				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
 				const s = scale.gpuState!;
@@ -806,6 +911,7 @@ export class GPUCoordinator {
 		}
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
+		this.#updateBandSlots();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
 		const dstOffset = slot * this.#slotByteSize!;
@@ -1255,6 +1361,14 @@ export class GPUCoordinator {
 						{
 							binding: 4,
 							resource: { buffer: this.#sizeConfigBuffer! }
+						},
+						{
+							// Band slot table. Must be present here too — this path
+							// rebuilds the bind groups on SSBO growth, and a bind
+							// group missing an entry its layout declares is a
+							// validation error at draw time, not here.
+							binding: 5,
+							resource: { buffer: this.#bandSlotBuffer! }
 						}
 					]
 				});
@@ -1992,7 +2106,7 @@ export class GPUCoordinator {
 				// needed within this render pass. On tile-based GPUs (Apple Silicon), this
 				// avoids VRAM allocation and keeps the texture in fast on-chip tile memory.
 				const transient =
-					((GPUTextureUsage as unknown as Record<string, number>).TRANSIENT_ATTACHMENT ?? 0);
+					(GPUTextureUsage as unknown as Record<string, number>).TRANSIENT_ATTACHMENT ?? 0;
 
 				const newTexture = this.#device!.createTexture({
 					size: { width: canvas.width, height: canvas.height },

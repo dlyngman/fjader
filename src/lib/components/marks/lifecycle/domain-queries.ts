@@ -10,6 +10,7 @@ import {
 } from '@uwdata/mosaic-sql';
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
@@ -53,7 +54,7 @@ export async function fetchCategoricalDomains(
 	seriesChannel: string | null,
 	hasCategoryReducingTransforms: boolean,
 	markId: string,
-	explicitDomain?: { x?: string[]; y?: string[] } | null
+	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null
 ): Promise<number> {
 	const fetches: Promise<void>[] = [];
 
@@ -99,6 +100,35 @@ export async function fetchCategoricalDomains(
 
 		// sortOnly mode: only fetch sort order, skip if no sort config
 		if (sortOnly && !sortField) return;
+
+		// Unsorted band domain comes from the field's dim, not a SELECT DISTINCT
+		// (band step 3a / §9.4). Two reasons beyond removing a query:
+		//
+		//  - Order. DISTINCT has no ORDER BY, so today's domain is whatever DuckDB
+		//    returned, then "first-appearance order" in updateDomainFromExtents.
+		//    Arbitrary. Dim labels are ordered by id, so the domain is
+		//    deterministic — and position-in-domain now EQUALS the dim id, which
+		//    is the invariant that lets the query switch to the view's id column
+		//    without moving a single bar.
+		//  - Multi-table. The dim spans every table registering the field, so two
+		//    marks on one shared scale agree on the category set by construction.
+		//
+		// Sorted and sortOnly still query: they rank by an aggregate, which the
+		// dim knows nothing about.
+		if (!sortField && !sortOnly && typeof field === 'string') {
+			fetches.push(
+				(async () => {
+					// Idempotent and coalesced — the mark's own setup calls this too.
+					await coordinator.ensureColumns(table, { categorical: [field] });
+					const categories = coordinator.identityValues(field);
+					// The scale adopts this same array in MarkLifecycleV2's
+					// #ensureIdentityColumns, which covers sorted and explicit-domain
+					// axes that never reach this branch.
+					if (categories.length > 0) scaleState.addMark(categories, markId);
+				})()
+			);
+			return;
+		}
 
 		// Only strings become column refs; expression nodes pass through as-is.
 		const axisExpr: ExprValue = isNode(field) ? (field as ExprNode) : sqlColumn(String(field));
@@ -153,8 +183,11 @@ export async function fetchCategoricalDomains(
 	// Track explicit domains to apply after all async fetches complete —
 	// other scales (color, series) register ViewManager columns in their
 	// fetch callbacks, so the band view must be created after those finish.
-	let deferredExplicitX: string[] | null = null;
-	let deferredExplicitY: string[] | null = null;
+	// DimValue, not string: a band axis over a numeric column takes a numeric
+	// explicit domain, and it reaches the scale uncoerced — which is what makes
+	// it work, since #toIds looks each entry up in a dim keyed by the same type.
+	let deferredExplicitX: DimValue[] | null = null;
+	let deferredExplicitY: DimValue[] | null = null;
 
 	if (actualXScaleType === 'band' || actualXScaleType === 'point') {
 		if (skipBandFetch) {

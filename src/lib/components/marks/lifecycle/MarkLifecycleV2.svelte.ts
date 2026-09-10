@@ -59,13 +59,12 @@ import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
-import { buildCaseExpression } from '$lib/sql/case-expression';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
-import { buildQueryParts, assembleQuery, type QueryParts } from './query-builder';
+import { buildQueryParts, assembleQuery, castReal, type QueryParts } from './query-builder';
 import {
 	setScalesReady,
 	markDeferredScalesReady,
@@ -138,6 +137,55 @@ export class MarkLifecycleV2 {
 	#transformCompiler: TransformCompiler;
 	#transformConfig: MarkConfig;
 	#autoBinNodes: Map<string, AutoBinNode> = new Map();
+	/**
+	 * Categorical fields with an id column in this table's view. Only these may
+	 * be selected as identity ids; a positional axis that is not here has no
+	 * fallback and does not render (see #ensureIdentityColumns).
+	 *
+	 * Cleared by #onIdentityReset, because after a reload the columns it names
+	 * no longer exist — and #sourceTable and #inlineCaseExpressions both gate on
+	 * it being non-empty.
+	 */
+	#identityFields: Set<string> = new Set();
+	/** Unsubscribe from the engine's identity resets. */
+	#identityResetOff: (() => void) | null = null;
+	/**
+	 * Reserved ids for synthetic rows, by field (§16.9). Populated at setup
+	 * because the value array must already contain the label before any JS
+	 * transform writes its id — a transform runs on data, which is far too late
+	 * to be issuing DDL.
+	 */
+	#syntheticIds: Record<string, number> = {};
+
+	/**
+	 * The relation any query built from #resolvedQueryParts must read.
+	 *
+	 * Those parts can carry identity id columns, which exist only on the view.
+	 * Degrades to the bare table when THIS mark requested no identity columns,
+	 * so a chart with no categorical axis is untouched. Safe for every query
+	 * shape because the view is `SELECT t.*` plus the id columns — anything
+	 * valid against the table is valid against the view.
+	 *
+	 * Gated on this mark's own #identityFields, NOT on whether a view exists for
+	 * the table. The engine's registry is per TABLE and is populated
+	 * synchronously when any mark calls ensureColumns, so asking it directly
+	 * hands the view's name to sibling marks that never requested identity and
+	 * therefore never awaited the CREATE — they then query a relation that does
+	 * not exist yet (`Catalog Error: Table with name <table>_v_s<session> does
+	 * not exist`). Two marks on one table where only one has a band axis is an
+	 * ordinary chart, not a corner case: see /examples/brush-demo.
+	 *
+	 * #identityFields is filled only after ensureColumns resolves, so a non-empty
+	 * set also means the view is built — this is the timing guarantee as well as
+	 * the scoping one.
+	 *
+	 * Not used by #buildQueryForAggregates, which runs in Phase 1 setup from the
+	 * raw config select before scales are ready, so it never names an id column.
+	 */
+	get #sourceTable(): string {
+		if (this.#identityFields.size === 0) return this.#config.table;
+		return this.#queryEngine.identitySourceFor(this.#config.table);
+	}
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
 	#rollingAvgVersion = $state(0);
 
@@ -337,8 +385,39 @@ export class MarkLifecycleV2 {
 			}
 		}
 
+		// A data reload drops the identity dims and views out from under this
+		// mark's query parts. Subscribed here rather than in an effect: it has to
+		// outlive setupComplete flipping, which is exactly what it manipulates.
+		this.#identityResetOff = this.#queryEngine.onIdentityReset(() => this.#onIdentityReset());
+
 		// Start reactive effects
 		this.#setupReactiveEffects();
+	}
+
+	/**
+	 * The engine dropped every identity dim and view (a data reload).
+	 *
+	 * Everything this mark holds from before the reset is invalid: the id
+	 * columns its query selects are gone with the view, and any id already in a
+	 * vertex buffer belongs to a numbering that no longer exists. Rather than
+	 * patch that up, hand the whole thing back to Phase 1 — clearing
+	 * setupComplete re-arms the setup effect, which re-runs #ensureIdentityColumns
+	 * and rebuilds the dims against the reloaded data.
+	 *
+	 * Clearing setupComplete also stops the bleeding immediately: #resolvedSelect
+	 * returns null without it, so #resolvedQueryParts goes null and the
+	 * registration effect stops re-registering. The mark's EXISTING registration
+	 * survives the gap, so a filter change landing in the few milliseconds before
+	 * setup completes can still assemble one query from the stale descriptor;
+	 * that query fails and is swallowed by the same handler that covers table
+	 * recreation. Tearing the handle down instead would flash every chart empty
+	 * on every reload, which registerMark goes out of its way to avoid.
+	 */
+	#onIdentityReset(): void {
+		if (this.#destroyed) return;
+		this.#identityFields.clear();
+		this.#syntheticIds = {};
+		this.setupComplete = false;
 	}
 
 	// ===========================================================================
@@ -444,7 +523,7 @@ export class MarkLifecycleV2 {
 				this.#handle = this.#queryEngine.registerMark(
 					this.#markId,
 					{
-						table: this.#config.table,
+						table: this.#sourceTable,
 						parts,
 						schema,
 						transformCompiler: this.#transformCompiler
@@ -630,7 +709,8 @@ export class MarkLifecycleV2 {
 					this.#colorScaleState,
 					this.#markId
 				),
-				this.#fetchFieldStats()
+				this.#fetchFieldStats(),
+				this.#ensureIdentityColumns()
 			]);
 
 			if (this.#destroyed) return;
@@ -677,26 +757,44 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 
 	/**
-	 * Inline CASE index expressions for band/point and ordinal color scales.
-	 * Replaces ViewManager's view column with direct SQL in the SELECT.
+	 * Encode the categorical channels into the SELECT, replacing ViewManager's
+	 * view columns with direct SQL.
+	 *
+	 * Two encodings now live here, and the name is the older one. Band/point x
+	 * and y take the view's identity id column. Ordinal colour and facet still
+	 * take a CASE built from their scale's domain — steps 3b and 3c, and the
+	 * reason `caseExpression` still exists.
 	 */
 	#inlineCaseExpressions(select: Record<string, unknown>): void {
-		const skipBandIndex = this.#transformCompiler.hasCategoryReducingTransforms();
+		// Band/point x and y: always the view's identity id column, never a CASE.
+		//
+		// The CASE this replaced was built from the scale's DOMAIN, so the query
+		// text depended on display order and a reorder invalidated preagg cubes
+		// and cache entries (§9.3). It also had to be suppressed whenever a
+		// category-reducing transform was present, because a domain holding only
+		// the survivors maps everything else to -1 before the transform runs —
+		// that was `skipBandIndex`, and it is gone with the CASE. Ids come from
+		// the dim, are independent of which categories survive, and topN filters
+		// them as integers.
+		//
+		// An axis with no identity is one #identityKey refused: bin(), or an
+		// aggregate. #ensureIdentityColumns reports it; there is no fallback to
+		// fall into, which is the point of §16.10 item 3.
+		for (const axis of ['x', 'y'] as const) {
+			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
 
-		// Band/point x scale
-		if (!skipBandIndex && (this.actualXScaleType === 'band' || this.actualXScaleType === 'point')) {
-			const xScale = this.#chartContext.xScaleState as BandScaleState | null;
-			if (xScale?.caseExpression) {
-				select.x = sql`${xScale.caseExpression}`;
-			}
-		}
+			// The same derivation #ensureIdentityColumns registered under, so a
+			// dimmed expression axis selects its id column like a dimmed column.
+			const key = this.#identityKey(axis)?.key;
+			if (key == null || !this.#identityFields.has(key)) continue;
 
-		// Band/point y scale
-		if (!skipBandIndex && (this.actualYScaleType === 'band' || this.actualYScaleType === 'point')) {
-			const yScale = this.#chartContext.yScaleState as BandScaleState | null;
-			if (yScale?.caseExpression) {
-				select.y = sql`${yScale.caseExpression}`;
-			}
+			// CAST to REAL explicitly. processDataForGPU's zero-copy path keys on
+			// Float32Array, and castNumeric cannot help: it casts a column ref only
+			// when the schema says the column is numeric, and the schema comes from
+			// DESCRIBE of the BASE table, which has no __dplot_*_idx columns. An INT
+			// column would arrive as an Int32Array and miss the fast path.
+			select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
 		}
 
 		// Ordinal color scale
@@ -900,6 +998,142 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
+	 * The identity key for a categorical axis, or null when it cannot be dimmed.
+	 *
+	 * The key is the source column name, or an expression's SQL text — the same
+	 * string `requestScale` puts in `columnName` and therefore the scale's
+	 * `sourceField` (§16.3). Deriving both from one place is what stops scale
+	 * identity and dim identity from diverging.
+	 *
+	 * Refused: bin() (values move with the viewport, §16.5), and aggregate or
+	 * window expressions, which are not a row-level value to group by.
+	 */
+	#identityKey(axis: 'x' | 'y'): { key: string; sql: string } | null {
+		const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+		if (scaleType !== 'band' && scaleType !== 'point') return null;
+
+		const field = this.#config.select[axis];
+		if (field == null) return null;
+		if (typeof field === 'string') return { key: field, sql: `"${field.replaceAll('"', '""')}"` };
+		if (!isNode(field) || isBinExpression(field)) return null;
+		if (isAggregateExpression(field as ExprNode) || isWindowExpression(field as ExprNode)) {
+			return null;
+		}
+
+		const sql = String(field);
+		return sql ? { key: sql, sql } : null;
+	}
+
+	/**
+	 * Request identity id columns for this mark's categorical axes (band step 3a).
+	 *
+	 * Runs inside the setup Promise.all, so every mark on a chart calls it in the
+	 * same tick — which is what CategoricalIdentity's coalescer is built for: they
+	 * union into one CREATE OR REPLACE VIEW rather than one per mark. Also re-run
+	 * after an identity reset, which is a reload rebuilding the dims from scratch.
+	 *
+	 * Plain columns and fixed SQL expressions both get a dim (§16 / #197). They
+	 * are not two paths: #identityKey hands over a key and the SQL producing the
+	 * value, and CategoricalIdentity substitutes the latter into the same
+	 * templates either way. What #identityKey refuses is bin(), aggregates and
+	 * window expressions — see there for why — and a refusal is reported below
+	 * rather than falling back, because since `b7292b2` there is nothing to fall
+	 * back to: the CASE path for positional band channels is deleted.
+	 *
+	 * Band/point only. Ordinal colour, series and facet still CASE-inline a
+	 * display position (steps 3b/3c), which is why this reads the two positional
+	 * axes rather than every channel.
+	 *
+	 * These columns ARE consumed: #inlineCaseExpressions selects the id column for
+	 * any axis in #identityFields, and the scale keeps ids as its internal
+	 * representation. Failing here is therefore fatal, not additive — which is
+	 * why the await below is unguarded.
+	 */
+	async #ensureIdentityColumns(): Promise<void> {
+		const axes: { axis: 'x' | 'y'; key: string; sql: string }[] = [];
+		for (const axis of ['x', 'y'] as const) {
+			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (scaleType !== 'band' && scaleType !== 'point') continue;
+
+			const resolved = this.#identityKey(axis);
+			if (resolved) {
+				axes.push({ axis, ...resolved });
+				continue;
+			}
+			// A categorical axis this cannot dim. There is no CASE fallback any
+			// more (§16.10 item 3), so it draws nothing — say why rather than
+			// leaving an empty chart to be diagnosed.
+			console.error(
+				`[${this.#markId}] The ${axis} axis is categorical but cannot be given a stable ` +
+					`identity: bin() produces values that move with the viewport, and an aggregate ` +
+					`or window expression is not a row-level value to group by. Use a rect mark for ` +
+					`binned axes. This mark will render nothing on ${axis}.`
+			);
+		}
+		if (axes.length === 0) return;
+
+		const categorical = axes.map(({ key, sql }) => ({ key, sql }));
+
+		// Fatal, unlike at C0: the query now selects these columns and reads FROM
+		// the view. Failing here gives a message naming the mark and the fields;
+		// continuing would fail at the binder with neither.
+		await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
+		for (const { key } of categorical) this.#identityFields.add(key);
+
+		// Hand each band scale the engine's live id -> value array, so it can build
+		// its slot table. This must happen for EVERY band axis, not only the ones
+		// whose domain came from the dim: a sorted axis takes the ranking-query
+		// path and an explicit domain skips the domain fetch altogether, and if
+		// either were left without identity values its slot table would be empty
+		// and the shader would read another scale's slots at offset 0.
+		for (const { axis, key } of axes) {
+			const identity = this.#queryEngine.identityFor(key);
+
+			// An all-NULL column builds an empty dim, which reads as "no identity"
+			// because hasIdentity is length > 0. The chart is then correctly empty
+			// but silently so, and once the string fallback is gone there is
+			// nothing else for it to fall back to. Say it out loud.
+			if (identity.values.length === 0) {
+				console.warn(
+					`[${this.#markId}] "${key}" has no non-NULL values, so the ${axis} axis has no ` +
+						`categories and this mark will render nothing.`
+				);
+			}
+
+			const scale = (
+				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+			) as BandScaleState | null;
+			scale?.setIdentity(identity);
+		}
+
+		// The synthetic "Other" bucket has no row in any table, so its id has to
+		// be reserved before a transform can write it (§16.9). Reserved for every
+		// categorical field of this mark rather than guessing which axis topN
+		// will pick — at most two, and the transform looks its own field up.
+		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
+			for (const { axis, key } of axes) {
+				const id = await this.#queryEngine.reserveSyntheticIdentity(key, 'Other');
+
+				// Keyed off #transformConfig itself, not recomputed. A transform
+				// reads its band column as config[axis] and passes that to
+				// getColumn, so taking the key from the same object makes the two
+				// literally one value rather than two derivations that agree. They
+				// did not agree once: keyed by the source field, every lookup
+				// missed and the Other row was silently dropped.
+				const column = this.#transformConfig[axis];
+				if (typeof column === 'string') this.#syntheticIds[column] = id;
+
+				// Re-adopt: the reservation appended to the value array, and a scale
+				// that adopted before it must see the new entry.
+				const scale = (
+					axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+				) as BandScaleState | null;
+				scale?.setIdentity(this.#queryEngine.identityFor(key));
+			}
+		}
+	}
+
+	/**
 	 * Re-fetch band domain ordering when sort config changes reactively.
 	 * Builds a SELECT DISTINCT + ORDER BY query, calls setSortOrder on the
 	 * band scale. No teardown, no schema re-fetch, no re-registration.
@@ -1013,7 +1247,7 @@ export class MarkLifecycleV2 {
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 		const q = assembleQuery({
-			table: this.#config.table,
+			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
 			filter: filter as unknown[],
 			filterNulls: this.#reactiveConfig.filterNulls ?? null,
@@ -1096,7 +1330,8 @@ export class MarkLifecycleV2 {
 
 		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
 			x: this.#chartContext.xScale,
-			y: this.#chartContext.yScale
+			y: this.#chartContext.yScale,
+			otherIdsByColumn: this.#syntheticIds
 		});
 	});
 
@@ -1190,21 +1425,23 @@ export class MarkLifecycleV2 {
 				if (!tooltipQuery) return;
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow
-				// in distance math). A band/point axis stays un-CASE-inlined (real
-				// category strings, not an ordinal index) in the main query when a
-				// category-reducing transform like topN is present
-				// (#inlineCaseExpressions' skipBandIndex — the top-N set can
-				// change, so a static CASE baked into that query would go stale).
-				// But TooltipManager's hit-test universally assumes band axes hold
-				// the scale's ordinal index (CAST(col AS INTEGER) = hoveredIndex),
-				// same as every other band-axis mark — so CASE-inline it here
-				// instead, safe because by tooltip-write time the domain is
-				// already resolved from the actual (post-transform) results.
+				// in distance math).
+				//
+				// Band/point axes: an axis WITH identity already selects the view's
+				// id column, which is a cast node rather than a raw column ref, so
+				// it falls through to the plain CAST below and the tooltip table
+				// carries ids — matching TooltipManager, which translates slot <->
+				// id through the live scale (see its BAND IDENTITY section).
+				//
+				// There is no longer a band axis that arrives here as raw category
+				// strings: #inlineCaseExpressions always selects the id column, and
+				// an axis it cannot dim is reported at setup. The CASE re-inlining
+				// that used to live here — rebuilding a domain-ordered index for
+				// the tooltip because skipBandIndex had left strings in the main
+				// query — is deleted with it (§16.10 item 3).
 				const selectConfig = this.#config.select;
 				const resolvedSelect = this.#resolvedQueryParts?.selectDef ?? {};
 				const schema = this.#schema;
-				const xScaleState = this.#chartContext.xScaleState as BandScaleState | null;
-				const yScaleState = this.#chartContext.yScaleState as BandScaleState | null;
 				const replaceExprs: string[] = [];
 				for (const c of ['x', 'x1', 'x2', 'y', 'y1', 'y2'] as const) {
 					if (!(c in selectConfig)) continue;
@@ -1216,16 +1453,8 @@ export class MarkLifecycleV2 {
 						: undefined;
 
 					if (isRawColumnRef && jsType && jsType !== 'number') {
-						const axis = c.startsWith('x') ? 'x' : 'y';
-						const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-						const scaleState = axis === 'x' ? xScaleState : yScaleState;
-						if (
-							(scaleType === 'band' || scaleType === 'point') &&
-							scaleState?.effectiveDomain?.length
-						) {
-							replaceExprs.push(`${buildCaseExpression(c, scaleState.effectiveDomain)} AS ${c}`);
-						}
-						// Else: unexpected non-numeric, non-band column — leave as-is.
+						// A non-numeric raw column reaching a positional channel is not
+						// something the tooltip can measure distance on. Left as-is.
 						continue;
 					}
 					replaceExprs.push(`CAST(${c} AS DOUBLE) AS ${c}`);
@@ -1260,22 +1489,12 @@ export class MarkLifecycleV2 {
 					if (colData) columnArrays[col] = colData;
 				}
 
-				// Band axis columns from category-reducing transforms contain
-				// strings — convert to integer indices for the tooltip pipeline.
-				const bandIndexMaps: Record<string, ReadonlyMap<string, number>> = {};
-				const xss = this.#chartContext.xScaleState;
-				if (this.actualXScaleType === 'band' && xss && 'categoryIndexMap' in xss) {
-					bandIndexMaps['x'] = xss.categoryIndexMap;
-				}
-				const yss = this.#chartContext.yScaleState;
-				if (this.actualYScaleType === 'band' && yss && 'categoryIndexMap' in yss) {
-					bandIndexMaps['y'] = yss.categoryIndexMap;
-				}
-
+				// Band axis columns arrive as numeric identity ids on every path now,
+				// so the string -> index conversion this used to do is gone with the
+				// rest of the string path (§16.10 item 3).
 				// Infer schema from first row
 				const schemaDef = columns
 					.map((col) => {
-						if (bandIndexMaps[col]) return `"${col}" INTEGER`;
 						const sample = columnArrays[col]?.[0];
 						const sqlType = typeof sample === 'number' ? 'DOUBLE' : 'VARCHAR';
 						return `"${col}" ${sqlType}`;
@@ -1288,11 +1507,6 @@ export class MarkLifecycleV2 {
 					const vals = columns.map((col) => {
 						const v = columnArrays[col]?.[i];
 						if (v == null || (typeof v === 'number' && isNaN(v))) return 'NULL';
-						const bandMap = bandIndexMaps[col];
-						if (bandMap && typeof v === 'string') {
-							const idx = bandMap.get(v);
-							return idx != null ? idx.toString() : 'NULL';
-						}
 						if (typeof v === 'number') return v.toString();
 						return `'${String(v).replace(/'/g, "''")}'`;
 					});
@@ -1332,7 +1546,7 @@ export class MarkLifecycleV2 {
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 
 		const q = assembleQuery({
-			table: this.#config.table,
+			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
 			filter: filter as unknown[],
 			filterNulls: this.#reactiveConfig.filterNulls ?? null,
@@ -1394,7 +1608,7 @@ export class MarkLifecycleV2 {
 
 		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
 		const sidecarQuery = assembleQuery({
-			table: this.#config.table,
+			table: this.#sourceTable,
 			parts: sidecarParts,
 			filter: filter as unknown[],
 			filterNulls: this.#reactiveConfig.filterNulls ?? null,
@@ -1607,6 +1821,8 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
+		this.#identityResetOff?.();
+		this.#identityResetOff = null;
 		this.#handle?.destroy();
 		clearTimeout(this.#fitDomainTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);

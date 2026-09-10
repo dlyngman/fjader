@@ -37,6 +37,12 @@ import {
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
+import {
+	CategoricalIdentity,
+	type DimValue,
+	type FieldIdentity,
+	type IdentityField
+} from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
@@ -74,7 +80,8 @@ export type JsColumnType = 'number' | 'string' | 'date' | 'boolean';
 /** Map a DuckDB SQL type string to a JS type category. */
 export function mapSqlTypeToJs(sqlType: string): JsColumnType {
 	const upper = (sqlType || '').toUpperCase();
-	if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper)) return 'number';
+	if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper))
+		return 'number';
 	if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(upper)) return 'date';
 	if (/BOOL/.test(upper)) return 'boolean';
 	return 'string';
@@ -152,7 +159,10 @@ export class QueryEngine {
 	#conn: DuckDBConnection | null = null;
 	#connPromise: Promise<DuckDBConnection> | null = null;
 	#inflight = new Map<string, AbortController>();
-	#pending = new Map<string, { sql: string; resolve: (t: Table) => void; reject: (e: Error) => void; cache: boolean }>();
+	#pending = new Map<
+		string,
+		{ sql: string; resolve: (t: Table) => void; reject: (e: Error) => void; cache: boolean }
+	>();
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
@@ -164,6 +174,32 @@ export class QueryEngine {
 	#preaggTables = new Set<string>();
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
+	/**
+	 * Per-instance suffix for every table and view this engine creates.
+	 * Multiple render contexts (Streamlit iframes, notebook cells) can share one
+	 * DuckDB instance, and a competing instance rebuilding a dim would renumber
+	 * ids already baked into live vertex buffers.
+	 */
+	#session = Math.random().toString(36).slice(2, 8);
+	/** Categorical identity: dim tables, per-table views, id columns, labels. */
+	#identity = new CategoricalIdentity(
+		{
+			exec: (sql) => this.exec(sql),
+			queryRows: async (sql) => {
+				// Never cached: the dim grows as tables register, and the SQL text
+				// does not change when it does.
+				const table = await this.query(sql, { cache: false });
+				const rows: Array<Record<string, unknown>> = [];
+				for (let i = 0; i < table.numRows; i++) {
+					rows.push(table.get(i) as Record<string, unknown>);
+				}
+				return rows;
+			}
+		},
+		this.#session
+	);
+	/** Notified after clearQueryCache() drops the identity dims and views. */
+	#identityResetListeners = new Set<() => void>();
 
 	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
 		if (connection instanceof Promise) {
@@ -173,6 +209,100 @@ export class QueryEngine {
 			});
 		} else {
 			this.#conn = connection;
+		}
+	}
+
+	/** This engine's per-instance suffix for created tables and views. */
+	get session(): string {
+		return this.#session;
+	}
+
+	/**
+	 * Ensure `table` has a view exposing a stable numeric id column for each
+	 * named categorical field, and resolve once it does. Concurrent callers
+	 * coalesce into one rebuild. See `categorical-identity.ts`.
+	 *
+	 * Band and point positional axes read these columns today (step 3a): their
+	 * query selects the id column and the scale keeps ids as its internal
+	 * representation. Ordinal colour, series and facet still CASE-inline a
+	 * display position — steps 3b and 3c.
+	 */
+	ensureColumns(
+		table: string,
+		fields: { categorical?: (string | IdentityField)[] }
+	): Promise<void> {
+		if (this.#destroyed) {
+			throw new Error('QueryEngine has been destroyed');
+		}
+		return this.#identity.ensureColumns(table, fields);
+	}
+
+	/** The view carrying id columns for `table`, or `table` if it has none. */
+	identitySourceFor(table: string): string {
+		return this.#identity.sourceFor(table);
+	}
+
+	/** The id column name a view exposes for `field`. */
+	identityColumn(field: string): string {
+		return this.#identity.idColumn(field);
+	}
+
+	/**
+	 * Dim values for `field`, indexed by id — the decode side of the string -> id
+	 * encode. Not display labels: formatting belongs to the scale/axis layer.
+	 *
+	 * The LIVE array — hold the reference, do not snapshot it. A second table
+	 * registering the same field appends to the dim afterwards and this array
+	 * grows in place (§9.4).
+	 */
+	identityValues(field: string): DimValue[] {
+		return this.#identity.values(field);
+	}
+
+	/**
+	 * The field's id <-> value bijection (§17.2). One live object owning both
+	 * directions, so a holder cannot end up with a value array and a reverse map
+	 * that disagree. Prefer this over identityValues() anywhere the reverse
+	 * direction is needed; do not rebuild it locally.
+	 */
+	identityFor(field: string): FieldIdentity {
+		return this.#identity.identity(field);
+	}
+
+	/**
+	 * Reserve an id for a value present in no table — the synthetic "Other"
+	 * bucket from `topN({ includeOthers })` (§16.9). Call after ensureColumns.
+	 * Returns an existing id when a real category already carries the label.
+	 */
+	reserveSyntheticIdentity(field: string, label: string): Promise<number> {
+		return this.#identity.reserveSynthetic(field, label);
+	}
+
+	/**
+	 * Subscribe to identity resets. Returns an unsubscribe function.
+	 *
+	 * A mark that requested identity columns cannot survive one on its own: its
+	 * query parts name `__dplot_*_idx` columns on a view that has just been
+	 * dropped, and it has no way to notice. Listeners are how it finds out, and
+	 * the contract is that a listener re-runs the mark's setup — re-requesting
+	 * the columns rebuilds the dims against the reloaded data.
+	 *
+	 * Fired after the DROPs settle, and fired even if they failed: a partially
+	 * dropped state still invalidates every id handed out before it.
+	 */
+	onIdentityReset(listener: () => void): () => void {
+		this.#identityResetListeners.add(listener);
+		return () => this.#identityResetListeners.delete(listener);
+	}
+
+	#notifyIdentityReset(): void {
+		// Copied, so a listener unsubscribing during the sweep cannot skip a peer.
+		for (const listener of [...this.#identityResetListeners]) {
+			try {
+				listener();
+			} catch (error) {
+				console.error('[QueryEngine] Identity reset listener failed:', error);
+			}
 		}
 	}
 
@@ -265,7 +395,12 @@ export class QueryEngine {
 		return this.#queryRaw(sqlStr);
 	}
 
-	async #executeForCaller(callerId: string, sqlStr: string, signal?: AbortSignal, cache: boolean = true): Promise<Table> {
+	async #executeForCaller(
+		callerId: string,
+		sqlStr: string,
+		signal?: AbortSignal,
+		cache: boolean = true
+	): Promise<Table> {
 		const controller = new AbortController();
 		this.#inflight.set(callerId, controller);
 
@@ -384,12 +519,32 @@ export class QueryEngine {
 	 * old data: the query result cache, DESCRIBE cache (schema may have
 	 * changed), and materialized preagg cubes (`CREATE TABLE IF NOT EXISTS`
 	 * means a stale cube would otherwise keep serving pre-reload aggregates
-	 * indefinitely). Registered marks are left as-is — this only invalidates
-	 * caches; callers still need to trigger a re-query (e.g. a filter change)
-	 * to see fresh data rendered.
+	 * indefinitely). Registered marks keep their registration — for everything
+	 * but identity this only invalidates caches, and callers still need to
+	 * trigger a re-query (e.g. a filter change) to see fresh data rendered.
+	 *
+	 * Identity is the exception, because dropping it invalidates the marks' SQL
+	 * rather than just their results. Marks that requested identity columns are
+	 * told to re-run setup via onIdentityReset() — see the note there. Await
+	 * this promise before assuming the rebuild has started.
 	 */
-	clearQueryCache(): void {
+	clearQueryCache(): Promise<void> {
 		this.clearDescribeCache();
+		// Identity dims are CREATE TABLE IF NOT EXISTS, so a stale dim would keep
+		// serving pre-reload ids indefinitely — the same trap as preagg cubes.
+		//
+		// Dropping them is not enough on its own: a mark's query parts still name
+		// __dplot_*_idx columns on a view that no longer exists, and #sourceTable
+		// falls back to the base table the moment the view registry is cleared,
+		// so the next query would select a column the base table does not have.
+		// The listeners are what closes that — they re-run mark setup, which
+		// re-requests the columns and rebuilds the dims against the new data.
+		//
+		// Notified in a `finally` so a failed DROP still invalidates: partially
+		// dropped state is no more usable than fully dropped state. An
+		// ensureColumns still in flight across this rejects rather than resolving
+		// against dropped state (see CategoricalIdentity's generation counter).
+		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
 		for (const reg of this.#marks.values()) {
 			this.#dropPreagg(reg);
 		}
@@ -398,6 +553,7 @@ export class QueryEngine {
 		}
 		this.#preaggTables.clear();
 		this.#queryCache.clear();
+		return identityReset;
 	}
 
 	/**
@@ -455,11 +611,7 @@ export class QueryEngine {
 	 * Fires a re-query immediately since the params effect won't trigger
 	 * (handle reference is unchanged).
 	 */
-	registerMark(
-		markId: string,
-		descriptor: QueryDescriptor,
-		filterGroup: FilterGroup
-	): MarkHandle {
+	registerMark(markId: string, descriptor: QueryDescriptor, filterGroup: FilterGroup): MarkHandle {
 		const prev = this.#marks.get(markId);
 		if (prev) {
 			// Don't cancel inflight queries — let them complete for intermediate
@@ -536,7 +688,12 @@ export class QueryEngine {
 
 			const sqlStr = usePreagg
 				? this.#assemblePreaggSQL(markId, reg, handle.params)
-				: this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
+				: this.#assembleSQL(
+						descriptor,
+						descriptor.table,
+						selection.predicate(markId),
+						handle.params
+					);
 			if (!sqlStr) continue;
 
 			// Use the public query() path — its execute-latest logic ensures
@@ -564,7 +721,12 @@ export class QueryEngine {
 
 		const sqlStr = usePreagg
 			? this.#assemblePreaggSQL(markId, reg, handle.params)
-			: this.#assembleSQL(descriptor, descriptor.table, reg.filterGroup.selection.predicate(markId), handle.params);
+			: this.#assembleSQL(
+					descriptor,
+					descriptor.table,
+					reg.filterGroup.selection.predicate(markId),
+					handle.params
+				);
 		if (!sqlStr) return;
 
 		this.query(sqlStr, { callerId: markId })
@@ -720,10 +882,7 @@ export class QueryEngine {
 			}
 
 			// Bake non-active filters into the preagg table
-			const staticFilters = filterGroup.selection.predicateExcluding(
-				markId,
-				activeSourceIds
-			);
+			const staticFilters = filterGroup.selection.predicateExcluding(markId, activeSourceIds);
 
 			// Build preagg creation query, sorted by active columns for fast range scans
 			const preaggQuery = Query.from(table)
@@ -770,11 +929,7 @@ export class QueryEngine {
 	 * Builds modified QueryParts from the stored outputSelect + bin filters,
 	 * then delegates to assembleQuery().
 	 */
-	#assemblePreaggSQL(
-		markId: string,
-		reg: MarkRegistration,
-		params: QueryParams
-	): string | null {
+	#assemblePreaggSQL(markId: string, reg: MarkRegistration, params: QueryParams): string | null {
 		const { preaggTable, preaggOutputSelect, preaggBinMeta, preaggSourceChartMarkIds } = reg;
 		if (!preaggTable || !preaggOutputSelect || !preaggBinMeta || !preaggSourceChartMarkIds) {
 			return null;
@@ -873,6 +1028,9 @@ export class QueryEngine {
 	 * Destroy the engine and close the connection.
 	 */
 	async destroy(): Promise<void> {
+		// Before the destroyed flag: reset() goes through this.exec(), which
+		// throws once destroyed.
+		await this.#identity.reset().catch(() => {});
 		this.#destroyed = true;
 		// Clean up mark registrations
 		for (const reg of this.#marks.values()) {

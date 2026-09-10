@@ -319,12 +319,9 @@
 		unregisterScaleType: (dimension, markId) =>
 			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
 
-		registerParallelColumn: (column, markId) =>
-			scales?.registerParallelColumn(column, markId),
-		unregisterParallelColumn: (column, markId) =>
-			scales?.unregisterParallelColumn(column, markId),
-		reorderParallelAxis: (from, to) =>
-			scales?.reorderParallelAxis(from, to),
+		registerParallelColumn: (column, markId) => scales?.registerParallelColumn(column, markId),
+		unregisterParallelColumn: (column, markId) => scales?.unregisterParallelColumn(column, markId),
+		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
 			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };
 		},
@@ -391,7 +388,7 @@
 					<ChartCell
 						cellChartId={facetChartIds[i]}
 						facetIndex={i}
-						facetLabel={cat}
+						facetLabel={String(cat)}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
 						{chartConfig}

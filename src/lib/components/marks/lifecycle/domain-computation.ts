@@ -73,6 +73,27 @@ export function extractCategoriesFromData(data: DataAccessor, axis: string): str
 }
 
 /**
+ * Unique identity ids present in a channel, in first-appearance order.
+ *
+ * The sibling of extractCategoriesFromData for band axes carrying dim ids
+ * rather than raw values. -1 is skipped: it is the no-identity sentinel, not a
+ * category, and a scale must never register it as one.
+ */
+export function extractIdsFromData(data: DataAccessor, axis: string): number[] {
+	const col = data.getColumn(axis);
+	if (!col) return [];
+	const seen = new Set<number>();
+	const result: number[] = [];
+	for (let i = 0; i < data.length; i++) {
+		const id = col[i] as number;
+		if (id < 0 || seen.has(id)) continue;
+		seen.add(id);
+		result.push(id);
+	}
+	return result;
+}
+
+/**
  * Detect which channels need their domain computed from query results.
  * This includes:
  * - Aggregate expressions (count, sum, etc.) on linear scales

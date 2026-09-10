@@ -3,6 +3,8 @@
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
+import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import type { DimValue } from '$lib/query-engine/categorical-identity';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
@@ -30,7 +32,15 @@ interface TooltipMarkRegistration {
 	};
 	colorColumn?: string;
 	constantColor?: string;
-	bandDomains?: Record<string, string[]>;
+	/**
+	 * Display-ordered category strings per band axis, present only for the axis
+	 * a mark declares as its band axis. A SNAPSHOT, taken inside untrack() at
+	 * register time — so it is used as a gate (does this mark have a band axis
+	 * here?) and NEVER as a lookup — decoding a channel value to a category is
+	 * BandScaleState.categoryAt, which reads the live domain. See the BAND
+	 * IDENTITY section below.
+	 */
+	bandDomains?: Record<string, DimValue[]>;
 	colorDomain?: string[];
 	colorScaleState?: { getColor: (value: unknown) => string | null };
 	sizeScaleState?: { getRenderedRadius: (value: number) => number };
@@ -338,6 +348,30 @@ export class TooltipManager {
 	}
 
 	// =========================================================================
+	// BAND IDENTITY
+	// =========================================================================
+	//
+	// Band step 3a split identity from position: a band channel holds a stable
+	// dim id, while invertScreenToData and the d3 band scale both work in
+	// display slots. The two are the same number only while the axis is in dim
+	// order — no sort, no explicit domain, no category-reducing transform —
+	// which is why conflating them looks correct on a default chart and fails
+	// on exactly the charts identity exists for.
+	//
+	// The translation itself belongs to BandScaleState, which owns both spaces
+	// (idAtSlot / categoryAt, alongside slotTable for the GPU). All this does
+	// is fetch the live scale to ask. Nothing here may index a captured domain
+	// array: `config.bandDomains` is a snapshot taken inside untrack() at
+	// register time, so it is a gate — does this mark declare a band axis on
+	// this side? — and never a lookup.
+
+	/** The live band scale for an axis, or null if that axis is not a band. */
+	#bandScale(axis: 'x' | 'y'): BandScaleState | null {
+		const state = axis === 'x' ? this.#scaleProvider.xScaleState : this.#scaleProvider.yScaleState;
+		return state && 'idAtSlot' in state ? state : null;
+	}
+
+	// =========================================================================
 	// QUERY BUILDING
 	// =========================================================================
 
@@ -363,10 +397,13 @@ export class TooltipManager {
 		const { tempTable, scaleTypes, columns } = config;
 		const conditions: string[] = [];
 
-		// Y axis
+		// Y axis. The cursor gives a display slot; the column holds an identity
+		// id, so translate before comparing.
 		if (scaleTypes.y === 'band' && yData != null) {
 			const col = columns?.y || 'y';
-			conditions.push(`CAST("${col}" AS INTEGER) = ${Math.round(yData)}`);
+			const id = this.#bandScale('y')?.idAtSlot(Math.round(yData));
+			if (id == null) return null;
+			conditions.push(`CAST("${col}" AS INTEGER) = ${id}`);
 		} else if (yData != null) {
 			const low = columns?.yLow ?? 'y0';
 			const high = columns?.yHigh ?? 'y1';
@@ -380,7 +417,9 @@ export class TooltipManager {
 		// X axis
 		if (scaleTypes.x === 'band' && xData != null) {
 			const col = columns?.x || 'x';
-			conditions.push(`CAST("${col}" AS INTEGER) = ${Math.round(xData)}`);
+			const id = this.#bandScale('x')?.idAtSlot(Math.round(xData));
+			if (id == null) return null;
+			conditions.push(`CAST("${col}" AS INTEGER) = ${id}`);
 		} else if (xData != null) {
 			const low = columns?.xLow ?? 'x0';
 			const high = columns?.xHigh ?? 'x1';
@@ -421,7 +460,9 @@ export class TooltipManager {
 
 		// X axis (x/y are pre-cast to DOUBLE during tooltip table creation)
 		if (useX && scaleTypes.x === 'band' && xData != null) {
-			bbConditions.push(`CAST(${xCol} AS INTEGER) = ${Math.round(xData)}`);
+			const id = this.#bandScale('x')?.idAtSlot(Math.round(xData));
+			if (id == null) return null;
+			bbConditions.push(`CAST(${xCol} AS INTEGER) = ${id}`);
 		} else if (useX && xData != null) {
 			// Containment mode: stacked horizontal areas provide xLow/xHigh columns.
 			const xLowCol = columns?.xLow;
@@ -456,7 +497,9 @@ export class TooltipManager {
 
 		// Y axis
 		if (useY && scaleTypes.y === 'band' && yData != null) {
-			bbConditions.push(`CAST(${yCol} AS INTEGER) = ${Math.round(yData)}`);
+			const id = this.#bandScale('y')?.idAtSlot(Math.round(yData));
+			if (id == null) return null;
+			bbConditions.push(`CAST(${yCol} AS INTEGER) = ${id}`);
 		} else if (useY && yData != null) {
 			// Containment mode: stacked areas provide yLow/yHigh columns.
 			// Points where yLow <= cursor <= yHigh get zero y-distance (cursor is inside).
@@ -527,12 +570,14 @@ export class TooltipManager {
 	): number | null {
 		if (!scale) return null;
 
-		// Band scale: convert integer index to category string, center in band
+		// Band scale: decode the channel to a category string, center in band.
+		// The d3 scale is keyed by category, so this has to go through the value
+		// rather than being used as a slot directly.
 		if (config.scaleTypes[axis] === 'band' && config.bandDomains?.[axis]) {
 			const col = columns?.[axis] || axis;
 			const index = row[col as string];
 			if (index == null) return null;
-			const category = config.bandDomains[axis]![index as number];
+			const category = this.#bandScale(axis)?.categoryAt(index as number);
 			if (category == null) return null;
 			const pos = scale(category);
 			const bandwidth = 'bandwidth' in scale ? (scale as D3BandScale).bandwidth() : 0;
@@ -595,9 +640,9 @@ export class TooltipManager {
 	): unknown {
 		const { scaleTypes, bandDomains } = config;
 
-		// Band index → category label
+		// Band channel → category label
 		if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
-			return bandDomains[key]![value as number] ?? value;
+			return this.#bandScale(key)?.categoryAt(value as number) ?? value;
 		}
 
 		// Time offset → formatted datetime
@@ -698,11 +743,12 @@ export class TooltipManager {
 			if (/^[xy]\d$/.test(key) && !channelFields?.[key]) continue;
 
 			const fieldName = channelFields?.[key] || key;
-			const axis: 'x' | 'y' = key.startsWith('x') ? 'x' : 'y';
 
-			// Resolve band index to category label
+			// Resolve band channel to category label. Toggle reads currentPoint by
+			// field name to build its filter tuples, so this is also what makes a
+			// click on a reordered band axis filter the right category.
 			if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
-				point[fieldName] = bandDomains[key]![value as number] ?? value;
+				point[fieldName] = this.#bandScale(key)?.categoryAt(value as number) ?? value;
 				continue;
 			}
 

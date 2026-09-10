@@ -203,7 +203,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
           p1: f32, // categoryCount
           p2: f32, // paddingInner
           p3: f32, // paddingOuter
-          p4: f32, // padding
+          p4: f32, // base offset of this scale's block in bandSlots
         };
       `;
 		},
@@ -225,7 +225,18 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 					return -1.0e6;
 				}
 
-				let categoryIndex = u32(value);
+				// The value is an identity id from the dim, not a position. Resolve
+				// it to a display slot; -1 means this id is not currently shown —
+				// filtered out by a category-reducing transform, or belonging to
+				// another table on a shared scale. Both must be discarded, and
+				// leaving it to the scissor rect is not safe: a slot of -1 sits one
+				// step outside the range only until padding, alignment or an
+				// animating categoryCount moves the band layout.
+				let slot = bandSlot(u32(scale.p4), u32(value));
+				if (slot < 0.0) {
+					return -1.0e6;
+				}
+
 				let categoryCount = scale.p1;
 				let paddingInner = scale.p2;
 				let paddingOuter = scale.p3;
@@ -235,7 +246,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 				
 				// Compute band layout - ranges are always normalized (min < max)
 				let bandLayout = computeBandLayout(
-					categoryIndex,
+					slot,
 					categoryCount,
 					paddingInner,
 					paddingOuter,
@@ -541,9 +552,42 @@ export class ScaleTemplateSystem {
 
 		return `
     // ===== BAND SCALE HELPERS =====
+
+    // Identity id -> display slot (§9.5, §14.3). A UNIFORM buffer, not storage:
+    // the vertex stage already sits at the default maxStorageBuffersPerShaderStage
+    // of 8, while its uniform buffers are nowhere near the default 12.
+    //
+    // WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
+    // vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
+    // default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
+    // every band and point scale, at the per-scale base carried in p4.
+    //
+    // Each scale's block is [count, slot0, slot1, ...]. The count is what makes
+    // the lookup safe: ids and the slot table can disagree for a moment while a
+    // dim appends, and without a per-scale bound an id past this scale's end
+    // reads the NEXT scale's slots — a plausible wrong position rather than a
+    // visible failure. Index 0 is a permanent zero-length block, which is where
+    // a scale that did not fit in the buffer points.
+    @group(2) @binding(5) var<uniform> bandSlots: array<vec4<f32>, 4096>;
+
+    fn bandSlotAt(i: u32) -> f32 {
+      return bandSlots[i >> 2u][i & 3u];
+    }
+
+    fn bandSlot(base: u32, id: u32) -> f32 {
+      let count = u32(bandSlotAt(base));
+      if (id >= count) {
+        return -1.0;
+      }
+      return bandSlotAt(base + 1u + id);
+    }
     
+    // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:
+    // the id is stable and comes from the dim, the slot says where that id
+    // currently sits and changes on every reorder. scaleBand resolves one to
+    // the other through bandSlots before calling this.
     fn computeBandLayout(
-      categoryIndex: u32,
+      slot: f32,
       categoryCount: f32,
       paddingInner: f32,
       paddingOuter: f32,
@@ -557,7 +601,7 @@ export class ScaleTemplateSystem {
 
       let step = rangeSize / max(1.0, n - paddingInner + paddingOuter * 2.0);
       let bandwidth = step * (1.0 - paddingInner);
-      let offset = paddingOuter * step + f32(categoryIndex) * step;
+      let offset = paddingOuter * step + slot * step;
 
       return vec2<f32>(offset, bandwidth);
     }
