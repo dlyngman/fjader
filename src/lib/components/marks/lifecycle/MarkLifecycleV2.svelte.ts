@@ -59,6 +59,7 @@ import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
+import { identityKeyFor } from '$lib/query-engine/identity-key';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
@@ -1011,17 +1012,7 @@ export class MarkLifecycleV2 {
 	#identityKey(axis: 'x' | 'y'): { key: string; sql: string } | null {
 		const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 		if (scaleType !== 'band' && scaleType !== 'point') return null;
-
-		const field = this.#config.select[axis];
-		if (field == null) return null;
-		if (typeof field === 'string') return { key: field, sql: `"${field.replaceAll('"', '""')}"` };
-		if (!isNode(field) || isBinExpression(field)) return null;
-		if (isAggregateExpression(field as ExprNode) || isWindowExpression(field as ExprNode)) {
-			return null;
-		}
-
-		const sql = String(field);
-		return sql ? { key: sql, sql } : null;
+		return identityKeyFor(this.#config.select[axis]);
 	}
 
 	/**

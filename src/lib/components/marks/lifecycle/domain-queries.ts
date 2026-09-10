@@ -16,6 +16,7 @@ import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { ContinuousScaleState, NormalizedSortConfig } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
+import { identityKeyFor } from '$lib/query-engine/identity-key';
 interface DataClientConfig {
 	_filterNulls: unknown[] | null;
 	select?: Record<string, unknown>;
@@ -115,12 +116,18 @@ export async function fetchCategoricalDomains(
 		//
 		// Sorted and sortOnly still query: they rank by an aggregate, which the
 		// dim knows nothing about.
-		if (!sortField && !sortOnly && typeof field === 'string') {
+		//
+		// Expression-backed axes take this path too, since `20c2370`'s successor
+		// gave the key derivation a shared home. They used to fall through to the
+		// DISTINCT below — correct but redundant, and deferred only because
+		// routing them here would have meant a second copy of #identityKey.
+		const identityField = !sortField && !sortOnly ? identityKeyFor(field) : null;
+		if (identityField) {
 			fetches.push(
 				(async () => {
 					// Idempotent and coalesced — the mark's own setup calls this too.
-					await coordinator.ensureColumns(table, { categorical: [field] });
-					const categories = coordinator.identityValues(field);
+					await coordinator.ensureColumns(table, { categorical: [identityField] });
+					const categories = coordinator.identityValues(identityField.key);
 					// The scale adopts this same array in MarkLifecycleV2's
 					// #ensureIdentityColumns, which covers sorted and explicit-domain
 					// axes that never reach this branch.
