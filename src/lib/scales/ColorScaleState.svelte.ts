@@ -16,7 +16,6 @@ import {
 	colorScaleTicks
 } from './color-utils';
 import type { RGBA, D3ColorScale } from './color-utils';
-import { buildCaseExpression, colorIndexColumn } from '$lib/sql/case-expression';
 import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
@@ -232,26 +231,6 @@ export class ColorScaleState {
 	 */
 	get d3Scale(): D3ColorScale | null {
 		return this.#d3Scale;
-	}
-
-	/**
-	 * The column name used in derived views for this scale's index.
-	 * Format: __dplot_{field}_color_idx
-	 */
-	get indexColumnName(): string {
-		return colorIndexColumn(this.#field);
-	}
-
-	/**
-	 * Inline CASE expression mapping ordinal domain values to 0-based indices.
-	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
-	 * Returns empty string for non-ordinal scales (they don't need CASE mapping).
-	 */
-	get caseExpression(): string {
-		if (!this.isOrdinal || !this.domain.length) return '';
-		return buildCaseExpression(this.#field, this.domain as string[], {
-			oneBased: false
-		});
 	}
 
 	/**

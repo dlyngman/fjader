@@ -9,7 +9,7 @@
  * the transform looked it up by the data column name.
  *
  * This walks the real chain instead: dim -> view -> the mark's query shape,
- * with the id column aliased to the channel exactly as `#inlineCaseExpressions`
+ * with the id column aliased to the channel exactly as `#inlineIdentityColumns`
  * aliases it, then through topN and back to a label.
  */
 

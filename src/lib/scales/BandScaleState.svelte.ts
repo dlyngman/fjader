@@ -678,7 +678,7 @@ export class BandScaleState {
 	 * There used to be a second path here that mapped category STRINGS to
 	 * domain positions, one row at a time, on every update — the per-row JS pass
 	 * §3 exists to delete. Nothing produces strings on a band channel any more:
-	 * #inlineCaseExpressions always selects the id column, and an axis it cannot
+	 * #inlineIdentityColumns always selects the id column, and an axis it cannot
 	 * dim is reported at setup rather than silently falling back. Strings here
 	 * now mean a real defect upstream, so they are reported rather than mapped.
 	 */

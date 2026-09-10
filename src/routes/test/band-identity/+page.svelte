@@ -28,7 +28,7 @@
 	//       -> All five correct. This is the rung that ends the alphabetical
 	//          interval.
 	//
-	//   C4  dead code deleted (caseExpression, skipBandIndex, #processWithMap,
+	//   C4  dead code deleted (the CASE path, skipBandIndex, #processWithMap,
 	//       tooltip CASE/Map paths)
 	//       -> No change. Deletion only.
 	//

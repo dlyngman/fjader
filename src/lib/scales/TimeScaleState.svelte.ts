@@ -6,7 +6,7 @@ import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import type { LinearScaleOptions } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { timeOffsetColumn } from '$lib/sql/case-expression';
+import { timeOffsetColumn } from '$lib/sql/derived-columns';
 
 /**
  * TimeScaleState extends LinearScaleState with datetime awareness.

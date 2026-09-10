@@ -214,8 +214,8 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 			fn scaleBand${suffix}(value: f32, scaleIndex: u32) -> f32 {
 				let scale = scaleParams[scaleIndex];
 
-				// -1 = no identity (unmapped category), matching
-				// buildCaseExpression's ELSE -1 and the value < 0.0 check in
+				// -1 = no identity (unmapped category), matching the COALESCE(-1)
+				// the identity view emits and the value < 0.0 check in
 				// getColorFromScale. Must be rejected before the cast below:
 				// u32() of a negative f32 is an indeterminate value in WGSL, so
 				// an unmapped row would otherwise land at an arbitrary band.

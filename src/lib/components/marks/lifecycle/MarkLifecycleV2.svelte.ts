@@ -144,7 +144,7 @@ export class MarkLifecycleV2 {
 	 * fallback and does not render (see #ensureIdentityColumns).
 	 *
 	 * Cleared by #onIdentityReset, because after a reload the columns it names
-	 * no longer exist — and #sourceTable and #inlineCaseExpressions both gate on
+	 * no longer exist — and #sourceTable and #inlineIdentityColumns both gate on
 	 * it being non-empty.
 	 */
 	#identityFields: Set<string> = new Set();
@@ -266,7 +266,7 @@ export class MarkLifecycleV2 {
 		}
 
 		// Inline CASE expressions — reads scale states reactively
-		this.#inlineCaseExpressions(resolvedSelect);
+		this.#inlineIdentityColumns(resolvedSelect);
 		this.#inlineTimeOffsets(resolvedSelect);
 
 		return buildQueryParts(
@@ -761,12 +761,11 @@ export class MarkLifecycleV2 {
 	 * Encode the categorical channels into the SELECT, replacing ViewManager's
 	 * view columns with direct SQL.
 	 *
-	 * Two encodings still live here, and the name is the older one. Band/point x
-	 * and y and the facet channel take the view's identity id column. Ordinal
-	 * colour is the last CASE, built from its scale's domain — step 3b, and the
-	 * only reason `caseExpression` still exists anywhere.
+	 * One encoding now, and the name is the older one: every categorical channel
+	 * — band and point x and y, the facet grid, ordinal colour — takes the
+	 * view's identity id column. The CASE this is named after is deleted.
 	 */
-	#inlineCaseExpressions(select: Record<string, unknown>): void {
+	#inlineIdentityColumns(select: Record<string, unknown>): void {
 		// Band/point x and y: always the view's identity id column, never a CASE.
 		//
 		// The CASE this replaced was built from the scale's DOMAIN, so the query
@@ -798,20 +797,23 @@ export class MarkLifecycleV2 {
 			select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
 		}
 
-		// Ordinal colour. The id column, like the positional channels — the
-		// fragment shader resolves it to this scale's palette rank through the
-		// shared slot table, so display order never reaches the query text.
+		// Ordinal colour. The id column, like every other categorical channel —
+		// the fragment shader resolves it to this scale's palette rank through
+		// the shared slot table, so display order never reaches the query text.
 		//
-		// The CASE remains for a scale whose field could not be dimmed, which is
-		// the only reason buildCaseExpression still exists.
+		// No CASE fallback, and nothing lost by that. A field this cannot dim is
+		// an aggregate, a window or a bin, and none of those produced a working
+		// ordinal colour scale anyway: the domain fetch skips aggregates
+		// entirely, so there was no domain, no palette upload, and paletteSize 0
+		// against a `% paletteSize` in the shader. bin() reached the domain query
+		// as "[object Object]". The fallback was unreachable for exactly the
+		// cases it appeared to cover.
 		const colorChannel = this.#config.colorChannel || 'fill';
 		const colorField = this.#colorScaleState?.isOrdinal
 			? identityKeyFor(this.#config.select[colorChannel])?.key
 			: null;
 		if (colorField && this.#identityFields.has(colorField)) {
 			select[colorChannel] = castReal(sqlColumn(this.#queryEngine.identityColumn(colorField)));
-		} else if (this.#colorScaleState?.caseExpression) {
-			select[colorChannel] = sql`${this.#colorScaleState.caseExpression}`;
 		}
 
 		// Facet. The renderers compile a faceted pipeline whenever chartContext.fx
@@ -1048,7 +1050,7 @@ export class MarkLifecycleV2 {
 	 * display position (steps 3b/3c), which is why this reads the two positional
 	 * axes rather than every channel.
 	 *
-	 * These columns ARE consumed: #inlineCaseExpressions selects the id column for
+	 * These columns ARE consumed: #inlineIdentityColumns selects the id column for
 	 * any axis in #identityFields, and the scale keeps ids as its internal
 	 * representation. Failing here is therefore fatal, not additive — which is
 	 * why the await below is unguarded.
@@ -1086,6 +1088,15 @@ export class MarkLifecycleV2 {
 			: null;
 
 		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx) : null;
+		if (this.#colorScaleState?.isOrdinal && this.#config.select[colorChannel] && !colorKey) {
+			console.error(
+				`[${this.#markId}] The colour channel is categorical but cannot be given a stable ` +
+					`identity. Colouring by an aggregate, a window expression or bin() has no ` +
+					`categories to colour BY — use a continuous scheme for a computed value. This ` +
+					`mark will render without colour.`
+			);
+		}
+
 		if (this.#chartContext.fx && !facetKey) {
 			console.error(
 				`[${this.#markId}] fx is set but cannot be given a stable identity, so this mark ` +
@@ -1490,7 +1501,7 @@ export class MarkLifecycleV2 {
 				// id through the live scale (see its BAND IDENTITY section).
 				//
 				// There is no longer a band axis that arrives here as raw category
-				// strings: #inlineCaseExpressions always selects the id column, and
+				// strings: #inlineIdentityColumns always selects the id column, and
 				// an axis it cannot dim is reported at setup. The CASE re-inlining
 				// that used to live here — rebuilding a domain-ordered index for
 				// the tooltip because skipBandIndex had left strings in the main

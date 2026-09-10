@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BandScaleState } from './BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
-import { buildCaseExpression } from '$lib/sql/case-expression';
 
 describe('BandScaleState.processDataForGPU', () => {
 	function scaleWith(domain: string[]): BandScaleState {
@@ -32,15 +31,6 @@ describe('BandScaleState.processDataForGPU', () => {
 		expect(spy).toHaveBeenCalledOnce();
 		expect(spy.mock.calls[0][0]).toContain('identity ids were expected');
 		spy.mockRestore();
-	});
-
-	it('still emits -1 for an unmapped value in the SQL CASE', () => {
-		// buildCaseExpression outlives this deletion: ordinal colour is the last
-		// CASE-inlined channel, until step 3b. The sentinel it emits has to keep
-		// matching the one scaleBand discards.
-		const sql = buildCaseExpression('category', ['a', 'b']);
-		expect(sql).toContain('WHEN "category" = \'a\' THEN 0');
-		expect(sql).toContain('ELSE -1');
 	});
 
 	it('passes a Float32Array through untouched', () => {
