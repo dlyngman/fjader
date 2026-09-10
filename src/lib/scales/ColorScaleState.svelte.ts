@@ -139,8 +139,6 @@ export class ColorScaleState {
 	}
 
 	// ViewManager integration - tracks tables this scale has registered columns for
-	#registeredTables: Set<string> = new Set();
-	#viewsCreated: Set<string> = new Set(); // Tables that have had their view column created (one-shot)
 
 	constructor(
 		config: ColorScaleConfig,
@@ -437,6 +435,7 @@ export class ColorScaleState {
 	 * the new one and simply mean other categories.
 	 */
 	setIdentity(identity: FieldIdentity): void {
+		this.#warnIfDestroyed('setIdentity');
 		const previous = this.#identity;
 		this.#identity = identity;
 		if (previous && previous !== identity && !previous.present) {
@@ -611,46 +610,22 @@ export class ColorScaleState {
 	// ============================================================
 
 	/**
-	 * Register this scale for a source table. After domain is set,
-	 * the view will be created with the index column (one-shot).
+	 * Kept as a no-op so callers do not have to know the view is gone.
+	 *
+	 * It once registered a derived index column with ViewManager. The colour
+	 * channel takes the dim's id column now, so there is nothing to create —
+	 * but MarkColor, MarkSeries and domain-queries all still call it, and
+	 * deleting it is a separate change from deleting what it did.
 	 */
-	registerTable(sourceTable: string): void {
-		this.#registeredTables.add(sourceTable);
-		this.#maybeCreateView(sourceTable);
-	}
-
-	/**
-	 * Create view for a table if both table is registered and domain is known.
-	 * Only creates once per table (one-shot).
-	 */
-	#maybeCreateView(sourceTable: string): void {
-		// Only create once per table
-		if (this.#viewsCreated.has(sourceTable)) {
-			return;
-		}
-
-		// Need domain to be ready
-		if (!this.isOrdinal || this.domain.length === 0) {
-			return;
-		}
-
-		this.#viewsCreated.add(sourceTable);
-	}
-
-	#unregisterFromViewManager(): void {
-		this.#registeredTables.clear();
-		this.#viewsCreated.clear();
-	}
+	registerTable(_sourceTable: string): void {}
 
 	// ============================================================
 	// DOMAIN UPDATES
 	// ============================================================
 
-	/**
-	 * Update the domain. Triggers GPU re-upload.
-	 * Also triggers one-shot view creation for registered tables.
-	 */
+	/** Update the domain. Triggers GPU re-upload. */
 	setDomain(newDomain: (string | number)[]): void {
+		this.#warnIfDestroyed('setDomain');
 		if (!newDomain || newDomain.length === 0) return;
 
 		// Check if domain actually changed
@@ -661,13 +636,6 @@ export class ColorScaleState {
 
 		this.domain = [...newDomain];
 		this.#uploadToGPU();
-
-		// Domain order changed — clear one-shot guard to force view recreation
-		// so the CASE expression matches the new domain→index mapping.
-		this.#viewsCreated.clear();
-		for (const table of this.#registeredTables) {
-			this.#maybeCreateView(table);
-		}
 	}
 
 	/**
@@ -821,14 +789,43 @@ export class ColorScaleState {
 	// CLEANUP
 	// ============================================================
 
+	/**
+	 * Marks the scale dead. Clears nothing, deliberately — see
+	 * BandScaleState.destroy for the full argument.
+	 *
+	 * The short version: the registry calls this when chart-id usage hits zero
+	 * and then drops the instance from storage, so it can never be handed out
+	 * again and its state cannot leak into a future chart. Clearing therefore
+	 * buys nothing, while a component still holding the reference loses
+	 * everything — and here that is worse than for a band scale, because
+	 * nulling #d3Scale makes getColor return black for every category rather
+	 * than failing.
+	 *
+	 * The GPU config, ramp and palette slots ARE released, by the registry from
+	 * gpuSlots. That release is real and has to stay, which is also why a
+	 * still-referenced colour scale is dangerous beyond its own rendering: its
+	 * slots can be reallocated to a different scale, and it would then write
+	 * its palette over that one's.
+	 */
 	destroy(): void {
-		// Unregister from ViewManager
-		this.#unregisterFromViewManager();
+		this.#destroyed = true;
+	}
 
-		// Slots are released by registry via gpuSlots getter
-		this.#activeValues = null;
-		this.#d3Scale = null;
-		this.#categoryMap.clear();
-		this.ready = false;
+	/** True once the registry has torn this scale down. */
+	get isDestroyed(): boolean {
+		return this.#destroyed;
+	}
+
+	#destroyed = false;
+	#warnedAfterDestroy = false;
+
+	#warnIfDestroyed(what: string): void {
+		if (!this.#destroyed || this.#warnedAfterDestroy) return;
+		this.#warnedAfterDestroy = true;
+		console.warn(
+			`[ColorScaleState] "${this.#field}": ${what} after destroy(). The registry dropped ` +
+				`this scale when its chart-id usage hit zero and released its GPU slots, which may ` +
+				`now belong to another scale. Register the holder's chart id.`
+		);
 	}
 }

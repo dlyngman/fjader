@@ -578,3 +578,61 @@ describe('BandScaleState as a facet scale', () => {
 		expect([0, 1, 2].map((cell) => scale.idAtSlot(cell))).toEqual([0, 1, 2]);
 	});
 });
+
+describe('BandScaleState after the registry tears it down', () => {
+	// §25.4. ScaleRegistry destroys a scale when its chart-id usage hits zero and
+	// then drops it from storage — but a component can still hold the reference,
+	// and a faceted container guarantees it: it obtains the facet scale, hands it
+	// to its cells, and stops being a chart itself.
+	//
+	// destroy() used to clear #extents, #explicitDomain and #frozenDomain, which
+	// is how an explicit fxDomain vanished with no error and no symptom beyond
+	// an ordering that did not apply.
+
+	it('keeps the state a still-referenced holder depends on', () => {
+		const scale = new BandScaleState('species');
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
+		scale.updateDomainFromExtents();
+
+		scale.destroy();
+		scale.updateDomainFromExtents();
+
+		// The explicit ordering survives, because nothing else can ever be handed
+		// this instance: the registry builds a fresh one for the next request.
+		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
+		expect(Array.from(scale.displayOrder)).toEqual([2, 0, 1]);
+	});
+
+	it('reports itself destroyed', () => {
+		const scale = new BandScaleState('species');
+		expect(scale.isDestroyed).toBe(false);
+		scale.destroy();
+		expect(scale.isDestroyed).toBe(true);
+	});
+
+	it('warns once when state is registered after destroy', () => {
+		// Loud rather than silent: registering on a dead scale means a holder is
+		// not counted in the registry, which is the actual defect. Once only —
+		// this is reachable from a render path.
+		const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const scale = new BandScaleState('species');
+		scale.destroy();
+
+		scale.addMark(['Adelie'], 'mark-1');
+		scale.addMark(['Chinstrap'], 'mark-2');
+		scale.setSortOrder(['Adelie']);
+
+		expect(spy).toHaveBeenCalledTimes(1);
+		expect(spy.mock.calls[0][0]).toContain('after destroy()');
+		spy.mockRestore();
+	});
+
+	it('does not warn on a live scale', () => {
+		const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const scale = new BandScaleState('species');
+		scale.addMark(['Adelie'], 'mark-1');
+		expect(spy).not.toHaveBeenCalled();
+		spy.mockRestore();
+	});
+});
