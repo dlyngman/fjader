@@ -313,6 +313,11 @@ export class GPUCoordinator {
 	#bandSlots: BandSlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
 	#bandSlotScales: BandSlotScale[] = [];
+	/**
+	 * Scales whose slot table moved this frame. Reused, and empty on almost
+	 * every frame — a slot table changes on a reorder, not per frame.
+	 */
+	#movedSlotScales = new Set<string>();
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -717,6 +722,8 @@ export class GPUCoordinator {
 		// allocator, the capacity fallback and the eviction sweep are tested.
 		const scales = this.#bandSlotScales;
 		scales.length = 0;
+		const moved = this.#movedSlotScales;
+		moved.clear();
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
 				id: string;
@@ -725,10 +732,34 @@ export class GPUCoordinator {
 				slotVersion?: number;
 			};
 			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
+			// Noted before packing, which is what overwrites the recorded version.
+			if (state.versions.get(scale.id) !== scale.slotVersion) moved.add(scale.id);
 			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
 		}
 
 		const { dirty, length } = packBandSlots(scales, state);
+
+		// A facet scale's permutation decides which id each cell renders, and that
+		// id lives in the cell's FRAME UNIFORM — which is written on mount and on
+		// scale-set changes, not per frame. Nothing else refreshes it: a domain
+		// change reaches invalidateChartsUsingScale, which invalidates the chart
+		// ids the scale is registered under (the container, not the cells) and in
+		// any case only marks them dirty for redraw.
+		//
+		// So without this a facet cell keeps whatever id it was given at mount —
+		// when the scale had no identity yet, so idAtSlot passed the CELL INDEX
+		// through. Ids and cell indices coincide while the dim order is the
+		// display order, which is every facet chart today, which is why this was
+		// invisible. Guarded on the version so it costs a set lookup per frame
+		// and a uniform write only when a permutation actually moves.
+		if (moved.size > 0) {
+			for (const chart of this.#registeredCharts.values()) {
+				if (chart.facetScaleId && moved.has(chart.facetScaleId)) {
+					this.updateChartFrameUniforms(chart.chartId);
+				}
+			}
+		}
+
 		if (!dirty) return;
 
 		this.#device!.queue.writeBuffer(
@@ -1918,8 +1949,10 @@ export class GPUCoordinator {
 		// is displayOrder[slot], without it the slot passes through unchanged,
 		// which is what makes this a no-op until the facet scale is migrated.
 		//
-		// Resolved per frame, deliberately. A reorder moves which id sits at this
-		// cell while registerChart, which runs once at mount, is long finished.
+		// Resolved here rather than captured at registration, because registerChart
+		// runs once at mount and a reorder moves which id sits at this cell long
+		// after. Note this method is event-driven, NOT per frame — #updateBandSlots
+		// is what notices a facet permutation moving and calls it.
 		const facetSlot = chartConfig.facetIndex ?? 0;
 		const facetScale = chartConfig.facetScaleId
 			? (this.#scaleIdToInstance.get(chartConfig.facetScaleId) as unknown as
