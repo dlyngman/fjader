@@ -8,10 +8,12 @@
  * Three pieces:
  *
  * 1. A **dim table per source field**, `__dplot_dim_<field>_s<session>`, holding
- *    `(value, id)`. Built from the first table that requests the field; later
- *    tables APPEND unseen values with continuing ids. It never reorders and never
- *    renumbers, so an id already baked into a vertex buffer stays valid and no
- *    earlier mark has to requery.
+ *    `(value, label, id)`. Built from the first table that requests the field;
+ *    later tables APPEND unseen values with continuing ids. It never reorders and
+ *    never renumbers, so an id already baked into a vertex buffer stays valid and
+ *    no earlier mark has to requery. `value` carries the source column's own type
+ *    and `label` is NULL, except on a synthetic row (`reserveSynthetic`), where
+ *    that is inverted.
  *
  * 2. A **per-table view**, `<table>_v_s<session>`, selecting `*` plus one
  *    `__dplot_<field>_idx` column per requested field. Always LEFT JOIN with
@@ -36,9 +38,9 @@
  * both dims and views carry a session suffix.
  *
  * Nothing here is reactive, and nothing here knows which scale kind is reading.
- * Band and point positional axes read these columns today (step 3a); ordinal
- * colour, series and facet still CASE-inline a display position, and switch
- * over one at a time in steps 3b and 3c.
+ * That is the point: band and point axes, the facet grid, ordinal colour and
+ * the series scale all read the same columns from the same dim, and none of
+ * them is special-cased here.
  */
 
 import { IDENTITY_SLOT_CAPACITY } from '$lib/gpu/identity-slot-packing';
@@ -79,6 +81,19 @@ interface DimEntry {
 	sql: string;
 	/** Source tables already folded into this dim. */
 	tables: Set<string>;
+	/**
+	 * The refusal message once `#checkDimSize` has rejected this dim, and null
+	 * otherwise. Sticky, because the dim genuinely IS too big: a later, smaller
+	 * table registering the same field must fail too rather than inherit a dim
+	 * nothing can draw.
+	 *
+	 * Recorded rather than inferred from `tables`, because the obvious fix —
+	 * marking the table done only after the check passes — would put a second
+	 * table back on the CREATE branch, where `CREATE TABLE IF NOT EXISTS` is a
+	 * silent no-op and its rows are never appended. That is exactly what `chain`
+	 * below exists to prevent, so the refusal is tracked separately.
+	 */
+	refusal: string | null;
 	/**
 	 * Serializes work on this dim. The coalescer is per TABLE, so two tables
 	 * registering the same field run two independent drains, and without this
@@ -458,6 +473,7 @@ export class CategoricalIdentity {
 				name: this.dimTable(field),
 				sql: this.#sqlFor.get(field) ?? quote(field),
 				tables: new Set(),
+				refusal: null,
 				chain: Promise.resolve()
 			};
 			this.#dims.set(field, dim);
@@ -512,8 +528,19 @@ export class CategoricalIdentity {
 		if (existing !== undefined) return existing;
 
 		const dimName = quote(dim.name);
+		// value NULL, label carrying the text. The label cannot go in `value`:
+		// that column has the source column's type, so 'Other' against a year or
+		// a rating is `Conversion Error: Could not convert string 'Other' to
+		// INT32` — includeOthers simply threw on every non-VARCHAR band axis.
+		//
+		// NULL is the right value rather than a placeholder of the column's type,
+		// because a synthetic row must never join to a source row and #createView
+		// joins ON t.key = d.value. Any in-range sentinel would collide with a
+		// real category the moment the data contained it; NULL cannot, since
+		// NULL = anything is never true.
 		await this.#exec.exec(
-			`INSERT INTO ${dimName} SELECT ${literal(label)}, ` +
+			`INSERT INTO ${dimName} (value, label, id) ` +
+				`SELECT NULL, ${literal(label)}, ` +
 				`(SELECT COALESCE(MAX(id), -1) + 1 FROM ${dimName})::INT`
 		);
 		await this.#refreshValues(field);
@@ -531,6 +558,11 @@ export class CategoricalIdentity {
 		table: string,
 		generation: number
 	): Promise<void> {
+		// BEFORE the tables check, not after: a mark whose setup re-runs would
+		// otherwise hit `tables.has(table)`, return early, and render against a
+		// dim the size check had already refused — the refusal firing exactly
+		// once and then never again.
+		if (dim.refusal) throw new Error(dim.refusal);
 		if (dim.tables.has(table)) return;
 		// Queued behind other dim work that outlived a reset.
 		if (this.#generation !== generation) return;
@@ -544,9 +576,15 @@ export class CategoricalIdentity {
 		await this.#checkCardinality(field, expr, src);
 
 		if (dim.tables.size === 0) {
+			// `label` is NULL for every real value and carries the text for a
+			// synthetic one (see reserveSynthetic). It exists because `value` takes
+			// the SOURCE column's type: on a band axis over a year or a rating
+			// there is no INTEGER that means "Other", and writing the string into
+			// that column is a conversion error, not a fallback.
 			await this.#exec.exec(
 				`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
-					`SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
+					`SELECT value, NULL::VARCHAR AS label, ` +
+					`(ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
 					`FROM (SELECT DISTINCT ${expr} AS value FROM ${src} WHERE ${expr} IS NOT NULL)`
 			);
 			// A second statement: CTAS cannot carry a constraint. `value` is unique
@@ -555,13 +593,19 @@ export class CategoricalIdentity {
 			// value does not tie-break — #createView joins ON t.field = d.value, so
 			// it FANS OUT every matching source row in every query against the
 			// view. Cheap insurance against a future writer forgetting.
+			//
+			// Synthetic rows hold value NULL, and SQL treats NULLs as distinct
+			// under a unique index, so any number of them coexist here — verified
+			// against DuckDB rather than assumed.
 			await this.#exec.exec(
 				`CREATE UNIQUE INDEX IF NOT EXISTS ${quote(`${dim.name}_value_uq`)} ON ${dimName}(value)`
 			);
 		} else {
+			// Columns named rather than positional: the table has three of them and
+			// a positional INSERT would silently put the id into `label`.
 			await this.#exec.exec(
-				`INSERT INTO ${dimName} ` +
-					`SELECT s.v, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
+				`INSERT INTO ${dimName} (value, label, id) ` +
+					`SELECT s.v, NULL, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
 					`ROW_NUMBER() OVER (ORDER BY s.v))::INT ` +
 					`FROM (SELECT DISTINCT ${expr} AS v FROM ${src} WHERE ${expr} IS NOT NULL) s ` +
 					`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d WHERE d.value = s.v)`
@@ -578,7 +622,7 @@ export class CategoricalIdentity {
 		// Exact rather than approximate here: the rows exist, COUNT(*) on a
 		// categorical dim is trivial, and this is the number the error should
 		// quote.
-		this.#checkDimSize(field, this.identity(field).values.length);
+		this.#checkDimSize(dim, field, this.identity(field).values.length);
 	}
 
 	/**
@@ -627,18 +671,27 @@ export class CategoricalIdentity {
 	 * same field should fail too rather than inherit a dim nothing can draw.
 	 * Rolling back would make the failure depend on which mark set up first.
 	 *
+	 * That "should" is now enforced rather than asserted. The refusal is stored
+	 * on the dim and re-thrown by `#ensureDimNow` before its `tables` check, so
+	 * a mark re-running setup cannot slip past it — previously the throw left
+	 * the table already marked done, and the retry returned early and rendered
+	 * against the dim this refused.
+	 *
 	 * The buffer figure is quoted here and nowhere else, because this is the
 	 * only check that compares against the thing the buffer actually holds.
 	 */
-	#checkDimSize(field: string, size: number): void {
+	#checkDimSize(dim: DimEntry, field: string, size: number): void {
 		if (size > MAX_IDENTITY_CARDINALITY) {
-			throw new Error(
+			// Recorded on the dim before it is thrown, so every later registration
+			// of this field fails the same way instead of the first one being the
+			// only one that ever sees it.
+			dim.refusal =
 				`"${field}" has ${size} distinct values across every table registering it, over the ` +
-					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. The shared slot ` +
-					`buffer holds ${SLOT_BUDGET} ids across every scale that needs one on the ` +
-					`page, so this is a page-wide budget and not a per-axis one. Use a continuous ` +
-					`scale, bin the values, or reduce them with a transform.`
-			);
+				`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. The shared slot ` +
+				`buffer holds ${SLOT_BUDGET} ids across every scale that needs one on the ` +
+				`page, so this is a page-wide budget and not a per-axis one. Use a continuous ` +
+				`scale, bin the values, or reduce them with a transform.`;
+			throw new Error(dim.refusal);
 		}
 		if (size > WARN_IDENTITY_CARDINALITY) {
 			console.warn(
@@ -658,13 +711,19 @@ export class CategoricalIdentity {
 	 */
 	async #refreshValues(field: string): Promise<void> {
 		const rows = await this.#exec.queryRows(
-			`SELECT id, value FROM ${quote(this.dimTable(field))} ORDER BY id`
+			`SELECT id, value, label FROM ${quote(this.dimTable(field))} ORDER BY id`
 		);
 
 		// Ordered by id and dense by construction, so position is the id — and
 		// reset() derives value -> id from the same pass, so the two directions
 		// cannot disagree.
-		this.identity(field).reset(rows.map((row) => row.value as DimValue));
+		//
+		// `label` wins where it is set, which is only ever a synthetic row. Every
+		// real row has label NULL and keeps its native value, so this does not
+		// stringify anything the dim read from the source (see DimValue). It is
+		// the one place the two columns collapse back into one space, and it is
+		// why no consumer has to know a bucket was synthetic.
+		this.identity(field).reset(rows.map((row) => (row.label ?? row.value) as DimValue));
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */

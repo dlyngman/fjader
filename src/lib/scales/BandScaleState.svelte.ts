@@ -62,7 +62,7 @@ export class BandScaleState {
 	// =========================================================================
 	// SELECTION STATE
 	// =========================================================================
-	#activeValues: Set<string> | null = $state(null); // null = all active, Set = only these active
+	#activeValues: Set<DimValue> | null = $state(null); // null = all active, Set = only these active
 
 	// =========================================================================
 	// POINTER STATE
@@ -181,11 +181,11 @@ export class BandScaleState {
 	// ACTIVE VALUES (selection feedback)
 	// =========================================================================
 
-	get activeValues(): Set<string> | null {
+	get activeValues(): Set<DimValue> | null {
 		return this.#activeValues;
 	}
 
-	setActiveValues(values: Iterable<string>): void {
+	setActiveValues(values: Iterable<DimValue>): void {
 		this.#activeValues = values instanceof Set ? values : new Set(values);
 	}
 
@@ -193,7 +193,7 @@ export class BandScaleState {
 		this.#activeValues = null;
 	}
 
-	isActive(value: string): boolean {
+	isActive(value: DimValue): boolean {
 		return this.#activeValues == null || this.#activeValues.has(value);
 	}
 
@@ -502,10 +502,15 @@ export class BandScaleState {
 	 * new identity value array.
 	 */
 	#rebuildSlotTable(): void {
-		// Without identity the channel already carries a display position — an
-		// expression-backed axis CASE-inlines one — so the shader's lookup has to
-		// be a no-op. The identity permutation, not an empty table: empty would
-		// give the scale offset 0 and another scale's slots.
+		// Without identity the channel already carries a display position, so the
+		// shader's lookup has to be a no-op. This is now only a TRANSIENT state —
+		// the window before setIdentity arrives, and the all-NULL column that
+		// renders nothing anyway — because an expression-backed axis gets a dim
+		// like any other since `c55e719`. See §29.8: the pair of spaces this
+		// branch serves outlived the reason for it.
+		//
+		// The identity permutation, not an empty table: empty would give the
+		// scale offset 0 and another scale's slots.
 		if (!this.hasIdentity) {
 			const n = this.#domain.length;
 			const passthrough = new Float32Array(n);
@@ -901,26 +906,6 @@ export class BandScaleState {
 		return Math.max(0, Math.min(n - 1, bandIndex));
 	}
 
-	// =========================================================================
-	// LEGACY/COMPATIBILITY METHODS
-	// =========================================================================
-
-	/**
-	 * Get positioning information for a category (for compatibility)
-	 */
-	getPosition(category: string): { current: number } {
-		const index = this.effectiveDomain.indexOf(category);
-		if (index === -1) return { current: 0 };
-
-		return {
-			current: index / Math.max(1, this.effectiveDomain.length - 1)
-		};
-	}
-
-	/**
-	 * Read-only view of the category→index mapping.
-	 * Derived from the effective domain; updates reactively.
-	 */
 	/**
 	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */

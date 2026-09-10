@@ -222,10 +222,12 @@ export class QueryEngine {
 	 * named categorical field, and resolve once it does. Concurrent callers
 	 * coalesce into one rebuild. See `categorical-identity.ts`.
 	 *
-	 * Band and point positional axes read these columns today (step 3a): their
-	 * query selects the id column and the scale keeps ids as its internal
-	 * representation. Ordinal colour, series and facet still CASE-inline a
-	 * display position — steps 3b and 3c.
+	 * EVERY categorical channel reads these columns: band and point positional
+	 * axes, the facet grid, ordinal colour and the series scale that shares its
+	 * class. Each selects the id column and keeps ids as its internal
+	 * representation; display position is resolved from the shared identity slot
+	 * table, on the GPU or through the scale's own lookup. There is no second
+	 * path — the CASE inlining this replaced is deleted (`c54c53d`).
 	 */
 	ensureColumns(
 		table: string,

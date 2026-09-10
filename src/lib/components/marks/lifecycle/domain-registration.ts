@@ -264,9 +264,10 @@ export function registerDataDerivedDomains(
 
 			// The band channel carries dim ids, and the scale stores ids, so they
 			// go straight across — no decoding to strings for the scale to encode
-			// back. Raw values only for a scale with no identity: an
-			// expression-backed axis has no dim, so its channel holds a
-			// CASE-produced position or the value itself.
+			// back. Raw values only for a scale with no identity, which since
+			// `c55e719` means a scale whose dim has not arrived yet or is empty,
+			// not a kind of axis: an expression-backed axis gets a dim like any
+			// column. See §29.8 — this fork is the transient, not a second path.
 			const encoded = !!bandScale?.hasIdentity;
 			const categories: (string | number)[] = encoded
 				? extractIdsFromData(data, axis)

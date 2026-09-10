@@ -837,28 +837,6 @@ export class ChartScales {
 		return true;
 	};
 
-	xCategoryPositions = $derived.by(() => {
-		const xInst = this.#xScaleInstance;
-		if (!xInst || xInst.scaleType !== 'band' || !this.xScale || !this.layout.isReady) return null;
-		const domain = xInst.effectiveDomain;
-		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d: string | number) => this.xScale!(d)));
-	});
-
-	yCategoryPositions = $derived.by(() => {
-		const yInst = this.#yScaleInstance;
-		if (!yInst || yInst.scaleType !== 'band' || !this.yScale || !this.layout.isReady) return null;
-		const domain = yInst.effectiveDomain;
-		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d: string | number) => this.yScale!(d)));
-	});
-
-	categoryPositionsReady = $derived.by(() => {
-		const xReady = this.scaleTypes?.x !== 'band' || this.xCategoryPositions !== null;
-		const yReady = this.scaleTypes?.y !== 'band' || this.yCategoryPositions !== null;
-		return xReady && yReady;
-	});
-
 	xBandwidth = $derived.by(() => {
 		if (this.scaleTypes?.x !== 'band' || !this.baseXScale || !this.layout.isReady) return 0;
 		return (this.baseXScale as D3BandScale).bandwidth();
@@ -931,15 +909,6 @@ export class ChartScales {
 			},
 			get scaleConfigurations() {
 				return coordinator.scaleConfigurations;
-			},
-			get xCategoryPositions() {
-				return coordinator.xCategoryPositions;
-			},
-			get yCategoryPositions() {
-				return coordinator.yCategoryPositions;
-			},
-			get categoryPositionsReady() {
-				return coordinator.categoryPositionsReady;
 			},
 			get xBandwidth() {
 				return coordinator.xBandwidth;

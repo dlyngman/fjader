@@ -428,9 +428,6 @@ export interface ChartContext {
 	readonly active: boolean | undefined;
 
 	// Band support
-	readonly xCategoryPositions: Float32Array | null | undefined;
-	readonly yCategoryPositions: Float32Array | null | undefined;
-	readonly categoryPositionsReady: boolean | undefined;
 	readonly xBandwidth: number | undefined;
 	readonly yBandwidth: number | undefined;
 
@@ -465,7 +462,8 @@ export interface ChartContext {
 	readonly animatedAxisXPositions?: number[];
 
 	// Faceting
-	fx: string | null;
+	/** A column name or a fixed SQL expression. See ChartContainer's fx prop. */
+	fx: FieldRef | null;
 	readonly isFaceted: boolean;
 	readonly facetChartIds: string[];
 	readonly facetBandScale: BandScaleState | null;

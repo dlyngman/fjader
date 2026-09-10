@@ -310,9 +310,12 @@ describe('CategoricalIdentity', () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const dim = identity.dimTable('species');
 
-		await expect(db.run(`INSERT INTO "${dim}" VALUES ('Adelie', 99)`)).rejects.toThrow(
-			/[Cc]onstraint|unique/
-		);
+		// Columns named: the dim carries (value, label, id), and a positional
+		// INSERT would fail at the binder before ever reaching the constraint
+		// this test is about.
+		await expect(
+			db.run(`INSERT INTO "${dim}" (value, label, id) VALUES ('Adelie', NULL, 99)`)
+		).rejects.toThrow(/[Cc]onstraint|unique/);
 	});
 
 	it('an append after a reservation continues past it without renumbering', async () => {
@@ -714,5 +717,32 @@ describe('CategoricalIdentity', () => {
 			expect(idsInDomainOrder).not.toEqual([...idsInDomainOrder].sort((a, b) => a - b));
 			expect(ids.get('critical')).toBeGreaterThan(ids.get('low')!);
 		});
+	});
+
+	it('keeps refusing an oversized dim, rather than only the first time', async () => {
+		// The refusal used to fire exactly once: it threw AFTER marking the table
+		// done, so a mark re-running setup hit `tables.has(table)`, returned
+		// early, and rendered against the dim that had just been rejected.
+		await db.run(`CREATE TABLE huge AS SELECT i::VARCHAR AS c FROM range(10001) t(i)`);
+
+		await expect(identity.ensureColumns('huge', { categorical: ['c'] })).rejects.toThrow(
+			/distinct values across every table/
+		);
+		// The retry is the case that regressed. Same error, not a silent pass.
+		await expect(identity.ensureColumns('huge', { categorical: ['c'] })).rejects.toThrow(
+			/distinct values across every table/
+		);
+	});
+
+	it('refuses a second, smaller table on a dim that was already refused', async () => {
+		// What the docstring always claimed: the dim IS too big, so inheriting it
+		// must fail regardless of which table asks next.
+		await db.run(`CREATE TABLE huge2 AS SELECT i::VARCHAR AS c2 FROM range(10001) t(i)`);
+		await db.run(`CREATE TABLE tiny2 AS SELECT 'a' AS c2`);
+
+		await expect(identity.ensureColumns('huge2', { categorical: ['c2'] })).rejects.toThrow();
+		await expect(identity.ensureColumns('tiny2', { categorical: ['c2'] })).rejects.toThrow(
+			/distinct values across every table/
+		);
 	});
 });

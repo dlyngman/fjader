@@ -145,6 +145,59 @@ describe('identity ids through topN', () => {
 		expect(totals[xs.indexOf(otherId)]).toBe(830);
 	});
 
+	// The two axes this suite and identity-numeric each cover alone: a synthetic
+	// bucket, and a dim whose values are not strings. Their PRODUCT was missing,
+	// and that is exactly where includeOthers threw — `Conversion Error: Could
+	// not convert string 'Other' to INT32` — because the label was written into
+	// a `value` column carrying the source column's type. Neither suite was
+	// wrong; the gap was between them.
+	describe('a synthetic bucket on a non-VARCHAR dim', () => {
+		for (const [label, type, values] of [
+			['INTEGER', 'INTEGER', '(2021, 10), (2022, 400), (2023, 300)'],
+			['BIGINT', 'BIGINT', '(90000000001, 10), (90000000002, 400), (90000000003, 300)'],
+			['DATE', 'DATE', `('2024-01-01', 10), ('2024-02-01', 400), ('2024-03-01', 300)`]
+		] as const) {
+			it(`reserves and labels Other on a ${label} column`, async () => {
+				await db.run(`CREATE TABLE t (k ${type}, amount INT)`);
+				await db.run(`INSERT INTO t VALUES ${values}`);
+
+				await identity.ensureColumns('t', { categorical: ['k'] });
+				const otherId = await identity.reserveSynthetic('k', 'Other');
+				const dim = identity.identity('k');
+
+				// Appended after the three real values, and decodes to its label.
+				expect(otherId).toBe(3);
+				expect(dim.values[otherId]).toBe('Other');
+				expect(dim.ids.get('Other')).toBe(otherId);
+
+				// The real values kept their own type — the label column exists so
+				// that the synthetic row does not force them all to VARCHAR. (A
+				// DATE arrives as a JS Date object, not a string and not a number:
+				// checked, not assumed, and see the note below about DimValue.)
+				expect(dim.values.slice(0, 3).every((v) => typeof v !== 'string')).toBe(true);
+
+				// And the synthetic row still cannot join to a source row.
+				const rows = await db.all(`SELECT COUNT(*) AS n FROM "${identity.sourceFor('t')}"`);
+				expect(Number(rows[0].n)).toBe(3);
+			});
+		}
+
+		it('keeps a second synthetic bucket distinct under the unique index', async () => {
+			// value is NULL on both, and SQL treats NULLs as distinct, so the
+			// unique index on `value` does not reject the second one.
+			await db.run(`CREATE TABLE t (k INTEGER)`);
+			await db.run(`INSERT INTO t VALUES (1), (2)`);
+			await identity.ensureColumns('t', { categorical: ['k'] });
+
+			const other = await identity.reserveSynthetic('k', 'Other');
+			const missing = await identity.reserveSynthetic('k', 'Missing');
+
+			expect(other).toBe(2);
+			expect(missing).toBe(3);
+			expect(identity.identity('k').values[missing]).toBe('Missing');
+		});
+	});
+
 	it('leaves the view queryable after a reservation', async () => {
 		// The reserved row has no match in the source, so the LEFT JOIN must not
 		// see it — a duplicate value here would fan out every matching row.

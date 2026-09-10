@@ -206,8 +206,9 @@ export class MarkLifecycleV2 {
 	// yet encoded for the GPU.
 	//
 	// Split out of #resolvedQueryParts because #refetchSortedDomain needs exactly this
-	// form. It selects category *values*, so it must see resolved bins but must not see
-	// the CASE inlining below, which rewrites a band axis into an integer index.
+	// form. It selects category *values*, so it must see resolved bins but must not
+	// see #inlineIdentityColumns below, which swaps a categorical channel for its
+	// dim's id column.
 	#resolvedSelect: Record<string, unknown> | null = $derived.by(() => {
 		if (!this.setupComplete) return null;
 
@@ -1046,9 +1047,10 @@ export class MarkLifecycleV2 {
 	 * rather than falling back, because since `b7292b2` there is nothing to fall
 	 * back to: the CASE path for positional band channels is deleted.
 	 *
-	 * Band/point only. Ordinal colour, series and facet still CASE-inline a
-	 * display position (steps 3b/3c), which is why this reads the two positional
-	 * axes rather than every channel.
+	 * Reads every categorical channel, not only the positional axes: the two
+	 * band/point axes, then the facet key and the ordinal colour key below. They
+	 * are registered in ONE call so they share a single coalesced CREATE OR
+	 * REPLACE VIEW rather than triggering one rebuild each.
 	 *
 	 * These columns ARE consumed: #inlineIdentityColumns selects the id column for
 	 * any axis in #identityFields, and the scale keeps ids as its internal
@@ -1076,17 +1078,20 @@ export class MarkLifecycleV2 {
 					`binned axes. This mark will render nothing on ${axis}.`
 			);
 		}
-		// The facet channel (step 3c). Not an axis — it has no scale type on x or
-		// y — but it is a categorical channel over the same table, so it wants the
-		// same dim. Registered here rather than in its own pass so it joins the
-		// coalesced CREATE OR REPLACE VIEW the axes already trigger.
-		// Ordinal colour (step 3b). Continuous colour has no categories and wants
-		// no dim, so this gates on isOrdinal rather than on the channel existing.
+		// The two non-axis categorical channels. Neither has a scale type on x or
+		// y, but both are categorical over the same table and want the same dim,
+		// and both are registered HERE rather than in their own pass so they join
+		// the coalesced CREATE OR REPLACE VIEW the axes already trigger.
+
+		// Ordinal colour. Continuous colour has no categories and wants no dim,
+		// so this gates on isOrdinal rather than on the channel existing.
 		const colorChannel = this.#config.colorChannel || 'fill';
 		const colorKey = this.#colorScaleState?.isOrdinal
 			? identityKeyFor(this.#config.select[colorChannel])
 			: null;
 
+		// Facet. `fx` is a column name or a fixed expression, so it goes through
+		// the same derivation as everything else.
 		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx) : null;
 		if (this.#colorScaleState?.isOrdinal && this.#config.select[colorChannel] && !colorKey) {
 			console.error(
@@ -1281,7 +1286,7 @@ export class MarkLifecycleV2 {
 	 * (which isn't available yet during Phase 1 setup).
 	 */
 	#buildQueryForAggregates(_table: string, _config: any, filter: unknown[]): Query | null {
-		// Build raw query parts directly from config.select (no CASE inlining,
+		// Build raw query parts directly from config.select (no identity columns,
 		// no bin resolution — scale states aren't ready yet during Phase 1).
 		const parts = buildQueryParts(
 			this.#config.select,
