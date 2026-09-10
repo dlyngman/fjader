@@ -203,7 +203,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
           p1: f32, // categoryCount
           p2: f32, // paddingInner
           p3: f32, // paddingOuter
-          p4: f32, // base offset of this scale's block in bandSlots
+          p4: f32, // base offset of this scale's block in identitySlots
         };
       `;
 		},
@@ -232,7 +232,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 				// leaving it to the scissor rect is not safe: a slot of -1 sits one
 				// step outside the range only until padding, alignment or an
 				// animating categoryCount moves the band layout.
-				let slot = bandSlot(u32(scale.p4), u32(value));
+				let slot = identitySlot(u32(scale.p4), u32(value));
 				if (slot < 0.0) {
 					return -1.0e6;
 				}
@@ -571,18 +571,18 @@ export class ScaleTemplateSystem {
 	_buildSlotTableHelpers(): string {
 		return `
     // ===== SHARED SLOT TABLE (identity id -> display slot) =====
-    @group(2) @binding(5) var<uniform> bandSlots: array<vec4<f32>, 4096>;
+    @group(2) @binding(5) var<uniform> identitySlots: array<vec4<f32>, 4096>;
 
-    fn bandSlotAt(i: u32) -> f32 {
-      return bandSlots[i >> 2u][i & 3u];
+    fn identitySlotAt(i: u32) -> f32 {
+      return identitySlots[i >> 2u][i & 3u];
     }
 
-    fn bandSlot(base: u32, id: u32) -> f32 {
-      let count = u32(bandSlotAt(base));
+    fn identitySlot(base: u32, id: u32) -> f32 {
+      let count = u32(identitySlotAt(base));
       if (id >= count) {
         return -1.0;
       }
-      return bandSlotAt(base + 1u + id);
+      return identitySlotAt(base + 1u + id);
     }
     `;
 	}
@@ -600,7 +600,7 @@ export class ScaleTemplateSystem {
     // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:
     // the id is stable and comes from the dim, the slot says where that id
     // currently sits and changes on every reorder. scaleBand resolves one to
-    // the other through bandSlots before calling this.
+    // the other through identitySlots before calling this.
     fn computeBandLayout(
       slot: f32,
       categoryCount: f32,

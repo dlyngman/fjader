@@ -289,7 +289,7 @@
 		// The band scale itself, not its domain array. The channel carries an
 		// identity id, which indexes the scale's VALUES; the domain is in display
 		// order and indexing it with an id puts every label on the wrong row as
-		// soon as the axis is sorted (the GPU gets this right via bandSlots, so
+		// soon as the axis is sorted (the GPU gets this right via identitySlots, so
 		// the symptom is correct bars with shuffled text). categoryAt handles
 		// both cases — see BandScaleState's IDENTITY <-> DISPLAY section.
 		const xBand =

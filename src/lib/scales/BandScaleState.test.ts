@@ -201,7 +201,7 @@ describe('BandScaleState.slotTable', () => {
 });
 
 describe('BandScaleState identity <-> display translation', () => {
-	// The CPU-side counterpart of the shader's bandSlots lookup. Consumers —
+	// The CPU-side counterpart of the shader's identitySlots lookup. Consumers —
 	// tooltips, hit-testing, toggles — ask in their own terms and never index
 	// displayOrder or identityValues themselves.
 

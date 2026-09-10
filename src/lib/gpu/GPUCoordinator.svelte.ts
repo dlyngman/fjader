@@ -5,13 +5,13 @@ import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
 import {
-	BAND_SLOT_CAPACITY,
-	BAND_SLOT_EMPTY,
-	createBandSlotState,
-	packBandSlots,
-	type BandSlotScale,
-	type BandSlotState
-} from './band-slot-packing';
+	IDENTITY_SLOT_CAPACITY,
+	IDENTITY_SLOT_EMPTY,
+	createIdentitySlotState,
+	packIdentitySlots,
+	type IdentitySlotScale,
+	type IdentitySlotState
+} from './identity-slot-packing';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -318,14 +318,14 @@ export class GPUCoordinator {
 	 * can disagree transiently while a dim appends. Budget is therefore
 	 * 16384 - 1 - (1 per scale) slots.
 	 */
-	#bandSlotBuffer: GPUBuffer | null = null;
+	#identitySlotBuffer: GPUBuffer | null = null;
 	/**
 	 * CPU mirror plus the per-scale bases and versions. Allocation lives in
-	 * band-slot-packing.ts; this class owns only the GPU buffer and the upload.
+	 * identity-slot-packing.ts; this class owns only the GPU buffer and the upload.
 	 */
-	#bandSlots: BandSlotState | null = null;
+	#identitySlots: IdentitySlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
-	#bandSlotScales: BandSlotScale[] = [];
+	#identitySlotScales: IdentitySlotScale[] = [];
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -596,7 +596,7 @@ export class GPUCoordinator {
 
 		// Create color scale buffers (must happen before bind group creation)
 		this.#createColorScaleBuffers();
-		this.#createBandSlotBuffer();
+		this.#createIdentitySlotBuffer();
 
 		// Pre-create bind groups for each slot
 		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
@@ -646,7 +646,7 @@ export class GPUCoordinator {
 						// Band identity slot table - full buffer, no offset
 						binding: 5,
 						resource: {
-							buffer: this.#bandSlotBuffer!
+							buffer: this.#identitySlotBuffer!
 						}
 					}
 				]
@@ -706,12 +706,12 @@ export class GPUCoordinator {
 	 * Zero-allocation hot path.
 	 */
 	/** 64 KB uniform buffer for the shared band slot table. */
-	#createBandSlotBuffer(): void {
-		if (this.#bandSlotBuffer) return;
-		this.#bandSlots = createBandSlotState(BAND_SLOT_CAPACITY);
-		this.#bandSlotBuffer = this.#device!.createBuffer({
-			label: 'band-slot-table',
-			size: BAND_SLOT_CAPACITY * 4,
+	#createIdentitySlotBuffer(): void {
+		if (this.#identitySlotBuffer) return;
+		this.#identitySlots = createIdentitySlotState(IDENTITY_SLOT_CAPACITY);
+		this.#identitySlotBuffer = this.#device!.createBuffer({
+			label: 'identity-slot-table',
+			size: IDENTITY_SLOT_CAPACITY * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 	}
@@ -725,14 +725,14 @@ export class GPUCoordinator {
 	 * every call because a scale appearing or disappearing shifts the ones after
 	 * it — cheap, since it is a running sum over a handful of scales.
 	 */
-	#updateBandSlots(): void {
-		const state = this.#bandSlots;
+	#updateIdentitySlots(): void {
+		const state = this.#identitySlots;
 		if (!state) return;
 
 		// Collect this frame's band/point scales into the reused array. The
-		// packing itself is pure — see band-slot-packing.ts, which is where the
+		// packing itself is pure — see identity-slot-packing.ts, which is where the
 		// allocator, the capacity fallback and the eviction sweep are tested.
-		const scales = this.#bandSlotScales;
+		const scales = this.#identitySlotScales;
 		scales.length = 0;
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
@@ -745,12 +745,12 @@ export class GPUCoordinator {
 			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
 		}
 
-		const { dirty, length } = packBandSlots(scales, state);
+		const { dirty, length } = packIdentitySlots(scales, state);
 
 		if (!dirty) return;
 
 		this.#device!.queue.writeBuffer(
-			this.#bandSlotBuffer!,
+			this.#identitySlotBuffer!,
 			0,
 			state.buffer as Float32Array<ArrayBuffer>,
 			0,
@@ -800,7 +800,7 @@ export class GPUCoordinator {
 				view[off + 2] = config.paddingOuter;
 				// p4: this scale's base offset into the shared band slot table.
 				view[off + 3] =
-					this.#bandSlots?.offsets.get((scale as { id: string }).id) ?? BAND_SLOT_EMPTY;
+					this.#identitySlots?.offsets.get((scale as { id: string }).id) ?? IDENTITY_SLOT_EMPTY;
 			} else {
 				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
 				const s = scale.gpuState!;
@@ -965,7 +965,7 @@ export class GPUCoordinator {
 		}
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
-		this.#updateBandSlots();
+		this.#updateIdentitySlots();
 		this.#refreshMovedFacetUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
@@ -1423,7 +1423,7 @@ export class GPUCoordinator {
 							// group missing an entry its layout declares is a
 							// validation error at draw time, not here.
 							binding: 5,
-							resource: { buffer: this.#bandSlotBuffer! }
+							resource: { buffer: this.#identitySlotBuffer! }
 						}
 					]
 				});
@@ -1966,7 +1966,7 @@ export class GPUCoordinator {
 		//
 		// Resolved here rather than captured at registration, because registerChart
 		// runs once at mount and a reorder moves which id sits at this cell long
-		// after. Note this method is event-driven, NOT per frame — #updateBandSlots
+		// after. Note this method is event-driven, NOT per frame — #updateIdentitySlots
 		// is what notices a facet permutation moving and calls it.
 		const facetSlot = chartConfig.facetIndex ?? 0;
 		u32[10] = (chartConfig.facetScale?.idAtSlot(facetSlot) ?? facetSlot) >>> 0;
