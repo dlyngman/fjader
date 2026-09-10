@@ -575,14 +575,18 @@ export class GPUCoordinator {
 					buffer: { type: 'read-only-storage' }
 				},
 				{
-					// Binding 5: Band identity id -> display slot (vertex only).
+					// Binding 5: shared slot table, identity id -> display slot.
 					// Uniform, not storage: the vertex stage is at the default
-					// storage limit of 8 (§14.1). Declared on every layout even
-					// though only band shaders read it — a pipeline layout may
-					// expose more than its shader uses, and this group's uniform
-					// buffers are nowhere near the default 12.
+					// storage limit of 8 (§14.1), while this group's uniform
+					// buffers are nowhere near the default 12 in either stage.
+					//
+					// FRAGMENT as well as VERTEX. Band axes resolve a slot in the
+					// vertex stage, but ordinal colour carries the same ids and
+					// resolves in the fragment stage — and colorConfigs, which
+					// carries the per-scale base, is a storage buffer that cannot
+					// move to vertex without exceeding the limit above.
 					binding: 5,
-					visibility: GPUShaderStage.VERTEX,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: 'uniform' }
 				}
 			]

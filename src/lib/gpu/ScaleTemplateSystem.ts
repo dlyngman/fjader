@@ -497,6 +497,7 @@ export class ScaleTemplateSystem {
       
       // ===== 3. HELPER FUNCTIONS =====
       
+      ${this._buildSlotTableHelpers()}
       ${bandHelpers}
       ${implementations}
       ${scaleFunctions}
@@ -543,31 +544,33 @@ export class ScaleTemplateSystem {
 	 * Build band scale helper functions (only if needed)
 	 * @private
 	 */
-	_buildBandHelpers(scaleTypes: { x: string; y: string }): string {
-		const needsBandHelpers = scaleTypes.x === 'band' || scaleTypes.y === 'band';
-
-		if (!needsBandHelpers) {
-			return '';
-		}
-
+	/**
+	 * The shared slot table, and the lookup into it.
+	 *
+	 * Emitted ALWAYS, not only for band axes. It started band-only because band
+	 * axes were the only channel carrying identity ids; ordinal colour carries
+	 * them too now, and resolves in the FRAGMENT stage, so the declaration has
+	 * to be present even in a shader with no band scale at all.
+	 *
+	 * A uniform rather than storage, which is what makes the fragment stage
+	 * affordable: the vertex stage is at the default maxStorageBuffersPerShaderStage
+	 * of 8, while uniform buffers are nowhere near the default 12 in either stage.
+	 *
+	 * WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
+	 * vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
+	 * default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
+	 * every scale that needs one, at the per-scale base that scale carries.
+	 *
+	 * Each scale's block is [count, slot0, slot1, ...]. The count is what makes
+	 * the lookup safe: ids and the slot table can disagree for a moment while a
+	 * dim appends, and without a per-scale bound an id past this scale's end
+	 * reads the NEXT scale's slots — a plausible wrong answer rather than a
+	 * visible failure. Index 0 is a permanent zero-length block, which is where
+	 * a scale that did not fit in the buffer points.
+	 */
+	_buildSlotTableHelpers(): string {
 		return `
-    // ===== BAND SCALE HELPERS =====
-
-    // Identity id -> display slot (§9.5, §14.3). A UNIFORM buffer, not storage:
-    // the vertex stage already sits at the default maxStorageBuffersPerShaderStage
-    // of 8, while its uniform buffers are nowhere near the default 12.
-    //
-    // WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
-    // vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
-    // default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
-    // every band and point scale, at the per-scale base carried in p4.
-    //
-    // Each scale's block is [count, slot0, slot1, ...]. The count is what makes
-    // the lookup safe: ids and the slot table can disagree for a moment while a
-    // dim appends, and without a per-scale bound an id past this scale's end
-    // reads the NEXT scale's slots — a plausible wrong position rather than a
-    // visible failure. Index 0 is a permanent zero-length block, which is where
-    // a scale that did not fit in the buffer points.
+    // ===== SHARED SLOT TABLE (identity id -> display slot) =====
     @group(2) @binding(5) var<uniform> bandSlots: array<vec4<f32>, 4096>;
 
     fn bandSlotAt(i: u32) -> f32 {
@@ -581,7 +584,19 @@ export class ScaleTemplateSystem {
       }
       return bandSlotAt(base + 1u + id);
     }
-    
+    `;
+	}
+
+	_buildBandHelpers(scaleTypes: { x: string; y: string }): string {
+		const needsBandHelpers = scaleTypes.x === 'band' || scaleTypes.y === 'band';
+
+		if (!needsBandHelpers) {
+			return '';
+		}
+
+		return `
+    // ===== BAND SCALE HELPERS =====
+
     // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:
     // the id is stable and comes from the dim, the slot says where that id
     // currently sits and changes on every reorder. scaleBand resolves one to
