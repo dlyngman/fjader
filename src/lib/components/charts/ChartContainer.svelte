@@ -24,8 +24,13 @@
 		 * differ, which every part of the facet identity path depends on being
 		 * handled and no chart previously exercised.
 		 *
-		 * Read once, at init: a static ordering, not a reactive one. Changing it
-		 * after mount will not move the cells.
+		 * Applied during MARK setup, not here. ScaleRegistry destroys a scale when
+		 * its chart-id usage hits zero — clearing the explicit domain and the
+		 * extents while keeping the instance — and a faceted container triggers
+		 * exactly that when it stops being a single chart and becomes a grid. So
+		 * anything registered at container init is wiped before the cells mount.
+		 *
+		 * Static, not reactive: changing it after mount will not move the cells.
 		 *
 		 * SHARED, and this will surprise you. ScaleRegistry keys scales by name
 		 * plus type plus config, and a facet scale is named `__facet__<fx>`, so
@@ -111,13 +116,6 @@
 				layout.chartId
 			) as BandScaleState)
 		: null;
-	// Registered at init rather than in an effect. The scale re-encodes an
-	// explicit domain when identity arrives (BandScaleState.setIdentity), so
-	// this is safe to hand over before the dim exists.
-	if (facetBandScale && fxDomain?.length) {
-		facetBandScale.addMark(fxDomain, `${layout.chartId}-fx-explicit`, { explicit: true });
-	}
-
 	const facetCategories = $derived(
 		facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null
 	);
@@ -127,6 +125,7 @@
 
 	const facetingProps = {
 		fx,
+		fxDomain,
 		get isFaceted() {
 			return isFaceted;
 		},
@@ -371,6 +370,7 @@
 		},
 
 		fx,
+		fxDomain,
 		get isFaceted() {
 			return isFaceted;
 		},

@@ -469,6 +469,8 @@ export interface ChartContext {
 	readonly isFaceted: boolean;
 	readonly facetChartIds: string[];
 	readonly facetBandScale: BandScaleState | null;
+	/** Explicit facet cell order, in source values. See ChartContainer's fxDomain. */
+	readonly fxDomain?: DimValue[] | null;
 
 	// Configuration store
 	readonly config: ChartConfig;

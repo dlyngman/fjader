@@ -1114,10 +1114,28 @@ export class MarkLifecycleV2 {
 		}
 
 		// The facet scale adopts too: its displayOrder is what turns a cell index
-		// into the id that cell renders, which the frame uniform reads per frame.
+		// into the id that cell renders, which the frame uniform reads.
 		if (facetKey) {
 			const facetScale = this.#chartContext.facetBandScale as BandScaleState | null;
 			facetScale?.setIdentity(this.#queryEngine.identityFor(facetKey.key));
+
+			// An explicit cell order, applied HERE rather than where the prop is
+			// declared. ScaleRegistry ref-counts scales by chart id and calls
+			// destroy() — which clears #explicitDomain and #extents — the moment
+			// usage hits zero, leaving the same instance in the registry to be
+			// handed back empty. A faceted container hits that every time: it
+			// registers the scale under its own chart id, becomes a grid, and its
+			// own usage drops to zero before the cells' marks mount. Anything
+			// registered before that point is wiped by design.
+			//
+			// Mark setup runs after the wipe, and re-runs after any later one, so
+			// this is the first moment the ordering can survive. Keyed by a
+			// constant so several marks on one facet scale overwrite rather than
+			// accumulate.
+			const fxDomain = this.#chartContext.fxDomain;
+			if (facetScale && fxDomain?.length) {
+				facetScale.addMark(fxDomain, '__fx-explicit', { explicit: true });
+			}
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to
