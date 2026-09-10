@@ -2,6 +2,7 @@
 	import { getContext } from 'svelte';
 	import type { ChartContext, D3BandScale } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import type { ContinuousScaleState } from '$lib/types';
 
 	interface Props {
@@ -24,8 +25,12 @@
 		c.xScaleState?.getTicks ? c.xScaleState.getTicks(ticksNumber) : []
 	);
 
-	// Band scales: use D3 scale's domain() for category strings (needed for positioning)
-	const bandTicks = $derived(c.xScale?.domain ? c.xScale.domain() : []);
+	// Band scales: use the D3 scale's domain() for the categories (needed for positioning).
+	// A band scale's domain is its source values, which are whatever DuckDB
+	// returned for the column (see DimValue) — not necessarily strings. The
+	// d3 scale's domain() is untyped, so the claim is made once here rather
+	// than re-asserted at each tick.
+	const bandTicks = $derived((c.xScale?.domain ? c.xScale.domain() : []) as DimValue[]);
 
 	// Unified formatter interface - all scale states have tickFormat()
 	const tickFormatter = $derived(c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : String);
@@ -52,9 +57,7 @@
 			{@const bandScale = c.xScale as D3BandScale}
 			{#each bandTicks as tick (tick)}
 				{@const tickX = c.xScale(tick)}
-				<g
-					class:tick-dimmed={bandState.activeValues != null && !bandState.isActive(tick as string)}
-				>
+				<g class:tick-dimmed={bandState.activeValues != null && !bandState.isActive(tick)}>
 					<line
 						x1={tickX + bandScale.bandwidth() / 2}
 						x2={tickX + bandScale.bandwidth() / 2}

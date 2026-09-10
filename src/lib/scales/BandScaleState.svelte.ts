@@ -62,7 +62,7 @@ export class BandScaleState {
 	// =========================================================================
 	// SELECTION STATE
 	// =========================================================================
-	#activeValues: Set<string> | null = $state(null); // null = all active, Set = only these active
+	#activeValues: Set<DimValue> | null = $state(null); // null = all active, Set = only these active
 
 	// =========================================================================
 	// POINTER STATE
@@ -181,11 +181,11 @@ export class BandScaleState {
 	// ACTIVE VALUES (selection feedback)
 	// =========================================================================
 
-	get activeValues(): Set<string> | null {
+	get activeValues(): Set<DimValue> | null {
 		return this.#activeValues;
 	}
 
-	setActiveValues(values: Iterable<string>): void {
+	setActiveValues(values: Iterable<DimValue>): void {
 		this.#activeValues = values instanceof Set ? values : new Set(values);
 	}
 
@@ -193,7 +193,7 @@ export class BandScaleState {
 		this.#activeValues = null;
 	}
 
-	isActive(value: string): boolean {
+	isActive(value: DimValue): boolean {
 		return this.#activeValues == null || this.#activeValues.has(value);
 	}
 
