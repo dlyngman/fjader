@@ -133,10 +133,13 @@
 				`CREATE TABLE fx_varchar AS SELECT * FROM (VALUES
 					('A', 3), ('B', 7), ('C', 5), ('A', 2), ('B', 1), ('C', 9)
 				) t(cat_varchar, amount)`,
+				// `bucket` is a plain VARCHAR so an expression can be tested on ONE
+				// channel at a time: chart 4a puts it only in fx, 4b only on the axis.
 				`CREATE TABLE fx_date AS SELECT * FROM (VALUES
-					(DATE '2024-01-01', 3), (DATE '2024-02-01', 7), (DATE '2024-03-01', 5),
-					(DATE '2024-01-01', 2), (DATE '2024-02-01', 1), (DATE '2024-03-01', 9)
-				) t(cat_date, amount)`,
+					(DATE '2024-01-01', 3, 'lo'), (DATE '2024-02-01', 7, 'hi'),
+					(DATE '2024-03-01', 5, 'hi'), (DATE '2024-01-01', 2, 'lo'),
+					(DATE '2024-02-01', 1, 'lo'), (DATE '2024-03-01', 9, 'hi')
+				) t(cat_date, amount, bucket)`,
 				`CREATE TABLE fx_ts AS SELECT * FROM (VALUES
 					(TIMESTAMP '2024-01-01 12:00:00', 3), (TIMESTAMP '2024-02-01 12:00:00', 7),
 					(TIMESTAMP '2024-03-01 12:00:00', 5), (TIMESTAMP '2024-01-01 12:00:00', 2),
@@ -280,7 +283,10 @@
 			</ChartContainer>
 		</div>
 
-		<h2>4. The fix &mdash; truncate in <code>fx</code>. Cells read 2024-01, 02, 03.</h2>
+		<h2>
+			4a. Expression in <code>fx</code> only &mdash; three cells headed 2024-01, 02, 03, each with lo/hi
+			bars.
+		</h2>
 		<p class="note">
 			<code>fx</code> takes a fixed SQL expression, keyed on its own text and dimmed exactly as a
 			column is (§16 / #197). Truncating gives one cell per month instead of one per instant, and it
@@ -289,12 +295,41 @@
 			column.
 		</p>
 		<div class="chart">
-			<ChartContainer xLabel="cat" yLabel="count" fx={monthExpr}>
+			<ChartContainer xLabel="bucket" yLabel="count" fx={monthExpr}>
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<BarMarkY table="fx_date" x={monthExpr} y={count()} fill={monthExpr} />
+							<BarMarkY table="fx_date" x="bucket" y={count()} fill="bucket" />
+						{/snippet}
+					</WebGPUCanvas>
+				{/snippet}
+				{#snippet background()}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+				{/snippet}
+			</ChartContainer>
+		</div>
+
+		<h2>4b. Expression on the band AXIS only &mdash; bars labelled 2024-01, 02, 03.</h2>
+		<p class="note">
+			The other half of 4a, isolated. If 4a renders and this one does not, an expression in
+			<code>fx</code> is fine and the gap is an expression on a band axis, which is a different
+			path: <code>inferMarkScaleType</code> returns <code>'linear'</code> for any non-string field
+			and only BarMarkY's MANDATE makes the scale band, while
+			<code>ChartScales.#buildAxisScaleConfig</code> guards its <code>sourceField</code> on
+			<code>typeof col === 'string'</code> and so never sets one for an expression. Compare with
+			<code>/test/band-identity</code> chart 6, which is an expression axis that works &mdash; and
+			which passes an explicit <code>domain</code>.
+		</p>
+		<div class="chart">
+			<ChartContainer xLabel="month" yLabel="count">
+				{#snippet canvas()}
+					<WebGPUCanvas>
+						{#snippet canvasComponents()}
+							<Grid />
+							<BarMarkY table="fx_date" x={monthExpr} y={count()} />
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}
