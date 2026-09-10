@@ -313,15 +313,6 @@
 			return scales?.active;
 		},
 
-		get xCategoryPositions() {
-			return scales?.xCategoryPositions;
-		},
-		get yCategoryPositions() {
-			return scales?.yCategoryPositions;
-		},
-		get categoryPositionsReady() {
-			return scales?.categoryPositionsReady;
-		},
 		get xBandwidth() {
 			return scales?.xBandwidth;
 		},

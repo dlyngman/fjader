@@ -428,9 +428,6 @@ export interface ChartContext {
 	readonly active: boolean | undefined;
 
 	// Band support
-	readonly xCategoryPositions: Float32Array | null | undefined;
-	readonly yCategoryPositions: Float32Array | null | undefined;
-	readonly categoryPositionsReady: boolean | undefined;
 	readonly xBandwidth: number | undefined;
 	readonly yBandwidth: number | undefined;
 

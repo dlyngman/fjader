@@ -177,28 +177,6 @@
 	});
 
 	// --- Band scale support (cell-local $derived) ---
-	const xCategoryPositions = $derived.by(() => {
-		const xss = scales?.xScaleState;
-		if (!xss || xss.scaleType !== 'band' || !cellXScale || !layout.isReady) return null;
-		const domain = xss.effectiveDomain;
-		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d) => cellXScale(d)));
-	});
-
-	const yCategoryPositions = $derived.by(() => {
-		const yss = scales?.yScaleState;
-		if (!yss || yss.scaleType !== 'band' || !cellYScale || !layout.isReady) return null;
-		const domain = yss.effectiveDomain;
-		if (!domain || domain.length === 0) return null;
-		return new Float32Array(domain.map((d) => cellYScale(d)));
-	});
-
-	const categoryPositionsReady = $derived.by(() => {
-		const xReady = scales?.scaleTypes?.x !== 'band' || xCategoryPositions !== null;
-		const yReady = scales?.scaleTypes?.y !== 'band' || yCategoryPositions !== null;
-		return xReady && yReady;
-	});
-
 	const xBandwidth = $derived.by(() => {
 		if (scales?.scaleTypes?.x !== 'band' || !cellXScale || !layout.isReady) return 0;
 		return cellXScale?.bandwidth?.() ?? 0;
@@ -392,15 +370,6 @@
 		},
 
 		// Band support — cell-local $derived
-		get xCategoryPositions() {
-			return xCategoryPositions;
-		},
-		get yCategoryPositions() {
-			return yCategoryPositions;
-		},
-		get categoryPositionsReady() {
-			return categoryPositionsReady;
-		},
 		get xBandwidth() {
 			return xBandwidth;
 		},
