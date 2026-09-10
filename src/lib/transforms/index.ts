@@ -476,7 +476,8 @@ function gatherRows(data: DataAccessor, indices: number[]): DataAccessor {
 // -----------------------------------------------------------------------------
 // stackY / stackX — cumulative offset stacking
 //
-// SQL path (default): cumulative window SUM, PARTITION BY band ORDER BY the
+// SQL path (default): cumulative window SUM, PARTITION BY band (plus `__facet`
+// when the mark is faceted — a cell is its own stack) ORDER BY the
 // series channel. The series channel is whatever's already in the select — for
 // an ordinal color scale on fill, that is the dim's identity id (step 3b;
 // before `58b0023` it was a CASE-inlined domain-ordered index).
@@ -606,13 +607,32 @@ function stackSQL(direction: 'y' | 'x', options: StackYOptions | StackXOptions):
 			const bandCol = column(band);
 			const notNaN = sqlTag`NOT isnan(${valueCol})`;
 
+			// A facet cell is its own stack. `__facet` joins the partition key
+			// whenever the mark is faceted, because a band value repeats across
+			// cells — "Adelie" in every one — and partitioning on the band alone
+			// pools them into a single running total. The bars in the second cell
+			// then start where the first cell's ended, which reads as a stack that
+			// does not touch the axis rather than as a wrong number.
+			//
+			// It is worse than an offset, because ORDER BY over tied series values
+			// gives every peer the whole partition's sum: with one series per cell
+			// EVERY bar gets the grand total and none of them is right. Verified
+			// against DuckDB, not reasoned about.
+			//
+			// Invisible until now because every faceted bar chart in the repo sets
+			// x and fx to the same field, which makes each partition a single row
+			// and the pooling a no-op.
+			const partition = aliases.includes('__facet')
+				? sqlTag`${bandCol}, ${column('__facet')}`
+				: bandCol;
+
 			// Cumulative sum through the current row, excluding NaN rows from the
 			// running total (they don't poison later segments). Without a series
 			// column there's one row per band, so the "cumulative" total already
 			// equals that row's own value — correct degenerate case.
 			const cumulative = series
-				? sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${bandCol} ORDER BY ${column(series)})`
-				: sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${bandCol})`;
+				? sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${partition} ORDER BY ${column(series)})`
+				: sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${partition})`;
 
 			// Force this row's own boundaries to NaN when its value is NaN,
 			// instead of silently dropping it from the running total.
@@ -620,7 +640,9 @@ function stackSQL(direction: 'y' | 'x', options: StackYOptions | StackXOptions):
 			let lo: ExprNode = sqlTag`${hi} - ${valueCol}`;
 
 			if (options.offset === 'expand' || options.offset === 'center') {
-				const total = sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${bandCol})`;
+				// Same partition as the cumulative sum above: an `expand` that
+				// normalised by a total pooled across cells would not reach 1.
+				const total = sqlTag`SUM(${valueCol}) FILTER (WHERE ${notNaN}) OVER (PARTITION BY ${partition})`;
 				if (options.offset === 'expand') {
 					lo = sqlTag`(${lo}) / NULLIF(${total}, 0)`;
 					hi = sqlTag`(${hi}) / NULLIF(${total}, 0)`;
@@ -824,9 +846,17 @@ function normalizeSQL(options: NormalizeOptions): SqlTransform {
 			const aliases = getSelectAliases(query);
 			const { by, band } = resolveValueAndBand(aliases, options, config, 'normalize');
 
+			// `__facet` joins the partition for the same reason it does in
+			// stackSQL: a band value repeats across cells, and a percentage
+			// normalised over the pooled total does not reach 100 within any one
+			// of them.
+			const partition = aliases.includes('__facet')
+				? sqlTag`${column(band)}, ${column('__facet')}`
+				: column(band);
+
 			const outSelect = passthroughSelect(aliases);
 			outSelect[by] =
-				sqlTag`${column(by)} * 100 / NULLIF(SUM(${column(by)}) OVER (PARTITION BY ${column(band)}), 0)`;
+				sqlTag`${column(by)} * 100 / NULLIF(SUM(${column(by)}) OVER (PARTITION BY ${partition}), 0)`;
 
 			return Query.from({ __normalize_base: query }).select(outSelect);
 		},
