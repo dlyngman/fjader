@@ -1,5 +1,10 @@
 /**
- * Packing for the shared band slot table (§9.5, §14.3).
+ * Packing for the shared identity slot table (§9.5, §14.3).
+ *
+ * Named for band scales until ordinal colour needed it too. It was never
+ * band-specific: it maps an identity id to that scale's display position, and
+ * the channels wanting that are band and point axes, the facet grid, and
+ * ordinal colour.
  *
  * Every band and point scale's `slotTable` — identity id -> display slot —
  * lives in ONE uniform buffer, at a per-scale base the scale carries in its p4.
@@ -28,7 +33,7 @@
  * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
  * maxUniformBufferBindingSize, and 64 KB / 4 is this.
  */
-export const BAND_SLOT_CAPACITY = 16384;
+export const IDENTITY_SLOT_CAPACITY = 16384;
 
 /**
  * Base of the permanent zero-length block. A scale that cannot be placed points
@@ -36,10 +41,10 @@ export const BAND_SLOT_CAPACITY = 16384;
  * warning claims happens. Pointing it at a stale base instead left the scale
  * rendering, from another scale's slots.
  */
-export const BAND_SLOT_EMPTY = 0;
+export const IDENTITY_SLOT_EMPTY = 0;
 
 /** The parts of a band/point scale this needs. */
-export interface BandSlotScale {
+export interface IdentitySlotScale {
 	id: string;
 	/** id -> display slot, or -1 for an id not currently shown. */
 	slotTable: Float32Array;
@@ -48,7 +53,7 @@ export interface BandSlotScale {
 }
 
 /** Everything that persists between calls. */
-export interface BandSlotState {
+export interface IdentitySlotState {
 	/** CPU mirror of the uniform buffer. */
 	buffer: Float32Array;
 	/** Per-scale base offset, read back into p4. */
@@ -58,11 +63,13 @@ export interface BandSlotState {
 }
 
 /** A state with the permanent empty block in place. */
-export function createBandSlotState(capacity: number = BAND_SLOT_CAPACITY): BandSlotState {
+export function createIdentitySlotState(
+	capacity: number = IDENTITY_SLOT_CAPACITY
+): IdentitySlotState {
 	const buffer = new Float32Array(capacity);
 	buffer.fill(-1);
 	// The permanent empty block: count 0, so it holds no slots.
-	buffer[BAND_SLOT_EMPTY] = 0;
+	buffer[IDENTITY_SLOT_EMPTY] = 0;
 	return { buffer, offsets: new Map(), versions: new Map() };
 }
 
@@ -78,9 +85,9 @@ export function createBandSlotState(capacity: number = BAND_SLOT_CAPACITY): Band
  * handful of scales, and the alternative — a free list — would have to survive
  * a scale changing size, which happens whenever a dim appends.
  */
-export function packBandSlots(
-	scales: readonly BandSlotScale[],
-	state: BandSlotState
+export function packIdentitySlots(
+	scales: readonly IdentitySlotScale[],
+	state: IdentitySlotState
 ): { dirty: boolean; length: number } {
 	const { buffer, offsets, versions } = state;
 	const capacity = buffer.length;
@@ -97,7 +104,7 @@ export function packBandSlots(
 		// One extra float for the block's count header.
 		const need = table.length + 1;
 		const fits = offset + need <= capacity;
-		const base = fits ? offset : BAND_SLOT_EMPTY;
+		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
 
 		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== scale.slotVersion) {

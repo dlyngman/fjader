@@ -5,13 +5,13 @@ import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
 import {
-	BAND_SLOT_CAPACITY,
-	BAND_SLOT_EMPTY,
-	createBandSlotState,
-	packBandSlots,
-	type BandSlotScale,
-	type BandSlotState
-} from './band-slot-packing';
+	IDENTITY_SLOT_CAPACITY,
+	IDENTITY_SLOT_EMPTY,
+	createIdentitySlotState,
+	packIdentitySlots,
+	type IdentitySlotScale,
+	type IdentitySlotState
+} from './identity-slot-packing';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -24,7 +24,22 @@ interface ChartConfig {
 	chartId: string;
 	canvas: HTMLCanvasElement;
 	zIndex: number;
+	/** This cell's DISPLAY position in the facet grid. */
 	facetIndex: number;
+	/**
+	 * The facet BandScaleState itself, not its id.
+	 *
+	 * An id would mean a registry lookup, and a facet scale is not in the
+	 * registry by the time this matters: ScaleRegistry.deregisterChart deletes
+	 * it from scaleUsage and storage when its chart-id usage hits zero, which a
+	 * faceted container always triggers when it stops being one chart and
+	 * becomes a grid. The instance survives — the container and the cells hold
+	 * it — but nothing can look it up. Holding the reference is what makes the
+	 * per-cell facet value resolvable at all.
+	 */
+	facetScale: FacetScaleRef | null;
+	/** Last _version whose value was written into this chart's uniform. */
+	_facetVersion: number;
 	visible: boolean;
 	context: GPUCanvasContext;
 	contextConfigured: boolean;
@@ -83,9 +98,23 @@ interface GPUCoordinatorConfig {
 	msaaSampleCount?: number;
 }
 
+/** A scale that carries its slot-table base in its own uploaded config. */
+interface SlotBaseConsumer {
+	setSlotBase(base: number): void;
+	readonly gpuSlots?: { configSlot: number };
+}
+
+/** What the coordinator needs from a facet scale: which id sits at a cell. */
+export interface FacetScaleRef {
+	idAtSlot(slot: number): number | null;
+	/** Bumped whenever the permutation could have moved. */
+	readonly _version: number;
+}
+
 interface ChartRegistrationConfig {
 	zIndex?: number;
 	facetIndex?: number;
+	facetScale?: FacetScaleRef | null;
 }
 
 export interface ChartRegistrationResult {
@@ -295,14 +324,20 @@ export class GPUCoordinator {
 	 * can disagree transiently while a dim appends. Budget is therefore
 	 * 16384 - 1 - (1 per scale) slots.
 	 */
-	#bandSlotBuffer: GPUBuffer | null = null;
+	#identitySlotBuffer: GPUBuffer | null = null;
 	/**
 	 * CPU mirror plus the per-scale bases and versions. Allocation lives in
-	 * band-slot-packing.ts; this class owns only the GPU buffer and the upload.
+	 * identity-slot-packing.ts; this class owns only the GPU buffer and the upload.
 	 */
-	#bandSlots: BandSlotState | null = null;
+	#identitySlots: IdentitySlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
-	#bandSlotScales: BandSlotScale[] = [];
+	#identitySlotScales: IdentitySlotScale[] = [];
+	/** Last slot base pushed back to a scale, so a static chart patches nothing. */
+	#slotBaseSeen = new Map<string, number>();
+	/** Index-aligned with #identitySlotScales. Reused; null where not applicable. */
+	#slotBaseConsumers: (SlotBaseConsumer | null)[] = [];
+	/** Reused for the four-byte config patch. */
+	#slotBasePatch = new Uint32Array(1);
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -313,7 +348,9 @@ export class GPUCoordinator {
 	// COLOR BUFFER DECLARATIONS
 	// =========================================================================
 	// Color scale buffers (group 2, bindings 1-3)
-	#colorConfigBuffer: GPUBuffer | null = null; // 64 configs × 32 bytes = 2KB
+	#colorConfigBuffer: GPUBuffer | null = null; // 64 configs × 48 bytes = 3KB
+	/** Must match ColorConfig in ColorScaleShaderLib and ColorScaleState. */
+	#COLOR_CONFIG_BYTES = 48;
 	#colorRampBuffer: GPUBuffer | null = null; // 64 ramps × 256 colors × 16 bytes = 256KB
 	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
@@ -552,14 +589,18 @@ export class GPUCoordinator {
 					buffer: { type: 'read-only-storage' }
 				},
 				{
-					// Binding 5: Band identity id -> display slot (vertex only).
+					// Binding 5: shared slot table, identity id -> display slot.
 					// Uniform, not storage: the vertex stage is at the default
-					// storage limit of 8 (§14.1). Declared on every layout even
-					// though only band shaders read it — a pipeline layout may
-					// expose more than its shader uses, and this group's uniform
-					// buffers are nowhere near the default 12.
+					// storage limit of 8 (§14.1), while this group's uniform
+					// buffers are nowhere near the default 12 in either stage.
+					//
+					// FRAGMENT as well as VERTEX. Band axes resolve a slot in the
+					// vertex stage, but ordinal colour carries the same ids and
+					// resolves in the fragment stage — and colorConfigs, which
+					// carries the per-scale base, is a storage buffer that cannot
+					// move to vertex without exceeding the limit above.
 					binding: 5,
-					visibility: GPUShaderStage.VERTEX,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: 'uniform' }
 				}
 			]
@@ -569,7 +610,7 @@ export class GPUCoordinator {
 
 		// Create color scale buffers (must happen before bind group creation)
 		this.#createColorScaleBuffers();
-		this.#createBandSlotBuffer();
+		this.#createIdentitySlotBuffer();
 
 		// Pre-create bind groups for each slot
 		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
@@ -619,7 +660,7 @@ export class GPUCoordinator {
 						// Band identity slot table - full buffer, no offset
 						binding: 5,
 						resource: {
-							buffer: this.#bandSlotBuffer!
+							buffer: this.#identitySlotBuffer!
 						}
 					}
 				]
@@ -645,10 +686,10 @@ export class GPUCoordinator {
 	#createColorScaleBuffers(): void {
 		const device = this.#device!;
 
-		// ColorConfig buffer: 64 slots × 32 bytes each
+		// ColorConfig buffer: 64 slots × 48 bytes each
 		this.#colorConfigBuffer = device.createBuffer({
 			label: 'ColorConfig SSBO',
-			size: this.#maxColorSlots * 32,
+			size: this.#maxColorSlots * this.#COLOR_CONFIG_BYTES,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 
@@ -679,12 +720,12 @@ export class GPUCoordinator {
 	 * Zero-allocation hot path.
 	 */
 	/** 64 KB uniform buffer for the shared band slot table. */
-	#createBandSlotBuffer(): void {
-		if (this.#bandSlotBuffer) return;
-		this.#bandSlots = createBandSlotState(BAND_SLOT_CAPACITY);
-		this.#bandSlotBuffer = this.#device!.createBuffer({
-			label: 'band-slot-table',
-			size: BAND_SLOT_CAPACITY * 4,
+	#createIdentitySlotBuffer(): void {
+		if (this.#identitySlotBuffer) return;
+		this.#identitySlots = createIdentitySlotState(IDENTITY_SLOT_CAPACITY);
+		this.#identitySlotBuffer = this.#device!.createBuffer({
+			label: 'identity-slot-table',
+			size: IDENTITY_SLOT_CAPACITY * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 	}
@@ -698,15 +739,17 @@ export class GPUCoordinator {
 	 * every call because a scale appearing or disappearing shifts the ones after
 	 * it — cheap, since it is a running sum over a handful of scales.
 	 */
-	#updateBandSlots(): void {
-		const state = this.#bandSlots;
+	#updateIdentitySlots(): void {
+		const state = this.#identitySlots;
 		if (!state) return;
 
 		// Collect this frame's band/point scales into the reused array. The
-		// packing itself is pure — see band-slot-packing.ts, which is where the
+		// packing itself is pure — see identity-slot-packing.ts, which is where the
 		// allocator, the capacity fallback and the eviction sweep are tested.
-		const scales = this.#bandSlotScales;
+		const scales = this.#identitySlotScales;
 		scales.length = 0;
+		const consumers = this.#slotBaseConsumers;
+		consumers.length = 0;
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
 				id: string;
@@ -714,20 +757,88 @@ export class GPUCoordinator {
 				slotTable?: Float32Array;
 				slotVersion?: number;
 			};
-			if (!isCategoricalScale(scale.type) || !scale.slotTable) continue;
+			// Any scale that offers a slot table wants one packed. It used to gate
+			// on band|point, which was the same set at the time; ordinal colour
+			// offers one now, and gating on the type would have meant listing
+			// every kind here as each migrates.
+			if (!scale.slotTable) continue;
 			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
+			// Index-aligned with `scales`, so the base can be handed back after
+			// packing without searching for the instance again.
+			consumers.push(
+				(scale as unknown as SlotBaseConsumer).setSlotBase
+					? (scale as unknown as SlotBaseConsumer)
+					: null
+			);
 		}
 
-		const { dirty, length } = packBandSlots(scales, state);
+		const { dirty, length } = packIdentitySlots(scales, state);
+
+		// Hand back the base to any scale that reads it from its own config rather
+		// than from p4. A band scale's base is refilled into p4 every frame; an
+		// ordinal colour scale's lives in a config uploaded only when the scale
+		// changes, so it is patched directly — four bytes, and only when it
+		// moved. Without that a colour scale keeps a base that belonged to it
+		// before a neighbour resized, and reads another scale's ranks.
+		//
+		// Walks the parallel array captured during collection rather than
+		// searching #scaleArray per entry: this runs every frame.
+		for (let i = 0; i < consumers.length; i++) {
+			const scale = consumers[i];
+			if (!scale) continue;
+			const id = scales[i].id;
+			const base = state.offsets.get(id);
+			if (base === undefined || this.#slotBaseSeen.get(id) === base) continue;
+
+			scale.setSlotBase(base);
+			this.#slotBaseSeen.set(id, base);
+
+			const configSlot = scale.gpuSlots?.configSlot;
+			if (configSlot !== undefined && configSlot >= 0 && this.#colorConfigBuffer) {
+				this.#slotBasePatch[0] = base;
+				this.#device!.queue.writeBuffer(
+					this.#colorConfigBuffer,
+					configSlot * this.#COLOR_CONFIG_BYTES + 32,
+					this.#slotBasePatch
+				);
+			}
+		}
+
 		if (!dirty) return;
 
 		this.#device!.queue.writeBuffer(
-			this.#bandSlotBuffer!,
+			this.#identitySlotBuffer!,
 			0,
 			state.buffer as Float32Array<ArrayBuffer>,
 			0,
 			length
 		);
+	}
+
+	/**
+	 * Rewrite the frame uniform of any faceted chart whose facet permutation
+	 * moved.
+	 *
+	 * updateChartFrameUniforms is event-driven — mount, scale-set sync, a
+	 * pending queue — and none of those fire when a facet scale's displayOrder
+	 * changes. The scale is also absent from the registry by then (see
+	 * ChartConfig.facetScale), so nothing that walks registered scales can
+	 * notice either. Walking the charts is what is left, and it is cheap: one
+	 * property read and one compare per chart, and a uniform write only when a
+	 * permutation actually moved, which is a reorder rather than a frame.
+	 *
+	 * Without it a cell keeps the value it was given at mount — when the facet
+	 * scale had no identity yet, so idAtSlot passed the CELL INDEX through.
+	 * That agrees with the id whenever dim order is display order, which is
+	 * every facet chart that does not set fxDomain.
+	 */
+	#refreshMovedFacetUniforms(): void {
+		for (const chart of this.#registeredCharts.values()) {
+			const scale = chart.facetScale;
+			if (scale && scale._version !== chart._facetVersion) {
+				this.updateChartFrameUniforms(chart.chartId);
+			}
+		}
 	}
 
 	#fillAllScales(view: Float32Array): void {
@@ -746,7 +857,7 @@ export class GPUCoordinator {
 				view[off + 2] = config.paddingOuter;
 				// p4: this scale's base offset into the shared band slot table.
 				view[off + 3] =
-					this.#bandSlots?.offsets.get((scale as { id: string }).id) ?? BAND_SLOT_EMPTY;
+					this.#identitySlots?.offsets.get((scale as { id: string }).id) ?? IDENTITY_SLOT_EMPTY;
 			} else {
 				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
 				const s = scale.gpuState!;
@@ -911,7 +1022,8 @@ export class GPUCoordinator {
 		}
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
-		this.#updateBandSlots();
+		this.#updateIdentitySlots();
+		this.#refreshMovedFacetUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
 		const dstOffset = slot * this.#slotByteSize!;
@@ -1368,7 +1480,7 @@ export class GPUCoordinator {
 							// group missing an entry its layout declares is a
 							// validation error at draw time, not here.
 							binding: 5,
-							resource: { buffer: this.#bandSlotBuffer! }
+							resource: { buffer: this.#identitySlotBuffer! }
 						}
 					]
 				});
@@ -1394,7 +1506,7 @@ export class GPUCoordinator {
 	 * Write a ColorConfig struct to the config buffer.
 	 *
 	 * @param {number} slot - Config slot index (0-63)
-	 * @param {ArrayBuffer} configData - 32-byte config struct from ColorScaleState
+	 * @param {ArrayBuffer} configData - 48-byte config struct from ColorScaleState
 	 */
 	writeColorConfig(slot: number, configData: ArrayBufferLike): void {
 		if (!this.#colorConfigBuffer) {
@@ -1407,7 +1519,7 @@ export class GPUCoordinator {
 			return;
 		}
 
-		const byteOffset = slot * 32;
+		const byteOffset = slot * this.#COLOR_CONFIG_BYTES;
 		this.#device!.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
 	}
 
@@ -1578,6 +1690,8 @@ export class GPUCoordinator {
 			canvas,
 			zIndex: config.zIndex || 0,
 			facetIndex: config.facetIndex ?? 0,
+			facetScale: config.facetScale ?? null,
+			_facetVersion: -1,
 			visible: true,
 			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
@@ -1900,7 +2014,20 @@ export class GPUCoordinator {
 		// f32[7] = padding
 		u32[8] = xScaleIndex >>> 0;
 		u32[9] = yScaleIndex >>> 0;
-		u32[10] = (chartConfig.facetIndex ?? 0) >>> 0;
+		// The facet value this cell renders. The vertex shaders compare their
+		// __facet channel against this, and that channel now carries a dim id
+		// rather than a cell index — so this has to be the id displayed at this
+		// cell, not the cell's position. idAtSlot handles both: with identity it
+		// is displayOrder[slot], without it the slot passes through unchanged,
+		// which is what makes this a no-op until the facet scale is migrated.
+		//
+		// Resolved here rather than captured at registration, because registerChart
+		// runs once at mount and a reorder moves which id sits at this cell long
+		// after. Note this method is event-driven, NOT per frame — #updateIdentitySlots
+		// is what notices a facet permutation moving and calls it.
+		const facetSlot = chartConfig.facetIndex ?? 0;
+		u32[10] = (chartConfig.facetScale?.idAtSlot(facetSlot) ?? facetSlot) >>> 0;
+		chartConfig._facetVersion = chartConfig.facetScale?._version ?? -1;
 		u32[11] = 0; // padding
 		f32[12] = nullColor[0]; // R
 		f32[13] = nullColor[1]; // G

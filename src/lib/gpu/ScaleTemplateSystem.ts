@@ -203,7 +203,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
           p1: f32, // categoryCount
           p2: f32, // paddingInner
           p3: f32, // paddingOuter
-          p4: f32, // base offset of this scale's block in bandSlots
+          p4: f32, // base offset of this scale's block in identitySlots
         };
       `;
 		},
@@ -214,8 +214,8 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 			fn scaleBand${suffix}(value: f32, scaleIndex: u32) -> f32 {
 				let scale = scaleParams[scaleIndex];
 
-				// -1 = no identity (unmapped category), matching
-				// buildCaseExpression's ELSE -1 and the value < 0.0 check in
+				// -1 = no identity (unmapped category), matching the COALESCE(-1)
+				// the identity view emits and the value < 0.0 check in
 				// getColorFromScale. Must be rejected before the cast below:
 				// u32() of a negative f32 is an indeterminate value in WGSL, so
 				// an unmapped row would otherwise land at an arbitrary band.
@@ -232,7 +232,7 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 				// leaving it to the scissor rect is not safe: a slot of -1 sits one
 				// step outside the range only until padding, alignment or an
 				// animating categoryCount moves the band layout.
-				let slot = bandSlot(u32(scale.p4), u32(value));
+				let slot = identitySlot(u32(scale.p4), u32(value));
 				if (slot < 0.0) {
 					return -1.0e6;
 				}
@@ -497,6 +497,7 @@ export class ScaleTemplateSystem {
       
       // ===== 3. HELPER FUNCTIONS =====
       
+      ${this._buildSlotTableHelpers()}
       ${bandHelpers}
       ${implementations}
       ${scaleFunctions}
@@ -543,6 +544,49 @@ export class ScaleTemplateSystem {
 	 * Build band scale helper functions (only if needed)
 	 * @private
 	 */
+	/**
+	 * The shared slot table, and the lookup into it.
+	 *
+	 * Emitted ALWAYS, not only for band axes. It started band-only because band
+	 * axes were the only channel carrying identity ids; ordinal colour carries
+	 * them too now, and resolves in the FRAGMENT stage, so the declaration has
+	 * to be present even in a shader with no band scale at all.
+	 *
+	 * A uniform rather than storage, which is what makes the fragment stage
+	 * affordable: the vertex stage is at the default maxStorageBuffersPerShaderStage
+	 * of 8, while uniform buffers are nowhere near the default 12 in either stage.
+	 *
+	 * WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
+	 * vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
+	 * default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
+	 * every scale that needs one, at the per-scale base that scale carries.
+	 *
+	 * Each scale's block is [count, slot0, slot1, ...]. The count is what makes
+	 * the lookup safe: ids and the slot table can disagree for a moment while a
+	 * dim appends, and without a per-scale bound an id past this scale's end
+	 * reads the NEXT scale's slots — a plausible wrong answer rather than a
+	 * visible failure. Index 0 is a permanent zero-length block, which is where
+	 * a scale that did not fit in the buffer points.
+	 */
+	_buildSlotTableHelpers(): string {
+		return `
+    // ===== SHARED SLOT TABLE (identity id -> display slot) =====
+    @group(2) @binding(5) var<uniform> identitySlots: array<vec4<f32>, 4096>;
+
+    fn identitySlotAt(i: u32) -> f32 {
+      return identitySlots[i >> 2u][i & 3u];
+    }
+
+    fn identitySlot(base: u32, id: u32) -> f32 {
+      let count = u32(identitySlotAt(base));
+      if (id >= count) {
+        return -1.0;
+      }
+      return identitySlotAt(base + 1u + id);
+    }
+    `;
+	}
+
 	_buildBandHelpers(scaleTypes: { x: string; y: string }): string {
 		const needsBandHelpers = scaleTypes.x === 'band' || scaleTypes.y === 'band';
 
@@ -553,39 +597,10 @@ export class ScaleTemplateSystem {
 		return `
     // ===== BAND SCALE HELPERS =====
 
-    // Identity id -> display slot (§9.5, §14.3). A UNIFORM buffer, not storage:
-    // the vertex stage already sits at the default maxStorageBuffersPerShaderStage
-    // of 8, while its uniform buffers are nowhere near the default 12.
-    //
-    // WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
-    // vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
-    // default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
-    // every band and point scale, at the per-scale base carried in p4.
-    //
-    // Each scale's block is [count, slot0, slot1, ...]. The count is what makes
-    // the lookup safe: ids and the slot table can disagree for a moment while a
-    // dim appends, and without a per-scale bound an id past this scale's end
-    // reads the NEXT scale's slots — a plausible wrong position rather than a
-    // visible failure. Index 0 is a permanent zero-length block, which is where
-    // a scale that did not fit in the buffer points.
-    @group(2) @binding(5) var<uniform> bandSlots: array<vec4<f32>, 4096>;
-
-    fn bandSlotAt(i: u32) -> f32 {
-      return bandSlots[i >> 2u][i & 3u];
-    }
-
-    fn bandSlot(base: u32, id: u32) -> f32 {
-      let count = u32(bandSlotAt(base));
-      if (id >= count) {
-        return -1.0;
-      }
-      return bandSlotAt(base + 1u + id);
-    }
-    
     // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:
     // the id is stable and comes from the dim, the slot says where that id
     // currently sits and changes on every reorder. scaleBand resolves one to
-    // the other through bandSlots before calling this.
+    // the other through identitySlots before calling this.
     fn computeBandLayout(
       slot: f32,
       categoryCount: f32,

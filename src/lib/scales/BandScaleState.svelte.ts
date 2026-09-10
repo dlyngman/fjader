@@ -2,7 +2,6 @@
 
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
-import { buildCaseExpression } from '$lib/sql/case-expression';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 interface BandScaleConfig {
@@ -198,11 +197,57 @@ export class BandScaleState {
 		return this.#activeValues == null || this.#activeValues.has(value);
 	}
 
+	/**
+	 * Marks the scale dead. Clears nothing, deliberately.
+	 *
+	 * ScaleRegistry calls this when a scale's chart-id usage hits zero, and then
+	 * `_removeScaleFromStorage` drops it from the storage map — so the instance
+	 * is unreachable through getOrCreateScale afterwards and a later request
+	 * builds a fresh one. Its state therefore cannot leak into any future chart,
+	 * which leaves wiping it with no upside and one large downside: components
+	 * that still hold the reference lose whatever was registered on it, silently.
+	 *
+	 * That is not hypothetical. A faceted container obtains the facet scale,
+	 * passes it to its cells, and stops being a chart itself — dropping usage to
+	 * zero while every cell is still using the object. This wipe ate an explicit
+	 * `fxDomain` that way, and the symptom was an ordering that simply did not
+	 * apply (§25.3). Being dead and being unreferenced are different things, and
+	 * only the registry's refcount claimed they were the same.
+	 *
+	 * What teardown genuinely needs to release — GPU config, ramp and palette
+	 * slots — is released by the registry from `gpuSlots`, not here. A band
+	 * scale holds none.
+	 */
 	destroy(): void {
-		this.#activeValues = null;
-		this.#frozenDomain = null;
-		this.#explicitDomain = null;
-		this.#extents.clear();
+		this.#destroyed = true;
+	}
+
+	/**
+	 * True once the registry has torn this scale down. Use-after-destroy is
+	 * reported rather than silently accepted; see #warnIfDestroyed.
+	 */
+	get isDestroyed(): boolean {
+		return this.#destroyed;
+	}
+
+	#destroyed = false;
+	#warnedAfterDestroy = false;
+
+	/**
+	 * Registering state on a destroyed scale means a component is holding a
+	 * reference the registry has already written off — the shape that cost three
+	 * stacked bugs in §25.3, every one of them silent. Warned once per scale:
+	 * this can be reached from a render path.
+	 */
+	#warnIfDestroyed(what: string): void {
+		if (!this.#destroyed || this.#warnedAfterDestroy) return;
+		this.#warnedAfterDestroy = true;
+		console.warn(
+			`[BandScaleState] "${this.name}": ${what} after destroy(). The registry dropped this ` +
+				`scale when its chart-id usage hit zero, but something still holds it — so it is ` +
+				`invisible to the coordinator and a fresh instance will be built for the next ` +
+				`getOrCreateScale. Register the holder's chart id, or hold the instance deliberately.`
+		);
 	}
 
 	// =========================================================================
@@ -216,24 +261,6 @@ export class BandScaleState {
 	 */
 	get sourceField(): string {
 		return this.#sourceField ?? this.name;
-	}
-
-	/**
-	 * Inline CASE expression mapping domain values to 0-based positions.
-	 *
-	 * NOT for the positional band channel, which carries dim ids and takes the
-	 * view's id column instead (`b7292b2`). This survives for the two roles that
-	 * still put display positions through a BandScaleState: the facet scale's
-	 * `__facet`, and ordinal colour. Steps 3b and 3c migrate one each, and the
-	 * last one to land deletes this.
-	 *
-	 * Reactive — recomputes when effectiveDomain changes, which is why the CASE
-	 * text moves on a reorder and the id column does not.
-	 */
-	get caseExpression(): string {
-		return buildCaseExpression(this.sourceField, this.effectiveDomain, {
-			oneBased: false
-		});
 	}
 
 	// =========================================================================
@@ -272,6 +299,7 @@ export class BandScaleState {
 	 * Adopt the engine's id -> value array for this field. Hold the reference.
 	 */
 	setIdentity(identity: FieldIdentity): void {
+		this.#warnIfDestroyed('setIdentity');
 		const previous = this.#identity;
 		this.#identity = identity;
 
@@ -534,6 +562,7 @@ export class BandScaleState {
 			encoded = false
 		}: { sorted?: boolean; explicit?: boolean; encoded?: boolean } = {}
 	): this {
+		this.#warnIfDestroyed('addMark');
 		// Ids once identity exists, values otherwise. `encoded` says which space
 		// `categories` is already in: the band channel of a scale with identity
 		// carries dim ids straight from the data, everything else supplies source
@@ -564,6 +593,7 @@ export class BandScaleState {
 	 * the domain should only contain post-transform categories.
 	 */
 	setSortOrder(categories: (DimValue | number)[]): void {
+		this.#warnIfDestroyed('setSortOrder');
 		// The sidecar selects the raw column, so these are always source values
 		// (§15.6 item 2 would change that; until it does, never ids).
 		this.#sortOrder = this.hasIdentity
@@ -697,7 +727,7 @@ export class BandScaleState {
 	 * There used to be a second path here that mapped category STRINGS to
 	 * domain positions, one row at a time, on every update — the per-row JS pass
 	 * §3 exists to delete. Nothing produces strings on a band channel any more:
-	 * #inlineCaseExpressions always selects the id column, and an axis it cannot
+	 * #inlineIdentityColumns always selects the id column, and an axis it cannot
 	 * dim is reported at setup rather than silently falling back. Strings here
 	 * now mean a real defect upstream, so they are reported rather than mapped.
 	 */

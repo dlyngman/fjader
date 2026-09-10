@@ -11,6 +11,7 @@
 	import type { ChartConfig } from '$lib/config';
 	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import type { D3Scale } from '$lib/types';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
@@ -19,6 +20,7 @@
 
 	interface FacetingProps {
 		fx: string | null;
+		fxDomain?: DimValue[] | null;
 		isFaceted: boolean;
 		facetChartIds: string[];
 		facetBandScale: BandScaleState | null;
@@ -59,7 +61,13 @@
 		clipPadding = 0,
 		scales,
 		chartConfig,
-		facetingProps = { fx: null, isFaceted: false, facetChartIds: [], facetBandScale: null },
+		facetingProps = {
+			fx: null,
+			fxDomain: null,
+			isFaceted: false,
+			facetChartIds: [],
+			facetBandScale: null
+		},
 		gpuCoordinator,
 		wheelInteraction = { dwellTimeMs: 250, momentumThreshold: 150, enabled: true },
 		background = undefined,
@@ -429,6 +437,7 @@
 
 		// Faceting — from parent
 		fx: facetingProps.fx,
+		fxDomain: facetingProps.fxDomain ?? null,
 		get isFaceted() {
 			return facetingProps.isFaceted;
 		},
@@ -849,7 +858,7 @@
 				{#if canvas}
 					{@render canvas()}
 				{:else}
-					<WebGPUCanvas {facetIndex} />
+					<WebGPUCanvas {facetIndex} facetScale={facetingProps?.facetBandScale ?? null} />
 				{/if}
 			</div>
 

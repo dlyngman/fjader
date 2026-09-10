@@ -59,6 +59,7 @@ import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
+import { identityKeyFor } from '$lib/query-engine/identity-key';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
@@ -143,7 +144,7 @@ export class MarkLifecycleV2 {
 	 * fallback and does not render (see #ensureIdentityColumns).
 	 *
 	 * Cleared by #onIdentityReset, because after a reload the columns it names
-	 * no longer exist — and #sourceTable and #inlineCaseExpressions both gate on
+	 * no longer exist — and #sourceTable and #inlineIdentityColumns both gate on
 	 * it being non-empty.
 	 */
 	#identityFields: Set<string> = new Set();
@@ -265,7 +266,7 @@ export class MarkLifecycleV2 {
 		}
 
 		// Inline CASE expressions — reads scale states reactively
-		this.#inlineCaseExpressions(resolvedSelect);
+		this.#inlineIdentityColumns(resolvedSelect);
 		this.#inlineTimeOffsets(resolvedSelect);
 
 		return buildQueryParts(
@@ -760,12 +761,11 @@ export class MarkLifecycleV2 {
 	 * Encode the categorical channels into the SELECT, replacing ViewManager's
 	 * view columns with direct SQL.
 	 *
-	 * Two encodings now live here, and the name is the older one. Band/point x
-	 * and y take the view's identity id column. Ordinal colour and facet still
-	 * take a CASE built from their scale's domain — steps 3b and 3c, and the
-	 * reason `caseExpression` still exists.
+	 * One encoding now, and the name is the older one: every categorical channel
+	 * — band and point x and y, the facet grid, ordinal colour — takes the
+	 * view's identity id column. The CASE this is named after is deleted.
 	 */
-	#inlineCaseExpressions(select: Record<string, unknown>): void {
+	#inlineIdentityColumns(select: Record<string, unknown>): void {
 		// Band/point x and y: always the view's identity id column, never a CASE.
 		//
 		// The CASE this replaced was built from the scale's DOMAIN, so the query
@@ -797,22 +797,38 @@ export class MarkLifecycleV2 {
 			select[axis] = castReal(sqlColumn(this.#queryEngine.identityColumn(key)));
 		}
 
-		// Ordinal color scale
-		const colorKey = this.#config.colorChannel || 'fill';
-		if (this.#colorScaleState?.caseExpression) {
-			select[colorKey] = sql`${this.#colorScaleState.caseExpression}`;
+		// Ordinal colour. The id column, like every other categorical channel —
+		// the fragment shader resolves it to this scale's palette rank through
+		// the shared slot table, so display order never reaches the query text.
+		//
+		// No CASE fallback, and nothing lost by that. A field this cannot dim is
+		// an aggregate, a window or a bin, and none of those produced a working
+		// ordinal colour scale anyway: the domain fetch skips aggregates
+		// entirely, so there was no domain, no palette upload, and paletteSize 0
+		// against a `% paletteSize` in the shader. bin() reached the domain query
+		// as "[object Object]". The fallback was unreachable for exactly the
+		// cases it appeared to cover.
+		const colorChannel = this.#config.colorChannel || 'fill';
+		const colorField = this.#colorScaleState?.isOrdinal
+			? identityKeyFor(this.#config.select[colorChannel])?.key
+			: null;
+		if (colorField && this.#identityFields.has(colorField)) {
+			select[colorChannel] = castReal(sqlColumn(this.#queryEngine.identityColumn(colorField)));
 		}
 
-		// Facet cell index. The renderers compile a faceted pipeline whenever
-		// chartContext.fx is set and discard instances whose __facet differs
-		// from the active cell, so the column has to be in the select or the
-		// facet vertex buffer is never written. V1 set this from ViewManager's
-		// index column; V2 dropped it in the migration.
-		if (this.#chartContext.fx) {
-			const facetScale = this.#chartContext.facetBandScale as BandScaleState | null;
-			if (facetScale?.caseExpression) {
-				select.__facet = sql`${facetScale.caseExpression}`;
-			}
+		// Facet. The renderers compile a faceted pipeline whenever chartContext.fx
+		// is set and discard instances whose __facet differs from the cell's
+		// value, so the column has to be in the select or the facet vertex buffer
+		// is never written.
+		//
+		// Carries the dim ID, not the cell index — the same move the positional
+		// channels made. The comparison still works because GPUCoordinator now
+		// resolves the frame uniform through idAtSlot, so both sides are ids.
+		// That is what takes display order out of the query text: a facet reorder
+		// changes which id sits in which cell and rewrites nothing.
+		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx)?.key : null;
+		if (facetKey && this.#identityFields.has(facetKey)) {
+			select.__facet = castReal(sqlColumn(this.#queryEngine.identityColumn(facetKey)));
 		}
 	}
 
@@ -1011,17 +1027,7 @@ export class MarkLifecycleV2 {
 	#identityKey(axis: 'x' | 'y'): { key: string; sql: string } | null {
 		const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 		if (scaleType !== 'band' && scaleType !== 'point') return null;
-
-		const field = this.#config.select[axis];
-		if (field == null) return null;
-		if (typeof field === 'string') return { key: field, sql: `"${field.replaceAll('"', '""')}"` };
-		if (!isNode(field) || isBinExpression(field)) return null;
-		if (isAggregateExpression(field as ExprNode) || isWindowExpression(field as ExprNode)) {
-			return null;
-		}
-
-		const sql = String(field);
-		return sql ? { key: sql, sql } : null;
+		return identityKeyFor(this.#config.select[axis]);
 	}
 
 	/**
@@ -1044,7 +1050,7 @@ export class MarkLifecycleV2 {
 	 * display position (steps 3b/3c), which is why this reads the two positional
 	 * axes rather than every channel.
 	 *
-	 * These columns ARE consumed: #inlineCaseExpressions selects the id column for
+	 * These columns ARE consumed: #inlineIdentityColumns selects the id column for
 	 * any axis in #identityFields, and the scale keeps ids as its internal
 	 * representation. Failing here is therefore fatal, not additive — which is
 	 * why the await below is unguarded.
@@ -1070,9 +1076,40 @@ export class MarkLifecycleV2 {
 					`binned axes. This mark will render nothing on ${axis}.`
 			);
 		}
-		if (axes.length === 0) return;
+		// The facet channel (step 3c). Not an axis — it has no scale type on x or
+		// y — but it is a categorical channel over the same table, so it wants the
+		// same dim. Registered here rather than in its own pass so it joins the
+		// coalesced CREATE OR REPLACE VIEW the axes already trigger.
+		// Ordinal colour (step 3b). Continuous colour has no categories and wants
+		// no dim, so this gates on isOrdinal rather than on the channel existing.
+		const colorChannel = this.#config.colorChannel || 'fill';
+		const colorKey = this.#colorScaleState?.isOrdinal
+			? identityKeyFor(this.#config.select[colorChannel])
+			: null;
 
-		const categorical = axes.map(({ key, sql }) => ({ key, sql }));
+		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx) : null;
+		if (this.#colorScaleState?.isOrdinal && this.#config.select[colorChannel] && !colorKey) {
+			console.error(
+				`[${this.#markId}] The colour channel is categorical but cannot be given a stable ` +
+					`identity. Colouring by an aggregate, a window expression or bin() has no ` +
+					`categories to colour BY — use a continuous scheme for a computed value. This ` +
+					`mark will render without colour.`
+			);
+		}
+
+		if (this.#chartContext.fx && !facetKey) {
+			console.error(
+				`[${this.#markId}] fx is set but cannot be given a stable identity, so this mark ` +
+					`will render nothing. Facet by a column or a fixed expression.`
+			);
+		}
+
+		if (axes.length === 0 && !facetKey && !colorKey) return;
+
+		const categorical = [...axes.map(({ key, sql }) => ({ key, sql }))];
+		for (const extra of [facetKey, colorKey]) {
+			if (extra && !categorical.some((c) => c.key === extra.key)) categorical.push(extra);
+		}
 
 		// Fatal, unlike at C0: the query now selects these columns and reads FROM
 		// the view. Failing here gives a message naming the mark and the fields;
@@ -1104,6 +1141,36 @@ export class MarkLifecycleV2 {
 				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 			) as BandScaleState | null;
 			scale?.setIdentity(identity);
+		}
+
+		// The facet scale adopts too: its displayOrder is what turns a cell index
+		// into the id that cell renders, which the frame uniform reads.
+		if (facetKey) {
+			const facetScale = this.#chartContext.facetBandScale as BandScaleState | null;
+			facetScale?.setIdentity(this.#queryEngine.identityFor(facetKey.key));
+
+			// An explicit cell order, applied HERE rather than where the prop is
+			// declared. ScaleRegistry ref-counts scales by chart id and calls
+			// destroy() — which clears #explicitDomain and #extents — the moment
+			// usage hits zero, leaving the same instance in the registry to be
+			// handed back empty. A faceted container hits that every time: it
+			// registers the scale under its own chart id, becomes a grid, and its
+			// own usage drops to zero before the cells' marks mount. Anything
+			// registered before that point is wiped by design.
+			//
+			// Mark setup runs after the wipe, and re-runs after any later one, so
+			// this is the first moment the ordering can survive. Keyed by a
+			// constant so several marks on one facet scale overwrite rather than
+			// accumulate.
+			const fxDomain = this.#chartContext.fxDomain;
+			if (facetScale && fxDomain?.length) {
+				facetScale.addMark(fxDomain, '__fx-explicit', { explicit: true });
+			}
+		}
+
+		// The colour scale adopts too, and turns ids into stable palette ranks.
+		if (colorKey) {
+			this.#colorScaleState?.setIdentity(this.#queryEngine.identityFor(colorKey.key));
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to
@@ -1434,7 +1501,7 @@ export class MarkLifecycleV2 {
 				// id through the live scale (see its BAND IDENTITY section).
 				//
 				// There is no longer a band axis that arrives here as raw category
-				// strings: #inlineCaseExpressions always selects the id column, and
+				// strings: #inlineIdentityColumns always selects the id column, and
 				// an axis it cannot dim is reported at setup. The CASE re-inlining
 				// that used to live here — rebuilding a domain-ordered index for
 				// the tooltip because skipBandIndex had left strings in the main

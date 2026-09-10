@@ -9,12 +9,38 @@
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import ChartCell from './ChartCell.svelte';
 
 	interface Props {
 		xLabel?: string | null;
 		yLabel?: string | null;
 		fx?: string | null;
+		/**
+		 * Explicit cell order for the facet grid, as source values.
+		 *
+		 * Without it, cell order is the dim's — ordered by value, so id equals
+		 * cell index and the two are indistinguishable. This is what makes them
+		 * differ, which every part of the facet identity path depends on being
+		 * handled and no chart previously exercised.
+		 *
+		 * Applied during MARK setup, not here. ScaleRegistry destroys a scale when
+		 * its chart-id usage hits zero — clearing the explicit domain and the
+		 * extents while keeping the instance — and a faceted container triggers
+		 * exactly that when it stops being a single chart and becomes a grid. So
+		 * anything registered at container init is wiped before the cells mount.
+		 *
+		 * Static, not reactive: changing it after mount will not move the cells.
+		 *
+		 * SHARED, and this will surprise you. ScaleRegistry keys scales by name
+		 * plus type plus config, and a facet scale is named `__facet__<fx>`, so
+		 * every ChartContainer faceting on the same field holds the SAME
+		 * BandScaleState. Setting this reorders the cells of all of them, not
+		 * just this one. Give a chart its own facet column when you want its
+		 * order to be its own — the same workaround the positional `domain` prop
+		 * needs, for the same reason.
+		 */
+		fxDomain?: DimValue[] | null;
 		columns?: number | null;
 		background?: Snippet;
 		foreground?: Snippet;
@@ -41,6 +67,7 @@
 		xLabel = null,
 		yLabel = null,
 		fx = null,
+		fxDomain = null,
 		columns: facetColumns = null,
 		background = undefined,
 		foreground = undefined,
@@ -98,6 +125,7 @@
 
 	const facetingProps = {
 		fx,
+		fxDomain,
 		get isFaceted() {
 			return isFaceted;
 		},
@@ -342,6 +370,7 @@
 		},
 
 		fx,
+		fxDomain,
 		get isFaceted() {
 			return isFaceted;
 		},

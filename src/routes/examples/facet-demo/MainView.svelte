@@ -130,6 +130,46 @@
 			{/snippet}
 		</ChartContainer>
 	</div>
+
+	<!-- 3. Reordered cells: the case where a facet id and a cell index differ -->
+	<h2>Faceted Bars — cells reordered by fxDomain</h2>
+	<p class="note">
+		Cell order is Gentoo, Adelie, Chinstrap, while the dim numbers them alphabetically — so a cell's
+		index and the id it renders are different numbers in every cell but one. Every other facet chart
+		has them equal, which makes this the only place a confusion between the two is visible. Each
+		cell's bars must belong to the species in its own heading.
+		<br />
+		It facets on its own column, <code>species_ordered</code>, because a facet scale is shared by
+		every container faceting on the same field — so an <code>fxDomain</code> here would otherwise reorder
+		the two charts above with it.
+	</p>
+	<div class="chart-wrapper">
+		<ChartContainer
+			xLabel="species"
+			yLabel="count"
+			fx="species_ordered"
+			fxDomain={['Gentoo', 'Adelie', 'Chinstrap']}
+		>
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+						<BarMarkY
+							table="penguins_fx_ordered"
+							x="species_ordered"
+							y={count()}
+							fill="species_ordered"
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+			{#snippet background()}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+			{/snippet}
+		</ChartContainer>
+	</div>
 </div>
 
 <style>
@@ -142,6 +182,13 @@
 
 	h2:first-child {
 		margin-top: 0;
+	}
+
+	.note {
+		margin: 0 0 8px 0;
+		font-size: 12px;
+		color: #666;
+		max-width: 80ch;
 	}
 
 	.demo-scroll {

@@ -1,6 +1,9 @@
 // src/lib/scales/ColorScaleState.svelte.ts
+import { scaleOrdinal } from 'd3-scale';
+import type { ScaleOrdinal } from 'd3-scale';
 import {
 	createD3Scale,
+	getOrdinalColors,
 	bakeGradient,
 	bakeInterpolator,
 	bakePalette,
@@ -13,7 +16,7 @@ import {
 	colorScaleTicks
 } from './color-utils';
 import type { RGBA, D3ColorScale } from './color-utils';
-import { buildCaseExpression, colorIndexColumn } from '$lib/sql/case-expression';
+import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -29,6 +32,11 @@ interface ColorScaleConfig {
 	exponent?: number; // pow exponent (default 1)
 }
 
+/** Must match ColorConfig in ColorScaleShaderLib. */
+const COLOR_CONFIG_BYTES = 48;
+/** slotBase meaning "the channel already carries a palette index". */
+const NO_SLOT_TABLE = 0xffffffff;
+
 interface ColorConfigParams {
 	type: number;
 	rampOffset?: number;
@@ -38,6 +46,8 @@ interface ColorConfigParams {
 	domainMax?: number;
 	transformType?: number;
 	transformParam?: number;
+	/** Base into the shared identity slot table, or NO_SLOT_TABLE. */
+	slotBase?: number;
 }
 
 /**
@@ -82,10 +92,53 @@ export class ColorScaleState {
 
 	// Ordinal category mapping (string -> 0-based index, -1 = null/unknown)
 	#categoryMap: Map<string | number, number> = new Map();
+	/**
+	 * The engine's id <-> value bijection for this scale's field (step 3b).
+	 * A live reference, never a copy — the dim appends when a second table
+	 * registers the same field.
+	 */
+	#identity: FieldIdentity | null = null;
+	/**
+	 * id -> palette rank, ASSIGNED ONCE AND NEVER REASSIGNED.
+	 *
+	 * Not the position in the current domain, which is what the CASE encoded and
+	 * what makes a colour move when its neighbours come and go. A category that
+	 * is filtered out keeps its rank reserved, so when it returns it returns in
+	 * the same colour. That is the whole point: a legend that reshuffles on
+	 * every filter is worse than a gap in the palette.
+	 *
+	 * Ranks are handed out in domain order on first sight, so an untouched chart
+	 * still gets palette colours 0, 1, 2... in order. Churn leaves gaps, and
+	 * enough churn walks past the palette's 32 entries and wraps — the same wrap
+	 * a chart with more than 32 categories already gets, reached sooner.
+	 *
+	 * Cleared only when identity itself is replaced (a data reload), where ids
+	 * stop meaning anything and holding colours to them would be wrong.
+	 */
+	#paletteRank: Map<number, number> = new Map();
+	#nextRank = 0;
+	/**
+	 * id -> rank as a dense array, packed into the shared identity slot table so
+	 * the fragment shader can resolve a channel id to a palette index. -1 for an
+	 * id this scale has never ranked.
+	 */
+	slotTable: Float32Array = new Float32Array(0);
+	/** Bumped on every slotTable rebuild; the packer uploads only on a change. */
+	slotVersion: number = 0;
+	/**
+	 * Where this scale's block sits in the shared identity slot table. Assigned
+	 * by the coordinator's packer, which also patches it into the uploaded
+	 * config — the config is written when the scale changes, while the base can
+	 * move on any frame a neighbouring scale resizes.
+	 */
+	#slotBase: number = -1;
+
+	/** Called by the packer when this scale's block moves. */
+	setSlotBase(base: number): void {
+		this.#slotBase = base;
+	}
 
 	// ViewManager integration - tracks tables this scale has registered columns for
-	#registeredTables: Set<string> = new Set();
-	#viewsCreated: Set<string> = new Set(); // Tables that have had their view column created (one-shot)
 
 	constructor(
 		config: ColorScaleConfig,
@@ -179,26 +232,6 @@ export class ColorScaleState {
 	}
 
 	/**
-	 * The column name used in derived views for this scale's index.
-	 * Format: __dplot_{field}_color_idx
-	 */
-	get indexColumnName(): string {
-		return colorIndexColumn(this.#field);
-	}
-
-	/**
-	 * Inline CASE expression mapping ordinal domain values to 0-based indices.
-	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
-	 * Returns empty string for non-ordinal scales (they don't need CASE mapping).
-	 */
-	get caseExpression(): string {
-		if (!this.isOrdinal || !this.domain.length) return '';
-		return buildCaseExpression(this.#field, this.domain as string[], {
-			oneBased: false
-		});
-	}
-
-	/**
 	 * Unique scale ID for ViewManager registration.
 	 */
 	get scaleId(): string {
@@ -255,6 +288,18 @@ export class ColorScaleState {
 		}
 
 		if (this.isOrdinal) {
+			if (this.hasIdentity) {
+				// The query selects the id column CAST to REAL, so this arrives as
+				// a Float32Array and returns above. Reaching here with raw values
+				// means something upstream stopped selecting it — and mapping them
+				// to domain positions would hand the shader positions where it
+				// expects ids, which it would resolve as some other category's
+				// rank rather than fail.
+				console.error(
+					`[ColorScaleState] "${this.#field}" has identity but received raw category ` +
+						`values; the query should select its __dplot_*_idx column. Colours will be wrong.`
+				);
+			}
 			const indices = new Float32Array(data.length);
 			for (let i = 0; i < data.length; i++) {
 				const val = data[i];
@@ -301,9 +346,18 @@ export class ColorScaleState {
 		if (this.isOrdinal) {
 			// Ordinal: D3 scale needs the full categorical domain (strings).
 			// effectiveDomain is only meaningful for continuous scales.
-			this.#d3Scale = createD3Scale(this.#scheme, this.domain as number[], {
-				reverse: this.#reverse
-			});
+			//
+			// The ranks have to be refreshed BEFORE this, because the CPU scale
+			// is built to agree with them: d3's scaleOrdinal assigns colours by
+			// position in its domain, and once a category's rank has outlived a
+			// disappearance its rank and its domain position differ. Left alone,
+			// the legend and the tooltip swatch would show one colour while the
+			// GPU drew another — the two disagreeing quietly, on exactly the
+			// charts the stable rank exists for.
+			this.#refreshRanks();
+			this.#d3Scale = this.#hasRanks()
+				? this.#buildRankedOrdinalScale()
+				: createD3Scale(this.#scheme, this.domain as number[], { reverse: this.#reverse });
 			this.#uploadOrdinal();
 		} else {
 			const effectiveDomain = this.#effectiveDomain();
@@ -372,10 +426,102 @@ export class ColorScaleState {
 		this.#gpuCoordinator!.writeColorConfig(this.#configSlot, config);
 	}
 
+	/**
+	 * Adopt the engine's id <-> value bijection for this field.
+	 *
+	 * A different FieldIdentity object means a rebuilt dim (a data reload), so
+	 * every rank is stale — the same object-swap signature BandScaleState uses,
+	 * and for the same reason: ids from the old dim are still in range against
+	 * the new one and simply mean other categories.
+	 */
+	setIdentity(identity: FieldIdentity): void {
+		this.#warnIfDestroyed('setIdentity');
+		const previous = this.#identity;
+		this.#identity = identity;
+		if (previous && previous !== identity && !previous.present) {
+			this.#paletteRank.clear();
+			this.#nextRank = 0;
+		}
+		this.#refreshRanks();
+	}
+
+	/** True once this scale's channel carries dim ids rather than palette indices. */
+	get hasIdentity(): boolean {
+		return this.isOrdinal && (this.#identity?.present ?? false);
+	}
+
+	/**
+	 * Hand a rank to every domain category that does not have one, then rebuild
+	 * the dense table. Existing ranks are never touched, which is what makes a
+	 * colour survive its category disappearing.
+	 */
+	#refreshRanks(): void {
+		const identity = this.#identity;
+		if (!identity?.present) return;
+
+		for (const value of this.domain) {
+			const id = identity.ids.get(value as never);
+			if (id === undefined || this.#paletteRank.has(id)) continue;
+			this.#paletteRank.set(id, this.#nextRank++);
+		}
+
+		const table = new Float32Array(identity.values.length);
+		table.fill(-1);
+		for (const [id, rank] of this.#paletteRank) {
+			if (id >= 0 && id < table.length) table[id] = rank;
+		}
+		this.slotTable = table;
+		this.slotVersion++;
+	}
+
+	#hasRanks(): boolean {
+		return this.hasIdentity && this.#paletteRank.size > 0;
+	}
+
+	/**
+	 * An ordinal scale whose range is permuted to match the palette ranks, so
+	 * `getColor(value)` returns the colour the GPU actually draws.
+	 *
+	 * d3 would otherwise index its range by domain position. Handing it an
+	 * explicit range indexed the same way, with each entry taken at that
+	 * category's rank, makes the two agree by construction rather than by both
+	 * happening to be domain order.
+	 */
+	#buildRankedOrdinalScale(): ScaleOrdinal<string, string> {
+		let colors = getOrdinalColors(this.#scheme) ?? [];
+		if (this.#reverse) colors = [...colors].reverse();
+		const identity = this.#identity!;
+
+		const range = this.domain.map((value) => {
+			const id = identity.ids.get(value as never);
+			const rank = id === undefined ? undefined : this.#paletteRank.get(id);
+			// Same wrap the shader applies, so an over-32 palette agrees too.
+			return rank === undefined ? ColorScaleState.NULL_COLOR : colors[rank % colors.length];
+		});
+
+		// No .unknown(): it widens d3's third type param past D3ColorScale, and
+		// the unranked case is already handled by the range entries below. An
+		// out-of-domain value therefore cycles the range exactly as it does on
+		// the scale this replaces.
+		return scaleOrdinal<string, string>().domain(this.domain.map(String)).range(range);
+	}
+
+	/**
+	 * Source value for a channel id — the decode side of the encode the query
+	 * performs, for tooltips and legends. Undefined without identity, where the
+	 * channel carries a palette index and the caller should read the domain.
+	 */
+	categoryAt(id: number): string | number | undefined {
+		if (!this.hasIdentity) return undefined;
+		return this.#identity!.values[id] as string | number | undefined;
+	}
+
 	#uploadOrdinal(): void {
 		// Rebuild category map (string -> 0-based index)
 		this.#categoryMap.clear();
 		this.domain.forEach((cat, i) => this.#categoryMap.set(cat, i));
+		// New categories in the domain need ranks before the palette is sized.
+		this.#refreshRanks();
 
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
@@ -385,10 +531,21 @@ export class ColorScaleState {
 		);
 
 		// Build and upload config struct
+		// paletteSize is the modulus the shader wraps a rank with, so it has to
+		// span the RANK space, not the current domain. Ranks outlive the
+		// categories that earned them, so after any churn nextRank exceeds
+		// domain.length — and wrapping a rank of 5 over a domain of 3 lands it on
+		// rank 2's colour, undoing exactly the stability the ranks are for.
+		//
+		// Capped at 32, the palette's size, so a chart with more categories than
+		// that wraps as it always has. Floored at 1: this is a u32 modulus and 0
+		// is undefined behaviour in WGSL.
+		const rankSpace = this.hasIdentity ? this.#nextRank : this.domain.length;
 		const config = this.#buildColorConfig({
 			type: 0, // ORDINAL
 			paletteOffset: this.#paletteSlot * 32,
-			paletteSize: Math.min(this.domain.length, 32)
+			paletteSize: Math.min(Math.max(rankSpace, 1), 32),
+			slotBase: this.hasIdentity ? this.#slotBase : undefined
 		});
 		this.#gpuCoordinator.writeColorConfig(this.#configSlot, config);
 	}
@@ -428,7 +585,7 @@ export class ColorScaleState {
 	 * }; // 32 bytes total
 	 */
 	#buildColorConfig(params: ColorConfigParams): ArrayBuffer {
-		const buffer = new ArrayBuffer(32);
+		const buffer = new ArrayBuffer(COLOR_CONFIG_BYTES);
 		const view = new DataView(buffer);
 		const LE = true; // Little Endian (WebGPU standard)
 
@@ -443,6 +600,7 @@ export class ColorScaleState {
 		view.setUint32(20, params.type ?? 0, LE);
 		view.setUint32(24, params.transformType ?? 0, LE);
 		view.setFloat32(28, params.transformParam ?? 0, LE);
+		view.setUint32(32, params.slotBase ?? NO_SLOT_TABLE, LE);
 
 		return buffer;
 	}
@@ -452,46 +610,22 @@ export class ColorScaleState {
 	// ============================================================
 
 	/**
-	 * Register this scale for a source table. After domain is set,
-	 * the view will be created with the index column (one-shot).
+	 * Kept as a no-op so callers do not have to know the view is gone.
+	 *
+	 * It once registered a derived index column with ViewManager. The colour
+	 * channel takes the dim's id column now, so there is nothing to create —
+	 * but MarkColor, MarkSeries and domain-queries all still call it, and
+	 * deleting it is a separate change from deleting what it did.
 	 */
-	registerTable(sourceTable: string): void {
-		this.#registeredTables.add(sourceTable);
-		this.#maybeCreateView(sourceTable);
-	}
-
-	/**
-	 * Create view for a table if both table is registered and domain is known.
-	 * Only creates once per table (one-shot).
-	 */
-	#maybeCreateView(sourceTable: string): void {
-		// Only create once per table
-		if (this.#viewsCreated.has(sourceTable)) {
-			return;
-		}
-
-		// Need domain to be ready
-		if (!this.isOrdinal || this.domain.length === 0) {
-			return;
-		}
-
-		this.#viewsCreated.add(sourceTable);
-	}
-
-	#unregisterFromViewManager(): void {
-		this.#registeredTables.clear();
-		this.#viewsCreated.clear();
-	}
+	registerTable(_sourceTable: string): void {}
 
 	// ============================================================
 	// DOMAIN UPDATES
 	// ============================================================
 
-	/**
-	 * Update the domain. Triggers GPU re-upload.
-	 * Also triggers one-shot view creation for registered tables.
-	 */
+	/** Update the domain. Triggers GPU re-upload. */
 	setDomain(newDomain: (string | number)[]): void {
+		this.#warnIfDestroyed('setDomain');
 		if (!newDomain || newDomain.length === 0) return;
 
 		// Check if domain actually changed
@@ -502,13 +636,6 @@ export class ColorScaleState {
 
 		this.domain = [...newDomain];
 		this.#uploadToGPU();
-
-		// Domain order changed — clear one-shot guard to force view recreation
-		// so the CASE expression matches the new domain→index mapping.
-		this.#viewsCreated.clear();
-		for (const table of this.#registeredTables) {
-			this.#maybeCreateView(table);
-		}
 	}
 
 	/**
@@ -524,9 +651,7 @@ export class ColorScaleState {
 		// If the scale type is a transform type (log/symlog/etc.), keep it;
 		// otherwise infer from the new scheme.
 		const effectiveType =
-			this.#transformType !== 'linear'
-				? this.#scaleType
-				: (newSchemeType || 'sequential');
+			this.#transformType !== 'linear' ? this.#scaleType : newSchemeType || 'sequential';
 		const resolved = resolveColorScaleTypes(effectiveType, newScheme);
 		const nowOrdinal = resolved.renderType === 'ordinal';
 
@@ -553,11 +678,7 @@ export class ColorScaleState {
 	 * Called when the user changes the color scale type (e.g., linear → symlog)
 	 * while keeping the same field.
 	 */
-	setTransform(
-		scaleType: ColorScaleType,
-		constant?: number,
-		exponent?: number
-	): void {
+	setTransform(scaleType: ColorScaleType, constant?: number, exponent?: number): void {
 		const resolved = resolveColorScaleTypes(scaleType, this.#scheme);
 
 		// No change — bail
@@ -668,14 +789,43 @@ export class ColorScaleState {
 	// CLEANUP
 	// ============================================================
 
+	/**
+	 * Marks the scale dead. Clears nothing, deliberately — see
+	 * BandScaleState.destroy for the full argument.
+	 *
+	 * The short version: the registry calls this when chart-id usage hits zero
+	 * and then drops the instance from storage, so it can never be handed out
+	 * again and its state cannot leak into a future chart. Clearing therefore
+	 * buys nothing, while a component still holding the reference loses
+	 * everything — and here that is worse than for a band scale, because
+	 * nulling #d3Scale makes getColor return black for every category rather
+	 * than failing.
+	 *
+	 * The GPU config, ramp and palette slots ARE released, by the registry from
+	 * gpuSlots. That release is real and has to stay, which is also why a
+	 * still-referenced colour scale is dangerous beyond its own rendering: its
+	 * slots can be reallocated to a different scale, and it would then write
+	 * its palette over that one's.
+	 */
 	destroy(): void {
-		// Unregister from ViewManager
-		this.#unregisterFromViewManager();
+		this.#destroyed = true;
+	}
 
-		// Slots are released by registry via gpuSlots getter
-		this.#activeValues = null;
-		this.#d3Scale = null;
-		this.#categoryMap.clear();
-		this.ready = false;
+	/** True once the registry has torn this scale down. */
+	get isDestroyed(): boolean {
+		return this.#destroyed;
+	}
+
+	#destroyed = false;
+	#warnedAfterDestroy = false;
+
+	#warnIfDestroyed(what: string): void {
+		if (!this.#destroyed || this.#warnedAfterDestroy) return;
+		this.#warnedAfterDestroy = true;
+		console.warn(
+			`[ColorScaleState] "${this.#field}": ${what} after destroy(). The registry dropped ` +
+				`this scale when its chart-id usage hit zero and released its GPU slots, which may ` +
+				`now belong to another scale. Register the holder's chart id.`
+		);
 	}
 }

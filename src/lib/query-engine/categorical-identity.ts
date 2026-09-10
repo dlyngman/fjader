@@ -41,7 +41,7 @@
  * over one at a time in steps 3b and 3c.
  */
 
-import { BAND_SLOT_CAPACITY } from '$lib/gpu/band-slot-packing';
+import { IDENTITY_SLOT_CAPACITY } from '$lib/gpu/identity-slot-packing';
 
 /** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
 export interface IdentityExec {
@@ -222,7 +222,7 @@ export const WARN_IDENTITY_CARDINALITY = 1000;
  * Quoted in the refusal above. Imported rather than written as a literal so the
  * message cannot claim a budget the packer does not have.
  */
-const BAND_SLOT_BUDGET = BAND_SLOT_CAPACITY;
+const SLOT_BUDGET = IDENTITY_SLOT_CAPACITY;
 
 export class CategoricalIdentity {
 	#exec: IdentityExec;
@@ -635,7 +635,7 @@ export class CategoricalIdentity {
 			throw new Error(
 				`"${field}" has ${size} distinct values across every table registering it, over the ` +
 					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. The shared slot ` +
-					`buffer holds ${BAND_SLOT_BUDGET} ids across every band and point scale on the ` +
+					`buffer holds ${SLOT_BUDGET} ids across every scale that needs one on the ` +
 					`page, so this is a page-wide budget and not a per-axis one. Use a continuous ` +
 					`scale, bin the values, or reduce them with a transform.`
 			);

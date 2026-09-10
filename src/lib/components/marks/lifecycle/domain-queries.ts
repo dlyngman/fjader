@@ -16,6 +16,7 @@ import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { ContinuousScaleState, NormalizedSortConfig } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
+import { identityKeyFor } from '$lib/query-engine/identity-key';
 interface DataClientConfig {
 	_filterNulls: unknown[] | null;
 	select?: Record<string, unknown>;
@@ -115,12 +116,18 @@ export async function fetchCategoricalDomains(
 		//
 		// Sorted and sortOnly still query: they rank by an aggregate, which the
 		// dim knows nothing about.
-		if (!sortField && !sortOnly && typeof field === 'string') {
+		//
+		// Expression-backed axes take this path too, since `20c2370`'s successor
+		// gave the key derivation a shared home. They used to fall through to the
+		// DISTINCT below — correct but redundant, and deferred only because
+		// routing them here would have meant a second copy of #identityKey.
+		const identityField = !sortField && !sortOnly ? identityKeyFor(field) : null;
+		if (identityField) {
 			fetches.push(
 				(async () => {
 					// Idempotent and coalesced — the mark's own setup calls this too.
-					await coordinator.ensureColumns(table, { categorical: [field] });
-					const categories = coordinator.identityValues(field);
+					await coordinator.ensureColumns(table, { categorical: [identityField] });
+					const categories = coordinator.identityValues(identityField.key);
 					// The scale adopts this same array in MarkLifecycleV2's
 					// #ensureIdentityColumns, which covers sorted and explicit-domain
 					// axes that never reach this branch.
@@ -210,19 +217,27 @@ export async function fetchCategoricalDomains(
 		}
 	}
 
-	// Facet: register categories with the facet BandScaleState
-	if (facetBandScale && fx) {
-		const fxExpr = isNode(fx) ? fx : sqlColumn(String(fx));
-		const q = Query.from(table).select({ fx: fxExpr }).distinct();
+	// Facet: register categories with the facet BandScaleState.
+	//
+	// From the dim, like the positional axes (step 3c). The DISTINCT it replaces
+	// had no ORDER BY, so cell order was whatever DuckDB happened to return and
+	// then first-appearance order — arbitrary, and different between two marks on
+	// the same facet scale. Dim values are ordered by id, so cell order is
+	// deterministic and every mark agrees on it by construction.
+	const facetKey = fx ? identityKeyFor(fx) : null;
+	if (facetBandScale && facetKey) {
 		fetches.push(
-			coordinator.query(q).then((result) => {
-				const categories = Array.from(result).map((row) => row.fx);
-				if (categories.length > 0) {
-					facetBandScale.addMark(categories, markId);
-				}
-			})
+			(async () => {
+				// Idempotent and coalesced — the mark's own setup calls this too.
+				await coordinator.ensureColumns(table, { categorical: [facetKey] });
+				const categories = coordinator.identityValues(facetKey.key);
+				if (categories.length > 0) facetBandScale.addMark(categories, markId);
+			})()
 		);
 	}
+	// No fallback when the fx expression cannot be dimmed. #ensureIdentityColumns
+	// reports that case and the mark renders nothing, so populating a domain here
+	// would draw empty cells for categories no mark can put a row in.
 
 	// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
 	const setupTimeFetch = (axis: string, field: unknown): void => {

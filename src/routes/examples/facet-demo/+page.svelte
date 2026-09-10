@@ -4,17 +4,29 @@
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-
 	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			await queryEngine.exec([loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()]);
+			await queryEngine.exec([
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
+			]);
+
+			// A separate facet FIELD for the reordered chart. ScaleRegistry keys
+			// scales by name + type + config, and a facet scale is named
+			// __facet__<fx>, so every container faceting on `species` shares one
+			// BandScaleState — an explicit fxDomain on any of them reorders all
+			// of them. Its own column gives it its own scale, which is the same
+			// workaround /test/band-identity uses for the positional axes.
+			await queryEngine.exec([
+				`CREATE TABLE penguins_fx_ordered AS SELECT *, species AS species_ordered FROM penguins`
+			]);
 
 			// Synthetic timeseries for line/area facet tests
-			await queryEngine.exec([`
+			await queryEngine.exec([
+				`
 				CREATE TABLE facet_timeseries AS
 				WITH RECURSIVE
 					points AS (
@@ -30,7 +42,8 @@
 					p.idx as x,
 					s.amp * sin((p.idx + s.offset) * 0.15) + 0.3 * random() + 2.0 as y
 				FROM points p CROSS JOIN series s
-			`]);
+			`
+			]);
 
 			isLoaded = true;
 		} catch (error) {
