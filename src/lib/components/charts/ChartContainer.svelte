@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { setContext, getContext } from 'svelte';
+	import { setContext, getContext, onDestroy } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -140,6 +140,33 @@
 				layout.chartId
 			) as BandScaleState)
 		: null;
+	// The container HOLDS this scale for its whole life, but its usage as a
+	// *chart* is transient: it registers under layout.chartId, then becomes a
+	// grid, and ChartScales' teardown calls removeChartUsage for that id. Usage
+	// hits zero while the object is still in use by the container and every cell
+	// it handed the reference to, and deregisterChart then destroys it, drops it
+	// from scaleUsage and removes it from storage (§25.3, §27.2).
+	//
+	// So ownership is registered separately from chart usage, under an id that
+	// lives exactly as long as this component. Synchronous here rather than in
+	// onMount because the teardown it has to outlive happens before cells mount
+	// — an onMount registration would restore the refcount after the eviction
+	// instead of preventing it.
+	//
+	// Cells are NOT registered individually. They come and go with the facet
+	// domain, which would reintroduce a window at every domain change; the
+	// container outlives all of them and is the honest owner.
+	const facetOwnerId = facetBandScale ? `${layout.chartId}-fx-owner` : null;
+	if (facetBandScale && facetOwnerId) {
+		scaleRegistry.registerChart(facetBandScale, facetOwnerId);
+	}
+
+	onDestroy(() => {
+		if (facetBandScale && facetOwnerId) {
+			scaleRegistry.deregisterChart(facetBandScale, facetOwnerId);
+		}
+	});
+
 	const facetCategories = $derived(
 		facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null
 	);
