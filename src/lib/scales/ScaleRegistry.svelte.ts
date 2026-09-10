@@ -379,6 +379,43 @@ export class ScaleRegistry {
 		return scale;
 	}
 
+	/**
+	 * Count `chartId` as a user of `scale`, for a holder that did not obtain it
+	 * through getOrCreateScale (§27.2).
+	 *
+	 * The refcount is what keeps a scale alive, and until now it was only ever
+	 * incremented by the call that CREATED the scale. A component handed an
+	 * existing instance by reference was therefore invisible to it — and a
+	 * faceted container guarantees exactly that shape: it obtains the facet
+	 * scale under its own chart id, hands the object to its cells, then stops
+	 * being a chart itself. Its usage drops to zero while every cell is still
+	 * using the object, and deregisterChart destroys it, drops it from
+	 * scaleUsage and removes it from storage. §25.3 cost three stacked bugs to
+	 * that, and the coordinator half — an evicted scale being invisible to
+	 * #scaleIdToInstance and #scaleArray — was never fixed, only contained by
+	 * holding the instance directly.
+	 *
+	 * Idempotent, and the exact inverse of deregisterChart, so a holder can pair
+	 * them across its own lifecycle.
+	 */
+	registerChart(scale: AnyScaleState, chartId: string): void {
+		if (!scale || !chartId) return;
+
+		untrack(() => {
+			if (!this.scaleUsage.has(scale)) {
+				this.scaleUsage.set(scale, new Set());
+			}
+			const chartIds = this.scaleUsage.get(scale)!;
+			if (chartIds.has(chartId)) return;
+
+			chartIds.add(chartId);
+			const inst = scale as unknown as { _affectedChartsArray?: string[] };
+			if (inst._affectedChartsArray) {
+				inst._affectedChartsArray = Array.from(chartIds);
+			}
+		});
+	}
+
 	deregisterChart(scale: AnyScaleState, chartId: string): void {
 		if (!scale || !chartId) return;
 
@@ -484,7 +521,11 @@ export class ScaleRegistry {
 	 * SvelteMap is reactive, so callers inside $effect will re-run
 	 * when the scale is later created.
 	 */
-	findScale(name: string, type: string, config: Record<string, unknown> = {}): AnyScaleState | null {
+	findScale(
+		name: string,
+		type: string,
+		config: Record<string, unknown> = {}
+	): AnyScaleState | null {
 		const bucket = this.scales[type];
 		if (!bucket) return null;
 		const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';

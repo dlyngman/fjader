@@ -332,8 +332,25 @@ export class GPUCoordinator {
 	#identitySlots: IdentitySlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
 	#identitySlotScales: IdentitySlotScale[] = [];
-	/** Last slot base pushed back to a scale, so a static chart patches nothing. */
-	#slotBaseSeen = new Map<string, number>();
+	/**
+	 * Last slot base pushed back to a scale, so a static chart patches nothing.
+	 *
+	 * Keyed by the scale INSTANCE, not by its id, and that is the whole point.
+	 * A chart that unmounts and remounts is evicted from the registry and
+	 * rebuilt, so the new object carries the same scale id — and the packer,
+	 * being a deterministic running sum over the same scales, hands that id the
+	 * same base. Keyed by id, the cache would then say "already delivered" and
+	 * skip setSlotBase for an instance that had never received one. It keeps
+	 * ColorScaleState's initial -1, which #buildColorConfig writes as
+	 * NO_SLOT_TABLE, and the shader reads the channel's DIM ID as a palette
+	 * index: wrong colours, silently, and disagreeing with the CPU legend.
+	 *
+	 * A WeakMap also removes the need to sweep it. Sweeping would not have been
+	 * enough anyway — an unmount and remount with no frame between them leaves
+	 * the id present in the packer's offsets, so there is nothing for a sweep to
+	 * notice, while the instance has still changed.
+	 */
+	#slotBaseSeen = new WeakMap<SlotBaseConsumer, number>();
 	/** Index-aligned with #identitySlotScales. Reused; null where not applicable. */
 	#slotBaseConsumers: (SlotBaseConsumer | null)[] = [];
 	/** Reused for the four-byte config patch. */
@@ -786,12 +803,11 @@ export class GPUCoordinator {
 		for (let i = 0; i < consumers.length; i++) {
 			const scale = consumers[i];
 			if (!scale) continue;
-			const id = scales[i].id;
-			const base = state.offsets.get(id);
-			if (base === undefined || this.#slotBaseSeen.get(id) === base) continue;
+			const base = state.offsets.get(scales[i].id);
+			if (base === undefined || this.#slotBaseSeen.get(scale) === base) continue;
 
 			scale.setSlotBase(base);
-			this.#slotBaseSeen.set(id, base);
+			this.#slotBaseSeen.set(scale, base);
 
 			const configSlot = scale.gpuSlots?.configSlot;
 			if (configSlot !== undefined && configSlot >= 0 && this.#colorConfigBuffer) {
