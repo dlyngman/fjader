@@ -38,9 +38,9 @@
  * both dims and views carry a session suffix.
  *
  * Nothing here is reactive, and nothing here knows which scale kind is reading.
- * Band and point positional axes read these columns today (step 3a); ordinal
- * colour, series and facet still CASE-inline a display position, and switch
- * over one at a time in steps 3b and 3c.
+ * That is the point: band and point axes, the facet grid, ordinal colour and
+ * the series scale all read the same columns from the same dim, and none of
+ * them is special-cased here.
  */
 
 import { IDENTITY_SLOT_CAPACITY } from '$lib/gpu/identity-slot-packing';
@@ -81,6 +81,19 @@ interface DimEntry {
 	sql: string;
 	/** Source tables already folded into this dim. */
 	tables: Set<string>;
+	/**
+	 * The refusal message once `#checkDimSize` has rejected this dim, and null
+	 * otherwise. Sticky, because the dim genuinely IS too big: a later, smaller
+	 * table registering the same field must fail too rather than inherit a dim
+	 * nothing can draw.
+	 *
+	 * Recorded rather than inferred from `tables`, because the obvious fix —
+	 * marking the table done only after the check passes — would put a second
+	 * table back on the CREATE branch, where `CREATE TABLE IF NOT EXISTS` is a
+	 * silent no-op and its rows are never appended. That is exactly what `chain`
+	 * below exists to prevent, so the refusal is tracked separately.
+	 */
+	refusal: string | null;
 	/**
 	 * Serializes work on this dim. The coalescer is per TABLE, so two tables
 	 * registering the same field run two independent drains, and without this
@@ -460,6 +473,7 @@ export class CategoricalIdentity {
 				name: this.dimTable(field),
 				sql: this.#sqlFor.get(field) ?? quote(field),
 				tables: new Set(),
+				refusal: null,
 				chain: Promise.resolve()
 			};
 			this.#dims.set(field, dim);
@@ -544,6 +558,11 @@ export class CategoricalIdentity {
 		table: string,
 		generation: number
 	): Promise<void> {
+		// BEFORE the tables check, not after: a mark whose setup re-runs would
+		// otherwise hit `tables.has(table)`, return early, and render against a
+		// dim the size check had already refused — the refusal firing exactly
+		// once and then never again.
+		if (dim.refusal) throw new Error(dim.refusal);
 		if (dim.tables.has(table)) return;
 		// Queued behind other dim work that outlived a reset.
 		if (this.#generation !== generation) return;
@@ -603,7 +622,7 @@ export class CategoricalIdentity {
 		// Exact rather than approximate here: the rows exist, COUNT(*) on a
 		// categorical dim is trivial, and this is the number the error should
 		// quote.
-		this.#checkDimSize(field, this.identity(field).values.length);
+		this.#checkDimSize(dim, field, this.identity(field).values.length);
 	}
 
 	/**
@@ -652,18 +671,27 @@ export class CategoricalIdentity {
 	 * same field should fail too rather than inherit a dim nothing can draw.
 	 * Rolling back would make the failure depend on which mark set up first.
 	 *
+	 * That "should" is now enforced rather than asserted. The refusal is stored
+	 * on the dim and re-thrown by `#ensureDimNow` before its `tables` check, so
+	 * a mark re-running setup cannot slip past it — previously the throw left
+	 * the table already marked done, and the retry returned early and rendered
+	 * against the dim this refused.
+	 *
 	 * The buffer figure is quoted here and nowhere else, because this is the
 	 * only check that compares against the thing the buffer actually holds.
 	 */
-	#checkDimSize(field: string, size: number): void {
+	#checkDimSize(dim: DimEntry, field: string, size: number): void {
 		if (size > MAX_IDENTITY_CARDINALITY) {
-			throw new Error(
+			// Recorded on the dim before it is thrown, so every later registration
+			// of this field fails the same way instead of the first one being the
+			// only one that ever sees it.
+			dim.refusal =
 				`"${field}" has ${size} distinct values across every table registering it, over the ` +
-					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. The shared slot ` +
-					`buffer holds ${SLOT_BUDGET} ids across every scale that needs one on the ` +
-					`page, so this is a page-wide budget and not a per-axis one. Use a continuous ` +
-					`scale, bin the values, or reduce them with a transform.`
-			);
+				`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. The shared slot ` +
+				`buffer holds ${SLOT_BUDGET} ids across every scale that needs one on the ` +
+				`page, so this is a page-wide budget and not a per-axis one. Use a continuous ` +
+				`scale, bin the values, or reduce them with a transform.`;
+			throw new Error(dim.refusal);
 		}
 		if (size > WARN_IDENTITY_CARDINALITY) {
 			console.warn(
