@@ -195,6 +195,81 @@ describe('BandScaleState identity <-> display translation', () => {
 	// tooltips, hit-testing, toggles — ask in their own terms and never index
 	// displayOrder or identityValues themselves.
 
+	// The animation interface exists but nothing drives it yet (step 5 C2).
+	//
+	// Two claims, and the second is the one worth a test: BandScaleState now
+	// satisfies what GPUCoordinator's loop calls, and it does not register, so
+	// the loop never sees it. C3 makes one change that both registers and
+	// interpolates — deliberately one change, so the first frame of motion
+	// proves the registration too.
+	describe('animation interface', () => {
+		function scale(): BandScaleState {
+			const s = new BandScaleState('species');
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			return s;
+		}
+
+		it('has the four methods GPUCoordinator drives a scale through', () => {
+			const s = scale();
+			for (const name of ['step', 'updateRenderState', 'isAtRest', '_markAtRest'] as const) {
+				expect(typeof s[name]).toBe('function');
+			}
+			// step() takes no arguments here. The band-geometry step(rangeSize)
+			// moved to stepWidth for exactly this reason, and an arity clash
+			// between them would have been silent.
+			expect(s.step.length).toBe(0);
+			expect(s.stepWidth(100)).toBeGreaterThan(0);
+		});
+
+		it('reports at rest, so a registered scale cannot pin the loop on', () => {
+			// Load-bearing, not a placeholder. With no spring, a scale that ever
+			// reached #animatedScalesArray must fall straight back out on the next
+			// sweep; otherwise the chart redraws every frame while looking
+			// perfectly correct, which is invisible outside a profiler.
+			const s = scale();
+			expect(s.isAtRest()).toBe(true);
+
+			s.step();
+			s.updateRenderState(0.016);
+			expect(s.isAtRest()).toBe(true);
+		});
+
+		it('driving the loop by hand moves nothing, because there is no spring', () => {
+			const s = scale();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+			const before = Array.from(s.slotTable);
+			const version = s.slotVersion;
+
+			for (let i = 0; i < 10; i++) {
+				s.step();
+				s.updateRenderState(0.016);
+			}
+
+			// C3 inverts this: slotCurrent walks toward slotTarget and slotVersion
+			// climbs once per frame.
+			expect(Array.from(s.slotTable)).toEqual(before);
+			expect(s.slotVersion).toBe(version);
+		});
+
+		// NOT TESTED, deliberately: "does not register with the coordinator".
+		//
+		// There is nothing to observe. BandScaleState holds no coordinator
+		// reference at all — BandScaleConfig has no gpuCoordinator field and the
+		// class never mentions one — so registration is structurally impossible
+		// rather than merely absent. A test passing a fake coordinator and
+		// asserting addAnimatingScale was not called would pass for that reason
+		// and not for the intended one, which is the vacuous-assertion shape this
+		// file keeps catching elsewhere.
+		//
+		// It is C3's first task: give this class a coordinator, register on a
+		// retarget, and let the eviction sweep take it back out. At that point
+		// the claim becomes testable, because there will be something that CAN
+		// register.
+	});
+
 	// The slot table is now a target and a current (§9.5, step 5 C1).
 	//
 	// C1's whole assertion is that splitting them changes nothing: with no
