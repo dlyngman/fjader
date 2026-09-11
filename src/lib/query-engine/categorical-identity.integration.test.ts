@@ -270,6 +270,68 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// Failure isolation across the shared batch
+	// -----------------------------------------------------------------------
+	//
+	// Every mark on a table coalesces into one drain, so a refusal used to
+	// reject the promise all of them were awaiting: a mark whose own fields were
+	// fine failed setup, never retried, and logged an error naming a field it had
+	// not asked for. The work is per-field and the failure has to be too.
+
+	describe('a refusal belongs to the caller that asked for it', () => {
+		beforeEach(async () => {
+			await db.run(`CREATE TABLE mixed AS
+				SELECT 'g' || (i % 3) AS good, i::VARCHAR AS wide FROM range(20000) t(i)`);
+		});
+
+		it('does not fail a concurrent caller that never asked for the bad field', async () => {
+			const innocent = identity.ensureColumns('mixed', { categorical: ['good'] });
+			const offender = identity.ensureColumns('mixed', { categorical: ['wide'] });
+
+			await expect(offender).rejects.toThrow(/distinct values/);
+			await expect(innocent).resolves.toBeUndefined();
+		});
+
+		it('builds the view from the fields that survived the batch', async () => {
+			await identity.ensureColumns('mixed', { categorical: ['good'] }).catch(() => {});
+			await identity.ensureColumns('mixed', { categorical: ['wide'] }).catch(() => {});
+
+			expect(identity.columnsFor('mixed')).toEqual(['good']);
+			const rows = await db.all(`SELECT * FROM "${identity.sourceFor('mixed')}" LIMIT 1`);
+			const cols = Object.keys(rows[0]);
+			expect(cols).toContain(identity.idColumn('good'));
+			expect(cols).not.toContain(identity.idColumn('wide'));
+		});
+
+		it('still refuses the bad field on a later, separate call', async () => {
+			await identity.ensureColumns('mixed', { categorical: ['good', 'wide'] }).catch(() => {});
+			// The sticky dim.refusal, reached through the recorded failure rather
+			// than around it.
+			await expect(identity.ensureColumns('mixed', { categorical: ['wide'] })).rejects.toThrow(
+				/distinct values/
+			);
+		});
+
+		it('fails the caller that asked for both, since it cannot render either way', async () => {
+			await expect(
+				identity.ensureColumns('mixed', { categorical: ['good', 'wide'] })
+			).rejects.toThrow(/distinct values/);
+			// ...but `good` is built, so a sibling mark needing only that one works.
+			await expect(
+				identity.ensureColumns('mixed', { categorical: ['good'] })
+			).resolves.toBeUndefined();
+		});
+
+		it('leaves no view at all when every field in the batch is refused', async () => {
+			// The degenerate rebuild: with nothing to expose, #createView would
+			// emit an empty column list.
+			await expect(identity.ensureColumns('mixed', { categorical: ['wide'] })).rejects.toThrow();
+			expect(identity.columnsFor('mixed')).toEqual([]);
+			expect(identity.sourceFor('mixed')).toBe('mixed');
+		});
+	});
+
+	// -----------------------------------------------------------------------
 	// Synthetic ids (§16.9)
 	// -----------------------------------------------------------------------
 
