@@ -112,6 +112,22 @@ interface ViewEntry {
 	pending: Set<string>;
 	/** The in-progress rebuild, if any. */
 	inflight: Promise<void> | null;
+	/**
+	 * The error from each field whose LAST attempt threw, and nothing else.
+	 *
+	 * The coalescer batches every mark on a table into one drain, so without
+	 * this a single refusal rejected the shared promise and took down every
+	 * concurrent caller — a mark whose own fields were fine would fail setup and
+	 * never retry, blaming a field it had not asked for. Failure has to be as
+	 * per-field as the work is.
+	 *
+	 * Cleared on the field's next success rather than accumulated, so a
+	 * transient failure does not become permanent: a retry re-enters `pending`
+	 * (the field is not in `current`), is re-attempted, and re-records only if
+	 * it throws again. A sticky refusal stays sticky because `#ensureDimNow`
+	 * re-throws `dim.refusal`, not because it is remembered here.
+	 */
+	failures: Map<string, Error>;
 }
 
 /**
@@ -373,7 +389,7 @@ export class CategoricalIdentity {
 
 		let entry = this.#views.get(table);
 		if (!entry) {
-			entry = { current: new Set(), pending: new Set(), inflight: null };
+			entry = { current: new Set(), pending: new Set(), inflight: null, failures: new Map() };
 			this.#views.set(table, entry);
 		}
 
@@ -386,6 +402,10 @@ export class CategoricalIdentity {
 		// Nothing new. Still await any rebuild in flight, so a caller that asked
 		// only for already-present fields does not race ahead of the CREATE OR
 		// REPLACE that a concurrent caller is running against the same view.
+		//
+		// No failure check on this branch, and it is not an omission: reaching it
+		// means every field this caller asked for is in `current`, and a field
+		// enters `current` only by succeeding, which deletes it from `failures`.
 		if (entry.pending.size === 0) {
 			if (entry.inflight) await entry.inflight;
 			return;
@@ -417,6 +437,19 @@ export class CategoricalIdentity {
 					`the mark must re-run setup.`
 			);
 		}
+
+		// Only THIS caller's fields. The drain builds one batch for every mark on
+		// the table, so a refusal it hit belongs to whichever caller asked for
+		// that field — rejecting the shared promise instead would fail marks that
+		// have their columns and can render, and hand them an error naming a
+		// field they never mentioned.
+		//
+		// After the reset check, because a reset invalidates the fields too and
+		// its message is the one that says what to do about it.
+		for (const field of categorical) {
+			const failure = entry.failures.get(field.key);
+			if (failure) throw failure;
+		}
 	}
 
 	/**
@@ -429,6 +462,13 @@ export class CategoricalIdentity {
 	 * null the instant the loop exits rather than one microtask later — a caller
 	 * landing in that gap starts a fresh drain instead of awaiting a promise
 	 * that is already done with its work.
+	 *
+	 * A field that throws is RECORDED, not propagated. One batch serves every
+	 * mark on the table, so throwing out of here rejects the shared promise and
+	 * fails marks whose own fields built cleanly; `ensureColumns` re-throws each
+	 * failure to the callers that asked for that field. Only a failure of the
+	 * view rebuild itself still rejects everyone, because then nobody got a
+	 * column.
 	 */
 	async #drain(table: string, entry: ViewEntry, generation: number): Promise<void> {
 		try {
@@ -440,13 +480,26 @@ export class CategoricalIdentity {
 				const batch = [...entry.pending];
 				entry.pending.clear();
 
+				const succeeded: string[] = [];
 				for (const field of batch) {
-					await this.#ensureDim(field, table, generation);
+					try {
+						await this.#ensureDim(field, table, generation);
+						succeeded.push(field);
+						entry.failures.delete(field);
+					} catch (error) {
+						entry.failures.set(field, error instanceof Error ? error : new Error(String(error)));
+					}
 				}
 
 				if (this.#generation !== generation) return;
 
-				const all = new Set([...entry.current, ...batch]);
+				// Nothing new to expose. Skip the rebuild rather than re-running
+				// CREATE OR REPLACE with the columns it already has — and when
+				// `current` is empty too, `#createView` would have no columns to
+				// emit and would build syntactically invalid SQL.
+				if (succeeded.length === 0) continue;
+
+				const all = new Set([...entry.current, ...succeeded]);
 				await this.#createView(table, [...all]);
 
 				// Only after the view exists — a failed rebuild must not leave
