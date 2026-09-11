@@ -195,6 +195,78 @@ describe('BandScaleState identity <-> display translation', () => {
 	// tooltips, hit-testing, toggles — ask in their own terms and never index
 	// displayOrder or identityValues themselves.
 
+	// The slot table is now a target and a current (§9.5, step 5 C1).
+	//
+	// C1's whole assertion is that splitting them changes nothing: with no
+	// spring, slotCurrent is settled straight onto slotTarget, so the array the
+	// GPU reads is byte-for-byte what it was before the split. These pin that,
+	// and they are the tests that have to START FAILING at C3 — a spring that
+	// leaves them passing mid-transition is a spring that is not interpolating.
+	describe('slot target and current', () => {
+		function reordered(): BandScaleState {
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			scale.updateDomainFromExtents();
+			return scale;
+		}
+
+		it('agree exactly, because nothing interpolates yet', () => {
+			const scale = reordered();
+			expect(Array.from(scale.slotTable)).toEqual(Array.from(scale.slotTarget));
+		});
+
+		it('slotTable is slotCurrent, and it is what the reorder produced', () => {
+			const scale = reordered();
+			// Ids alphabetical; display order Gentoo, Adelie, Chinstrap. So
+			// Adelie(0) sits at slot 1, Chinstrap(1) at 2, Gentoo(2) at 0.
+			expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(scale.slotTarget)).toEqual([1, 2, 0]);
+		});
+
+		it('keeps -1 for an id the scale does not display', () => {
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			scale.addMark(['Adelie', 'Gentoo'], 'topn');
+			scale.updateDomainFromExtents();
+
+			// Chinstrap(1) is in the dim but not on this axis. Both arrays must
+			// say so: a target of -1 that settles to something else would draw a
+			// filtered category at a real slot.
+			expect(Array.from(scale.slotTarget)).toEqual([0, -1, 1]);
+			expect(Array.from(scale.slotTable)).toEqual([0, -1, 1]);
+		});
+
+		it('reuses its arrays across a reorder, and resizes when the dim grows', () => {
+			const scale = reordered();
+			const before = scale.slotTable;
+
+			scale.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			scale.updateDomainFromExtents();
+			// Same length, so the same object — a reorder must not allocate, which
+			// is what makes this safe to drive from a per-frame spring later.
+			expect(scale.slotTable).toBe(before);
+			expect(Array.from(scale.slotTable)).toEqual([2, 0, 1]);
+
+			// A second table appends to the dim: the arrays have to grow with it,
+			// or an id past the old end would index off the table.
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']));
+			scale.addMark(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor'], 'mark-2');
+			scale.updateDomainFromExtents();
+			expect(scale.slotTable.length).toBe(4);
+			expect(scale.slotTable.length).toBe(scale.slotTarget.length);
+		});
+
+		it('bumps slotVersion when it settles, so the packer re-uploads', () => {
+			const scale = reordered();
+			const v = scale.slotVersion;
+			scale.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			scale.updateDomainFromExtents();
+			expect(scale.slotVersion).toBeGreaterThan(v);
+		});
+	});
+
 	// A re-sort has to REORDER, not just be remembered.
 	//
 	// Every other test around this one calls updateDomainFromExtents() by hand
