@@ -596,6 +596,19 @@ export class BandScaleState {
 	 * Set the preferred sort order without registering categories in #extents.
 	 * Used by topN marks: the sort sidecar runs against the full dataset but
 	 * the domain should only contain post-transform categories.
+	 *
+	 * Schedules a domain update, like every other writer of display-order state.
+	 * It used to be the one that did not, which is why a reactive sort change
+	 * did nothing at all: MarkLifecycleV2's sort effect re-ran the sidecar, the
+	 * query returned the right categories in the right order, this stored them,
+	 * and #domain, #displayOrder and the slot table all stayed where they were.
+	 * §3.1 reported it as "the band re-sort path is not wired up"; PR #198 fixed
+	 * the sidecar's SQL for computed axes without reaching this half.
+	 *
+	 * Not registering in #extents is the part this method is named for and is
+	 * unchanged. Scheduling cannot leak a topN mark's full domain into its axis:
+	 * updateDomainFromExtents intersects the preferred order against the
+	 * categories actually in #extents, and that intersection is the protection.
 	 */
 	setSortOrder(categories: (DimValue | number)[]): void {
 		this.#warnIfDestroyed('setSortOrder');
@@ -604,6 +617,14 @@ export class BandScaleState {
 		this.#sortOrder = this.hasIdentity
 			? this.#toIds(categories, false)
 			: [...new Set(categories.filter((c) => c != null))];
+
+		// Guarded like addMark and removeMark rather than relying on
+		// updateDomainFromExtents' own #enableUpdates check. The duplication is
+		// theirs and is noted in §32.7 as part of the funnel §29.8 should fold
+		// these three writers into; matching them is the smaller change here.
+		if (this.#enableUpdates) {
+			this.#scheduleDomainUpdate();
+		}
 	}
 
 	/**

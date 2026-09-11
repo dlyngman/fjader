@@ -195,6 +195,74 @@ describe('BandScaleState identity <-> display translation', () => {
 	// tooltips, hit-testing, toggles — ask in their own terms and never index
 	// displayOrder or identityValues themselves.
 
+	// A re-sort has to REORDER, not just be remembered.
+	//
+	// Every other test around this one calls updateDomainFromExtents() by hand
+	// after setSortOrder, which is why none of them caught that the production
+	// path never does. MarkLifecycleV2's sort effect runs the sidecar and ends
+	// at setSortOrder — nothing downstream of it recomputed anything, so a
+	// reactive sort change moved no bars at all (§3.1, §32.7). These tests
+	// deliberately do NOT crank the handle.
+	describe('a re-sort schedules its own domain update', () => {
+		function sorted(): BandScaleState {
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			scale.updateDomainFromExtents();
+			return scale;
+		}
+
+		it('reorders the domain without the caller cranking the handle', async () => {
+			const scale = sorted();
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+
+			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			// The update is scheduled on a microtask, as it is for addMark.
+			await Promise.resolve();
+
+			expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
+		});
+
+		it('moves the slot table with it, which is what the GPU reads', async () => {
+			const scale = sorted();
+			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			await Promise.resolve();
+
+			// slotTable is indexed by id and holds the display slot. Ids are
+			// alphabetical, so Adelie(0) is now at slot 1, Chinstrap(1) at 2 and
+			// Gentoo(2) at 0. A reorder that moved #domain but not this would draw
+			// the old order while labelling the new one.
+			expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(scale.displayOrder)).toEqual([2, 0, 1]);
+		});
+
+		it('does not leak categories that are not in the extents', async () => {
+			// What setSortOrder is named for: the sidecar ranks the FULL dataset
+			// while a topN mark's extents hold only the survivors. Scheduling must
+			// not put the losers on the axis — the intersection in
+			// updateDomainFromExtents is what prevents it.
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			scale.addMark(['Adelie', 'Gentoo'], 'topn-mark');
+			scale.updateDomainFromExtents();
+
+			scale.setSortOrder(['Gentoo', 'Chinstrap', 'Adelie']);
+			await Promise.resolve();
+
+			expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
+		});
+
+		it('stays put while the scale is frozen', async () => {
+			const scale = sorted();
+			scale.setUpdatesEnabled(false);
+
+			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			await Promise.resolve();
+
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		});
+	});
+
 	it('maps a display slot to the id sitting there', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
