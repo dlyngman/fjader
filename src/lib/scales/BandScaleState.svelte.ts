@@ -25,9 +25,11 @@ interface BandGpuConfig {
  *
  * It owns two spaces and the permutation between them: IDENTITY, the dim id a
  * channel carries, and DISPLAY, the slot a category occupies on the axis.
- * `displayOrder` is the permutation, `slotTable` its inverse for the shader,
- * and `#domain` a value projection for d3 and the axis. See the IDENTITY <->
- * DISPLAY section for the CPU-side translation.
+ * `displayOrder` is the permutation, `slotTarget` its inverse, `slotTable`
+ * (= `slotCurrent`) what the shader actually reads, and `#domain` a value
+ * projection for d3 and the axis. Target and current are equal until a spring
+ * drives one toward the other (§9.5). See the IDENTITY <-> DISPLAY section for
+ * the CPU-side translation.
  *
  * Key responsibilities:
  * - Domain management (unique categories from multiple marks)
@@ -430,16 +432,45 @@ export class BandScaleState {
 	 * Recomputes with the domain. An in-place append to the identity values alone
 	 * does not invalidate it, but an append is always followed by the addMark
 	 * that puts the new category into the domain, which does.
+	 *
+	 * This is `slotCurrent`, not `slotTarget` — what is on screen now, which
+	 * during an animation is a fraction of the way between two orders. The two
+	 * are equal at rest, and step 5 C1 has no spring yet, so they are equal
+	 * always. See slotTarget.
 	 */
 	get slotTable(): Float32Array {
-		return this.#slotTable;
+		return this.#slotCurrent;
 	}
 
-	#slotTable: Float32Array = new Float32Array(0);
+	/**
+	 * Where each id is HEADED: the display slot it will occupy once the chart
+	 * has settled, or -1 for an id that is not displayed. Rewritten whole on
+	 * every reorder, by #rebuildSlotTable.
+	 *
+	 * Separate from slotCurrent because §9.5's animated reorder interpolates
+	 * between them: a spring drives slotCurrent toward this, and the GPU reads
+	 * slotCurrent. Introduced before the spring so the split can be verified
+	 * while the two are still trivially equal — if anything moves on screen at
+	 * C1, the plumbing is wrong, and that is far cheaper to find here than
+	 * through a spring.
+	 *
+	 * Exposed for the spring and for tests, NOT as a lookup table: the same
+	 * caution slotTable and displayOrder carry. Ask idAtSlot or categoryAt.
+	 */
+	get slotTarget(): Float32Array {
+		return this.#slotTarget;
+	}
+
+	#slotTarget: Float32Array = new Float32Array(0);
+	#slotCurrent: Float32Array = new Float32Array(0);
 	/**
 	 * Bumped on every slot-table rebuild. The GPU upload path compares this
 	 * rather than the array contents, so an unchanged frame costs no writeBuffer
 	 * — the slot table changes on reorder, not per frame.
+	 *
+	 * Once a spring writes slotCurrent per frame this has to be bumped per frame
+	 * too, or the packer will upload the first frame of a transition and none of
+	 * the rest. That belongs with the spring (C3), not here.
 	 */
 	slotVersion: number = 0;
 
@@ -500,6 +531,11 @@ export class BandScaleState {
 	 *
 	 * Called from the two places its inputs move: a domain change and adopting a
 	 * new identity value array.
+	 *
+	 * Writes slotTarget, then settles slotCurrent onto it. At C1 that settle is
+	 * a copy — there is no spring — so the two never differ and nothing on
+	 * screen changes. C3 replaces the copy with a retarget, and that is the only
+	 * line in here that has to change.
 	 */
 	#rebuildSlotTable(): void {
 		// Without identity the channel already carries a display position, so the
@@ -513,10 +549,9 @@ export class BandScaleState {
 		// scale offset 0 and another scale's slots.
 		if (!this.hasIdentity) {
 			const n = this.#domain.length;
-			const passthrough = new Float32Array(n);
-			for (let i = 0; i < n; i++) passthrough[i] = i;
-			this.#slotTable = passthrough;
-			this.slotVersion++;
+			const target = this.#resizeSlots(n);
+			for (let i = 0; i < n; i++) target[i] = i;
+			this.#settleSlots();
 			return;
 		}
 
@@ -524,15 +559,49 @@ export class BandScaleState {
 		// is already ids, so this is an array walk. Everything not listed keeps
 		// -1 — filtered out by a transform, or belonging to another table on a
 		// shared scale.
-		const table = new Float32Array(this.#identity!.values.length);
-		table.fill(-1);
+		const target = this.#resizeSlots(this.#identity!.values.length);
+		target.fill(-1);
 		const order = this.#displayOrder;
 		for (let slot = 0; slot < order.length; slot++) {
 			const id = order[slot];
-			if (id >= 0 && id < table.length) table[id] = slot;
+			if (id >= 0 && id < target.length) target[id] = slot;
 		}
 
-		this.#slotTable = table;
+		this.#settleSlots();
+	}
+
+	/**
+	 * Size both slot arrays to `length` and return the target for filling.
+	 *
+	 * Reuses the existing arrays when the length is unchanged, which is every
+	 * reorder — the dim only grows when a second table appends. Callers always
+	 * overwrite every entry they care about, so the stale contents of a reused
+	 * target do not leak: the identity branch fills with -1 first, and the
+	 * passthrough branch writes all n.
+	 *
+	 * Zero-copy is not the point here (a reorder is rare); not allocating two
+	 * Float32Arrays per frame once a spring drives this IS, so the allocation
+	 * decision is made here once rather than moved later.
+	 */
+	#resizeSlots(length: number): Float32Array {
+		if (this.#slotTarget.length !== length) {
+			this.#slotTarget = new Float32Array(length);
+			this.#slotCurrent = new Float32Array(length);
+		}
+		return this.#slotTarget;
+	}
+
+	/**
+	 * Put slotCurrent where slotTarget says, with no interpolation, and tell the
+	 * upload path the table moved.
+	 *
+	 * This is the seam the spring replaces (C3): retarget instead of settle, and
+	 * let the animation loop walk slotCurrent across and bump the version per
+	 * frame. Until then a reorder is the same path with the spring snapped to 1,
+	 * which is §3.1's point and the reason C1 must be invisible.
+	 */
+	#settleSlots(): void {
+		this.#slotCurrent.set(this.#slotTarget);
 		this.slotVersion++;
 	}
 
@@ -985,13 +1054,19 @@ export class BandScaleState {
 			// Identity <-> display. Replaces the old category -> index map, which
 			// described a channel encoding this scale no longer uses: with
 			// identity the channel carries a dim id, and these two are what
-			// resolve it — displayOrder[slot] is the id shown there, slotTable[id]
-			// its position, and they are inverses. Dumping the domain alone hides
-			// a desync between them.
+			// resolve it — displayOrder[slot] is the id shown there,
+			// slotCurrent[id] its position, and they are inverses. Dumping the
+			// domain alone hides a desync between them.
+			//
+			// Both slot arrays, because the interesting failure once a spring
+			// drives this is precisely that they disagree when they should not:
+			// equal at rest, and slotCurrent a fraction of the way to slotTarget
+			// mid-transition. One of them alone cannot show that.
 			hasIdentity: this.hasIdentity,
 			identityCount: this.#identity?.values.length ?? 0,
 			displayOrder: Array.from(this.#displayOrder),
-			slotTable: Array.from(this.#slotTable),
+			slotCurrent: Array.from(this.#slotCurrent),
+			slotTarget: Array.from(this.#slotTarget),
 
 			// GPU state
 			gpuState: this.gpuState
