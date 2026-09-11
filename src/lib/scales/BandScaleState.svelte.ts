@@ -952,15 +952,92 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Calculate step size for a given range size (CPU-side)
+	 * Calculate step size for a given range size (CPU-side) — the band pitch,
+	 * centre to centre, of which `bandwidth` is the drawn fraction.
+	 *
+	 * d3 spells this `step()`, and so did this class until step 5 C2 needed that
+	 * name for the animation interface `GPUCoordinator` drives, where `step()`
+	 * means "advance physics by one fixed timestep" and takes no arguments. Two
+	 * methods cannot share the name and the collision is silent — an arity
+	 * mismatch, not a type error — so the geometry one moved. It pairs with
+	 * `bandwidth(rangeSize)` either way.
 	 */
-	step(rangeSize: number): number {
+	stepWidth(rangeSize: number): number {
 		const config = this.getConfig();
 		const n = config.categoryCount;
 
 		if (n === 0) return 0;
 
 		return rangeSize / Math.max(1, n - config.paddingInner + config.paddingOuter * 2);
+	}
+
+	// =========================================================================
+	// ANIMATION INTERFACE (step 5 C2)
+	// =========================================================================
+	//
+	// GPUCoordinator's fixed-timestep loop drives every scale in
+	// #animatedScalesArray through exactly four methods — step(),
+	// updateRenderState(dt), isAtRest() and _markAtRest() — and evicts a scale
+	// the moment isAtRest() returns true (GPUCoordinator:975).
+	//
+	// This implements them and NOTHING REGISTERS YET. §9.5's spring is C3, and
+	// registering here would add a state where "nothing happens on screen" is
+	// ambiguous between "the loop ran and correctly did nothing" and "the loop
+	// never saw this scale" — the two are indistinguishable without a frame
+	// counter, and a checkpoint you cannot read is not a checkpoint. C3 makes
+	// one change that both registers and interpolates, so the first frame of
+	// motion proves the registration too.
+	//
+	// What C3 must add beyond a spring:
+	//   - call addAnimatingScale(this) when a retarget leaves the two slot
+	//     arrays disagreeing, and let the eviction sweep remove it again;
+	//   - populate _affectedChartsArray, which is what the loop redraws per
+	//     frame. This class currently pushes redraws through
+	//     #registry.invalidateChartsUsingScale (see updateDomainFromExtents),
+	//     which is a per-reorder call and not a per-frame one;
+	//   - bump slotVersion inside updateRenderState, or the packer uploads the
+	//     first frame of a transition and none of the rest.
+
+	#isAnimating: boolean = false;
+
+	/** True while a transition is in flight. Read by tests and by C3. */
+	get isAnimating(): boolean {
+		return this.#isAnimating;
+	}
+
+	/**
+	 * Advance physics by one fixed timestep. Called at a fixed rate, not per
+	 * frame, so it must not touch render state.
+	 *
+	 * Empty until C3: there is no spring, so there is no physics to advance.
+	 */
+	step(): void {}
+
+	/**
+	 * Update render state with extrapolation, once per frame.
+	 *
+	 * Empty until C3. When it fills in, it writes slotCurrent from the spring
+	 * and bumps slotVersion — the array is mutated in place (C1's #resizeSlots
+	 * reuses it), so the version is the only thing the packer can compare.
+	 */
+	updateRenderState(_extrapolationDt: number): void {}
+
+	/**
+	 * Whether the loop can stop driving this scale.
+	 *
+	 * Unconditionally true, and load-bearing rather than a placeholder: with no
+	 * spring, a scale that ever got registered must fall straight back out on
+	 * the next sweep instead of pinning the animation loop on forever. A chart
+	 * that redraws every frame while looking perfectly correct is the failure
+	 * this guards, and it is invisible except in a profiler.
+	 */
+	isAtRest(): boolean {
+		return true;
+	}
+
+	/** Called by GPUCoordinator when this scale stops animating. */
+	_markAtRest(): void {
+		this.#isAnimating = false;
 	}
 
 	// =========================================================================
@@ -981,7 +1058,7 @@ export class BandScaleState {
 		const n = config.categoryCount;
 		if (n === 0) return null;
 
-		const stepSize = this.step(rangeSize);
+		const stepSize = this.stepWidth(rangeSize);
 		if (stepSize === 0) return null;
 
 		const offset = config.paddingOuter * stepSize;
