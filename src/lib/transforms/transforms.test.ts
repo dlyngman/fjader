@@ -377,7 +377,11 @@ describe('Transforms', () => {
 			const sql = compiler.applyToQuery(q).toString();
 
 			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC\)/);
-			expect(sql).toMatch(/"__topn_rank" <= 3/);
+			expect(sql).toMatch(/"__dplot_topn_rank" <= 3/);
+			// Published rather than consumed and dropped: the band axis reads this
+			// column to order itself, because row order does not survive the stack
+			// wrapper a bar mark adds. The __dplot_ prefix keeps it out of tooltips.
+			expect(sql).toMatch(/SELECT "x", "y2", "__dplot_topn_rank" FROM/);
 		});
 
 		it('SQL topN swaps axes for barx', () => {

@@ -325,6 +325,13 @@ export function buildQueryParts(
  * Callers decide what is CAST-wrapped by preparing parts.selectDef with
  * castNumeric(); assembly never inspects expression types.
  */
+/** Output aliases a query exposes to whatever wraps it. */
+function selectAliases(query: Query): string[] {
+	const sel = (query as unknown as { _select?: { alias?: string }[] })._select;
+	if (!Array.isArray(sel)) return [];
+	return sel.map((s) => s.alias).filter((a): a is string => !!a);
+}
+
 export function assembleQuery(opts: AssembleOptions): Query {
 	const { table, parts, filter = [], filterNulls, transformCompiler, limit, window } = opts;
 	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;
@@ -350,8 +357,21 @@ export function assembleQuery(opts: AssembleOptions): Query {
 
 	if (window) {
 		const outerSelect: Record<string, unknown> = {};
-		for (const ch of Object.keys(selectDef)) {
-			if (selectDef[ch] == null) continue;
+		// Project what the CTE ACTUALLY exposes, not only what selectDef declared.
+		// A SQL transform can add columns — stack's y0/y1, topN's rank — and
+		// rebuilding the projection from selectDef alone silently drops them, so a
+		// transform's output would survive every other assembly path and vanish in
+		// this one. Purely additive: every selectDef key is still projected
+		// exactly as before, including the window channels, which are computed
+		// out here and so are not aliases of the inner query.
+		const exposed = new Set(Object.keys(selectDef));
+		if (hasSQLTransforms) {
+			for (const alias of selectAliases(result)) exposed.add(alias);
+		}
+		for (const ch of exposed) {
+			// A declared-but-null channel stays dropped; a transform-added one has
+			// no selectDef entry at all and must not be caught by the same test.
+			if (ch in selectDef && selectDef[ch] == null) continue;
 			outerSelect[ch] = ch in window.channels ? castReal(window.channels[ch]) : sqlColumn(ch);
 		}
 		result = Query.from(window.cteName)

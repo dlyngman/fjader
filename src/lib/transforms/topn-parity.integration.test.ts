@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { Query, column, sum, eq, literal, type ExprNode } from '@uwdata/mosaic-sql';
-import { topN, TransformCompiler } from './index';
+import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN } from './index';
 import { buildQueryParts, assembleQuery } from '$lib/components/marks/lifecycle/query-builder';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
 import type { MarkConfig } from '$lib/types';
@@ -227,6 +227,54 @@ describe('topN SQL/JS parity (native DuckDB)', () => {
 		const predicate = '"region" = \'North\'';
 		expect(sqlText.split(predicate).length - 1).toBe(1);
 		expect(sqlText.indexOf(predicate)).toBeLessThan(sqlText.indexOf('"__topn_base"'));
+	});
+
+	it('publishes its ranking as a column that survives the stack wrapper', async () => {
+		// The shape a BAR MARK actually produces, which is the whole point of this
+		// test: BarMarkY prepends stackY to the user's transforms, so topN's query
+		// is immediately wrapped in `Query.from({ __stack_base: ... })` whose outer
+		// SELECT is a window PARTITIONed by the band column.
+		//
+		// The previous version of this test built parts by hand with no stack, saw
+		// its ORDER BY land outermost, and concluded topN returned ranked rows. It
+		// does not: DuckDB re-partitions for the window and the row order that
+		// reaches the axis is keyed by dim id. Asserting on a query shape the app
+		// never emits is what let that ship (§34.4/§34.5).
+		const s = scenarios.find((x) => x.name.startsWith('vertical bars'))!;
+		const compiler = new TransformCompiler([topN(s.n), stackY()], s.config);
+		const parts = buildQueryParts(s.select, s.orderConfig, true);
+		const text = assembleQuery({
+			table: 'sales',
+			parts,
+			filter: [],
+			transformCompiler: compiler
+		}).toString();
+
+		// The stack wrapper is present, so this is the real shape...
+		expect(text).toContain('__stack_base');
+		// ...and the rank survives it as a column, carried by stackSQL's
+		// passthroughSelect without stackSQL knowing it exists.
+		expect(text).toContain(TOPN_RANK_COLUMN);
+
+		const rows = await db.all(text);
+		const byRank = rows
+			.slice()
+			.sort((a, b) => Number(a[TOPN_RANK_COLUMN]) - Number(b[TOPN_RANK_COLUMN]));
+		expect(byRank.map((r) => r.x)).toEqual(['Electronics', 'Clothing', 'Food', 'Music', 'Books']);
+
+		// And nothing is ordering the result: the ONLY ORDER BY in the whole query
+		// is the one inside ROW_NUMBER()'s OVER clause, which defines the ranking
+		// rather than the row order. An outer ORDER BY here would mean someone had
+		// reintroduced the mechanism this replaced — it cannot survive the window
+		// above, so it would be a claim the query does not keep.
+		expect(text.match(/ORDER BY/g)).toHaveLength(1);
+		expect(text).toContain('ROW_NUMBER() OVER (ORDER BY');
+	});
+
+	it('hides the rank from tooltips by using the __dplot_ prefix', () => {
+		// #writeTooltipTable filters exactly this prefix. A rank column named
+		// anything else would render as a user-visible tooltip row.
+		expect(TOPN_RANK_COLUMN.startsWith('__dplot_')).toBe(true);
 	});
 
 	it('preserves ORDER BY for connected/series marks on the outer query', async () => {

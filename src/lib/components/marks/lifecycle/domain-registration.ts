@@ -18,8 +18,9 @@ import { isBinExpression } from '$lib/sql/bin';
 import {
 	computeExtentFromData,
 	extractCategoriesFromData,
-	extractIdsFromData
+	extractIdsRankedFromData
 } from './domain-computation';
+import { TOPN_RANK_COLUMN } from '$lib/transforms';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -269,8 +270,14 @@ export function registerDataDerivedDomains(
 			// not a kind of axis: an expression-backed axis gets a dim like any
 			// column. See §29.8 — this fork is the transient, not a second path.
 			const encoded = !!bandScale?.hasIdentity;
+			// Ranked when the transform published a ranking, first-appearance order
+			// otherwise. This is where a topN axis stops being ordered by dim id:
+			// the rank arrives as a COLUMN rather than as row order, because a bar
+			// mark stacks by default and the window that stacking adds
+			// re-partitions by the band column, discarding any order the ranked
+			// query had. See TOPN_RANK_COLUMN.
 			const categories: (string | number)[] = encoded
-				? extractIdsFromData(data, axis)
+				? extractIdsRankedFromData(data, axis, TOPN_RANK_COLUMN)
 				: extractCategoriesFromData(data, axis);
 			if (bandScale?.addMark && categories.length > 0) {
 				// Don't pass { sorted: true } — the data row order is not necessarily

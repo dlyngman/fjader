@@ -165,6 +165,21 @@ function resolveTopNColumns(
 	return { by, band, series };
 }
 
+/**
+ * The column topN uses to tell the band axis what its ranking was.
+ *
+ * Display order is a property of the DATA, not of the order rows arrive in.
+ * Row order is not preserved through a wrapping subquery, and it is also
+ * already spoken for: a connected mark needs rows ordered by x to draw its
+ * polyline, and `domain-registration.ts` says as much where it declines to
+ * treat row order as a sort order. Carrying the rank as a value lets both
+ * consumers have what they need at once.
+ *
+ * `__dplot_`-prefixed so #writeTooltipTable's existing filter hides it, like
+ * the identity index columns in the same result.
+ */
+export const TOPN_RANK_COLUMN = '__dplot_topn_rank';
+
 function topNSQL(n: number, options: TopNOptions): SqlTransform {
 	return {
 		stage: 'sql',
@@ -178,6 +193,16 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 				// Grouped: compute total per band category, take top N, filter.
 				// Ranks categories by SUM(value) across all series, then keeps
 				// all series rows for the winning categories.
+				//
+				// No rank column, unlike the simple path below. The ranking lives
+				// inside topCatsQuery and surfacing it means joining that back in,
+				// which is a real change to a query the stack path depends on. So
+				// a STACKED topN still takes its band order from dim id rather
+				// than from the measure, and that is §33.6's standing item.
+				//
+				// The consumer tolerates the absence rather than depending on it:
+				// no rank column means the band branch falls back to row order,
+				// which is what it did for every mark before this.
 				const topCatsQuery = Query.from({ __topn_base: query })
 					.select({ [band]: column(band) })
 					.groupby(column(band))
@@ -192,12 +217,32 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 			// Simple: rank rows by value, filter to top N.
 			const ranked = Query.from({ __topn_base: query }).select({
 				...passthroughSelect(aliases),
-				__topn_rank: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+				[TOPN_RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
 			});
 
+			// The rank stays in the output, and that is the whole mechanism: the
+			// band axis reads it as a VALUE instead of inferring the ranking from
+			// the order the rows happen to arrive in.
+			//
+			// An earlier attempt ordered the rows instead (`40e4132`). It could
+			// not work, and the reason generalises: a bar mark stacks by default,
+			// so this query is immediately wrapped by stackSQL, and an ORDER BY in
+			// a subquery does not bind the outer query — which here is a window
+			// PARTITIONed by the band column, so the surviving order was the
+			// window operator's, keyed by dim id. That commit's claim that
+			// "connected marks keep their x-ordering as that secondary key" was
+			// wrong too: ranks are unique, so a secondary key never fires.
+			//
+			// A value survives all of it. stackSQL projects
+			// passthroughSelect(getSelectAliases(query)), so it carries this
+			// column through without knowing it exists, and the same holds for any
+			// future wrapping transform.
+			//
+			// The `__dplot_` prefix is load-bearing: #writeTooltipTable filters
+			// exactly that prefix, so the rank cannot leak into a tooltip.
 			return Query.from({ __topn: ranked })
-				.select(passthroughSelect(aliases))
-				.where(sqlTag`"__topn_rank" <= ${n}`);
+				.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
+				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
 		},
 		describe() {
 			return `Top ${n} (SQL)`;
@@ -326,6 +371,21 @@ function topNSimple(
 			columns[colName] = dst;
 		}
 	}
+
+	// Same contract as the SQL path: state the ranking rather than leave it to be
+	// inferred from row order. Redundant today, because these rows ARE emitted in
+	// rank order — and that is exactly the point. Chart 4 of /test/band-race came
+	// out correctly only because the JS path sorts after all SQL has run, which
+	// is an accident of engine choice rather than a guarantee.
+	//
+	// Other ranks last: it holds the categories past the cut, so it belongs at
+	// the end of the axis rather than wherever its reserved id happens to fall.
+	// 1-based, because ROW_NUMBER() is and the two paths are compared row for row
+	// by topn-parity. Only the relative order is read, so the base is free — and
+	// matching SQL is what keeps it free.
+	const rank = new Float32Array(outLen);
+	for (let i = 0; i < outLen; i++) rank[i] = i + 1;
+	columns[TOPN_RANK_COLUMN] = rank;
 
 	return new ColumnDataAccessor(columns, outLen);
 }

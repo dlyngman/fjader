@@ -1256,6 +1256,21 @@ export class MarkLifecycleV2 {
 		scaleState: BandScaleState,
 		sort: NormalizedSortConfig | undefined
 	): Promise<void> {
+		// No sort configured means this mark has NO OPINION about display order,
+		// so it must not express one. The branch below used to answer that case
+		// with SELECT DISTINCT and hand the result to setSortOrder, which was
+		// harmless only for as long as setSortOrder did nothing: it stored the
+		// order and never applied it. Making the re-sort path work (§32.7) made
+		// this live, and #explicitDomain ?? #sortOrder gives it priority — so
+		// every band mark without a `sort` prop silently took its axis order
+		// from an UNFILTERED DISTINCT over the base table instead of from its
+		// own data. topN marks are where it showed: survivors landed in
+		// whatever order DISTINCT returned rather than by the measure.
+		//
+		// Returning also drops a per-band-mark round trip that never had a
+		// reader.
+		if (!sort) return;
+
 		// Read from #resolvedSelect, not #config.select. A band/point axis can be a
 		// computed expression (e.g. y={bin('body_mass', {step:500})} on a BarMarkX),
 		// and an AutoBinNode is a plain class rather than an ExprNode — so the raw
@@ -1286,31 +1301,29 @@ export class MarkLifecycleV2 {
 
 		let q = Query.from(this.#config.table).select({ [axis]: axisExpr });
 
-		if (sort) {
-			const sortField =
-				select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1'];
-			if (!sortField) return;
+		// `sort` is non-null past the guard at the top, so there is no DISTINCT
+		// fallback here any more — an unsorted mark never reaches this function.
+		const sortField =
+			select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1'];
+		if (!sortField) return;
 
-			if (isAggregateExpression(sortField as ExprNode)) {
-				q = q.groupby(axisExpr as GroupByExpr).select({ _sort: sortField as ExprValue });
-			}
-			const sortExpr = isAggregateExpression(sortField as ExprNode)
-				? sqlColumn('_sort')
-				: isNode(sortField)
-					? sortField
-					: sqlColumn(String(sortField));
-
-			q.orderby(sort.direction === 'desc' ? sql`${sortExpr} DESC` : sortExpr);
-		} else {
-			q.distinct();
+		if (isAggregateExpression(sortField as ExprNode)) {
+			q = q.groupby(axisExpr as GroupByExpr).select({ _sort: sortField as ExprValue });
 		}
+		const sortExpr = isAggregateExpression(sortField as ExprNode)
+			? sqlColumn('_sort')
+			: isNode(sortField)
+				? sortField
+				: sqlColumn(String(sortField));
+
+		q.orderby(sort.direction === 'desc' ? sql`${sortExpr} DESC` : sortExpr);
 
 		try {
 			const result = await this.#queryEngine.query(q);
 			if (this.#destroyed) return;
 
 			const categories = Array.from(result).map((row: any) => row[axis]);
-			if (axis === 'y' && sort) categories.reverse();
+			if (axis === 'y') categories.reverse();
 
 			if (categories.length > 0) {
 				scaleState.setSortOrder(categories);
