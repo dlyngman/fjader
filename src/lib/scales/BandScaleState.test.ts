@@ -236,38 +236,303 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.isAtRest()).toBe(true);
 		});
 
-		it('driving the loop by hand moves nothing, because there is no spring', () => {
+		it('settles immediately when no coordinator can drive the loop', () => {
+			// slotCurrent is written only by updateRenderState, which only runs
+			// while the loop holds this scale. Without a coordinator that never
+			// happens, so a retarget alone would leave the old order on screen
+			// forever. An animation nobody can drive has to be an instant
+			// transition, not a lost one — and this is the common case in tests
+			// and for any scale built before a coordinator is wired up.
 			const s = scale();
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
-			const before = Array.from(s.slotTable);
-			const version = s.slotVersion;
 
-			for (let i = 0; i < 10; i++) {
-				s.step();
-				s.updateRenderState(0.016);
-			}
+			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotTable)).toEqual(Array.from(s.slotTarget));
+		});
+	});
 
-			// C3 inverts this: slotCurrent walks toward slotTarget and slotVersion
-			// climbs once per frame.
-			expect(Array.from(s.slotTable)).toEqual(before);
-			expect(s.slotVersion).toBe(version);
+	// The spring (step 5 C3).
+	//
+	// These need a coordinator, because without one a retarget settles instantly
+	// by design. The fake records what registered, which is also what makes the
+	// claim C2 could not test — "it does not register" — finally testable: there
+	// is now something that CAN.
+	describe('the spring', () => {
+		function withLoop() {
+			const registered: unknown[] = [];
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: (x: unknown) => registered.push(x) }
+			});
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			return { s, registered };
+		}
+
+		it('does not register for the first layout, which must not animate', () => {
+			// Every id enters from -1 on a first build, and an entering id snaps.
+			// If this registered, the opening frame of every chart would slide
+			// its bars in from off-axis.
+			const { s, registered } = withLoop();
+			expect(registered).toEqual([]);
+			expect(Array.from(s.slotTable)).toEqual([0, 1, 2]);
 		});
 
-		// NOT TESTED, deliberately: "does not register with the coordinator".
+		it('still does not register when the data lands BEFORE the identity', () => {
+			// withLoop adopts identity first, which is the order every other test
+			// here uses and NOT the only order the app produces: setIdentity is
+			// reached through a coalesced promise, so addMark can land on either
+			// side of it (§29.8's transient).
+			//
+			// Arriving on the early side used to make the first real layout look
+			// like a reorder. The passthrough branch had already written slots
+			// 0..n in DOMAIN-POSITION space and set #hasLaidOut; the identity
+			// branch then re-read those numbers as DIM IDS, found every id
+			// "already on screen" somewhere arbitrary, and sprang the lot. The
+			// opening frame of the chart slid its bars in from nowhere.
+			const registered: unknown[] = [];
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: (x: unknown) => registered.push(x) }
+			});
+
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1');
+			s.updateDomainFromExtents();
+			// Dim ids are alphabetical, so this display order is NOT id order —
+			// which is what makes the stale table and the real one differ.
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+
+			expect(registered).toEqual([]);
+			expect(Array.from(s.slotTarget)).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+		});
+
+		it('registers once on a reorder, and leaves the table where it was', () => {
+			const { s, registered } = withLoop();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+
+			expect(registered).toEqual([s]);
+			// The target moved; the visible table has not yet. That gap is the
+			// animation, and at C1 it did not exist.
+			expect(Array.from(s.slotTarget)).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotTable)).toEqual([0, 1, 2]);
+
+			// A second reorder while already animating must not register twice.
+			s.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			s.updateDomainFromExtents();
+			expect(registered).toEqual([s]);
+		});
+
+		it('walks the table toward the target and arrives', () => {
+			const { s } = withLoop();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+
+			expect(s.isAtRest()).toBe(false);
+
+			// Adelie(0) is travelling from slot 0 to slot 1.
+			let previous = s.slotTable[0];
+			let moved = false;
+			// A one-slot move needs 412 steps to reach REST_PRECISION at stiffness
+			// 120 — about 1.1s of physics at 360Hz, nearly all of it an
+			// imperceptible tail. The cap is generous rather than tight so this
+			// asserts convergence and not a particular tuning; `steps` is checked
+			// against it so a spring that never settles fails here loudly instead
+			// of falling out of the loop and passing.
+			let steps = 0;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				if (s.slotTable[0] > previous) moved = true;
+				previous = s.slotTable[0];
+				steps++;
+			}
+
+			// It got there gradually, not in one jump.
+			expect(moved).toBe(true);
+			expect(steps).toBeLessThan(5000);
+			expect(s.isAtRest()).toBe(true);
+			expect(s.slotTable[0]).toBeCloseTo(1, 2);
+		});
+
+		it('bumps slotVersion every frame, or the packer uploads only the first', () => {
+			const { s } = withLoop();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+
+			const before = s.slotVersion;
+			s.step();
+			s.updateRenderState(0);
+			s.step();
+			s.updateRenderState(0);
+			expect(s.slotVersion).toBe(before + 2);
+		});
+
+		it('lands exactly on the target when the loop lets go', () => {
+			// REST_PRECISION is sub-pixel, so the sliver is invisible — but
+			// slotCurrent is what the next retarget springs FROM, and a scale at
+			// rest holding 2.0003 springs from a number that was never a slot.
+			const { s } = withLoop();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+			for (let i = 0; i < 400 && !s.isAtRest(); i++) {
+				s.step();
+				s.updateRenderState(0);
+			}
+			s._markAtRest();
+
+			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+			expect(s.isAnimating).toBe(false);
+		});
+
+		// §12 Q1, answered (C4): enter and leave TRAVEL, from beyond the end.
 		//
-		// There is nothing to observe. BandScaleState holds no coordinator
-		// reference at all — BandScaleConfig has no gpuCoordinator field and the
-		// class never mentions one — so registration is structurally impossible
-		// rather than merely absent. A test passing a fake coordinator and
-		// asserting addAnimatingScale was not called would pass for that reason
-		// and not for the intended one, which is the vacuous-assertion shape this
-		// file keeps catching elsewhere.
-		//
-		// It is C3's first task: give this class a coordinator, register on a
-		// retarget, and let the eviction sweep take it back out. At that point
-		// the claim becomes testable, because there will be something that CAN
-		// register.
+		// A leaver cannot take -1 as its spring target — the shader discards
+		// slot < 0.0 before the lookup, so the bar would vanish on the frame the
+		// reorder landed. It holds a real slot for the whole exit and only becomes
+		// hidden once it arrives. For a topN axis the far end is also where a
+		// category genuinely goes: it drops past the cutoff, it does not evaporate
+		// from the middle.
+		it('walks a leaver off the end instead of vanishing it', () => {
+			const { s, registered } = withLoop();
+
+			// Chinstrap(1) leaves; the axis compacts to two slots, so `far` is 2.
+			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			expect(registered).toEqual([s]);
+			// Still on screen, at the slot it held, with -1 waiting for it.
+			expect(s.slotTable[1]).toBe(1);
+			expect(s.slotTarget[1]).toBe(-1);
+			// And it is travelling: the loop may not evict while it is in flight.
+			expect(s.isAtRest()).toBe(false);
+
+			let steps = 0;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				// Never discarded mid-exit, which is the C3 behaviour this replaces.
+				expect(s.slotTable[1]).toBeGreaterThanOrEqual(0);
+				steps++;
+			}
+			expect(steps).toBeLessThan(5000);
+			// It got past the last visible slot before the loop let go.
+			expect(s.slotTable[1]).toBeGreaterThan(1);
+
+			s._markAtRest();
+			// Only now is it hidden.
+			expect(s.slotTable[1]).toBe(-1);
+		});
+
+		it('climbs an entrant in from beyond the end', () => {
+			const { s } = withLoop();
+			// Drop to two, settle, then bring the third back.
+			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			s._markAtRest();
+			expect(s.slotTable[1]).toBe(-1);
+
+			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			// Starts past the last slot — clipped by the scissor, not discarded by
+			// the shader, which is what lets it travel at all.
+			expect(s.slotTable[1]).toBe(3);
+			expect(s.slotTarget[1]).toBe(1);
+
+			let steps = 0;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				steps++;
+			}
+			expect(s.slotTable[1]).toBeCloseTo(1, 2);
+		});
+
+		it('enters and leaves through Other when the axis has one', () => {
+			// With an Other bucket the far end is the WRONG destination: a category
+			// dropping out of the top N does not leave the chart, its value moves
+			// into Other. Animating it past the end would state something untrue
+			// about where the data went.
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: () => {} }
+			});
+			// Adelie, Chinstrap, Gentoo, then the reserved bucket at the top of the
+			// id space, exactly as reserveSynthetic hands it out.
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo', 'Other']));
+			s.setOtherId(3);
+			s.addMark(['Adelie', 'Chinstrap', 'Other'], 'mark-1');
+			s.updateDomainFromExtents();
+			expect(Array.from(s.slotTable)).toEqual([0, 1, -1, 2]);
+
+			// Chinstrap drops out and Gentoo takes its place. Other stays at 2.
+			s.addMark(['Adelie', 'Gentoo', 'Other'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			// The leaver heads for Other's slot, not slot 3 past the end.
+			expect(s.slotTarget[1]).toBe(-1);
+			let steps = 0;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				expect(s.slotTable[1]).toBeLessThanOrEqual(2);
+				steps++;
+			}
+			expect(s.slotTable[1]).toBeCloseTo(2, 2);
+
+			// And the entrant came OUT of Other rather than in from past the end.
+			expect(s.slotTarget[2]).toBe(1);
+		});
+
+		it('sends Other itself to the far end, having nowhere else to go', () => {
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: () => {} }
+			});
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
+			s.setOtherId(2);
+			s.addMark(['Adelie', 'Chinstrap', 'Other'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			// Two slots remain, so the far end is 2 — and Other cannot exit through
+			// itself.
+			let steps = 0;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				steps++;
+			}
+			expect(s.slotTable[2]).toBeCloseTo(2, 2);
+		});
+
+		it('still snaps the FIRST layout, so a chart does not slide in on load', () => {
+			// Every category is entering on an opening frame. Animating that would
+			// slide every bar in from off-axis on every chart, every load.
+			const { s, registered } = withLoop();
+			expect(Array.from(s.slotTable)).toEqual([0, 1, 2]);
+			expect(registered).toEqual([]);
+		});
+
+		it('reverses an exit that changes its mind, rather than restarting it', () => {
+			const { s } = withLoop();
+			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			for (let i = 0; i < 20; i++) {
+				s.step();
+				s.updateRenderState(0);
+			}
+			const midExit = s.slotTable[1];
+			expect(midExit).toBeGreaterThan(1);
+
+			// Back before it landed. It should resume from where it is.
+			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			expect(s.slotTable[1]).toBeCloseTo(midExit, 5);
+			expect(s.slotTarget[1]).toBe(1);
+		});
 	});
 
 	// The slot table is now a target and a current (§9.5, step 5 C1).
@@ -381,6 +646,28 @@ describe('BandScaleState identity <-> display translation', () => {
 			// the old order while labelling the new one.
 			expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
 			expect(Array.from(scale.displayOrder)).toEqual([2, 0, 1]);
+		});
+
+		it('a partial preferred order pulls its members to the front', async () => {
+			// Why handing an UNFILTERED SELECT DISTINCT to setSortOrder was so
+			// damaging. A preferred order need not cover the domain, and whatever
+			// it does cover is moved ahead of everything else — so a five-category
+			// DISTINCT over the base table dictated the order of a three-category
+			// topN axis, rotating ranked rows into DuckDB's hash order.
+			//
+			// The numbers below are the real case: rows arrived ranked A, B, C and
+			// rendered B, C, A, because the DISTINCT happened to come back
+			// E, B, C, D, A.
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['A', 'B', 'C', 'D', 'E']));
+			scale.addMark(['A', 'B', 'C'], 'topn-mark');
+			scale.updateDomainFromExtents();
+			expect(scale.effectiveDomain).toEqual(['A', 'B', 'C']);
+
+			scale.setSortOrder(['E', 'B', 'C', 'D', 'A']);
+			await Promise.resolve();
+
+			expect(scale.effectiveDomain).toEqual(['B', 'C', 'A']);
 		});
 
 		it('does not leak categories that are not in the extents', async () => {

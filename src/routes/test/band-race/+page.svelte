@@ -79,11 +79,37 @@
 	//          unanswered, and it is the whole point of chart 2 — do not
 	//          "fix" it by special-casing here.
 	//
-	//   C4  Q1 answered: enter/leave.
-	//       -> Chart 2 animates cleanly. Chart 3 still suspect.
+	//   C4  Q1 answered: enter and leave TRAVEL, from beyond the end.
+	//       -> Chart 2 animates cleanly: a leaver walks off the end while its
+	//          replacement climbs in behind it, and they cross at the cutoff.
+	//       -> Chart 3 finally moves at all. Changing k only appends or removes
+	//          at the TAIL, so no survivor ever changes slot and C3 left it
+	//          completely still; the entrant sliding in is the only motion that
+	//          chart can show until Q2 is answered.
+	//       -> Still expect the axis to re-lay-out in ONE frame underneath the
+	//          motion, because categoryCount does not animate. That is Q2, and
+	//          seeing it under a moving bar is the point of chart 3.
 	//
 	//   C5  Q2 answered: categoryCount.
 	//       -> Chart 3 correct.
+	//
+	// STILL OPEN AFTER C4, and neither is a spring bug:
+	//   - chart 1's axis labels jump to the final order while the bars travel.
+	//     The axis reads #domain, which is display ORDER, rather than
+	//     slotCurrent. §9.5's "one source of truth, not a mirror" is the fix and
+	//     it is a rung of its own.
+	//   - a category can only enter and leave at the FAR end. That is right for
+	//     topN, where membership changes at the cutoff, and it is a real
+	//     limitation for anything else — an explicit domain that drops a middle
+	//     category will send it out the long way.
+	//   - a leaver's ROW is gone from a topN result, so there is no vertex to
+	//     draw travelling. C4 gives it a position and the mark has nothing to
+	//     put there: chart 2 shows the grid line leave while the bar simply
+	//     disappears. Chart 4 is the case that matters — the value moves INTO
+	//     Other rather than out of the chart — and neither can animate until the
+	//     mark keeps outgoing rows alive for the length of a transition. That is
+	//     mark-level work; `crossfade_transitions_for_rebinning.md` already
+	//     proposes the mechanism for a different trigger.
 	//
 	// HOW IT FAILS, AND WHAT EACH FAILURE MEANS. The value of separating the
 	// three charts is that these stay distinguishable:
@@ -114,6 +140,41 @@
 	// the order the dim assigns ids in, so slot == id and every wrong lookup
 	// returns the right answer anyway. Use its other two orders, and hover the
 	// bars rather than trusting their heights.
+	//
+	// WHY ONLY CHART 1 HAS A `sort` PROP. It is the one with no transform, so
+	// nothing else can order it. Charts 2, 3 and 4 are topN marks, and topNSimple
+	// already returns its rows ranked by value descending — for the CURRENTLY
+	// FILTERED data, which is what a racing bar chart is. With the sidecar no
+	// longer overwriting display order for an unsorted mark, that data order is
+	// what reaches the axis, and it is correct.
+	//
+	// Adding `sort` to them is actively wrong, which is how it was written first:
+	// the sidecar ranks with `Query.from(table)` and NO filter, so chart 2 was
+	// ordered by each category's total across all three steps rather than by the
+	// step on screen. A fixed ranking with membership churn is not the thing
+	// under test.
+	//
+	// The sidecar ignoring the mark's filter is deliberate for topN's own use
+	// (rank the full dataset, display the survivors — see setSortOrder), and it
+	// is a real gap for a racing chart, where the ranking has to follow the
+	// filter. Not fixed here; recorded so the next person does not "fix" these
+	// charts by adding sort back.
+	//
+	// NO STATE READOUT. There was one — a table of domain, displayOrder,
+	// slotTarget, slotCurrent, sortOrder and extents, sampled per chart. It never
+	// populated a single cell and was removed. Whatever replaces it has to prove
+	// it renders BEFORE it is used to answer a question, because a diagnostic
+	// that silently shows nothing is worse than no diagnostic: it absorbs the
+	// attention that would otherwise go on the bug.
+	//
+	// Instead, three console handles, defined below: bandOrder() for the
+	// display-order inputs and outputs per axis, allScales() for the raw
+	// registry, lastSQL(match) for the queries the engine actually ran.
+	//
+	// NOT keyed by column name, which this comment used to claim and which cost
+	// a round trip: every band scale here is named "category" — the CHANNEL, not
+	// the field — and they are kept apart by `sourceField` inside the config
+	// half of the registry key. bandOrder() matches on either.
 	//
 	// WHY BUTTONS AND NOT A TIMER. A timer makes this look like a racing bar
 	// chart and makes every failure a stopwatch problem. These questions are
@@ -149,7 +210,98 @@
 	import { topN } from '$lib/transforms';
 	import { count } from '@uwdata/mosaic-sql';
 
-	const { queryEngine, filterGroups } = initDivePlot();
+	const { queryEngine, filterGroups, scaleRegistry } = initDivePlot();
+
+	// Capture every SQL string the engine runs, so the query the APP sends can be
+	// compared against the one the integration test asserts. Those are assembled
+	// by the same function but from different parts, and topn-parity builds its
+	// parts by hand — so "verified against DuckDB" does not establish that the
+	// app's query carries the same ORDER BY.
+	//
+	// Wrapped at the instance, before any query runs. The engine's own internals
+	// call this.query(), which resolves to this property.
+	const _sqlLog = [];
+	const _origQuery = queryEngine.query.bind(queryEngine);
+	queryEngine.query = (q, opts) => {
+		_sqlLog.push({ caller: opts?.callerId ?? null, sql: String(q) });
+		return _origQuery(q, opts);
+	};
+	/** lastSQL('race_churn') — most recent first. No arg: everything. */
+	function lastSQL(match) {
+		const hits = match ? _sqlLog.filter((e) => e.sql.includes(match)) : _sqlLog.slice();
+		return hits.reverse().map((e) => `/* caller=${e.caller} */\n${e.sql}`);
+	}
+
+	// A console handle, because the header's "read the scale directly from the
+	// console" was never actionable: nothing in the codebase puts the registry
+	// on `window`. This is the replacement for the removed state readout
+	// (§33.5), and it is deliberately a FUNCTION returning plain objects rather
+	// than a rendered table — console.table proves it printed, which is the one
+	// thing the panel could never do.
+	//
+	//   bandOrder()            every band axis on this page
+	//   bandOrder('cat_churn') just chart 2's
+	//
+	// #sortOrder and #explicitDomain are the INPUTS updateDomainFromExtents
+	// resolves before appending from #extents, so a preferred order that nobody
+	// asked for shows up here as a non-null `sortOrder` — which is the whole
+	// question §33.4 has failed to answer by looking at bars.
+	// Enumerate rather than look up. getScaleByField(f, 'band') returned null for
+	// all four columns on the first run and could not say WHY — wrong bucket key,
+	// wrong name, or an empty registry are three very different problems and it
+	// reported them identically. That is the failure mode that made the removed
+	// state readout worthless, reproduced in its replacement.
+	//
+	// So: walk every bucket, report every scale it holds, and match by name OR
+	// sourceField. If nothing matches, the inventory IS the answer.
+	function allScales() {
+		const found = [];
+		for (const [bucket, map] of Object.entries(scaleRegistry.scales ?? {})) {
+			for (const [key, scale] of map) {
+				found.push({ bucket, key, name: scale.name, sourceField: scale.sourceField, scale });
+			}
+		}
+		return found;
+	}
+
+	function bandOrder(field) {
+		const inventory = allScales();
+		const fields = field ? [field] : ['cat_reorder', 'cat_churn', 'cat_count', 'cat_other'];
+		const out = {};
+		for (const f of fields) {
+			const hit = inventory.find((s) => s.name === f || s.sourceField === f);
+			const scale = hit?.scale;
+			if (!scale?.getDebugInfo) {
+				out[f] = 'not found';
+				continue;
+			}
+			const d = scale.getDebugInfo();
+			// categoryAt is the public decode — ids in, source values out. Every
+			// one of these arrays is in id space once identity has arrived.
+			const label = (id) => scale.categoryAt(id) ?? `#${id}`;
+			out[f] = {
+				displayed: d.displayOrder.map(label).join(', '),
+				sortOrder: d.sortOrder ? d.sortOrder.map(label).join(', ') : null,
+				explicitDomain: d.explicitDomain ? d.explicitDomain.map(label).join(', ') : null,
+				extents: Object.values(d.extents)
+					.map((ids) => ids.map(label).join(', '))
+					.join(' | '),
+				currentDomain: d.currentDomain.join(', '),
+				slotTarget: Array.from(d.slotTarget).join(', '),
+				slotCurrent: Array.from(d.slotCurrent).join(', ')
+			};
+		}
+		// Always carry the inventory, so a miss is self-explaining instead of
+		// being another question.
+		out._registry = allScales().map((s) => `${s.bucket} | ${s.key} | name=${s.name}`);
+		return out;
+	}
+	if (typeof window !== 'undefined') {
+		window.bandOrder = bandOrder;
+		window.allScales = allScales;
+		window.lastSQL = lastSQL;
+		window.scaleRegistry = scaleRegistry;
+	}
 	let isLoaded = $state(false);
 	let error = $state(null);
 
@@ -233,6 +385,20 @@
 				     ('A',1,50),('B',1,40),('C',1,30),('D',1,20),('E',1,10),
 				     ('A',2,50),('B',2,40),('C',2,10),('D',2,35),('E',2,20),
 				     ('A',3,10),('B',3,40),('C',3,20),('D',3,50),('E',3,45)
+				   ) AS v(cat, step, n)
+				   JOIN range(60) r ON r.range < v.n`,
+
+				// Chart 4. Other's height is deliberately DIFFERENT at every step
+				// (15, 33, 18), because a bucket that absorbs a leaver without
+				// changing size cannot be seen absorbing anything — the fixture
+				// mistake `0f86cc4` records. The first draft of this table had
+				// Other at 30 in all three steps.
+				`CREATE TABLE race_other AS
+				   SELECT v.cat AS cat_other, v.step AS step
+				   FROM (VALUES
+				     ('A',1,50),('B',1,40),('C',1,30),('D',1,10),('E',1,5),
+				     ('A',2,50),('B',2,40),('C',2,8),('D',2,35),('E',2,25),
+				     ('A',3,6),('B',3,40),('C',3,12),('D',3,50),('E',3,45)
 				   ) AS v(cat, step, n)
 				   JOIN range(60) r ON r.range < v.n`,
 
@@ -353,6 +519,42 @@
 			</section>
 
 			<section>
+				<h2>4. Membership with an Other bucket — topN(3, includeOthers)</h2>
+				<p>
+					The same churn as chart 2, but nothing leaves the chart: a category dropping out of the
+					top three is absorbed into <strong>Other</strong>, whose height changes to prove it (15,
+					33, 18). This is the case a leaver has somewhere to GO — Other is a real bucket with a
+					real slot and a reserved dim id — so the exit has a destination rather than just an exit
+					direction. Shares chart 2's step buttons.
+				</p>
+				<div class="chart">
+					<ChartContainer xLabel="category" yLabel="count">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="race_other"
+										x="cat_other"
+										y={count()}
+										selection="band-race"
+										transforms={[topN(3, { includeOthers: true })]}
+										tip={['x', 'y']}
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</section>
+
+			<section>
 				<h2>3. Count only — topN(k)</h2>
 				<p>
 					Constant data, constant ranking; only how many are shown changes. This is Q2. First
@@ -403,6 +605,9 @@
 				<tr><td>2</td><td>step 1</td><td>A 50, B 40, C 30</td></tr>
 				<tr><td>2</td><td>step 2</td><td>A 50, B 40, D 35</td></tr>
 				<tr><td>2</td><td>step 3</td><td>D 50, E 45, B 40</td></tr>
+				<tr><td>4</td><td>step 1</td><td>A 50, B 40, C 30, Other 15</td></tr>
+				<tr><td>4</td><td>step 2</td><td>A 50, B 40, D 35, Other 33</td></tr>
+				<tr><td>4</td><td>step 3</td><td>D 50, E 45, B 40, Other 18</td></tr>
 				<tr><td>3</td><td>k = 2</td><td>C 50, E 40</td></tr>
 				<tr><td>3</td><td>k = 5</td><td>C 50, E 40, A 30, D 20, B 10</td></tr>
 			</tbody>

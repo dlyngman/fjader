@@ -1242,6 +1242,10 @@ export class MarkLifecycleV2 {
 					axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 				) as BandScaleState | null;
 				scale?.setIdentity(this.#queryEngine.identityFor(key));
+				// And tell it WHICH id is the bucket, so an entrance can come out of
+				// Other and an exit can go into it rather than past the end of the
+				// axis. With an Other bucket that is where the value actually goes.
+				scale?.setOtherId(id);
 			}
 		}
 	}

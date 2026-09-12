@@ -292,7 +292,9 @@ export class ScaleRegistry {
 							padding: (config.padding as number | undefined) ?? 0.1,
 							align: (config.align as number | undefined) ?? 0.5,
 							sourceField: config.sourceField as string | undefined,
-							registry: this
+							registry: this,
+							// Step 5 C3: how a reorder reaches the animation loop.
+							gpuCoordinator: this.#gpuCoordinator
 						})
 					);
 				} else if (type === 'color') {
