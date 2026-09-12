@@ -3,6 +3,16 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
+import { Spring } from '$lib/animation';
+
+/**
+ * Spring constants, taken from ParallelAxisReorder, which is the same
+ * interaction: a permutation settling into place. These run in SLOT space
+ * rather than its normalized [0,1], so the precision is 0.0005 of one band —
+ * comfortably sub-pixel on any axis worth animating.
+ */
+const REORDER_STIFFNESS = 120;
+const REST_PRECISION = 0.0005;
 
 interface BandScaleConfig {
 	padding?: number;
@@ -11,6 +21,15 @@ interface BandScaleConfig {
 	align?: number;
 	sourceField?: string | null;
 	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
+	/**
+	 * How a reorder reaches the animation loop (step 5 C3). Structurally typed
+	 * rather than importing GPUCoordinator, which would be a cycle: the
+	 * coordinator's ScaleInstance is what this class implements.
+	 */
+	gpuCoordinator?: {
+		addAnimatingScale(scale: unknown): void;
+		removeAnimatingScale?(scale: unknown): void;
+	} | null;
 }
 
 interface BandGpuConfig {
@@ -108,6 +127,10 @@ export class BandScaleState {
 	 */
 	#extentsEncoded: boolean = false;
 	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
+	#gpuCoordinator: {
+		addAnimatingScale(scale: unknown): void;
+		removeAnimatingScale?(scale: unknown): void;
+	} | null = null;
 
 	// =========================================================================
 	// FREEZE/DEBOUNCE FUNCTIONALITY
@@ -160,6 +183,7 @@ export class BandScaleState {
 		this.#align = config.align ?? 0.5;
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
+		this.#gpuCoordinator = config.gpuCoordinator ?? null;
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
 			initialDomain: domain.length,
@@ -464,6 +488,60 @@ export class BandScaleState {
 	#slotTarget: Float32Array = new Float32Array(0);
 	#slotCurrent: Float32Array = new Float32Array(0);
 	/**
+	 * One spring per identity id, driving slotCurrent[id] toward
+	 * slotTarget[id] — NOT one spring interpolating between two whole
+	 * permutations on a single clock.
+	 *
+	 * Per-id because §12 Q1 is about individual categories entering and
+	 * leaving, and a shared clock cannot give one category different timing
+	 * from its neighbours. It also matches ParallelAxisReorder, which springs
+	 * each axis independently. The cost is N Spring objects for a categorical
+	 * scale, which is tiny and is allocated on resize, never per frame.
+	 */
+	#springs: Spring[] = [];
+	/**
+	 * 1 for an id that is travelling OUT — no longer displayed, but still on
+	 * screen until its spring reaches the far end (§12 Q1, C4).
+	 *
+	 * A leaver cannot simply take -1 as its target: -1 is the not-displayed
+	 * sentinel and the shader discards it before the slot lookup, so the bar
+	 * would vanish on the frame the reorder landed. It has to hold a REAL slot
+	 * for the whole exit, which means slotCurrent and slotTarget disagree about
+	 * it on purpose, and this array is what says so.
+	 */
+	#exiting: Uint8Array = new Uint8Array(0);
+	/**
+	 * False until the first layout with anything in it.
+	 *
+	 * The opening frame of a chart is every category entering at once, and
+	 * animating that would slide every bar in from off-axis on load. Only
+	 * categories arriving AFTER a chart exists are entrances worth showing.
+	 */
+	#hasLaidOut: boolean = false;
+	/**
+	 * Which value space the slot arrays are currently indexed in — true for dim
+	 * ids, false for domain positions. Not the same question as `hasIdentity`,
+	 * which is about NOW; this is about what is already in the arrays, and the
+	 * gap between the two is the boundary #rebuildSlotTable has to notice.
+	 */
+	#slotsHaveIdentity: boolean = false;
+	/**
+	 * The dim id of this axis's synthetic "Other" bucket, or null when the mark
+	 * has none. Set by the lifecycle alongside the reservation (§16.9).
+	 *
+	 * It is where entrances and exits come from and go to when it exists,
+	 * because with an Other bucket that is literally true: a category dropping
+	 * out of the top N does not leave the chart, its value moves INTO Other, and
+	 * one climbing in is value coming back OUT of it. Travelling past the end of
+	 * the axis would say the opposite — that it went somewhere else.
+	 */
+	#otherId: number | null = null;
+
+	/** Tell this axis which id is its Other bucket, if any. */
+	setOtherId(id: number | null): void {
+		this.#otherId = id;
+	}
+	/**
 	 * Bumped on every slot-table rebuild. The GPU upload path compares this
 	 * rather than the array contents, so an unchanged frame costs no writeBuffer
 	 * — the slot table changes on reorder, not per frame.
@@ -538,6 +616,29 @@ export class BandScaleState {
 	 * line in here that has to change.
 	 */
 	#rebuildSlotTable(): void {
+		// The slot arrays are indexed by DIM ID with identity and by DOMAIN
+		// POSITION without it, so crossing that boundary changes what every entry
+		// means. Carrying slotCurrent across it hands the id space a set of
+		// positions that were never id-indexed, and #resizeSlots cannot see the
+		// difference: the two spaces are usually the same LENGTH, so its
+		// unchanged-length fast path keeps the whole stale array.
+		//
+		// That made the first real layout of a chart look like a reorder — every
+		// id "already on screen" at a meaningless slot, springs retargeted, the
+		// scale registered with the loop — and the bars slid in from nowhere.
+		// #hasLaidOut did not protect it, because the passthrough layout had
+		// already set it. Both halves are fixed by treating the boundary as the
+		// start of a new scale: drop the state, and let the identity layout be a
+		// first layout, which snaps.
+		//
+		// A dim that merely GROWS is not this case (§16.9's Other reservation
+		// appends one). The id space is unchanged there, existing ids keep their
+		// springs, and #resizeSlots' copy is exactly right.
+		if (this.#slotsHaveIdentity !== this.hasIdentity) {
+			this.#slotsHaveIdentity = this.hasIdentity;
+			this.#discardSlotState();
+		}
+
 		// Without identity the channel already carries a display position, so the
 		// shader's lookup has to be a no-op. This is now only a TRANSIENT state —
 		// the window before setIdentity arrives, and the all-NULL column that
@@ -551,7 +652,7 @@ export class BandScaleState {
 			const n = this.#domain.length;
 			const target = this.#resizeSlots(n);
 			for (let i = 0; i < n; i++) target[i] = i;
-			this.#settleSlots();
+			this.#retargetSlots(n);
 			return;
 		}
 
@@ -567,42 +668,184 @@ export class BandScaleState {
 			if (id >= 0 && id < target.length) target[id] = slot;
 		}
 
-		this.#settleSlots();
+		this.#retargetSlots(order.length);
 	}
 
 	/**
-	 * Size both slot arrays to `length` and return the target for filling.
+	 * Size the slot arrays and the springs to `length`, returning the target for
+	 * filling.
 	 *
-	 * Reuses the existing arrays when the length is unchanged, which is every
-	 * reorder — the dim only grows when a second table appends. Callers always
-	 * overwrite every entry they care about, so the stale contents of a reused
-	 * target do not leak: the identity branch fills with -1 first, and the
-	 * passthrough branch writes all n.
+	 * Reuses everything when the length is unchanged, which is every reorder —
+	 * the dim only grows when a second table appends. Callers always overwrite
+	 * every target entry they care about, so stale contents do not leak: the
+	 * identity branch fills with -1 first, and the passthrough branch writes all
+	 * n.
 	 *
-	 * Zero-copy is not the point here (a reorder is rare); not allocating two
-	 * Float32Arrays per frame once a spring drives this IS, so the allocation
-	 * decision is made here once rather than moved later.
+	 * On a grow, existing ids KEEP where they currently are and keep their
+	 * springs, so a dim append mid-transition does not teleport the categories
+	 * already on screen. New ids start at -1, which is "not displayed" and makes
+	 * them enter by the same route as any other newcomer.
 	 */
+	/**
+	 * Forget everything positional, so the next layout is a first layout.
+	 *
+	 * Lengths go to zero rather than being refilled: that is what stops
+	 * #resizeSlots' unchanged-length fast path from preserving the arrays it is
+	 * being asked to throw away. #hasLaidOut goes with them, because "has this
+	 * scale laid out before" is only meaningful about the space it laid out in.
+	 */
+	#discardSlotState(): void {
+		this.#slotTarget = new Float32Array(0);
+		this.#slotCurrent = new Float32Array(0);
+		this.#springs = [];
+		this.#exiting = new Uint8Array(0);
+		this.#hasLaidOut = false;
+	}
+
 	#resizeSlots(length: number): Float32Array {
-		if (this.#slotTarget.length !== length) {
-			this.#slotTarget = new Float32Array(length);
-			this.#slotCurrent = new Float32Array(length);
+		if (this.#slotTarget.length === length) return this.#slotTarget;
+
+		const current = new Float32Array(length);
+		// -1 is the not-displayed sentinel, and it is the right INITIAL value:
+		// before the first layout nothing is on screen, so every id is entering.
+		// Zero would instead mean "everything is at slot 0", and the first paint
+		// would animate outward from there.
+		current.fill(-1);
+		const keep = Math.min(this.#slotCurrent.length, length);
+		current.set(this.#slotCurrent.subarray(0, keep), 0);
+
+		const springs = this.#springs.slice(0, keep);
+		while (springs.length < length) {
+			springs.push(new Spring(-1, REORDER_STIFFNESS, REST_PRECISION));
 		}
+
+		const exiting = new Uint8Array(length);
+		exiting.set(this.#exiting.subarray(0, keep), 0);
+		this.#exiting = exiting;
+
+		this.#slotTarget = new Float32Array(length);
+		this.#slotCurrent = current;
+		this.#springs = springs;
 		return this.#slotTarget;
 	}
 
 	/**
-	 * Put slotCurrent where slotTarget says, with no interpolation, and tell the
-	 * upload path the table moved.
+	 * Point every spring at its new slot, and wake the animation loop if any of
+	 * them has somewhere to go.
 	 *
-	 * This is the seam the spring replaces (C3): retarget instead of settle, and
-	 * let the animation loop walk slotCurrent across and bump the version per
-	 * frame. Until then a reorder is the same path with the spring snapped to 1,
-	 * which is §3.1's point and the reason C1 must be invisible.
+	 * **Transitions involving -1 snap rather than spring**, and that is C3's
+	 * deliberate limit, not an oversight. -1 means "not displayed", so a spring
+	 * from slot 3 to -1 would slide the leaving bar left through every one of its
+	 * neighbours before the shader finally discarded it below zero, and an
+	 * entering one would slide in from off-axis the same way. Neither is a
+	 * designed behaviour; §12 Q1 is the open question of what the designed one
+	 * is, and it needs answering with a chart in front of you rather than here.
+	 *
+	 * The consequence, which is what `test/band-race` chart 2 exists to show: a
+	 * pure reorder animates, and a category entering or leaving POPS. That is
+	 * the expected C3 result, and "fixing" it by inventing semantics here is
+	 * exactly what the checkpoint is meant to prevent.
 	 */
-	#settleSlots(): void {
-		this.#slotCurrent.set(this.#slotTarget);
+	#retargetSlots(count: number): void {
+		const target = this.#slotTarget;
+		const current = this.#slotCurrent;
+		const springs = this.#springs;
+		const exiting = this.#exiting;
+		// Where an entrance comes from and an exit goes to.
+		//
+		// Other's slot when this axis has an Other bucket that is on screen: a
+		// category leaving the top N has its value absorbed there, so that IS
+		// where it went, and one entering is value coming back out. Anything else
+		// would animate a claim that is not true of the data.
+		//
+		// Otherwise one past the last displayed slot. Off the end of the axis so
+		// the scissor rect clips it, and non-negative so it survives the shader's
+		// `slot < 0.0` discard on the way through — that pair is what makes
+		// travel expressible at all without a second per-id channel.
+		const far = count;
+		const otherId = this.#otherId;
+		const otherSlot =
+			otherId != null && otherId >= 0 && otherId < target.length ? target[otherId] : -1;
+		const settled = !this.#hasLaidOut;
+		let moving = false;
+
+		for (let id = 0; id < target.length; id++) {
+			const to = target[id];
+			const onScreen = current[id] >= 0;
+
+			// Other itself has nowhere to emerge from or vanish into but the end.
+			const gateway = otherSlot >= 0 && id !== otherId ? otherSlot : far;
+
+			if (to >= 0) {
+				exiting[id] = 0;
+				if (!onScreen) {
+					// Entering. On a first layout there is nothing to enter from, so
+					// snap; afterwards climb in from beyond the end, which for a topN
+					// axis is where a category genuinely comes from — it is promoted
+					// past the cutoff, not conjured at rank 0.
+					if (settled) {
+						springs[id].set(to);
+						current[id] = to;
+						continue;
+					}
+					springs[id].set(gateway);
+					current[id] = gateway;
+				}
+				springs[id].setTarget(to);
+			} else if (onScreen && !settled) {
+				// Leaving. Keep a real slot and walk off the end; the hidden
+				// sentinel is applied by #settleSlots once the spring arrives, not
+				// now. slotTarget already says -1, so the two disagree about this id
+				// on purpose — #exiting is what records that.
+				exiting[id] = 1;
+				springs[id].setTarget(gateway);
+			} else {
+				// Hidden and staying hidden, or hidden before the first layout.
+				exiting[id] = 0;
+				springs[id].set(-1);
+				current[id] = -1;
+				continue;
+			}
+
+			if (!springs[id].isAtRest(REST_PRECISION)) moving = true;
+		}
+
+		if (count > 0) this.#hasLaidOut = true;
+
+		// An animation nobody can drive has to be an instant transition, not a
+		// lost one. slotCurrent is written ONLY by updateRenderState, which only
+		// runs while the loop holds this scale — so without a coordinator the
+		// springs would be retargeted and the table would keep the old order
+		// forever. Reorders do happen with no coordinator attached: every unit
+		// test, and any scale built before one is wired up.
+		if (moving && this.#gpuCoordinator) {
+			this.#ensureAnimating();
+		} else if (moving) {
+			this.#settleSlots();
+		}
+
 		this.slotVersion++;
+	}
+
+	/** Land every id exactly on its target, with no interpolation. */
+	#settleSlots(): void {
+		const target = this.#slotTarget;
+		for (let i = 0; i < target.length; i++) {
+			// The true target, which for a leaver is the hidden sentinel and not
+			// the far slot its spring was walking toward. This is where an exit
+			// actually completes.
+			this.#springs[i].set(target[i]);
+			this.#slotCurrent[i] = target[i];
+			this.#exiting[i] = 0;
+		}
+	}
+
+	/** Join the animation loop, once, until the eviction sweep drops us. */
+	#ensureAnimating(): void {
+		if (!this.#isAnimating && this.#gpuCoordinator) {
+			this.#isAnimating = true;
+			this.#gpuCoordinator.addAnimatingScale(this);
+		}
 	}
 
 	// =========================================================================
@@ -1006,38 +1249,90 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Advance physics by one fixed timestep. Called at a fixed rate, not per
-	 * frame, so it must not touch render state.
-	 *
-	 * Empty until C3: there is no spring, so there is no physics to advance.
+	 * Charts to redraw while this scale animates. Populated by ScaleRegistry,
+	 * which fills this on any scale that declares it — declaring the field is
+	 * the whole subscription.
 	 */
-	step(): void {}
+	_affectedChartsArray: string[] = [];
 
 	/**
-	 * Update render state with extrapolation, once per frame.
-	 *
-	 * Empty until C3. When it fills in, it writes slotCurrent from the spring
-	 * and bumps slotVersion — the array is mutated in place (C1's #resizeSlots
-	 * reuses it), so the version is the only thing the packer can compare.
+	 * Advance physics by one fixed timestep. Called at a fixed rate, not per
+	 * frame, so it must not touch render state.
 	 */
-	updateRenderState(_extrapolationDt: number): void {}
+	step(): void {
+		const springs = this.#springs;
+		for (let i = 0; i < springs.length; i++) springs[i].step();
+	}
+
+	/**
+	 * Write slotCurrent from the springs, once per frame, with extrapolation.
+	 *
+	 * slotVersion is bumped here as well as on retarget: the array is mutated in
+	 * place, so the version is the only thing the packer can compare, and
+	 * without a bump per frame it would upload the first frame of a transition
+	 * and none of the rest. Only reached while registered, and the eviction
+	 * sweep unregisters at rest, so this cannot mark a static chart dirty.
+	 *
+	 * An id whose target is -1 is written straight through rather than read from
+	 * its spring: not-displayed is a state, not a position, and letting a spring
+	 * drift near it would put a bar at slot -0.4 for a frame.
+	 *
+	 * `_version` is deliberately NOT bumped. Nothing an axis reads has changed —
+	 * #domain holds display ORDER and only slots are moving — so waking Svelte
+	 * per frame would recompute the axis for no new information. The visible
+	 * consequence is the labels jumping to their final order while the bars
+	 * slide, which is this checkpoint's known residual; see the class docs.
+	 */
+	updateRenderState(extrapolationDt: number): void {
+		const current = this.#slotCurrent;
+		const target = this.#slotTarget;
+		const springs = this.#springs;
+
+		const exiting = this.#exiting;
+		for (let id = 0; id < current.length; id++) {
+			// Hidden and not on its way out: pinned at the sentinel. An id that IS
+			// on its way out still has a real slot, and reading its spring is the
+			// whole of what makes a leaver travel rather than vanish.
+			current[id] =
+				target[id] < 0 && !exiting[id] ? -1 : springs[id].getRenderable(extrapolationDt);
+		}
+
+		this.slotVersion++;
+	}
 
 	/**
 	 * Whether the loop can stop driving this scale.
 	 *
-	 * Unconditionally true, and load-bearing rather than a placeholder: with no
-	 * spring, a scale that ever got registered must fall straight back out on
-	 * the next sweep instead of pinning the animation loop on forever. A chart
-	 * that redraws every frame while looking perfectly correct is the failure
-	 * this guards, and it is invisible except in a profiler.
+	 * Ids that are not displayed AND not leaving are skipped: their spring was
+	 * snapped, so it is at rest by construction. A leaver is neither — it is
+	 * mid-travel with a real slot — and must hold the loop open until it lands.
 	 */
 	isAtRest(): boolean {
+		const springs = this.#springs;
+		const target = this.#slotTarget;
+		const exiting = this.#exiting;
+		for (let i = 0; i < springs.length; i++) {
+			// A leaver is not at rest until it is off the end — skipping it here
+			// would evict the scale mid-exit and freeze the bar halfway out.
+			if (target[i] < 0 && !exiting[i]) continue;
+			if (!springs[i].isAtRest(REST_PRECISION)) return false;
+		}
 		return true;
 	}
 
-	/** Called by GPUCoordinator when this scale stops animating. */
+	/**
+	 * Called by GPUCoordinator when this scale stops animating.
+	 *
+	 * Lands exactly on the target rather than wherever the last extrapolated
+	 * frame left things. REST_PRECISION is sub-pixel so the difference is
+	 * invisible, but slotCurrent is what every later comparison reads, and a
+	 * scale at rest holding 2.0003 is a scale whose next retarget springs from a
+	 * number that was never a slot.
+	 */
 	_markAtRest(): void {
 		this.#isAnimating = false;
+		this.#settleSlots();
+		this.slotVersion++;
 	}
 
 	// =========================================================================
@@ -1141,6 +1436,14 @@ export class BandScaleState {
 			// mid-transition. One of them alone cannot show that.
 			hasIdentity: this.hasIdentity,
 			identityCount: this.#identity?.values.length ?? 0,
+
+			// The INPUTS to display order, not just its output. updateDomainFromExtents
+			// resolves #explicitDomain ?? #sortOrder first and appends the rest from
+			// #extents, and a partial preferred order pulls its members to the front —
+			// so when an axis is in an order nobody asked for, which of these is set
+			// is the whole question. Dumping only the result cannot answer it.
+			sortOrder: this.#sortOrder ? [...this.#sortOrder] : null,
+			explicitDomain: this.#explicitDomain ? [...this.#explicitDomain] : null,
 			displayOrder: Array.from(this.#displayOrder),
 			slotCurrent: Array.from(this.#slotCurrent),
 			slotTarget: Array.from(this.#slotTarget),
