@@ -94,6 +94,50 @@ export function extractIdsFromData(data: DataAccessor, axis: string): number[] {
 }
 
 /**
+ * Ids in the order a ranking transform ranked them, rather than the order the
+ * rows arrived in.
+ *
+ * Band display order is first-appearance order over whatever this returns, so
+ * for a topN axis this is what makes the axis read by the measure instead of by
+ * dim id. It is deliberately NOT an ORDER BY on the query: a bar mark stacks by
+ * default, so the ranked query is wrapped in a window partitioned by the band
+ * column, and the row order does not survive that. A value does.
+ *
+ * Falls back to plain first-appearance order when the column is absent — a
+ * grouped topN has no rank to publish, and every other mark has no ranking at
+ * all. Absence is the normal case, not an error.
+ *
+ * Ties keep their first appearance, so a rank column that repeats a value (the
+ * JS path's Other row cannot, but a future one might) degrades to row order
+ * rather than to something arbitrary.
+ */
+export function extractIdsRankedFromData(
+	data: DataAccessor,
+	axis: string,
+	rankColumn: string
+): number[] {
+	const col = data.getColumn(axis);
+	if (!col) return [];
+	const ranks = data.getColumn(rankColumn);
+	if (!ranks) return extractIdsFromData(data, axis);
+
+	const seen = new Map<number, number>();
+	for (let i = 0; i < data.length; i++) {
+		const id = col[i] as number;
+		// Keep the BEST rank for an id, not the first row's. A grouped result has
+		// several rows per category and they need not agree.
+		if (id < 0) continue;
+		const rank = Number(ranks[i]);
+		const prev = seen.get(id);
+		if (prev === undefined || rank < prev) seen.set(id, rank);
+	}
+
+	// Stable by construction: Map preserves insertion (= first appearance), and
+	// a stable sort leaves equal ranks in it.
+	return [...seen.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+}
+
+/**
  * Detect which channels need their domain computed from query results.
  * This includes:
  * - Aggregate expressions (count, sum, etc.) on linear scales
