@@ -5,6 +5,8 @@ import {
 	packIdentitySlots,
 	type IdentitySlotScale
 } from './identity-slot-packing';
+import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 /** A scale whose slot table is the given permutation. */
 function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
@@ -274,5 +276,78 @@ describe('packIdentitySlots eviction', () => {
 		expect(state.versions.size).toBe(0);
 		expect(dirty).toBe(false); // nothing to write; p4 falls back to the empty block
 		expect(length).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The shader's view, evaluated in JS against the packed buffers.
+// ---------------------------------------------------------------------------
+
+describe('what the shader reads back', () => {
+	/** identitySlot(base, id) from ScaleTemplateSystem, in TypeScript. */
+	function identitySlot(state: IdentitySlotState, base: number, id: number): number {
+		const count = state.buffer[base];
+		if (id >= count) return -1;
+		const t = state.buffer[base + 1];
+		const a = state.buffer[base + 2 + id];
+		const b = state.bufferTo[base + 2 + id];
+		return a + (b - a) * t;
+	}
+
+	it('agrees with the scale about every id, mid-transition', () => {
+		// The two halves of the design meet here: JS computes slotTable as
+		// mix(from, to, t) and the vertex stage computes the same thing from the
+		// same three numbers. If they drift, bars are in the wrong slots.
+		const s = new BandScaleState('species', [], {
+			gpuCoordinator: { addAnimatingScale: () => {} }
+		});
+		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		// Chinstrap(1) leaves: a real slot in both tables, -1 in slotTarget.
+		s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		s.updateDomainFromExtents();
+		for (let i = 0; i < 15; i++) {
+			s.step();
+			s.updateRenderState(0);
+		}
+
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[{ id: s.id, slotTable: s.slotTable, slotFrom: s.slotFrom, slotTo: s.slotTo, t: s.t }],
+			state
+		);
+		const base = state.offsets.get(s.id)!;
+
+		for (let id = 0; id < 3; id++) {
+			expect(identitySlot(state, base, id)).toBeCloseTo(s.slotTable[id], 5);
+		}
+
+		// And the leaver specifically: still on screen, past where it started,
+		// heading for the far end rather than being discarded at < 0.
+		const leaver = identitySlot(state, base, 1);
+		expect(leaver).toBeGreaterThan(1);
+		expect(leaver).toBeLessThanOrEqual(2);
+	});
+
+	it('discards an id the scale does not display, without a sentinel branch', () => {
+		// -1 in both tables, so the mix returns -1 for any t. This is why the
+		// shader has no special case.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				{
+					id: 'a',
+					slotTable: Float32Array.from([0, -1, 1]),
+					slotFrom: Float32Array.from([0, -1, 1]),
+					slotTo: Float32Array.from([1, -1, 0]),
+					t: 0.5
+				}
+			],
+			state
+		);
+		const base = state.offsets.get('a')!;
+		expect(identitySlot(state, base, 1)).toBe(-1);
 	});
 });
