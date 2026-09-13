@@ -6,10 +6,13 @@ import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-iden
 import { Spring } from '$lib/animation';
 
 /**
- * Spring constants, taken from ParallelAxisReorder, which is the same
- * interaction: a permutation settling into place. These run in SLOT space
- * rather than its normalized [0,1], so the precision is 0.0005 of one band —
- * comfortably sub-pixel on any axis worth animating.
+ * Driver constants, taken from ParallelAxisReorder, which is the same
+ * interaction: a permutation settling into place.
+ *
+ * The precision is in NORMALISED t, not slot space — 0.0005 of a whole
+ * transition. That is the better place for it: a per-slot threshold means
+ * something different for a one-band nudge than for a full reorder, while a
+ * threshold on t is the same fraction of the journey either way.
  */
 const REORDER_STIFFNESS = 120;
 const REST_PRECISION = 0.0005;
@@ -46,9 +49,13 @@ interface BandGpuConfig {
  * channel carries, and DISPLAY, the slot a category occupies on the axis.
  * `displayOrder` is the permutation, `slotTarget` its inverse, `slotTable`
  * (= `slotCurrent`) what the shader actually reads, and `#domain` a value
- * projection for d3 and the axis. Target and current are equal until a spring
- * drives one toward the other (§9.5). See the IDENTITY <-> DISPLAY section for
- * the CPU-side translation.
+ * projection for d3 and the axis.
+ *
+ * A transition is `slotCurrent = mix(slotFrom, slotTo, t)` with ONE spring
+ * driving `t` for the whole scale, so everything in flight arrives together.
+ * `slotTo` is the animated destination and `slotTarget` what the scale says;
+ * they differ exactly for the ids on their way out, which hold a real slot until
+ * they land. See the IDENTITY <-> DISPLAY section for the CPU-side translation.
  *
  * Key responsibilities:
  * - Domain management (unique categories from multiple marks)
@@ -488,17 +495,42 @@ export class BandScaleState {
 	#slotTarget: Float32Array = new Float32Array(0);
 	#slotCurrent: Float32Array = new Float32Array(0);
 	/**
-	 * One spring per identity id, driving slotCurrent[id] toward
-	 * slotTarget[id] — NOT one spring interpolating between two whole
-	 * permutations on a single clock.
+	 * ONE spring for the whole scale, driving a normalised `t` from 0 to 1
+	 * across every id at once — not one spring per category.
 	 *
-	 * Per-id because §12 Q1 is about individual categories entering and
-	 * leaving, and a shared clock cannot give one category different timing
-	 * from its neighbours. It also matches ParallelAxisReorder, which springs
-	 * each axis independently. The cost is N Spring objects for a categorical
-	 * scale, which is tiny and is allocated on resize, never per frame.
+	 * A spring is per DATA UPDATE, not per category: everything that moves does
+	 * so because the same result landed. Sharing `t` is the feature rather than
+	 * a compromise — ids have different displacements, so one clock moves them
+	 * at proportionally different speeds and makes them ARRIVE TOGETHER, where
+	 * independent springs finish raggedly. Per-id timing, where it is wanted, is
+	 * a static phase buffer over this same `t`, not N springs.
+	 *
+	 * It also makes isAtRest() one comparison instead of a scan, and gives a
+	 * departing id a single moment at which to be retired.
+	 *
+	 * The costs, stated rather than hidden: `t` is normalised, so settle
+	 * DURATION is independent of distance — a one-band correction takes as long
+	 * as a full reorder — and a mid-flight retarget is continuous in `t` but not
+	 * in world space. Both are the other face of arriving together.
 	 */
-	#springs: Spring[] = [];
+	#driver: Spring = new Spring(1, REORDER_STIFFNESS, REST_PRECISION);
+	/**
+	 * Where each id's current transition STARTED, id-indexed.
+	 *
+	 * Rewritten by the fold on every retarget: a result landing mid-flight must
+	 * continue from where things actually are, so current position becomes the
+	 * new `from` before `t` resets to 0.
+	 */
+	#slotFrom: Float32Array = new Float32Array(0);
+	/**
+	 * Where each id's current transition is GOING — the animated destination,
+	 * which for a leaver is its gateway rather than the hidden sentinel.
+	 *
+	 * Distinct from #slotTarget, which is what the scale SAYS: -1 for anything
+	 * not displayed. The two disagree about a departing id on purpose, for the
+	 * length of its exit, and #exiting is what records that.
+	 */
+	#slotTo: Float32Array = new Float32Array(0);
 	/**
 	 * 1 for an id that is travelling OUT — no longer displayed, but still on
 	 * screen until its spring reaches the far end (§12 Q1, C4).
@@ -537,7 +569,16 @@ export class BandScaleState {
 	 */
 	#otherId: number | null = null;
 
-	/** Tell this axis which id is its Other bucket, if any. */
+	/**
+	 * Tell this axis which id is its Other bucket, if any.
+	 *
+	 * An id that is never displayed is INERT here, and that is a guarantee rather
+	 * than a coincidence: the gateway is read from the slot TABLE, so an Other
+	 * that no row carries holds -1 and the gateway falls back to the far end. The
+	 * lifecycle reserves an Other id for every categorical axis of a mark rather
+	 * than re-deriving which one topN picked, so the axes topN did not pick get
+	 * one too — and this is why that costs nothing.
+	 */
 	setOtherId(id: number | null): void {
 		this.#otherId = id;
 	}
@@ -624,7 +665,7 @@ export class BandScaleState {
 		// unchanged-length fast path keeps the whole stale array.
 		//
 		// That made the first real layout of a chart look like a reorder — every
-		// id "already on screen" at a meaningless slot, springs retargeted, the
+		// id "already on screen" at a meaningless slot, everything retargeted, the
 		// scale registered with the loop — and the bars slid in from nowhere.
 		// #hasLaidOut did not protect it, because the passthrough layout had
 		// already set it. Both halves are fixed by treating the boundary as the
@@ -633,7 +674,7 @@ export class BandScaleState {
 		//
 		// A dim that merely GROWS is not this case (§16.9's Other reservation
 		// appends one). The id space is unchanged there, existing ids keep their
-		// springs, and #resizeSlots' copy is exactly right.
+		// paths, and #resizeSlots' copy is exactly right.
 		if (this.#slotsHaveIdentity !== this.hasIdentity) {
 			this.#slotsHaveIdentity = this.hasIdentity;
 			this.#discardSlotState();
@@ -672,7 +713,7 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Size the slot arrays and the springs to `length`, returning the target for
+	 * Size every id-indexed slot array to `length`, returning the target for
 	 * filling.
 	 *
 	 * Reuses everything when the length is unchanged, which is every reorder —
@@ -681,10 +722,10 @@ export class BandScaleState {
 	 * identity branch fills with -1 first, and the passthrough branch writes all
 	 * n.
 	 *
-	 * On a grow, existing ids KEEP where they currently are and keep their
-	 * springs, so a dim append mid-transition does not teleport the categories
-	 * already on screen. New ids start at -1, which is "not displayed" and makes
-	 * them enter by the same route as any other newcomer.
+	 * On a grow, existing ids KEEP where they currently are and keep the path
+	 * they are on, so a dim append mid-transition does not teleport the
+	 * categories already on screen. New ids start at -1, which is "not
+	 * displayed" and makes them enter by the same route as any other newcomer.
 	 */
 	/**
 	 * Forget everything positional, so the next layout is a first layout.
@@ -697,8 +738,10 @@ export class BandScaleState {
 	#discardSlotState(): void {
 		this.#slotTarget = new Float32Array(0);
 		this.#slotCurrent = new Float32Array(0);
-		this.#springs = [];
+		this.#slotFrom = new Float32Array(0);
+		this.#slotTo = new Float32Array(0);
 		this.#exiting = new Uint8Array(0);
+		this.#driver.set(1);
 		this.#hasLaidOut = false;
 	}
 
@@ -714,10 +757,15 @@ export class BandScaleState {
 		const keep = Math.min(this.#slotCurrent.length, length);
 		current.set(this.#slotCurrent.subarray(0, keep), 0);
 
-		const springs = this.#springs.slice(0, keep);
-		while (springs.length < length) {
-			springs.push(new Spring(-1, REORDER_STIFFNESS, REST_PRECISION));
-		}
+		// from and to carry across a grow for the same reason current does: an id
+		// already in flight keeps the path it is on.
+		const from = new Float32Array(length);
+		from.fill(-1);
+		from.set(this.#slotFrom.subarray(0, keep), 0);
+
+		const to = new Float32Array(length);
+		to.fill(-1);
+		to.set(this.#slotTo.subarray(0, keep), 0);
 
 		const exiting = new Uint8Array(length);
 		exiting.set(this.#exiting.subarray(0, keep), 0);
@@ -725,7 +773,8 @@ export class BandScaleState {
 
 		this.#slotTarget = new Float32Array(length);
 		this.#slotCurrent = current;
-		this.#springs = springs;
+		this.#slotFrom = from;
+		this.#slotTo = to;
 		return this.#slotTarget;
 	}
 
@@ -749,7 +798,8 @@ export class BandScaleState {
 	#retargetSlots(count: number): void {
 		const target = this.#slotTarget;
 		const current = this.#slotCurrent;
-		const springs = this.#springs;
+		const from = this.#slotFrom;
+		const to = this.#slotTo;
 		const exiting = this.#exiting;
 		// Where an entrance comes from and an exit goes to.
 		//
@@ -770,44 +820,44 @@ export class BandScaleState {
 		let moving = false;
 
 		for (let id = 0; id < target.length; id++) {
-			const to = target[id];
+			const trueTo = target[id];
 			const onScreen = current[id] >= 0;
 
 			// Other itself has nowhere to emerge from or vanish into but the end.
 			const gateway = otherSlot >= 0 && id !== otherId ? otherSlot : far;
 
-			if (to >= 0) {
+			if (trueTo >= 0) {
 				exiting[id] = 0;
-				if (!onScreen) {
-					// Entering. On a first layout there is nothing to enter from, so
-					// snap; afterwards climb in from beyond the end, which for a topN
-					// axis is where a category genuinely comes from — it is promoted
-					// past the cutoff, not conjured at rank 0.
-					if (settled) {
-						springs[id].set(to);
-						current[id] = to;
-						continue;
-					}
-					springs[id].set(gateway);
-					current[id] = gateway;
-				}
-				springs[id].setTarget(to);
+				// THE FOLD. An id already on screen continues from where it
+				// actually is, not from where its last transition began — a result
+				// landing at t = 0.4 must not restart the journey. For an id that is
+				// mid-exit this is also what reverses it in place rather than
+				// teleporting it back to its old slot.
+				//
+				// slotCurrent is exactly mix(from, to, t) as of the last frame, so
+				// reading it IS the fold; there is nothing to recompute.
+				//
+				// Entering instead starts at the gateway — on a first layout there
+				// is nothing to enter from, so it starts where it lands and does not
+				// move at all.
+				from[id] = onScreen ? current[id] : settled ? trueTo : gateway;
+				to[id] = trueTo;
 			} else if (onScreen && !settled) {
-				// Leaving. Keep a real slot and walk off the end; the hidden
-				// sentinel is applied by #settleSlots once the spring arrives, not
-				// now. slotTarget already says -1, so the two disagree about this id
-				// on purpose — #exiting is what records that.
+				// Leaving. Keep a REAL slot and walk out; the hidden sentinel is
+				// applied by #settleSlots once it arrives, not now. slotTarget
+				// already says -1, so the two disagree about this id on purpose —
+				// #exiting is what records that.
 				exiting[id] = 1;
-				springs[id].setTarget(gateway);
+				from[id] = current[id];
+				to[id] = gateway;
 			} else {
 				// Hidden and staying hidden, or hidden before the first layout.
 				exiting[id] = 0;
-				springs[id].set(-1);
-				current[id] = -1;
-				continue;
+				from[id] = -1;
+				to[id] = -1;
 			}
 
-			if (!springs[id].isAtRest(REST_PRECISION)) moving = true;
+			if (from[id] !== to[id]) moving = true;
 		}
 
 		if (count > 0) this.#hasLaidOut = true;
@@ -815,27 +865,63 @@ export class BandScaleState {
 		// An animation nobody can drive has to be an instant transition, not a
 		// lost one. slotCurrent is written ONLY by updateRenderState, which only
 		// runs while the loop holds this scale — so without a coordinator the
-		// springs would be retargeted and the table would keep the old order
-		// forever. Reorders do happen with no coordinator attached: every unit
-		// test, and any scale built before one is wired up.
+		// driver would be reset and the table would keep the old order forever.
+		// Reorders do happen with no coordinator attached: every unit test, and
+		// any scale built before one is wired up.
 		if (moving && this.#gpuCoordinator) {
+			// Restart the clock, CARRYING VELOCITY — assigning the fields rather
+			// than calling set(), which zeroes it. A retarget mid-flight continues
+			// at the speed it was travelling instead of stalling and re-accelerating.
+			this.#driver.current = 0;
+			this.#driver.target = 1;
+			// Publish the folded positions immediately. Without this the table
+			// would hold last frame's values until the loop's first
+			// updateRenderState, and a retarget that lands between frames would
+			// show one frame of the old arrangement.
+			this.#writeCurrent(0);
 			this.#ensureAnimating();
-		} else if (moving) {
+		} else {
 			this.#settleSlots();
 		}
 
 		this.slotVersion++;
 	}
 
+	/**
+	 * Write slotCurrent = mix(from, to, t), the one expression this whole design
+	 * is organised around. Band step 4 moves it to the vertex stage, where the
+	 * GPU evaluates the identical formula from the identical inputs; until then
+	 * JS evaluates it for everyone.
+	 *
+	 * An id whose true target is -1 and which is not leaving is written straight
+	 * through: not-displayed is a STATE, not a position, and interpolating
+	 * toward it would put a bar at slot -0.4 for a frame.
+	 */
+	#writeCurrent(t: number): void {
+		const current = this.#slotCurrent;
+		const target = this.#slotTarget;
+		const from = this.#slotFrom;
+		const to = this.#slotTo;
+		const exiting = this.#exiting;
+		for (let id = 0; id < current.length; id++) {
+			current[id] = target[id] < 0 && !exiting[id] ? -1 : from[id] + (to[id] - from[id]) * t;
+		}
+	}
+
 	/** Land every id exactly on its target, with no interpolation. */
 	#settleSlots(): void {
 		const target = this.#slotTarget;
+		// Snap t to exactly 1. A spring approaches asymptotically and isAtRest
+		// fires at an epsilon, so leaving t just short of 1 would leave every
+		// element fractionally short — and a staggered t_i, which divides by
+		// (1 - phase), fractionally shorter still.
+		this.#driver.set(1);
 		for (let i = 0; i < target.length; i++) {
-			// The true target, which for a leaver is the hidden sentinel and not
-			// the far slot its spring was walking toward. This is where an exit
-			// actually completes.
-			this.#springs[i].set(target[i]);
+			// The TRUE target, which for a leaver is the hidden sentinel and not
+			// the gateway it was walking toward. This is where an exit completes.
 			this.#slotCurrent[i] = target[i];
+			this.#slotFrom[i] = target[i];
+			this.#slotTo[i] = target[i];
 			this.#exiting[i] = 0;
 		}
 	}
@@ -1260,12 +1346,11 @@ export class BandScaleState {
 	 * frame, so it must not touch render state.
 	 */
 	step(): void {
-		const springs = this.#springs;
-		for (let i = 0; i < springs.length; i++) springs[i].step();
+		this.#driver.step();
 	}
 
 	/**
-	 * Write slotCurrent from the springs, once per frame, with extrapolation.
+	 * Write slotCurrent from the driver, once per frame, with extrapolation.
 	 *
 	 * slotVersion is bumped here as well as on retarget: the array is mutated in
 	 * place, so the version is the only thing the packer can compare, and
@@ -1273,9 +1358,10 @@ export class BandScaleState {
 	 * and none of the rest. Only reached while registered, and the eviction
 	 * sweep unregisters at rest, so this cannot mark a static chart dirty.
 	 *
-	 * An id whose target is -1 is written straight through rather than read from
-	 * its spring: not-displayed is a state, not a position, and letting a spring
-	 * drift near it would put a bar at slot -0.4 for a frame.
+	 * `t` is clamped: the driver is critically damped so it should not overshoot,
+	 * but extrapolation reads AHEAD of the simulated state and can cross 1 near
+	 * the end. Unclamped that puts a bar slightly past its slot on the last
+	 * frame of every transition.
 	 *
 	 * `_version` is deliberately NOT bumped. Nothing an axis reads has changed —
 	 * #domain holds display ORDER and only slots are moving — so waking Svelte
@@ -1284,40 +1370,22 @@ export class BandScaleState {
 	 * slide, which is this checkpoint's known residual; see the class docs.
 	 */
 	updateRenderState(extrapolationDt: number): void {
-		const current = this.#slotCurrent;
-		const target = this.#slotTarget;
-		const springs = this.#springs;
-
-		const exiting = this.#exiting;
-		for (let id = 0; id < current.length; id++) {
-			// Hidden and not on its way out: pinned at the sentinel. An id that IS
-			// on its way out still has a real slot, and reading its spring is the
-			// whole of what makes a leaver travel rather than vanish.
-			current[id] =
-				target[id] < 0 && !exiting[id] ? -1 : springs[id].getRenderable(extrapolationDt);
-		}
-
+		const t = this.#driver.getRenderable(extrapolationDt);
+		this.#writeCurrent(t < 0 ? 0 : t > 1 ? 1 : t);
 		this.slotVersion++;
 	}
 
 	/**
 	 * Whether the loop can stop driving this scale.
 	 *
-	 * Ids that are not displayed AND not leaving are skipped: their spring was
-	 * snapped, so it is at rest by construction. A leaver is neither — it is
-	 * mid-travel with a real slot — and must hold the loop open until it lands.
+	 * One comparison, not a scan: everything in flight shares the driver, which
+	 * is the practical payoff of one spring. It also means rest arrives for
+	 * every id at once — which is exactly why a departing set has to accumulate
+	 * across updates rather than be replaced, since departures from several
+	 * consecutive updates are in the air together and are all retired here.
 	 */
 	isAtRest(): boolean {
-		const springs = this.#springs;
-		const target = this.#slotTarget;
-		const exiting = this.#exiting;
-		for (let i = 0; i < springs.length; i++) {
-			// A leaver is not at rest until it is off the end — skipping it here
-			// would evict the scale mid-exit and freeze the bar halfway out.
-			if (target[i] < 0 && !exiting[i]) continue;
-			if (!springs[i].isAtRest(REST_PRECISION)) return false;
-		}
-		return true;
+		return this.#driver.isAtRest(REST_PRECISION);
 	}
 
 	/**
@@ -1447,6 +1515,14 @@ export class BandScaleState {
 			displayOrder: Array.from(this.#displayOrder),
 			slotCurrent: Array.from(this.#slotCurrent),
 			slotTarget: Array.from(this.#slotTarget),
+
+			// The transition itself. slotCurrent is mix(slotFrom, slotTo, t), so
+			// these three are what produced it — and slotTo differs from slotTarget
+			// exactly for the ids that are on their way out.
+			slotFrom: Array.from(this.#slotFrom),
+			slotTo: Array.from(this.#slotTo),
+			exiting: Array.from(this.#exiting),
+			t: this.#driver.current,
 
 			// GPU state
 			gpuState: this.gpuState

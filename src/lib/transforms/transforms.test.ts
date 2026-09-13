@@ -1,7 +1,17 @@
 // src/lib/transforms/transforms.test.ts
 
 import { describe, it, expect } from 'vitest';
-import { filter, topN, stack, stackY, stackX, normalize, dodge, withImplicitStack } from './index';
+import {
+	filter,
+	topN,
+	stack,
+	stackY,
+	stackX,
+	normalize,
+	dodge,
+	withImplicitStack,
+	TOPN_RANK_COLUMN
+} from './index';
 import { TransformCompiler } from './TransformCompiler';
 import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
@@ -40,6 +50,63 @@ describe('Transforms', () => {
 			expect(result.length).toBe(2);
 			expect(result.getColumn('x')?.[0]).toBe('B'); // Highest
 			expect(result.getColumn('x')?.[1]).toBe('A');
+		});
+
+		it('topN() still ranks when there is nothing to cut', () => {
+			// n >= the number of rows used to short-circuit and return the accessor
+			// untouched. Nothing is cut, so it looks free — but the rows then come
+			// back in query order with no rank column, and the band axis, which
+			// reads the rank, silently falls back to row order. A topN that happens
+			// to fit must still be a topN.
+			const data = toAccessor([
+				{ x: 'A', y: 100 },
+				{ x: 'B', y: 200 },
+				{ x: 'C', y: 50 }
+			]);
+
+			const transform = topN(3, { engine: 'js' });
+			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
+
+			expect(result.length).toBe(3);
+			expect(Array.from({ length: 3 }, (_, i) => result.getColumn('x')?.[i])).toEqual([
+				'B',
+				'A',
+				'C'
+			]);
+			expect(Array.from(result.getColumn(TOPN_RANK_COLUMN) as Float32Array)).toEqual([1, 2, 3]);
+		});
+
+		it('topN() asks for more than it has without running off the end', () => {
+			// n > row count. Everything below indexes topIndices by position, so an
+			// unclamped n read past its end and wrote NaN into a Float32Array.
+			const data = toAccessor([
+				{ x: 'A', y: 100 },
+				{ x: 'B', y: 200 }
+			]);
+
+			const transform = topN(5, { engine: 'js' });
+			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
+
+			expect(result.length).toBe(2);
+			expect(result.getColumn('x')?.[0]).toBe('B');
+			expect(Array.from(result.getColumn('y') as Float32Array)).toEqual([200, 100]);
+		});
+
+		it('topN() omits Other when nothing was excluded', () => {
+			// An Other row here would be a category standing for zero rows — a
+			// claim about the data rather than a summary of it.
+			const data = toAccessor([
+				{ x: 'A', y: 100 },
+				{ x: 'B', y: 200 }
+			]);
+
+			const transform = topN(2, { includeOthers: true });
+			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
+
+			expect(result.length).toBe(2);
+			expect(Array.from({ length: 2 }, (_, i) => result.getColumn('x')?.[i])).not.toContain(
+				'Other'
+			);
 		});
 
 		it('topN() includes Others', () => {

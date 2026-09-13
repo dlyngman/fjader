@@ -1245,6 +1245,13 @@ export class MarkLifecycleV2 {
 				// And tell it WHICH id is the bucket, so an entrance can come out of
 				// Other and an exit can go into it rather than past the end of the
 				// axis. With an Other bucket that is where the value actually goes.
+				//
+				// Set on EVERY categorical axis, like the reservation above, rather
+				// than re-deriving which axis topN picked — that derivation living
+				// in two places is what silently dropped the Other row once already.
+				// The axes topN did not pick are unaffected: their reserved id is on
+				// no row, so it is never displayed, and setOtherId documents why an
+				// undisplayed id cannot act as a gateway.
 				scale?.setOtherId(id);
 			}
 		}

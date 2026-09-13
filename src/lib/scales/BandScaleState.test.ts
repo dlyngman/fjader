@@ -492,20 +492,134 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
 			s.setOtherId(2);
 			s.addMark(['Adelie', 'Chinstrap', 'Other'], 'mark-1');
+			// Other FIRST, so its exit has somewhere to travel. With Other already
+			// at the end there is no journey to observe, and a test that cannot see
+			// the difference between "went to the far end" and "did not move"
+			// cannot check that it did not try to leave through itself.
+			s.setSortOrder(['Other', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
+			expect(s.slotTable[2]).toBe(0);
 
 			s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
 			s.updateDomainFromExtents();
 
-			// Two slots remain, so the far end is 2 — and Other cannot exit through
-			// itself.
+			// Two slots remain, so the far end is 2. If Other took its own slot as
+			// its gateway it would sit at 0 and never travel.
+			let steps = 0;
+			let furthest = -1;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				furthest = Math.max(furthest, s.slotTable[2]);
+				steps++;
+			}
+			expect(steps).toBeLessThan(5000);
+			expect(furthest).toBeCloseTo(2, 2);
+
+			s._markAtRest();
+			expect(s.slotTable[2]).toBe(-1);
+		});
+
+		it('moves everything on one clock, so ids with different distances arrive together', () => {
+			// The defining property of a single driver, and the reason it is not a
+			// compromise: A travels one slot while D travels three, so a shared `t`
+			// moves them at proportionally different SPEEDS and lands them on the
+			// same frame. Independent springs would finish raggedly.
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: () => {} }
+			});
+			s.setIdentity(new FieldIdentity(['A', 'B', 'C', 'D']));
+			s.addMark(['A', 'B', 'C', 'D'], 'mark-1');
+			s.updateDomainFromExtents();
+			expect(Array.from(s.slotTable)).toEqual([0, 1, 2, 3]);
+
+			// D to the front: A 0->1 (one slot), D 3->0 (three).
+			s.setSortOrder(['D', 'A', 'B', 'C']);
+			s.updateDomainFromExtents();
+
+			let steps = 0;
+			let sawMotion = false;
+			while (steps < 5000 && !s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+				const fracA = (s.slotTable[0] - 0) / (1 - 0);
+				const fracD = (s.slotTable[3] - 3) / (0 - 3);
+				expect(fracA).toBeCloseTo(fracD, 6);
+				if (fracA > 0.01 && fracA < 0.99) sawMotion = true;
+				steps++;
+			}
+			// The assertion above is vacuous if the transition never had a middle.
+			expect(sawMotion).toBe(true);
+
+			s._markAtRest();
+			expect(Array.from(s.slotTable)).toEqual([1, 2, 3, 0]);
+		});
+
+		it('folds a mid-flight retarget, continuing from where it is', () => {
+			// New data under a drag is the NORMAL case. The animation must carry on
+			// from where things actually are, so current position becomes the new
+			// `from` before t resets — otherwise every result restarts the journey
+			// and a bar sliding out stutters instead of sliding.
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: () => {} }
+			});
+			s.setIdentity(new FieldIdentity(['A', 'B', 'C']));
+			s.addMark(['A', 'B', 'C'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			s.setSortOrder(['C', 'B', 'A']);
+			s.updateDomainFromExtents();
+
+			// Get genuinely mid-flight.
+			for (let i = 0; i < 20; i++) {
+				s.step();
+				s.updateRenderState(0);
+			}
+			const midFlight = Array.from(s.slotTable);
+			expect(midFlight[0]).toBeGreaterThan(0);
+			expect(midFlight[0]).toBeLessThan(2);
+
+			// A third order arrives while that is still running.
+			s.setSortOrder(['B', 'A', 'C']);
+			s.updateDomainFromExtents();
+
+			// The table does not jump on the frame the new result lands: the fold
+			// captured where each id was. Without it these would snap back to the
+			// positions the PREVIOUS transition started from.
+			expect(Array.from(s.slotTable)).toEqual(midFlight);
+
 			let steps = 0;
 			while (steps < 5000 && !s.isAtRest()) {
 				s.step();
 				s.updateRenderState(0);
 				steps++;
 			}
-			expect(s.slotTable[2]).toBeCloseTo(2, 2);
+			s._markAtRest();
+			expect(Array.from(s.slotTable)).toEqual([1, 0, 2]);
+		});
+
+		it('completes an exit that has nowhere to travel, instead of stranding it', () => {
+			// Other is ALREADY at the far end, so its gateway is the slot it is
+			// standing on and the exit is a zero-length journey.
+			//
+			// Per-id springs left the table untouched in this case — nothing was
+			// "moving", so neither the loop nor the settle path ran, and a category
+			// that had left the domain stayed drawn at its old slot indefinitely.
+			// One driver makes the no-op case take the settle path like any other.
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatingScale: () => {} }
+			});
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
+			s.setOtherId(2);
+			s.addMark(['Adelie', 'Chinstrap', 'Other'], 'mark-1');
+			s.updateDomainFromExtents();
+			expect(s.slotTable[2]).toBe(2);
+
+			s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+			s.updateDomainFromExtents();
+
+			expect(s.slotTarget[2]).toBe(-1);
+			expect(s.slotTable[2]).toBe(-1);
 		});
 
 		it('still snaps the FIRST layout, so a chart does not slide in on load', () => {
