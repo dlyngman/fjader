@@ -569,7 +569,16 @@ export class BandScaleState {
 	 */
 	#otherId: number | null = null;
 
-	/** Tell this axis which id is its Other bucket, if any. */
+	/**
+	 * Tell this axis which id is its Other bucket, if any.
+	 *
+	 * An id that is never displayed is INERT here, and that is a guarantee rather
+	 * than a coincidence: the gateway is read from the slot TABLE, so an Other
+	 * that no row carries holds -1 and the gateway falls back to the far end. The
+	 * lifecycle reserves an Other id for every categorical axis of a mark rather
+	 * than re-deriving which one topN picked, so the axes topN did not pick get
+	 * one too — and this is why that costs nothing.
+	 */
 	setOtherId(id: number | null): void {
 		this.#otherId = id;
 	}

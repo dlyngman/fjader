@@ -294,8 +294,14 @@ function topNJS(n: number, options: TopNOptions): JsTransform {
 				);
 			}
 
-			// Simple path: no series column, rank individual rows
-			if (data.length <= n) return data;
+			// Simple path: no series column, rank individual rows.
+			//
+			// No `data.length <= n` shortcut. Returning the accessor untouched
+			// looks like a free win — nothing is being cut — but it skips the three
+			// things this transform is for besides cutting: the rows come back in
+			// whatever order the query emitted, the rank column is missing so the
+			// band axis silently falls back to row order, and includeOthers is
+			// dropped. topNSimple handles the degenerate case itself.
 			return topNSimple(data, n, valueCol, bandField, options, otherId);
 		},
 		describe() {
@@ -316,7 +322,12 @@ function topNSimple(
 	const indices = Array.from({ length: data.length }, (_, i) => i);
 	indices.sort((a, b) => (Number(valueCol[b]) || 0) - (Number(valueCol[a]) || 0));
 
-	const topIndices = indices.slice(0, n);
+	// Clamp: `n` may exceed what there is. Everything below indexes topIndices by
+	// position, so an unclamped n reads past its end and writes NaN into a
+	// Float32Array — which is why this used to be guarded by an early return in
+	// the caller rather than handled.
+	const keep = Math.min(n, indices.length);
+	const topIndices = indices.slice(0, keep);
 	const bandCol = data.getColumn(bandField);
 	// A numeric band column holds identity ids; the Other row needs the reserved
 	// one. Summing it like any other numeric column — which is what this used to
@@ -339,9 +350,13 @@ function topNSimple(
 	// the same id, which would draw two bars in one slot.
 	const foldIdx =
 		includeOthers && bandIsIds ? topIndices.findIndex((i) => bandCol[i] === otherId) : -1;
-	const appendOther = includeOthers && foldIdx < 0;
+	// Nothing was excluded, so there is no residual to bucket. An Other row here
+	// would be a category representing zero rows, which is a claim about the data
+	// rather than a summary of it.
+	const excludedAny = keep < indices.length;
+	const appendOther = includeOthers && foldIdx < 0 && excludedAny;
 
-	const outLen = appendOther ? n + 1 : n;
+	const outLen = appendOther ? keep + 1 : keep;
 	const columns: Record<string, Float32Array | unknown[]> = {};
 
 	for (const colName of data.columnNames) {
@@ -350,15 +365,15 @@ function topNSimple(
 
 		if (src instanceof Float32Array) {
 			const dst = new Float32Array(outLen);
-			for (let i = 0; i < n; i++) dst[i] = src[topIndices[i]];
+			for (let i = 0; i < keep; i++) dst[i] = src[topIndices[i]];
 			if (includeOthers) {
 				if (colName === bandField) {
 					// Identity, not an aggregate. Already correct when folding.
-					if (appendOther) dst[n] = otherId!;
+					if (appendOther) dst[keep] = otherId!;
 				} else {
 					let sum = 0;
-					for (let i = n; i < indices.length; i++) sum += src[indices[i]];
-					if (appendOther) dst[n] = sum;
+					for (let i = keep; i < indices.length; i++) sum += src[indices[i]];
+					if (appendOther) dst[keep] = sum;
 					else dst[foldIdx] += sum;
 				}
 			}
