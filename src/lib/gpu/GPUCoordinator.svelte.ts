@@ -813,6 +813,9 @@ export class GPUCoordinator {
 				id: string;
 				type: string;
 				slotTable?: Float32Array;
+				slotFrom?: Float32Array;
+				slotTo?: Float32Array;
+				t?: number;
 				slotVersion?: number;
 			};
 			// Any scale that offers a slot table wants one packed. It used to gate
@@ -820,7 +823,17 @@ export class GPUCoordinator {
 			// offers one now, and gating on the type would have meant listing
 			// every kind here as each migrates.
 			if (!scale.slotTable) continue;
-			scales.push({ id: scale.id, slotTable: scale.slotTable, slotVersion: scale.slotVersion });
+			// from/to/t are absent for a scale with no driver — ordinal colour,
+			// facets — and the packer writes its settled table into both halves,
+			// which makes the shader's mix an identity for it.
+			scales.push({
+				id: scale.id,
+				slotTable: scale.slotTable,
+				slotFrom: scale.slotFrom,
+				slotTo: scale.slotTo,
+				t: scale.t,
+				slotVersion: scale.slotVersion
+			});
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.
 			consumers.push(
@@ -878,6 +891,41 @@ export class GPUCoordinator {
 			length
 		);
 	}
+
+	/**
+	 * Push each animating scale's `t` — four bytes at a known offset.
+	 *
+	 * This is what the whole two-table split buys. slotFrom and slotTo move on a
+	 * retarget, which is rare; only `t` moves per frame, and it is one float in
+	 * the block header rather than one per id. Before this the packer re-uploaded
+	 * the entire packed range on every frame of every animation.
+	 *
+	 * Only the `from` buffer is written: the shader reads t through
+	 * identitySlotFromAt, so the copy in the `to` buffer's header is never read.
+	 * The CPU mirror is updated alongside, or the next full upload would push a
+	 * stale t and jump the transition back.
+	 *
+	 * Runs after the pack, so a scale that has just been given a base this frame
+	 * gets its t at that base rather than its previous one.
+	 */
+	#uploadAnimatingT(): void {
+		const state = this.#identitySlots;
+		if (!state) return;
+		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
+			const scale = this.#animatedScalesArray[i] as unknown as { id?: string; t?: number };
+			if (scale.t === undefined || scale.id === undefined) continue;
+			const base = state.offsets.get(scale.id);
+			if (base === undefined || base === IDENTITY_SLOT_EMPTY) continue;
+			const at = base + 1;
+			if (state.buffer[at] === scale.t) continue;
+			state.buffer[at] = scale.t;
+			this.#tPatch[0] = scale.t;
+			this.#device!.queue.writeBuffer(this.#identitySlotBuffer!, at * 4, this.#tPatch);
+		}
+	}
+
+	/** Reused so the per-frame t write allocates nothing. */
+	#tPatch = new Float32Array(1);
 
 	/**
 	 * Rewrite the frame uniform of any faceted chart whose facet permutation
@@ -1087,6 +1135,8 @@ export class GPUCoordinator {
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#updateIdentitySlots();
+		// After the pack, so a scale given a base this frame gets its t there.
+		this.#uploadAnimatingT();
 		this.#refreshMovedFacetUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
