@@ -327,6 +327,13 @@ export class GPUCoordinator {
 	 */
 	#identitySlotBuffer: GPUBuffer | null = null;
 	/**
+	 * The `to` half. Same size, same per-scale bases, written from the same pack
+	 * — the shader reads `mix(from[id], to[id], t)` with t from the block header,
+	 * so a reorder in flight costs a 4-byte write per frame instead of the whole
+	 * table (§35.6 step 3).
+	 */
+	#identitySlotBufferTo: GPUBuffer | null = null;
+	/**
 	 * CPU mirror plus the per-scale bases and versions. Allocation lives in
 	 * identity-slot-packing.ts; this class owns only the GPU buffer and the upload.
 	 */
@@ -631,6 +638,14 @@ export class GPUCoordinator {
 					binding: 5,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: 'uniform' }
+				},
+				{
+					// Binding 6: the `to` half of the slot table. Same visibility as
+					// binding 5 for the same reason — ordinal colour resolves ids in
+					// the fragment stage and goes through the same helper.
+					binding: 6,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: { type: 'uniform' }
 				}
 			]
 		});
@@ -690,6 +705,12 @@ export class GPUCoordinator {
 						binding: 5,
 						resource: {
 							buffer: this.#identitySlotBuffer!
+						}
+					},
+					{
+						binding: 6,
+						resource: {
+							buffer: this.#identitySlotBufferTo!
 						}
 					}
 				]
@@ -756,7 +777,12 @@ export class GPUCoordinator {
 		if (this.#identitySlotBuffer) return;
 		this.#identitySlots = createIdentitySlotState(IDENTITY_SLOT_CAPACITY);
 		this.#identitySlotBuffer = this.#device!.createBuffer({
-			label: 'identity-slot-table',
+			label: 'identity-slot-table-from',
+			size: IDENTITY_SLOT_CAPACITY * 4,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+		});
+		this.#identitySlotBufferTo = this.#device!.createBuffer({
+			label: 'identity-slot-table-to',
 			size: IDENTITY_SLOT_CAPACITY * 4,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
@@ -841,6 +867,13 @@ export class GPUCoordinator {
 			this.#identitySlotBuffer!,
 			0,
 			state.buffer as Float32Array<ArrayBuffer>,
+			0,
+			length
+		);
+		this.#device!.queue.writeBuffer(
+			this.#identitySlotBufferTo!,
+			0,
+			state.bufferTo as Float32Array<ArrayBuffer>,
 			0,
 			length
 		);
@@ -1512,6 +1545,10 @@ export class GPUCoordinator {
 							// validation error at draw time, not here.
 							binding: 5,
 							resource: { buffer: this.#identitySlotBuffer! }
+						},
+						{
+							binding: 6,
+							resource: { buffer: this.#identitySlotBufferTo! }
 						}
 					]
 				});
@@ -2396,11 +2433,18 @@ export class GPUCoordinator {
 		this.#colorRampBuffer?.destroy();
 		this.#colorPaletteBuffer?.destroy();
 		this.#sizeConfigBuffer?.destroy();
+		// Both halves of the slot table, which were not released before there
+		// were two of them either — 64 KB each, so the omission is now worth 128.
+		this.#identitySlotBuffer?.destroy();
+		this.#identitySlotBufferTo?.destroy();
 
 		this.#colorConfigBuffer = null;
 		this.#colorRampBuffer = null;
 		this.#colorPaletteBuffer = null;
 		this.#sizeConfigBuffer = null;
+		this.#identitySlotBuffer = null;
+		this.#identitySlotBufferTo = null;
+		this.#identitySlots = null;
 	}
 
 	destroy(): void {
