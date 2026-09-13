@@ -9,8 +9,38 @@ struct SizeConfig {
 }
 `;
 
+/**
+ * Size scale slots, and the single source of truth for how many.
+ *
+ * A uniform array must be declared at a constant length, so this number has to
+ * reach the WGSL as well as the buffer allocation. It is exported and
+ * interpolated rather than written twice: a mismatch is a pipeline-creation
+ * validation error naming the binding, which is loud, but a constant that
+ * exists in two files is a constant that eventually disagrees with itself.
+ */
+export const MAX_SIZE_SLOTS = 64;
+
+/**
+ * UNIFORM, not storage, and it always should have been.
+ *
+ * SizeConfig is four f32s — exactly the 16-byte stride the uniform address
+ * space requires for array elements, so nothing is repacked — the whole array
+ * is MAX_SIZE_SLOTS × 16 = 1 KB against a 64 KB default binding size, it is
+ * read only by the vertex stage, and it is written when a size scale's domain
+ * changes rather than per frame. Every property that makes a uniform buffer the
+ * right container was already true of it.
+ *
+ * What it buys: the vertex stage sits at the default
+ * maxStorageBuffersPerShaderStage of 8 (six mark channels, scale params, and
+ * this), and animating a value channel needs a `from` and a `to` where there is
+ * now one buffer. Uniform buffers are nowhere near their own default of 12. See
+ * review_band_category_index_architecture.md §36.7.
+ *
+ * Dynamic indexing — `sizeConfigs[scaleIndex]` — is permitted on uniform arrays
+ * in WGSL, and the shared slot table already relies on the same thing.
+ */
 export const SIZE_SCALE_BINDINGS = /* wgsl */ `
-@group(2) @binding(4) var<storage, read> sizeConfigs: array<SizeConfig>;
+@group(2) @binding(4) var<uniform> sizeConfigs: array<SizeConfig, ${MAX_SIZE_SLOTS}>;
 `;
 
 export const SIZE_SCALE_FUNCTIONS = /* wgsl */ `
