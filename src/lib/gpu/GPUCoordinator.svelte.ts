@@ -4,6 +4,7 @@ import { scaleTemplateSystem } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
+import { MAX_SIZE_SLOTS } from './SizeScaleShaderLib';
 import {
 	IDENTITY_SLOT_CAPACITY,
 	IDENTITY_SLOT_EMPTY,
@@ -371,9 +372,10 @@ export class GPUCoordinator {
 	#colorRampBuffer: GPUBuffer | null = null; // 64 ramps × 256 colors × 16 bytes = 256KB
 	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
-	// Size scale buffer (group 2, binding 4)
-	#sizeConfigBuffer: GPUBuffer | null = null; // 64 configs × 16 bytes = 1KB
-	#maxSizeSlots = 64;
+	// Size scale buffer (group 2, binding 4). UNIFORM, not storage — see
+	// SIZE_SCALE_BINDINGS for why, and §36.7 for what it buys.
+	#sizeConfigBuffer: GPUBuffer | null = null; // MAX_SIZE_SLOTS × 16 bytes = 1KB
+	#maxSizeSlots = MAX_SIZE_SLOTS;
 
 	// Constants
 	#maxColorSlots = 64;
@@ -600,10 +602,20 @@ export class GPUCoordinator {
 					buffer: { type: 'read-only-storage' }
 				},
 				{
-					// Binding 4: Size scale configs (vertex only)
+					// Binding 4: Size scale configs (vertex only).
+					//
+					// Uniform rather than storage. 1 KB of 16-byte configs written on
+					// a domain change, which is what uniform buffers are for — and it
+					// returns a slot to the vertex stage's storage budget, which sits
+					// at the default 8 and has to fit a `from` and a `to` per animated
+					// value channel (§36.7).
+					//
+					// Still VERTEX-only, so this remains invisible to the compute
+					// pipelines that share this layout (M4Decimator) and continues not
+					// to count against their storage budget.
 					binding: 4,
 					visibility: GPUShaderStage.VERTEX,
-					buffer: { type: 'read-only-storage' }
+					buffer: { type: 'uniform' }
 				},
 				{
 					// Binding 5: shared slot table, identity id -> display slot.
@@ -724,11 +736,14 @@ export class GPUCoordinator {
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 
-		// Size config buffer: 64 slots × 16 bytes each
+		// Size config buffer: MAX_SIZE_SLOTS slots × 16 bytes each. The size is
+		// not just an allocation any more — a uniform array is declared at a fixed
+		// length, so the bound buffer must be at least that big or pipeline
+		// creation fails. Both come from the same constant.
 		this.#sizeConfigBuffer = device.createBuffer({
-			label: 'SizeConfig SSBO',
+			label: 'SizeConfig uniform',
 			size: this.#maxSizeSlots * 16,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 	}
 
