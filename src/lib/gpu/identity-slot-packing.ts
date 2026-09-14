@@ -19,11 +19,23 @@
  * what it should have been.
  *
  * Layout: index 0 is a permanent zero-length block, then one block per scale of
- * `[count, slot0, slot1, ...]`. The count header makes each block
+ * `[count, t, slot0, slot1, ...]`. The count header makes each block
  * self-describing, so the shader rejects an id past this scale's end instead of
  * reading into the next scale's slots — ids and the slot table can disagree
  * transiently while a dim appends. Budget is therefore
- * `capacity - 1 - (1 per scale)` slots.
+ * `capacity - 1 - (2 per scale)` slots.
+ *
+ * TWO buffers share one set of offsets: `from` is where each id's current
+ * transition started and `to` where it is going, and the shader reads
+ * `mix(from[id], to[id], t)`. Two bindings rather than two runs in one buffer,
+ * because one buffer would halve the id ceiling while uniform bindings are at
+ * three of a default twelve.
+ *
+ * `t` lives in the block header because it is PER SCALE — each band scale has
+ * its own driver — and a band scale's four scaleParams floats are all spoken
+ * for (categoryCount, paddingInner, paddingOuter, slot base). Putting it here
+ * costs one float per scale and makes the per-frame upload a 4-byte write at a
+ * known offset instead of re-uploading every slot.
  */
 
 /**
@@ -48,14 +60,26 @@ export interface IdentitySlotScale {
 	id: string;
 	/** id -> display slot, or -1 for an id not currently shown. */
 	slotTable: Float32Array;
+	/**
+	 * Where each id's transition started and where it is going. Both optional:
+	 * a scale that does not animate — ordinal colour, facet — offers neither,
+	 * and gets `slotTable` in both buffers, which makes the shader's mix an
+	 * identity for it rather than a special case.
+	 */
+	slotFrom?: Float32Array;
+	slotTo?: Float32Array;
+	/** Interpolation parameter, 1 (settled) unless a driver is running. */
+	t?: number;
 	/** Bumped by the scale on every slot-table rebuild. */
 	slotVersion?: number;
 }
 
 /** Everything that persists between calls. */
 export interface IdentitySlotState {
-	/** CPU mirror of the uniform buffer. */
+	/** CPU mirror of the `from` uniform buffer, and of the header. */
 	buffer: Float32Array;
+	/** CPU mirror of the `to` uniform buffer. Same offsets, same headers. */
+	bufferTo: Float32Array;
 	/** Per-scale base offset, read back into p4. */
 	offsets: Map<string, number>;
 	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
@@ -67,10 +91,13 @@ export function createIdentitySlotState(
 	capacity: number = IDENTITY_SLOT_CAPACITY
 ): IdentitySlotState {
 	const buffer = new Float32Array(capacity);
+	const bufferTo = new Float32Array(capacity);
 	buffer.fill(-1);
+	bufferTo.fill(-1);
 	// The permanent empty block: count 0, so it holds no slots.
 	buffer[IDENTITY_SLOT_EMPTY] = 0;
-	return { buffer, offsets: new Map(), versions: new Map() };
+	bufferTo[IDENTITY_SLOT_EMPTY] = 0;
+	return { buffer, bufferTo, offsets: new Map(), versions: new Map() };
 }
 
 /**
@@ -89,7 +116,7 @@ export function packIdentitySlots(
 	scales: readonly IdentitySlotScale[],
 	state: IdentitySlotState
 ): { dirty: boolean; length: number } {
-	const { buffer, offsets, versions } = state;
+	const { buffer, bufferTo, offsets, versions } = state;
 	const capacity = buffer.length;
 
 	// Index 0 is the permanent empty block; real blocks start after it.
@@ -101,16 +128,25 @@ export function packIdentitySlots(
 		const table = scale.slotTable;
 		seen.add(scale.id);
 
-		// One extra float for the block's count header.
-		const need = table.length + 1;
+		// Two extra floats for the block's header: count, then t.
+		const need = table.length + 2;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
 
 		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== scale.slotVersion) {
 			if (fits) {
+				// A scale with no driver offers neither half, and gets its settled
+				// table in both — the shader's mix is then an identity for it, which
+				// is cheaper than branching on whether a scale animates.
+				const from = scale.slotFrom ?? table;
+				const to = scale.slotTo ?? table;
 				buffer[base] = table.length;
-				buffer.set(table, base + 1);
+				buffer[base + 1] = scale.t ?? 1;
+				buffer.set(from, base + 2);
+				bufferTo[base] = table.length;
+				bufferTo[base + 1] = scale.t ?? 1;
+				bufferTo.set(to, base + 2);
 			} else {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(

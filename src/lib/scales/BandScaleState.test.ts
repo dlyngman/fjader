@@ -356,17 +356,63 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slotTable[0]).toBeCloseTo(1, 2);
 		});
 
-		it('bumps slotVersion every frame, or the packer uploads only the first', () => {
+		it('does NOT bump slotVersion per frame, so the packer uploads on retarget only', () => {
+			// This assertion is inverted from the one it replaces, on purpose and
+			// on schedule. While JS did the interpolation, slotVersion had to bump
+			// every frame or the packer would upload the first frame of a
+			// transition and none of the rest.
+			//
+			// The GPU does the mix now. slotFrom and slotTo change on a RETARGET;
+			// only t changes per frame, and t is four bytes at a known offset. A
+			// per-frame bump would mean re-uploading the whole packed range — up
+			// to 64 KB — on every frame of every animation, which is the cost this
+			// checkpoint exists to remove.
 			const { s } = withLoop();
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
 
-			const before = s.slotVersion;
+			const afterRetarget = s.slotVersion;
 			s.step();
 			s.updateRenderState(0);
 			s.step();
 			s.updateRenderState(0);
-			expect(s.slotVersion).toBe(before + 2);
+			expect(s.slotVersion).toBe(afterRetarget);
+
+			// t moved even though the version did not — that is the whole split.
+			expect(s.t).toBeGreaterThan(0);
+			expect(s.t).toBeLessThan(1);
+
+			// And a second retarget does bump it, because the tables really moved.
+			s.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			s.updateDomainFromExtents();
+			expect(s.slotVersion).toBeGreaterThan(afterRetarget);
+		});
+
+		it('interpolates the table on demand, without walking every id per frame', () => {
+			// slotTable is no longer maintained: the GPU reads from/to/t, so the
+			// per-frame walk produced a value nothing read. It still has to be the
+			// honest answer when asked — for the fold, the tests, and the axis
+			// labels that will need it.
+			const { s } = withLoop();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+
+			expect(Array.from(s.slotFrom)).toEqual([0, 1, 2]);
+			expect(Array.from(s.slotTo)).toEqual([1, 2, 0]);
+
+			for (let i = 0; i < 20; i++) {
+				s.step();
+				s.updateRenderState(0);
+			}
+
+			const t = s.t;
+			const table = Array.from(s.slotTable);
+			// Exactly mix(from, to, t), which is what the shader computes from the
+			// same three inputs. If these ever disagree the two halves of the
+			// design have drifted.
+			expect(table[0]).toBeCloseTo(0 + (1 - 0) * t, 6);
+			expect(table[1]).toBeCloseTo(1 + (2 - 1) * t, 6);
+			expect(table[2]).toBeCloseTo(2 + (0 - 2) * t, 6);
 		});
 
 		it('lands exactly on the target when the loop lets go', () => {

@@ -5,6 +5,8 @@ import {
 	packIdentitySlots,
 	type IdentitySlotScale
 } from './identity-slot-packing';
+import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 /** A scale whose slot table is the given permutation. */
 function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
@@ -14,7 +16,12 @@ function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
 /** Read one scale's block back the way the shader's identitySlot() does. */
 function readBlock(buffer: Float32Array, base: number) {
 	const count = buffer[base];
-	return { count, slots: Array.from(buffer.slice(base + 1, base + 1 + count)) };
+	return { count, slots: Array.from(buffer.slice(base + 2, base + 2 + count)) };
+}
+
+/** The t the shader would interpolate with, from the same block header. */
+function readT(buffer: Float32Array, base: number) {
+	return buffer[base + 1];
 }
 
 describe('packIdentitySlots layout', () => {
@@ -41,7 +48,7 @@ describe('packIdentitySlots layout', () => {
 		packIdentitySlots([scale('a', [0, 1]), scale('b', [1, 0, 2]), scale('c', [0])], state);
 
 		const [a, b, c] = ['a', 'b', 'c'].map((id) => state.offsets.get(id)!);
-		expect([a, b, c]).toEqual([1, 4, 8]); // 1 + (2+1) = 4, 4 + (3+1) = 8
+		expect([a, b, c]).toEqual([1, 5, 10]); // 1 + (2+2) = 5, 5 + (3+2) = 10
 		expect(readBlock(state.buffer, a)).toEqual({ count: 2, slots: [0, 1] });
 		expect(readBlock(state.buffer, b)).toEqual({ count: 3, slots: [1, 0, 2] });
 		expect(readBlock(state.buffer, c)).toEqual({ count: 1, slots: [0] });
@@ -50,8 +57,8 @@ describe('packIdentitySlots layout', () => {
 	it('reports the used prefix so the caller uploads only that much', () => {
 		const state = createIdentitySlotState(16384);
 		const { length } = packIdentitySlots([scale('a', [0, 1]), scale('b', [0])], state);
-		// 1 empty + (2+1) + (1+1)
-		expect(length).toBe(6);
+		// 1 empty + (2+2) + (1+2)
+		expect(length).toBe(8);
 	});
 
 	it('preserves -1 for ids that are not displayed', () => {
@@ -60,6 +67,65 @@ describe('packIdentitySlots layout', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots([scale('a', [0, -1, 1])], state);
 		expect(readBlock(state.buffer, state.offsets.get('a')!).slots).toEqual([0, -1, 1]);
+	});
+});
+
+describe('packIdentitySlots transition state', () => {
+	it('gives a scale with no driver the same table in both buffers', () => {
+		// Ordinal colour and facet offer no from/to. Writing the settled table to
+		// both makes the shader's mix an identity for them, which is cheaper than
+		// branching in the shader on whether a scale animates.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([scale('a', [2, 0, 1])], state);
+
+		const base = state.offsets.get('a')!;
+		expect(readBlock(state.buffer, base).slots).toEqual([2, 0, 1]);
+		expect(readBlock(state.bufferTo, base).slots).toEqual([2, 0, 1]);
+		// t = 1 means settled, so mix(from, to, 1) is `to` whatever from holds.
+		expect(readT(state.buffer, base)).toBe(1);
+	});
+
+	it('writes from and to into their own buffers at the same base', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				{
+					id: 'a',
+					slotTable: Float32Array.from([0, 1, 2]),
+					slotFrom: Float32Array.from([2, 1, 0]),
+					slotTo: Float32Array.from([0, 1, 2]),
+					t: 0.25,
+					slotVersion: 1
+				}
+			],
+			state
+		);
+
+		const base = state.offsets.get('a')!;
+		// One base serves both buffers — that is what lets p4 stay a single float.
+		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 1, 0] });
+		expect(readBlock(state.bufferTo, base)).toEqual({ count: 3, slots: [0, 1, 2] });
+		expect(readT(state.buffer, base)).toBeCloseTo(0.25, 6);
+		expect(readT(state.bufferTo, base)).toBeCloseTo(0.25, 6);
+	});
+
+	it('keeps the empty block empty in both buffers', () => {
+		// A parked scale reads count 0 from whichever buffer the shader asks, so
+		// both need the header — not just the one carrying `from`.
+		const state = createIdentitySlotState(64);
+		expect(state.buffer[IDENTITY_SLOT_EMPTY]).toBe(0);
+		expect(state.bufferTo[IDENTITY_SLOT_EMPTY]).toBe(0);
+	});
+
+	it('counts the t header against capacity, not just the slots', () => {
+		// Two floats of header per block, so a budget that fit before may not.
+		const state = createIdentitySlotState(8);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		// 1 empty + (4 slots + 2 header) = 7; a second 4-id scale needs 6 more.
+		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0])], state);
+		expect(state.offsets.get('a')).toBe(1);
+		expect(state.offsets.get('b')).toBe(IDENTITY_SLOT_EMPTY);
+		warn.mockRestore();
 	});
 });
 
@@ -103,8 +169,8 @@ describe('packIdentitySlots dirty tracking', () => {
 describe('packIdentitySlots capacity', () => {
 	it('parks a scale that does not fit on the empty block', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(8);
-		// 1 empty + (4+1) = 6 used; the next needs 5 and only 2 remain.
+		const state = createIdentitySlotState(10);
+		// 1 empty + (4+2) = 7 used; the next needs 6 and only 3 remain.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 
 		expect(state.offsets.get('a')).toBe(1);
@@ -118,7 +184,7 @@ describe('packIdentitySlots capacity', () => {
 	it('still places a later scale small enough to fit', () => {
 		// The reason the loop does not break on the first scale that overflows.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(10);
+		const state = createIdentitySlotState(12);
 		packIdentitySlots(
 			[scale('a', [0, 1, 2, 3]), scale('huge', new Array(20).fill(0)), scale('c', [0])],
 			state
@@ -126,8 +192,8 @@ describe('packIdentitySlots capacity', () => {
 
 		expect(state.offsets.get('a')).toBe(1);
 		expect(state.offsets.get('huge')).toBe(IDENTITY_SLOT_EMPTY);
-		expect(state.offsets.get('c')).toBe(6);
-		expect(readBlock(state.buffer, 6)).toEqual({ count: 1, slots: [0] });
+		expect(state.offsets.get('c')).toBe(7);
+		expect(readBlock(state.buffer, 7)).toEqual({ count: 1, slots: [0] });
 		warn.mockRestore();
 	});
 
@@ -135,7 +201,7 @@ describe('packIdentitySlots capacity', () => {
 		// The caller runs this per frame; a warning per frame is a log flood
 		// that hides everything else.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(8);
+		const state = createIdentitySlotState(10);
 		const scales = [scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])];
 
 		packIdentitySlots(scales, state);
@@ -149,7 +215,7 @@ describe('packIdentitySlots capacity', () => {
 
 	it('places a scale that fits again once room is freed', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(8);
+		const state = createIdentitySlotState(10);
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 		expect(state.offsets.get('b')).toBe(IDENTITY_SLOT_EMPTY);
 
@@ -210,5 +276,78 @@ describe('packIdentitySlots eviction', () => {
 		expect(state.versions.size).toBe(0);
 		expect(dirty).toBe(false); // nothing to write; p4 falls back to the empty block
 		expect(length).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The shader's view, evaluated in JS against the packed buffers.
+// ---------------------------------------------------------------------------
+
+describe('what the shader reads back', () => {
+	/** identitySlot(base, id) from ScaleTemplateSystem, in TypeScript. */
+	function identitySlot(state: IdentitySlotState, base: number, id: number): number {
+		const count = state.buffer[base];
+		if (id >= count) return -1;
+		const t = state.buffer[base + 1];
+		const a = state.buffer[base + 2 + id];
+		const b = state.bufferTo[base + 2 + id];
+		return a + (b - a) * t;
+	}
+
+	it('agrees with the scale about every id, mid-transition', () => {
+		// The two halves of the design meet here: JS computes slotTable as
+		// mix(from, to, t) and the vertex stage computes the same thing from the
+		// same three numbers. If they drift, bars are in the wrong slots.
+		const s = new BandScaleState('species', [], {
+			gpuCoordinator: { addAnimatingScale: () => {} }
+		});
+		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		// Chinstrap(1) leaves: a real slot in both tables, -1 in slotTarget.
+		s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		s.updateDomainFromExtents();
+		for (let i = 0; i < 15; i++) {
+			s.step();
+			s.updateRenderState(0);
+		}
+
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[{ id: s.id, slotTable: s.slotTable, slotFrom: s.slotFrom, slotTo: s.slotTo, t: s.t }],
+			state
+		);
+		const base = state.offsets.get(s.id)!;
+
+		for (let id = 0; id < 3; id++) {
+			expect(identitySlot(state, base, id)).toBeCloseTo(s.slotTable[id], 5);
+		}
+
+		// And the leaver specifically: still on screen, past where it started,
+		// heading for the far end rather than being discarded at < 0.
+		const leaver = identitySlot(state, base, 1);
+		expect(leaver).toBeGreaterThan(1);
+		expect(leaver).toBeLessThanOrEqual(2);
+	});
+
+	it('discards an id the scale does not display, without a sentinel branch', () => {
+		// -1 in both tables, so the mix returns -1 for any t. This is why the
+		// shader has no special case.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				{
+					id: 'a',
+					slotTable: Float32Array.from([0, -1, 1]),
+					slotFrom: Float32Array.from([0, -1, 1]),
+					slotTo: Float32Array.from([1, -1, 0]),
+					t: 0.5
+				}
+			],
+			state
+		);
+		const base = state.offsets.get('a')!;
+		expect(identitySlot(state, base, 1)).toBe(-1);
 	});
 });

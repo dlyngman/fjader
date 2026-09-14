@@ -571,18 +571,39 @@ export class ScaleTemplateSystem {
 	_buildSlotTableHelpers(): string {
 		return `
     // ===== SHARED SLOT TABLE (identity id -> display slot) =====
-    @group(2) @binding(5) var<uniform> identitySlots: array<vec4<f32>, 4096>;
+    //
+    // TWO tables at one base: where each id's transition started, and where it
+    // is going. The interpolation happens here rather than in JS, so a reorder
+    // costs one 4-byte write of t per frame instead of re-uploading every slot.
+    @group(2) @binding(5) var<uniform> identitySlotsFrom: array<vec4<f32>, 4096>;
+    @group(2) @binding(6) var<uniform> identitySlotsTo: array<vec4<f32>, 4096>;
 
-    fn identitySlotAt(i: u32) -> f32 {
-      return identitySlots[i >> 2u][i & 3u];
+    fn identitySlotFromAt(i: u32) -> f32 {
+      return identitySlotsFrom[i >> 2u][i & 3u];
+    }
+
+    fn identitySlotToAt(i: u32) -> f32 {
+      return identitySlotsTo[i >> 2u][i & 3u];
     }
 
     fn identitySlot(base: u32, id: u32) -> f32 {
-      let count = u32(identitySlotAt(base));
+      // Block layout: [count, t, slot0, slot1, ...]. The count is what makes a
+      // block self-describing, so an id past this scale's end is discarded
+      // instead of reading into the next scale's slots.
+      let count = u32(identitySlotFromAt(base));
       if (id >= count) {
         return -1.0;
       }
-      return identitySlotAt(base + 1u + id);
+      let t = identitySlotFromAt(base + 1u);
+      let a = identitySlotFromAt(base + 2u + id);
+      let b = identitySlotToAt(base + 2u + id);
+      // No sentinel case, deliberately. An id that is not displayed has -1 in
+      // BOTH tables, so the mix returns -1 without a branch; one that is
+      // leaving has a real slot in both, which is what lets it travel. The
+      // scale normalises that before packing, so the shader does not re-derive
+      // it. A scale with no driver has from == to and t == 1, making this an
+      // identity for ordinal colour and facets.
+      return mix(a, b, t);
     }
     `;
 	}

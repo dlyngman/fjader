@@ -465,12 +465,40 @@ export class BandScaleState {
 	 * that puts the new category into the domain, which does.
 	 *
 	 * This is `slotCurrent`, not `slotTarget` — what is on screen now, which
-	 * during an animation is a fraction of the way between two orders. The two
-	 * are equal at rest, and step 5 C1 has no spring yet, so they are equal
-	 * always. See slotTarget.
+	 * during an animation is a fraction of the way between two orders.
+	 *
+	 * Computed ON DEMAND rather than maintained. The GPU no longer reads it:
+	 * it reads slotFrom, slotTo and t and does the mix in the vertex stage, so
+	 * a per-frame walk of every id existed only to produce a value nothing read
+	 * every frame. It is still the honest answer to "where is everything now",
+	 * for the fold, for tests, and for the axis labels that will need it.
 	 */
 	get slotTable(): Float32Array {
+		if (this.#currentDirty) {
+			this.#writeCurrent(this.#renderT);
+			this.#currentDirty = false;
+		}
 		return this.#slotCurrent;
+	}
+
+	/**
+	 * The two halves the GPU interpolates between, and where along it we are.
+	 *
+	 * These are what the packer uploads: `from` and `to` change on a retarget,
+	 * `t` every frame — which is the whole point, since t is four bytes and the
+	 * table is as many as there are ids.
+	 */
+	get slotFrom(): Float32Array {
+		return this.#slotFrom;
+	}
+
+	get slotTo(): Float32Array {
+		return this.#slotTo;
+	}
+
+	/** Extrapolated for the frame being drawn, not the last physics step. */
+	get t(): number {
+		return this.#renderT;
 	}
 
 	/**
@@ -494,6 +522,14 @@ export class BandScaleState {
 
 	#slotTarget: Float32Array = new Float32Array(0);
 	#slotCurrent: Float32Array = new Float32Array(0);
+	/**
+	 * Where the driver is for the frame being drawn — extrapolated ahead of the
+	 * simulated state, and clamped, since a read ahead of the last step can
+	 * cross 1 near the end of a transition.
+	 */
+	#renderT: number = 1;
+	/** slotCurrent is stale until someone asks for it. */
+	#currentDirty: boolean = false;
 	/**
 	 * ONE spring for the whole scale, driving a normalised `t` from 0 to 1
 	 * across every id at once — not one spring per category.
@@ -796,8 +832,13 @@ export class BandScaleState {
 	 * exactly what the checkpoint is meant to prevent.
 	 */
 	#retargetSlots(count: number): void {
+		// Materialise where everything actually is before overwriting it — the
+		// fold's input. Reading the getter rather than the field because
+		// slotCurrent is only computed on demand now, and a retarget arriving
+		// between frames must see this frame's positions, not the last ones the
+		// table happened to be written with.
+		const current = this.slotTable;
 		const target = this.#slotTarget;
-		const current = this.#slotCurrent;
 		const from = this.#slotFrom;
 		const to = this.#slotTo;
 		const exiting = this.#exiting;
@@ -874,11 +915,13 @@ export class BandScaleState {
 			// at the speed it was travelling instead of stalling and re-accelerating.
 			this.#driver.current = 0;
 			this.#driver.target = 1;
+			this.#renderT = 0;
 			// Publish the folded positions immediately. Without this the table
 			// would hold last frame's values until the loop's first
 			// updateRenderState, and a retarget that lands between frames would
 			// show one frame of the old arrangement.
 			this.#writeCurrent(0);
+			this.#currentDirty = false;
 			this.#ensureAnimating();
 		} else {
 			this.#settleSlots();
@@ -916,6 +959,8 @@ export class BandScaleState {
 		// element fractionally short — and a staggered t_i, which divides by
 		// (1 - phase), fractionally shorter still.
 		this.#driver.set(1);
+		this.#renderT = 1;
+		this.#currentDirty = false;
 		for (let i = 0; i < target.length; i++) {
 			// The TRUE target, which for a leaver is the hidden sentinel and not
 			// the gateway it was walking toward. This is where an exit completes.
@@ -1350,29 +1395,27 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Write slotCurrent from the driver, once per frame, with extrapolation.
+	 * Record where the driver is for this frame. Does NOT touch the slot table.
 	 *
-	 * slotVersion is bumped here as well as on retarget: the array is mutated in
-	 * place, so the version is the only thing the packer can compare, and
-	 * without a bump per frame it would upload the first frame of a transition
-	 * and none of the rest. Only reached while registered, and the eviction
-	 * sweep unregisters at rest, so this cannot mark a static chart dirty.
+	 * The GPU reads slotFrom, slotTo and t and interpolates in the vertex stage,
+	 * so the only thing that changes per frame is four bytes of t. This used to
+	 * write every id and bump slotVersion, which made the packer re-upload the
+	 * entire packed range — up to 64 KB — on every frame of every animation.
 	 *
-	 * `t` is clamped: the driver is critically damped so it should not overshoot,
-	 * but extrapolation reads AHEAD of the simulated state and can cross 1 near
-	 * the end. Unclamped that puts a bar slightly past its slot on the last
-	 * frame of every transition.
+	 * slotVersion is deliberately NOT bumped here any more. It means "the
+	 * tables moved", which happens on a retarget, and bumping it per frame is
+	 * exactly what made the upload per-frame.
 	 *
-	 * `_version` is deliberately NOT bumped. Nothing an axis reads has changed —
+	 * `_version` is not bumped either. Nothing an axis reads has changed —
 	 * #domain holds display ORDER and only slots are moving — so waking Svelte
 	 * per frame would recompute the axis for no new information. The visible
-	 * consequence is the labels jumping to their final order while the bars
-	 * slide, which is this checkpoint's known residual; see the class docs.
+	 * consequence is labels jumping to their final order while the bars slide,
+	 * which is this checkpoint's known residual.
 	 */
 	updateRenderState(extrapolationDt: number): void {
 		const t = this.#driver.getRenderable(extrapolationDt);
-		this.#writeCurrent(t < 0 ? 0 : t > 1 ? 1 : t);
-		this.slotVersion++;
+		this.#renderT = t < 0 ? 0 : t > 1 ? 1 : t;
+		this.#currentDirty = true;
 	}
 
 	/**
