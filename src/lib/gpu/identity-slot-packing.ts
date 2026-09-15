@@ -80,6 +80,21 @@ export interface IdentitySlotState {
 	buffer: Float32Array;
 	/** CPU mirror of the `to` uniform buffer. Same offsets, same headers. */
 	bufferTo: Float32Array;
+	/**
+	 * Which scale's block each float belongs to, parallel to `buffer`.
+	 *
+	 * The resolve kernel needs `t` for the element it is working on, and `t`
+	 * lives in that element's block header. Blocks are variable-length, so a
+	 * flat thread cannot find its own header by arithmetic — this is the lookup
+	 * that lets it, and it turns the whole page into ONE dispatch instead of one
+	 * per scale.
+	 *
+	 * Uint32 rather than Float32 because it is an index, and it is uploaded only
+	 * when the packing moves — a reorder or a scale appearing — never per frame.
+	 * Header floats point at their own block, so a thread landing on one reads
+	 * its own `t` and writes a value nothing reads. Cheaper than excluding them.
+	 */
+	bases: Uint32Array;
 	/** Per-scale base offset, read back into p4. */
 	offsets: Map<string, number>;
 	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
@@ -92,12 +107,13 @@ export function createIdentitySlotState(
 ): IdentitySlotState {
 	const buffer = new Float32Array(capacity);
 	const bufferTo = new Float32Array(capacity);
+	const bases = new Uint32Array(capacity);
 	buffer.fill(-1);
 	bufferTo.fill(-1);
 	// The permanent empty block: count 0, so it holds no slots.
 	buffer[IDENTITY_SLOT_EMPTY] = 0;
 	bufferTo[IDENTITY_SLOT_EMPTY] = 0;
-	return { buffer, bufferTo, offsets: new Map(), versions: new Map() };
+	return { buffer, bufferTo, bases, offsets: new Map(), versions: new Map() };
 }
 
 /**
@@ -116,7 +132,7 @@ export function packIdentitySlots(
 	scales: readonly IdentitySlotScale[],
 	state: IdentitySlotState
 ): { dirty: boolean; length: number } {
-	const { buffer, bufferTo, offsets, versions } = state;
+	const { buffer, bufferTo, bases, offsets, versions } = state;
 	const capacity = buffer.length;
 
 	// Index 0 is the permanent empty block; real blocks start after it.
@@ -147,6 +163,7 @@ export function packIdentitySlots(
 				bufferTo[base] = table.length;
 				bufferTo[base + 1] = scale.t ?? 1;
 				bufferTo.set(to, base + 2);
+				bases.fill(base, base, base + need);
 			} else {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(

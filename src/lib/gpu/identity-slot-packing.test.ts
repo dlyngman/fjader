@@ -351,3 +351,103 @@ describe('what the shader reads back', () => {
 		expect(identitySlot(state, base, 1)).toBe(-1);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// bases — the per-element block lookup the resolve kernel needs (§47 rung 1)
+// ---------------------------------------------------------------------------
+//
+// The kernel reads `t` from its element's block header, and blocks are
+// variable-length, so a flat thread cannot find its own header by arithmetic.
+// `bases[i]` is that lookup, and getting it wrong means an element reads
+// ANOTHER scale's `t` — which renders, plausibly, at the wrong point in a
+// transition. That is the failure class this whole module exists to prevent
+// (the count header does the same job for ids), so it is asserted rather than
+// assumed.
+
+describe('packIdentitySlots: bases', () => {
+	it('points every float of a block at that block, header included', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				{ id: 'a', slotTable: Float32Array.from([0, 1, 2]), slotVersion: 1 },
+				{ id: 'b', slotTable: Float32Array.from([1, 0]), slotVersion: 1 }
+			],
+			state
+		);
+
+		const a = state.offsets.get('a')!;
+		const b = state.offsets.get('b')!;
+
+		// count + t + 3 slots, then count + t + 2 slots.
+		for (let i = a; i < a + 5; i++) expect(state.bases[i]).toBe(a);
+		for (let i = b; i < b + 4; i++) expect(state.bases[i]).toBe(b);
+	});
+
+	it('lets a thread recover its own t, which is the point of it', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				{
+					id: 'a',
+					slotTable: Float32Array.from([0, 1]),
+					slotFrom: Float32Array.from([0, 1]),
+					slotTo: Float32Array.from([1, 0]),
+					t: 0.25,
+					slotVersion: 1
+				},
+				{
+					id: 'b',
+					slotTable: Float32Array.from([0]),
+					slotFrom: Float32Array.from([0]),
+					slotTo: Float32Array.from([3]),
+					t: 0.75,
+					slotVersion: 1
+				}
+			],
+			state
+		);
+
+		// Exactly what the kernel does: for each element, find its block, read t
+		// from the header, mix. Two scales with DIFFERENT t, because a shared t
+		// would pass this test by accident.
+		const tAt = (i: number) => state.buffer[state.bases[i] + 1];
+		const a = state.offsets.get('a')!;
+		const b = state.offsets.get('b')!;
+
+		expect(tAt(a + 2)).toBeCloseTo(0.25, 5);
+		expect(tAt(a + 3)).toBeCloseTo(0.25, 5);
+		expect(tAt(b + 2)).toBeCloseTo(0.75, 5);
+
+		const resolve = (i: number) => state.buffer[i] + (state.bufferTo[i] - state.buffer[i]) * tAt(i);
+		expect(resolve(a + 2)).toBeCloseTo(0.25, 5); // 0 -> 1 at t=0.25
+		expect(resolve(a + 3)).toBeCloseTo(0.75, 5); // 1 -> 0 at t=0.25
+		expect(resolve(b + 2)).toBeCloseTo(2.25, 5); // 0 -> 3 at t=0.75
+	});
+
+	it('rewrites bases when a scale shrinks and shifts the one after it', () => {
+		// The case a stale bases entry would survive: 'b' moves because 'a' got
+		// smaller, so every float of b's block must be re-pointed. Without the
+		// rewrite, b's slots would read a's t.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				{ id: 'a', slotTable: Float32Array.from([0, 1, 2, 3]), t: 0.1, slotVersion: 1 },
+				{ id: 'b', slotTable: Float32Array.from([0]), t: 0.9, slotVersion: 1 }
+			],
+			state
+		);
+
+		packIdentitySlots(
+			[
+				{ id: 'a', slotTable: Float32Array.from([0, 1]), t: 0.1, slotVersion: 2 },
+				{ id: 'b', slotTable: Float32Array.from([0]), t: 0.9, slotVersion: 1 }
+			],
+			state
+		);
+
+		const b = state.offsets.get('b')!;
+		for (let i = b; i < b + 3; i++) expect(state.bases[i]).toBe(b);
+		// toBeCloseTo, not toBe: these are Float32Array round trips.
+		expect(state.buffer[state.bases[b + 2] + 1]).toBeCloseTo(0.9, 5);
+	});
+});
