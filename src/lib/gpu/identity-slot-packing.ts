@@ -58,8 +58,24 @@ export const IDENTITY_SLOT_EMPTY = 0;
 /** The parts of a band/point scale this needs. */
 export interface IdentitySlotScale {
 	id: string;
-	/** id -> display slot, or -1 for an id not currently shown. */
-	slotTable: Float32Array;
+	/**
+	 * How many ids this scale's block holds — the count header.
+	 *
+	 * Separate from `slotTable.length` so the packer never has to touch
+	 * `slotTable` for a scale that supplies `from` and `to`. On `BandScaleState`
+	 * that getter folds `mix(from, to, t)` over the whole dim on demand, and the
+	 * packer runs every frame, so reading it here made a per-frame O(dim) walk
+	 * out of a per-reorder one — producing, since the resolve moved to the GPU,
+	 * a number nothing reads at all (§41.2, §49.1).
+	 */
+	slotCount: number;
+	/**
+	 * id -> display slot, or -1 for an id not currently shown.
+	 *
+	 * Only needed by a scale that does NOT animate and so supplies neither half
+	 * below; it is then used as both. A driven scale omits it.
+	 */
+	slotTable?: Float32Array;
 	/**
 	 * Where each id's transition started and where it is going. Both optional:
 	 * a scale that does not animate — ordinal colour, facet — offers neither,
@@ -141,11 +157,10 @@ export function packIdentitySlots(
 	const seen = new Set<string>();
 
 	for (const scale of scales) {
-		const table = scale.slotTable;
 		seen.add(scale.id);
 
 		// Two extra floats for the block's header: count, then t.
-		const need = table.length + 2;
+		const need = scale.slotCount + 2;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
@@ -155,20 +170,20 @@ export function packIdentitySlots(
 				// A scale with no driver offers neither half, and gets its settled
 				// table in both — the shader's mix is then an identity for it, which
 				// is cheaper than branching on whether a scale animates.
-				const from = scale.slotFrom ?? table;
-				const to = scale.slotTo ?? table;
-				buffer[base] = table.length;
+				const from = scale.slotFrom ?? scale.slotTable;
+				const to = scale.slotTo ?? scale.slotTable;
+				buffer[base] = scale.slotCount;
 				buffer[base + 1] = scale.t ?? 1;
-				buffer.set(from, base + 2);
-				bufferTo[base] = table.length;
+				if (from) buffer.set(from, base + 2);
+				bufferTo[base] = scale.slotCount;
 				bufferTo[base + 1] = scale.t ?? 1;
-				bufferTo.set(to, base + 2);
+				if (to) bufferTo.set(to, base + 2);
 				bases.fill(base, base, base + need);
 			} else {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
 					`[GPUCoordinator] Band slot capacity (${capacity}) exhausted; ` +
-						`scale "${scale.id}" (${table.length} ids) will not render.`
+						`scale "${scale.id}" (${scale.slotCount} ids) will not render.`
 				);
 			}
 			offsets.set(scale.id, base);

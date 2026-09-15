@@ -3,7 +3,8 @@ import {
 	IDENTITY_SLOT_EMPTY,
 	createIdentitySlotState,
 	packIdentitySlots,
-	type IdentitySlotScale
+	type IdentitySlotScale,
+	type IdentitySlotState
 } from './identity-slot-packing';
 import { resolveSlotsReference } from './SlotResolveShader';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
@@ -11,7 +12,7 @@ import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 /** A scale whose slot table is the given permutation. */
 function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
-	return { id, slotTable: Float32Array.from(slots), slotVersion: version };
+	return { id, slotCount: slots.length, slotTable: Float32Array.from(slots), slotVersion: version };
 }
 
 /** Read one scale's block back the way the shader's identitySlot() does. */
@@ -92,6 +93,8 @@ describe('packIdentitySlots transition state', () => {
 			[
 				{
 					id: 'a',
+					slotCount: Float32Array.from([0, 1, 2]).length,
+
 					slotTable: Float32Array.from([0, 1, 2]),
 					slotFrom: Float32Array.from([2, 1, 0]),
 					slotTo: Float32Array.from([0, 1, 2]),
@@ -316,7 +319,7 @@ describe('what the shader reads back', () => {
 
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
-			[{ id: s.id, slotTable: s.slotTable, slotFrom: s.slotFrom, slotTo: s.slotTo, t: s.t }],
+			[{ id: s.id, slotCount: s.slotCount, slotFrom: s.slotFrom, slotTo: s.slotTo, t: s.t }],
 			state
 		);
 		const base = state.offsets.get(s.id)!;
@@ -340,6 +343,8 @@ describe('what the shader reads back', () => {
 			[
 				{
 					id: 'a',
+					slotCount: Float32Array.from([0, -1, 1]).length,
+
 					slotTable: Float32Array.from([0, -1, 1]),
 					slotFrom: Float32Array.from([0, -1, 1]),
 					slotTo: Float32Array.from([1, -1, 0]),
@@ -370,8 +375,18 @@ describe('packIdentitySlots: bases', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
 			[
-				{ id: 'a', slotTable: Float32Array.from([0, 1, 2]), slotVersion: 1 },
-				{ id: 'b', slotTable: Float32Array.from([1, 0]), slotVersion: 1 }
+				{
+					id: 'a',
+					slotCount: Float32Array.from([0, 1, 2]).length,
+					slotTable: Float32Array.from([0, 1, 2]),
+					slotVersion: 1
+				},
+				{
+					id: 'b',
+					slotCount: Float32Array.from([1, 0]).length,
+					slotTable: Float32Array.from([1, 0]),
+					slotVersion: 1
+				}
 			],
 			state
 		);
@@ -390,6 +405,8 @@ describe('packIdentitySlots: bases', () => {
 			[
 				{
 					id: 'a',
+					slotCount: Float32Array.from([0, 1]).length,
+
 					slotTable: Float32Array.from([0, 1]),
 					slotFrom: Float32Array.from([0, 1]),
 					slotTo: Float32Array.from([1, 0]),
@@ -398,6 +415,8 @@ describe('packIdentitySlots: bases', () => {
 				},
 				{
 					id: 'b',
+					slotCount: Float32Array.from([0]).length,
+
 					slotTable: Float32Array.from([0]),
 					slotFrom: Float32Array.from([0]),
 					slotTo: Float32Array.from([3]),
@@ -432,16 +451,40 @@ describe('packIdentitySlots: bases', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
 			[
-				{ id: 'a', slotTable: Float32Array.from([0, 1, 2, 3]), t: 0.1, slotVersion: 1 },
-				{ id: 'b', slotTable: Float32Array.from([0]), t: 0.9, slotVersion: 1 }
+				{
+					id: 'a',
+					slotCount: Float32Array.from([0, 1, 2, 3]).length,
+					slotTable: Float32Array.from([0, 1, 2, 3]),
+					t: 0.1,
+					slotVersion: 1
+				},
+				{
+					id: 'b',
+					slotCount: Float32Array.from([0]).length,
+					slotTable: Float32Array.from([0]),
+					t: 0.9,
+					slotVersion: 1
+				}
 			],
 			state
 		);
 
 		packIdentitySlots(
 			[
-				{ id: 'a', slotTable: Float32Array.from([0, 1]), t: 0.1, slotVersion: 2 },
-				{ id: 'b', slotTable: Float32Array.from([0]), t: 0.9, slotVersion: 1 }
+				{
+					id: 'a',
+					slotCount: Float32Array.from([0, 1]).length,
+					slotTable: Float32Array.from([0, 1]),
+					t: 0.1,
+					slotVersion: 2
+				},
+				{
+					id: 'b',
+					slotCount: Float32Array.from([0]).length,
+					slotTable: Float32Array.from([0]),
+					t: 0.9,
+					slotVersion: 1
+				}
 			],
 			state
 		);
@@ -480,6 +523,8 @@ describe('resolveSlotsReference', () => {
 		const scales = [
 			{
 				id: 'a',
+				slotCount: Float32Array.from([0, 1, 2]).length,
+
 				slotTable: Float32Array.from([0, 1, 2]),
 				slotFrom: Float32Array.from([0, 1, 2]),
 				slotTo: Float32Array.from([2, 0, 1]),
@@ -488,6 +533,8 @@ describe('resolveSlotsReference', () => {
 			},
 			{
 				id: 'b',
+				slotCount: Float32Array.from([1, -1, 0]).length,
+
 				slotTable: Float32Array.from([1, -1, 0]),
 				slotFrom: Float32Array.from([1, -1, 0]),
 				slotTo: Float32Array.from([0, -1, 1]),
@@ -519,6 +566,8 @@ describe('resolveSlotsReference', () => {
 			[
 				{
 					id: 'a',
+					slotCount: Float32Array.from([0, -1, 1]).length,
+
 					slotTable: Float32Array.from([0, -1, 1]),
 					slotFrom: Float32Array.from([0, -1, 1]),
 					slotTo: Float32Array.from([1, -1, 0]),
@@ -545,6 +594,8 @@ describe('resolveSlotsReference', () => {
 			[
 				{
 					id: 'a',
+					slotCount: Float32Array.from([0]).length,
+
 					slotTable: Float32Array.from([0]),
 					slotFrom: Float32Array.from([0]),
 					slotTo: Float32Array.from([10]),
@@ -553,6 +604,8 @@ describe('resolveSlotsReference', () => {
 				},
 				{
 					id: 'b',
+					slotCount: Float32Array.from([0]).length,
+
 					slotTable: Float32Array.from([0]),
 					slotFrom: Float32Array.from([0]),
 					slotTo: Float32Array.from([10]),
@@ -574,7 +627,15 @@ describe('resolveSlotsReference', () => {
 		// a buffer dump is full of values nothing put there.
 		const state = createIdentitySlotState(64);
 		const { length } = packIdentitySlots(
-			[{ id: 'a', slotTable: Float32Array.from([0, 1]), t: 1, slotVersion: 1 }],
+			[
+				{
+					id: 'a',
+					slotCount: Float32Array.from([0, 1]).length,
+					slotTable: Float32Array.from([0, 1]),
+					t: 1,
+					slotVersion: 1
+				}
+			],
 			state
 		);
 		const out = new Float32Array(state.buffer.length).fill(999);

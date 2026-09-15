@@ -473,6 +473,18 @@ export class BandScaleState {
 	 * every frame. It is still the honest answer to "where is everything now",
 	 * for the fold, for tests, and for the axis labels that will need it.
 	 */
+	/**
+	 * How many ids the slot arrays hold — the packer's count header.
+	 *
+	 * Exists so the packer never reads `slotTable`, whose getter folds
+	 * `mix(from, to, t)` over the whole dim. The packer runs every frame and the
+	 * GPU does that mix itself now, so reading it there was an O(dim) walk per
+	 * frame producing a number nothing consumed (§41.2, §49.1).
+	 */
+	get slotCount(): number {
+		return this.#slotTarget.length;
+	}
+
 	get slotTable(): Float32Array {
 		if (this.#currentDirty) {
 			this.#writeCurrent(this.#renderT);

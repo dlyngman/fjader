@@ -123,6 +123,13 @@ export class ColorScaleState {
 	 * id this scale has never ranked.
 	 */
 	slotTable: Float32Array = new Float32Array(0);
+	/**
+	 * The packer's count header. A plain read here — this scale does not animate,
+	 * so `slotTable` is a field rather than a fold (see BandScaleState.slotCount).
+	 */
+	get slotCount(): number {
+		return this.slotTable.length;
+	}
 	/** Bumped on every slotTable rebuild; the packer uploads only on a change. */
 	slotVersion: number = 0;
 	/**

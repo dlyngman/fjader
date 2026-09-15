@@ -901,6 +901,7 @@ export class GPUCoordinator {
 			const scale = this.#scaleArray[i].instance as unknown as {
 				id: string;
 				type: string;
+				slotCount?: number;
 				slotTable?: Float32Array;
 				slotFrom?: Float32Array;
 				slotTo?: Float32Array;
@@ -911,13 +912,23 @@ export class GPUCoordinator {
 			// on band|point, which was the same set at the time; ordinal colour
 			// offers one now, and gating on the type would have meant listing
 			// every kind here as each migrates.
-			if (!scale.slotTable) continue;
+			//
+			// Gated on slotCount, never on slotTable: this runs every frame, and
+			// on a driven scale `slotTable` is a getter that folds mix(from, to, t)
+			// over the whole dim. Since the GPU does that mix itself, touching it
+			// here walked every id per frame to produce a number nothing read
+			// (§41.2, §49.1).
+			const slotCount = scale.slotCount;
+			if (slotCount === undefined) continue;
 			// from/to/t are absent for a scale with no driver — ordinal colour,
 			// facets — and the packer writes its settled table into both halves,
-			// which makes the shader's mix an identity for it.
+			// which makes the resolve an identity for it. Such a scale supplies
+			// slotTable instead, and reading it costs nothing: it is a plain field
+			// on the scales that have no fold.
 			scales.push({
 				id: scale.id,
-				slotTable: scale.slotTable,
+				slotCount,
+				slotTable: scale.slotFrom ? undefined : scale.slotTable,
 				slotFrom: scale.slotFrom,
 				slotTo: scale.slotTo,
 				t: scale.t,
