@@ -1163,6 +1163,29 @@ export class MarkLifecycleV2 {
 		await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
 		for (const { key } of categorical) this.#identityFields.add(key);
 
+		// Tell the transforms which dim each categorical axis is identified by.
+		//
+		// This is what turns on topN's dense join (§44): with a dim to join
+		// against, a category that drops out of the top N keeps a row at zero
+		// instead of vanishing, so its bar can shrink out rather than disappear
+		// on the frame the reorder lands.
+		//
+		// Handed over rather than derived in the transform, for the same reason
+		// `otherIdsByColumn` is: the name is session-suffixed and owned by the
+		// identity coordinator, and a transform rebuilding it from a field name
+		// is two derivations that must agree and eventually will not.
+		//
+		// Keyed by CHANNEL, because that is what a SQL transform resolves — topN
+		// gets its band as a select alias ('x' or 'y'), never as a source field.
+		// #transformConfig is the same object the compiler holds by reference, so
+		// assigning here reaches transforms that run later; nothing re-reads it
+		// at construction time.
+		const dimByChannel: Record<string, string> = {};
+		for (const { axis, key } of axes) {
+			dimByChannel[axis] = this.#queryEngine.dimTableFor(key);
+		}
+		this.#transformConfig.dimTableByChannel = dimByChannel;
+
 		// Hand each band scale the engine's live id -> value array, so it can build
 		// its slot table. This must happen for EVERY band axis, not only the ones
 		// whose domain came from the dim: a sorted axis takes the ranking-query
