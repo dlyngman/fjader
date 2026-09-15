@@ -345,8 +345,11 @@ describe('topN dense join', () => {
 
 	it('gives an excluded category a zero measure and no rank', async () => {
 		const rows = await run(true, 3);
-		const ranked = rows.filter((r) => r[TOPN_RANK_COLUMN] != null);
-		const excluded = rows.filter((r) => r[TOPN_RANK_COLUMN] == null);
+		// NaN, not NULL: the rank is coalesced so the column reaches JS with
+		// nullCount 0, which is what DataAccessor's zero-copy path requires.
+		const isRanked = (r: Record<string, unknown>) => Number.isFinite(Number(r[TOPN_RANK_COLUMN]));
+		const ranked = rows.filter(isRanked);
+		const excluded = rows.filter((r) => !isRanked(r));
 
 		expect(ranked.length).toBe(3);
 		expect(excluded.length).toBe(rows.length - 3);
@@ -362,7 +365,7 @@ describe('topN dense join', () => {
 	it('leaves the displayed rows byte-identical to the sparse query', async () => {
 		// The join must not disturb what topN already produced — it only adds.
 		const sparse = await run(false, 3);
-		const dense = (await run(true, 3)).filter((r) => r[TOPN_RANK_COLUMN] != null);
+		const dense = (await run(true, 3)).filter((r) => Number.isFinite(Number(r[TOPN_RANK_COLUMN])));
 
 		const key = (r: Record<string, unknown>) => `${r.x}:${Number(r.y2)}:${r[TOPN_RANK_COLUMN]}`;
 		expect(new Set(dense.map(key))).toEqual(new Set(sparse.map(key)));
@@ -380,6 +383,6 @@ describe('topN dense join', () => {
 	it('is off unless a dim is supplied, so every existing mark is unchanged', async () => {
 		const rows = await run(false, 3);
 		expect(rows.length).toBe(3);
-		for (const r of rows) expect(r[TOPN_RANK_COLUMN]).not.toBeNull();
+		for (const r of rows) expect(Number.isFinite(Number(r[TOPN_RANK_COLUMN]))).toBe(true);
 	});
 });

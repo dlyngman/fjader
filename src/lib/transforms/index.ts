@@ -237,10 +237,18 @@ function densify(inner: SelectQuery, aliases: string[], band: string, dim: strin
 				? (sqlTag`d."id"` as ExprNode)
 				: (sqlTag`COALESCE(a.${column(alias)}, 0)` as ExprNode);
 	}
-	// Deliberately NOT coalesced: NULL here means "not displayed", which is
-	// exactly what the band axis needs in order to leave this id out of the
-	// display order.
-	select[TOPN_RANK_COLUMN] = sqlTag`a.${column(TOPN_RANK_COLUMN)}` as ExprNode;
+	// NaN, not NULL and not 0, for a category past the cutoff.
+	//
+	// "No rank" has to survive to JS as something the band axis can test, and
+	// the only encoding that does is the one every other channel already uses:
+	// DataAccessor's fast path requires nullCount == 0, which holds precisely
+	// because queries coalesce NULL to NaN. Left as a nullable BIGINT this
+	// column would arrive with a validity bitmap and whatever the values buffer
+	// happens to hold underneath — usually 0, which would rank an EXCLUDED
+	// category first and put it at the front of the axis.
+	select[TOPN_RANK_COLUMN] = sqlTag`COALESCE(CAST(a.${column(
+		TOPN_RANK_COLUMN
+	)} AS REAL), 'NaN'::REAL)` as ExprNode;
 
 	return Query.from(
 		sqlTag`${literalTable(dim)} AS d LEFT JOIN (${inner}) AS a ON a.${column(band)} = d."id"`
