@@ -5,6 +5,7 @@ import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
 import { MAX_SIZE_SLOTS } from './SizeScaleShaderLib';
+import { SLOT_RESOLVE_SHADER, SLOT_RESOLVE_WORKGROUP } from './SlotResolveShader';
 import {
 	IDENTITY_SLOT_CAPACITY,
 	IDENTITY_SLOT_EMPTY,
@@ -364,6 +365,19 @@ export class GPUCoordinator {
 	/** Reused for the four-byte config patch. */
 	#slotBasePatch = new Uint32Array(1);
 
+	/** Which block each packed float belongs to — the kernel's `t` lookup. */
+	#identitySlotBases: GPUBuffer | null = null;
+	/** What the render stages read: `mix(from, to, t)`, written by compute. */
+	#identitySlotResolved: GPUBuffer | null = null;
+	#slotResolveParams: GPUBuffer | null = null;
+	#slotResolvePipeline: GPUComputePipeline | null = null;
+	#slotResolveBindGroup: GPUBindGroup | null = null;
+	/** Packed prefix in floats — how many threads the dispatch needs. */
+	#slotResolveCount = 0;
+	/** Set when the tables move or a scale animates; see #encodeSlotResolve. */
+	#slotResolvePending = false;
+	#slotResolveParamsPatch = new Uint32Array(4);
+
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
 
@@ -625,27 +639,26 @@ export class GPUCoordinator {
 					buffer: { type: 'uniform' }
 				},
 				{
-					// Binding 5: shared slot table, identity id -> display slot.
-					// Uniform, not storage: the vertex stage is at the default
-					// storage limit of 8 (§14.1), while this group's uniform
-					// buffers are nowhere near the default 12 in either stage.
+					// Binding 5: the RESOLVED slot table — identity id -> where that
+					// id is right now. A compute pass writes it once per frame from
+					// `from`, `to` and each block's `t` (§40, §47 rung 1); the render
+					// stages read this one buffer and do no interpolation.
 					//
-					// FRAGMENT as well as VERTEX. Band axes resolve a slot in the
-					// vertex stage, but ordinal colour carries the same ids and
-					// resolves in the fragment stage — and colorConfigs, which
-					// carries the per-scale base, is a storage buffer that cannot
-					// move to vertex without exceeding the limit above.
+					// Storage, where it used to be two uniforms. It costs the vertex
+					// stage one binding where the pair cost none — Rects lands at 8
+					// of 8, which is the free limit and what §40.3 predicted — and in
+					// exchange the vec4 packing, the 64 KB uniform cap and §38's
+					// 16384-float global ceiling all go away with the address space.
+					//
+					// `from` and `to` are not here at all any more. They are bound to
+					// the compute pipeline, which has its own budget.
+					//
+					// FRAGMENT as well as VERTEX: band axes resolve a slot in the
+					// vertex stage, ordinal colour carries the same ids and resolves
+					// in the fragment stage.
 					binding: 5,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					buffer: { type: 'uniform' }
-				},
-				{
-					// Binding 6: the `to` half of the slot table. Same visibility as
-					// binding 5 for the same reason — ordinal colour resolves ids in
-					// the fragment stage and goes through the same helper.
-					binding: 6,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					buffer: { type: 'uniform' }
+					buffer: { type: 'read-only-storage' }
 				}
 			]
 		});
@@ -701,16 +714,10 @@ export class GPUCoordinator {
 						}
 					},
 					{
-						// Band identity slot table - full buffer, no offset
+						// The resolved slot table, written by the compute pass.
 						binding: 5,
 						resource: {
-							buffer: this.#identitySlotBuffer!
-						}
-					},
-					{
-						binding: 6,
-						resource: {
-							buffer: this.#identitySlotBufferTo!
+							buffer: this.#identitySlotResolved!
 						}
 					}
 				]
@@ -772,20 +779,102 @@ export class GPUCoordinator {
 	 * Fill CPU buffer with current scale GPU state.
 	 * Zero-allocation hot path.
 	 */
-	/** 64 KB uniform buffer for the shared band slot table. */
+	/**
+	 * Buffers and pipeline for the slot table and its per-frame resolve.
+	 *
+	 * `from`, `to` and `bases` are compute-stage inputs; `resolved` is what the
+	 * render stages bind. All four are storage now — the vec4 packing and the
+	 * 64 KB uniform cap went with the address space (§47 rung 1).
+	 */
 	#createIdentitySlotBuffer(): void {
 		if (this.#identitySlotBuffer) return;
+		const device = this.#device!;
+		const bytes = IDENTITY_SLOT_CAPACITY * 4;
 		this.#identitySlots = createIdentitySlotState(IDENTITY_SLOT_CAPACITY);
-		this.#identitySlotBuffer = this.#device!.createBuffer({
+
+		const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+		this.#identitySlotBuffer = device.createBuffer({
 			label: 'identity-slot-table-from',
-			size: IDENTITY_SLOT_CAPACITY * 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+			size: bytes,
+			usage: storage
 		});
-		this.#identitySlotBufferTo = this.#device!.createBuffer({
+		this.#identitySlotBufferTo = device.createBuffer({
 			label: 'identity-slot-table-to',
-			size: IDENTITY_SLOT_CAPACITY * 4,
+			size: bytes,
+			usage: storage
+		});
+		this.#identitySlotBases = device.createBuffer({
+			label: 'identity-slot-bases',
+			size: bytes,
+			usage: storage
+		});
+		this.#identitySlotResolved = device.createBuffer({
+			label: 'identity-slot-table-resolved',
+			size: bytes,
+			usage: storage
+		});
+		this.#slotResolveParams = device.createBuffer({
+			label: 'identity-slot-resolve-params',
+			size: 16,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
+
+		const layout = device.createBindGroupLayout({
+			label: 'slot-resolve-layout',
+			entries: [
+				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+				{ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }
+			]
+		});
+		this.#slotResolvePipeline = device.createComputePipeline({
+			label: 'slot-resolve',
+			layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+			compute: {
+				module: device.createShaderModule({
+					label: 'slot-resolve',
+					code: SLOT_RESOLVE_SHADER
+				}),
+				entryPoint: 'main'
+			}
+		});
+		this.#slotResolveBindGroup = device.createBindGroup({
+			label: 'slot-resolve-bind-group',
+			layout,
+			entries: [
+				{ binding: 0, resource: { buffer: this.#identitySlotBuffer } },
+				{ binding: 1, resource: { buffer: this.#identitySlotBufferTo } },
+				{ binding: 2, resource: { buffer: this.#identitySlotBases } },
+				{ binding: 3, resource: { buffer: this.#identitySlotResolved } },
+				{ binding: 4, resource: { buffer: this.#slotResolveParams } }
+			]
+		});
+	}
+
+	/**
+	 * Encode the resolve. One dispatch for every scale on the page.
+	 *
+	 * Runs whenever the tables moved OR anything is animating — and once more
+	 * after the last transition settles, because `resolved` is state rather than
+	 * a per-frame recomputation of something else: if the dispatch stopped while
+	 * `t` was still short of 1, the settled frame would keep the second-to-last
+	 * position forever. `#slotResolvePending` is that one extra pass.
+	 */
+	#encodeSlotResolve(encoder: GPUCommandEncoder): void {
+		if (!this.#slotResolvePipeline || !this.#slotResolvePending) return;
+		const count = this.#slotResolveCount;
+		if (count === 0) return;
+
+		const pass = encoder.beginComputePass({ label: 'slot-resolve' });
+		pass.setPipeline(this.#slotResolvePipeline);
+		pass.setBindGroup(0, this.#slotResolveBindGroup!);
+		pass.dispatchWorkgroups(Math.ceil(count / SLOT_RESOLVE_WORKGROUP));
+		pass.end();
+
+		// Anything still animating re-arms it; otherwise this was the final pass.
+		this.#slotResolvePending = this.#animatedScalesArray.length > 0;
 	}
 
 	/**
@@ -874,22 +963,42 @@ export class GPUCoordinator {
 			}
 		}
 
+		// Anything animating needs a resolve this frame even when the tables
+		// themselves did not move, because `t` did.
+		if (this.#animatedScalesArray.length > 0) this.#slotResolvePending = true;
+
 		if (!dirty) return;
 
-		this.#device!.queue.writeBuffer(
+		const queue = this.#device!.queue;
+		queue.writeBuffer(
 			this.#identitySlotBuffer!,
 			0,
 			state.buffer as Float32Array<ArrayBuffer>,
 			0,
 			length
 		);
-		this.#device!.queue.writeBuffer(
+		queue.writeBuffer(
 			this.#identitySlotBufferTo!,
 			0,
 			state.bufferTo as Float32Array<ArrayBuffer>,
 			0,
 			length
 		);
+		// Only when the packing moved — never per frame.
+		queue.writeBuffer(
+			this.#identitySlotBases!,
+			0,
+			state.bases as Uint32Array<ArrayBuffer>,
+			0,
+			length
+		);
+
+		if (this.#slotResolveCount !== length) {
+			this.#slotResolveCount = length;
+			this.#slotResolveParamsPatch[0] = length;
+			queue.writeBuffer(this.#slotResolveParams!, 0, this.#slotResolveParamsPatch);
+		}
+		this.#slotResolvePending = true;
 	}
 
 	/**
@@ -900,8 +1009,9 @@ export class GPUCoordinator {
 	 * the block header rather than one per id. Before this the packer re-uploaded
 	 * the entire packed range on every frame of every animation.
 	 *
-	 * Only the `from` buffer is written: the shader reads t through
-	 * identitySlotFromAt, so the copy in the `to` buffer's header is never read.
+	 * Only the `from` buffer is written: the resolve kernel reads t from
+	 * `slotFrom[bases[i] + 1]`, so the copy in the `to` buffer's header is never
+	 * read by anything.
 	 * The CPU mirror is updated alongside, or the next full upload would push a
 	 * stale t and jump the transition back.
 	 *
@@ -921,6 +1031,9 @@ export class GPUCoordinator {
 			state.buffer[at] = scale.t;
 			this.#tPatch[0] = scale.t;
 			this.#device!.queue.writeBuffer(this.#identitySlotBuffer!, at * 4, this.#tPatch);
+			// t moved, so what the render stages read is stale until the kernel
+			// runs again.
+			this.#slotResolvePending = true;
 		}
 	}
 
@@ -1153,7 +1266,11 @@ export class GPUCoordinator {
 		const commandEncoder = this.#device!.createCommandEncoder(this.#encoderDescriptor);
 		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
 
-		// PHASE 3a: PRE-RENDER COMPUTE (M4 decimation, etc.)
+		// PHASE 3a: PRE-RENDER COMPUTE
+		// The slot resolve goes first: registered compute work may read a band
+		// scale, and everything in the render passes below reads `resolved`.
+		this.#encodeSlotResolve(commandEncoder);
+
 		if (this.#computeWork.size > 0) {
 			for (const computeFn of this.#computeWork.values()) {
 				computeFn(commandEncoder, currentScaleBindGroup);
@@ -1589,16 +1706,12 @@ export class GPUCoordinator {
 							resource: { buffer: this.#sizeConfigBuffer! }
 						},
 						{
-							// Band slot table. Must be present here too — this path
-							// rebuilds the bind groups on SSBO growth, and a bind
-							// group missing an entry its layout declares is a
+							// Resolved slot table. Must be present here too — this
+							// path rebuilds the bind groups on SSBO growth, and a
+							// bind group missing an entry its layout declares is a
 							// validation error at draw time, not here.
 							binding: 5,
-							resource: { buffer: this.#identitySlotBuffer! }
-						},
-						{
-							binding: 6,
-							resource: { buffer: this.#identitySlotBufferTo! }
+							resource: { buffer: this.#identitySlotResolved! }
 						}
 					]
 				});
@@ -2487,6 +2600,9 @@ export class GPUCoordinator {
 		// were two of them either — 64 KB each, so the omission is now worth 128.
 		this.#identitySlotBuffer?.destroy();
 		this.#identitySlotBufferTo?.destroy();
+		this.#identitySlotBases?.destroy();
+		this.#identitySlotResolved?.destroy();
+		this.#slotResolveParams?.destroy();
 
 		this.#colorConfigBuffer = null;
 		this.#colorRampBuffer = null;
@@ -2494,6 +2610,13 @@ export class GPUCoordinator {
 		this.#sizeConfigBuffer = null;
 		this.#identitySlotBuffer = null;
 		this.#identitySlotBufferTo = null;
+		this.#identitySlotBases = null;
+		this.#identitySlotResolved = null;
+		this.#slotResolveParams = null;
+		this.#slotResolvePipeline = null;
+		this.#slotResolveBindGroup = null;
+		this.#slotResolveCount = 0;
+		this.#slotResolvePending = false;
 		this.#identitySlots = null;
 	}
 

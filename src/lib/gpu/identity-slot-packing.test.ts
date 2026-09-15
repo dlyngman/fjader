@@ -5,6 +5,7 @@ import {
 	packIdentitySlots,
 	type IdentitySlotScale
 } from './identity-slot-packing';
+import { resolveSlotsReference } from './SlotResolveShader';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
@@ -449,5 +450,136 @@ describe('packIdentitySlots: bases', () => {
 		for (let i = b; i < b + 3; i++) expect(state.bases[i]).toBe(b);
 		// toBeCloseTo, not toBe: these are Float32Array round trips.
 		expect(state.buffer[state.bases[b + 2] + 1]).toBeCloseTo(0.9, 5);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The resolve kernel's formula, against the packed buffers (§47 rung 1)
+// ---------------------------------------------------------------------------
+//
+// The mix moved out of the vertex stage and into a compute pass, so it is now
+// reachable only through a device — which is the condition §45.6 warns about and
+// the reason `identity-slot-packing.ts` was extracted in the first place.
+// `resolveSlotsReference` is the JS twin the WGSL is written against; these
+// tests pin it to the behaviour the vertex stage had, so the port has something
+// to be wrong against rather than only a running browser.
+
+describe('resolveSlotsReference', () => {
+	/** What the vertex stage used to compute, kept here as the oracle. */
+	function vertexStageMix(state: IdentitySlotState, base: number, id: number): number {
+		const count = state.buffer[base];
+		if (id >= count) return -1;
+		const t = state.buffer[base + 1];
+		const a = state.buffer[base + 2 + id];
+		const b = state.bufferTo[base + 2 + id];
+		return a + (b - a) * t;
+	}
+
+	it('reproduces the vertex-stage mix for every id of every scale', () => {
+		const state = createIdentitySlotState(64);
+		const scales = [
+			{
+				id: 'a',
+				slotTable: Float32Array.from([0, 1, 2]),
+				slotFrom: Float32Array.from([0, 1, 2]),
+				slotTo: Float32Array.from([2, 0, 1]),
+				t: 0.4,
+				slotVersion: 1
+			},
+			{
+				id: 'b',
+				slotTable: Float32Array.from([1, -1, 0]),
+				slotFrom: Float32Array.from([1, -1, 0]),
+				slotTo: Float32Array.from([0, -1, 1]),
+				t: 0.85,
+				slotVersion: 1
+			}
+		];
+		const { length } = packIdentitySlots(scales, state);
+
+		const out = new Float32Array(state.buffer.length);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+
+		for (const s of scales) {
+			const base = state.offsets.get(s.id)!;
+			// The header survives: count is identical in both halves, so mixing it
+			// returns it. The shader still reads its bound from `resolved`.
+			expect(out[base]).toBe(s.slotTable.length);
+			for (let id = 0; id < s.slotTable.length; id++) {
+				expect(out[base + 2 + id]).toBeCloseTo(vertexStageMix(state, base, id), 5);
+			}
+		}
+	});
+
+	it('leaves an undisplayed id at -1 without a branch', () => {
+		// -1 in both halves for any t. This is why neither the kernel nor the
+		// shader has a sentinel case.
+		const state = createIdentitySlotState(64);
+		const { length } = packIdentitySlots(
+			[
+				{
+					id: 'a',
+					slotTable: Float32Array.from([0, -1, 1]),
+					slotFrom: Float32Array.from([0, -1, 1]),
+					slotTo: Float32Array.from([1, -1, 0]),
+					t: 0.5,
+					slotVersion: 1
+				}
+			],
+			state
+		);
+		const out = new Float32Array(state.buffer.length);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+		const base = state.offsets.get('a')!;
+		expect(out[base + 2 + 1]).toBe(-1);
+	});
+
+	it('gives each scale its OWN t, which is the whole reason bases exists', () => {
+		// A shared t would pass every other test in this file. Two scales at
+		// different points in their transitions is the case that separates
+		// "reads t from its own block" from "reads whichever t it happened to
+		// find" — and reading a neighbour's t renders plausibly, at the wrong
+		// point in a transition, which is the worst kind of wrong here.
+		const state = createIdentitySlotState(64);
+		const { length } = packIdentitySlots(
+			[
+				{
+					id: 'a',
+					slotTable: Float32Array.from([0]),
+					slotFrom: Float32Array.from([0]),
+					slotTo: Float32Array.from([10]),
+					t: 0,
+					slotVersion: 1
+				},
+				{
+					id: 'b',
+					slotTable: Float32Array.from([0]),
+					slotFrom: Float32Array.from([0]),
+					slotTo: Float32Array.from([10]),
+					t: 1,
+					slotVersion: 1
+				}
+			],
+			state
+		);
+		const out = new Float32Array(state.buffer.length);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+
+		expect(out[state.offsets.get('a')! + 2]).toBeCloseTo(0, 5);
+		expect(out[state.offsets.get('b')! + 2]).toBeCloseTo(10, 5);
+	});
+
+	it('does not write past the packed prefix', () => {
+		// The dispatch covers `length` threads; the tail must stay as it was, or
+		// a buffer dump is full of values nothing put there.
+		const state = createIdentitySlotState(64);
+		const { length } = packIdentitySlots(
+			[{ id: 'a', slotTable: Float32Array.from([0, 1]), t: 1, slotVersion: 1 }],
+			state
+		);
+		const out = new Float32Array(state.buffer.length).fill(999);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+		expect(out[length]).toBe(999);
+		expect(out[state.buffer.length - 1]).toBe(999);
 	});
 });

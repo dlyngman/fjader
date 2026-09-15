@@ -557,11 +557,9 @@ export class ScaleTemplateSystem {
 	 * of 8, while uniform buffers are nowhere near the default 12 in either stage.
 	 *
 	 * WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
-	 * vec4s and indexed with a shift and a mask. 4096 vec4s is 64 KB — the
-	 * default maxUniformBufferBindingSize — giving 16384 floats GLOBALLY across
-	 * every scale that needs one, at the per-scale base that scale carries.
+	 * a flat storage array, written by the resolve pass each frame.
 	 *
-	 * Each scale's block is [count, slot0, slot1, ...]. The count is what makes
+	 * Each scale's block is [count, t, slot0, slot1, ...]. The count is what makes
 	 * the lookup safe: ids and the slot table can disagree for a moment while a
 	 * dim appends, and without a per-scale bound an id past this scale's end
 	 * reads the NEXT scale's slots — a plausible wrong answer rather than a
@@ -572,38 +570,36 @@ export class ScaleTemplateSystem {
 		return `
     // ===== SHARED SLOT TABLE (identity id -> display slot) =====
     //
-    // TWO tables at one base: where each id's transition started, and where it
-    // is going. The interpolation happens here rather than in JS, so a reorder
-    // costs one 4-byte write of t per frame instead of re-uploading every slot.
-    @group(2) @binding(5) var<uniform> identitySlotsFrom: array<vec4<f32>, 4096>;
-    @group(2) @binding(6) var<uniform> identitySlotsTo: array<vec4<f32>, 4096>;
+    // ONE buffer, already resolved. A compute pass wrote
+    // \`mix(from[i], to[i], t)\` for every float of the packed table before this
+    // render pass was encoded (§40, §47 rung 1), so the render stages do no
+    // interpolation and never see the second table at all. That is what makes
+    // animating cost this stage's binding budget nothing.
+    //
+    // Storage rather than the two uniforms it replaces, which is what removed
+    // the vec4 packing (\`i >> 2u\`/\`i & 3u\` written in both JS and WGSL), the
+    // 64 KB uniform cap, and the 16384-float global ceiling with it.
+    @group(2) @binding(5) var<storage, read> identitySlots: array<f32>;
 
-    fn identitySlotFromAt(i: u32) -> f32 {
-      return identitySlotsFrom[i >> 2u][i & 3u];
-    }
-
-    fn identitySlotToAt(i: u32) -> f32 {
-      return identitySlotsTo[i >> 2u][i & 3u];
+    fn identitySlotAt(i: u32) -> f32 {
+      return identitySlots[i];
     }
 
     fn identitySlot(base: u32, id: u32) -> f32 {
       // Block layout: [count, t, slot0, slot1, ...]. The count is what makes a
       // block self-describing, so an id past this scale's end is discarded
-      // instead of reading into the next scale's slots.
-      let count = u32(identitySlotFromAt(base));
+      // instead of reading into the next scale's slots. It survives the resolve
+      // untouched because it holds the same value in both halves, so mixing it
+      // returns it.
+      let count = u32(identitySlots[base]);
       if (id >= count) {
         return -1.0;
       }
-      let t = identitySlotFromAt(base + 1u);
-      let a = identitySlotFromAt(base + 2u + id);
-      let b = identitySlotToAt(base + 2u + id);
-      // No sentinel case, deliberately. An id that is not displayed has -1 in
-      // BOTH tables, so the mix returns -1 without a branch; one that is
-      // leaving has a real slot in both, which is what lets it travel. The
-      // scale normalises that before packing, so the shader does not re-derive
-      // it. A scale with no driver has from == to and t == 1, making this an
-      // identity for ordinal colour and facets.
-      return mix(a, b, t);
+      // No sentinel case, deliberately. An id that is not displayed holds -1 in
+      // both halves, so the resolve wrote -1 without a branch; one that is
+      // leaving holds a real slot in both, which is what lets it travel. The
+      // scale normalises that before packing, so nothing here re-derives it.
+      return identitySlots[base + 2u + id];
     }
     `;
 	}
