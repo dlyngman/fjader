@@ -1165,7 +1165,7 @@ export class MarkLifecycleV2 {
 
 		// Tell the transforms which dim each categorical axis is identified by.
 		//
-		// This is what turns on topN's dense join (§44): with a dim to join
+		// This is what turns on topN's dense join: with a dim to join
 		// against, a category that drops out of the top N keeps a row at zero
 		// instead of vanishing, so its bar can shrink out rather than disappear
 		// on the frame the reorder lands.

@@ -195,7 +195,7 @@ function dimTableFor(config: MarkConfig | undefined, band: string): string | nul
 }
 
 /**
- * Give every category in the dim a row, at zero past the cutoff (§44).
+ * Give every category in the dim a row, at zero past the cutoff.
  *
  * This is what makes a departing category animate instead of disappearing: it
  * still has a row, its measure runs to 0, and enter/leave becomes an ordinary
@@ -218,16 +218,17 @@ function dimTableFor(config: MarkConfig | undefined, band: string): string | nul
  * Written with `sqlTag` because mosaic-sql's SelectQuery has no join — `from()`
  * takes table expressions and a multi-expression `from` is a cross join, which
  * is an INNER semantic and drops precisely the rows this exists to keep. A raw
- * FROM inside a transform's `apply()` is the case §7.2's rule permits; the
- * unaliased `Query.from(sqlTag...)` form is deliberate, because the object form
- * appends `AS "<key>"` after the ON clause and produces a syntax error.
+ * FROM inside a transform's `apply()` body is safe by construction — it is not a
+ * channel expression, so nothing downstream tries to analyse it. The unaliased
+ * `Query.from(sqlTag...)` form is deliberate, because the object form appends
+ * `AS "<key>"` after the ON clause and produces a syntax error.
  *
  * NOTE ON ROW ORDER. The `ORDER BY` here is correct but not binding: a bar mark
  * stacks by default, so this is immediately wrapped, and a subquery's ORDER BY
- * does not constrain the outer query (§34.5, at length). Anything that needs
- * rows in id order — id-indexed GPU buffers — has to get that ordering applied
- * at the OUTERMOST query, which is a separate change at `assembleQuery`'s
- * `orderChannels` seam. Do not read this line as a guarantee.
+ * does not constrain the outer query. Anything that needs rows in id order —
+ * id-indexed GPU buffers — has to get that ordering applied at the OUTERMOST
+ * query, which is a separate change at `assembleQuery`'s `orderChannels` seam.
+ * Do not read this line as a guarantee.
  */
 function densify(inner: SelectQuery, aliases: string[], band: string, dim: string): SelectQuery {
 	const select: Record<string, ExprNode> = {};

@@ -1,24 +1,23 @@
 <script>
-	// Measurement harness for proposals/review_band_category_index_architecture.md §45.7.
+	// Does the dense LEFT JOIN cost anything? A measurement harness.
 	//
-	// THE QUESTION. §44 proposes that an aggregated topN mark's outermost query
-	// LEFT JOIN the dim, so every category comes back on every update — a
-	// category dropping out of the topN then still has a row, at value 0, and
-	// animates out instead of vanishing. §44 is recommended on reasoning alone;
-	// this is the measurement it asked for, and it gates building on it.
+	// THE QUESTION. An aggregated topN mark ends at WHERE rank <= n, so a
+	// category dropping out has no row and its bar vanishes on the frame the
+	// reorder lands. Having the outermost query LEFT JOIN the dim keeps it, at
+	// value 0, so it can animate out instead. That is only worth building if the
+	// join is cheap, and this is the measurement.
 	//
-	// WHY THIS IS A ROUTE AND NOT AN INTEGRATION TEST. §29.10b: this project has
-	// two DuckDB->JS boundaries and they disagree. Integration tests run the
-	// `duckdb` npm package; the app runs duckdb-wasm through flechette's
-	// tableFromIPC. For a TIMING number those are different engines outright, and
-	// the chunk-count question below does not exist at all outside the app's
-	// path, because tableFromIPC is what produces the chunks. A node benchmark
-	// would be a confident number about something that does not ship — which is
-	// the exact failure §29.10 records.
+	// WHY THIS IS A ROUTE AND NOT AN INTEGRATION TEST. This project has two
+	// DuckDB->JS boundaries and they disagree. Integration tests run the `duckdb`
+	// npm package; the app runs duckdb-wasm through flechette's tableFromIPC. For
+	// a TIMING number those are different engines outright, and the chunk-count
+	// question below does not exist at all outside the app's path, because
+	// tableFromIPC is what produces the chunks. A node benchmark would be a
+	// confident number about something that does not ship.
 	//
-	// WHAT IS EXPECTED, written down first so the result is readable (§33.5: a
+	// WHAT IS EXPECTED, written down first so the result is readable. A
 	// diagnostic has to be able to surprise you, which means saying beforehand
-	// what it should say).
+	// what it should say.
 	//
 	//   The join runs AFTER aggregation. Its left side is the dim (C rows) and
 	//   its right side is the already-aggregated, already-ranked result (<= n
@@ -31,21 +30,21 @@
 	//   means something else is happening, and the query plan is the next thing
 	//   to look at.
 	//
-	// THE SECOND NUMBER MATTERS AS MUCH AS THE FIRST. §44's second argument for
+	// THE SECOND NUMBER MATTERS AS MUCH AS THE FIRST. The other reason to want
 	// the dense shape is that it preserves Arrow zero-copy: a dense result
 	// ordered by id IS the id-indexed GPU buffer, handed over without a copy.
 	// That holds only while DataAccessor's fast path does — `col.data.length ===
 	// 1` and `chunk.values instanceof Float32Array` (DataAccessor.ts:41-47).
 	// More than one chunk silently falls back to a copy, with no error anywhere,
-	// and §44.2's second argument evaporates. So CHUNKS is a pass/fail column,
-	// not a curiosity.
+	// and that argument evaporates. So CHUNKS is a pass/fail column, not a
+	// curiosity.
 	//
 	// HOW TO READ THE TABLE.
-	//   dense/sparse ratio near 1.0 at 50-5000  -> §44 proceeds as written
-	//   chunks > 1 at any size                  -> re-open §44; zero-copy is lost
+	//   dense/sparse ratio near 1.0 at 50-5000  -> the join is free; proceed
+	//   chunks > 1 at any size                  -> zero-copy is lost; reconsider
 	//   f32 = no                                -> a conversion copy per update
-	//   dense much slower at 5000               -> §44.3 item 1 binds sooner than
-	//                                              thought; look at the plan
+	//   dense much slower at 5000               -> cost binds sooner than thought;
+	//                                              look at the query plan
 	//
 	// Cache is disabled on every measured query (QueryOpts.cache = false), or the
 	// second run of each shape would report the map lookup rather than the query.
@@ -59,7 +58,7 @@
 
 	// Dim cardinalities to sweep. 50 is an ordinary bar chart, 500 a large one,
 	// 5000 the point where a racing chart is still plausible, 50000 the case
-	// §38.1 says breaks the slot table today.
+	// where a shared slot table stops fitting.
 	const CARDINALITIES = [50, 500, 5000, 50000];
 	const ROWS = 200_000; // fact rows, constant across the sweep
 	const TOP_N = 10;
@@ -100,11 +99,11 @@
 	}
 
 	/**
-	 * §44's shape: one row per category in the dim, always, in id order.
+	 * The dense shape: one row per category in the dim, always, in id order.
 	 *
-	 * The cutoff stays INSIDE the join (§44.4). The join restores rows, not
-	 * values, so an excluded category comes back at 0 — which is what makes a
-	 * departing bar shrink to nothing rather than slide away at full height.
+	 * The cutoff stays INSIDE the join, so the join restores rows and not values
+	 * — an excluded category comes back at 0, which is what makes a departing bar
+	 * shrink to nothing rather than slide away at full height.
 	 */
 	function denseSQL(view, idCol, dim) {
 		return `
@@ -142,8 +141,7 @@
 		// `col.data[0].values instanceof Float32Array`, which is undefined for a
 		// multi-chunk column — so it reported "not Float32Array" for a result
 		// that is in fact a Float32Array, via toArray(). Measuring the thing that
-		// ships beats measuring something adjacent to it (§29.10b, one level
-		// down).
+		// ships beats measuring something adjacent to it.
 		const out = new ArrowDataAccessor(table).getColumn('y');
 		const zeroCopy = chunks === 1 && out != null && out === col.data[0].values;
 
@@ -163,7 +161,7 @@
 	 * The first run of this harness reported 3 chunks at 5000 rows. 5000 / 2048
 	 * = 2.44, and 2048 is DuckDB's vector size — which suggests chunking is a
 	 * function of ROW COUNT and has nothing to do with the join at all. If that
-	 * is right it is a bigger finding than anything about §44: §36.11 claims
+	 * is right it is the bigger finding: Arrow zero-copy is assumed to be live
 	 * Arrow zero-copy is "genuine today", and the marks it matters most for are
 	 * the 200k-row scatters. Those would chunk too, and the fast path would
 	 * already be dead for exactly the case it was written to protect.
@@ -287,9 +285,10 @@
 
 	// A row is a pass when the dense shape stays close to sparse AND the result
 	// is a single Float32Array chunk. The time bound is deliberately loose below
-	// 50k, where §44 expects the join to be free, and absent at 50k, where §44.3
-	// already says the cost is real and the question is only how much.
-	// What actually matters is TIME. §46 measured the multi-chunk path at
+	// 50k, where the join is expected to be free, and absent at 50k, where the
+	// cost is real and the question is only how much.
+	//
+	// What actually matters is TIME. The multi-chunk path measures at
 	// 0.00-0.10 ms — one allocation and a memcpy — so crossing into multiple
 	// chunks is a note, not a failure. A column that is not a Float32Array at all
 	// WOULD be a failure, because that means a per-element numeric conversion
@@ -297,17 +296,17 @@
 	function verdict(r) {
 		if (!r.f32) return 'FAIL — not Float32Array';
 		if (r.C <= 5000 && r.ratio > 1.5) return 'FAIL — join not free';
-		return r.chunks === 1 ? 'pass (zero-copy)' : 'pass (chunked, §46: ~free)';
+		return r.chunks === 1 ? 'pass (zero-copy)' : 'pass (chunked, ~free)';
 	}
 </script>
 
 <div class="page">
-	<h1>Dense LEFT JOIN — query cost (§45.7)</h1>
+	<h1>Dense LEFT JOIN — query cost</h1>
 	<p class="lede">
-		Does making every category come back on every update (§44) cost anything? Expectation: near-free
-		up to a few thousand categories, because the join runs after aggregation and the fact-table scan
-		is unchanged. <strong>The chunks column matters as much as the times</strong>
-		— more than one chunk means Arrow zero-copy is silently lost and §44's second argument with it.
+		Does making every category come back on every update cost anything? Expectation: near-free up to
+		a few thousand categories, because the join runs after aggregation and the fact-table scan is
+		unchanged. <strong>The chunks column matters as much as the times</strong> — more than one chunk
+		means Arrow zero-copy is silently lost, and with it half the case for the dense shape.
 	</p>
 
 	<p class="status">
@@ -322,8 +321,9 @@
 	<h2>Control: chunking vs row count (no join, no aggregate)</h2>
 	<p class="lede">
 		One cast column, N rows, nothing else. If chunks track row count here, chunking is a property of
-		the DuckDB&nbsp;&rarr;&nbsp;Arrow boundary and not of §44 — and §36.11's claim that zero-copy is
-		"genuine today" needs re-reading, because the 200k-row case is the one it was protecting.
+		the DuckDB&nbsp;&rarr;&nbsp;Arrow boundary and not of the join — and the assumption that
+		zero-copy is live today needs re-reading, because the 200k-row case is the one it was
+		protecting.
 	</p>
 	<table>
 		<thead>

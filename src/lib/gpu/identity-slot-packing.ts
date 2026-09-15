@@ -66,7 +66,7 @@ export interface IdentitySlotScale {
 	 * that getter folds `mix(from, to, t)` over the whole dim on demand, and the
 	 * packer runs every frame, so reading it here made a per-frame O(dim) walk
 	 * out of a per-reorder one — producing, since the resolve moved to the GPU,
-	 * a number nothing reads at all (§41.2, §49.1).
+	 * a number nothing reads at all.
 	 */
 	slotCount: number;
 	/**

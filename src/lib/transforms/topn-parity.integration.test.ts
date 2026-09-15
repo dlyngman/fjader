@@ -285,15 +285,15 @@ describe('topN SQL/JS parity (native DuckDB)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The dense LEFT JOIN: every category keeps a row (§44)
+// The dense LEFT JOIN: every category keeps a row
 // ---------------------------------------------------------------------------
 //
 // A category that drops out of the top N has no row, so there is nothing to
 // animate out — it vanishes on the frame the reorder lands. Joining from the
 // dim keeps it, at zero. These run against real DuckDB because the question is
 // SQL semantics (which rows come back, with what values), which is the half of
-// the boundary the npm driver and duckdb-wasm agree on — unlike types and
-// batching, where §29.10b applies.
+// the boundary the npm driver and duckdb-wasm agree on. They do NOT agree on
+// types or on Arrow batching, so nothing here may assert on either.
 
 describe('topN dense join', () => {
 	let db: DB;
@@ -372,7 +372,7 @@ describe('topN dense join', () => {
 	});
 
 	it('covers the whole id space, densely, so row order can align with id', async () => {
-		// The alignment §44 turns on: with ORDER BY d.id the result is the
+		// The alignment this exists for: with ORDER BY d.id the result IS the
 		// id-indexed buffer. This asserts the ids are 0..n-1 with no gaps, which
 		// is what makes that indexing meaningful at all.
 		const rows = await run(true, 3);

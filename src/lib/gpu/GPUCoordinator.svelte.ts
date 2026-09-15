@@ -641,13 +641,13 @@ export class GPUCoordinator {
 				{
 					// Binding 5: the RESOLVED slot table — identity id -> where that
 					// id is right now. A compute pass writes it once per frame from
-					// `from`, `to` and each block's `t` (§40, §47 rung 1); the render
-					// stages read this one buffer and do no interpolation.
+					// `from`, `to` and each block's `t`; the render stages read this one
+					// buffer and do no interpolation.
 					//
 					// Storage, where it used to be two uniforms. It costs the vertex
-					// stage one binding where the pair cost none — Rects lands at 8
-					// of 8, which is the free limit and what §40.3 predicted — and in
-					// exchange the vec4 packing, the 64 KB uniform cap and §38's
+					// stage one binding where the pair cost none — Rects lands at 8 of
+					// 8, the default maxStorageBuffersPerShaderStage — and in exchange
+					// the vec4 packing, the 64 KB uniform binding cap and the
 					// 16384-float global ceiling all go away with the address space.
 					//
 					// `from` and `to` are not here at all any more. They are bound to
@@ -784,7 +784,7 @@ export class GPUCoordinator {
 	 *
 	 * `from`, `to` and `bases` are compute-stage inputs; `resolved` is what the
 	 * render stages bind. All four are storage now — the vec4 packing and the
-	 * 64 KB uniform cap went with the address space (§47 rung 1).
+	 * 64 KB uniform binding cap went with the address space.
 	 */
 	#createIdentitySlotBuffer(): void {
 		if (this.#identitySlotBuffer) return;
@@ -916,8 +916,7 @@ export class GPUCoordinator {
 			// Gated on slotCount, never on slotTable: this runs every frame, and
 			// on a driven scale `slotTable` is a getter that folds mix(from, to, t)
 			// over the whole dim. Since the GPU does that mix itself, touching it
-			// here walked every id per frame to produce a number nothing read
-			// (§41.2, §49.1).
+			// here walked every id per frame to produce a number nothing read.
 			const slotCount = scale.slotCount;
 			if (slotCount === undefined) continue;
 			// from/to/t are absent for a scale with no driver — ordinal colour,

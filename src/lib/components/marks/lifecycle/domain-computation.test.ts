@@ -119,7 +119,7 @@ describe('extractIdsRankedFromData', () => {
 	});
 
 	it('leaves an unranked category out of the display order entirely', () => {
-		// The dense join (§44) returns every category so a departing bar has a
+		// The dense join returns every category so a departing bar has a
 		// row to shrink out on, and marks the ones past the cutoff with a NaN
 		// rank. They must not reach the axis: without this, topN(2) over five
 		// categories would display all five.

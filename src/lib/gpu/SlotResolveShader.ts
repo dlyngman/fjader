@@ -1,11 +1,11 @@
 /**
- * The slot resolve kernel (§40, §47 rung 1).
+ * The slot resolve kernel.
  *
  * One compute pass per frame writes `resolved[i] = mix(from[i], to[i], t)` for
  * every float of the packed slot table, and the vertex and fragment stages read
- * `resolved` alone. That is the whole of §40's argument: the second buffer never
- * reaches the render stages, so animating a channel costs their binding budget
- * nothing.
+ * `resolved` alone. That is the whole argument for doing it this way: the second
+ * buffer never reaches the render stages, so animating a channel costs their
+ * binding budget nothing.
  *
  * WHY t COMES FROM A LOOKUP. `t` is per scale and lives in that scale's block
  * header, but blocks are variable-length, so a flat thread cannot find its own
@@ -24,8 +24,8 @@
  *
  * WHY THERE IS NO SENTINEL BRANCH. An id that is not displayed holds -1 in both
  * halves, so the mix returns -1 for any t; a leaver holds a real slot in both,
- * which is what lets it travel. `BandScaleState` normalises that before packing
- * (§37), so this kernel does not re-derive it.
+ * which is what lets it travel. `BandScaleState` normalises that before packing,
+ * so this kernel does not re-derive it.
  */
 
 /** Threads per workgroup. 64 is the usual floor for good occupancy. */
@@ -63,8 +63,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 /**
  * The same expression in JS, and the reason it exists.
  *
- * §45.6: logic that lives only in WGSL is reachable only through a device, which
- * is the condition that got the packer extracted in the first place. This is the
+ * Logic that lives only in WGSL is reachable only through a device, which is the
+ * condition that got the packer extracted in the first place. This is the
  * reference the shader is asserted against, so the formula has something to be
  * wrong against — `ef70743` did the same for the vertex-stage mix it replaces.
  *

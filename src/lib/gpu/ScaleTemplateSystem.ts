@@ -572,9 +572,9 @@ export class ScaleTemplateSystem {
     //
     // ONE buffer, already resolved. A compute pass wrote
     // \`mix(from[i], to[i], t)\` for every float of the packed table before this
-    // render pass was encoded (§40, §47 rung 1), so the render stages do no
-    // interpolation and never see the second table at all. That is what makes
-    // animating cost this stage's binding budget nothing.
+    // render pass was encoded, so the render stages do no interpolation and
+    // never see the second table at all. That is what makes animating cost
+    // this stage's binding budget nothing.
     //
     // Storage rather than the two uniforms it replaces, which is what removed
     // the vec4 packing (\`i >> 2u\`/\`i & 3u\` written in both JS and WGSL), the

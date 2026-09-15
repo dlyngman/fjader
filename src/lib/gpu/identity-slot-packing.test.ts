@@ -359,7 +359,7 @@ describe('what the shader reads back', () => {
 });
 
 // ---------------------------------------------------------------------------
-// bases — the per-element block lookup the resolve kernel needs (§47 rung 1)
+// bases — the per-element block lookup the resolve kernel needs
 // ---------------------------------------------------------------------------
 //
 // The kernel reads `t` from its element's block header, and blocks are
@@ -497,12 +497,12 @@ describe('packIdentitySlots: bases', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The resolve kernel's formula, against the packed buffers (§47 rung 1)
+// The resolve kernel's formula, against the packed buffers
 // ---------------------------------------------------------------------------
 //
 // The mix moved out of the vertex stage and into a compute pass, so it is now
-// reachable only through a device — which is the condition §45.6 warns about and
-// the reason `identity-slot-packing.ts` was extracted in the first place.
+// reachable only through a device — which is the condition that got this module
+// extracted in the first place.
 // `resolveSlotsReference` is the JS twin the WGSL is written against; these
 // tests pin it to the behaviour the vertex stage had, so the port has something
 // to be wrong against rather than only a running browser.

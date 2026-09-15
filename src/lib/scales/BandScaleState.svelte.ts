@@ -479,7 +479,7 @@ export class BandScaleState {
 	 * Exists so the packer never reads `slotTable`, whose getter folds
 	 * `mix(from, to, t)` over the whole dim. The packer runs every frame and the
 	 * GPU does that mix itself now, so reading it there was an O(dim) walk per
-	 * frame producing a number nothing consumed (§41.2, §49.1).
+	 * frame producing a number nothing consumed.
 	 */
 	get slotCount(): number {
 		return this.#slotTarget.length;
