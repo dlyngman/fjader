@@ -180,6 +180,80 @@ function resolveTopNColumns(
  */
 export const TOPN_RANK_COLUMN = '__dplot_topn_rank';
 
+/**
+ * The dim table this mark's band channel is identified by, if it has one.
+ *
+ * Handed over by the lifecycle rather than derived here, for the reason
+ * `ScaleMap.otherIdsByColumn` exists: a transform cannot name a dim. The name
+ * is session-suffixed and owned by the identity coordinator, and rebuilding it
+ * from a field name is how two derivations that must agree stop agreeing.
+ */
+function dimTableFor(config: MarkConfig | undefined, band: string): string | null {
+	const byChannel = config?.dimTableByChannel as Record<string, string> | undefined;
+	const dim = byChannel?.[band];
+	return typeof dim === 'string' && dim.length > 0 ? dim : null;
+}
+
+/**
+ * Give every category in the dim a row, at zero past the cutoff (§44).
+ *
+ * This is what makes a departing category animate instead of disappearing: it
+ * still has a row, its measure runs to 0, and enter/leave becomes an ordinary
+ * value change on a channel that already exists — which is what the animation
+ * contract says it should be.
+ *
+ * **The cutoff stays INSIDE the join.** The join restores ROWS, not VALUES, so
+ * an excluded category comes back at 0 rather than at its real aggregate. That
+ * is what makes a leaving bar shrink to nothing, and it is also why
+ * `includeOthers` cannot double-count: Other carries the sum, and the
+ * categories folded into it carry zero.
+ *
+ * Column rules, and each one is load-bearing:
+ * - the band channel becomes `d.id`, so it is present for every category;
+ * - the rank passes through and stays NULL for a category past the cutoff,
+ *   which is how the band axis knows that one is not displayed;
+ * - every other channel is COALESCEd to 0, so a padded row has zero extent
+ *   rather than a NaN one, which would be discarded rather than shrunk.
+ *
+ * Written with `sqlTag` because mosaic-sql's SelectQuery has no join — `from()`
+ * takes table expressions and a multi-expression `from` is a cross join, which
+ * is an INNER semantic and drops precisely the rows this exists to keep. A raw
+ * FROM inside a transform's `apply()` is the case §7.2's rule permits; the
+ * unaliased `Query.from(sqlTag...)` form is deliberate, because the object form
+ * appends `AS "<key>"` after the ON clause and produces a syntax error.
+ *
+ * NOTE ON ROW ORDER. The `ORDER BY` here is correct but not binding: a bar mark
+ * stacks by default, so this is immediately wrapped, and a subquery's ORDER BY
+ * does not constrain the outer query (§34.5, at length). Anything that needs
+ * rows in id order — id-indexed GPU buffers — has to get that ordering applied
+ * at the OUTERMOST query, which is a separate change at `assembleQuery`'s
+ * `orderChannels` seam. Do not read this line as a guarantee.
+ */
+function densify(inner: SelectQuery, aliases: string[], band: string, dim: string): SelectQuery {
+	const select: Record<string, ExprNode> = {};
+	for (const alias of aliases) {
+		select[alias] =
+			alias === band
+				? (sqlTag`d."id"` as ExprNode)
+				: (sqlTag`COALESCE(a.${column(alias)}, 0)` as ExprNode);
+	}
+	// Deliberately NOT coalesced: NULL here means "not displayed", which is
+	// exactly what the band axis needs in order to leave this id out of the
+	// display order.
+	select[TOPN_RANK_COLUMN] = sqlTag`a.${column(TOPN_RANK_COLUMN)}` as ExprNode;
+
+	return Query.from(
+		sqlTag`${literalTable(dim)} AS d LEFT JOIN (${inner}) AS a ON a.${column(band)} = d."id"`
+	)
+		.select(select)
+		.orderby(sqlTag`d."id"`);
+}
+
+/** A bare table name as SQL. The dim name comes from the engine, not a user. */
+function literalTable(name: string) {
+	return sqlTag([`"${name.replace(/"/g, '""')}"`] as unknown as TemplateStringsArray);
+}
+
 function topNSQL(n: number, options: TopNOptions): SqlTransform {
 	return {
 		stage: 'sql',
@@ -240,9 +314,15 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 			//
 			// The `__dplot_` prefix is load-bearing: #writeTooltipTable filters
 			// exactly that prefix, so the rank cannot leak into a tooltip.
-			return Query.from({ __topn: ranked })
+			const filtered = Query.from({ __topn: ranked })
 				.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
 				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
+
+			// A category that drops out of the top N has no row, so there is
+			// nothing to animate out — it vanishes on the frame the reorder lands.
+			// Given a dim to join against, keep every category instead.
+			const dim = dimTableFor(config, band);
+			return dim ? densify(filtered, aliases, band, dim) : filtered;
 		},
 		describe() {
 			return `Top ${n} (SQL)`;

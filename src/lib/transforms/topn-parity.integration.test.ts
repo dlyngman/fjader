@@ -283,3 +283,103 @@ describe('topN SQL/JS parity (native DuckDB)', () => {
 		expect(sqlText.trimEnd()).toMatch(/ORDER BY "fill", "x"$/);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// The dense LEFT JOIN: every category keeps a row (§44)
+// ---------------------------------------------------------------------------
+//
+// A category that drops out of the top N has no row, so there is nothing to
+// animate out — it vanishes on the frame the reorder lands. Joining from the
+// dim keeps it, at zero. These run against real DuckDB because the question is
+// SQL semantics (which rows come back, with what values), which is the half of
+// the boundary the npm driver and duckdb-wasm agree on — unlike types and
+// batching, where §29.10b applies.
+
+describe('topN dense join', () => {
+	let db: DB;
+	const DIM = '__dplot_dim_category_test';
+
+	beforeAll(async () => {
+		db = openDB();
+		await db.run(SEED_SQL);
+		// The dim as categorical-identity builds it: ids assigned by value order,
+		// dense from 0, never renumbered.
+		await db.run(
+			`CREATE TABLE "${DIM}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT category AS value FROM sales)`
+		);
+		// The band channel carries the dim id, as the identity view emits it.
+		await db.run(
+			`CREATE TABLE sales_v AS
+			 SELECT s.*, COALESCE(d.id, -1) AS category_idx
+			 FROM sales s LEFT JOIN "${DIM}" d ON s.category = d.value`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	const base = () =>
+		Query.from('sales_v')
+			.select({ x: column('category_idx'), y2: sum(column('revenue')) })
+			.groupby(column('category_idx'));
+
+	const cfg = { markType: 'barY', table: 'sales_v', x: 'x', y: 'y2' } as MarkConfig;
+
+	async function run(dense: boolean, n: number) {
+		const t = topN(n, { by: 'y2' });
+		const q = t.apply(base(), {
+			...cfg,
+			...(dense ? { dimTableByChannel: { x: DIM } } : {})
+		});
+		return db.all(q.toString());
+	}
+
+	it('returns one row per category in the dim, not per displayed category', async () => {
+		const [dimRows] = await db.all(`SELECT COUNT(*)::INT AS n FROM "${DIM}"`);
+		const total = dimRows.n as number;
+		expect(total).toBeGreaterThan(3);
+
+		expect((await run(false, 3)).length).toBe(3);
+		expect((await run(true, 3)).length).toBe(total);
+	});
+
+	it('gives an excluded category a zero measure and no rank', async () => {
+		const rows = await run(true, 3);
+		const ranked = rows.filter((r) => r[TOPN_RANK_COLUMN] != null);
+		const excluded = rows.filter((r) => r[TOPN_RANK_COLUMN] == null);
+
+		expect(ranked.length).toBe(3);
+		expect(excluded.length).toBe(rows.length - 3);
+
+		// The whole point: an excluded category is present, at zero, so a bar can
+		// shrink to nothing rather than disappear.
+		for (const r of excluded) expect(Number(r.y2)).toBe(0);
+		// And it still carries its own id, so the buffer slot it occupies is its
+		// own rather than someone else's.
+		expect(new Set(rows.map((r) => r.x)).size).toBe(rows.length);
+	});
+
+	it('leaves the displayed rows byte-identical to the sparse query', async () => {
+		// The join must not disturb what topN already produced — it only adds.
+		const sparse = await run(false, 3);
+		const dense = (await run(true, 3)).filter((r) => r[TOPN_RANK_COLUMN] != null);
+
+		const key = (r: Record<string, unknown>) => `${r.x}:${Number(r.y2)}:${r[TOPN_RANK_COLUMN]}`;
+		expect(new Set(dense.map(key))).toEqual(new Set(sparse.map(key)));
+	});
+
+	it('covers the whole id space, densely, so row order can align with id', async () => {
+		// The alignment §44 turns on: with ORDER BY d.id the result is the
+		// id-indexed buffer. This asserts the ids are 0..n-1 with no gaps, which
+		// is what makes that indexing meaningful at all.
+		const rows = await run(true, 3);
+		const ids = rows.map((r) => Number(r.x)).sort((a, b) => a - b);
+		expect(ids).toEqual(ids.map((_, i) => i));
+	});
+
+	it('is off unless a dim is supplied, so every existing mark is unchanged', async () => {
+		const rows = await run(false, 3);
+		expect(rows.length).toBe(3);
+		for (const r of rows) expect(r[TOPN_RANK_COLUMN]).not.toBeNull();
+	});
+});
