@@ -781,8 +781,9 @@ describe('BandScaleState identity <-> display translation', () => {
 				}
 				const leaving = s.bandTicks().find((t) => t.key === 1)!;
 				expect(leaving.value).toBe('Chinstrap');
-				expect(leaving.opacity).toBeGreaterThan(0);
-				expect(leaving.opacity).toBeLessThan(1);
+				expect(s.tickOpacity(1)).toBeGreaterThan(0);
+				expect(s.tickOpacity(1)).toBeLessThan(1);
+				expect(s.tickSlot(1)).toBeCloseTo(s.slotTable[1], 6);
 
 				while (!s.clock.isAtRest()) {
 					s.clock.step();
@@ -790,7 +791,7 @@ describe('BandScaleState identity <-> display translation', () => {
 				}
 				s.clock._markAtRest();
 				expect(s.bandTicks().map((t) => t.value)).toEqual(['Adelie', 'Gentoo']);
-				expect(s.bandTicks().every((t) => t.opacity === 1)).toBe(true);
+				expect(s.bandTicks().every((t) => s.tickOpacity(t.key) === 1)).toBe(true);
 			});
 
 			it('gives the grid every id, and which of them to show', () => {
@@ -822,7 +823,9 @@ describe('BandScaleState identity <-> display translation', () => {
 					for (const tick of s.bandTicks()) {
 						const expected = d3(tick.value!)! + d3.bandwidth() / 2;
 						const actual =
-							axis === 'x' ? s.slotCenter(tick.slot, size) : size - s.slotCenter(tick.slot, size);
+							axis === 'x'
+								? s.slotCenter(s.tickSlot(tick.key), size)
+								: size - s.slotCenter(s.tickSlot(tick.key), size);
 						expect(actual).toBeCloseTo(expected, 3);
 					}
 				}

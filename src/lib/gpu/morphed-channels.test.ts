@@ -185,6 +185,37 @@ describe('MorphedChannels', () => {
 		expect(issued).toContain('imm count=3 t=0');
 	});
 
+	it('joins a restart it has not folded yet, instead of issuing a second one', () => {
+		// The reorder a result causes restarts the clock first; the mark's own
+		// write lands right behind it. A second restart would repeat the scale's
+		// O(dim) slot fold and slot-table upload for nothing.
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+
+		f.scale.startTransition(); // the layout's restart
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		expect(f.scale.starts).toBe(1);
+
+		// And the fold still happens, carrying the new values with it.
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		expect(issued).toContain('imm count=3 t=0');
+	});
+
+	it('still starts its own transition once the last restart has been folded', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		f.scale.startTransition();
+		f.frame(); // folded
+
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		expect(f.scale.starts).toBe(2);
+	});
+
 	it('folds when a SIBLING restarts the shared clock, with no data of its own', () => {
 		const f = fakes();
 		const m = morphed(f);

@@ -34,7 +34,8 @@
 			s.updateScaleDomain(base);
 			const fmt = tickFormat ?? s.tickFormat(ticksNumber);
 			// Use animated position if available, else evenly spaced
-			const xNorm = animPositions.length === n ? animPositions[visualIdx] : (n > 1 ? visualIdx / (n - 1) : 0.5);
+			const xNorm =
+				animPositions.length === n ? animPositions[visualIdx] : n > 1 ? visualIdx / (n - 1) : 0.5;
 			return {
 				dataIdx,
 				visualIdx,
@@ -59,20 +60,16 @@
 		{@const labelX = vi === 0 ? -8 : vi === axes.length - 1 ? 8 : 0}
 		{@const isDragging = dragDataIdx === axis.dataIdx}
 		{@const axisX = axis.x}
-		<g
-			class="parallel-axis"
-			class:dragging={isDragging}
-			transform="translate({axisX}, 0)"
-		>
+		<g class="parallel-axis" class:dragging={isDragging} transform="translate({axisX}, 0)">
 			<line x1={0} x2={0} y1={0} y2={c.innerHeight} class="axis-line" />
 
 			{#each axis.ticks as tick, j (j)}
 				{@const y = axis.scale(tick)}
 				<line x1={-4} x2={4} y1={y} y2={y} class="tick-line" />
-				<text class="tick-halo" text-anchor={anchor} dominant-baseline="middle" x={labelX} y={y}>
+				<text class="tick-halo" text-anchor={anchor} dominant-baseline="middle" x={labelX} {y}>
 					{axis.fmt(tick)}
 				</text>
-				<text class="tick-label" text-anchor={anchor} dominant-baseline="middle" x={labelX} y={y}>
+				<text class="tick-label" text-anchor={anchor} dominant-baseline="middle" x={labelX} {y}>
 					{axis.fmt(tick)}
 				</text>
 			{/each}
@@ -93,8 +90,10 @@
 		{@const n = ps.columns.length}
 		{@const dragVisualIdx = ps.axisOrder.indexOf(dragDataIdx)}
 		{@const slots = Array.from({ length: n }, (_, i) => visualX(i, n))}
-		{@const closestSlot = slots.reduce((best, x, i) =>
-			Math.abs(dragX - x) < Math.abs(dragX - slots[best]) ? i : best, 0)}
+		{@const closestSlot = slots.reduce(
+			(best, x, i) => (Math.abs(dragX - x) < Math.abs(dragX - slots[best]) ? i : best),
+			0
+		)}
 		{#if closestSlot !== dragVisualIdx}
 			<line
 				x1={slots[closestSlot]}

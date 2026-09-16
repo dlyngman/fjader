@@ -226,8 +226,9 @@ export class BaseGPURenderer {
 			device: this.#device,
 			host: this.#gpuCoordinator,
 			label: this.#rendererId,
+			// No template string: this runs on every frame a mark encodes.
 			scaleFor: (axis) =>
-				(this.#chartContext as unknown as Record<string, unknown>)[`${axis}ScaleState`],
+				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState,
 			affectedCharts: () =>
 				this.#facetChartIds.length > 0 ? this.#facetChartIds : [this.#chartContext.chartId]
 		});

@@ -358,6 +358,7 @@ export class GPUCoordinator {
 	#identitySlots: IdentitySlotState | null = null;
 	/** Reused per frame so the hot path allocates nothing. */
 	#identitySlotScales: IdentitySlotScale[] = [];
+	#identitySlotEntryPool: IdentitySlotScale[] = [];
 	/**
 	 * Last slot base pushed back to a scale, so a static chart patches nothing.
 	 *
@@ -392,6 +393,8 @@ export class GPUCoordinator {
 	#slotResolveCount = 0;
 	/** Set when the tables or a t moved; see #encodeSlotResolve. */
 	#slotResolvePending = false;
+	/** Built once; encoded on every frame a t or table moves. */
+	#slotResolvePassDescriptor: GPUComputePassDescriptor = { label: 'slot-resolve' };
 	/** `count` for the resolve, pushed as an immediate. */
 	#slotResolveImmediates = new Uint32Array(1);
 
@@ -878,7 +881,7 @@ export class GPUCoordinator {
 		const count = this.#slotResolveCount;
 		if (count === 0) return;
 
-		const pass = encoder.beginComputePass({ label: 'slot-resolve' });
+		const pass = encoder.beginComputePass(this.#slotResolvePassDescriptor);
 		pass.setPipeline(this.#slotResolvePipeline);
 		this.#slotResolveImmediates[0] = count;
 		pass.setImmediates!(0, this.#slotResolveImmediates);
@@ -905,7 +908,10 @@ export class GPUCoordinator {
 		// Collect this frame's band/point scales into the reused array. The
 		// packing itself is pure — see identity-slot-packing.ts, which is where the
 		// allocator, the capacity fallback and the eviction sweep are tested.
+		// Entries are pooled and overwritten in place: this runs every frame, and
+		// an object per scale per frame is garbage for nothing.
 		const scales = this.#identitySlotScales;
+		const pool = this.#identitySlotEntryPool;
 		scales.length = 0;
 		const consumers = this.#slotBaseConsumers;
 		consumers.length = 0;
@@ -936,15 +942,15 @@ export class GPUCoordinator {
 			// which makes the resolve an identity for it. Such a scale supplies
 			// slotTable instead, and reading it costs nothing: it is a plain field
 			// on the scales that have no fold.
-			scales.push({
-				id: scale.id,
-				slotCount,
-				slotTable: scale.slotFrom ? undefined : scale.slotTable,
-				slotFrom: scale.slotFrom,
-				slotTo: scale.slotTo,
-				t: scale.t,
-				slotVersion: scale.slotVersion
-			});
+			const entry = (pool[scales.length] ??= { id: '', slotCount: 0 });
+			entry.id = scale.id;
+			entry.slotCount = slotCount;
+			entry.slotTable = scale.slotFrom ? undefined : scale.slotTable;
+			entry.slotFrom = scale.slotFrom;
+			entry.slotTo = scale.slotTo;
+			entry.t = scale.t;
+			entry.slotVersion = scale.slotVersion;
+			scales.push(entry);
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.
 			consumers.push(

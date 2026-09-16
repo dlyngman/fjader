@@ -131,3 +131,14 @@ describe('SlotTransition frame notifications', () => {
 		expect(frames.at(-1)).toBe(1);
 	});
 });
+
+describe('SlotTransition per-id reads', () => {
+	it('slotOf is the full table’s value for that id, mid-flight, without walking the table', () => {
+		const s = laidOut();
+		s.layout('ids', [2, 0], 4); // 1 leaves, 3 stays hidden, 2 and 0 swap
+		stepTo(s, 25);
+		const table = Array.from(s.table);
+		for (let id = 0; id < 4; id++) expect(s.slotOf(id)).toBeCloseTo(table[id], 6);
+		expect(s.slotOf(99)).toBe(-1);
+	});
+});

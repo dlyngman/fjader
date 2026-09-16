@@ -21,10 +21,6 @@ export interface BandTick {
 	/** Stable across reorders: the dim id, or the position without identity. */
 	key: number;
 	value: DimValue | undefined;
-	/** Where it is now, fractional mid-transition. */
-	slot: number;
-	/** 0..1, fading with the category's enter or exit. */
-	opacity: number;
 }
 
 interface BandScaleConfig {
@@ -196,7 +192,8 @@ export class BandScaleState {
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
-			onFrame: () => this.#slotFrame++
+			onFrame: () => this.#slotFrame++,
+			onRest: () => this.#slotRest++
 		});
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
@@ -467,6 +464,14 @@ export class BandScaleState {
 	 * no reactivity at all.
 	 */
 	#slotFrame = $state(0);
+	/** Bumped when a transition settles — the set of ids on screen shrank. */
+	#slotRest = $state(0);
+	/**
+	 * getConfig's result, overwritten on every call rather than rebuilt: the
+	 * coordinator reads it for every band scale on every frame, and the CPU layout
+	 * reads it per label per frame during a transition. Read it immediately.
+	 */
+	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0, align: 0.5 };
 
 	/**
 	 * Display slot per identity id: `slotTable[id]` is where this category is
@@ -901,12 +906,12 @@ export class BandScaleState {
 			? this.#slots.animatedCount
 			: this.effectiveDomain.length;
 
-		return {
-			categoryCount,
-			paddingInner: paddingInner,
-			paddingOuter: paddingOuter,
-			align: this.#align
-		};
+		const config = this.#gpuConfig;
+		config.categoryCount = categoryCount;
+		config.paddingInner = paddingInner;
+		config.paddingOuter = paddingOuter;
+		config.align = this.#align;
+		return config;
 	}
 
 	// =========================================================================
@@ -994,40 +999,52 @@ export class BandScaleState {
 	}
 
 	/**
-	 * The categories on screen NOW, for a band axis to label.
+	 * The categories on screen, for a band axis to label.
 	 *
 	 * Not the domain: mid-transition a leaving category is no longer in it but
 	 * its bar is still sliding out, and an entering one is in it but has not
-	 * arrived. Every id whose current slot is on screen is listed, at that
-	 * fractional slot, with its label's opacity — fading out as it leaves, in as
-	 * it enters, on the same clock as the bars.
+	 * arrived. Both are listed, from the moment a layout lands until the
+	 * transition settles.
+	 *
+	 * The LIST changes only then — layout and settling — so it is rebuilt only
+	 * then, and its entries are stable. Where each label is and how visible, which
+	 * change every frame, are asked per label with `tickSlot` and `tickOpacity`:
+	 * O(1) each, no arrays, and no walk over ids that are not on screen.
 	 *
 	 * Keyed by id, so an axis `{#each}` moves a label rather than replacing it.
-	 * Position it with `slotCenter`.
 	 */
 	bandTicks(): BandTick[] {
 		void this._version;
-		void this.#slotFrame;
-		const table = this.#slots.table;
+		void this.#slotRest;
 		const ticks: BandTick[] = [];
 
 		if (this.hasIdentity) {
+			// Headed somewhere on screen: displayed, entering, or leaving toward a
+			// gateway. A hidden id is -1 in both halves.
+			const to = this.#slots.to;
 			const values = this.#identity!.values;
-			for (let id = 0; id < table.length; id++) {
-				const slot = table[id];
-				if (slot < 0) continue;
-				const value = values[id];
-				ticks.push({ key: id, value, slot, opacity: this.#slots.alphaOf(id) });
+			for (let id = 0; id < to.length; id++) {
+				if (to[id] >= 0) ticks.push({ key: id, value: values[id] });
 			}
 			return ticks;
 		}
 
 		// No identity: the channel is already a display position.
 		const domain = this.effectiveDomain;
-		for (let i = 0; i < domain.length; i++) {
-			ticks.push({ key: i, value: domain[i], slot: table[i] ?? i, opacity: 1 });
-		}
+		for (let i = 0; i < domain.length; i++) ticks.push({ key: i, value: domain[i] });
 		return ticks;
+	}
+
+	/** Where a tick's category is now — its fractional slot. Per frame, O(1). */
+	tickSlot(key: number): number {
+		void this.#slotFrame;
+		return this.#slots.slotOf(key);
+	}
+
+	/** How visible a tick's label is now, fading with its category. Per frame, O(1). */
+	tickOpacity(key: number): number {
+		void this.#slotFrame;
+		return this.#slots.alphaOf(key);
 	}
 
 	/**
@@ -1174,7 +1191,7 @@ export class BandScaleState {
 			},
 
 			// GPU config
-			gpuConfig: this.getConfig(),
+			gpuConfig: { ...this.getConfig() },
 
 			// Identity <-> display. Replaces the old category -> index map, which
 			// described a channel encoding this scale no longer uses: with

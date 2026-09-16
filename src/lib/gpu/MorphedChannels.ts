@@ -138,6 +138,11 @@ export class MorphedChannels {
 	#affectedCharts: () => string[];
 
 	#channels = new Map<number, Channel>();
+	/**
+	 * The same channels as an array, for the per-frame loops: iterating a Map
+	 * allocates an iterator, and encode runs on every rendered frame.
+	 */
+	#channelList: Channel[] = [];
 	#registered = false;
 
 	#alignmentKey: number | null = null;
@@ -154,6 +159,11 @@ export class MorphedChannels {
 
 	/** Last version seen from the clock, to notice a restart this mark did not cause. */
 	#lastClockVersion: number | null = null;
+	/** #readClock's results, in fields rather than a returned object. */
+	#clockT = 1;
+	#clockRestarted = false;
+	/** Built once: a descriptor per encode would be an allocation per frame. */
+	#passDescriptor: GPUComputePassDescriptor;
 	#ownClock: TransitionClock | null = null;
 
 	#immediates = new ArrayBuffer(VALUE_RESOLVE_IMMEDIATE_SIZE);
@@ -177,6 +187,7 @@ export class MorphedChannels {
 		this.#label = options.label;
 		this.#scaleFor = options.scaleFor;
 		this.#affectedCharts = options.affectedCharts;
+		this.#passDescriptor = { label: `${options.label}-resolve` };
 	}
 
 	/** The buffer the vertex stage binds for this channel, if it morphs. */
@@ -236,6 +247,7 @@ export class MorphedChannels {
 		if (!channel) return false;
 		this.#destroyChannel(channel);
 		this.#channels.delete(binding);
+		this.#channelList = [...this.#channels.values()];
 		return true;
 	}
 
@@ -254,16 +266,19 @@ export class MorphedChannels {
 	 * in command order — so each dispatch reads its own, with no buffer to write.
 	 */
 	encode(encoder: GPUCommandEncoder): void {
-		if (this.#channels.size === 0) return;
+		const channels = this.#channelList;
+		if (channels.length === 0) return;
 
-		const { t, restarted } = this.#readClock();
-		if (restarted) this.#foldPending = true;
+		this.#readClock();
+		const t = this.#clockT;
+		if (this.#clockRestarted) this.#foldPending = true;
 		const snap = this.#snapPending;
 		const resolveT = snap ? 1 : t;
 
 		if (!snap && !this.#foldPending && !this.#dirty && resolveT === this.#resolvedT) return;
 
-		for (const channel of this.#channels.values()) {
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
 			if (snap) {
 				encoder.copyBufferToBuffer(channel.to, 0, channel.from, 0, channel.size);
 			} else if (this.#foldPending) {
@@ -279,10 +294,11 @@ export class MorphedChannels {
 		this.#resolvedT = resolveT;
 
 		const { pipeline, layout } = pipelineFor(this.#device);
-		const pass = encoder.beginComputePass({ label: `${this.#label}-resolve` });
+		const pass = encoder.beginComputePass(this.#passDescriptor);
 		pass.setPipeline(pipeline);
 		this.#immediatesView.setFloat32(4, resolveT, true);
-		for (const channel of this.#channels.values()) {
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
 			if (channel.count === 0) continue;
 
 			channel.bindGroup ??= this.#device.createBindGroup({
@@ -315,8 +331,9 @@ export class MorphedChannels {
 			this.#host.removeAnimatedSource(this.#ownClock);
 			this.#ownClock = null;
 		}
-		for (const channel of this.#channels.values()) this.#destroyChannel(channel);
+		for (const channel of this.#channelList) this.#destroyChannel(channel);
 		this.#channels.clear();
+		this.#channelList = [];
 	}
 
 	#allocate(binding: number, required: number, previous: Channel | undefined): Channel {
@@ -337,6 +354,7 @@ export class MorphedChannels {
 			bindGroup: null
 		};
 		this.#channels.set(binding, channel);
+		this.#channelList = [...this.#channels.values()];
 		return channel;
 	}
 
@@ -353,8 +371,23 @@ export class MorphedChannels {
 		return scale?.clock && scale.startTransition ? (scale as ClockHost) : null;
 	}
 
+	/**
+	 * Start a transition — unless one is already waiting to be folded.
+	 *
+	 * New data on an aligned row set means a new transition, and for a
+	 * value-only update nothing else would start one. But a write often lands
+	 * right behind a restart it did not issue: the reorder its own result caused,
+	 * or a sibling's. If the clock has restarted since this mark last folded, the
+	 * next encode folds that restart, and the new `to` goes along with it —
+	 * issuing a second restart would only repeat the scale's O(dim) slot fold and
+	 * re-upload its slot tables, for nothing.
+	 */
 	#startTransition(): void {
 		const scale = this.#clockHost();
+		const clock = scale?.clock ?? this.#ownClock;
+		if (clock && this.#lastClockVersion !== null && clock.version !== this.#lastClockVersion) {
+			return;
+		}
 		if (scale) {
 			scale.startTransition();
 			return;
@@ -379,14 +412,17 @@ export class MorphedChannels {
 	 * version while no new transition began. The first observation is not a
 	 * restart, or the opening frame would fold against nothing.
 	 */
-	#readClock(): { t: number; restarted: boolean } {
+	#readClock(): void {
 		const clock = this.#clockHost()?.clock ?? this.#ownClock;
 		if (!clock) {
 			this.#lastClockVersion = null;
-			return { t: 1, restarted: false };
+			this.#clockT = 1;
+			this.#clockRestarted = false;
+			return;
 		}
-		const restarted = this.#lastClockVersion !== null && clock.version !== this.#lastClockVersion;
+		this.#clockRestarted =
+			this.#lastClockVersion !== null && clock.version !== this.#lastClockVersion;
 		this.#lastClockVersion = clock.version;
-		return { t: clock.t, restarted };
+		this.#clockT = clock.t;
 	}
 }

@@ -116,6 +116,10 @@ export interface IdentitySlotState {
 	bases: Uint32Array;
 	/** Per-scale base offset, read back into p4. */
 	offsets: Map<string, number>;
+	/** Scratch for the eviction sweep; cleared, not reallocated, per pack. */
+	seen: Set<string>;
+	/** Returned by every pack and overwritten by the next — read it immediately. */
+	result: { dirty: boolean; length: number };
 	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
 	versions: Map<string, number>;
 }
@@ -132,7 +136,15 @@ export function createIdentitySlotState(
 	// The permanent empty block: count 0, so it holds no slots.
 	buffer[IDENTITY_SLOT_EMPTY] = 0;
 	bufferTo[IDENTITY_SLOT_EMPTY] = 0;
-	return { buffer, bufferTo, bases, offsets: new Map(), versions: new Map() };
+	return {
+		buffer,
+		bufferTo,
+		bases,
+		offsets: new Map(),
+		versions: new Map(),
+		seen: new Set(),
+		result: { dirty: false, length: 0 }
+	};
 }
 
 /**
@@ -157,9 +169,12 @@ export function packIdentitySlots(
 	// Index 0 is the permanent empty block; real blocks start after it.
 	let offset = 1;
 	let dirty = false;
-	const seen = new Set<string>();
+	// Runs every frame: the scratch set and the result are the state's own.
+	const seen = state.seen;
+	seen.clear();
 
-	for (const scale of scales) {
+	for (let i = 0; i < scales.length; i++) {
+		const scale = scales[i];
 		seen.add(scale.id);
 
 		// Two extra floats for the block's header: count, then t.
@@ -214,5 +229,7 @@ export function packIdentitySlots(
 		}
 	}
 
-	return { dirty, length: offset };
+	state.result.dirty = dirty;
+	state.result.length = offset;
+	return state.result;
 }

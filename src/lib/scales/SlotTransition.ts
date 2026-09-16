@@ -154,11 +154,19 @@ export class SlotTransition {
 	/**
 	 * `onFrame` is called for every frame the clock is driven through, and once
 	 * more when it settles — for anything on the CPU that has to follow the
-	 * transition, like axis labels. The GPU needs no such call.
+	 * transition, like axis labels. The GPU needs no such call. `onRest` is called
+	 * only on settling, for consumers of WHICH ids are on screen rather than
+	 * where they are.
 	 */
-	constructor(loop: SlotLoop | null = null, options: { onFrame?: () => void } = {}) {
+	#onRest: (() => void) | null;
+
+	constructor(
+		loop: SlotLoop | null = null,
+		options: { onFrame?: () => void; onRest?: () => void } = {}
+	) {
 		this.#loop = loop;
 		this.#onFrame = options.onFrame ?? null;
+		this.#onRest = options.onRest ?? null;
 		this.clock = new TransitionClock({
 			onRest: () => this.#onClockRest(),
 			onFrame: this.#onFrame ?? undefined
@@ -204,6 +212,18 @@ export class SlotTransition {
 	get animatedCount(): number {
 		const t = this.clock.t;
 		return this.#countFrom + (this.#countTo - this.#countFrom) * t;
+	}
+
+	/**
+	 * Where one id is now: `mix(from, to, t)` for that id alone, or -1.
+	 *
+	 * O(1), for per-frame consumers that want a handful of ids — axis labels —
+	 * and must not pay for `table`, which walks every id in the dim.
+	 */
+	slotOf(id: number): number {
+		const f = this.#from[id];
+		if (f === undefined) return -1;
+		return f + (this.#to[id] - f) * this.clock.t;
 	}
 
 	/** How visible id's label is now, 0..1. */
@@ -517,5 +537,7 @@ export class SlotTransition {
 		this.version++;
 		// The last frame: t is exactly 1 now, which the loop's final frame was not.
 		this.#onFrame?.();
+		// And every leaver has arrived, so the set of ids on screen shrank.
+		this.#onRest?.();
 	}
 }
