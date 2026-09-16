@@ -227,7 +227,8 @@ export function buildQueryParts(
 	select: Record<string, unknown>,
 	orderConfig: OrderConfig | undefined | null,
 	hasSQLTransforms: boolean,
-	passthroughChannels: Map<string, string> = new Map()
+	passthroughChannels: Map<string, string> = new Map(),
+	alignChannels: string[] = []
 ): QueryParts {
 	const selectDef: Record<string, unknown> = {};
 	const nonAggregateGroupBy: unknown[] = [];
@@ -280,17 +281,47 @@ export function buildQueryParts(
 
 	// Store channel names for connected mark ordering.
 	let orderChannels: string[] | null = null;
+	const chans: string[] = [];
 	if (orderConfig) {
 		const { seriesChannel, dimensionChannel } = orderConfig;
-		const chans: string[] = [];
 
 		if (aliasMap.has('__facet')) chans.push('__facet');
 		if (seriesChannel && aliasMap.has(seriesChannel)) chans.push(seriesChannel);
 		if (dimensionChannel && aliasMap.has(dimensionChannel)) chans.push(dimensionChannel);
+	}
 
-		if (chans.length > 0) {
-			orderChannels = chans;
-		}
+	// Channels whose ORDER the GPU depends on, rather than the reader.
+	//
+	// A mark whose query returns one row per category — every category, every
+	// update — can hand those rows to the GPU as an array indexed by category,
+	// with no rearranging, but only while row `i` is the SAME category on every
+	// update. Nothing otherwise guarantees that: hash aggregation is free to
+	// return groups in whatever order it likes, and it does not have to pick the
+	// same one twice.
+	//
+	// It has to be applied HERE, on the outermost query, and not by whichever
+	// transform produced the rows. A bar mark stacks by default, so the query is
+	// wrapped, and a subquery's ORDER BY does not constrain the outer one —
+	// worse, the wrapper is a window PARTITIONed by the same column, so the
+	// optimiser re-partitions and the surviving order is the window operator's.
+	// An inner ORDER BY looks correct, verifies correct against the database in
+	// isolation, and is discarded one level up.
+	//
+	// Appended after the connected-mark channels rather than before, so a
+	// polyline's ordering still wins where the two disagree. For the marks this
+	// applies to they cannot disagree — the categorical channel IS the dimension
+	// channel — but that is a property of today's callers, not a guarantee.
+	if (aliasMap.has('__facet') && alignChannels.length > 0 && !chans.includes('__facet')) {
+		// Facet first, so each cell's rows stay contiguous; the alignment is then
+		// per cell, which is what a faceted mark needs.
+		chans.unshift('__facet');
+	}
+	for (const ch of alignChannels) {
+		if (aliasMap.has(ch) && !chans.includes(ch)) chans.push(ch);
+	}
+
+	if (chans.length > 0) {
+		orderChannels = chans;
 	}
 
 	return {

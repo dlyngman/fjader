@@ -270,11 +270,30 @@ export class MarkLifecycleV2 {
 		this.#inlineIdentityColumns(resolvedSelect);
 		this.#inlineTimeOffsets(resolvedSelect);
 
+		// Channels the GPU needs a stable row order on.
+		//
+		// Every categorical axis that has a dim, because those are the ones whose
+		// query can return a row per category rather than a row per survivor —
+		// and a row per category is only usable as a category-indexed array while
+		// the order is the same on every update.
+		//
+		// Taken from the dim map rather than by re-deriving which channel the
+		// transform picked as its band. That derivation living in two places is
+		// what silently dropped the synthetic bucket's row once already, and this
+		// is a superset that cannot miss: ordering by a categorical channel that
+		// did not need it costs a sort of already-sorted rows.
+		//
+		// Read the same way #inlineIdentityColumns reads #identityFields — set
+		// during setup, before any query is assembled, and not reactive. The two
+		// share that property and would break together.
+		const alignChannels = Object.keys(this.#transformConfig.dimTableByChannel ?? {});
+
 		return buildQueryParts(
 			resolvedSelect,
 			this.#config._orderConfig ?? null,
 			this.#transformCompiler.hasSQLTransforms(),
-			passthroughChannels
+			passthroughChannels,
+			alignChannels
 		);
 	});
 

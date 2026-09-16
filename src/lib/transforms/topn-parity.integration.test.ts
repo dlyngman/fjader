@@ -386,3 +386,96 @@ describe('topN dense join', () => {
 		for (const r of rows) expect(Number.isFinite(Number(r[TOPN_RANK_COLUMN]))).toBe(true);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Row order, on the OUTERMOST query
+// ---------------------------------------------------------------------------
+//
+// A dense result is only usable as a category-indexed array while row i is the
+// same category on every update, and nothing guarantees that by itself — hash
+// aggregation returns groups in whatever order it likes and need not pick the
+// same one twice.
+//
+// The ordering therefore has to be applied outside every wrapping transform. An
+// ORDER BY inside one looks right, verifies right against the database on its
+// own, and is thrown away one level up: a bar mark stacks by default, and the
+// stack's outer query is a window PARTITIONed by the same column, so the
+// optimiser re-partitions and the surviving order is the window operator's.
+// That failure took four attempts to find once already, which is why it is
+// pinned here against real DuckDB rather than asserted on the SQL string.
+
+describe('dense row order', () => {
+	let db: DB;
+	const DIM = '__dplot_dim_order_test';
+
+	beforeAll(async () => {
+		db = openDB();
+		await db.run(SEED_SQL);
+		await db.run(
+			`CREATE TABLE "${DIM}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT category AS value FROM sales)`
+		);
+		await db.run(
+			`CREATE TABLE sales_o AS
+			 SELECT s.*, COALESCE(d.id, -1) AS category_idx
+			 FROM sales s LEFT JOIN "${DIM}" d ON s.category = d.value`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	/**
+	 * The shape a bar mark emits: dense topN, then the implicit stack.
+	 *
+	 * No `fill`. A series channel routes topN down its grouped branch, which
+	 * ranks inside a subquery and has no dense join — so a GROUPED topN still
+	 * returns only its survivors, and a category leaving one still vanishes.
+	 * That is a real remaining limit and not a quirk of this fixture.
+	 */
+	function build(align: string[]) {
+		const parts = buildQueryParts(
+			{ x: column('category_idx'), y2: sum(column('revenue')) },
+			null,
+			true,
+			new Map(),
+			align
+		);
+		const compiler = new TransformCompiler([topN(3, { by: 'y2' }), stackY()], {
+			markType: 'barY',
+			table: 'sales_o',
+			x: 'x',
+			y: 'y2',
+			dimTableByChannel: { x: DIM }
+		} as MarkConfig);
+		return assembleQuery({ table: 'sales_o', parts, filter: [], transformCompiler: compiler });
+	}
+
+	it('comes back in id order once the outer query is ordered', async () => {
+		const rows = await db.all(build(['x'])!.toString());
+		const ids = rows.map((r) => Number(r.x));
+		expect(ids).toEqual([...ids].sort((a, b) => a - b));
+		// Dense AND in order is what makes row index usable as a category index.
+		expect(ids).toEqual(ids.map((_, i) => i));
+	});
+
+	it('is the outer query that carries it, not the transform', async () => {
+		// The control. Without the outer ORDER BY the inner one is still emitted
+		// by the dense join, so this asserts that the inner one is NOT what makes
+		// the previous test pass — otherwise that test would prove nothing.
+		const sql = build([])!.toString();
+		expect(sql).toContain('ORDER BY'); // the dense join's own, inside
+		const outerTail = sql.slice(sql.lastIndexOf(') AS "__stack_base"'));
+		expect(outerTail).not.toContain('ORDER BY');
+	});
+
+	it('orders by facet first, so each cell stays contiguous', async () => {
+		const parts = buildQueryParts(
+			{ x: column('category_idx'), y2: sum(column('revenue')), __facet: column('region') },
+			null,
+			true,
+			new Map(),
+			['x']
+		);
+		expect(parts.orderChannels).toEqual(['__facet', 'x']);
+	});
+});
