@@ -808,6 +808,28 @@ describe('BandScaleState identity <-> display translation', () => {
 				expect(Array.from(s.tickVisibility())).toEqual([1, 0, 1]);
 			});
 
+			it('hides a leaving label once its band centre has left the axis, not only on the clock', () => {
+				// Adelie leaves from slot 0 and travels past the end while the axis
+				// shrinks to end there. Its bar is clipped at the axis end; its label,
+				// SVG outside the plot, must be gone once the band's centre is past it —
+				// while the clock alone would still have it partly visible.
+				const { s } = withLoop();
+				s.addMark(['Chinstrap', 'Gentoo'], 'mark-1');
+				s.updateDomainFromExtents();
+
+				let sawOutside = false;
+				while (!s.clock.isAtRest()) {
+					s.clock.step();
+					s.clock.updateRenderState(0);
+					const n = s.getConfig().categoryCount;
+					if (s.tickSlot(0) >= n - 0.5) {
+						sawOutside = true;
+						expect(s.tickOpacity(0)).toBe(0);
+					}
+				}
+				expect(sawOutside).toBe(true);
+			});
+
 			it('places a settled label where d3 centres its band, on either axis', () => {
 				// The shader and d3 must agree for a label to sit on its bar; this
 				// checks the CPU copy of the shader's layout against d3 at rest.

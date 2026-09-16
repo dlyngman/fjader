@@ -1041,10 +1041,23 @@ export class BandScaleState {
 		return this.#slots.slotOf(key);
 	}
 
-	/** How visible a tick's label is now, fading with its category. Per frame, O(1). */
+	/**
+	 * How visible a tick's label is now. Per frame, O(1).
+	 *
+	 * Two fades, multiplied. The category's own, on the transition's clock. And
+	 * its position: a band is drawn only inside the plot, clipped at the axis
+	 * ends, but a label is SVG outside it — so a leaver heading past the end still
+	 * showed its label after its bar had gone. The label is centred on its band,
+	 * so it fades out over the half slot before that centre reaches the axis end
+	 * (the animated count), and is gone from there; the same at the start. An
+	 * entrant's label appears as its band crosses in.
+	 */
 	tickOpacity(key: number): number {
 		void this.#slotFrame;
-		return this.#slots.alphaOf(key);
+		const slot = this.#slots.slotOf(key);
+		const n = this.getConfig().categoryCount;
+		const inside = Math.min(1, Math.max(0, (n - 0.5 - slot) * 2), Math.max(0, (slot + 0.5) * 2));
+		return this.#slots.alphaOf(key) * inside;
 	}
 
 	/**
