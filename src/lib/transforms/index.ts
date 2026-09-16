@@ -238,6 +238,21 @@ function densify(inner: SelectQuery, aliases: string[], band: string, dim: strin
 				? (sqlTag`d."id"` as ExprNode)
 				: (sqlTag`COALESCE(a.${column(alias)}, 0)` as ExprNode);
 	}
+	// Only when a ranking transform actually published one. This runs for every
+	// categorical mark now, and most have no rank column at all — projecting it
+	// unconditionally asks the join for a column that is not there, which is a
+	// binder error naming a values list rather than a mark.
+	//
+	// It cannot be left to the loop above either: that coalesces to 0, and 0 is
+	// the BEST rank, so every excluded category would sort to the front.
+	if (!aliases.includes(TOPN_RANK_COLUMN)) {
+		return Query.from(
+			sqlTag`${literalTable(dim)} AS d LEFT JOIN (${inner}) AS a ON a.${column(band)} = d."id"`
+		)
+			.select(select)
+			.orderby(sqlTag`d."id"`);
+	}
+
 	// NaN, not NULL and not 0, for a category past the cutoff.
 	//
 	// "No rank" has to survive to JS as something the band axis can test, and

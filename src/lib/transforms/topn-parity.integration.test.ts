@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
-import { Query, column, sum, eq, literal, type ExprNode } from '@uwdata/mosaic-sql';
+import { Query, column, sum, eq, literal, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
 import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN, withDenseCategories } from './index';
 import { buildQueryParts, assembleQuery } from '$lib/components/marks/lifecycle/query-builder';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
@@ -492,5 +492,89 @@ describe('dense row order', () => {
 			['x']
 		);
 		expect(parts.orderChannels).toEqual(['__facet', 'x']);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// dense() on its own, with no ranking transform in front of it
+// ---------------------------------------------------------------------------
+//
+// The shape every ordinary bar chart produces, and the one every test above
+// missed: they all composed topN with dense, so the rank column was always
+// present and the code that projects it was never exercised without one. It
+// asked the join for a column that did not exist, which surfaces as a binder
+// error naming a values list rather than a mark.
+
+describe('dense without topN', () => {
+	let db: DB;
+	const DIM = '__dplot_dim_plain_test';
+
+	beforeAll(async () => {
+		db = openDB();
+		await db.run(SEED_SQL);
+		await db.run(
+			`CREATE TABLE "${DIM}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT category AS value FROM sales)`
+		);
+		await db.run(
+			`CREATE TABLE sales_p AS
+			 SELECT s.*, COALESCE(d.id, -1) AS category_idx
+			 FROM sales s LEFT JOIN "${DIM}" d ON s.category = d.value`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	const markConfig = {
+		markType: 'barY',
+		table: 'sales_p',
+		x: 'x',
+		y: 'y2',
+		rowsAreGrouped: true,
+		dimTableByChannel: { x: DIM }
+	} as MarkConfig;
+
+	/** A plain aggregated bar chart, filtered so a category has no rows at all. */
+	function build(where?: string) {
+		let q = Query.from('sales_p')
+			.select({ x: column('category_idx'), y2: sum(column('revenue')) })
+			.groupby(column('category_idx'));
+		if (where) q = q.where(sqlTag`${column('region')} = ${literal(where)}`);
+		const transforms = withDenseCategories([]);
+		let out = q as SelectQuery;
+		for (const t of transforms) out = (t as SqlTransform).apply(out, markConfig);
+		return out;
+	}
+
+	it('runs at all, which is what the rank projection broke', async () => {
+		const rows = await db.all(build().toString());
+		expect(rows.length).toBeGreaterThan(0);
+	});
+
+	it('keeps the row set the same size when a filter empties a category', async () => {
+		// The point of densifying by default. Without it, a category with no rows
+		// vanishes from the GROUP BY, every row after it shifts up, and nothing
+		// downstream can tell that from a category that never existed.
+		const all = await db.all(build().toString());
+		const filtered = await db.all(build('North').toString());
+
+		expect(filtered.length).toBe(all.length);
+		expect(filtered.map((r) => Number(r.x))).toEqual(all.map((r) => Number(r.x)));
+	});
+
+	it('publishes no rank column, because nothing ranked anything', async () => {
+		const rows = await db.all(build().toString());
+		expect(Object.keys(rows[0])).not.toContain(TOPN_RANK_COLUMN);
+	});
+
+	it('refuses itself when the rows are not grouped', async () => {
+		// A raw mark has many rows per category, so the join would succeed and the
+		// one-row-per-category claim would be a lie.
+		const raw = Query.from('sales_p').select({ x: column('category_idx'), y2: column('revenue') });
+		const out = (withDenseCategories([])[0] as SqlTransform).apply(raw, {
+			...markConfig,
+			rowsAreGrouped: false
+		} as MarkConfig);
+		expect(out.toString()).toBe(raw.toString());
 	});
 });
