@@ -196,7 +196,8 @@ export class BandScaleState {
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
-			onFrame: () => this.#slotFrame++
+			onFrame: () => this.#slotFrame++,
+			onRest: () => this.#slotRest++
 		});
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
@@ -467,6 +468,8 @@ export class BandScaleState {
 	 * no reactivity at all.
 	 */
 	#slotFrame = $state(0);
+	/** Bumped when a transition settles — the set of ids on screen changed. */
+	#slotRest = $state(0);
 
 	/**
 	 * Display slot per identity id: `slotTable[id]` is where this category is
@@ -954,21 +957,39 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Generate tick values for grid lines and axes.
+	 * Channel values for grid lines — what this axis's channel carries, so the
+	 * shader's scaleBand resolves each one through the slot table exactly as it
+	 * resolves a bar.
 	 *
-	 * Since the GPU shader logic (scaleBandX) expects a Float32 index (0.0, 1.0, etc.),
-	 * we must return the indices themselves, not the domain strings.
+	 * With identity that is the dim ID of every category on screen: the same set
+	 * `bandTicks` labels, leavers and entrants included, so a line travels with
+	 * its band. This used to hand over display positions 0..n-1, which the shader
+	 * read as ids — one line per displayed id, at that id's slot. Every position
+	 * whose id was hidden (past a topN cutoff, a reserved Other, an id from
+	 * another table sharing the dim) lost its line, and no line followed a
+	 * reorder.
 	 *
-	 * The Axis component will then use tickFormat() to resolve index 0 -> "Label".
+	 * Without identity the channel is already a position, so positions it is.
+	 *
+	 * Subscribes to layout and settling only: which ids are on screen changes
+	 * then and at no other time, and a grid rewrites its buffer on every change.
 	 */
 	getTicks(): Float32Array {
-		this._version; // Register Svelte dependency
-		const n = this.effectiveDomain.length;
+		void this._version;
+		void this.#slotRest;
 
-		// Create the sequence 0..N-1
+		if (!this.hasIdentity) {
+			const n = this.effectiveDomain.length;
+			const ticks = new Float32Array(n);
+			for (let i = 0; i < n; i++) ticks[i] = i;
+			return ticks;
+		}
+
+		const table = this.#slots.table;
+		let n = 0;
+		for (let id = 0; id < table.length; id++) if (table[id] >= 0) n++;
 		const ticks = new Float32Array(n);
-		for (let i = 0; i < n; i++) ticks[i] = i;
-
+		for (let id = 0, i = 0; id < table.length; id++) if (table[id] >= 0) ticks[i++] = id;
 		return ticks;
 	}
 
