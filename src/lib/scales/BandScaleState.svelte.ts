@@ -3,7 +3,7 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
-import { Spring } from '$lib/animation';
+import { TransitionClock } from '$lib/animation';
 
 /**
  * Driver constants, taken from ParallelAxisReorder, which is the same
@@ -487,7 +487,7 @@ export class BandScaleState {
 
 	get slotTable(): Float32Array {
 		if (this.#currentDirty) {
-			this.#writeCurrent(this.#renderT);
+			this.#writeCurrent(this.#driver.t);
 			this.#currentDirty = false;
 		}
 		return this.#slotCurrent;
@@ -510,7 +510,19 @@ export class BandScaleState {
 
 	/** Extrapolated for the frame being drawn, not the last physics step. */
 	get t(): number {
-		return this.#renderT;
+		return this.#driver.t;
+	}
+
+	/**
+	 * The clock this scale's slot transition runs on.
+	 *
+	 * Exposed because marks drawn against this axis ADOPT it rather than owning
+	 * one: a bar's height has to travel on the same number its slot does, or the
+	 * two desynchronise on a retarget and the bar reaches its rank before or
+	 * after it finishes growing.
+	 */
+	get clock(): TransitionClock {
+		return this.#driver;
 	}
 
 	/**
@@ -534,12 +546,6 @@ export class BandScaleState {
 
 	#slotTarget: Float32Array = new Float32Array(0);
 	#slotCurrent: Float32Array = new Float32Array(0);
-	/**
-	 * Where the driver is for the frame being drawn — extrapolated ahead of the
-	 * simulated state, and clamped, since a read ahead of the last step can
-	 * cross 1 near the end of a transition.
-	 */
-	#renderT: number = 1;
 	/** slotCurrent is stale until someone asks for it. */
 	#currentDirty: boolean = false;
 	/**
@@ -561,7 +567,7 @@ export class BandScaleState {
 	 * as a full reorder — and a mid-flight retarget is continuous in `t` but not
 	 * in world space. Both are the other face of arriving together.
 	 */
-	#driver: Spring = new Spring(1, REORDER_STIFFNESS, REST_PRECISION);
+	#driver: TransitionClock = new TransitionClock(REORDER_STIFFNESS, REST_PRECISION);
 	/**
 	 * Where each id's current transition STARTED, id-indexed.
 	 *
@@ -789,7 +795,7 @@ export class BandScaleState {
 		this.#slotFrom = new Float32Array(0);
 		this.#slotTo = new Float32Array(0);
 		this.#exiting = new Uint8Array(0);
-		this.#driver.set(1);
+		this.#driver.settle();
 		this.#hasLaidOut = false;
 	}
 
@@ -925,9 +931,7 @@ export class BandScaleState {
 			// Restart the clock, CARRYING VELOCITY — assigning the fields rather
 			// than calling set(), which zeroes it. A retarget mid-flight continues
 			// at the speed it was travelling instead of stalling and re-accelerating.
-			this.#driver.current = 0;
-			this.#driver.target = 1;
-			this.#renderT = 0;
+			this.#driver.restart();
 			// Publish the folded positions immediately. Without this the table
 			// would hold last frame's values until the loop's first
 			// updateRenderState, and a retarget that lands between frames would
@@ -970,8 +974,7 @@ export class BandScaleState {
 		// fires at an epsilon, so leaving t just short of 1 would leave every
 		// element fractionally short — and a staggered t_i, which divides by
 		// (1 - phase), fractionally shorter still.
-		this.#driver.set(1);
-		this.#renderT = 1;
+		this.#driver.settle();
 		this.#currentDirty = false;
 		for (let i = 0; i < target.length; i++) {
 			// The TRUE target, which for a leaver is the hidden sentinel and not
@@ -1425,8 +1428,7 @@ export class BandScaleState {
 	 * which is this checkpoint's known residual.
 	 */
 	updateRenderState(extrapolationDt: number): void {
-		const t = this.#driver.getRenderable(extrapolationDt);
-		this.#renderT = t < 0 ? 0 : t > 1 ? 1 : t;
+		this.#driver.updateRenderState(extrapolationDt);
 		this.#currentDirty = true;
 	}
 
@@ -1440,7 +1442,7 @@ export class BandScaleState {
 	 * consecutive updates are in the air together and are all retired here.
 	 */
 	isAtRest(): boolean {
-		return this.#driver.isAtRest(REST_PRECISION);
+		return this.#driver.isAtRest();
 	}
 
 	/**
@@ -1577,7 +1579,11 @@ export class BandScaleState {
 			slotFrom: Array.from(this.#slotFrom),
 			slotTo: Array.from(this.#slotTo),
 			exiting: Array.from(this.#exiting),
-			t: this.#driver.current,
+			// The RENDER t, not the simulated one. The comment above says these
+			// three are what produced slotCurrent, and slotCurrent is written from
+			// the extrapolated value — so reporting the last physics step here
+			// described a mix that was never computed.
+			t: this.#driver.t,
 
 			// GPU state
 			gpuState: this.gpuState
