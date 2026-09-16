@@ -74,18 +74,31 @@ export interface DataBindingEntry {
 	type?: string;
 }
 
-interface ScaleInstance {
+/**
+ * What the fixed-timestep loop actually requires of a participant.
+ *
+ * Four methods and a list of charts to redraw. Notably NOT `id`, `type` or any
+ * GPU state: those belong to a scale, and the loop has never read them. Keeping
+ * this separate from `ScaleInstance` is what lets a mark drive a transition —
+ * a data update it owns, with no scale to hang it on.
+ */
+export interface AnimatedSource {
+	step: () => void;
+	updateRenderState: (dt: number) => void;
+	isAtRest: () => boolean;
+	_markAtRest: () => void;
+	/** Applied before the physics step, for sources that consume queued input. */
+	_applyInput?: () => void;
+	/** Charts to redraw while this is running. */
+	_affectedChartsArray?: string[];
+}
+
+interface ScaleInstance extends AnimatedSource {
 	id: string;
 	type: string;
 	constructor: { name: string };
 	gpuState?: { domainMin: number; domainMax: number; domainScale: number; p4: number };
 	getConfig?: () => { categoryCount: number; paddingInner: number; paddingOuter: number };
-	step: () => void;
-	updateRenderState: (dt: number) => void;
-	isAtRest: () => boolean;
-	_markAtRest: () => void;
-	_applyInput?: () => void;
-	_affectedChartsArray?: string[];
 }
 
 interface ScaleArrayEntry {
@@ -268,8 +281,18 @@ export class GPUCoordinator {
 	// ANIMATION SYSTEM
 	// =========================================================================
 	#animationLoop: AnimationLoop | null = null;
-	#animatedScales = new Set<ScaleInstance>(); // Set for O(1) membership check
-	#animatedScalesArray: ScaleInstance[] = []; // Array for O(1) iteration (no allocation)
+	/**
+	 * Everything the fixed-timestep loop is currently driving.
+	 *
+	 * Scales, and anything else that animates. The loop has only ever used four
+	 * methods and a redraw list, so the list was never really about scales — but
+	 * the way to JOIN it was, because `addAnimatingScale` allocates a scale
+	 * parameter slot, which a mark has no use for. `addAnimatedSource` is the
+	 * same list without that step, so a mark can drive a transition of its own
+	 * when there is no categorical scale to adopt a clock from.
+	 */
+	#animatedScales = new Set<AnimatedSource>(); // Set for O(1) membership check
+	#animatedScalesArray: AnimatedSource[] = []; // Array for O(1) iteration (no allocation)
 	#scaleRegistry: ScaleRegistry | null = null;
 
 	// =========================================================================
@@ -1833,6 +1856,33 @@ export class GPUCoordinator {
 	// ANIMATED SCALE MANAGEMENT
 	// =========================================================================
 
+	/**
+	 * Join the loop.
+	 *
+	 * For a scale, prefer `addAnimatingScale`, which also makes sure the scale
+	 * has a parameter slot to be written into. Anything that is not a scale —
+	 * a mark driving its own data transition — has no such slot and wants this.
+	 */
+	addAnimatedSource(source: AnimatedSource): void {
+		if (!this.#animatedScales.has(source)) {
+			this.#animatedScales.add(source);
+			this.#animatedScalesArray.push(source);
+		}
+		this.#animationLoop!.requestStart();
+	}
+
+	removeAnimatedSource(source: AnimatedSource): void {
+		if (this.#animatedScales.delete(source)) {
+			const idx = this.#animatedScalesArray.indexOf(source);
+			if (idx !== -1) {
+				const lastItem = this.#animatedScalesArray.pop()!;
+				if (idx < this.#animatedScalesArray.length) {
+					this.#animatedScalesArray[idx] = lastItem;
+				}
+			}
+		}
+	}
+
 	addAnimatingScale(scale: ScaleInstance): void {
 		// console.log(`=== addAnimatingScale ${scale.name} (${scale.id}) ===`);
 		let idx = this.#scaleIndexManager.getIndex(scale.id);
@@ -1849,27 +1899,12 @@ export class GPUCoordinator {
 			}
 		}
 
-		// console.log('Already in animatedScales Set?', this.#animatedScales.has(scale));
-
-		if (!this.#animatedScales.has(scale)) {
-			this.#animatedScales.add(scale);
-			this.#animatedScalesArray.push(scale);
-			// console.log('Added to animatedScales, new length:', this.#animatedScalesArray.length);
-		}
-
-		this.#animationLoop!.requestStart();
+		// The slot exists; the rest is just joining the loop.
+		this.addAnimatedSource(scale);
 	}
 
 	removeAnimatingScale(scale: ScaleInstance): void {
-		if (this.#animatedScales.delete(scale)) {
-			const idx = this.#animatedScalesArray.indexOf(scale);
-			if (idx !== -1) {
-				const lastItem = this.#animatedScalesArray.pop()!;
-				if (idx < this.#animatedScalesArray.length) {
-					this.#animatedScalesArray[idx] = lastItem;
-				}
-			}
-		}
+		this.removeAnimatedSource(scale);
 	}
 
 	// =========================================================================
