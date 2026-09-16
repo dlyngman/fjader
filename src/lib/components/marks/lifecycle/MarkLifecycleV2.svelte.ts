@@ -1332,6 +1332,24 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
+	 * Whether this mark's rows are one per category, in category order.
+	 *
+	 * The precondition for morphing a channel: interpolating `from[i]` to `to[i]`
+	 * means something only while row `i` is the same category in both. A query
+	 * returning one row per surviving group does not give that — filter a
+	 * category to nothing and every row after it shifts up — and interpolating
+	 * across that produces values belonging to no category at all.
+	 *
+	 * Read from the transform that did the work rather than re-derived from the
+	 * conditions, which are several and would then be checked in two places.
+	 */
+	get rowsAreIdAligned(): boolean {
+		return this.#transformCompiler.sqlTransforms.some(
+			(t) => t.type === 'dense' && (t as { applied?: boolean }).applied === true
+		);
+	}
+
+	/**
 	 * Re-fetch band domain ordering when sort config changes reactively.
 	 * Builds a SELECT DISTINCT + ORDER BY query, calls setSortOrder on the
 	 * band scale. No teardown, no schema re-fetch, no re-registration.

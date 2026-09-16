@@ -225,7 +225,7 @@
 	});
 
 	const reactiveConfig = buildReactiveConfig(entry, {
-		resolveFitDomain: () => _isOverlay ? undefined : resolvedFitAxis
+		resolveFitDomain: () => (_isOverlay ? undefined : resolvedFitAxis)
 	});
 
 	let xScaleId = $derived(chartContext.xScaleState?.id);

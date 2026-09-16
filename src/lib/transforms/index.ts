@@ -300,12 +300,23 @@ function densify(inner: SelectQuery, aliases: string[], band: string, dim: strin
  * - **Two dimmed categorical axes.** A heatmap would need the cross product of
  *   both dims, and joining one leaves the other's values NULL. Not built.
  */
-export function dense(options: { enabled?: boolean } = {}): SqlTransform {
+/** A `dense()` transform, which reports whether it applied itself. */
+export interface DenseTransform extends SqlTransform {
+	applied: boolean;
+}
+
+export function dense(options: { enabled?: boolean } = {}): DenseTransform {
 	return {
 		stage: 'sql',
 		type: 'dense',
+		// Whether the join actually happened, recorded by the only code that
+		// knows. The conditions below are several, and a caller re-deriving them
+		// to predict the answer is two derivations that must agree — which is how
+		// the synthetic bucket's row went missing once already.
+		applied: false,
 		spec: { transform: 'dense', ...(options.enabled === false ? { enabled: false } : {}) },
 		apply(query: SelectQuery, config?: MarkConfig) {
+			this.applied = false;
 			if (options.enabled === false) return query;
 
 			const byChannel = config?.dimTableByChannel as Record<string, string> | undefined;
@@ -325,6 +336,7 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 			const dim = byChannel[band];
 			if (typeof dim !== 'string' || dim.length === 0) return query;
 
+			this.applied = true;
 			return densify(query, aliases, band, dim);
 		},
 		describe() {

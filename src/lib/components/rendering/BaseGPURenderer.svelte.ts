@@ -223,6 +223,12 @@ export class BaseGPURenderer {
 	writeAttribute(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 
+		// A channel that was animated and is not any more gives its extra buffers
+		// back. Without this, the compute pass would keep dispatching into a
+		// binding that now holds an ordinary channel buffer and overwrite it with
+		// a mix of two stale halves — which renders, wrongly, rather than failing.
+		this.#dropAnimated(binding);
+
 		let buffer = this.#ownedResources.buffers.get(binding);
 		const requiredSize = data.byteLength;
 
@@ -335,6 +341,22 @@ export class BaseGPURenderer {
 			);
 		}
 		if (!this.#bindGroupUpdateScheduled) this.invalidateLayer();
+	}
+
+	/** Release a channel's transition buffers, leaving the binding to the caller. */
+	#dropAnimated(binding: number): void {
+		const entry = this.#animated.get(binding);
+		if (!entry) return;
+		entry.from.destroy();
+		entry.to.destroy();
+		entry.params.destroy();
+		this.#animated.delete(binding);
+		this.#resolveBindGroups.delete(binding);
+		// The resolved buffer is the caller's to replace; drop it so writeAttribute
+		// allocates a fresh one rather than writing into a compute output.
+		this.#ownedResources.buffers.get(binding)?.destroy();
+		this.#ownedResources.buffers.delete(binding);
+		this.#scheduleBindGroupUpdate();
 	}
 
 	/** Where this mark's animated channels are along their transition, 0..1. */

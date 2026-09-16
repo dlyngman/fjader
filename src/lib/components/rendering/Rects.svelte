@@ -54,6 +54,8 @@
 		dx?: number;
 		dy?: number;
 		markId?: string;
+		/** Rows are one per category, in category order, so channels may morph. */
+		morphable?: boolean;
 	}
 
 	let {
@@ -72,7 +74,8 @@
 		inset = 0,
 		dx = 0,
 		dy = 0,
-		markId = ''
+		markId = '',
+		morphable = false
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -227,25 +230,26 @@
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data);
 	});
-	// STATIC for now, and the reason is a precondition that is not met yet.
+	// The extent channels morph when — and only when — the mark can say its rows
+	// are one per category, in category order.
 	//
-	// Morphing a channel interpolates from[i] to to[i], which only means anything
-	// while row i is the SAME category in both buffers. A query that returns one
-	// row per surviving group does not give that: filter a category down to no
-	// rows and it drops out of the GROUP BY, every row after it shifts up, and
-	// the resolve interpolates between values belonging to different categories.
-	// It looks like bars jumping between wrong heights, which is what it was.
+	// Interpolating from[i] to to[i] means something only while row i is the SAME
+	// category in both buffers. A query returning one row per surviving group
+	// does not give that: filter a category to nothing and every row after it
+	// shifts up, so the two buffers describe different things at the same index
+	// and the result is bars at heights belonging to no category at all.
 	//
-	// Ordering by the dim id is necessary and not sufficient — the row set has to
-	// be DENSE as well, one row per category every time, which today only the
-	// topN path produces. Until a mark can say that its rows are id-aligned,
-	// these stay static; the machinery for animating them is built and tested and
-	// is waiting on that one fact.
+	// Both edges go through the same path, because a bar's two edges have to
+	// travel together.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y0, y0Data);
+		if (!renderer?.resourcesCreated) return;
+		if (morphable) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
+		else renderer.writeAttribute(BINDINGS.Y0, y0Data);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y1, y1Data);
+		if (!renderer?.resourcesCreated) return;
+		if (morphable) renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
+		else renderer.writeAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)
