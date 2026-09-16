@@ -1,6 +1,7 @@
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { VALUE_RESOLVE_SHADER, VALUE_RESOLVE_WORKGROUP } from '$lib/gpu/ValueResolveShader';
+import type { TransitionClock } from '$lib/animation/TransitionClock';
 
 interface RendererOptions {
 	zIndex?: number;
@@ -351,32 +352,32 @@ export class BaseGPURenderer {
 	 */
 	#readClock(): { t: number; restarted: boolean } {
 		const ctx = this.#chartContext as unknown as {
-			xScaleState?: { t?: number; slotVersion?: number } | null;
-			yScaleState?: { t?: number; slotVersion?: number } | null;
+			xScaleState?: { clock?: TransitionClock } | null;
+			yScaleState?: { clock?: TransitionClock } | null;
 		};
-		const scale =
-			ctx.xScaleState?.t !== undefined
-				? ctx.xScaleState
-				: ctx.yScaleState?.t !== undefined
-					? ctx.yScaleState
-					: null;
+		const clock = ctx.xScaleState?.clock ?? ctx.yScaleState?.clock ?? null;
 
-		if (!scale) {
+		if (!clock) {
 			this.#lastClockVersion = null;
 			return { t: 1, restarted: false };
 		}
 
-		const version = scale.slotVersion ?? 0;
-		// A retarget this mark did not cause still resets `t` to 0 — a sibling
+		// A restart this mark did not cause still resets `t` to 0 — a sibling
 		// mark's data landing on the same axis, or another cell of a facet grid.
 		// Without folding on that, this mark's values snap back to where its own
-		// transition started and travel again. The version is already bumped on
-		// every retarget and means exactly "the tables moved", so it needs no new
-		// signal; the first observation is not a restart, or the opening frame
-		// would fold against nothing.
-		const restarted = this.#lastClockVersion !== null && version !== this.#lastClockVersion;
-		this.#lastClockVersion = version;
-		return { t: scale.t ?? 1, restarted };
+		// transition started and travel again.
+		//
+		// The clock's own version, not the slot table's. They agree on a reorder
+		// and do not in general: settling bumps the slot version, because the
+		// table genuinely changed, while no new transition began. Reading that
+		// meant a fold on every settle — inert, since `from` and `to` are equal
+		// by then, but work done for a reason that was not true.
+		//
+		// The first observation is deliberately not a restart, or the opening
+		// frame would fold against nothing.
+		const restarted = this.#lastClockVersion !== null && clock.version !== this.#lastClockVersion;
+		this.#lastClockVersion = clock.version;
+		return { t: clock.t, restarted };
 	}
 
 	#resolveBindGroups = new Map<number, GPUBindGroup>();
