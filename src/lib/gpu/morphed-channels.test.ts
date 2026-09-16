@@ -12,6 +12,7 @@ beforeAll(() => {
 		UNIFORM: 64,
 		STORAGE: 128
 	};
+	(globalThis as Record<string, unknown>).GPUShaderStage ??= { COMPUTE: 4 };
 });
 
 interface FakeBuffer {
@@ -37,18 +38,13 @@ function fakes() {
 			return buffer;
 		},
 		createShaderModule: () => ({}),
-		createComputePipeline: () => ({ getBindGroupLayout: () => ({}) }),
+		createBindGroupLayout: () => ({}),
+		createPipelineLayout: () => ({}),
+		createComputePipeline: () => ({}),
 		createBindGroup: () => ({}),
 		queue: {
-			writeBuffer(buffer: FakeBuffer, _offset: number, data: ArrayBuffer | ArrayBufferView) {
-				if (buffer.label.endsWith('-params')) {
-					const view = new DataView(data instanceof ArrayBuffer ? data : data.buffer);
-					log.push(
-						`params ${buffer.label} count=${view.getUint32(0, true)} t=${view.getFloat32(4, true)}`
-					);
-				} else {
-					log.push(`write ${buffer.label}`);
-				}
+			writeBuffer(buffer: FakeBuffer) {
+				log.push(`write ${buffer.label}`);
 			}
 		}
 	} as unknown as GPUDevice;
@@ -62,6 +58,10 @@ function fakes() {
 			return {
 				setPipeline() {},
 				setBindGroup() {},
+				setImmediates(_offset: number, data: ArrayBuffer) {
+					const view = new DataView(data);
+					log.push(`imm count=${view.getUint32(0, true)} t=${view.getFloat32(4, true)}`);
+				},
 				dispatchWorkgroups(n: number) {
 					log.push(`dispatch ${n}`);
 				},
@@ -139,7 +139,9 @@ describe('MorphedChannels', () => {
 		expect(issued).toContain('copy m-2-to -> m-2-from');
 		expect(issued).toContain('copy m-3-to -> m-3-from');
 		expect(issued.filter((c) => c.startsWith('dispatch'))).toHaveLength(2);
-		expect(issued.filter((c) => c.startsWith('params')).every((c) => c.endsWith('t=1'))).toBe(true);
+		const imm = issued.filter((c) => c.startsWith('imm'));
+		expect(imm).toHaveLength(2);
+		expect(imm.every((c) => c.endsWith('t=1'))).toBe(true);
 	});
 
 	it('issues nothing at all on a frame where nothing changed', () => {
@@ -180,7 +182,7 @@ describe('MorphedChannels', () => {
 		const issued = f.frame();
 		expect(issued).toContain('copy m-2-resolved -> m-2-from');
 		expect(issued).not.toContain('copy m-2-to -> m-2-from');
-		expect(issued.some((c) => c.startsWith('params m-2') && c.endsWith('t=0'))).toBe(true);
+		expect(issued).toContain('imm count=3 t=0');
 	});
 
 	it('folds when a SIBLING restarts the shared clock, with no data of its own', () => {
@@ -253,19 +255,34 @@ describe('MorphedChannels', () => {
 		expect(f.sources[0].t).toBe(0);
 	});
 
-	it('only rewrites params when count or t changed', () => {
+	it('gives each dispatch its own count and t, set immediately before it', () => {
+		// Why immediates rather than a shared uniform: queue writes land before
+		// any command in the submit, so a buffer rewritten between dispatches
+		// would give every dispatch the last channel's values. Two channels of
+		// different lengths make a wrong count visible.
+		const f = fakes();
+		const m = morphed(f);
+		m.write('x', ids, [
+			[2, values(1, 2, 3)],
+			[3, new Float32Array(100)]
+		]);
+		const issued = f.frame().filter((c) => c.startsWith('imm') || c.startsWith('dispatch'));
+		expect(issued).toEqual(['imm count=3 t=1', 'dispatch 1', 'imm count=100 t=1', 'dispatch 2']);
+	});
+
+	it('writes no buffer while animating: t travels in the command stream', () => {
 		const f = fakes();
 		const m = morphed(f);
 		update(m, values(1, 2, 3), values(4, 5, 6));
-		f.frame(); // params now hold count=3, t=1
+		f.frame();
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		f.frame();
 
-		// A sibling restarts and the clock lands again before the next frame: a
-		// fold is due, but t and count are what params already hold.
-		f.scale.startTransition();
-		f.scale.clock.settle();
+		f.scale.clock.step();
+		f.scale.clock.updateRenderState(0);
 		const issued = f.frame();
-		expect(issued).toContain('copy m-2-resolved -> m-2-from');
-		expect(issued.filter((c) => c.startsWith('params'))).toEqual([]);
+		expect(issued.some((c) => c.startsWith('dispatch'))).toBe(true);
+		expect(issued.filter((c) => c.startsWith('write'))).toEqual([]);
 	});
 
 	it('unregisters its compute work before destroying the buffers it reads', () => {
@@ -276,7 +293,7 @@ describe('MorphedChannels', () => {
 
 		m.destroy();
 		expect(f.log[0]).toBe('unregister');
-		expect(f.log.filter((c) => c.startsWith('destroy'))).toHaveLength(8);
+		expect(f.log.filter((c) => c.startsWith('destroy'))).toHaveLength(6);
 		expect(f.hasWork()).toBe(false);
 	});
 

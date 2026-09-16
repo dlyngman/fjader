@@ -45,20 +45,32 @@
 /** Threads per workgroup. Matches the slot kernel. */
 export const VALUE_RESOLVE_WORKGROUP = 64;
 
+/** Bytes of immediate data the kernel reads: `count` then `t`. */
+export const VALUE_RESOLVE_IMMEDIATE_SIZE = 8;
+
+/**
+ * `count` and `t` arrive as IMMEDIATES — set on the pass right before each
+ * dispatch — rather than in a uniform buffer.
+ *
+ * A uniform would need one buffer per channel: queue writes all land before
+ * any command in the submit, so one buffer rewritten between dispatches would
+ * hand every dispatch the last channel's values. Immediates are pass state,
+ * set in command order, so each dispatch reads its own.
+ */
 export const VALUE_RESOLVE_SHADER = /* wgsl */ `
+requires immediate_address_space;
+
 struct Params {
   // Rows in use. The tail of an over-allocated buffer is left alone.
   count: u32,
   // 0 -> from, 1 -> to. Shared by every row of this channel.
   t: f32,
-  _pad0: u32,
-  _pad1: u32,
 };
 
 @group(0) @binding(0) var<storage, read>       valueFrom: array<f32>;
 @group(0) @binding(1) var<storage, read>       valueTo:   array<f32>;
 @group(0) @binding(2) var<storage, read_write> resolved:  array<f32>;
-@group(0) @binding(3) var<uniform>             params:    Params;
+var<immediate> params: Params;
 
 @compute @workgroup_size(${VALUE_RESOLVE_WORKGROUP})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {

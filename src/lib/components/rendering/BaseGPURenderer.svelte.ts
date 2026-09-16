@@ -15,6 +15,9 @@ interface InitConfig {
 	rendererDefinition: object;
 }
 
+/** Warned once per page, not per mark. */
+let warnedMorphUnsupported = false;
+
 export class BaseGPURenderer {
 	// Core properties
 	#markType: string;
@@ -207,6 +210,17 @@ export class BaseGPURenderer {
 		channels: readonly (readonly [number, AllowSharedBufferSource])[]
 	): void {
 		if (!this.#device) return;
+
+		if (!MorphedChannels.supported) {
+			if (!warnedMorphUnsupported) {
+				warnedMorphUnsupported = true;
+				console.warn(
+					'[DivePlot] WGSL immediates are not available, so values will not animate between updates.'
+				);
+			}
+			for (const [binding, data] of channels) this.writeAttribute(binding, data);
+			return;
+		}
 
 		this.#morphed ??= new MorphedChannels({
 			device: this.#device,

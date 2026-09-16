@@ -1,4 +1,8 @@
-import { VALUE_RESOLVE_SHADER, VALUE_RESOLVE_WORKGROUP } from './ValueResolveShader';
+import {
+	VALUE_RESOLVE_IMMEDIATE_SIZE,
+	VALUE_RESOLVE_SHADER,
+	VALUE_RESOLVE_WORKGROUP
+} from './ValueResolveShader';
 import { TransitionClock } from '$lib/animation/TransitionClock';
 
 /**
@@ -60,34 +64,54 @@ interface Channel {
 	from: GPUBuffer;
 	to: GPUBuffer;
 	resolved: GPUBuffer;
-	params: GPUBuffer;
 	/** Bytes allocated, the same for all three data buffers. */
 	size: number;
 	/** Rows in use; the dispatch covers these and no more. */
 	count: number;
 	bindGroup: GPUBindGroup | null;
-	/** What `params` holds, so a frame that changes neither writes nothing. */
-	paramsCount: number;
-	paramsT: number;
 }
 
-const PIPELINES = new WeakMap<GPUDevice, GPUComputePipeline>();
+interface ResolvePipeline {
+	pipeline: GPUComputePipeline;
+	layout: GPUBindGroupLayout;
+}
 
-/** One resolve pipeline per device: the kernel is channel-agnostic. */
-function pipelineFor(device: GPUDevice): GPUComputePipeline {
-	let pipeline = PIPELINES.get(device);
-	if (!pipeline) {
-		pipeline = device.createComputePipeline({
+const PIPELINES = new WeakMap<GPUDevice, ResolvePipeline>();
+
+/**
+ * One resolve pipeline per device: the kernel is channel-agnostic.
+ *
+ * An explicit layout rather than 'auto', so the immediate range is stated here
+ * and not left to how a default layout infers it.
+ */
+function pipelineFor(device: GPUDevice): ResolvePipeline {
+	let entry = PIPELINES.get(device);
+	if (!entry) {
+		const stage = GPUShaderStage.COMPUTE;
+		const layout = device.createBindGroupLayout({
 			label: 'value-resolve',
-			layout: 'auto',
+			entries: [
+				{ binding: 0, visibility: stage, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: stage, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: stage, buffer: { type: 'storage' } }
+			]
+		});
+		const pipeline = device.createComputePipeline({
+			label: 'value-resolve',
+			layout: device.createPipelineLayout({
+				label: 'value-resolve',
+				bindGroupLayouts: [layout],
+				immediateSize: VALUE_RESOLVE_IMMEDIATE_SIZE
+			}),
 			compute: {
 				module: device.createShaderModule({ label: 'value-resolve', code: VALUE_RESOLVE_SHADER }),
 				entryPoint: 'main'
 			}
 		});
-		PIPELINES.set(device, pipeline);
+		entry = { pipeline, layout };
+		PIPELINES.set(device, entry);
 	}
-	return pipeline;
+	return entry;
 }
 
 /**
@@ -132,8 +156,20 @@ export class MorphedChannels {
 	#lastClockVersion: number | null = null;
 	#ownClock: TransitionClock | null = null;
 
-	#paramsScratch = new ArrayBuffer(16);
-	#paramsView = new DataView(this.#paramsScratch);
+	#immediates = new ArrayBuffer(VALUE_RESOLVE_IMMEDIATE_SIZE);
+	#immediatesView = new DataView(this.#immediates);
+
+	/**
+	 * Whether this browser can run the resolve kernel at all. Immediates are
+	 * Chrome-only for now; where they are missing a mark writes these channels
+	 * as static, which is what it did before morphing existed.
+	 */
+	static get supported(): boolean {
+		return (
+			typeof navigator !== 'undefined' &&
+			!!navigator.gpu?.wgslLanguageFeatures?.has('immediate_address_space')
+		);
+	}
 
 	constructor(options: MorphedChannelsOptions) {
 		this.#device = options.device;
@@ -214,9 +250,8 @@ export class MorphedChannels {
 	 * matters because the coordinator runs compute work on every frame it
 	 * renders, and hover and pan render a lot of frames.
 	 *
-	 * Each channel keeps its own params buffer: queue writes all land before any
-	 * command in the submit, so one buffer shared across dispatches would give
-	 * every dispatch the last channel's values.
+	 * `count` and `t` go to each dispatch as immediates, which are pass state set
+	 * in command order — so each dispatch reads its own, with no buffer to write.
 	 */
 	encode(encoder: GPUCommandEncoder): void {
 		if (this.#channels.size === 0) return;
@@ -243,29 +278,23 @@ export class MorphedChannels {
 		this.#dirty = false;
 		this.#resolvedT = resolveT;
 
-		const pipeline = pipelineFor(this.#device);
+		const { pipeline, layout } = pipelineFor(this.#device);
 		const pass = encoder.beginComputePass({ label: `${this.#label}-resolve` });
 		pass.setPipeline(pipeline);
+		this.#immediatesView.setFloat32(4, resolveT, true);
 		for (const channel of this.#channels.values()) {
 			if (channel.count === 0) continue;
 
-			if (channel.paramsCount !== channel.count || channel.paramsT !== resolveT) {
-				this.#paramsView.setUint32(0, channel.count, true);
-				this.#paramsView.setFloat32(4, resolveT, true);
-				this.#device.queue.writeBuffer(channel.params, 0, this.#paramsScratch);
-				channel.paramsCount = channel.count;
-				channel.paramsT = resolveT;
-			}
-
 			channel.bindGroup ??= this.#device.createBindGroup({
-				layout: pipeline.getBindGroupLayout(0),
+				layout,
 				entries: [
 					{ binding: 0, resource: { buffer: channel.from } },
 					{ binding: 1, resource: { buffer: channel.to } },
-					{ binding: 2, resource: { buffer: channel.resolved } },
-					{ binding: 3, resource: { buffer: channel.params } }
+					{ binding: 2, resource: { buffer: channel.resolved } }
 				]
 			});
+			this.#immediatesView.setUint32(0, channel.count, true);
+			pass.setImmediates!(0, this.#immediates);
 			pass.setBindGroup(0, channel.bindGroup);
 			pass.dispatchWorkgroups(Math.ceil(channel.count / VALUE_RESOLVE_WORKGROUP));
 		}
@@ -303,16 +332,9 @@ export class MorphedChannels {
 			from: make('from'),
 			to: make('to'),
 			resolved: make('resolved'),
-			params: this.#device.createBuffer({
-				size: 16,
-				usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-				label: `${this.#label}-${binding}-params`
-			}),
 			size,
 			count: 0,
-			bindGroup: null,
-			paramsCount: -1,
-			paramsT: -1
+			bindGroup: null
 		};
 		this.#channels.set(binding, channel);
 		return channel;
@@ -322,7 +344,6 @@ export class MorphedChannels {
 		channel.from.destroy();
 		channel.to.destroy();
 		channel.resolved.destroy();
-		channel.params.destroy();
 	}
 
 	/** The band axis's scale, when it owns a clock this mark should adopt. */
