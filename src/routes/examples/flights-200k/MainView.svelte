@@ -36,8 +36,9 @@
 						<DotsMark
 							table="flights"
 							selection="brush"
-							x='delay'
+							x={min('delay')}
 							y="time"
+							fill={avg('delay')}
 							opacity="0.8"
 						/>
 					{/snippet}
