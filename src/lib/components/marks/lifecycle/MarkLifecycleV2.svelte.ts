@@ -476,6 +476,8 @@ export class MarkLifecycleV2 {
 		if (this.#destroyed) return;
 		this.#identityFields.clear();
 		this.#syntheticIds = {};
+		// The SQL topN must not bucket into an id from the dim that just went away.
+		delete this.#transformConfig.otherIdsByColumn;
 		this.setupComplete = false;
 	}
 
@@ -1366,6 +1368,12 @@ export class MarkLifecycleV2 {
 				// undisplayed id cannot act as a gateway.
 				scale?.setOtherId(id);
 			}
+			// The SQL topN buckets past its cutoff into this id, so it reads the
+			// same map the JS path is handed. A copy, because #syntheticIds is
+			// replaced wholesale on reset. And the query parts rebuild: anything
+			// assembled before the reservation had no id and left Other out.
+			this.#transformConfig.otherIdsByColumn = { ...this.#syntheticIds };
+			this.#identitySetupVersion++;
 		}
 	}
 

@@ -9,12 +9,12 @@ import { ObjectDataAccessor } from '$lib/data/DataAccessor';
 
 describe('Transform Pipeline Integration', () => {
 	it('full pipeline: SQL + JS transforms', () => {
-		// Simulate a bar chart with stacking. topN(includeOthers) forces JS, so
+		// Simulate a bar chart with stacking. A JS-engine topN, so
 		// the stack that follows it must also be JS — SQL can't wrap client-side
 		// transformed data.
 		const transforms = [
 			filter(gt('revenue', 0)),
-			topN(10, { includeOthers: true }),
+			topN(10, { includeOthers: true, engine: 'js' }),
 			stackY({ engine: 'js' })
 		];
 

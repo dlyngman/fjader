@@ -93,7 +93,7 @@ describe('identity ids through topN', () => {
 		expect(otherId).toBe(4);
 
 		const data = await fetchChannels('category');
-		const result = topN(2, { includeOthers: true }).apply(
+		const result = topN(2, { includeOthers: true, engine: 'js' }).apply(
 			data,
 			{ markType: 'bar', table: 'sales', x: 'x', y: 'total' },
 			{ otherIdsByColumn: { x: otherId } }
@@ -128,7 +128,7 @@ describe('identity ids through topN', () => {
 		expect(values.filter((v) => v === 'Other')).toHaveLength(1);
 
 		const data = await fetchChannels('category');
-		const result = topN(2, { includeOthers: true }).apply(
+		const result = topN(2, { includeOthers: true, engine: 'js' }).apply(
 			data,
 			{ markType: 'bar', table: 'sales', x: 'x', y: 'total' },
 			{ otherIdsByColumn: { x: otherId } }

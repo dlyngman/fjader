@@ -12,7 +12,11 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { column, sum, eq, literal, type ExprNode } from '@uwdata/mosaic-sql';
 import { stackY, stackX, TransformCompiler } from './index';
-import { buildQueryParts, assembleQuery, castReal } from '$lib/components/marks/lifecycle/query-builder';
+import {
+	buildQueryParts,
+	assembleQuery,
+	castReal
+} from '$lib/components/marks/lifecycle/query-builder';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
 import type { MarkConfig } from '$lib/types';
 
@@ -132,9 +136,16 @@ async function runBothPaths(db: DB, s: Scenario) {
 	// --- JS path: untransformed query, then JS stack on the result ---
 	const jsCompiler = new TransformCompiler([], s.config);
 	const baseParts = buildQueryParts(s.select, s.orderConfig, false);
-	const baseQuery = assembleQuery({ table: s.table, parts: baseParts, transformCompiler: jsCompiler });
+	const baseQuery = assembleQuery({
+		table: s.table,
+		parts: baseParts,
+		transformCompiler: jsCompiler
+	});
 	const baseRows = await db.all(baseQuery.toString());
-	const jsResult = stackFn({ ...opts, engine: 'js' } as any).apply(rowsToAccessor(baseRows), s.config);
+	const jsResult = stackFn({ ...opts, engine: 'js' } as any).apply(
+		rowsToAccessor(baseRows),
+		s.config
+	);
 	const jsRows = accessorToRows(jsResult);
 
 	return { sqlRows, jsRows, sqlText: sqlQuery.toString() };
@@ -145,8 +156,20 @@ async function runBothPaths(db: DB, s: Scenario) {
 // ---------------------------------------------------------------------------
 
 const VERTICAL: MarkConfig = { markType: 'area', table: 'stacked', x: 'x', y: 'y2', fill: 'fill' };
-const HORIZONTAL: MarkConfig = { markType: 'barx', table: 'stacked', x: 'x2', y: 'y', fill: 'fill' };
-const NAN_CONFIG: MarkConfig = { markType: 'area', table: 'stacked_nan', x: 'x', y: 'y2', fill: 'fill' };
+const HORIZONTAL: MarkConfig = {
+	markType: 'barx',
+	table: 'stacked',
+	x: 'x2',
+	y: 'y',
+	fill: 'fill'
+};
+const NAN_CONFIG: MarkConfig = {
+	markType: 'area',
+	table: 'stacked_nan',
+	x: 'x',
+	y: 'y2',
+	fill: 'fill'
+};
 
 const scenarios: Scenario[] = [
 	{

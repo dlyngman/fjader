@@ -17,7 +17,6 @@
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { topN } from '$lib/transforms';
 
-
 	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
@@ -79,7 +78,8 @@
 	<div class="container">
 		<h1>topN Transform Test</h1>
 		<p class="subtitle">
-			topN runs as a SQL CTE by default (charts 2, 4, 6); includeOthers falls back to JS (chart 3)
+			topN runs in SQL, includeOthers included (charts 2–4, 6, 7); engine: 'js' forces the
+			client-side path
 		</p>
 
 		<div class="charts-grid">
@@ -149,10 +149,10 @@
 
 			<!-- Chart 3: topN(5, includeOthers) -->
 			<div class="chart-panel">
-				<h3>3. topN(5, includeOthers: true) — JS fallback</h3>
+				<h3>3. topN(5, includeOthers: true) — SQL</h3>
 				<p class="desc">
-					includeOthers is JS-only. Should show 5 + "Other" bar (revenue 320), with "Other" in
-					the band domain.
+					Should show 5 + "Other" bar (revenue 320), with "Other" last in the band domain. Other is
+					a SQL bucket over a reserved dim id, so this mark gets dense rows like any other.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5+ Category" yLabel="Revenue">
@@ -221,8 +221,8 @@
 				<p class="desc">
 					Click a rect or legend swatch to toggle its region; click a band label to toggle that
 					category. Both AND together. This chart is the source, so it is excluded from its own
-					toggles (axis labels and legend dim; bar dimming is a separate proposal); chart 6
-					filters. Shift-click for multi-select, click empty space to clear.
+					toggles (axis labels and legend dim; bar dimming is a separate proposal); chart 6 filters.
+					Shift-click for multi-select, click empty space to clear.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
@@ -289,6 +289,49 @@
 										sort={{ x: 'y', order: 'desc' }}
 										selection="brush"
 										transforms={[topN(5)]}
+										tooltip
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+						{#snippet interactors()}
+							<Toggle selection="brush" field="region" />
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
+			<!-- Chart 7: Selection + topN(5, includeOthers) -->
+			<div class="chart-panel">
+				<h3>7. Selection + topN(5, includeOthers) — SQL, crossfiltered</h3>
+				<p class="desc">
+					Chart 6 with an Other bucket. Toggling a region re-ranks, and nothing leaves the chart: a
+					category dropping out of the top 5 shrinks while travelling INTO Other, and Other's
+					stacked segments grow by what it absorbed. Other stays last on the axis. One Other row per
+					region, so its stack has the same colours as the bars beside it.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
+						{#snippet legend()}
+							<Legend color="region" selection="brush" />
+						{/snippet}
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="top_n_by_region"
+										x="category"
+										y={sum('revenue')}
+										fill="region"
+										sort={{ x: 'y', order: 'desc' }}
+										selection="brush"
+										transforms={[topN(5, { includeOthers: true })]}
 										tooltip
 									/>
 								{/snippet}

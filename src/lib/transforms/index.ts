@@ -92,11 +92,9 @@ interface TopNOptions {
 }
 
 export function topN(n: number, options: TopNOptions & { engine: 'js' }): JsTransform;
-export function topN(n: number, options: TopNOptions & { includeOthers: true }): JsTransform;
 export function topN(n: number, options?: TopNOptions): SqlTransform;
 export function topN(n: number, options: TopNOptions = {}): SqlTransform | JsTransform {
-	// includeOthers requires JS path (complex aggregation not yet in SQL)
-	if (options.includeOthers || options.engine === 'js') {
+	if (options.engine === 'js') {
 		return topNJS(n, options);
 	}
 	return topNSQL(n, options);
@@ -458,14 +456,20 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 	return {
 		stage: 'sql',
 		type: 'topN',
-		spec: { transform: 'topN', n, ...(options.by ? { by: options.by } : {}) },
+		spec: {
+			transform: 'topN',
+			n,
+			...(options.by ? { by: options.by } : {}),
+			...(options.includeOthers ? { includeOthers: true } : {})
+		},
 		apply(query: SelectQuery, config?: MarkConfig) {
 			const aliases = getSelectAliases(query);
 			const { by, band, series } = resolveTopNColumns(aliases, options, config);
 
+			let ranked: SelectQuery;
 			if (series) {
-				// Grouped: rank categories by their total across every series, keep
-				// every series row of the top N.
+				// Grouped: rank CATEGORIES by their total across every series, so
+				// every row of a category shares its rank.
 				//
 				// Published as a column like the simple path, and for the same two
 				// reasons. The axis reads its order from it — row order does not
@@ -473,26 +477,23 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 				// is kept off the axis by its rank being NaN, which only works if
 				// there is a rank to be NaN.
 				//
-				// DENSE_RANK over (total, band) so every row of a category shares its
-				// rank and a tie still yields exactly n categories, deterministically.
+				// DENSE_RANK over (total, band) so a tie still yields exactly n
+				// categories, deterministically.
 				const totals = Query.from({ __topn_base: query }).select({
 					...passthroughSelect(aliases),
 					__dplot_topn_total: sqlTag`SUM(${column(by)}) OVER (PARTITION BY ${column(band)})`
 				});
-				const ranked = Query.from({ __topn_totals: totals }).select({
+				ranked = Query.from({ __topn_totals: totals }).select({
 					...passthroughSelect(aliases),
 					[TOPN_RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
 				});
-				return Query.from({ __topn: ranked })
-					.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
-					.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
+			} else {
+				// Simple: rank rows by value.
+				ranked = Query.from({ __topn_base: query }).select({
+					...passthroughSelect(aliases),
+					[TOPN_RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+				});
 			}
-
-			// Simple: rank rows by value, filter to top N.
-			const ranked = Query.from({ __topn_base: query }).select({
-				...passthroughSelect(aliases),
-				[TOPN_RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
-			});
 
 			// The rank stays in the output, and that is the whole mechanism: the
 			// band axis reads it as a VALUE instead of inferring the ranking from
@@ -514,18 +515,107 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 			//
 			// The `__dplot_` prefix is load-bearing: #writeTooltipTable filters
 			// exactly that prefix, so the rank cannot leak into a tooltip.
+			//
 			// Not densified here. Keeping a row for every category is not topN's
 			// business — an ordinary bar chart under a crossfilter loses rows the
 			// same way, when a category filters down to nothing and drops out of
 			// the GROUP BY. `dense()` does it for both, and runs after this.
+			const otherId = (config?.otherIdsByColumn as Record<string, number> | undefined)?.[band];
+			if (options.includeOthers && otherId != null) {
+				return collapseIntoOther(ranked, aliases, { n, by, band, series, otherId, config });
+			}
+			// No reserved id yet — identity setup reserves it asynchronously — so
+			// there is nothing to call Other, and the rows past the cutoff are
+			// simply left out, as the JS path does. The query is rebuilt once the id
+			// exists.
 			return Query.from({ __topn: ranked })
 				.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
 				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
 		},
 		describe() {
-			return `Top ${n} (SQL)`;
+			return `Top ${n}${options.includeOthers ? ' + Other' : ''} (SQL)`;
 		}
 	};
+}
+
+/**
+ * Everything ranked past `n` becomes one Other row per remaining group key.
+ *
+ * Two steps. BUCKET relabels a row past the cutoff — its band becomes the
+ * reserved id and its rank n + 1, so Other sorts after every real category.
+ * COLLAPSE groups by the band and every other group key (a series, a facet),
+ * so Other gets one row per series:
+ *
+ * | channel | top row | Other row |
+ * |---|---|---|
+ * | band, or an id from the band's own dim | itself | the reserved id |
+ * | another group key | itself | itself |
+ * | the value ranked by | itself | summed |
+ * | anything else | itself | 0 |
+ * | rank | itself | n + 1 |
+ *
+ * An id from the band's own dim — colour by category — gets the reserved id so
+ * Other is coloured as Other. The JS path gives it 0, which is category 0's
+ * colour; that is its bug and not copied here.
+ *
+ * The reserved id can be a REAL category ("Other" in the data: the reservation
+ * reuses it). If that category makes the cut, bucketing gives its row and the
+ * excluded rows the same band, and the GROUP BY folds them — summed value, its
+ * own values elsewhere, its own rank via MIN. No special case.
+ */
+function collapseIntoOther(
+	ranked: SelectQuery,
+	aliases: string[],
+	o: {
+		n: number;
+		by: string;
+		band: string;
+		series: string | null;
+		otherId: number;
+		config: MarkConfig | undefined;
+	}
+): SelectQuery {
+	const { n, by, band, otherId } = o;
+	const rank = column(TOPN_RANK_COLUMN);
+	const kept = sqlTag`${rank} <= ${n}`;
+	const identityDims = o.config?.identityDims as Record<string, string> | undefined;
+	const sameAsBand = (alias: string) =>
+		alias === band || (!!identityDims?.[alias] && identityDims[alias] === identityDims[band]);
+	const groupKeys =
+		(o.config?.groupKeys as string[] | null | undefined) ?? (o.series ? [o.series] : []);
+	const isKey = (alias: string) => sameAsBand(alias) || groupKeys.includes(alias);
+
+	const bucket: Record<string, ExprNode> = {};
+	for (const alias of aliases) {
+		const col = column(alias);
+		if (sameAsBand(alias)) {
+			bucket[alias] = sqlTag`CASE WHEN ${kept} THEN ${col} ELSE ${otherId} END` as ExprNode;
+		} else if (isKey(alias) || alias === by) {
+			bucket[alias] = col;
+		} else {
+			bucket[alias] = sqlTag`CASE WHEN ${kept} THEN ${col} END` as ExprNode;
+		}
+	}
+	bucket[TOPN_RANK_COLUMN] = sqlTag`CASE WHEN ${kept} THEN ${rank} ELSE ${n + 1} END` as ExprNode;
+	const bucketed = Query.from({ __topn_ranked: ranked }).select(bucket);
+
+	const collapse: Record<string, ExprNode> = {};
+	const keys: ExprNode[] = [];
+	for (const alias of aliases) {
+		const col = column(alias);
+		if (isKey(alias)) {
+			collapse[alias] = col;
+			keys.push(col);
+		} else if (alias === by) {
+			collapse[alias] = sqlTag`CAST(SUM(${col}) AS REAL)` as ExprNode;
+		} else {
+			collapse[alias] = sqlTag`COALESCE(MAX(${col}), 0)` as ExprNode;
+		}
+	}
+	collapse[TOPN_RANK_COLUMN] = sqlTag`MIN(${rank})` as ExprNode;
+	return Query.from({ __topn_bucketed: bucketed })
+		.select(collapse)
+		.groupby(...keys);
 }
 
 function topNJS(n: number, options: TopNOptions): JsTransform {

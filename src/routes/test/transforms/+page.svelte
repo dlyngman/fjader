@@ -111,7 +111,7 @@
 									fill="species"
 									opacity="1"
 									r={12}
-									transforms={[topN(5, { includeOthers: true })]}
+									transforms={[topN(5, { includeOthers: true, engine: 'js' })]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

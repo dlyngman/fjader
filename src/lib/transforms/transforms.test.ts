@@ -102,7 +102,7 @@ describe('Transforms', () => {
 				{ x: 'B', y: 200 }
 			]);
 
-			const transform = topN(2, { includeOthers: true });
+			const transform = topN(2, { includeOthers: true, engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			expect(result.length).toBe(2);
@@ -118,7 +118,7 @@ describe('Transforms', () => {
 				{ x: 'C', y: 50 }
 			]);
 
-			const transform = topN(2, { includeOthers: true });
+			const transform = topN(2, { includeOthers: true, engine: 'js' });
 			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
 
 			expect(result.length).toBe(3);
@@ -143,7 +143,7 @@ describe('Transforms', () => {
 		const markCfg = { markType: 'bar', table: 't', x: 'x', y: 'y' };
 
 		it('topN() gives the Other row the reserved id, not a sum of excluded ids', () => {
-			const result = topN(2, { includeOthers: true }).apply(idBandData(), markCfg, {
+			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(idBandData(), markCfg, {
 				otherIdsByColumn: { x: 3 }
 			});
 
@@ -154,7 +154,7 @@ describe('Transforms', () => {
 		});
 
 		it('topN() omits the Other row when no id was reserved', () => {
-			const result = topN(2, { includeOthers: true }).apply(idBandData(), markCfg);
+			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(idBandData(), markCfg);
 
 			// Better a missing bar than one drawn on a live category's slot.
 			expect(result.length).toBe(2);
@@ -169,7 +169,7 @@ describe('Transforms', () => {
 				{ x: new Float32Array([0, 1, 2]), y: new Float32Array([100, 200, 50]) },
 				3
 			);
-			const result = topN(2, { includeOthers: true }).apply(data, markCfg, {
+			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(data, markCfg, {
 				otherIdsByColumn: { x: 1 }
 			});
 
@@ -187,7 +187,7 @@ describe('Transforms', () => {
 				{ x: 'B', y: 200 },
 				{ x: 'C', y: 50 }
 			]);
-			const result = topN(2, { includeOthers: true }).apply(data, markCfg);
+			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(data, markCfg);
 
 			expect(result.getColumn('x')?.[2]).toBe('Other');
 		});
@@ -203,7 +203,7 @@ describe('Transforms', () => {
 				},
 				6
 			);
-			const result = topN(1, { includeOthers: true }).apply(
+			const result = topN(1, { includeOthers: true, engine: 'js' }).apply(
 				data,
 				{ ...markCfg, fill: 'fill' },
 				{ otherIdsByColumn: { x: 3 } }
@@ -394,8 +394,12 @@ describe('Transforms', () => {
 			expect(result[1].stage).toBe('sql');
 		});
 
-		it('adds JS stack after a JS-stage transform (e.g. topN includeOthers), never SQL-after-JS', () => {
-			const result = withImplicitStack([topN(5, { includeOthers: true })], false, 'y');
+		it('adds JS stack after a JS-stage transform (e.g. a JS-engine topN), never SQL-after-JS', () => {
+			const result = withImplicitStack(
+				[topN(5, { includeOthers: true, engine: 'js' })],
+				false,
+				'y'
+			);
 			expect(result[1].stage).toBe('js');
 			// Must not throw — this is the regression: the auto-injected stack
 			// used to always default to SQL, appended after a JS transform.

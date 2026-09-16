@@ -819,3 +819,174 @@ describe('dense with a series channel', () => {
 		}
 	});
 });
+
+// ---------------------------------------------------------------------------
+// topN includeOthers, in SQL
+// ---------------------------------------------------------------------------
+//
+// Other used to exist only on the JS path, which `dense()` does not follow, so
+// a chart with an Other bucket could not animate at all. In SQL it is a bucket
+// and a GROUP BY: past the cutoff the band becomes the reserved id, rows
+// collapse per remaining group key, and the rank past the cutoff is n + 1.
+
+describe('topN includeOthers in SQL', () => {
+	let db: DB;
+	const CAT = '__dplot_dim_others_category';
+	const REG = '__dplot_dim_others_region';
+	let otherId: number;
+
+	beforeAll(async () => {
+		db = openDB();
+		await db.run(SEED_SQL);
+		await db.run(
+			`CREATE TABLE "${CAT}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT category AS value FROM sales)`
+		);
+		const [{ n }] = await db.all(`SELECT COUNT(*)::INT AS n FROM "${CAT}"`);
+		otherId = Number(n);
+		await db.run(`INSERT INTO "${CAT}" VALUES ('Other', ${otherId})`);
+		await db.run(
+			`CREATE TABLE "${REG}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT region AS value FROM sales)`
+		);
+		await db.run(
+			`CREATE TABLE sales_o2 AS
+			 SELECT s.*, c.id AS category_idx, r.id AS region_idx
+			 FROM sales s JOIN "${CAT}" c ON s.category = c.value JOIN "${REG}" r ON s.region = r.value`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	const isRanked = (r: Record<string, unknown>) => Number.isFinite(Number(r[TOPN_RANK_COLUMN]));
+
+	async function run(opts: {
+		series?: boolean;
+		colourIsCategory?: boolean;
+		other?: number | null;
+		dense?: boolean;
+		where?: string;
+	}) {
+		const select: Record<string, ExprNode> = {
+			x: column('category_idx'),
+			y2: sum(column('revenue'))
+		};
+		const keys = [column('category_idx')];
+		const groupKeys = ['x'];
+		if (opts.series) {
+			select.fill = column('region_idx');
+			keys.push(column('region_idx'));
+			groupKeys.push('fill');
+		}
+		if (opts.colourIsCategory) {
+			select.fill = column('category_idx');
+			groupKeys.push('fill');
+		}
+		let q = Query.from('sales_o2')
+			.select(select)
+			.groupby(...keys) as SelectQuery;
+		if (opts.where)
+			q = q.where(sqlTag([opts.where] as unknown as TemplateStringsArray)) as SelectQuery;
+
+		const other = opts.other === undefined ? otherId : opts.other;
+		const config = {
+			markType: 'barY',
+			table: 'sales_o2',
+			x: 'x',
+			y: 'y2',
+			...(opts.series || opts.colourIsCategory ? { fill: 'fill' } : {}),
+			groupKeys,
+			dimTableByChannel: { x: CAT },
+			identityDims: {
+				x: CAT,
+				...(opts.series ? { fill: REG } : {}),
+				...(opts.colourIsCategory ? { fill: CAT } : {})
+			},
+			dimSizes: { [CAT]: otherId + 1, [REG]: 3 },
+			...(other != null ? { otherIdsByColumn: { x: other } } : {})
+		} as unknown as MarkConfig;
+
+		const topn = topN(5, { by: 'y2', includeOthers: true }) as unknown as SqlTransform;
+		expect(topn.stage).toBe('sql');
+		const transforms = opts.dense ? withDenseCategories([topn, stackY()]) : [topn];
+		for (const t of transforms) q = (t as SqlTransform).apply(q, config);
+		return db.all(
+			`SELECT * FROM (${q}) ORDER BY x, ${opts.series || opts.colourIsCategory ? 'fill' : 'x'}`
+		);
+	}
+
+	async function totals(where?: string) {
+		const rows = await db.all(
+			`SELECT category_idx AS id, SUM(revenue)::DOUBLE AS v FROM sales_o2 ${where ? `WHERE ${where}` : ''}
+			 GROUP BY category_idx ORDER BY v DESC, category_idx`
+		);
+		return rows.map((r) => ({ id: Number(r.id), v: Number(r.v) }));
+	}
+
+	it('collapses everything past the cutoff into one Other row, ranked last', async () => {
+		const rows = await run({});
+		const all = await totals();
+		const top = all.slice(0, 5);
+		const rest = all.slice(5).reduce((s, r) => s + r.v, 0);
+
+		expect(rows.length).toBe(6);
+		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
+		expect(Number(otherRow.y2)).toBeCloseTo(rest, 3);
+		expect(Number(otherRow[TOPN_RANK_COLUMN])).toBe(6);
+		const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+		expect(ids).toEqual([...top.map((t) => t.id), otherId]);
+	});
+
+	it('keeps one Other row per series, each summing that series past the cutoff', async () => {
+		const rows = await run({ series: true });
+		const top = new Set((await totals()).slice(0, 5).map((t) => t.id));
+		const expected = await db.all(
+			`SELECT region_idx AS s, SUM(revenue)::DOUBLE AS v FROM sales_o2
+			 WHERE category_idx NOT IN (${[...top].join(',')}) GROUP BY region_idx ORDER BY region_idx`
+		);
+		const others = rows.filter((r) => Number(r.x) === otherId);
+		expect(others.map((r) => Number(r.fill))).toEqual(expected.map((e) => Number(e.s)));
+		others.forEach((r, i) => expect(Number(r.y2)).toBeCloseTo(Number(expected[i].v), 3));
+		for (const r of rows) {
+			if (Number(r.x) !== otherId) expect(top.has(Number(r.x))).toBe(true);
+		}
+	});
+
+	it('folds into a real category that holds the reserved id and made the cut', async () => {
+		// reserveSynthetic reuses a real "Other" rather than duplicating it, so the
+		// reserved id can be a category that survives. Its excluded total joins it.
+		const all = await totals();
+		const winner = all[0];
+		const rest = all.slice(5).reduce((s, r) => s + r.v, 0);
+		const rows = await run({ other: winner.id });
+
+		expect(rows.length).toBe(5);
+		const folded = rows.find((r) => Number(r.x) === winner.id)!;
+		expect(Number(folded.y2)).toBeCloseTo(winner.v + rest, 3);
+		expect(Number(folded[TOPN_RANK_COLUMN])).toBe(1);
+	});
+
+	it('gives Other its own id in a colour channel from the band dim, not category 0', async () => {
+		const rows = await run({ colourIsCategory: true });
+		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
+		expect(Number(otherRow.fill)).toBe(otherId);
+	});
+
+	it('omits the Other rows when no id has been reserved yet', async () => {
+		const rows = await run({ other: null });
+		expect(rows.length).toBe(5);
+		expect(rows.every(isRanked)).toBe(true);
+	});
+
+	it('with dense: excluded categories are padded unranked, Other is displayed last', async () => {
+		for (const where of [undefined, `region = 'North'`]) {
+			const rows = await run({ series: true, dense: true, where });
+			const all = await totals(where);
+			const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+			expect(ids).toEqual([...all.slice(0, 5).map((t) => t.id), otherId]);
+			// Pairs, as for any series: 11 categories x (3 regions + the NULL -1).
+			expect(rows.length).toBe((otherId + 1) * 4);
+		}
+	});
+});
