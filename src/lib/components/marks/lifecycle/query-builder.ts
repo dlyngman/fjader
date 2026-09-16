@@ -282,14 +282,41 @@ export function buildQueryParts(
 	// Store channel names for connected mark ordering.
 	let orderChannels: string[] | null = null;
 	const chans: string[] = [];
-	if (orderConfig) {
-		const { seriesChannel, dimensionChannel } = orderConfig;
+	if (aliasMap.has('__facet')) chans.push('__facet');
 
-		if (aliasMap.has('__facet')) chans.push('__facet');
-		if (seriesChannel && aliasMap.has(seriesChannel)) chans.push(seriesChannel);
-		if (dimensionChannel && aliasMap.has(dimensionChannel)) chans.push(dimensionChannel);
+	// ALIGNMENT FIRST, ahead of any preference about row order.
+	//
+	// These channels are a correctness requirement: a mark handing its rows to
+	// the GPU as an array indexed by category needs row `i` to be the same
+	// category on every update, and only the leading ORDER BY term decides that.
+	// Everything after it is a tiebreaker.
+	//
+	// An earlier version appended them LAST, reasoning that a connected mark's
+	// ordering should win where the two disagree and that for these marks they
+	// could not disagree. Both halves were wrong. A bar mark with a series
+	// channel emits ORDER BY fill, y — so rows came back grouped by colour, not
+	// by category — and because densify gives an absent category `fill = 0`, the
+	// permutation changed with whichever categories the filter had emptied. The
+	// result was bars interpolating toward other categories' values, sometimes.
+	//
+	// A preference that silently corrupts values is not a preference worth
+	// keeping. The tiebreakers still apply, so series segments stay contiguous
+	// WITHIN a category, which is what stacking actually needs.
+	for (const ch of alignChannels) {
+		if (aliasMap.has(ch) && !chans.includes(ch)) chans.push(ch);
 	}
 
+	if (orderConfig) {
+		const { seriesChannel, dimensionChannel } = orderConfig;
+		if (seriesChannel && aliasMap.has(seriesChannel) && !chans.includes(seriesChannel)) {
+			chans.push(seriesChannel);
+		}
+		if (dimensionChannel && aliasMap.has(dimensionChannel) && !chans.includes(dimensionChannel)) {
+			chans.push(dimensionChannel);
+		}
+	}
+
+	// (see above: alignment channels lead, tiebreakers follow)
 	// Channels whose ORDER the GPU depends on, rather than the reader.
 	//
 	// A mark whose query returns one row per category — every category, every
@@ -311,15 +338,6 @@ export function buildQueryParts(
 	// polyline's ordering still wins where the two disagree. For the marks this
 	// applies to they cannot disagree — the categorical channel IS the dimension
 	// channel — but that is a property of today's callers, not a guarantee.
-	if (aliasMap.has('__facet') && alignChannels.length > 0 && !chans.includes('__facet')) {
-		// Facet first, so each cell's rows stay contiguous; the alignment is then
-		// per cell, which is what a faceted mark needs.
-		chans.unshift('__facet');
-	}
-	for (const ch of alignChannels) {
-		if (aliasMap.has(ch) && !chans.includes(ch)) chans.push(ch);
-	}
-
 	if (chans.length > 0) {
 		orderChannels = chans;
 	}

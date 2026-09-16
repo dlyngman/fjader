@@ -252,6 +252,16 @@
 			hash = (hash * 31 + bandData[i]) | 0;
 		}
 		renderer.setAlignmentKey(hash);
+
+		// TEMPORARY DIAGNOSTIC — remove before merging. Pairs with the [parts]
+		// line: that says what was requested, this says what arrived.
+		const ids = Array.from(bandData);
+		let ascending = true;
+		for (let i = 1; i < ids.length; i++) if (ids[i] < ids[i - 1]) ascending = false;
+		console.log(
+			`[rows ${markId}] n=${ids.length} ascending=${ascending} ids=[${ids.join(',')}]` +
+				`${ascending ? '' : '   <-- UNORDERED'}`
+		);
 	});
 
 	// The MEASURE axis's two edges morph; the band axis's never do.
