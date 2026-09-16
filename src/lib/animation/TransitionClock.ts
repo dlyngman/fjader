@@ -38,6 +38,29 @@ import { Spring } from './Spring';
  * restarting it every frame makes this consumer re-fold every frame, so it
  * converges by decelerating rather than along the curve the spring intended.
  */
+/**
+ * Stiffness for a data-update transition, and how to think about changing it.
+ *
+ * The spring is critically damped, so it never overshoots and the only knob is
+ * how fast it converges: `omega = sqrt(stiffness)`, and it is within about a
+ * percent of its destination after roughly `5 / omega` seconds. So 120 settles
+ * in ~0.46s, 240 in ~0.32s, 400 in ~0.25s. Quadrupling the number halves the
+ * time; it is not a linear dial.
+ *
+ * ONE NUMBER FOR SLOT AND VALUE, deliberately. A bar's position and its height
+ * share a clock so they arrive together — separate springs desynchronise on a
+ * retarget and the bar reaches its rank visibly before or after it finishes
+ * growing. Wanting them to differ is a design change, not a constant.
+ *
+ * Note this is also the floor on how responsive a drag feels: `t` is
+ * normalised, so settle DURATION is independent of distance and a one-pixel
+ * correction takes as long as a full reorder.
+ */
+export const TRANSITION_STIFFNESS = 240;
+
+/** Sub-pixel, so rest is declared when the difference stops being visible. */
+export const TRANSITION_PRECISION = 0.0005;
+
 export class TransitionClock {
 	#spring: Spring;
 	#precision: number;
@@ -58,7 +81,7 @@ export class TransitionClock {
 	 */
 	version: number = 0;
 
-	constructor(stiffness: number, precision: number) {
+	constructor(stiffness: number = TRANSITION_STIFFNESS, precision: number = TRANSITION_PRECISION) {
 		this.#precision = precision;
 		this.#spring = new Spring(1, stiffness, precision);
 	}

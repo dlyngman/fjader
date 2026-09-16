@@ -23,10 +23,6 @@ interface InitConfig {
  * and has no idea what the floats mean — so there is nothing to specialise per
  * mark or per channel. Only the bind groups differ.
  */
-/** Matches the band scale's reorder spring, so adopted and owned clocks feel alike. */
-const TRANSITION_STIFFNESS = 120;
-const TRANSITION_PRECISION = 0.0005;
-
 const RESOLVE_PIPELINES = new WeakMap<GPUDevice, GPUComputePipeline>();
 
 function resolvePipelineFor(device: GPUDevice): GPUComputePipeline {
@@ -449,7 +445,7 @@ export class BaseGPURenderer {
 			return;
 		}
 		if (!this.#ownClock) {
-			this.#ownClock = new TransitionClock(TRANSITION_STIFFNESS, TRANSITION_PRECISION);
+			this.#ownClock = new TransitionClock();
 			this.#ownClock._affectedChartsArray = [this.#chartContext.chartId];
 		}
 		this.#ownClock.restart();

@@ -14,8 +14,6 @@ import { TransitionClock } from '$lib/animation';
  * something different for a one-band nudge than for a full reorder, while a
  * threshold on t is the same fraction of the journey either way.
  */
-const REORDER_STIFFNESS = 120;
-const REST_PRECISION = 0.0005;
 
 interface BandScaleConfig {
 	padding?: number;
@@ -567,7 +565,7 @@ export class BandScaleState {
 	 * as a full reorder — and a mid-flight retarget is continuous in `t` but not
 	 * in world space. Both are the other face of arriving together.
 	 */
-	#driver: TransitionClock = new TransitionClock(REORDER_STIFFNESS, REST_PRECISION);
+	#driver: TransitionClock = new TransitionClock();
 	/**
 	 * Where each id's current transition STARTED, id-indexed.
 	 *
@@ -1470,7 +1468,7 @@ export class BandScaleState {
 	 * Called by GPUCoordinator when this scale stops animating.
 	 *
 	 * Lands exactly on the target rather than wherever the last extrapolated
-	 * frame left things. REST_PRECISION is sub-pixel so the difference is
+	 * frame left things. The clock's rest precision is sub-pixel so the difference is
 	 * invisible, but slotCurrent is what every later comparison reads, and a
 	 * scale at rest holding 2.0003 is a scale whose next retarget springs from a
 	 * number that was never a slot.
