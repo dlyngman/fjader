@@ -73,6 +73,22 @@ export class SlotTransition {
 	 */
 	#exiting: Uint8Array = new Uint8Array(0);
 	/**
+	 * How visible each id's LABEL is, as the two ends of the transition: 1 for
+	 * displayed, 0 for not. Travels on the same clock and folds the same way as
+	 * the slots, so a leaver's label fades as its bar goes, and one that turns
+	 * back mid-exit fades in again from where it had got to.
+	 */
+	#alphaFrom: Float32Array = new Float32Array(0);
+	#alphaTo: Float32Array = new Float32Array(0);
+	/**
+	 * How many slots the axis is laid out for, as the two ends of the
+	 * transition. Band width and pitch follow it, so they change WITH the bars
+	 * rather than on the frame the data lands — and a leaver headed for slot
+	 * `shown` arrives just as the axis has shrunk to end there.
+	 */
+	#countFrom: number = 0;
+	#countTo: number = 0;
+	/**
 	 * False until the first layout with anything in it.
 	 *
 	 * The opening frame of a chart is every category entering at once, and
@@ -103,7 +119,7 @@ export class SlotTransition {
 	 * reorder — and a mid-flight retarget is continuous in `t` but not in world
 	 * space. Both are the other face of arriving together.
 	 */
-	readonly clock: TransitionClock = new TransitionClock({ onRest: () => this.#onClockRest() });
+	readonly clock: TransitionClock;
 
 	/**
 	 * The id of the axis's synthetic "Other" bucket, or null when it has none.
@@ -133,8 +149,20 @@ export class SlotTransition {
 	 * scale built before a coordinator is wired up. Transitions then land
 	 * instantly rather than being lost.
 	 */
-	constructor(loop: SlotLoop | null = null) {
+	#onFrame: (() => void) | null;
+
+	/**
+	 * `onFrame` is called for every frame the clock is driven through, and once
+	 * more when it settles — for anything on the CPU that has to follow the
+	 * transition, like axis labels. The GPU needs no such call.
+	 */
+	constructor(loop: SlotLoop | null = null, options: { onFrame?: () => void } = {}) {
 		this.#loop = loop;
+		this.#onFrame = options.onFrame ?? null;
+		this.clock = new TransitionClock({
+			onRest: () => this.#onClockRest(),
+			onFrame: this.#onFrame ?? undefined
+		});
 	}
 
 	/** How many ids the arrays hold — the packer's count header. */
@@ -170,6 +198,19 @@ export class SlotTransition {
 
 	get to(): Float32Array {
 		return this.#to;
+	}
+
+	/** How many slots the axis is laid out for NOW — fractional mid-transition. */
+	get animatedCount(): number {
+		const t = this.clock.t;
+		return this.#countFrom + (this.#countTo - this.#countFrom) * t;
+	}
+
+	/** How visible id's label is now, 0..1. */
+	alphaOf(id: number): number {
+		const t = this.clock.t;
+		const a = this.#alphaFrom[id] ?? 0;
+		return a + ((this.#alphaTo[id] ?? 0) - a) * t;
 	}
 
 	/** Extrapolated for the frame being drawn, not the last physics step. */
@@ -237,6 +278,8 @@ export class SlotTransition {
 	 */
 	startTransition(): void {
 		this.#from.set(this.table);
+		for (let id = 0; id < this.#alphaFrom.length; id++) this.#alphaFrom[id] = this.alphaOf(id);
+		this.#countFrom = this.animatedCount;
 		this.#restartFolded();
 		this.version++;
 	}
@@ -267,6 +310,10 @@ export class SlotTransition {
 		this.#from = new Float32Array(0);
 		this.#to = new Float32Array(0);
 		this.#exiting = new Uint8Array(0);
+		this.#alphaFrom = new Float32Array(0);
+		this.#alphaTo = new Float32Array(0);
+		this.#countFrom = 0;
+		this.#countTo = 0;
 		this.clock.settle();
 		this.#hasLaidOut = false;
 	}
@@ -301,6 +348,14 @@ export class SlotTransition {
 		const exiting = new Uint8Array(length);
 		exiting.set(this.#exiting.subarray(0, keep), 0);
 		this.#exiting = exiting;
+		// New ids are not displayed, so their labels start invisible.
+		const alpha = (old: Float32Array) => {
+			const next = new Float32Array(length);
+			next.set(old.subarray(0, keep), 0);
+			return next;
+		};
+		this.#alphaFrom = alpha(this.#alphaFrom);
+		this.#alphaTo = alpha(this.#alphaTo);
 
 		this.#target = new Float32Array(length);
 		return this.#target;
@@ -334,6 +389,9 @@ export class SlotTransition {
 			otherId != null && otherId >= 0 && otherId < target.length ? target[otherId] : -1;
 		const settled = !this.#hasLaidOut;
 		let moving = false;
+		const alphaFrom = this.#alphaFrom;
+		const alphaTo = this.#alphaTo;
+		const t = this.clock.t;
 
 		for (let id = 0; id < target.length; id++) {
 			const trueTo = target[id];
@@ -341,6 +399,12 @@ export class SlotTransition {
 
 			// Other itself has nowhere to emerge from or vanish into but the end.
 			const gateway = otherSlot >= 0 && id !== otherId ? otherSlot : far;
+
+			// Labels fold like slots: from wherever this one's opacity has got to.
+			// On a first layout there is nothing to fade in from.
+			const alphaNow = alphaFrom[id] + (alphaTo[id] - alphaFrom[id]) * t;
+			alphaFrom[id] = settled ? (trueTo >= 0 ? 1 : 0) : alphaNow;
+			alphaTo[id] = trueTo >= 0 ? 1 : 0;
 
 			if (trueTo >= 0) {
 				exiting[id] = 0;
@@ -368,6 +432,11 @@ export class SlotTransition {
 
 			if (from[id] !== to[id]) moving = true;
 		}
+
+		// The count folds too, and on a first layout starts where it lands.
+		this.#countFrom = settled ? shown : this.animatedCount;
+		this.#countTo = shown;
+		if (this.#countFrom !== this.#countTo) moving = true;
 
 		if (shown > 0) this.#hasLaidOut = true;
 
@@ -412,11 +481,15 @@ export class SlotTransition {
 		const target = this.#target;
 		this.clock.settle();
 		this.#currentT = 1;
+		this.#countFrom = this.#countTo;
 		for (let i = 0; i < target.length; i++) {
 			this.#current[i] = target[i];
 			this.#from[i] = target[i];
 			this.#to[i] = target[i];
 			this.#exiting[i] = 0;
+			const shownNow = target[i] >= 0 ? 1 : 0;
+			this.#alphaFrom[i] = shownNow;
+			this.#alphaTo[i] = shownNow;
 		}
 	}
 
@@ -442,5 +515,7 @@ export class SlotTransition {
 		this.#isAnimating = false;
 		this.#settle();
 		this.version++;
+		// The last frame: t is exactly 1 now, which the loop's final frame was not.
+		this.#onFrame?.();
 	}
 }

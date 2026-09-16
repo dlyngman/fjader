@@ -16,6 +16,17 @@ import { SlotTransition } from './SlotTransition';
  * threshold on t is the same fraction of the journey either way.
  */
 
+/** One label on a band axis, as `bandTicks` reports it. */
+export interface BandTick {
+	/** Stable across reorders: the dim id, or the position without identity. */
+	key: number;
+	value: DimValue | undefined;
+	/** Where it is now, fractional mid-transition. */
+	slot: number;
+	/** 0..1, fading with the category's enter or exit. */
+	opacity: number;
+}
+
 interface BandScaleConfig {
 	padding?: number;
 	paddingInner?: number | null;
@@ -184,7 +195,9 @@ export class BandScaleState {
 		this.#align = config.align ?? 0.5;
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
-		this.#slots = new SlotTransition(config.gpuCoordinator ?? null);
+		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
+			onFrame: () => this.#slotFrame++
+		});
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
 			initialDomain: domain.length,
@@ -447,6 +460,13 @@ export class BandScaleState {
 	// SlotTransition; this class decides what is displayed and in what order.
 
 	#slots: SlotTransition;
+	/**
+	 * Bumped on every frame a slot transition is driven, and once on settling.
+	 * What the CPU consumers of an in-flight layout — axis labels, bandwidth for
+	 * hit-testing — subscribe to. Nothing bumps it at rest, so a still chart costs
+	 * no reactivity at all.
+	 */
+	#slotFrame = $state(0);
 
 	/**
 	 * Display slot per identity id: `slotTable[id]` is where this category is
@@ -872,8 +892,17 @@ export class BandScaleState {
 
 		const paddingOuter = this.#paddingOuter !== null ? this.#paddingOuter : this.#padding;
 
+		// Mid-transition the band count is travelling too, so widths and pitch
+		// change WITH the bars rather than on the frame the data landed. The
+		// coordinator writes this to the GPU every frame, and the CPU layout
+		// below reads it, so the two agree. At rest it is the domain's length.
+		void this.#slotFrame;
+		const categoryCount = this.#slots.isAnimating
+			? this.#slots.animatedCount
+			: this.effectiveDomain.length;
+
 		return {
-			categoryCount: this.effectiveDomain.length,
+			categoryCount,
 			paddingInner: paddingInner,
 			paddingOuter: paddingOuter,
 			align: this.#align
@@ -941,6 +970,55 @@ export class BandScaleState {
 		for (let i = 0; i < n; i++) ticks[i] = i;
 
 		return ticks;
+	}
+
+	/**
+	 * The categories on screen NOW, for a band axis to label.
+	 *
+	 * Not the domain: mid-transition a leaving category is no longer in it but
+	 * its bar is still sliding out, and an entering one is in it but has not
+	 * arrived. Every id whose current slot is on screen is listed, at that
+	 * fractional slot, with its label's opacity — fading out as it leaves, in as
+	 * it enters, on the same clock as the bars.
+	 *
+	 * Keyed by id, so an axis `{#each}` moves a label rather than replacing it.
+	 * Position it with `slotCenter`.
+	 */
+	bandTicks(): BandTick[] {
+		void this._version;
+		void this.#slotFrame;
+		const table = this.#slots.table;
+		const ticks: BandTick[] = [];
+
+		if (this.hasIdentity) {
+			const values = this.#identity!.values;
+			for (let id = 0; id < table.length; id++) {
+				const slot = table[id];
+				if (slot < 0) continue;
+				const value = values[id];
+				ticks.push({ key: id, value, slot, opacity: this.#slots.alphaOf(id) });
+			}
+			return ticks;
+		}
+
+		// No identity: the channel is already a display position.
+		const domain = this.effectiveDomain;
+		for (let i = 0; i < domain.length; i++) {
+			ticks.push({ key: i, value: domain[i], slot: table[i] ?? i, opacity: 1 });
+		}
+		return ticks;
+	}
+
+	/**
+	 * Centre of a (possibly fractional) slot, measured from the start of the
+	 * range — the same layout the shader's computeBandLayout uses, so a label
+	 * sits on its bar mid-transition. For a y axis, subtract from the height.
+	 */
+	slotCenter(slot: number, rangeSize: number): number {
+		const { categoryCount: n, paddingInner, paddingOuter } = this.getConfig();
+		if (n <= 0) return 0;
+		const step = rangeSize / Math.max(1, n - paddingInner + paddingOuter * 2);
+		return paddingOuter * step + slot * step + (step * (1 - paddingInner)) / 2;
 	}
 
 	/**

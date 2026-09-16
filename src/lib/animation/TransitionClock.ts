@@ -89,11 +89,21 @@ export class TransitionClock {
 	 * categories here.
 	 */
 	#onRest: (() => void) | null;
+	/** Called after each frame's render t is recorded. */
+	#onFrame: (() => void) | null;
 
-	constructor(options: { stiffness?: number; precision?: number; onRest?: () => void } = {}) {
+	constructor(
+		options: {
+			stiffness?: number;
+			precision?: number;
+			onRest?: () => void;
+			onFrame?: () => void;
+		} = {}
+	) {
 		this.#precision = options.precision ?? TRANSITION_PRECISION;
 		this.#spring = new Spring(1, options.stiffness ?? TRANSITION_STIFFNESS, this.#precision);
 		this.#onRest = options.onRest ?? null;
+		this.#onFrame = options.onFrame ?? null;
 	}
 
 	/** Where the transition is, for the frame being drawn. 1 when settled. */
@@ -141,6 +151,7 @@ export class TransitionClock {
 	updateRenderState(extrapolationDt: number): void {
 		const t = this.#spring.getRenderable(extrapolationDt);
 		this.#renderT = t < 0 ? 0 : t > 1 ? 1 : t;
+		this.#onFrame?.();
 	}
 
 	/** Charts to redraw while this runs. Set by whoever owns the clock. */

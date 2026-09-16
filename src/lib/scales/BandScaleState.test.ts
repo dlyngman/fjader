@@ -674,12 +674,13 @@ describe('BandScaleState identity <-> display translation', () => {
 
 		it('completes an exit that has nowhere to travel, instead of stranding it', () => {
 			// Other is ALREADY at the far end, so its gateway is the slot it is
-			// standing on and the exit is a zero-length journey.
+			// standing on. The slot does not move — but the axis does, shrinking
+			// from three bands to two under it, so this exit is a journey too.
 			//
-			// Per-id springs left the table untouched in this case — nothing was
-			// "moving", so neither the loop nor the settle path ran, and a category
-			// that had left the domain stayed drawn at its old slot indefinitely.
-			// One driver makes the no-op case take the settle path like any other.
+			// Per-id springs once left the table untouched in this case — nothing
+			// was "moving", so neither the loop nor the settle path ran, and a
+			// category that had left the domain stayed drawn at its old slot
+			// indefinitely. Whatever the journey, it must END.
 			const s = new BandScaleState('species', [], {
 				gpuCoordinator: { addAnimatedSource: () => {} }
 			});
@@ -691,8 +692,14 @@ describe('BandScaleState identity <-> display translation', () => {
 
 			s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
 			s.updateDomainFromExtents();
-
 			expect(s.slotTarget[2]).toBe(-1);
+
+			let steps = 0;
+			while (!s.clock.isAtRest() && steps++ < 5000) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
+			}
+			s.clock._markAtRest();
 			expect(s.slotTable[2]).toBe(-1);
 		});
 
@@ -759,6 +766,53 @@ describe('BandScaleState identity <-> display translation', () => {
 			}
 			s.clock._markAtRest();
 			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+		});
+
+		describe('axis ticks', () => {
+			it('labels a leaver while its bar is leaving, fading, and drops it on arrival', () => {
+				const { s } = withLoop();
+				s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+				s.updateDomainFromExtents();
+				// Chinstrap (id 1) is out of the domain but still on screen.
+				expect(s.domain()).not.toContain('Chinstrap');
+				for (let i = 0; i < 20; i++) {
+					s.clock.step();
+					s.clock.updateRenderState(0);
+				}
+				const leaving = s.bandTicks().find((t) => t.key === 1)!;
+				expect(leaving.value).toBe('Chinstrap');
+				expect(leaving.opacity).toBeGreaterThan(0);
+				expect(leaving.opacity).toBeLessThan(1);
+
+				while (!s.clock.isAtRest()) {
+					s.clock.step();
+					s.clock.updateRenderState(0);
+				}
+				s.clock._markAtRest();
+				expect(s.bandTicks().map((t) => t.value)).toEqual(['Adelie', 'Gentoo']);
+				expect(s.bandTicks().every((t) => t.opacity === 1)).toBe(true);
+			});
+
+			it('places a settled label where d3 centres its band, on either axis', () => {
+				// The shader and d3 must agree for a label to sit on its bar; this
+				// checks the CPU copy of the shader's layout against d3 at rest.
+				const { s } = withLoop();
+				for (const [axis, size] of [
+					['x', 600],
+					['y', 400]
+				] as const) {
+					// The pair ChartScales uses: range and padding, then the domain.
+					const d3 = s.updateScaleDomain(s.getBaseScale(axis, size)) as ReturnType<
+						typeof s.getBaseScale
+					>;
+					for (const tick of s.bandTicks()) {
+						const expected = d3(tick.value!)! + d3.bandwidth() / 2;
+						const actual =
+							axis === 'x' ? s.slotCenter(tick.slot, size) : size - s.slotCenter(tick.slot, size);
+						expect(actual).toBeCloseTo(expected, 3);
+					}
+				}
+			});
 		});
 
 		// A leaver is only a leaver if the fold sees it ON SCREEN, and the fold

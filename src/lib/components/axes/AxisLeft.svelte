@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import type { ChartContext, D3BandScale } from '$lib/types';
+	import type { ChartContext } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import type { ContinuousScaleState } from '$lib/types';
 
 	interface Props {
@@ -25,12 +24,12 @@
 		c.yScaleState?.getTicks ? c.yScaleState.getTicks(ticksNumber) : []
 	);
 
-	// Band scales: use the D3 scale's domain() for the categories (needed for positioning).
-	// A band scale's domain is its source values, which are whatever DuckDB
-	// returned for the column (see DimValue) — not necessarily strings. The
-	// d3 scale's domain() is untyped, so the claim is made once here rather
-	// than re-asserted at each tick.
-	const bandTicks = $derived((c.yScale?.domain ? c.yScale.domain() : []) as DimValue[]);
+	// Band scales: the categories on screen NOW, at their current fractional slots,
+	// rather than the domain. Mid-transition a label travels with its bar, and a
+	// leaving category keeps its label, fading, until its bar is gone.
+	const bandTicks = $derived(
+		c.scaleTypes?.y === 'band' && c.yScaleState ? (c.yScaleState as BandScaleState).bandTicks() : []
+	);
 
 	// Unified formatter interface - all scale states have tickFormat()
 	const tickFormatter = $derived(c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : String);
@@ -52,27 +51,21 @@
 				{c.yLabel}
 			</text>
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
-			<!-- Band scales: centered positioning -->
 			{@const bandState = c.yScaleState as BandScaleState}
-			{@const bandScale = c.yScale as D3BandScale}
-			{#each bandTicks as tick (tick)}
-				{@const tickY = c.yScale(tick)}
-				<g class:tick-dimmed={bandState.activeValues != null && !bandState.isActive(tick)}>
-					<line
-						x1={0}
-						x2={-6}
-						y1={tickY + bandScale.bandwidth() / 2}
-						y2={tickY + bandScale.bandwidth() / 2}
-					/>
-
-					<text
-						text-anchor="end"
-						dominant-baseline="middle"
-						x={-9}
-						y={tickY + bandScale.bandwidth() / 2}
+			{#each bandTicks as tick (tick.key)}
+				<!-- Slot 0 at the bottom, as in the shader and d3's reversed range. -->
+				{@const tickY = c.innerHeight - bandState.slotCenter(tick.slot, c.innerHeight)}
+				<g opacity={tick.opacity}>
+					<g
+						class:tick-dimmed={bandState.activeValues != null &&
+							tick.value != null &&
+							!bandState.isActive(tick.value)}
 					>
-						{tick}
-					</text>
+						<line x1={0} x2={-6} y1={tickY} y2={tickY} />
+						<text text-anchor="end" dominant-baseline="middle" x={-9} y={tickY}>
+							{tick.value}
+						</text>
+					</g>
 				</g>
 			{/each}
 
