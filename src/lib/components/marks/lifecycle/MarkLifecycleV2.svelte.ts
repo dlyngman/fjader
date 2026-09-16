@@ -36,6 +36,7 @@ import {
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { withDenseCategories } from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -88,6 +89,16 @@ export interface MarkLifecycleV2Config {
 	inferredScaleColumns?: { x?: FieldRef; y?: FieldRef };
 	table: string;
 	transforms: Transform[];
+	/**
+	 * Return a row for every category on a categorical axis, not only the ones
+	 * that survived the filter. Default on.
+	 *
+	 * Set false to opt out. The cost it buys back is a result sized by the
+	 * dimension rather than by what is displayed, which matters at high
+	 * cardinality; what it gives up is a category being able to fade out rather
+	 * than disappear, and the row alignment that lets values morph at all.
+	 */
+	dense?: boolean;
 	select: Record<string, unknown>;
 	constants?: Record<string, number>;
 	colorChannel?: string;
@@ -288,13 +299,23 @@ export class MarkLifecycleV2 {
 		// share that property and would break together.
 		const alignChannels = Object.keys(this.#transformConfig.dimTableByChannel ?? {});
 
-		return buildQueryParts(
+		const parts = buildQueryParts(
 			resolvedSelect,
 			this.#config._orderConfig ?? null,
 			this.#transformCompiler.hasSQLTransforms(),
 			passthroughChannels,
 			alignChannels
 		);
+
+		// Whether this mark's query yields one row per category.
+		//
+		// `dense()` needs it and cannot work it out for itself: by the time it
+		// runs, topN may have wrapped the query, so the GROUP BY is several levels
+		// down and the query it is handed reports none of its own. Here it is a
+		// fact about the select that was just built.
+		this.#transformConfig.rowsAreGrouped = parts.hasAggregates;
+
+		return parts;
 	});
 
 	// --- Domain State ---
@@ -350,7 +371,18 @@ export class MarkLifecycleV2 {
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill')
 		};
-		this.#transformCompiler = new TransformCompiler(config.transforms || [], this.#transformConfig);
+		// `dense()` is added here rather than in each of the twelve mark components
+		// that assemble transform lists, and it is added unconditionally: it
+		// refuses itself at apply time unless the mark has exactly one dimmed
+		// categorical axis that is also a GROUP BY key. That keeps the condition
+		// in one place, next to the reason for it, instead of spread across the
+		// callers that would each have to re-derive it.
+		//
+		// `dense: false` on the mark opts out.
+		this.#transformCompiler = new TransformCompiler(
+			withDenseCategories(config.transforms || [], config.dense !== false),
+			this.#transformConfig
+		);
 		this.#detectAutoBins();
 
 		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin)

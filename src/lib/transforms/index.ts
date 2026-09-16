@@ -258,6 +258,89 @@ function densify(inner: SelectQuery, aliases: string[], band: string, dim: strin
 		.orderby(sqlTag`d."id"`);
 }
 
+/**
+ * Return a row for every category, not only the ones that survived.
+ *
+ * Added automatically to any mark with a categorical axis, and the reason it is
+ * a default rather than an opt-in is that the alternative is a silent
+ * discontinuity: a category filtered down to no rows simply drops out of the
+ * GROUP BY, so its bar disappears between one update and the next with nothing
+ * to animate and no way for a consumer to tell it apart from a category that
+ * was never there.
+ *
+ * With it, absence is a VALUE — zero — so a bar shrinks to nothing and a
+ * returning one grows back, and the row set is the same size and in the same
+ * order on every update. That second property is what lets a mark hand its rows
+ * to the GPU as an array indexed by category and morph between two of them.
+ *
+ * REFUSES ITSELF in three cases, each of which would make that claim false:
+ *
+ * - **No dim on any channel.** Nothing to join against.
+ * - **The mark's rows are not grouped.** A raw mark has many rows per category,
+ *   so joining the dim adds zero rows to a result that was never
+ *   one-row-per-category to begin with — the join would succeed and the
+ *   alignment would be a lie. Raw marks show rows of a static file; they have
+ *   nothing to morph anyway. The mark layer reports this, because by the time
+ *   this runs topN may have wrapped the query and its GROUP BY is out of reach.
+ * - **Two dimmed categorical axes.** A heatmap would need the cross product of
+ *   both dims, and joining one leaves the other's values NULL. Not built.
+ */
+export function dense(options: { enabled?: boolean } = {}): SqlTransform {
+	return {
+		stage: 'sql',
+		type: 'dense',
+		spec: { transform: 'dense', ...(options.enabled === false ? { enabled: false } : {}) },
+		apply(query: SelectQuery, config?: MarkConfig) {
+			if (options.enabled === false) return query;
+
+			const byChannel = config?.dimTableByChannel as Record<string, string> | undefined;
+			if (!byChannel) return query;
+
+			// "One row per category" cannot be recovered from the query by the time
+			// this runs: topN has already wrapped it, so the GROUP BY is several
+			// levels down and this query's own `_groupby` is empty. The mark
+			// layer knows, because it built the select; it says so here.
+			if (config?.rowsAreGrouped !== true) return query;
+
+			const aliases = getSelectAliases(query);
+			const candidates = Object.keys(byChannel).filter((ch) => aliases.includes(ch));
+			if (candidates.length !== 1) return query;
+
+			const band = candidates[0];
+			const dim = byChannel[band];
+			if (typeof dim !== 'string' || dim.length === 0) return query;
+
+			return densify(query, aliases, band, dim);
+		},
+		describe() {
+			return 'Dense categories';
+		}
+	};
+}
+
+/**
+ * Insert `dense()` where it has to run: after anything that drops categories,
+ * before anything that wraps the result.
+ *
+ * Before a stack in particular. Stacking after densifying is correct — a zero
+ * row contributes zero to a cumulative sum — while densifying after stacking
+ * would join one row per category onto a result that has one row per category
+ * PER SERIES, and collapse the series.
+ */
+export function withDenseCategories(transforms: Transform[], enabled = true): Transform[] {
+	if (!enabled) return transforms;
+	if (transforms.some((t) => t.type === 'dense')) return transforms;
+	// A JS-engine pipeline computes membership client-side and never sees the
+	// SQL path, so a SQL transform in front of it would be applied to a query
+	// whose result it does not produce.
+	if (transforms.some((t) => t.stage === 'js')) return transforms;
+
+	const stackAt = transforms.findIndex((t) => t.type === 'stack');
+	const d = dense();
+	if (stackAt === -1) return [...transforms, d];
+	return [...transforms.slice(0, stackAt), d, ...transforms.slice(stackAt)];
+}
+
 /** A bare table name as SQL. The dim name comes from the engine, not a user. */
 function literalTable(name: string) {
 	return sqlTag([`"${name.replace(/"/g, '""')}"`] as unknown as TemplateStringsArray);
@@ -323,15 +406,13 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 			//
 			// The `__dplot_` prefix is load-bearing: #writeTooltipTable filters
 			// exactly that prefix, so the rank cannot leak into a tooltip.
-			const filtered = Query.from({ __topn: ranked })
+			// Not densified here. Keeping a row for every category is not topN's
+			// business — an ordinary bar chart under a crossfilter loses rows the
+			// same way, when a category filters down to nothing and drops out of
+			// the GROUP BY. `dense()` does it for both, and runs after this.
+			return Query.from({ __topn: ranked })
 				.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
 				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
-
-			// A category that drops out of the top N has no row, so there is
-			// nothing to animate out — it vanishes on the frame the reorder lands.
-			// Given a dim to join against, keep every category instead.
-			const dim = dimTableFor(config, band);
-			return dim ? densify(filtered, aliases, band, dim) : filtered;
 		},
 		describe() {
 			return `Top ${n} (SQL)`;

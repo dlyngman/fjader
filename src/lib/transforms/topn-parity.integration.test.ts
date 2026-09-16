@@ -11,10 +11,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { Query, column, sum, eq, literal, type ExprNode } from '@uwdata/mosaic-sql';
-import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN } from './index';
+import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN, withDenseCategories } from './index';
 import { buildQueryParts, assembleQuery } from '$lib/components/marks/lifecycle/query-builder';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
-import type { MarkConfig } from '$lib/types';
+import type { MarkConfig, SqlTransform } from '$lib/types';
+import type { SelectQuery } from '@uwdata/mosaic-sql';
 
 // ---------------------------------------------------------------------------
 // DuckDB helper
@@ -323,14 +324,27 @@ describe('topN dense join', () => {
 			.select({ x: column('category_idx'), y2: sum(column('revenue')) })
 			.groupby(column('category_idx'));
 
-	const cfg = { markType: 'barY', table: 'sales_v', x: 'x', y: 'y2' } as MarkConfig;
+	const cfg = {
+		markType: 'barY',
+		table: 'sales_v',
+		x: 'x',
+		y: 'y2',
+		rowsAreGrouped: true
+	} as MarkConfig;
 
-	async function run(dense: boolean, n: number) {
-		const t = topN(n, { by: 'y2' });
-		const q = t.apply(base(), {
+	/**
+	 * Composed the way the lifecycle composes it: topN drops categories, then
+	 * `dense` puts a zero row back for each one. `dense` refuses itself when no
+	 * dim is supplied, which is what the `isDense = false` case exercises.
+	 */
+	async function run(isDense: boolean, n: number) {
+		const markConfig = {
 			...cfg,
-			...(dense ? { dimTableByChannel: { x: DIM } } : {})
-		});
+			...(isDense ? { dimTableByChannel: { x: DIM } } : {})
+		} as MarkConfig;
+		const transforms = withDenseCategories([topN(n, { by: 'y2' })]);
+		let q = base() as SelectQuery;
+		for (const t of transforms) q = (t as SqlTransform).apply(q, markConfig);
 		return db.all(q.toString());
 	}
 
@@ -440,11 +454,12 @@ describe('dense row order', () => {
 			new Map(),
 			align
 		);
-		const compiler = new TransformCompiler([topN(3, { by: 'y2' }), stackY()], {
+		const compiler = new TransformCompiler(withDenseCategories([topN(3, { by: 'y2' }), stackY()]), {
 			markType: 'barY',
 			table: 'sales_o',
 			x: 'x',
 			y: 'y2',
+			rowsAreGrouped: true,
 			dimTableByChannel: { x: DIM }
 		} as MarkConfig);
 		return assembleQuery({ table: 'sales_o', parts, filter: [], transformCompiler: compiler });
