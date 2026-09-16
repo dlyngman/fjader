@@ -693,6 +693,89 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slotTable[1]).toBeCloseTo(midExit, 5);
 			expect(s.slotTarget[1]).toBe(1);
 		});
+
+		it('holds every slot where it is when a mark restarts the clock mid-reorder', () => {
+			// A mark whose values changed restarts the scale's clock without
+			// reordering: a sibling mark's data landing, another facet cell, the
+			// next step of a drag. The clock is shared, so t goes back to 0, and
+			// the slots must fold first or every bar jumps back to where the
+			// reorder began.
+			//
+			// Asserted on what the GPU draws — mix(slotFrom, slotTo, t) — rather
+			// than on slotTable, which is computed from the same inputs and would
+			// agree with a wrong answer.
+			const { s } = withLoop();
+			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.updateDomainFromExtents();
+			for (let i = 0; i < 60; i++) {
+				s.step();
+				s.updateRenderState(0);
+			}
+			const drawn = () => Array.from(s.slotFrom, (from, id) => from + (s.slotTo[id] - from) * s.t);
+			const before = drawn();
+			// Genuinely mid-flight, or this asserts nothing.
+			expect(before[0]).toBeGreaterThan(0.05);
+			expect(before[0]).toBeLessThan(0.95);
+			const version = s.slotVersion;
+
+			s.startTransition();
+
+			expect(s.t).toBe(0);
+			drawn().forEach((slot, id) => expect(slot).toBeCloseTo(before[id], 5));
+			// slotFrom moved, so the packer has to upload it.
+			expect(s.slotVersion).toBeGreaterThan(version);
+			// And it still arrives where the reorder was going.
+			while (!s.isAtRest()) {
+				s.step();
+				s.updateRenderState(0);
+			}
+			s._markAtRest();
+			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+		});
+
+		// A leaver is only a leaver if the fold sees it ON SCREEN, and the fold
+		// runs after #rebuildSlotTable has already written the new target, where
+		// it is -1. Both tests below reach the fold with slotCurrent stale — which
+		// is the ordinary case, not an edge — and both used to vanish the leaver.
+		describe('a leaver is still on screen when the fold reads it', () => {
+			const drawn = (s: BandScaleState) =>
+				Array.from(s.slotFrom, (from, id) => from + (s.slotTo[id] - from) * s.t);
+
+			it('when the mark restarts the clock before the reorder lands', () => {
+				// The usual order in the app: the mark's values are written, which
+				// restarts the clock, and the domain update follows in a microtask.
+				const { s } = withLoop();
+				s.startTransition();
+				s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+				s.updateDomainFromExtents();
+
+				expect(s.slotTarget[1]).toBe(-1);
+				expect(drawn(s)[1]).toBe(1);
+				s.step();
+				s.updateRenderState(0);
+				expect(drawn(s)[1]).toBeGreaterThanOrEqual(1);
+			});
+
+			it('when it leaves while another transition is in flight', () => {
+				// The drag case: updates keep landing before the last one settles.
+				const { s } = withLoop();
+				s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+				s.updateDomainFromExtents();
+				for (let i = 0; i < 20; i++) {
+					s.step();
+					s.updateRenderState(0);
+				}
+				const midFlight = drawn(s)[1];
+				expect(midFlight).toBeGreaterThan(1);
+				expect(midFlight).toBeLessThan(2);
+
+				s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+				s.updateDomainFromExtents();
+
+				// Continues from where it was, rather than disappearing.
+				expect(drawn(s)[1]).toBeCloseTo(midFlight, 5);
+			});
+		});
 	});
 
 	// The slot table is now a target and a current (§9.5, step 5 C1).

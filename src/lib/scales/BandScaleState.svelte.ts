@@ -926,17 +926,7 @@ export class BandScaleState {
 		// Reorders do happen with no coordinator attached: every unit test, and
 		// any scale built before one is wired up.
 		if (moving && this.#gpuCoordinator) {
-			// Restart the clock, CARRYING VELOCITY — assigning the fields rather
-			// than calling set(), which zeroes it. A retarget mid-flight continues
-			// at the speed it was travelling instead of stalling and re-accelerating.
-			this.#driver.restart();
-			// Publish the folded positions immediately. Without this the table
-			// would hold last frame's values until the loop's first
-			// updateRenderState, and a retarget that lands between frames would
-			// show one frame of the old arrangement.
-			this.#writeCurrent(0);
-			this.#currentDirty = false;
-			this.#ensureAnimating();
+			this.#restartFolded();
 		} else {
 			this.#settleSlots();
 		}
@@ -945,23 +935,24 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Write slotCurrent = mix(from, to, t), the one expression this whole design
-	 * is organised around. Band step 4 moves it to the vertex stage, where the
-	 * GPU evaluates the identical formula from the identical inputs; until then
-	 * JS evaluates it for everyone.
+	 * Write slotCurrent = mix(from, to, t) — the same expression, from the same
+	 * inputs, that the slot resolve kernel evaluates on the GPU.
 	 *
-	 * An id whose true target is -1 and which is not leaving is written straight
-	 * through: not-displayed is a STATE, not a position, and interpolating
-	 * toward it would put a bar at slot -0.4 for a frame.
+	 * Deliberately NOT a function of #slotTarget. The fold reads this, and
+	 * #rebuildSlotTable has already overwritten the target with the NEW layout by
+	 * then: consulting it here marked a category that had just left as never on
+	 * screen, so it vanished instead of travelling out.
+	 *
+	 * No sentinel branch is needed. Every path that writes from/to keeps a hidden
+	 * id at -1 in BOTH, so the mix is -1 for every t, and never interpolates
+	 * between a real slot and "not displayed".
 	 */
 	#writeCurrent(t: number): void {
 		const current = this.#slotCurrent;
-		const target = this.#slotTarget;
 		const from = this.#slotFrom;
 		const to = this.#slotTo;
-		const exiting = this.#exiting;
 		for (let id = 0; id < current.length; id++) {
-			current[id] = target[id] < 0 && !exiting[id] ? -1 : from[id] + (to[id] - from[id]) * t;
+			current[id] = from[id] + (to[id] - from[id]) * t;
 		}
 	}
 
@@ -999,9 +990,30 @@ export class BandScaleState {
 	 * Every other mark on this axis folds to where it already is, so its start
 	 * and destination are equal and it does not move. That is why one mark may
 	 * start a clock they all share.
+	 *
+	 * The slots are a consumer of that clock too, and fold the same way. The
+	 * destinations are unchanged, but `t` is about to go back to 0, so `from`
+	 * has to become where every id is NOW — or a restart that lands mid-reorder
+	 * sends every bar back to where that reorder began.
 	 */
 	startTransition(): void {
+		this.#slotFrom.set(this.slotTable);
+		this.#restartFolded();
+		// slotFrom moved, and the packer uploads on this and nothing else.
+		this.slotVersion++;
+	}
+
+	/**
+	 * Restart the clock once `from` already holds where everything is.
+	 *
+	 * The restart CARRIES VELOCITY, so a transition interrupted mid-flight
+	 * continues at the speed it was travelling. slotCurrent is marked stale
+	 * rather than written: at t = 0 it equals the folded `from`, and the getter
+	 * computes exactly that the next time anything asks.
+	 */
+	#restartFolded(): void {
 		this.#driver.restart();
+		this.#currentDirty = true;
 		this.#ensureAnimating();
 	}
 
