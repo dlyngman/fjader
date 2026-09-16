@@ -54,8 +54,16 @@
 		dx?: number;
 		dy?: number;
 		markId?: string;
-		/** Rows are one per category, in category order, so channels may morph. */
-		morphable?: boolean;
+		/**
+		 * Which axis carries the MEASURE, when this mark's rows are one per
+		 * category and may therefore morph. null to morph nothing.
+		 *
+		 * Never the band axis: its channels carry a category id that the shader
+		 * resolves through the slot table, and interpolating an identity produces
+		 * a fraction that resolves to some OTHER category. Position already
+		 * animates, through the slot table, which is the mechanism for it.
+		 */
+		morphAxis?: 'x' | 'y' | null;
 	}
 
 	let {
@@ -75,7 +83,7 @@
 		dx = 0,
 		dy = 0,
 		markId = '',
-		morphable = false
+		morphAxis = null
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -224,31 +232,37 @@
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
-	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X0, x0Data);
-	});
-	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data);
-	});
-	// The extent channels morph when — and only when — the mark can say its rows
-	// are one per category, in category order.
+	// The MEASURE axis's two edges morph; the band axis's never do.
 	//
-	// Interpolating from[i] to to[i] means something only while row i is the SAME
-	// category in both buffers. A query returning one row per surviving group
-	// does not give that: filter a category to nothing and every row after it
-	// shifts up, so the two buffers describe different things at the same index
-	// and the result is bars at heights belonging to no category at all.
+	// Which axis that is depends on the mark. A vertical bar's measure is y and
+	// its category is x; a horizontal bar's is the other way round, and there
+	// both y0 and y1 are literally the same array — the category id. Blending two
+	// ids gives a fraction that the slot table resolves to a DIFFERENT category,
+	// so the bar draws in someone else's row. Position is already animated, by
+	// interpolating the slot rather than the id, which is the mechanism that
+	// exists for it.
 	//
-	// Both edges go through the same path, because a bar's two edges have to
-	// travel together.
+	// Two conditions, both required: an axis to morph, and rows that are one per
+	// category in category order. Interpolating from[i] to to[i] means something
+	// only while row i is the same category in both buffers.
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
-		if (morphable) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
+		if (morphAxis === 'x') renderer.writeAnimatedAttribute(BINDINGS.X0, x0Data);
+		else renderer.writeAttribute(BINDINGS.X0, x0Data);
+	});
+	$effect(() => {
+		if (!renderer?.resourcesCreated) return;
+		if (morphAxis === 'x') renderer.writeAnimatedAttribute(BINDINGS.X1, x1Data);
+		else renderer.writeAttribute(BINDINGS.X1, x1Data);
+	});
+	$effect(() => {
+		if (!renderer?.resourcesCreated) return;
+		if (morphAxis === 'y') renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
 		else renderer.writeAttribute(BINDINGS.Y0, y0Data);
 	});
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
-		if (morphable) renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
+		if (morphAxis === 'y') renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
 		else renderer.writeAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {

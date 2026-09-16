@@ -312,7 +312,7 @@
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}
-		morphable={setup?.rowsAreIdAligned ?? false}
+		morphAxis={setup?.rowsAreIdAligned ? 'y' : null}
 		inset={entry.inset ?? 0}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
