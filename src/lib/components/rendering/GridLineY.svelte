@@ -14,6 +14,7 @@
 
 	const BINDINGS = {
 		POSITIONS: 0,
+		ALPHA: 1,
 		CONSTANTS: 6
 	};
 
@@ -25,12 +26,28 @@
 
 	interface Props {
 		positions: Float32Array;
+		/**
+		 * Per-line opacity, 0..1. On a band axis the lines are every id in the
+		 * dim and this is 1 for the displayed ones, so a line fades in and out
+		 * with its category — morphed on the GPU on the band axis's clock, the
+		 * way a bar's height is. Omitted, every line is fully drawn.
+		 */
+		alpha?: Float32Array | null;
+		/** The band axis these lines belong to, when `alpha` should morph. */
+		bandAxis?: 'x' | 'y' | null;
 		color?: [number, number, number, number];
 		lineWidth?: number;
 		zIndex?: number;
 	}
 
-	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 }: Props = $props();
+	let {
+		positions,
+		alpha = null,
+		bandAxis = null,
+		color = [0.8, 0.8, 0.8, 0.3],
+		lineWidth = 1,
+		zIndex = -10
+	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
@@ -52,6 +69,7 @@
     @group(1) @binding(6) var<uniform> ruleConstants: RuleConstants;
 
     @group(1) @binding(0) var<storage, read> positions: array<f32>;
+    @group(1) @binding(1) var<storage, read> alphaValues: array<f32>;
 
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -80,7 +98,10 @@
 
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.color = ruleConstants.color;
+      output.color = vec4<f32>(
+        ruleConstants.color.rgb,
+        ruleConstants.color.a * alphaValues[instanceIdx]
+      );
       return output;
     }
 
@@ -99,6 +120,7 @@
 
 	const dataBindingConfig = [
 		{ binding: BINDINGS.POSITIONS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -113,6 +135,28 @@
 		if (renderer?.resourcesCreated && positions) {
 			renderer.writeAttribute(BINDINGS.POSITIONS, positions);
 		}
+	});
+
+	// Opacity. On a band axis it morphs like a bar's height does: the rows are
+	// every id in the dim, so row i is the same category on every update, and
+	// the positions are that id list — which is what writeMorphed checks rows
+	// against.
+	const morphs = $derived(!!bandAxis && !!alpha && alpha.length === positions?.length);
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !morphs) return;
+		renderer.writeMorphed(bandAxis!, positions, [[BINDINGS.ALPHA, alpha!]]);
+	});
+
+	// Otherwise every line is fully drawn. Keyed on the line COUNT alone, because
+	// a continuous axis's positions change on every pan frame and its opacity
+	// does not; the ones are reused until the count outgrows them.
+	const lineCount = $derived(positions?.length ?? 0);
+	let ones = new Float32Array(0);
+	$effect(() => {
+		if (!renderer?.resourcesCreated || morphs) return;
+		if (ones.length < lineCount)
+			ones = new Float32Array(Math.max(lineCount, ones.length * 2)).fill(1);
+		renderer.writeAttribute(BINDINGS.ALPHA, ones.subarray(0, lineCount));
 	});
 
 	// Update uniform constants

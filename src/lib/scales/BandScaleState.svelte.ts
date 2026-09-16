@@ -196,8 +196,7 @@ export class BandScaleState {
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
-			onFrame: () => this.#slotFrame++,
-			onRest: () => this.#slotRest++
+			onFrame: () => this.#slotFrame++
 		});
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
@@ -468,8 +467,6 @@ export class BandScaleState {
 	 * no reactivity at all.
 	 */
 	#slotFrame = $state(0);
-	/** Bumped when a transition settles — the set of ids on screen changed. */
-	#slotRest = $state(0);
 
 	/**
 	 * Display slot per identity id: `slotTable[id]` is where this category is
@@ -961,36 +958,39 @@ export class BandScaleState {
 	 * shader's scaleBand resolves each one through the slot table exactly as it
 	 * resolves a bar.
 	 *
-	 * With identity that is the dim ID of every category on screen: the same set
-	 * `bandTicks` labels, leavers and entrants included, so a line travels with
-	 * its band. This used to hand over display positions 0..n-1, which the shader
-	 * read as ids — one line per displayed id, at that id's slot. Every position
-	 * whose id was hidden (past a topN cutoff, a reserved Other, an id from
-	 * another table sharing the dim) lost its line, and no line followed a
-	 * reorder.
+	 * With identity that is EVERY id in the dim, displayed or not. A hidden id
+	 * resolves to slot -1 and the shader puts it off-screen, so it costs nothing
+	 * visible — and it makes row i the same category on every update, which is
+	 * what lets a line's opacity morph the way a bar's height does (see
+	 * `tickVisibility`). Handing over display positions instead, as this once
+	 * did, had the shader read position i as id i: every position whose id was
+	 * hidden lost its line, and no line followed a reorder.
 	 *
 	 * Without identity the channel is already a position, so positions it is.
-	 *
-	 * Subscribes to layout and settling only: which ids are on screen changes
-	 * then and at no other time, and a grid rewrites its buffer on every change.
+	 * Changes only when the dim or the domain does.
 	 */
 	getTicks(): Float32Array {
 		void this._version;
-		void this.#slotRest;
-
-		if (!this.hasIdentity) {
-			const n = this.effectiveDomain.length;
-			const ticks = new Float32Array(n);
-			for (let i = 0; i < n; i++) ticks[i] = i;
-			return ticks;
-		}
-
-		const table = this.#slots.table;
-		let n = 0;
-		for (let id = 0; id < table.length; id++) if (table[id] >= 0) n++;
+		const n = this.hasIdentity ? this.#identity!.values.length : this.effectiveDomain.length;
 		const ticks = new Float32Array(n);
-		for (let id = 0, i = 0; id < table.length; id++) if (table[id] >= 0) ticks[i++] = id;
+		for (let i = 0; i < n; i++) ticks[i] = i;
 		return ticks;
+	}
+
+	/**
+	 * Where each grid line is headed: 1 for a displayed category, 0 otherwise,
+	 * row-aligned with `getTicks`. A grid morphs its lines' opacity toward this on
+	 * the axis's clock, so a line fades out with a leaving bar and in with an
+	 * entering one. Changes on every layout.
+	 */
+	tickVisibility(): Float32Array {
+		void this._version;
+		if (!this.hasIdentity) return new Float32Array(this.effectiveDomain.length).fill(1);
+		const target = this.#slots.target;
+		const n = this.#identity!.values.length;
+		const out = new Float32Array(n);
+		for (let id = 0; id < n; id++) out[id] = (target[id] ?? -1) >= 0 ? 1 : 0;
+		return out;
 	}
 
 	/**

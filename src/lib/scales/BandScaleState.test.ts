@@ -793,24 +793,18 @@ describe('BandScaleState identity <-> display translation', () => {
 				expect(s.bandTicks().every((t) => t.opacity === 1)).toBe(true);
 			});
 
-			it('gives the grid the ids on screen, which the shader resolves like a bar', () => {
+			it('gives the grid every id, and which of them to show', () => {
 				// The grid's values go through scaleBand -> identitySlot, so they are
 				// ids. Positions 0..n-1 were read as ids too: with Gentoo and Adelie
 				// displayed and Chinstrap not, "position 1" is Chinstrap's id, which
-				// has no slot — so one of two lines vanished.
+				// has no slot — so one of two lines vanished. Every id, with a
+				// visibility to fade toward, keeps rows aligned across updates.
 				const { s } = withLoop();
 				s.addMark(['Gentoo', 'Adelie'], 'mark-1');
 				s.updateDomainFromExtents();
 
-				// Mid-exit, Chinstrap's line is still travelling with its bar.
 				expect(Array.from(s.getTicks())).toEqual([0, 1, 2]);
-
-				while (!s.clock.isAtRest()) {
-					s.clock.step();
-					s.clock.updateRenderState(0);
-				}
-				s.clock._markAtRest();
-				expect(Array.from(s.getTicks())).toEqual([0, 2]);
+				expect(Array.from(s.tickVisibility())).toEqual([1, 0, 1]);
 			});
 
 			it('places a settled label where d3 centres its band, on either axis', () => {
