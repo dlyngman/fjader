@@ -161,13 +161,6 @@ export class MarkLifecycleV2 {
 	#identityFields: Set<string> = new Set();
 	/** Unsubscribe from the engine's identity resets. */
 	#identityResetOff: (() => void) | null = null;
-	/**
-	 * Reserved ids for synthetic rows, by field (§16.9). Populated at setup
-	 * because the value array must already contain the label before any JS
-	 * transform writes its id — a transform runs on data, which is far too late
-	 * to be issuing DDL.
-	 */
-	#syntheticIds: Record<string, number> = {};
 
 	/**
 	 * The relation any query built from #resolvedQueryParts must read.
@@ -475,8 +468,7 @@ export class MarkLifecycleV2 {
 	#onIdentityReset(): void {
 		if (this.#destroyed) return;
 		this.#identityFields.clear();
-		this.#syntheticIds = {};
-		// The SQL topN must not bucket into an id from the dim that just went away.
+		// topN must not bucket into an id from the dim that just went away.
 		delete this.#transformConfig.otherIdsByColumn;
 		this.setupComplete = false;
 	}
@@ -1338,17 +1330,18 @@ export class MarkLifecycleV2 {
 		// categorical field of this mark rather than guessing which axis topN
 		// will pick — at most two, and the transform looks its own field up.
 		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
+			const otherIds: Record<string, number> = {};
 			for (const { axis, key } of axes) {
 				const id = await this.#queryEngine.reserveSyntheticIdentity(key, 'Other');
 
-				// Keyed off #transformConfig itself, not recomputed. A transform
-				// reads its band column as config[axis] and passes that to
-				// getColumn, so taking the key from the same object makes the two
-				// literally one value rather than two derivations that agree. They
-				// did not agree once: keyed by the source field, every lookup
-				// missed and the Other row was silently dropped.
+				// Keyed off #transformConfig itself, not recomputed. topN resolves
+				// its band alias as config[axis] and looks the id up under it, so
+				// taking the key from the same object makes the two literally one
+				// value rather than two derivations that agree. They did not agree
+				// once: keyed by the source field, every lookup missed and the
+				// Other row was silently dropped.
 				const column = this.#transformConfig[axis];
-				if (typeof column === 'string') this.#syntheticIds[column] = id;
+				if (typeof column === 'string') otherIds[column] = id;
 
 				// Re-adopt: the reservation appended to the value array, and a scale
 				// that adopted before it must see the new entry.
@@ -1368,11 +1361,10 @@ export class MarkLifecycleV2 {
 				// undisplayed id cannot act as a gateway.
 				scale?.setOtherId(id);
 			}
-			// The SQL topN buckets past its cutoff into this id, so it reads the
-			// same map the JS path is handed. A copy, because #syntheticIds is
-			// replaced wholesale on reset. And the query parts rebuild: anything
-			// assembled before the reservation had no id and left Other out.
-			this.#transformConfig.otherIdsByColumn = { ...this.#syntheticIds };
+			// topN buckets past its cutoff into these ids. The query parts rebuild:
+			// anything assembled before the reservation had no id and left Other
+			// out.
+			this.#transformConfig.otherIdsByColumn = otherIds;
 			this.#identitySetupVersion++;
 		}
 	}
@@ -1624,8 +1616,7 @@ export class MarkLifecycleV2 {
 
 		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
 			x: this.#chartContext.xScale,
-			y: this.#chartContext.yScale,
-			otherIdsByColumn: this.#syntheticIds
+			y: this.#chartContext.yScale
 		});
 	});
 

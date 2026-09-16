@@ -77,10 +77,7 @@
 {:else}
 	<div class="container">
 		<h1>topN Transform Test</h1>
-		<p class="subtitle">
-			topN runs in SQL, includeOthers included (charts 2–4, 6, 7); engine: 'js' forces the
-			client-side path
-		</p>
+		<p class="subtitle">topN runs in SQL, includeOthers included (charts 2–4, 6, 7)</p>
 
 		<div class="charts-grid">
 			<!-- Chart 1: Baseline -->

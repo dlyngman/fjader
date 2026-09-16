@@ -96,8 +96,11 @@
 		</div> -->
 
 		<!-- <div class="chart-section">
-			<h2>Top 5 Bins + Other (JS Transform)</h2>
-			<p>Should show only 6 points: top 5 bins by count + "Other"</p>
+			<h2>Top 5 Bins</h2>
+			<p>
+				Should show only the top 5 bins by count. No Other bucket: a binned axis has no dim to
+				reserve an Other id in.
+			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length_bin" yLabel="count">
 					{#snippet canvas()}
@@ -111,7 +114,7 @@
 									fill="species"
 									opacity="1"
 									r={12}
-									transforms={[topN(5, { includeOthers: true, engine: 'js' })]}
+									transforms={[topN(5)]}
 								/>
 							{/snippet}
 						</WebGPUCanvas>

@@ -2,7 +2,7 @@
  * Integration test: the identity id contract, end to end through real SQL.
  *
  * The unit tests either side of this seam pass each other consistent data by
- * construction — the transform tests supply their own `otherIdsByColumn`, and
+ * construction — the transform tests supply their own reserved ids, and
  * the engine tests never see a channel alias. So neither could catch the two
  * defects that actually shipped: a synthetic row fabricating a band value
  * (§16.9), and the reserved id being published under the source column while
@@ -16,8 +16,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import duckdb from 'duckdb';
 import { CategoricalIdentity } from './categorical-identity';
-import { topN } from '$lib/transforms';
-import { ColumnDataAccessor } from '$lib/data/DataAccessor';
+import { topN, TOPN_RANK_COLUMN } from '$lib/transforms';
+import { Query, column, sql } from '@uwdata/mosaic-sql';
+import type { MarkConfig, SqlTransform } from '$lib/types';
 
 interface DB {
 	run(sql: string): Promise<void>;
@@ -67,21 +68,30 @@ describe('identity ids through topN', () => {
 		await db.close();
 	});
 
-	/** The mark's query shape: the id column aliased to the channel, grouped. */
-	async function fetchChannels(field: string) {
+	/**
+	 * The mark's query shape — the id column aliased to the channel, grouped —
+	 * through topN(2, includeOthers) with the reserved id handed over under the
+	 * channel alias, exactly as the lifecycle keys it. Rows in rank order.
+	 */
+	async function topTwoWithOther(field: string, otherId: number) {
 		const idCol = identity.idColumn(field);
-		const rows = await db.all(
-			`SELECT CAST("${idCol}" AS REAL) AS x, COUNT(*)::REAL AS y, SUM(amount)::REAL AS total ` +
-				`FROM "${identity.sourceFor('sales')}" GROUP BY 1 ORDER BY 1`
-		);
-		return new ColumnDataAccessor(
-			{
-				x: Float32Array.from(rows.map((r) => Number(r.x))),
-				y: Float32Array.from(rows.map((r) => Number(r.y))),
-				total: Float32Array.from(rows.map((r) => Number(r.total)))
-			},
-			rows.length
-		);
+		const query = Query.from(identity.sourceFor('sales'))
+			.select({
+				x: sql`CAST(${column(idCol)} AS REAL)`,
+				total: sql`SUM(amount)::REAL`
+			})
+			.groupby(column(idCol));
+		const config = {
+			markType: 'bar',
+			table: 'sales',
+			x: 'x',
+			y: 'total',
+			groupKeys: ['x'],
+			otherIdsByColumn: { x: otherId }
+		} as unknown as MarkConfig;
+		const out = (topN(2, { includeOthers: true }) as SqlTransform).apply(query, config);
+		const rows = await db.all(`SELECT * FROM (${out}) ORDER BY "${TOPN_RANK_COLUMN}"`);
+		return { xs: rows.map((r) => Number(r.x)), totals: rows.map((r) => Number(r.total)) };
 	}
 
 	it('carries a reserved id through the query and back to its label', async () => {
@@ -92,15 +102,7 @@ describe('identity ids through topN', () => {
 		// alpha/bravo/charlie/delta = 0..3 alphabetically; Other is 4.
 		expect(otherId).toBe(4);
 
-		const data = await fetchChannels('category');
-		const result = topN(2, { includeOthers: true, engine: 'js' }).apply(
-			data,
-			{ markType: 'bar', table: 'sales', x: 'x', y: 'total' },
-			{ otherIdsByColumn: { x: otherId } }
-		);
-
-		const xs = Array.from(result.getColumn('x') as Float32Array);
-		const totals = Array.from(result.getColumn('total') as Float32Array);
+		const { xs, totals } = await topTwoWithOther('category', otherId);
 
 		// Kept by rank: bravo (400) then charlie (300) — ids 1 and 2, so the
 		// display order is not the id order.
@@ -127,18 +129,10 @@ describe('identity ids through topN', () => {
 		expect(otherId).toBe(0);
 		expect(values.filter((v) => v === 'Other')).toHaveLength(1);
 
-		const data = await fetchChannels('category');
-		const result = topN(2, { includeOthers: true, engine: 'js' }).apply(
-			data,
-			{ markType: 'bar', table: 'sales', x: 'x', y: 'total' },
-			{ otherIdsByColumn: { x: otherId } }
-		);
-
-		const xs = Array.from(result.getColumn('x') as Float32Array);
-		const totals = Array.from(result.getColumn('total') as Float32Array);
+		const { xs, totals } = await topTwoWithOther('category', otherId);
 
 		// Two rows, not three: no duplicate bar in Other's slot.
-		expect(result.length).toBe(2);
+		expect(xs).toHaveLength(2);
 		expect(new Set(xs).size).toBe(2);
 		// Other (500) and bravo (400) survive; alpha 10 + charlie 300 + delta 20
 		// fold into Other.

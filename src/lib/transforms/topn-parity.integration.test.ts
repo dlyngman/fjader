@@ -1,9 +1,9 @@
 /**
- * Integration test: SQL topN and JS topN must produce identical rows.
+ * Integration test: the SQL topN against native DuckDB.
  *
  * Runs the real query assembly path (buildQueryParts + assembleQuery +
- * TransformCompiler) against native DuckDB, and compares against the JS
- * topN applied to the untransformed query result. Covers the shapes the
+ * TransformCompiler), and compares against the same result computed as a plain
+ * GROUP BY over the untransformed query. Covers the shapes the
  * mark layer actually produces: vertical bars (y2 alias), horizontal bars
  * (x2 alias, axis swap), grouped/series bars, and crossfilter re-ranking.
  */
@@ -76,20 +76,7 @@ function rowsToAccessor(rows: Record<string, unknown>[]): DataAccessor {
 	return new ColumnDataAccessor(columns, rows.length);
 }
 
-/** Accessor → canonical sorted row list for order-independent comparison. */
-function accessorToRows(data: DataAccessor): Record<string, unknown>[] {
-	const rows: Record<string, unknown>[] = [];
-	for (let i = 0; i < data.length; i++) {
-		const row: Record<string, unknown> = {};
-		for (const col of data.columnNames) {
-			row[col] = data.getColumn(col)![i];
-		}
-		rows.push(row);
-	}
-	return canonical(rows);
-}
-
-/** Native DuckDB returns BigInt for integer SUMs; JS path holds numbers. */
+/** Native DuckDB returns BigInt for integer SUMs. */
 function normalize(v: unknown): unknown {
 	return typeof v === 'bigint' ? Number(v) : v;
 }
@@ -116,33 +103,41 @@ interface Scenario {
 	expectedBand: string[];
 }
 
-async function runBothPaths(db: DB, s: Scenario) {
+/**
+ * The SQL topN, and what it should return computed a second, obvious way.
+ *
+ * The reference is the untransformed query restricted to the categories a plain
+ * GROUP BY ... ORDER BY total DESC, band LIMIT n picks — in DuckDB, not in a
+ * second implementation of topN. The JS topN used to be the reference, and it
+ * had bugs of its own.
+ */
+async function runSQL(db: DB, s: Scenario) {
 	const filter = s.filter ?? [];
+	const band = s.config.markType === 'barx' ? 'y' : 'x';
+	const by = s.config.markType === 'barx' ? 'x2' : 'y2';
 
-	// --- SQL path: real assembly with topN as a SQL transform ---
-	const sqlCompiler = new TransformCompiler([topN(s.n)], s.config);
-	const sqlParts = buildQueryParts(s.select, s.orderConfig, true);
-	const sqlQuery = assembleQuery({
+	const compiler = new TransformCompiler([topN(s.n)], s.config);
+	const parts = buildQueryParts(s.select, s.orderConfig, true);
+	const sqlQuery = assembleQuery({ table: 'sales', parts, filter, transformCompiler: compiler });
+	const sqlRows = canonical(
+		(await db.all(sqlQuery.toString())).map(({ [TOPN_RANK_COLUMN]: _rank, ...rest }) => rest)
+	);
+
+	const base = assembleQuery({
 		table: 'sales',
-		parts: sqlParts,
+		parts: buildQueryParts(s.select, s.orderConfig, false),
 		filter,
-		transformCompiler: sqlCompiler
-	});
-	const sqlRows = canonical(await db.all(sqlQuery.toString()));
+		transformCompiler: new TransformCompiler([], s.config)
+	}).toString();
+	const expectedRows = canonical(
+		await db.all(
+			`SELECT * FROM (${base}) WHERE "${band}" IN (
+			   SELECT "${band}" FROM (${base}) GROUP BY "${band}"
+			   ORDER BY SUM("${by}") DESC, "${band}" LIMIT ${s.n})`
+		)
+	);
 
-	// --- JS path: untransformed query, then JS topN on the result ---
-	const jsCompiler = new TransformCompiler([topN(s.n, { engine: 'js' })], s.config);
-	const baseParts = buildQueryParts(s.select, s.orderConfig, false);
-	const baseQuery = assembleQuery({
-		table: 'sales',
-		parts: baseParts,
-		filter,
-		transformCompiler: jsCompiler
-	});
-	const baseRows = await db.all(baseQuery.toString());
-	const jsRows = accessorToRows(jsCompiler.applyToData(rowsToAccessor(baseRows), s.config));
-
-	return { sqlRows, jsRows, sqlText: sqlQuery.toString() };
+	return { sqlRows, expectedRows, sqlText: sqlQuery.toString() };
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +190,7 @@ const scenarios: Scenario[] = [
 	}
 ];
 
-describe('topN SQL/JS parity (native DuckDB)', () => {
+describe('topN against a DuckDB reference', () => {
 	let db: DB;
 
 	beforeAll(async () => {
@@ -209,9 +204,9 @@ describe('topN SQL/JS parity (native DuckDB)', () => {
 
 	for (const s of scenarios) {
 		it(s.name, async () => {
-			const { sqlRows, jsRows } = await runBothPaths(db, s);
+			const { sqlRows, expectedRows } = await runSQL(db, s);
 
-			expect(sqlRows).toEqual(jsRows);
+			expect(sqlRows).toEqual(expectedRows);
 
 			const bandCol = s.config.markType === 'barx' ? s.config.y! : s.config.x!;
 			const bands = [...new Set(sqlRows.map((r) => r[bandCol]))].sort();
@@ -221,7 +216,7 @@ describe('topN SQL/JS parity (native DuckDB)', () => {
 
 	it('filter is applied inside the topN CTE, not on its output', async () => {
 		const s = scenarios.find((x) => x.name.startsWith('crossfilter'))!;
-		const { sqlText } = await runBothPaths(db, s);
+		const { sqlText } = await runSQL(db, s);
 
 		// The region predicate must appear exactly once, inside the base scan
 		// subquery (whose body prints before its `AS "__topn_base"` alias),
@@ -281,7 +276,7 @@ describe('topN SQL/JS parity (native DuckDB)', () => {
 
 	it('preserves ORDER BY for connected/series marks on the outer query', async () => {
 		const s = scenarios.find((x) => x.name.startsWith('grouped bars'))!;
-		const { sqlText } = await runBothPaths(db, s);
+		const { sqlText } = await runSQL(db, s);
 		expect(sqlText.trimEnd()).toMatch(/ORDER BY "fill", "x"$/);
 	});
 });
@@ -867,6 +862,7 @@ describe('topN includeOthers in SQL', () => {
 		other?: number | null;
 		dense?: boolean;
 		where?: string;
+		n?: number;
 	}) {
 		const select: Record<string, ExprNode> = {
 			x: column('category_idx'),
@@ -907,7 +903,7 @@ describe('topN includeOthers in SQL', () => {
 			...(other != null ? { otherIdsByColumn: { x: other } } : {})
 		} as unknown as MarkConfig;
 
-		const topn = topN(5, { by: 'y2', includeOthers: true }) as unknown as SqlTransform;
+		const topn = topN(opts.n ?? 5, { by: 'y2', includeOthers: true }) as unknown as SqlTransform;
 		expect(topn.stage).toBe('sql');
 		const transforms = opts.dense ? withDenseCategories([topn, stackY()]) : [topn];
 		for (const t of transforms) q = (t as SqlTransform).apply(q, config);
@@ -971,6 +967,14 @@ describe('topN includeOthers in SQL', () => {
 		const rows = await run({ colourIsCategory: true });
 		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
 		expect(Number(otherRow.fill)).toBe(otherId);
+	});
+
+	it('adds no Other row when nothing falls past the cutoff', async () => {
+		// Other would be a category standing for zero rows — a claim about the
+		// data rather than a summary of it.
+		const rows = await run({ n: 20 });
+		expect(rows.some((r) => Number(r.x) === otherId)).toBe(false);
+		expect(rows.every(isRanked)).toBe(true);
 	});
 
 	it('omits the Other rows when no id has been reserved yet', async () => {

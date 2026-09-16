@@ -10,14 +10,13 @@ import {
 	normalize,
 	dodge,
 	withImplicitStack,
-	dense,
-	TOPN_RANK_COLUMN
+	dense
 } from './index';
 import { TransformCompiler } from './TransformCompiler';
 import type { MarkConfig } from '$lib/types';
 import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
-import { ObjectDataAccessor, ColumnDataAccessor } from '$lib/data/DataAccessor';
+import { ObjectDataAccessor } from '$lib/data/DataAccessor';
 
 /** Helper: wrap plain objects as DataAccessor for tests. */
 function toAccessor(data: Record<string, unknown>[]) {
@@ -39,182 +38,6 @@ describe('Transforms', () => {
 	});
 
 	describe('JS Transforms', () => {
-		it('topN() takes top items', () => {
-			const data = toAccessor([
-				{ x: 'A', y: 100 },
-				{ x: 'B', y: 200 },
-				{ x: 'C', y: 50 }
-			]);
-
-			const transform = topN(2, { engine: 'js' });
-			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
-
-			expect(result.length).toBe(2);
-			expect(result.getColumn('x')?.[0]).toBe('B'); // Highest
-			expect(result.getColumn('x')?.[1]).toBe('A');
-		});
-
-		it('topN() still ranks when there is nothing to cut', () => {
-			// n >= the number of rows used to short-circuit and return the accessor
-			// untouched. Nothing is cut, so it looks free — but the rows then come
-			// back in query order with no rank column, and the band axis, which
-			// reads the rank, silently falls back to row order. A topN that happens
-			// to fit must still be a topN.
-			const data = toAccessor([
-				{ x: 'A', y: 100 },
-				{ x: 'B', y: 200 },
-				{ x: 'C', y: 50 }
-			]);
-
-			const transform = topN(3, { engine: 'js' });
-			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
-
-			expect(result.length).toBe(3);
-			expect(Array.from({ length: 3 }, (_, i) => result.getColumn('x')?.[i])).toEqual([
-				'B',
-				'A',
-				'C'
-			]);
-			expect(Array.from(result.getColumn(TOPN_RANK_COLUMN) as Float32Array)).toEqual([1, 2, 3]);
-		});
-
-		it('topN() asks for more than it has without running off the end', () => {
-			// n > row count. Everything below indexes topIndices by position, so an
-			// unclamped n read past its end and wrote NaN into a Float32Array.
-			const data = toAccessor([
-				{ x: 'A', y: 100 },
-				{ x: 'B', y: 200 }
-			]);
-
-			const transform = topN(5, { engine: 'js' });
-			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
-
-			expect(result.length).toBe(2);
-			expect(result.getColumn('x')?.[0]).toBe('B');
-			expect(Array.from(result.getColumn('y') as Float32Array)).toEqual([200, 100]);
-		});
-
-		it('topN() omits Other when nothing was excluded', () => {
-			// An Other row here would be a category standing for zero rows — a
-			// claim about the data rather than a summary of it.
-			const data = toAccessor([
-				{ x: 'A', y: 100 },
-				{ x: 'B', y: 200 }
-			]);
-
-			const transform = topN(2, { includeOthers: true, engine: 'js' });
-			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
-
-			expect(result.length).toBe(2);
-			expect(Array.from({ length: 2 }, (_, i) => result.getColumn('x')?.[i])).not.toContain(
-				'Other'
-			);
-		});
-
-		it('topN() includes Others', () => {
-			const data = toAccessor([
-				{ x: 'A', y: 100 },
-				{ x: 'B', y: 200 },
-				{ x: 'C', y: 50 }
-			]);
-
-			const transform = topN(2, { includeOthers: true, engine: 'js' });
-			const result = transform.apply(data, { markType: 'bar', table: 't', x: 'x', y: 'y' });
-
-			expect(result.length).toBe(3);
-			expect(result.getColumn('x')?.[2]).toBe('Other');
-			expect(result.getColumn('y')?.[2]).toBe(50); // Sum of C
-		});
-
-		// --- includeOthers over an identity band column (§16.9) -------------
-		//
-		// After band step 3a the band channel is a Float32Array of dim ids, so
-		// the string branch above is dead for any migrated axis. The synthetic
-		// row cannot invent an id; the engine reserves one at setup and it
-		// arrives through scales.otherIds.
-
-		/** ids 0..2 = A,B,C; the Other bucket was reserved as id 3. */
-		function idBandData() {
-			return new ColumnDataAccessor(
-				{ x: new Float32Array([0, 1, 2]), y: new Float32Array([100, 200, 50]) },
-				3
-			);
-		}
-		const markCfg = { markType: 'bar', table: 't', x: 'x', y: 'y' };
-
-		it('topN() gives the Other row the reserved id, not a sum of excluded ids', () => {
-			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(idBandData(), markCfg, {
-				otherIdsByColumn: { x: 3 }
-			});
-
-			expect(result.length).toBe(3);
-			// Was the sum of the excluded ids (2), which is category C's own id.
-			expect(result.getColumn('x')?.[2]).toBe(3);
-			expect(result.getColumn('y')?.[2]).toBe(50);
-		});
-
-		it('topN() omits the Other row when no id was reserved', () => {
-			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(idBandData(), markCfg);
-
-			// Better a missing bar than one drawn on a live category's slot.
-			expect(result.length).toBe(2);
-			expect(Array.from(result.getColumn('x') as Float32Array)).toEqual([1, 0]);
-		});
-
-		it('topN() folds into a surviving category that already holds the reserved id', () => {
-			// A real category literally named "Other" — reserveSynthetic reuses its
-			// id rather than duplicating the value, so here id 1 is both a kept
-			// category and the bucket. Appending would draw two bars in one slot.
-			const data = new ColumnDataAccessor(
-				{ x: new Float32Array([0, 1, 2]), y: new Float32Array([100, 200, 50]) },
-				3
-			);
-			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(data, markCfg, {
-				otherIdsByColumn: { x: 1 }
-			});
-
-			expect(result.length).toBe(2);
-			const xs = Array.from(result.getColumn('x') as Float32Array);
-			const ys = Array.from(result.getColumn('y') as Float32Array);
-			// B (id 1) kept its slot and absorbed C's 50.
-			expect(xs).toEqual([1, 0]);
-			expect(ys[xs.indexOf(1)]).toBe(250);
-		});
-
-		it('topN() keeps the string path for a band column with no identity', () => {
-			const data = toAccessor([
-				{ x: 'A', y: 100 },
-				{ x: 'B', y: 200 },
-				{ x: 'C', y: 50 }
-			]);
-			const result = topN(2, { includeOthers: true, engine: 'js' }).apply(data, markCfg);
-
-			expect(result.getColumn('x')?.[2]).toBe('Other');
-		});
-
-		it('topN() with series gives Other rows the reserved id, not 0', () => {
-			// Grouped path: ids 0..2 across two series. Other rows used to get 0,
-			// which is category A's id — the Other bar landed on top of it.
-			const data = new ColumnDataAccessor(
-				{
-					x: new Float32Array([0, 0, 1, 1, 2, 2]),
-					y: new Float32Array([50, 50, 90, 90, 10, 10]),
-					fill: ['n', 's', 'n', 's', 'n', 's']
-				},
-				6
-			);
-			const result = topN(1, { includeOthers: true, engine: 'js' }).apply(
-				data,
-				{ ...markCfg, fill: 'fill' },
-				{ otherIdsByColumn: { x: 3 } }
-			);
-
-			const xs = Array.from(result.getColumn('x') as Float32Array);
-			expect(xs.slice(0, 2)).toEqual([1, 1]);
-			expect(xs.slice(2)).toEqual([3, 3]);
-			expect(xs).not.toContain(0);
-		});
-
 		it('stack() calculates y0 and y1', () => {
 			const data = toAccessor([
 				{ x: 'Jan', y: 10, region: 'North' },
@@ -394,12 +217,8 @@ describe('Transforms', () => {
 			expect(result[1].stage).toBe('sql');
 		});
 
-		it('adds JS stack after a JS-stage transform (e.g. a JS-engine topN), never SQL-after-JS', () => {
-			const result = withImplicitStack(
-				[topN(5, { includeOthers: true, engine: 'js' })],
-				false,
-				'y'
-			);
+		it('adds JS stack after a JS-stage transform (e.g. dodge), never SQL-after-JS', () => {
+			const result = withImplicitStack([dodge()], false, 'y');
 			expect(result[1].stage).toBe('js');
 			// Must not throw — this is the regression: the auto-injected stack
 			// used to always default to SQL, appended after a JS transform.
