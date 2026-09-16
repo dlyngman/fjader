@@ -227,11 +227,21 @@
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data);
 	});
+	// The extent channels morph rather than replace: a bar's two edges are what
+	// has to travel when a value changes, and they must travel together, so both
+	// go through the same clock.
+	//
+	// The clock is pinned at 1 for now, which makes the resolve an exact copy of
+	// the incoming data — identical output to writeAttribute, through the whole
+	// three-buffer path. That is deliberate: it exercises the allocation, the
+	// fold, the dispatch and the vertex read while nothing on screen is allowed
+	// to change, so anything that moves is a plumbing fault rather than an
+	// animation.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y0, y0Data);
+		if (renderer?.resourcesCreated) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y1, y1Data);
+		if (renderer?.resourcesCreated) renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)
