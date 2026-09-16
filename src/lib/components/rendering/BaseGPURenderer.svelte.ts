@@ -1,7 +1,7 @@
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { VALUE_RESOLVE_SHADER, VALUE_RESOLVE_WORKGROUP } from '$lib/gpu/ValueResolveShader';
-import type { TransitionClock } from '$lib/animation/TransitionClock';
+import { TransitionClock } from '$lib/animation/TransitionClock';
 
 interface RendererOptions {
 	zIndex?: number;
@@ -23,6 +23,10 @@ interface InitConfig {
  * and has no idea what the floats mean — so there is nothing to specialise per
  * mark or per channel. Only the bind groups differ.
  */
+/** Matches the band scale's reorder spring, so adopted and owned clocks feel alike. */
+const TRANSITION_STIFFNESS = 120;
+const TRANSITION_PRECISION = 0.0005;
+
 const RESOLVE_PIPELINES = new WeakMap<GPUDevice, GPUComputePipeline>();
 
 function resolvePipelineFor(device: GPUDevice): GPUComputePipeline {
@@ -93,6 +97,7 @@ export class BaseGPURenderer {
 		}
 	>();
 	#animatedRegistered = false;
+	#hasWrittenAnimated = false;
 	#paramsScratch = new ArrayBuffer(16);
 	/**
 	 * Where every animated channel of this mark is along its transition.
@@ -313,6 +318,16 @@ export class BaseGPURenderer {
 		entry.foldPending = true;
 		this.#device.queue.writeBuffer(entry.to, 0, data as ArrayBufferView<ArrayBuffer>);
 
+		// New data means a new transition — including when nothing reordered,
+		// which is the ordinary crossfilter step and the case that used to snap.
+		//
+		// Not on the FIRST write, though. There is nothing on screen to travel
+		// from, so the opening frame of a chart would grow every bar out of
+		// whatever the buffers happened to hold. A chart appears; it does not
+		// animate in.
+		if (this.#hasWrittenAnimated) this.#startTransition();
+		this.#hasWrittenAnimated = true;
+
 		if (!this.#animatedRegistered) {
 			this.#animatedRegistered = true;
 			this.#gpuCoordinator.registerComputeWork(`${this.#rendererId}-resolve`, (encoder) =>
@@ -350,12 +365,54 @@ export class BaseGPURenderer {
 	 * categorical axes, which nothing builds yet. When something does, the two
 	 * will have to share a clock rather than this picking one.
 	 */
-	#readClock(): { t: number; restarted: boolean } {
+	/** A categorical scale on this chart that owns a clock, if there is one. */
+	#clockScale(): { clock: TransitionClock; startTransition(): void } | null {
 		const ctx = this.#chartContext as unknown as {
-			xScaleState?: { clock?: TransitionClock } | null;
-			yScaleState?: { clock?: TransitionClock } | null;
+			xScaleState?: { clock?: TransitionClock; startTransition?(): void } | null;
+			yScaleState?: { clock?: TransitionClock; startTransition?(): void } | null;
 		};
-		const clock = ctx.xScaleState?.clock ?? ctx.yScaleState?.clock ?? null;
+		for (const scale of [ctx.xScaleState, ctx.yScaleState]) {
+			if (scale?.clock && scale.startTransition) {
+				return scale as { clock: TransitionClock; startTransition(): void };
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Begin a transition for this mark's animated channels.
+	 *
+	 * ADOPT the categorical scale's clock when there is one, so a bar's height
+	 * travels on the same number its slot does — two clocks with two velocities
+	 * desynchronise on a retarget, and the bar reaches its rank before or after
+	 * it finishes growing. OWN one otherwise, which is the case for a mark on no
+	 * categorical axis at all: a scatter morphing a radius has nothing to adopt,
+	 * and until it could own a clock it simply snapped.
+	 *
+	 * Never both. Adoption is safe across marks because a mark with no new data
+	 * folds to where it already is — start and destination equal — and does not
+	 * move however the clock runs.
+	 */
+	#startTransition(): void {
+		const scale = this.#clockScale();
+		if (scale) {
+			scale.startTransition();
+			return;
+		}
+		if (!this.#ownClock) {
+			this.#ownClock = new TransitionClock(TRANSITION_STIFFNESS, TRANSITION_PRECISION);
+			this.#ownClock._affectedChartsArray = [this.#chartContext.chartId];
+		}
+		this.#ownClock.restart();
+		// Re-registered every time: the loop evicts a clock when it settles, so
+		// this is a join rather than a no-op after the first transition.
+		this.#gpuCoordinator.addAnimatedSource(this.#ownClock);
+	}
+
+	#ownClock: TransitionClock | null = null;
+
+	#readClock(): { t: number; restarted: boolean } {
+		const clock = this.#clockScale()?.clock ?? this.#ownClock ?? null;
 
 		if (!clock) {
 			this.#lastClockVersion = null;
@@ -636,6 +693,10 @@ export class BaseGPURenderer {
 		if (this.#animatedRegistered) {
 			this.#gpuCoordinator.removeComputeWork(`${this.#rendererId}-resolve`);
 			this.#animatedRegistered = false;
+		}
+		if (this.#ownClock) {
+			this.#gpuCoordinator.removeAnimatedSource(this.#ownClock);
+			this.#ownClock = null;
 		}
 		for (const entry of this.#animated.values()) {
 			entry.from.destroy();

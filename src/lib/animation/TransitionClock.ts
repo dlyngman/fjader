@@ -111,6 +111,20 @@ export class TransitionClock {
 	}
 
 	/**
+	 * Charts to redraw while this runs. Set by whoever owns the clock.
+	 *
+	 * A scale's clock does not use this — the scale is what the loop drives, and
+	 * it supplies its own usage set. A clock owned by a mark is registered
+	 * directly, and this is how it says what to repaint.
+	 */
+	_affectedChartsArray: string[] = [];
+
+	/** Called by the loop when this stops. Lands exactly on 1. */
+	_markAtRest(): void {
+		this.settle();
+	}
+
+	/**
 	 * Whether the loop can stop driving this.
 	 *
 	 * One comparison, not a scan over everything animating — which is the

@@ -986,6 +986,27 @@ export class BandScaleState {
 		}
 	}
 
+	/**
+	 * Start a transition without changing what is displayed.
+	 *
+	 * For a mark whose VALUES changed while the ranking did not — the ordinary
+	 * crossfilter step, and the normal case during a drag when re-ranking is
+	 * held until release. Nothing here reorders, so nothing would otherwise
+	 * restart the clock, and the mark's values would jump.
+	 *
+	 * Waking the loop is the half that cannot be skipped: a clock nobody steps
+	 * sits at 0 forever, which does not look like a missing animation — it looks
+	 * like everything frozen at the start of one.
+	 *
+	 * Every other mark on this axis folds to where it already is, so its start
+	 * and destination are equal and it does not move. That is why one mark may
+	 * start a clock they all share.
+	 */
+	startTransition(): void {
+		this.#driver.restart();
+		this.#ensureAnimating();
+	}
+
 	/** Join the animation loop, once, until the eviction sweep drops us. */
 	#ensureAnimating(): void {
 		if (!this.#isAnimating && this.#gpuCoordinator) {
