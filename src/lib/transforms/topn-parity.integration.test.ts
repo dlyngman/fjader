@@ -629,35 +629,69 @@ describe('dense fills identity channels differently from measures', () => {
 			y: 'y2',
 			rowsAreGrouped: true,
 			dimTableByChannel: { x: DIM },
-			identityChannels: ['x', 'fill']
+			identityDims: { x: DIM, fill: DIM }
 		} as MarkConfig);
 		return db.all(out.toString());
 	}
 
 	it('gives an absent category zero for the measure', async () => {
+		// Identified by the band id being one the filter removed, not by anything
+		// about the measure — otherwise this asserts its own premise.
 		const rows = await run();
-		const absent = rows.filter((r) => Number(r.fill) < 0);
+		const present = new Set(
+			(
+				await db.all(
+					`SELECT DISTINCT category_idx AS id FROM sales_f WHERE category <> 'Electronics'`
+				)
+			).map((r) => Number(r.id))
+		);
+		const absent = rows.filter((r) => !present.has(Number(r.x)));
 		expect(absent.length).toBeGreaterThan(0);
 		for (const r of absent) expect(Number(r.y2)).toBe(0);
 	});
 
-	it('gives an absent category -1 for an id channel, never 0', async () => {
-		// 0 would be indistinguishable from the first real category.
+	it('keeps a category its own colour when colour IS the category', async () => {
+		// The case a sentinel got wrong. A bar with no data is still on screen
+		// while it shrinks, and colouring it "absent" turns it grey on exactly
+		// the frame the colour matters. Its id is not unknown — it is the
+		// category's own, and the dim has it.
 		const rows = await run();
-		const present = rows.filter((r) => Number(r.y2) !== 0);
-		const absent = rows.filter((r) => Number(r.y2) === 0);
-		for (const r of absent) expect(Number(r.fill)).toBe(-1);
-		// And a present category still carries its own id.
-		for (const r of present) expect(Number(r.fill)).toBe(Number(r.x));
+		for (const r of rows) expect(Number(r.fill)).toBe(Number(r.x));
 	});
 
-	it('does not add a spurious id to the set of colours in play', async () => {
-		// The actual defect: with 0 as the filler, id 0 appeared in the colour
-		// channel whether or not that category had any rows, so the palette order
-		// changed as the filter emptied categories.
+	it('never puts 0 in an id channel for a category that has no data', async () => {
+		// 0 is a real category, so it would be indistinguishable from the first
+		// one — which is how palette ranks shifted as the filter emptied
+		// categories and bars that had not changed were repainted.
 		const rows = await run();
-		const colourIds = new Set(rows.map((r) => Number(r.fill)).filter((v) => v >= 0));
-		const bandIds = new Set(rows.filter((r) => Number(r.y2) !== 0).map((r) => Number(r.x)));
-		expect(colourIds).toEqual(bandIds);
+		const absent = rows.filter((r) => Number(r.y2) === 0);
+		expect(absent.length).toBeGreaterThan(0);
+		for (const r of absent) expect(Number(r.fill)).not.toBe(0);
+	});
+
+	it('uses the absent sentinel for an id channel from a DIFFERENT field', async () => {
+		// No correct value exists there: the category genuinely has no value in
+		// that field, so -1 rather than a colour borrowed from somewhere.
+		const q = Query.from('sales_f')
+			.select({
+				x: column('category_idx'),
+				y2: sum(column('revenue')),
+				fill: sum(column('category_idx'))
+			})
+			.groupby(column('category_idx'))
+			.where(sqlTag`${column('category')} <> ${literal('Electronics')}`);
+		const out = (withDenseCategories([])[0] as SqlTransform).apply(q, {
+			markType: 'barY',
+			table: 'sales_f',
+			x: 'x',
+			y: 'y2',
+			rowsAreGrouped: true,
+			dimTableByChannel: { x: DIM },
+			identityDims: { x: DIM, fill: '__some_other_dim' }
+		} as MarkConfig);
+		const rows = await db.all(out.toString());
+		const absent = rows.filter((r) => Number(r.y2) === 0);
+		expect(absent.length).toBeGreaterThan(0);
+		for (const r of absent) expect(Number(r.fill)).toBe(-1);
 	});
 });

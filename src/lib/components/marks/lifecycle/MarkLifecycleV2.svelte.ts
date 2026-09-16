@@ -1251,16 +1251,21 @@ export class MarkLifecycleV2 {
 		}
 		this.#transformConfig.dimTableByChannel = dimByChannel;
 
-		// Every channel whose values are category ids rather than quantities.
-		// Densifying fills these with the absent sentinel instead of zero, since
-		// zero is a real category and would reach the colour scale's domain.
-		// Wider than the map above, which holds positional axes only.
-		const identityChannels = new Set<string>(Object.keys(dimByChannel));
+		// Every channel whose values are category ids rather than quantities, and
+		// the dim each is identified by. Densifying needs both: a channel sharing
+		// the band's dim is that category and is filled from the dim, while one
+		// from another field has no value for a row with no data and takes the
+		// absent sentinel. Wider than the map above, which is positional axes only.
+		const identityDims: Record<string, string> = { ...dimByChannel };
 		if (colorKey && this.#identityFields.has(colorKey.key)) {
-			identityChannels.add(this.#config.colorChannel || 'fill');
+			identityDims[this.#config.colorChannel || 'fill'] = this.#queryEngine.dimTableFor(
+				colorKey.key
+			);
 		}
-		if (facetKey && this.#identityFields.has(facetKey.key)) identityChannels.add('__facet');
-		this.#transformConfig.identityChannels = [...identityChannels];
+		if (facetKey && this.#identityFields.has(facetKey.key)) {
+			identityDims.__facet = this.#queryEngine.dimTableFor(facetKey.key);
+		}
+		this.#transformConfig.identityDims = identityDims;
 		// Tell the query parts to rebuild. They were computed before this existed,
 		// and a query assembled from them has no alignment ordering on it.
 		this.#identitySetupVersion++;

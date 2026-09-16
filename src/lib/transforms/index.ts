@@ -210,9 +210,11 @@ function dimTableFor(config: MarkConfig | undefined, band: string): string | nul
  *
  * Column rules, and each one is load-bearing:
  * - the band channel becomes `d.id`, so it is present for every category;
- * - a channel carrying a category id — ordinal colour, facet — gets -1, the
- *   absent sentinel, because 0 is a real category and would enter the colour
- *   scale's domain and shift every palette rank after it;
+ * - a channel carrying a category id from the SAME dim as the band is filled
+ *   from the dim, because its value is that category's own id — which is what
+ *   keeps a departing bar its colour while it shrinks;
+ * - a category id from another field gets -1, the absent sentinel, never 0,
+ *   which is a real category and would shift every palette rank after it;
  * - the rank passes through and stays NULL for a category past the cutoff,
  *   which is how the band axis knows that one is not displayed;
  * - every other channel is COALESCEd to 0, so a padded row has zero extent
@@ -238,21 +240,29 @@ function densify(
 	aliases: string[],
 	band: string,
 	dim: string,
-	identityChannels: Set<string>
+	identityDims: Record<string, string>
 ): SelectQuery {
 	const select: Record<string, ExprNode> = {};
 	for (const alias of aliases) {
 		if (alias === band) {
 			select[alias] = sqlTag`d."id"` as ExprNode;
-		} else if (identityChannels.has(alias)) {
-			// -1, the established "no identity" sentinel, NOT 0.
+		} else if (identityDims[alias] && identityDims[alias] === identityDims[band]) {
+			// Same dim as the band, so this channel IS the category — the ordinary
+			// "colour the bars by their own category" chart. Its value for a row
+			// with no data is not unknown, it is that category's id, so take it
+			// from the dim like the band does.
 			//
-			// A channel carrying a category id — an ordinal colour, a facet — must
-			// not be given 0 for a row that has no data, because 0 is a real
-			// category. It lands in the colour scale's domain, shifts every
-			// palette rank after it, and repaints bars that did not change. The
-			// row itself is invisible either way: it has no measure, so nothing is
-			// drawn at it. -1 is already what every consumer treats as absent.
+			// This is what keeps a DEPARTING bar its colour. It is still on screen
+			// while it shrinks, and a sentinel would turn it grey on the frame its
+			// data disappeared — the one frame where the colour matters most.
+			select[alias] = sqlTag`d."id"` as ExprNode;
+		} else if (identityDims[alias]) {
+			// A category id from some OTHER field. There is no correct value for a
+			// row that has no data — the category genuinely has no value in that
+			// field — so the absent sentinel it is. Never 0, which is a real
+			// category: it would enter the colour scale's domain whether or not
+			// anything carried it, shift every palette rank after it, and repaint
+			// bars that had not changed.
 			select[alias] = sqlTag`COALESCE(a.${column(alias)}, -1)` as ExprNode;
 		} else {
 			// A measure. 0 is the point: it is what makes a departing bar shrink to
@@ -359,12 +369,12 @@ export function dense(options: { enabled?: boolean } = {}): DenseTransform {
 			if (typeof dim !== 'string' || dim.length === 0) return query;
 
 			this.applied = true;
-			// Channels carrying a category id rather than a quantity. They are
-			// filled with the absent sentinel, not with zero.
-			const identityChannels = new Set(
-				(config?.identityChannels as string[] | undefined) ?? Object.keys(byChannel)
-			);
-			return densify(query, aliases, band, dim, identityChannels);
+			// Channels carrying a category id rather than a quantity, and which dim
+			// each one is identified by — so a channel sharing the band's dim can
+			// be filled from the dim instead of with a sentinel.
+			const identityDims =
+				(config?.identityDims as Record<string, string> | undefined) ?? byChannel;
+			return densify(query, aliases, band, dim, identityDims);
 		},
 		describe() {
 			return 'Dense categories';
