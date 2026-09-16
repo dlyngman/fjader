@@ -879,11 +879,11 @@ export class GPUCoordinator {
 	/**
 	 * Encode the resolve. One dispatch for every scale on the page.
 	 *
-	 * Runs whenever the tables moved OR anything is animating — and once more
-	 * after the last transition settles, because `resolved` is state rather than
-	 * a per-frame recomputation of something else: if the dispatch stopped while
-	 * `t` was still short of 1, the settled frame would keep the second-to-last
-	 * position forever. `#slotResolvePending` is that one extra pass.
+	 * Runs only when an input moved: the tables were repacked, or some scale's
+	 * `t` changed. Settling is one of those — t lands on 1 and the tables are
+	 * repacked — so the final position is resolved without a special case, and
+	 * a frame where nothing moved (a pan, a hover, another mark's own animation)
+	 * dispatches nothing.
 	 */
 	#encodeSlotResolve(encoder: GPUCommandEncoder): void {
 		if (!this.#slotResolvePipeline || !this.#slotResolvePending) return;
@@ -896,8 +896,7 @@ export class GPUCoordinator {
 		pass.dispatchWorkgroups(Math.ceil(count / SLOT_RESOLVE_WORKGROUP));
 		pass.end();
 
-		// Anything still animating re-arms it; otherwise this was the final pass.
-		this.#slotResolvePending = this.#animatedScalesArray.length > 0;
+		this.#slotResolvePending = false;
 	}
 
 	/**
@@ -996,10 +995,6 @@ export class GPUCoordinator {
 			}
 		}
 
-		// Anything animating needs a resolve this frame even when the tables
-		// themselves did not move, because `t` did.
-		if (this.#animatedScalesArray.length > 0) this.#slotResolvePending = true;
-
 		if (!dirty) return;
 
 		const queue = this.#device!.queue;
@@ -1035,7 +1030,7 @@ export class GPUCoordinator {
 	}
 
 	/**
-	 * Push each animating scale's `t` — four bytes at a known offset.
+	 * Push each packed scale's `t` when it moved — four bytes at a known offset.
 	 *
 	 * This is what the whole two-table split buys. slotFrom and slotTo move on a
 	 * retarget, which is rare; only `t` moves per frame, and it is one float in
@@ -1050,12 +1045,16 @@ export class GPUCoordinator {
 	 *
 	 * Runs after the pack, so a scale that has just been given a base this frame
 	 * gets its t at that base rather than its previous one.
+	 *
+	 * Walks the scales rather than the animation loop's participants: the loop
+	 * holds a band scale's CLOCK, which has a t but no id or block. The
+	 * comparison against the mirror is what keeps a still frame free.
 	 */
 	#uploadAnimatingT(): void {
 		const state = this.#identitySlots;
 		if (!state) return;
-		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
-			const scale = this.#animatedScalesArray[i] as unknown as { id?: string; t?: number };
+		for (let i = 0; i < this.#scaleArray.length; i++) {
+			const scale = this.#scaleArray[i].instance as unknown as { id?: string; t?: number };
 			if (scale.t === undefined || scale.id === undefined) continue;
 			const base = state.offsets.get(scale.id);
 			if (base === undefined || base === IDENTITY_SLOT_EMPTY) continue;

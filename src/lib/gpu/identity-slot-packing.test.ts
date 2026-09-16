@@ -303,7 +303,7 @@ describe('what the shader reads back', () => {
 		// mix(from, to, t) and the vertex stage computes the same thing from the
 		// same three numbers. If they drift, bars are in the wrong slots.
 		const s = new BandScaleState('species', [], {
-			gpuCoordinator: { addAnimatingScale: () => {} }
+			gpuCoordinator: { addAnimatedSource: () => {} }
 		});
 		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
@@ -313,8 +313,8 @@ describe('what the shader reads back', () => {
 		s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 		s.updateDomainFromExtents();
 		for (let i = 0; i < 15; i++) {
-			s.step();
-			s.updateRenderState(0);
+			s.clock.step();
+			s.clock.updateRenderState(0);
 		}
 
 		const state = createIdentitySlotState(64);

@@ -81,9 +81,19 @@ export class TransitionClock {
 	 */
 	version: number = 0;
 
-	constructor(stiffness: number = TRANSITION_STIFFNESS, precision: number = TRANSITION_PRECISION) {
-		this.#precision = precision;
-		this.#spring = new Spring(1, stiffness, precision);
+	/**
+	 * Called once the loop has settled this clock — after `t` has landed on 1.
+	 *
+	 * For an owner with state of its own to finish, which is what lets the loop
+	 * drive the clock rather than the owner: a band scale retires its departing
+	 * categories here.
+	 */
+	#onRest: (() => void) | null;
+
+	constructor(options: { stiffness?: number; precision?: number; onRest?: () => void } = {}) {
+		this.#precision = options.precision ?? TRANSITION_PRECISION;
+		this.#spring = new Spring(1, options.stiffness ?? TRANSITION_STIFFNESS, this.#precision);
+		this.#onRest = options.onRest ?? null;
 	}
 
 	/** Where the transition is, for the frame being drawn. 1 when settled. */
@@ -133,18 +143,13 @@ export class TransitionClock {
 		this.#renderT = t < 0 ? 0 : t > 1 ? 1 : t;
 	}
 
-	/**
-	 * Charts to redraw while this runs. Set by whoever owns the clock.
-	 *
-	 * A scale's clock does not use this — the scale is what the loop drives, and
-	 * it supplies its own usage set. A clock owned by a mark is registered
-	 * directly, and this is how it says what to repaint.
-	 */
+	/** Charts to redraw while this runs. Set by whoever owns the clock. */
 	_affectedChartsArray: string[] = [];
 
-	/** Called by the loop when this stops. Lands exactly on 1. */
+	/** Called by the loop when this stops. Lands exactly on 1, then tells the owner. */
 	_markAtRest(): void {
 		this.settle();
+		this.#onRest?.();
 	}
 
 	/**

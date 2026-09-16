@@ -195,13 +195,9 @@ describe('BandScaleState identity <-> display translation', () => {
 	// tooltips, hit-testing, toggles — ask in their own terms and never index
 	// displayOrder or identityValues themselves.
 
-	// The animation interface exists but nothing drives it yet (step 5 C2).
-	//
-	// Two claims, and the second is the one worth a test: BandScaleState now
-	// satisfies what GPUCoordinator's loop calls, and it does not register, so
-	// the loop never sees it. C3 makes one change that both registers and
-	// interpolates — deliberately one change, so the first frame of motion
-	// proves the registration too.
+	// The loop drives the scale's CLOCK, not the scale. What the scale still has
+	// to do — settle its slots, share its redraw set — reaches it through the
+	// clock, and these pin that wiring down.
 	describe('animation interface', () => {
 		function scale(): BandScaleState {
 			const s = new BandScaleState('species');
@@ -211,36 +207,68 @@ describe('BandScaleState identity <-> display translation', () => {
 			return s;
 		}
 
-		it('has the four methods GPUCoordinator drives a scale through', () => {
-			const s = scale();
-			for (const name of ['step', 'updateRenderState', 'isAtRest', '_markAtRest'] as const) {
-				expect(typeof s[name]).toBe('function');
+		it('keeps no loop interface of its own', () => {
+			// A scale with step() would look drivable, and a scale that joined the
+			// loop alongside its clock would be stepped twice per timestep.
+			const s = scale() as unknown as Record<string, unknown>;
+			for (const name of ['step', 'updateRenderState', 'isAtRest', '_markAtRest']) {
+				expect(s[name]).toBeUndefined();
 			}
-			// step() takes no arguments here. The band-geometry step(rangeSize)
-			// moved to stepWidth for exactly this reason, and an arity clash
-			// between them would have been silent.
-			expect(s.step.length).toBe(0);
-			expect(s.stepWidth(100)).toBeGreaterThan(0);
+			expect(scale().stepWidth(100)).toBeGreaterThan(0);
 		});
 
-		it('reports at rest, so a registered scale cannot pin the loop on', () => {
-			// Load-bearing, not a placeholder. With no spring, a scale that ever
-			// reached #animatedScalesArray must fall straight back out on the next
-			// sweep; otherwise the chart redraws every frame while looking
-			// perfectly correct, which is invisible outside a profiler.
+		it('reports at rest, so a registered clock cannot pin the loop on', () => {
+			// A clock that reached the loop with nothing to do must fall straight
+			// back out on the next sweep; otherwise the chart redraws every frame
+			// while looking perfectly correct, which is invisible outside a profiler.
 			const s = scale();
-			expect(s.isAtRest()).toBe(true);
+			expect(s.clock.isAtRest()).toBe(true);
 
-			s.step();
-			s.updateRenderState(0.016);
-			expect(s.isAtRest()).toBe(true);
+			s.clock.step();
+			s.clock.updateRenderState(0.016);
+			expect(s.clock.isAtRest()).toBe(true);
+		});
+
+		it('shares the charts to redraw with its clock, which is what the loop reads', () => {
+			// The coordinator assigns _affectedChartsArray on every scale it tracks,
+			// by name. The loop only ever sees the clock.
+			const s = scale();
+			s._affectedChartsArray = ['chart-a', 'chart-b'];
+			expect(s.clock._affectedChartsArray).toEqual(['chart-a', 'chart-b']);
+		});
+
+		it('settles its slots when the loop settles the clock', () => {
+			const registered: unknown[] = [];
+			const s = new BandScaleState('species', [], {
+				gpuCoordinator: { addAnimatedSource: (x: unknown) => registered.push(x) }
+			});
+			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			// Chinstrap leaves, so there is a departing id for the settle to retire.
+			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
+			s.updateDomainFromExtents();
+			expect(registered).toEqual([s.clock]);
+			expect(s.slotTo[1]).toBeGreaterThanOrEqual(0);
+
+			while (!s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
+			}
+			const version = s.slotVersion;
+			// What the loop's eviction sweep calls, and the only thing it calls.
+			s.clock._markAtRest();
+
+			expect(s.isAnimating).toBe(false);
+			expect(s.slotTo[1]).toBe(-1);
+			expect(Array.from(s.slotTable)).toEqual(Array.from(s.slotTarget));
+			expect(s.slotVersion).toBeGreaterThan(version);
 		});
 
 		it('settles immediately when no coordinator can drive the loop', () => {
-			// slotCurrent is written only by updateRenderState, which only runs
-			// while the loop holds this scale. Without a coordinator that never
-			// happens, so a retarget alone would leave the old order on screen
-			// forever. An animation nobody can drive has to be an instant
+			// t only advances while the loop holds the clock. Without a coordinator
+			// that never happens, so a retarget alone would leave the old order on
+			// screen forever. An animation nobody can drive has to be an instant
 			// transition, not a lost one — and this is the common case in tests
 			// and for any scale built before a coordinator is wired up.
 			const s = scale();
@@ -262,7 +290,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		function withLoop() {
 			const registered: unknown[] = [];
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: (x: unknown) => registered.push(x) }
+				gpuCoordinator: { addAnimatedSource: (x: unknown) => registered.push(x) }
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
@@ -293,7 +321,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// opening frame of the chart slid its bars in from nowhere.
 			const registered: unknown[] = [];
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: (x: unknown) => registered.push(x) }
+				gpuCoordinator: { addAnimatedSource: (x: unknown) => registered.push(x) }
 			});
 
 			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1');
@@ -312,7 +340,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
 
-			expect(registered).toEqual([s]);
+			expect(registered).toEqual([s.clock]);
 			// The target moved; the visible table has not yet. That gap is the
 			// animation, and at C1 it did not exist.
 			expect(Array.from(s.slotTarget)).toEqual([1, 2, 0]);
@@ -321,7 +349,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// A second reorder while already animating must not register twice.
 			s.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
 			s.updateDomainFromExtents();
-			expect(registered).toEqual([s]);
+			expect(registered).toEqual([s.clock]);
 		});
 
 		it('walks the table toward the target and arrives', () => {
@@ -329,7 +357,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
 
-			expect(s.isAtRest()).toBe(false);
+			expect(s.clock.isAtRest()).toBe(false);
 
 			// Adelie(0) is travelling from slot 0 to slot 1.
 			let previous = s.slotTable[0];
@@ -341,9 +369,9 @@ describe('BandScaleState identity <-> display translation', () => {
 			// against it so a spring that never settles fails here loudly instead
 			// of falling out of the loop and passing.
 			let steps = 0;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				if (s.slotTable[0] > previous) moved = true;
 				previous = s.slotTable[0];
 				steps++;
@@ -352,7 +380,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// It got there gradually, not in one jump.
 			expect(moved).toBe(true);
 			expect(steps).toBeLessThan(5000);
-			expect(s.isAtRest()).toBe(true);
+			expect(s.clock.isAtRest()).toBe(true);
 			expect(s.slotTable[0]).toBeCloseTo(1, 2);
 		});
 
@@ -372,10 +400,10 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.updateDomainFromExtents();
 
 			const afterRetarget = s.slotVersion;
-			s.step();
-			s.updateRenderState(0);
-			s.step();
-			s.updateRenderState(0);
+			s.clock.step();
+			s.clock.updateRenderState(0);
+			s.clock.step();
+			s.clock.updateRenderState(0);
 			expect(s.slotVersion).toBe(afterRetarget);
 
 			// t moved even though the version did not — that is the whole split.
@@ -401,8 +429,8 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(Array.from(s.slotTo)).toEqual([1, 2, 0]);
 
 			for (let i = 0; i < 20; i++) {
-				s.step();
-				s.updateRenderState(0);
+				s.clock.step();
+				s.clock.updateRenderState(0);
 			}
 
 			const t = s.t;
@@ -422,11 +450,11 @@ describe('BandScaleState identity <-> display translation', () => {
 			const { s } = withLoop();
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
-			for (let i = 0; i < 400 && !s.isAtRest(); i++) {
-				s.step();
-				s.updateRenderState(0);
+			for (let i = 0; i < 400 && !s.clock.isAtRest(); i++) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 			}
-			s._markAtRest();
+			s.clock._markAtRest();
 
 			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
 			expect(s.isAnimating).toBe(false);
@@ -447,17 +475,17 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 			s.updateDomainFromExtents();
 
-			expect(registered).toEqual([s]);
+			expect(registered).toEqual([s.clock]);
 			// Still on screen, at the slot it held, with -1 waiting for it.
 			expect(s.slotTable[1]).toBe(1);
 			expect(s.slotTarget[1]).toBe(-1);
 			// And it is travelling: the loop may not evict while it is in flight.
-			expect(s.isAtRest()).toBe(false);
+			expect(s.clock.isAtRest()).toBe(false);
 
 			let steps = 0;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				// Never discarded mid-exit, which is the C3 behaviour this replaces.
 				expect(s.slotTable[1]).toBeGreaterThanOrEqual(0);
 				steps++;
@@ -466,7 +494,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// It got past the last visible slot before the loop let go.
 			expect(s.slotTable[1]).toBeGreaterThan(1);
 
-			s._markAtRest();
+			s.clock._markAtRest();
 			// Only now is it hidden.
 			expect(s.slotTable[1]).toBe(-1);
 		});
@@ -476,7 +504,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// Drop to two, settle, then bring the third back.
 			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 			s.updateDomainFromExtents();
-			s._markAtRest();
+			s.clock._markAtRest();
 			expect(s.slotTable[1]).toBe(-1);
 
 			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
@@ -488,9 +516,9 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slotTarget[1]).toBe(1);
 
 			let steps = 0;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				steps++;
 			}
 			expect(s.slotTable[1]).toBeCloseTo(1, 2);
@@ -502,7 +530,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// into Other. Animating it past the end would state something untrue
 			// about where the data went.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {} }
 			});
 			// Adelie, Chinstrap, Gentoo, then the reserved bucket at the top of the
 			// id space, exactly as reserveSynthetic hands it out.
@@ -519,9 +547,9 @@ describe('BandScaleState identity <-> display translation', () => {
 			// The leaver heads for Other's slot, not slot 3 past the end.
 			expect(s.slotTarget[1]).toBe(-1);
 			let steps = 0;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				expect(s.slotTable[1]).toBeLessThanOrEqual(2);
 				steps++;
 			}
@@ -533,7 +561,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 		it('sends Other itself to the far end, having nowhere else to go', () => {
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
 			s.setOtherId(2);
@@ -553,16 +581,16 @@ describe('BandScaleState identity <-> display translation', () => {
 			// its gateway it would sit at 0 and never travel.
 			let steps = 0;
 			let furthest = -1;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				furthest = Math.max(furthest, s.slotTable[2]);
 				steps++;
 			}
 			expect(steps).toBeLessThan(5000);
 			expect(furthest).toBeCloseTo(2, 2);
 
-			s._markAtRest();
+			s.clock._markAtRest();
 			expect(s.slotTable[2]).toBe(-1);
 		});
 
@@ -572,7 +600,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// moves them at proportionally different SPEEDS and lands them on the
 			// same frame. Independent springs would finish raggedly.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['A', 'B', 'C', 'D']));
 			s.addMark(['A', 'B', 'C', 'D'], 'mark-1');
@@ -585,9 +613,9 @@ describe('BandScaleState identity <-> display translation', () => {
 
 			let steps = 0;
 			let sawMotion = false;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				const fracA = (s.slotTable[0] - 0) / (1 - 0);
 				const fracD = (s.slotTable[3] - 3) / (0 - 3);
 				expect(fracA).toBeCloseTo(fracD, 6);
@@ -597,7 +625,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// The assertion above is vacuous if the transition never had a middle.
 			expect(sawMotion).toBe(true);
 
-			s._markAtRest();
+			s.clock._markAtRest();
 			expect(Array.from(s.slotTable)).toEqual([1, 2, 3, 0]);
 		});
 
@@ -607,7 +635,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// `from` before t resets — otherwise every result restarts the journey
 			// and a bar sliding out stutters instead of sliding.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['A', 'B', 'C']));
 			s.addMark(['A', 'B', 'C'], 'mark-1');
@@ -618,8 +646,8 @@ describe('BandScaleState identity <-> display translation', () => {
 
 			// Get genuinely mid-flight.
 			for (let i = 0; i < 20; i++) {
-				s.step();
-				s.updateRenderState(0);
+				s.clock.step();
+				s.clock.updateRenderState(0);
 			}
 			const midFlight = Array.from(s.slotTable);
 			expect(midFlight[0]).toBeGreaterThan(0);
@@ -635,12 +663,12 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(Array.from(s.slotTable)).toEqual(midFlight);
 
 			let steps = 0;
-			while (steps < 5000 && !s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (steps < 5000 && !s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				steps++;
 			}
-			s._markAtRest();
+			s.clock._markAtRest();
 			expect(Array.from(s.slotTable)).toEqual([1, 0, 2]);
 		});
 
@@ -653,7 +681,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// that had left the domain stayed drawn at its old slot indefinitely.
 			// One driver makes the no-op case take the settle path like any other.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatingScale: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
 			s.setOtherId(2);
@@ -681,8 +709,8 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 			s.updateDomainFromExtents();
 			for (let i = 0; i < 20; i++) {
-				s.step();
-				s.updateRenderState(0);
+				s.clock.step();
+				s.clock.updateRenderState(0);
 			}
 			const midExit = s.slotTable[1];
 			expect(midExit).toBeGreaterThan(1);
@@ -708,8 +736,8 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
 			for (let i = 0; i < 60; i++) {
-				s.step();
-				s.updateRenderState(0);
+				s.clock.step();
+				s.clock.updateRenderState(0);
 			}
 			const drawn = () => Array.from(s.slotFrom, (from, id) => from + (s.slotTo[id] - from) * s.t);
 			const before = drawn();
@@ -725,11 +753,11 @@ describe('BandScaleState identity <-> display translation', () => {
 			// slotFrom moved, so the packer has to upload it.
 			expect(s.slotVersion).toBeGreaterThan(version);
 			// And it still arrives where the reorder was going.
-			while (!s.isAtRest()) {
-				s.step();
-				s.updateRenderState(0);
+			while (!s.clock.isAtRest()) {
+				s.clock.step();
+				s.clock.updateRenderState(0);
 			}
-			s._markAtRest();
+			s.clock._markAtRest();
 			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
 		});
 
@@ -751,8 +779,8 @@ describe('BandScaleState identity <-> display translation', () => {
 
 				expect(s.slotTarget[1]).toBe(-1);
 				expect(drawn(s)[1]).toBe(1);
-				s.step();
-				s.updateRenderState(0);
+				s.clock.step();
+				s.clock.updateRenderState(0);
 				expect(drawn(s)[1]).toBeGreaterThanOrEqual(1);
 			});
 
@@ -762,8 +790,8 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 				s.updateDomainFromExtents();
 				for (let i = 0; i < 20; i++) {
-					s.step();
-					s.updateRenderState(0);
+					s.clock.step();
+					s.clock.updateRenderState(0);
 				}
 				const midFlight = drawn(s)[1];
 				expect(midFlight).toBeGreaterThan(1);

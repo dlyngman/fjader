@@ -23,13 +23,12 @@ interface BandScaleConfig {
 	sourceField?: string | null;
 	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
 	/**
-	 * How a transition reaches the animation loop. Structurally typed
-	 * rather than importing GPUCoordinator, which would be a cycle: the
-	 * coordinator's ScaleInstance is what this class implements.
+	 * How a transition reaches the animation loop. Structurally typed rather
+	 * than importing GPUCoordinator, which would be a cycle. The loop drives
+	 * this scale's CLOCK, not the scale.
 	 */
 	gpuCoordinator?: {
-		addAnimatingScale(scale: unknown): void;
-		removeAnimatingScale?(scale: unknown): void;
+		addAnimatedSource(source: TransitionClock): void;
 	} | null;
 }
 
@@ -133,8 +132,7 @@ export class BandScaleState {
 	#extentsEncoded: boolean = false;
 	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
 	#gpuCoordinator: {
-		addAnimatingScale(scale: unknown): void;
-		removeAnimatingScale?(scale: unknown): void;
+		addAnimatedSource(source: TransitionClock): void;
 	} | null = null;
 
 	// =========================================================================
@@ -472,9 +470,10 @@ export class BandScaleState {
 	 * labels that will need it.
 	 */
 	get slotTable(): Float32Array {
-		if (this.#currentDirty) {
-			this.#writeCurrent(this.#driver.t);
-			this.#currentDirty = false;
+		const t = this.#driver.t;
+		if (this.#currentT !== t) {
+			this.#writeCurrent(t);
+			this.#currentT = t;
 		}
 		return this.#slotCurrent;
 	}
@@ -540,8 +539,13 @@ export class BandScaleState {
 
 	#slotTarget: Float32Array = new Float32Array(0);
 	#slotCurrent: Float32Array = new Float32Array(0);
-	/** slotCurrent is stale until someone asks for it. */
-	#currentDirty: boolean = false;
+	/**
+	 * The t slotCurrent was computed at, or NaN when from/to have moved since.
+	 *
+	 * Keyed on t rather than invalidated per frame, so nothing has to tell the
+	 * scale a frame happened — the loop drives the clock, not the scale.
+	 */
+	#currentT: number = Number.NaN;
 	/**
 	 * ONE spring for the whole scale, driving a normalised `t` from 0 to 1
 	 * across every id at once — not one spring per category.
@@ -561,7 +565,7 @@ export class BandScaleState {
 	 * as a full reorder — and a mid-flight retarget is continuous in `t` but not
 	 * in world space. Both are the other face of arriving together.
 	 */
-	#driver: TransitionClock = new TransitionClock();
+	#driver: TransitionClock = new TransitionClock({ onRest: () => this.#onClockRest() });
 	/**
 	 * Where each id's current transition STARTED, id-indexed.
 	 *
@@ -907,9 +911,9 @@ export class BandScaleState {
 		if (count > 0) this.#hasLaidOut = true;
 
 		// An animation nobody can drive has to be an instant transition, not a
-		// lost one. slotCurrent is written ONLY by updateRenderState, which only
-		// runs while the loop holds this scale — so without a coordinator the
-		// driver would be reset and the table would keep the old order forever.
+		// lost one. t only advances while the loop holds the clock, so without a
+		// coordinator it would sit at 0 and the table would keep the old order
+		// forever.
 		// Reorders do happen with no coordinator attached: every unit test, and
 		// any scale built before one is wired up.
 		if (moving && this.#gpuCoordinator) {
@@ -951,7 +955,7 @@ export class BandScaleState {
 		// element fractionally short — and a staggered t_i, which divides by
 		// (1 - phase), fractionally shorter still.
 		this.#driver.settle();
-		this.#currentDirty = false;
+		this.#currentT = 1;
 		for (let i = 0; i < target.length; i++) {
 			// The TRUE target, which for a leaver is the hidden sentinel and not
 			// the gateway it was walking toward. This is where an exit completes.
@@ -1000,7 +1004,7 @@ export class BandScaleState {
 	 */
 	#restartFolded(): void {
 		this.#driver.restart();
-		this.#currentDirty = true;
+		this.#currentT = Number.NaN;
 		this.#ensureAnimating();
 	}
 
@@ -1008,7 +1012,7 @@ export class BandScaleState {
 	#ensureAnimating(): void {
 		if (!this.#isAnimating && this.#gpuCoordinator) {
 			this.#isAnimating = true;
-			this.#gpuCoordinator.addAnimatingScale(this);
+			this.#gpuCoordinator.addAnimatedSource(this.#driver);
 		}
 	}
 
@@ -1362,12 +1366,10 @@ export class BandScaleState {
 	 * Calculate step size for a given range size (CPU-side) — the band pitch,
 	 * centre to centre, of which `bandwidth` is the drawn fraction.
 	 *
-	 * d3 spells this `step()`, and so did this class until the animation
-	 * interface needed that name — the one `GPUCoordinator` drives, where `step()`
-	 * means "advance physics by one fixed timestep" and takes no arguments. Two
-	 * methods cannot share the name and the collision is silent — an arity
-	 * mismatch, not a type error — so the geometry one moved. It pairs with
-	 * `bandwidth(rangeSize)` either way.
+	 * d3 spells this `step()`. Not here: the animation loop's interface uses
+	 * `step()` for "advance physics one timestep", and a scale that ever joins the
+	 * loop again would collide silently — an arity mismatch, not a type error.
+	 * It pairs with `bandwidth(rangeSize)` either way.
 	 */
 	stepWidth(rangeSize: number): number {
 		const config = this.getConfig();
@@ -1379,14 +1381,20 @@ export class BandScaleState {
 	}
 
 	// =========================================================================
-	// ANIMATION INTERFACE
+	// ANIMATION
 	// =========================================================================
 	//
-	// GPUCoordinator's fixed-timestep loop drives every animating source through
-	// step(), updateRenderState(dt), isAtRest() and _markAtRest(), redraws
-	// _affectedChartsArray while it runs, and evicts the source the moment
-	// isAtRest() returns true. This scale joins on a retarget or
-	// startTransition, and is dropped again by that sweep.
+	// The loop drives #driver — step, render state, rest — and redraws the
+	// charts this scale is used in while it runs. This scale joins it on a
+	// retarget or startTransition, and finishes its own state in #onClockRest
+	// when the loop settles the clock.
+	//
+	// Nothing per frame reaches the scale. The GPU resolves mix(slotFrom,
+	// slotTo, t) itself, so a frame moves four bytes of t; slotVersion means
+	// "the tables moved" and is not bumped per frame; and `_version` is not
+	// either, because nothing an axis reads has changed — #domain holds display
+	// ORDER and only slots are moving. The visible consequence is labels jumping
+	// to their final order while the bars slide, which is a known gap.
 
 	#isAnimating: boolean = false;
 
@@ -1396,66 +1404,28 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Charts to redraw while this scale animates. Populated by ScaleRegistry,
-	 * which fills this on any scale that declares it — declaring the field is
-	 * the whole subscription.
+	 * Charts to redraw while this scale animates. The coordinator assigns it by
+	 * name on every scale it tracks; it lives on the clock, because the clock is
+	 * what the loop holds.
 	 */
-	_affectedChartsArray: string[] = [];
+	get _affectedChartsArray(): string[] {
+		return this.#driver._affectedChartsArray;
+	}
 
-	/**
-	 * Advance physics by one fixed timestep. Called at a fixed rate, not per
-	 * frame, so it must not touch render state.
-	 */
-	step(): void {
-		this.#driver.step();
+	set _affectedChartsArray(charts: string[]) {
+		this.#driver._affectedChartsArray = charts;
 	}
 
 	/**
-	 * Record where the driver is for this frame. Does NOT touch the slot table.
+	 * The loop has settled the clock: land every id exactly on its target, and
+	 * retire the departing ones.
 	 *
-	 * The GPU resolves mix(slotFrom, slotTo, t) itself, so the only thing that
-	 * changes per frame is four bytes of t. This used to
-	 * write every id and bump slotVersion, which made the packer re-upload the
-	 * entire packed range — up to 64 KB — on every frame of every animation.
-	 *
-	 * slotVersion is deliberately NOT bumped here any more. It means "the
-	 * tables moved", which happens on a retarget, and bumping it per frame is
-	 * exactly what made the upload per-frame.
-	 *
-	 * `_version` is not bumped either. Nothing an axis reads has changed —
-	 * #domain holds display ORDER and only slots are moving — so waking Svelte
-	 * per frame would recompute the axis for no new information. The visible
-	 * consequence is labels jumping to their final order while the bars slide,
-	 * which is a known gap.
+	 * Exactly, rather than wherever the last extrapolated frame left things. The
+	 * rest precision is sub-pixel so the difference is invisible, but a scale at
+	 * rest holding 2.0003 is a scale whose next retarget springs from a number
+	 * that was never a slot.
 	 */
-	updateRenderState(extrapolationDt: number): void {
-		this.#driver.updateRenderState(extrapolationDt);
-		this.#currentDirty = true;
-	}
-
-	/**
-	 * Whether the loop can stop driving this scale.
-	 *
-	 * One comparison, not a scan: everything in flight shares the driver, which
-	 * is the practical payoff of one spring. It also means rest arrives for
-	 * every id at once — which is exactly why a departing set has to accumulate
-	 * across updates rather than be replaced, since departures from several
-	 * consecutive updates are in the air together and are all retired here.
-	 */
-	isAtRest(): boolean {
-		return this.#driver.isAtRest();
-	}
-
-	/**
-	 * Called by GPUCoordinator when this scale stops animating.
-	 *
-	 * Lands exactly on the target rather than wherever the last extrapolated
-	 * frame left things. The clock's rest precision is sub-pixel so the difference is
-	 * invisible, but slotCurrent is what every later comparison reads, and a
-	 * scale at rest holding 2.0003 is a scale whose next retarget springs from a
-	 * number that was never a slot.
-	 */
-	_markAtRest(): void {
+	#onClockRest(): void {
 		this.#isAnimating = false;
 		this.#settleSlots();
 		this.slotVersion++;
