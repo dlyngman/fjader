@@ -9,16 +9,18 @@
  *
  * WHY t COMES FROM A LOOKUP. `t` is per scale and lives in that scale's block
  * header, but blocks are variable-length, so a flat thread cannot find its own
- * header by arithmetic. `bases[i]` says which block float `i` belongs to. That
- * is what makes this ONE dispatch for the whole page rather than one per scale —
- * and the per-scale alternative has a silent bug waiting in it, because
- * per-dispatch constants need push constants, and writing a uniform between
- * dispatches in a single encoder does not work: queue writes all land before any
- * command in the submit, so the last write would win for every dispatch.
+ * header by arithmetic. `bases[i]` says which block float `i` belongs to, and
+ * that is what makes this ONE dispatch for the whole page.
+ *
+ * The alternative is a dispatch per scale with `(base, count, t)` as
+ * immediates, which would retire `bases`. It was not possible when this was
+ * written — a uniform rewritten between dispatches gives every dispatch the
+ * last write — and it is now. Not taken because a page has few band scales and
+ * `bases` is uploaded only on a repack, so there is nothing to win yet.
  *
  * WHY HEADERS ARE RESOLVED TOO, rather than skipped. `count` sits at `base` in
  * both halves, so `mix(count, count, t)` is `count` and the header survives
- * untouched — the vertex stage still reads its bound there. `t` at `base + 1`
+ * untouched — the render stages still read their bound there. `t` at `base + 1`
  * resolves to something meaningless, and nothing reads it. Two branchless writes
  * are cheaper than the guard that would avoid them.
  *
@@ -31,22 +33,24 @@
 /** Threads per workgroup. 64 is the usual floor for good occupancy. */
 export const SLOT_RESOLVE_WORKGROUP = 64;
 
+/** Bytes of immediate data the kernel reads: `count`. */
+export const SLOT_RESOLVE_IMMEDIATE_SIZE = 4;
+
 export const SLOT_RESOLVE_SHADER = /* wgsl */ `
+requires immediate_address_space;
+
 struct Params {
   // How much of the packed buffer is in use. The tail is untouched rather than
   // resolved to junk — nothing reads it, but a NaN there would be a confusing
   // thing to find in a buffer dump.
   count: u32,
-  _pad0: u32,
-  _pad1: u32,
-  _pad2: u32,
 };
 
 @group(0) @binding(0) var<storage, read>       slotFrom: array<f32>;
 @group(0) @binding(1) var<storage, read>       slotTo:   array<f32>;
 @group(0) @binding(2) var<storage, read>       bases:    array<u32>;
 @group(0) @binding(3) var<storage, read_write> resolved: array<f32>;
-@group(0) @binding(4) var<uniform>             params:   Params;
+var<immediate> params: Params;
 
 @compute @workgroup_size(${SLOT_RESOLVE_WORKGROUP})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {

@@ -541,10 +541,6 @@ export class ScaleTemplateSystem {
 	}
 
 	/**
-	 * Build band scale helper functions (only if needed)
-	 * @private
-	 */
-	/**
 	 * The shared slot table, and the lookup into it.
 	 *
 	 * Emitted ALWAYS, not only for band axes. It started band-only because band
@@ -552,14 +548,11 @@ export class ScaleTemplateSystem {
 	 * them too now, and resolves in the FRAGMENT stage, so the declaration has
 	 * to be present even in a shader with no band scale at all.
 	 *
-	 * A uniform rather than storage, which is what makes the fragment stage
-	 * affordable: the vertex stage is at the default maxStorageBuffersPerShaderStage
-	 * of 8, while uniform buffers are nowhere near the default 12 in either stage.
+	 * One read-only storage binding, visible to both stages, written by the
+	 * resolve pass whenever the tables or a t moved.
 	 *
-	 * WGSL requires a 16-byte stride for uniform arrays, so f32s are packed into
-	 * a flat storage array, written by the resolve pass each frame.
-	 *
-	 * Each scale's block is [count, t, slot0, slot1, ...]. The count is what makes
+	 * Each scale's block is [count, t, slot0, slot1, ...] — the layout
+	 * identity-slot-packing.ts owns. The count is what makes
 	 * the lookup safe: ids and the slot table can disagree for a moment while a
 	 * dim appends, and without a per-scale bound an id past this scale's end
 	 * reads the NEXT scale's slots — a plausible wrong answer rather than a
@@ -576,9 +569,6 @@ export class ScaleTemplateSystem {
     // never see the second table at all. That is what makes animating cost
     // this stage's binding budget nothing.
     //
-    // Storage rather than the two uniforms it replaces, which is what removed
-    // the vec4 packing (\`i >> 2u\`/\`i & 3u\` written in both JS and WGSL), the
-    // 64 KB uniform cap, and the 16384-float global ceiling with it.
     @group(2) @binding(5) var<storage, read> identitySlots: array<f32>;
 
     fn identitySlotAt(i: u32) -> f32 {

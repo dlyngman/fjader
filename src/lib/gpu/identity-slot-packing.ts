@@ -39,11 +39,14 @@
  */
 
 /**
- * 16384 floats GLOBALLY across every band and point scale on the page.
+ * Floats GLOBALLY across every band and point scale on the page, headers
+ * included.
  *
- * A uniform buffer, not storage: the vertex stage is already at the default
- * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
- * maxUniformBufferBindingSize, and 64 KB / 4 is this.
+ * No longer a binding limit: the tables are storage buffers, bound only to the
+ * resolve pass, and the render stages read one resolved storage buffer. The
+ * number is left over from when they were 64 KB uniforms, and making the
+ * allocation grow on demand (recreate the buffers, rebuild the bind groups) is
+ * what would retire it.
  */
 export const IDENTITY_SLOT_CAPACITY = 16384;
 
@@ -137,7 +140,7 @@ export function createIdentitySlotState(
  *
  * `dirty` is false when nothing moved — slot tables change on reorder, not per
  * frame, so a static chart costs no writeBuffer. `length` is how much of the
- * buffer is in use, so the caller uploads a prefix rather than all 64 KB.
+ * buffer is in use, so the caller uploads a prefix rather than the whole allocation.
  *
  * Offsets are recomputed on every call because a scale appearing or
  * disappearing shifts every scale after it. That is a running sum over a
@@ -165,7 +168,10 @@ export function packIdentitySlots(
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
 
-		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== scale.slotVersion) {
+		// Both sides defaulted the same way: a scale with no slotVersion is stored
+		// as 0, and comparing that against `undefined` made it dirty every frame.
+		const version = scale.slotVersion ?? 0;
+		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== version) {
 			if (fits) {
 				// A scale with no driver offers neither half, and gets its settled
 				// table in both — the shader's mix is then an identity for it, which
@@ -187,7 +193,7 @@ export function packIdentitySlots(
 				);
 			}
 			offsets.set(scale.id, base);
-			versions.set(scale.id, scale.slotVersion ?? 0);
+			versions.set(scale.id, version);
 			dirty = true;
 		}
 		// No break: a later scale with a smaller table may still fit, and one

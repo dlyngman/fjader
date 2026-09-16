@@ -144,6 +144,18 @@ describe('packIdentitySlots dirty tracking', () => {
 		expect(packIdentitySlots(scales, state).dirty).toBe(false);
 	});
 
+	it('is clean on a repeat pack of a scale that declares no slotVersion', () => {
+		// The collector admits any scale with a slot table, so a new scale kind can
+		// opt in without declaring a version. It must not then cost a re-upload —
+		// and, if it did not fit, a capacity warning — on every frame.
+		const state = createIdentitySlotState(64);
+		const versionless = { id: 'a', slotCount: 2, slotTable: Float32Array.from([0, 1]) };
+
+		expect(packIdentitySlots([versionless], state).dirty).toBe(true);
+		expect(packIdentitySlots([versionless], state).dirty).toBe(false);
+		expect(packIdentitySlots([versionless], state).dirty).toBe(false);
+	});
+
 	it('is dirty when a slot table is rebuilt', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots([scale('a', [0, 1, 2], 1)], state);

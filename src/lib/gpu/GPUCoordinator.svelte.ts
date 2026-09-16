@@ -5,7 +5,11 @@ import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
 import { MAX_SIZE_SLOTS } from './SizeScaleShaderLib';
-import { SLOT_RESOLVE_SHADER, SLOT_RESOLVE_WORKGROUP } from './SlotResolveShader';
+import {
+	SLOT_RESOLVE_IMMEDIATE_SIZE,
+	SLOT_RESOLVE_SHADER,
+	SLOT_RESOLVE_WORKGROUP
+} from './SlotResolveShader';
 import {
 	IDENTITY_SLOT_CAPACITY,
 	IDENTITY_SLOT_EMPTY,
@@ -291,8 +295,8 @@ export class GPUCoordinator {
 	 * same list without that step, so a mark can drive a transition of its own
 	 * when there is no categorical scale to adopt a clock from.
 	 */
-	#animatedScales = new Set<AnimatedSource>(); // Set for O(1) membership check
-	#animatedScalesArray: AnimatedSource[] = []; // Array for O(1) iteration (no allocation)
+	#animatedSources = new Set<AnimatedSource>(); // Set for O(1) membership check
+	#animatedSourcesArray: AnimatedSource[] = []; // Array for O(1) iteration (no allocation)
 	#scaleRegistry: ScaleRegistry | null = null;
 
 	// =========================================================================
@@ -335,26 +339,16 @@ export class GPUCoordinator {
 	#cpuScaleBuffer: Float32Array | null = null; // Reusable CPU buffer for scale data
 	/**
 	 * Band identity id -> display slot, shared by every band and point scale at
-	 * a per-scale base carried in that scale's p4 (§9.5, §14.3).
+	 * a per-scale base carried in that scale's p4. This is the `from` half.
 	 *
-	 * A uniform buffer because the vertex stage is already at the default
-	 * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
-	 * maxUniformBufferBindingSize, so 16384 floats GLOBALLY across all such
-	 * scales.
-	 *
-	 * Layout: index 0 is a permanent zero-length block, then one block per
-	 * scale of `[count, slot0, slot1, ...]`. The count makes each block
-	 * self-describing, so the shader can reject an id past this scale's end
-	 * instead of reading into the next scale's slots — the ids and the table
-	 * can disagree transiently while a dim appends. Budget is therefore
-	 * 16384 - 1 - (1 per scale) slots.
+	 * The block layout is owned by identity-slot-packing.ts, which writes it;
+	 * see that file rather than a restatement here.
 	 */
 	#identitySlotBuffer: GPUBuffer | null = null;
 	/**
-	 * The `to` half. Same size, same per-scale bases, written from the same pack
-	 * — the shader reads `mix(from[id], to[id], t)` with t from the block header,
-	 * so a reorder in flight costs a 4-byte write per frame instead of the whole
-	 * table (§35.6 step 3).
+	 * The `to` half. Same size, same per-scale bases, written from the same pack.
+	 * The resolve pass mixes the two with t from the block header, so a reorder
+	 * in flight costs a 4-byte write per frame instead of the whole table.
 	 */
 	#identitySlotBufferTo: GPUBuffer | null = null;
 	/**
@@ -392,14 +386,14 @@ export class GPUCoordinator {
 	#identitySlotBases: GPUBuffer | null = null;
 	/** What the render stages read: `mix(from, to, t)`, written by compute. */
 	#identitySlotResolved: GPUBuffer | null = null;
-	#slotResolveParams: GPUBuffer | null = null;
 	#slotResolvePipeline: GPUComputePipeline | null = null;
 	#slotResolveBindGroup: GPUBindGroup | null = null;
 	/** Packed prefix in floats — how many threads the dispatch needs. */
 	#slotResolveCount = 0;
-	/** Set when the tables move or a scale animates; see #encodeSlotResolve. */
+	/** Set when the tables or a t moved; see #encodeSlotResolve. */
 	#slotResolvePending = false;
-	#slotResolveParamsPatch = new Uint32Array(4);
+	/** `count` for the resolve, pushed as an immediate. */
+	#slotResolveImmediates = new Uint32Array(1);
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -806,8 +800,7 @@ export class GPUCoordinator {
 	 * Buffers and pipeline for the slot table and its per-frame resolve.
 	 *
 	 * `from`, `to` and `bases` are compute-stage inputs; `resolved` is what the
-	 * render stages bind. All four are storage now — the vec4 packing and the
-	 * 64 KB uniform binding cap went with the address space.
+	 * render stages bind. `count` reaches the kernel as an immediate.
 	 */
 	#createIdentitySlotBuffer(): void {
 		if (this.#identitySlotBuffer) return;
@@ -836,25 +829,21 @@ export class GPUCoordinator {
 			size: bytes,
 			usage: storage
 		});
-		this.#slotResolveParams = device.createBuffer({
-			label: 'identity-slot-resolve-params',
-			size: 16,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-		});
-
 		const layout = device.createBindGroupLayout({
 			label: 'slot-resolve-layout',
 			entries: [
 				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
 				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
 				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-				{ binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }
+				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
 			]
 		});
 		this.#slotResolvePipeline = device.createComputePipeline({
 			label: 'slot-resolve',
-			layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+			layout: device.createPipelineLayout({
+				bindGroupLayouts: [layout],
+				immediateSize: SLOT_RESOLVE_IMMEDIATE_SIZE
+			}),
 			compute: {
 				module: device.createShaderModule({
 					label: 'slot-resolve',
@@ -870,8 +859,7 @@ export class GPUCoordinator {
 				{ binding: 0, resource: { buffer: this.#identitySlotBuffer } },
 				{ binding: 1, resource: { buffer: this.#identitySlotBufferTo } },
 				{ binding: 2, resource: { buffer: this.#identitySlotBases } },
-				{ binding: 3, resource: { buffer: this.#identitySlotResolved } },
-				{ binding: 4, resource: { buffer: this.#slotResolveParams } }
+				{ binding: 3, resource: { buffer: this.#identitySlotResolved } }
 			]
 		});
 	}
@@ -892,6 +880,8 @@ export class GPUCoordinator {
 
 		const pass = encoder.beginComputePass({ label: 'slot-resolve' });
 		pass.setPipeline(this.#slotResolvePipeline);
+		this.#slotResolveImmediates[0] = count;
+		pass.setImmediates!(0, this.#slotResolveImmediates);
 		pass.setBindGroup(0, this.#slotResolveBindGroup!);
 		pass.dispatchWorkgroups(Math.ceil(count / SLOT_RESOLVE_WORKGROUP));
 		pass.end();
@@ -1021,11 +1011,7 @@ export class GPUCoordinator {
 			length
 		);
 
-		if (this.#slotResolveCount !== length) {
-			this.#slotResolveCount = length;
-			this.#slotResolveParamsPatch[0] = length;
-			queue.writeBuffer(this.#slotResolveParams!, 0, this.#slotResolveParamsPatch);
-		}
+		this.#slotResolveCount = length;
 		this.#slotResolvePending = true;
 	}
 
@@ -1138,9 +1124,9 @@ export class GPUCoordinator {
 	#physicsCallbacks: (() => void)[] = [];
 
 	#physicsStep = (): void => {
-		const len = this.#animatedScalesArray.length;
+		const len = this.#animatedSourcesArray.length;
 		for (let i = 0; i < len; i++) {
-			this.#animatedScalesArray[i].step();
+			this.#animatedSourcesArray[i].step();
 		}
 		for (let i = 0; i < this.#physicsCallbacks.length; i++) {
 			this.#physicsCallbacks[i]();
@@ -1159,14 +1145,14 @@ export class GPUCoordinator {
 		}
 
 		// 1. Apply any accumulated input (zoom, etc.)
-		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
-			this.#animatedScalesArray[i]._applyInput?.();
+		for (let i = 0; i < this.#animatedSourcesArray.length; i++) {
+			this.#animatedSourcesArray[i]._applyInput?.();
 		}
 
 		// 2. Update render state with extrapolation for ALL scales first
-		const len = this.#animatedScalesArray.length;
+		const len = this.#animatedSourcesArray.length;
 		for (let i = 0; i < len; i++) {
-			this.#animatedScalesArray[i].updateRenderState(extrapolationDt);
+			this.#animatedSourcesArray[i].updateRenderState(extrapolationDt);
 		}
 
 		// 3. Gather charts to render BEFORE removing rested scales
@@ -1175,8 +1161,8 @@ export class GPUCoordinator {
 		const currentRenderId = this.#frameId;
 
 		// Add charts affected by animated scales
-		for (let i = 0; i < this.#animatedScalesArray.length; i++) {
-			const scale = this.#animatedScalesArray[i];
+		for (let i = 0; i < this.#animatedSourcesArray.length; i++) {
+			const scale = this.#animatedSourcesArray[i];
 			const affected = scale._affectedChartsArray;
 
 			if (affected) {
@@ -1213,16 +1199,16 @@ export class GPUCoordinator {
 		this.#dirtyChartsArray.length = 0;
 
 		// 4. Remove scales that are at rest (backwards for safe removal)
-		for (let i = this.#animatedScalesArray.length - 1; i >= 0; i--) {
-			const scale = this.#animatedScalesArray[i];
+		for (let i = this.#animatedSourcesArray.length - 1; i >= 0; i--) {
+			const scale = this.#animatedSourcesArray[i];
 
 			if (scale.isAtRest()) {
 				scale._markAtRest();
 				// Swap and pop removal (O(1))
-				this.#animatedScales.delete(scale);
-				const last = this.#animatedScalesArray.pop()!;
-				if (i < this.#animatedScalesArray.length) {
-					this.#animatedScalesArray[i] = last;
+				this.#animatedSources.delete(scale);
+				const last = this.#animatedSourcesArray.pop()!;
+				if (i < this.#animatedSourcesArray.length) {
+					this.#animatedSourcesArray[i] = last;
 				}
 			}
 		}
@@ -1241,7 +1227,7 @@ export class GPUCoordinator {
 		}
 
 		// 6. Per-frame callbacks (tooltip scheduling, etc.)
-		this.#isAnimating = this.#animatedScales.size > 0;
+		this.#isAnimating = this.#animatedSources.size > 0;
 		const cbLen = this.#frameCallbacks.length;
 		for (let i = 0; i < cbLen; i++) {
 			this.#frameCallbacks[i](this.#isAnimating);
@@ -1253,7 +1239,7 @@ export class GPUCoordinator {
 	 */
 	#idleCheck = (): boolean => {
 		return (
-			this.#animatedScales.size === 0 &&
+			this.#animatedSources.size === 0 &&
 			this.#dirtyChartsArray.length === 0 &&
 			this.#hoveredCharts.size === 0 &&
 			this.#pendingReleases.length === 0
@@ -1863,20 +1849,20 @@ export class GPUCoordinator {
 	 * a mark driving its own data transition — has no such slot and wants this.
 	 */
 	addAnimatedSource(source: AnimatedSource): void {
-		if (!this.#animatedScales.has(source)) {
-			this.#animatedScales.add(source);
-			this.#animatedScalesArray.push(source);
+		if (!this.#animatedSources.has(source)) {
+			this.#animatedSources.add(source);
+			this.#animatedSourcesArray.push(source);
 		}
 		this.#animationLoop!.requestStart();
 	}
 
 	removeAnimatedSource(source: AnimatedSource): void {
-		if (this.#animatedScales.delete(source)) {
-			const idx = this.#animatedScalesArray.indexOf(source);
+		if (this.#animatedSources.delete(source)) {
+			const idx = this.#animatedSourcesArray.indexOf(source);
 			if (idx !== -1) {
-				const lastItem = this.#animatedScalesArray.pop()!;
-				if (idx < this.#animatedScalesArray.length) {
-					this.#animatedScalesArray[idx] = lastItem;
+				const lastItem = this.#animatedSourcesArray.pop()!;
+				if (idx < this.#animatedSourcesArray.length) {
+					this.#animatedSourcesArray[idx] = lastItem;
 				}
 			}
 		}
@@ -2640,13 +2626,11 @@ export class GPUCoordinator {
 		this.#colorRampBuffer?.destroy();
 		this.#colorPaletteBuffer?.destroy();
 		this.#sizeConfigBuffer?.destroy();
-		// Both halves of the slot table, which were not released before there
-		// were two of them either — 64 KB each, so the omission is now worth 128.
+		// The slot tables and their resolve inputs and output.
 		this.#identitySlotBuffer?.destroy();
 		this.#identitySlotBufferTo?.destroy();
 		this.#identitySlotBases?.destroy();
 		this.#identitySlotResolved?.destroy();
-		this.#slotResolveParams?.destroy();
 
 		this.#colorConfigBuffer = null;
 		this.#colorRampBuffer = null;
@@ -2656,7 +2640,6 @@ export class GPUCoordinator {
 		this.#identitySlotBufferTo = null;
 		this.#identitySlotBases = null;
 		this.#identitySlotResolved = null;
-		this.#slotResolveParams = null;
 		this.#slotResolvePipeline = null;
 		this.#slotResolveBindGroup = null;
 		this.#slotResolveCount = 0;
@@ -2692,8 +2675,8 @@ export class GPUCoordinator {
 		}
 		this.#rendererRegistry.clear();
 
-		this.#animatedScales.clear();
-		this.#animatedScalesArray.length = 0;
+		this.#animatedSources.clear();
+		this.#animatedSourcesArray.length = 0;
 		this.#hoveredCharts.clear();
 
 		// Cleanup MSAA textures

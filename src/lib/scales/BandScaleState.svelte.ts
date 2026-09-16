@@ -1191,9 +1191,19 @@ export class BandScaleState {
 		const values = this.#identity?.values ?? [];
 		// Already ids: every path into #extents/#sortOrder/#explicitDomain
 		// encodes at the boundary. This pass de-duplicates and range-checks.
-		const orderedIds = this.hasIdentity ? this.#toIds(allCategories, true) : [];
+		//
+		// An id with no value is dropped from the ids THEMSELVES, before either
+		// projection. Filtering only the values would shorten #domain without
+		// shortening #displayOrder, and the permutation would disagree with the
+		// band index space d3 and the shader's categoryCount use — by one, with
+		// nothing failing. Unreachable today (the dim has no NULL values and
+		// synthetic rows carry a label), which is why it is written so the two
+		// cannot diverge rather than checked.
+		const orderedIds = this.hasIdentity
+			? this.#toIds(allCategories, true).filter((id) => values[id] != null)
+			: [];
 		const resolved: DimValue[] = this.hasIdentity
-			? orderedIds.map((id) => values[id]).filter((v): v is DimValue => v != null)
+			? orderedIds.map((id) => values[id] as DimValue)
 			: (allCategories as DimValue[]);
 
 		const oldDomain = this.#domain;
