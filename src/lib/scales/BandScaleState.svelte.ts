@@ -3,7 +3,8 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
-import { TransitionClock } from '$lib/animation';
+import type { TransitionClock } from '$lib/animation';
+import { SlotTransition } from './SlotTransition';
 
 /**
  * Driver constants, taken from ParallelAxisReorder, which is the same
@@ -131,9 +132,6 @@ export class BandScaleState {
 	 */
 	#extentsEncoded: boolean = false;
 	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
-	#gpuCoordinator: {
-		addAnimatedSource(source: TransitionClock): void;
-	} | null = null;
 
 	// =========================================================================
 	// FREEZE/DEBOUNCE FUNCTIONALITY
@@ -186,7 +184,7 @@ export class BandScaleState {
 		this.#align = config.align ?? 0.5;
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
-		this.#gpuCoordinator = config.gpuCoordinator ?? null;
+		this.#slots = new SlotTransition(config.gpuCoordinator ?? null);
 
 		console.log(`🏗️ BandScaleState "${name}" created:`, {
 			initialDomain: domain.length,
@@ -440,207 +438,111 @@ export class BandScaleState {
 		return out;
 	}
 
+	// -------------------------------------------------------------------------
+	// SLOTS — where each category is on screen, owned by SlotTransition
+	// -------------------------------------------------------------------------
+	//
+	// Pass-throughs, so the packer, the coordinator and the marks keep one object
+	// to read. Everything about entering, leaving, folding and the clock lives in
+	// SlotTransition; this class decides what is displayed and in what order.
+
+	#slots: SlotTransition;
+
 	/**
-	 * Display slot per identity id: `slotTable[id]` is the position this
-	 * category occupies on the axis, or -1 when it is not currently displayed.
-	 *
-	 * This is the indirection that lets identity and position be different
-	 * things. The query supplies a stable id that never changes when the
-	 * chart reorders; this table says where that id currently sits. A reorder
-	 * rewrites the table and leaves the SQL, the vertex buffers and the preagg
-	 * cubes alone.
+	 * Display slot per identity id: `slotTable[id]` is where this category is
+	 * NOW, or -1 when it is not displayed. Mid-transition that is a fraction of
+	 * the way between two orders.
 	 *
 	 * -1 covers two cases deliberately given one sentinel: an id filtered out by
 	 * a category-reducing transform, and an id belonging to another table on a
-	 * shared scale. Both must be discarded by the consumer, and -1 is already
-	 * the "no identity" sentinel, so there is one comparison rather than
-	 * two.
+	 * shared scale. Both must be discarded by the consumer.
 	 *
-	 * Recomputes with the domain. An in-place append to the identity values alone
-	 * does not invalidate it, but an append is always followed by the addMark
-	 * that puts the new category into the domain, which does.
-	 *
-	 * This is `slotCurrent`, not `slotTarget` — what is on screen now, which
-	 * during an animation is a fraction of the way between two orders.
-	 *
-	 * Computed ON DEMAND rather than maintained. The GPU never reads it: it
-	 * resolves mix(slotFrom, slotTo, t) in a compute pass, so a per-frame walk of
-	 * every id would produce a value nothing reads. It is still the honest answer
-	 * to "where is everything now", for the fold, for tests, and for the axis
-	 * labels that will need it.
+	 * Not a lookup table for CPU consumers: ask idAtSlot or categoryAt.
 	 */
 	get slotTable(): Float32Array {
-		const t = this.#driver.t;
-		if (this.#currentT !== t) {
-			this.#writeCurrent(t);
-			this.#currentT = t;
-		}
-		return this.#slotCurrent;
+		return this.#slots.table;
 	}
 
-	/**
-	 * How many ids the slot arrays hold — the packer's count header.
-	 *
-	 * Exists so the packer never reads `slotTable`, whose getter folds
-	 * `mix(from, to, t)` over the whole dim. The packer runs every frame and the
-	 * GPU does that mix itself now, so reading it there was an O(dim) walk per
-	 * frame producing a number nothing consumed.
-	 */
+	/** How many ids the slot arrays hold — the packer's count header. */
 	get slotCount(): number {
-		return this.#slotTarget.length;
+		return this.#slots.count;
 	}
 
-	/**
-	 * The two halves the GPU interpolates between, and where along it we are.
-	 *
-	 * These are what the packer uploads: `from` and `to` change on a retarget,
-	 * `t` every frame — which is the whole point, since t is four bytes and the
-	 * table is as many as there are ids.
-	 */
+	/** The two ends of the transition in flight, which the packer uploads. */
 	get slotFrom(): Float32Array {
-		return this.#slotFrom;
+		return this.#slots.from;
 	}
 
 	get slotTo(): Float32Array {
-		return this.#slotTo;
+		return this.#slots.to;
+	}
+
+	/** Where each id is headed once settled; -1 for one not displayed. */
+	get slotTarget(): Float32Array {
+		return this.#slots.target;
 	}
 
 	/** Extrapolated for the frame being drawn, not the last physics step. */
 	get t(): number {
-		return this.#driver.t;
+		return this.#slots.t;
 	}
 
 	/**
-	 * The clock this scale's slot transition runs on.
+	 * The clock this axis's slots travel on.
 	 *
 	 * Exposed because marks drawn against this axis ADOPT it rather than owning
 	 * one: a bar's height has to travel on the same number its slot does, or the
-	 * two desynchronise on a retarget and the bar reaches its rank before or
-	 * after it finishes growing.
+	 * two desynchronise on a retarget.
 	 */
 	get clock(): TransitionClock {
-		return this.#driver;
+		return this.#slots.clock;
+	}
+
+	/** Bumped whenever the slot tables move; the packer uploads on this alone. */
+	get slotVersion(): number {
+		return this.#slots.version;
+	}
+
+	/** True while a transition is in flight. */
+	get isAnimating(): boolean {
+		return this.#slots.isAnimating;
 	}
 
 	/**
-	 * Where each id is HEADED: the display slot it will occupy once the chart
-	 * has settled, or -1 for an id that is not displayed. Rewritten whole on
-	 * every reorder, by #rebuildSlotTable.
-	 *
-	 * Not the same as slotTo, which is where the ANIMATION is going: the two
-	 * disagree about a departing id, which is -1 here and its exit gateway there.
-	 *
-	 * Exposed for the spring and for tests, NOT as a lookup table: the same
-	 * caution slotTable and displayOrder carry. Ask idAtSlot or categoryAt.
+	 * Charts to redraw while this axis animates. The coordinator assigns it by
+	 * name on every scale it tracks; it lives on the clock, because the clock is
+	 * what the loop holds.
 	 */
-	get slotTarget(): Float32Array {
-		return this.#slotTarget;
+	get _affectedChartsArray(): string[] {
+		return this.#slots.clock._affectedChartsArray;
 	}
 
-	#slotTarget: Float32Array = new Float32Array(0);
-	#slotCurrent: Float32Array = new Float32Array(0);
-	/**
-	 * The t slotCurrent was computed at, or NaN when from/to have moved since.
-	 *
-	 * Keyed on t rather than invalidated per frame, so nothing has to tell the
-	 * scale a frame happened — the loop drives the clock, not the scale.
-	 */
-	#currentT: number = Number.NaN;
-	/**
-	 * ONE spring for the whole scale, driving a normalised `t` from 0 to 1
-	 * across every id at once — not one spring per category.
-	 *
-	 * A spring is per DATA UPDATE, not per category: everything that moves does
-	 * so because the same result landed. Sharing `t` is the feature rather than
-	 * a compromise — ids have different displacements, so one clock moves them
-	 * at proportionally different speeds and makes them ARRIVE TOGETHER, where
-	 * independent springs finish raggedly. Per-id timing, where it is wanted, is
-	 * a static phase buffer over this same `t`, not N springs.
-	 *
-	 * It also makes isAtRest() one comparison instead of a scan, and gives a
-	 * departing id a single moment at which to be retired.
-	 *
-	 * The costs, stated rather than hidden: `t` is normalised, so settle
-	 * DURATION is independent of distance — a one-band correction takes as long
-	 * as a full reorder — and a mid-flight retarget is continuous in `t` but not
-	 * in world space. Both are the other face of arriving together.
-	 */
-	#driver: TransitionClock = new TransitionClock({ onRest: () => this.#onClockRest() });
-	/**
-	 * Where each id's current transition STARTED, id-indexed.
-	 *
-	 * Rewritten by the fold on every retarget: a result landing mid-flight must
-	 * continue from where things actually are, so current position becomes the
-	 * new `from` before `t` resets to 0.
-	 */
-	#slotFrom: Float32Array = new Float32Array(0);
-	/**
-	 * Where each id's current transition is GOING — the animated destination,
-	 * which for a leaver is its gateway rather than the hidden sentinel.
-	 *
-	 * Distinct from #slotTarget, which is what the scale SAYS: -1 for anything
-	 * not displayed. The two disagree about a departing id on purpose, for the
-	 * length of its exit, and #exiting is what records that.
-	 */
-	#slotTo: Float32Array = new Float32Array(0);
-	/**
-	 * 1 for an id that is travelling OUT — no longer displayed, but still on
-	 * screen until the clock reaches the far end.
-	 *
-	 * A leaver cannot simply take -1 as its target: -1 is the not-displayed
-	 * sentinel and the shader discards it before the slot lookup, so the bar
-	 * would vanish on the frame the reorder landed. It has to hold a REAL slot
-	 * for the whole exit, which means slotCurrent and slotTarget disagree about
-	 * it on purpose, and this array is what says so.
-	 */
-	#exiting: Uint8Array = new Uint8Array(0);
-	/**
-	 * False until the first layout with anything in it.
-	 *
-	 * The opening frame of a chart is every category entering at once, and
-	 * animating that would slide every bar in from off-axis on load. Only
-	 * categories arriving AFTER a chart exists are entrances worth showing.
-	 */
-	#hasLaidOut: boolean = false;
-	/**
-	 * Which value space the slot arrays are currently indexed in — true for dim
-	 * ids, false for domain positions. Not the same question as `hasIdentity`,
-	 * which is about NOW; this is about what is already in the arrays, and the
-	 * gap between the two is the boundary #rebuildSlotTable has to notice.
-	 */
-	#slotsHaveIdentity: boolean = false;
-	/**
-	 * The dim id of this axis's synthetic "Other" bucket, or null when the mark
-	 * has none. Set by the lifecycle alongside the reservation.
-	 *
-	 * It is where entrances and exits come from and go to when it exists,
-	 * because with an Other bucket that is literally true: a category dropping
-	 * out of the top N does not leave the chart, its value moves INTO Other, and
-	 * one climbing in is value coming back OUT of it. Travelling past the end of
-	 * the axis would say the opposite — that it went somewhere else.
-	 */
-	#otherId: number | null = null;
+	set _affectedChartsArray(charts: string[]) {
+		this.#slots.clock._affectedChartsArray = charts;
+	}
 
 	/**
-	 * Tell this axis which id is its Other bucket, if any.
+	 * Tell this axis which id is its Other bucket, if any — where entering and
+	 * leaving categories travel from and to.
 	 *
-	 * An id that is never displayed is INERT here, and that is a guarantee rather
-	 * than a coincidence: the gateway is read from the slot TABLE, so an Other
-	 * that no row carries holds -1 and the gateway falls back to the far end. The
-	 * lifecycle reserves an Other id for every categorical axis of a mark rather
-	 * than re-deriving which one topN picked, so the axes topN did not pick get
-	 * one too — and this is why that costs nothing.
+	 * The lifecycle reserves an Other id for every categorical axis of a mark
+	 * rather than re-deriving which one topN picked. That costs nothing on the
+	 * axes topN did not pick: an Other no row carries is never displayed, and an
+	 * undisplayed Other is ignored.
 	 */
 	setOtherId(id: number | null): void {
-		this.#otherId = id;
+		this.#slots.otherId = id;
 	}
+
 	/**
-	 * Bumped whenever slotFrom or slotTo move — a retarget, a fold, a settle.
-	 * The packer compares this rather than the array contents, so a frame where
-	 * only t moved uploads four bytes and nothing else. Writing either array
-	 * without bumping this leaves the GPU on the old one.
+	 * Start a transition without changing what is displayed — for a mark whose
+	 * values changed while the ranking did not. Every other mark on this axis
+	 * folds to where it already is, which is why one mark may start a clock they
+	 * all share.
 	 */
-	slotVersion: number = 0;
+	startTransition(): void {
+		this.#slots.startTransition();
+	}
 
 	// -------------------------------------------------------------------------
 	// IDENTITY <-> DISPLAY, FOR CPU CONSUMERS
@@ -691,328 +593,25 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Rebuilt imperatively rather than as a $derived, for two reasons. Its
-	 * consumer is the per-frame GPU upload path, which is a plain rAF callback
-	 * and not a reactive context, so lazy invalidation cannot be relied on
-	 * there. And its inputs change on reorder — rarely — while a $derived read
-	 * per frame invites recomputing every frame for no reason.
+	 * Hand the current display order to the slots.
 	 *
-	 * Called from the two places its inputs move: a domain change and adopting a
-	 * new identity value array.
+	 * Imperative rather than a $derived: the consumer is the per-frame GPU upload
+	 * path, which is not a reactive context, and the inputs change on reorder.
+	 * Called from the two places they move: a domain change and adopting a new
+	 * identity value array.
 	 *
-	 * Writes slotTarget, then retargets from/to toward it. The ORDER matters to
-	 * anything the retarget reads: by then the target already describes the new
-	 * layout, so the fold must not consult it.
+	 * Without identity the channel already carries a display position, so the
+	 * layout is the identity permutation over the domain — not an empty table,
+	 * which would give the scale offset 0 and another scale's slots. That is only
+	 * a TRANSIENT state now — the window before setIdentity arrives, and the
+	 * all-NULL column that renders nothing — because an expression-backed axis
+	 * gets a dim like any other since `c55e719`.
 	 */
 	#rebuildSlotTable(): void {
-		// The slot arrays are indexed by DIM ID with identity and by DOMAIN
-		// POSITION without it, so crossing that boundary changes what every entry
-		// means. Carrying slotCurrent across it hands the id space a set of
-		// positions that were never id-indexed, and #resizeSlots cannot see the
-		// difference: the two spaces are usually the same LENGTH, so its
-		// unchanged-length fast path keeps the whole stale array.
-		//
-		// That made the first real layout of a chart look like a reorder — every
-		// id "already on screen" at a meaningless slot, everything retargeted, the
-		// scale registered with the loop — and the bars slid in from nowhere.
-		// #hasLaidOut did not protect it, because the passthrough layout had
-		// already set it. Both halves are fixed by treating the boundary as the
-		// start of a new scale: drop the state, and let the identity layout be a
-		// first layout, which snaps.
-		//
-		// A dim that merely GROWS is not this case (the Other reservation
-		// appends one). The id space is unchanged there, existing ids keep their
-		// paths, and #resizeSlots' copy is exactly right.
-		if (this.#slotsHaveIdentity !== this.hasIdentity) {
-			this.#slotsHaveIdentity = this.hasIdentity;
-			this.#discardSlotState();
-		}
-
-		// Without identity the channel already carries a display position, so the
-		// shader's lookup has to be a no-op. This is now only a TRANSIENT state —
-		// the window before setIdentity arrives, and the all-NULL column that
-		// renders nothing anyway — because an expression-backed axis gets a dim
-		// like any other since `c55e719`. The pair of value spaces this branch
-		// serves has outlived the reason for it, and folding it away is open.
-		//
-		// The identity permutation, not an empty table: empty would give the
-		// scale offset 0 and another scale's slots.
-		if (!this.hasIdentity) {
-			const n = this.#domain.length;
-			const target = this.#resizeSlots(n);
-			for (let i = 0; i < n; i++) target[i] = i;
-			this.#retargetSlots(n);
-			return;
-		}
-
-		// The plain inverse of displayOrder. No Map and no strings: displayOrder
-		// is already ids, so this is an array walk. Everything not listed keeps
-		// -1 — filtered out by a transform, or belonging to another table on a
-		// shared scale.
-		const target = this.#resizeSlots(this.#identity!.values.length);
-		target.fill(-1);
-		const order = this.#displayOrder;
-		for (let slot = 0; slot < order.length; slot++) {
-			const id = order[slot];
-			if (id >= 0 && id < target.length) target[id] = slot;
-		}
-
-		this.#retargetSlots(order.length);
-	}
-
-	/**
-	 * Size every id-indexed slot array to `length`, returning the target for
-	 * filling.
-	 *
-	 * Reuses everything when the length is unchanged, which is every reorder —
-	 * the dim only grows when a second table appends. Callers always overwrite
-	 * every target entry they care about, so stale contents do not leak: the
-	 * identity branch fills with -1 first, and the passthrough branch writes all
-	 * n.
-	 *
-	 * On a grow, existing ids KEEP where they currently are and keep the path
-	 * they are on, so a dim append mid-transition does not teleport the
-	 * categories already on screen. New ids start at -1, which is "not
-	 * displayed" and makes them enter by the same route as any other newcomer.
-	 */
-	/**
-	 * Forget everything positional, so the next layout is a first layout.
-	 *
-	 * Lengths go to zero rather than being refilled: that is what stops
-	 * #resizeSlots' unchanged-length fast path from preserving the arrays it is
-	 * being asked to throw away. #hasLaidOut goes with them, because "has this
-	 * scale laid out before" is only meaningful about the space it laid out in.
-	 */
-	#discardSlotState(): void {
-		this.#slotTarget = new Float32Array(0);
-		this.#slotCurrent = new Float32Array(0);
-		this.#slotFrom = new Float32Array(0);
-		this.#slotTo = new Float32Array(0);
-		this.#exiting = new Uint8Array(0);
-		this.#driver.settle();
-		this.#hasLaidOut = false;
-	}
-
-	#resizeSlots(length: number): Float32Array {
-		if (this.#slotTarget.length === length) return this.#slotTarget;
-
-		const current = new Float32Array(length);
-		// -1 is the not-displayed sentinel, and it is the right INITIAL value:
-		// before the first layout nothing is on screen, so every id is entering.
-		// Zero would instead mean "everything is at slot 0", and the first paint
-		// would animate outward from there.
-		current.fill(-1);
-		const keep = Math.min(this.#slotCurrent.length, length);
-		current.set(this.#slotCurrent.subarray(0, keep), 0);
-
-		// from and to carry across a grow for the same reason current does: an id
-		// already in flight keeps the path it is on.
-		const from = new Float32Array(length);
-		from.fill(-1);
-		from.set(this.#slotFrom.subarray(0, keep), 0);
-
-		const to = new Float32Array(length);
-		to.fill(-1);
-		to.set(this.#slotTo.subarray(0, keep), 0);
-
-		const exiting = new Uint8Array(length);
-		exiting.set(this.#exiting.subarray(0, keep), 0);
-		this.#exiting = exiting;
-
-		this.#slotTarget = new Float32Array(length);
-		this.#slotCurrent = current;
-		this.#slotFrom = from;
-		this.#slotTo = to;
-		return this.#slotTarget;
-	}
-
-	/**
-	 * Fold, then point every id at its new slot, and wake the loop if anything
-	 * has somewhere to go.
-	 *
-	 * Nothing ever interpolates toward -1, which means "not displayed": a bar
-	 * travelling from slot 3 to -1 would slide through every neighbour before
-	 * the shader discarded it. So an entering id starts at a gateway and a
-	 * leaving one travels to it — Other's slot when the axis has one on screen,
-	 * one past the end otherwise — and a hidden id holds -1 in BOTH halves. That
-	 * invariant is what lets mix(from, to, t) need no sentinel branch, in JS or
-	 * on the GPU.
-	 */
-	#retargetSlots(count: number): void {
-		// Materialise where everything actually is before overwriting it — the
-		// fold's input. Reading the getter rather than the field because
-		// slotCurrent is only computed on demand now, and a retarget arriving
-		// between frames must see this frame's positions, not the last ones the
-		// table happened to be written with.
-		const current = this.slotTable;
-		const target = this.#slotTarget;
-		const from = this.#slotFrom;
-		const to = this.#slotTo;
-		const exiting = this.#exiting;
-		// Where an entrance comes from and an exit goes to.
-		//
-		// Other's slot when this axis has an Other bucket that is on screen: a
-		// category leaving the top N has its value absorbed there, so that IS
-		// where it went, and one entering is value coming back out. Anything else
-		// would animate a claim that is not true of the data.
-		//
-		// Otherwise one past the last displayed slot. Off the end of the axis so
-		// the scissor rect clips it, and non-negative so it survives the shader's
-		// `slot < 0.0` discard on the way through — that pair is what makes
-		// travel expressible at all without a second per-id channel.
-		const far = count;
-		const otherId = this.#otherId;
-		const otherSlot =
-			otherId != null && otherId >= 0 && otherId < target.length ? target[otherId] : -1;
-		const settled = !this.#hasLaidOut;
-		let moving = false;
-
-		for (let id = 0; id < target.length; id++) {
-			const trueTo = target[id];
-			const onScreen = current[id] >= 0;
-
-			// Other itself has nowhere to emerge from or vanish into but the end.
-			const gateway = otherSlot >= 0 && id !== otherId ? otherSlot : far;
-
-			if (trueTo >= 0) {
-				exiting[id] = 0;
-				// THE FOLD. An id already on screen continues from where it
-				// actually is, not from where its last transition began — a result
-				// landing at t = 0.4 must not restart the journey. For an id that is
-				// mid-exit this is also what reverses it in place rather than
-				// teleporting it back to its old slot.
-				//
-				// slotCurrent is exactly mix(from, to, t) as of the last frame, so
-				// reading it IS the fold; there is nothing to recompute.
-				//
-				// Entering instead starts at the gateway — on a first layout there
-				// is nothing to enter from, so it starts where it lands and does not
-				// move at all.
-				from[id] = onScreen ? current[id] : settled ? trueTo : gateway;
-				to[id] = trueTo;
-			} else if (onScreen && !settled) {
-				// Leaving. Keep a REAL slot and walk out; the hidden sentinel is
-				// applied by #settleSlots once it arrives, not now. slotTarget
-				// already says -1, so the two disagree about this id on purpose —
-				// #exiting is what records that.
-				exiting[id] = 1;
-				from[id] = current[id];
-				to[id] = gateway;
-			} else {
-				// Hidden and staying hidden, or hidden before the first layout.
-				exiting[id] = 0;
-				from[id] = -1;
-				to[id] = -1;
-			}
-
-			if (from[id] !== to[id]) moving = true;
-		}
-
-		if (count > 0) this.#hasLaidOut = true;
-
-		// An animation nobody can drive has to be an instant transition, not a
-		// lost one. t only advances while the loop holds the clock, so without a
-		// coordinator it would sit at 0 and the table would keep the old order
-		// forever.
-		// Reorders do happen with no coordinator attached: every unit test, and
-		// any scale built before one is wired up.
-		if (moving && this.#gpuCoordinator) {
-			this.#restartFolded();
+		if (this.hasIdentity) {
+			this.#slots.layout('ids', this.#displayOrder, this.#identity!.values.length);
 		} else {
-			this.#settleSlots();
-		}
-
-		this.slotVersion++;
-	}
-
-	/**
-	 * Write slotCurrent = mix(from, to, t) — the same expression, from the same
-	 * inputs, that the slot resolve kernel evaluates on the GPU.
-	 *
-	 * Deliberately NOT a function of #slotTarget. The fold reads this, and
-	 * #rebuildSlotTable has already overwritten the target with the NEW layout by
-	 * then: consulting it here marked a category that had just left as never on
-	 * screen, so it vanished instead of travelling out.
-	 *
-	 * No sentinel branch is needed. Every path that writes from/to keeps a hidden
-	 * id at -1 in BOTH, so the mix is -1 for every t, and never interpolates
-	 * between a real slot and "not displayed".
-	 */
-	#writeCurrent(t: number): void {
-		const current = this.#slotCurrent;
-		const from = this.#slotFrom;
-		const to = this.#slotTo;
-		for (let id = 0; id < current.length; id++) {
-			current[id] = from[id] + (to[id] - from[id]) * t;
-		}
-	}
-
-	/** Land every id exactly on its target, with no interpolation. */
-	#settleSlots(): void {
-		const target = this.#slotTarget;
-		// Snap t to exactly 1. A spring approaches asymptotically and isAtRest
-		// fires at an epsilon, so leaving t just short of 1 would leave every
-		// element fractionally short — and a staggered t_i, which divides by
-		// (1 - phase), fractionally shorter still.
-		this.#driver.settle();
-		this.#currentT = 1;
-		for (let i = 0; i < target.length; i++) {
-			// The TRUE target, which for a leaver is the hidden sentinel and not
-			// the gateway it was walking toward. This is where an exit completes.
-			this.#slotCurrent[i] = target[i];
-			this.#slotFrom[i] = target[i];
-			this.#slotTo[i] = target[i];
-			this.#exiting[i] = 0;
-		}
-	}
-
-	/**
-	 * Start a transition without changing what is displayed.
-	 *
-	 * For a mark whose VALUES changed while the ranking did not — the ordinary
-	 * crossfilter step, and the normal case during a drag when re-ranking is
-	 * held until release. Nothing here reorders, so nothing would otherwise
-	 * restart the clock, and the mark's values would jump.
-	 *
-	 * Waking the loop is the half that cannot be skipped: a clock nobody steps
-	 * sits at 0 forever, which does not look like a missing animation — it looks
-	 * like everything frozen at the start of one.
-	 *
-	 * Every other mark on this axis folds to where it already is, so its start
-	 * and destination are equal and it does not move. That is why one mark may
-	 * start a clock they all share.
-	 *
-	 * The slots are a consumer of that clock too, and fold the same way. The
-	 * destinations are unchanged, but `t` is about to go back to 0, so `from`
-	 * has to become where every id is NOW — or a restart that lands mid-reorder
-	 * sends every bar back to where that reorder began.
-	 */
-	startTransition(): void {
-		this.#slotFrom.set(this.slotTable);
-		this.#restartFolded();
-		// slotFrom moved, and the packer uploads on this and nothing else.
-		this.slotVersion++;
-	}
-
-	/**
-	 * Restart the clock once `from` already holds where everything is.
-	 *
-	 * The restart CARRIES VELOCITY, so a transition interrupted mid-flight
-	 * continues at the speed it was travelling. slotCurrent is marked stale
-	 * rather than written: at t = 0 it equals the folded `from`, and the getter
-	 * computes exactly that the next time anything asks.
-	 */
-	#restartFolded(): void {
-		this.#driver.restart();
-		this.#currentT = Number.NaN;
-		this.#ensureAnimating();
-	}
-
-	/** Join the animation loop, once, until the eviction sweep drops us. */
-	#ensureAnimating(): void {
-		if (!this.#isAnimating && this.#gpuCoordinator) {
-			this.#isAnimating = true;
-			this.#gpuCoordinator.addAnimatedSource(this.#driver);
+			this.#slots.layout('positions', null, this.#domain.length);
 		}
 	}
 
@@ -1391,57 +990,6 @@ export class BandScaleState {
 	}
 
 	// =========================================================================
-	// ANIMATION
-	// =========================================================================
-	//
-	// The loop drives #driver — step, render state, rest — and redraws the
-	// charts this scale is used in while it runs. This scale joins it on a
-	// retarget or startTransition, and finishes its own state in #onClockRest
-	// when the loop settles the clock.
-	//
-	// Nothing per frame reaches the scale. The GPU resolves mix(slotFrom,
-	// slotTo, t) itself, so a frame moves four bytes of t; slotVersion means
-	// "the tables moved" and is not bumped per frame; and `_version` is not
-	// either, because nothing an axis reads has changed — #domain holds display
-	// ORDER and only slots are moving. The visible consequence is labels jumping
-	// to their final order while the bars slide, which is a known gap.
-
-	#isAnimating: boolean = false;
-
-	/** True while a transition is in flight. */
-	get isAnimating(): boolean {
-		return this.#isAnimating;
-	}
-
-	/**
-	 * Charts to redraw while this scale animates. The coordinator assigns it by
-	 * name on every scale it tracks; it lives on the clock, because the clock is
-	 * what the loop holds.
-	 */
-	get _affectedChartsArray(): string[] {
-		return this.#driver._affectedChartsArray;
-	}
-
-	set _affectedChartsArray(charts: string[]) {
-		this.#driver._affectedChartsArray = charts;
-	}
-
-	/**
-	 * The loop has settled the clock: land every id exactly on its target, and
-	 * retire the departing ones.
-	 *
-	 * Exactly, rather than wherever the last extrapolated frame left things. The
-	 * rest precision is sub-pixel so the difference is invisible, but a scale at
-	 * rest holding 2.0003 is a scale whose next retarget springs from a number
-	 * that was never a slot.
-	 */
-	#onClockRest(): void {
-		this.#isAnimating = false;
-		this.#settleSlots();
-		this.slotVersion++;
-	}
-
-	// =========================================================================
 	// POINTER / INVERSION
 	// =========================================================================
 
@@ -1551,20 +1099,9 @@ export class BandScaleState {
 			sortOrder: this.#sortOrder ? [...this.#sortOrder] : null,
 			explicitDomain: this.#explicitDomain ? [...this.#explicitDomain] : null,
 			displayOrder: Array.from(this.#displayOrder),
-			slotCurrent: Array.from(this.#slotCurrent),
-			slotTarget: Array.from(this.#slotTarget),
-
-			// The transition itself. slotCurrent is mix(slotFrom, slotTo, t), so
-			// these three are what produced it — and slotTo differs from slotTarget
-			// exactly for the ids that are on their way out.
-			slotFrom: Array.from(this.#slotFrom),
-			slotTo: Array.from(this.#slotTo),
-			exiting: Array.from(this.#exiting),
-			// The RENDER t, not the simulated one. The comment above says these
-			// three are what produced slotCurrent, and slotCurrent is written from
-			// the extrapolated value — so reporting the last physics step here
-			// described a mix that was never computed.
-			t: this.#driver.t,
+			// The transition. slotCurrent is mix(slotFrom, slotTo, t), and slotTo
+			// differs from slotTarget exactly for the ids on their way out.
+			...this.#slots.debugState(),
 
 			// GPU state
 			gpuState: this.gpuState
