@@ -307,49 +307,56 @@ function densify(
  * - **Two dimmed categorical axes.** A heatmap would need the cross product of
  *   both dims, and joining one leaves the other's values NULL. Not built.
  */
-/** A `dense()` transform, which reports whether it applied itself. */
+/** A `dense()` transform, which can say which channel it would join on. */
 export interface DenseTransform extends SqlTransform {
-	applied: boolean;
+	/**
+	 * The channel this joins the dim on for a query with these aliases, or null
+	 * when it refuses itself.
+	 *
+	 * Pure, and the only place the conditions live: `apply()` calls it, and so
+	 * does a mark asking whether its rows are one per category. The decision
+	 * rests on the mark config and the select, never on which query happened to
+	 * be assembled last — the same transform is applied to the main query, to
+	 * aggregate and sidecar queries, and to viewport counts.
+	 */
+	bandFor(aliases: string[], config?: MarkConfig): string | null;
 }
 
 export function dense(options: { enabled?: boolean } = {}): DenseTransform {
 	return {
 		stage: 'sql',
 		type: 'dense',
-		// Whether the join actually happened, recorded by the only code that
-		// knows. The conditions below are several, and a caller re-deriving them
-		// to predict the answer is two derivations that must agree — which is how
-		// the synthetic bucket's row went missing once already.
-		applied: false,
 		spec: { transform: 'dense', ...(options.enabled === false ? { enabled: false } : {}) },
-		apply(query: SelectQuery, config?: MarkConfig) {
-			this.applied = false;
-			if (options.enabled === false) return query;
+		bandFor(aliases: string[], config?: MarkConfig): string | null {
+			if (options.enabled === false) return null;
 
 			const byChannel = config?.dimTableByChannel as Record<string, string> | undefined;
-			if (!byChannel) return query;
+			if (!byChannel) return null;
 
 			// "One row per category" cannot be recovered from the query by the time
 			// this runs: topN has already wrapped it, so the GROUP BY is several
 			// levels down and this query's own `_groupby` is empty. The mark
 			// layer knows, because it built the select; it says so here.
-			if (config?.rowsAreGrouped !== true) return query;
+			if (config?.rowsAreGrouped !== true) return null;
 
-			const aliases = getSelectAliases(query);
 			const candidates = Object.keys(byChannel).filter((ch) => aliases.includes(ch));
-			if (candidates.length !== 1) return query;
+			if (candidates.length !== 1) return null;
 
-			const band = candidates[0];
-			const dim = byChannel[band];
-			if (typeof dim !== 'string' || dim.length === 0) return query;
+			const dim = byChannel[candidates[0]];
+			return typeof dim === 'string' && dim.length > 0 ? candidates[0] : null;
+		},
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const band = this.bandFor(aliases, config);
+			if (!band) return query;
 
-			this.applied = true;
+			const byChannel = config!.dimTableByChannel as Record<string, string>;
 			// Channels carrying a category id rather than a quantity, and which dim
 			// each one is identified by — so a channel sharing the band's dim can
 			// be filled from the dim instead of with a sentinel.
 			const identityDims =
 				(config?.identityDims as Record<string, string> | undefined) ?? byChannel;
-			return densify(query, aliases, band, dim, identityDims);
+			return densify(query, aliases, band, byChannel[band], identityDims);
 		},
 		describe() {
 			return 'Dense categories';

@@ -10,9 +10,11 @@ import {
 	normalize,
 	dodge,
 	withImplicitStack,
+	dense,
 	TOPN_RANK_COLUMN
 } from './index';
 import { TransformCompiler } from './TransformCompiler';
+import type { MarkConfig } from '$lib/types';
 import { bin, AutoBinNode } from '../sql/bin';
 import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
 import { ObjectDataAccessor, ColumnDataAccessor } from '$lib/data/DataAccessor';
@@ -550,5 +552,43 @@ describe('Transforms', () => {
 			expect(upper.toLowerCase()).toContain('floor');
 			expect(base).not.toBe(upper);
 		});
+	});
+});
+
+describe('dense().bandFor', () => {
+	// The one place dense()'s conditions live. apply() joins on what this
+	// returns, and a mark decides whether — and along which axis — it may morph
+	// from the same answer, so the two cannot disagree.
+	const grouped = {
+		markType: 'barY',
+		table: 't',
+		rowsAreGrouped: true,
+		dimTableByChannel: { x: 'dim_species' }
+	} as unknown as MarkConfig;
+
+	it('names the one dimmed channel the select carries', () => {
+		expect(dense().bandFor(['x', 'y'], grouped)).toBe('x');
+	});
+
+	it('refuses when opted out', () => {
+		expect(dense({ enabled: false }).bandFor(['x', 'y'], grouped)).toBeNull();
+	});
+
+	it('refuses raw rows, which are not one per category however the join goes', () => {
+		expect(dense().bandFor(['x', 'y'], { ...grouped, rowsAreGrouped: false })).toBeNull();
+	});
+
+	it('refuses two dimmed axes, which would need the cross product', () => {
+		const both = { ...grouped, dimTableByChannel: { x: 'dim_a', y: 'dim_b' } };
+		expect(dense().bandFor(['x', 'y'], both as MarkConfig)).toBeNull();
+	});
+
+	it('ignores a dim for a channel the select does not carry', () => {
+		const extra = { ...grouped, dimTableByChannel: { x: 'dim_a', y: 'dim_b' } };
+		expect(dense().bandFor(['y', 'x2'], extra as MarkConfig)).toBe('y');
+	});
+
+	it('refuses before identity setup has handed over any dims', () => {
+		expect(dense().bandFor(['x', 'y'], { ...grouped, dimTableByChannel: undefined })).toBeNull();
 	});
 });

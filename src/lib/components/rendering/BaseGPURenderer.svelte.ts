@@ -361,38 +361,35 @@ export class BaseGPURenderer {
 	 * interpolating, which is exactly what a mark that cannot morph does anyway.
 	 * Wrong-but-still is better than wrong-and-moving, and it costs one pass over
 	 * a per-category array.
+	 *
+	 * `bandAxis` is the axis those rows are aligned on. Its scale owns the clock
+	 * this mark's channels adopt, because it is the same scale whose slots they
+	 * have to arrive with.
 	 */
-	setAlignmentKey(key: number): void {
+	setAlignment(bandAxis: 'x' | 'y', key: number): void {
 		if (this.#alignmentKey !== null && this.#alignmentKey !== key) {
 			this.#alignmentBroke = true;
 		}
 		this.#alignmentKey = key;
+		this.#bandAxis = bandAxis;
 	}
 
 	#alignmentKey: number | null = null;
 	#alignmentBroke = false;
+	#bandAxis: 'x' | 'y' | null = null;
 
 	/** Last transition counter seen from the clock, to notice a retarget. */
 	#lastClockVersion: number | null = null;
 
-	/**
-	 * A categorical scale on this chart that owns a clock, if there is one.
-	 *
-	 * x before y is arbitrary and only matters for a mark with TWO animating
-	 * categorical axes, which nothing builds yet. When something does, the two
-	 * will have to share a clock rather than this picking one.
-	 */
+	/** The band axis's scale, when it owns a clock this mark should adopt. */
 	#clockScale(): { clock: TransitionClock; startTransition(): void } | null {
-		const ctx = this.#chartContext as unknown as {
-			xScaleState?: { clock?: TransitionClock; startTransition?(): void } | null;
-			yScaleState?: { clock?: TransitionClock; startTransition?(): void } | null;
-		};
-		for (const scale of [ctx.xScaleState, ctx.yScaleState]) {
-			if (scale?.clock && scale.startTransition) {
-				return scale as { clock: TransitionClock; startTransition(): void };
-			}
-		}
-		return null;
+		if (!this.#bandAxis) return null;
+		const scale = (this.#chartContext as unknown as Record<string, unknown>)[
+			`${this.#bandAxis}ScaleState`
+		] as { clock?: TransitionClock; startTransition?(): void } | null | undefined;
+		return scale?.clock && scale.startTransition
+			? (scale as { clock: TransitionClock; startTransition(): void })
+			: null;
 	}
 
 	/**

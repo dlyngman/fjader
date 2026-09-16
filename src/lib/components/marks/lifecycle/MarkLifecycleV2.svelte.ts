@@ -36,7 +36,7 @@ import {
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories } from '$lib/transforms';
+import { withDenseCategories, type DenseTransform } from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -1365,22 +1365,35 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Whether this mark's rows are one per category, in category order.
+	 * The axis whose rows are one per category, in category order — or null.
 	 *
-	 * The precondition for morphing a channel: interpolating `from[i]` to `to[i]`
-	 * means something only while row `i` is the same category in both. A query
+	 * The precondition for morphing: interpolating `from[i]` to `to[i]` means
+	 * something only while row `i` is the same category in both. A query
 	 * returning one row per surviving group does not give that — filter a
 	 * category to nothing and every row after it shifts up — and interpolating
 	 * across that produces values belonging to no category at all.
 	 *
-	 * Read from the transform that did the work rather than re-derived from the
-	 * conditions, which are several and would then be checked in two places.
+	 * It is also which axis is the BAND, which is everything a renderer needs:
+	 * the band's channels carry ids that resolve through the slot table and are
+	 * never mixed, the other axis's channels morph, and the band scale owns the
+	 * clock both run on.
+	 *
+	 * Asked of `dense()` itself, over the same select and config its `apply()`
+	 * sees, so the conditions are written once. Derived rather than recorded at
+	 * apply time: apply runs for every query assembled from this mark, not only
+	 * the one whose rows reach the GPU.
 	 */
-	get rowsAreIdAligned(): boolean {
-		return this.#transformCompiler.sqlTransforms.some(
-			(t) => t.type === 'dense' && (t as { applied?: boolean }).applied === true
-		);
-	}
+	alignedBand: 'x' | 'y' | null = $derived.by(() => {
+		const parts = this.#resolvedQueryParts;
+		if (!parts) return null;
+		// Identity setup fills in the dim map dense() reads; see the field.
+		void this.#identitySetupVersion;
+		const d = this.#transformCompiler.sqlTransforms.find((t) => t.type === 'dense') as
+			| DenseTransform
+			| undefined;
+		const band = d?.bandFor(Object.keys(parts.selectDef), this.#transformConfig) ?? null;
+		return band === 'x' || band === 'y' ? band : null;
+	});
 
 	/**
 	 * Re-fetch band domain ordering when sort config changes reactively.

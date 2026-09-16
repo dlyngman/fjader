@@ -55,15 +55,15 @@
 		dy?: number;
 		markId?: string;
 		/**
-		 * Which axis carries the MEASURE, when this mark's rows are one per
-		 * category and may therefore morph. null to morph nothing.
+		 * The band axis, when this mark's rows are one per category in category
+		 * order and may therefore morph. null to morph nothing.
 		 *
-		 * Never the band axis: its channels carry a category id that the shader
-		 * resolves through the slot table, and interpolating an identity produces
-		 * a fraction that resolves to some OTHER category. Position already
-		 * animates, through the slot table, which is the mechanism for it.
+		 * The OTHER axis's channels morph. The band's never do: they carry a
+		 * category id that the shader resolves through the slot table, and
+		 * interpolating an identity produces a fraction that resolves to some
+		 * other category. Position already animates, through the slot table.
 		 */
-		morphAxis?: 'x' | 'y' | null;
+		bandAxis?: 'x' | 'y' | null;
 	}
 
 	let {
@@ -83,8 +83,11 @@
 		dx = 0,
 		dy = 0,
 		markId = '',
-		morphAxis = null
+		bandAxis = null
 	}: Props = $props();
+
+	const morphX = $derived(bandAxis === 'y');
+	const morphY = $derived(bandAxis === 'x');
 
 	const chartContext = getContext<ChartContext>('chart');
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
@@ -244,47 +247,39 @@
 	// when they move. A cheap hash, not a comparison, because this runs per
 	// update and the array is per category.
 	$effect(() => {
-		if (!renderer?.resourcesCreated || !morphAxis) return;
-		const bandData = (morphAxis === 'x' ? y0Data : x0Data) as Float32Array | undefined;
+		if (!renderer?.resourcesCreated || !bandAxis) return;
+		const bandData = (bandAxis === 'y' ? y0Data : x0Data) as Float32Array | undefined;
 		if (!bandData) return;
 		let hash = bandData.length;
 		for (let i = 0; i < bandData.length; i++) {
 			hash = (hash * 31 + bandData[i]) | 0;
 		}
-		renderer.setAlignmentKey(hash);
+		renderer.setAlignment(bandAxis, hash);
 	});
 
-	// The MEASURE axis's two edges morph; the band axis's never do.
+	// The measure axis's two edges morph; the band axis's never do.
 	//
-	// Which axis that is depends on the mark. A vertical bar's measure is y and
-	// its category is x; a horizontal bar's is the other way round, and there
-	// both y0 and y1 are literally the same array — the category id. Blending two
-	// ids gives a fraction that the slot table resolves to a DIFFERENT category,
-	// so the bar draws in someone else's row. Position is already animated, by
-	// interpolating the slot rather than the id, which is the mechanism that
-	// exists for it.
-	//
-	// Two conditions, both required: an axis to morph, and rows that are one per
-	// category in category order. Interpolating from[i] to to[i] means something
-	// only while row i is the same category in both buffers.
+	// A horizontal bar puts literally the same array — the category id — in y0
+	// and y1. Blending two ids gives a fraction that the slot table resolves to a
+	// DIFFERENT category, so the bar would draw in someone else's row.
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
-		if (morphAxis === 'x') renderer.writeAnimatedAttribute(BINDINGS.X0, x0Data);
+		if (morphX) renderer.writeAnimatedAttribute(BINDINGS.X0, x0Data);
 		else renderer.writeAttribute(BINDINGS.X0, x0Data);
 	});
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
-		if (morphAxis === 'x') renderer.writeAnimatedAttribute(BINDINGS.X1, x1Data);
+		if (morphX) renderer.writeAnimatedAttribute(BINDINGS.X1, x1Data);
 		else renderer.writeAttribute(BINDINGS.X1, x1Data);
 	});
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
-		if (morphAxis === 'y') renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
+		if (morphY) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
 		else renderer.writeAttribute(BINDINGS.Y0, y0Data);
 	});
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
-		if (morphAxis === 'y') renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
+		if (morphY) renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
 		else renderer.writeAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {
