@@ -39,6 +39,13 @@ export interface QueryParts {
 	hasAggregates: boolean;
 	hasWindowAggregates: boolean;
 	hasSQLTransforms: boolean;
+	/**
+	 * Channels that are GROUP BY keys, or null when the query does not
+	 * aggregate. With keys, a result has one row per combination of their values
+	 * — which is what a transform needs to know to pad a result to every
+	 * combination, and cannot recover from a query topN has already wrapped.
+	 */
+	groupKeys: string[] | null;
 	orderChannels: string[] | null;
 	aliasMap: Map<string, string>;
 	/** Channels whose raw config value was a column-name passthrough (string
@@ -237,6 +244,7 @@ export function buildQueryParts(
 	let hasWindowAggregates = false;
 	const aliasMap = new Map<string, string>();
 
+	const keyChannels: string[] = [];
 	for (const channel in select) {
 		const expr = select[channel];
 		if (expr == null) continue;
@@ -268,6 +276,7 @@ export function buildQueryParts(
 		if (isAggregateExpression(exprNode)) {
 			hasAggregates = true;
 		} else if (!isWindowExpression(exprNode)) {
+			keyChannels.push(channel);
 			// Dedup: multiple channels may reference the same column
 			if (!groupByKeys.has(sqlAlias)) {
 				groupByKeys.add(sqlAlias);
@@ -330,6 +339,7 @@ export function buildQueryParts(
 		selectDef,
 		nonAggregateGroupBy,
 		hasAggregates,
+		groupKeys: hasAggregates ? keyChannels : null,
 		hasWindowAggregates,
 		hasSQLTransforms,
 		orderChannels,
@@ -385,7 +395,7 @@ export function assembleQuery(opts: AssembleOptions): Query {
 
 	let result: Query = q;
 	if (hasSQLTransforms) {
-		result = transformCompiler.applyToQuery(q);
+		result = transformCompiler.applyToQuery(q, { groupKeys: parts.groupKeys });
 	}
 
 	if (window) {

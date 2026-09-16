@@ -41,12 +41,18 @@ export class TransformCompiler {
 		}
 	}
 
-	applyToQuery(query: SelectQuery): SelectQuery {
+	/**
+	 * Apply the SQL transforms. `facts` are what is true of THIS query rather
+	 * than of the mark — its GROUP BY keys, say — merged over the mark config for
+	 * this call only, so the shared config object is never written per query.
+	 */
+	applyToQuery(query: SelectQuery, facts?: Partial<MarkConfig>): SelectQuery {
 		let result = query;
+		const config = facts ? ({ ...this.markConfig, ...facts } as MarkConfig) : this.markConfig;
 
 		for (const transform of this.sqlTransforms) {
 			try {
-				result = transform.apply(result, this.markConfig);
+				result = transform.apply(result, config);
 			} catch (error) {
 				throw new Error(
 					`Failed to apply ${transform.type} transform: ${(error as Error).message}`,

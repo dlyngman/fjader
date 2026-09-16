@@ -994,10 +994,12 @@ export class QueryEngine {
 		const windowChannels = reg.preaggWindowChannels;
 		const castSelect: Record<string, unknown> = {};
 		const preaggGroupBy: ExprNode[] = [];
+		const preaggGroupKeys: string[] = [];
 		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
 			if (!isAggregateExpression(expr)) {
 				castSelect[ch] = expr;
 				preaggGroupBy.push(column(ch));
+				preaggGroupKeys.push(ch);
 			} else if (windowChannels && ch in windowChannels) {
 				castSelect[ch] = expr;
 			} else {
@@ -1009,6 +1011,7 @@ export class QueryEngine {
 			selectDef: castSelect,
 			nonAggregateGroupBy: preaggGroupBy,
 			hasAggregates: true,
+			groupKeys: preaggGroupKeys,
 			hasWindowAggregates: false,
 			hasSQLTransforms: parts.hasSQLTransforms,
 			orderChannels: parts.orderChannels,

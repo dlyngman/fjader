@@ -14,6 +14,7 @@ import { Query, column, sum, eq, literal, sql as sqlTag, type ExprNode } from '@
 import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN, withDenseCategories } from './index';
 import { buildQueryParts, assembleQuery } from '$lib/components/marks/lifecycle/query-builder';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
+import { extractIdsRankedFromData } from '$lib/components/marks/lifecycle/domain-computation';
 import type { MarkConfig, SqlTransform } from '$lib/types';
 import type { SelectQuery } from '@uwdata/mosaic-sql';
 
@@ -329,7 +330,7 @@ describe('topN dense join', () => {
 		table: 'sales_v',
 		x: 'x',
 		y: 'y2',
-		rowsAreGrouped: true
+		groupKeys: ['x']
 	} as MarkConfig;
 
 	/**
@@ -459,7 +460,7 @@ describe('dense row order', () => {
 			table: 'sales_o',
 			x: 'x',
 			y: 'y2',
-			rowsAreGrouped: true,
+
 			dimTableByChannel: { x: DIM }
 		} as MarkConfig);
 		return assembleQuery({ table: 'sales_o', parts, filter: [], transformCompiler: compiler });
@@ -531,7 +532,7 @@ describe('dense without topN', () => {
 		table: 'sales_p',
 		x: 'x',
 		y: 'y2',
-		rowsAreGrouped: true,
+		groupKeys: ['x'],
 		dimTableByChannel: { x: DIM }
 	} as MarkConfig;
 
@@ -574,7 +575,7 @@ describe('dense without topN', () => {
 		const raw = Query.from('sales_p').select({ x: column('category_idx'), y2: column('revenue') });
 		const out = (withDenseCategories([])[0] as SqlTransform).apply(raw, {
 			...markConfig,
-			rowsAreGrouped: false
+			groupKeys: null
 		} as MarkConfig);
 		expect(out.toString()).toBe(raw.toString());
 	});
@@ -628,7 +629,7 @@ describe('dense fills identity channels differently from measures', () => {
 			table: 'sales_f',
 			x: 'x',
 			y: 'y2',
-			rowsAreGrouped: true,
+			groupKeys: ['x', 'fill'],
 			dimTableByChannel: { x: DIM },
 			identityDims: { x: DIM, fill: DIM }
 		} as MarkConfig);
@@ -686,7 +687,7 @@ describe('dense fills identity channels differently from measures', () => {
 			table: 'sales_f',
 			x: 'x',
 			y: 'y2',
-			rowsAreGrouped: true,
+			groupKeys: ['x'],
 			dimTableByChannel: { x: DIM },
 			identityDims: { x: DIM, fill: '__some_other_dim' }
 		} as MarkConfig);
@@ -694,5 +695,127 @@ describe('dense fills identity channels differently from measures', () => {
 		const absent = rows.filter((r) => Number(r.y2) === 0);
 		expect(absent.length).toBeGreaterThan(0);
 		for (const r of absent) expect(Number(r.fill)).toBe(-1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// dense with a series channel: grouped topN, and pairs rather than categories
+// ---------------------------------------------------------------------------
+//
+// A bar mark coloured by a DIFFERENT field has one row per (category, series)
+// pair. Two things follow, and both were visible on /test/top-n chart 6:
+//
+// - the grouped topN published no rank, so the only mechanism that tells the
+//   axis "returned but not displayed" had nothing to mark padded rows with, and
+//   the axis listed every category in the dim — a reserved Other included;
+// - densifying categories does not restore missing PAIRS, so a filter that
+//   empties one shifted every row after it, and the renderer's alignment guard
+//   snapped instead of animating.
+
+describe('dense with a series channel', () => {
+	let db: DB;
+	const CAT = '__dplot_dim_series_category';
+	const REG = '__dplot_dim_series_region';
+	let otherId: number;
+
+	beforeAll(async () => {
+		db = openDB();
+		await db.run(SEED_SQL);
+		await db.run(
+			`CREATE TABLE "${CAT}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT category AS value FROM sales)`
+		);
+		// A synthetic Other, reserved by some other mark on the same field. No
+		// row in the data carries it.
+		const [{ n }] = await db.all(`SELECT COUNT(*)::INT AS n FROM "${CAT}"`);
+		otherId = Number(n);
+		await db.run(`INSERT INTO "${CAT}" VALUES ('Other', ${otherId})`);
+		await db.run(
+			`CREATE TABLE "${REG}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT region AS value FROM sales)`
+		);
+		await db.run(
+			`CREATE TABLE sales_s AS
+			 SELECT s.*, c.id AS category_idx, r.id AS region_idx
+			 FROM sales s JOIN "${CAT}" c ON s.category = c.value JOIN "${REG}" r ON s.region = r.value`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	const config = {
+		markType: 'barY',
+		table: 'sales_s',
+		x: 'x',
+		y: 'y2',
+		fill: 'fill',
+		dimTableByChannel: { x: CAT },
+		identityDims: { x: CAT, fill: REG },
+		dimSizes: { [CAT]: 11, [REG]: 3 },
+		groupKeys: ['x', 'fill']
+	} as unknown as MarkConfig;
+
+	/** The shape chart 6 emits — grouped topN, dense, stack — ordered as assembleQuery orders it. */
+	async function run(where: string | null) {
+		let q = Query.from('sales_s')
+			.select({
+				x: column('category_idx'),
+				y2: sum(column('revenue')),
+				fill: column('region_idx')
+			})
+			.groupby(column('category_idx'), column('region_idx')) as SelectQuery;
+		if (where) q = q.where(sqlTag([where] as unknown as TemplateStringsArray)) as SelectQuery;
+		for (const t of withDenseCategories([topN(5, { by: 'y2' }), stackY()])) {
+			q = (t as SqlTransform).apply(q, config);
+		}
+		return db.all(`SELECT * FROM (${q}) ORDER BY x, fill`);
+	}
+
+	async function expectedTop5(where: string | null) {
+		const rows = await db.all(
+			`SELECT category_idx AS id FROM sales_s ${where ? `WHERE ${where}` : ''}
+			 GROUP BY category_idx ORDER BY SUM(revenue) DESC, category_idx LIMIT 5`
+		);
+		return rows.map((r) => Number(r.id));
+	}
+
+	it('shows the axis the top n only, in rank order, not every category in the dim', async () => {
+		for (const where of [null, `region = 'North'`]) {
+			const rows = await run(where);
+			const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+			expect(ids).toEqual(await expectedTop5(where));
+		}
+	});
+
+	it('never displays a synthetic row no data carries', async () => {
+		const rows = await run(null);
+		expect(rows.some((r) => Number(r.x) === otherId)).toBe(true);
+		const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+		expect(ids).not.toContain(otherId);
+	});
+
+	it('returns the same (category, series) rows whether or not a filter empties pairs', async () => {
+		// The alignment the renderer checks: row i is the same pair on every
+		// update. Excluding a region empties every pair that region had.
+		const key = (rows: Record<string, unknown>[]) => rows.map((r) => `${r.x}:${r.fill}`);
+		const all = await run(null);
+		const withoutNorth = await run(`region <> 'North'`);
+		expect(key(withoutNorth)).toEqual(key(all));
+		// 11 categories (Other included) x 3 regions, plus a -1 series per
+		// category: a row whose series is NULL carries -1, and is padded like any
+		// other pair rather than dropped by the join.
+		expect(all.length).toBe(11 * (3 + 1));
+	});
+
+	it('pads an emptied pair at zero, under its own series id rather than a sentinel', async () => {
+		const [{ id: north }] = await db.all(`SELECT id FROM "${REG}" WHERE value = 'North'`);
+		const rows = await run(`region <> 'North'`);
+		const padded = rows.filter((r) => Number(r.fill) === Number(north));
+		expect(padded.length).toBe(11);
+		for (const r of padded) {
+			expect(Number(r.y2)).toBe(0);
+			expect(Number.isFinite(Number(r[TOPN_RANK_COLUMN]))).toBe(false);
+		}
 	});
 });

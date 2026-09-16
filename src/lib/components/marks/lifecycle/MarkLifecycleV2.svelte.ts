@@ -205,7 +205,7 @@ export class MarkLifecycleV2 {
 	 *
 	 * #transformConfig is a plain object, and the derived below reads two things
 	 * out of it that only exist after ensureColumns resolves — the dim per
-	 * channel, and whether the rows are grouped. Without this the FIRST query is
+	 * channel, and the dims' sizes. Without this the FIRST query is
 	 * built without them: no ORDER BY, so its rows come back in whatever order
 	 * the aggregation produced, and the next query — built with them — comes back
 	 * in id order. Two results in two different orders, which is precisely the
@@ -320,14 +320,6 @@ export class MarkLifecycleV2 {
 			passthroughChannels,
 			alignChannels
 		);
-
-		// Whether this mark's query yields one row per category.
-		//
-		// `dense()` needs it and cannot work it out for itself: by the time it
-		// runs, topN may have wrapped the query, so the GROUP BY is several levels
-		// down and the query it is handed reports none of its own. Here it is a
-		// fact about the select that was just built.
-		this.#transformConfig.rowsAreGrouped = parts.hasAggregates;
 
 		return parts;
 	});
@@ -1266,6 +1258,19 @@ export class MarkLifecycleV2 {
 			identityDims.__facet = this.#queryEngine.dimTableFor(facetKey.key);
 		}
 		this.#transformConfig.identityDims = identityDims;
+
+		// How many ids each of those dims holds, so `dense()` can refuse a padded
+		// result that would multiply past its limit. Read now; a later Other
+		// reservation adds one, which does not move a limit that coarse.
+		const dimSizes: Record<string, number> = {};
+		const sizeOf = (key: string) => {
+			dimSizes[this.#queryEngine.dimTableFor(key)] =
+				this.#queryEngine.identityFor(key).values.length;
+		};
+		for (const { key } of axes) sizeOf(key);
+		if (colorKey && this.#identityFields.has(colorKey.key)) sizeOf(colorKey.key);
+		if (facetKey && this.#identityFields.has(facetKey.key)) sizeOf(facetKey.key);
+		this.#transformConfig.dimSizes = dimSizes;
 		// Tell the query parts to rebuild. They were computed before this existed,
 		// and a query assembled from them has no alignment ordering on it.
 		this.#identitySetupVersion++;
@@ -1391,7 +1396,13 @@ export class MarkLifecycleV2 {
 		const d = this.#transformCompiler.sqlTransforms.find((t) => t.type === 'dense') as
 			| DenseTransform
 			| undefined;
-		const band = d?.bandFor(Object.keys(parts.selectDef), this.#transformConfig) ?? null;
+		// The same per-query fact assembleQuery hands the transforms, so this and
+		// the query cannot disagree about whether the join happens.
+		const band =
+			d?.bandFor(Object.keys(parts.selectDef), {
+				...this.#transformConfig,
+				groupKeys: parts.groupKeys
+			}) ?? null;
 		return band === 'x' || band === 'y' ? band : null;
 	});
 

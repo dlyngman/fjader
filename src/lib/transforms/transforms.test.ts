@@ -562,7 +562,7 @@ describe('dense().bandFor', () => {
 	const grouped = {
 		markType: 'barY',
 		table: 't',
-		rowsAreGrouped: true,
+		groupKeys: ['x'],
 		dimTableByChannel: { x: 'dim_species' }
 	} as unknown as MarkConfig;
 
@@ -575,7 +575,7 @@ describe('dense().bandFor', () => {
 	});
 
 	it('refuses raw rows, which are not one per category however the join goes', () => {
-		expect(dense().bandFor(['x', 'y'], { ...grouped, rowsAreGrouped: false })).toBeNull();
+		expect(dense().bandFor(['x', 'y'], { ...grouped, groupKeys: null })).toBeNull();
 	});
 
 	it('refuses two dimmed axes, which would need the cross product', () => {
@@ -585,7 +585,29 @@ describe('dense().bandFor', () => {
 
 	it('ignores a dim for a channel the select does not carry', () => {
 		const extra = { ...grouped, dimTableByChannel: { x: 'dim_a', y: 'dim_b' } };
-		expect(dense().bandFor(['y', 'x2'], extra as MarkConfig)).toBe('y');
+		expect(dense().bandFor(['y', 'x2'], { ...extra, groupKeys: ['y'] } as MarkConfig)).toBe('y');
+	});
+
+	it('refuses a group key it cannot enumerate, rather than padding it as a measure', () => {
+		// A series with no dim: its values cannot be listed, so its missing pairs
+		// cannot be restored, and filling it with 0 would misalign the rows.
+		const series = { ...grouped, groupKeys: ['x', 'fill'] };
+		expect(dense().bandFor(['x', 'y', 'fill'], series as MarkConfig)).toBeNull();
+		const withDim = { ...series, identityDims: { x: 'dim_species', fill: 'dim_island' } };
+		expect(dense().bandFor(['x', 'y', 'fill'], withDim as MarkConfig)).toBe('x');
+	});
+
+	it('refuses when padding every combination would pass the row limit', () => {
+		const config = (categories: number, series: number) =>
+			({
+				...grouped,
+				groupKeys: ['x', 'fill'],
+				identityDims: { x: 'dim_species', fill: 'dim_island' },
+				dimSizes: { dim_species: categories, dim_island: series }
+			}) as unknown as MarkConfig;
+		// Each series dim counts one more, for the -1 a NULL series carries.
+		expect(dense().bandFor(['x', 'y', 'fill'], config(500, 19))).toBe('x');
+		expect(dense().bandFor(['x', 'y', 'fill'], config(5000, 19))).toBeNull();
 	});
 
 	it('refuses before identity setup has handed over any dims', () => {
