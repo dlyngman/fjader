@@ -235,52 +235,38 @@
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
-	// Tell the renderer what this update's rows ARE, before it writes them.
+	// The measure axis's two edges morph, as ONE write per data update, so one
+	// update starts one transition. The band's ids go with them: they are how a
+	// row set that is not the one being animated gets noticed and snapped.
 	//
-	// Morphing interpolates row i of the old buffer toward row i of the new one,
-	// which means something only while row i is the same category in both. That
-	// is supposed to be guaranteed upstream — one row per category, in category
-	// order — and it has silently not been, twice. The failure looks like data
-	// rather than like a bug: a bar travelling to a neighbour's value and back.
-	//
-	// So the renderer is given the band ids and snaps rather than interpolates
-	// when they move. A cheap hash, not a comparison, because this runs per
-	// update and the array is per category.
+	// The band axis's own channels never morph. A horizontal bar puts literally
+	// the same array — the category id — in y0 and y1, and blending two ids gives
+	// a fraction that the slot table resolves to a DIFFERENT category.
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !bandAxis) return;
-		const bandData = (bandAxis === 'y' ? y0Data : x0Data) as Float32Array | undefined;
-		if (!bandData) return;
-		let hash = bandData.length;
-		for (let i = 0; i < bandData.length; i++) {
-			hash = (hash * 31 + bandData[i]) | 0;
+		if (bandAxis === 'x') {
+			renderer.writeMorphed('x', x0Data, [
+				[BINDINGS.Y0, y0Data],
+				[BINDINGS.Y1, y1Data]
+			]);
+		} else {
+			renderer.writeMorphed('y', y0Data, [
+				[BINDINGS.X0, x0Data],
+				[BINDINGS.X1, x1Data]
+			]);
 		}
-		renderer.setAlignment(bandAxis, hash);
-	});
-
-	// The measure axis's two edges morph; the band axis's never do.
-	//
-	// A horizontal bar puts literally the same array — the category id — in y0
-	// and y1. Blending two ids gives a fraction that the slot table resolves to a
-	// DIFFERENT category, so the bar would draw in someone else's row.
-	$effect(() => {
-		if (!renderer?.resourcesCreated) return;
-		if (morphX) renderer.writeAnimatedAttribute(BINDINGS.X0, x0Data);
-		else renderer.writeAttribute(BINDINGS.X0, x0Data);
 	});
 	$effect(() => {
-		if (!renderer?.resourcesCreated) return;
-		if (morphX) renderer.writeAnimatedAttribute(BINDINGS.X1, x1Data);
-		else renderer.writeAttribute(BINDINGS.X1, x1Data);
+		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X0, x0Data);
 	});
 	$effect(() => {
-		if (!renderer?.resourcesCreated) return;
-		if (morphY) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
-		else renderer.writeAttribute(BINDINGS.Y0, y0Data);
+		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X1, x1Data);
 	});
 	$effect(() => {
-		if (!renderer?.resourcesCreated) return;
-		if (morphY) renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
-		else renderer.writeAttribute(BINDINGS.Y1, y1Data);
+		if (renderer?.resourcesCreated && !morphY) renderer.writeAttribute(BINDINGS.Y0, y0Data);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && !morphY) renderer.writeAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)
