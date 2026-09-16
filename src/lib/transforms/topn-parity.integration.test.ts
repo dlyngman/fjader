@@ -578,3 +578,86 @@ describe('dense without topN', () => {
 		expect(out.toString()).toBe(raw.toString());
 	});
 });
+
+// ---------------------------------------------------------------------------
+// What an absent category gets in each channel
+// ---------------------------------------------------------------------------
+//
+// The distinction that produced wrong colours: a measure and a category id are
+// both numbers and want opposite fillers. Zero is the point for a measure — it
+// is what makes a bar shrink to nothing — and zero is a REAL CATEGORY for an id
+// channel, so it enters the colour scale's domain and shifts every palette rank
+// after it. Bars that had not changed were repainted.
+
+describe('dense fills identity channels differently from measures', () => {
+	let db: DB;
+	const DIM = '__dplot_dim_fill_test';
+
+	beforeAll(async () => {
+		db = openDB();
+		await db.run(SEED_SQL);
+		await db.run(
+			`CREATE TABLE "${DIM}" AS
+			 SELECT value, (ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id
+			 FROM (SELECT DISTINCT category AS value FROM sales)`
+		);
+		await db.run(
+			`CREATE TABLE sales_f AS
+			 SELECT s.*, COALESCE(d.id, -1) AS category_idx
+			 FROM sales s LEFT JOIN "${DIM}" d ON s.category = d.value`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	async function run() {
+		// A mark whose colour is the same categorical field as its band — the
+		// ordinary "colour the bars by their category" chart.
+		const q = Query.from('sales_f')
+			.select({
+				x: column('category_idx'),
+				y2: sum(column('revenue')),
+				fill: column('category_idx')
+			})
+			.groupby(column('category_idx'))
+			// Removes one category outright, which is the case that matters: a
+			// filter that merely reduces a category still leaves it a row.
+			.where(sqlTag`${column('category')} <> ${literal('Electronics')}`);
+		const out = (withDenseCategories([])[0] as SqlTransform).apply(q, {
+			markType: 'barY',
+			table: 'sales_f',
+			x: 'x',
+			y: 'y2',
+			rowsAreGrouped: true,
+			dimTableByChannel: { x: DIM },
+			identityChannels: ['x', 'fill']
+		} as MarkConfig);
+		return db.all(out.toString());
+	}
+
+	it('gives an absent category zero for the measure', async () => {
+		const rows = await run();
+		const absent = rows.filter((r) => Number(r.fill) < 0);
+		expect(absent.length).toBeGreaterThan(0);
+		for (const r of absent) expect(Number(r.y2)).toBe(0);
+	});
+
+	it('gives an absent category -1 for an id channel, never 0', async () => {
+		// 0 would be indistinguishable from the first real category.
+		const rows = await run();
+		const present = rows.filter((r) => Number(r.y2) !== 0);
+		const absent = rows.filter((r) => Number(r.y2) === 0);
+		for (const r of absent) expect(Number(r.fill)).toBe(-1);
+		// And a present category still carries its own id.
+		for (const r of present) expect(Number(r.fill)).toBe(Number(r.x));
+	});
+
+	it('does not add a spurious id to the set of colours in play', async () => {
+		// The actual defect: with 0 as the filler, id 0 appeared in the colour
+		// channel whether or not that category had any rows, so the palette order
+		// changed as the filter emptied categories.
+		const rows = await run();
+		const colourIds = new Set(rows.map((r) => Number(r.fill)).filter((v) => v >= 0));
+		const bandIds = new Set(rows.filter((r) => Number(r.y2) !== 0).map((r) => Number(r.x)));
+		expect(colourIds).toEqual(bandIds);
+	});
+});

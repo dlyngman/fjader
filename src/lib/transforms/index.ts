@@ -210,6 +210,9 @@ function dimTableFor(config: MarkConfig | undefined, band: string): string | nul
  *
  * Column rules, and each one is load-bearing:
  * - the band channel becomes `d.id`, so it is present for every category;
+ * - a channel carrying a category id — ordinal colour, facet — gets -1, the
+ *   absent sentinel, because 0 is a real category and would enter the colour
+ *   scale's domain and shift every palette rank after it;
  * - the rank passes through and stays NULL for a category past the cutoff,
  *   which is how the band axis knows that one is not displayed;
  * - every other channel is COALESCEd to 0, so a padded row has zero extent
@@ -230,13 +233,32 @@ function dimTableFor(config: MarkConfig | undefined, band: string): string | nul
  * query, which is a separate change at `assembleQuery`'s `orderChannels` seam.
  * Do not read this line as a guarantee.
  */
-function densify(inner: SelectQuery, aliases: string[], band: string, dim: string): SelectQuery {
+function densify(
+	inner: SelectQuery,
+	aliases: string[],
+	band: string,
+	dim: string,
+	identityChannels: Set<string>
+): SelectQuery {
 	const select: Record<string, ExprNode> = {};
 	for (const alias of aliases) {
-		select[alias] =
-			alias === band
-				? (sqlTag`d."id"` as ExprNode)
-				: (sqlTag`COALESCE(a.${column(alias)}, 0)` as ExprNode);
+		if (alias === band) {
+			select[alias] = sqlTag`d."id"` as ExprNode;
+		} else if (identityChannels.has(alias)) {
+			// -1, the established "no identity" sentinel, NOT 0.
+			//
+			// A channel carrying a category id — an ordinal colour, a facet — must
+			// not be given 0 for a row that has no data, because 0 is a real
+			// category. It lands in the colour scale's domain, shifts every
+			// palette rank after it, and repaints bars that did not change. The
+			// row itself is invisible either way: it has no measure, so nothing is
+			// drawn at it. -1 is already what every consumer treats as absent.
+			select[alias] = sqlTag`COALESCE(a.${column(alias)}, -1)` as ExprNode;
+		} else {
+			// A measure. 0 is the point: it is what makes a departing bar shrink to
+			// nothing rather than vanish.
+			select[alias] = sqlTag`COALESCE(a.${column(alias)}, 0)` as ExprNode;
+		}
 	}
 	// Only when a ranking transform actually published one. This runs for every
 	// categorical mark now, and most have no rank column at all — projecting it
@@ -337,7 +359,12 @@ export function dense(options: { enabled?: boolean } = {}): DenseTransform {
 			if (typeof dim !== 'string' || dim.length === 0) return query;
 
 			this.applied = true;
-			return densify(query, aliases, band, dim);
+			// Channels carrying a category id rather than a quantity. They are
+			// filled with the absent sentinel, not with zero.
+			const identityChannels = new Set(
+				(config?.identityChannels as string[] | undefined) ?? Object.keys(byChannel)
+			);
+			return densify(query, aliases, band, dim, identityChannels);
 		},
 		describe() {
 			return 'Dense categories';

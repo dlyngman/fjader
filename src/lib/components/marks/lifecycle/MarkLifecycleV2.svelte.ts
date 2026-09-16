@@ -1250,6 +1250,17 @@ export class MarkLifecycleV2 {
 			dimByChannel[axis] = this.#queryEngine.dimTableFor(key);
 		}
 		this.#transformConfig.dimTableByChannel = dimByChannel;
+
+		// Every channel whose values are category ids rather than quantities.
+		// Densifying fills these with the absent sentinel instead of zero, since
+		// zero is a real category and would reach the colour scale's domain.
+		// Wider than the map above, which holds positional axes only.
+		const identityChannels = new Set<string>(Object.keys(dimByChannel));
+		if (colorKey && this.#identityFields.has(colorKey.key)) {
+			identityChannels.add(this.#config.colorChannel || 'fill');
+		}
+		if (facetKey && this.#identityFields.has(facetKey.key)) identityChannels.add('__facet');
+		this.#transformConfig.identityChannels = [...identityChannels];
 		// Tell the query parts to rebuild. They were computed before this existed,
 		// and a query assembled from them has no alignment ordering on it.
 		this.#identitySetupVersion++;
