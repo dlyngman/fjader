@@ -227,19 +227,25 @@
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data);
 	});
-	// The extent channels morph rather than replace: a bar's two edges are what
-	// has to travel when a value changes, and they must travel together, so both
-	// go through the same clock.
+	// STATIC for now, and the reason is a precondition that is not met yet.
 	//
-	// The clock is the categorical scale's, so a bar's height travels on exactly
-	// the number its slot does and the two arrive together. A chart with no
-	// categorical axis has no clock, sits at 1, and gets an exact copy of its
-	// data — the same result a static channel gives, by the same path.
+	// Morphing a channel interpolates from[i] to to[i], which only means anything
+	// while row i is the SAME category in both buffers. A query that returns one
+	// row per surviving group does not give that: filter a category down to no
+	// rows and it drops out of the GROUP BY, every row after it shifts up, and
+	// the resolve interpolates between values belonging to different categories.
+	// It looks like bars jumping between wrong heights, which is what it was.
+	//
+	// Ordering by the dim id is necessary and not sufficient — the row set has to
+	// be DENSE as well, one row per category every time, which today only the
+	// topN path produces. Until a mark can say that its rows are id-aligned,
+	// these stay static; the machinery for animating them is built and tested and
+	// is waiting on that one fact.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y0, y0Data);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAnimatedAttribute(BINDINGS.Y1, y1Data);
+		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)
