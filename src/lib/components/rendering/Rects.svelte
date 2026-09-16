@@ -232,6 +232,28 @@
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
+	// Tell the renderer what this update's rows ARE, before it writes them.
+	//
+	// Morphing interpolates row i of the old buffer toward row i of the new one,
+	// which means something only while row i is the same category in both. That
+	// is supposed to be guaranteed upstream — one row per category, in category
+	// order — and it has silently not been, twice. The failure looks like data
+	// rather than like a bug: a bar travelling to a neighbour's value and back.
+	//
+	// So the renderer is given the band ids and snaps rather than interpolates
+	// when they move. A cheap hash, not a comparison, because this runs per
+	// update and the array is per category.
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !morphAxis) return;
+		const bandData = (morphAxis === 'x' ? y0Data : x0Data) as Float32Array | undefined;
+		if (!bandData) return;
+		let hash = bandData.length;
+		for (let i = 0; i < bandData.length; i++) {
+			hash = (hash * 31 + bandData[i]) | 0;
+		}
+		renderer.setAlignmentKey(hash);
+	});
+
 	// The MEASURE axis's two edges morph; the band axis's never do.
 	//
 	// Which axis that is depends on the mark. A vertical bar's measure is y and

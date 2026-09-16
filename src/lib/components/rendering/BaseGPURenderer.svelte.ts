@@ -331,7 +331,9 @@ export class BaseGPURenderer {
 		// from, so the opening frame of a chart would grow every bar out of
 		// whatever the buffers happened to hold. A chart appears; it does not
 		// animate in.
-		if (this.#hasWrittenAnimated) this.#startTransition();
+		// A row set that is not the one we were animating has nothing to continue
+		// from, so this update lands rather than travels.
+		if (this.#hasWrittenAnimated && !this.#alignmentBroke) this.#startTransition();
 		this.#hasWrittenAnimated = true;
 
 		if (!this.#animatedRegistered) {
@@ -358,6 +360,31 @@ export class BaseGPURenderer {
 		this.#ownedResources.buffers.delete(binding);
 		this.#scheduleBindGroupUpdate();
 	}
+
+	/**
+	 * What this mark's rows ARE, so misalignment can be noticed rather than
+	 * trusted not to happen.
+	 *
+	 * Morphing assumes row `i` is the same entity on every update. The mark
+	 * asserts that by choosing to animate at all, and it has been wrong more than
+	 * once — a query path that skipped the ordering, a first query assembled
+	 * before the ordering existed. The failure is silent and looks like data: a
+	 * bar animating to its neighbour's value and back.
+	 *
+	 * So the claim is checked. When the key changes, this update SNAPS instead of
+	 * interpolating, which is exactly what a mark that cannot morph does anyway.
+	 * Wrong-but-still is better than wrong-and-moving, and it costs one pass over
+	 * a per-category array.
+	 */
+	setAlignmentKey(key: number): void {
+		if (this.#alignmentKey !== null && this.#alignmentKey !== key) {
+			this.#alignmentBroke = true;
+		}
+		this.#alignmentKey = key;
+	}
+
+	#alignmentKey: number | null = null;
+	#alignmentBroke = false;
 
 	/** Where this mark's animated channels are along their transition, 0..1. */
 	setAnimationT(t: number): void {
@@ -476,17 +503,25 @@ export class BaseGPURenderer {
 		const pipeline = resolvePipelineFor(this.#device);
 
 		const { t, restarted } = this.#readClock();
-		this.#animationT = t;
+		this.#animationT = this.#alignmentBroke ? 1 : t;
 		if (restarted) {
 			for (const entry of this.#animated.values()) entry.foldPending = true;
 		}
+
+		const broke = this.#alignmentBroke;
+		this.#alignmentBroke = false;
 
 		for (const [binding, entry] of this.#animated) {
 			if (entry.count === 0) continue;
 			const resolved = this.#ownedResources.buffers.get(binding);
 			if (!resolved) continue;
 
-			if (entry.foldPending) {
+			if (broke) {
+				// Start from the destination, so mix() is the identity for every t
+				// and the values are simply correct.
+				encoder.copyBufferToBuffer(entry.to, 0, entry.from, 0, entry.size);
+				entry.foldPending = false;
+			} else if (entry.foldPending) {
 				// Where everything actually is becomes where it starts from. A
 				// transition interrupted mid-flight continues rather than
 				// restarting, and one that was at rest copies `to` onto itself,

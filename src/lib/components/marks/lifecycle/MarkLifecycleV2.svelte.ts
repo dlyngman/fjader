@@ -200,6 +200,18 @@ export class MarkLifecycleV2 {
 	}
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
 	#rollingAvgVersion = $state(0);
+	/**
+	 * Bumped when identity setup finishes, so the query parts recompute.
+	 *
+	 * #transformConfig is a plain object, and the derived below reads two things
+	 * out of it that only exist after ensureColumns resolves — the dim per
+	 * channel, and whether the rows are grouped. Without this the FIRST query is
+	 * built without them: no ORDER BY, so its rows come back in whatever order
+	 * the aggregation produced, and the next query — built with them — comes back
+	 * in id order. Two results in two different orders, which is precisely the
+	 * misalignment the ordering exists to prevent.
+	 */
+	#identitySetupVersion = $state(0);
 
 	// --- Query State (reactive — feed #resolvedQueryParts $derived) ---
 	#fieldStats = $state<Record<string, { column: string; min: number; max: number }> | null>(null);
@@ -247,6 +259,8 @@ export class MarkLifecycleV2 {
 
 		// Resolve RollingAvgNodes — track invalidation counter
 		void this.#rollingAvgVersion;
+		// Identity setup fills in the dim map this derived reads; see the field.
+		void this.#identitySetupVersion;
 		for (const [ch, value] of Object.entries(resolvedSelect)) {
 			if (isRollingAvgExpression(value)) {
 				resolvedSelect[ch] = value.resolve();
@@ -1236,6 +1250,9 @@ export class MarkLifecycleV2 {
 			dimByChannel[axis] = this.#queryEngine.dimTableFor(key);
 		}
 		this.#transformConfig.dimTableByChannel = dimByChannel;
+		// Tell the query parts to rebuild. They were computed before this existed,
+		// and a query assembled from them has no alignment ordering on it.
+		this.#identitySetupVersion++;
 
 		// Hand each band scale the engine's live id -> value array, so it can build
 		// its slot table. This must happen for EVERY band axis, not only the ones
