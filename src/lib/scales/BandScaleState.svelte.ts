@@ -23,7 +23,7 @@ interface BandScaleConfig {
 	sourceField?: string | null;
 	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
 	/**
-	 * How a reorder reaches the animation loop (step 5 C3). Structurally typed
+	 * How a transition reaches the animation loop. Structurally typed
 	 * rather than importing GPUCoordinator, which would be a cycle: the
 	 * coordinator's ScaleInstance is what this class implements.
 	 */
@@ -114,7 +114,7 @@ export class BandScaleState {
 	#align: number = 0.5;
 	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
 	/**
-	 * The engine's id <-> value bijection for this scale's field (§9.4, §17.2).
+	 * The engine's id <-> value bijection for this scale's field.
 	 * A live reference, never a copy: the dim appends when a second table
 	 * registers the same field, and a snapshot taken at this scale's setup would
 	 * be indexed past its end by ids from that table.
@@ -242,7 +242,7 @@ export class BandScaleState {
 	 * passes it to its cells, and stops being a chart itself — dropping usage to
 	 * zero while every cell is still using the object. This wipe ate an explicit
 	 * `fxDomain` that way, and the symptom was an ordering that simply did not
-	 * apply (§25.3). Being dead and being unreferenced are different things, and
+	 * apply. Being dead and being unreferenced are different things, and
 	 * only the registry's refcount claimed they were the same.
 	 *
 	 * What teardown genuinely needs to release — GPU config, ramp and palette
@@ -267,7 +267,7 @@ export class BandScaleState {
 	/**
 	 * Registering state on a destroyed scale means a component is holding a
 	 * reference the registry has already written off — the shape that cost three
-	 * stacked bugs in §25.3, every one of them silent. Warned once per scale:
+	 * stacked bugs, every one of them silent. Warned once per scale:
 	 * this can be reached from a render path.
 	 */
 	#warnIfDestroyed(what: string): void {
@@ -387,11 +387,11 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Ids in display order — the permutation the whole design is about (§9.5).
+	 * Ids in display order — the permutation the whole design is about.
 	 * Primary state: #domain is derived from it, and the slot table is its
 	 * inverse. Empty for a scale without identity, which stays on strings.
 	 *
-	 * Exposed for the animated reorder (§13 step 5) and for tests, NOT as a
+	 * Exposed for the animated reorder and for tests, NOT as a
 	 * lookup table. To answer "which id is displayed at this slot" call
 	 * idAtSlot, and to answer "which category is this channel value" call
 	 * categoryAt: both handle the no-identity case, which indexing this array
@@ -447,7 +447,7 @@ export class BandScaleState {
 	 * category occupies on the axis, or -1 when it is not currently displayed.
 	 *
 	 * This is the indirection that lets identity and position be different
-	 * things (§9.5). The query supplies a stable id that never changes when the
+	 * things. The query supplies a stable id that never changes when the
 	 * chart reorders; this table says where that id currently sits. A reorder
 	 * rewrites the table and leaves the SQL, the vertex buffers and the preagg
 	 * cubes alone.
@@ -455,7 +455,7 @@ export class BandScaleState {
 	 * -1 covers two cases deliberately given one sentinel: an id filtered out by
 	 * a category-reducing transform, and an id belonging to another table on a
 	 * shared scale. Both must be discarded by the consumer, and -1 is already
-	 * the "no identity" sentinel (§3.2), so there is one comparison rather than
+	 * the "no identity" sentinel, so there is one comparison rather than
 	 * two.
 	 *
 	 * Recomputes with the domain. An in-place append to the identity values alone
@@ -465,12 +465,20 @@ export class BandScaleState {
 	 * This is `slotCurrent`, not `slotTarget` — what is on screen now, which
 	 * during an animation is a fraction of the way between two orders.
 	 *
-	 * Computed ON DEMAND rather than maintained. The GPU no longer reads it:
-	 * it reads slotFrom, slotTo and t and does the mix in the vertex stage, so
-	 * a per-frame walk of every id existed only to produce a value nothing read
-	 * every frame. It is still the honest answer to "where is everything now",
-	 * for the fold, for tests, and for the axis labels that will need it.
+	 * Computed ON DEMAND rather than maintained. The GPU never reads it: it
+	 * resolves mix(slotFrom, slotTo, t) in a compute pass, so a per-frame walk of
+	 * every id would produce a value nothing reads. It is still the honest answer
+	 * to "where is everything now", for the fold, for tests, and for the axis
+	 * labels that will need it.
 	 */
+	get slotTable(): Float32Array {
+		if (this.#currentDirty) {
+			this.#writeCurrent(this.#driver.t);
+			this.#currentDirty = false;
+		}
+		return this.#slotCurrent;
+	}
+
 	/**
 	 * How many ids the slot arrays hold — the packer's count header.
 	 *
@@ -481,14 +489,6 @@ export class BandScaleState {
 	 */
 	get slotCount(): number {
 		return this.#slotTarget.length;
-	}
-
-	get slotTable(): Float32Array {
-		if (this.#currentDirty) {
-			this.#writeCurrent(this.#driver.t);
-			this.#currentDirty = false;
-		}
-		return this.#slotCurrent;
 	}
 
 	/**
@@ -528,12 +528,8 @@ export class BandScaleState {
 	 * has settled, or -1 for an id that is not displayed. Rewritten whole on
 	 * every reorder, by #rebuildSlotTable.
 	 *
-	 * Separate from slotCurrent because §9.5's animated reorder interpolates
-	 * between them: a spring drives slotCurrent toward this, and the GPU reads
-	 * slotCurrent. Introduced before the spring so the split can be verified
-	 * while the two are still trivially equal — if anything moves on screen at
-	 * C1, the plumbing is wrong, and that is far cheaper to find here than
-	 * through a spring.
+	 * Not the same as slotTo, which is where the ANIMATION is going: the two
+	 * disagree about a departing id, which is -1 here and its exit gateway there.
 	 *
 	 * Exposed for the spring and for tests, NOT as a lookup table: the same
 	 * caution slotTable and displayOrder carry. Ask idAtSlot or categoryAt.
@@ -585,7 +581,7 @@ export class BandScaleState {
 	#slotTo: Float32Array = new Float32Array(0);
 	/**
 	 * 1 for an id that is travelling OUT — no longer displayed, but still on
-	 * screen until its spring reaches the far end (§12 Q1, C4).
+	 * screen until the clock reaches the far end.
 	 *
 	 * A leaver cannot simply take -1 as its target: -1 is the not-displayed
 	 * sentinel and the shader discards it before the slot lookup, so the bar
@@ -611,7 +607,7 @@ export class BandScaleState {
 	#slotsHaveIdentity: boolean = false;
 	/**
 	 * The dim id of this axis's synthetic "Other" bucket, or null when the mark
-	 * has none. Set by the lifecycle alongside the reservation (§16.9).
+	 * has none. Set by the lifecycle alongside the reservation.
 	 *
 	 * It is where entrances and exits come from and go to when it exists,
 	 * because with an Other bucket that is literally true: a category dropping
@@ -635,13 +631,10 @@ export class BandScaleState {
 		this.#otherId = id;
 	}
 	/**
-	 * Bumped on every slot-table rebuild. The GPU upload path compares this
-	 * rather than the array contents, so an unchanged frame costs no writeBuffer
-	 * — the slot table changes on reorder, not per frame.
-	 *
-	 * Once a spring writes slotCurrent per frame this has to be bumped per frame
-	 * too, or the packer will upload the first frame of a transition and none of
-	 * the rest. That belongs with the spring (C3), not here.
+	 * Bumped whenever slotFrom or slotTo move — a retarget, a fold, a settle.
+	 * The packer compares this rather than the array contents, so a frame where
+	 * only t moved uploads four bytes and nothing else. Writing either array
+	 * without bumping this leaves the GPU on the old one.
 	 */
 	slotVersion: number = 0;
 
@@ -680,8 +673,8 @@ export class BandScaleState {
 	 *
 	 * Reads the live domain rather than any snapshot: a caller that captured the
 	 * domain once holds display order as of that moment, and reordering it is
-	 * the entire point of the identity split (§9.4's warning, which has already
-	 * been rediscovered twice).
+	 * the entire point of the identity split (a warning that has already been
+	 * rediscovered twice).
 	 *
 	 * effectiveDomain, not #domain, so a frozen scale decodes to what is on
 	 * screen. The two coincide today — updateDomainFromExtents returns early
@@ -698,15 +691,14 @@ export class BandScaleState {
 	 * consumer is the per-frame GPU upload path, which is a plain rAF callback
 	 * and not a reactive context, so lazy invalidation cannot be relied on
 	 * there. And its inputs change on reorder — rarely — while a $derived read
-	 * per frame invites recomputing a Map every frame for no reason.
+	 * per frame invites recomputing every frame for no reason.
 	 *
 	 * Called from the two places its inputs move: a domain change and adopting a
 	 * new identity value array.
 	 *
-	 * Writes slotTarget, then settles slotCurrent onto it. At C1 that settle is
-	 * a copy — there is no spring — so the two never differ and nothing on
-	 * screen changes. C3 replaces the copy with a retarget, and that is the only
-	 * line in here that has to change.
+	 * Writes slotTarget, then retargets from/to toward it. The ORDER matters to
+	 * anything the retarget reads: by then the target already describes the new
+	 * layout, so the fold must not consult it.
 	 */
 	#rebuildSlotTable(): void {
 		// The slot arrays are indexed by DIM ID with identity and by DOMAIN
@@ -724,7 +716,7 @@ export class BandScaleState {
 		// start of a new scale: drop the state, and let the identity layout be a
 		// first layout, which snaps.
 		//
-		// A dim that merely GROWS is not this case (§16.9's Other reservation
+		// A dim that merely GROWS is not this case (the Other reservation
 		// appends one). The id space is unchanged there, existing ids keep their
 		// paths, and #resizeSlots' copy is exactly right.
 		if (this.#slotsHaveIdentity !== this.hasIdentity) {
@@ -736,8 +728,8 @@ export class BandScaleState {
 		// shader's lookup has to be a no-op. This is now only a TRANSIENT state —
 		// the window before setIdentity arrives, and the all-NULL column that
 		// renders nothing anyway — because an expression-backed axis gets a dim
-		// like any other since `c55e719`. See §29.8: the pair of spaces this
-		// branch serves outlived the reason for it.
+		// like any other since `c55e719`. The pair of value spaces this branch
+		// serves has outlived the reason for it, and folding it away is open.
 		//
 		// The identity permutation, not an empty table: empty would give the
 		// scale offset 0 and another scale's slots.
@@ -831,21 +823,16 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Point every spring at its new slot, and wake the animation loop if any of
-	 * them has somewhere to go.
+	 * Fold, then point every id at its new slot, and wake the loop if anything
+	 * has somewhere to go.
 	 *
-	 * **Transitions involving -1 snap rather than spring**, and that is C3's
-	 * deliberate limit, not an oversight. -1 means "not displayed", so a spring
-	 * from slot 3 to -1 would slide the leaving bar left through every one of its
-	 * neighbours before the shader finally discarded it below zero, and an
-	 * entering one would slide in from off-axis the same way. Neither is a
-	 * designed behaviour; §12 Q1 is the open question of what the designed one
-	 * is, and it needs answering with a chart in front of you rather than here.
-	 *
-	 * The consequence, which is what `test/band-race` chart 2 exists to show: a
-	 * pure reorder animates, and a category entering or leaving POPS. That is
-	 * the expected C3 result, and "fixing" it by inventing semantics here is
-	 * exactly what the checkpoint is meant to prevent.
+	 * Nothing ever interpolates toward -1, which means "not displayed": a bar
+	 * travelling from slot 3 to -1 would slide through every neighbour before
+	 * the shader discarded it. So an entering id starts at a gateway and a
+	 * leaving one travels to it — Other's slot when the axis has one on screen,
+	 * one past the end otherwise — and a hidden id holds -1 in BOTH halves. That
+	 * invariant is what lets mix(from, to, t) need no sentinel branch, in JS or
+	 * on the GPU.
 	 */
 	#retargetSlots(count: number): void {
 		// Materialise where everything actually is before overwriting it — the
@@ -1091,8 +1078,8 @@ export class BandScaleState {
 	 * did nothing at all: MarkLifecycleV2's sort effect re-ran the sidecar, the
 	 * query returned the right categories in the right order, this stored them,
 	 * and #domain, #displayOrder and the slot table all stayed where they were.
-	 * §3.1 reported it as "the band re-sort path is not wired up"; PR #198 fixed
-	 * the sidecar's SQL for computed axes without reaching this half.
+	 * PR #198 fixed the sidecar's SQL for computed axes without reaching this
+	 * half.
 	 *
 	 * Not registering in #extents is the part this method is named for and is
 	 * unchanged. Scheduling cannot leak a topN mark's full domain into its axis:
@@ -1102,15 +1089,15 @@ export class BandScaleState {
 	setSortOrder(categories: (DimValue | number)[]): void {
 		this.#warnIfDestroyed('setSortOrder');
 		// The sidecar selects the raw column, so these are always source values
-		// (§15.6 item 2 would change that; until it does, never ids).
+		// (until the sidecar returns ids, never ids).
 		this.#sortOrder = this.hasIdentity
 			? this.#toIds(categories, false)
 			: [...new Set(categories.filter((c) => c != null))];
 
 		// Guarded like addMark and removeMark rather than relying on
 		// updateDomainFromExtents' own #enableUpdates check. The duplication is
-		// theirs and is noted in §32.7 as part of the funnel §29.8 should fold
-		// these three writers into; matching them is the smaller change here.
+		// theirs — these three writers should share one funnel — and matching
+		// them is the smaller change here.
 		if (this.#enableUpdates) {
 			this.#scheduleDomainUpdate();
 		}
@@ -1240,8 +1227,8 @@ export class BandScaleState {
 	 * arrives as a Float32Array of identity ids and is handed straight through.
 	 *
 	 * There used to be a second path here that mapped category STRINGS to
-	 * domain positions, one row at a time, on every update — the per-row JS pass
-	 * §3 exists to delete. Nothing produces strings on a band channel any more:
+	 * domain positions, one row at a time, on every update — a per-row JS pass
+	 * the identity layer exists to delete. Nothing produces strings on a band channel any more:
 	 * #inlineIdentityColumns always selects the id column, and an axis it cannot
 	 * dim is reported at setup rather than silently falling back. Strings here
 	 * now mean a real defect upstream, so they are reported rather than mapped.
@@ -1375,8 +1362,8 @@ export class BandScaleState {
 	 * Calculate step size for a given range size (CPU-side) — the band pitch,
 	 * centre to centre, of which `bandwidth` is the drawn fraction.
 	 *
-	 * d3 spells this `step()`, and so did this class until step 5 C2 needed that
-	 * name for the animation interface `GPUCoordinator` drives, where `step()`
+	 * d3 spells this `step()`, and so did this class until the animation
+	 * interface needed that name — the one `GPUCoordinator` drives, where `step()`
 	 * means "advance physics by one fixed timestep" and takes no arguments. Two
 	 * methods cannot share the name and the collision is silent — an arity
 	 * mismatch, not a type error — so the geometry one moved. It pairs with
@@ -1392,35 +1379,18 @@ export class BandScaleState {
 	}
 
 	// =========================================================================
-	// ANIMATION INTERFACE (step 5 C2)
+	// ANIMATION INTERFACE
 	// =========================================================================
 	//
-	// GPUCoordinator's fixed-timestep loop drives every scale in
-	// #animatedScalesArray through exactly four methods — step(),
-	// updateRenderState(dt), isAtRest() and _markAtRest() — and evicts a scale
-	// the moment isAtRest() returns true (GPUCoordinator:975).
-	//
-	// This implements them and NOTHING REGISTERS YET. §9.5's spring is C3, and
-	// registering here would add a state where "nothing happens on screen" is
-	// ambiguous between "the loop ran and correctly did nothing" and "the loop
-	// never saw this scale" — the two are indistinguishable without a frame
-	// counter, and a checkpoint you cannot read is not a checkpoint. C3 makes
-	// one change that both registers and interpolates, so the first frame of
-	// motion proves the registration too.
-	//
-	// What C3 must add beyond a spring:
-	//   - call addAnimatingScale(this) when a retarget leaves the two slot
-	//     arrays disagreeing, and let the eviction sweep remove it again;
-	//   - populate _affectedChartsArray, which is what the loop redraws per
-	//     frame. This class currently pushes redraws through
-	//     #registry.invalidateChartsUsingScale (see updateDomainFromExtents),
-	//     which is a per-reorder call and not a per-frame one;
-	//   - bump slotVersion inside updateRenderState, or the packer uploads the
-	//     first frame of a transition and none of the rest.
+	// GPUCoordinator's fixed-timestep loop drives every animating source through
+	// step(), updateRenderState(dt), isAtRest() and _markAtRest(), redraws
+	// _affectedChartsArray while it runs, and evicts the source the moment
+	// isAtRest() returns true. This scale joins on a retarget or
+	// startTransition, and is dropped again by that sweep.
 
 	#isAnimating: boolean = false;
 
-	/** True while a transition is in flight. Read by tests and by C3. */
+	/** True while a transition is in flight. */
 	get isAnimating(): boolean {
 		return this.#isAnimating;
 	}
@@ -1443,8 +1413,8 @@ export class BandScaleState {
 	/**
 	 * Record where the driver is for this frame. Does NOT touch the slot table.
 	 *
-	 * The GPU reads slotFrom, slotTo and t and interpolates in the vertex stage,
-	 * so the only thing that changes per frame is four bytes of t. This used to
+	 * The GPU resolves mix(slotFrom, slotTo, t) itself, so the only thing that
+	 * changes per frame is four bytes of t. This used to
 	 * write every id and bump slotVersion, which made the packer re-upload the
 	 * entire packed range — up to 64 KB — on every frame of every animation.
 	 *
@@ -1456,7 +1426,7 @@ export class BandScaleState {
 	 * #domain holds display ORDER and only slots are moving — so waking Svelte
 	 * per frame would recompute the axis for no new information. The visible
 	 * consequence is labels jumping to their final order while the bars slide,
-	 * which is this checkpoint's known residual.
+	 * which is a known gap.
 	 */
 	updateRenderState(extrapolationDt: number): void {
 		this.#driver.updateRenderState(extrapolationDt);

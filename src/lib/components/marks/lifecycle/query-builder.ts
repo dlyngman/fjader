@@ -279,8 +279,7 @@ export function buildQueryParts(
 		}
 	}
 
-	// Store channel names for connected mark ordering.
-	let orderChannels: string[] | null = null;
+	// Channels to order the outermost query by, leading term first.
 	const chans: string[] = [];
 	if (aliasMap.has('__facet')) chans.push('__facet');
 
@@ -295,13 +294,22 @@ export function buildQueryParts(
 	// ordering should win where the two disagree and that for these marks they
 	// could not disagree. Both halves were wrong. A bar mark with a series
 	// channel emits ORDER BY fill, y — so rows came back grouped by colour, not
-	// by category — and because densify gives an absent category `fill = 0`, the
-	// permutation changed with whichever categories the filter had emptied. The
+	// by category — and because densify fills an absent category's `fill` with a
+	// sentinel, the permutation changed with whichever categories the filter had
+	// emptied. The
 	// result was bars interpolating toward other categories' values, sometimes.
 	//
 	// A preference that silently corrupts values is not a preference worth
 	// keeping. The tiebreakers still apply, so series segments stay contiguous
 	// WITHIN a category, which is what stacking actually needs.
+	//
+	// And it has to be applied HERE, on the outermost query, not by whichever
+	// transform produced the rows. A bar mark stacks by default, so the query is
+	// wrapped, and a subquery's ORDER BY does not constrain the outer one — worse,
+	// the wrapper is a window PARTITIONed by the same column, so the optimiser
+	// re-partitions and the surviving order is the window operator's. An inner
+	// ORDER BY looks correct, verifies correct against the database in isolation,
+	// and is discarded one level up.
 	for (const ch of alignChannels) {
 		if (aliasMap.has(ch) && !chans.includes(ch)) chans.push(ch);
 	}
@@ -316,31 +324,7 @@ export function buildQueryParts(
 		}
 	}
 
-	// (see above: alignment channels lead, tiebreakers follow)
-	// Channels whose ORDER the GPU depends on, rather than the reader.
-	//
-	// A mark whose query returns one row per category — every category, every
-	// update — can hand those rows to the GPU as an array indexed by category,
-	// with no rearranging, but only while row `i` is the SAME category on every
-	// update. Nothing otherwise guarantees that: hash aggregation is free to
-	// return groups in whatever order it likes, and it does not have to pick the
-	// same one twice.
-	//
-	// It has to be applied HERE, on the outermost query, and not by whichever
-	// transform produced the rows. A bar mark stacks by default, so the query is
-	// wrapped, and a subquery's ORDER BY does not constrain the outer one —
-	// worse, the wrapper is a window PARTITIONed by the same column, so the
-	// optimiser re-partitions and the surviving order is the window operator's.
-	// An inner ORDER BY looks correct, verifies correct against the database in
-	// isolation, and is discarded one level up.
-	//
-	// Appended after the connected-mark channels rather than before, so a
-	// polyline's ordering still wins where the two disagree. For the marks this
-	// applies to they cannot disagree — the categorical channel IS the dimension
-	// channel — but that is a property of today's callers, not a guarantee.
-	if (chans.length > 0) {
-		orderChannels = chans;
-	}
+	const orderChannels = chans.length > 0 ? chans : null;
 
 	return {
 		selectDef,

@@ -95,15 +95,6 @@ export class BaseGPURenderer {
 	#animatedRegistered = false;
 	#hasWrittenAnimated = false;
 	#paramsScratch = new ArrayBuffer(16);
-	/**
-	 * Where every animated channel of this mark is along its transition.
-	 *
-	 * One value for the mark, not one per channel: a bar's height and its slot
-	 * have to arrive together, and separate clocks with separate velocities
-	 * desynchronise on a retarget — the bar slides into its new rank before it
-	 * finishes growing, or after.
-	 */
-	#animationT = 1;
 
 	// State management
 	#resourcesCreated = $state(false);
@@ -323,12 +314,11 @@ export class BaseGPURenderer {
 		// New data means a new transition — including when nothing reordered,
 		// which is the ordinary crossfilter step and the case that used to snap.
 		//
-		// Not on the FIRST write, though. There is nothing on screen to travel
-		// from, so the opening frame of a chart would grow every bar out of
-		// whatever the buffers happened to hold. A chart appears; it does not
-		// animate in.
-		// A row set that is not the one we were animating has nothing to continue
-		// from, so this update lands rather than travels.
+		// Two exceptions, both because there is nothing to travel from. The FIRST
+		// write: the opening frame would grow every bar out of whatever the
+		// buffers happened to hold, and a chart appears rather than animating in.
+		// And a row set that is not the one we were animating: this update lands
+		// rather than travels.
 		if (this.#hasWrittenAnimated && !this.#alignmentBroke) this.#startTransition();
 		this.#hasWrittenAnimated = true;
 
@@ -382,35 +372,16 @@ export class BaseGPURenderer {
 	#alignmentKey: number | null = null;
 	#alignmentBroke = false;
 
-	/** Where this mark's animated channels are along their transition, 0..1. */
-	setAnimationT(t: number): void {
-		this.#animationT = t < 0 ? 0 : t > 1 ? 1 : t;
-	}
-
 	/** Last transition counter seen from the clock, to notice a retarget. */
 	#lastClockVersion: number | null = null;
 
 	/**
-	 * The clock this mark's animated channels run on, and whether it just
-	 * restarted.
-	 *
-	 * It is the CATEGORICAL SCALE's, not the mark's own, and that is the whole
-	 * point: a bar's slot and its height have to arrive together. Two springs
-	 * with two velocities desynchronise on a retarget — the bar slides into its
-	 * new rank before it finishes growing, or after — and in the racing chart
-	 * this design exists for, that is the visible artifact rather than a
-	 * subtlety. Reading the scale's published `t` means there is one number, and
-	 * both the slot resolve and this one read it.
-	 *
-	 * A mark with no categorical scale has no clock and sits at 1, which makes
-	 * the resolve an exact copy of its data — the same thing a static channel
-	 * does, without a second code path.
+	 * A categorical scale on this chart that owns a clock, if there is one.
 	 *
 	 * x before y is arbitrary and only matters for a mark with TWO animating
 	 * categorical axes, which nothing builds yet. When something does, the two
 	 * will have to share a clock rather than this picking one.
 	 */
-	/** A categorical scale on this chart that owns a clock, if there is one. */
 	#clockScale(): { clock: TransitionClock; startTransition(): void } | null {
 		const ctx = this.#chartContext as unknown as {
 			xScaleState?: { clock?: TransitionClock; startTransition?(): void } | null;
@@ -499,7 +470,7 @@ export class BaseGPURenderer {
 		const pipeline = resolvePipelineFor(this.#device);
 
 		const { t, restarted } = this.#readClock();
-		this.#animationT = this.#alignmentBroke ? 1 : t;
+		const resolveT = this.#alignmentBroke ? 1 : t;
 		if (restarted) {
 			for (const entry of this.#animated.values()) entry.foldPending = true;
 		}
@@ -528,7 +499,7 @@ export class BaseGPURenderer {
 
 			const view = new DataView(this.#paramsScratch);
 			view.setUint32(0, entry.count, true);
-			view.setFloat32(4, this.#animationT, true);
+			view.setFloat32(4, resolveT, true);
 			this.#device.queue.writeBuffer(entry.params, 0, this.#paramsScratch);
 
 			let group = this.#resolveBindGroups.get(binding);

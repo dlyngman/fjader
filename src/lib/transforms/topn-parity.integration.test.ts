@@ -386,7 +386,7 @@ describe('topN dense join', () => {
 	});
 
 	it('covers the whole id space, densely, so row order can align with id', async () => {
-		// The alignment this exists for: with ORDER BY d.id the result IS the
+		// The alignment this exists for: ordered by id, the result IS the
 		// id-indexed buffer. This asserts the ids are 0..n-1 with no gaps, which
 		// is what makes that indexing meaningful at all.
 		const rows = await run(true, 3);
@@ -474,13 +474,14 @@ describe('dense row order', () => {
 	});
 
 	it('is the outer query that carries it, not the transform', async () => {
-		// The control. Without the outer ORDER BY the inner one is still emitted
-		// by the dense join, so this asserts that the inner one is NOT what makes
-		// the previous test pass — otherwise that test would prove nothing.
+		// The control, so the previous test proves something: with no alignment
+		// channels, nothing orders the outermost query. The dense join does not
+		// order its own result either — an ORDER BY there would be discarded by
+		// the stack wrapping it, and would read as a guarantee it is not.
 		const sql = build([])!.toString();
-		expect(sql).toContain('ORDER BY'); // the dense join's own, inside
 		const outerTail = sql.slice(sql.lastIndexOf(') AS "__stack_base"'));
 		expect(outerTail).not.toContain('ORDER BY');
+		expect(sql).not.toMatch(/ORDER BY\s+d\."id"/);
 	});
 
 	it('orders by facet first, so each cell stays contiguous', async () => {

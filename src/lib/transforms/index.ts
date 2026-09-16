@@ -181,20 +181,6 @@ function resolveTopNColumns(
 export const TOPN_RANK_COLUMN = '__dplot_topn_rank';
 
 /**
- * The dim table this mark's band channel is identified by, if it has one.
- *
- * Handed over by the lifecycle rather than derived here, for the reason
- * `ScaleMap.otherIdsByColumn` exists: a transform cannot name a dim. The name
- * is session-suffixed and owned by the identity coordinator, and rebuilding it
- * from a field name is how two derivations that must agree stop agreeing.
- */
-function dimTableFor(config: MarkConfig | undefined, band: string): string | null {
-	const byChannel = config?.dimTableByChannel as Record<string, string> | undefined;
-	const dim = byChannel?.[band];
-	return typeof dim === 'string' && dim.length > 0 ? dim : null;
-}
-
-/**
  * Give every category in the dim a row, at zero past the cutoff.
  *
  * This is what makes a departing category animate instead of disappearing: it
@@ -228,12 +214,9 @@ function dimTableFor(config: MarkConfig | undefined, band: string): string | nul
  * `Query.from(sqlTag...)` form is deliberate, because the object form appends
  * `AS "<key>"` after the ON clause and produces a syntax error.
  *
- * NOTE ON ROW ORDER. The `ORDER BY` here is correct but not binding: a bar mark
- * stacks by default, so this is immediately wrapped, and a subquery's ORDER BY
- * does not constrain the outer query. Anything that needs rows in id order —
- * id-indexed GPU buffers — has to get that ordering applied at the OUTERMOST
- * query, which is a separate change at `assembleQuery`'s `orderChannels` seam.
- * Do not read this line as a guarantee.
+ * NOT ORDERED HERE. A bar mark stacks by default, so this is wrapped, and a
+ * subquery's ORDER BY does not bind the outer query. Row order for id-indexed
+ * GPU buffers is applied to the outermost query, by `buildQueryParts`.
  */
 function densify(
 	inner: SelectQuery,
@@ -277,32 +260,24 @@ function densify(
 	//
 	// It cannot be left to the loop above either: that coalesces to 0, and 0 is
 	// the BEST rank, so every excluded category would sort to the front.
-	if (!aliases.includes(TOPN_RANK_COLUMN)) {
-		return Query.from(
-			sqlTag`${literalTable(dim)} AS d LEFT JOIN (${inner}) AS a ON a.${column(band)} = d."id"`
-		)
-			.select(select)
-			.orderby(sqlTag`d."id"`);
+	if (aliases.includes(TOPN_RANK_COLUMN)) {
+		// NaN, not NULL and not 0, for a category past the cutoff.
+		//
+		// "No rank" has to survive to JS as something the band axis can test, and
+		// the only encoding that does is the one every other channel already uses:
+		// DataAccessor's fast path requires nullCount == 0, which holds precisely
+		// because queries coalesce NULL to NaN. Left as a nullable BIGINT this
+		// column would arrive with a validity bitmap and whatever the values buffer
+		// happens to hold underneath — usually 0, which would rank an EXCLUDED
+		// category first and put it at the front of the axis.
+		select[TOPN_RANK_COLUMN] = sqlTag`COALESCE(CAST(a.${column(
+			TOPN_RANK_COLUMN
+		)} AS REAL), 'NaN'::REAL)` as ExprNode;
 	}
-
-	// NaN, not NULL and not 0, for a category past the cutoff.
-	//
-	// "No rank" has to survive to JS as something the band axis can test, and
-	// the only encoding that does is the one every other channel already uses:
-	// DataAccessor's fast path requires nullCount == 0, which holds precisely
-	// because queries coalesce NULL to NaN. Left as a nullable BIGINT this
-	// column would arrive with a validity bitmap and whatever the values buffer
-	// happens to hold underneath — usually 0, which would rank an EXCLUDED
-	// category first and put it at the front of the axis.
-	select[TOPN_RANK_COLUMN] = sqlTag`COALESCE(CAST(a.${column(
-		TOPN_RANK_COLUMN
-	)} AS REAL), 'NaN'::REAL)` as ExprNode;
 
 	return Query.from(
 		sqlTag`${literalTable(dim)} AS d LEFT JOIN (${inner}) AS a ON a.${column(band)} = d."id"`
-	)
-		.select(select)
-		.orderby(sqlTag`d."id"`);
+	).select(select);
 }
 
 /**
