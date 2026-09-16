@@ -326,6 +326,59 @@ export class BaseGPURenderer {
 		this.#animationT = t < 0 ? 0 : t > 1 ? 1 : t;
 	}
 
+	/** Last transition counter seen from the clock, to notice a retarget. */
+	#lastClockVersion: number | null = null;
+
+	/**
+	 * The clock this mark's animated channels run on, and whether it just
+	 * restarted.
+	 *
+	 * It is the CATEGORICAL SCALE's, not the mark's own, and that is the whole
+	 * point: a bar's slot and its height have to arrive together. Two springs
+	 * with two velocities desynchronise on a retarget — the bar slides into its
+	 * new rank before it finishes growing, or after — and in the racing chart
+	 * this design exists for, that is the visible artifact rather than a
+	 * subtlety. Reading the scale's published `t` means there is one number, and
+	 * both the slot resolve and this one read it.
+	 *
+	 * A mark with no categorical scale has no clock and sits at 1, which makes
+	 * the resolve an exact copy of its data — the same thing a static channel
+	 * does, without a second code path.
+	 *
+	 * x before y is arbitrary and only matters for a mark with TWO animating
+	 * categorical axes, which nothing builds yet. When something does, the two
+	 * will have to share a clock rather than this picking one.
+	 */
+	#readClock(): { t: number; restarted: boolean } {
+		const ctx = this.#chartContext as unknown as {
+			xScaleState?: { t?: number; slotVersion?: number } | null;
+			yScaleState?: { t?: number; slotVersion?: number } | null;
+		};
+		const scale =
+			ctx.xScaleState?.t !== undefined
+				? ctx.xScaleState
+				: ctx.yScaleState?.t !== undefined
+					? ctx.yScaleState
+					: null;
+
+		if (!scale) {
+			this.#lastClockVersion = null;
+			return { t: 1, restarted: false };
+		}
+
+		const version = scale.slotVersion ?? 0;
+		// A retarget this mark did not cause still resets `t` to 0 — a sibling
+		// mark's data landing on the same axis, or another cell of a facet grid.
+		// Without folding on that, this mark's values snap back to where its own
+		// transition started and travel again. The version is already bumped on
+		// every retarget and means exactly "the tables moved", so it needs no new
+		// signal; the first observation is not a restart, or the opening frame
+		// would fold against nothing.
+		const restarted = this.#lastClockVersion !== null && version !== this.#lastClockVersion;
+		this.#lastClockVersion = version;
+		return { t: scale.t ?? 1, restarted };
+	}
+
 	#resolveBindGroups = new Map<number, GPUBindGroup>();
 
 	/**
@@ -341,6 +394,12 @@ export class BaseGPURenderer {
 	#encodeResolve(encoder: GPUCommandEncoder): void {
 		if (!this.#device || this.#animated.size === 0) return;
 		const pipeline = resolvePipelineFor(this.#device);
+
+		const { t, restarted } = this.#readClock();
+		this.#animationT = t;
+		if (restarted) {
+			for (const entry of this.#animated.values()) entry.foldPending = true;
+		}
 
 		for (const [binding, entry] of this.#animated) {
 			if (entry.count === 0) continue;

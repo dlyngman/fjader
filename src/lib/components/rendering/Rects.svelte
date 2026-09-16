@@ -231,12 +231,10 @@
 	// has to travel when a value changes, and they must travel together, so both
 	// go through the same clock.
 	//
-	// The clock is pinned at 1 for now, which makes the resolve an exact copy of
-	// the incoming data — identical output to writeAttribute, through the whole
-	// three-buffer path. That is deliberate: it exercises the allocation, the
-	// fold, the dispatch and the vertex read while nothing on screen is allowed
-	// to change, so anything that moves is a plumbing fault rather than an
-	// animation.
+	// The clock is the categorical scale's, so a bar's height travels on exactly
+	// the number its slot does and the two arrive together. A chart with no
+	// categorical axis has no clock, sits at 1, and gets an exact copy of its
+	// data — the same result a static channel gives, by the same path.
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAnimatedAttribute(BINDINGS.Y0, y0Data);
 	});
