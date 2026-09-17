@@ -1206,13 +1206,16 @@ export class GPUCoordinator {
 			const scale = this.#animatedSourcesArray[i];
 
 			if (scale.isAtRest()) {
-				scale._markAtRest();
 				// Swap and pop removal (O(1))
 				this.#animatedSources.delete(scale);
 				const last = this.#animatedSourcesArray.pop()!;
 				if (i < this.#animatedSourcesArray.length) {
 					this.#animatedSourcesArray[i] = last;
 				}
+				// Removed BEFORE it is told, so a source that restarts itself from
+				// its rest callback rejoins rather than being dropped right after.
+				// Iterating backwards, a rejoin appends past `i` and is not revisited.
+				scale._markAtRest();
 			}
 		}
 

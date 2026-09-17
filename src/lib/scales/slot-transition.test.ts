@@ -5,7 +5,7 @@ import { SlotTransition } from './SlotTransition';
 // settle and snap exactly as the slots do. BandScaleState.test drives slots
 // through a scale; these drive SlotTransition directly.
 
-const loop = { addAnimatedSource: () => {} };
+const loop = { addAnimatedSource: () => {}, removeAnimatedSource: () => {} };
 
 /** Three displayed ids, laid out, at rest. */
 function laidOut(frames: number[] = []) {
@@ -116,6 +116,25 @@ describe('SlotTransition label opacity', () => {
 		const before = s.alphaOf(1);
 		s.startTransition();
 		expect(s.alphaOf(1)).toBeCloseTo(before, 6);
+	});
+});
+
+describe('SlotTransition with no loop', () => {
+	it('lands a restart at once, whichever call starts it', () => {
+		// Nothing can advance t without a loop. A reorder always settled; a
+		// value-only restart used to leave t at 0, so every consumer stayed at
+		// the start of a transition that could never run.
+		const s = new SlotTransition(null);
+		s.layout('ids', [0, 1, 2], 3);
+
+		s.layout('ids', [2, 0], 3);
+		expect(s.t).toBe(1);
+		expect(Array.from(s.snapshot())).toEqual([1, -1, 0]);
+
+		s.startTransition();
+		expect(s.t).toBe(1);
+		expect(s.isAnimating).toBe(false);
+		expect(Array.from(s.snapshot())).toEqual([1, -1, 0]);
 	});
 });
 

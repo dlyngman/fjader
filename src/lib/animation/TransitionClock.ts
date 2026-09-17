@@ -61,9 +61,28 @@ export const TRANSITION_STIFFNESS = 240;
 /** Sub-pixel, so rest is declared when the difference stops being visible. */
 export const TRANSITION_PRECISION = 0.0005;
 
+/**
+ * The animation loop, as a clock sees it. The coordinator's fixed-timestep loop
+ * is the one implementation; structurally typed so this module does not import
+ * the GPU layer.
+ */
+export interface ClockLoop {
+	addAnimatedSource(source: TransitionClock): void;
+	removeAnimatedSource(source: TransitionClock): void;
+}
+
 export class TransitionClock {
 	#spring: Spring;
 	#precision: number;
+	/**
+	 * What drives this clock, or null when nothing can — a unit test, or a
+	 * scale built without a coordinator. Then a restart lands immediately:
+	 * `t` only advances while the loop holds the clock, so waiting for it would
+	 * leave every consumer at t = 0 for good.
+	 */
+	#loop: ClockLoop | null;
+	/** True from a restart until the loop settles or `stop` removes the clock. */
+	#running = false;
 	/**
 	 * Where the driver is for the frame being DRAWN — extrapolated ahead of the
 	 * last physics step, and clamped, since a read ahead of that step can cross
@@ -94,12 +113,14 @@ export class TransitionClock {
 
 	constructor(
 		options: {
+			loop?: ClockLoop | null;
 			stiffness?: number;
 			precision?: number;
 			onRest?: () => void;
 			onFrame?: () => void;
 		} = {}
 	) {
+		this.#loop = options.loop ?? null;
 		this.#precision = options.precision ?? TRANSITION_PRECISION;
 		this.#spring = new Spring(1, options.stiffness ?? TRANSITION_STIFFNESS, this.#precision);
 		this.#onRest = options.onRest ?? null;
@@ -109,6 +130,11 @@ export class TransitionClock {
 	/** Where the transition is, for the frame being drawn. 1 when settled. */
 	get t(): number {
 		return this.#renderT;
+	}
+
+	/** True while the loop is driving this clock. */
+	get running(): boolean {
+		return this.#running;
 	}
 
 	/**
@@ -121,12 +147,36 @@ export class TransitionClock {
 	 * `t` is normalised, so a restart is continuous in `t` and not in world
 	 * space — an element retargeted nearer decelerates abruptly, one retargeted
 	 * further jumps. That is the other face of arriving together, not a defect.
+	 *
+	 * JOINS THE LOOP, so no owner has to remember to. The loop drops a clock
+	 * when it settles, so this rejoins on every restart after that. With no loop
+	 * the transition is over at once: settled, and `onRest` called before this
+	 * returns — the same end state the loop would reach, reached now.
 	 */
 	restart(): void {
 		this.#spring.current = 0;
 		this.#spring.target = 1;
 		this.#renderT = 0;
 		this.version++;
+
+		if (!this.#loop) {
+			this._markAtRest();
+			return;
+		}
+		if (!this.#running) {
+			this.#running = true;
+			this.#loop.addAnimatedSource(this);
+		}
+	}
+
+	/**
+	 * Leave the loop without settling, for an owner being torn down. Nothing
+	 * reads the clock afterwards, so there is nothing to land.
+	 */
+	stop(): void {
+		if (!this.#running) return;
+		this.#running = false;
+		this.#loop?.removeAnimatedSource(this);
 	}
 
 	/**
@@ -157,8 +207,12 @@ export class TransitionClock {
 	/** Charts to redraw while this runs. Set by whoever owns the clock. */
 	_affectedChartsArray: string[] = [];
 
-	/** Called by the loop when this stops. Lands exactly on 1, then tells the owner. */
+	/**
+	 * Called by the loop when this stops, after removing it. Lands exactly on 1,
+	 * then tells the owner — which may restart it, and rejoin, from `onRest`.
+	 */
 	_markAtRest(): void {
+		this.#running = false;
 		this.settle();
 		this.#onRest?.();
 	}

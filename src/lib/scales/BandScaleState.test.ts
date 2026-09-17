@@ -240,7 +240,10 @@ describe('BandScaleState identity <-> display translation', () => {
 		it('settles its slots when the loop settles the clock', () => {
 			const registered: unknown[] = [];
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: (x: unknown) => registered.push(x) }
+				gpuCoordinator: {
+					addAnimatedSource: (x: unknown) => registered.push(x),
+					removeAnimatedSource: () => {}
+				}
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
@@ -290,7 +293,10 @@ describe('BandScaleState identity <-> display translation', () => {
 		function withLoop() {
 			const registered: unknown[] = [];
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: (x: unknown) => registered.push(x) }
+				gpuCoordinator: {
+					addAnimatedSource: (x: unknown) => registered.push(x),
+					removeAnimatedSource: () => {}
+				}
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
@@ -321,7 +327,10 @@ describe('BandScaleState identity <-> display translation', () => {
 			// opening frame of the chart slid its bars in from nowhere.
 			const registered: unknown[] = [];
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: (x: unknown) => registered.push(x) }
+				gpuCoordinator: {
+					addAnimatedSource: (x: unknown) => registered.push(x),
+					removeAnimatedSource: () => {}
+				}
 			});
 
 			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1');
@@ -529,7 +538,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// into Other. Animating it past the end would state something untrue
 			// about where the data went.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 			});
 			// Adelie, Chinstrap, Gentoo, then the reserved bucket at the top of the
 			// id space, exactly as reserveSynthetic hands it out.
@@ -560,7 +569,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 		it('sends Other itself to the far end, having nowhere else to go', () => {
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
 			s.setOtherId(2);
@@ -599,7 +608,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// moves them at proportionally different SPEEDS and lands them on the
 			// same frame. Independent springs would finish raggedly.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['A', 'B', 'C', 'D']));
 			s.addMark(['A', 'B', 'C', 'D'], 'mark-1');
@@ -634,7 +643,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// `from` before t resets — otherwise every result restarts the journey
 			// and a bar sliding out stutters instead of sliding.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['A', 'B', 'C']));
 			s.addMark(['A', 'B', 'C'], 'mark-1');
@@ -681,7 +690,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// category that had left the domain stayed drawn at its old slot
 			// indefinitely. Whatever the journey, it must END.
 			const s = new BandScaleState('species', [], {
-				gpuCoordinator: { addAnimatedSource: () => {} }
+				gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 			});
 			s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Other']));
 			s.setOtherId(2);

@@ -3,7 +3,7 @@ import {
 	VALUE_RESOLVE_SHADER,
 	VALUE_RESOLVE_WORKGROUP
 } from './ValueResolveShader';
-import { TransitionClock } from '$lib/animation/TransitionClock';
+import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
 
 /**
  * Channels of one mark that morph between data updates rather than replacing
@@ -33,12 +33,13 @@ import { TransitionClock } from '$lib/animation/TransitionClock';
  * a mark with no new data folds to where it already is and does not move.
  */
 
-/** The coordinator's slice this needs. Structural, so tests can supply a fake. */
-export interface MorphHost {
+/**
+ * The coordinator's slice this needs. Structural, so tests can supply a fake.
+ * It is also the loop an owned clock joins — the clock does that itself.
+ */
+export interface MorphHost extends ClockLoop {
 	registerComputeWork(key: string, fn: (encoder: GPUCommandEncoder) => void): void;
 	removeComputeWork(key: string): void;
-	addAnimatedSource(source: TransitionClock): void;
-	removeAnimatedSource(source: TransitionClock): void;
 }
 
 /** A scale that owns a data-transition clock marks can adopt. */
@@ -327,10 +328,8 @@ export class MorphedChannels {
 			this.#host.removeComputeWork(this.#label);
 			this.#registered = false;
 		}
-		if (this.#ownClock) {
-			this.#host.removeAnimatedSource(this.#ownClock);
-			this.#ownClock = null;
-		}
+		this.#ownClock?.stop();
+		this.#ownClock = null;
 		for (const channel of this.#channelList) this.#destroyChannel(channel);
 		this.#channels.clear();
 		this.#channelList = [];
@@ -392,13 +391,11 @@ export class MorphedChannels {
 			scale.startTransition();
 			return;
 		}
-		this.#ownClock ??= new TransitionClock();
+		this.#ownClock ??= new TransitionClock({ loop: this.#host });
 		// Read at start rather than construction: a facet grid registers its
 		// cells after the mark's first data has landed.
 		this.#ownClock._affectedChartsArray = this.#affectedCharts();
 		this.#ownClock.restart();
-		// Every time: the loop evicts a clock when it settles.
-		this.#host.addAnimatedSource(this.#ownClock);
 	}
 
 	/**

@@ -89,9 +89,9 @@ function fakes() {
 		}
 	};
 
-	// A band scale's clock, adopted.
+	// A band scale's clock, adopted. On the same fake loop, as a real one is.
 	const scale = {
-		clock: new TransitionClock(),
+		clock: new TransitionClock({ loop: host }),
 		starts: 0,
 		startTransition() {
 			this.starts++;

@@ -3,7 +3,7 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
-import type { TransitionClock } from '$lib/animation';
+import type { ClockLoop, TransitionClock } from '$lib/animation';
 import { SlotTransition } from './SlotTransition';
 
 /**
@@ -35,9 +35,7 @@ interface BandScaleConfig {
 	 * than importing GPUCoordinator, which would be a cycle. The loop drives
 	 * this scale's CLOCK, not the scale.
 	 */
-	gpuCoordinator?: {
-		addAnimatedSource(source: TransitionClock): void;
-	} | null;
+	gpuCoordinator?: ClockLoop | null;
 }
 
 interface BandGpuConfig {

@@ -1,4 +1,4 @@
-import { TransitionClock } from '$lib/animation';
+import { TransitionClock, type ClockLoop } from '$lib/animation';
 
 /**
  * Where every category of a band axis sits, and how it gets there.
@@ -41,14 +41,7 @@ import { TransitionClock } from '$lib/animation';
  * second time.
  */
 
-/** What joining the animation loop needs. */
-export interface SlotLoop {
-	addAnimatedSource(source: TransitionClock): void;
-}
-
 export class SlotTransition {
-	#loop: SlotLoop | null;
-
 	#target: Float32Array = new Float32Array(0);
 	/**
 	 * Where each id's current transition STARTED.
@@ -91,7 +84,6 @@ export class SlotTransition {
 	 * Which space the arrays are indexed in. See `layout`.
 	 */
 	#space: 'ids' | 'positions' = 'positions';
-	#isAnimating: boolean = false;
 
 	/**
 	 * ONE clock for the whole axis, driving a normalised `t` from 0 to 1 across
@@ -135,11 +127,6 @@ export class SlotTransition {
 	 */
 	version: number = 0;
 
-	/**
-	 * `loop` is null when nothing can drive the clock — every unit test, and a
-	 * scale built before a coordinator is wired up. Transitions then land
-	 * instantly rather than being lost.
-	 */
 	#onFrame: (() => void) | null;
 
 	/**
@@ -151,14 +138,20 @@ export class SlotTransition {
 	 */
 	#onRest: (() => void) | null;
 
+	/**
+	 * `loop` is handed to the clock, which joins it on every restart. Null when
+	 * nothing can drive it — every unit test, and a scale built before a
+	 * coordinator is wired up — and transitions then land instantly rather than
+	 * being lost.
+	 */
 	constructor(
-		loop: SlotLoop | null = null,
+		loop: ClockLoop | null = null,
 		options: { onFrame?: () => void; onRest?: () => void } = {}
 	) {
-		this.#loop = loop;
 		this.#onFrame = options.onFrame ?? null;
 		this.#onRest = options.onRest ?? null;
 		this.clock = new TransitionClock({
+			loop,
 			onRest: () => this.#onClockRest(),
 			onFrame: this.#onFrame ?? undefined
 		});
@@ -228,7 +221,7 @@ export class SlotTransition {
 
 	/** True while the clock is in the loop. */
 	get isAnimating(): boolean {
-		return this.#isAnimating;
+		return this.clock.running;
 	}
 
 	/**
@@ -296,7 +289,7 @@ export class SlotTransition {
 			alphaFrom[id] += (alphaTo[id] - alphaFrom[id]) * t;
 		}
 		this.#countFrom = this.animatedCount;
-		this.#restartFolded();
+		this.clock.restart();
 		this.version++;
 	}
 
@@ -449,10 +442,10 @@ export class SlotTransition {
 
 		if (shown > 0) this.#hasLaidOut = true;
 
-		// An animation nobody can drive has to be an instant transition, not a lost
-		// one: t only advances while the loop holds the clock.
-		if (moving && this.#loop) {
-			this.#restartFolded();
+		// With no loop to drive it, the clock settles inside the restart, through
+		// #onClockRest — the same landing the loop would reach.
+		if (moving) {
+			this.clock.restart();
 		} else {
 			this.#settle();
 		}
@@ -482,24 +475,8 @@ export class SlotTransition {
 		}
 	}
 
-	/**
-	 * Restart the clock once `from` already holds where everything is, and join
-	 * the loop.
-	 *
-	 * The restart CARRIES VELOCITY, so a transition interrupted mid-flight
-	 * continues at the speed it was travelling.
-	 */
-	#restartFolded(): void {
-		this.clock.restart();
-		if (!this.#isAnimating && this.#loop) {
-			this.#isAnimating = true;
-			this.#loop.addAnimatedSource(this.clock);
-		}
-	}
-
-	/** The loop settled the clock: land, retire the leavers, and say the tables moved. */
+	/** The clock settled: land, retire the leavers, and say the tables moved. */
 	#onClockRest(): void {
-		this.#isAnimating = false;
 		this.#settle();
 		this.version++;
 		// The last frame: t is exactly 1 now, which the loop's final frame was not.

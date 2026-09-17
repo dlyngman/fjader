@@ -315,7 +315,7 @@ describe('what the shader reads back', () => {
 		// mix(from, to, t) and the resolve pass computes the same thing from the
 		// same three numbers. If they drift, bars are in the wrong slots.
 		const s = new BandScaleState('species', [], {
-			gpuCoordinator: { addAnimatedSource: () => {} }
+			gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 		});
 		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
