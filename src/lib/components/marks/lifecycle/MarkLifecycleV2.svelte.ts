@@ -59,7 +59,7 @@ import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
 import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
-import { type RollingAvgNode, isRollingAvgExpression } from '$lib/sql/rolling-avg';
+import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
@@ -192,8 +192,6 @@ export class MarkLifecycleV2 {
 		if (this.#identityFields.size === 0) return this.#config.table;
 		return this.#queryEngine.identitySourceFor(this.#config.table);
 	}
-	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
-	#rollingAvgVersion = $state(0);
 	/**
 	 * Every channel of this mark carrying category ids, and its dim — null until
 	 * identity setup, and again after a reset. Set only through #setIdentity,
@@ -251,8 +249,6 @@ export class MarkLifecycleV2 {
 			}
 		}
 
-		// Resolve RollingAvgNodes — track invalidation counter
-		void this.#rollingAvgVersion;
 		// Identity setup changes what this resolves to downstream; see the field.
 		void this.#identity;
 		for (const [ch, value] of Object.entries(resolvedSelect)) {
@@ -463,11 +459,6 @@ export class MarkLifecycleV2 {
 		for (const [channel, value] of Object.entries(this.#config.select)) {
 			if (isBinExpression(value)) {
 				this.#autoBinNodes.set(channel, value);
-			} else if (isRollingAvgExpression(value)) {
-				this.#rollingAvgNodes.set(channel, value);
-				value.registerInvalidation(() => {
-					this.#rollingAvgVersion++;
-				});
 			}
 		}
 	}
@@ -2088,10 +2079,6 @@ export class MarkLifecycleV2 {
 		if (this.#adaptiveBinRung) {
 			this.#adaptiveBinRung.destroy();
 			this.#adaptiveBinRung = null;
-		}
-
-		for (const node of this.#rollingAvgNodes.values()) {
-			node.clearInvalidation();
 		}
 
 		// Defensive tooltip table cleanup. The tooltip $effect cleanup

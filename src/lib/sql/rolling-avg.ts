@@ -2,9 +2,10 @@
 // RollingAvgNode — lazy window expression for LOD smoothing overlay
 //
 // Like AutoBinNode, this is a "recipe" that defers SQL expression construction
-// to query-building time. The windowSize can be mutated without recreating the
-// MarkLifecycle — instead, an invalidation callback triggers a re-query using
-// the same cache-invalidation pattern as triggerReBin.
+// to query-building time. The window size and mode may be getters, read each
+// time the expression is built: the mark resolves its select in a $derived, so
+// reading them there tracks whatever they read, and a change re-queries the
+// existing mark rather than recreating it. Same as topN's count.
 // =============================================================================
 
 import {
@@ -34,51 +35,34 @@ export class RollingAvgNode {
 	orderByField: string;
 	/** Optional PARTITION BY column (series grouping). */
 	partitionByField: string | null;
-	/** Current window size (rows in each direction for centered, total for trailing). Mutable. */
-	windowSize: number;
-	/** Window mode: 'centered' (±N) or 'trailing' (←N, backward-only). */
-	mode: SmoothMode;
 	/** Type marker for detection. */
 	isRollingAvgNode = true as const;
 
-	#onInvalidate: (() => void) | null = null;
+	#window: () => number;
+	#mode: () => SmoothMode;
 
 	constructor(
 		inner: RollingAvgInner,
 		orderByField: string,
 		partitionByField: string | null,
-		windowSize: number = 1,
-		mode: SmoothMode = 'centered'
+		windowSize: number | (() => number) = 1,
+		mode: SmoothMode | (() => SmoothMode) = 'centered'
 	) {
 		this.inner = inner;
 		this.orderByField = orderByField;
 		this.partitionByField = partitionByField;
-		this.windowSize = windowSize;
-		this.mode = mode;
+		this.#window = typeof windowSize === 'number' ? () => windowSize : windowSize;
+		this.#mode = typeof mode === 'function' ? mode : () => mode;
 	}
 
-	/** Update window size and fire invalidation callback (triggers re-query). */
-	setWindowSize(size: number): void {
-		if (size === this.windowSize) return;
-		this.windowSize = size;
-		this.#onInvalidate?.();
+	/** Rows in each direction for centered, total for trailing. */
+	get windowSize(): number {
+		return this.#window();
 	}
 
-	/** Update window mode and fire invalidation callback (triggers re-query). */
-	setMode(mode: SmoothMode): void {
-		if (mode === this.mode) return;
-		this.mode = mode;
-		this.#onInvalidate?.();
-	}
-
-	/** Register a callback fired when parameters change. Called by MarkLifecycle. */
-	registerInvalidation(callback: () => void): void {
-		this.#onInvalidate = callback;
-	}
-
-	/** Clear invalidation callback. Called on MarkLifecycle destroy. */
-	clearInvalidation(): void {
-		this.#onInvalidate = null;
+	/** 'centered' (±N), 'trailing' (←N) or 'leading' (→N). */
+	get mode(): SmoothMode {
+		return this.#mode();
 	}
 
 	/** Resolve to a Mosaic window expression with current parameters. */

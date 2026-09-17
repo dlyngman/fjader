@@ -307,27 +307,24 @@
 		brush.resizeEdge = edge === edgeStart ? 'start' : 'end';
 	}
 
-	// Register callbacks and keyboard listeners
+	// Register pointer callbacks; the keys are on <svelte:window> below.
 	onMount(() => {
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
 		chart.onInteractorPointerEnter = handlePointerEnter;
 
-		window.addEventListener('keydown', handleKeyDown);
-		window.addEventListener('keyup', handleKeyUp);
-
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
 			chart.onInteractorPointerEnter = null;
-			window.removeEventListener('keydown', handleKeyDown);
-			window.removeEventListener('keyup', handleKeyUp);
 			brushHandle.destroy();
 		};
 	});
 </script>
+
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
 
 {#if brush.active && brushScreen}
 	<BrushOverlay

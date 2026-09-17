@@ -10,7 +10,12 @@
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
-	type InvertibleScale = { (v: unknown): number; invert(v: number): number; domain(): number[]; range(): number[] };
+	type InvertibleScale = {
+		(v: unknown): number;
+		invert(v: number): number;
+		domain(): number[];
+		range(): number[];
+	};
 
 	interface Props {
 		/** Filter group name — selects which FilterGroup these brushes write to. */
@@ -99,9 +104,7 @@
 						kind: 'range',
 						column: col,
 						label: col,
-						values: value
-							? [(value as number[])[0], (value as number[])[1]]
-							: []
+						values: value ? [(value as number[])[0], (value as number[])[1]] : []
 					})
 				})
 			);
@@ -295,20 +298,17 @@
 		chart.onInteractorPointerUp = handlePointerUp;
 		chart.onInteractorPointerEnter = handlePointerEnter;
 
-		window.addEventListener('keydown', handleKeyDown);
-		window.addEventListener('keyup', handleKeyUp);
-
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
 			chart.onInteractorPointerEnter = null;
-			window.removeEventListener('keydown', handleKeyDown);
-			window.removeEventListener('keyup', handleKeyUp);
 			for (const h of handles) h.destroy();
 		};
 	});
 </script>
+
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
 
 {#if ps}
 	{#each brushScreens as screen, i}
