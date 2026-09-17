@@ -336,7 +336,7 @@ describe('topN dense join', () => {
 	async function run(isDense: boolean, n: number) {
 		const markConfig = {
 			...cfg,
-			...(isDense ? { dimTableByChannel: { x: DIM } } : {})
+			...(isDense ? { identity: { x: { dim: DIM, size: 100, positional: true } } } : {})
 		} as MarkConfig;
 		const transforms = withDenseCategories([topN(n, { by: 'y2' })]);
 		let q = base() as SelectQuery;
@@ -455,8 +455,7 @@ describe('dense row order', () => {
 			table: 'sales_o',
 			x: 'x',
 			y: 'y2',
-
-			dimTableByChannel: { x: DIM }
+			identity: { x: { dim: DIM, size: 100, positional: true } }
 		} as MarkConfig);
 		return assembleQuery({ table: 'sales_o', parts, filter: [], transformCompiler: compiler });
 	}
@@ -528,7 +527,7 @@ describe('dense without topN', () => {
 		x: 'x',
 		y: 'y2',
 		groupKeys: ['x'],
-		dimTableByChannel: { x: DIM }
+		identity: { x: { dim: DIM, size: 100, positional: true } }
 	} as MarkConfig;
 
 	/** A plain aggregated bar chart, filtered so a category has no rows at all. */
@@ -625,8 +624,10 @@ describe('dense fills identity channels differently from measures', () => {
 			x: 'x',
 			y: 'y2',
 			groupKeys: ['x', 'fill'],
-			dimTableByChannel: { x: DIM },
-			identityDims: { x: DIM, fill: DIM }
+			identity: {
+				x: { dim: DIM, size: 100, positional: true },
+				fill: { dim: DIM, size: 100, positional: false }
+			}
 		} as MarkConfig);
 		return db.all(out.toString());
 	}
@@ -683,8 +684,10 @@ describe('dense fills identity channels differently from measures', () => {
 			x: 'x',
 			y: 'y2',
 			groupKeys: ['x'],
-			dimTableByChannel: { x: DIM },
-			identityDims: { x: DIM, fill: '__some_other_dim' }
+			identity: {
+				x: { dim: DIM, size: 100, positional: true },
+				fill: { dim: '__some_other_dim', size: 3, positional: false }
+			}
 		} as MarkConfig);
 		const rows = await db.all(out.toString());
 		const absent = rows.filter((r) => Number(r.y2) === 0);
@@ -745,11 +748,12 @@ describe('dense with a series channel', () => {
 		x: 'x',
 		y: 'y2',
 		fill: 'fill',
-		dimTableByChannel: { x: CAT },
-		identityDims: { x: CAT, fill: REG },
-		dimSizes: { [CAT]: 11, [REG]: 3 },
+		identity: {
+			x: { dim: CAT, size: 11, positional: true },
+			fill: { dim: REG, size: 3, positional: false }
+		},
 		groupKeys: ['x', 'fill']
-	} as unknown as MarkConfig;
+	} as MarkConfig;
 
 	/** The shape chart 6 emits — grouped topN, dense, stack — ordered as assembleQuery orders it. */
 	async function run(where: string | null) {
@@ -893,15 +897,19 @@ describe('topN includeOthers in SQL', () => {
 			y: 'y2',
 			...(opts.series || opts.colourIsCategory ? { fill: 'fill' } : {}),
 			groupKeys,
-			dimTableByChannel: { x: CAT },
-			identityDims: {
-				x: CAT,
-				...(opts.series ? { fill: REG } : {}),
-				...(opts.colourIsCategory ? { fill: CAT } : {})
-			},
-			dimSizes: { [CAT]: otherId + 1, [REG]: 3 },
-			...(other != null ? { otherIdsByColumn: { x: other } } : {})
-		} as unknown as MarkConfig;
+			identity: {
+				x: {
+					dim: CAT,
+					size: otherId + 1,
+					positional: true,
+					...(other != null ? { otherId: other } : {})
+				},
+				...(opts.series ? { fill: { dim: REG, size: 3, positional: false } } : {}),
+				...(opts.colourIsCategory
+					? { fill: { dim: CAT, size: otherId + 1, positional: false } }
+					: {})
+			}
+		} as MarkConfig;
 
 		const topn = topN(opts.n ?? 5, { by: 'y2', includeOthers: true }) as unknown as SqlTransform;
 		expect(topn.stage).toBe('sql');

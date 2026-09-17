@@ -8,7 +8,14 @@
 
 import { Query, column, sql as sqlTag } from '@uwdata/mosaic-sql';
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
-import type { SqlTransform, JsTransform, Transform, MarkConfig, ScaleMap } from '$lib/types';
+import type {
+	ChannelIdentity,
+	SqlTransform,
+	JsTransform,
+	Transform,
+	MarkConfig,
+	ScaleMap
+} from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 
 // =============================================================================
@@ -224,7 +231,7 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// Another group key, enumerated from its own dim: the padded row for a
 			// missing (category, series) pair carries that series' real id.
 			select[alias] = rawSql(`${crossed}."id"`) as ExprNode;
-		} else if (plan.identityDims[alias] && plan.identityDims[alias] === dim) {
+		} else if (plan.identity[alias]?.dim === dim) {
 			// Same dim as the band, so this channel IS the category — the ordinary
 			// "colour the bars by their own category" chart. Its value for a row
 			// with no data is not unknown, it is that category's id, so take it
@@ -234,7 +241,7 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// while it shrinks, and a sentinel would turn it grey on the frame its
 			// data disappeared — the one frame where the colour matters most.
 			select[alias] = sqlTag`d."id"` as ExprNode;
-		} else if (plan.identityDims[alias]) {
+		} else if (plan.identity[alias]) {
 			// A category id from some OTHER field that is not a group key — an
 			// aggregate over ids. There is no correct value for a row with no data,
 			// so the absent sentinel it is. Never 0, which is a real category: it
@@ -303,7 +310,7 @@ interface DensePlan {
 	dim: string;
 	/** Every other group key with a dim of its own, crossed in: [channel, dim]. */
 	cross: [string, string][];
-	identityDims: Record<string, string>;
+	identity: Record<string, ChannelIdentity>;
 }
 
 /**
@@ -319,8 +326,7 @@ interface DensePlan {
  * - **A group key with no dim.** Its values cannot be enumerated, so its
  *   missing combinations cannot be padded; padding it as a measure would
  *   misalign rather than align.
- * - **Too many rows.** See DENSE_ROW_LIMIT. Only checked when every size is
- *   known.
+ * - **Too many rows.** See DENSE_ROW_LIMIT.
  */
 function densePlan(
 	aliases: string[],
@@ -329,39 +335,36 @@ function densePlan(
 ): DensePlan | null {
 	if (!enabled) return null;
 
-	const byChannel = config?.dimTableByChannel as Record<string, string> | undefined;
-	if (!byChannel) return null;
+	const identity = config?.identity;
+	if (!identity) return null;
 
 	// Stated by whoever built the select, because it cannot be recovered from
 	// the query by the time this runs: topN has already wrapped it, and the
 	// GROUP BY is several levels down.
-	const groupKeys = config?.groupKeys as string[] | null | undefined;
+	const groupKeys = config?.groupKeys;
 	if (!groupKeys) return null;
 
-	const candidates = Object.keys(byChannel).filter((ch) => aliases.includes(ch));
+	const candidates = aliases.filter((ch) => identity[ch]?.positional);
 	if (candidates.length !== 1) return null;
 	const band = candidates[0];
-	const dim = byChannel[band];
-	if (typeof dim !== 'string' || dim.length === 0 || !groupKeys.includes(band)) return null;
+	const { dim, size } = identity[band];
+	if (!dim || !groupKeys.includes(band)) return null;
 
-	const identityDims = (config?.identityDims as Record<string, string> | undefined) ?? byChannel;
 	const cross: [string, string][] = [];
+	// Padded rows: the band's categories, times each crossed key's ids plus -1.
+	let rows = size;
 	for (const key of groupKeys) {
 		if (key === band || !aliases.includes(key)) continue;
-		const keyDim = identityDims[key];
-		if (!keyDim) return null;
+		const keyIdentity = identity[key];
+		if (!keyIdentity) return null;
 		// A key from the band's own dim is the category again, not a new axis.
-		if (keyDim !== dim) cross.push([key, keyDim]);
+		if (keyIdentity.dim === dim) continue;
+		cross.push([key, keyIdentity.dim]);
+		rows *= keyIdentity.size + 1;
 	}
+	if (rows > DENSE_ROW_LIMIT) return null;
 
-	const sizes = config?.dimSizes as Record<string, number> | undefined;
-	if (sizes) {
-		let rows = sizes[dim];
-		for (const [, keyDim] of cross) rows *= (sizes[keyDim] ?? NaN) + 1;
-		if (rows > DENSE_ROW_LIMIT) return null;
-	}
-
-	return { band, dim, cross, identityDims };
+	return { band, dim, cross, identity };
 }
 
 /** A `dense()` transform, which can say which channel it would join on. */
@@ -514,7 +517,7 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 			// business — an ordinary bar chart under a crossfilter loses rows the
 			// same way, when a category filters down to nothing and drops out of
 			// the GROUP BY. `dense()` does it for both, and runs after this.
-			const otherId = (config?.otherIdsByColumn as Record<string, number> | undefined)?.[band];
+			const otherId = config?.identity?.[band]?.otherId;
 			if (options.includeOthers && otherId != null) {
 				return collapseIntoOther(ranked, aliases, { n, by, band, series, otherId, config });
 			}
@@ -572,11 +575,11 @@ function collapseIntoOther(
 	const { n, by, band, otherId } = o;
 	const rank = column(TOPN_RANK_COLUMN);
 	const kept = sqlTag`${rank} <= ${n}`;
-	const identityDims = o.config?.identityDims as Record<string, string> | undefined;
+	const identity = o.config?.identity;
+	const bandDim = identity?.[band]?.dim;
 	const sameAsBand = (alias: string) =>
-		alias === band || (!!identityDims?.[alias] && identityDims[alias] === identityDims[band]);
-	const groupKeys =
-		(o.config?.groupKeys as string[] | null | undefined) ?? (o.series ? [o.series] : []);
+		alias === band || (!!bandDim && identity?.[alias]?.dim === bandDim);
+	const groupKeys = o.config?.groupKeys ?? (o.series ? [o.series] : []);
 	const isKey = (alias: string) => sameAsBand(alias) || groupKeys.includes(alias);
 
 	const bucket: Record<string, ExprNode> = {};

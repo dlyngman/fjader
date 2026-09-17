@@ -386,8 +386,9 @@ describe('dense().bandFor', () => {
 		markType: 'barY',
 		table: 't',
 		groupKeys: ['x'],
-		dimTableByChannel: { x: 'dim_species' }
-	} as unknown as MarkConfig;
+		identity: { x: { dim: 'dim_species', size: 3, positional: true } }
+	} as MarkConfig;
+	const axis = (dim: string) => ({ dim, size: 3, positional: true });
 
 	it('names the one dimmed channel the select carries', () => {
 		expect(dense().bandFor(['x', 'y'], grouped)).toBe('x');
@@ -402,12 +403,12 @@ describe('dense().bandFor', () => {
 	});
 
 	it('refuses two dimmed axes, which would need the cross product', () => {
-		const both = { ...grouped, dimTableByChannel: { x: 'dim_a', y: 'dim_b' } };
+		const both = { ...grouped, identity: { x: axis('dim_a'), y: axis('dim_b') } };
 		expect(dense().bandFor(['x', 'y'], both as MarkConfig)).toBeNull();
 	});
 
 	it('ignores a dim for a channel the select does not carry', () => {
-		const extra = { ...grouped, dimTableByChannel: { x: 'dim_a', y: 'dim_b' } };
+		const extra = { ...grouped, identity: { x: axis('dim_a'), y: axis('dim_b') } };
 		expect(dense().bandFor(['y', 'x2'], { ...extra, groupKeys: ['y'] } as MarkConfig)).toBe('y');
 	});
 
@@ -416,7 +417,10 @@ describe('dense().bandFor', () => {
 		// cannot be restored, and filling it with 0 would misalign the rows.
 		const series = { ...grouped, groupKeys: ['x', 'fill'] };
 		expect(dense().bandFor(['x', 'y', 'fill'], series as MarkConfig)).toBeNull();
-		const withDim = { ...series, identityDims: { x: 'dim_species', fill: 'dim_island' } };
+		const withDim = {
+			...series,
+			identity: { ...grouped.identity, fill: { dim: 'dim_island', size: 3, positional: false } }
+		};
 		expect(dense().bandFor(['x', 'y', 'fill'], withDim as MarkConfig)).toBe('x');
 	});
 
@@ -425,15 +429,17 @@ describe('dense().bandFor', () => {
 			({
 				...grouped,
 				groupKeys: ['x', 'fill'],
-				identityDims: { x: 'dim_species', fill: 'dim_island' },
-				dimSizes: { dim_species: categories, dim_island: series }
-			}) as unknown as MarkConfig;
+				identity: {
+					x: { dim: 'dim_species', size: categories, positional: true },
+					fill: { dim: 'dim_island', size: series, positional: false }
+				}
+			}) as MarkConfig;
 		// Each series dim counts one more, for the -1 a NULL series carries.
 		expect(dense().bandFor(['x', 'y', 'fill'], config(500, 19))).toBe('x');
 		expect(dense().bandFor(['x', 'y', 'fill'], config(5000, 19))).toBeNull();
 	});
 
 	it('refuses before identity setup has handed over any dims', () => {
-		expect(dense().bandFor(['x', 'y'], { ...grouped, dimTableByChannel: undefined })).toBeNull();
+		expect(dense().bandFor(['x', 'y'], { ...grouped, identity: undefined })).toBeNull();
 	});
 });

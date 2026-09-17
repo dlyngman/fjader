@@ -97,12 +97,34 @@ export type Transform = SqlTransform | JsTransform;
 // Mark config (passed to JS transforms)
 // ---------------------------------------------------------------------------
 
+/**
+ * A channel whose values are category ids, and what identifies them.
+ *
+ * One object per channel so the facts about a dim travel together: the name a
+ * transform joins against, how many ids it holds, and the reserved Other id
+ * bucketed into it. Kept apart, they were four maps keyed three different ways.
+ */
+export interface ChannelIdentity {
+	/** The dim table the ids come from. Session-suffixed and engine-owned; never rebuilt from a field name. */
+	dim: string;
+	/** How many ids the dim held when identity was set up. */
+	size: number;
+	/** An x or y axis, as opposed to colour or facet. */
+	positional: boolean;
+	/** The reserved id past-the-cutoff rows are bucketed into, once reserved. */
+	otherId?: number;
+}
+
 export interface MarkConfig {
 	markType: string;
 	table: string;
 	x?: string;
 	y?: string;
 	color?: string;
+	/** Every channel carrying category ids, keyed by channel. Absent until identity setup. */
+	identity?: Record<string, ChannelIdentity>;
+	/** The query's GROUP BY channels, or null when it does not aggregate. Per query. */
+	groupKeys?: string[] | null;
 	[key: string]: unknown;
 }
 

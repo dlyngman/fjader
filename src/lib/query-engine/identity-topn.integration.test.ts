@@ -87,8 +87,10 @@ describe('identity ids through topN', () => {
 			x: 'x',
 			y: 'total',
 			groupKeys: ['x'],
-			otherIdsByColumn: { x: otherId }
-		} as unknown as MarkConfig;
+			identity: {
+				x: { dim: identity.dimTable(field), size: otherId + 1, positional: true, otherId }
+			}
+		} as MarkConfig;
 		const out = (topN(2, { includeOthers: true }) as SqlTransform).apply(query, config);
 		const rows = await db.all(`SELECT * FROM (${out}) ORDER BY "${TOPN_RANK_COLUMN}"`);
 		return { xs: rows.map((r) => Number(r.x)), totals: rows.map((r) => Number(r.total)) };
