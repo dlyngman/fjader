@@ -216,8 +216,8 @@ export const TOPN_RANK_COLUMN = '__dplot_topn_rank';
  * `AS "<key>"` after the ON clause and produces a syntax error.
  *
  * NOT ORDERED HERE. A bar mark stacks by default, so this is wrapped, and a
- * subquery's ORDER BY does not bind the outer query. Row order for id-indexed
- * GPU buffers is applied to the outermost query, by `buildQueryParts`.
+ * subquery's ORDER BY does not bind the outer query. It publishes `alignment`
+ * instead, and the query assembler orders the outermost query by it.
  */
 function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): SelectQuery {
 	const { band, dim, cross } = plan;
@@ -367,16 +367,6 @@ function densePlan(
 	return { band, dim, cross, identity };
 }
 
-/** A `dense()` transform, which can say which channel it would join on. */
-export interface DenseTransform extends SqlTransform {
-	/**
-	 * The channel this joins the dim on for a query with these aliases, or null
-	 * when it refuses itself. `apply()` decides from the same plan, so a mark
-	 * asking this and the query agreeing are one derivation, not two.
-	 */
-	bandFor(aliases: string[], config?: MarkConfig): string | null;
-}
-
 /**
  * Return a row for every category, not only the ones that survived.
  *
@@ -396,14 +386,20 @@ export interface DenseTransform extends SqlTransform {
  * key values, since those are what the rows are. When it refuses and why is
  * `densePlan`.
  */
-export function dense(options: { enabled?: boolean } = {}): DenseTransform {
+export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 	const enabled = options.enabled !== false;
 	return {
 		stage: 'sql',
 		type: 'dense',
 		spec: { transform: 'dense', ...(enabled ? {} : { enabled: false }) },
-		bandFor(aliases: string[], config?: MarkConfig): string | null {
-			return densePlan(aliases, config, enabled)?.band ?? null;
+		/**
+		 * The band, then every crossed key: the rows are exactly their cross
+		 * product. Decided by the same plan `apply()` joins on, so a mark asking
+		 * and the query agreeing are one derivation, not two.
+		 */
+		alignment(aliases: string[], config?: MarkConfig): string[] | null {
+			const plan = densePlan(aliases, config, enabled);
+			return plan ? [plan.band, ...plan.cross.map(([key]) => key)] : null;
 		},
 		apply(query: SelectQuery, config?: MarkConfig) {
 			const aliases = getSelectAliases(query);

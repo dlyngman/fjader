@@ -234,8 +234,7 @@ export function buildQueryParts(
 	select: Record<string, unknown>,
 	orderConfig: OrderConfig | undefined | null,
 	hasSQLTransforms: boolean,
-	passthroughChannels: Map<string, string> = new Map(),
-	alignChannels: string[] = []
+	passthroughChannels: Map<string, string> = new Map()
 ): QueryParts {
 	const selectDef: Record<string, unknown> = {};
 	const nonAggregateGroupBy: unknown[] = [];
@@ -288,40 +287,12 @@ export function buildQueryParts(
 		}
 	}
 
-	// Channels to order the outermost query by, leading term first.
+	// A preference about row order, leading term first. A facet leads so each
+	// cell's rows stay contiguous. Row ALIGNMENT is not decided here: that is a
+	// guarantee only the transforms can make, and assembleQuery puts it ahead of
+	// this — see outerOrder.
 	const chans: string[] = [];
 	if (aliasMap.has('__facet')) chans.push('__facet');
-
-	// ALIGNMENT FIRST, ahead of any preference about row order.
-	//
-	// These channels are a correctness requirement: a mark handing its rows to
-	// the GPU as an array indexed by category needs row `i` to be the same
-	// category on every update, and only the leading ORDER BY term decides that.
-	// Everything after it is a tiebreaker.
-	//
-	// An earlier version appended them LAST, reasoning that a connected mark's
-	// ordering should win where the two disagree and that for these marks they
-	// could not disagree. Both halves were wrong. A bar mark with a series
-	// channel emits ORDER BY fill, y — so rows came back grouped by colour, not
-	// by category — and because densify fills an absent category's `fill` with a
-	// sentinel, the permutation changed with whichever categories the filter had
-	// emptied. The
-	// result was bars interpolating toward other categories' values, sometimes.
-	//
-	// A preference that silently corrupts values is not a preference worth
-	// keeping. The tiebreakers still apply, so series segments stay contiguous
-	// WITHIN a category, which is what stacking actually needs.
-	//
-	// And it has to be applied HERE, on the outermost query, not by whichever
-	// transform produced the rows. A bar mark stacks by default, so the query is
-	// wrapped, and a subquery's ORDER BY does not constrain the outer one — worse,
-	// the wrapper is a window PARTITIONed by the same column, so the optimiser
-	// re-partitions and the surviving order is the window operator's. An inner
-	// ORDER BY looks correct, verifies correct against the database in isolation,
-	// and is discarded one level up.
-	for (const ch of alignChannels) {
-		if (aliasMap.has(ch) && !chans.includes(ch)) chans.push(ch);
-	}
 
 	if (orderConfig) {
 		const { seriesChannel, dimensionChannel } = orderConfig;
@@ -362,7 +333,7 @@ export function buildQueryParts(
  *                                     (topN ranking etc.) see filtered rows
  *   → SQL transforms (CTE wrapping)
  *   → [window CTE: outer SELECT applies window fns over the inner result]
- *   → ORDER BY orderChannels        — on the outermost query
+ *   → ORDER BY outerOrder(...)      — alignment, then orderChannels; outermost
  *   → LIMIT
  *
  * Callers decide what is CAST-wrapped by preparing parts.selectDef with
@@ -373,6 +344,46 @@ function selectAliases(query: Query): string[] {
 	const sel = (query as unknown as { _select?: { alias?: string }[] })._select;
 	if (!Array.isArray(sel)) return [];
 	return sel.map((s) => s.alias).filter((a): a is string => !!a);
+}
+
+/**
+ * The outermost ORDER BY: a leading facet, then the transforms' alignment, then
+ * the mark's preference, each channel once.
+ *
+ * ALIGNMENT AHEAD OF PREFERENCE. A mark handing its rows to the GPU as an array
+ * indexed by category needs row `i` to be the same category on every update,
+ * and only the leading terms decide that; everything after is a tiebreaker. An
+ * earlier version put alignment LAST, reasoning that a connected mark's order
+ * should win and that for these marks the two could not disagree. Both halves
+ * were wrong: a bar mark with a series emits `fill, x`, so rows came back grouped
+ * by colour, and because a padded row's `fill` is a sentinel the permutation
+ * changed with whichever categories a filter emptied. The tiebreakers still
+ * keep series segments contiguous WITHIN a category, which is what stacking
+ * needs.
+ *
+ * A facet still leads, so each cell's rows stay contiguous; the alignment within
+ * a cell is unchanged by it.
+ *
+ * ON THE OUTERMOST QUERY, never inside a transform. A bar mark stacks by default,
+ * so the aligned result is wrapped, and a subquery's ORDER BY does not bind the
+ * outer one — the stack's window PARTITIONs by the same column, the optimiser
+ * re-partitions, and the surviving order is the window operator's. An inner
+ * ORDER BY looks right, verifies right against the database in isolation, and is
+ * discarded one level up.
+ */
+export function outerOrder(
+	preference: string[] | null,
+	alignment: string[] | null
+): string[] | null {
+	if (!alignment || alignment.length === 0) return preference;
+	const order: string[] = [];
+	const add = (channel: string) => {
+		if (!order.includes(channel)) order.push(channel);
+	};
+	if (preference?.[0] === '__facet') add('__facet');
+	for (const channel of alignment) add(channel);
+	for (const channel of preference ?? []) add(channel);
+	return order;
 }
 
 export function assembleQuery(opts: AssembleOptions): Query {
@@ -422,8 +433,12 @@ export function assembleQuery(opts: AssembleOptions): Query {
 			.with({ [window.cteName]: result });
 	}
 
-	if (orderChannels) {
-		result = result.orderby(...orderChannels.map((ch) => sqlColumn(ch)));
+	const alignment = hasSQLTransforms
+		? transformCompiler.alignment(Object.keys(selectDef), { groupKeys: parts.groupKeys })
+		: null;
+	const order = outerOrder(orderChannels, alignment);
+	if (order) {
+		result = result.orderby(...order.map((ch) => sqlColumn(ch)));
 	}
 	if (limit) {
 		result = result.limit(limit);

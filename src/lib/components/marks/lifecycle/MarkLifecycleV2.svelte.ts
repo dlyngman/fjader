@@ -36,7 +36,7 @@ import {
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories, type DenseTransform } from '$lib/transforms';
+import { withDenseCategories } from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -289,29 +289,11 @@ export class MarkLifecycleV2 {
 		this.#inlineIdentityColumns(resolvedSelect);
 		this.#inlineTimeOffsets(resolvedSelect);
 
-		// Channels the GPU needs a stable row order on.
-		//
-		// Every categorical axis that has a dim, because those are the ones whose
-		// query can return a row per category rather than a row per survivor —
-		// and a row per category is only usable as a category-indexed array while
-		// the order is the same on every update.
-		//
-		// Taken from the identity map rather than by re-deriving which channel the
-		// transform picked as its band. That derivation living in two places is
-		// what silently dropped the synthetic bucket's row once already, and this
-		// is a superset that cannot miss: ordering by a categorical channel that
-		// did not need it costs a sort of already-sorted rows.
-		const alignChannels: string[] = [];
-		for (const [channel, { positional }] of Object.entries(this.#identity ?? {})) {
-			if (positional) alignChannels.push(channel);
-		}
-
 		const parts = buildQueryParts(
 			resolvedSelect,
 			this.#config._orderConfig ?? null,
 			this.#transformCompiler.hasSQLTransforms(),
-			passthroughChannels,
-			alignChannels
+			passthroughChannels
 		);
 
 		return parts;
@@ -1375,26 +1357,21 @@ export class MarkLifecycleV2 {
 	 * never mixed, the other axis's channels morph, and the band scale owns the
 	 * clock both run on.
 	 *
-	 * Asked of `dense()` itself, over the same select and config its `apply()`
-	 * sees, so the conditions are written once. Derived rather than recorded at
-	 * apply time: apply runs for every query assembled from this mark, not only
-	 * the one whose rows reach the GPU.
+	 * The first channel of the transforms' alignment — `dense()`'s plan, over the
+	 * same select and facts its `apply()` sees — so the conditions are written
+	 * once. Derived rather than recorded at apply time: apply runs for every
+	 * query assembled from this mark, not only the one whose rows reach the GPU.
 	 */
 	alignedBand: 'x' | 'y' | null = $derived.by(() => {
 		const parts = this.#resolvedQueryParts;
 		if (!parts) return null;
 		// Identity setup fills in what dense() reads; see the field.
 		void this.#identity;
-		const d = this.#transformCompiler.sqlTransforms.find((t) => t.type === 'dense') as
-			| DenseTransform
-			| undefined;
-		// The same per-query fact assembleQuery hands the transforms, so this and
-		// the query cannot disagree about whether the join happens.
-		const band =
-			d?.bandFor(Object.keys(parts.selectDef), {
-				...this.#transformConfig,
-				groupKeys: parts.groupKeys
-			}) ?? null;
+		// Asked exactly as assembleQuery asks when it orders the query, so this and
+		// the rows cannot disagree about which channel they are aligned on.
+		const band = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
+			groupKeys: parts.groupKeys
+		})?.[0];
 		return band === 'x' || band === 'y' ? band : null;
 	});
 

@@ -77,6 +77,16 @@ export interface SqlTransform {
 	apply(query: SelectQuery, config?: MarkConfig): SelectQuery;
 	/** Channel aliases this transform adds to the result beyond the base select (e.g. stack's y0/y1). */
 	channels?: string[];
+	/**
+	 * The channels whose values identify each row, leading term first, when this
+	 * transform guarantees exactly one row per combination of them — or null when
+	 * it makes no such guarantee for a query with these aliases.
+	 *
+	 * The query assembler orders the OUTERMOST query by these, which is what
+	 * makes row `i` the same category on every update; and the first is the
+	 * band a mark may morph along.
+	 */
+	alignment?(aliases: string[], config?: MarkConfig): string[] | null;
 	describe?(): string;
 }
 

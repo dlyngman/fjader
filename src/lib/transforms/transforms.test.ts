@@ -378,7 +378,7 @@ describe('Transforms', () => {
 	});
 });
 
-describe('dense().bandFor', () => {
+describe('dense().alignment', () => {
 	// The one place dense()'s conditions live. apply() joins on what this
 	// returns, and a mark decides whether — and along which axis — it may morph
 	// from the same answer, so the two cannot disagree.
@@ -391,37 +391,40 @@ describe('dense().bandFor', () => {
 	const axis = (dim: string) => ({ dim, size: 3, positional: true });
 
 	it('names the one dimmed channel the select carries', () => {
-		expect(dense().bandFor(['x', 'y'], grouped)).toBe('x');
+		expect(dense().alignment!(['x', 'y'], grouped)).toEqual(['x']);
 	});
 
 	it('refuses when opted out', () => {
-		expect(dense({ enabled: false }).bandFor(['x', 'y'], grouped)).toBeNull();
+		expect(dense({ enabled: false }).alignment!(['x', 'y'], grouped)).toBeNull();
 	});
 
 	it('refuses raw rows, which are not one per category however the join goes', () => {
-		expect(dense().bandFor(['x', 'y'], { ...grouped, groupKeys: null })).toBeNull();
+		expect(dense().alignment!(['x', 'y'], { ...grouped, groupKeys: null })).toBeNull();
 	});
 
 	it('refuses two dimmed axes, which would need the cross product', () => {
 		const both = { ...grouped, identity: { x: axis('dim_a'), y: axis('dim_b') } };
-		expect(dense().bandFor(['x', 'y'], both as MarkConfig)).toBeNull();
+		expect(dense().alignment!(['x', 'y'], both as MarkConfig)).toBeNull();
 	});
 
 	it('ignores a dim for a channel the select does not carry', () => {
 		const extra = { ...grouped, identity: { x: axis('dim_a'), y: axis('dim_b') } };
-		expect(dense().bandFor(['y', 'x2'], { ...extra, groupKeys: ['y'] } as MarkConfig)).toBe('y');
+		expect(dense().alignment!(['y', 'x2'], { ...extra, groupKeys: ['y'] } as MarkConfig)).toEqual([
+			'y'
+		]);
 	});
 
 	it('refuses a group key it cannot enumerate, rather than padding it as a measure', () => {
 		// A series with no dim: its values cannot be listed, so its missing pairs
 		// cannot be restored, and filling it with 0 would misalign the rows.
 		const series = { ...grouped, groupKeys: ['x', 'fill'] };
-		expect(dense().bandFor(['x', 'y', 'fill'], series as MarkConfig)).toBeNull();
+		expect(dense().alignment!(['x', 'y', 'fill'], series as MarkConfig)).toBeNull();
 		const withDim = {
 			...series,
 			identity: { ...grouped.identity, fill: { dim: 'dim_island', size: 3, positional: false } }
 		};
-		expect(dense().bandFor(['x', 'y', 'fill'], withDim as MarkConfig)).toBe('x');
+		// Aligned on the band, then the series crossed in with it.
+		expect(dense().alignment!(['x', 'y', 'fill'], withDim as MarkConfig)).toEqual(['x', 'fill']);
 	});
 
 	it('refuses when padding every combination would pass the row limit', () => {
@@ -435,11 +438,11 @@ describe('dense().bandFor', () => {
 				}
 			}) as MarkConfig;
 		// Each series dim counts one more, for the -1 a NULL series carries.
-		expect(dense().bandFor(['x', 'y', 'fill'], config(500, 19))).toBe('x');
-		expect(dense().bandFor(['x', 'y', 'fill'], config(5000, 19))).toBeNull();
+		expect(dense().alignment!(['x', 'y', 'fill'], config(500, 19))).toEqual(['x', 'fill']);
+		expect(dense().alignment!(['x', 'y', 'fill'], config(5000, 19))).toBeNull();
 	});
 
 	it('refuses before identity setup has handed over any dims', () => {
-		expect(dense().bandFor(['x', 'y'], { ...grouped, identity: undefined })).toBeNull();
+		expect(dense().alignment!(['x', 'y'], { ...grouped, identity: undefined })).toBeNull();
 	});
 });

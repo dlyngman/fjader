@@ -18,7 +18,8 @@ import {
 	assembleQuery,
 	castNumeric,
 	splitWindowSelect,
-	buildOuterWindow
+	buildOuterWindow,
+	outerOrder
 } from './query-builder';
 
 // ---------------------------------------------------------------------------
@@ -361,5 +362,24 @@ describe('assembleQuery', () => {
 				/no outer aggregate/
 			);
 		});
+	});
+});
+
+describe('outerOrder', () => {
+	it('is the preference alone when no transform guarantees alignment', () => {
+		expect(outerOrder(['fill', 'x'], null)).toEqual(['fill', 'x']);
+		expect(outerOrder(null, null)).toBeNull();
+	});
+
+	it('puts alignment ahead of the preference, each channel once', () => {
+		// A stacked bar with a series prefers `fill, x`. Row i has to be the same
+		// category on every update, so the category leads and the series breaks
+		// ties within it.
+		expect(outerOrder(['fill', 'x'], ['x', 'fill'])).toEqual(['x', 'fill']);
+		expect(outerOrder(null, ['x'])).toEqual(['x']);
+	});
+
+	it('keeps a facet leading, so each cell stays contiguous', () => {
+		expect(outerOrder(['__facet'], ['x', '__facet'])).toEqual(['__facet', 'x']);
 	});
 });

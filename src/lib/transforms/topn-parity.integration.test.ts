@@ -12,7 +12,11 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { Query, column, sum, eq, literal, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
 import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN, withDenseCategories } from './index';
-import { buildQueryParts, assembleQuery } from '$lib/components/marks/lifecycle/query-builder';
+import {
+	buildQueryParts,
+	assembleQuery,
+	type QueryParts
+} from '$lib/components/marks/lifecycle/query-builder';
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
 import { extractIdsRankedFromData } from '$lib/components/marks/lifecycle/domain-computation';
 import type { MarkConfig, SqlTransform } from '$lib/types';
@@ -442,15 +446,14 @@ describe('dense row order', () => {
 	 * returns only its survivors, and a category leaving one still vanishes.
 	 * That is a real remaining limit and not a quirk of this fixture.
 	 */
-	function build(align: string[]) {
+	function build(isDense: boolean) {
 		const parts = buildQueryParts(
 			{ x: column('category_idx'), y2: sum(column('revenue')) },
 			null,
-			true,
-			new Map(),
-			align
+			true
 		);
-		const compiler = new TransformCompiler(withDenseCategories([topN(3, { by: 'y2' }), stackY()]), {
+		const transforms = withDenseCategories([topN(3, { by: 'y2' }), stackY()], isDense);
+		const compiler = new TransformCompiler(transforms, {
 			markType: 'barY',
 			table: 'sales_o',
 			x: 'x',
@@ -461,7 +464,7 @@ describe('dense row order', () => {
 	}
 
 	it('comes back in id order once the outer query is ordered', async () => {
-		const rows = await db.all(build(['x'])!.toString());
+		const rows = await db.all(build(true)!.toString());
 		const ids = rows.map((r) => Number(r.x));
 		expect(ids).toEqual([...ids].sort((a, b) => a - b));
 		// Dense AND in order is what makes row index usable as a category index.
@@ -469,25 +472,68 @@ describe('dense row order', () => {
 	});
 
 	it('is the outer query that carries it, not the transform', async () => {
-		// The control, so the previous test proves something: with no alignment
-		// channels, nothing orders the outermost query. The dense join does not
-		// order its own result either — an ORDER BY there would be discarded by
-		// the stack wrapping it, and would read as a guarantee it is not.
-		const sql = build([])!.toString();
-		const outerTail = sql.slice(sql.lastIndexOf(') AS "__stack_base"'));
-		expect(outerTail).not.toContain('ORDER BY');
-		expect(sql).not.toMatch(/ORDER BY\s+d\."id"/);
+		// The control, so the previous test proves something: with dense opted
+		// out there is no alignment, and nothing orders the outermost query. The
+		// dense join does not order its own result either — an ORDER BY there
+		// would be discarded by the stack wrapping it, and would read as a
+		// guarantee it is not.
+		const outerTail = (sql: string) => sql.slice(sql.lastIndexOf(') AS "__stack_base"'));
+		expect(outerTail(build(false)!.toString())).not.toContain('ORDER BY');
+		const aligned = build(true)!.toString();
+		expect(outerTail(aligned)).toContain('ORDER BY "x"');
+		expect(aligned).not.toMatch(/ORDER BY\s+d\."id"/);
 	});
 
-	it('orders by facet first, so each cell stays contiguous', async () => {
-		const parts = buildQueryParts(
-			{ x: column('category_idx'), y2: sum(column('revenue')), __facet: column('region') },
-			null,
-			true,
-			new Map(),
-			['x']
+	it('orders a query over a pre-aggregated table the same way', async () => {
+		// The shape the preagg path assembles: its own parts over a cube, group
+		// keys taken from the cube's dimension columns, the mark's compiler. The
+		// alignment comes from those parts, so a crossfilter served from a cube
+		// hands the GPU rows in the same order as one served from the base table.
+		await db.run(
+			`CREATE OR REPLACE TABLE sales_cube AS
+			 SELECT category_idx::REAL AS x, region, SUM(revenue) AS y2
+			 FROM sales_o GROUP BY ALL`
 		);
-		expect(parts.orderChannels).toEqual(['__facet', 'x']);
+		const parts: QueryParts = {
+			selectDef: { x: column('x'), y2: sqlTag`CAST(SUM("y2") AS REAL)` },
+			nonAggregateGroupBy: [column('x')],
+			hasAggregates: true,
+			groupKeys: ['x'],
+			hasWindowAggregates: false,
+			hasSQLTransforms: true,
+			orderChannels: null,
+			aliasMap: new Map([
+				['x', 'x'],
+				['y2', 'y2']
+			]),
+			passthroughChannels: new Map()
+		};
+		const compiler = new TransformCompiler(withDenseCategories([stackY()]), {
+			markType: 'barY',
+			table: 'sales_cube',
+			x: 'x',
+			y: 'y2',
+			identity: { x: { dim: DIM, size: 100, positional: true } }
+		} as MarkConfig);
+		// Filter one category out entirely, so padding is what keeps its row.
+		const q = assembleQuery({
+			table: 'sales_cube',
+			parts,
+			filter: [sqlTag`x <> 0`],
+			transformCompiler: compiler
+		});
+		const rows = await db.all(q.toString());
+		const ids = rows.map((r) => Number(r.x));
+		const dimSize = Number((await db.all(`SELECT COUNT(*) AS n FROM "${DIM}"`))[0].n);
+		expect(ids).toEqual(Array.from({ length: dimSize }, (_, i) => i));
+		// Reached independently of the padding under test: in the cube itself,
+		// category 0 has revenue, so a zero here can only be the padded row.
+		const [cube] = await db.all(`SELECT SUM(y2) AS total FROM sales_cube WHERE x = 0`);
+		expect(Number(cube.total)).toBeGreaterThan(0);
+		expect(Number(rows[0].y2)).toBe(0);
+		expect(q.toString().slice(q.toString().lastIndexOf(') AS "__stack_base"'))).toContain(
+			'ORDER BY "x"'
+		);
 	});
 });
 

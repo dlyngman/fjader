@@ -48,7 +48,7 @@ export class TransformCompiler {
 	 */
 	applyToQuery(query: SelectQuery, facts?: Partial<MarkConfig>): SelectQuery {
 		let result = query;
-		const config = facts ? ({ ...this.markConfig, ...facts } as MarkConfig) : this.markConfig;
+		const config = this.#configFor(facts);
 
 		for (const transform of this.sqlTransforms) {
 			try {
@@ -62,6 +62,24 @@ export class TransformCompiler {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Which channels a query with these aliases comes back aligned on, leading
+	 * term first, or null. Asked with the same facts as `applyToQuery`, so the
+	 * answer is about the query those transforms actually produce.
+	 */
+	alignment(aliases: string[], facts?: Partial<MarkConfig>): string[] | null {
+		const config = this.#configFor(facts);
+		for (const transform of this.sqlTransforms) {
+			const order = transform.alignment?.(aliases, config);
+			if (order) return order;
+		}
+		return null;
+	}
+
+	#configFor(facts: Partial<MarkConfig> | undefined): MarkConfig | undefined {
+		return facts ? ({ ...this.markConfig, ...facts } as MarkConfig) : this.markConfig;
 	}
 
 	applyToData(data: DataAccessor, config: MarkConfig, scales: ScaleMap = {}): DataAccessor {
