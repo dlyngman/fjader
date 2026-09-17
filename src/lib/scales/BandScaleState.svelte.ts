@@ -52,11 +52,11 @@ interface BandGpuConfig {
  *
  * It owns two spaces and the permutation between them: IDENTITY, the dim id a
  * channel carries, and DISPLAY, the slot a category occupies on the axis.
- * `displayOrder` is the permutation, `slotTarget` its inverse, `slotTable`
- * (= `slotCurrent`) what the shader actually reads, and `#domain` a value
- * projection for d3 and the axis.
+ * `displayOrder` is the permutation, `slotTarget` its inverse, `slotFrom` and
+ * `slotTo` what the GPU resolves, and `#domain` a value projection for d3 and
+ * the axis.
  *
- * A transition is `slotCurrent = mix(slotFrom, slotTo, t)` with ONE spring
+ * A transition is `mix(slotFrom, slotTo, t)` with ONE spring
  * driving `t` for the whole scale, so everything in flight arrives together.
  * `slotTo` is the animated destination and `slotTarget` what the scale says;
  * they differ exactly for the ids on their way out, which hold a real slot until
@@ -474,18 +474,20 @@ export class BandScaleState {
 	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0, align: 0.5 };
 
 	/**
-	 * Display slot per identity id: `slotTable[id]` is where this category is
-	 * NOW, or -1 when it is not displayed. Mid-transition that is a fraction of
-	 * the way between two orders.
+	 * Display slot per identity id, copied: `[id]` is where this category is NOW,
+	 * or -1 when it is not displayed. Mid-transition that is a fraction of the
+	 * way between two orders.
 	 *
 	 * -1 covers two cases deliberately given one sentinel: an id filtered out by
 	 * a category-reducing transform, and an id belonging to another table on a
 	 * shared scale. Both must be discarded by the consumer.
 	 *
-	 * Not a lookup table for CPU consumers: ask idAtSlot or categoryAt.
+	 * Allocates and walks the dim: for tests and debugging. The GPU reads
+	 * `slotFrom`/`slotTo` and mixes them itself; a label asks `tickSlot`; a CPU
+	 * lookup asks idAtSlot or categoryAt.
 	 */
-	get slotTable(): Float32Array {
-		return this.#slots.table;
+	slotSnapshot(): Float32Array {
+		return this.#slots.snapshot();
 	}
 
 	/** How many ids the slot arrays hold — the packer's count header. */
@@ -573,7 +575,7 @@ export class BandScaleState {
 	// IDENTITY <-> DISPLAY, FOR CPU CONSUMERS
 	// -------------------------------------------------------------------------
 	//
-	// The GPU crosses this boundary through slotTable, in the shader. Everything
+	// The GPU crosses this boundary through the slot tables, in the shader. Everything
 	// on the CPU side — tooltips, hit-testing, legends, toggles — crosses it
 	// here, so that the rule "with identity a channel value is a dim id, without
 	// identity it is already a display position" is stated once, by the object

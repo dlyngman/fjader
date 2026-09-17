@@ -931,17 +931,14 @@ export class GPUCoordinator {
 			// offers one now, and gating on the type would have meant listing
 			// every kind here as each migrates.
 			//
-			// Gated on slotCount, never on slotTable: this runs every frame, and
-			// on a driven scale `slotTable` is a getter that folds mix(from, to, t)
-			// over the whole dim. Since the GPU does that mix itself, touching it
-			// here walked every id per frame to produce a number nothing read.
+			// Gated on slotCount, not slotTable: a driven scale has no table, only
+			// the from/to halves the GPU mixes itself.
 			const slotCount = scale.slotCount;
 			if (slotCount === undefined) continue;
 			// from/to/t are absent for a scale with no driver — ordinal colour,
 			// facets — and the packer writes its settled table into both halves,
 			// which makes the resolve an identity for it. Such a scale supplies
-			// slotTable instead, and reading it costs nothing: it is a plain field
-			// on the scales that have no fold.
+			// slotTable instead, as a plain field.
 			const entry = (pool[scales.length] ??= { id: '', slotCount: 0 });
 			entry.id = scale.id;
 			entry.slotCount = slotCount;

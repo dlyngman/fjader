@@ -6,7 +6,7 @@
  * the channels wanting that are band and point axes, the facet grid, and
  * ordinal colour.
  *
- * Every band and point scale's `slotTable` — identity id -> display slot —
+ * Every band and point scale's slot table — identity id -> display slot —
  * lives in ONE uniform buffer, at a per-scale base the scale carries in its p4.
  * This module decides where each block goes and what the buffer holds; the
  * coordinator owns the GPU buffer and the upload.
@@ -64,12 +64,9 @@ export interface IdentitySlotScale {
 	/**
 	 * How many ids this scale's block holds — the count header.
 	 *
-	 * Separate from `slotTable.length` so the packer never has to touch
-	 * `slotTable` for a scale that supplies `from` and `to`. On `BandScaleState`
-	 * that getter folds `mix(from, to, t)` over the whole dim on demand, and the
-	 * packer runs every frame, so reading it here made a per-frame O(dim) walk
-	 * out of a per-reorder one — producing, since the resolve moved to the GPU,
-	 * a number nothing reads at all.
+	 * Separate from `slotTable.length` because a scale that animates supplies
+	 * `from` and `to` and has no table to measure: where its ids are now is
+	 * `mix(from, to, t)`, which the GPU resolves and nothing on the CPU stores.
 	 */
 	slotCount: number;
 	/**

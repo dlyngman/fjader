@@ -20,16 +20,25 @@ import { TransitionClock } from '$lib/animation';
  * |---|---|
  * | `target` | where each id is HEADED once settled; -1 if not displayed |
  * | `from`, `to` | the two ends of the transition in flight |
- * | `table` | `mix(from, to, t)` — where each id is NOW |
+ *
+ * Where an id is NOW is `mix(from, to, t)`, and it is never stored: `slotOf`
+ * computes it for one id, and the GPU resolve kernel for all of them.
  *
  * `to` and `target` disagree about exactly one kind of id: one that is leaving,
  * which is -1 in `target` and its exit gateway in `to`, for the length of its
- * exit. `#exiting` records which.
+ * exit.
  *
  * THE INVARIANT everything leans on: a hidden id holds -1 in BOTH `from` and
  * `to`, and nothing ever interpolates between a real slot and -1. So
  * `mix(from, to, t)` needs no sentinel branch, in JS or in the GPU resolve
- * kernel, and the two compute the same expression from the same inputs.
+ * kernel, and the two compute the same expression from the same inputs. It is
+ * also what makes `from >= 0`, once folded, mean "on screen".
+ *
+ * THE FOLD IS IN PLACE, and the one rule that comes with it: a fold and the
+ * clock's restart (or a settle) happen in the same call. After
+ * `from = mix(from, to, t)` the arrays already describe where everything is,
+ * but only at t = 0 — read them at the old t in between and every id moves a
+ * second time.
  */
 
 /** What joining the animation loop needs. */
@@ -41,14 +50,6 @@ export class SlotTransition {
 	#loop: SlotLoop | null;
 
 	#target: Float32Array = new Float32Array(0);
-	#current: Float32Array = new Float32Array(0);
-	/**
-	 * The t `#current` was computed at, or NaN when from/to have moved since.
-	 *
-	 * Keyed on t rather than invalidated per frame, so nothing has to say a frame
-	 * happened — the loop drives the clock, not this.
-	 */
-	#currentT: number = Number.NaN;
 	/**
 	 * Where each id's current transition STARTED.
 	 *
@@ -62,16 +63,6 @@ export class SlotTransition {
 	 * which for a leaver is its gateway rather than the hidden sentinel.
 	 */
 	#to: Float32Array = new Float32Array(0);
-	/**
-	 * 1 for an id that is travelling OUT — no longer displayed, but still on
-	 * screen until the clock reaches the far end.
-	 *
-	 * A leaver cannot simply take -1 as its destination: -1 is the not-displayed
-	 * sentinel and the shader discards it before the slot lookup, so the bar
-	 * would vanish on the frame the reorder landed. It has to hold a REAL slot
-	 * for the whole exit.
-	 */
-	#exiting: Uint8Array = new Uint8Array(0);
 	/**
 	 * How visible each id's LABEL is, as the two ends of the transition: 1 for
 	 * displayed, 0 for not. Travels on the same clock and folds the same way as
@@ -179,20 +170,17 @@ export class SlotTransition {
 	}
 
 	/**
-	 * Where each id is NOW: `mix(from, to, t)`, or -1 when not displayed.
+	 * Where every id is NOW, as a fresh array: `mix(from, to, t)`, or -1 when not
+	 * displayed.
 	 *
-	 * Computed on demand rather than maintained. The GPU never reads it — it
-	 * resolves the same mix in a compute pass — so a per-frame walk of every id
-	 * would produce a value nothing reads. It is the honest answer to "where is
-	 * everything", for the fold, for tests, and for axis labels.
+	 * Allocates and walks the whole dim, so it is for tests and debug dumps only.
+	 * Nothing on a hot path needs it: the GPU resolves the same mix itself, and a
+	 * CPU consumer that follows a transition asks `slotOf` per id.
 	 */
-	get table(): Float32Array {
-		const t = this.clock.t;
-		if (this.#currentT !== t) {
-			this.#writeCurrent(t);
-			this.#currentT = t;
-		}
-		return this.#current;
+	snapshot(): Float32Array {
+		const out = new Float32Array(this.#from.length);
+		for (let id = 0; id < out.length; id++) out[id] = this.slotOf(id);
+		return out;
 	}
 
 	/** Where each id is headed once settled; -1 for an id not displayed. */
@@ -297,8 +285,16 @@ export class SlotTransition {
 	 * every bar back to where that reorder began.
 	 */
 	startTransition(): void {
-		this.#from.set(this.table);
-		for (let id = 0; id < this.#alphaFrom.length; id++) this.#alphaFrom[id] = this.alphaOf(id);
+		const t = this.clock.t;
+		const from = this.#from;
+		const to = this.#to;
+		const alphaFrom = this.#alphaFrom;
+		const alphaTo = this.#alphaTo;
+		// Folded in place, restarted below in the same call.
+		for (let id = 0; id < from.length; id++) {
+			from[id] += (to[id] - from[id]) * t;
+			alphaFrom[id] += (alphaTo[id] - alphaFrom[id]) * t;
+		}
 		this.#countFrom = this.animatedCount;
 		this.#restartFolded();
 		this.version++;
@@ -307,11 +303,10 @@ export class SlotTransition {
 	/** The arrays, copied, for a debug dump. */
 	debugState() {
 		return {
-			slotCurrent: Array.from(this.table),
+			slotCurrent: Array.from(this.snapshot()),
 			slotTarget: Array.from(this.#target),
 			slotFrom: Array.from(this.#from),
 			slotTo: Array.from(this.#to),
-			exiting: Array.from(this.#exiting),
 			// The RENDER t — the one slotCurrent was computed from.
 			t: this.clock.t
 		};
@@ -326,10 +321,8 @@ export class SlotTransition {
 	 */
 	#discard(): void {
 		this.#target = new Float32Array(0);
-		this.#current = new Float32Array(0);
 		this.#from = new Float32Array(0);
 		this.#to = new Float32Array(0);
-		this.#exiting = new Uint8Array(0);
 		this.#alphaFrom = new Float32Array(0);
 		this.#alphaTo = new Float32Array(0);
 		this.#countFrom = 0;
@@ -354,20 +347,16 @@ export class SlotTransition {
 	#resize(length: number): Float32Array {
 		if (this.#target.length === length) return this.#target;
 
-		const keep = Math.min(this.#current.length, length);
+		const keep = Math.min(this.#from.length, length);
 		const grown = (old: Float32Array) => {
 			const next = new Float32Array(length);
 			next.fill(-1);
 			next.set(old.subarray(0, keep), 0);
 			return next;
 		};
-		this.#current = grown(this.#current);
 		this.#from = grown(this.#from);
 		this.#to = grown(this.#to);
 
-		const exiting = new Uint8Array(length);
-		exiting.set(this.#exiting.subarray(0, keep), 0);
-		this.#exiting = exiting;
 		// New ids are not displayed, so their labels start invisible.
 		const alpha = (old: Float32Array) => {
 			const next = new Float32Array(length);
@@ -386,14 +375,9 @@ export class SlotTransition {
 	 * has somewhere to go. `shown` is how many slots are displayed.
 	 */
 	#retarget(shown: number): void {
-		// Where everything actually is, before anything is overwritten — the fold's
-		// input. Through the getter: #current is computed on demand, and a retarget
-		// arriving between frames must see this frame's positions.
-		const current = this.table;
 		const target = this.#target;
 		const from = this.#from;
 		const to = this.#to;
-		const exiting = this.#exiting;
 		// Where an entrance comes from and an exit goes to.
 		//
 		// Other's slot when the axis has an Other bucket on screen: a category
@@ -415,7 +399,13 @@ export class SlotTransition {
 
 		for (let id = 0; id < target.length; id++) {
 			const trueTo = target[id];
-			const onScreen = current[id] >= 0;
+			// Where this id is now, from the OLD from/to — read before this pass
+			// writes either. Not a function of `target`, which already holds the
+			// new layout: a category that has just left is -1 there, and asking
+			// it would call a leaver never on screen, so it would vanish instead
+			// of travelling out.
+			const now = from[id] + (to[id] - from[id]) * t;
+			const onScreen = now >= 0;
 
 			// Other itself has nowhere to emerge from or vanish into but the end.
 			const gateway = otherSlot >= 0 && id !== otherId ? otherSlot : far;
@@ -427,7 +417,6 @@ export class SlotTransition {
 			alphaTo[id] = trueTo >= 0 ? 1 : 0;
 
 			if (trueTo >= 0) {
-				exiting[id] = 0;
 				// THE FOLD. An id already on screen continues from where it actually
 				// is, not from where its last transition began — a result landing at
 				// t = 0.4 must not restart the journey. For an id mid-exit this is
@@ -435,17 +424,17 @@ export class SlotTransition {
 				//
 				// Entering instead starts at the gateway — except on a first layout,
 				// where there is nothing to enter from, so it starts where it lands.
-				from[id] = onScreen ? current[id] : settled ? trueTo : gateway;
+				from[id] = onScreen ? now : settled ? trueTo : gateway;
 				to[id] = trueTo;
 			} else if (onScreen && !settled) {
-				// Leaving. Keep a REAL slot and walk out; the hidden sentinel is
-				// applied by #settle once it arrives, not now.
-				exiting[id] = 1;
-				from[id] = current[id];
+				// Leaving. Keep a REAL slot and walk out: -1 is the not-displayed
+				// sentinel, which the shader discards before the slot lookup, so
+				// taking it as the destination would make the bar vanish on the
+				// frame the reorder landed. #settle applies it once the exit is over.
+				from[id] = now;
 				to[id] = gateway;
 			} else {
 				// Hidden and staying hidden, or hidden before the first layout.
-				exiting[id] = 0;
 				from[id] = -1;
 				to[id] = -1;
 			}
@@ -472,23 +461,6 @@ export class SlotTransition {
 	}
 
 	/**
-	 * Write #current = mix(from, to, t).
-	 *
-	 * Deliberately NOT a function of #target. The fold reads this, and `layout`
-	 * has already overwritten the target with the NEW order by then: consulting
-	 * it here marked a category that had just left as never on screen, so it
-	 * vanished instead of travelling out.
-	 */
-	#writeCurrent(t: number): void {
-		const current = this.#current;
-		const from = this.#from;
-		const to = this.#to;
-		for (let id = 0; id < current.length; id++) {
-			current[id] = from[id] + (to[id] - from[id]) * t;
-		}
-	}
-
-	/**
 	 * Land every id exactly on its TRUE target — for a leaver the hidden
 	 * sentinel, not the gateway it was walking toward. This is where an exit
 	 * completes.
@@ -500,13 +472,10 @@ export class SlotTransition {
 	#settle(): void {
 		const target = this.#target;
 		this.clock.settle();
-		this.#currentT = 1;
 		this.#countFrom = this.#countTo;
 		for (let i = 0; i < target.length; i++) {
-			this.#current[i] = target[i];
 			this.#from[i] = target[i];
 			this.#to[i] = target[i];
-			this.#exiting[i] = 0;
 			const shownNow = target[i] >= 0 ? 1 : 0;
 			this.#alphaFrom[i] = shownNow;
 			this.#alphaTo[i] = shownNow;
@@ -518,12 +487,10 @@ export class SlotTransition {
 	 * the loop.
 	 *
 	 * The restart CARRIES VELOCITY, so a transition interrupted mid-flight
-	 * continues at the speed it was travelling. #current is marked stale rather
-	 * than written: at t = 0 it equals the folded `from`.
+	 * continues at the speed it was travelling.
 	 */
 	#restartFolded(): void {
 		this.clock.restart();
-		this.#currentT = Number.NaN;
 		if (!this.#isAnimating && this.#loop) {
 			this.#isAnimating = true;
 			this.#loop.addAnimatedSource(this.clock);

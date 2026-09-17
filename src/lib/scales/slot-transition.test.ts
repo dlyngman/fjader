@@ -137,8 +137,28 @@ describe('SlotTransition per-id reads', () => {
 		const s = laidOut();
 		s.layout('ids', [2, 0], 4); // 1 leaves, 3 stays hidden, 2 and 0 swap
 		stepTo(s, 25);
-		const table = Array.from(s.table);
+		const table = Array.from(s.snapshot());
 		for (let id = 0; id < 4; id++) expect(s.slotOf(id)).toBeCloseTo(table[id], 6);
 		expect(s.slotOf(99)).toBe(-1);
+	});
+
+	it('does not move any id across a fold, whichever call folds', () => {
+		// The fold rewrites `from` in place and resets t in the same call. Read
+		// on either side of it, every id — staying, swapping, leaving — has to be
+		// exactly where it was, or it moves twice.
+		const s = laidOut();
+		s.layout('ids', [2, 0], 3); // 1 leaves, 2 and 0 swap
+		stepTo(s, 25);
+
+		const before = Array.from(s.snapshot());
+		s.startTransition();
+		expect(s.t).toBe(0);
+		expect(Array.from(s.snapshot())).toEqual(before);
+
+		stepTo(s, 10);
+		const midway = Array.from(s.snapshot());
+		s.layout('ids', [0, 1, 2], 3); // 1 turns back mid-exit
+		const after = Array.from(s.snapshot());
+		for (let id = 0; id < 3; id++) expect(after[id]).toBeCloseTo(midway[id], 6);
 	});
 });

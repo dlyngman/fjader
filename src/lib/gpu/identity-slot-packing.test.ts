@@ -311,8 +311,8 @@ describe('what the shader reads back', () => {
 	}
 
 	it('agrees with the scale about every id, mid-transition', () => {
-		// The two halves of the design meet here: JS computes slotTable as
-		// mix(from, to, t) and the vertex stage computes the same thing from the
+		// The two halves of the design meet here: JS computes where an id is as
+		// mix(from, to, t) and the resolve pass computes the same thing from the
 		// same three numbers. If they drift, bars are in the wrong slots.
 		const s = new BandScaleState('species', [], {
 			gpuCoordinator: { addAnimatedSource: () => {} }
@@ -336,8 +336,9 @@ describe('what the shader reads back', () => {
 		);
 		const base = state.offsets.get(s.id)!;
 
+		const snapshot = s.slotSnapshot();
 		for (let id = 0; id < 3; id++) {
-			expect(identitySlot(state, base, id)).toBeCloseTo(s.slotTable[id], 5);
+			expect(identitySlot(state, base, id)).toBeCloseTo(snapshot[id], 5);
 		}
 
 		// And the leaver specifically: still on screen, past where it started,

@@ -44,7 +44,7 @@ describe('BandScaleState.processDataForGPU', () => {
 // Slot table (band step 3a / §9.5)
 // ---------------------------------------------------------------------------
 
-describe('BandScaleState.slotTable', () => {
+describe('BandScaleState slot table', () => {
 	/** Build a scale whose identity ids are alphabetical, as the dim assigns them. */
 	function withIdentity(values: string[], domain: string[]) {
 		const scale = new BandScaleState('species');
@@ -59,7 +59,7 @@ describe('BandScaleState.slotTable', () => {
 			['Adelie', 'Chinstrap', 'Gentoo'],
 			['Adelie', 'Chinstrap', 'Gentoo']
 		);
-		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([0, 1, 2]);
 	});
 
 	it('maps id to display slot under an explicit reorder', () => {
@@ -70,7 +70,7 @@ describe('BandScaleState.slotTable', () => {
 		scale.updateDomainFromExtents();
 
 		// Adelie(id 0) -> slot 1, Chinstrap(id 1) -> slot 2, Gentoo(id 2) -> slot 0.
-		expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([1, 2, 0]);
 	});
 
 	it('gives -1 to ids that are not displayed', () => {
@@ -80,7 +80,7 @@ describe('BandScaleState.slotTable', () => {
 		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
 
-		const table = Array.from(scale.slotTable);
+		const table = Array.from(scale.slotSnapshot());
 		expect(table[1]).toBe(-1); // Chinstrap: filtered out
 		expect(table[0]).toBe(0);
 		expect(table[2]).toBe(1);
@@ -94,8 +94,8 @@ describe('BandScaleState.slotTable', () => {
 		scale.updateDomainFromExtents();
 
 		// Indexable by Emperor's id without running off the end — the §9.4 failure.
-		expect(scale.slotTable.length).toBe(4);
-		expect(scale.slotTable[3]).toBe(-1);
+		expect(scale.slotSnapshot().length).toBe(4);
+		expect(scale.slotSnapshot()[3]).toBe(-1);
 	});
 
 	it('follows a reorder without the ids changing', () => {
@@ -103,17 +103,17 @@ describe('BandScaleState.slotTable', () => {
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
-		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([0, 1, 2]);
 
 		// Sort by some measure: Gentoo, Chinstrap, Adelie. Ids are untouched.
 		scale.setSortOrder(['Gentoo', 'Chinstrap', 'Adelie']);
 		scale.updateDomainFromExtents();
-		expect(Array.from(scale.slotTable)).toEqual([2, 1, 0]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([2, 1, 0]);
 	});
 
 	it('is empty before identity values arrive', () => {
 		const scale = new BandScaleState('species');
-		expect(scale.slotTable.length).toBe(0);
+		expect(scale.slotSnapshot().length).toBe(0);
 	});
 
 	it('re-encodes categories registered before identity arrived', () => {
@@ -128,7 +128,7 @@ describe('BandScaleState.slotTable', () => {
 
 		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
 		expect(Array.from(scale.displayOrder)).toEqual([0, 1, 2]);
-		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([0, 1, 2]);
 	});
 
 	it('keeps a pre-identity sort order after identity arrives', () => {
@@ -140,7 +140,7 @@ describe('BandScaleState.slotTable', () => {
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 
 		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
-		expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([1, 2, 0]);
 	});
 
 	it('encodes a value added to the live array after identity was adopted', () => {
@@ -162,7 +162,7 @@ describe('BandScaleState.slotTable', () => {
 
 		expect(scale.effectiveDomain).toContain('Emperor');
 		expect(Array.from(scale.displayOrder)).toEqual([0, 1, 2, 3]);
-		expect(scale.slotTable[3]).toBe(3);
+		expect(scale.slotSnapshot()[3]).toBe(3);
 	});
 
 	it('accepts ids directly, as topN passes them', () => {
@@ -175,7 +175,7 @@ describe('BandScaleState.slotTable', () => {
 		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
 		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
 		// Chinstrap is not displayed.
-		expect(Array.from(scale.slotTable)).toEqual([1, -1, 0]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([1, -1, 0]);
 	});
 
 	it('passes positions through when the scale has no identity values', () => {
@@ -186,7 +186,7 @@ describe('BandScaleState.slotTable', () => {
 		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { explicit: true });
 		scale.updateDomainFromExtents();
 
-		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([0, 1, 2]);
 	});
 });
 
@@ -261,7 +261,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 			expect(s.isAnimating).toBe(false);
 			expect(s.slotTo[1]).toBe(-1);
-			expect(Array.from(s.slotTable)).toEqual(Array.from(s.slotTarget));
+			expect(Array.from(s.slotSnapshot())).toEqual(Array.from(s.slotTarget));
 			expect(s.slotVersion).toBeGreaterThan(version);
 		});
 
@@ -275,8 +275,8 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
 
-			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
-			expect(Array.from(s.slotTable)).toEqual(Array.from(s.slotTarget));
+			expect(Array.from(s.slotSnapshot())).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotSnapshot())).toEqual(Array.from(s.slotTarget));
 		});
 	});
 
@@ -304,7 +304,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// its bars in from off-axis.
 			const { s, registered } = withLoop();
 			expect(registered).toEqual([]);
-			expect(Array.from(s.slotTable)).toEqual([0, 1, 2]);
+			expect(Array.from(s.slotSnapshot())).toEqual([0, 1, 2]);
 		});
 
 		it('still does not register when the data lands BEFORE the identity', () => {
@@ -332,7 +332,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 			expect(registered).toEqual([]);
 			expect(Array.from(s.slotTarget)).toEqual([1, 2, 0]);
-			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotSnapshot())).toEqual([1, 2, 0]);
 		});
 
 		it('registers once on a reorder, and leaves the table where it was', () => {
@@ -344,7 +344,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// The target moved; the visible table has not yet. That gap is the
 			// animation, and at C1 it did not exist.
 			expect(Array.from(s.slotTarget)).toEqual([1, 2, 0]);
-			expect(Array.from(s.slotTable)).toEqual([0, 1, 2]);
+			expect(Array.from(s.slotSnapshot())).toEqual([0, 1, 2]);
 
 			// A second reorder while already animating must not register twice.
 			s.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
@@ -360,7 +360,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.clock.isAtRest()).toBe(false);
 
 			// Adelie(0) is travelling from slot 0 to slot 1.
-			let previous = s.slotTable[0];
+			let previous = s.slotSnapshot()[0];
 			let moved = false;
 			// A one-slot move needs 412 steps to reach REST_PRECISION at stiffness
 			// 120 — about 1.1s of physics at 360Hz, nearly all of it an
@@ -372,8 +372,8 @@ describe('BandScaleState identity <-> display translation', () => {
 			while (steps < 5000 && !s.clock.isAtRest()) {
 				s.clock.step();
 				s.clock.updateRenderState(0);
-				if (s.slotTable[0] > previous) moved = true;
-				previous = s.slotTable[0];
+				if (s.slotSnapshot()[0] > previous) moved = true;
+				previous = s.slotSnapshot()[0];
 				steps++;
 			}
 
@@ -381,7 +381,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(moved).toBe(true);
 			expect(steps).toBeLessThan(5000);
 			expect(s.clock.isAtRest()).toBe(true);
-			expect(s.slotTable[0]).toBeCloseTo(1, 2);
+			expect(s.slotSnapshot()[0]).toBeCloseTo(1, 2);
 		});
 
 		it('does NOT bump slotVersion per frame, so the packer uploads on retarget only', () => {
@@ -416,11 +416,10 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slotVersion).toBeGreaterThan(afterRetarget);
 		});
 
-		it('interpolates the table on demand, without walking every id per frame', () => {
-			// slotTable is no longer maintained: the GPU reads from/to/t, so the
-			// per-frame walk produced a value nothing read. It still has to be the
-			// honest answer when asked — for the fold, the tests, and the axis
-			// labels that will need it.
+		it('snapshots mix(from, to, t), the same expression the GPU resolves', () => {
+			// Where every id is now is never stored: the GPU reads from/to/t, and
+			// a CPU reader asks per id. The snapshot still has to be the honest
+			// answer when asked.
 			const { s } = withLoop();
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
@@ -434,7 +433,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			}
 
 			const t = s.t;
-			const table = Array.from(s.slotTable);
+			const table = Array.from(s.slotSnapshot());
 			// Exactly mix(from, to, t), which is what the shader computes from the
 			// same three inputs. If these ever disagree the two halves of the
 			// design have drifted.
@@ -456,7 +455,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			}
 			s.clock._markAtRest();
 
-			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotSnapshot())).toEqual([1, 2, 0]);
 			expect(s.isAnimating).toBe(false);
 		});
 
@@ -477,7 +476,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 			expect(registered).toEqual([s.clock]);
 			// Still on screen, at the slot it held, with -1 waiting for it.
-			expect(s.slotTable[1]).toBe(1);
+			expect(s.slotSnapshot()[1]).toBe(1);
 			expect(s.slotTarget[1]).toBe(-1);
 			// And it is travelling: the loop may not evict while it is in flight.
 			expect(s.clock.isAtRest()).toBe(false);
@@ -487,16 +486,16 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.clock.step();
 				s.clock.updateRenderState(0);
 				// Never discarded mid-exit, which is the C3 behaviour this replaces.
-				expect(s.slotTable[1]).toBeGreaterThanOrEqual(0);
+				expect(s.slotSnapshot()[1]).toBeGreaterThanOrEqual(0);
 				steps++;
 			}
 			expect(steps).toBeLessThan(5000);
 			// It got past the last visible slot before the loop let go.
-			expect(s.slotTable[1]).toBeGreaterThan(1);
+			expect(s.slotSnapshot()[1]).toBeGreaterThan(1);
 
 			s.clock._markAtRest();
 			// Only now is it hidden.
-			expect(s.slotTable[1]).toBe(-1);
+			expect(s.slotSnapshot()[1]).toBe(-1);
 		});
 
 		it('climbs an entrant in from beyond the end', () => {
@@ -505,14 +504,14 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 			s.updateDomainFromExtents();
 			s.clock._markAtRest();
-			expect(s.slotTable[1]).toBe(-1);
+			expect(s.slotSnapshot()[1]).toBe(-1);
 
 			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 			s.updateDomainFromExtents();
 
 			// Starts past the last slot — clipped by the scissor, not discarded by
 			// the shader, which is what lets it travel at all.
-			expect(s.slotTable[1]).toBe(3);
+			expect(s.slotSnapshot()[1]).toBe(3);
 			expect(s.slotTarget[1]).toBe(1);
 
 			let steps = 0;
@@ -521,7 +520,7 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.clock.updateRenderState(0);
 				steps++;
 			}
-			expect(s.slotTable[1]).toBeCloseTo(1, 2);
+			expect(s.slotSnapshot()[1]).toBeCloseTo(1, 2);
 		});
 
 		it('enters and leaves through Other when the axis has one', () => {
@@ -538,7 +537,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setOtherId(3);
 			s.addMark(['Adelie', 'Chinstrap', 'Other'], 'mark-1');
 			s.updateDomainFromExtents();
-			expect(Array.from(s.slotTable)).toEqual([0, 1, -1, 2]);
+			expect(Array.from(s.slotSnapshot())).toEqual([0, 1, -1, 2]);
 
 			// Chinstrap drops out and Gentoo takes its place. Other stays at 2.
 			s.addMark(['Adelie', 'Gentoo', 'Other'], 'mark-1');
@@ -550,10 +549,10 @@ describe('BandScaleState identity <-> display translation', () => {
 			while (steps < 5000 && !s.clock.isAtRest()) {
 				s.clock.step();
 				s.clock.updateRenderState(0);
-				expect(s.slotTable[1]).toBeLessThanOrEqual(2);
+				expect(s.slotSnapshot()[1]).toBeLessThanOrEqual(2);
 				steps++;
 			}
-			expect(s.slotTable[1]).toBeCloseTo(2, 2);
+			expect(s.slotSnapshot()[1]).toBeCloseTo(2, 2);
 
 			// And the entrant came OUT of Other rather than in from past the end.
 			expect(s.slotTarget[2]).toBe(1);
@@ -572,7 +571,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// cannot check that it did not try to leave through itself.
 			s.setSortOrder(['Other', 'Adelie', 'Chinstrap']);
 			s.updateDomainFromExtents();
-			expect(s.slotTable[2]).toBe(0);
+			expect(s.slotSnapshot()[2]).toBe(0);
 
 			s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
 			s.updateDomainFromExtents();
@@ -584,14 +583,14 @@ describe('BandScaleState identity <-> display translation', () => {
 			while (steps < 5000 && !s.clock.isAtRest()) {
 				s.clock.step();
 				s.clock.updateRenderState(0);
-				furthest = Math.max(furthest, s.slotTable[2]);
+				furthest = Math.max(furthest, s.slotSnapshot()[2]);
 				steps++;
 			}
 			expect(steps).toBeLessThan(5000);
 			expect(furthest).toBeCloseTo(2, 2);
 
 			s.clock._markAtRest();
-			expect(s.slotTable[2]).toBe(-1);
+			expect(s.slotSnapshot()[2]).toBe(-1);
 		});
 
 		it('moves everything on one clock, so ids with different distances arrive together', () => {
@@ -605,7 +604,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setIdentity(new FieldIdentity(['A', 'B', 'C', 'D']));
 			s.addMark(['A', 'B', 'C', 'D'], 'mark-1');
 			s.updateDomainFromExtents();
-			expect(Array.from(s.slotTable)).toEqual([0, 1, 2, 3]);
+			expect(Array.from(s.slotSnapshot())).toEqual([0, 1, 2, 3]);
 
 			// D to the front: A 0->1 (one slot), D 3->0 (three).
 			s.setSortOrder(['D', 'A', 'B', 'C']);
@@ -616,8 +615,8 @@ describe('BandScaleState identity <-> display translation', () => {
 			while (steps < 5000 && !s.clock.isAtRest()) {
 				s.clock.step();
 				s.clock.updateRenderState(0);
-				const fracA = (s.slotTable[0] - 0) / (1 - 0);
-				const fracD = (s.slotTable[3] - 3) / (0 - 3);
+				const fracA = (s.slotSnapshot()[0] - 0) / (1 - 0);
+				const fracD = (s.slotSnapshot()[3] - 3) / (0 - 3);
 				expect(fracA).toBeCloseTo(fracD, 6);
 				if (fracA > 0.01 && fracA < 0.99) sawMotion = true;
 				steps++;
@@ -626,7 +625,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(sawMotion).toBe(true);
 
 			s.clock._markAtRest();
-			expect(Array.from(s.slotTable)).toEqual([1, 2, 3, 0]);
+			expect(Array.from(s.slotSnapshot())).toEqual([1, 2, 3, 0]);
 		});
 
 		it('folds a mid-flight retarget, continuing from where it is', () => {
@@ -649,7 +648,7 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.clock.step();
 				s.clock.updateRenderState(0);
 			}
-			const midFlight = Array.from(s.slotTable);
+			const midFlight = Array.from(s.slotSnapshot());
 			expect(midFlight[0]).toBeGreaterThan(0);
 			expect(midFlight[0]).toBeLessThan(2);
 
@@ -660,7 +659,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// The table does not jump on the frame the new result lands: the fold
 			// captured where each id was. Without it these would snap back to the
 			// positions the PREVIOUS transition started from.
-			expect(Array.from(s.slotTable)).toEqual(midFlight);
+			expect(Array.from(s.slotSnapshot())).toEqual(midFlight);
 
 			let steps = 0;
 			while (steps < 5000 && !s.clock.isAtRest()) {
@@ -669,7 +668,7 @@ describe('BandScaleState identity <-> display translation', () => {
 				steps++;
 			}
 			s.clock._markAtRest();
-			expect(Array.from(s.slotTable)).toEqual([1, 0, 2]);
+			expect(Array.from(s.slotSnapshot())).toEqual([1, 0, 2]);
 		});
 
 		it('completes an exit that has nowhere to travel, instead of stranding it', () => {
@@ -688,7 +687,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.setOtherId(2);
 			s.addMark(['Adelie', 'Chinstrap', 'Other'], 'mark-1');
 			s.updateDomainFromExtents();
-			expect(s.slotTable[2]).toBe(2);
+			expect(s.slotSnapshot()[2]).toBe(2);
 
 			s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
 			s.updateDomainFromExtents();
@@ -700,14 +699,14 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.clock.updateRenderState(0);
 			}
 			s.clock._markAtRest();
-			expect(s.slotTable[2]).toBe(-1);
+			expect(s.slotSnapshot()[2]).toBe(-1);
 		});
 
 		it('still snaps the FIRST layout, so a chart does not slide in on load', () => {
 			// Every category is entering on an opening frame. Animating that would
 			// slide every bar in from off-axis on every chart, every load.
 			const { s, registered } = withLoop();
-			expect(Array.from(s.slotTable)).toEqual([0, 1, 2]);
+			expect(Array.from(s.slotSnapshot())).toEqual([0, 1, 2]);
 			expect(registered).toEqual([]);
 		});
 
@@ -719,13 +718,13 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.clock.step();
 				s.clock.updateRenderState(0);
 			}
-			const midExit = s.slotTable[1];
+			const midExit = s.slotSnapshot()[1];
 			expect(midExit).toBeGreaterThan(1);
 
 			// Back before it landed. It should resume from where it is.
 			s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 			s.updateDomainFromExtents();
-			expect(s.slotTable[1]).toBeCloseTo(midExit, 5);
+			expect(s.slotSnapshot()[1]).toBeCloseTo(midExit, 5);
 			expect(s.slotTarget[1]).toBe(1);
 		});
 
@@ -737,7 +736,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// reorder began.
 			//
 			// Asserted on what the GPU draws — mix(slotFrom, slotTo, t) — rather
-			// than on slotTable, which is computed from the same inputs and would
+			// than on the snapshot, which is computed from the same inputs and would
 			// agree with a wrong answer.
 			const { s } = withLoop();
 			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
@@ -765,7 +764,7 @@ describe('BandScaleState identity <-> display translation', () => {
 				s.clock.updateRenderState(0);
 			}
 			s.clock._markAtRest();
-			expect(Array.from(s.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(s.slotSnapshot())).toEqual([1, 2, 0]);
 		});
 
 		describe('axis ticks', () => {
@@ -783,7 +782,7 @@ describe('BandScaleState identity <-> display translation', () => {
 				expect(leaving.value).toBe('Chinstrap');
 				expect(s.tickOpacity(1)).toBeGreaterThan(0);
 				expect(s.tickOpacity(1)).toBeLessThan(1);
-				expect(s.tickSlot(1)).toBeCloseTo(s.slotTable[1], 6);
+				expect(s.tickSlot(1)).toBeCloseTo(s.slotSnapshot()[1], 6);
 
 				while (!s.clock.isAtRest()) {
 					s.clock.step();
@@ -918,14 +917,14 @@ describe('BandScaleState identity <-> display translation', () => {
 
 		it('agree exactly, because nothing interpolates yet', () => {
 			const scale = reordered();
-			expect(Array.from(scale.slotTable)).toEqual(Array.from(scale.slotTarget));
+			expect(Array.from(scale.slotSnapshot())).toEqual(Array.from(scale.slotTarget));
 		});
 
-		it('slotTable is slotCurrent, and it is what the reorder produced', () => {
+		it('the snapshot is what the reorder produced', () => {
 			const scale = reordered();
 			// Ids alphabetical; display order Gentoo, Adelie, Chinstrap. So
 			// Adelie(0) sits at slot 1, Chinstrap(1) at 2, Gentoo(2) at 0.
-			expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(scale.slotSnapshot())).toEqual([1, 2, 0]);
 			expect(Array.from(scale.slotTarget)).toEqual([1, 2, 0]);
 		});
 
@@ -939,27 +938,29 @@ describe('BandScaleState identity <-> display translation', () => {
 			// say so: a target of -1 that settles to something else would draw a
 			// filtered category at a real slot.
 			expect(Array.from(scale.slotTarget)).toEqual([0, -1, 1]);
-			expect(Array.from(scale.slotTable)).toEqual([0, -1, 1]);
+			expect(Array.from(scale.slotSnapshot())).toEqual([0, -1, 1]);
 		});
 
 		it('reuses its arrays across a reorder, and resizes when the dim grows', () => {
 			const scale = reordered();
-			const before = scale.slotTable;
+			const from = scale.slotFrom;
+			const to = scale.slotTo;
 
 			scale.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
 			scale.updateDomainFromExtents();
-			// Same length, so the same object — a reorder must not allocate, which
-			// is what makes this safe to drive from a per-frame spring later.
-			expect(scale.slotTable).toBe(before);
-			expect(Array.from(scale.slotTable)).toEqual([2, 0, 1]);
+			// Same length, so the same objects — a reorder must not allocate the
+			// arrays the packer uploads.
+			expect(scale.slotFrom).toBe(from);
+			expect(scale.slotTo).toBe(to);
+			expect(Array.from(scale.slotSnapshot())).toEqual([2, 0, 1]);
 
 			// A second table appends to the dim: the arrays have to grow with it,
 			// or an id past the old end would index off the table.
 			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']));
 			scale.addMark(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor'], 'mark-2');
 			scale.updateDomainFromExtents();
-			expect(scale.slotTable.length).toBe(4);
-			expect(scale.slotTable.length).toBe(scale.slotTarget.length);
+			expect(scale.slotSnapshot().length).toBe(4);
+			expect(scale.slotSnapshot().length).toBe(scale.slotTarget.length);
 		});
 
 		it('bumps slotVersion when it settles, so the packer re-uploads', () => {
@@ -1004,11 +1005,11 @@ describe('BandScaleState identity <-> display translation', () => {
 			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
 			await Promise.resolve();
 
-			// slotTable is indexed by id and holds the display slot. Ids are
+			// The slot table is indexed by id and holds the display slot. Ids are
 			// alphabetical, so Adelie(0) is now at slot 1, Chinstrap(1) at 2 and
 			// Gentoo(2) at 0. A reorder that moved #domain but not this would draw
 			// the old order while labelling the new one.
-			expect(Array.from(scale.slotTable)).toEqual([1, 2, 0]);
+			expect(Array.from(scale.slotSnapshot())).toEqual([1, 2, 0]);
 			expect(Array.from(scale.displayOrder)).toEqual([2, 0, 1]);
 		});
 
@@ -1256,7 +1257,7 @@ describe('BandScaleState across an identity reset', () => {
 		// decodes to Rockhopper — a category nothing has registered.
 		expect(scale.effectiveDomain).toEqual(['King', 'Emperor']);
 		expect(Array.from(scale.displayOrder)).toEqual([1, 0]);
-		expect(Array.from(scale.slotTable)).toEqual([1, 0, -1]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([1, 0, -1]);
 	});
 
 	it('handles a mark that re-registers before the fresh identity is adopted', () => {
@@ -1342,7 +1343,7 @@ describe('BandScaleState GPU readiness and gpuState', () => {
 		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
 		expect(scale.gpuState.domainMax).toBe(2);
 		expect(scale.getConfig().categoryCount).toBe(3);
-		expect(Array.from(scale.slotTable)).toEqual([0, 1, 2]);
+		expect(Array.from(scale.slotSnapshot())).toEqual([0, 1, 2]);
 	});
 
 	it('agrees with getConfig().categoryCount', () => {

@@ -359,7 +359,7 @@ export class TooltipManager {
 	// on exactly the charts identity exists for.
 	//
 	// The translation itself belongs to BandScaleState, which owns both spaces
-	// (idAtSlot / categoryAt, alongside slotTable for the GPU). All this does
+	// (idAtSlot / categoryAt, alongside the slot tables for the GPU). All this does
 	// is fetch the live scale to ask. Nothing here may index a captured domain
 	// array: `config.bandDomains` is a snapshot taken inside untrack() at
 	// register time, so it is a gate — does this mark declare a band axis on
