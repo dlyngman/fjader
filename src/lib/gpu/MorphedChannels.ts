@@ -43,7 +43,7 @@ export interface MorphHost extends ClockLoop {
 }
 
 /** A scale's slots, when they own a data-transition clock marks can adopt. */
-interface ClockHost {
+export interface ClockHost {
 	clock: TransitionClock;
 	startTransition(): void;
 }
@@ -53,13 +53,14 @@ export interface MorphedChannelsOptions {
 	host: MorphHost;
 	/** Unique per renderer; also the compute-work key. */
 	label: string;
-	/** The chart's scale on an axis, or null. */
-	scaleFor(axis: 'x' | 'y'): unknown;
+	/**
+	 * The clock to adopt, or null to own one. Asked on every encode rather than
+	 * once, because the scale that supplies it can arrive after the first data.
+	 */
+	clockHost(): ClockHost | null;
 	/** Charts to redraw while this mark's OWN clock runs. */
 	affectedCharts(): string[];
 }
-
-type BandAxis = 'x' | 'y';
 
 interface Channel {
 	from: GPUBuffer;
@@ -135,7 +136,7 @@ export class MorphedChannels {
 	#device: GPUDevice;
 	#host: MorphHost;
 	#label: string;
-	#scaleFor: (axis: BandAxis) => unknown;
+	#clockHostFor: () => ClockHost | null;
 	#affectedCharts: () => string[];
 
 	#channels = new Map<number, Channel>();
@@ -147,7 +148,6 @@ export class MorphedChannels {
 	#registered = false;
 
 	#alignmentKey: number | null = null;
-	#bandAxis: BandAxis | null = null;
 
 	/** The next dispatch starts from `to`. */
 	#snapPending = false;
@@ -158,8 +158,14 @@ export class MorphedChannels {
 	/** The t `resolved` was last computed at. */
 	#resolvedT = 1;
 
-	/** Last version seen from the clock, to notice a restart this mark did not cause. */
-	#lastClockVersion: number | null = null;
+	/**
+	 * The clock last read, and its version then — to notice a restart this mark
+	 * did not cause. Both, because a version only means something against the
+	 * clock it came from: a mark that starts adopting a scale's clock, or whose
+	 * scale is replaced, is reading a different counter.
+	 */
+	#lastClock: TransitionClock | null = null;
+	#lastClockVersion = 0;
 	/** #readClock's results, in fields rather than a returned object. */
 	#clockT = 1;
 	#clockRestarted = false;
@@ -186,7 +192,7 @@ export class MorphedChannels {
 		this.#device = options.device;
 		this.#host = options.host;
 		this.#label = options.label;
-		this.#scaleFor = options.scaleFor;
+		this.#clockHostFor = options.clockHost;
 		this.#affectedCharts = options.affectedCharts;
 		this.#passDescriptor = { label: `${options.label}-resolve` };
 	}
@@ -197,22 +203,19 @@ export class MorphedChannels {
 	}
 
 	/**
-	 * One data update: every morphing channel's new values, and the band ids
-	 * that say which category each row is.
+	 * One data update: every morphing channel's new values, and the ids that say
+	 * which category each row is.
 	 *
 	 * All channels in one call, so one update starts one transition. Returns
 	 * whether any buffer was (re)allocated, which the caller must rebind.
 	 */
 	write(
-		bandAxis: BandAxis,
-		bandIds: ArrayLike<number>,
+		rowIds: ArrayLike<number>,
 		channels: readonly (readonly [number, AllowSharedBufferSource])[]
 	): boolean {
-		const key = alignmentKey(bandIds);
-		let travels = this.#alignmentKey === key && this.#bandAxis === bandAxis;
-		if (this.#bandAxis !== bandAxis) this.#lastClockVersion = null;
+		const key = alignmentKey(rowIds);
+		let travels = this.#alignmentKey === key;
 		this.#alignmentKey = key;
-		this.#bandAxis = bandAxis;
 
 		let reallocated = false;
 		for (const [binding, data] of channels) {
@@ -363,12 +366,18 @@ export class MorphedChannels {
 		channel.resolved.destroy();
 	}
 
-	/** The band axis's slots, when they own a clock this mark should adopt. */
-	#clockHost(): ClockHost | null {
-		if (!this.#bandAxis) return null;
-		const scale = this.#scaleFor(this.#bandAxis) as { slots?: Partial<ClockHost> } | null;
-		const slots = scale?.slots;
-		return slots?.clock && slots.startTransition ? (slots as ClockHost) : null;
+	/**
+	 * The clock this mark runs on: the host's when there is one, its own
+	 * otherwise. Never both — adopting stops the clock it owned, and the switch
+	 * reads as a restart, so the next encode folds from what is on screen.
+	 */
+	#clock(host: ClockHost | null): TransitionClock | null {
+		if (!host) return this.#ownClock;
+		if (this.#ownClock) {
+			this.#ownClock.stop();
+			this.#ownClock = null;
+		}
+		return host.clock;
 	}
 
 	/**
@@ -383,13 +392,13 @@ export class MorphedChannels {
 	 * re-upload its slot tables, for nothing.
 	 */
 	#startTransition(): void {
-		const scale = this.#clockHost();
-		const clock = scale?.clock ?? this.#ownClock;
-		if (clock && this.#lastClockVersion !== null && clock.version !== this.#lastClockVersion) {
+		const host = this.#clockHostFor();
+		const clock = this.#clock(host);
+		if (clock && clock === this.#lastClock && clock.version !== this.#lastClockVersion) {
 			return;
 		}
-		if (scale) {
-			scale.startTransition();
+		if (host) {
+			host.startTransition();
 			return;
 		}
 		this.#ownClock ??= new TransitionClock({ loop: this.#host });
@@ -407,19 +416,24 @@ export class MorphedChannels {
 	 * on it this mark's values snap back to where its own transition started.
 	 *
 	 * The clock's own version, not the slot table's: settling bumps the slot
-	 * version while no new transition began. The first observation is not a
-	 * restart, or the opening frame would fold against nothing.
+	 * version while no new transition began. A DIFFERENT clock from last time
+	 * counts as a restart too — its t has nothing to do with the old one's, so
+	 * continuing without a fold would jump. The first clock ever read is not a
+	 * restart: until then nothing has animated, and `from` already equals what
+	 * is on screen.
 	 */
 	#readClock(): void {
-		const clock = this.#clockHost()?.clock ?? this.#ownClock;
+		const clock = this.#clock(this.#clockHostFor());
 		if (!clock) {
-			this.#lastClockVersion = null;
+			this.#lastClock = null;
 			this.#clockT = 1;
 			this.#clockRestarted = false;
 			return;
 		}
+		const last = this.#lastClock;
 		this.#clockRestarted =
-			this.#lastClockVersion !== null && clock.version !== this.#lastClockVersion;
+			last !== null && (clock !== last || clock.version !== this.#lastClockVersion);
+		this.#lastClock = clock;
 		this.#lastClockVersion = clock.version;
 		this.#clockT = clock.t;
 	}

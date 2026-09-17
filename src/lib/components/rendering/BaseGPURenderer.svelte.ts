@@ -1,6 +1,6 @@
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
-import { MorphedChannels } from '$lib/gpu/MorphedChannels';
+import { MorphedChannels, type ClockHost } from '$lib/gpu/MorphedChannels';
 
 interface RendererOptions {
 	zIndex?: number;
@@ -44,6 +44,8 @@ export class BaseGPURenderer {
 
 	/** Channels that morph between data updates; created on first use. */
 	#morphed: MorphedChannels | null = null;
+	/** The band axis of the last morphed write — whose scale's clock they adopt. */
+	#morphAxis: 'x' | 'y' | null = null;
 
 	// State management
 	#resourcesCreated = $state(false);
@@ -226,9 +228,18 @@ export class BaseGPURenderer {
 			device: this.#device,
 			host: this.#gpuCoordinator,
 			label: this.#rendererId,
-			// No template string: this runs on every frame a mark encodes.
-			scaleFor: (axis) =>
-				axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState,
+			// Runs on every frame a mark encodes, so no template strings.
+			clockHost: () => {
+				const axis = this.#morphAxis;
+				const scale =
+					axis === 'x'
+						? this.#chartContext.xScaleState
+						: axis === 'y'
+							? this.#chartContext.yScaleState
+							: null;
+				const slots = (scale as { slots?: Partial<ClockHost> } | null)?.slots;
+				return slots?.clock && slots.startTransition ? (slots as ClockHost) : null;
+			},
 			affectedCharts: () =>
 				this.#facetChartIds.length > 0 ? this.#facetChartIds : [this.#chartContext.chartId]
 		});
@@ -245,7 +256,8 @@ export class BaseGPURenderer {
 			}
 		}
 
-		if (this.#morphed.write(bandAxis, bandIds, channels) || rebind) {
+		this.#morphAxis = bandAxis;
+		if (this.#morphed.write(bandIds, channels) || rebind) {
 			this.#scheduleBindGroupUpdate();
 		} else if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();

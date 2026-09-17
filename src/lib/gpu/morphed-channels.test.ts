@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { MorphedChannels, type MorphHost } from './MorphedChannels';
+import { MorphedChannels, type ClockHost, type MorphHost } from './MorphedChannels';
 import { TransitionClock } from '$lib/animation/TransitionClock';
 
 // A fake device that records what reaches the GPU, so the claims below are
@@ -99,7 +99,6 @@ function fakes() {
 			this.clock.restart();
 		}
 	};
-	const scale = { slots };
 
 	/** Run one frame's compute work and return what it issued. */
 	const frame = () => {
@@ -108,7 +107,7 @@ function fakes() {
 		return [...log];
 	};
 
-	return { device, host, log, scale, slots, sources, frame, hasWork: () => computeWork !== null };
+	return { device, host, log, slots, sources, frame, hasWork: () => computeWork !== null };
 }
 
 const ids = new Float32Array([0, 1, 2]);
@@ -119,13 +118,13 @@ function morphed(f: ReturnType<typeof fakes>, withScale = true) {
 		device: f.device,
 		host: f.host,
 		label: 'm',
-		scaleFor: (axis) => (withScale && axis === 'x' ? f.scale : null),
+		clockHost: () => (withScale ? f.slots : null),
 		affectedCharts: () => ['chart-1']
 	});
 }
 
 const update = (m: MorphedChannels, y0: Float32Array, y1: Float32Array, bandIds = ids) =>
-	m.write('x', bandIds, [
+	m.write(bandIds, [
 		[2, y0],
 		[3, y1]
 	]);
@@ -266,7 +265,7 @@ describe('MorphedChannels', () => {
 		// this rule catches.
 		const f = fakes();
 		const m = morphed(f);
-		m.write('x', ids, [[2, values(1, 2, 3)]]);
+		m.write(ids, [[2, values(1, 2, 3)]]);
 		f.frame();
 
 		const reallocated = update(m, values(2, 3, 4), values(5, 6, 7));
@@ -274,6 +273,89 @@ describe('MorphedChannels', () => {
 		const issued = f.frame();
 		expect(issued).toContain('copy m-3-to -> m-3-from');
 		expect(issued).not.toContain('copy m-3-resolved -> m-3-from');
+	});
+
+	it('stops its own clock and folds when a scale arrives to adopt', () => {
+		// A scale can appear after the first data. The mark must not keep a
+		// second clock running, and must continue from what is on screen rather
+		// than jump to wherever the adopted clock's t happens to be.
+		const f = fakes();
+		let adopted: ClockHost | null = null;
+		const m = new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => adopted,
+			affectedCharts: () => ['chart-1']
+		});
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		f.frame();
+		const own = f.sources[0];
+		expect(own.running).toBe(true);
+
+		adopted = f.slots;
+		const issued = f.frame();
+		expect(own.running).toBe(false);
+		expect(f.sources).not.toContain(own);
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+	});
+
+	it('restarts the adopted clock when new data lands in the same tick as the switch', () => {
+		// The pending-fold shortcut skips a restart when the clock has moved on
+		// since this mark last read it. A clock it has never read has not "moved
+		// on" — skipping there would fold onto whatever t the new clock is at,
+		// and the update would land without animating.
+		const f = fakes();
+		let adopted: ClockHost | null = null;
+		const m = new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => adopted,
+			affectedCharts: () => ['chart-1']
+		});
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		f.frame();
+
+		adopted = f.slots;
+		update(m, values(3, 4, 5), values(6, 7, 8));
+		expect(f.slots.starts).toBe(1);
+		expect(f.frame()).toContain('imm count=3 t=0');
+	});
+
+	it('folds when its clock is replaced by one that happens to be on the same version', () => {
+		// A version is a counter on ONE clock. Compared across two, an equal
+		// number reads as "nothing happened" and the mark skips the fold.
+		const f = fakes();
+		const hostFor = () => {
+			const clock = new TransitionClock({ loop: f.host });
+			return { clock, startTransition: () => clock.restart() };
+		};
+		const a = hostFor();
+		const b = hostFor();
+		let adopted: ClockHost = a;
+		const m = new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => adopted,
+			affectedCharts: () => ['chart-1']
+		});
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+
+		b.startTransition();
+		expect(b.clock.version).toBe(a.clock.version + 1);
+		a.startTransition();
+		f.frame();
+		expect(b.clock.version).toBe(a.clock.version);
+
+		adopted = b;
+		expect(f.frame()).toContain('copy m-2-resolved -> m-2-from');
 	});
 
 	it('owns a clock when the band axis has no scale to adopt, and joins the loop', () => {
@@ -295,7 +377,7 @@ describe('MorphedChannels', () => {
 		// different lengths make a wrong count visible.
 		const f = fakes();
 		const m = morphed(f);
-		m.write('x', ids, [
+		m.write(ids, [
 			[2, values(1, 2, 3)],
 			[3, new Float32Array(100)]
 		]);
