@@ -3,7 +3,8 @@
 //
 // User-activated (analytical). Shift+scroll adjusts window size.
 // Creates a RollingAvgNode that the overlay mark receives as a channel value.
-// Field references are getters so the node picks up channel reassignments.
+// Field references are getters so the node picks up channel reassignments, and
+// so are the window size and mode, so adjusting them re-queries the mark.
 // =============================================================================
 
 import { isNode, isAggregateExpression, type AggregateNode } from '@uwdata/mosaic-sql';
@@ -69,19 +70,11 @@ export class SmoothRung implements LODRung {
 					inner,
 					String(this.#fields.x()),
 					seriesField ? String(seriesField) : null,
-					this.#getWindow(),
-					this.#getMode()
+					// Getters, not values: the mark reads them when it builds its
+					// query, so a scroll re-queries rather than rebuilding anything.
+					this.#getWindow,
+					this.#getMode
 				);
-			}
-		});
-
-		// Sync parameters to node — triggers query invalidation
-		$effect(() => {
-			if (!this.node) return;
-			const w = this.#getWindow();
-			if (w > 0) {
-				this.node.setWindowSize(w);
-				this.node.setMode(this.#getMode());
 			}
 		});
 	}
