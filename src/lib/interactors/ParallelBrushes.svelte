@@ -298,20 +298,17 @@
 		chart.onInteractorPointerUp = handlePointerUp;
 		chart.onInteractorPointerEnter = handlePointerEnter;
 
-		window.addEventListener('keydown', handleKeyDown);
-		window.addEventListener('keyup', handleKeyUp);
-
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
 			chart.onInteractorPointerEnter = null;
-			window.removeEventListener('keydown', handleKeyDown);
-			window.removeEventListener('keyup', handleKeyUp);
 			for (const h of handles) h.destroy();
 		};
 	});
 </script>
+
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
 
 {#if ps}
 	{#each brushScreens as screen, i}

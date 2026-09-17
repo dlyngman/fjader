@@ -19,30 +19,13 @@
 	let dropdownEl = $state<HTMLDivElement | null>(null);
 	let buttonEl = $state<HTMLButtonElement | null>(null);
 
-	// Setup click outside listener when component mounts
-	$effect(() => {
-		if (isOpen) {
-			const handleClickOutside = (event: MouseEvent) => {
-				// Check if the click was outside both the dropdown and the button
-				if (
-					dropdownEl &&
-					!dropdownEl.contains(event.target as Node) &&
-					buttonEl &&
-					!buttonEl.contains(event.target as Node)
-				) {
-					isOpen = false;
-				}
-			};
-
-			// Add the event listener to the document
-			document.addEventListener('mousedown', handleClickOutside);
-
-			// Clean up the event listener when isOpen changes to false
-			return () => {
-				document.removeEventListener('mousedown', handleClickOutside);
-			};
-		}
-	});
+	/** A press anywhere but the dropdown and its button closes it. */
+	function handleClickOutside(event: MouseEvent) {
+		if (!isOpen) return;
+		const target = event.target as Node;
+		if (dropdownEl?.contains(target) || buttonEl?.contains(target)) return;
+		isOpen = false;
+	}
 
 	function handleSelect(rows: number, columns: number) {
 		selectedRows = rows;
@@ -56,6 +39,8 @@
 		hoverColumns = col;
 	}
 </script>
+
+<svelte:document onmousedown={handleClickOutside} />
 
 <div class="grid-size-selector">
 	<button class="size-display" onclick={() => (isOpen = !isOpen)} bind:this={buttonEl}>
