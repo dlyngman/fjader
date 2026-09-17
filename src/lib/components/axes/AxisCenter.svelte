@@ -69,14 +69,9 @@
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
 			{@const bandState = c.yScaleState as BandScaleState}
 			{#each bandTicks as tick (tick.key)}
-				{@const tickY =
-					c.innerHeight - bandState.slotCenter(bandState.tickSlot(tick.key), c.innerHeight)}
+				{@const tickY = bandState.tickPosition(tick.key, c.innerHeight, 'y')}
 				<g opacity={bandState.tickOpacity(tick.key)}>
-					<g
-						class:tick-dimmed={bandState.activeValues != null &&
-							tick.value != null &&
-							!bandState.isActive(tick.value)}
-					>
+					<g class:tick-dimmed={bandState.isTickDimmed(tick)}>
 						<line x1={axisX} x2={axisX + tickDir * 6} y1={tickY} y2={tickY} />
 						<text
 							text-anchor={textAnchor}

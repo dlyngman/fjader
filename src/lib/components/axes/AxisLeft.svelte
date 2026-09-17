@@ -53,15 +53,9 @@
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
 			{@const bandState = c.yScaleState as BandScaleState}
 			{#each bandTicks as tick (tick.key)}
-				<!-- Slot 0 at the bottom, as in the shader and d3's reversed range. -->
-				{@const tickY =
-					c.innerHeight - bandState.slotCenter(bandState.tickSlot(tick.key), c.innerHeight)}
+				{@const tickY = bandState.tickPosition(tick.key, c.innerHeight, 'y')}
 				<g opacity={bandState.tickOpacity(tick.key)}>
-					<g
-						class:tick-dimmed={bandState.activeValues != null &&
-							tick.value != null &&
-							!bandState.isActive(tick.value)}
-					>
+					<g class:tick-dimmed={bandState.isTickDimmed(tick)}>
 						<line x1={0} x2={-6} y1={tickY} y2={tickY} />
 						<text text-anchor="end" dominant-baseline="middle" x={-9} y={tickY}>
 							{tick.value}

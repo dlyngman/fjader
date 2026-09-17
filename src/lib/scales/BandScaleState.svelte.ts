@@ -1007,15 +1007,42 @@ export class BandScaleState {
 	}
 
 	/**
+	 * Where a tick's label sits now, in pixels along the axis: the centre of its
+	 * category's current slot, so it travels with the bar. Slot 0 is at the start
+	 * of the range on x and at the bottom on y, as in the shader and d3's
+	 * reversed range. Per frame, O(1).
+	 */
+	tickPosition(key: number, rangeSize: number, axis: 'x' | 'y'): number {
+		const centre = this.slotCenter(this.tickSlot(key), rangeSize);
+		return axis === 'y' ? rangeSize - centre : centre;
+	}
+
+	/** Whether a tick's category is outside the current selection. */
+	isTickDimmed(tick: BandTick): boolean {
+		return tick.value != null && !this.isActive(tick.value);
+	}
+
+	/**
 	 * Centre of a (possibly fractional) slot, measured from the start of the
 	 * range — the same layout the shader's computeBandLayout uses, so a label
-	 * sits on its bar mid-transition. For a y axis, subtract from the height.
+	 * sits on its bar mid-transition. For a y axis, subtract from the height, or
+	 * use `tickPosition`.
 	 */
 	slotCenter(slot: number, rangeSize: number): number {
-		const { categoryCount: n, paddingInner, paddingOuter } = this.getConfig();
-		if (n <= 0) return 0;
-		const step = rangeSize / Math.max(1, n - paddingInner + paddingOuter * 2);
-		return paddingOuter * step + slot * step + (step * (1 - paddingInner)) / 2;
+		const config = this.getConfig();
+		if (config.categoryCount <= 0) return 0;
+		const step = this.#step(rangeSize, config);
+		return config.paddingOuter * step + slot * step + (step * (1 - config.paddingInner)) / 2;
+	}
+
+	/**
+	 * The band pitch for a range, from a config just read — the one formula the
+	 * CPU layout methods share, and the one the shader's computeBandLayout uses.
+	 */
+	#step(rangeSize: number, config: BandGpuConfig): number {
+		return (
+			rangeSize / Math.max(1, config.categoryCount - config.paddingInner + config.paddingOuter * 2)
+		);
 	}
 
 	/**
@@ -1038,12 +1065,8 @@ export class BandScaleState {
 	 */
 	bandwidth(rangeSize: number): number {
 		const config = this.getConfig();
-		const n = config.categoryCount;
-
-		if (n === 0) return 0;
-
-		const step = rangeSize / Math.max(1, n - config.paddingInner + config.paddingOuter * 2);
-		return step * (1 - config.paddingInner);
+		if (config.categoryCount === 0) return 0;
+		return this.#step(rangeSize, config) * (1 - config.paddingInner);
 	}
 
 	/**
@@ -1057,11 +1080,8 @@ export class BandScaleState {
 	 */
 	stepWidth(rangeSize: number): number {
 		const config = this.getConfig();
-		const n = config.categoryCount;
-
-		if (n === 0) return 0;
-
-		return rangeSize / Math.max(1, n - config.paddingInner + config.paddingOuter * 2);
+		if (config.categoryCount === 0) return 0;
+		return this.#step(rangeSize, config);
 	}
 
 	// =========================================================================
@@ -1082,7 +1102,7 @@ export class BandScaleState {
 		const n = config.categoryCount;
 		if (n === 0) return null;
 
-		const stepSize = this.stepWidth(rangeSize);
+		const stepSize = this.#step(rangeSize, config);
 		if (stepSize === 0) return null;
 
 		const offset = config.paddingOuter * stepSize;

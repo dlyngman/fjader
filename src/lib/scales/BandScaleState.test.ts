@@ -1513,3 +1513,38 @@ describe('BandScaleState after the registry tears it down', () => {
 		spy.mockRestore();
 	});
 });
+
+describe('BandScaleState tick placement', () => {
+	function scaleOf(categories: string[]) {
+		const scale = new BandScaleState('category');
+		scale.addMark(categories, 'mark-1');
+		scale.updateDomainFromExtents();
+		return scale;
+	}
+
+	it('puts a tick at the centre of its band, as d3 does, from the start on x and the end on y', () => {
+		const scale = scaleOf(['a', 'b', 'c']);
+		const d3x = scale.getBaseScale('x', 300);
+		scale.updateScaleDomain(d3x as never);
+		// The first category, not the middle one: a middle band sits in the same
+		// place counted from either end, so it could not tell x from y.
+		const centreX = (d3x('a') ?? NaN) + d3x.bandwidth() / 2;
+		expect(scale.tickPosition(0, 300, 'x')).toBeCloseTo(centreX, 6);
+
+		const d3y = scale.getBaseScale('y', 300);
+		scale.updateScaleDomain(d3y as never);
+		const centreY = (d3y('a') ?? NaN) + d3y.bandwidth() / 2;
+		expect(scale.tickPosition(0, 300, 'y')).toBeCloseTo(centreY, 6);
+		expect(centreY).not.toBeCloseTo(centreX, 0);
+	});
+
+	it('dims a tick outside the selection, and none without one', () => {
+		const scale = scaleOf(['a', 'b']);
+		const [a, b] = scale.bandTicks();
+		expect(scale.isTickDimmed(a) || scale.isTickDimmed(b)).toBe(false);
+
+		scale.setActiveValues(['a']);
+		expect(scale.isTickDimmed(a)).toBe(false);
+		expect(scale.isTickDimmed(b)).toBe(true);
+	});
+});

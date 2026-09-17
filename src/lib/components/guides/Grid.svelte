@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { GridLineX, GridLineY } from '../rendering';
+	import { GridLine } from '../rendering';
 	import type { ChartContext, ScaleStateInstance } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 
@@ -61,7 +61,8 @@
 </script>
 
 {#if xTickValues}
-	<GridLineX
+	<GridLine
+		axis="x"
 		positions={xTickValues}
 		alpha={xAlpha}
 		bandAxis={xBand ? 'x' : null}
@@ -71,7 +72,8 @@
 	/>
 {/if}
 {#if yTickValues}
-	<GridLineY
+	<GridLine
+		axis="y"
 		positions={yTickValues}
 		alpha={yAlpha}
 		bandAxis={yBand ? 'y' : null}

@@ -4,13 +4,21 @@
 	import { getGPUContext } from '$lib/gpu';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
-	// GridLineX: Vertical grid lines (X-axis)
-	// Only binds X scale - eliminates Y scale binding overhead
-	const ruleXRendererDefinition = {
-		x: { concept: 'position', channels: ['x'] },
-		y: null, // No Y scale binding
-		placeholders: { x: '{{X_AXIS_LOGIC}}' }
-	};
+	// Full-span grid lines along one axis: vertical lines at x positions, or
+	// horizontal lines at y positions. Binds only that axis's scale.
+	function rendererDefinitionFor(axis: 'x' | 'y') {
+		return axis === 'x'
+			? {
+					x: { concept: 'position', channels: ['x'] },
+					y: null,
+					placeholders: { x: '{{X_AXIS_LOGIC}}' }
+				}
+			: {
+					x: null,
+					y: { concept: 'position', channels: ['y'] },
+					placeholders: { y: '{{Y_AXIS_LOGIC}}' }
+				};
+	}
 
 	const BINDINGS = {
 		POSITIONS: 0,
@@ -25,6 +33,8 @@
 	};
 
 	interface Props {
+		/** Which axis the lines mark: vertical lines for x, horizontal for y. Fixed at creation. */
+		axis: 'x' | 'y';
 		positions: Float32Array;
 		/**
 		 * Per-line opacity, 0..1. On a band axis the lines are every id in the
@@ -41,6 +51,7 @@
 	}
 
 	let {
+		axis,
 		positions,
 		alpha = null,
 		bandAxis = null,
@@ -58,7 +69,28 @@
 	let initializationError = $state<string | null>(null);
 	let lineGeometryBuffer: GPUBuffer;
 
-	const ruleXShaderCode = `
+	/**
+	 * The two orientations differ only in which coordinate is scaled and which
+	 * spans the plot; everything else is shared.
+	 */
+	function shaderFor(axis: 'x' | 'y'): string {
+		const placement =
+			axis === 'x'
+				? `
+      let x = positions[instanceIdx];
+      {{X_AXIS_LOGIC}}
+      // Vertical: fixed x, spanning the full height.
+      let screenY = mix(0.0, frameUniforms.resolution.y, lineVertex.y);
+      let offsetX = (lineVertex.x - 0.5) * 2.0 * halfWidth;
+      let worldPos = vec2<f32>(scaledX + offsetX, screenY);`
+				: `
+      let y = positions[instanceIdx];
+      {{Y_AXIS_LOGIC}}
+      // Horizontal: fixed y, spanning the full width.
+      let screenX = mix(0.0, frameUniforms.resolution.x, lineVertex.x);
+      let offsetY = (lineVertex.y - 0.5) * 2.0 * halfWidth;
+      let worldPos = vec2<f32>(screenX, scaledY + offsetY);`;
+		return `
     struct RuleConstants {
       lineWidth: f32,
       _pad0: u32,
@@ -81,18 +113,9 @@
       @location(0) lineVertex: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
     ) -> VertexOutput {
-      let x = positions[instanceIdx];
-
-      // X axis scaling (for vertical lines)
-      {{X_AXIS_LOGIC}}
-
-      // Render vertical line as a thin quad
+      // Rendered as a thin quad.
       let halfWidth = ruleConstants.lineWidth * 0.5 * frameUniforms.devicePixelRatio;
-
-      // Vertical: fixed X, span full Y
-      let screenY = mix(0.0, frameUniforms.resolution.y, lineVertex.y);
-      let offsetX = (lineVertex.x - 0.5) * 2.0 * halfWidth;
-      let worldPos = vec2<f32>(scaledX + offsetX, screenY);
+${placement}
 
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
 
@@ -110,6 +133,7 @@
       return vec4<f32>(input.color.rgb * input.color.a, input.color.a);
     }
   `;
+	}
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
@@ -202,7 +226,7 @@
 		lineGeometryBuffer = device.createBuffer({
 			size: lineVertices.byteLength,
 			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-			label: 'ruleX-line-geometry'
+			label: `grid-line-${axis}-geometry`
 		});
 		device.queue.writeBuffer(lineGeometryBuffer, 0, lineVertices);
 	}
@@ -215,17 +239,23 @@
 
 	async function initializeRule() {
 		try {
-			renderer = new BaseGPURenderer('ruleX', webGPUContext, gpuCoordinator, chartContext, {
-				zIndex,
-				xScaleType: chartContext.scaleTypes?.x || 'linear',
-				yScaleType: chartContext.scaleTypes?.y || 'linear'
-			});
+			renderer = new BaseGPURenderer(
+				`grid-line-${axis}`,
+				webGPUContext,
+				gpuCoordinator,
+				chartContext,
+				{
+					zIndex,
+					xScaleType: chartContext.scaleTypes?.x || 'linear',
+					yScaleType: chartContext.scaleTypes?.y || 'linear'
+				}
+			);
 
 			await renderer.initialize({
-				markShaderCode: ruleXShaderCode,
+				markShaderCode: shaderFor(axis),
 				vertexBufferLayout,
 				dataBindingConfig,
-				rendererDefinition: ruleXRendererDefinition
+				rendererDefinition: rendererDefinitionFor(axis)
 			});
 
 			await initializeLineGeometry();
@@ -236,7 +266,7 @@
 				renderer.registerLayer(drawRules);
 			}
 		} catch (error) {
-			console.error('RuleX renderer init failed:', error);
+			console.error(`Grid line (${axis}) renderer init failed:`, error);
 			initializationError = (error as Error).message;
 		}
 	}
