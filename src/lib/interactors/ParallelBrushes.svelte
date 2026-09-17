@@ -10,7 +10,12 @@
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
-	type InvertibleScale = { (v: unknown): number; invert(v: number): number; domain(): number[]; range(): number[] };
+	type InvertibleScale = {
+		(v: unknown): number;
+		invert(v: number): number;
+		domain(): number[];
+		range(): number[];
+	};
 
 	interface Props {
 		/** Filter group name — selects which FilterGroup these brushes write to. */
@@ -99,9 +104,7 @@
 						kind: 'range',
 						column: col,
 						label: col,
-						values: value
-							? [(value as number[])[0], (value as number[])[1]]
-							: []
+						values: value ? [(value as number[])[0], (value as number[])[1]] : []
 					})
 				})
 			);
