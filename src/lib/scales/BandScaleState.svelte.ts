@@ -3,8 +3,8 @@
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
-import type { ClockLoop, TransitionClock } from '$lib/animation';
-import { SlotTransition } from './SlotTransition';
+import type { ClockLoop } from '$lib/animation';
+import { SlotTransition, type BandSlots } from './SlotTransition';
 
 /**
  * Driver constants, taken from ParallelAxisReorder, which is the same
@@ -50,13 +50,13 @@ interface BandGpuConfig {
  *
  * It owns two spaces and the permutation between them: IDENTITY, the dim id a
  * channel carries, and DISPLAY, the slot a category occupies on the axis.
- * `displayOrder` is the permutation, `slotTarget` its inverse, `slotFrom` and
- * `slotTo` what the GPU resolves, and `#domain` a value projection for d3 and
- * the axis.
+ * `displayOrder` is the permutation, `slots.target` its inverse, `slots.from`
+ * and `slots.to` what the GPU resolves, and `#domain` a value projection for d3
+ * and the axis.
  *
- * A transition is `mix(slotFrom, slotTo, t)` with ONE spring
+ * A transition is `mix(slots.from, slots.to, t)` with ONE spring
  * driving `t` for the whole scale, so everything in flight arrives together.
- * `slotTo` is the animated destination and `slotTarget` what the scale says;
+ * `slots.to` is the animated destination and `slots.target` what the scale says;
  * they differ exactly for the ids on their way out, which hold a real slot until
  * they land. See the IDENTITY <-> DISPLAY section for the CPU-side translation.
  *
@@ -450,8 +450,7 @@ export class BandScaleState {
 	// SLOTS — where each category is on screen, owned by SlotTransition
 	// -------------------------------------------------------------------------
 	//
-	// Pass-throughs, so the packer, the coordinator and the marks keep one object
-	// to read. Everything about entering, leaving, folding and the clock lives in
+	// Everything about entering, leaving, folding and the clock lives in
 	// SlotTransition; this class decides what is displayed and in what order.
 
 	#slots: SlotTransition;
@@ -472,65 +471,22 @@ export class BandScaleState {
 	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0, align: 0.5 };
 
 	/**
-	 * Display slot per identity id, copied: `[id]` is where this category is NOW,
-	 * or -1 when it is not displayed. Mid-transition that is a fraction of the
-	 * way between two orders.
+	 * Where every category of this axis is on screen, and the clock it travels on.
 	 *
-	 * -1 covers two cases deliberately given one sentinel: an id filtered out by
-	 * a category-reducing transform, and an id belonging to another table on a
-	 * shared scale. Both must be discarded by the consumer.
+	 * The packer reads it as a SlotSource. Marks drawn against this axis adopt its
+	 * `clock`, and `startTransition` on it restarts that clock for a value-only
+	 * update — every other mark on the axis folds to where it already is, which
+	 * is why one mark may start a clock they all share.
 	 *
-	 * Allocates and walks the dim: for tests and debugging. The GPU reads
-	 * `slotFrom`/`slotTo` and mixes them itself; a label asks `tickSlot`; a CPU
-	 * lookup asks idAtSlot or categoryAt.
+	 * `snapshot()` copies where every id is now: -1 for an id filtered out by a
+	 * transform or belonging to another table on a shared scale. It allocates, so
+	 * it is for tests and debugging; a label asks `tickSlot`, and a CPU lookup
+	 * asks idAtSlot or categoryAt.
+	 *
+	 * Laying the axis out is this scale's alone, so `layout` is not exposed.
 	 */
-	slotSnapshot(): Float32Array {
-		return this.#slots.snapshot();
-	}
-
-	/** How many ids the slot arrays hold — the packer's count header. */
-	get slotCount(): number {
-		return this.#slots.count;
-	}
-
-	/** The two ends of the transition in flight, which the packer uploads. */
-	get slotFrom(): Float32Array {
-		return this.#slots.from;
-	}
-
-	get slotTo(): Float32Array {
-		return this.#slots.to;
-	}
-
-	/** Where each id is headed once settled; -1 for one not displayed. */
-	get slotTarget(): Float32Array {
-		return this.#slots.target;
-	}
-
-	/** Extrapolated for the frame being drawn, not the last physics step. */
-	get t(): number {
-		return this.#slots.t;
-	}
-
-	/**
-	 * The clock this axis's slots travel on.
-	 *
-	 * Exposed because marks drawn against this axis ADOPT it rather than owning
-	 * one: a bar's height has to travel on the same number its slot does, or the
-	 * two desynchronise on a retarget.
-	 */
-	get clock(): TransitionClock {
-		return this.#slots.clock;
-	}
-
-	/** Bumped whenever the slot tables move; the packer uploads on this alone. */
-	get slotVersion(): number {
-		return this.#slots.version;
-	}
-
-	/** True while a transition is in flight. */
-	get isAnimating(): boolean {
-		return this.#slots.isAnimating;
+	get slots(): BandSlots {
+		return this.#slots;
 	}
 
 	/**
@@ -557,16 +513,6 @@ export class BandScaleState {
 	 */
 	setOtherId(id: number | null): void {
 		this.#slots.otherId = id;
-	}
-
-	/**
-	 * Start a transition without changing what is displayed — for a mark whose
-	 * values changed while the ranking did not. Every other mark on this axis
-	 * folds to where it already is, which is why one mark may start a clock they
-	 * all share.
-	 */
-	startTransition(): void {
-		this.#slots.startTransition();
 	}
 
 	// -------------------------------------------------------------------------

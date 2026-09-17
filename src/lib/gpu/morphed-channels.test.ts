@@ -89,8 +89,9 @@ function fakes() {
 		}
 	};
 
-	// A band scale's clock, adopted. On the same fake loop, as a real one is.
-	const scale = {
+	// A band scale's slots, whose clock is adopted. On the same fake loop, as a
+	// real one is.
+	const slots = {
 		clock: new TransitionClock({ loop: host }),
 		starts: 0,
 		startTransition() {
@@ -98,6 +99,7 @@ function fakes() {
 			this.clock.restart();
 		}
 	};
+	const scale = { slots };
 
 	/** Run one frame's compute work and return what it issued. */
 	const frame = () => {
@@ -106,7 +108,7 @@ function fakes() {
 		return [...log];
 	};
 
-	return { device, host, log, scale, sources, frame, hasWork: () => computeWork !== null };
+	return { device, host, log, scale, slots, sources, frame, hasWork: () => computeWork !== null };
 }
 
 const ids = new Float32Array([0, 1, 2]);
@@ -134,7 +136,7 @@ describe('MorphedChannels', () => {
 		const m = morphed(f);
 		update(m, values(1, 2, 3), values(4, 5, 6));
 
-		expect(f.scale.starts).toBe(0);
+		expect(f.slots.starts).toBe(0);
 		const issued = f.frame();
 		expect(issued).toContain('copy m-2-to -> m-2-from');
 		expect(issued).toContain('copy m-3-to -> m-3-from');
@@ -169,7 +171,7 @@ describe('MorphedChannels', () => {
 		f.frame();
 
 		update(m, values(2, 3, 4), values(5, 6, 7));
-		expect(f.scale.starts).toBe(1);
+		expect(f.slots.starts).toBe(1);
 	});
 
 	it('folds from what is on screen when its own update restarts the clock', () => {
@@ -194,9 +196,9 @@ describe('MorphedChannels', () => {
 		update(m, values(1, 2, 3), values(4, 5, 6));
 		f.frame();
 
-		f.scale.startTransition(); // the layout's restart
+		f.slots.startTransition(); // the layout's restart
 		update(m, values(2, 3, 4), values(5, 6, 7));
-		expect(f.scale.starts).toBe(1);
+		expect(f.slots.starts).toBe(1);
 
 		// And the fold still happens, carrying the new values with it.
 		const issued = f.frame();
@@ -209,11 +211,11 @@ describe('MorphedChannels', () => {
 		const m = morphed(f);
 		update(m, values(1, 2, 3), values(4, 5, 6));
 		f.frame();
-		f.scale.startTransition();
+		f.slots.startTransition();
 		f.frame(); // folded
 
 		update(m, values(2, 3, 4), values(5, 6, 7));
-		expect(f.scale.starts).toBe(2);
+		expect(f.slots.starts).toBe(2);
 	});
 
 	it('folds when a SIBLING restarts the shared clock, with no data of its own', () => {
@@ -222,7 +224,7 @@ describe('MorphedChannels', () => {
 		update(m, values(1, 2, 3), values(4, 5, 6));
 		f.frame();
 
-		f.scale.startTransition(); // another mark on the axis, or another facet cell
+		f.slots.startTransition(); // another mark on the axis, or another facet cell
 		const issued = f.frame();
 		expect(issued).toContain('copy m-2-resolved -> m-2-from');
 	});
@@ -235,11 +237,11 @@ describe('MorphedChannels', () => {
 		update(m, values(2, 3, 4), values(5, 6, 7));
 		f.frame();
 
-		f.scale.clock.step();
-		f.scale.clock.updateRenderState(0);
+		f.slots.clock.step();
+		f.slots.clock.updateRenderState(0);
 		expect(f.frame().some((c) => c.startsWith('dispatch'))).toBe(true);
 
-		f.scale.clock.settle();
+		f.slots.clock.settle();
 		expect(f.frame().some((c) => c.startsWith('dispatch'))).toBe(true);
 		expect(f.frame()).toEqual([]);
 	});
@@ -251,7 +253,7 @@ describe('MorphedChannels', () => {
 		f.frame();
 
 		update(m, values(2, 3, 4), values(5, 6, 7), new Float32Array([0, 2, 1]));
-		expect(f.scale.starts).toBe(0);
+		expect(f.slots.starts).toBe(0);
 		const issued = f.frame();
 		expect(issued).toContain('copy m-2-to -> m-2-from');
 		expect(issued).not.toContain('copy m-2-resolved -> m-2-from');
@@ -309,8 +311,8 @@ describe('MorphedChannels', () => {
 		update(m, values(2, 3, 4), values(5, 6, 7));
 		f.frame();
 
-		f.scale.clock.step();
-		f.scale.clock.updateRenderState(0);
+		f.slots.clock.step();
+		f.slots.clock.updateRenderState(0);
 		const issued = f.frame();
 		expect(issued.some((c) => c.startsWith('dispatch'))).toBe(true);
 		expect(issued.filter((c) => c.startsWith('write'))).toEqual([]);

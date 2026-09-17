@@ -115,7 +115,7 @@ describe('band axis over a non-VARCHAR column', () => {
 
 			expect(scale.effectiveDomain).toEqual([2021, 2022, 2023]);
 			expect(Array.from(scale.displayOrder)).toEqual([0, 1, 2]);
-			expect(Array.from(scale.slotSnapshot())).toEqual([0, 1, 2]);
+			expect(Array.from(scale.slots.snapshot())).toEqual([0, 1, 2]);
 		});
 
 		it('decodes a channel id back to a number, not a string', async () => {
@@ -145,7 +145,7 @@ describe('band axis over a non-VARCHAR column', () => {
 			expect(scale.effectiveDomain).toEqual([2023, 2021, 2022]);
 			expect(Array.from(scale.displayOrder)).toEqual([2, 0, 1]);
 			// slot table [id] = slot: 2021(id 0)->1, 2022(id 1)->2, 2023(id 2)->0
-			expect(Array.from(scale.slotSnapshot())).toEqual([1, 2, 0]);
+			expect(Array.from(scale.slots.snapshot())).toEqual([1, 2, 0]);
 			expect(scale.idAtSlot(0)).toBe(2);
 			expect(scale.categoryAt(scale.idAtSlot(0)!)).toBe(2023);
 		});

@@ -1,4 +1,5 @@
 import { TransitionClock, type ClockLoop } from '$lib/animation';
+import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
 /**
  * Where every category of a band axis sits, and how it gets there.
@@ -41,7 +42,29 @@ import { TransitionClock, type ClockLoop } from '$lib/animation';
  * second time.
  */
 
-export class SlotTransition {
+/**
+ * A band scale's slots as the rest of the page sees them: the packer's
+ * SlotSource, the clock marks adopt, and per-id reads. `layout` is left out —
+ * what is displayed, and in what order, is the scale's to decide.
+ */
+export type BandSlots = Pick<
+	SlotTransition,
+	| 'count'
+	| 'from'
+	| 'to'
+	| 'target'
+	| 't'
+	| 'version'
+	| 'clock'
+	| 'isAnimating'
+	| 'animatedCount'
+	| 'startTransition'
+	| 'slotOf'
+	| 'alphaOf'
+	| 'snapshot'
+>;
+
+export class SlotTransition implements SlotSource {
 	#target: Float32Array = new Float32Array(0);
 	/**
 	 * Where each id's current transition STARTED.

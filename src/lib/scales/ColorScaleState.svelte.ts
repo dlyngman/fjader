@@ -20,6 +20,7 @@ import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
 interface ColorScaleConfig {
 	field: string;
@@ -121,17 +122,16 @@ export class ColorScaleState {
 	 * id -> rank as a dense array, packed into the shared identity slot table so
 	 * the fragment shader can resolve a channel id to a palette index. -1 for an
 	 * id this scale has never ranked.
+	 *
+	 * Ranks do not animate, so both ends of the "transition" are the same table
+	 * at t = 1. `version` is bumped on every rebuild; the packer uploads only on
+	 * a change.
 	 */
-	slotTable: Float32Array = new Float32Array(0);
-	/**
-	 * The packer's count header. This scale does not animate, so its table is
-	 * the whole story; a band scale supplies from/to halves instead.
-	 */
-	get slotCount(): number {
-		return this.slotTable.length;
+	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
+
+	get slots(): SlotSource {
+		return this.#slots;
 	}
-	/** Bumped on every slotTable rebuild; the packer uploads only on a change. */
-	slotVersion: number = 0;
 	/**
 	 * Where this scale's block sits in the shared identity slot table. Assigned
 	 * by the coordinator's packer, which also patches it into the uploaded
@@ -477,8 +477,11 @@ export class ColorScaleState {
 		for (const [id, rank] of this.#paletteRank) {
 			if (id >= 0 && id < table.length) table[id] = rank;
 		}
-		this.slotTable = table;
-		this.slotVersion++;
+		const slots = this.#slots;
+		slots.from = table;
+		slots.to = table;
+		slots.count = table.length;
+		slots.version++;
 	}
 
 	#hasRanks(): boolean {

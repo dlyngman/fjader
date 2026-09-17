@@ -16,6 +16,7 @@ import {
 	createIdentitySlotState,
 	packIdentitySlots,
 	type IdentitySlotScale,
+	type SlotSource,
 	type IdentitySlotState
 } from './identity-slot-packing';
 
@@ -918,35 +919,17 @@ export class GPUCoordinator {
 		for (let i = 0; i < this.#scaleArray.length; i++) {
 			const scale = this.#scaleArray[i].instance as unknown as {
 				id: string;
-				type: string;
-				slotCount?: number;
-				slotTable?: Float32Array;
-				slotFrom?: Float32Array;
-				slotTo?: Float32Array;
-				t?: number;
-				slotVersion?: number;
+				slots?: SlotSource;
 			};
-			// Any scale that offers a slot table wants one packed. It used to gate
-			// on band|point, which was the same set at the time; ordinal colour
-			// offers one now, and gating on the type would have meant listing
-			// every kind here as each migrates.
-			//
-			// Gated on slotCount, not slotTable: a driven scale has no table, only
-			// the from/to halves the GPU mixes itself.
-			const slotCount = scale.slotCount;
-			if (slotCount === undefined) continue;
-			// from/to/t are absent for a scale with no driver — ordinal colour,
-			// facets — and the packer writes its settled table into both halves,
-			// which makes the resolve an identity for it. Such a scale supplies
-			// slotTable instead, as a plain field.
-			const entry = (pool[scales.length] ??= { id: '', slotCount: 0 });
+			// Any scale that offers slots wants them packed. It used to gate on
+			// band|point, which was the same set at the time; ordinal colour offers
+			// them now, and gating on the type would have meant listing every kind
+			// here as each migrates.
+			const slots = scale.slots;
+			if (!slots) continue;
+			const entry = (pool[scales.length] ??= { id: '', slots });
 			entry.id = scale.id;
-			entry.slotCount = slotCount;
-			entry.slotTable = scale.slotFrom ? undefined : scale.slotTable;
-			entry.slotFrom = scale.slotFrom;
-			entry.slotTo = scale.slotTo;
-			entry.t = scale.t;
-			entry.slotVersion = scale.slotVersion;
+			entry.slots = slots;
 			scales.push(entry);
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.
@@ -1043,14 +1026,15 @@ export class GPUCoordinator {
 		const state = this.#identitySlots;
 		if (!state) return;
 		for (let i = 0; i < this.#scaleArray.length; i++) {
-			const scale = this.#scaleArray[i].instance as unknown as { id?: string; t?: number };
-			if (scale.t === undefined || scale.id === undefined) continue;
+			const scale = this.#scaleArray[i].instance as unknown as { id: string; slots?: SlotSource };
+			const t = scale.slots?.t;
+			if (t === undefined) continue;
 			const base = state.offsets.get(scale.id);
 			if (base === undefined || base === IDENTITY_SLOT_EMPTY) continue;
 			const at = base + 1;
-			if (state.buffer[at] === scale.t) continue;
-			state.buffer[at] = scale.t;
-			this.#tPatch[0] = scale.t;
+			if (state.buffer[at] === t) continue;
+			state.buffer[at] = t;
+			this.#tPatch[0] = t;
 			this.#device!.queue.writeBuffer(this.#identitySlotBuffer!, at * 4, this.#tPatch);
 			// t moved, so what the render stages read is stale until the kernel
 			// runs again.

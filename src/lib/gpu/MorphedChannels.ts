@@ -42,7 +42,7 @@ export interface MorphHost extends ClockLoop {
 	removeComputeWork(key: string): void;
 }
 
-/** A scale that owns a data-transition clock marks can adopt. */
+/** A scale's slots, when they own a data-transition clock marks can adopt. */
 interface ClockHost {
 	clock: TransitionClock;
 	startTransition(): void;
@@ -363,11 +363,12 @@ export class MorphedChannels {
 		channel.resolved.destroy();
 	}
 
-	/** The band axis's scale, when it owns a clock this mark should adopt. */
+	/** The band axis's slots, when they own a clock this mark should adopt. */
 	#clockHost(): ClockHost | null {
 		if (!this.#bandAxis) return null;
-		const scale = this.#scaleFor(this.#bandAxis) as Partial<ClockHost> | null | undefined;
-		return scale?.clock && scale.startTransition ? (scale as ClockHost) : null;
+		const scale = this.#scaleFor(this.#bandAxis) as { slots?: Partial<ClockHost> } | null;
+		const slots = scale?.slots;
+		return slots?.clock && slots.startTransition ? (slots as ClockHost) : null;
 	}
 
 	/**

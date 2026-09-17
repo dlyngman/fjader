@@ -58,36 +58,31 @@ export const IDENTITY_SLOT_CAPACITY = 16384;
  */
 export const IDENTITY_SLOT_EMPTY = 0;
 
-/** The parts of a band/point scale this needs. */
+/**
+ * One scale's slot table as the packer reads it: identity id -> display slot,
+ * as the two ends of a transition and where between them it is.
+ *
+ * One shape for every scale. A scale that does not animate — ordinal colour —
+ * hands the same table as both ends with `t` at 1, which makes the resolve an
+ * identity for it rather than a special case here or in the shader.
+ */
+export interface SlotSource {
+	/** How many ids the block holds — its count header, and the length of `from` and `to`. */
+	readonly count: number;
+	/** Where each id's transition started; -1 for an id not shown. */
+	readonly from: Float32Array;
+	/** Where each id's transition is going; -1 for an id not shown. */
+	readonly to: Float32Array;
+	/** 0 -> from, 1 -> to. */
+	readonly t: number;
+	/** Bumped whenever `from` or `to` move; the packer re-uploads on it alone. */
+	readonly version: number;
+}
+
+/** A scale with a slot table, as the packer needs it. */
 export interface IdentitySlotScale {
 	id: string;
-	/**
-	 * How many ids this scale's block holds — the count header.
-	 *
-	 * Separate from `slotTable.length` because a scale that animates supplies
-	 * `from` and `to` and has no table to measure: where its ids are now is
-	 * `mix(from, to, t)`, which the GPU resolves and nothing on the CPU stores.
-	 */
-	slotCount: number;
-	/**
-	 * id -> display slot, or -1 for an id not currently shown.
-	 *
-	 * Only needed by a scale that does NOT animate and so supplies neither half
-	 * below; it is then used as both. A driven scale omits it.
-	 */
-	slotTable?: Float32Array;
-	/**
-	 * Where each id's transition started and where it is going. Both optional:
-	 * a scale that does not animate — ordinal colour, facet — offers neither,
-	 * and gets `slotTable` in both buffers, which makes the shader's mix an
-	 * identity for it rather than a special case.
-	 */
-	slotFrom?: Float32Array;
-	slotTo?: Float32Array;
-	/** Interpolation parameter, 1 (settled) unless a driver is running. */
-	t?: number;
-	/** Bumped by the scale on every slot-table rebuild. */
-	slotVersion?: number;
+	slots: SlotSource;
 }
 
 /** Everything that persists between calls. */
@@ -174,34 +169,28 @@ export function packIdentitySlots(
 		const scale = scales[i];
 		seen.add(scale.id);
 
+		const slots = scale.slots;
 		// Two extra floats for the block's header: count, then t.
-		const need = scale.slotCount + 2;
+		const need = slots.count + 2;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
 
-		// Both sides defaulted the same way: a scale with no slotVersion is stored
-		// as 0, and comparing that against `undefined` made it dirty every frame.
-		const version = scale.slotVersion ?? 0;
+		const version = slots.version;
 		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== version) {
 			if (fits) {
-				// A scale with no driver offers neither half, and gets its settled
-				// table in both — the shader's mix is then an identity for it, which
-				// is cheaper than branching on whether a scale animates.
-				const from = scale.slotFrom ?? scale.slotTable;
-				const to = scale.slotTo ?? scale.slotTable;
-				buffer[base] = scale.slotCount;
-				buffer[base + 1] = scale.t ?? 1;
-				if (from) buffer.set(from, base + 2);
-				bufferTo[base] = scale.slotCount;
-				bufferTo[base + 1] = scale.t ?? 1;
-				if (to) bufferTo.set(to, base + 2);
+				buffer[base] = slots.count;
+				buffer[base + 1] = slots.t;
+				buffer.set(slots.from, base + 2);
+				bufferTo[base] = slots.count;
+				bufferTo[base + 1] = slots.t;
+				bufferTo.set(slots.to, base + 2);
 				bases.fill(base, base, base + need);
 			} else {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
 					`[GPUCoordinator] Band slot capacity (${capacity}) exhausted; ` +
-						`scale "${scale.id}" (${scale.slotCount} ids) will not render.`
+						`scale "${scale.id}" (${slots.count} ids) will not render.`
 				);
 			}
 			offsets.set(scale.id, base);

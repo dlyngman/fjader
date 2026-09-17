@@ -10,9 +10,29 @@ import { resolveSlotsReference } from './SlotResolveShader';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
-/** A scale whose slot table is the given permutation. */
+/** A scale whose slots travel from `from` to `to`, `t` of the way. */
+function travelling(
+	id: string,
+	from: number[],
+	to: number[],
+	t: number,
+	version = 1
+): IdentitySlotScale {
+	return {
+		id,
+		slots: {
+			count: from.length,
+			from: Float32Array.from(from),
+			to: Float32Array.from(to),
+			t,
+			version
+		}
+	};
+}
+
+/** A settled scale whose slot table is the given permutation. */
 function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
-	return { id, slotCount: slots.length, slotTable: Float32Array.from(slots), slotVersion: version };
+	return travelling(id, slots, slots, 1, version);
 }
 
 /** Read one scale's block back the way the shader's identitySlot() does. */
@@ -89,21 +109,7 @@ describe('packIdentitySlots transition state', () => {
 
 	it('writes from and to into their own buffers at the same base', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, 1, 2]).length,
-
-					slotTable: Float32Array.from([0, 1, 2]),
-					slotFrom: Float32Array.from([2, 1, 0]),
-					slotTo: Float32Array.from([0, 1, 2]),
-					t: 0.25,
-					slotVersion: 1
-				}
-			],
-			state
-		);
+		packIdentitySlots([travelling('a', [2, 1, 0], [0, 1, 2], 0.25)], state);
 
 		const base = state.offsets.get('a')!;
 		// One base serves both buffers — that is what lets p4 stay a single float.
@@ -142,18 +148,6 @@ describe('packIdentitySlots dirty tracking', () => {
 		// A static chart must cost no writeBuffer, which is the only reason this
 		// function returns a flag rather than always uploading.
 		expect(packIdentitySlots(scales, state).dirty).toBe(false);
-	});
-
-	it('is clean on a repeat pack of a scale that declares no slotVersion', () => {
-		// The collector admits any scale with a slot table, so a new scale kind can
-		// opt in without declaring a version. It must not then cost a re-upload —
-		// and, if it did not fit, a capacity warning — on every frame.
-		const state = createIdentitySlotState(64);
-		const versionless = { id: 'a', slotCount: 2, slotTable: Float32Array.from([0, 1]) };
-
-		expect(packIdentitySlots([versionless], state).dirty).toBe(true);
-		expect(packIdentitySlots([versionless], state).dirty).toBe(false);
-		expect(packIdentitySlots([versionless], state).dirty).toBe(false);
 	});
 
 	it('is dirty when a slot table is rebuilt', () => {
@@ -325,18 +319,15 @@ describe('what the shader reads back', () => {
 		s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 		s.updateDomainFromExtents();
 		for (let i = 0; i < 15; i++) {
-			s.clock.step();
-			s.clock.updateRenderState(0);
+			s.slots.clock.step();
+			s.slots.clock.updateRenderState(0);
 		}
 
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[{ id: s.id, slotCount: s.slotCount, slotFrom: s.slotFrom, slotTo: s.slotTo, t: s.t }],
-			state
-		);
+		packIdentitySlots([{ id: s.id, slots: s.slots }], state);
 		const base = state.offsets.get(s.id)!;
 
-		const snapshot = s.slotSnapshot();
+		const snapshot = s.slots.snapshot();
 		for (let id = 0; id < 3; id++) {
 			expect(identitySlot(state, base, id)).toBeCloseTo(snapshot[id], 5);
 		}
@@ -352,20 +343,7 @@ describe('what the shader reads back', () => {
 		// -1 in both tables, so the mix returns -1 for any t. This is why the
 		// shader has no special case.
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, -1, 1]).length,
-
-					slotTable: Float32Array.from([0, -1, 1]),
-					slotFrom: Float32Array.from([0, -1, 1]),
-					slotTo: Float32Array.from([1, -1, 0]),
-					t: 0.5
-				}
-			],
-			state
-		);
+		packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
 		const base = state.offsets.get('a')!;
 		expect(identitySlot(state, base, 1)).toBe(-1);
 	});
@@ -387,20 +365,7 @@ describe('packIdentitySlots: bases', () => {
 	it('points every float of a block at that block, header included', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, 1, 2]).length,
-					slotTable: Float32Array.from([0, 1, 2]),
-					slotVersion: 1
-				},
-				{
-					id: 'b',
-					slotCount: Float32Array.from([1, 0]).length,
-					slotTable: Float32Array.from([1, 0]),
-					slotVersion: 1
-				}
-			],
+			[travelling('a', [0, 1, 2], [0, 1, 2], 1), travelling('b', [1, 0], [1, 0], 1)],
 			state
 		);
 
@@ -415,28 +380,7 @@ describe('packIdentitySlots: bases', () => {
 	it('lets a thread recover its own t, which is the point of it', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, 1]).length,
-
-					slotTable: Float32Array.from([0, 1]),
-					slotFrom: Float32Array.from([0, 1]),
-					slotTo: Float32Array.from([1, 0]),
-					t: 0.25,
-					slotVersion: 1
-				},
-				{
-					id: 'b',
-					slotCount: Float32Array.from([0]).length,
-
-					slotTable: Float32Array.from([0]),
-					slotFrom: Float32Array.from([0]),
-					slotTo: Float32Array.from([3]),
-					t: 0.75,
-					slotVersion: 1
-				}
-			],
+			[travelling('a', [0, 1], [1, 0], 0.25), travelling('b', [0], [3], 0.75)],
 			state
 		);
 
@@ -463,42 +407,12 @@ describe('packIdentitySlots: bases', () => {
 		// rewrite, b's slots would read a's t.
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, 1, 2, 3]).length,
-					slotTable: Float32Array.from([0, 1, 2, 3]),
-					t: 0.1,
-					slotVersion: 1
-				},
-				{
-					id: 'b',
-					slotCount: Float32Array.from([0]).length,
-					slotTable: Float32Array.from([0]),
-					t: 0.9,
-					slotVersion: 1
-				}
-			],
+			[travelling('a', [0, 1, 2, 3], [0, 1, 2, 3], 0.1), travelling('b', [0], [0], 0.9)],
 			state
 		);
 
 		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, 1]).length,
-					slotTable: Float32Array.from([0, 1]),
-					t: 0.1,
-					slotVersion: 2
-				},
-				{
-					id: 'b',
-					slotCount: Float32Array.from([0]).length,
-					slotTable: Float32Array.from([0]),
-					t: 0.9,
-					slotVersion: 1
-				}
-			],
+			[travelling('a', [0, 1], [0, 1], 0.1, 2), travelling('b', [0], [0], 0.9)],
 			state
 		);
 
@@ -534,26 +448,8 @@ describe('resolveSlotsReference', () => {
 	it('reproduces the vertex-stage mix for every id of every scale', () => {
 		const state = createIdentitySlotState(64);
 		const scales = [
-			{
-				id: 'a',
-				slotCount: Float32Array.from([0, 1, 2]).length,
-
-				slotTable: Float32Array.from([0, 1, 2]),
-				slotFrom: Float32Array.from([0, 1, 2]),
-				slotTo: Float32Array.from([2, 0, 1]),
-				t: 0.4,
-				slotVersion: 1
-			},
-			{
-				id: 'b',
-				slotCount: Float32Array.from([1, -1, 0]).length,
-
-				slotTable: Float32Array.from([1, -1, 0]),
-				slotFrom: Float32Array.from([1, -1, 0]),
-				slotTo: Float32Array.from([0, -1, 1]),
-				t: 0.85,
-				slotVersion: 1
-			}
+			travelling('a', [0, 1, 2], [2, 0, 1], 0.4),
+			travelling('b', [1, -1, 0], [0, -1, 1], 0.85)
 		];
 		const { length } = packIdentitySlots(scales, state);
 
@@ -564,8 +460,8 @@ describe('resolveSlotsReference', () => {
 			const base = state.offsets.get(s.id)!;
 			// The header survives: count is identical in both halves, so mixing it
 			// returns it. The shader still reads its bound from `resolved`.
-			expect(out[base]).toBe(s.slotTable.length);
-			for (let id = 0; id < s.slotTable.length; id++) {
+			expect(out[base]).toBe(s.slots.count);
+			for (let id = 0; id < s.slots.count; id++) {
 				expect(out[base + 2 + id]).toBeCloseTo(vertexStageMix(state, base, id), 5);
 			}
 		}
@@ -575,21 +471,7 @@ describe('resolveSlotsReference', () => {
 		// -1 in both halves for any t. This is why neither the kernel nor the
 		// shader has a sentinel case.
 		const state = createIdentitySlotState(64);
-		const { length } = packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, -1, 1]).length,
-
-					slotTable: Float32Array.from([0, -1, 1]),
-					slotFrom: Float32Array.from([0, -1, 1]),
-					slotTo: Float32Array.from([1, -1, 0]),
-					t: 0.5,
-					slotVersion: 1
-				}
-			],
-			state
-		);
+		const { length } = packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
 		const out = new Float32Array(state.buffer.length);
 		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
 		const base = state.offsets.get('a')!;
@@ -604,28 +486,7 @@ describe('resolveSlotsReference', () => {
 		// point in a transition, which is the worst kind of wrong here.
 		const state = createIdentitySlotState(64);
 		const { length } = packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0]).length,
-
-					slotTable: Float32Array.from([0]),
-					slotFrom: Float32Array.from([0]),
-					slotTo: Float32Array.from([10]),
-					t: 0,
-					slotVersion: 1
-				},
-				{
-					id: 'b',
-					slotCount: Float32Array.from([0]).length,
-
-					slotTable: Float32Array.from([0]),
-					slotFrom: Float32Array.from([0]),
-					slotTo: Float32Array.from([10]),
-					t: 1,
-					slotVersion: 1
-				}
-			],
+			[travelling('a', [0], [10], 0), travelling('b', [0], [10], 1)],
 			state
 		);
 		const out = new Float32Array(state.buffer.length);
@@ -639,18 +500,7 @@ describe('resolveSlotsReference', () => {
 		// The dispatch covers `length` threads; the tail must stay as it was, or
 		// a buffer dump is full of values nothing put there.
 		const state = createIdentitySlotState(64);
-		const { length } = packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotCount: Float32Array.from([0, 1]).length,
-					slotTable: Float32Array.from([0, 1]),
-					t: 1,
-					slotVersion: 1
-				}
-			],
-			state
-		);
+		const { length } = packIdentitySlots([travelling('a', [0, 1], [0, 1], 1)], state);
 		const out = new Float32Array(state.buffer.length).fill(999);
 		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
 		expect(out[length]).toBe(999);
