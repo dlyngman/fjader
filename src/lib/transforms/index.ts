@@ -97,7 +97,17 @@ interface TopNOptions {
 	includeOthers?: boolean;
 }
 
-export function topN(n: number, options: TopNOptions = {}): SqlTransform {
+/**
+ * Keep the top `n` categories by value.
+ *
+ * `n` may be a getter — `topN(() => count)` — read each time the query is
+ * assembled. That is what lets a changing count animate: `topN(count)` with a
+ * different number is a different transform, and a mark handed different
+ * transforms is rebuilt, which throws away the bars on screen. A getter keeps the
+ * transform, and the mark re-queries when what it reads changes, the way it does
+ * for `limit`.
+ */
+export function topN(n: number | (() => number), options: TopNOptions = {}): SqlTransform {
 	return topNSQL(n, options);
 }
 
@@ -445,17 +455,24 @@ function rawSql(text: string) {
 	return sqlTag([text] as unknown as TemplateStringsArray);
 }
 
-function topNSQL(n: number, options: TopNOptions): SqlTransform {
+function topNSQL(count: number | (() => number), options: TopNOptions): SqlTransform {
+	const current = typeof count === 'number' ? () => count : count;
 	return {
 		stage: 'sql',
 		type: 'topN',
-		spec: {
-			transform: 'topN',
-			n,
-			...(options.by ? { by: options.by } : {}),
-			...(options.includeOthers ? { includeOthers: true } : {})
+		// A getter, so it states the count as it is now — and so reading it from a
+		// reactive context tracks whatever the count reads.
+		get spec() {
+			return {
+				transform: 'topN',
+				n: current(),
+				...(options.by ? { by: options.by } : {}),
+				...(options.includeOthers ? { includeOthers: true } : {})
+			};
 		},
 		apply(query: SelectQuery, config?: MarkConfig) {
+			// Read once per query: every use below must agree on it.
+			const n = current();
 			const aliases = getSelectAliases(query);
 			const { by, band, series } = resolveTopNColumns(aliases, options, config);
 
@@ -526,7 +543,7 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
 		},
 		describe() {
-			return `Top ${n}${options.includeOthers ? ' + Other' : ''} (SQL)`;
+			return `Top ${current()}${options.includeOthers ? ' + Other' : ''} (SQL)`;
 		}
 	};
 }

@@ -78,6 +78,17 @@ export class TransformCompiler {
 		return null;
 	}
 
+	/**
+	 * Every SQL transform's parameters as they are now.
+	 *
+	 * Read from a reactive context, this tracks any parameter given as a getter —
+	 * `topN(() => count)` — so the caller can re-query when one changes. The query
+	 * itself needs nothing more: transforms read their parameters when applied.
+	 */
+	get specs(): (Record<string, unknown> | undefined)[] {
+		return this.sqlTransforms.map((transform) => transform.spec);
+	}
+
 	#configFor(facts: Partial<MarkConfig> | undefined): MarkConfig | undefined {
 		return facts ? ({ ...this.markConfig, ...facts } as MarkConfig) : this.markConfig;
 	}

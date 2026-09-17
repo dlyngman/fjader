@@ -580,12 +580,16 @@ export class MarkLifecycleV2 {
 		// Push per-mark params and trigger query. Runs immediately after
 		// registration (Svelte flushes effects in creation order), providing
 		// the initial query. On subsequent changes to sort/limit/filterNulls,
-		// re-queries this mark only via _onParamsChange.
+		// or to a transform parameter given as a getter, re-queries this mark
+		// only via _onParamsChange.
 		$effect(() => {
 			if (!this.#handle) return;
 			const sort = this.#reactiveConfig.sort;
 			const limit = this.#reactiveConfig.limit;
 			const filterNulls = this.#reactiveConfig.filterNulls;
+			// Read for tracking only: transforms read their parameters when the query
+			// is assembled, so a changed count needs a re-query and not a rebuild.
+			void this.#transformCompiler.specs;
 			untrack(() => {
 				this.#handle!.updateParams({ sort, limit, filterNulls });
 			});

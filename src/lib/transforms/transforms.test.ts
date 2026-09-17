@@ -446,3 +446,31 @@ describe('dense().alignment', () => {
 		expect(dense().alignment!(['x', 'y'], { ...grouped, identity: undefined })).toBeNull();
 	});
 });
+
+describe('topN with a getter count', () => {
+	// A getter keeps the transform the same object while the count changes, so a
+	// mark is not rebuilt; the SQL reads it when assembled, and `specs` is what a
+	// mark's effect reads to know when to re-query.
+	const config: MarkConfig = { markType: 'bary', table: 'sales', x: 'x', y: 'y2' };
+	const query = () =>
+		Query.from('sales')
+			.select({ x: column('category'), y2: sum('revenue') })
+			.groupby(column('category'));
+
+	it('ranks by the count as it is when the query is assembled', () => {
+		let count = 3;
+		const compiler = new TransformCompiler([topN(() => count)], config);
+		expect(compiler.applyToQuery(query()).toString()).toMatch(/"__dplot_topn_rank" <= 3/);
+
+		count = 5;
+		expect(compiler.applyToQuery(query()).toString()).toMatch(/"__dplot_topn_rank" <= 5/);
+		expect(compiler.specs[0]).toMatchObject({ transform: 'topN', n: 5 });
+	});
+
+	it('reads the getter through specs, which is what a reactive caller tracks', () => {
+		let reads = 0;
+		const compiler = new TransformCompiler([topN(() => (reads++, 4))], config);
+		void compiler.specs;
+		expect(reads).toBe(1);
+	});
+});

@@ -557,9 +557,10 @@
 			<section>
 				<h2>3. Count only — topN(k)</h2>
 				<p>
-					Constant data, constant ranking; only how many are shown changes. This is Q2. First
-					establish whether changing <code>k</code> animates or tears the mark down and rebuilds it —
-					if it rebuilds, Q2 needs a lazy node, not a prop.
+					Constant data, constant ranking; only how many are shown changes. The count is passed as a
+					getter, <code>topN(() =&gt; k)</code>, so changing it re-queries the mark in place and a
+					category leaving the top k shrinks out as its slot moves. <code>topN(k)</code> would build
+					a new transform on every change, rebuild the mark, and the bars would pop.
 				</p>
 				<div class="controls">
 					{#each COUNTS as k (k)}
@@ -582,7 +583,7 @@
 										table="race_count"
 										x="cat_count"
 										y={count()}
-										transforms={[topN(topCount)]}
+										transforms={[topN(() => topCount)]}
 										tip={['x', 'y']}
 									/>
 								{/snippet}
