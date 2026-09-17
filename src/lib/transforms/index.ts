@@ -8,8 +8,15 @@
 
 import { Query, column, sql as sqlTag } from '@uwdata/mosaic-sql';
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
-import type { SqlTransform, JsTransform, Transform, MarkConfig, ScaleMap } from '$lib/types';
-import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
+import type {
+	ChannelIdentity,
+	SqlTransform,
+	JsTransform,
+	Transform,
+	MarkConfig,
+	ScaleMap
+} from '$lib/types';
+import type { DataAccessor } from '$lib/data/DataAccessor';
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
@@ -78,27 +85,29 @@ export function orderby(...expressions: ExprNode[]): SqlTransform {
 // -----------------------------------------------------------------------------
 // topN — filter to top N categories by aggregate value
 //
-// SQL path (default): CTE wrapping with ROW_NUMBER / LIMIT ranking.
-// JS path (engine: 'js'): post-query DataAccessor processing.
-// includeOthers only supported on JS path.
+// SQL only. Ranks, then filters to the top N or collapses the rest into Other.
+// Runs in the database like every category-reducing step, and — unlike a
+// client-side pass — ahead of `dense()`, which is what lets it animate.
 // -----------------------------------------------------------------------------
 
 interface TopNOptions {
 	/** Value channel to rank by. Default: the mark's value axis (y, or x for barx). */
 	by?: string;
+	/** Collapse everything past the cutoff into one Other row per series. */
 	includeOthers?: boolean;
-	/** Force JS execution path. Default: SQL. */
-	engine?: 'sql' | 'js';
 }
 
-export function topN(n: number, options: TopNOptions & { engine: 'js' }): JsTransform;
-export function topN(n: number, options: TopNOptions & { includeOthers: true }): JsTransform;
-export function topN(n: number, options?: TopNOptions): SqlTransform;
-export function topN(n: number, options: TopNOptions = {}): SqlTransform | JsTransform {
-	// includeOthers requires JS path (complex aggregation not yet in SQL)
-	if (options.includeOthers || options.engine === 'js') {
-		return topNJS(n, options);
-	}
+/**
+ * Keep the top `n` categories by value.
+ *
+ * `n` may be a getter — `topN(() => count)` — read each time the query is
+ * assembled. That is what lets a changing count animate: `topN(count)` with a
+ * different number is a different transform, and a mark handed different
+ * transforms is rebuilt, which throws away the bars on screen. A getter keeps the
+ * transform, and the mark re-queries when what it reads changes, the way it does
+ * for `limit`.
+ */
+export function topN(n: number | (() => number), options: TopNOptions = {}): SqlTransform {
 	return topNSQL(n, options);
 }
 
@@ -180,45 +189,321 @@ function resolveTopNColumns(
  */
 export const TOPN_RANK_COLUMN = '__dplot_topn_rank';
 
-function topNSQL(n: number, options: TopNOptions): SqlTransform {
+/**
+ * Give every category in the dim a row, at zero past the cutoff.
+ *
+ * This is what makes a departing category animate instead of disappearing: it
+ * still has a row, its measure runs to 0, and enter/leave becomes an ordinary
+ * value change on a channel that already exists — which is what the animation
+ * contract says it should be.
+ *
+ * **The cutoff stays INSIDE the join.** The join restores ROWS, not VALUES, so
+ * an excluded category comes back at 0 rather than at its real aggregate. That
+ * is what makes a leaving bar shrink to nothing, and it is also why
+ * `includeOthers` cannot double-count: Other carries the sum, and the
+ * categories folded into it carry zero.
+ *
+ * Column rules, and each one is load-bearing:
+ * - the band channel becomes `d.id`, so it is present for every category;
+ * - a channel carrying a category id from the SAME dim as the band is filled
+ *   from the dim, because its value is that category's own id — which is what
+ *   keeps a departing bar its colour while it shrinks;
+ * - another group key (a series, a facet) is enumerated from its own dim, so a
+ *   missing PAIR is padded too, under its real id;
+ * - a category id from another field that is not a key gets -1, the absent
+ *   sentinel, never 0, which is a real category;
+ * - the rank becomes NaN on every padded row, which is how a topN axis knows
+ *   that row is not displayed;
+ * - every other channel is COALESCEd to 0, so a padded row has zero extent
+ *   rather than a NaN one, which would be discarded rather than shrunk.
+ *
+ * Written with `sqlTag` because mosaic-sql's SelectQuery has no join — `from()`
+ * takes table expressions and a multi-expression `from` is a cross join, which
+ * is an INNER semantic and drops precisely the rows this exists to keep. A raw
+ * FROM inside a transform's `apply()` body is safe by construction — it is not a
+ * channel expression, so nothing downstream tries to analyse it. The unaliased
+ * `Query.from(sqlTag...)` form is deliberate, because the object form appends
+ * `AS "<key>"` after the ON clause and produces a syntax error.
+ *
+ * NOT ORDERED HERE. A bar mark stacks by default, so this is wrapped, and a
+ * subquery's ORDER BY does not bind the outer query. It publishes `alignment`
+ * instead, and the query assembler orders the outermost query by it.
+ */
+function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): SelectQuery {
+	const { band, dim, cross } = plan;
+	const crossAlias = new Map(cross.map(([key], i) => [key, `k${i}`]));
+	const select: Record<string, ExprNode> = {};
+	for (const alias of aliases) {
+		const crossed = crossAlias.get(alias);
+		if (alias === band) {
+			select[alias] = sqlTag`d."id"` as ExprNode;
+		} else if (crossed) {
+			// Another group key, enumerated from its own dim: the padded row for a
+			// missing (category, series) pair carries that series' real id.
+			select[alias] = rawSql(`${crossed}."id"`) as ExprNode;
+		} else if (plan.identity[alias]?.dim === dim) {
+			// Same dim as the band, so this channel IS the category — the ordinary
+			// "colour the bars by their own category" chart. Its value for a row
+			// with no data is not unknown, it is that category's id, so take it
+			// from the dim like the band does.
+			//
+			// This is what keeps a DEPARTING bar its colour. It is still on screen
+			// while it shrinks, and a sentinel would turn it grey on the frame its
+			// data disappeared — the one frame where the colour matters most.
+			select[alias] = sqlTag`d."id"` as ExprNode;
+		} else if (plan.identity[alias]) {
+			// A category id from some OTHER field that is not a group key — an
+			// aggregate over ids. There is no correct value for a row with no data,
+			// so the absent sentinel it is. Never 0, which is a real category: it
+			// would enter the colour scale's domain, shift every palette rank after
+			// it, and repaint bars that had not changed.
+			select[alias] = sqlTag`COALESCE(a.${column(alias)}, -1)` as ExprNode;
+		} else {
+			// A measure. 0 is the point: it is what makes a departing bar shrink to
+			// nothing rather than vanish.
+			select[alias] = sqlTag`COALESCE(a.${column(alias)}, 0)` as ExprNode;
+		}
+	}
+	// Only when a ranking transform actually published one. Most marks have no
+	// rank column, and projecting it unconditionally is a binder error.
+	//
+	// It cannot be left to the loop above either: that coalesces to 0, and 0 is
+	// the BEST rank, so every padded row would sort to the front.
+	if (aliases.includes(TOPN_RANK_COLUMN)) {
+		// NaN, not NULL and not 0, for a padded row — "returned but not displayed".
+		//
+		// This is the ONLY thing that keeps a padded row off a topN axis: past the
+		// cutoff, a synthetic id another mark reserved, an id from another table
+		// sharing the field's dim. All three are rows the join added, and all
+		// three get NaN here. It survives to JS because every channel coalesces
+		// NULL to NaN: DataAccessor's zero-copy path requires nullCount == 0, and a
+		// nullable column would arrive with whatever its values buffer holds —
+		// usually 0, the best rank.
+		select[TOPN_RANK_COLUMN] = sqlTag`COALESCE(CAST(a.${column(
+			TOPN_RANK_COLUMN
+		)} AS REAL), 'NaN'::REAL)` as ExprNode;
+	}
+
+	// Every other group key is crossed in, so a missing PAIR comes back, not only
+	// a missing category. Each key's ids get -1 appended: a row whose series is
+	// NULL carries -1, and a join over the dim's ids alone would drop it.
+	const joins = cross
+		.map(
+			([, keyDim], i) =>
+				` CROSS JOIN (SELECT "id" FROM ${quoteTable(keyDim)} UNION ALL SELECT -1) AS k${i}`
+		)
+		.join('');
+	const on = [
+		`a.${column(band)} = d."id"`,
+		...cross.map(([key], i) => `a.${column(key)} = k${i}."id"`)
+	].join(' AND ');
+	return Query.from(
+		rawSql(`${quoteTable(dim)} AS d${joins} LEFT JOIN (${inner}) AS a ON ${on}`)
+	).select(select);
+}
+
+/**
+ * Most padded rows `dense()` will produce before refusing.
+ *
+ * The result is band x every other key's dim, so it multiplies. Measured on
+ * native DuckDB over a 1M-row fact table: 10k padded rows cost under ~10 ms more
+ * than the sparse query, 50k about 50 ms, and 1M (5000 categories x 20 series x
+ * 10 facets) over a second. 10k covers a 5000-category topN and 500 categories
+ * x 20 series. Past it the mark snaps instead of morphing, which is what it did
+ * before any of this existed.
+ */
+export const DENSE_ROW_LIMIT = 10_000;
+
+interface DensePlan {
+	/** The channel joined against its dim, and that dim. */
+	band: string;
+	dim: string;
+	/** Every other group key with a dim of its own, crossed in: [channel, dim]. */
+	cross: [string, string][];
+	identity: Record<string, ChannelIdentity>;
+}
+
+/**
+ * Whether `dense()` applies to a query with these aliases, and how.
+ *
+ * The one place its conditions live. Refuses — returns null — when padding
+ * would make a claim that is false:
+ *
+ * - **Not grouped.** A raw mark has many rows per category; padding it aligns
+ *   nothing. Raw marks show rows of a static file and have nothing to morph.
+ * - **Not exactly one dimmed positional axis** among the aliases. A heatmap
+ *   would need both, which is the cross product again, and is not built.
+ * - **A group key with no dim.** Its values cannot be enumerated, so its
+ *   missing combinations cannot be padded; padding it as a measure would
+ *   misalign rather than align.
+ * - **Too many rows.** See DENSE_ROW_LIMIT.
+ */
+function densePlan(
+	aliases: string[],
+	config: MarkConfig | undefined,
+	enabled: boolean
+): DensePlan | null {
+	if (!enabled) return null;
+
+	const identity = config?.identity;
+	if (!identity) return null;
+
+	// Stated by whoever built the select, because it cannot be recovered from
+	// the query by the time this runs: topN has already wrapped it, and the
+	// GROUP BY is several levels down.
+	const groupKeys = config?.groupKeys;
+	if (!groupKeys) return null;
+
+	const candidates = aliases.filter((ch) => identity[ch]?.positional);
+	if (candidates.length !== 1) return null;
+	const band = candidates[0];
+	const { dim, size } = identity[band];
+	if (!dim || !groupKeys.includes(band)) return null;
+
+	const cross: [string, string][] = [];
+	// Padded rows: the band's categories, times each crossed key's ids plus -1.
+	let rows = size;
+	for (const key of groupKeys) {
+		if (key === band || !aliases.includes(key)) continue;
+		const keyIdentity = identity[key];
+		if (!keyIdentity) return null;
+		// A key from the band's own dim is the category again, not a new axis.
+		if (keyIdentity.dim === dim) continue;
+		cross.push([key, keyIdentity.dim]);
+		rows *= keyIdentity.size + 1;
+	}
+	if (rows > DENSE_ROW_LIMIT) return null;
+
+	return { band, dim, cross, identity };
+}
+
+/**
+ * Return a row for every category, not only the ones that survived.
+ *
+ * Added automatically to any mark with a categorical axis, and the reason it is
+ * a default rather than an opt-in is that the alternative is a silent
+ * discontinuity: a category filtered down to no rows simply drops out of the
+ * GROUP BY, so its bar disappears between one update and the next with nothing
+ * to animate and no way for a consumer to tell it apart from a category that
+ * was never there.
+ *
+ * With it, absence is a VALUE — zero — so a bar shrinks to nothing and a
+ * returning one grows back, and the row set is the same size and in the same
+ * order on every update. That second property is what lets a mark hand its rows
+ * to the GPU as an array indexed by category and morph between two of them.
+ *
+ * With a series or a facet, "every category" means every COMBINATION of group
+ * key values, since those are what the rows are. When it refuses and why is
+ * `densePlan`.
+ */
+export function dense(options: { enabled?: boolean } = {}): SqlTransform {
+	const enabled = options.enabled !== false;
+	return {
+		stage: 'sql',
+		type: 'dense',
+		spec: { transform: 'dense', ...(enabled ? {} : { enabled: false }) },
+		/**
+		 * The band, then every crossed key: the rows are exactly their cross
+		 * product. Decided by the same plan `apply()` joins on, so a mark asking
+		 * and the query agreeing are one derivation, not two.
+		 */
+		alignment(aliases: string[], config?: MarkConfig): string[] | null {
+			const plan = densePlan(aliases, config, enabled);
+			return plan ? [plan.band, ...plan.cross.map(([key]) => key)] : null;
+		},
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const aliases = getSelectAliases(query);
+			const plan = densePlan(aliases, config, enabled);
+			return plan ? densify(query, aliases, plan) : query;
+		},
+		describe() {
+			return 'Dense categories';
+		}
+	};
+}
+
+/**
+ * Insert `dense()` where it has to run: after anything that drops categories,
+ * before anything that wraps the result.
+ *
+ * Before a stack in particular. Stacking after densifying is correct — a zero
+ * row contributes zero to a cumulative sum — while densifying after stacking
+ * would join one row per category onto a result that has one row per category
+ * PER SERIES, and collapse the series.
+ */
+export function withDenseCategories(transforms: Transform[], enabled = true): Transform[] {
+	if (!enabled) return transforms;
+	if (transforms.some((t) => t.type === 'dense')) return transforms;
+	// A JS-engine pipeline computes membership client-side and never sees the
+	// SQL path, so a SQL transform in front of it would be applied to a query
+	// whose result it does not produce.
+	if (transforms.some((t) => t.stage === 'js')) return transforms;
+
+	const stackAt = transforms.findIndex((t) => t.type === 'stack');
+	const d = dense();
+	if (stackAt === -1) return [...transforms, d];
+	return [...transforms.slice(0, stackAt), d, ...transforms.slice(stackAt)];
+}
+
+/** A bare table name, quoted. The dim name comes from the engine, not a user. */
+function quoteTable(name: string): string {
+	return `"${name.replace(/"/g, '""')}"`;
+}
+
+/** Engine-built SQL text as a fragment. Never user input. */
+function rawSql(text: string) {
+	return sqlTag([text] as unknown as TemplateStringsArray);
+}
+
+function topNSQL(count: number | (() => number), options: TopNOptions): SqlTransform {
+	const current = typeof count === 'number' ? () => count : count;
 	return {
 		stage: 'sql',
 		type: 'topN',
-		spec: { transform: 'topN', n, ...(options.by ? { by: options.by } : {}) },
+		// A getter, so it states the count as it is now — and so reading it from a
+		// reactive context tracks whatever the count reads.
+		get spec() {
+			return {
+				transform: 'topN',
+				n: current(),
+				...(options.by ? { by: options.by } : {}),
+				...(options.includeOthers ? { includeOthers: true } : {})
+			};
+		},
 		apply(query: SelectQuery, config?: MarkConfig) {
+			// Read once per query: every use below must agree on it.
+			const n = current();
 			const aliases = getSelectAliases(query);
 			const { by, band, series } = resolveTopNColumns(aliases, options, config);
 
+			let ranked: SelectQuery;
 			if (series) {
-				// Grouped: compute total per band category, take top N, filter.
-				// Ranks categories by SUM(value) across all series, then keeps
-				// all series rows for the winning categories.
+				// Grouped: rank CATEGORIES by their total across every series, so
+				// every row of a category shares its rank.
 				//
-				// No rank column, unlike the simple path below. The ranking lives
-				// inside topCatsQuery and surfacing it means joining that back in,
-				// which is a real change to a query the stack path depends on. So
-				// a STACKED topN still takes its band order from dim id rather
-				// than from the measure, and that is §33.6's standing item.
+				// Published as a column like the simple path, and for the same two
+				// reasons. The axis reads its order from it — row order does not
+				// survive the stack wrapping this. And a padded row from `dense()`
+				// is kept off the axis by its rank being NaN, which only works if
+				// there is a rank to be NaN.
 				//
-				// The consumer tolerates the absence rather than depending on it:
-				// no rank column means the band branch falls back to row order,
-				// which is what it did for every mark before this.
-				const topCatsQuery = Query.from({ __topn_base: query })
-					.select({ [band]: column(band) })
-					.groupby(column(band))
-					.orderby(sqlTag`SUM(${column(by)}) DESC`)
-					.limit(n);
-
-				return Query.from({ __topn_src: query })
-					.select(passthroughSelect(aliases))
-					.where(sqlTag`${column(band)} IN (${topCatsQuery})`);
+				// DENSE_RANK over (total, band) so a tie still yields exactly n
+				// categories, deterministically.
+				const totals = Query.from({ __topn_base: query }).select({
+					...passthroughSelect(aliases),
+					__dplot_topn_total: sqlTag`SUM(${column(by)}) OVER (PARTITION BY ${column(band)})`
+				});
+				ranked = Query.from({ __topn_totals: totals }).select({
+					...passthroughSelect(aliases),
+					[TOPN_RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
+				});
+			} else {
+				// Simple: rank rows by value.
+				ranked = Query.from({ __topn_base: query }).select({
+					...passthroughSelect(aliases),
+					[TOPN_RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+				});
 			}
-
-			// Simple: rank rows by value, filter to top N.
-			const ranked = Query.from({ __topn_base: query }).select({
-				...passthroughSelect(aliases),
-				[TOPN_RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
-			});
 
 			// The rank stays in the output, and that is the whole mechanism: the
 			// band axis reads it as a VALUE instead of inferring the ranking from
@@ -240,312 +525,107 @@ function topNSQL(n: number, options: TopNOptions): SqlTransform {
 			//
 			// The `__dplot_` prefix is load-bearing: #writeTooltipTable filters
 			// exactly that prefix, so the rank cannot leak into a tooltip.
+			//
+			// Not densified here. Keeping a row for every category is not topN's
+			// business — an ordinary bar chart under a crossfilter loses rows the
+			// same way, when a category filters down to nothing and drops out of
+			// the GROUP BY. `dense()` does it for both, and runs after this.
+			const otherId = config?.identity?.[band]?.otherId;
+			if (options.includeOthers && otherId != null) {
+				return collapseIntoOther(ranked, aliases, { n, by, band, series, otherId, config });
+			}
+			// No reserved id yet — identity setup reserves it asynchronously — so
+			// there is nothing to call Other, and the rows past the cutoff are
+			// simply left out, as the JS path does. The query is rebuilt once the id
+			// exists.
 			return Query.from({ __topn: ranked })
 				.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
 				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
 		},
 		describe() {
-			return `Top ${n} (SQL)`;
+			return `Top ${current()}${options.includeOthers ? ' + Other' : ''} (SQL)`;
 		}
 	};
 }
 
-function topNJS(n: number, options: TopNOptions): JsTransform {
-	return {
-		stage: 'js',
-		type: 'topN',
-		spec: {
-			transform: 'topN',
-			n,
-			...(options.by ? { by: options.by } : {}),
-			...(options.includeOthers ? { includeOthers: true } : {})
-		},
-		apply(data: DataAccessor, config: MarkConfig, scales?: ScaleMap) {
-			if (data.length === 0) return data;
-
-			// Value axis: x for horizontal marks (barx), y for vertical (bary, default)
-			const isHorizontal = config.markType === 'barx';
-			const valueField = (options.by || (isHorizontal ? config.x : config.y)) as string | undefined;
-			const bandField = (isHorizontal ? config.y : config.x) as string | undefined;
-			const seriesField = config.fill as string | undefined;
-
-			if (!valueField || !bandField) return data;
-			const valueCol = data.getColumn(valueField);
-			const bandColData = data.getColumn(bandField);
-			if (!valueCol || !bandColData) return data;
-
-			// The band channel carries dim ids, so a synthetic "Other" row cannot
-			// invent one — the engine reserved it at setup (§16.9). Keyed by data
-			// column name, which is what bandField is.
-			const otherId = scales?.otherIdsByColumn?.[bandField];
-
-			const seriesCol = seriesField ? data.getColumn(seriesField) : null;
-			if (seriesCol) {
-				return topNGrouped(
-					data,
-					n,
-					valueCol,
-					bandColData,
-					bandField,
-					seriesCol,
-					options,
-					valueField,
-					otherId
-				);
-			}
-
-			// Simple path: no series column, rank individual rows.
-			//
-			// No `data.length <= n` shortcut. Returning the accessor untouched
-			// looks like a free win — nothing is being cut — but it skips the three
-			// things this transform is for besides cutting: the rows come back in
-			// whatever order the query emitted, the rank column is missing so the
-			// band axis silently falls back to row order, and includeOthers is
-			// dropped. topNSimple handles the degenerate case itself.
-			return topNSimple(data, n, valueCol, bandField, options, otherId);
-		},
-		describe() {
-			return `Top ${n}${options.includeOthers ? ' (with Others)' : ''} (JS)`;
-		}
-	};
-}
-
-/** topN without series: rank and gather individual rows. */
-function topNSimple(
-	data: DataAccessor,
-	n: number,
-	valueCol: ArrayLike<unknown>,
-	bandField: string,
-	options: TopNOptions,
-	otherId?: number
-): DataAccessor {
-	const indices = Array.from({ length: data.length }, (_, i) => i);
-	indices.sort((a, b) => (Number(valueCol[b]) || 0) - (Number(valueCol[a]) || 0));
-
-	// Clamp: `n` may exceed what there is. Everything below indexes topIndices by
-	// position, so an unclamped n reads past its end and writes NaN into a
-	// Float32Array — which is why this used to be guarded by an early return in
-	// the caller rather than handled.
-	const keep = Math.min(n, indices.length);
-	const topIndices = indices.slice(0, keep);
-	const bandCol = data.getColumn(bandField);
-	// A numeric band column holds identity ids; the Other row needs the reserved
-	// one. Summing it like any other numeric column — which is what this used to
-	// do — produces the sum of the EXCLUDED ids, an arbitrary number that either
-	// falls outside the scale's block or lands on a live category (§16.9).
-	const bandIsIds = bandCol instanceof Float32Array;
-
-	let includeOthers = !!options.includeOthers;
-	if (includeOthers && bandIsIds && otherId == null) {
-		console.warn(
-			`[topN] includeOthers on "${bandField}" needs a reserved identity id and has none; ` +
-				`omitting the Other row rather than fabricating a category.`
-		);
-		includeOthers = false;
+/**
+ * Everything ranked past `n` becomes one Other row per remaining group key.
+ *
+ * Two steps. BUCKET relabels a row past the cutoff — its band becomes the
+ * reserved id and its rank n + 1, so Other sorts after every real category.
+ * COLLAPSE groups by the band and every other group key (a series, a facet),
+ * so Other gets one row per series:
+ *
+ * | channel | top row | Other row |
+ * |---|---|---|
+ * | band, or an id from the band's own dim | itself | the reserved id |
+ * | another group key | itself | itself |
+ * | the value ranked by | itself | summed |
+ * | anything else | itself | 0 |
+ * | rank | itself | n + 1 |
+ *
+ * An id from the band's own dim — colour by category — gets the reserved id so
+ * Other is coloured as Other. The JS path gives it 0, which is category 0's
+ * colour; that is its bug and not copied here.
+ *
+ * The reserved id can be a REAL category ("Other" in the data: the reservation
+ * reuses it). If that category makes the cut, bucketing gives its row and the
+ * excluded rows the same band, and the GROUP BY folds them — summed value, its
+ * own values elsewhere, its own rank via MIN. No special case.
+ */
+function collapseIntoOther(
+	ranked: SelectQuery,
+	aliases: string[],
+	o: {
+		n: number;
+		by: string;
+		band: string;
+		series: string | null;
+		otherId: number;
+		config: MarkConfig | undefined;
 	}
+): SelectQuery {
+	const { n, by, band, otherId } = o;
+	const rank = column(TOPN_RANK_COLUMN);
+	const kept = sqlTag`${rank} <= ${n}`;
+	const identity = o.config?.identity;
+	const bandDim = identity?.[band]?.dim;
+	const sameAsBand = (alias: string) =>
+		alias === band || (!!bandDim && identity?.[alias]?.dim === bandDim);
+	const groupKeys = o.config?.groupKeys ?? (o.series ? [o.series] : []);
+	const isKey = (alias: string) => sameAsBand(alias) || groupKeys.includes(alias);
 
-	// A real category may already carry the reserved id — reserveSynthetic reuses
-	// it rather than duplicating the value. If that category survived the cut,
-	// fold the excluded total into its row instead of appending a second row with
-	// the same id, which would draw two bars in one slot.
-	const foldIdx =
-		includeOthers && bandIsIds ? topIndices.findIndex((i) => bandCol[i] === otherId) : -1;
-	// Nothing was excluded, so there is no residual to bucket. An Other row here
-	// would be a category representing zero rows, which is a claim about the data
-	// rather than a summary of it.
-	const excludedAny = keep < indices.length;
-	const appendOther = includeOthers && foldIdx < 0 && excludedAny;
-
-	const outLen = appendOther ? keep + 1 : keep;
-	const columns: Record<string, Float32Array | unknown[]> = {};
-
-	for (const colName of data.columnNames) {
-		const src = data.getColumn(colName);
-		if (!src) continue;
-
-		if (src instanceof Float32Array) {
-			const dst = new Float32Array(outLen);
-			for (let i = 0; i < keep; i++) dst[i] = src[topIndices[i]];
-			if (includeOthers) {
-				if (colName === bandField) {
-					// Identity, not an aggregate. Already correct when folding.
-					if (appendOther) dst[keep] = otherId!;
-				} else {
-					let sum = 0;
-					for (let i = keep; i < indices.length; i++) sum += src[indices[i]];
-					if (appendOther) dst[keep] = sum;
-					else dst[foldIdx] += sum;
-				}
-			}
-			columns[colName] = dst;
+	const bucket: Record<string, ExprNode> = {};
+	for (const alias of aliases) {
+		const col = column(alias);
+		if (sameAsBand(alias)) {
+			bucket[alias] = sqlTag`CASE WHEN ${kept} THEN ${col} ELSE ${otherId} END` as ExprNode;
+		} else if (isKey(alias) || alias === by) {
+			bucket[alias] = col;
 		} else {
-			const dst: unknown[] = topIndices.map((i) => src[i]);
-			if (appendOther) {
-				dst.push(colName === bandField ? 'Other' : null);
-			}
-			columns[colName] = dst;
+			bucket[alias] = sqlTag`CASE WHEN ${kept} THEN ${col} END` as ExprNode;
 		}
 	}
+	bucket[TOPN_RANK_COLUMN] = sqlTag`CASE WHEN ${kept} THEN ${rank} ELSE ${n + 1} END` as ExprNode;
+	const bucketed = Query.from({ __topn_ranked: ranked }).select(bucket);
 
-	// Same contract as the SQL path: state the ranking rather than leave it to be
-	// inferred from row order. Redundant today, because these rows ARE emitted in
-	// rank order — and that is exactly the point. Chart 4 of /test/band-race came
-	// out correctly only because the JS path sorts after all SQL has run, which
-	// is an accident of engine choice rather than a guarantee.
-	//
-	// Other ranks last: it holds the categories past the cut, so it belongs at
-	// the end of the axis rather than wherever its reserved id happens to fall.
-	// 1-based, because ROW_NUMBER() is and the two paths are compared row for row
-	// by topn-parity. Only the relative order is read, so the base is free — and
-	// matching SQL is what keeps it free.
-	const rank = new Float32Array(outLen);
-	for (let i = 0; i < outLen; i++) rank[i] = i + 1;
-	columns[TOPN_RANK_COLUMN] = rank;
-
-	return new ColumnDataAccessor(columns, outLen);
-}
-
-/** topN with series: rank categories by total across all series, keep all series rows. */
-function topNGrouped(
-	data: DataAccessor,
-	n: number,
-	valueCol: ArrayLike<unknown>,
-	bandColData: ArrayLike<unknown>,
-	bandField: string,
-	seriesCol: ArrayLike<unknown>,
-	options: TopNOptions,
-	valueField: string,
-	otherId?: number
-): DataAccessor {
-	// Sum values per category to rank them
-	const categoryTotals = new Map<unknown, number>();
-	for (let i = 0; i < data.length; i++) {
-		const cat = bandColData[i];
-		categoryTotals.set(cat, (categoryTotals.get(cat) || 0) + (Number(valueCol[i]) || 0));
-	}
-
-	// Rank categories descending by total
-	const ranked = [...categoryTotals.entries()].sort((a, b) => b[1] - a[1]);
-	const topCategories = new Set(ranked.slice(0, n).map(([cat]) => cat));
-
-	// Collect row indices for top categories and excluded categories
-	const keepIndices: number[] = [];
-	const excludeIndices: number[] = [];
-	for (let i = 0; i < data.length; i++) {
-		if (topCategories.has(bandColData[i])) {
-			keepIndices.push(i);
+	const collapse: Record<string, ExprNode> = {};
+	const keys: ExprNode[] = [];
+	for (const alias of aliases) {
+		const col = column(alias);
+		if (isKey(alias)) {
+			collapse[alias] = col;
+			keys.push(col);
+		} else if (alias === by) {
+			collapse[alias] = sqlTag`CAST(SUM(${col}) AS REAL)` as ExprNode;
 		} else {
-			excludeIndices.push(i);
+			collapse[alias] = sqlTag`COALESCE(MAX(${col}), 0)` as ExprNode;
 		}
 	}
-
-	if (!options.includeOthers) {
-		// Simple: gather rows for top N categories
-		const columns: Record<string, Float32Array | unknown[]> = {};
-		for (const colName of data.columnNames) {
-			const src = data.getColumn(colName);
-			if (!src) continue;
-			if (src instanceof Float32Array) {
-				const dst = new Float32Array(keepIndices.length);
-				for (let i = 0; i < keepIndices.length; i++) dst[i] = src[keepIndices[i]];
-				columns[colName] = dst;
-			} else {
-				columns[colName] = keepIndices.map((i) => src[i]);
-			}
-		}
-		return new ColumnDataAccessor(columns, keepIndices.length);
-	}
-
-	// A numeric band column holds identity ids, so the Other rows need the
-	// reserved one. They used to get 0 — a real category id — which drew the
-	// Other bar on top of whichever category owned it (§16.9).
-	const bandIsIds = bandColData instanceof Float32Array;
-	if (bandIsIds && otherId == null) {
-		console.warn(
-			`[topN] includeOthers on "${bandField}" needs a reserved identity id and has none; ` +
-				`omitting the Other rows rather than fabricating a category.`
-		);
-		return gatherRows(data, keepIndices);
-	}
-
-	// includeOthers: sum excluded rows per series into synthetic "Other" rows
-	const seriesValues = new Map<unknown, number>();
-	const seriesOrder: unknown[] = [];
-	for (const i of excludeIndices) {
-		const s = seriesCol[i];
-		if (!seriesValues.has(s)) seriesOrder.push(s);
-		seriesValues.set(s, (seriesValues.get(s) || 0) + (Number(valueCol[i]) || 0));
-	}
-
-	// A real category may already carry the reserved id (reserveSynthetic reuses
-	// rather than duplicating). Where such a row survived the cut for a given
-	// series, fold that series' total into it instead of appending a duplicate
-	// (category, series) row.
-	const foldFor = new Map<unknown, number>();
-	if (bandIsIds) {
-		for (let k = 0; k < keepIndices.length; k++) {
-			const i = keepIndices[k];
-			if (bandColData[i] === otherId && seriesValues.has(seriesCol[i])) {
-				foldFor.set(seriesCol[i], k);
-			}
-		}
-	}
-	const appended = seriesOrder.filter((sv) => !foldFor.has(sv));
-
-	const outLen = keepIndices.length + appended.length;
-	const columns: Record<string, Float32Array | unknown[]> = {};
-
-	for (const colName of data.columnNames) {
-		const src = data.getColumn(colName);
-		if (!src) continue;
-
-		if (src instanceof Float32Array) {
-			const dst = new Float32Array(outLen);
-			for (let i = 0; i < keepIndices.length; i++) dst[i] = src[keepIndices[i]];
-			// Folded series: add the excluded total into the surviving row.
-			if (colName === valueField) {
-				for (const [sv, k] of foldFor) dst[k] += seriesValues.get(sv) || 0;
-			}
-			// Appended "Other" rows: the value column gets the per-series total,
-			// the band column the reserved id, everything else 0.
-			for (let j = 0; j < appended.length; j++) {
-				dst[keepIndices.length + j] =
-					colName === valueField
-						? seriesValues.get(appended[j]) || 0
-						: colName === bandField
-							? otherId!
-							: 0;
-			}
-			columns[colName] = dst;
-		} else {
-			const dst: unknown[] = keepIndices.map((i) => src[i]);
-			for (let j = 0; j < appended.length; j++) {
-				if (colName === bandField) dst.push('Other');
-				else if (src === seriesCol) dst.push(appended[j]);
-				else dst.push(null);
-			}
-			columns[colName] = dst;
-		}
-	}
-
-	return new ColumnDataAccessor(columns, outLen);
-}
-
-/** Gather the given row indices from every column, preserving typed arrays. */
-function gatherRows(data: DataAccessor, indices: number[]): DataAccessor {
-	const columns: Record<string, Float32Array | unknown[]> = {};
-	for (const colName of data.columnNames) {
-		const src = data.getColumn(colName);
-		if (!src) continue;
-		if (src instanceof Float32Array) {
-			const dst = new Float32Array(indices.length);
-			for (let i = 0; i < indices.length; i++) dst[i] = src[indices[i]];
-			columns[colName] = dst;
-		} else {
-			columns[colName] = indices.map((i) => src[i]);
-		}
-	}
-	return new ColumnDataAccessor(columns, indices.length);
+	collapse[TOPN_RANK_COLUMN] = sqlTag`MIN(${rank})` as ExprNode;
+	return Query.from({ __topn_bucketed: bucketed })
+		.select(collapse)
+		.groupby(...keys);
 }
 
 // -----------------------------------------------------------------------------
@@ -950,7 +1030,7 @@ function normalizeJS(_options: NormalizeOptions): JsTransform {
 			if (data.length === 0) return data;
 
 			const n = data.length;
-			// barx swaps value/band axes, same convention as topNJS.
+			// barx swaps value/band axes, same convention as topN.
 			const isHorizontal = config.markType === 'barx';
 			const groupField = (isHorizontal ? config.y : config.x)!;
 			const valueField = (isHorizontal ? config.x : config.y)!;

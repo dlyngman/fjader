@@ -293,7 +293,7 @@ export class ScaleRegistry {
 							align: (config.align as number | undefined) ?? 0.5,
 							sourceField: config.sourceField as string | undefined,
 							registry: this,
-							// Step 5 C3: how a reorder reaches the animation loop.
+							// How a data transition reaches the animation loop.
 							gpuCoordinator: this.#gpuCoordinator
 						})
 					);

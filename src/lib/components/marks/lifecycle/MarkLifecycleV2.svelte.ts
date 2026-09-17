@@ -36,12 +36,14 @@ import {
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { withDenseCategories } from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
 	FieldRef,
 	NormalizedSortConfig,
 	Transform,
+	ChannelIdentity,
 	MarkConfig,
 	ChartContext,
 	ScaleStateInstance,
@@ -88,6 +90,16 @@ export interface MarkLifecycleV2Config {
 	inferredScaleColumns?: { x?: FieldRef; y?: FieldRef };
 	table: string;
 	transforms: Transform[];
+	/**
+	 * Return a row for every category on a categorical axis, not only the ones
+	 * that survived the filter. Default on.
+	 *
+	 * Set false to opt out. The cost it buys back is a result sized by the
+	 * dimension rather than by what is displayed, which matters at high
+	 * cardinality; what it gives up is a category being able to fade out rather
+	 * than disappear, and the row alignment that lets values morph at all.
+	 */
+	dense?: boolean;
 	select: Record<string, unknown>;
 	constants?: Record<string, number>;
 	colorChannel?: string;
@@ -150,13 +162,6 @@ export class MarkLifecycleV2 {
 	#identityFields: Set<string> = new Set();
 	/** Unsubscribe from the engine's identity resets. */
 	#identityResetOff: (() => void) | null = null;
-	/**
-	 * Reserved ids for synthetic rows, by field (§16.9). Populated at setup
-	 * because the value array must already contain the label before any JS
-	 * transform writes its id — a transform runs on data, which is far too late
-	 * to be issuing DDL.
-	 */
-	#syntheticIds: Record<string, number> = {};
 
 	/**
 	 * The relation any query built from #resolvedQueryParts must read.
@@ -189,6 +194,18 @@ export class MarkLifecycleV2 {
 	}
 	#rollingAvgNodes: Map<string, RollingAvgNode> = new Map();
 	#rollingAvgVersion = $state(0);
+	/**
+	 * Every channel of this mark carrying category ids, and its dim — null until
+	 * identity setup, and again after a reset. Set only through #setIdentity,
+	 * which mirrors it onto #transformConfig for the transforms.
+	 *
+	 * Reactive because the query parts depend on it and it arrives after the
+	 * first build. Without that the FIRST query is built without it: no ORDER BY,
+	 * so its rows come back in whatever order the aggregation produced, and the
+	 * next query — built with it — in id order. Two results in two orders is
+	 * precisely the misalignment the ordering exists to prevent.
+	 */
+	#identity: Record<string, ChannelIdentity> | null = $state.raw(null);
 
 	// --- Query State (reactive — feed #resolvedQueryParts $derived) ---
 	#fieldStats = $state<Record<string, { column: string; min: number; max: number }> | null>(null);
@@ -236,6 +253,8 @@ export class MarkLifecycleV2 {
 
 		// Resolve RollingAvgNodes — track invalidation counter
 		void this.#rollingAvgVersion;
+		// Identity setup changes what this resolves to downstream; see the field.
+		void this.#identity;
 		for (const [ch, value] of Object.entries(resolvedSelect)) {
 			if (isRollingAvgExpression(value)) {
 				resolvedSelect[ch] = value.resolve();
@@ -270,12 +289,14 @@ export class MarkLifecycleV2 {
 		this.#inlineIdentityColumns(resolvedSelect);
 		this.#inlineTimeOffsets(resolvedSelect);
 
-		return buildQueryParts(
+		const parts = buildQueryParts(
 			resolvedSelect,
 			this.#config._orderConfig ?? null,
 			this.#transformCompiler.hasSQLTransforms(),
 			passthroughChannels
 		);
+
+		return parts;
 	});
 
 	// --- Domain State ---
@@ -331,7 +352,18 @@ export class MarkLifecycleV2 {
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill')
 		};
-		this.#transformCompiler = new TransformCompiler(config.transforms || [], this.#transformConfig);
+		// `dense()` is added here rather than in each of the twelve mark components
+		// that assemble transform lists, and it is added unconditionally: it
+		// refuses itself at apply time unless the mark has exactly one dimmed
+		// categorical axis that is also a GROUP BY key. That keeps the condition
+		// in one place, next to the reason for it, instead of spread across the
+		// callers that would each have to re-derive it.
+		//
+		// `dense: false` on the mark opts out.
+		this.#transformCompiler = new TransformCompiler(
+			withDenseCategories(config.transforms || [], config.dense !== false),
+			this.#transformConfig
+		);
 		this.#detectAutoBins();
 
 		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin)
@@ -418,7 +450,8 @@ export class MarkLifecycleV2 {
 	#onIdentityReset(): void {
 		if (this.#destroyed) return;
 		this.#identityFields.clear();
-		this.#syntheticIds = {};
+		// Every dim it names just went away — topN must not bucket into one.
+		this.#setIdentity(null);
 		this.setupComplete = false;
 	}
 
@@ -547,12 +580,16 @@ export class MarkLifecycleV2 {
 		// Push per-mark params and trigger query. Runs immediately after
 		// registration (Svelte flushes effects in creation order), providing
 		// the initial query. On subsequent changes to sort/limit/filterNulls,
-		// re-queries this mark only via _onParamsChange.
+		// or to a transform parameter given as a getter, re-queries this mark
+		// only via _onParamsChange.
 		$effect(() => {
 			if (!this.#handle) return;
 			const sort = this.#reactiveConfig.sort;
 			const limit = this.#reactiveConfig.limit;
 			const filterNulls = this.#reactiveConfig.filterNulls;
+			// Read for tracking only: transforms read their parameters when the query
+			// is assembled, so a changed count needs a re-query and not a rebuild.
+			void this.#transformCompiler.specs;
 			untrack(() => {
 				this.#handle!.updateParams({ sort, limit, filterNulls });
 			});
@@ -1163,6 +1200,38 @@ export class MarkLifecycleV2 {
 		await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
 		for (const { key } of categorical) this.#identityFields.add(key);
 
+		// Tell the transforms which dim each categorical channel is identified by.
+		//
+		// This is what turns on the dense join: with a dim to join against, a
+		// category that drops out of the top N keeps a row at zero instead of
+		// vanishing, so its bar can shrink out rather than disappear on the frame
+		// the reorder lands. Positional axes are what can be the band. Colour and
+		// facet are there too, because densifying needs to know a channel carries
+		// ids: one sharing the band's dim is filled from the dim, one from another
+		// field takes the absent sentinel.
+		//
+		// Handed over rather than derived in the transform: the dim name is
+		// session-suffixed and owned by the identity coordinator, and a transform
+		// rebuilding it from a field name is two derivations that must agree and
+		// eventually will not. Sizes are read now; a later Other reservation adds
+		// one id, which does not move a row limit that coarse.
+		const identity: Record<string, ChannelIdentity> = {};
+		const describe = (channel: string, key: string, positional: boolean) => {
+			identity[channel] = {
+				dim: this.#queryEngine.dimTableFor(key),
+				size: this.#queryEngine.identityFor(key).values.length,
+				positional
+			};
+		};
+		for (const { axis, key } of axes) describe(axis, key, true);
+		if (colorKey && this.#identityFields.has(colorKey.key)) {
+			describe(this.#config.colorChannel || 'fill', colorKey.key, false);
+		}
+		if (facetKey && this.#identityFields.has(facetKey.key)) {
+			describe('__facet', facetKey.key, false);
+		}
+		this.#setIdentity(identity);
+
 		// Hand each band scale the engine's live id -> value array, so it can build
 		// its slot table. This must happen for EVERY band axis, not only the ones
 		// whose domain came from the dim: a sorted axis takes the ranking-query
@@ -1224,17 +1293,10 @@ export class MarkLifecycleV2 {
 		// categorical field of this mark rather than guessing which axis topN
 		// will pick — at most two, and the transform looks its own field up.
 		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
+			const otherIds: Partial<Record<'x' | 'y', number>> = {};
 			for (const { axis, key } of axes) {
 				const id = await this.#queryEngine.reserveSyntheticIdentity(key, 'Other');
-
-				// Keyed off #transformConfig itself, not recomputed. A transform
-				// reads its band column as config[axis] and passes that to
-				// getColumn, so taking the key from the same object makes the two
-				// literally one value rather than two derivations that agree. They
-				// did not agree once: keyed by the source field, every lookup
-				// missed and the Other row was silently dropped.
-				const column = this.#transformConfig[axis];
-				if (typeof column === 'string') this.#syntheticIds[column] = id;
+				otherIds[axis] = id;
 
 				// Re-adopt: the reservation appended to the value array, and a scale
 				// that adopted before it must see the new entry.
@@ -1254,8 +1316,68 @@ export class MarkLifecycleV2 {
 				// undisplayed id cannot act as a gateway.
 				scale?.setOtherId(id);
 			}
+			// topN buckets past its cutoff into these ids. The query parts rebuild:
+			// anything assembled before the reservation had no id and left Other
+			// out.
+			// On the same entry as the axis's dim, keyed by the channel topN
+			// resolves its band to. Kept as a separate map keyed by the source
+			// field, every lookup once missed and the Other row was silently
+			// dropped; one entry per channel cannot disagree with itself.
+			//
+			// Read after the awaits: a reset in between leaves nothing to add to.
+			const current = this.#identity;
+			if (current) {
+				const withOther = { ...current };
+				for (const [axis, otherId] of Object.entries(otherIds)) {
+					if (withOther[axis]) withOther[axis] = { ...withOther[axis], otherId };
+				}
+				this.#setIdentity(withOther);
+			}
 		}
 	}
+
+	/**
+	 * The one writer of identity: the reactive copy the query parts read, and
+	 * the transforms' copy on #transformConfig — the same object the compiler
+	 * holds by reference, so transforms that run later see it.
+	 */
+	#setIdentity(identity: Record<string, ChannelIdentity> | null): void {
+		this.#identity = identity;
+		if (identity) this.#transformConfig.identity = identity;
+		else delete this.#transformConfig.identity;
+	}
+
+	/**
+	 * The axis whose rows are one per category, in category order — or null.
+	 *
+	 * The precondition for morphing: interpolating `from[i]` to `to[i]` means
+	 * something only while row `i` is the same category in both. A query
+	 * returning one row per surviving group does not give that — filter a
+	 * category to nothing and every row after it shifts up — and interpolating
+	 * across that produces values belonging to no category at all.
+	 *
+	 * It is also which axis is the BAND, which is everything a renderer needs:
+	 * the band's channels carry ids that resolve through the slot table and are
+	 * never mixed, the other axis's channels morph, and the band scale owns the
+	 * clock both run on.
+	 *
+	 * The first channel of the transforms' alignment — `dense()`'s plan, over the
+	 * same select and facts its `apply()` sees — so the conditions are written
+	 * once. Derived rather than recorded at apply time: apply runs for every
+	 * query assembled from this mark, not only the one whose rows reach the GPU.
+	 */
+	alignedBand: 'x' | 'y' | null = $derived.by(() => {
+		const parts = this.#resolvedQueryParts;
+		if (!parts) return null;
+		// Identity setup fills in what dense() reads; see the field.
+		void this.#identity;
+		// Asked exactly as assembleQuery asks when it orders the query, so this and
+		// the rows cannot disagree about which channel they are aligned on.
+		const band = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
+			groupKeys: parts.groupKeys
+		})?.[0];
+		return band === 'x' || band === 'y' ? band : null;
+	});
 
 	/**
 	 * Re-fetch band domain ordering when sort config changes reactively.
@@ -1467,8 +1589,7 @@ export class MarkLifecycleV2 {
 
 		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
 			x: this.#chartContext.xScale,
-			y: this.#chartContext.yScale,
-			otherIdsByColumn: this.#syntheticIds
+			y: this.#chartContext.yScale
 		});
 	});
 

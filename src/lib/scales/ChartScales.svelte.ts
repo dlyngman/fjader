@@ -314,11 +314,7 @@ export class ChartScales {
 			// Time: sourceField for EPOCH() SQL in TimeScaleState.
 			// sourceField is NOT added to linear scales to avoid changing their
 			// config hash, which would break scale sharing for use_selection.
-			if (
-				axisConfig.type === 'band' ||
-				axisConfig.type === 'point' ||
-				axisConfig.type === 'time'
-			) {
+			if (axisConfig.type === 'band' || axisConfig.type === 'point' || axisConfig.type === 'time') {
 				cfg.sourceField = col;
 			}
 		}
@@ -516,7 +512,9 @@ export class ChartScales {
 				gpuCoordinator: this.gpuCoordinator,
 				chartId: this.chartId,
 				getAxisOrder: () => this.#parallelAxisOrder,
-				setAxisOrder: (order) => { this.#parallelAxisOrder = order; }
+				setAxisOrder: (order) => {
+					this.#parallelAxisOrder = order;
+				}
 			});
 		}
 		return this.#reorder;
@@ -559,7 +557,11 @@ export class ChartScales {
 		}
 	};
 
-	get parallelScales(): { scaleStates: LinearScaleState[]; columns: string[]; axisOrder: number[] } | null {
+	get parallelScales(): {
+		scaleStates: LinearScaleState[];
+		columns: string[];
+		axisOrder: number[];
+	} | null {
 		if (this.#parallelScaleInstances.size === 0) return null;
 		return {
 			scaleStates: [...this.#parallelScaleInstances.values()],
@@ -732,9 +734,15 @@ export class ChartScales {
 
 	// --- PARALLEL AXIS REORDER (delegated to ParallelAxisReorder) ---
 
-	get reorderCurrentX(): number | null { return this.#reorder?.reorderCurrentX ?? null; }
-	get reorderDataIdx(): number | null { return this.#reorder?.reorderDataIdx ?? null; }
-	get animatedAxisXPositions(): number[] { return this.#reorder?.animatedAxisXPositions ?? []; }
+	get reorderCurrentX(): number | null {
+		return this.#reorder?.reorderCurrentX ?? null;
+	}
+	get reorderDataIdx(): number | null {
+		return this.#reorder?.reorderDataIdx ?? null;
+	}
+	get animatedAxisXPositions(): number[] {
+		return this.#reorder?.animatedAxisXPositions ?? [];
+	}
 
 	startParallelReorder = (innerX: number, innerWidth: number): boolean => {
 		return this.#reorder?.startReorder(innerX, innerWidth) ?? false;

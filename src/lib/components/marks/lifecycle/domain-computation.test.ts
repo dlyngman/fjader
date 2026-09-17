@@ -118,6 +118,30 @@ describe('extractIdsRankedFromData', () => {
 		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([0, 1, 2]);
 	});
 
+	it('leaves an unranked category out of the display order entirely', () => {
+		// The dense join returns every category so a departing bar has a
+		// row to shrink out on, and marks the ones past the cutoff with a NaN
+		// rank. They must not reach the axis: without this, topN(2) over five
+		// categories would display all five.
+		const data = accessor([0, 1, 2, 3, 4], [2, NaN, 1, NaN, NaN]);
+		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([2, 0]);
+	});
+
+	it('does not admit a NaN rank on an id it has not seen before', () => {
+		// The bug the explicit guard exists for. Every comparison against NaN is
+		// false, so `rank < prev` can never let one in — but the first time an id
+		// appears there is no `prev`, and that branch would.
+		const data = accessor([7], [NaN]);
+		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([]);
+	});
+
+	it('keeps an id whose FIRST row is unranked but a later one is not', () => {
+		// A grouped result has several rows per category and they need not agree.
+		// Skipping the NaN must not also skip the id.
+		const data = accessor([5, 5], [NaN, 3]);
+		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([5]);
+	});
+
 	it('falls back to first-appearance order when no rank was published', () => {
 		// A grouped topN has no rank to publish and every other mark has no
 		// ranking at all, so absence is the normal case rather than an error.

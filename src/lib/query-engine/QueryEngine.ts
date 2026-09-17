@@ -250,6 +250,19 @@ export class QueryEngine {
 	}
 
 	/**
+	 * The dim table holding `field`'s `(value, label, id)` rows.
+	 *
+	 * Exposed for callers that need to JOIN the dim rather than read an id
+	 * column through a view — a dense result with one row per category, so a
+	 * category leaving a topN still has a row to animate out on. The name is
+	 * session-suffixed and owned by the identity coordinator; do not rebuild it
+	 * from the field name.
+	 */
+	dimTableFor(field: string): string {
+		return this.#identity.dimTable(field);
+	}
+
+	/**
 	 * Dim values for `field`, indexed by id — the decode side of the string -> id
 	 * encode. Not display labels: formatting belongs to the scale/axis layer.
 	 *
@@ -981,10 +994,12 @@ export class QueryEngine {
 		const windowChannels = reg.preaggWindowChannels;
 		const castSelect: Record<string, unknown> = {};
 		const preaggGroupBy: ExprNode[] = [];
+		const preaggGroupKeys: string[] = [];
 		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
 			if (!isAggregateExpression(expr)) {
 				castSelect[ch] = expr;
 				preaggGroupBy.push(column(ch));
+				preaggGroupKeys.push(ch);
 			} else if (windowChannels && ch in windowChannels) {
 				castSelect[ch] = expr;
 			} else {
@@ -996,6 +1011,7 @@ export class QueryEngine {
 			selectDef: castSelect,
 			nonAggregateGroupBy: preaggGroupBy,
 			hasAggregates: true,
+			groupKeys: preaggGroupKeys,
 			hasWindowAggregates: false,
 			hasSQLTransforms: parts.hasSQLTransforms,
 			orderChannels: parts.orderChannels,

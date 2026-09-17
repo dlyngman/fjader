@@ -3,20 +3,10 @@
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { ParallelLines } from '../rendering';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import {
-		buildSelectFromChannels,
-		MarkColor,
-		generateMarkId
-	} from './utils';
+	import { buildSelectFromChannels, MarkColor, generateMarkId } from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
 	import { getGPUContext } from '$lib/gpu';
-	import type {
-		FieldRef,
-		ChartContext,
-		ColorScheme,
-		CurveType,
-		Transform
-	} from '$lib/types';
+	import type { FieldRef, ChartContext, ColorScheme, CurveType, Transform } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -148,7 +138,9 @@
 
 	const rowCount = $derived(setup?.data?.length ?? 0);
 
-	const currentAxisOrder = $derived(chartContext.parallelScales?.axisOrder ?? columnNames.map((_: string, i: number) => i));
+	const currentAxisOrder = $derived(
+		chartContext.parallelScales?.axisOrder ?? columnNames.map((_: string, i: number) => i)
+	);
 
 	// Per-axis normalized x-positions (0–1) — animated by ChartScales.
 	// Falls back to evenly spaced if no animated positions available.

@@ -4,16 +4,25 @@
 	import { getGPUContext } from '$lib/gpu';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
-	// GridLineX: Vertical grid lines (X-axis)
-	// Only binds X scale - eliminates Y scale binding overhead
-	const ruleXRendererDefinition = {
-		x: { concept: 'position', channels: ['x'] },
-		y: null, // No Y scale binding
-		placeholders: { x: '{{X_AXIS_LOGIC}}' }
-	};
+	// Full-span grid lines along one axis: vertical lines at x positions, or
+	// horizontal lines at y positions. Binds only that axis's scale.
+	function rendererDefinitionFor(axis: 'x' | 'y') {
+		return axis === 'x'
+			? {
+					x: { concept: 'position', channels: ['x'] },
+					y: null,
+					placeholders: { x: '{{X_AXIS_LOGIC}}' }
+				}
+			: {
+					x: null,
+					y: { concept: 'position', channels: ['y'] },
+					placeholders: { y: '{{Y_AXIS_LOGIC}}' }
+				};
+	}
 
 	const BINDINGS = {
 		POSITIONS: 0,
+		ALPHA: 1,
 		CONSTANTS: 6
 	};
 
@@ -24,13 +33,32 @@
 	};
 
 	interface Props {
+		/** Which axis the lines mark: vertical lines for x, horizontal for y. Fixed at creation. */
+		axis: 'x' | 'y';
 		positions: Float32Array;
+		/**
+		 * Per-line opacity, 0..1. On a band axis the lines are every id in the
+		 * dim and this is 1 for the displayed ones, so a line fades in and out
+		 * with its category — morphed on the GPU on the band axis's clock, the
+		 * way a bar's height is. Omitted, every line is fully drawn.
+		 */
+		alpha?: Float32Array | null;
+		/** The band axis these lines belong to, when `alpha` should morph. */
+		bandAxis?: 'x' | 'y' | null;
 		color?: [number, number, number, number];
 		lineWidth?: number;
 		zIndex?: number;
 	}
 
-	let { positions, color = [0.8, 0.8, 0.8, 0.3], lineWidth = 1, zIndex = -10 }: Props = $props();
+	let {
+		axis,
+		positions,
+		alpha = null,
+		bandAxis = null,
+		color = [0.8, 0.8, 0.8, 0.3],
+		lineWidth = 1,
+		zIndex = -10
+	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
@@ -41,7 +69,28 @@
 	let initializationError = $state<string | null>(null);
 	let lineGeometryBuffer: GPUBuffer;
 
-	const ruleXShaderCode = `
+	/**
+	 * The two orientations differ only in which coordinate is scaled and which
+	 * spans the plot; everything else is shared.
+	 */
+	function shaderFor(axis: 'x' | 'y'): string {
+		const placement =
+			axis === 'x'
+				? `
+      let x = positions[instanceIdx];
+      {{X_AXIS_LOGIC}}
+      // Vertical: fixed x, spanning the full height.
+      let screenY = mix(0.0, frameUniforms.resolution.y, lineVertex.y);
+      let offsetX = (lineVertex.x - 0.5) * 2.0 * halfWidth;
+      let worldPos = vec2<f32>(scaledX + offsetX, screenY);`
+				: `
+      let y = positions[instanceIdx];
+      {{Y_AXIS_LOGIC}}
+      // Horizontal: fixed y, spanning the full width.
+      let screenX = mix(0.0, frameUniforms.resolution.x, lineVertex.x);
+      let offsetY = (lineVertex.y - 0.5) * 2.0 * halfWidth;
+      let worldPos = vec2<f32>(screenX, scaledY + offsetY);`;
+		return `
     struct RuleConstants {
       lineWidth: f32,
       _pad0: u32,
@@ -52,6 +101,7 @@
     @group(1) @binding(6) var<uniform> ruleConstants: RuleConstants;
 
     @group(1) @binding(0) var<storage, read> positions: array<f32>;
+    @group(1) @binding(1) var<storage, read> alphaValues: array<f32>;
 
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -63,24 +113,18 @@
       @location(0) lineVertex: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
     ) -> VertexOutput {
-      let x = positions[instanceIdx];
-
-      // X axis scaling (for vertical lines)
-      {{X_AXIS_LOGIC}}
-
-      // Render vertical line as a thin quad
+      // Rendered as a thin quad.
       let halfWidth = ruleConstants.lineWidth * 0.5 * frameUniforms.devicePixelRatio;
-
-      // Vertical: fixed X, span full Y
-      let screenY = mix(0.0, frameUniforms.resolution.y, lineVertex.y);
-      let offsetX = (lineVertex.x - 0.5) * 2.0 * halfWidth;
-      let worldPos = vec2<f32>(scaledX + offsetX, screenY);
+${placement}
 
       let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
 
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.color = ruleConstants.color;
+      output.color = vec4<f32>(
+        ruleConstants.color.rgb,
+        ruleConstants.color.a * alphaValues[instanceIdx]
+      );
       return output;
     }
 
@@ -89,6 +133,7 @@
       return vec4<f32>(input.color.rgb * input.color.a, input.color.a);
     }
   `;
+	}
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
@@ -99,6 +144,7 @@
 
 	const dataBindingConfig = [
 		{ binding: BINDINGS.POSITIONS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -113,6 +159,28 @@
 		if (renderer?.resourcesCreated && positions) {
 			renderer.writeAttribute(BINDINGS.POSITIONS, positions);
 		}
+	});
+
+	// Opacity. On a band axis it morphs like a bar's height does: the rows are
+	// every id in the dim, so row i is the same category on every update, and
+	// the positions are that id list — which is what writeMorphed checks rows
+	// against.
+	const morphs = $derived(!!bandAxis && !!alpha && alpha.length === positions?.length);
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !morphs) return;
+		renderer.writeMorphed(bandAxis!, positions, [[BINDINGS.ALPHA, alpha!]]);
+	});
+
+	// Otherwise every line is fully drawn. Keyed on the line COUNT alone, because
+	// a continuous axis's positions change on every pan frame and its opacity
+	// does not; the ones are reused until the count outgrows them.
+	const lineCount = $derived(positions?.length ?? 0);
+	let ones = new Float32Array(0);
+	$effect(() => {
+		if (!renderer?.resourcesCreated || morphs) return;
+		if (ones.length < lineCount)
+			ones = new Float32Array(Math.max(lineCount, ones.length * 2)).fill(1);
+		renderer.writeAttribute(BINDINGS.ALPHA, ones.subarray(0, lineCount));
 	});
 
 	// Update uniform constants
@@ -158,7 +226,7 @@
 		lineGeometryBuffer = device.createBuffer({
 			size: lineVertices.byteLength,
 			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-			label: 'ruleX-line-geometry'
+			label: `grid-line-${axis}-geometry`
 		});
 		device.queue.writeBuffer(lineGeometryBuffer, 0, lineVertices);
 	}
@@ -171,17 +239,23 @@
 
 	async function initializeRule() {
 		try {
-			renderer = new BaseGPURenderer('ruleX', webGPUContext, gpuCoordinator, chartContext, {
-				zIndex,
-				xScaleType: chartContext.scaleTypes?.x || 'linear',
-				yScaleType: chartContext.scaleTypes?.y || 'linear'
-			});
+			renderer = new BaseGPURenderer(
+				`grid-line-${axis}`,
+				webGPUContext,
+				gpuCoordinator,
+				chartContext,
+				{
+					zIndex,
+					xScaleType: chartContext.scaleTypes?.x || 'linear',
+					yScaleType: chartContext.scaleTypes?.y || 'linear'
+				}
+			);
 
 			await renderer.initialize({
-				markShaderCode: ruleXShaderCode,
+				markShaderCode: shaderFor(axis),
 				vertexBufferLayout,
 				dataBindingConfig,
-				rendererDefinition: ruleXRendererDefinition
+				rendererDefinition: rendererDefinitionFor(axis)
 			});
 
 			await initializeLineGeometry();
@@ -192,7 +266,7 @@
 				renderer.registerLayer(drawRules);
 			}
 		} catch (error) {
-			console.error('RuleX renderer init failed:', error);
+			console.error(`Grid line (${axis}) renderer init failed:`, error);
 			initializationError = (error as Error).message;
 		}
 	}

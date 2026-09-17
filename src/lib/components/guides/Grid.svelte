@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { GridLineX, GridLineY } from '../rendering';
+	import { GridLine } from '../rendering';
 	import type { ChartContext, ScaleStateInstance } from '$lib/types';
+	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 
 	interface Props {
 		axis?: 'both' | 'x' | 'y';
@@ -23,44 +24,61 @@
 	const xScale = $derived(axis === 'x' || axis === 'both' ? chartContext.xScaleState : null);
 	const yScale = $derived(axis === 'y' || axis === 'both' ? chartContext.yScaleState : null);
 
-	// =========================================================================
-	// ZERO-ALLOCATION TICK BUFFERS (one per axis)
-	// =========================================================================
-	const MAX_TICKS = 200;
-	const xTickBuffer = new Float32Array(MAX_TICKS);
-	const yTickBuffer = new Float32Array(MAX_TICKS);
+	// A band axis draws a line for every id in its dim, positioned through the slot
+	// table like a bar and faded with its category; `tickVisibility` is what each
+	// line fades toward. Any other axis draws its ticks, fully.
+	const xBand = $derived(chartContext.scaleTypes?.x === 'band');
+	const yBand = $derived(chartContext.scaleTypes?.y === 'band');
 
-	let xTickValues = $state(null);
-	let yTickValues = $state(null);
+	// One reusable buffer per axis. A continuous axis re-ticks on every pan frame,
+	// so copying into a fresh array each time would allocate per frame; this
+	// grows when a band axis's dim does and is otherwise reused. Uncapped: a band
+	// axis draws a line per id in its dim.
+	let xBuffer = new Float32Array(64);
+	let yBuffer = new Float32Array(64);
 
-	// Helper: fill buffer from scale ticks (zero-allocation)
-	function fillTickBuffer(scale: ScaleStateInstance, buffer: Float32Array) {
-		const newTicks = scale?.getTicks ? scale.getTicks() : [];
-		const count = Math.min(newTicks.length, MAX_TICKS);
-
-		if (count > 0) {
-			for (let i = 0; i < count; i++) {
-				buffer[i] = newTicks[i];
-			}
-			return buffer.subarray(0, count);
+	function ticksOf(scale: ScaleStateInstance | null, which: 'x' | 'y'): Float32Array | null {
+		const ticks = scale?.getTicks ? (scale.getTicks() as ArrayLike<number>) : null;
+		if (!ticks || ticks.length === 0) return null;
+		let buffer = which === 'x' ? xBuffer : yBuffer;
+		if (buffer.length < ticks.length) {
+			buffer = new Float32Array(Math.max(ticks.length, buffer.length * 2));
+			if (which === 'x') xBuffer = buffer;
+			else yBuffer = buffer;
 		}
-		return null;
+		for (let i = 0; i < ticks.length; i++) buffer[i] = ticks[i];
+		return buffer.subarray(0, ticks.length);
 	}
 
-	// X axis ticks
-	$effect(() => {
-		xTickValues = xScale ? fillTickBuffer(xScale, xTickBuffer) : null;
-	});
+	function visibilityOf(scale: ScaleStateInstance | null, band: boolean): Float32Array | null {
+		return band && scale ? (scale as BandScaleState).tickVisibility() : null;
+	}
 
-	// Y axis ticks
-	$effect(() => {
-		yTickValues = yScale ? fillTickBuffer(yScale, yTickBuffer) : null;
-	});
+	const xTickValues = $derived(ticksOf(xScale, 'x'));
+	const yTickValues = $derived(ticksOf(yScale, 'y'));
+	const xAlpha = $derived(visibilityOf(xScale, xBand));
+	const yAlpha = $derived(visibilityOf(yScale, yBand));
 </script>
 
 {#if xTickValues}
-	<GridLineX positions={xTickValues} {color} {lineWidth} {zIndex} />
+	<GridLine
+		axis="x"
+		positions={xTickValues}
+		alpha={xAlpha}
+		bandAxis={xBand ? 'x' : null}
+		{color}
+		{lineWidth}
+		{zIndex}
+	/>
 {/if}
 {#if yTickValues}
-	<GridLineY positions={yTickValues} {color} {lineWidth} {zIndex} />
+	<GridLine
+		axis="y"
+		positions={yTickValues}
+		alpha={yAlpha}
+		bandAxis={yBand ? 'y' : null}
+		{color}
+		{lineWidth}
+		{zIndex}
+	/>
 {/if}

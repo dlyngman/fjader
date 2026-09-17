@@ -39,6 +39,13 @@ export interface QueryParts {
 	hasAggregates: boolean;
 	hasWindowAggregates: boolean;
 	hasSQLTransforms: boolean;
+	/**
+	 * Channels that are GROUP BY keys, or null when the query does not
+	 * aggregate. With keys, a result has one row per combination of their values
+	 * — which is what a transform needs to know to pad a result to every
+	 * combination, and cannot recover from a query topN has already wrapped.
+	 */
+	groupKeys: string[] | null;
 	orderChannels: string[] | null;
 	aliasMap: Map<string, string>;
 	/** Channels whose raw config value was a column-name passthrough (string
@@ -236,6 +243,7 @@ export function buildQueryParts(
 	let hasWindowAggregates = false;
 	const aliasMap = new Map<string, string>();
 
+	const keyChannels: string[] = [];
 	for (const channel in select) {
 		const expr = select[channel];
 		if (expr == null) continue;
@@ -267,6 +275,7 @@ export function buildQueryParts(
 		if (isAggregateExpression(exprNode)) {
 			hasAggregates = true;
 		} else if (!isWindowExpression(exprNode)) {
+			keyChannels.push(channel);
 			// Dedup: multiple channels may reference the same column
 			if (!groupByKeys.has(sqlAlias)) {
 				groupByKeys.add(sqlAlias);
@@ -278,25 +287,30 @@ export function buildQueryParts(
 		}
 	}
 
-	// Store channel names for connected mark ordering.
-	let orderChannels: string[] | null = null;
+	// A preference about row order, leading term first. A facet leads so each
+	// cell's rows stay contiguous. Row ALIGNMENT is not decided here: that is a
+	// guarantee only the transforms can make, and assembleQuery puts it ahead of
+	// this — see outerOrder.
+	const chans: string[] = [];
+	if (aliasMap.has('__facet')) chans.push('__facet');
+
 	if (orderConfig) {
 		const { seriesChannel, dimensionChannel } = orderConfig;
-		const chans: string[] = [];
-
-		if (aliasMap.has('__facet')) chans.push('__facet');
-		if (seriesChannel && aliasMap.has(seriesChannel)) chans.push(seriesChannel);
-		if (dimensionChannel && aliasMap.has(dimensionChannel)) chans.push(dimensionChannel);
-
-		if (chans.length > 0) {
-			orderChannels = chans;
+		if (seriesChannel && aliasMap.has(seriesChannel) && !chans.includes(seriesChannel)) {
+			chans.push(seriesChannel);
+		}
+		if (dimensionChannel && aliasMap.has(dimensionChannel) && !chans.includes(dimensionChannel)) {
+			chans.push(dimensionChannel);
 		}
 	}
+
+	const orderChannels = chans.length > 0 ? chans : null;
 
 	return {
 		selectDef,
 		nonAggregateGroupBy,
 		hasAggregates,
+		groupKeys: hasAggregates ? keyChannels : null,
 		hasWindowAggregates,
 		hasSQLTransforms,
 		orderChannels,
@@ -319,7 +333,7 @@ export function buildQueryParts(
  *                                     (topN ranking etc.) see filtered rows
  *   → SQL transforms (CTE wrapping)
  *   → [window CTE: outer SELECT applies window fns over the inner result]
- *   → ORDER BY orderChannels        — on the outermost query
+ *   → ORDER BY outerOrder(...)      — alignment, then orderChannels; outermost
  *   → LIMIT
  *
  * Callers decide what is CAST-wrapped by preparing parts.selectDef with
@@ -330,6 +344,46 @@ function selectAliases(query: Query): string[] {
 	const sel = (query as unknown as { _select?: { alias?: string }[] })._select;
 	if (!Array.isArray(sel)) return [];
 	return sel.map((s) => s.alias).filter((a): a is string => !!a);
+}
+
+/**
+ * The outermost ORDER BY: a leading facet, then the transforms' alignment, then
+ * the mark's preference, each channel once.
+ *
+ * ALIGNMENT AHEAD OF PREFERENCE. A mark handing its rows to the GPU as an array
+ * indexed by category needs row `i` to be the same category on every update,
+ * and only the leading terms decide that; everything after is a tiebreaker. An
+ * earlier version put alignment LAST, reasoning that a connected mark's order
+ * should win and that for these marks the two could not disagree. Both halves
+ * were wrong: a bar mark with a series emits `fill, x`, so rows came back grouped
+ * by colour, and because a padded row's `fill` is a sentinel the permutation
+ * changed with whichever categories a filter emptied. The tiebreakers still
+ * keep series segments contiguous WITHIN a category, which is what stacking
+ * needs.
+ *
+ * A facet still leads, so each cell's rows stay contiguous; the alignment within
+ * a cell is unchanged by it.
+ *
+ * ON THE OUTERMOST QUERY, never inside a transform. A bar mark stacks by default,
+ * so the aligned result is wrapped, and a subquery's ORDER BY does not bind the
+ * outer one — the stack's window PARTITIONs by the same column, the optimiser
+ * re-partitions, and the surviving order is the window operator's. An inner
+ * ORDER BY looks right, verifies right against the database in isolation, and is
+ * discarded one level up.
+ */
+export function outerOrder(
+	preference: string[] | null,
+	alignment: string[] | null
+): string[] | null {
+	if (!alignment || alignment.length === 0) return preference;
+	const order: string[] = [];
+	const add = (channel: string) => {
+		if (!order.includes(channel)) order.push(channel);
+	};
+	if (preference?.[0] === '__facet') add('__facet');
+	for (const channel of alignment) add(channel);
+	for (const channel of preference ?? []) add(channel);
+	return order;
 }
 
 export function assembleQuery(opts: AssembleOptions): Query {
@@ -352,7 +406,7 @@ export function assembleQuery(opts: AssembleOptions): Query {
 
 	let result: Query = q;
 	if (hasSQLTransforms) {
-		result = transformCompiler.applyToQuery(q);
+		result = transformCompiler.applyToQuery(q, { groupKeys: parts.groupKeys });
 	}
 
 	if (window) {
@@ -379,8 +433,12 @@ export function assembleQuery(opts: AssembleOptions): Query {
 			.with({ [window.cteName]: result });
 	}
 
-	if (orderChannels) {
-		result = result.orderby(...orderChannels.map((ch) => sqlColumn(ch)));
+	const alignment = hasSQLTransforms
+		? transformCompiler.alignment(Object.keys(selectDef), { groupKeys: parts.groupKeys })
+		: null;
+	const order = outerOrder(orderChannels, alignment);
+	if (order) {
+		result = result.orderby(...order.map((ch) => sqlColumn(ch)));
 	}
 	if (limit) {
 		result = result.limit(limit);

@@ -41,12 +41,18 @@ export class TransformCompiler {
 		}
 	}
 
-	applyToQuery(query: SelectQuery): SelectQuery {
+	/**
+	 * Apply the SQL transforms. `facts` are what is true of THIS query rather
+	 * than of the mark — its GROUP BY keys, say — merged over the mark config for
+	 * this call only, so the shared config object is never written per query.
+	 */
+	applyToQuery(query: SelectQuery, facts?: Partial<MarkConfig>): SelectQuery {
 		let result = query;
+		const config = this.#configFor(facts);
 
 		for (const transform of this.sqlTransforms) {
 			try {
-				result = transform.apply(result, this.markConfig);
+				result = transform.apply(result, config);
 			} catch (error) {
 				throw new Error(
 					`Failed to apply ${transform.type} transform: ${(error as Error).message}`,
@@ -56,6 +62,35 @@ export class TransformCompiler {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Which channels a query with these aliases comes back aligned on, leading
+	 * term first, or null. Asked with the same facts as `applyToQuery`, so the
+	 * answer is about the query those transforms actually produce.
+	 */
+	alignment(aliases: string[], facts?: Partial<MarkConfig>): string[] | null {
+		const config = this.#configFor(facts);
+		for (const transform of this.sqlTransforms) {
+			const order = transform.alignment?.(aliases, config);
+			if (order) return order;
+		}
+		return null;
+	}
+
+	/**
+	 * Every SQL transform's parameters as they are now.
+	 *
+	 * Read from a reactive context, this tracks any parameter given as a getter —
+	 * `topN(() => count)` — so the caller can re-query when one changes. The query
+	 * itself needs nothing more: transforms read their parameters when applied.
+	 */
+	get specs(): (Record<string, unknown> | undefined)[] {
+		return this.sqlTransforms.map((transform) => transform.spec);
+	}
+
+	#configFor(facts: Partial<MarkConfig> | undefined): MarkConfig | undefined {
+		return facts ? ({ ...this.markConfig, ...facts } as MarkConfig) : this.markConfig;
 	}
 
 	applyToData(data: DataAccessor, config: MarkConfig, scales: ScaleMap = {}): DataAccessor {

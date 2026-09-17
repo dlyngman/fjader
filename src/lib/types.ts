@@ -77,6 +77,16 @@ export interface SqlTransform {
 	apply(query: SelectQuery, config?: MarkConfig): SelectQuery;
 	/** Channel aliases this transform adds to the result beyond the base select (e.g. stack's y0/y1). */
 	channels?: string[];
+	/**
+	 * The channels whose values identify each row, leading term first, when this
+	 * transform guarantees exactly one row per combination of them — or null when
+	 * it makes no such guarantee for a query with these aliases.
+	 *
+	 * The query assembler orders the OUTERMOST query by these, which is what
+	 * makes row `i` the same category on every update; and the first is the
+	 * band a mark may morph along.
+	 */
+	alignment?(aliases: string[], config?: MarkConfig): string[] | null;
 	describe?(): string;
 }
 
@@ -97,12 +107,34 @@ export type Transform = SqlTransform | JsTransform;
 // Mark config (passed to JS transforms)
 // ---------------------------------------------------------------------------
 
+/**
+ * A channel whose values are category ids, and what identifies them.
+ *
+ * One object per channel so the facts about a dim travel together: the name a
+ * transform joins against, how many ids it holds, and the reserved Other id
+ * bucketed into it. Kept apart, they were four maps keyed three different ways.
+ */
+export interface ChannelIdentity {
+	/** The dim table the ids come from. Session-suffixed and engine-owned; never rebuilt from a field name. */
+	dim: string;
+	/** How many ids the dim held when identity was set up. */
+	size: number;
+	/** An x or y axis, as opposed to colour or facet. */
+	positional: boolean;
+	/** The reserved id past-the-cutoff rows are bucketed into, once reserved. */
+	otherId?: number;
+}
+
 export interface MarkConfig {
 	markType: string;
 	table: string;
 	x?: string;
 	y?: string;
 	color?: string;
+	/** Every channel carrying category ids, keyed by channel. Absent until identity setup. */
+	identity?: Record<string, ChannelIdentity>;
+	/** The query's GROUP BY channels, or null when it does not aggregate. Per query. */
+	groupKeys?: string[] | null;
 	[key: string]: unknown;
 }
 
@@ -113,18 +145,6 @@ export interface MarkConfig {
 export interface ScaleMap {
 	x?: { bandwidth?(): number; domain?(): unknown[]; range?(): number[] };
 	y?: { bandwidth?(): number; domain?(): unknown[]; range?(): number[] };
-	/**
-	 * Reserved identity ids for synthetic rows a transform invents — the "Other"
-	 * bucket from `topN({ includeOthers })` (§16.9). A band channel carries dim
-	 * ids, so a transform cannot fabricate one; it has to be handed an id the
-	 * engine reserved at setup.
-	 *
-	 * Keyed by DATA COLUMN NAME — what a transform passes to `getColumn`, which
-	 * is the channel alias the query produced ('x', or an extent variant like
-	 * 'x1'), NOT the source field the dim is built on. Keying it by the source
-	 * column silently misses and the synthetic row is dropped.
-	 */
-	otherIdsByColumn?: Record<string, number>;
 	[key: string]: unknown;
 }
 

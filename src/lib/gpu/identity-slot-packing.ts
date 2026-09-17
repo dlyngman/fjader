@@ -6,7 +6,7 @@
  * the channels wanting that are band and point axes, the facet grid, and
  * ordinal colour.
  *
- * Every band and point scale's `slotTable` — identity id -> display slot —
+ * Every band and point scale's slot table — identity id -> display slot —
  * lives in ONE uniform buffer, at a per-scale base the scale carries in its p4.
  * This module decides where each block goes and what the buffer holds; the
  * coordinator owns the GPU buffer and the upload.
@@ -39,11 +39,14 @@
  */
 
 /**
- * 16384 floats GLOBALLY across every band and point scale on the page.
+ * Floats GLOBALLY across every band and point scale on the page, headers
+ * included.
  *
- * A uniform buffer, not storage: the vertex stage is already at the default
- * maxStorageBuffersPerShaderStage of 8. 64 KB is the default
- * maxUniformBufferBindingSize, and 64 KB / 4 is this.
+ * No longer a binding limit: the tables are storage buffers, bound only to the
+ * resolve pass, and the render stages read one resolved storage buffer. The
+ * number is left over from when they were 64 KB uniforms, and making the
+ * allocation grow on demand (recreate the buffers, rebuild the bind groups) is
+ * what would retire it.
  */
 export const IDENTITY_SLOT_CAPACITY = 16384;
 
@@ -55,23 +58,31 @@ export const IDENTITY_SLOT_CAPACITY = 16384;
  */
 export const IDENTITY_SLOT_EMPTY = 0;
 
-/** The parts of a band/point scale this needs. */
+/**
+ * One scale's slot table as the packer reads it: identity id -> display slot,
+ * as the two ends of a transition and where between them it is.
+ *
+ * One shape for every scale. A scale that does not animate — ordinal colour —
+ * hands the same table as both ends with `t` at 1, which makes the resolve an
+ * identity for it rather than a special case here or in the shader.
+ */
+export interface SlotSource {
+	/** How many ids the block holds — its count header, and the length of `from` and `to`. */
+	readonly count: number;
+	/** Where each id's transition started; -1 for an id not shown. */
+	readonly from: Float32Array;
+	/** Where each id's transition is going; -1 for an id not shown. */
+	readonly to: Float32Array;
+	/** 0 -> from, 1 -> to. */
+	readonly t: number;
+	/** Bumped whenever `from` or `to` move; the packer re-uploads on it alone. */
+	readonly version: number;
+}
+
+/** A scale with a slot table, as the packer needs it. */
 export interface IdentitySlotScale {
 	id: string;
-	/** id -> display slot, or -1 for an id not currently shown. */
-	slotTable: Float32Array;
-	/**
-	 * Where each id's transition started and where it is going. Both optional:
-	 * a scale that does not animate — ordinal colour, facet — offers neither,
-	 * and gets `slotTable` in both buffers, which makes the shader's mix an
-	 * identity for it rather than a special case.
-	 */
-	slotFrom?: Float32Array;
-	slotTo?: Float32Array;
-	/** Interpolation parameter, 1 (settled) unless a driver is running. */
-	t?: number;
-	/** Bumped by the scale on every slot-table rebuild. */
-	slotVersion?: number;
+	slots: SlotSource;
 }
 
 /** Everything that persists between calls. */
@@ -80,8 +91,27 @@ export interface IdentitySlotState {
 	buffer: Float32Array;
 	/** CPU mirror of the `to` uniform buffer. Same offsets, same headers. */
 	bufferTo: Float32Array;
+	/**
+	 * Which scale's block each float belongs to, parallel to `buffer`.
+	 *
+	 * The resolve kernel needs `t` for the element it is working on, and `t`
+	 * lives in that element's block header. Blocks are variable-length, so a
+	 * flat thread cannot find its own header by arithmetic — this is the lookup
+	 * that lets it, and it turns the whole page into ONE dispatch instead of one
+	 * per scale.
+	 *
+	 * Uint32 rather than Float32 because it is an index, and it is uploaded only
+	 * when the packing moves — a reorder or a scale appearing — never per frame.
+	 * Header floats point at their own block, so a thread landing on one reads
+	 * its own `t` and writes a value nothing reads. Cheaper than excluding them.
+	 */
+	bases: Uint32Array;
 	/** Per-scale base offset, read back into p4. */
 	offsets: Map<string, number>;
+	/** Scratch for the eviction sweep; cleared, not reallocated, per pack. */
+	seen: Set<string>;
+	/** Returned by every pack and overwritten by the next — read it immediately. */
+	result: { dirty: boolean; length: number };
 	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
 	versions: Map<string, number>;
 }
@@ -92,12 +122,21 @@ export function createIdentitySlotState(
 ): IdentitySlotState {
 	const buffer = new Float32Array(capacity);
 	const bufferTo = new Float32Array(capacity);
+	const bases = new Uint32Array(capacity);
 	buffer.fill(-1);
 	bufferTo.fill(-1);
 	// The permanent empty block: count 0, so it holds no slots.
 	buffer[IDENTITY_SLOT_EMPTY] = 0;
 	bufferTo[IDENTITY_SLOT_EMPTY] = 0;
-	return { buffer, bufferTo, offsets: new Map(), versions: new Map() };
+	return {
+		buffer,
+		bufferTo,
+		bases,
+		offsets: new Map(),
+		versions: new Map(),
+		seen: new Set(),
+		result: { dirty: false, length: 0 }
+	};
 }
 
 /**
@@ -105,7 +144,7 @@ export function createIdentitySlotState(
  *
  * `dirty` is false when nothing moved — slot tables change on reorder, not per
  * frame, so a static chart costs no writeBuffer. `length` is how much of the
- * buffer is in use, so the caller uploads a prefix rather than all 64 KB.
+ * buffer is in use, so the caller uploads a prefix rather than the whole allocation.
  *
  * Offsets are recomputed on every call because a scale appearing or
  * disappearing shifts every scale after it. That is a running sum over a
@@ -116,46 +155,46 @@ export function packIdentitySlots(
 	scales: readonly IdentitySlotScale[],
 	state: IdentitySlotState
 ): { dirty: boolean; length: number } {
-	const { buffer, bufferTo, offsets, versions } = state;
+	const { buffer, bufferTo, bases, offsets, versions } = state;
 	const capacity = buffer.length;
 
 	// Index 0 is the permanent empty block; real blocks start after it.
 	let offset = 1;
 	let dirty = false;
-	const seen = new Set<string>();
+	// Runs every frame: the scratch set and the result are the state's own.
+	const seen = state.seen;
+	seen.clear();
 
-	for (const scale of scales) {
-		const table = scale.slotTable;
+	for (let i = 0; i < scales.length; i++) {
+		const scale = scales[i];
 		seen.add(scale.id);
 
+		const slots = scale.slots;
 		// Two extra floats for the block's header: count, then t.
-		const need = table.length + 2;
+		const need = slots.count + 2;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
 
-		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== scale.slotVersion) {
+		const version = slots.version;
+		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== version) {
 			if (fits) {
-				// A scale with no driver offers neither half, and gets its settled
-				// table in both — the shader's mix is then an identity for it, which
-				// is cheaper than branching on whether a scale animates.
-				const from = scale.slotFrom ?? table;
-				const to = scale.slotTo ?? table;
-				buffer[base] = table.length;
-				buffer[base + 1] = scale.t ?? 1;
-				buffer.set(from, base + 2);
-				bufferTo[base] = table.length;
-				bufferTo[base + 1] = scale.t ?? 1;
-				bufferTo.set(to, base + 2);
+				buffer[base] = slots.count;
+				buffer[base + 1] = slots.t;
+				buffer.set(slots.from, base + 2);
+				bufferTo[base] = slots.count;
+				bufferTo[base + 1] = slots.t;
+				bufferTo.set(slots.to, base + 2);
+				bases.fill(base, base, base + need);
 			} else {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
 					`[GPUCoordinator] Band slot capacity (${capacity}) exhausted; ` +
-						`scale "${scale.id}" (${table.length} ids) will not render.`
+						`scale "${scale.id}" (${slots.count} ids) will not render.`
 				);
 			}
 			offsets.set(scale.id, base);
-			versions.set(scale.id, scale.slotVersion ?? 0);
+			versions.set(scale.id, version);
 			dirty = true;
 		}
 		// No break: a later scale with a smaller table may still fit, and one
@@ -176,5 +215,7 @@ export function packIdentitySlots(
 		}
 	}
 
-	return { dirty, length: offset };
+	state.result.dirty = dirty;
+	state.result.length = offset;
+	return state.result;
 }

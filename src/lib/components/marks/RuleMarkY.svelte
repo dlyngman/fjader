@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { RuleY, GridLineY } from '../rendering';
+	import { RuleY, GridLine } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { parseColorToRGBA, DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
@@ -286,8 +286,8 @@
 </script>
 
 {#if isConstant && constantPositions}
-	<!-- Constant-only path: render via GridLineY -->
-	<GridLineY positions={constantPositions} color={constantColor} lineWidth={strokeWidth} />
+	<!-- Constant-only path: render via GridLine -->
+	<GridLine axis="y" positions={constantPositions} color={constantColor} lineWidth={strokeWidth} />
 {:else if setup?.gpuReady && markColor.ready && yData}
 	<!-- Data-driven path: render via RuleY mark renderer -->
 	<RuleY

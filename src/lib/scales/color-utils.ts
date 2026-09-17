@@ -496,10 +496,7 @@ export function bakeGradient(d3Scale: GradientScale, steps: number = 256): Float
  * space — the GPU shader is responsible for the domain transform (log, symlog,
  * sqrt, pow) before indexing into this ramp.
  */
-export function bakeInterpolator(
-	interpolator: Interpolator,
-	steps: number = 256
-): Float32Array {
+export function bakeInterpolator(interpolator: Interpolator, steps: number = 256): Float32Array {
 	const result = new Float32Array(steps * 4);
 
 	for (let i = 0; i < steps; i++) {
@@ -639,15 +636,11 @@ function createSequentialScale(
 		case 'log':
 			return scaleSequentialLog(interpolator).domain(domain);
 		case 'symlog':
-			return (scaleSequentialSymlog(interpolator).domain(domain) as any).constant(
-				constant ?? 1
-			);
+			return (scaleSequentialSymlog(interpolator).domain(domain) as any).constant(constant ?? 1);
 		case 'sqrt':
 			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(0.5);
 		case 'pow':
-			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(
-				exponent ?? 1
-			);
+			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(exponent ?? 1);
 		default:
 			return scaleSequential(interpolator).domain(domain);
 	}
@@ -665,15 +658,11 @@ function createDivergingScale(
 		case 'log':
 			return scaleDivergingLog(interpolator).domain(domain);
 		case 'symlog':
-			return (scaleDivergingSymlog(interpolator).domain(domain) as any).constant(
-				constant ?? 1
-			);
+			return (scaleDivergingSymlog(interpolator).domain(domain) as any).constant(constant ?? 1);
 		case 'sqrt':
 			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(0.5);
 		case 'pow':
-			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(
-				exponent ?? 1
-			);
+			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(exponent ?? 1);
 		default:
 			return scaleDiverging(interpolator).domain(domain);
 	}
@@ -748,10 +737,7 @@ export function resolveColorScaleTypes(
  * Get the (possibly reversed) interpolator for a scheme.
  * Returns null for ordinal schemes.
  */
-export function getResolvedInterpolator(
-	scheme: string,
-	reverse: boolean
-): Interpolator | null {
+export function getResolvedInterpolator(scheme: string, reverse: boolean): Interpolator | null {
 	let interpolator = getInterpolator(scheme);
 	if (!interpolator) return null;
 	if (reverse) {
@@ -762,9 +748,7 @@ export function getResolvedInterpolator(
 }
 
 /** GPU integer constant for a color transform type. */
-export function transformTypeToGPU(
-	type: 'linear' | 'log' | 'symlog' | 'sqrt' | 'pow'
-): number {
+export function transformTypeToGPU(type: 'linear' | 'log' | 'symlog' | 'sqrt' | 'pow'): number {
 	switch (type) {
 		case 'linear':
 			return 0;
@@ -864,4 +848,3 @@ function symlogTicks(lo: number, hi: number, constant: number): number[] {
 
 	return [...new Set(result)].sort((a, b) => a - b);
 }
-

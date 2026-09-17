@@ -128,6 +128,13 @@ export function extractIdsRankedFromData(
 		// several rows per category and they need not agree.
 		if (id < 0) continue;
 		const rank = Number(ranks[i]);
+		// NaN means "returned, but not displayed" — a category the dense join
+		// keeps a row for so its bar can shrink out, past topN's cutoff.
+		// It must not reach the display order at all, and the test has to be
+		// explicit: every comparison against NaN is false, so `rank < prev`
+		// never fires, but the `prev === undefined` branch would still admit it
+		// the first time the id is seen.
+		if (!Number.isFinite(rank)) continue;
 		const prev = seen.get(id);
 		if (prev === undefined || rank < prev) seen.set(id, rank);
 	}

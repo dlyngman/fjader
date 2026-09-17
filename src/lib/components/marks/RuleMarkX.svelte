@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
-	import { RuleX, GridLineX } from '../rendering';
+	import { RuleX, GridLine } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { parseColorToRGBA, DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
@@ -60,7 +60,7 @@
 	const gpuCoordinator = getGPUContext();
 
 	// --- Constant-only path ---
-	// When no table and x is a number, render directly via GridLineX
+	// When no table and x is a number, render directly via GridLine
 	const isConstant = $derived(!table && typeof x === 'number');
 
 	const constantPositions = $derived.by(() => {
@@ -290,8 +290,8 @@
 </script>
 
 {#if isConstant && constantPositions}
-	<!-- Constant-only path: render via GridLineX -->
-	<GridLineX positions={constantPositions} color={constantColor} lineWidth={strokeWidth} />
+	<!-- Constant-only path: render via GridLine -->
+	<GridLine axis="x" positions={constantPositions} color={constantColor} lineWidth={strokeWidth} />
 {:else if setup?.gpuReady && markColor.ready && xData}
 	<!-- Data-driven path: render via RuleX mark renderer -->
 	<RuleX

@@ -54,6 +54,16 @@
 		dx?: number;
 		dy?: number;
 		markId?: string;
+		/**
+		 * The band axis, when this mark's rows are one per category in category
+		 * order and may therefore morph. null to morph nothing.
+		 *
+		 * The OTHER axis's channels morph. The band's never do: they carry a
+		 * category id that the shader resolves through the slot table, and
+		 * interpolating an identity produces a fraction that resolves to some
+		 * other category. Position already animates, through the slot table.
+		 */
+		bandAxis?: 'x' | 'y' | null;
 	}
 
 	let {
@@ -72,8 +82,12 @@
 		inset = 0,
 		dx = 0,
 		dy = 0,
-		markId = ''
+		markId = '',
+		bandAxis = null
 	}: Props = $props();
+
+	const morphX = $derived(bandAxis === 'y');
+	const morphY = $derived(bandAxis === 'x');
 
 	const chartContext = getContext<ChartContext>('chart');
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
@@ -221,17 +235,38 @@
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
+	// The measure axis's two edges morph, as ONE write per data update, so one
+	// update starts one transition. The band's ids go with them: they are how a
+	// row set that is not the one being animated gets noticed and snapped.
+	//
+	// The band axis's own channels never morph. A horizontal bar puts literally
+	// the same array — the category id — in y0 and y1, and blending two ids gives
+	// a fraction that the slot table resolves to a DIFFERENT category.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X0, x0Data);
+		if (!renderer?.resourcesCreated || !bandAxis) return;
+		if (bandAxis === 'x') {
+			renderer.writeMorphed('x', x0Data, [
+				[BINDINGS.Y0, y0Data],
+				[BINDINGS.Y1, y1Data]
+			]);
+		} else {
+			renderer.writeMorphed('y', y0Data, [
+				[BINDINGS.X0, x0Data],
+				[BINDINGS.X1, x1Data]
+			]);
+		}
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X1, x1Data);
+		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X0, x0Data);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y0, y0Data);
+		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X1, x1Data);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y1, y1Data);
+		if (renderer?.resourcesCreated && !morphY) renderer.writeAttribute(BINDINGS.Y0, y0Data);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && !morphY) renderer.writeAttribute(BINDINGS.Y1, y1Data);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && colorValueData)

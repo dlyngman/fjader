@@ -1,5 +1,6 @@
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+import { MorphedChannels, type ClockHost } from '$lib/gpu/MorphedChannels';
 
 interface RendererOptions {
 	zIndex?: number;
@@ -13,6 +14,9 @@ interface InitConfig {
 	vertexBufferLayout: GPUVertexBufferLayout[];
 	rendererDefinition: object;
 }
+
+/** Warned once per page, not per mark. */
+let warnedMorphUnsupported = false;
 
 export class BaseGPURenderer {
 	// Core properties
@@ -37,6 +41,11 @@ export class BaseGPURenderer {
 
 	// Vertex buffers (separate from bind group storage buffers)
 	#vertexBuffers = new Map<number, GPUBuffer>();
+
+	/** Channels that morph between data updates; created on first use. */
+	#morphed: MorphedChannels | null = null;
+	/** The band axis of the last morphed write — whose scale's clock they adopt. */
+	#morphAxis: 'x' | 'y' | null = null;
 
 	// State management
 	#resourcesCreated = $state(false);
@@ -152,6 +161,10 @@ export class BaseGPURenderer {
 	writeAttribute(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 
+		// A channel that morphed and does not any more gives its buffers back, and
+		// the binding needs rebinding to the static buffer allocated below.
+		if (this.#morphed?.drop(binding)) this.#scheduleBindGroupUpdate();
+
 		let buffer = this.#ownedResources.buffers.get(binding);
 		const requiredSize = data.byteLength;
 
@@ -181,6 +194,72 @@ export class BaseGPURenderer {
 
 		// 3. Trigger Render
 		if (!this.#bindGroupUpdateScheduled) {
+			this.invalidateLayer();
+		}
+	}
+
+	/**
+	 * Write one data update's morphing channels together.
+	 *
+	 * `bandIds` are the category of each row, on `bandAxis`: they are how a
+	 * row set that is not the one being animated gets noticed and snapped, and
+	 * the band axis's scale is whose clock these channels adopt. See
+	 * MorphedChannels for the fold, the snap and the clock.
+	 */
+	writeMorphed(
+		bandAxis: 'x' | 'y',
+		bandIds: ArrayLike<number>,
+		channels: readonly (readonly [number, AllowSharedBufferSource])[]
+	): void {
+		if (!this.#device) return;
+
+		if (!MorphedChannels.supported) {
+			if (!warnedMorphUnsupported) {
+				warnedMorphUnsupported = true;
+				console.warn(
+					'[DivePlot] WGSL immediates are not available, so values will not animate between updates.'
+				);
+			}
+			for (const [binding, data] of channels) this.writeAttribute(binding, data);
+			return;
+		}
+
+		this.#morphed ??= new MorphedChannels({
+			device: this.#device,
+			host: this.#gpuCoordinator,
+			label: this.#rendererId,
+			// Runs on every frame a mark encodes, so no template strings.
+			clockHost: () => {
+				const axis = this.#morphAxis;
+				const scale =
+					axis === 'x'
+						? this.#chartContext.xScaleState
+						: axis === 'y'
+							? this.#chartContext.yScaleState
+							: null;
+				const slots = (scale as { slots?: Partial<ClockHost> } | null)?.slots;
+				return slots?.clock && slots.startTransition ? (slots as ClockHost) : null;
+			},
+			affectedCharts: () =>
+				this.#facetChartIds.length > 0 ? this.#facetChartIds : [this.#chartContext.chartId]
+		});
+
+		// A binding that was static until now gives up its buffer; the morphed
+		// channel's resolved buffer takes its place in the bind group.
+		let rebind = false;
+		for (const [binding] of channels) {
+			const stale = this.#ownedResources.buffers.get(binding);
+			if (stale) {
+				stale.destroy();
+				this.#ownedResources.buffers.delete(binding);
+				rebind = true;
+			}
+		}
+
+		this.#morphAxis = bandAxis;
+		if (this.#morphed.write(bandIds, channels) || rebind) {
+			this.#scheduleBindGroupUpdate();
+		} else if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();
 		}
 	}
@@ -257,7 +336,7 @@ export class BaseGPURenderer {
 	 * renderer data buffers or include markConstants in alternate bind groups.
 	 */
 	getBuffer(binding: number): GPUBuffer | undefined {
-		return this.#ownedResources.buffers.get(binding);
+		return this.#morphed?.resolved(binding) ?? this.#ownedResources.buffers.get(binding);
 	}
 
 	// ===== INTERNAL HELPERS =====
@@ -279,7 +358,8 @@ export class BaseGPURenderer {
 
 		// Map stored buffers to config entries
 		const entries = this.#dataBindingConfig.map((config) => {
-			const buffer = this.#ownedResources.buffers.get(config.binding);
+			const buffer =
+				this.#morphed?.resolved(config.binding) ?? this.#ownedResources.buffers.get(config.binding);
 			return {
 				binding: config.binding,
 				resource: { buffer: buffer || this.#sharedDummyBuffer }
@@ -370,6 +450,10 @@ export class BaseGPURenderer {
 	destroy(): void {
 		this.#isDestroyed = true;
 		this.#initGeneration++;
+
+		// Before the buffers below: it unregisters compute work that reads them.
+		this.#morphed?.destroy();
+		this.#morphed = null;
 
 		// Clean up buffers
 		for (const buffer of this.#ownedResources.buffers.values()) {

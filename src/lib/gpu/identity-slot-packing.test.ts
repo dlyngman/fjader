@@ -3,14 +3,36 @@ import {
 	IDENTITY_SLOT_EMPTY,
 	createIdentitySlotState,
 	packIdentitySlots,
-	type IdentitySlotScale
+	type IdentitySlotScale,
+	type IdentitySlotState
 } from './identity-slot-packing';
+import { resolveSlotsReference } from './SlotResolveShader';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
-/** A scale whose slot table is the given permutation. */
+/** A scale whose slots travel from `from` to `to`, `t` of the way. */
+function travelling(
+	id: string,
+	from: number[],
+	to: number[],
+	t: number,
+	version = 1
+): IdentitySlotScale {
+	return {
+		id,
+		slots: {
+			count: from.length,
+			from: Float32Array.from(from),
+			to: Float32Array.from(to),
+			t,
+			version
+		}
+	};
+}
+
+/** A settled scale whose slot table is the given permutation. */
 function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
-	return { id, slotTable: Float32Array.from(slots), slotVersion: version };
+	return travelling(id, slots, slots, 1, version);
 }
 
 /** Read one scale's block back the way the shader's identitySlot() does. */
@@ -87,19 +109,7 @@ describe('packIdentitySlots transition state', () => {
 
 	it('writes from and to into their own buffers at the same base', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotTable: Float32Array.from([0, 1, 2]),
-					slotFrom: Float32Array.from([2, 1, 0]),
-					slotTo: Float32Array.from([0, 1, 2]),
-					t: 0.25,
-					slotVersion: 1
-				}
-			],
-			state
-		);
+		packIdentitySlots([travelling('a', [2, 1, 0], [0, 1, 2], 0.25)], state);
 
 		const base = state.offsets.get('a')!;
 		// One base serves both buffers — that is what lets p4 stay a single float.
@@ -295,11 +305,11 @@ describe('what the shader reads back', () => {
 	}
 
 	it('agrees with the scale about every id, mid-transition', () => {
-		// The two halves of the design meet here: JS computes slotTable as
-		// mix(from, to, t) and the vertex stage computes the same thing from the
+		// The two halves of the design meet here: JS computes where an id is as
+		// mix(from, to, t) and the resolve pass computes the same thing from the
 		// same three numbers. If they drift, bars are in the wrong slots.
 		const s = new BandScaleState('species', [], {
-			gpuCoordinator: { addAnimatingScale: () => {} }
+			gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
 		});
 		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
@@ -309,19 +319,17 @@ describe('what the shader reads back', () => {
 		s.addMark(['Adelie', 'Gentoo'], 'mark-1');
 		s.updateDomainFromExtents();
 		for (let i = 0; i < 15; i++) {
-			s.step();
-			s.updateRenderState(0);
+			s.slots.clock.step();
+			s.slots.clock.updateRenderState(0);
 		}
 
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[{ id: s.id, slotTable: s.slotTable, slotFrom: s.slotFrom, slotTo: s.slotTo, t: s.t }],
-			state
-		);
+		packIdentitySlots([{ id: s.id, slots: s.slots }], state);
 		const base = state.offsets.get(s.id)!;
 
+		const snapshot = s.slots.snapshot();
 		for (let id = 0; id < 3; id++) {
-			expect(identitySlot(state, base, id)).toBeCloseTo(s.slotTable[id], 5);
+			expect(identitySlot(state, base, id)).toBeCloseTo(snapshot[id], 5);
 		}
 
 		// And the leaver specifically: still on screen, past where it started,
@@ -335,19 +343,167 @@ describe('what the shader reads back', () => {
 		// -1 in both tables, so the mix returns -1 for any t. This is why the
 		// shader has no special case.
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[
-				{
-					id: 'a',
-					slotTable: Float32Array.from([0, -1, 1]),
-					slotFrom: Float32Array.from([0, -1, 1]),
-					slotTo: Float32Array.from([1, -1, 0]),
-					t: 0.5
-				}
-			],
-			state
-		);
+		packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
 		const base = state.offsets.get('a')!;
 		expect(identitySlot(state, base, 1)).toBe(-1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// bases — the per-element block lookup the resolve kernel needs
+// ---------------------------------------------------------------------------
+//
+// The kernel reads `t` from its element's block header, and blocks are
+// variable-length, so a flat thread cannot find its own header by arithmetic.
+// `bases[i]` is that lookup, and getting it wrong means an element reads
+// ANOTHER scale's `t` — which renders, plausibly, at the wrong point in a
+// transition. That is the failure class this whole module exists to prevent
+// (the count header does the same job for ids), so it is asserted rather than
+// assumed.
+
+describe('packIdentitySlots: bases', () => {
+	it('points every float of a block at that block, header included', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[travelling('a', [0, 1, 2], [0, 1, 2], 1), travelling('b', [1, 0], [1, 0], 1)],
+			state
+		);
+
+		const a = state.offsets.get('a')!;
+		const b = state.offsets.get('b')!;
+
+		// count + t + 3 slots, then count + t + 2 slots.
+		for (let i = a; i < a + 5; i++) expect(state.bases[i]).toBe(a);
+		for (let i = b; i < b + 4; i++) expect(state.bases[i]).toBe(b);
+	});
+
+	it('lets a thread recover its own t, which is the point of it', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[travelling('a', [0, 1], [1, 0], 0.25), travelling('b', [0], [3], 0.75)],
+			state
+		);
+
+		// Exactly what the kernel does: for each element, find its block, read t
+		// from the header, mix. Two scales with DIFFERENT t, because a shared t
+		// would pass this test by accident.
+		const tAt = (i: number) => state.buffer[state.bases[i] + 1];
+		const a = state.offsets.get('a')!;
+		const b = state.offsets.get('b')!;
+
+		expect(tAt(a + 2)).toBeCloseTo(0.25, 5);
+		expect(tAt(a + 3)).toBeCloseTo(0.25, 5);
+		expect(tAt(b + 2)).toBeCloseTo(0.75, 5);
+
+		const resolve = (i: number) => state.buffer[i] + (state.bufferTo[i] - state.buffer[i]) * tAt(i);
+		expect(resolve(a + 2)).toBeCloseTo(0.25, 5); // 0 -> 1 at t=0.25
+		expect(resolve(a + 3)).toBeCloseTo(0.75, 5); // 1 -> 0 at t=0.25
+		expect(resolve(b + 2)).toBeCloseTo(2.25, 5); // 0 -> 3 at t=0.75
+	});
+
+	it('rewrites bases when a scale shrinks and shifts the one after it', () => {
+		// The case a stale bases entry would survive: 'b' moves because 'a' got
+		// smaller, so every float of b's block must be re-pointed. Without the
+		// rewrite, b's slots would read a's t.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[travelling('a', [0, 1, 2, 3], [0, 1, 2, 3], 0.1), travelling('b', [0], [0], 0.9)],
+			state
+		);
+
+		packIdentitySlots(
+			[travelling('a', [0, 1], [0, 1], 0.1, 2), travelling('b', [0], [0], 0.9)],
+			state
+		);
+
+		const b = state.offsets.get('b')!;
+		for (let i = b; i < b + 3; i++) expect(state.bases[i]).toBe(b);
+		// toBeCloseTo, not toBe: these are Float32Array round trips.
+		expect(state.buffer[state.bases[b + 2] + 1]).toBeCloseTo(0.9, 5);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The resolve kernel's formula, against the packed buffers
+// ---------------------------------------------------------------------------
+//
+// The mix moved out of the vertex stage and into a compute pass, so it is now
+// reachable only through a device — which is the condition that got this module
+// extracted in the first place.
+// `resolveSlotsReference` is the JS twin the WGSL is written against; these
+// tests pin it to the behaviour the vertex stage had, so the port has something
+// to be wrong against rather than only a running browser.
+
+describe('resolveSlotsReference', () => {
+	/** What the vertex stage used to compute, kept here as the oracle. */
+	function vertexStageMix(state: IdentitySlotState, base: number, id: number): number {
+		const count = state.buffer[base];
+		if (id >= count) return -1;
+		const t = state.buffer[base + 1];
+		const a = state.buffer[base + 2 + id];
+		const b = state.bufferTo[base + 2 + id];
+		return a + (b - a) * t;
+	}
+
+	it('reproduces the vertex-stage mix for every id of every scale', () => {
+		const state = createIdentitySlotState(64);
+		const scales = [
+			travelling('a', [0, 1, 2], [2, 0, 1], 0.4),
+			travelling('b', [1, -1, 0], [0, -1, 1], 0.85)
+		];
+		const { length } = packIdentitySlots(scales, state);
+
+		const out = new Float32Array(state.buffer.length);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+
+		for (const s of scales) {
+			const base = state.offsets.get(s.id)!;
+			// The header survives: count is identical in both halves, so mixing it
+			// returns it. The shader still reads its bound from `resolved`.
+			expect(out[base]).toBe(s.slots.count);
+			for (let id = 0; id < s.slots.count; id++) {
+				expect(out[base + 2 + id]).toBeCloseTo(vertexStageMix(state, base, id), 5);
+			}
+		}
+	});
+
+	it('leaves an undisplayed id at -1 without a branch', () => {
+		// -1 in both halves for any t. This is why neither the kernel nor the
+		// shader has a sentinel case.
+		const state = createIdentitySlotState(64);
+		const { length } = packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
+		const out = new Float32Array(state.buffer.length);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+		const base = state.offsets.get('a')!;
+		expect(out[base + 2 + 1]).toBe(-1);
+	});
+
+	it('gives each scale its OWN t, which is the whole reason bases exists', () => {
+		// A shared t would pass every other test in this file. Two scales at
+		// different points in their transitions is the case that separates
+		// "reads t from its own block" from "reads whichever t it happened to
+		// find" — and reading a neighbour's t renders plausibly, at the wrong
+		// point in a transition, which is the worst kind of wrong here.
+		const state = createIdentitySlotState(64);
+		const { length } = packIdentitySlots(
+			[travelling('a', [0], [10], 0), travelling('b', [0], [10], 1)],
+			state
+		);
+		const out = new Float32Array(state.buffer.length);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+
+		expect(out[state.offsets.get('a')! + 2]).toBeCloseTo(0, 5);
+		expect(out[state.offsets.get('b')! + 2]).toBeCloseTo(10, 5);
+	});
+
+	it('does not write past the packed prefix', () => {
+		// The dispatch covers `length` threads; the tail must stay as it was, or
+		// a buffer dump is full of values nothing put there.
+		const state = createIdentitySlotState(64);
+		const { length } = packIdentitySlots([travelling('a', [0, 1], [0, 1], 1)], state);
+		const out = new Float32Array(state.buffer.length).fill(999);
+		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+		expect(out[length]).toBe(999);
+		expect(out[state.buffer.length - 1]).toBe(999);
 	});
 });
