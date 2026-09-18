@@ -12,11 +12,11 @@
 		WebGPUCanvas,
 		DotsMark,
 		IntervalX,
-		Legend} from '$lib/components';
+		Legend
+	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 	import Toggle from '$lib/interactors/Toggle.svelte';
-
 
 	const { queryEngine } = initDivePlot();
 	let isLoaded = $state(false);
@@ -69,7 +69,7 @@
 									r="precipitation"
 									preferredXScaleType="time"
 									selection="brush"
-									domain={{ y: ["sun", "fog", "drizzle", "rain", "snow"] }}
+									domain={{ y: ['sun', 'fog', 'drizzle', 'rain', 'snow'] }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
@@ -101,13 +101,19 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
+								<!--
+									Sorted by count, so a brush on the dots above re-ranks the
+									bars and they race into their new order. The ranking is a
+									column in the mark's own query, so it follows the brush. No
+									explicit domain: one would win over the sort.
+								-->
 								<BarMarkX
 									table="weather"
 									x={count()}
 									y="weather"
 									fill="weather"
 									selection="brush"
-									domain={{ y: ["sun", "fog", "drizzle", "rain", "snow"] }}
+									sort={{ y: 'x', order: 'desc' }}
 								/>
 							{/snippet}
 						</WebGPUCanvas>
