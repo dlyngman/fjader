@@ -1054,8 +1054,19 @@ export class BandScaleState {
 	}
 
 	/**
-	 * The band pitch for a range, from a config just read — the one formula the
-	 * CPU layout methods share, and the one the shader's computeBandLayout uses.
+	 * The band pitch for a range, from a config just read.
+	 *
+	 * THE CPU TWIN of the shader's computeBandLayout, and the one formula every
+	 * CPU layout method here shares — slotCenter, bandwidth, stepWidth and the
+	 * pointer inversion. Two implementations is the floor, not an oversight: one
+	 * runs per vertex on the GPU, one answers axis ticks, tooltips and
+	 * hit-testing on a pointer event, and neither can call the other.
+	 *
+	 * What holds them together is that each is written once and both are pinned
+	 * against d3's scaleBand, which is the third implementation and the one that
+	 * positions every SVG consumer. See band-layout.test.ts. When they drift,
+	 * the symptom is labels off their bars — which is what a prop reaching only
+	 * d3 produced, and why it was dropped rather than wired.
 	 */
 	#step(rangeSize: number, config: BandGpuConfig): number {
 		return (
