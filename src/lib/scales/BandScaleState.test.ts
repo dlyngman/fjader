@@ -106,7 +106,7 @@ describe('BandScaleState slot table', () => {
 		expect(Array.from(scale.slots.snapshot())).toEqual([0, 1, 2]);
 
 		// Sort by some measure: Gentoo, Chinstrap, Adelie. Ids are untouched.
-		scale.setSortOrder(['Gentoo', 'Chinstrap', 'Adelie']);
+		scale.addMark(['Gentoo', 'Chinstrap', 'Adelie'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 		expect(Array.from(scale.slots.snapshot())).toEqual([2, 1, 0]);
 	});
@@ -134,7 +134,7 @@ describe('BandScaleState slot table', () => {
 	it('keeps a pre-identity sort order after identity arrives', () => {
 		const scale = new BandScaleState('species');
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
-		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
@@ -275,7 +275,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// transition, not a lost one — and this is the common case in tests
 			// and for any scale built before a coordinator is wired up.
 			const s = scale();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			expect(Array.from(s.slots.snapshot())).toEqual([1, 2, 0]);
@@ -346,7 +346,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 		it('registers once on a reorder, and leaves the table where it was', () => {
 			const { s, registered } = withLoop();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			expect(registered).toEqual([s.slots.clock]);
@@ -356,14 +356,14 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(Array.from(s.slots.snapshot())).toEqual([0, 1, 2]);
 
 			// A second reorder while already animating must not register twice.
-			s.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			s.addMark(['Chinstrap', 'Gentoo', 'Adelie'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 			expect(registered).toEqual([s.slots.clock]);
 		});
 
 		it('walks the table toward the target and arrives', () => {
 			const { s } = withLoop();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			expect(s.slots.clock.isAtRest()).toBe(false);
@@ -405,7 +405,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// to 64 KB — on every frame of every animation, which is the cost this
 			// checkpoint exists to remove.
 			const { s } = withLoop();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			const afterRetarget = s.slots.version;
@@ -420,7 +420,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slots.t).toBeLessThan(1);
 
 			// And a second retarget does bump it, because the tables really moved.
-			s.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			s.addMark(['Chinstrap', 'Gentoo', 'Adelie'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 			expect(s.slots.version).toBeGreaterThan(afterRetarget);
 		});
@@ -430,7 +430,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// a CPU reader asks per id. The snapshot still has to be the honest
 			// answer when asked.
 			const { s } = withLoop();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			expect(Array.from(s.slots.from)).toEqual([0, 1, 2]);
@@ -456,7 +456,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// slotCurrent is what the next retarget springs FROM, and a scale at
 			// rest holding 2.0003 springs from a number that was never a slot.
 			const { s } = withLoop();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 			for (let i = 0; i < 400 && !s.slots.clock.isAtRest(); i++) {
 				s.slots.clock.step();
@@ -578,7 +578,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// at the end there is no journey to observe, and a test that cannot see
 			// the difference between "went to the far end" and "did not move"
 			// cannot check that it did not try to leave through itself.
-			s.setSortOrder(['Other', 'Adelie', 'Chinstrap']);
+			s.addMark(['Other', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 			expect(s.slots.snapshot()[2]).toBe(0);
 
@@ -616,7 +616,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(Array.from(s.slots.snapshot())).toEqual([0, 1, 2, 3]);
 
 			// D to the front: A 0->1 (one slot), D 3->0 (three).
-			s.setSortOrder(['D', 'A', 'B', 'C']);
+			s.addMark(['D', 'A', 'B', 'C'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			let steps = 0;
@@ -649,7 +649,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			s.addMark(['A', 'B', 'C'], 'mark-1');
 			s.updateDomainFromExtents();
 
-			s.setSortOrder(['C', 'B', 'A']);
+			s.addMark(['C', 'B', 'A'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			// Get genuinely mid-flight.
@@ -662,7 +662,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(midFlight[0]).toBeLessThan(2);
 
 			// A third order arrives while that is still running.
-			s.setSortOrder(['B', 'A', 'C']);
+			s.addMark(['B', 'A', 'C'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 
 			// The table does not jump on the frame the new result lands: the fold
@@ -748,7 +748,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// than on the snapshot, which is computed from the same inputs and would
 			// agree with a wrong answer.
 			const { s } = withLoop();
-			s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			s.updateDomainFromExtents();
 			for (let i = 0; i < 60; i++) {
 				s.slots.clock.step();
@@ -889,7 +889,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			it('when it leaves while another transition is in flight', () => {
 				// The drag case: updates keep landing before the last one settles.
 				const { s } = withLoop();
-				s.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+				s.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 				s.updateDomainFromExtents();
 				for (let i = 0; i < 20; i++) {
 					s.slots.clock.step();
@@ -920,7 +920,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			const scale = new BandScaleState('species');
 			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 			scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
-			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			scale.updateDomainFromExtents();
 			return scale;
 		}
@@ -956,7 +956,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			const from = scale.slots.from;
 			const to = scale.slots.to;
 
-			scale.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			scale.addMark(['Chinstrap', 'Gentoo', 'Adelie'], 'mark-1', { sorted: true });
 			scale.updateDomainFromExtents();
 			// Same length, so the same objects — a reorder must not allocate the
 			// arrays the packer uploads.
@@ -976,7 +976,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		it('bumps slotVersion when it settles, so the packer re-uploads', () => {
 			const scale = reordered();
 			const v = scale.slots.version;
-			scale.setSortOrder(['Chinstrap', 'Gentoo', 'Adelie']);
+			scale.addMark(['Chinstrap', 'Gentoo', 'Adelie'], 'mark-1', { sorted: true });
 			scale.updateDomainFromExtents();
 			expect(scale.slots.version).toBeGreaterThan(v);
 		});
@@ -985,11 +985,10 @@ describe('BandScaleState identity <-> display translation', () => {
 	// A re-sort has to REORDER, not just be remembered.
 	//
 	// Every other test around this one calls updateDomainFromExtents() by hand
-	// after setSortOrder, which is why none of them caught that the production
-	// path never does. MarkLifecycleV2's sort effect runs the sidecar and ends
-	// at setSortOrder — nothing downstream of it recomputed anything, so a
-	// reactive sort change moved no bars at all (§3.1, §32.7). These tests
-	// deliberately do NOT crank the handle.
+	// after registering a ranking, which is why none of them caught that the
+	// production path once did not: a ranking was stored and nothing downstream
+	// recomputed, so a reactive sort change moved no bars at all (§3.1, §32.7).
+	// These tests deliberately do NOT crank the handle.
 	describe('a re-sort schedules its own domain update', () => {
 		function sorted(): BandScaleState {
 			const scale = new BandScaleState('species');
@@ -1003,7 +1002,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			const scale = sorted();
 			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
 
-			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			// The update is scheduled on a microtask, as it is for addMark.
 			await Promise.resolve();
 
@@ -1012,7 +1011,7 @@ describe('BandScaleState identity <-> display translation', () => {
 
 		it('moves the slot table with it, which is what the GPU reads', async () => {
 			const scale = sorted();
-			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			await Promise.resolve();
 
 			// The slot table is indexed by id and holds the display slot. Ids are
@@ -1023,49 +1022,56 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(Array.from(scale.displayOrder)).toEqual([2, 0, 1]);
 		});
 
-		it('a partial preferred order pulls its members to the front', async () => {
-			// Why handing an UNFILTERED SELECT DISTINCT to setSortOrder was so
-			// damaging. A preferred order need not cover the domain, and whatever
-			// it does cover is moved ahead of everything else — so a five-category
-			// DISTINCT over the base table dictated the order of a three-category
-			// topN axis, rotating ranked rows into DuckDB's hash order.
-			//
-			// The numbers below are the real case: rows arrived ranked A, B, C and
-			// rendered B, C, A, because the DISTINCT happened to come back
-			// E, B, C, D, A.
+		it('a ranked extent leads, and the other marks follow in first appearance', async () => {
+			// A ranking is one mark's extent like any other: the categories ITS
+			// query returned, in the order it ranked them. It is not a preferred
+			// order over the whole axis, so a mark on the same scale that returned
+			// more categories keeps them, after the ranked ones. The ranked list
+			// cannot name a category its own query did not return, which is what
+			// used to need an intersection when the ranking came from a second,
+			// unfiltered query.
 			const scale = new BandScaleState('species');
 			scale.setIdentity(new FieldIdentity(['A', 'B', 'C', 'D', 'E']));
-			scale.addMark(['A', 'B', 'C'], 'topn-mark');
+			scale.addMark(['A', 'B', 'C', 'D', 'E'], 'other-mark');
 			scale.updateDomainFromExtents();
-			expect(scale.effectiveDomain).toEqual(['A', 'B', 'C']);
+			expect(scale.effectiveDomain).toEqual(['A', 'B', 'C', 'D', 'E']);
 
-			scale.setSortOrder(['E', 'B', 'C', 'D', 'A']);
+			scale.addMark(['C', 'A'], 'ranked-mark', { sorted: true });
 			await Promise.resolve();
 
-			expect(scale.effectiveDomain).toEqual(['B', 'C', 'A']);
+			expect(scale.effectiveDomain).toEqual(['C', 'A', 'B', 'D', 'E']);
 		});
 
-		it('does not leak categories that are not in the extents', async () => {
-			// What setSortOrder is named for: the sidecar ranks the FULL dataset
-			// while a topN mark's extents hold only the survivors. Scheduling must
-			// not put the losers on the axis — the intersection in
-			// updateDomainFromExtents is what prevents it.
-			const scale = new BandScaleState('species');
-			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
-			scale.addMark(['Adelie', 'Gentoo'], 'topn-mark');
-			scale.updateDomainFromExtents();
-
-			scale.setSortOrder(['Gentoo', 'Chinstrap', 'Adelie']);
+		it('a mark that re-registers without a ranking withdraws it', async () => {
+			// The claim travels with the extent. A mark whose sort prop is removed
+			// registers its next result unranked, and the axis falls back to first
+			// appearance — it does not keep an order nobody asks for any more.
+			const scale = sorted();
+			scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			await Promise.resolve();
+			expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
 
-			expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
+			scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+			await Promise.resolve();
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		});
+
+		it('a mark that leaves takes its ranking with it', async () => {
+			const scale = sorted();
+			scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'ranked-mark', { sorted: true });
+			await Promise.resolve();
+			expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie', 'Chinstrap']);
+
+			scale.removeMark('ranked-mark');
+			await Promise.resolve();
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
 		});
 
 		it('stays put while the scale is frozen', async () => {
 			const scale = sorted();
 			scale.setUpdatesEnabled(false);
 
-			scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+			scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 			await Promise.resolve();
 
 			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
@@ -1076,7 +1082,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
-		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 
 		// Display order is Gentoo, Adelie, Chinstrap; ids are alphabetical.
@@ -1089,7 +1095,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
-		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 
 		// The id decodes to the same value whatever slot it currently occupies —
@@ -1104,7 +1110,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
-		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 
 		// What a hover does: invert to a slot, translate to an id to match the
@@ -1151,7 +1157,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		scale.updateDomainFromExtents();
 		const captured = scale.effectiveDomain;
 
-		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 
 		expect(captured).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
@@ -1472,7 +1478,7 @@ describe('BandScaleState after the registry tears it down', () => {
 
 		scale.addMark(['Adelie'], 'mark-1');
 		scale.addMark(['Chinstrap'], 'mark-2');
-		scale.setSortOrder(['Adelie']);
+		scale.addMark(['Adelie'], 'mark-1', { sorted: true });
 
 		expect(spy).toHaveBeenCalledTimes(1);
 		expect(spy.mock.calls[0][0]).toContain('after destroy()');
@@ -1668,7 +1674,7 @@ describe('BandScaleState teardown', () => {
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
-		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.addMark(['Gentoo', 'Adelie', 'Chinstrap'], 'mark-1', { sorted: true });
 		scale.updateDomainFromExtents();
 		expect(joined).toEqual([scale.slots.clock]);
 

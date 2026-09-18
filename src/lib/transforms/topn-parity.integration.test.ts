@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { Query, column, sum, eq, literal, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
-import { topN, stackY, TransformCompiler, TOPN_RANK_COLUMN, withDenseCategories } from './index';
+import { topN, stackY, TransformCompiler, RANK_COLUMN, withDenseCategories } from './index';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -124,7 +124,7 @@ async function runSQL(db: DB, s: Scenario) {
 	const parts = buildQueryParts(s.select, s.orderConfig, true);
 	const sqlQuery = assembleQuery({ table: 'sales', parts, filter, transformCompiler: compiler });
 	const sqlRows = canonical(
-		(await db.all(sqlQuery.toString())).map(({ [TOPN_RANK_COLUMN]: _rank, ...rest }) => rest)
+		(await db.all(sqlQuery.toString())).map(({ [RANK_COLUMN]: _rank, ...rest }) => rest)
 	);
 
 	const base = assembleQuery({
@@ -255,12 +255,12 @@ describe('topN against a DuckDB reference', () => {
 		expect(text).toContain('__stack_base');
 		// ...and the rank survives it as a column, carried by stackSQL's
 		// passthroughSelect without stackSQL knowing it exists.
-		expect(text).toContain(TOPN_RANK_COLUMN);
+		expect(text).toContain(RANK_COLUMN);
 
 		const rows = await db.all(text);
 		const byRank = rows
 			.slice()
-			.sort((a, b) => Number(a[TOPN_RANK_COLUMN]) - Number(b[TOPN_RANK_COLUMN]));
+			.sort((a, b) => Number(a[RANK_COLUMN]) - Number(b[RANK_COLUMN]));
 		expect(byRank.map((r) => r.x)).toEqual(['Electronics', 'Clothing', 'Food', 'Music', 'Books']);
 
 		// And nothing is ordering the result: the ONLY ORDER BY in the whole query
@@ -275,7 +275,7 @@ describe('topN against a DuckDB reference', () => {
 	it('hides the rank from tooltips by using the __dplot_ prefix', () => {
 		// #writeTooltipTable filters exactly this prefix. A rank column named
 		// anything else would render as a user-visible tooltip row.
-		expect(TOPN_RANK_COLUMN.startsWith('__dplot_')).toBe(true);
+		expect(RANK_COLUMN.startsWith('__dplot_')).toBe(true);
 	});
 
 	it('preserves ORDER BY for connected/series marks on the outer query', async () => {
@@ -361,7 +361,7 @@ describe('topN dense join', () => {
 		const rows = await run(true, 3);
 		// NaN, not NULL: the rank is coalesced so the column reaches JS with
 		// nullCount 0, which is what DataAccessor's zero-copy path requires.
-		const isRanked = (r: Record<string, unknown>) => Number.isFinite(Number(r[TOPN_RANK_COLUMN]));
+		const isRanked = (r: Record<string, unknown>) => Number.isFinite(Number(r[RANK_COLUMN]));
 		const ranked = rows.filter(isRanked);
 		const excluded = rows.filter((r) => !isRanked(r));
 
@@ -379,9 +379,9 @@ describe('topN dense join', () => {
 	it('leaves the displayed rows byte-identical to the sparse query', async () => {
 		// The join must not disturb what topN already produced — it only adds.
 		const sparse = await run(false, 3);
-		const dense = (await run(true, 3)).filter((r) => Number.isFinite(Number(r[TOPN_RANK_COLUMN])));
+		const dense = (await run(true, 3)).filter((r) => Number.isFinite(Number(r[RANK_COLUMN])));
 
-		const key = (r: Record<string, unknown>) => `${r.x}:${Number(r.y2)}:${r[TOPN_RANK_COLUMN]}`;
+		const key = (r: Record<string, unknown>) => `${r.x}:${Number(r.y2)}:${r[RANK_COLUMN]}`;
 		expect(new Set(dense.map(key))).toEqual(new Set(sparse.map(key)));
 	});
 
@@ -397,7 +397,7 @@ describe('topN dense join', () => {
 	it('is off unless a dim is supplied, so every existing mark is unchanged', async () => {
 		const rows = await run(false, 3);
 		expect(rows.length).toBe(3);
-		for (const r of rows) expect(Number.isFinite(Number(r[TOPN_RANK_COLUMN]))).toBe(true);
+		for (const r of rows) expect(Number.isFinite(Number(r[RANK_COLUMN]))).toBe(true);
 	});
 });
 
@@ -606,7 +606,7 @@ describe('dense without topN', () => {
 
 	it('publishes no rank column, because nothing ranked anything', async () => {
 		const rows = await db.all(build().toString());
-		expect(Object.keys(rows[0])).not.toContain(TOPN_RANK_COLUMN);
+		expect(Object.keys(rows[0])).not.toContain(RANK_COLUMN);
 	});
 
 	it('refuses itself when the rows are not grouped', async () => {
@@ -828,7 +828,7 @@ describe('dense with a series channel', () => {
 	it('shows the axis the top n only, in rank order, not every category in the dim', async () => {
 		for (const where of [null, `region = 'North'`]) {
 			const rows = await run(where);
-			const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+			const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', RANK_COLUMN);
 			expect(ids).toEqual(await expectedTop5(where));
 		}
 	});
@@ -836,7 +836,7 @@ describe('dense with a series channel', () => {
 	it('never displays a synthetic row no data carries', async () => {
 		const rows = await run(null);
 		expect(rows.some((r) => Number(r.x) === otherId)).toBe(true);
-		const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+		const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', RANK_COLUMN);
 		expect(ids).not.toContain(otherId);
 	});
 
@@ -860,7 +860,7 @@ describe('dense with a series channel', () => {
 		expect(padded.length).toBe(11);
 		for (const r of padded) {
 			expect(Number(r.y2)).toBe(0);
-			expect(Number.isFinite(Number(r[TOPN_RANK_COLUMN]))).toBe(false);
+			expect(Number.isFinite(Number(r[RANK_COLUMN]))).toBe(false);
 		}
 	});
 });
@@ -904,7 +904,7 @@ describe('topN includeOthers in SQL', () => {
 	});
 	afterAll(async () => await db.close());
 
-	const isRanked = (r: Record<string, unknown>) => Number.isFinite(Number(r[TOPN_RANK_COLUMN]));
+	const isRanked = (r: Record<string, unknown>) => Number.isFinite(Number(r[RANK_COLUMN]));
 
 	async function run(opts: {
 		series?: boolean;
@@ -983,8 +983,8 @@ describe('topN includeOthers in SQL', () => {
 		expect(rows.length).toBe(6);
 		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
 		expect(Number(otherRow.y2)).toBeCloseTo(rest, 3);
-		expect(Number(otherRow[TOPN_RANK_COLUMN])).toBe(6);
-		const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+		expect(Number(otherRow[RANK_COLUMN])).toBe(6);
+		const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', RANK_COLUMN);
 		expect(ids).toEqual([...top.map((t) => t.id), otherId]);
 	});
 
@@ -1014,7 +1014,7 @@ describe('topN includeOthers in SQL', () => {
 		expect(rows.length).toBe(5);
 		const folded = rows.find((r) => Number(r.x) === winner.id)!;
 		expect(Number(folded.y2)).toBeCloseTo(winner.v + rest, 3);
-		expect(Number(folded[TOPN_RANK_COLUMN])).toBe(1);
+		expect(Number(folded[RANK_COLUMN])).toBe(1);
 	});
 
 	it('gives Other its own id in a colour channel from the band dim, not category 0', async () => {
@@ -1041,7 +1041,7 @@ describe('topN includeOthers in SQL', () => {
 		for (const where of [undefined, `region = 'North'`]) {
 			const rows = await run({ series: true, dense: true, where });
 			const all = await totals(where);
-			const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', TOPN_RANK_COLUMN);
+			const ids = extractIdsRankedFromData(rowsToAccessor(rows), 'x', RANK_COLUMN);
 			expect(ids).toEqual([...all.slice(0, 5).map((t) => t.id), otherId]);
 			// Pairs, as for any series: 11 categories x (3 regions + the NULL -1).
 			expect(rows.length).toBe((otherId + 1) * 4);

@@ -142,23 +142,16 @@
 	// bars rather than trusting their heights.
 	//
 	// WHY ONLY CHART 1 HAS A `sort` PROP. It is the one with no transform, so
-	// nothing else can order it. Charts 2, 3 and 4 are topN marks, and topNSimple
-	// already returns its rows ranked by value descending — for the CURRENTLY
-	// FILTERED data, which is what a racing bar chart is. With the sidecar no
-	// longer overwriting display order for an unsorted mark, that data order is
-	// what reaches the axis, and it is correct.
+	// nothing else can order it. Charts 2, 3 and 4 are topN marks, and topN
+	// already publishes its ranking by value descending — for the CURRENTLY
+	// FILTERED data, which is what a racing bar chart is.
 	//
-	// Adding `sort` to them is actively wrong, which is how it was written first:
-	// the sidecar ranks with `Query.from(table)` and NO filter, so chart 2 was
-	// ordered by each category's total across all three steps rather than by the
-	// step on screen. A fixed ranking with membership churn is not the thing
-	// under test.
-	//
-	// The sidecar ignoring the mark's filter is deliberate for topN's own use
-	// (rank the full dataset, display the survivors — see setSortOrder), and it
-	// is a real gap for a racing chart, where the ranking has to follow the
-	// filter. Not fixed here; recorded so the next person does not "fix" these
-	// charts by adding sort back.
+	// `sort` is the same mechanism now: a rank column in the mark's own query,
+	// so it follows the filter too. It used to be a sidecar that ranked the
+	// unfiltered table, which ordered chart 2 by each category's total across
+	// all three steps rather than by the step on screen — the reason `sort`
+	// was kept off these charts. They are left without it so that chart 1 is
+	// still the only one that varies order.
 	//
 	// NO STATE READOUT. There was one — a table of domain, displayOrder,
 	// slotTarget, slotCurrent, sortOrder and extents, sampled per chart. It never

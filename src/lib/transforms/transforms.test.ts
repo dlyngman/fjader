@@ -269,11 +269,11 @@ describe('Transforms', () => {
 			const sql = compiler.applyToQuery(q).toString();
 
 			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC\)/);
-			expect(sql).toMatch(/"__dplot_topn_rank" <= 3/);
+			expect(sql).toMatch(/"__dplot_rank" <= 3/);
 			// Published rather than consumed and dropped: the band axis reads this
 			// column to order itself, because row order does not survive the stack
 			// wrapper a bar mark adds. The __dplot_ prefix keeps it out of tooltips.
-			expect(sql).toMatch(/SELECT "x", "y2", "__dplot_topn_rank" FROM/);
+			expect(sql).toMatch(/SELECT "x", "y2", "__dplot_rank" FROM/);
 		});
 
 		it('SQL topN swaps axes for barx', () => {
@@ -460,10 +460,10 @@ describe('topN with a getter count', () => {
 	it('ranks by the count as it is when the query is assembled', () => {
 		let count = 3;
 		const compiler = new TransformCompiler([topN(() => count)], config);
-		expect(compiler.applyToQuery(query()).toString()).toMatch(/"__dplot_topn_rank" <= 3/);
+		expect(compiler.applyToQuery(query()).toString()).toMatch(/"__dplot_rank" <= 3/);
 
 		count = 5;
-		expect(compiler.applyToQuery(query()).toString()).toMatch(/"__dplot_topn_rank" <= 5/);
+		expect(compiler.applyToQuery(query()).toString()).toMatch(/"__dplot_rank" <= 5/);
 		expect(compiler.specs[0]).toMatchObject({ transform: 'topN', n: 5 });
 	});
 

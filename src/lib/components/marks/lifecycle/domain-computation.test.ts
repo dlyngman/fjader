@@ -9,7 +9,7 @@ import {
 	detectChannelsNeedingDataDomain
 } from './domain-computation';
 import { ColumnDataAccessor } from '$lib/data/DataAccessor';
-import { TOPN_RANK_COLUMN } from '$lib/transforms';
+import { RANK_COLUMN } from '$lib/transforms';
 
 describe('computeExtentFromData', () => {
 	it('returns extent for single numeric channel', () => {
@@ -105,7 +105,7 @@ describe('extractIdsRankedFromData', () => {
 	/** Rows as the pipeline delivers them: ids on the band channel, rank alongside. */
 	function accessor(ids: number[], ranks?: number[]) {
 		const cols: Record<string, Float32Array> = { x: Float32Array.from(ids) };
-		if (ranks) cols[TOPN_RANK_COLUMN] = Float32Array.from(ranks);
+		if (ranks) cols[RANK_COLUMN] = Float32Array.from(ranks);
 		return new ColumnDataAccessor(cols, ids.length);
 	}
 
@@ -115,7 +115,7 @@ describe('extractIdsRankedFromData', () => {
 		// column and the rows come back keyed by dim id. Reading row order here
 		// is what put a topN axis in dim-id order; reading the rank does not.
 		const data = accessor([1, 2, 0], [2, 3, 1]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([0, 1, 2]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([0, 1, 2]);
 	});
 
 	it('leaves an unranked category out of the display order entirely', () => {
@@ -124,7 +124,7 @@ describe('extractIdsRankedFromData', () => {
 		// rank. They must not reach the axis: without this, topN(2) over five
 		// categories would display all five.
 		const data = accessor([0, 1, 2, 3, 4], [2, NaN, 1, NaN, NaN]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([2, 0]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([2, 0]);
 	});
 
 	it('does not admit a NaN rank on an id it has not seen before', () => {
@@ -132,37 +132,37 @@ describe('extractIdsRankedFromData', () => {
 		// false, so `rank < prev` can never let one in — but the first time an id
 		// appears there is no `prev`, and that branch would.
 		const data = accessor([7], [NaN]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([]);
 	});
 
 	it('keeps an id whose FIRST row is unranked but a later one is not', () => {
 		// A grouped result has several rows per category and they need not agree.
 		// Skipping the NaN must not also skip the id.
 		const data = accessor([5, 5], [NaN, 3]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([5]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([5]);
 	});
 
 	it('falls back to first-appearance order when no rank was published', () => {
 		// A grouped topN has no rank to publish and every other mark has no
 		// ranking at all, so absence is the normal case rather than an error.
 		const data = accessor([2, 0, 1]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([2, 0, 1]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([2, 0, 1]);
 	});
 
 	it('keeps the best rank for an id that appears on several rows', () => {
 		// A grouped result has one row per series per category and they need not
 		// agree; the category ranks where its best row ranks.
 		const data = accessor([5, 7, 5, 7], [4, 1, 2, 3]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([7, 5]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([7, 5]);
 	});
 
 	it('drops the not-displayed sentinel', () => {
 		const data = accessor([-1, 3, -1, 1], [1, 2, 3, 4]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([3, 1]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([3, 1]);
 	});
 
 	it('leaves tied ranks in first-appearance order', () => {
 		const data = accessor([9, 4, 6], [1, 1, 1]);
-		expect(extractIdsRankedFromData(data, 'x', TOPN_RANK_COLUMN)).toEqual([9, 4, 6]);
+		expect(extractIdsRankedFromData(data, 'x', RANK_COLUMN)).toEqual([9, 4, 6]);
 	});
 });

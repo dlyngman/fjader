@@ -10,6 +10,10 @@ import type { Table } from '@uwdata/flechette';
 import type { NormalizedSortConfig } from '$lib/types';
 
 export interface QueryParams {
+	/**
+	 * Not read by the engine. The rank transform reads the sort when the query
+	 * is assembled; this is here so that a changed sort re-queries the mark.
+	 */
 	sort?: NormalizedSortConfig;
 	limit?: number;
 	filterNulls?: unknown[] | null;

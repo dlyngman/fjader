@@ -30,7 +30,7 @@ export function normalizeSortConfig(sort: SortConfig | null | undefined): Normal
 	if (!sort) return null;
 	for (const axis of ['x', 'y'] as const) {
 		if (sort[axis]) {
-			return { channel: sort[axis]!, direction: sort.order || 'asc' };
+			return { axis, channel: sort[axis]!, direction: sort.order || 'asc' };
 		}
 	}
 	return null;

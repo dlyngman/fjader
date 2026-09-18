@@ -44,6 +44,20 @@ interface BandGpuConfig {
 }
 
 /**
+ * What one mark registered on the axis, and what it claims about order.
+ *
+ * `explicit` is a `domain` prop, `sorted` a ranking the mark's query published,
+ * null a list with no opinion about order. The claim travels with the list, so
+ * a mark re-registering without one withdraws it, and a mark leaving the
+ * scale takes it along — a preferred order held apart from the extents used
+ * to outlive both.
+ */
+interface MarkExtent {
+	categories: (DimValue | number)[];
+	role: 'explicit' | 'sorted' | null;
+}
+
+/**
  * BandScaleState manages categorical (band/point) scales.
  *
  * It owns two spaces and the permutation between them: IDENTITY, the dim id a
@@ -103,9 +117,7 @@ export class BandScaleState {
 	// =========================================================================
 	#domain: DimValue[] = $state([]);
 	// Ids when the scale has identity, values otherwise. See #toIds.
-	#extents: Map<string, (DimValue | number)[]> = new Map();
-	#sortOrder: (DimValue | number)[] | null = null;
-	#explicitDomain: (DimValue | number)[] | null = null;
+	#extents: Map<string, MarkExtent> = new Map();
 	#domainUpdateScheduled: boolean = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
@@ -126,9 +138,8 @@ export class BandScaleState {
 	 */
 	#identity: FieldIdentity | null = $state.raw(null);
 	/**
-	 * Whether #extents, #sortOrder and #explicitDomain hold ids rather than
-	 * source values. Flips once, when identity is first adopted; see
-	 * setIdentity. Cleared whenever the dim behind those ids goes away — emptied
+	 * Whether #extents holds ids rather than source values. Flips once, when
+	 * identity is first adopted; see setIdentity. Cleared whenever the dim behind those ids goes away — emptied
 	 * in place, or replaced by a fresh one after a reload — because the ids
 	 * stored under it stop meaning anything at that point.
 	 */
@@ -343,11 +354,9 @@ export class BandScaleState {
 		// guesses, so the transition has to be tracked.
 		if (!this.#extentsEncoded && this.hasIdentity) {
 			this.#extentsEncoded = true;
-			for (const [id, cats] of this.#extents) {
-				this.#extents.set(id, this.#toIds(cats, false));
+			for (const extent of this.#extents.values()) {
+				extent.categories = this.#toIds(extent.categories, false);
 			}
-			if (this.#sortOrder) this.#sortOrder = this.#toIds(this.#sortOrder, false);
-			if (this.#explicitDomain) this.#explicitDomain = this.#toIds(this.#explicitDomain, false);
 		}
 
 		this.updateDomainFromExtents();
@@ -387,8 +396,7 @@ export class BandScaleState {
 	 * reads it as an id, which is the wrong-data class of failure rather than a
 	 * crash. Exactly one caller is in id space (the band channel of a scale
 	 * with identity, in registerDataDerivedDomains); everything else — explicit
-	 * domain props, the sort sidecar, the dim's own value list — supplies
-	 * source values.
+	 * domain props, the dim's own value list — supplies source values.
 	 *
 	 * Ids are range-checked against the value array. An id past its end would
 	 * survive into #displayOrder but be dropped from #domain by the string
@@ -632,54 +640,16 @@ export class BandScaleState {
 			? this.#toIds(categories, encoded)
 			: [...new Set(categories.filter((c) => c != null))];
 
-		this.#extents.set(identifier, uniqueCategories);
-
-		if (explicit) {
-			this.#explicitDomain = uniqueCategories;
-		} else if (sorted) {
-			this.#sortOrder = uniqueCategories;
-		}
+		this.#extents.set(identifier, {
+			categories: uniqueCategories,
+			role: explicit ? 'explicit' : sorted ? 'sorted' : null
+		});
 
 		if (this.#enableUpdates) {
 			this.#scheduleDomainUpdate();
 		}
 
 		return this;
-	}
-
-	/**
-	 * Set the preferred sort order without registering categories in #extents.
-	 * Used by topN marks: the sort sidecar runs against the full dataset but
-	 * the domain should only contain post-transform categories.
-	 *
-	 * Schedules a domain update, like every other writer of display-order state.
-	 * It used to be the one that did not, which is why a reactive sort change
-	 * did nothing at all: MarkLifecycleV2's sort effect re-ran the sidecar, the
-	 * query returned the right categories in the right order, this stored them,
-	 * and #domain, #displayOrder and the slot table all stayed where they were.
-	 * PR #198 fixed the sidecar's SQL for computed axes without reaching this
-	 * half.
-	 *
-	 * Not registering in #extents is the part this method is named for and is
-	 * unchanged. Scheduling cannot leak a topN mark's full domain into its axis:
-	 * updateDomainFromExtents intersects the preferred order against the
-	 * categories actually in #extents, and that intersection is the protection.
-	 */
-	setSortOrder(categories: (DimValue | number)[]): void {
-		this.#warnIfDestroyed('setSortOrder');
-		// The sidecar selects the raw column, so these are always source values
-		// (until the sidecar returns ids, never ids).
-		this.#sortOrder = this.hasIdentity
-			? this.#toIds(categories, false)
-			: [...new Set(categories.filter((c) => c != null))];
-
-		// Guarded like addMark and removeMark rather than relying on
-		// updateDomainFromExtents' own #enableUpdates check. The duplication is
-		// theirs — these three writers should share one funnel — and matching
-		// them is the smaller change here.
-		if (this.#enableUpdates) {
-			this.#scheduleDomainUpdate();
-		}
 	}
 
 	/**
@@ -725,30 +695,22 @@ export class BandScaleState {
 			return;
 		}
 
-		// Collect all valid categories across all extents
-		const validCategories = new Set<DimValue | number>();
-		for (const categories of this.#extents.values()) {
-			for (const cat of categories) validCategories.add(cat);
-		}
-
 		const allCategories: (DimValue | number)[] = [];
 		const seen = new Set<DimValue | number>();
 
-		// Priority 1: Explicit domain from mark prop (highest specificity)
-		// Priority 2: Sort order from sidecar query
-		const preferredOrder = this.#explicitDomain ?? this.#sortOrder;
-		if (preferredOrder) {
-			for (const cat of preferredOrder) {
-				if (validCategories.has(cat) && !seen.has(cat)) {
-					seen.add(cat);
-					allCategories.push(cat);
-				}
-			}
-		}
-
-		// Append remaining categories from extents (first-appearance order)
-		for (const categories of this.#extents.values()) {
-			for (const category of categories) {
+		// Priority 1: an explicit domain from a mark prop (highest specificity)
+		// Priority 2: a ranking a mark's query published
+		// Then everything else in first-appearance order. The preferred list is
+		// one mark's extent like any other, so it needs no intersection against
+		// the rest: it is already only categories that mark returned.
+		const preferred =
+			[...this.#extents.values()].find((e) => e.role === 'explicit') ??
+			[...this.#extents.values()].find((e) => e.role === 'sorted');
+		const ordered = preferred
+			? [preferred, ...[...this.#extents.values()].filter((e) => e !== preferred)]
+			: [...this.#extents.values()];
+		for (const extent of ordered) {
+			for (const category of extent.categories) {
 				if (!seen.has(category)) {
 					seen.add(category);
 					allCategories.push(category);
@@ -764,8 +726,7 @@ export class BandScaleState {
 		// over an INTEGER column carries numbers all the way to scaleBand, which
 		// looks its domain up by the raw value and misses on a stringified one.
 		const values = this.#identity?.values ?? [];
-		// Already ids: every path into #extents/#sortOrder/#explicitDomain
-		// encodes at the boundary. This pass de-duplicates and range-checks.
+		// Already ids: every path into #extents encodes at the boundary. This pass de-duplicates and range-checks.
 		//
 		// An id with no value is dropped from the ids THEMSELVES, before either
 		// projection. Filtering only the values would shorten #domain without
@@ -1156,7 +1117,7 @@ export class BandScaleState {
 	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */
 	getExtents(): Record<string, (DimValue | number)[]> {
-		return Object.fromEntries(this.#extents);
+		return Object.fromEntries([...this.#extents].map(([id, e]) => [id, e.categories]));
 	}
 
 	// No-op methods for API consistency with LinearScaleState
@@ -1194,7 +1155,7 @@ export class BandScaleState {
 
 			// Extent tracking
 			extentsCount: this.#extents.size,
-			extents: Object.fromEntries(this.#extents),
+			extents: this.getExtents(),
 
 			// Configuration
 			configuration: {
@@ -1221,12 +1182,11 @@ export class BandScaleState {
 			identityCount: this.#identity?.values.length ?? 0,
 
 			// The INPUTS to display order, not just its output. updateDomainFromExtents
-			// resolves #explicitDomain ?? #sortOrder first and appends the rest from
-			// #extents, and a partial preferred order pulls its members to the front —
-			// so when an axis is in an order nobody asked for, which of these is set
-			// is the whole question. Dumping only the result cannot answer it.
-			sortOrder: this.#sortOrder ? [...this.#sortOrder] : null,
-			explicitDomain: this.#explicitDomain ? [...this.#explicitDomain] : null,
+			// takes an explicit extent first, then a sorted one, then the rest in
+			// first-appearance order — so when an axis is in an order nobody asked
+			// for, which mark claimed which role is the whole question. Dumping
+			// only the result cannot answer it.
+			extentRoles: Object.fromEntries([...this.#extents].map(([id, e]) => [id, e.role])),
 			displayOrder: Array.from(this.#displayOrder),
 			// The transition. slotCurrent is mix(slotFrom, slotTo, t), and slotTo
 			// differs from slotTarget exactly for the ids on their way out.

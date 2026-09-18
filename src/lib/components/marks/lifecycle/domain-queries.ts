@@ -1,20 +1,19 @@
 import {
 	Query,
 	isNode,
-	sql,
 	column as sqlColumn,
 	isAggregateExpression,
 	cast,
 	min,
 	max
 } from '@uwdata/mosaic-sql';
-import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
+import type { ExprValue } from '@uwdata/mosaic-sql';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
-import type { ContinuousScaleState, NormalizedSortConfig } from '$lib/types';
+import type { ContinuousScaleState } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 interface DataClientConfig {
@@ -40,7 +39,6 @@ export async function fetchCategoricalDomains(
 	coordinator: QueryEngine,
 	table: string,
 	select: Record<string, unknown>,
-	sort: NormalizedSortConfig,
 	actualXScaleType: string,
 	actualYScaleType: string,
 	xScaleState: BandScaleState | null,
@@ -53,18 +51,13 @@ export async function fetchCategoricalDomains(
 	sizeScaleState: SizeScaleState | null,
 	seriesScaleState: ColorScaleState | null,
 	seriesChannel: string | null,
-	hasCategoryReducingTransforms: boolean,
+	bandDomainFromData: boolean,
 	markId: string,
 	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null
 ): Promise<number> {
 	const fetches: Promise<void>[] = [];
 
-	const setupFetch = (
-		axis: string,
-		field: unknown,
-		scaleState: BandScaleState | null,
-		{ sortOnly = false } = {}
-	): void => {
+	const setupFetch = (axis: string, field: unknown, scaleState: BandScaleState | null): void => {
 		if (!field || !scaleState) return;
 
 		// Binned band axes are not supported. bin() produces continuous values, but
@@ -92,17 +85,7 @@ export async function fetchCategoricalDomains(
 			return;
 		}
 
-		// Resolve the sort channel to a select key. Point-based marks (Dots, Lines)
-		// have direct 'x'/'y' keys, but extent-based marks (Bars, Rects, Areas) use
-		// 'x1'/'x2'/'y1'/'y2'. Fall back to channel+'2' then channel+'1' for those.
-		const sortField = sort
-			? select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1']
-			: null;
-
-		// sortOnly mode: only fetch sort order, skip if no sort config
-		if (sortOnly && !sortField) return;
-
-		// Unsorted band domain comes from the field's dim, not a SELECT DISTINCT
+		// The band domain comes from the field's dim, not a SELECT DISTINCT.
 		// Two reasons beyond removing a query:
 		//
 		//  - Order. DISTINCT has no ORDER BY, so today's domain is whatever DuckDB
@@ -114,79 +97,35 @@ export async function fetchCategoricalDomains(
 		//  - Multi-table. The dim spans every table registering the field, so two
 		//    marks on one shared scale agree on the category set by construction.
 		//
-		// Sorted and sortOnly still query: they rank by an aggregate, which the
-		// dim knows nothing about.
+		// A sorted axis does not come here at all: its order is a ranking the
+		// query publishes as a column (see `rank()`), and its domain is registered
+		// from the data, the way a topN axis's membership is.
 		//
 		// Expression-backed axes take this path too, since `20c2370`'s successor
 		// gave the key derivation a shared home. They used to fall through to the
 		// DISTINCT below — correct but redundant, and deferred only because
 		// routing them here would have meant a second copy of #identityKey.
-		const identityField = !sortField && !sortOnly ? identityKeyFor(field) : null;
-		if (identityField) {
-			fetches.push(
-				(async () => {
-					// Idempotent and coalesced — the mark's own setup calls this too.
-					await coordinator.ensureColumns(table, { categorical: [identityField] });
-					const categories = coordinator.identityValues(identityField.key);
-					// The scale adopts this same array in MarkLifecycleV2's
-					// #ensureIdentityColumns, which covers sorted and explicit-domain
-					// axes that never reach this branch.
-					if (categories.length > 0) scaleState.addMark(categories, markId);
-				})()
-			);
-			return;
-		}
-
-		// Only strings become column refs; expression nodes pass through as-is.
-		const axisExpr: ExprValue = isNode(field) ? (field as ExprNode) : sqlColumn(String(field));
-
-		let q = Query.from(table).select({ [axis]: axisExpr });
-		if (sortField) {
-			if (isAggregateExpression(sortField as ExprNode)) {
-				// Aggregate: GROUP BY band field, SELECT aggregate, ORDER BY it
-				q = q.groupby(axisExpr as GroupByExpr).select({ _sort: sortField as ExprValue });
-				if (sort!.direction === 'desc') {
-					q.orderby(sql`${sqlColumn('_sort')} DESC`);
-				} else {
-					q.orderby(sqlColumn('_sort'));
-				}
-			} else {
-				// Raw field or expression: ORDER BY directly
-				const sortExpr = isNode(sortField) ? sortField : sqlColumn(String(sortField));
-				if (sort!.direction === 'desc') {
-					q.orderby(sql`${sortExpr} DESC`);
-				} else {
-					q.orderby(sortExpr);
-				}
-			}
-		} else {
-			q.distinct();
-		}
-
+		const identityField = identityKeyFor(field);
+		if (!identityField) return;
 		fetches.push(
-			coordinator.query(q).then((result) => {
-				const categories = Array.from(result).map((row) => row[axis]);
-				// Y band scale maps index 0 → bottom, index N → top (bottom-to-top),
-				// but users read top-to-bottom. Reverse so SQL sort order matches
-				// the visual reading direction (e.g. 'desc' → largest at top).
-				if (axis === 'y' && sortField) {
-					categories.reverse();
-				}
-				if (categories.length > 0) {
-					if (sortOnly) {
-						scaleState.setSortOrder(categories);
-					} else {
-						scaleState.addMark(categories, markId, { sorted: !!sortField });
-					}
-				}
-			})
+			(async () => {
+				// Idempotent and coalesced — the mark's own setup calls this too.
+				await coordinator.ensureColumns(table, { categorical: [identityField] });
+				const categories = coordinator.identityValues(identityField.key);
+				// The scale adopts this same array in MarkLifecycleV2's
+				// #ensureIdentityColumns, which also covers the explicit-domain axes
+				// that never reach this branch.
+				if (categories.length > 0) scaleState.addMark(categories, markId);
+			})()
 		);
 	};
 
-	// Skip band fetch for marks with category-reducing transforms (topN):
-	// domain will be populated post-transform in registerDataDerivedDomains.
-	// BUT still run the sort sidecar so #sortOrder is set on the shared scale.
-	const skipBandFetch = hasCategoryReducingTransforms;
+	// A mark whose band axis is decided by its data — topN membership, a
+	// ranking from `sort` — registers the axis from each result in
+	// registerDataDerivedDomains, so it does not take the dim here: a dim
+	// registration first and a ranked one on the first result would animate
+	// every chart into its order on load.
+	const skipBandFetch = bandDomainFromData;
 	// Track explicit domains to apply after all async fetches complete —
 	// other scales (color, series) register ViewManager columns in their
 	// fetch callbacks, so the band view must be created after those finish.
@@ -198,7 +137,7 @@ export async function fetchCategoricalDomains(
 
 	if (actualXScaleType === 'band' || actualXScaleType === 'point') {
 		if (skipBandFetch) {
-			setupFetch('x', select.x, xScaleState, { sortOnly: true });
+			// Registered from the data.
 		} else if (explicitDomain?.x && xScaleState) {
 			deferredExplicitX = explicitDomain.x;
 		} else {
@@ -207,7 +146,7 @@ export async function fetchCategoricalDomains(
 	}
 	if (actualYScaleType === 'band' || actualYScaleType === 'point') {
 		if (skipBandFetch) {
-			setupFetch('y', select.y, yScaleState, { sortOnly: true });
+			// Registered from the data.
 		} else if (explicitDomain?.y && yScaleState) {
 			// Y band scale maps index 0 → bottom, so reverse the user's
 			// top-to-bottom array to match GPU rendering order.
