@@ -1654,3 +1654,44 @@ describe('BandScaleState tick placement for an id it is not showing', () => {
 		expect(scale.tickPosition(2, 300, 'x')).toBeLessThan(0);
 	});
 });
+
+describe('BandScaleState teardown', () => {
+	it('leaves the loop when the registry drops it mid-transition', () => {
+		const joined: unknown[] = [];
+		const left: unknown[] = [];
+		const scale = new BandScaleState('species', [], {
+			gpuCoordinator: {
+				addAnimatedSource: (x: unknown) => joined.push(x),
+				removeAnimatedSource: (x: unknown) => left.push(x)
+			}
+		});
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+		expect(joined).toEqual([scale.slots.clock]);
+
+		scale.destroy();
+
+		// Otherwise the loop stays awake and its charts keep rendering until the
+		// spring settles, for a transition nobody can see.
+		expect(left).toEqual([scale.slots.clock]);
+	});
+
+	it('still answers with everything that was registered on it', () => {
+		// The reason destroy() wipes nothing: a faceted container drops usage to
+		// zero while its cells still hold the object.
+		const scale = new BandScaleState('species');
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Gentoo']));
+		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		scale.destroy();
+
+		expect(scale.isDestroyed).toBe(true);
+		expect(scale.effectiveDomain).toEqual(['Adelie', 'Gentoo']);
+		expect(Array.from(scale.displayOrder)).toEqual([0, 1]);
+		expect(Array.from(scale.slots.target)).toEqual([0, 1]);
+	});
+});

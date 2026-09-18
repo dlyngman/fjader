@@ -213,10 +213,18 @@ export class BandScaleState {
 	 *
 	 * What teardown genuinely needs to release — GPU config, ramp and palette
 	 * slots — is released by the registry from `gpuSlots`, not here. A band
-	 * scale holds none.
+	 * scale holds none of those.
+	 *
+	 * It does hold one thing, and it is not state: a place in the animation
+	 * loop. A clock mid-transition when the registry drops the scale keeps the
+	 * loop awake and its charts rendering until the spring settles, for a
+	 * transition nobody is watching. Stopping it leaves the arrays alone, which
+	 * is the whole point of not wiping — a component still holding the scale
+	 * reads exactly what it read before, it just no longer animates.
 	 */
 	destroy(): void {
 		this.#destroyed = true;
+		this.#slots.clock.stop();
 	}
 
 	/**
