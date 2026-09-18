@@ -604,6 +604,12 @@ export class ScaleTemplateSystem {
 		return `
     // ===== BAND SCALE HELPERS =====
 
+    // THE band layout, and the only place the step expression lives. Every other
+    // consumer goes through here: getBandwidth{X,Y} below, and scaleBand via the
+    // offset. Its CPU twin is BandScaleState's #step, which the axis, the
+    // tooltip and hit-testing share and which is asserted against d3's own
+    // scaleBand — that pair is what keeps labels on their bars.
+    //
     // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:
     // the id is stable and comes from the dim, the slot says where that id
     // currently sits and changes on every reorder. scaleBand resolves one to
@@ -628,32 +634,33 @@ export class ScaleTemplateSystem {
       return vec2<f32>(offset, bandwidth);
     }
     
+    // Bandwidth does not depend on the slot, so both of these are the layout at
+    // slot 0 and take its second component. Spelled out separately until one of
+    // the three copies of the step expression grew a padding term the others did
+    // not — the same way align came to move the d3 scale and nothing else.
+    // There is one formula here now, and a test asserts it appears once.
     fn getBandwidthX() -> f32 {
       let scale = scaleParams[frameUniforms.xScaleIndex];
-      let rangeMin = frameUniforms.rangeMin.x;
-      let rangeMax = frameUniforms.rangeMax.x;
-      let rangeSize = rangeMax - rangeMin;  // Simple: always positive now
-      
-      let n = scale.p1;
-      let paddingInner = scale.p2;
-      let paddingOuter = scale.p3;
-      
-      let step = rangeSize / max(1.0, n - paddingInner + paddingOuter * 2.0);
-      return step * (1.0 - paddingInner);
+      return computeBandLayout(
+        0.0,
+        scale.p1,
+        scale.p2,
+        scale.p3,
+        frameUniforms.rangeMin.x,
+        frameUniforms.rangeMax.x
+      ).y;
     }
-    
+
     fn getBandwidthY() -> f32 {
       let scale = scaleParams[frameUniforms.yScaleIndex];
-      let rangeMin = frameUniforms.rangeMin.y;
-      let rangeMax = frameUniforms.rangeMax.y;
-      let rangeSize = rangeMax - rangeMin;  // Simple: always positive now
-      
-      let n = scale.p1;
-      let paddingInner = scale.p2;
-      let paddingOuter = scale.p3;
-      
-      let step = rangeSize / max(1.0, n - paddingInner + paddingOuter * 2.0);
-      return step * (1.0 - paddingInner);
+      return computeBandLayout(
+        0.0,
+        scale.p1,
+        scale.p2,
+        scale.p3,
+        frameUniforms.rangeMin.y,
+        frameUniforms.rangeMax.y
+      ).y;
     }
   `;
 	}
