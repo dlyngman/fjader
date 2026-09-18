@@ -177,7 +177,7 @@ export class TransformCompiler {
 	/**
 	 * Whether any category-reducing transform emits a synthetic "Other" row.
 	 * That row exists in no table, so its band id has to be reserved at setup
-	 * before the transform can write it (§16.9).
+	 * before the transform can write it.
 	 */
 	hasSyntheticOtherBucket(): boolean {
 		return this.transforms.some((t) => t.type === 'topN' && t.spec?.includeOthers === true);

@@ -1,5 +1,5 @@
 /**
- * Packing for the shared identity slot table (§9.5, §14.3).
+ * Packing for the shared identity slot table.
  *
  * Named for band scales until ordinal colour needed it too. It was never
  * band-specific: it maps an identity id to that scale's display position, and
@@ -15,7 +15,7 @@
  * band identity path — a running-sum allocator, a capacity fallback, a
  * transition-only warning and an eviction sweep — and it was reachable only
  * through a real WebGPU device, so a browser exercised it and nothing asserted
- * on it (§20.4 C). It is a pure function over plain arrays and maps, which is
+ * on it. It is a pure function over plain arrays and maps, which is
  * what it should have been.
  *
  * Layout: index 0 is a permanent zero-length block, then one block per scale of

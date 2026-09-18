@@ -840,7 +840,7 @@ export class MarkLifecycleV2 {
 		//
 		// The CASE this replaced was built from the scale's DOMAIN, so the query
 		// text depended on display order and a reorder invalidated preagg cubes
-		// and cache entries (§9.3). It also had to be suppressed whenever a
+		// and cache entries. It also had to be suppressed whenever a
 		// category-reducing transform was present, because a domain holding only
 		// the survivors maps everything else to -1 before the transform runs —
 		// that was `skipBandIndex`, and it is gone with the CASE. Ids come from
@@ -849,7 +849,7 @@ export class MarkLifecycleV2 {
 		//
 		// An axis with no identity is one #identityKey refused: bin(), or an
 		// aggregate. #ensureIdentityColumns reports it; there is no fallback to
-		// fall into, which is the point of §16.10 item 3.
+		// fall into, which is the point.
 		for (const axis of ['x', 'y'] as const) {
 			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
 			if (scaleType !== 'band' && scaleType !== 'point') continue;
@@ -1088,10 +1088,10 @@ export class MarkLifecycleV2 {
 	 *
 	 * The key is the source column name, or an expression's SQL text — the same
 	 * string `requestScale` puts in `columnName` and therefore the scale's
-	 * `sourceField` (§16.3). Deriving both from one place is what stops scale
+	 * `sourceField`. Deriving both from one place is what stops scale
 	 * identity and dim identity from diverging.
 	 *
-	 * Refused: bin() (values move with the viewport, §16.5), and aggregate or
+	 * Refused: bin() (values move with the viewport), and aggregate or
 	 * window expressions, which are not a row-level value to group by.
 	 */
 	#identityKey(axis: 'x' | 'y'): { key: string; sql: string } | null {
@@ -1108,7 +1108,7 @@ export class MarkLifecycleV2 {
 	 * union into one CREATE OR REPLACE VIEW rather than one per mark. Also re-run
 	 * after an identity reset, which is a reload rebuilding the dims from scratch.
 	 *
-	 * Plain columns and fixed SQL expressions both get a dim (§16 / #197). They
+	 * Plain columns and fixed SQL expressions both get a dim (#197). They
 	 * are not two paths: #identityKey hands over a key and the SQL producing the
 	 * value, and CategoricalIdentity substitutes the latter into the same
 	 * templates either way. What #identityKey refuses is bin(), aggregates and
@@ -1138,7 +1138,7 @@ export class MarkLifecycleV2 {
 				continue;
 			}
 			// A categorical axis this cannot dim. There is no CASE fallback any
-			// more (§16.10 item 3), so it draws nothing — say why rather than
+			// more, so it draws nothing — say why rather than
 			// leaving an empty chart to be diagnosed.
 			console.error(
 				`[${this.#markId}] The ${axis} axis is categorical but cannot be given a stable ` +
@@ -1280,7 +1280,7 @@ export class MarkLifecycleV2 {
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to
-		// be reserved before a transform can write it (§16.9). Reserved for every
+		// be reserved before a transform can write it. Reserved for every
 		// categorical field of this mark rather than guessing which axis topN
 		// will pick — at most two, and the transform looks its own field up.
 		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
@@ -1384,7 +1384,7 @@ export class MarkLifecycleV2 {
 		// so it must not express one. The branch below used to answer that case
 		// with SELECT DISTINCT and hand the result to setSortOrder, which was
 		// harmless only for as long as setSortOrder did nothing: it stored the
-		// order and never applied it. Making the re-sort path work (§32.7) made
+		// order and never applied it. Making the re-sort path work made
 		// this live, and #explicitDomain ?? #sortOrder gives it priority — so
 		// every band mark without a `sort` prop silently took its axis order
 		// from an UNFILTERED DISTINCT over the base table instead of from its
@@ -1713,7 +1713,7 @@ export class MarkLifecycleV2 {
 				// an axis it cannot dim is reported at setup. The CASE re-inlining
 				// that used to live here — rebuilding a domain-ordered index for
 				// the tooltip because skipBandIndex had left strings in the main
-				// query — is deleted with it (§16.10 item 3).
+				// query — is deleted with it.
 				const selectConfig = this.#config.select;
 				const resolvedSelect = this.#resolvedQueryParts?.selectDef ?? {};
 				const schema = this.#schema;
@@ -1766,7 +1766,7 @@ export class MarkLifecycleV2 {
 
 				// Band axis columns arrive as numeric identity ids on every path now,
 				// so the string -> index conversion this used to do is gone with the
-				// rest of the string path (§16.10 item 3).
+				// rest of the string path.
 				// Infer schema from first row
 				const schemaDef = columns
 					.map((col) => {

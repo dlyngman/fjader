@@ -21,7 +21,7 @@
 		 * The facet channel: a column name, or a fixed SQL expression over one.
 		 *
 		 * Whatever a categorical channel accepts anywhere else, because it goes
-		 * through the same `identityKeyFor` and the same dim (§16 / #197) — an
+		 * through the same `identityKeyFor` and the same dim (#197) — an
 		 * expression is keyed on its own text and gets an identity exactly as a
 		 * column does. bin(), aggregates and window functions are refused for the
 		 * reasons stated there, and the mark reports the refusal.
@@ -145,7 +145,7 @@
 	// grid, and ChartScales' teardown calls removeChartUsage for that id. Usage
 	// hits zero while the object is still in use by the container and every cell
 	// it handed the reference to, and deregisterChart then destroys it, drops it
-	// from scaleUsage and removes it from storage (§25.3, §27.2).
+	// from scaleUsage and removes it from storage.
 	//
 	// So ownership is registered separately from chart usage, under an id that
 	// lives exactly as long as this component. Synchronous here rather than in
@@ -171,7 +171,7 @@
 		facetBandScale?.effectiveDomain?.length ? facetBandScale.effectiveDomain : null
 	);
 
-	// A grid of one chart per category, gated on the count (§29.11). The dim's
+	// A grid of one chart per category, gated on the count. The dim's
 	// own limit is three orders of magnitude higher and answers a different
 	// question — see facet-limits.ts.
 	const facetCheck = $derived(
@@ -468,7 +468,7 @@
 
 		{#if facetRefusal}
 			<!-- Shown, not logged. A blank area plus a console line is the failure
-			     mode the dim's refusals were written to avoid (§16.6). -->
+			     mode the dim's refusals were written to avoid. -->
 			<div class="facet-refusal" role="alert">{facetRefusal}</div>
 		{:else if facetCategories}
 			{#if facetCheck?.message}

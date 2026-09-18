@@ -1,5 +1,5 @@
 /**
- * How many facet cells are too many (§29.11).
+ * How many facet cells are too many.
  *
  * Separate from the dim's limits, which answer a different question.
  * `MAX_IDENTITY_CARDINALITY` (10000) is sized for the shared slot buffer and
@@ -13,7 +13,7 @@
  * cell per distinct value, which at second resolution is roughly one per row —
  * a 6k-row table passes `#checkCardinality` comfortably and hangs the tab. The
  * column type does not predict this and only the count does, which is the same
- * conclusion §16.6 reached for band axes.
+ * conclusion the band axis's own cardinality refusal reached.
  */
 
 /** Refuse above this. A grid this wide is not a chart anyone can read. */
@@ -33,7 +33,7 @@ export interface FacetCellCheck {
  *
  * Pure, and returns the message rather than logging it, so the refusal can be
  * shown ON the chart — a console warning for a blank area is the failure mode
- * §16.6's refusals were written to avoid.
+ * the band axis's cardinality refusals were written to avoid.
  *
  * `field` is only quoted into the message; it is the identity key, so an
  * expression-backed facet names itself readably.

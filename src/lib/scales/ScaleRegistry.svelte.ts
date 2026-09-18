@@ -399,7 +399,7 @@ export class ScaleRegistry {
 
 	/**
 	 * Count `chartId` as a user of `scale`, for a holder that did not obtain it
-	 * through getOrCreateScale (§27.2).
+	 * through getOrCreateScale.
 	 *
 	 * The refcount is what keeps a scale alive, and until now it was only ever
 	 * incremented by the call that CREATED the scale. A component handed an
@@ -408,8 +408,8 @@ export class ScaleRegistry {
 	 * scale under its own chart id, hands the object to its cells, then stops
 	 * being a chart itself. Its usage drops to zero while every cell is still
 	 * using the object, and deregisterChart destroys it, drops it from
-	 * scaleUsage and removes it from storage. §25.3 cost three stacked bugs to
-	 * that, and the coordinator half — an evicted scale being invisible to
+	 * scaleUsage and removes it from storage. That shape cost three stacked bugs
+	 * to find, and the coordinator half — an evicted scale being invisible to
 	 * #scaleIdToInstance and #scaleArray — was never fixed, only contained by
 	 * holding the instance directly.
 	 *

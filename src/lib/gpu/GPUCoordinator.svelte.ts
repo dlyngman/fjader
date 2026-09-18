@@ -432,7 +432,7 @@ export class GPUCoordinator {
 	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
 	// Size scale buffer (group 2, binding 4). UNIFORM, not storage — see
-	// SIZE_SCALE_BINDINGS for why, and §36.7 for what it buys.
+	// SIZE_SCALE_BINDINGS for why, and for what it buys.
 	#sizeConfigBuffer: GPUBuffer | null = null; // MAX_SIZE_SLOTS × 16 bytes = 1KB
 	#maxSizeSlots = MAX_SIZE_SLOTS;
 
@@ -667,7 +667,7 @@ export class GPUCoordinator {
 					// a domain change, which is what uniform buffers are for — and it
 					// returns a slot to the vertex stage's storage budget, which sits
 					// at the default 8 and has to fit a `from` and a `to` per animated
-					// value channel (§36.7).
+					// value channel.
 					//
 					// Still VERTEX-only, so this remains invisible to the compute
 					// pipelines that share this layout (M4Decimator) and continues not

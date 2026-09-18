@@ -103,7 +103,7 @@ export async function fetchCategoricalDomains(
 		if (sortOnly && !sortField) return;
 
 		// Unsorted band domain comes from the field's dim, not a SELECT DISTINCT
-		// (band step 3a / §9.4). Two reasons beyond removing a query:
+		// Two reasons beyond removing a query:
 		//
 		//  - Order. DISTINCT has no ORDER BY, so today's domain is whatever DuckDB
 		//    returned, then "first-appearance order" in updateDomainFromExtents.
