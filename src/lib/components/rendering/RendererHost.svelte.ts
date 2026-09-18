@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import { BaseGPURenderer, type InitConfig } from './BaseGPURenderer.svelte';
 import type { GPUCoordinator } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -71,9 +72,30 @@ export class RendererHost {
 	#options: RendererHostOptions;
 	#mounted = false;
 
-	/** Construct at the top of a component `<script>`, not inside `onMount`. */
+	/**
+	 * Construct during component initialisation — at the top of `<script>`, not
+	 * inside `onMount` — because this owns an `$effect` and Svelte only allows
+	 * one to be created there. That is also what lets the scale-type rule live
+	 * HERE rather than being repeated in every component.
+	 */
 	constructor(options: RendererHostOptions) {
 		this.#options = options;
+
+		// The pipeline is compiled for the chart's scale types, and a chart does
+		// not always know them when its marks mount: a mark that infers its axis
+		// from the table schema registers no requirement until that arrives. So
+		// the dependency is tracked rather than read once.
+		//
+		// Reading `scaleTypes` is what subscribes; `syncScaleTypes` compares and
+		// returns immediately when nothing moved, which is every frame but the
+		// one where it did. Untracked inside, so a rebuild cannot re-enter here.
+		$effect(() => {
+			const types = this.#options.chartContext.scaleTypes;
+			void types?.x;
+			void types?.y;
+			const renderer = this.renderer;
+			if (renderer) untrack(() => renderer.syncScaleTypes());
+		});
 	}
 
 	/**

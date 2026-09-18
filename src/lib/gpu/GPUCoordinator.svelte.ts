@@ -2345,6 +2345,21 @@ export class GPUCoordinator {
 		};
 	}
 
+	/**
+	 * Drop a chart's cached render plan, so the next frame rebuilds it.
+	 *
+	 * The plan caches one pipeline per layer, read from the renderer when it was
+	 * built. A renderer that swaps its pipeline — recompiling for a scale type
+	 * that resolved after it started — is otherwise invisible here, and the
+	 * chart goes on drawing through the pipeline it cached.
+	 */
+	rebuildRenderPlan(chartId: string): void {
+		const chart = this.#registeredCharts.get(chartId);
+		if (!chart) return;
+		chart.needsPlanRebuild = true;
+		this.invalidateChart(chartId);
+	}
+
 	unregisterLayer(chartId: string, layerId: string): void {
 		const chart = this.#registeredCharts.get(chartId);
 		if (chart?.layers.has(layerId)) {
