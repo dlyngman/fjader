@@ -1113,8 +1113,14 @@ export class BandScaleState {
 
 		const bandIndex = Math.floor((pos - offset) / stepSize);
 
-		// Clamp to valid range
-		return Math.max(0, Math.min(n - 1, bandIndex));
+		// Clamped to a WHOLE slot. Mid-transition the count is fractional, so a
+		// bare `n - 1` hands back a fraction for a pointer past the last band —
+		// and a fractional slot indexes nothing, so idAtSlot and the domain both
+		// answer undefined and hover and click die at the axis end while an axis
+		// reorders. Rounded UP rather than down: a slot that is on its way out
+		// still exists, and reporting no category there is honest where reporting
+		// its neighbour's would not be. Identical to `n - 1` at rest.
+		return Math.max(0, Math.min(Math.ceil(n) - 1, bandIndex));
 	}
 
 	/**

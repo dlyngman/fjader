@@ -1548,3 +1548,84 @@ describe('BandScaleState tick placement', () => {
 		expect(scale.isTickDimmed(b)).toBe(true);
 	});
 });
+
+describe('BandScaleState pointer inversion', () => {
+	/**
+	 * A three-category axis part-way through dropping to two, so the count it is
+	 * laid out for is strictly fractional.
+	 */
+	function midTransition() {
+		const s = new BandScaleState('species', [], {
+			gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
+		});
+		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		// Drive the shared clock part of the way, which is what puts the count
+		// between its two ends.
+		const clock = s.slots.clock;
+		for (let i = 0; i < 8; i++) clock.step();
+		clock.updateRenderState(0);
+		return s;
+	}
+
+	it('returns a WHOLE slot while the band count is fractional', () => {
+		const s = midTransition();
+		const n = s.getConfig().categoryCount;
+		expect(n).toBeGreaterThan(2);
+		expect(n).toBeLessThan(3);
+		expect(Number.isInteger(n)).toBe(false);
+
+		// Past the last surviving band. The clamp used to be `min(n - 1, i)` and
+		// handed the fractional count straight back, and a fractional slot
+		// indexes neither displayOrder nor the domain — so idAtSlot and Toggle
+		// both answered undefined and hover and click died at the axis end for
+		// the length of every reorder.
+		const edge = s.invertScreenToData(299, 300);
+		expect(edge).not.toBeNull();
+		expect(Number.isInteger(edge)).toBe(true);
+		// The band still LEAVING, not its neighbour — which is the whole of what
+		// the rounding decides, and integer-ness alone does not pin: rounding
+		// down is an integer too, and answers 1 here.
+		expect(edge).toBe(2);
+	});
+
+	it('still names the category under a band that is staying', () => {
+		const s = midTransition();
+		const slot = s.invertScreenToData(20, 300);
+		expect(slot).toBe(0);
+		expect(s.categoryAt(s.idAtSlot(slot!)!)).toBe('Adelie');
+	});
+});
+
+
+describe('BandScaleState pointer inversion on an emptying axis', () => {
+	it('answers slot 0 while the last band is still leaving', () => {
+		// Between 0 and 1 laid-out slots the only slot that exists is 0, and it
+		// is on its way out. Consistent with the clamp's rule that a leaver is
+		// still somewhere: pinned here because it is the one case where the
+		// rounding decides the answer rather than just its type.
+		const s = new BandScaleState('species', [], {
+			gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
+		});
+		s.setIdentity(new FieldIdentity(['Adelie']));
+		s.addMark(['Adelie'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		s.removeMark('mark-1');
+		s.updateDomainFromExtents();
+
+		const clock = s.slots.clock;
+		for (let i = 0; i < 8; i++) clock.step();
+		clock.updateRenderState(0);
+
+		const n = s.getConfig().categoryCount;
+		expect(n).toBeGreaterThan(0);
+		expect(n).toBeLessThan(1);
+		expect(s.invertScreenToData(150, 300)).toBe(0);
+	});
+});
