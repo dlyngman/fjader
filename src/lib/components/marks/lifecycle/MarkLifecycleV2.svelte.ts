@@ -1592,6 +1592,32 @@ export class MarkLifecycleV2 {
 		return raw instanceof Float32Array ? raw : new Float32Array(raw as ArrayLike<number>);
 	});
 
+	/**
+	 * Whether this mark's scales can be drawn against. Every mark component gates
+	 * its renderer on it, so a chart whose scales are not usable has no layers
+	 * and draws nothing.
+	 *
+	 * READINESS OF SCALE STATE, and nothing else — which is the boundary worth
+	 * knowing, because it reads like a general "is this chart safe to draw" and
+	 * is not. It says the scale objects exist, are ready, and have a domain. It
+	 * says nothing about the COORDINATOR's view of them: which scale a chart's
+	 * shaders actually resolve through when they run.
+	 *
+	 * Those are different failures, and the second one is invisible from here. A
+	 * chart can pass every check in this getter — right scale, right domain,
+	 * right slot table, right axis — and still render every mark through another
+	 * chart's band layout, because nothing is UNREADY; something derived from
+	 * the scale has gone stale on the way to the GPU. Gating harder cannot catch
+	 * that, whatever the gate.
+	 *
+	 * How the coordinator holds that view is its business and has changed: today
+	 * it is an index cached in the chart's frame uniform, kept true by
+	 * reconciling it per frame rather than by pushing it on every writer, and
+	 * the immediates work replaces it with the scale's params written into the
+	 * pass, where there is no cache to go stale. What does not change is the
+	 * boundary — this getter answers for the scale, not for what the shader
+	 * reads.
+	 */
 	gpuReady: boolean = $derived.by(() => {
 		if (!this.setupComplete) return false;
 
