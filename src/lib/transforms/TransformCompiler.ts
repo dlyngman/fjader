@@ -68,6 +68,17 @@ export class TransformCompiler {
 	 * Which channels a query with these aliases comes back aligned on, leading
 	 * term first, or null. Asked with the same facts as `applyToQuery`, so the
 	 * answer is about the query those transforms actually produce.
+	 *
+	 * NOT quite the same aliases, and the difference is worth knowing. Callers
+	 * pass `Object.keys(selectDef)`, while inside `apply` a transform reads the
+	 * query it is handed — which by then carries what earlier transforms added:
+	 * topN's rank, stack's y0/y1. So the plan is one derivation asked over two
+	 * alias sets.
+	 *
+	 * Benign today because the extra aliases appear in neither `identity` nor
+	 * `groupKeys`, which is all `dense()` consults. A transform that added a
+	 * channel carrying category ids would break the tie, and then these two have
+	 * to be given the same list.
 	 */
 	alignment(aliases: string[], facts?: Partial<MarkConfig>): string[] | null {
 		const config = this.#configFor(facts);
