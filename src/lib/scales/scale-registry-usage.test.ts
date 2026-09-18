@@ -69,3 +69,52 @@ describe('ScaleRegistry chart usage', () => {
 		expect(scale.isDestroyed).toBe(false);
 	});
 });
+
+describe('ScaleRegistry band padding', () => {
+	it('lets `padding` stand in for both halves', () => {
+		// It could not, and silently: inner and outer were defaulted here
+		// unconditionally, so the scale's own `#paddingInner ?? #padding`
+		// fallback was unreachable and a mark's `padding` prop did nothing.
+		const reg = registry();
+		const scale = reg.getOrCreateScale(
+			'species',
+			'band',
+			{ sourceField: 'species', padding: 0.3 },
+			'chart-1'
+		) as BandScaleState;
+
+		const config = scale.getConfig();
+		expect(config.paddingInner).toBe(0.3);
+		expect(config.paddingOuter).toBe(0.3);
+	});
+
+	it('lets an explicit half win over the shorthand', () => {
+		const reg = registry();
+		const scale = reg.getOrCreateScale(
+			'island',
+			'band',
+			{ sourceField: 'island', padding: 0.3, paddingOuter: 0 },
+			'chart-1'
+		) as BandScaleState;
+
+		const config = scale.getConfig();
+		expect(config.paddingInner).toBe(0.3);
+		expect(config.paddingOuter).toBe(0);
+	});
+
+	it('keeps a point scale at paddingInner 1, where `padding` is the outer one', () => {
+		// A point scale's bands have no width by definition, so the shorthand
+		// cannot be allowed to reach the inner half.
+		const reg = registry();
+		const scale = reg.getOrCreateScale(
+			'year',
+			'point',
+			{ sourceField: 'year', padding: 0.3 },
+			'chart-1'
+		) as BandScaleState;
+
+		const config = scale.getConfig();
+		expect(config.paddingInner).toBe(1);
+		expect(config.paddingOuter).toBe(0.3);
+	});
+});
