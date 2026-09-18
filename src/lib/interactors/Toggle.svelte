@@ -123,7 +123,17 @@
 		syncFilter(t);
 	}
 
-	/** Band axis click → category under the pointer on that axis, or null. */
+	/**
+	 * Band axis click → category under the pointer on that axis, or null.
+	 *
+	 * Decoded through the scale rather than by indexing its domain. The two
+	 * agree — the domain IS in display order, so `effectiveDomain[slot]` is the
+	 * category at that slot — but the equivalence is a property of the scale's
+	 * internals, and re-deriving it here is how a consumer came to compare a
+	 * slot against an id in the first place. `idAtSlot` and `categoryAt` are the
+	 * pair that owns the crossing, and they handle the no-identity case that
+	 * indexing by hand does not.
+	 */
 	function bandCategoryAt(
 		axis: 'x' | 'y',
 		innerPos: number
@@ -131,8 +141,10 @@
 		if (chart.scaleTypes?.[axis] !== 'band') return null;
 		const bandState = chart[`${axis}ScaleState`] as BandScaleState;
 		const extent = axis === 'x' ? chart.innerWidth : chart.innerHeight;
-		const index = bandState.invertScreenToData(innerPos, extent, axis === 'y');
-		const value = bandState.effectiveDomain[index] ?? null;
+		const slot = bandState.invertScreenToData(innerPos, extent, axis === 'y');
+		if (slot == null) return null;
+		const id = bandState.idAtSlot(slot);
+		const value = id == null ? null : (bandState.categoryAt(id) ?? null);
 		return value == null ? null : { field: bandState.sourceField, value };
 	}
 
