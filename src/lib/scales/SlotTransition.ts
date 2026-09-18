@@ -84,6 +84,16 @@ export class SlotTransition implements SlotSource {
 	 * displayed, 0 for not. Travels on the same clock and folds the same way as
 	 * the slots, so a leaver's label fades as its bar goes, and one that turns
 	 * back mid-exit fades in again from where it had got to.
+	 *
+	 * A PAIR, like `from`/`to`, and NOT a cache of `target`. Every write here is
+	 * `target[id] >= 0 ? 1 : 0`, which makes the far end look derivable and it is
+	 * not: `layout` fills the NEW order into `target` before calling `#retarget`,
+	 * and `#retarget` reads this pair to fold — so at the one read that matters
+	 * `target` is already the new layout and this still holds the old visibility.
+	 * Deriving it there would tell a leaver it was already invisible, and its
+	 * label would fold from 0 and vanish on the frame the reorder landed instead
+	 * of fading out with its bar. Same shape as the fold that consulted `target`
+	 * and made leavers disappear.
 	 */
 	#alphaFrom: Float32Array = new Float32Array(0);
 	#alphaTo: Float32Array = new Float32Array(0);
