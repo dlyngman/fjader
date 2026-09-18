@@ -564,6 +564,47 @@ export class BandScaleState {
 	}
 
 	/**
+	 * The inverse of `categoryAt`: the channel value a source value is carried
+	 * as, or null when this axis does not know it.
+	 *
+	 * For a caller holding a VALUE that needs a key — a label whose channel came
+	 * back as raw categories because the axis has no dim, a legend entry, a
+	 * toggle. A caller already holding a channel value has the key and must not
+	 * come through here.
+	 *
+	 * Both directions are a lookup, never a scan: with identity the dim's own
+	 * map, and without it a value -> position map cached against the domain
+	 * array it was built from. That cache is what keeps a per-frame consumer off
+	 * an indexOf per item — the positions of an axis mid-transition are asked
+	 * for every label on every frame.
+	 */
+	channelValueFor(value: DimValue): number | null {
+		if (this.hasIdentity) return this.#identity!.ids.get(value) ?? null;
+		return this.#domainPositions().get(value) ?? null;
+	}
+
+	/**
+	 * value -> display position, for a scale with no identity.
+	 *
+	 * Keyed on the domain ARRAY rather than on `_version`: every writer of the
+	 * domain assigns a fresh array (`#domain` on update, `#frozenDomain` on
+	 * freeze), so a reference comparison is exact, and it cannot miss a change
+	 * that moved the domain without bumping a counter — freezing is one.
+	 */
+	#positions: Map<DimValue, number> | null = null;
+	#positionsFor: DimValue[] | null = null;
+
+	#domainPositions(): Map<DimValue, number> {
+		const domain = this.effectiveDomain;
+		if (this.#positions && this.#positionsFor === domain) return this.#positions;
+		const map = new Map<DimValue, number>();
+		for (let i = 0; i < domain.length; i++) map.set(domain[i], i);
+		this.#positions = map;
+		this.#positionsFor = domain;
+		return map;
+	}
+
+	/**
 	 * Hand the current display order to the slots.
 	 *
 	 * Imperative rather than a $derived: the consumer is the per-frame GPU upload
@@ -1013,7 +1054,19 @@ export class BandScaleState {
 	 * reversed range. Per frame, O(1).
 	 */
 	tickPosition(key: number, rangeSize: number, axis: 'x' | 'y'): number {
-		const centre = this.slotCenter(this.tickSlot(key), rangeSize);
+		return this.slotPosition(this.tickSlot(key), rangeSize, axis);
+	}
+
+	/**
+	 * The same, for a caller that already has the slot.
+	 *
+	 * A consumer that has to test the slot first — an SVG label, which must not
+	 * draw a category the axis is not displaying — would otherwise ask for it
+	 * twice per item per frame. The axis flip lives here rather than being
+	 * re-derived by such a caller.
+	 */
+	slotPosition(slot: number, rangeSize: number, axis: 'x' | 'y'): number {
+		const centre = this.slotCenter(slot, rangeSize);
 		return axis === 'y' ? rangeSize - centre : centre;
 	}
 

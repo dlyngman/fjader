@@ -1602,7 +1602,6 @@ describe('BandScaleState pointer inversion', () => {
 	});
 });
 
-
 describe('BandScaleState pointer inversion on an emptying axis', () => {
 	it('answers slot 0 while the last band is still leaving', () => {
 		// Between 0 and 1 laid-out slots the only slot that exists is 0, and it
@@ -1627,5 +1626,57 @@ describe('BandScaleState pointer inversion on an emptying axis', () => {
 		expect(n).toBeGreaterThan(0);
 		expect(n).toBeLessThan(1);
 		expect(s.invertScreenToData(150, 300)).toBe(0);
+	});
+});
+describe('BandScaleState value -> channel value', () => {
+	it('inverts categoryAt in both spaces', () => {
+		const withId = new BandScaleState('species');
+		withId.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		withId.addMark(['Gentoo', 'Adelie'], 'mark-1');
+		withId.updateDomainFromExtents();
+		// The dim id, NOT the display position: Gentoo is displayed first and is
+		// still id 2. Round-tripping is what pins the two apart.
+		expect(withId.channelValueFor('Gentoo')).toBe(2);
+		expect(withId.categoryAt(withId.channelValueFor('Gentoo')!)).toBe('Gentoo');
+		expect(withId.channelValueFor('Emperor')).toBeNull();
+
+		const noId = new BandScaleState('species');
+		noId.addMark(['Gentoo', 'Adelie'], 'mark-1');
+		noId.updateDomainFromExtents();
+		// Without identity the channel carries the display position instead.
+		expect(noId.channelValueFor('Gentoo')).toBe(0);
+		expect(noId.categoryAt(noId.channelValueFor('Adelie')!)).toBe('Adelie');
+		expect(noId.channelValueFor('Emperor')).toBeNull();
+	});
+
+	it('follows the domain when it moves, so the cache cannot go stale', () => {
+		const scale = new BandScaleState('species');
+		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(scale.channelValueFor('Gentoo')).toBe(1);
+
+		scale.addMark(['Chinstrap', 'Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(scale.channelValueFor('Gentoo')).toBe(2);
+		expect(scale.channelValueFor('Chinstrap')).toBe(0);
+	});
+});
+
+describe('BandScaleState tick placement for an id it is not showing', () => {
+	it('reports the hidden sentinel rather than a coordinate one step outside', () => {
+		// A row can carry an id this axis is not displaying — filtered out by a
+		// transform, or from another table on a shared scale. The band layout is
+		// linear in the slot, so -1 goes through it as a REAL position one step
+		// before the range: an SVG consumer that trusts it draws off the left
+		// edge, where the shader discards the bar. Consumers test the slot.
+		const scale = new BandScaleState('species');
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		expect(scale.tickSlot(0)).toBe(0);
+		expect(scale.tickSlot(2)).toBe(-1);
+		// The trap, stated so it stays stated: this is a plausible number.
+		expect(scale.tickPosition(2, 300, 'x')).toBeLessThan(0);
 	});
 });
