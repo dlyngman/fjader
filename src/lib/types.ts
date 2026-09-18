@@ -291,12 +291,18 @@ export interface BaseMarkProps {
 	fitDomain?: 'x' | 'y' | boolean;
 }
 
-/** Props for marks that support band scale padding/alignment (Bar, Rect). */
+/**
+ * Props for marks that support band scale padding (Bar, Rect).
+ *
+ * No `align`: the GPU band layout places a category at the centre of its slot
+ * and has no parameter for anything else, so the only alignment this library
+ * can honour is d3's default. It was a prop for a while, reached d3 alone, and
+ * silently moved SVG consumers off the bars.
+ */
 export interface BandScaleProps {
 	padding?: number;
 	paddingInner?: number;
 	paddingOuter?: number;
-	align?: number;
 }
 
 /** Props for marks that support continuous scale type preference. */

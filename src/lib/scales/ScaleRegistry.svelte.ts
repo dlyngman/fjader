@@ -242,7 +242,7 @@ export class ScaleRegistry {
 				const keyType = isTransformType(scaleType) ? 'sequential' : scaleType;
 				key = `${name}-color-${keyType}`;
 			} else {
-				// Other scales: key by full config (padding, align, etc. matter)
+				// Other scales: key by full config (padding etc. matter)
 				const configKey = Object.keys(config).length > 0 ? `-${stableStringify(config)}` : '';
 				key = `${name}-${type}${configKey}`;
 			}
@@ -286,11 +286,27 @@ export class ScaleRegistry {
 					this.scales[type].set(
 						key,
 						new BandScaleState(name, [], {
+							// `padding` is d3's shorthand for both, and it has to be resolved
+							// HERE: defaulting inner and outer unconditionally leaves them
+							// non-null on every scale, so the scale's own
+							// `#paddingInner ?? #padding` fallback can never fire and a mark's
+							// `padding` prop did nothing at all.
+							//
+							// A point scale is the exception on the inner side: its bands have
+							// no width by definition, so paddingInner stays 1 and `padding`
+							// means the outer padding alone — which is what d3's scalePoint
+							// does with it too.
+							//
+							// `padding` itself is NOT forwarded: resolved here, both halves are
+							// always set, so the scale's own fallback is dead through this path
+							// and passing it would be a third place writing the same default.
 							paddingInner:
-								(config.paddingInner as number | undefined) ?? (type === 'point' ? 1 : 0.1),
-							paddingOuter: (config.paddingOuter as number | undefined) ?? 0.1,
-							padding: (config.padding as number | undefined) ?? 0.1,
-							align: (config.align as number | undefined) ?? 0.5,
+								(config.paddingInner as number | undefined) ??
+								(type === 'point' ? 1 : ((config.padding as number | undefined) ?? 0.1)),
+							paddingOuter:
+								(config.paddingOuter as number | undefined) ??
+								(config.padding as number | undefined) ??
+								0.1,
 							sourceField: config.sourceField as string | undefined,
 							registry: this,
 							// How a data transition reaches the animation loop.
@@ -383,7 +399,7 @@ export class ScaleRegistry {
 
 	/**
 	 * Count `chartId` as a user of `scale`, for a holder that did not obtain it
-	 * through getOrCreateScale (§27.2).
+	 * through getOrCreateScale.
 	 *
 	 * The refcount is what keeps a scale alive, and until now it was only ever
 	 * incremented by the call that CREATED the scale. A component handed an
@@ -392,8 +408,8 @@ export class ScaleRegistry {
 	 * scale under its own chart id, hands the object to its cells, then stops
 	 * being a chart itself. Its usage drops to zero while every cell is still
 	 * using the object, and deregisterChart destroys it, drops it from
-	 * scaleUsage and removes it from storage. §25.3 cost three stacked bugs to
-	 * that, and the coordinator half — an evicted scale being invisible to
+	 * scaleUsage and removes it from storage. That shape cost three stacked bugs
+	 * to find, and the coordinator half — an evicted scale being invisible to
 	 * #scaleIdToInstance and #scaleArray — was never fixed, only contained by
 	 * holding the instance directly.
 	 *

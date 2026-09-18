@@ -1309,19 +1309,10 @@ describe('BandScaleState across an identity reset', () => {
 	});
 });
 
-describe('BandScaleState GPU readiness and gpuState', () => {
-	// Both of these used to route through a category -> index Map. gpuState read
-	// its .size and isReadyForGPU asserted it was a Map at all.
-	//
-	// Note on what is NOT pinned here: swapping gpuState's effectiveDomain.length
-	// for #domain.length passes every one of these, because updateDomainFromExtents
-	// returns early while frozen, so the two arrays never actually diverge. The
-	// old Map read the same expression, and .size differed from .length only on a
-	// duplicate category — which the dim's unique index and the de-duplication in
-	// updateDomainFromExtents both prevent. That substitution is behaviour-
-	// preserving in every reachable state, so these pin the contract (domainMax
-	// tracks the displayed domain and agrees with getConfig) rather than the
-	// expression.
+describe('BandScaleState GPU readiness', () => {
+	// isReadyForGPU used to route through a category -> index Map, and asserted
+	// it was a Map at all — a clause a field initializer made true before the
+	// constructor finished, so it never once decided this.
 
 	function ready(domain: string[]) {
 		const scale = new BandScaleState('species');
@@ -1331,15 +1322,6 @@ describe('BandScaleState GPU readiness and gpuState', () => {
 		scale.setReady();
 		return scale;
 	}
-
-	it('reports domainMax as the last displayed slot', () => {
-		expect(ready(['Adelie', 'Chinstrap', 'Gentoo']).gpuState.domainMax).toBe(2);
-	});
-
-	it('does not go negative on an empty domain', () => {
-		const scale = new BandScaleState('species');
-		expect(scale.gpuState.domainMax).toBe(0);
-	});
 
 	it('does not move while frozen', () => {
 		const scale = ready(['Adelie', 'Chinstrap', 'Gentoo']);
@@ -1351,16 +1333,8 @@ describe('BandScaleState GPU readiness and gpuState', () => {
 		scale.updateDomainFromExtents();
 
 		expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
-		expect(scale.gpuState.domainMax).toBe(2);
 		expect(scale.getConfig().categoryCount).toBe(3);
 		expect(Array.from(scale.slots.snapshot())).toEqual([0, 1, 2]);
-	});
-
-	it('agrees with getConfig().categoryCount', () => {
-		// They are the same quantity, and the GPU reads both — gpuState for the
-		// domain bounds, getConfig for the band layout.
-		const scale = ready(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
-		expect(scale.gpuState.domainMax + 1).toBe(scale.getConfig().categoryCount);
 	});
 
 	it('is not GPU-ready without a domain or before setReady', () => {
@@ -1546,5 +1520,178 @@ describe('BandScaleState tick placement', () => {
 		scale.setActiveValues(['a']);
 		expect(scale.isTickDimmed(a)).toBe(false);
 		expect(scale.isTickDimmed(b)).toBe(true);
+	});
+});
+
+describe('BandScaleState pointer inversion', () => {
+	/**
+	 * A three-category axis part-way through dropping to two, so the count it is
+	 * laid out for is strictly fractional.
+	 */
+	function midTransition() {
+		const s = new BandScaleState('species', [], {
+			gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
+		});
+		s.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		s.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		s.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		// Drive the shared clock part of the way, which is what puts the count
+		// between its two ends.
+		const clock = s.slots.clock;
+		for (let i = 0; i < 8; i++) clock.step();
+		clock.updateRenderState(0);
+		return s;
+	}
+
+	it('returns a WHOLE slot while the band count is fractional', () => {
+		const s = midTransition();
+		const n = s.getConfig().categoryCount;
+		expect(n).toBeGreaterThan(2);
+		expect(n).toBeLessThan(3);
+		expect(Number.isInteger(n)).toBe(false);
+
+		// Past the last surviving band. The clamp used to be `min(n - 1, i)` and
+		// handed the fractional count straight back, and a fractional slot
+		// indexes neither displayOrder nor the domain — so idAtSlot and Toggle
+		// both answered undefined and hover and click died at the axis end for
+		// the length of every reorder.
+		const edge = s.invertScreenToData(299, 300);
+		expect(edge).not.toBeNull();
+		expect(Number.isInteger(edge)).toBe(true);
+		// The band still LEAVING, not its neighbour — which is the whole of what
+		// the rounding decides, and integer-ness alone does not pin: rounding
+		// down is an integer too, and answers 1 here.
+		expect(edge).toBe(2);
+	});
+
+	it('still names the category under a band that is staying', () => {
+		const s = midTransition();
+		const slot = s.invertScreenToData(20, 300);
+		expect(slot).toBe(0);
+		expect(s.categoryAt(s.idAtSlot(slot!)!)).toBe('Adelie');
+	});
+});
+
+describe('BandScaleState pointer inversion on an emptying axis', () => {
+	it('answers slot 0 while the last band is still leaving', () => {
+		// Between 0 and 1 laid-out slots the only slot that exists is 0, and it
+		// is on its way out. Consistent with the clamp's rule that a leaver is
+		// still somewhere: pinned here because it is the one case where the
+		// rounding decides the answer rather than just its type.
+		const s = new BandScaleState('species', [], {
+			gpuCoordinator: { addAnimatedSource: () => {}, removeAnimatedSource: () => {} }
+		});
+		s.setIdentity(new FieldIdentity(['Adelie']));
+		s.addMark(['Adelie'], 'mark-1');
+		s.updateDomainFromExtents();
+
+		s.removeMark('mark-1');
+		s.updateDomainFromExtents();
+
+		const clock = s.slots.clock;
+		for (let i = 0; i < 8; i++) clock.step();
+		clock.updateRenderState(0);
+
+		const n = s.getConfig().categoryCount;
+		expect(n).toBeGreaterThan(0);
+		expect(n).toBeLessThan(1);
+		expect(s.invertScreenToData(150, 300)).toBe(0);
+	});
+});
+describe('BandScaleState value -> channel value', () => {
+	it('inverts categoryAt in both spaces', () => {
+		const withId = new BandScaleState('species');
+		withId.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		withId.addMark(['Gentoo', 'Adelie'], 'mark-1');
+		withId.updateDomainFromExtents();
+		// The dim id, NOT the display position: Gentoo is displayed first and is
+		// still id 2. Round-tripping is what pins the two apart.
+		expect(withId.channelValueFor('Gentoo')).toBe(2);
+		expect(withId.categoryAt(withId.channelValueFor('Gentoo')!)).toBe('Gentoo');
+		expect(withId.channelValueFor('Emperor')).toBeNull();
+
+		const noId = new BandScaleState('species');
+		noId.addMark(['Gentoo', 'Adelie'], 'mark-1');
+		noId.updateDomainFromExtents();
+		// Without identity the channel carries the display position instead.
+		expect(noId.channelValueFor('Gentoo')).toBe(0);
+		expect(noId.categoryAt(noId.channelValueFor('Adelie')!)).toBe('Adelie');
+		expect(noId.channelValueFor('Emperor')).toBeNull();
+	});
+
+	it('follows the domain when it moves, so the cache cannot go stale', () => {
+		const scale = new BandScaleState('species');
+		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(scale.channelValueFor('Gentoo')).toBe(1);
+
+		scale.addMark(['Chinstrap', 'Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(scale.channelValueFor('Gentoo')).toBe(2);
+		expect(scale.channelValueFor('Chinstrap')).toBe(0);
+	});
+});
+
+describe('BandScaleState tick placement for an id it is not showing', () => {
+	it('reports the hidden sentinel rather than a coordinate one step outside', () => {
+		// A row can carry an id this axis is not displaying — filtered out by a
+		// transform, or from another table on a shared scale. The band layout is
+		// linear in the slot, so -1 goes through it as a REAL position one step
+		// before the range: an SVG consumer that trusts it draws off the left
+		// edge, where the shader discards the bar. Consumers test the slot.
+		const scale = new BandScaleState('species');
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Adelie', 'Chinstrap'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		expect(scale.tickSlot(0)).toBe(0);
+		expect(scale.tickSlot(2)).toBe(-1);
+		// The trap, stated so it stays stated: this is a plausible number.
+		expect(scale.tickPosition(2, 300, 'x')).toBeLessThan(0);
+	});
+});
+
+describe('BandScaleState teardown', () => {
+	it('leaves the loop when the registry drops it mid-transition', () => {
+		const joined: unknown[] = [];
+		const left: unknown[] = [];
+		const scale = new BandScaleState('species', [], {
+			gpuCoordinator: {
+				addAnimatedSource: (x: unknown) => joined.push(x),
+				removeAnimatedSource: (x: unknown) => left.push(x)
+			}
+		});
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+		scale.setSortOrder(['Gentoo', 'Adelie', 'Chinstrap']);
+		scale.updateDomainFromExtents();
+		expect(joined).toEqual([scale.slots.clock]);
+
+		scale.destroy();
+
+		// Otherwise the loop stays awake and its charts keep rendering until the
+		// spring settles, for a transition nobody can see.
+		expect(left).toEqual([scale.slots.clock]);
+	});
+
+	it('still answers with everything that was registered on it', () => {
+		// The reason destroy() wipes nothing: a faceted container drops usage to
+		// zero while its cells still hold the object.
+		const scale = new BandScaleState('species');
+		scale.setIdentity(new FieldIdentity(['Adelie', 'Gentoo']));
+		scale.addMark(['Adelie', 'Gentoo'], 'mark-1');
+		scale.updateDomainFromExtents();
+
+		scale.destroy();
+
+		expect(scale.isDestroyed).toBe(true);
+		expect(scale.effectiveDomain).toEqual(['Adelie', 'Gentoo']);
+		expect(Array.from(scale.displayOrder)).toEqual([0, 1]);
+		expect(Array.from(scale.slots.target)).toEqual([0, 1]);
 	});
 });

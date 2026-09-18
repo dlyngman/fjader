@@ -1,7 +1,6 @@
 /**
  * Categorical identity: stable numeric ids for categorical field values.
  *
- * Band step 2 of `proposals/review_band_category_index_architecture.md` §9.2.
  * This module owns *identity* only — which value is which id. Display position
  * (slots, ordering, animation) is not its concern and lives in the scale states.
  *
@@ -54,7 +53,7 @@ export interface IdentityExec {
 
 /**
  * A thing that can have an identity: a source column, or a fixed SQL expression
- * over one (§16). Both are dimmed identically — the only difference is how the
+ * over one. Both are dimmed identically — the only difference is how the
  * value is produced.
  */
 export interface IdentityField {
@@ -62,7 +61,7 @@ export interface IdentityField {
 	 * Stable key for this identity. The column name, or the expression's SQL
 	 * text. Names the dim, the id column and the value array, and must be the
 	 * same string that becomes the scale's `sourceField`, so scale identity and
-	 * dim identity cannot diverge (§16.3).
+	 * dim identity cannot diverge.
 	 */
 	key: string;
 	/** SQL producing the value. A quoted identifier, or the expression itself. */
@@ -163,14 +162,14 @@ export type DimValue = string | number | bigint;
  *
  * The two used to live apart: the engine owned id -> value and every scale
  * rebuilt value -> id for itself, self-healing on a length mismatch because the
- * array it mirrored was live and owned elsewhere. §15.5 #5 was a bug in exactly
- * that seam. Here `reset()` is the only writer and rewrites both directions in
+ * array it mirrored was live and owned elsewhere. A bug lived in exactly that
+ * seam. Here `reset()` is the only writer and rewrites both directions in
  * one pass, so the pair cannot be half-updated and no holder needs a staleness
  * test.
  *
  * `values` and `ids` are mutated IN PLACE and never reassigned, so a holder
  * keeps a bare reference and sees growth. That is what lets a scale adopt this
- * once and stay correct when a second table appends to the dim (§9.4).
+ * once and stay correct when a second table appends to the dim.
  */
 export class FieldIdentity {
 	/** id -> source value. Dense and 0-based, so position is the id. */
@@ -224,7 +223,7 @@ function shortHash(s: string): string {
  * A key that is already identifier-safe is used as-is, so the common case reads
  * cleanly in a query plan (`__dplot_species_idx`).
  *
- * Anything else — an expression key (§16) or an exotic column name — is named
+ * Anything else — an expression key or an exotic column name — is named
  * by HASH ALONE, not by its sanitized text. Sanitizing produced identifiers of
  * 150+ characters for an ordinary three-branch CASE, growing without bound with
  * the expression and turning its whitespace into runs of underscores: neither
@@ -241,7 +240,7 @@ function identityToken(field: string): string {
 }
 
 /**
- * Above this many distinct values a band axis is refused outright (§16.6).
+ * Above this many distinct values a band axis is refused outright.
  * The shared slot buffer holds 16384 floats across every band and point scale,
  * so a single axis this large cannot render whatever else is on the page — the
  * limit is capacity, not taste.
@@ -271,7 +270,7 @@ export class CategoricalIdentity {
 	#resetChain: Promise<void> = Promise.resolve();
 	/**
 	 * A CACHE of the dim's id -> value mapping, one array per FIELD, indexed by
-	 * id. §9.4.
+	 * id.
 	 *
 	 * DuckDB owns the mapping; this is a synchronously-readable copy of it,
 	 * because the readers cannot await. Axis ticks render domain values during
@@ -279,7 +278,7 @@ export class CategoricalIdentity {
 	 * do the same — none can block on a query. Rebuilding it from mark query
 	 * results instead would be per-mark rather than per-field, would see only
 	 * the rows surviving the current filter, and would be the per-row JS pass
-	 * §3 exists to delete.
+	 * this identity layer exists to delete.
 	 *
 	 * The cache is unusually safe because the dim is append-only and never
 	 * renumbers: it can only grow, and an entry's meaning never changes once
@@ -543,7 +542,7 @@ export class CategoricalIdentity {
 
 	/**
 	 * Reserve an id for a value that exists in no table — the synthetic "Other"
-	 * bucket a `topN({ includeOthers })` produces (§16.9).
+	 * bucket a `topN({ includeOthers })` produces.
 	 *
 	 * Goes through the same writer as every other id, so `values(f)[otherId]` is
 	 * the label and no consumer has to know it was synthetic. Serialized on the
@@ -679,12 +678,12 @@ export class CategoricalIdentity {
 	}
 
 	/**
-	 * Refuse a band axis with more distinct values than can render (§16.6).
+	 * Refuse a band axis with more distinct values than can render.
 	 *
 	 * Runs here rather than in `#fetchFieldStats` — that is a sibling of
 	 * `#ensureIdentityColumns` in the same `Promise.all`, so gating one on the
 	 * other would serialize two concurrent operations and put a round trip on
-	 * the critical path §3.3 protects. Here it costs a query only for fields
+	 * the setup path that already blocks on one. Here it costs a query only for fields
 	 * that actually get a dim, and it is where the refusal has to land anyway.
 	 *
 	 * `approx_count_distinct` rather than `COUNT(DISTINCT …)`: one HyperLogLog

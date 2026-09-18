@@ -27,7 +27,6 @@ interface BandScaleConfig {
 	padding?: number;
 	paddingInner?: number | null;
 	paddingOuter?: number | null;
-	align?: number;
 	sourceField?: string | null;
 	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
 	/**
@@ -42,7 +41,6 @@ interface BandGpuConfig {
 	categoryCount: number;
 	paddingInner: number;
 	paddingOuter: number;
-	align: number;
 }
 
 /**
@@ -116,7 +114,6 @@ export class BandScaleState {
 	#padding: number = 0.1;
 	#paddingInner: number | null = null;
 	#paddingOuter: number | null = null;
-	#align: number = 0.5;
 	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
 	/**
 	 * The engine's id <-> value bijection for this scale's field.
@@ -150,31 +147,6 @@ export class BandScaleState {
 	#sharedScale: ScaleBand<DimValue> = scaleBand<DimValue>();
 
 	// =========================================================================
-	// DERIVED STATE
-	// =========================================================================
-
-	/**
-	 * GPU state (derived) - for compatibility with coordinator
-	 */
-	gpuState: { domainMin: number; domainMax: number; p4: number; domainScale: number } = $derived.by(
-		() => {
-			// effectiveDomain.length, the same expression getConfig() uses for
-			// categoryCount. This used to be the size of a category -> index Map
-			// rebuilt on every domain change, which was the last consumer keeping
-			// that Map alive once the band channel stopped carrying positions.
-			// Two derivations of one number is one more than the GPU needs.
-			const categoryCount = this.effectiveDomain.length;
-
-			return {
-				domainMin: 0,
-				domainMax: Math.max(0, categoryCount - 1),
-				p4: 0, // unused for band scales (SSBO written via getConfig instead)
-				domainScale: 0
-			};
-		}
-	);
-
-	// =========================================================================
 	// CONSTRUCTOR
 	// =========================================================================
 
@@ -186,20 +158,12 @@ export class BandScaleState {
 		this.#padding = config.padding ?? 0.1;
 		this.#paddingInner = config.paddingInner ?? null;
 		this.#paddingOuter = config.paddingOuter ?? null;
-		this.#align = config.align ?? 0.5;
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
+			charts: () => this._affectedChartsArray,
 			onFrame: () => this.#slotFrame++,
 			onRest: () => this.#slotRest++
-		});
-
-		console.log(`🏗️ BandScaleState "${name}" created:`, {
-			initialDomain: domain.length,
-			padding: this.#padding,
-			paddingInner: this.#paddingInner,
-			paddingOuter: this.#paddingOuter,
-			align: this.#align
 		});
 	}
 
@@ -209,7 +173,6 @@ export class BandScaleState {
 
 	setReady(): void {
 		this.ready = true;
-		console.log(`✅ BandScaleState "${this.name}" marked as ready`);
 	}
 
 	// =========================================================================
@@ -251,10 +214,18 @@ export class BandScaleState {
 	 *
 	 * What teardown genuinely needs to release — GPU config, ramp and palette
 	 * slots — is released by the registry from `gpuSlots`, not here. A band
-	 * scale holds none.
+	 * scale holds none of those.
+	 *
+	 * It does hold one thing, and it is not state: a place in the animation
+	 * loop. A clock mid-transition when the registry drops the scale keeps the
+	 * loop awake and its charts rendering until the spring settles, for a
+	 * transition nobody is watching. Stopping it leaves the arrays alone, which
+	 * is the whole point of not wiping — a component still holding the scale
+	 * reads exactly what it read before, it just no longer animates.
 	 */
 	destroy(): void {
 		this.#destroyed = true;
+		this.#slots.clock.stop();
 	}
 
 	/**
@@ -313,12 +284,10 @@ export class BandScaleState {
 		if (wasEnabled && !enabled) {
 			// Freezing - capture current domain
 			this.#frozenDomain = [...this.#domain];
-			console.log(`❄️ BandScale "${this.name}" frozen at ${this.#frozenDomain.length} categories`);
 		} else if (!wasEnabled && enabled) {
 			// Unfreezing - restore updates
 			this.#frozenDomain = null;
 			this.updateDomainFromExtents();
-			console.log(`🔥 BandScale "${this.name}" unfrozen`);
 		}
 	}
 
@@ -468,7 +437,7 @@ export class BandScaleState {
 	 * coordinator reads it for every band scale on every frame, and the CPU layout
 	 * reads it per label per frame during a transition. Read it immediately.
 	 */
-	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0, align: 0.5 };
+	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0 };
 
 	/**
 	 * Where every category of this axis is on screen, and the clock it travels on.
@@ -490,17 +459,12 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Charts to redraw while this axis animates. The coordinator assigns it by
-	 * name on every scale it tracks; it lives on the clock, because the clock is
-	 * what the loop holds.
+	 * Charts to redraw while this axis animates. The registry and the
+	 * coordinator assign it by name on every scale they track, the same as on a
+	 * continuous scale — the clock reads it from here rather than being written
+	 * into, so there is one place it lives and one place it is set.
 	 */
-	get _affectedChartsArray(): string[] {
-		return this.#slots.clock._affectedChartsArray;
-	}
-
-	set _affectedChartsArray(charts: string[]) {
-		this.#slots.clock._affectedChartsArray = charts;
-	}
+	_affectedChartsArray: string[] = [];
 
 	/**
 	 * Tell this axis which id is its Other bucket, if any — where entering and
@@ -561,6 +525,47 @@ export class BandScaleState {
 	categoryAt(channelValue: number): DimValue | undefined {
 		if (!this.hasIdentity) return this.effectiveDomain[channelValue];
 		return this.#identity!.values[channelValue];
+	}
+
+	/**
+	 * The inverse of `categoryAt`: the channel value a source value is carried
+	 * as, or null when this axis does not know it.
+	 *
+	 * For a caller holding a VALUE that needs a key — a label whose channel came
+	 * back as raw categories because the axis has no dim, a legend entry, a
+	 * toggle. A caller already holding a channel value has the key and must not
+	 * come through here.
+	 *
+	 * Both directions are a lookup, never a scan: with identity the dim's own
+	 * map, and without it a value -> position map cached against the domain
+	 * array it was built from. That cache is what keeps a per-frame consumer off
+	 * an indexOf per item — the positions of an axis mid-transition are asked
+	 * for every label on every frame.
+	 */
+	channelValueFor(value: DimValue): number | null {
+		if (this.hasIdentity) return this.#identity!.ids.get(value) ?? null;
+		return this.#domainPositions().get(value) ?? null;
+	}
+
+	/**
+	 * value -> display position, for a scale with no identity.
+	 *
+	 * Keyed on the domain ARRAY rather than on `_version`: every writer of the
+	 * domain assigns a fresh array (`#domain` on update, `#frozenDomain` on
+	 * freeze), so a reference comparison is exact, and it cannot miss a change
+	 * that moved the domain without bumping a counter — freezing is one.
+	 */
+	#positions: Map<DimValue, number> | null = null;
+	#positionsFor: DimValue[] | null = null;
+
+	#domainPositions(): Map<DimValue, number> {
+		const domain = this.effectiveDomain;
+		if (this.#positions && this.#positionsFor === domain) return this.#positions;
+		const map = new Map<DimValue, number>();
+		for (let i = 0; i < domain.length; i++) map.set(domain[i], i);
+		this.#positions = map;
+		this.#positionsFor = domain;
+		return map;
 	}
 
 	/**
@@ -856,7 +861,6 @@ export class BandScaleState {
 		config.categoryCount = categoryCount;
 		config.paddingInner = paddingInner;
 		config.paddingOuter = paddingOuter;
-		config.align = this.#align;
 		return config;
 	}
 
@@ -876,9 +880,11 @@ export class BandScaleState {
 			this.#sharedScale.padding(this.#padding);
 		}
 
-		if (this.#align !== 0.5) {
-			this.#sharedScale.align(this.#align);
-		}
+		// align is left at d3's default, which is centred. The GPU band layout
+		// has no alignment parameter — computeBandLayout places a category at
+		// paddingOuter * step + slot * step — so a d3 scale aligned any other way
+		// would put every SVG consumer somewhere the bars are not. It was a prop
+		// until it was noticed that it reached only this line.
 
 		return this.#sharedScale;
 	}
@@ -1013,7 +1019,19 @@ export class BandScaleState {
 	 * reversed range. Per frame, O(1).
 	 */
 	tickPosition(key: number, rangeSize: number, axis: 'x' | 'y'): number {
-		const centre = this.slotCenter(this.tickSlot(key), rangeSize);
+		return this.slotPosition(this.tickSlot(key), rangeSize, axis);
+	}
+
+	/**
+	 * The same, for a caller that already has the slot.
+	 *
+	 * A consumer that has to test the slot first — an SVG label, which must not
+	 * draw a category the axis is not displaying — would otherwise ask for it
+	 * twice per item per frame. The axis flip lives here rather than being
+	 * re-derived by such a caller.
+	 */
+	slotPosition(slot: number, rangeSize: number, axis: 'x' | 'y'): number {
+		const centre = this.slotCenter(slot, rangeSize);
 		return axis === 'y' ? rangeSize - centre : centre;
 	}
 
@@ -1113,8 +1131,14 @@ export class BandScaleState {
 
 		const bandIndex = Math.floor((pos - offset) / stepSize);
 
-		// Clamp to valid range
-		return Math.max(0, Math.min(n - 1, bandIndex));
+		// Clamped to a WHOLE slot. Mid-transition the count is fractional, so a
+		// bare `n - 1` hands back a fraction for a pointer past the last band —
+		// and a fractional slot indexes nothing, so idAtSlot and the domain both
+		// answer undefined and hover and click die at the axis end while an axis
+		// reorders. Rounded UP rather than down: a slot that is on its way out
+		// still exists, and reporting no category there is honest where reporting
+		// its neighbour's would not be. Identical to `n - 1` at rest.
+		return Math.max(0, Math.min(Math.ceil(n) - 1, bandIndex));
 	}
 
 	/**
@@ -1165,8 +1189,7 @@ export class BandScaleState {
 			configuration: {
 				padding: this.#padding,
 				paddingInner: this.#paddingInner,
-				paddingOuter: this.#paddingOuter,
-				align: this.#align
+				paddingOuter: this.#paddingOuter
 			},
 
 			// GPU config
@@ -1196,10 +1219,7 @@ export class BandScaleState {
 			displayOrder: Array.from(this.#displayOrder),
 			// The transition. slotCurrent is mix(slotFrom, slotTo, t), and slotTo
 			// differs from slotTarget exactly for the ids on their way out.
-			...this.#slots.debugState(),
-
-			// GPU state
-			gpuState: this.gpuState
+			...this.#slots.debugState()
 		};
 	}
 }

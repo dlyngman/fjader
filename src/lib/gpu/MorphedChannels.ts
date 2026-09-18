@@ -401,10 +401,9 @@ export class MorphedChannels {
 			host.startTransition();
 			return;
 		}
-		this.#ownClock ??= new TransitionClock({ loop: this.#host });
-		// Read at start rather than construction: a facet grid registers its
+		// The charts are asked for, not captured: a facet grid registers its
 		// cells after the mark's first data has landed.
-		this.#ownClock._affectedChartsArray = this.#affectedCharts();
+		this.#ownClock ??= new TransitionClock({ loop: this.#host, charts: this.#affectedCharts });
 		this.#ownClock.restart();
 	}
 

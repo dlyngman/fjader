@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -93,6 +93,7 @@
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
+	const effectiveMarkType = faceted ? 'rects-faceted' : 'rects';
 
 	// --- Facet compile-time specialization ---
 	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
@@ -104,8 +105,16 @@
         return degen;
       }`;
 
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const host = new RendererHost({
+		markType: effectiveMarkType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: 'Rects'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let rectGeometryBuffer: GPUBuffer;
 
 	const rectVertexCount = 6;
@@ -231,8 +240,6 @@
 		}
 	];
 
-	const effectiveMarkType = faceted ? 'rects-faceted' : 'rects';
-
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
 	// The measure axis's two edges morph, as ONE write per data update, so one
@@ -353,50 +360,23 @@
 		passEncoder.draw(rectVertexCount, renderer.instanceCount);
 	}
 
-	async function initializeRects() {
-		try {
-			renderer = new BaseGPURenderer(
-				effectiveMarkType,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: rectsShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition: rectRendererDefinition
-			});
+			},
+			async ready(r) {
+				await initializeRectGeometry();
 
-			await initializeRectGeometry();
-
-			// Non-faceted: register with the single chart canvas
-			// Faceted: registration handled by reactive $effect above
-			if (!faceted) {
-				renderer.registerLayer(drawRects);
+				// Non-faceted: register with the single chart canvas.
+				// Faceted: registration handled by the reactive $effect above.
+				if (!faceted) r.registerLayer(drawRects);
 			}
-		} catch (error) {
-			console.error('Rects init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeRects();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	// Release retained renderer from a previous instance once this one has data
 	$effect(() => {

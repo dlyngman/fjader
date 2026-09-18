@@ -268,14 +268,14 @@ export class QueryEngine {
 	 *
 	 * The LIVE array — hold the reference, do not snapshot it. A second table
 	 * registering the same field appends to the dim afterwards and this array
-	 * grows in place (§9.4).
+	 * grows in place.
 	 */
 	identityValues(field: string): DimValue[] {
 		return this.#identity.values(field);
 	}
 
 	/**
-	 * The field's id <-> value bijection (§17.2). One live object owning both
+	 * The field's id <-> value bijection. One live object owning both
 	 * directions, so a holder cannot end up with a value array and a reverse map
 	 * that disagree. Prefer this over identityValues() anywhere the reverse
 	 * direction is needed; do not rebuild it locally.
@@ -286,7 +286,7 @@ export class QueryEngine {
 
 	/**
 	 * Reserve an id for a value present in no table — the synthetic "Other"
-	 * bucket from `topN({ includeOthers })` (§16.9). Call after ensureColumns.
+	 * bucket from `topN({ includeOthers })`. Call after ensureColumns.
 	 * Returns an existing id when a real category already carries the label.
 	 */
 	reserveSyntheticIdentity(field: string, label: string): Promise<number> {

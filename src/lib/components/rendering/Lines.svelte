@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
@@ -79,6 +79,8 @@
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
+	const baseMarkType = curve === 'linear' ? 'lines' : `lines-${curve}`;
+	const effectiveMarkType = faceted ? `${baseMarkType}-faceted` : baseMarkType;
 
 	// --- Facet compile-time specialization ---
 	// Lines uses a storage buffer (not a vertex attribute) for facet indices because
@@ -102,8 +104,16 @@
       return output;
     }`;
 
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const host = new RendererHost({
+		markType: effectiveMarkType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: 'Lines'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let quadGeometryBuffer: GPUBuffer;
 	const m4ComputeKey = `m4-${crypto.randomUUID()}`;
 
@@ -111,9 +121,6 @@
 	const resolution = getCurveResolution(curve);
 	const quadVertexCount = 6 * resolution + 6; // 6N segment + 6 circle
 	// Pipeline variant key includes curve type for separate shader compilation
-	const baseMarkType = curve === 'linear' ? 'lines' : `lines-${curve}`;
-	const effectiveMarkType = faceted ? `${baseMarkType}-faceted` : baseMarkType;
-
 	// Line shader: sub-segment quads + round join circles at data points.
 	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
 	// With linear (resolution=1): single quad per segment, identical to original.
@@ -540,67 +547,31 @@
 		}
 	}
 
-	async function initializeLines() {
-		try {
-			renderer = new BaseGPURenderer(
-				effectiveMarkType,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: linesShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition: lineRendererDefinition
-			});
+			},
+			async ready(r) {
+				await initializeGeometry();
 
-			await initializeGeometry();
+				// Non-faceted: register with the single chart canvas.
+				// Faceted: registration handled by the reactive $effect above.
+				if (!faceted) r.registerLayer(drawLines);
 
-			// Non-faceted: register with the single chart canvas
-			// Faceted: registration handled by reactive $effect above
-			if (!faceted) {
-				renderer.registerLayer(drawLines);
+				// Series and colour default to zeros until their data arrives.
+				if (!seriesData && xData) r.writeAttribute(BINDINGS.SERIES, new Float32Array(xData.length));
+				if (!colorValueData && xData)
+					r.writeAttribute(BINDINGS.COLOR, new Float32Array(xData.length));
+
+				// Tell M4 the vertex count for drawIndirect.
+				m4Decimator?.setVertexCount(quadVertexCount);
 			}
-
-			// Initialize series buffer with zeros if not provided
-			if (!seriesData && xData) {
-				const defaultSeries = new Float32Array(xData.length);
-				renderer.writeAttribute(BINDINGS.SERIES, defaultSeries);
-			}
-
-			// Initialize color buffer with zeros if not provided
-			if (!colorValueData && xData) {
-				const defaultColor = new Float32Array(xData.length);
-				renderer.writeAttribute(BINDINGS.COLOR, defaultColor);
-			}
-
-			// Tell M4 decimator the vertex count for drawIndirect
-			if (m4Decimator) {
-				m4Decimator.setVertexCount(quadVertexCount);
-			}
-		} catch (error) {
-			console.error('Lines init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeLines();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	// Release retained renderer from a previous instance once this one has data
 	$effect(() => {

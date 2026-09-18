@@ -128,7 +128,12 @@ export interface DerivedIntervalSpec {
 // =============================================================================
 
 /** A column name, aggregate shorthand ("count()"), or structured object. */
-export type FieldSpec = string | AggregateFieldSpec | BinFieldSpec | WindowFieldSpec | RawSqlFieldSpec;
+export type FieldSpec =
+	| string
+	| AggregateFieldSpec
+	| BinFieldSpec
+	| WindowFieldSpec
+	| RawSqlFieldSpec;
 
 export interface AggregateFieldSpec {
 	aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'median';
@@ -224,7 +229,6 @@ export interface BarXMarkSpec extends BaseMarkSpec {
 	padding?: number;
 	paddingInner?: number;
 	paddingOuter?: number;
-	align?: number;
 	inset?: number;
 	dx?: number;
 	dy?: number;
@@ -241,7 +245,6 @@ export interface BarYMarkSpec extends BaseMarkSpec {
 	padding?: number;
 	paddingInner?: number;
 	paddingOuter?: number;
-	align?: number;
 	inset?: number;
 	dx?: number;
 	dy?: number;
@@ -312,7 +315,6 @@ export interface RectMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	padding?: number;
 	paddingInner?: number;
 	paddingOuter?: number;
-	align?: number;
 	inset?: number;
 	dx?: number;
 	dy?: number;

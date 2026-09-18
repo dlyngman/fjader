@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -71,6 +71,13 @@
 	// Compile-time selection: does this rule have cross-axis extent?
 	// Determined once at mount, same pattern as Rects uses `faceted`
 	const hasExtent = !!y0Data;
+	const effectiveMarkType = faceted
+		? hasExtent
+			? 'ruleX-extent-faceted'
+			: 'ruleX-faceted'
+		: hasExtent
+			? 'ruleX-extent'
+			: 'ruleX';
 
 	// --- Renderer definition (compile-time) ---
 	const rendererDefinition = hasExtent
@@ -94,8 +101,16 @@
         return degen;
       }`;
 
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const host = new RendererHost({
+		markType: effectiveMarkType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: 'RuleX mark'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let lineGeometryBuffer: GPUBuffer;
 
 	const ruleXShaderCode = `
@@ -221,14 +236,6 @@
 		}
 	];
 
-	const effectiveMarkType = faceted
-		? hasExtent
-			? 'ruleX-extent-faceted'
-			: 'ruleX-faceted'
-		: hasExtent
-			? 'ruleX-extent'
-			: 'ruleX';
-
 	// --- DATA WRITING EFFECTS ---
 
 	$effect(() => {
@@ -322,49 +329,20 @@
 		passEncoder.draw(6, renderer.instanceCount);
 	}
 
-	async function initializeRule() {
-		try {
-			renderer = new BaseGPURenderer(
-				effectiveMarkType,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: ruleXShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition
-			});
-
-			await initializeLineGeometry();
-
-			if (!faceted) {
-				renderer.registerLayer(drawRules);
+			},
+			async ready(r) {
+				await initializeLineGeometry();
+				if (!faceted) r.registerLayer(drawRules);
 			}
-		} catch (error) {
-			console.error('RuleX mark renderer init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		if (!webGPUContext) return;
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeRule();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	// Release retained renderer from a previous instance once this one has data
 	$effect(() => {

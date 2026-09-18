@@ -19,6 +19,7 @@ import {
 	type SlotSource,
 	type IdentitySlotState
 } from './identity-slot-packing';
+import { frameUniformIsStale } from './frame-uniform-sync';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -61,6 +62,14 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
+	/**
+	 * What this chart's frame uniform was last written against: the scale
+	 * topology at the time, and the two scale ids. Compared per frame; see
+	 * #refreshStaleFrameUniforms.
+	 */
+	_uniformTopology: number;
+	_uniformXScaleId: string | null;
+	_uniformYScaleId: string | null;
 }
 
 interface LayerConfig {
@@ -330,6 +339,14 @@ export class GPUCoordinator {
 	// SCALE SSBO SYSTEM
 	// =========================================================================
 	#scaleIndexManager = new ScaleIndexManager();
+	/**
+	 * Bumped whenever scale indices are reassigned.
+	 *
+	 * A chart's frame uniform carries the INDEX of its scales, not their ids,
+	 * so a rebuild can move a chart's scale without touching the chart. One
+	 * integer compare per chart per frame is what makes noticing that free.
+	 */
+	#scaleTopology = 0;
 	#maxScaleSlots = 256;
 	#SSBO_SLOT_COUNT = 16;
 
@@ -415,7 +432,7 @@ export class GPUCoordinator {
 	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
 	// Size scale buffer (group 2, binding 4). UNIFORM, not storage — see
-	// SIZE_SCALE_BINDINGS for why, and §36.7 for what it buys.
+	// SIZE_SCALE_BINDINGS for why, and for what it buys.
 	#sizeConfigBuffer: GPUBuffer | null = null; // MAX_SIZE_SLOTS × 16 bytes = 1KB
 	#maxSizeSlots = MAX_SIZE_SLOTS;
 
@@ -650,7 +667,7 @@ export class GPUCoordinator {
 					// a domain change, which is what uniform buffers are for — and it
 					// returns a slot to the vertex stage's storage budget, which sits
 					// at the default 8 and has to fit a `from` and a `to` per animated
-					// value channel (§36.7).
+					// value channel.
 					//
 					// Still VERTEX-only, so this remains invisible to the compute
 					// pipelines that share this layout (M4Decimator) and continues not
@@ -1046,28 +1063,44 @@ export class GPUCoordinator {
 	#tPatch = new Float32Array(1);
 
 	/**
-	 * Rewrite the frame uniform of any faceted chart whose facet permutation
-	 * moved.
+	 * Rewrite the frame uniform of any chart whose inputs have moved under it.
 	 *
-	 * updateChartFrameUniforms is event-driven — mount, scale-set sync, a
-	 * pending queue — and none of those fire when a facet scale's displayOrder
-	 * changes. The scale is also absent from the registry by then (see
-	 * ChartConfig.facetScale), so nothing that walks registered scales can
-	 * notice either. Walking the charts is what is left, and it is cheap: one
-	 * property read and one compare per chart, and a uniform write only when a
-	 * permutation actually moved, which is a reorder rather than a frame.
+	 * The uniform holds derived state — a scale INDEX, a facet id — and both
+	 * change without anything touching the chart. `updateChartFrameUniforms` is
+	 * otherwise event-driven, so keeping it current means every writer of an
+	 * input remembering to call it, and the writers do not: a facet reorder
+	 * never did, and `setChartScaleMapping` did not either. The second one cost
+	 * a chart that rendered every mark through ANOTHER chart's scale — right
+	 * scale, right domain, right slot table, right axis, wrong pixels — because
+	 * its uniform kept the index it was given before its scales resolved, which
+	 * `updateChartFrameUniforms` reads as 0, the first scale on the page.
 	 *
-	 * Without it a cell keeps the value it was given at mount — when the facet
-	 * scale had no identity yet, so idAtSlot passed the CELL INDEX through.
-	 * That agrees with the id whenever dim order is display order, which is
-	 * every facet chart that does not set fxDomain.
+	 * Reconciled rather than pushed, which is what `#fillAllScales` already does
+	 * for scale params two lines below. Nothing has to remember, because there
+	 * is nothing to remember: the loop is the subscription and these integers
+	 * are the dirty bit.
+	 *
+	 * The steady state is three compares per chart and no lookups; a write
+	 * happens on a reorder or a remount, never on a frame. What counts as stale,
+	 * and why a rebuild counts even when the ids have not moved, is
+	 * `frameUniformIsStale`.
+	 *
+	 * This disappears with the scale index itself: the immediates work writes a
+	 * chart's resolved scale params straight into the pass, and an index that
+	 * does not exist cannot be stale.
 	 */
-	#refreshMovedFacetUniforms(): void {
+	#refreshStaleFrameUniforms(): void {
 		for (const chart of this.#registeredCharts.values()) {
-			const scale = chart.facetScale;
-			if (scale && scale._version !== chart._facetVersion) {
-				this.updateChartFrameUniforms(chart.chartId);
-			}
+			if (!frameUniformIsStale(chart, this.#scaleTopology)) continue;
+
+			// Recorded before the write, not after: updateChartFrameUniforms defers
+			// when the context is not configured yet, and re-running it on every
+			// frame until then would be a write per frame for a chart that is not
+			// even drawing. The pending queue replays it once it can.
+			chart._uniformTopology = this.#scaleTopology;
+			chart._uniformXScaleId = chart.xScaleId;
+			chart._uniformYScaleId = chart.yScaleId;
+			this.updateChartFrameUniforms(chart.chartId);
 		}
 	}
 
@@ -1258,7 +1291,7 @@ export class GPUCoordinator {
 		this.#updateIdentitySlots();
 		// After the pack, so a scale given a base this frame gets its t there.
 		this.#uploadAnimatingT();
-		this.#refreshMovedFacetUniforms();
+		this.#refreshStaleFrameUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
 		const dstOffset = slot * this.#slotByteSize!;
@@ -1643,6 +1676,7 @@ export class GPUCoordinator {
 		}
 
 		const count = this.#scaleIndexManager.rebuild(ids);
+		this.#scaleTopology++;
 
 		// Build flat array for hot loop
 		for (const scale of this.#scaleIdToInstance.values()) {
@@ -1943,6 +1977,11 @@ export class GPUCoordinator {
 			facetIndex: config.facetIndex ?? 0,
 			facetScale: config.facetScale ?? null,
 			_facetVersion: -1,
+			// -1 and null so the first reconcile always fires: a chart registered
+			// before its scales resolve has to be picked up by it.
+			_uniformTopology: -1,
+			_uniformXScaleId: null,
+			_uniformYScaleId: null,
 			visible: true,
 			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
@@ -2143,6 +2182,10 @@ export class GPUCoordinator {
 		chartConfig.xScaleId = xScaleId;
 		chartConfig.yScaleId = yScaleId;
 
+		// No uniform write here, deliberately. The index this mapping decides is
+		// reconciled per frame by #refreshStaleFrameUniforms, which compares the
+		// ids a chart holds against the ones its uniform was written for. Pushing
+		// it from every writer is what left this one behind.
 		if (changed) {
 			chartConfig.needsPlanRebuild = true;
 			this.invalidateChart(chartId);
@@ -2248,6 +2291,23 @@ export class GPUCoordinator {
 		const rangeMinY = 0; // Top of chart (screen coords)
 		const rangeMaxY = canvas.clientHeight * dpr;
 
+		// The fallbacks are a GUESS — whichever scale registered first and second
+		// — and the shader cannot tell a guess from an answer. That is how a chart
+		// came to render every mark through another chart's band layout and slot
+		// table while its own scale, domain, ticks and axis were all correct.
+		//
+		// Left in rather than removed, because removing changes nothing: the
+		// buffer is created without mappedAtCreation, so WebGPU zero-initialises
+		// it, and not writing an index reads as 0 exactly as writing one does.
+		// Refusing to DRAW is what would help, and that is a gate around a field
+		// with a known end date — immediates writes a chart's resolved scale
+		// params straight into the pass, and an index that does not exist cannot
+		// be guessed at.
+		//
+		// What makes it survivable meanwhile is #refreshStaleFrameUniforms: the
+		// only window left is between a mapping arriving and the next index
+		// rebuild, and that rebuild bumps the topology counter, which marks this
+		// chart stale again. A frame or two, not the rest of the session.
 		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId!) ?? 0;
 		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId!) ?? 1;
 
@@ -2343,6 +2403,79 @@ export class GPUCoordinator {
 		return {
 			remove: () => this.unregisterLayer(chartId, layerId)
 		};
+	}
+
+	/**
+	 * Drop a chart's cached render plan, so the next frame rebuilds it.
+	 *
+	 * The plan caches one pipeline per layer, read from the renderer when it was
+	 * built. A renderer that swaps its pipeline — recompiling for a scale type
+	 * that resolved after it started — is otherwise invisible here, and the
+	 * chart goes on drawing through the pipeline it cached.
+	 */
+	rebuildRenderPlan(chartId: string): void {
+		const chart = this.#registeredCharts.get(chartId);
+		if (!chart) return;
+		chart.needsPlanRebuild = true;
+		this.invalidateChart(chartId);
+	}
+
+	/**
+	 * Which scale each chart resolves its axes through, and the SSBO index the
+	 * shader reads for it.
+	 *
+	 * A mark's shader reads `scaleParams[frameUniforms.xScaleIndex]`, so a chart
+	 * pointing at the wrong scale renders through another chart's band layout
+	 * and slot table — every id resolving to a slot it does not own. Nothing on
+	 * the CPU side shows that: the scale, its domain and its axis are all
+	 * correct, and only the pixels are wrong. This is the join between them.
+	 */
+	debugChartScales(): Array<Record<string, unknown>> {
+		const out: Array<Record<string, unknown>> = [];
+		for (const chart of this.#registeredCharts.values()) {
+			out.push({
+				chartId: chart.chartId,
+				xScaleId: chart.xScaleId,
+				yScaleId: chart.yScaleId,
+				xScaleIndex: this.#scaleIndexManager.getIndex(chart.xScaleId!) ?? null,
+				yScaleIndex: this.#scaleIndexManager.getIndex(chart.yScaleId!) ?? null,
+				layers: [...chart.layers.values()].map((l) => l.markType).join(', ')
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * What is actually in `scaleParams`, slot by slot, as the shader reads it.
+	 *
+	 * The registry's inventory is not this list. The coordinator holds scale
+	 * INSTANCES, and one the registry has dropped — destroyed on a refcount
+	 * reaching zero while a component still held it — stays here and keeps being
+	 * written every frame. So a chart can point at an index whose contents
+	 * belong to an object no inventory of the registry can show.
+	 */
+	debugScaleParams(): Array<Record<string, unknown>> {
+		return this.#scaleArray.map((entry) => {
+			const scale = entry.instance as unknown as {
+				id: string;
+				name?: string;
+				type?: string;
+				sourceField?: string;
+				isDestroyed?: boolean;
+				getConfig?: () => { categoryCount: number };
+				slots?: SlotSource;
+			};
+			return {
+				index: entry.index,
+				id: scale.id,
+				field: scale.sourceField ?? scale.name,
+				type: scale.type,
+				destroyed: scale.isDestroyed ?? false,
+				categoryCount: scale.getConfig?.().categoryCount,
+				slotBase: this.#identitySlots?.offsets.get(scale.id),
+				slots: scale.slots ? Array.from(scale.slots.to).join(', ') : null
+			};
+		});
 	}
 
 	unregisterLayer(chartId: string, layerId: string): void {

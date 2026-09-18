@@ -29,7 +29,7 @@ function quote(identifier: string): string {
  * The identity key and value SQL for a channel, or null when it cannot be dimmed.
  *
  * A plain column name becomes a quoted identifier. A fixed SQL expression is
- * keyed on its own text and emitted verbatim (§16 / #197) — the two are one code
+ * keyed on its own text and emitted verbatim (#197) — the two are one code
  * path, differing only in what is substituted for the value expression.
  *
  * Refused, and why each is refused rather than merely unsupported:
@@ -50,8 +50,9 @@ export function identityKeyFor(field: unknown): IdentityField | null {
 
 	// bin() first, and on its own line. An AutoBinNode is a plain class rather
 	// than an ExprNode, so it also fails isNode() below — which made this check
-	// unreachable in the form it was extracted from, and meant the rule §16.5
-	// cares about most was being enforced by accident. Checked first, it is the
+	// unreachable in the form it was extracted from, and meant the rule this
+	// exists for — a binned axis gets no identity, because its values move with
+	// the viewport — was being enforced by accident. Checked first, it is the
 	// clause that actually fires, and it keeps firing if AutoBinNode ever becomes
 	// a real node.
 	if (isBinExpression(field)) return null;

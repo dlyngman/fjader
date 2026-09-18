@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 
@@ -65,8 +65,16 @@
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const host = new RendererHost({
+		markType: `grid-line-${axis}`,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: `Grid line (${axis})`
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let lineGeometryBuffer: GPUBuffer;
 
 	/**
@@ -237,51 +245,23 @@ ${placement}
 		passEncoder.draw(6, renderer.instanceCount);
 	}
 
-	async function initializeRule() {
-		try {
-			renderer = new BaseGPURenderer(
-				`grid-line-${axis}`,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: shaderFor(axis),
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition: rendererDefinitionFor(axis)
-			});
+			},
+			async ready(r) {
+				await initializeLineGeometry();
 
-			await initializeLineGeometry();
-
-			// Non-faceted: register with the single chart canvas
-			// Faceted: registration handled by reactive $effect above
-			if (!faceted) {
-				renderer.registerLayer(drawRules);
+				// Non-faceted: register with the single chart canvas.
+				// Faceted: registration handled by the reactive $effect above.
+				if (!faceted) r.registerLayer(drawRules);
 			}
-		} catch (error) {
-			console.error(`Grid line (${axis}) renderer init failed:`, error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		if (!webGPUContext) return;
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeRule();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	onDestroy(() => {
 		if (lineGeometryBuffer) lineGeometryBuffer.destroy();

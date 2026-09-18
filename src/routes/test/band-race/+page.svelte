@@ -204,13 +204,15 @@
 		AxisBottom,
 		MarginLabel,
 		WebGPUCanvas,
-		BarMarkY
+		BarMarkY,
+		DotsMark,
+		TextMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import { topN } from '$lib/transforms';
 	import { count } from '@uwdata/mosaic-sql';
 
-	const { queryEngine, filterGroups, scaleRegistry } = initDivePlot();
+	const { queryEngine, filterGroups, scaleRegistry, gpuCoordinator } = initDivePlot();
 
 	// Capture every SQL string the engine runs, so the query the APP sends can be
 	// compared against the one the integration test asserts. Those are assembled
@@ -296,8 +298,28 @@
 		out._registry = allScales().map((s) => `${s.bucket} | ${s.key} | name=${s.name}`);
 		return out;
 	}
+	// Which SCALE each chart's shaders resolve through, joined to the scale's
+	// field so the answer is readable.
+	//
+	// The CPU half of a band axis can be entirely correct — right domain, right
+	// slot table, right ticks — while a mark renders through a DIFFERENT
+	// scale's params, because the shader reads scaleParams[xScaleIndex] and that
+	// index belongs to the chart, not to the scale the axis drew. Nothing else
+	// on this page can see that mismatch.
+	function chartScales() {
+		const byId = new Map(allScales().map((s) => [s.scale.id, s.sourceField ?? s.name]));
+		return gpuCoordinator.debugChartScales().map((c) => ({
+			chart: c.chartId,
+			marks: c.layers,
+			x: `${byId.get(c.xScaleId) ?? c.xScaleId} @${c.xScaleIndex}`,
+			y: `${byId.get(c.yScaleId) ?? c.yScaleId} @${c.yScaleIndex}`
+		}));
+	}
+
 	if (typeof window !== 'undefined') {
 		window.bandOrder = bandOrder;
+		window.chartScales = chartScales;
+		window.scaleParams = () => gpuCoordinator.debugScaleParams();
 		window.allScales = allScales;
 		window.lastSQL = lastSQL;
 		window.scaleRegistry = scaleRegistry;
@@ -475,6 +497,26 @@
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
+
+						<!--
+							A label per bar, on the BAND axis, so a reorder can be watched for the
+							one thing an SVG label placed through the d3 scale could not do: travel.
+							That scale carries the SETTLED domain, so every label used to jump to its
+							final column on the frame the reorder landed, while its bar was still
+							sliding. A label that leads or lags its bar here means positioning has
+							gone back through the domain.
+						-->
+						{#snippet foreground()}
+							<TextMark
+								table="race_reorder"
+								x="cat_reorder"
+								y={count()}
+								text="cat_reorder"
+								sort={sortConfig}
+								dy={-6}
+								fontSize={10}
+							/>
+						{/snippet}
 					</ChartContainer>
 				</div>
 			</section>
@@ -513,6 +555,27 @@
 									/>
 								{/snippet}
 							</WebGPUCanvas>
+						{/snippet}
+
+						<!--
+							The same labels as chart 1, but over topN, where the dense join gives a
+							ROW to every category and not only the three on screen. So this is where
+							the ids the axis is NOT displaying show up: their slot is -1, the band
+							layout turns that into a real coordinate one step before the range, and
+							without the slot test in TextMark every one of them stacks up off the
+							left edge. Three labels, on three bars, at every step.
+						-->
+						{#snippet foreground()}
+							<TextMark
+								table="race_churn"
+								x="cat_churn"
+								y={count()}
+								text="cat_churn"
+								selection="band-race"
+								transforms={[topN(3)]}
+								dy={-6}
+								fontSize={10}
+							/>
 						{/snippet}
 					</ChartContainer>
 				</div>
@@ -584,6 +647,66 @@
 										x="cat_count"
 										y={count()}
 										transforms={[topN(() => topCount)]}
+										tip={['x', 'y']}
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</section>
+
+			<section>
+				<h2>5. Chart 2 as dots — does a non-Rects mark half-animate?</h2>
+				<p>
+					<code>dense()</code> does not know what mark it is, so any aggregating mark with one
+					dimmed positional axis gets dense rows, an outermost <code>ORDER BY</code> and a non-null
+					<code>alignedBand</code> — but only <code>Rects</code> consumes it. Of the band-capable
+					marks,
+					<code>RectMark</code> opts out deliberately and <code>TextMark</code> places itself in SVG
+					through the slot table, which leaves <code>DotsMark</code> as the only one that gets the row
+					guarantee and does nothing with it.
+				</p>
+				<p>
+					<strong>It has to be chart 2's driver, not chart 1's.</strong> Chart 1 holds every count
+					fixed (A=30 B=10 C=50 D=20 E=40) and only permutes them, so a mark that does not morph its
+					values writes the same numbers on every step and is indistinguishable from one that does.
+					This chart sat on that driver first and looked perfect, which is the trap: a pure reorder
+					cannot show a value that fails to travel. The churn steps move the values <em>and</em> the
+					ranking on the same update, which is the only shape where not morphing is visible.
+				</p>
+				<p>
+					<strong>What to look for.</strong> Against chart 2, which is this mark's twin and shares
+					these buttons: whether a dot
+					<strong>slides sideways smoothly while its height jumps</strong>. The band channel carries
+					ids and resolves through the slot table in the shader, so x travels whatever the mark
+					does; y is written whole on the frame the query lands. Step 2 → 3 is the sharpest: a leave
+					and a move on the same frame.
+				</p>
+				<div class="controls">
+					{#each CHURN_STEPS as n (n)}
+						<button class:active={churnStep === n} onclick={() => setChurnStep(n)}>step {n}</button>
+					{/each}
+				</div>
+				<div class="chart">
+					<ChartContainer xLabel="category" yLabel="count">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<DotsMark
+										table="race_churn"
+										x="cat_churn"
+										y={count()}
+										selection="band-race"
+										transforms={[topN(3)]}
+										r={6}
 										tip={['x', 'y']}
 									/>
 								{/snippet}

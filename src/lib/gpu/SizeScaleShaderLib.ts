@@ -33,8 +33,7 @@ export const MAX_SIZE_SLOTS = 64;
  * What it buys: the vertex stage sits at the default
  * maxStorageBuffersPerShaderStage of 8 (six mark channels, scale params, and
  * this), and animating a value channel needs a `from` and a `to` where there is
- * now one buffer. Uniform buffers are nowhere near their own default of 12. See
- * review_band_category_index_architecture.md §36.7.
+ * now one buffer. Uniform buffers are nowhere near their own default of 12.
  *
  * Dynamic indexing — `sizeConfigs[scaleIndex]` — is permitted on uniform arrays
  * in WGSL, and the shared slot table already relies on the same thing.

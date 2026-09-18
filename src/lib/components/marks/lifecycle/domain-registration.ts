@@ -268,7 +268,7 @@ export function registerDataDerivedDomains(
 			// back. Raw values only for a scale with no identity, which since
 			// `c55e719` means a scale whose dim has not arrived yet or is empty,
 			// not a kind of axis: an expression-backed axis gets a dim like any
-			// column. See §29.8 — this fork is the transient, not a second path.
+			// column. This fork is the transient, not a second path.
 			const encoded = !!bandScale?.hasIdentity;
 			// Ranked when the transform published a ranking, first-appearance order
 			// otherwise. This is where a topN axis stops being ordered by dim id:

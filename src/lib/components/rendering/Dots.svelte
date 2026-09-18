@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -47,6 +47,18 @@
 		sizeMode?: number;
 		sizeScaleIndex?: number;
 		markId?: string;
+		/**
+		 * The band axis, when this mark's rows are one per category in category
+		 * order and may therefore morph. null to morph nothing.
+		 *
+		 * The OTHER axis's channel morphs. The band's never does: it carries a
+		 * category id that the shader resolves through the slot table, and
+		 * interpolating an identity produces a fraction that resolves to some
+		 * other category. That position already animates, which is exactly what
+		 * made the gap visible here — a dot slid to its new rank while its value
+		 * landed whole.
+		 */
+		bandAxis?: 'x' | 'y' | null;
 	}
 
 	let {
@@ -63,17 +75,29 @@
 		constantColor = DEFAULT_STROKE_COLOR,
 		sizeMode = 0,
 		sizeScaleIndex = 0,
-		markId = ''
+		markId = '',
+		bandAxis = null
 	}: Props = $props();
+
+	const morphX = $derived(bandAxis === 'y');
+	const morphY = $derived(bandAxis === 'x');
 
 	const chartContext = getContext<ChartContext>('chart');
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 
 	const faceted = !!chartContext.fx;
-
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const effectiveMarkType = faceted ? 'dots-faceted' : 'dots';
+	const host = new RendererHost({
+		markType: effectiveMarkType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: 'Dots'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let quadGeometryBuffer: GPUBuffer;
 
 	const quadVertexCount = 6;
@@ -214,15 +238,25 @@
 		}
 	];
 
-	const effectiveMarkType = faceted ? 'dots-faceted' : 'dots';
-
 	// --- WRITING EFFECTS ---
 
+	// The measure axis's single channel morphs, as ONE write per data update,
+	// so one update starts one transition. The band's ids go with it: they are
+	// how a row set that is not the one being animated gets noticed and snapped.
+	//
+	// Radius is deliberately left static. It is a quantity, so it could morph,
+	// but whether a dot should resize on the same clock as it travels is a
+	// design question rather than a consequence of this one.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData);
+		if (!renderer?.resourcesCreated || !bandAxis) return;
+		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]]);
+		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]]);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData);
+		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X, xData);
+	});
+	$effect(() => {
+		if (renderer?.resourcesCreated && !morphY) renderer.writeAttribute(BINDINGS.Y, yData);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.RADIUS, radiusData);
@@ -311,50 +345,22 @@
 		passEncoder.draw(quadVertexCount, renderer.instanceCount);
 	}
 
-	async function initializeDots() {
-		try {
-			renderer = new BaseGPURenderer(
-				effectiveMarkType,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: dotsShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition: dotRendererDefinition
-			});
-
-			await initializeDotsGeometry();
-
-			// Non-faceted: register with the single chart canvas
-			// Faceted: registration handled by reactive $effect above
-			if (!faceted) {
-				renderer.registerLayer(drawDots);
+			},
+			async ready(r) {
+				await initializeDotsGeometry();
+				// Non-faceted: register with the single chart canvas.
+				// Faceted: registration handled by the reactive $effect above.
+				if (!faceted) r.registerLayer(drawDots);
 			}
-		} catch (error) {
-			console.error('Dots init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeDots();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	// Clean up retained renderer from a previous instance once this renderer has data
 	$effect(() => {

@@ -2,13 +2,13 @@ import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost } from '$lib/gpu/MorphedChannels';
 
-interface RendererOptions {
+export interface RendererOptions {
 	zIndex?: number;
 	xScaleType?: string;
 	yScaleType?: string;
 }
 
-interface InitConfig {
+export interface InitConfig {
 	dataBindingConfig: DataBindingEntry[];
 	markShaderCode: string;
 	vertexBufferLayout: GPUVertexBufferLayout[];
@@ -64,6 +64,21 @@ export class BaseGPURenderer {
 	#zIndex: number;
 	#xScaleType: string;
 	#yScaleType: string;
+	/** The last config passed to `initialize`, so it can be re-run. */
+	#initConfig: InitConfig | null = null;
+	/**
+	 * The scale types the current pipeline was COMPILED against.
+	 *
+	 * The shader is specialised per scale type — `scaleBand` resolves an id
+	 * through the slot table, `scaleLinear` does not — so the pipeline depends
+	 * on a value that is not known when a chart starts. A mark whose axis type
+	 * is inferred from the table schema registers nothing until that arrives,
+	 * and a renderer built inside that window compiled against the `linear`
+	 * fallback and stayed there: every row drawn, none discarded, positions
+	 * read as numbers instead of resolved as identities. Recorded so it can be
+	 * compared and rebuilt rather than assumed to have been right.
+	 */
+	#builtScaleTypes: { x: string; y: string } | null = null;
 
 	// Facet support: one renderer registered across multiple facet cell charts
 	#facetLayerControls: { chartId: string; control: LayerRegistrationResult }[] = [];
@@ -118,13 +133,11 @@ export class BaseGPURenderer {
 			this.#device = this.#webGPUContext.getDevice();
 			if (!this.#device) throw new Error('No WebGPU device available');
 
+			const scaleTypes = this.#scaleTypes();
 			const result = await this.#gpuCoordinator.acquirePipeline(
 				this.#rendererId,
 				this.#markType,
-				{
-					x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
-					y: this.#chartContext.scaleTypes?.y || this.#yScaleType
-				},
+				scaleTypes,
 				markShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
@@ -138,17 +151,77 @@ export class BaseGPURenderer {
 
 			this.#pipeline = result.pipeline;
 			this.#perDataLayout = result.dataLayout;
+			this.#initConfig = config;
+			this.#builtScaleTypes = scaleTypes;
 			this.#resourcesCreated = true;
 
 			// Initial empty bind group
 			this.#rebuildBindGroup();
 
-			console.log(`${this.#markType} renderer initialized`);
+			// The specialisation is named because it is otherwise invisible: a mark
+			// compiled against the wrong axis logic renders, silently and wrongly.
+			console.log(`${this.#markType} renderer initialized (x=${scaleTypes.x}, y=${scaleTypes.y})`);
 		} catch (error) {
 			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
 				console.error(`${this.#markType} initialization failed:`, error);
 				throw error;
 			}
+		}
+	}
+
+	/**
+	 * The specialisation this mark's shader should be compiled for.
+	 *
+	 * The chart's types win; the constructor's are the fallback for an axis the
+	 * chart names none for, which is how ParallelLines pins its own y. Both fall
+	 * back to `linear`, and that last step is a GUESS — see #builtScaleTypes for
+	 * what it costs — which is why `syncScaleTypes` exists to correct it rather
+	 * than the guess being made once and trusted.
+	 */
+	#scaleTypes(): { x: string; y: string } {
+		return {
+			x: this.#chartContext.scaleTypes?.x || this.#xScaleType,
+			y: this.#chartContext.scaleTypes?.y || this.#yScaleType
+		};
+	}
+
+	/**
+	 * Rebuild the pipeline if the chart's scale types have moved away from the
+	 * ones it was compiled against. A no-op otherwise, and cheap: two string
+	 * comparisons.
+	 *
+	 * Called whenever the chart's types change. Two cases reach it — an axis
+	 * whose type resolved after this renderer was built (a mark that infers its
+	 * scale from the table schema), and one that genuinely changes later,
+	 * when a mark joins the chart and MANDATEs a different type.
+	 *
+	 * The data survives: `initialize` releases the coordinator's pipeline and
+	 * shader references but not the buffers this renderer owns, and rebuilds the
+	 * bind group from them. `#resourcesCreated` goes false and back to true,
+	 * which re-runs every component effect gated on it, so anything that did
+	 * need rewriting is rewritten.
+	 *
+	 * The chart's render plan caches a pipeline per layer, so it has to be
+	 * rebuilt too — otherwise the swap is invisible and the chart keeps drawing
+	 * through the old one.
+	 */
+	async syncScaleTypes(): Promise<void> {
+		const config = this.#initConfig;
+		const built = this.#builtScaleTypes;
+		if (!config || !built || this.#isDestroyed) return;
+
+		const want = this.#scaleTypes();
+		if (want.x === built.x && want.y === built.y) return;
+
+		console.warn(
+			`[${this.#markType}] rebuilding pipeline: the chart's scales moved from ` +
+				`(${built.x}, ${built.y}) to (${want.x}, ${want.y}) after this mark compiled ` +
+				`against them. Anything drawn in between used the wrong axis logic.`
+		);
+		await this.initialize(config);
+		this.#gpuCoordinator.rebuildRenderPlan(this.#chartContext.chartId);
+		for (const { chartId } of this.#facetLayerControls) {
+			this.#gpuCoordinator.rebuildRenderPlan(chartId);
 		}
 	}
 

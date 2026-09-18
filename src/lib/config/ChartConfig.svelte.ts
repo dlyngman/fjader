@@ -63,7 +63,6 @@ export interface MarkEntry {
 	padding?: number;
 	paddingInner?: number;
 	paddingOuter?: number;
-	align?: number;
 	inset?: number;
 	dx?: number;
 	dy?: number;
