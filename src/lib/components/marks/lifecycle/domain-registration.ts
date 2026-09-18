@@ -20,7 +20,7 @@ import {
 	extractCategoriesFromData,
 	extractIdsRankedFromData
 } from './domain-computation';
-import { TOPN_RANK_COLUMN } from '$lib/transforms';
+import { RANK_COLUMN } from '$lib/transforms';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -156,8 +156,8 @@ export function setInitialContinuousDomains(
 
 /**
  * Register domains from query result data for channels that need data-derived domains.
- * Handles continuous scales (linear, time, log, symlog) and band scales with
- * category-reducing transforms (topN).
+ * Handles continuous scales (linear, time, log, symlog) and band scales whose
+ * membership or order the data decides (topN, a ranking from `sort`).
  *
  * Called from Effect 7 on each data update. Uses positional args to avoid
  * object allocation on the crossfilter hot path.
@@ -172,7 +172,7 @@ export function registerDataDerivedDomains(
 	actualYScaleType: string,
 	xScaleState: ContinuousScaleState | null,
 	yScaleState: ContinuousScaleState | null,
-	hasCategoryReducingTransforms: boolean,
+	bandDomainFromData: boolean,
 	xBandScaleState: BandScaleState | null,
 	yBandScaleState: BandScaleState | null,
 	markId: string,
@@ -183,8 +183,14 @@ export function registerDataDerivedDomains(
 		return { dataDerivedDomainsSet: false, skipDomainUpdateForAxis };
 	}
 
-	// Skip if no channels need data-derived domains
-	if (channelsNeedingDataDomain.size === 0 && additionalChannels.length === 0) {
+	// Skip if no channels need data-derived domains — unless the band axis is
+	// one of them. A raw sorted mark has no aggregate to size a scale by and
+	// still takes its band order from the rank column below.
+	if (
+		channelsNeedingDataDomain.size === 0 &&
+		additionalChannels.length === 0 &&
+		!bandDomainFromData
+	) {
 		return { dataDerivedDomainsSet: true, skipDomainUpdateForAxis };
 	}
 
@@ -254,9 +260,11 @@ export function registerDataDerivedDomains(
 		}
 	}
 
-	// Band scale domain from post-transform data (for topN and other category-reducing transforms).
-	// These marks skip fetchCategoricalDomains for the band axis and populate domain here.
-	if (hasCategoryReducingTransforms) {
+	// Band scale domain from the query result, for a mark whose axis is decided
+	// by its data: topN decides membership, and a ranking transform decides
+	// order. Such a mark skips the dim registration in fetchCategoricalDomains
+	// and registers here, on every result.
+	if (bandDomainFromData) {
 		for (const axis of ['x', 'y'] as const) {
 			const scaleType = axis === 'x' ? actualXScaleType : actualYScaleType;
 			if (scaleType !== 'band' && scaleType !== 'point') continue;
@@ -270,25 +278,31 @@ export function registerDataDerivedDomains(
 			// not a kind of axis: an expression-backed axis gets a dim like any
 			// column. This fork is the transient, not a second path.
 			const encoded = !!bandScale?.hasIdentity;
-			// Ranked when the transform published a ranking, first-appearance order
-			// otherwise. This is where a topN axis stops being ordered by dim id:
-			// the rank arrives as a COLUMN rather than as row order, because a bar
-			// mark stacks by default and the window that stacking adds
-			// re-partitions by the band column, discarding any order the ranked
-			// query had. See TOPN_RANK_COLUMN.
+			// Ranked when a transform published a ranking, first-appearance order
+			// otherwise. The rank arrives as a COLUMN rather than as row order,
+			// because a bar mark stacks by default and the window that stacking
+			// adds re-partitions by the band column, discarding any order the
+			// ranked query had. See RANK_COLUMN.
+			const ranked = encoded && data.getColumn(RANK_COLUMN) != null;
 			const categories: (string | number)[] = encoded
-				? extractIdsRankedFromData(data, axis, TOPN_RANK_COLUMN)
+				? extractIdsRankedFromData(data, axis, RANK_COLUMN)
 				: extractCategoriesFromData(data, axis);
+			// A y band axis puts slot 0 at the bottom, and a ranking is read from
+			// the top. Reversed here, once, for every ranked axis — topN's and the
+			// sort's alike — rather than by whichever transform produced the rank.
+			if (ranked && axis === 'y') categories.reverse();
 			if (bandScale?.addMark && categories.length > 0) {
-				// Don't pass { sorted: true } — the data row order is not necessarily
-				// the desired sort order (e.g. _orderConfig adds ORDER BY series, dim).
-				// If a sort sidecar ran (from a sibling mark sharing this scale),
-				// its #sortOrder is already set and should not be overwritten.
+				// `sorted` says this list is a ranking the axis should prefer over
+				// first-appearance order from other marks on the same scale. Without
+				// a rank column the data's row order is not an opinion about order
+				// (the assembler orders by alignment, then series), so it is not
+				// claimed as one — and a mark whose sort was removed thereby
+				// withdraws the ranking it registered before.
 				//
 				// `encoded` because this is the ONE caller already in id space: the
 				// channel carries dim ids. The scale cannot tell that by looking —
 				// on a numeric band column a source value is a number too.
-				bandScale.addMark(categories, markId, { encoded });
+				bandScale.addMark(categories, markId, { encoded, sorted: ranked });
 				bandScale.updateDomainFromExtents();
 			}
 		}

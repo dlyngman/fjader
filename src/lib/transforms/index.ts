@@ -14,6 +14,7 @@ import type {
 	JsTransform,
 	Transform,
 	MarkConfig,
+	NormalizedSortConfig,
 	ScaleMap
 } from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
@@ -175,7 +176,10 @@ function resolveTopNColumns(
 }
 
 /**
- * The column topN uses to tell the band axis what its ranking was.
+ * The column a ranking transform uses to tell the band axis what its ranking
+ * was: topN's, and the `sort` prop's through `rank()`. One column, so the axis
+ * has one reader whichever transform ranked; when both run, `rank()` runs last
+ * and its order wins while topN's membership stands.
  *
  * Display order is a property of the DATA, not of the order rows arrive in.
  * Row order is not preserved through a wrapping subquery, and it is also
@@ -187,7 +191,7 @@ function resolveTopNColumns(
  * `__dplot_`-prefixed so #writeTooltipTable's existing filter hides it, like
  * the identity index columns in the same result.
  */
-export const TOPN_RANK_COLUMN = '__dplot_topn_rank';
+export const RANK_COLUMN = '__dplot_rank';
 
 /**
  * Give every category in the dim a row, at zero past the cutoff.
@@ -269,7 +273,7 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 	//
 	// It cannot be left to the loop above either: that coalesces to 0, and 0 is
 	// the BEST rank, so every padded row would sort to the front.
-	if (aliases.includes(TOPN_RANK_COLUMN)) {
+	if (aliases.includes(RANK_COLUMN)) {
 		// NaN, not NULL and not 0, for a padded row — "returned but not displayed".
 		//
 		// This is the ONLY thing that keeps a padded row off a topN axis: past the
@@ -279,8 +283,8 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 		// NULL to NaN: DataAccessor's zero-copy path requires nullCount == 0, and a
 		// nullable column would arrive with whatever its values buffer holds —
 		// usually 0, the best rank.
-		select[TOPN_RANK_COLUMN] = sqlTag`COALESCE(CAST(a.${column(
-			TOPN_RANK_COLUMN
+		select[RANK_COLUMN] = sqlTag`COALESCE(CAST(a.${column(
+			RANK_COLUMN
 		)} AS REAL), 'NaN'::REAL)` as ExprNode;
 	}
 
@@ -445,6 +449,127 @@ export function withDenseCategories(transforms: Transform[], enabled = true): Tr
 	return [...transforms.slice(0, stackAt), d, ...transforms.slice(stackAt)];
 }
 
+// -----------------------------------------------------------------------------
+// rank — order a band axis by a measure, published as a column
+// -----------------------------------------------------------------------------
+
+/**
+ * Rank every category of a band axis by a measure, in the query that draws it.
+ *
+ * This is what a mark's `sort` prop becomes. It used to be a sidecar: a second
+ * query against the unfiltered base table, whose result was handed to the
+ * scale as a preferred order. That ranked the whole table while the chart
+ * showed a filtered one — a racing bar chart ordered by all-time totals rather
+ * than by the step on screen — and it was a second route for display order to
+ * reach the axis, beside the one topN already used: a rank column in the
+ * result, read by the axis as a value. This is that route, for `sort`.
+ *
+ * The measure is aggregated per category first, so a category gets one rank
+ * however many rows it has. SUM over a grouped query, because a series splits a
+ * category across rows and its total is what should rank it. MIN or MAX over an
+ * ungrouped one, because those rows are raw values and the extreme is what an
+ * ORDER BY would have put first. Ties break on the band id, so the order is
+ * deterministic.
+ *
+ * Runs LAST, after `dense()` and any stack. A padded row is a real category at
+ * zero and belongs on a sorted axis exactly as on an unsorted one, so it is
+ * ranked with the rest. When topN has already ranked and `dense()` has marked
+ * the rows past its cutoff NaN, those stay NaN: rows are partitioned by whether
+ * they are displayed and only the displayed partition is re-ranked, so
+ * membership stays topN's and order becomes the sort's. An Other bucket ranks
+ * last whatever its total; it is a remainder, not a category.
+ *
+ * `sort` may be a getter, read when the query is assembled, so changing it
+ * re-queries instead of rebuilding the mark — the contract `topN(() => k)` set.
+ * With no sort, or on an axis that carries no identity (a continuous x on a
+ * line, or an axis whose dim has not arrived), the query passes through
+ * untouched.
+ */
+export function rank(sort: NormalizedSortConfig | (() => NormalizedSortConfig)): SqlTransform {
+	const current = typeof sort === 'function' ? sort : () => sort;
+	return {
+		stage: 'sql',
+		type: 'rank',
+		// A getter, so reading it from a reactive context tracks the sort.
+		get spec() {
+			const s = current();
+			return s
+				? { transform: 'rank', axis: s.axis, by: s.channel, direction: s.direction }
+				: { transform: 'rank' };
+		},
+		apply(query: SelectQuery, config?: MarkConfig) {
+			const s = current();
+			if (!s) return query;
+			const aliases = getSelectAliases(query);
+			const band = s.axis;
+			// Only a band axis with identity has categories to rank. Before the
+			// dim arrives the channel carries raw values, and a continuous axis
+			// carries no categories at all; both pass through.
+			if (!aliases.includes(band) || !config?.identity?.[band]?.positional) return query;
+			// The sort channel resolved the way the mark lifecycle resolves an
+			// axis: a point mark has y, an extent mark y2 or y1.
+			const by = [s.channel, `${s.channel}2`, `${s.channel}1`].find((a) => aliases.includes(a));
+			if (!by) return query;
+
+			const bandCol = column(band);
+			const grouped = !!config.groupKeys;
+			const perCategory = grouped
+				? sqlTag`SUM(${column(by)}) OVER (PARTITION BY ${bandCol})`
+				: s.direction === 'desc'
+					? sqlTag`MAX(${column(by)}) OVER (PARTITION BY ${bandCol})`
+					: sqlTag`MIN(${column(by)}) OVER (PARTITION BY ${bandCol})`;
+			const totals = Query.from({ __rank_base: query }).select({
+				...passthroughSelect(aliases),
+				__dplot_rank_measure: perCategory as ExprNode
+			});
+
+			const measure = column('__dplot_rank_measure');
+			const otherId = config.identity[band].otherId;
+			const order = [
+				// Other last, whatever it sums to.
+				...(otherId != null ? [sqlTag`(${bandCol} = ${otherId}) ASC`] : []),
+				s.direction === 'desc' ? sqlTag`${measure} DESC` : sqlTag`${measure} ASC`,
+				sqlTag`${bandCol} ASC`
+			];
+			const orderBy = rawSql(order.map((o) => String(o)).join(', '));
+
+			// A rank already in the result is topN's, and a NaN there is a row
+			// dense() padded past the cutoff: returned so its bar can shrink out,
+			// never displayed. That stays NaN, and the displayed rows are ranked
+			// among themselves.
+			const prior = aliases.includes(RANK_COLUMN) ? column(RANK_COLUMN) : null;
+			const ranked = prior
+				? sqlTag`CASE WHEN isnan(CAST(${prior} AS REAL)) THEN 'NaN'::REAL ELSE CAST(DENSE_RANK() OVER (PARTITION BY isnan(CAST(${prior} AS REAL)) ORDER BY ${orderBy}) AS REAL) END`
+				: sqlTag`CAST(DENSE_RANK() OVER (ORDER BY ${orderBy}) AS REAL)`;
+
+			return Query.from({ __rank_measured: totals }).select({
+				...passthroughSelect(aliases),
+				[RANK_COLUMN]: ranked as ExprNode
+			});
+		},
+		describe() {
+			const s = current();
+			return s ? `Sort ${s.axis} by ${s.channel} ${s.direction}` : 'Sort (none)';
+		}
+	};
+}
+
+/**
+ * Give a mark's `sort` prop its transform. Placed last among the SQL
+ * transforms — after topN, `dense()` and a SQL stack, whose output it ranks —
+ * and ahead of any JS transform, which the staging rule requires.
+ */
+export function withRanking(
+	transforms: Transform[],
+	sort: NormalizedSortConfig | (() => NormalizedSortConfig)
+): Transform[] {
+	if (transforms.some((t) => t.type === 'rank')) return transforms;
+	const r = rank(sort);
+	const jsAt = transforms.findIndex((t) => t.stage === 'js');
+	if (jsAt === -1) return [...transforms, r];
+	return [...transforms.slice(0, jsAt), r, ...transforms.slice(jsAt)];
+}
+
 /** A bare table name, quoted. The dim name comes from the engine, not a user. */
 function quoteTable(name: string): string {
 	return `"${name.replace(/"/g, '""')}"`;
@@ -495,13 +620,13 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 				});
 				ranked = Query.from({ __topn_totals: totals }).select({
 					...passthroughSelect(aliases),
-					[TOPN_RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
+					[RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
 				});
 			} else {
 				// Simple: rank rows by value.
 				ranked = Query.from({ __topn_base: query }).select({
 					...passthroughSelect(aliases),
-					[TOPN_RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+					[RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
 				});
 			}
 
@@ -539,8 +664,8 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 			// simply left out, as the JS path does. The query is rebuilt once the id
 			// exists.
 			return Query.from({ __topn: ranked })
-				.select({ ...passthroughSelect(aliases), [TOPN_RANK_COLUMN]: column(TOPN_RANK_COLUMN) })
-				.where(sqlTag`${column(TOPN_RANK_COLUMN)} <= ${n}`);
+				.select({ ...passthroughSelect(aliases), [RANK_COLUMN]: column(RANK_COLUMN) })
+				.where(sqlTag`${column(RANK_COLUMN)} <= ${n}`);
 		},
 		describe() {
 			return `Top ${current()}${options.includeOthers ? ' + Other' : ''} (SQL)`;
@@ -586,7 +711,7 @@ function collapseIntoOther(
 	}
 ): SelectQuery {
 	const { n, by, band, otherId } = o;
-	const rank = column(TOPN_RANK_COLUMN);
+	const rank = column(RANK_COLUMN);
 	const kept = sqlTag`${rank} <= ${n}`;
 	const identity = o.config?.identity;
 	const bandDim = identity?.[band]?.dim;
@@ -606,7 +731,7 @@ function collapseIntoOther(
 			bucket[alias] = sqlTag`CASE WHEN ${kept} THEN ${col} END` as ExprNode;
 		}
 	}
-	bucket[TOPN_RANK_COLUMN] = sqlTag`CASE WHEN ${kept} THEN ${rank} ELSE ${n + 1} END` as ExprNode;
+	bucket[RANK_COLUMN] = sqlTag`CASE WHEN ${kept} THEN ${rank} ELSE ${n + 1} END` as ExprNode;
 	const bucketed = Query.from({ __topn_ranked: ranked }).select(bucket);
 
 	const collapse: Record<string, ExprNode> = {};
@@ -622,7 +747,7 @@ function collapseIntoOther(
 			collapse[alias] = sqlTag`COALESCE(MAX(${col}), 0)` as ExprNode;
 		}
 	}
-	collapse[TOPN_RANK_COLUMN] = sqlTag`MIN(${rank})` as ExprNode;
+	collapse[RANK_COLUMN] = sqlTag`MIN(${rank})` as ExprNode;
 	return Query.from({ __topn_bucketed: bucketed })
 		.select(collapse)
 		.groupby(...keys);

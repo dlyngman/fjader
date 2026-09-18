@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import duckdb from 'duckdb';
 import { CategoricalIdentity } from './categorical-identity';
-import { topN, TOPN_RANK_COLUMN } from '$lib/transforms';
+import { topN, RANK_COLUMN } from '$lib/transforms';
 import { Query, column, sql } from '@uwdata/mosaic-sql';
 import type { MarkConfig, SqlTransform } from '$lib/types';
 
@@ -92,7 +92,7 @@ describe('identity ids through topN', () => {
 			}
 		} as MarkConfig;
 		const out = (topN(2, { includeOthers: true }) as SqlTransform).apply(query, config);
-		const rows = await db.all(`SELECT * FROM (${out}) ORDER BY "${TOPN_RANK_COLUMN}"`);
+		const rows = await db.all(`SELECT * FROM (${out}) ORDER BY "${RANK_COLUMN}"`);
 		return { xs: rows.map((r) => Number(r.x)), totals: rows.map((r) => Number(r.total)) };
 	}
 

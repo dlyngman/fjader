@@ -257,7 +257,16 @@ export interface SortConfig {
 	order?: 'asc' | 'desc';
 }
 
-export type NormalizedSortConfig = { channel: string; direction: 'asc' | 'desc' } | null;
+/**
+ * A `sort` prop, resolved: which band axis to order, by which channel, which
+ * way. `axis` is the key the prop was given under (`sort={{ x: 'y' }}` orders
+ * the x axis by y) and is what the rank transform ranks.
+ */
+export type NormalizedSortConfig = {
+	axis: 'x' | 'y';
+	channel: string;
+	direction: 'asc' | 'desc';
+} | null;
 
 // ---------------------------------------------------------------------------
 // Mark prop building blocks

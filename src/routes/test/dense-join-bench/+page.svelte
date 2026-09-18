@@ -87,15 +87,15 @@
 	/** The query shape as it is today: one row per DISPLAYED category. */
 	function sparseSQL(view, idCol) {
 		return `
-			SELECT "x", "y", "__dplot_topn_rank"
+			SELECT "x", "y", "__dplot_rank"
 			FROM (
-				SELECT "x", "y", ROW_NUMBER() OVER (ORDER BY "y" DESC) AS "__dplot_topn_rank"
+				SELECT "x", "y", ROW_NUMBER() OVER (ORDER BY "y" DESC) AS "__dplot_rank"
 				FROM (
 					SELECT ${castReal(idCol)} AS "x", ${castReal('SUM(revenue)')} AS "y"
 					FROM ${view} GROUP BY ${idCol}
 				) AS __topn_base
 			) AS __topn
-			WHERE "__dplot_topn_rank" <= ${TOP_N}`;
+			WHERE "__dplot_rank" <= ${TOP_N}`;
 	}
 
 	/**
@@ -109,7 +109,7 @@
 		return `
 			SELECT ${castReal('d.id')} AS "x",
 			       ${castReal('COALESCE(a."y", 0)')} AS "y",
-			       ${castReal('a."__dplot_topn_rank"')} AS "__dplot_topn_rank"
+			       ${castReal('a."__dplot_rank"')} AS "__dplot_rank"
 			FROM "${dim}" d
 			LEFT JOIN (${sparseSQL(view, idCol)}) a ON a."x" = d.id
 			ORDER BY d.id`;

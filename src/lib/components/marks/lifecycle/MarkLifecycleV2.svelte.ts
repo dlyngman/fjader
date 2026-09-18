@@ -36,7 +36,7 @@ import {
 import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories } from '$lib/transforms';
+import { withDenseCategories, withRanking } from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -220,10 +220,9 @@ export class MarkLifecycleV2 {
 	// concrete bin expression, a RollingAvgNode becomes a window function — but not
 	// yet encoded for the GPU.
 	//
-	// Split out of #resolvedQueryParts because #refetchSortedDomain needs exactly this
-	// form. It selects category *values*, so it must see resolved bins but must not
-	// see #inlineIdentityColumns below, which swaps a categorical channel for its
-	// dim's id column.
+	// Split out of #resolvedQueryParts: this selects category *values*, so it sees
+	// resolved bins but not #inlineIdentityColumns below, which swaps a categorical
+	// channel for its dim's id column.
 	#resolvedSelect: Record<string, unknown> | null = $derived.by(() => {
 		if (!this.setupComplete) return null;
 
@@ -266,7 +265,7 @@ export class MarkLifecycleV2 {
 		if (!semanticSelect) return null;
 
 		// Copy before the inline helpers below, which mutate in place — #resolvedSelect
-		// is shared with #refetchSortedDomain and must not carry GPU encodings.
+		// must not carry GPU encodings.
 		const resolvedSelect = { ...semanticSelect };
 
 		// Capture passthrough channels BEFORE inline wrappings mutate the select.
@@ -301,6 +300,26 @@ export class MarkLifecycleV2 {
 	#globalAggregatesSet = $state(false);
 	#skipDomainUpdateForAxis: string | null = null;
 	#lastBandDomainDataVersion: number | null = null;
+	/**
+	 * Whether this mark's band axis is decided by its query results rather than
+	 * by the dim: topN decides membership, and `sort` decides order through the
+	 * rank column. Sticky once set, so a mark whose sort is later removed still
+	 * re-registers from its data and withdraws the ranking it had claimed.
+	 */
+	#bandDomainFromData = false;
+
+	/**
+	 * The sort that ranks this mark's band axis, or null.
+	 *
+	 * An explicit `domain` on the same axis wins outright, as it did when sort
+	 * was a sidecar: the ranking is not computed and the axis is not taken from
+	 * the data, so the listed categories are shown in the listed order.
+	 */
+	get #rankingSort(): NormalizedSortConfig {
+		const sort = this.#reactiveConfig.sort ?? null;
+		if (!sort) return null;
+		return this.#reactiveConfig.domain?.[sort.axis]?.length ? null : sort;
+	}
 
 	// --- Tooltip ---
 	#tooltipTableName: string;
@@ -356,8 +375,15 @@ export class MarkLifecycleV2 {
 		// callers that would each have to re-derive it.
 		//
 		// `dense: false` on the mark opts out.
+		//
+		// `rank()` likewise: the `sort` prop is a ranking the query publishes as
+		// a column, read through a getter so a changed sort re-queries rather
+		// than rebuilding. With no sort it passes the query through.
 		this.#transformCompiler = new TransformCompiler(
-			withDenseCategories(config.transforms || [], config.dense !== false),
+			withRanking(
+				withDenseCategories(config.transforms || [], config.dense !== false),
+				() => this.#rankingSort
+			),
 			this.#transformConfig
 		);
 		this.#detectAutoBins();
@@ -573,6 +599,10 @@ export class MarkLifecycleV2 {
 		// the initial query. On subsequent changes to sort/limit/filterNulls,
 		// or to a transform parameter given as a getter, re-queries this mark
 		// only via _onParamsChange.
+		//
+		// `sort` is not read by the engine: the rank transform reads it when the
+		// query is assembled. It is here so that changing it re-queries, which
+		// is where the new ranking comes from.
 		$effect(() => {
 			if (!this.#handle) return;
 			const sort = this.#reactiveConfig.sort;
@@ -582,6 +612,9 @@ export class MarkLifecycleV2 {
 			// is assembled, so a changed count needs a re-query and not a rebuild.
 			void this.#transformCompiler.specs;
 			untrack(() => {
+				// A mark sorted at any point takes its band axis from the data from
+				// then on; see the field.
+				if (this.#rankingSort) this.#bandDomainFromData = true;
 				this.#handle!.updateParams({ sort, limit, filterNulls });
 			});
 		});
@@ -594,25 +627,6 @@ export class MarkLifecycleV2 {
 
 			untrack(() => {
 				this.#handleDataDomains(dv);
-			});
-		});
-
-		// Band re-sort: lightweight re-sort when sort config changes.
-		// Fires a targeted domain query — no teardown, no schema re-fetch.
-		$effect(() => {
-			if (!this.setupComplete) return;
-			const sort = this.#reactiveConfig.sort;
-
-			untrack(() => {
-				for (const [axis, scaleType] of [
-					['x', this.actualXScaleType],
-					['y', this.actualYScaleType]
-				] as const) {
-					if (scaleType !== 'band' && scaleType !== 'point') continue;
-					const scaleState = this.#scaleMap[axis] as BandScaleState | null;
-					if (!scaleState) continue;
-					this.#refetchSortedDomain(axis, scaleState, sort);
-				}
 			});
 		});
 
@@ -741,6 +755,9 @@ export class MarkLifecycleV2 {
 
 		try {
 			const seriesKey = this.#config._orderConfig?.seriesChannel ?? null;
+			if (this.#transformCompiler.hasCategoryReducingTransforms() || this.#rankingSort) {
+				this.#bandDomainFromData = true;
+			}
 
 			// Batch all domain queries + schema fetch in parallel
 			const [schemaColumns, fetchCount, aggResult, fieldStats] = await Promise.all([
@@ -750,7 +767,6 @@ export class MarkLifecycleV2 {
 					this.#queryEngine,
 					this.#config.table,
 					this.#config.select,
-					this.#reactiveConfig.sort,
 					this.actualXScaleType,
 					this.actualYScaleType,
 					this.#chartContext.xScaleState as BandScaleState | null,
@@ -763,7 +779,7 @@ export class MarkLifecycleV2 {
 					this.#sizeScaleState,
 					this.#seriesScaleState,
 					seriesKey,
-					this.#transformCompiler.hasCategoryReducingTransforms(),
+					this.#bandDomainFromData,
 					this.#markId,
 					this.#reactiveConfig.domain
 				),
@@ -1036,12 +1052,9 @@ export class MarkLifecycleV2 {
 
 		// Once domains are derived from the first query result, skip
 		// re-registration on subsequent results (e.g., crossfilter updates).
-		// Exception: topN marks need band domain re-derivation on new data.
+		// Exception: a band axis the data decides is re-derived on every result.
 		if (this.#dataDerivedDomainsSet) {
-			if (
-				this.#transformCompiler.hasCategoryReducingTransforms() &&
-				dv !== this.#lastBandDomainDataVersion
-			) {
+			if (this.#bandDomainFromData && dv !== this.#lastBandDomainDataVersion) {
 				this.#lastBandDomainDataVersion = dv;
 			} else {
 				return;
@@ -1064,7 +1077,7 @@ export class MarkLifecycleV2 {
 				this.actualYScaleType,
 				xState,
 				yState,
-				this.#transformCompiler.hasCategoryReducingTransforms(),
+				this.#bandDomainFromData,
 				this.#chartContext.xScaleState as BandScaleState | null,
 				this.#chartContext.yScaleState as BandScaleState | null,
 				this.#markId,
@@ -1369,94 +1382,6 @@ export class MarkLifecycleV2 {
 		})?.[0];
 		return band === 'x' || band === 'y' ? band : null;
 	});
-
-	/**
-	 * Re-fetch band domain ordering when sort config changes reactively.
-	 * Builds a SELECT DISTINCT + ORDER BY query, calls setSortOrder on the
-	 * band scale. No teardown, no schema re-fetch, no re-registration.
-	 */
-	async #refetchSortedDomain(
-		axis: string,
-		scaleState: BandScaleState,
-		sort: NormalizedSortConfig | undefined
-	): Promise<void> {
-		// No sort configured means this mark has NO OPINION about display order,
-		// so it must not express one. The branch below used to answer that case
-		// with SELECT DISTINCT and hand the result to setSortOrder, which was
-		// harmless only for as long as setSortOrder did nothing: it stored the
-		// order and never applied it. Making the re-sort path work made
-		// this live, and #explicitDomain ?? #sortOrder gives it priority — so
-		// every band mark without a `sort` prop silently took its axis order
-		// from an UNFILTERED DISTINCT over the base table instead of from its
-		// own data. topN marks are where it showed: survivors landed in
-		// whatever order DISTINCT returned rather than by the measure.
-		//
-		// Returning also drops a per-band-mark round trip that never had a
-		// reader.
-		if (!sort) return;
-
-		// Read from #resolvedSelect, not #config.select. A band/point axis can be a
-		// computed expression (e.g. y={bin('body_mass', {step:500})} on a BarMarkX),
-		// and an AutoBinNode is a plain class rather than an ExprNode — so the raw
-		// config value both stringifies to "[object Object]" and carries none of the
-		// bin resolution the rendered query uses. Taking the resolved form fixes the
-		// invalid SQL and keeps this sidecar's binning identical to the chart's.
-		const select = this.#resolvedSelect;
-		if (!select) return;
-
-		const field = select[axis];
-		if (!field) return;
-
-		// Anything that is neither a string nor an ExprNode would stringify to
-		// "[object Object]" and produce SQL that fails at the binder. AutoBinNode and
-		// RollingAvgNode are both such wrappers, and #resolvedSelect has already
-		// replaced them — so reaching this means resolution did not happen, which is
-		// worth a warning rather than a query that cannot be read.
-		if (!isNode(field) && typeof field !== 'string') {
-			console.warn(
-				`[MarkLifecycleV2] Sort domain skipped for ${axis}: unresolved expression`,
-				field
-			);
-			return;
-		}
-
-		// Only strings become column refs; expression nodes pass through as-is.
-		const axisExpr: ExprValue = isNode(field) ? (field as ExprNode) : sqlColumn(String(field));
-
-		let q = Query.from(this.#config.table).select({ [axis]: axisExpr });
-
-		// `sort` is non-null past the guard at the top, so there is no DISTINCT
-		// fallback here any more — an unsorted mark never reaches this function.
-		const sortField =
-			select[sort.channel] || select[sort.channel + '2'] || select[sort.channel + '1'];
-		if (!sortField) return;
-
-		if (isAggregateExpression(sortField as ExprNode)) {
-			q = q.groupby(axisExpr as GroupByExpr).select({ _sort: sortField as ExprValue });
-		}
-		const sortExpr = isAggregateExpression(sortField as ExprNode)
-			? sqlColumn('_sort')
-			: isNode(sortField)
-				? sortField
-				: sqlColumn(String(sortField));
-
-		q.orderby(sort.direction === 'desc' ? sql`${sortExpr} DESC` : sortExpr);
-
-		try {
-			const result = await this.#queryEngine.query(q);
-			if (this.#destroyed) return;
-
-			const categories = Array.from(result).map((row: any) => row[axis]);
-			if (axis === 'y') categories.reverse();
-
-			if (categories.length > 0) {
-				scaleState.setSortOrder(categories);
-			}
-		} catch (e) {
-			if ((e as Error)?.name === 'AbortError') return;
-			console.warn(`[MarkLifecycleV2] Sort domain fetch failed:`, e);
-		}
-	}
 
 	/**
 	 * Build a query for fetchGlobalAggregates.
