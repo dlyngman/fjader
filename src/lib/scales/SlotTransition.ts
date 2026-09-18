@@ -179,12 +179,13 @@ export class SlotTransition implements SlotSource {
 	 */
 	constructor(
 		loop: ClockLoop | null = null,
-		options: { onFrame?: () => void; onRest?: () => void } = {}
+		options: { onFrame?: () => void; onRest?: () => void; charts?: () => string[] } = {}
 	) {
 		this.#onFrame = options.onFrame ?? null;
 		this.#onRest = options.onRest ?? null;
 		this.clock = new TransitionClock({
 			loop,
+			charts: options.charts,
 			onRest: () => this.#onClockRest(),
 			onFrame: this.#onFrame ?? undefined
 		});

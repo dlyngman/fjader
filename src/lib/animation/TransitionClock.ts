@@ -118,6 +118,7 @@ export class TransitionClock {
 			precision?: number;
 			onRest?: () => void;
 			onFrame?: () => void;
+			charts?: () => string[];
 		} = {}
 	) {
 		this.#loop = options.loop ?? null;
@@ -125,6 +126,7 @@ export class TransitionClock {
 		this.#spring = new Spring(1, options.stiffness ?? TRANSITION_STIFFNESS, this.#precision);
 		this.#onRest = options.onRest ?? null;
 		this.#onFrame = options.onFrame ?? null;
+		this.#charts = options.charts ?? null;
 	}
 
 	/** Where the transition is, for the frame being drawn. 1 when settled. */
@@ -204,8 +206,20 @@ export class TransitionClock {
 		this.#onFrame?.();
 	}
 
-	/** Charts to redraw while this runs. Set by whoever owns the clock. */
-	_affectedChartsArray: string[] = [];
+	/**
+	 * Charts to redraw while this runs, asked of the owner rather than written
+	 * into the clock.
+	 *
+	 * The loop reads this on every frame it drives, so asking is also what
+	 * makes it current: a facet grid registers its cells after the mark's
+	 * first data has landed, and a value captured at construction would name
+	 * the charts that existed before the grid did.
+	 */
+	get _affectedChartsArray(): string[] {
+		return this.#charts?.() ?? [];
+	}
+
+	#charts: (() => string[]) | null;
 
 	/**
 	 * Called by the loop when this stops, after removing it. Lands exactly on 1,

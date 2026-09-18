@@ -161,6 +161,7 @@ export class BandScaleState {
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
+			charts: () => this._affectedChartsArray,
 			onFrame: () => this.#slotFrame++,
 			onRest: () => this.#slotRest++
 		});
@@ -458,17 +459,12 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Charts to redraw while this axis animates. The coordinator assigns it by
-	 * name on every scale it tracks; it lives on the clock, because the clock is
-	 * what the loop holds.
+	 * Charts to redraw while this axis animates. The registry and the
+	 * coordinator assign it by name on every scale they track, the same as on a
+	 * continuous scale — the clock reads it from here rather than being written
+	 * into, so there is one place it lives and one place it is set.
 	 */
-	get _affectedChartsArray(): string[] {
-		return this.#slots.clock._affectedChartsArray;
-	}
-
-	set _affectedChartsArray(charts: string[]) {
-		this.#slots.clock._affectedChartsArray = charts;
-	}
+	_affectedChartsArray: string[] = [];
 
 	/**
 	 * Tell this axis which id is its Other bucket, if any — where entering and
