@@ -147,31 +147,6 @@ export class BandScaleState {
 	#sharedScale: ScaleBand<DimValue> = scaleBand<DimValue>();
 
 	// =========================================================================
-	// DERIVED STATE
-	// =========================================================================
-
-	/**
-	 * GPU state (derived) - for compatibility with coordinator
-	 */
-	gpuState: { domainMin: number; domainMax: number; p4: number; domainScale: number } = $derived.by(
-		() => {
-			// effectiveDomain.length, the same expression getConfig() uses for
-			// categoryCount. This used to be the size of a category -> index Map
-			// rebuilt on every domain change, which was the last consumer keeping
-			// that Map alive once the band channel stopped carrying positions.
-			// Two derivations of one number is one more than the GPU needs.
-			const categoryCount = this.effectiveDomain.length;
-
-			return {
-				domainMin: 0,
-				domainMax: Math.max(0, categoryCount - 1),
-				p4: 0, // unused for band scales (SSBO written via getConfig instead)
-				domainScale: 0
-			};
-		}
-	);
-
-	// =========================================================================
 	// CONSTRUCTOR
 	// =========================================================================
 
@@ -189,13 +164,6 @@ export class BandScaleState {
 			onFrame: () => this.#slotFrame++,
 			onRest: () => this.#slotRest++
 		});
-
-		console.log(`🏗️ BandScaleState "${name}" created:`, {
-			initialDomain: domain.length,
-			padding: this.#padding,
-			paddingInner: this.#paddingInner,
-			paddingOuter: this.#paddingOuter
-		});
 	}
 
 	// =========================================================================
@@ -204,7 +172,6 @@ export class BandScaleState {
 
 	setReady(): void {
 		this.ready = true;
-		console.log(`✅ BandScaleState "${this.name}" marked as ready`);
 	}
 
 	// =========================================================================
@@ -308,12 +275,10 @@ export class BandScaleState {
 		if (wasEnabled && !enabled) {
 			// Freezing - capture current domain
 			this.#frozenDomain = [...this.#domain];
-			console.log(`❄️ BandScale "${this.name}" frozen at ${this.#frozenDomain.length} categories`);
 		} else if (!wasEnabled && enabled) {
 			// Unfreezing - restore updates
 			this.#frozenDomain = null;
 			this.updateDomainFromExtents();
-			console.log(`🔥 BandScale "${this.name}" unfrozen`);
 		}
 	}
 
@@ -1250,10 +1215,7 @@ export class BandScaleState {
 			displayOrder: Array.from(this.#displayOrder),
 			// The transition. slotCurrent is mix(slotFrom, slotTo, t), and slotTo
 			// differs from slotTarget exactly for the ids on their way out.
-			...this.#slots.debugState(),
-
-			// GPU state
-			gpuState: this.gpuState
+			...this.#slots.debugState()
 		};
 	}
 }
