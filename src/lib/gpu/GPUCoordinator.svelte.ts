@@ -19,6 +19,7 @@ import {
 	type SlotSource,
 	type IdentitySlotState
 } from './identity-slot-packing';
+import { frameUniformIsStale } from './frame-uniform-sync';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -61,6 +62,14 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
+	/**
+	 * What this chart's frame uniform was last written against: the scale
+	 * topology at the time, and the two scale ids. Compared per frame; see
+	 * #refreshStaleFrameUniforms.
+	 */
+	_uniformTopology: number;
+	_uniformXScaleId: string | null;
+	_uniformYScaleId: string | null;
 }
 
 interface LayerConfig {
@@ -330,6 +339,14 @@ export class GPUCoordinator {
 	// SCALE SSBO SYSTEM
 	// =========================================================================
 	#scaleIndexManager = new ScaleIndexManager();
+	/**
+	 * Bumped whenever scale indices are reassigned.
+	 *
+	 * A chart's frame uniform carries the INDEX of its scales, not their ids,
+	 * so a rebuild can move a chart's scale without touching the chart. One
+	 * integer compare per chart per frame is what makes noticing that free.
+	 */
+	#scaleTopology = 0;
 	#maxScaleSlots = 256;
 	#SSBO_SLOT_COUNT = 16;
 
@@ -1046,28 +1063,44 @@ export class GPUCoordinator {
 	#tPatch = new Float32Array(1);
 
 	/**
-	 * Rewrite the frame uniform of any faceted chart whose facet permutation
-	 * moved.
+	 * Rewrite the frame uniform of any chart whose inputs have moved under it.
 	 *
-	 * updateChartFrameUniforms is event-driven — mount, scale-set sync, a
-	 * pending queue — and none of those fire when a facet scale's displayOrder
-	 * changes. The scale is also absent from the registry by then (see
-	 * ChartConfig.facetScale), so nothing that walks registered scales can
-	 * notice either. Walking the charts is what is left, and it is cheap: one
-	 * property read and one compare per chart, and a uniform write only when a
-	 * permutation actually moved, which is a reorder rather than a frame.
+	 * The uniform holds derived state — a scale INDEX, a facet id — and both
+	 * change without anything touching the chart. `updateChartFrameUniforms` is
+	 * otherwise event-driven, so keeping it current means every writer of an
+	 * input remembering to call it, and the writers do not: a facet reorder
+	 * never did, and `setChartScaleMapping` did not either. The second one cost
+	 * a chart that rendered every mark through ANOTHER chart's scale — right
+	 * scale, right domain, right slot table, right axis, wrong pixels — because
+	 * its uniform kept the index it was given before its scales resolved, which
+	 * `updateChartFrameUniforms` reads as 0, the first scale on the page.
 	 *
-	 * Without it a cell keeps the value it was given at mount — when the facet
-	 * scale had no identity yet, so idAtSlot passed the CELL INDEX through.
-	 * That agrees with the id whenever dim order is display order, which is
-	 * every facet chart that does not set fxDomain.
+	 * Reconciled rather than pushed, which is what `#fillAllScales` already does
+	 * for scale params two lines below. Nothing has to remember, because there
+	 * is nothing to remember: the loop is the subscription and these integers
+	 * are the dirty bit.
+	 *
+	 * The steady state is three compares per chart and no lookups; a write
+	 * happens on a reorder or a remount, never on a frame. What counts as stale,
+	 * and why a rebuild counts even when the ids have not moved, is
+	 * `frameUniformIsStale`.
+	 *
+	 * This disappears with the scale index itself: the immediates work writes a
+	 * chart's resolved scale params straight into the pass, and an index that
+	 * does not exist cannot be stale.
 	 */
-	#refreshMovedFacetUniforms(): void {
+	#refreshStaleFrameUniforms(): void {
 		for (const chart of this.#registeredCharts.values()) {
-			const scale = chart.facetScale;
-			if (scale && scale._version !== chart._facetVersion) {
-				this.updateChartFrameUniforms(chart.chartId);
-			}
+			if (!frameUniformIsStale(chart, this.#scaleTopology)) continue;
+
+			// Recorded before the write, not after: updateChartFrameUniforms defers
+			// when the context is not configured yet, and re-running it on every
+			// frame until then would be a write per frame for a chart that is not
+			// even drawing. The pending queue replays it once it can.
+			chart._uniformTopology = this.#scaleTopology;
+			chart._uniformXScaleId = chart.xScaleId;
+			chart._uniformYScaleId = chart.yScaleId;
+			this.updateChartFrameUniforms(chart.chartId);
 		}
 	}
 
@@ -1258,7 +1291,7 @@ export class GPUCoordinator {
 		this.#updateIdentitySlots();
 		// After the pack, so a scale given a base this frame gets its t there.
 		this.#uploadAnimatingT();
-		this.#refreshMovedFacetUniforms();
+		this.#refreshStaleFrameUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
 		const dstOffset = slot * this.#slotByteSize!;
@@ -1643,6 +1676,7 @@ export class GPUCoordinator {
 		}
 
 		const count = this.#scaleIndexManager.rebuild(ids);
+		this.#scaleTopology++;
 
 		// Build flat array for hot loop
 		for (const scale of this.#scaleIdToInstance.values()) {
@@ -1943,6 +1977,11 @@ export class GPUCoordinator {
 			facetIndex: config.facetIndex ?? 0,
 			facetScale: config.facetScale ?? null,
 			_facetVersion: -1,
+			// -1 and null so the first reconcile always fires: a chart registered
+			// before its scales resolve has to be picked up by it.
+			_uniformTopology: -1,
+			_uniformXScaleId: null,
+			_uniformYScaleId: null,
 			visible: true,
 			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
@@ -2143,6 +2182,10 @@ export class GPUCoordinator {
 		chartConfig.xScaleId = xScaleId;
 		chartConfig.yScaleId = yScaleId;
 
+		// No uniform write here, deliberately. The index this mapping decides is
+		// reconciled per frame by #refreshStaleFrameUniforms, which compares the
+		// ids a chart holds against the ones its uniform was written for. Pushing
+		// it from every writer is what left this one behind.
 		if (changed) {
 			chartConfig.needsPlanRebuild = true;
 			this.invalidateChart(chartId);
