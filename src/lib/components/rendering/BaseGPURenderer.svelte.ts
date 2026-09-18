@@ -2,13 +2,13 @@ import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost } from '$lib/gpu/MorphedChannels';
 
-interface RendererOptions {
+export interface RendererOptions {
 	zIndex?: number;
 	xScaleType?: string;
 	yScaleType?: string;
 }
 
-interface InitConfig {
+export interface InitConfig {
 	dataBindingConfig: DataBindingEntry[];
 	markShaderCode: string;
 	vertexBufferLayout: GPUVertexBufferLayout[];

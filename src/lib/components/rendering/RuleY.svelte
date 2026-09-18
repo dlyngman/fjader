@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -70,6 +70,13 @@
 
 	// Compile-time selection: does this rule have cross-axis extent?
 	const hasExtent = !!x0Data;
+	const effectiveMarkType = faceted
+		? hasExtent
+			? 'ruleY-extent-faceted'
+			: 'ruleY-faceted'
+		: hasExtent
+			? 'ruleY-extent'
+			: 'ruleY';
 
 	// --- Renderer definition (compile-time) ---
 	const rendererDefinition = hasExtent
@@ -93,8 +100,16 @@
         return degen;
       }`;
 
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const host = new RendererHost({
+		markType: effectiveMarkType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: 'RuleY mark'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let lineGeometryBuffer: GPUBuffer;
 
 	const ruleYShaderCode = `
@@ -220,14 +235,6 @@
 		}
 	];
 
-	const effectiveMarkType = faceted
-		? hasExtent
-			? 'ruleY-extent-faceted'
-			: 'ruleY-faceted'
-		: hasExtent
-			? 'ruleY-extent'
-			: 'ruleY';
-
 	// --- DATA WRITING EFFECTS ---
 
 	$effect(() => {
@@ -321,49 +328,20 @@
 		passEncoder.draw(6, renderer.instanceCount);
 	}
 
-	async function initializeRule() {
-		try {
-			renderer = new BaseGPURenderer(
-				effectiveMarkType,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: ruleYShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition
-			});
-
-			await initializeLineGeometry();
-
-			if (!faceted) {
-				renderer.registerLayer(drawRules);
+			},
+			async ready(r) {
+				await initializeLineGeometry();
+				if (!faceted) r.registerLayer(drawRules);
 			}
-		} catch (error) {
-			console.error('RuleY mark renderer init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		if (!webGPUContext) return;
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeRule();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	// Release retained renderer from a previous instance once this one has data
 	$effect(() => {

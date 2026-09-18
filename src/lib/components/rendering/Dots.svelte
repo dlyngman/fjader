@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -71,9 +71,17 @@
 	const gpuCoordinator = getGPUContext();
 
 	const faceted = !!chartContext.fx;
-
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const effectiveMarkType = faceted ? 'dots-faceted' : 'dots';
+	const host = new RendererHost({
+		markType: effectiveMarkType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex,
+		label: 'Dots'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let quadGeometryBuffer: GPUBuffer;
 
 	const quadVertexCount = 6;
@@ -214,8 +222,6 @@
 		}
 	];
 
-	const effectiveMarkType = faceted ? 'dots-faceted' : 'dots';
-
 	// --- WRITING EFFECTS ---
 
 	$effect(() => {
@@ -311,50 +317,22 @@
 		passEncoder.draw(quadVertexCount, renderer.instanceCount);
 	}
 
-	async function initializeDots() {
-		try {
-			renderer = new BaseGPURenderer(
-				effectiveMarkType,
-				webGPUContext,
-				gpuCoordinator,
-				chartContext,
-				{
-					zIndex,
-					xScaleType: chartContext.scaleTypes?.x || 'linear',
-					yScaleType: chartContext.scaleTypes?.y || 'linear'
-				}
-			);
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: dotsShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition: dotRendererDefinition
-			});
-
-			await initializeDotsGeometry();
-
-			// Non-faceted: register with the single chart canvas
-			// Faceted: registration handled by reactive $effect above
-			if (!faceted) {
-				renderer.registerLayer(drawDots);
+			},
+			async ready(r) {
+				await initializeDotsGeometry();
+				// Non-faceted: register with the single chart canvas.
+				// Faceted: registration handled by the reactive $effect above.
+				if (!faceted) r.registerLayer(drawDots);
 			}
-		} catch (error) {
-			console.error('Dots init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeDots();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	// Clean up retained renderer from a previous instance once this renderer has data
 	$effect(() => {

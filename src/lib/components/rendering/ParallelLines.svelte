@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, onDestroy } from 'svelte';
-	import { BaseGPURenderer } from './BaseGPURenderer.svelte';
+	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
@@ -64,8 +64,17 @@
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 
-	let renderer = $state<BaseGPURenderer | null>(null);
-	let initializationError = $state<string | null>(null);
+	const host = new RendererHost({
+		markType: markType,
+		webGPUContext,
+		gpuCoordinator,
+		chartContext,
+		zIndex: 0,
+		yScaleType: 'linear',
+		label: 'ParallelLines'
+	});
+	const renderer = $derived(host.renderer);
+	const initializationError = $derived(host.error);
 	let quadGeometryBuffer: GPUBuffer;
 
 	// (N-1) segments × resolution sub-quads × 6 verts + N circles × 6 verts
@@ -324,8 +333,7 @@
 
 	// --- Color data upload ---
 	$effect(() => {
-		if (!renderer?.resourcesCreated || !colorValueData)
-			return;
+		if (!renderer?.resourcesCreated || !colorValueData) return;
 		renderer.writeAttribute(BINDINGS.COLOR, colorValueData);
 	});
 
@@ -405,53 +413,32 @@
 		passEncoder.draw(vertexCount, renderer.instanceCount);
 	}
 
-	async function initializeRenderer() {
-		try {
-			renderer = new BaseGPURenderer(markType, webGPUContext, gpuCoordinator, chartContext, {
-				zIndex: 0,
-				xScaleType: chartContext.scaleTypes?.x || 'linear',
-				yScaleType: 'linear'
-			});
-
-			await renderer.initialize({
+	onMount(() =>
+		host.mount({
+			init: {
 				markShaderCode: shaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
 				rendererDefinition
-			});
+			},
+			ready(r) {
+				const device = webGPUContext.getDevice();
+				const quadVertices = createParallelGeometry(axisCount, resolution);
+				quadGeometryBuffer = device.createBuffer({
+					size: quadVertices.byteLength,
+					usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+					label: 'parallel-lines-geometry'
+				});
+				device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices as Float32Array<ArrayBuffer>);
 
-			// Create geometry buffer
-			const device = webGPUContext.getDevice();
-			const quadVertices = createParallelGeometry(axisCount, resolution);
-			quadGeometryBuffer = device.createBuffer({
-				size: quadVertices.byteLength,
-				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-				label: 'parallel-lines-geometry'
-			});
-			device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices as Float32Array<ArrayBuffer>);
+				r.registerLayer(drawParallelLines);
 
-			renderer.registerLayer(drawParallelLines);
-
-			// Initialize color buffer with zeros if not provided
-			if (!colorValueData && rowCount > 0) {
-				renderer.writeAttribute(BINDINGS.COLOR, new Float32Array(rowCount));
+				// Colour defaults to zeros until its data arrives.
+				if (!colorValueData && rowCount > 0)
+					r.writeAttribute(BINDINGS.COLOR, new Float32Array(rowCount));
 			}
-		} catch (error) {
-			console.error('ParallelLines init failed:', error);
-			initializationError = (error as Error).message;
-		}
-	}
-
-	async function waitForWebGPU() {
-		let attempts = 0;
-		while (!webGPUContext.isInitialized() && attempts < 100) {
-			await new Promise((r) => setTimeout(r, 50));
-			attempts++;
-		}
-		if (webGPUContext.isInitialized()) await initializeRenderer();
-	}
-
-	onMount(() => waitForWebGPU());
+		})
+	);
 
 	$effect(() => {
 		if (renderer?.resourcesCreated && markId) {
