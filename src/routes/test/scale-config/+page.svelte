@@ -48,15 +48,14 @@
 						y: {
 							type: 'band',
 							priority: 3,
-							config: { padding: 0.3, align: 0.2 }
+							config: { padding: 0.3 }
 						}
 					}
 				};
 
 				// Simulate the registration (what MarkLifecycle does)
 				window.testScaleConfig.registerTestScale('y', 'band', 3, 'test-bar', {
-					padding: 0.3,
-					align: 0.2
+					padding: 0.3
 				});
 
 				// Force resolution and check results

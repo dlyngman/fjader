@@ -64,7 +64,6 @@
 		padding,
 		paddingInner,
 		paddingOuter,
-		align = 0.5,
 		inset = 0.5,
 		dx = 0,
 		dy = 0,
@@ -105,7 +104,6 @@
 		padding: () => padding,
 		paddingInner: () => paddingInner,
 		paddingOuter: () => paddingOuter,
-		align: () => align,
 		inset: () => inset,
 		dx: () => dx,
 		dy: () => dy,
@@ -157,7 +155,6 @@
 		if (entry.padding != null) config.padding = entry.padding;
 		if (entry.paddingInner != null) config.paddingInner = entry.paddingInner;
 		if (entry.paddingOuter != null) config.paddingOuter = entry.paddingOuter;
-		if (entry.align != null) config.align = entry.align;
 		return config;
 	});
 

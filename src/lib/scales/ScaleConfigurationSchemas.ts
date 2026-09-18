@@ -48,12 +48,6 @@ export const SCALE_CONFIG_SCHEMAS: Record<string, ScaleConfigSchema> = {
 			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Space before first and after last group'
 		},
-		align: {
-			type: 'number',
-			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.AVERAGE as (values: unknown[]) => unknown,
-			description: 'Alignment within outer padding (0=left, 0.5=center, 1=right)'
-		},
 		transformKey: {
 			type: 'string',
 			strategy: RESOLUTION_STRATEGIES.FIRST_WINS as (values: unknown[]) => unknown,
@@ -100,12 +94,6 @@ export const SCALE_CONFIG_SCHEMAS: Record<string, ScaleConfigSchema> = {
 			range: [0, 1],
 			strategy: RESOLUTION_STRATEGIES.MAX as (values: unknown[]) => unknown,
 			description: 'Padding around point scale range'
-		},
-		align: {
-			type: 'number',
-			range: [0, 1],
-			strategy: RESOLUTION_STRATEGIES.AVERAGE as (values: unknown[]) => unknown,
-			description: 'Alignment within padding'
 		}
 	},
 

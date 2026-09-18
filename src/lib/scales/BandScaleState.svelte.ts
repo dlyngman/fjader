@@ -27,7 +27,6 @@ interface BandScaleConfig {
 	padding?: number;
 	paddingInner?: number | null;
 	paddingOuter?: number | null;
-	align?: number;
 	sourceField?: string | null;
 	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
 	/**
@@ -42,7 +41,6 @@ interface BandGpuConfig {
 	categoryCount: number;
 	paddingInner: number;
 	paddingOuter: number;
-	align: number;
 }
 
 /**
@@ -116,7 +114,6 @@ export class BandScaleState {
 	#padding: number = 0.1;
 	#paddingInner: number | null = null;
 	#paddingOuter: number | null = null;
-	#align: number = 0.5;
 	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
 	/**
 	 * The engine's id <-> value bijection for this scale's field.
@@ -186,7 +183,6 @@ export class BandScaleState {
 		this.#padding = config.padding ?? 0.1;
 		this.#paddingInner = config.paddingInner ?? null;
 		this.#paddingOuter = config.paddingOuter ?? null;
-		this.#align = config.align ?? 0.5;
 		this.#sourceField = config.sourceField ?? null;
 		this.#registry = config.registry ?? null;
 		this.#slots = new SlotTransition(config.gpuCoordinator ?? null, {
@@ -198,8 +194,7 @@ export class BandScaleState {
 			initialDomain: domain.length,
 			padding: this.#padding,
 			paddingInner: this.#paddingInner,
-			paddingOuter: this.#paddingOuter,
-			align: this.#align
+			paddingOuter: this.#paddingOuter
 		});
 	}
 
@@ -468,7 +463,7 @@ export class BandScaleState {
 	 * coordinator reads it for every band scale on every frame, and the CPU layout
 	 * reads it per label per frame during a transition. Read it immediately.
 	 */
-	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0, align: 0.5 };
+	#gpuConfig: BandGpuConfig = { categoryCount: 0, paddingInner: 0, paddingOuter: 0 };
 
 	/**
 	 * Where every category of this axis is on screen, and the clock it travels on.
@@ -897,7 +892,6 @@ export class BandScaleState {
 		config.categoryCount = categoryCount;
 		config.paddingInner = paddingInner;
 		config.paddingOuter = paddingOuter;
-		config.align = this.#align;
 		return config;
 	}
 
@@ -917,9 +911,11 @@ export class BandScaleState {
 			this.#sharedScale.padding(this.#padding);
 		}
 
-		if (this.#align !== 0.5) {
-			this.#sharedScale.align(this.#align);
-		}
+		// align is left at d3's default, which is centred. The GPU band layout
+		// has no alignment parameter — computeBandLayout places a category at
+		// paddingOuter * step + slot * step — so a d3 scale aligned any other way
+		// would put every SVG consumer somewhere the bars are not. It was a prop
+		// until it was noticed that it reached only this line.
 
 		return this.#sharedScale;
 	}
@@ -1224,8 +1220,7 @@ export class BandScaleState {
 			configuration: {
 				padding: this.#padding,
 				paddingInner: this.#paddingInner,
-				paddingOuter: this.#paddingOuter,
-				align: this.#align
+				paddingOuter: this.#paddingOuter
 			},
 
 			// GPU config
