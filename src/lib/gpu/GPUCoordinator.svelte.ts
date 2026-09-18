@@ -2403,6 +2403,64 @@ export class GPUCoordinator {
 		this.invalidateChart(chartId);
 	}
 
+	/**
+	 * Which scale each chart resolves its axes through, and the SSBO index the
+	 * shader reads for it.
+	 *
+	 * A mark's shader reads `scaleParams[frameUniforms.xScaleIndex]`, so a chart
+	 * pointing at the wrong scale renders through another chart's band layout
+	 * and slot table — every id resolving to a slot it does not own. Nothing on
+	 * the CPU side shows that: the scale, its domain and its axis are all
+	 * correct, and only the pixels are wrong. This is the join between them.
+	 */
+	debugChartScales(): Array<Record<string, unknown>> {
+		const out: Array<Record<string, unknown>> = [];
+		for (const chart of this.#registeredCharts.values()) {
+			out.push({
+				chartId: chart.chartId,
+				xScaleId: chart.xScaleId,
+				yScaleId: chart.yScaleId,
+				xScaleIndex: this.#scaleIndexManager.getIndex(chart.xScaleId!) ?? null,
+				yScaleIndex: this.#scaleIndexManager.getIndex(chart.yScaleId!) ?? null,
+				layers: [...chart.layers.values()].map((l) => l.markType).join(', ')
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * What is actually in `scaleParams`, slot by slot, as the shader reads it.
+	 *
+	 * The registry's inventory is not this list. The coordinator holds scale
+	 * INSTANCES, and one the registry has dropped — destroyed on a refcount
+	 * reaching zero while a component still held it — stays here and keeps being
+	 * written every frame. So a chart can point at an index whose contents
+	 * belong to an object no inventory of the registry can show.
+	 */
+	debugScaleParams(): Array<Record<string, unknown>> {
+		return this.#scaleArray.map((entry) => {
+			const scale = entry.instance as unknown as {
+				id: string;
+				name?: string;
+				type?: string;
+				sourceField?: string;
+				isDestroyed?: boolean;
+				getConfig?: () => { categoryCount: number };
+				slots?: SlotSource;
+			};
+			return {
+				index: entry.index,
+				id: scale.id,
+				field: scale.sourceField ?? scale.name,
+				type: scale.type,
+				destroyed: scale.isDestroyed ?? false,
+				categoryCount: scale.getConfig?.().categoryCount,
+				slotBase: this.#identitySlots?.offsets.get(scale.id),
+				slots: scale.slots ? Array.from(scale.slots.to).join(', ') : null
+			};
+		});
+	}
+
 	unregisterLayer(chartId: string, layerId: string): void {
 		const chart = this.#registeredCharts.get(chartId);
 		if (chart?.layers.has(layerId)) {
