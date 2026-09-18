@@ -2291,6 +2291,23 @@ export class GPUCoordinator {
 		const rangeMinY = 0; // Top of chart (screen coords)
 		const rangeMaxY = canvas.clientHeight * dpr;
 
+		// The fallbacks are a GUESS — whichever scale registered first and second
+		// — and the shader cannot tell a guess from an answer. That is how a chart
+		// came to render every mark through another chart's band layout and slot
+		// table while its own scale, domain, ticks and axis were all correct.
+		//
+		// Left in rather than removed, because removing changes nothing: the
+		// buffer is created without mappedAtCreation, so WebGPU zero-initialises
+		// it, and not writing an index reads as 0 exactly as writing one does.
+		// Refusing to DRAW is what would help, and that is a gate around a field
+		// with a known end date — immediates writes a chart's resolved scale
+		// params straight into the pass, and an index that does not exist cannot
+		// be guessed at.
+		//
+		// What makes it survivable meanwhile is #refreshStaleFrameUniforms: the
+		// only window left is between a mapping arriving and the next index
+		// rebuild, and that rebuild bumps the topology counter, which marks this
+		// chart stale again. A frame or two, not the rest of the session.
 		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId!) ?? 0;
 		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId!) ?? 1;
 
