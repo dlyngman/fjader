@@ -77,11 +77,6 @@ export class MarkColor {
 						},
 						this.#chartContext.chartId
 					) as ColorScaleState;
-
-					const table = this.#tableProp();
-					if (this.scaleState && table) {
-						this.scaleState.registerTable(table);
-					}
 				});
 			} else if (type === null && mode === 'field') {
 				// Schema not ready yet - trigger fetch but don't create scale
@@ -111,11 +106,7 @@ export class MarkColor {
 			const exponent = this.config.exponent;
 			if (this.scaleState) {
 				// When explicitType is set, apply it; when cleared, reset to 'sequential'
-				this.scaleState.setTransform(
-					(type || 'sequential') as ColorScaleType,
-					constant,
-					exponent
-				);
+				this.scaleState.setTransform((type || 'sequential') as ColorScaleType, constant, exponent);
 			}
 		});
 

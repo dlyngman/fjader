@@ -216,12 +216,9 @@ export async function fetchCategoricalDomains(
 		setupTimeFetch('y', select.y || select.y1);
 	}
 
-	// Fetch color domain if color scale is set and there's a color field.
-	// Eagerly register the table so setDomain → #maybeCreateView can create
-	// the index column even if MarkColor's $effect hasn't fired yet.
+	// The colour domain, if a colour scale is set and there is a colour field.
 	const colorKey = colorChannel || 'fill';
 	if (colorScaleState && select[colorKey]) {
-		colorScaleState.registerTable(table);
 		const colorValue = select[colorKey];
 		const colorField =
 			typeof colorValue === 'object' && 'field' in colorValue && !isNode(colorValue)
@@ -232,18 +229,29 @@ export async function fetchCategoricalDomains(
 
 		if (!isAggregate) {
 			if (colorScaleState.isOrdinal) {
-				const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
-				const q = Query.from(table).select({ color: colExpr }).distinct().orderby('color');
-
-				fetches.push(
-					coordinator.query(q).then((result) => {
-						const categories = Array.from(result).map((row) => row.color);
-						if (categories.length > 0) {
-							console.log(`[fetchCategoricalDomains] Color domain (ordinal):`, categories);
-							colorScaleState.setDomain(categories as (string | number)[]);
-						}
-					})
-				);
+				// From the field's dim, like a band axis: the same values in the
+				// same order a SELECT DISTINCT ... ORDER BY returned, without the
+				// query, and spanning every table that registers the field, so a
+				// colour scale shared by two tables agrees on its categories by
+				// construction. The dim is what the colour channel selects its ids
+				// from, so the domain and the ids cannot disagree either.
+				//
+				// A field this cannot dim (an aggregate, a bin) gets no domain, as
+				// it got none from the DISTINCT, which failed at the binder for a
+				// bin; the lifecycle reports it.
+				const colorIdentity = identityKeyFor(colorField);
+				if (colorIdentity) {
+					fetches.push(
+						(async () => {
+							// Idempotent and coalesced — the mark's own setup calls this too.
+							await coordinator.ensureColumns(table, { categorical: [colorIdentity] });
+							const categories = coordinator.identityValues(colorIdentity.key);
+							if (categories.length > 0) {
+								colorScaleState.setDomain(categories as (string | number)[]);
+							}
+						})()
+					);
+				}
 			} else {
 				const colExpr = isNode(colorField) ? colorField : sqlColumn(String(colorField));
 				const q = Query.from(table).select({
