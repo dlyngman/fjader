@@ -10,6 +10,11 @@ interface MarkColorInfo {
 	constantCssColor: string | null;
 }
 
+/** The series scale, for decoding a `z` channel (satisfied by MarkSeries). */
+interface MarkSeriesInfo {
+	scaleState: ColorScaleState | null;
+}
+
 interface TooltipConfigParams {
 	tempTable: string;
 	markType: string;
@@ -19,6 +24,13 @@ interface TooltipConfigParams {
 	bandAxes?: { x?: boolean; y?: boolean };
 	colorColumn?: string;
 	markColor: MarkColorInfo;
+	/**
+	 * A series channel separate from colour — a line's `z` — and its scale. The
+	 * channel carries a dim id, and the tooltip decodes it through the scale
+	 * exactly as it decodes the colour channel.
+	 */
+	seriesColumn?: string;
+	markSeries?: MarkSeriesInfo;
 	proximityAxis?: 'x' | 'y' | 'xy';
 	constantRadius?: number;
 	sizeScaleState?: SizeScaleState | null;
@@ -42,6 +54,8 @@ interface TooltipConfig {
 	bandDomains: Record<string, DimValue[]>;
 	colorDomain: string[] | null;
 	colorScaleState: ColorScaleState | null;
+	seriesColumn?: string;
+	seriesScaleState?: ColorScaleState | null;
 	proximityAxis?: 'x' | 'y' | 'xy';
 	constantRadius?: number;
 	sizeScaleState?: SizeScaleState | null;
@@ -58,6 +72,8 @@ export function buildTooltipConfig({
 	bandAxes,
 	colorColumn,
 	markColor,
+	seriesColumn,
+	markSeries,
 	proximityAxis,
 	constantRadius,
 	sizeScaleState,
@@ -88,6 +104,11 @@ export function buildTooltipConfig({
 		},
 		colorDomain: colorScaleState?.isOrdinal ? (colorScaleState.domain as string[]) : null,
 		colorScaleState: colorScaleState ?? null,
+		...(seriesColumn &&
+			channelFields[seriesColumn] && {
+				seriesColumn,
+				seriesScaleState: markSeries?.scaleState ?? null
+			}),
 		...(proximityAxis && { proximityAxis }),
 		...(constantRadius != null && { constantRadius }),
 		...(sizeScaleState && { sizeScaleState }),

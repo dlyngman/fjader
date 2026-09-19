@@ -143,7 +143,6 @@
 	const markSeries = new MarkSeries(
 		() => entry.z ?? entry.fill,
 		seriesChannelKey,
-		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
@@ -337,6 +336,7 @@
 					chartContext,
 					channelFields: setup!.channelFieldMap,
 					colorColumn: 'fill',
+					...(entry.z != null && { seriesColumn: 'z', markSeries }),
 					// Stacked areas: containment-based proximity (x0 ≤ cursor ≤ x1)
 					...(hasStackTransform && { columns: { x: 'x1', xLow: 'x0', xHigh: 'x1' } }),
 					markColor,

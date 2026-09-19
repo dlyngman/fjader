@@ -43,6 +43,9 @@ interface TooltipMarkRegistration {
 	bandDomains?: Record<string, DimValue[]>;
 	colorDomain?: string[];
 	colorScaleState?: { getColor: (value: unknown) => string | null };
+	/** A `z` channel separate from colour, decoded through its own scale. */
+	seriesColumn?: string;
+	seriesScaleState?: { categoryAt?(id: number): unknown } | null;
 	sizeScaleState?: { getRenderedRadius: (value: number) => number };
 	constantRadius?: number;
 	displayFields?: string[] | null;
@@ -795,6 +798,14 @@ export class TooltipManager {
 				} else {
 					point[resolvedName] = value;
 				}
+				continue;
+			}
+
+			// A separate series channel carries a dim id too, and its scale is
+			// the one that can read it.
+			if (config.seriesColumn && key === config.seriesColumn) {
+				const decoded = config.seriesScaleState?.categoryAt?.(value as number);
+				point[fieldName] = decoded !== undefined ? decoded : value;
 				continue;
 			}
 

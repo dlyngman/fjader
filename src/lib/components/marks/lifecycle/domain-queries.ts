@@ -294,22 +294,22 @@ export async function fetchCategoricalDomains(
 		);
 	}
 
-	// Fetch series domain if series scale is set and there's a series field
-	if (seriesScaleState && seriesChannel && select[seriesChannel]) {
-		const seriesField = select[seriesChannel];
-		const q = Query.from(table)
-			.select({ series: sqlColumn(String(seriesField)) })
-			.distinct()
-			.orderby('series');
-
-		fetches.push(
-			coordinator.query(q).then((result) => {
-				const categories = Array.from(result).map((row) => row.series);
-				if (categories.length > 0) {
-					seriesScaleState.setDomain(categories as (string | number)[]);
-				}
-			})
-		);
+	// The series domain, from the dim, the same way. When the series channel is
+	// the colour channel the registry hands both the same scale, and the colour
+	// branch above has already set it.
+	if (seriesScaleState && seriesChannel && seriesChannel !== colorKey && select[seriesChannel]) {
+		const seriesIdentity = identityKeyFor(select[seriesChannel]);
+		if (seriesIdentity) {
+			fetches.push(
+				(async () => {
+					await coordinator.ensureColumns(table, { categorical: [seriesIdentity] });
+					const categories = coordinator.identityValues(seriesIdentity.key);
+					if (categories.length > 0) {
+						seriesScaleState.setDomain(categories as (string | number)[]);
+					}
+				})()
+			);
+		}
 	}
 
 	if (fetches.length > 0) await Promise.all(fetches);
