@@ -549,21 +549,22 @@ export class MarkLifecycleV2 {
 				: !!(scaleTypes && xScaleState && yScaleState);
 			if (!scalesAvailable) return;
 
-			// Read #colorScaleState REACTIVELY — outside the untrack below — so
-			// that attaching it re-enters this effect. #runSetup returns without
-			// completing while this is false, which is the only reason the
-			// re-entry has anything to do. See there.
+			// Read #colorScaleState and #seriesScaleState REACTIVELY — outside the
+			// untrack below — so that attaching either re-enters this effect.
+			// #runSetup returns without completing while this is false, which is
+			// the only reason the re-entry has anything to do. See there.
 			//
-			// Colour only, despite what this comment used to say about "color/
-			// series": #seriesScaleState is not read here and so is not tracked.
-			// That is currently harmless because the series channel never takes a
-			// dim — it is passed to fetchCategoricalDomains and nowhere else — but
-			// it is not a guarantee anyone wrote down.
+			// Series too, since it takes a dim like colour: #ensureIdentityColumns
+			// hands the series scale its identity, and a scale that is not there
+			// yet would be handed nothing.
 			const colorKey = this.#config.colorChannel || 'fill';
-			const colorReady = !this.#config.select?.[colorKey] || !!this.#colorScaleState;
+			const seriesKey = this.#config._orderConfig?.seriesChannel ?? null;
+			const scalesReady =
+				(!this.#config.select?.[colorKey] || !!this.#colorScaleState) &&
+				(!seriesKey || seriesKey === colorKey || !!this.#seriesScaleState);
 
 			untrack(() => {
-				this.#runSetup(colorReady);
+				this.#runSetup(scalesReady);
 			});
 		});
 
@@ -706,7 +707,8 @@ export class MarkLifecycleV2 {
 	async #runSetup(colorReady: boolean): Promise<void> {
 		if (this.#destroyed) return;
 
-		// Wait for the colour scale before completing setup.
+		// Wait for the colour scale — and the series scale, which takes a dim the
+		// same way — before completing setup.
 		//
 		// `colorReady` was computed and passed here from the moment this effect
 		// was written, and never read — so the deferral it describes did not
@@ -900,6 +902,18 @@ export class MarkLifecycleV2 {
 			: null;
 		if (colorField && this.#identityFields.has(colorField)) {
 			select[colorChannel] = castReal(sqlColumn(this.#queryEngine.identityColumn(colorField)));
+		}
+
+		// Series. A separate `z` channel takes its dim's id column like colour
+		// does; the renderer only compares neighbouring rows for equality, and
+		// ids compare exactly as values did.
+		const seriesChannel = this.#config._orderConfig?.seriesChannel ?? null;
+		const seriesField =
+			seriesChannel && seriesChannel !== colorChannel
+				? identityKeyFor(this.#config.select[seriesChannel])?.key
+				: null;
+		if (seriesChannel && seriesField && this.#identityFields.has(seriesField)) {
+			select[seriesChannel] = castReal(sqlColumn(this.#queryEngine.identityColumn(seriesField)));
 		}
 
 		// Facet. The renderers compile a faceted pipeline whenever chartContext.fx
@@ -1172,6 +1186,15 @@ export class MarkLifecycleV2 {
 			? identityKeyFor(this.#config.select[colorChannel])
 			: null;
 
+		// Series — a line's `z`. When no `z` is given the series channel IS the
+		// colour channel and is covered above; only a separate channel takes a
+		// dim of its own. Always ordinal: grouping is by category.
+		const seriesChannel = this.#config._orderConfig?.seriesChannel ?? null;
+		const seriesKey =
+			seriesChannel && seriesChannel !== colorChannel
+				? identityKeyFor(this.#config.select[seriesChannel])
+				: null;
+
 		// Facet. `fx` is a column name or a fixed expression, so it goes through
 		// the same derivation as everything else.
 		const facetKey = this.#chartContext.fx ? identityKeyFor(this.#chartContext.fx) : null;
@@ -1191,10 +1214,18 @@ export class MarkLifecycleV2 {
 			);
 		}
 
-		if (axes.length === 0 && !facetKey && !colorKey) return;
+		if (seriesChannel && seriesChannel !== colorChannel && !seriesKey) {
+			console.error(
+				`[${this.#markId}] The series channel cannot be given a stable identity: group by ` +
+					`a column or a fixed expression, not an aggregate, a window or bin(). This mark ` +
+					`will render as one series.`
+			);
+		}
+
+		if (axes.length === 0 && !facetKey && !colorKey && !seriesKey) return;
 
 		const categorical = [...axes.map(({ key, sql }) => ({ key, sql }))];
-		for (const extra of [facetKey, colorKey]) {
+		for (const extra of [facetKey, colorKey, seriesKey]) {
 			if (extra && !categorical.some((c) => c.key === extra.key)) categorical.push(extra);
 		}
 
@@ -1230,6 +1261,9 @@ export class MarkLifecycleV2 {
 		for (const { axis, key } of axes) describe(axis, key, true);
 		if (colorKey && this.#identityFields.has(colorKey.key)) {
 			describe(this.#config.colorChannel || 'fill', colorKey.key, false);
+		}
+		if (seriesChannel && seriesKey && this.#identityFields.has(seriesKey.key)) {
+			describe(seriesChannel, seriesKey.key, false);
 		}
 		if (facetKey && this.#identityFields.has(facetKey.key)) {
 			describe('__facet', facetKey.key, false);
@@ -1290,6 +1324,12 @@ export class MarkLifecycleV2 {
 		// The colour scale adopts too, and turns ids into stable palette ranks.
 		if (colorKey) {
 			this.#colorScaleState?.setIdentity(this.#queryEngine.identityFor(colorKey.key));
+		}
+		// And the series scale, whose channel now carries ids as well. Sharing a
+		// field with colour is the registry's business: the two are then one
+		// instance, and the adoption above already covered it.
+		if (seriesKey) {
+			this.#seriesScaleState?.setIdentity(this.#queryEngine.identityFor(seriesKey.key));
 		}
 
 		// The synthetic "Other" bucket has no row in any table, so its id has to

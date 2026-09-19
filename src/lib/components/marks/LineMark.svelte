@@ -150,7 +150,6 @@
 	const markSeries = new MarkSeries(
 		() => entry.z ?? entry.stroke,
 		seriesChannelKey,
-		() => entry.table,
 		() => setup,
 		scaleRegistry,
 		chartContext
@@ -537,6 +536,7 @@
 					chartContext,
 					channelFields: setup!.channelFieldMap,
 					colorColumn: 'stroke',
+					...(entry.z != null && { seriesColumn: 'z', markSeries }),
 					markColor,
 					proximityAxis: entry.tooltipProximity,
 					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,

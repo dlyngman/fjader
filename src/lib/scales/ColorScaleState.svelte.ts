@@ -616,20 +616,6 @@ export class ColorScaleState {
 	}
 
 	// ============================================================
-	// VIEWMANAGER INTEGRATION
-	// ============================================================
-
-	/**
-	 * Kept as a no-op so callers do not have to know the view is gone.
-	 *
-	 * It once registered a derived index column with ViewManager. The colour
-	 * channel takes the dim's id column now, so there is nothing to create —
-	 * but MarkColor, MarkSeries and domain-queries all still call it, and
-	 * deleting it is a separate change from deleting what it did.
-	 */
-	registerTable(_sourceTable: string): void {}
-
-	// ============================================================
 	// DOMAIN UPDATES
 	// ============================================================
 

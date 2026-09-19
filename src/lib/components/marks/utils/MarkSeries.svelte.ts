@@ -17,7 +17,6 @@ import type { MarkSetupState } from './mark-types';
 export class MarkSeries {
 	#seriesProp: () => string | object | null;
 	#channelName: string;
-	#tableProp: () => string | null;
 	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
 	#chartContext: ChartContext;
@@ -27,14 +26,12 @@ export class MarkSeries {
 	constructor(
 		getSeries: () => string | object | null,
 		channelName: string,
-		getTable: () => string | null,
 		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
 		chartContext: ChartContext
 	) {
 		this.#seriesProp = getSeries;
 		this.#channelName = channelName;
-		this.#tableProp = getTable;
 		this.#setupState = getSetup;
 		this.#scaleRegistry = scaleRegistry;
 		this.#chartContext = chartContext;
@@ -55,11 +52,6 @@ export class MarkSeries {
 						{ type: 'ordinal' },
 						this.#chartContext.chartId
 					) as ColorScaleState;
-
-					const table = this.#tableProp();
-					if (this.scaleState && table) {
-						this.scaleState.registerTable(table);
-					}
 				});
 			} else {
 				this.scaleState = null;
