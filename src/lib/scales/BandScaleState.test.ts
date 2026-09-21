@@ -169,7 +169,7 @@ describe('BandScaleState slot table', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
 		// Only two survived the transform, handed over as ids with no decode.
-		scale.addMark([2, 0], 'mark-1', { encoded: true });
+		scale.addMarkIds([2, 0], 'mark-1');
 		scale.updateDomainFromExtents();
 
 		expect(scale.effectiveDomain).toEqual(['Gentoo', 'Adelie']);
@@ -1154,7 +1154,7 @@ describe('BandScaleState identity <-> display translation', () => {
 	it('reports no id for a slot holding no category', () => {
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
-		scale.addMark([2, 0], 'mark-1', { encoded: true }); // topN kept two of three
+		scale.addMarkIds([2, 0], 'mark-1'); // topN kept two of three
 		scale.updateDomainFromExtents();
 
 		expect(scale.idAtSlot(0)).toBe(2);
@@ -1208,10 +1208,10 @@ describe('BandScaleState id/value disambiguation', () => {
 		expect(scale.effectiveDomain).toEqual([2021, 2019]);
 	});
 
-	it('reads the same numbers as ids when the caller says they are encoded', () => {
+	it('reads the same numbers as ids when the caller registers them as ids', () => {
 		const scale = new BandScaleState('year');
 		scale.setIdentity(new FieldIdentity([2019, 2020, 2021] as unknown as string[]));
-		scale.addMark([2, 0], 'mark-1', { encoded: true });
+		scale.addMarkIds([2, 0], 'mark-1');
 		scale.updateDomainFromExtents();
 
 		expect(Array.from(scale.displayOrder)).toEqual([2, 0]);
@@ -1224,7 +1224,7 @@ describe('BandScaleState id/value disambiguation', () => {
 		// from the d3 band index space it must agree with.
 		const scale = new BandScaleState('species');
 		scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
-		scale.addMark([0, 7, 2], 'mark-1', { encoded: true });
+		scale.addMarkIds([0, 7, 2], 'mark-1');
 		scale.updateDomainFromExtents();
 
 		expect(Array.from(scale.displayOrder)).toEqual([0, 2]);
