@@ -2,6 +2,7 @@
 	import { getContext } from 'svelte';
 	import type { ChartContext } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
 
 	interface Props {
@@ -67,23 +68,15 @@
 				</text>
 			{/each}
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
-			{@const bandState = c.yScaleState as BandScaleState}
-			{#each bandTicks as tick (tick.key)}
-				{@const tickY = bandState.tickPosition(tick.key, c.innerHeight, 'y')}
-				<g opacity={bandState.tickOpacity(tick.key)}>
-					<g class:tick-dimmed={bandState.isTickDimmed(tick)}>
-						<line x1={axisX} x2={axisX + tickDir * 6} y1={tickY} y2={tickY} />
-						<text
-							text-anchor={textAnchor}
-							dominant-baseline="middle"
-							x={axisX + tickDir * 9}
-							y={tickY}
-						>
-							{tick.value}
-						</text>
-					</g>
-				</g>
-			{/each}
+			<BandAxisTicks
+				scale={c.yScaleState as BandScaleState}
+				ticks={bandTicks}
+				rangeSize={c.innerHeight}
+				axis="y"
+				base={axisX}
+				dir={tickDir}
+				{textAnchor}
+			/>
 		{/if}
 	</g>
 {/if}
@@ -101,10 +94,5 @@
 		fill: var(--diveplot-text-secondary, #6b7280);
 		font-family: var(--diveplot-font, system-ui, sans-serif);
 		font-size: 10px;
-	}
-
-	.tick-dimmed {
-		opacity: 0.25;
-		transition: opacity 0.15s ease;
 	}
 </style>
