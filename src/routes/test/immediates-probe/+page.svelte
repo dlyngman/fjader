@@ -185,8 +185,16 @@
 
 			// The narrow case, avoidable by declaring one size everywhere.
 			const differing = await probe(device, small, large, new Uint32Array([PROBE]));
-			say(`OTHER SIZE  first draw saw ${differing.first}, second draw saw ${differing.second}`);
-			if (differing.error) say(`            validation error: ${differing.error}`);
+			if (differing.error) {
+				// A validation error fails the whole command buffer, so NEITHER
+				// pixel was written and the numbers say nothing about either draw.
+				// Reported this way because the obvious reading of "0, 0" — that
+				// the switch cleared the data — is the wrong one.
+				say('OTHER SIZE  refused: nothing was drawn, so neither pixel means anything');
+				say(`            ${differing.error.split('\n')[0]}`);
+			} else {
+				say(`OTHER SIZE  first draw saw ${differing.first}, second draw saw ${differing.second}`);
+			}
 			say('');
 
 			// A control: the same two pipelines, but the second sets its own
