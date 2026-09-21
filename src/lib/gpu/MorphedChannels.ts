@@ -317,7 +317,7 @@ export class MorphedChannels {
 				]
 			});
 			this.#immediatesView.setUint32(0, channel.count, true);
-			pass.setImmediates!(0, this.#immediates);
+			pass.setImmediates(0, this.#immediates);
 			pass.setBindGroup(0, channel.bindGroup);
 			pass.dispatchWorkgroups(Math.ceil(channel.count / VALUE_RESOLVE_WORKGROUP));
 		}

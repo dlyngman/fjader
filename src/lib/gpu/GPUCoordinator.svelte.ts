@@ -911,7 +911,7 @@ export class GPUCoordinator {
 		const pass = encoder.beginComputePass(this.#slotResolvePassDescriptor);
 		pass.setPipeline(this.#slotResolvePipeline);
 		this.#slotResolveImmediates[0] = count;
-		pass.setImmediates!(0, this.#slotResolveImmediates);
+		pass.setImmediates(0, this.#slotResolveImmediates);
 		pass.setBindGroup(0, this.#slotResolveBindGroup!);
 		pass.dispatchWorkgroups(Math.ceil(count / SLOT_RESOLVE_WORKGROUP));
 		pass.end();
