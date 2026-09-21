@@ -561,11 +561,27 @@ export class BandScaleState {
 	/**
 	 * Debounce domain updates via microtask so multiple marks registering
 	 * in the same tick (e.g. sorted + unsorted) settle before views are created.
+	 *
+	 * THE FLAG IS THE REQUEST, not the microtask. A microtask cannot be
+	 * cancelled, so `updateDomainFromExtents` clears the flag to say the request
+	 * has been served, and the queued callback finds nothing to do and returns.
+	 *
+	 * Without that every data update on a band axis resolved TWICE: a mark
+	 * registers its result, which schedules this, and then the same caller
+	 * resolves synchronously because it needs the domain before it returns. The
+	 * microtask then recomputed the identical answer to discover `changed` was
+	 * false and discard it. The resolver's own contract says the debounce
+	 * batches the cost of APPLYING a resolution rather than computing one, and
+	 * this is what makes that true.
+	 *
+	 * A registration landing AFTER the explicit resolve finds the flag clear and
+	 * schedules again, which is correct — its categories have not been seen.
 	 */
 	#scheduleDomainUpdate(): void {
 		if (this.#domainUpdateScheduled) return;
 		this.#domainUpdateScheduled = true;
 		queueMicrotask(() => {
+			if (!this.#domainUpdateScheduled) return;
 			this.#domainUpdateScheduled = false;
 			this.updateDomainFromExtents();
 		});
@@ -587,6 +603,12 @@ export class BandScaleState {
 		if (!this.#enableUpdates) {
 			return;
 		}
+
+		// Any pending microtask asked for exactly this, so it is now served.
+		// Cleared below the freeze guard rather than above it: a frozen call
+		// resolves nothing, so it has not answered the request, and the microtask
+		// should still run and take the same early return.
+		this.#domainUpdateScheduled = false;
 
 		const { ids, values, changed } = this.#resolver.resolve();
 		if (!changed) return;

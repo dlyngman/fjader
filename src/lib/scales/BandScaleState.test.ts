@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BandScaleState } from './BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
+import { DomainResolver } from './DomainResolver';
 
 describe('BandScaleState.processDataForGPU', () => {
 	function scaleWith(domain: string[]): BandScaleState {
@@ -1012,6 +1013,84 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	// A re-sort has to REORDER, not just be remembered.
 	//
+	// The production path registers a result and then resolves synchronously,
+	// because it needs the domain before it returns. Registering had already
+	// scheduled a microtask, and that microtask used to recompute the identical
+	// answer in order to discover it had nothing to apply — one wasted resolve
+	// per data update per band axis, which at ten thousand categories is a
+	// whole frame budget.
+	//
+	// The flag is the request rather than the microtask, so an explicit resolve
+	// serves it. These tests pin both halves: the redundant one goes, and one
+	// that is NOT redundant still happens.
+	describe('an explicit resolve serves the scheduled one', () => {
+		function registered(): { scale: BandScaleState; resolve: ReturnType<typeof vi.spyOn> } {
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			const resolve = vi.spyOn(DomainResolver.prototype, 'resolve') as unknown as ReturnType<
+				typeof vi.spyOn
+			>;
+			resolve.mockClear();
+			return { scale, resolve };
+		}
+
+		it('resolves once for a register-then-resolve update, not twice', async () => {
+			const { scale, resolve } = registered();
+
+			// Exactly what registerDataDerivedDomains does on every result.
+			scale.addMarkIds([0, 1, 2], 'mark-1', { sorted: true });
+			scale.updateDomainFromExtents();
+			expect(resolve).toHaveBeenCalledTimes(1);
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(resolve).toHaveBeenCalledTimes(1);
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+			resolve.mockRestore();
+		});
+
+		it('still resolves for a registration that lands after the explicit one', async () => {
+			const { scale, resolve } = registered();
+
+			scale.addMarkIds([0], 'mark-1', { sorted: true });
+			scale.updateDomainFromExtents();
+			// A sibling mark on the same shared scale, registering later in the
+			// same tick. Its categories have not been seen, so the request it
+			// makes is a real one and must survive.
+			scale.addMarkIds([2, 1], 'mark-2');
+			expect(resolve).toHaveBeenCalledTimes(1);
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(resolve).toHaveBeenCalledTimes(2);
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Gentoo', 'Chinstrap']);
+			resolve.mockRestore();
+		});
+
+		it('leaves a frozen scale to take the early return in the microtask', async () => {
+			const { scale, resolve } = registered();
+			scale.addMarkIds([0, 1, 2], 'mark-1');
+			await Promise.resolve();
+			resolve.mockClear();
+
+			scale.setUpdatesEnabled(false);
+			// A frozen call resolves nothing, so it has not served the request.
+			scale.addMarkIds([2, 1, 0], 'mark-2', { sorted: true });
+			scale.updateDomainFromExtents();
+			expect(resolve).not.toHaveBeenCalled();
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Frozen throughout, so nothing resolved and the domain is what it was.
+			expect(resolve).not.toHaveBeenCalled();
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+			resolve.mockRestore();
+		});
+	});
+
 	// Every other test around this one calls updateDomainFromExtents() by hand
 	// after registering a ranking, which is why none of them caught that the
 	// production path once did not: a ranking was stored and nothing downstream
