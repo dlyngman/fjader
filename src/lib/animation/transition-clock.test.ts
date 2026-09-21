@@ -98,6 +98,25 @@ describe('TransitionClock and the loop', () => {
 		expect(rests).toBe(1);
 	});
 
+	it('hands back the same empty list every frame when nothing supplied one', () => {
+		// The loop reads this once per frame per clock it drives. Returning a
+		// fresh [] was an allocation per frame on the animation path, for a
+		// value that never changes.
+		const clock = new TransitionClock();
+		expect(clock._affectedChartsArray).toEqual([]);
+		expect(clock._affectedChartsArray).toBe(clock._affectedChartsArray);
+	});
+
+	it('asks its owner every read, so a list that grows later is seen', () => {
+		// The counterpart: the owner's list is NOT cached here. A facet grid
+		// registers its cells after the mark's first data has landed.
+		const charts: string[] = ['chart-a'];
+		const clock = new TransitionClock({ charts: () => charts });
+		expect(clock._affectedChartsArray).toEqual(['chart-a']);
+		charts.push('chart-b');
+		expect(clock._affectedChartsArray).toEqual(['chart-a', 'chart-b']);
+	});
+
 	it('leaves the loop on stop, and stopping a clock at rest does nothing', () => {
 		const f = fakeLoop();
 		const clock = new TransitionClock({ loop: f.loop });

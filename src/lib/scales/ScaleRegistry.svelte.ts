@@ -41,9 +41,26 @@ const stableStringify = (obj: unknown): string => {
 		.join(',')}}`;
 };
 
+/**
+ * The empty redraw list, shared. Returned for a scale this registry has never
+ * seen, on a path read once per frame, so it must not be a fresh array.
+ */
+const NO_CHARTS: string[] = [];
+
 export class ScaleRegistry {
 	// Public field for reactive tracking
 	scaleUsage = $state(new Map<AnyScaleState, Set<string>>());
+	/**
+	 * `scaleUsage`'s values as arrays, which is the shape the animation loop
+	 * wants: it reads the charts to redraw once per frame for every source it
+	 * drives, so it must not build one.
+	 *
+	 * Rebuilt only when a scale's usage changes, and the sole copy of that
+	 * fact. Scales used to hold their own, written into them from here AND
+	 * from the coordinator's topology handler — one fact, two writers, on an
+	 * object owned by neither. A scale asks `chartsUsing` now.
+	 */
+	#chartsFor = new Map<AnyScaleState, string[]>();
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -254,16 +271,27 @@ export class ScaleRegistry {
 
 			if (!this.scales[type].has(key)) {
 				scaleCreated = true;
+				// A scale asks this registry which charts use it, so it needs the
+				// reference. Built once rather than at each branch below, which is
+				// five places that would each have to remember.
+				const scaleOptions = { ...config, registry: this };
 				// Factory Logic
 				if (['linear', 'pow', 'identity'].includes(type)) {
 					this.scales[type].set(
 						key,
-						new LinearScaleState(name, undefined, type, undefined, config, this.#gpuCoordinator)
+						new LinearScaleState(
+							name,
+							undefined,
+							type,
+							undefined,
+							scaleOptions,
+							this.#gpuCoordinator
+						)
 					);
 				} else if (type === 'log') {
 					this.scales[type].set(
 						key,
-						new LogScaleState(name, undefined, 'log', undefined, config, this.#gpuCoordinator)
+						new LogScaleState(name, undefined, 'log', undefined, scaleOptions, this.#gpuCoordinator)
 					);
 				} else if (type === 'symlog') {
 					this.scales[type].set(
@@ -273,14 +301,21 @@ export class ScaleRegistry {
 							undefined,
 							'symlog',
 							undefined,
-							{ ...config, constant: config.constant as number | undefined },
+							{ ...scaleOptions, constant: config.constant as number | undefined },
 							this.#gpuCoordinator
 						)
 					);
 				} else if (type === 'time') {
 					this.scales[type].set(
 						key,
-						new TimeScaleState(name, undefined, 'time', undefined, config, this.#gpuCoordinator)
+						new TimeScaleState(
+							name,
+							undefined,
+							'time',
+							undefined,
+							scaleOptions,
+							this.#gpuCoordinator
+						)
 					);
 				} else if (['band', 'point'].includes(type)) {
 					this.scales[type].set(
@@ -363,7 +398,14 @@ export class ScaleRegistry {
 					// Fallback
 					this.scales[type].set(
 						key,
-						new LinearScaleState(name, undefined, 'linear', undefined, config, this.#gpuCoordinator)
+						new LinearScaleState(
+							name,
+							undefined,
+							'linear',
+							undefined,
+							scaleOptions,
+							this.#gpuCoordinator
+						)
 					);
 				}
 			}
@@ -380,11 +422,8 @@ export class ScaleRegistry {
 				const chartIds = this.scaleUsage.get(scale)!;
 				if (!chartIds.has(chartId)) {
 					chartIds.add(chartId);
-					// Update render-loop metadata directly (no full topology rebuild)
-					const inst = scale as unknown as { _affectedChartsArray?: string[] };
-					if (inst._affectedChartsArray) {
-						inst._affectedChartsArray = Array.from(chartIds);
-					}
+					// Render-loop metadata, without a full topology rebuild.
+					this.#publishCharts(scale, chartIds);
 				}
 			});
 		}
@@ -427,11 +466,24 @@ export class ScaleRegistry {
 			if (chartIds.has(chartId)) return;
 
 			chartIds.add(chartId);
-			const inst = scale as unknown as { _affectedChartsArray?: string[] };
-			if (inst._affectedChartsArray) {
-				inst._affectedChartsArray = Array.from(chartIds);
-			}
+			this.#publishCharts(scale, chartIds);
 		});
+	}
+
+	/**
+	 * The charts currently using `scale`, as the animation loop wants them.
+	 *
+	 * The live array, rebuilt only when usage changes — never copied per call,
+	 * because this is read once per frame for every animating source. Empty for
+	 * a scale this registry has never seen.
+	 */
+	chartsUsing(scale: AnyScaleState): string[] {
+		return this.#chartsFor.get(scale) ?? NO_CHARTS;
+	}
+
+	/** Re-derive one scale's redraw list. The only writer. */
+	#publishCharts(scale: AnyScaleState, chartIds: Set<string>): void {
+		this.#chartsFor.set(scale, Array.from(chartIds));
 	}
 
 	deregisterChart(scale: AnyScaleState, chartId: string): void {
@@ -445,14 +497,12 @@ export class ScaleRegistry {
 						// Scale destroyed — topology changes (SSBO layout shifts)
 						if (scale.destroy) scale.destroy();
 						this.scaleUsage.delete(scale);
+						this.#chartsFor.delete(scale);
 						this._removeScaleFromStorage(scale);
 						this.#notifyTopologyChange();
 					} else {
 						// Scale survives — just update render-loop metadata
-						const inst = scale as unknown as { _affectedChartsArray?: string[] };
-						if (inst._affectedChartsArray) {
-							inst._affectedChartsArray = Array.from(usage);
-						}
+						this.#publishCharts(scale, usage);
 					}
 				}
 			}
@@ -472,14 +522,12 @@ export class ScaleRegistry {
 					if (usageSet.size === 0) {
 						if (scale.destroy) scale.destroy();
 						this.scaleUsage.delete(scale);
+						this.#chartsFor.delete(scale);
 						this._removeScaleFromStorage(scale);
 						scaleDestroyed = true;
 					} else {
 						// Update render-loop metadata directly
-						const inst = scale as unknown as { _affectedChartsArray?: string[] };
-						if (inst._affectedChartsArray) {
-							inst._affectedChartsArray = Array.from(usageSet);
-						}
+						this.#publishCharts(scale, usageSet);
 					}
 				}
 			}

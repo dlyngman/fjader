@@ -83,6 +83,15 @@ export class BaseGPURenderer {
 	// Facet support: one renderer registered across multiple facet cell charts
 	#facetLayerControls: { chartId: string; control: LayerRegistrationResult }[] = [];
 	#facetChartIds: string[] = [];
+	/**
+	 * The redraw list for a mark that is not faceted: just its own chart.
+	 *
+	 * Held and rewritten in place rather than built per call. The clock asks for
+	 * this on every frame it drives, so returning a fresh array made one
+	 * allocation per frame per morphing mark — on the animation path, which the
+	 * coordinator is otherwise built to keep free of garbage.
+	 */
+	#ownChartIds: string[] = [''];
 
 	constructor(
 		markType: string,
@@ -272,6 +281,21 @@ export class BaseGPURenderer {
 	}
 
 	/**
+	 * Charts to redraw while this mark's own clock runs.
+	 *
+	 * Asked per frame rather than captured, because the answer changes: a facet
+	 * grid registers its cells after the mark's first data has landed. Both
+	 * branches return a held array, so asking costs one comparison and no
+	 * allocation.
+	 */
+	#chartsToRedraw(): string[] {
+		if (this.#facetChartIds.length > 0) return this.#facetChartIds;
+		const chartId = this.#chartContext.chartId;
+		if (this.#ownChartIds[0] !== chartId) this.#ownChartIds[0] = chartId;
+		return this.#ownChartIds;
+	}
+
+	/**
 	 * Write one data update's morphing channels together.
 	 *
 	 * `bandIds` are the category of each row, on `bandAxis`: they are how a
@@ -313,8 +337,7 @@ export class BaseGPURenderer {
 				const slots = (scale as { slots?: Partial<ClockHost> } | null)?.slots;
 				return slots?.clock && slots.startTransition ? (slots as ClockHost) : null;
 			},
-			affectedCharts: () =>
-				this.#facetChartIds.length > 0 ? this.#facetChartIds : [this.#chartContext.chartId]
+			affectedCharts: () => this.#chartsToRedraw()
 		});
 
 		// A binding that was static until now gives up its buffer; the morphed

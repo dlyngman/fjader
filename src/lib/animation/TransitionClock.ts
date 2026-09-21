@@ -71,6 +71,15 @@ export interface ClockLoop {
 	removeAnimatedSource(source: TransitionClock): void;
 }
 
+/**
+ * The empty redraw list, shared.
+ *
+ * A clock whose owner supplies no charts is asked for this on every frame the
+ * loop drives it, so a fresh array here was an allocation per frame for a
+ * reason that never changes. Never mutated: the loop only reads it.
+ */
+const NO_CHARTS: string[] = [];
+
 export class TransitionClock {
 	#spring: Spring;
 	#precision: number;
@@ -216,7 +225,7 @@ export class TransitionClock {
 	 * the charts that existed before the grid did.
 	 */
 	get _affectedChartsArray(): string[] {
-		return this.#charts?.() ?? [];
+		return this.#charts?.() ?? NO_CHARTS;
 	}
 
 	#charts: (() => string[]) | null;

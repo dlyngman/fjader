@@ -229,12 +229,40 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slots.clock.isAtRest()).toBe(true);
 		});
 
-		it('shares the charts to redraw with its clock, which is what the loop reads', () => {
-			// The coordinator assigns _affectedChartsArray on every scale it tracks,
-			// by name. The loop only ever sees the clock.
-			const s = scale();
-			s._affectedChartsArray = ['chart-a', 'chart-b'];
+		it('asks the registry which charts to redraw, and its clock sees the answer', () => {
+			// The loop only ever sees the clock, which asks the scale, which asks
+			// the registry — the one owner of which charts use which scale.
+			const charts: string[] = ['chart-a', 'chart-b'];
+			const s = new BandScaleState('species', [], {
+				registry: {
+					invalidateChartsUsingScale: () => {},
+					chartsUsing: () => charts
+				}
+			});
+			expect(s._affectedChartsArray).toEqual(['chart-a', 'chart-b']);
 			expect(s.slots.clock._affectedChartsArray).toEqual(['chart-a', 'chart-b']);
+		});
+
+		it('sees a chart registered later, because it asks rather than caching', () => {
+			// A facet grid registers its cells after the mark's first data has
+			// landed, so an answer captured once would name the charts that
+			// existed before the grid did.
+			const charts: string[] = ['chart-a'];
+			const s = new BandScaleState('species', [], {
+				registry: {
+					invalidateChartsUsingScale: () => {},
+					chartsUsing: () => charts
+				}
+			});
+			expect(s.slots.clock._affectedChartsArray).toEqual(['chart-a']);
+			charts.push('chart-b');
+			expect(s.slots.clock._affectedChartsArray).toEqual(['chart-a', 'chart-b']);
+		});
+
+		it('redraws nothing when no registry owns it, without allocating to say so', () => {
+			const s = scale();
+			expect(s._affectedChartsArray).toEqual([]);
+			expect(s._affectedChartsArray).toBe(s._affectedChartsArray);
 		});
 
 		it('settles its slots when the loop settles the clock', () => {
