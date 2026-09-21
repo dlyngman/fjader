@@ -183,11 +183,27 @@ export class TransitionClock {
 	/**
 	 * Leave the loop without settling, for an owner being torn down. Nothing
 	 * reads the clock afterwards, so there is nothing to land.
+	 *
+	 * TERMINAL, by releasing the loop rather than by a flag. `restart` already
+	 * has the right behaviour for a clock with nothing to drive it — land at
+	 * once — so a stopped clock reaches it by the path that was already there
+	 * and already tested, instead of a second way of saying the same thing.
+	 *
+	 * Terminal matters because the owners that stop a clock are finished with
+	 * it: a mark adopting a scale's clock stops the one it owned, and a scale
+	 * the registry has dropped stops its own. Neither is reachable again, but
+	 * a scale a component still holds can be laid out after that, and without
+	 * this its clock would rejoin a loop whose owner is gone and animate for
+	 * nobody. It now snaps instead, which is what a dead scale should do, and
+	 * its slots still settle onto the new layout rather than being left mid
+	 * transition.
 	 */
 	stop(): void {
-		if (!this.#running) return;
-		this.#running = false;
-		this.#loop?.removeAnimatedSource(this);
+		if (this.#running) {
+			this.#running = false;
+			this.#loop?.removeAnimatedSource(this);
+		}
+		this.#loop = null;
 	}
 
 	/**
