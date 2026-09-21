@@ -92,7 +92,23 @@ export class ColorScaleState {
 	#d3Scale: D3ColorScale | null = null;
 
 	// Ordinal category mapping (string -> 0-based index, -1 = null/unknown)
-	#categoryMap: Map<string | number, number> = new Map();
+	/**
+	 * value -> position in the domain, built on demand.
+	 *
+	 * Only one path reads it: an ordinal channel arriving as raw values rather
+	 * than dim ids. That is the degraded case — a field no dim could be built
+	 * for, or the window before identity lands — because an ordinary ordinal
+	 * colour channel selects its dim's id column and reaches the GPU as a
+	 * Float32Array that is handed straight through. Building it eagerly meant
+	 * walking the domain on every palette upload to fill a map that, with
+	 * identity present, nothing would ever read.
+	 *
+	 * Keyed on the domain ARRAY rather than a version counter, so it cannot
+	 * miss a change: every writer of the domain assigns a fresh array, which
+	 * the constructor now does too, so a reference comparison is exact.
+	 */
+	#categoryMap: Map<string | number, number> | null = null;
+	#categoryMapFor: (string | number)[] | null = null;
 	/**
 	 * The engine's id <-> value bijection for this scale's field (step 3b).
 	 * A live reference, never a copy — the dim appends when a second table
@@ -174,7 +190,10 @@ export class ColorScaleState {
 		);
 
 		// Set initial domain
-		this.domain = config.domain || [];
+		// Copied, not adopted: the domain array's identity is what #categoryMap
+		// keys its cache on, so it has to be ours to promise it changes only
+		// when the domain does.
+		this.domain = config.domain ? [...config.domain] : [];
 
 		// Allocate GPU slots
 		this.#allocateSlots();
@@ -307,11 +326,12 @@ export class ColorScaleState {
 						`values; the query should select its __dplot_*_idx column. Colours will be wrong.`
 				);
 			}
+			const positions = this.#categoryPositions();
 			const indices = new Float32Array(data.length);
 			for (let i = 0; i < data.length; i++) {
 				const val = data[i];
 				// -1 = null/unknown, 0+ = valid categories (matches ViewManager convention)
-				indices[i] = val == null ? -1 : (this.#categoryMap.get(val) ?? -1);
+				indices[i] = val == null ? -1 : (positions.get(val) ?? -1);
 			}
 			return indices;
 		}
@@ -462,6 +482,16 @@ export class ColorScaleState {
 	 * the dense table. Existing ranks are never touched, which is what makes a
 	 * colour survive its category disappearing.
 	 */
+	/** The value -> position map, rebuilt only when the domain array changes. */
+	#categoryPositions(): Map<string | number, number> {
+		if (this.#categoryMap && this.#categoryMapFor === this.domain) return this.#categoryMap;
+		const map = new Map<string | number, number>();
+		this.domain.forEach((cat, i) => map.set(cat, i));
+		this.#categoryMap = map;
+		this.#categoryMapFor = this.domain;
+		return map;
+	}
+
 	#refreshRanks(): void {
 		const identity = this.#identity;
 		if (!identity?.present) return;
@@ -527,9 +557,6 @@ export class ColorScaleState {
 	}
 
 	#uploadOrdinal(): void {
-		// Rebuild category map (string -> 0-based index)
-		this.#categoryMap.clear();
-		this.domain.forEach((cat, i) => this.#categoryMap.set(cat, i));
 		// New categories in the domain need ranks before the palette is sized.
 		this.#refreshRanks();
 
