@@ -516,21 +516,36 @@ export class BandScaleState {
 	// =========================================================================
 
 	/**
-	 * Add categorical data from a mark
+	 * Register a mark's categories, as source values.
+	 *
+	 * For ids — the band channel of a result, which carries them straight from
+	 * the query — use `addMarkIds`. The two spaces are not distinguishable by
+	 * inspection, so which one a caller is in is said by which method it calls.
 	 */
 	addMark(
-		categories: (DimValue | number)[],
+		categories: DimValue[],
 		identifier: string,
-		options: { sorted?: boolean; explicit?: boolean; encoded?: boolean } = {}
+		options: { sorted?: boolean; explicit?: boolean } = {}
 	): this {
 		this.#warnIfDestroyed('addMark');
 		this.#resolver.addMark(categories, identifier, options);
+		this.#afterRegistration();
+		return this;
+	}
 
+	/** Register a mark's categories, as dim ids. See `addMark`. */
+	addMarkIds(ids: number[], identifier: string, options: { sorted?: boolean } = {}): this {
+		this.#warnIfDestroyed('addMarkIds');
+		this.#resolver.addMarkIds(ids, identifier, options);
+		this.#afterRegistration();
+		return this;
+	}
+
+	/** Both registration paths schedule the same way. */
+	#afterRegistration(): void {
 		if (this.#enableUpdates) {
 			this.#scheduleDomainUpdate();
 		}
-
-		return this;
 	}
 
 	/**

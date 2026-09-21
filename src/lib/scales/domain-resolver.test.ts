@@ -75,9 +75,9 @@ describe('DomainResolver', () => {
 			expect(r.resolve().values).toEqual([2021, 2019]);
 		});
 
-		it('reads the same numbers as ids when the caller says they are encoded', () => {
+		it('reads the same numbers as ids when the caller registers them as ids', () => {
 			const r = withIdentity([2019, 2020, 2021]);
-			r.addMark([2, 0], 'mark-1', { encoded: true });
+			r.addMarkIds([2, 0], 'mark-1');
 			expect(r.resolve().values).toEqual([2021, 2019]);
 		});
 
@@ -85,7 +85,7 @@ describe('DomainResolver', () => {
 			// It would survive into the permutation and be dropped from the value
 			// projection, leaving the two different lengths.
 			const r = withIdentity();
-			r.addMark([0, 7, 2], 'mark-1', { encoded: true });
+			r.addMarkIds([0, 7, 2], 'mark-1');
 			const { ids, values } = r.resolve();
 			expect(Array.from(ids)).toEqual([0, 2]);
 			expect(ids.length).toBe(values.length);

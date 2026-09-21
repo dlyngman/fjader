@@ -271,40 +271,45 @@ export function registerDataDerivedDomains(
 
 			const bandScale = axis === 'x' ? xBandScaleState : yBandScaleState;
 
-			// The band channel carries dim ids, and the scale stores ids, so they
-			// go straight across — no decoding to strings for the scale to encode
-			// back. Raw values only for a scale with no identity, which since
-			// `c55e719` means a scale whose dim has not arrived yet or is empty,
-			// not a kind of axis: an expression-backed axis gets a dim like any
-			// column. This fork is the transient, not a second path.
-			const encoded = !!bandScale?.hasIdentity;
-			// Ranked when a transform published a ranking, first-appearance order
-			// otherwise. The rank arrives as a COLUMN rather than as row order,
-			// because a bar mark stacks by default and the window that stacking
-			// adds re-partitions by the band column, discarding any order the
-			// ranked query had. See RANK_COLUMN.
-			const ranked = encoded && data.getColumn(RANK_COLUMN) != null;
-			const categories: (string | number)[] = encoded
-				? extractIdsRankedFromData(data, axis, RANK_COLUMN)
-				: extractCategoriesFromData(data, axis);
-			// A y band axis puts slot 0 at the bottom, and a ranking is read from
-			// the top. Reversed here, once, for every ranked axis — topN's and the
-			// sort's alike — rather than by whichever transform produced the rank.
-			if (ranked && axis === 'y') categories.reverse();
-			if (bandScale?.addMark && categories.length > 0) {
+			if (!bandScale) continue;
+
+			// Which space the rows are in decides which method registers them, and
+			// the two are not distinguishable by inspection: on a numeric band
+			// column a source value is a number exactly as an id is. Naming the
+			// method is how the caller says, so there is no flag to get wrong.
+			if (bandScale.hasIdentity) {
+				// Ranked when a transform published a ranking, first-appearance
+				// order otherwise. The rank arrives as a COLUMN rather than as row
+				// order, because a bar mark stacks by default and the window that
+				// stacking adds re-partitions by the band column, discarding any
+				// order the ranked query had. See RANK_COLUMN.
+				const ranked = data.getColumn(RANK_COLUMN) != null;
+				const ids = extractIdsRankedFromData(data, axis, RANK_COLUMN);
+				// A y band axis puts slot 0 at the bottom and a ranking is read
+				// from the top. Reversed here, once, for every ranked axis —
+				// topN's and the sort's alike — rather than by whichever transform
+				// produced the rank.
+				if (ranked && axis === 'y') ids.reverse();
+				if (ids.length === 0) continue;
 				// `sorted` says this list is a ranking the axis should prefer over
-				// first-appearance order from other marks on the same scale. Without
-				// a rank column the data's row order is not an opinion about order
-				// (the assembler orders by alignment, then series), so it is not
-				// claimed as one — and a mark whose sort was removed thereby
+				// first-appearance order from other marks on the same scale.
+				// Without a rank column the row order is not an opinion about
+				// order (the assembler orders by alignment, then series), so it is
+				// not claimed as one — and a mark whose sort was removed thereby
 				// withdraws the ranking it registered before.
+				bandScale.addMarkIds(ids, markId, { sorted: ranked });
+			} else {
+				// No dim yet, or an empty one. The channel carries a display
+				// position, so its raw values are what the scale stores.
 				//
-				// `encoded` because this is the ONE caller already in id space: the
-				// channel carries dim ids. The scale cannot tell that by looking —
-				// on a numeric band column a source value is a number too.
-				bandScale.addMark(categories, markId, { encoded, sorted: ranked });
-				bandScale.updateDomainFromExtents();
+				// This is the TRANSIENT, not a second kind of axis: since
+				// `c55e719` an expression-backed axis gets a dim like any column,
+				// so reaching here means the dim has not arrived or has no values.
+				const categories = extractCategoriesFromData(data, axis);
+				if (categories.length === 0) continue;
+				bandScale.addMark(categories, markId);
 			}
+			bandScale.updateDomainFromExtents();
 		}
 	}
 

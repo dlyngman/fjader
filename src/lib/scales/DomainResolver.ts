@@ -89,33 +89,75 @@ export class DomainResolver {
 	// =========================================================================
 
 	/**
-	 * Register one mark's categories.
+	 * Register one mark's categories, as SOURCE VALUES.
 	 *
-	 * `encoded` says which space `categories` is in. Exactly one caller is in
-	 * id space — the band channel of a scale that has identity, whose rows
-	 * carry dim ids straight from the query — and everything else supplies
-	 * source values: an explicit domain prop, the dim's own value list. The
-	 * asymmetry is the point. Guessing "a number is an id" works only while dim
-	 * values are strings, and on a numeric band column it reads a category as
-	 * an id, which is the wrong-data class of failure rather than a crash.
+	 * The ordinary direction. An explicit `domain` prop, a dim's own value
+	 * list, anything that names categories the way a person writes them.
+	 * Values that this field's dim does not know are dropped.
 	 *
-	 * `sorted` marks the list as a ranking the axis should prefer, `explicit`
-	 * as a domain prop, which outranks it.
+	 * `sorted` marks the list as a ranking the axis should prefer over first
+	 * appearance, `explicit` as a domain prop, which outranks a ranking.
 	 */
 	addMark(
+		categories: DimValue[],
+		identifier: string,
+		{ sorted = false, explicit = false }: { sorted?: boolean; explicit?: boolean } = {}
+	): void {
+		this.#register(categories, identifier, explicit ? 'explicit' : sorted ? 'sorted' : null, false);
+	}
+
+	/**
+	 * Register one mark's categories, as DIM IDS.
+	 *
+	 * The other direction, and it needs a method of its own because the two
+	 * are not distinguishable by inspection: on a band axis over a year or a
+	 * rating, a source value is a number exactly as an id is. This used to be
+	 * a boolean on `addMark`, which meant a caller could hand ids to the value
+	 * path and get the wrong categories, or none, with nothing thrown. Naming
+	 * the method is what makes that unrepresentable.
+	 *
+	 * Exactly one caller is here: a mark registering the band channel of a
+	 * result, whose rows carry ids straight from the query. It has no
+	 * `explicit` option because an explicit domain is a prop, and props are
+	 * written as values.
+	 *
+	 * Ids are range-checked against the dim, because one past the end would
+	 * survive into the permutation and be dropped from the value projection,
+	 * leaving the two different lengths.
+	 */
+	addMarkIds(
+		ids: number[],
+		identifier: string,
+		{ sorted = false }: { sorted?: boolean } = {}
+	): void {
+		this.#register(ids, identifier, sorted ? 'sorted' : null, true);
+	}
+
+	/**
+	 * Convert at the boundary and store, once.
+	 *
+	 * Encoding happens on the way IN rather than by decoding to values and
+	 * re-encoding downstream, so the extents hold one space at a time and
+	 * `#encoded` says which.
+	 *
+	 * Without identity there is no dim to convert against, so both entry
+	 * points keep what they were handed: the channel carries a display
+	 * position in that state, which is what the values already are. A caller
+	 * cannot reach `addMarkIds` there — it asks whether the scale has identity
+	 * first — and preserving the behaviour rather than refusing keeps this a
+	 * rename of the surface and not a change of what it does.
+	 */
+	#register(
 		categories: (DimValue | number)[],
 		identifier: string,
-		{
-			sorted = false,
-			explicit = false,
-			encoded = false
-		}: { sorted?: boolean; explicit?: boolean; encoded?: boolean } = {}
+		role: MarkExtent['role'],
+		encoded: boolean
 	): void {
 		this.#extents.set(identifier, {
 			categories: this.hasIdentity
 				? this.#toIds(categories, encoded)
 				: [...new Set(categories.filter((c) => c != null))],
-			role: explicit ? 'explicit' : sorted ? 'sorted' : null
+			role
 		});
 	}
 
