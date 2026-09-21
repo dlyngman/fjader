@@ -5,6 +5,7 @@ import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ClockLoop } from '$lib/animation';
 import { SlotTransition, type BandSlots } from './SlotTransition';
+import { DomainResolver } from './DomainResolver';
 
 /**
  * Driver constants, taken from ParallelAxisReorder, which is the same
@@ -44,20 +45,6 @@ interface BandGpuConfig {
 	categoryCount: number;
 	paddingInner: number;
 	paddingOuter: number;
-}
-
-/**
- * What one mark registered on the axis, and what it claims about order.
- *
- * `explicit` is a `domain` prop, `sorted` a ranking the mark's query published,
- * null a list with no opinion about order. The claim travels with the list, so
- * a mark re-registering without one withdraws it, and a mark leaving the
- * scale takes it along — a preferred order held apart from the extents used
- * to outlive both.
- */
-interface MarkExtent {
-	categories: (DimValue | number)[];
-	role: 'explicit' | 'sorted' | null;
 }
 
 /**
@@ -119,8 +106,12 @@ export class BandScaleState {
 	// DOMAIN STATE
 	// =========================================================================
 	#domain: DimValue[] = $state([]);
-	// Ids when the scale has identity, values otherwise. See #toIds.
-	#extents: Map<string, MarkExtent> = new Map();
+	/**
+	 * Which categories are displayed and in what order, and the id <-> value
+	 * boundary that decides it. This class publishes the answer; it does not
+	 * work it out. See DomainResolver.
+	 */
+	#resolver = new DomainResolver();
 	#domainUpdateScheduled: boolean = false; // Microtask debounce for updateDomainFromExtents
 
 	// =========================================================================
@@ -130,23 +121,6 @@ export class BandScaleState {
 	#paddingInner: number | null = null;
 	#paddingOuter: number | null = null;
 	#sourceField: string | null = null; // Actual SQL column name (defaults to this.name if null)
-	/**
-	 * The engine's id <-> value bijection for this scale's field.
-	 * A live reference, never a copy: the dim appends when a second table
-	 * registers the same field, and a snapshot taken at this scale's setup would
-	 * be indexed past its end by ids from that table.
-	 *
-	 * Both directions come from here. The scale used to rebuild value -> id
-	 * itself and self-heal on a length mismatch; that seam is gone.
-	 */
-	#identity: FieldIdentity | null = $state.raw(null);
-	/**
-	 * Whether #extents holds ids rather than source values. Flips once, when
-	 * identity is first adopted; see setIdentity. Cleared whenever the dim behind those ids goes away — emptied
-	 * in place, or replaced by a fresh one after a reload — because the ids
-	 * stored under it stop meaning anything at that point.
-	 */
-	#extentsEncoded: boolean = false;
 	#registry: {
 		invalidateChartsUsingScale(scale: unknown): void;
 		chartsUsing(scale: unknown): string[];
@@ -317,61 +291,25 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Adopt the engine's id -> value array for this field. Hold the reference.
+	 * Adopt the engine's bijection for this field.
+	 *
+	 * The resolver does the work — re-encoding anything registered before
+	 * identity arrived, and detecting the two reload orderings that make stored
+	 * ids meaningless. What belongs here is what a scale does afterwards:
+	 * republish, and bump the version unconditionally, because `hasIdentity`
+	 * changing alters what the ticks and the grid report even when the domain
+	 * itself has not moved.
 	 */
 	setIdentity(identity: FieldIdentity): void {
 		this.#warnIfDestroyed('setIdentity');
-		const previous = this.#identity;
-		this.#identity = identity;
-
-		// A reload empties the dim in place. The ids stored under it stop meaning
-		// anything, so the next adoption must re-encode from values again.
-		if (!identity.present) this.#extentsEncoded = false;
-
-		// The other half of that reload, and the one the emptied-in-place check
-		// cannot see: QueryEngine.reset() clears its map, so the mark re-running
-		// setup gets a DIFFERENT FieldIdentity for the same field and arrives here
-		// with it already populated. `present` is true on the way in and the flag
-		// would stay set from before the reload, leaving pre-reset ids in #extents
-		// to be range-checked against a new numbering they merely happen to fit —
-		// wrong categories, no error. The signature is unambiguous: the object we
-		// were holding has been emptied and a different one is replacing it. That
-		// only happens across a reset, since identityFor() is stable per field.
-		//
-		// Dropped rather than translated, by clearing the flag and letting the
-		// re-encode below treat the stale entries as VALUES: they miss and are
-		// discarded, while an entry a re-running mark has already refreshed is a
-		// real value and encodes correctly. That mixed state is the normal case —
-		// a mark's domain fetch and its ensureColumns resume off the same
-		// coalesced promise, so addMark can land on either side of this call.
-		if (previous && previous !== identity && !previous.present) this.#extentsEncoded = false;
-
-		// Re-encode anything registered BEFORE identity arrived. Marks race here:
-		// a mark's domain fetch and its ensureColumns both resume off the same
-		// coalesced promise, so addMark can run while hasIdentity is still false
-		// and store values. Leaving those as strings makes updateDomainFromExtents
-		// index the value array with a string and drop every category.
-		//
-		// Exactly once, on the transition. Every mark on a shared scale calls
-		// this with the same live array, and after the first pass the stored
-		// lists are already ids — re-encoding them as VALUES would look each id
-		// up in the engine's map, miss, and drop the entire domain. The old "a number is an
-		// id" heuristic made the repeat harmless by accident; #toIds no longer
-		// guesses, so the transition has to be tracked.
-		if (!this.#extentsEncoded && this.hasIdentity) {
-			this.#extentsEncoded = true;
-			for (const extent of this.#extents.values()) {
-				extent.categories = this.#toIds(extent.categories, false);
-			}
-		}
-
+		this.#resolver.setIdentity(identity);
 		this.updateDomainFromExtents();
 		this._version++;
 	}
 
 	/** True when this scale's channel carries dim ids rather than positions. */
 	get hasIdentity(): boolean {
-		return this.#identity?.present ?? false;
+		return this.#resolver.hasIdentity;
 	}
 
 	/**
@@ -391,43 +329,6 @@ export class BandScaleState {
 	}
 
 	#displayOrder: Int32Array = new Int32Array(0);
-
-	/**
-	 * Normalize a caller's list to ids, dropping anything the dim does not know.
-	 *
-	 * `encoded` says which space the caller is in, because the two are NOT
-	 * distinguishable by inspection. Treating any number as an id works only
-	 * while dim values are strings; on a band axis over a numeric column —
-	 * a year, a rating — a raw category value is a number too, and guessing
-	 * reads it as an id, which is the wrong-data class of failure rather than a
-	 * crash. Exactly one caller is in id space (the band channel of a scale
-	 * with identity, in registerDataDerivedDomains); everything else — explicit
-	 * domain props, the dim's own value list — supplies source values.
-	 *
-	 * Ids are range-checked against the value array. An id past its end would
-	 * survive into #displayOrder but be dropped from #domain by the string
-	 * projection, desynchronizing the permutation from the d3 band index space
-	 * it has to agree with.
-	 */
-	#toIds(items: (DimValue | number)[], encoded: boolean): number[] {
-		// No staleness check: both directions come from the engine's live
-		// FieldIdentity, rewritten in one pass, so the map cannot lag the array.
-		const identity = this.#identity;
-		if (!identity) return [];
-
-		const limit = identity.values.length;
-		const out: number[] = [];
-		const seen = new Set<number>();
-		for (const item of items) {
-			if (item == null) continue;
-			const id = encoded ? (item as number) : identity.ids.get(item as string);
-			if (id === undefined || !Number.isInteger(id) || id < 0 || id >= limit) continue;
-			if (seen.has(id)) continue;
-			seen.add(id);
-			out.push(id);
-		}
-		return out;
-	}
 
 	// -------------------------------------------------------------------------
 	// SLOTS — where each category is on screen, owned by SlotTransition
@@ -550,8 +451,7 @@ export class BandScaleState {
 	 * display pipeline reads effectiveDomain, and this must not drift from it.
 	 */
 	categoryAt(channelValue: number): DimValue | undefined {
-		if (!this.hasIdentity) return this.effectiveDomain[channelValue];
-		return this.#identity!.values[channelValue];
+		return this.#resolver.categoryAt(channelValue, this.effectiveDomain);
 	}
 
 	/**
@@ -570,29 +470,7 @@ export class BandScaleState {
 	 * for every label on every frame.
 	 */
 	channelValueFor(value: DimValue): number | null {
-		if (this.hasIdentity) return this.#identity!.ids.get(value) ?? null;
-		return this.#domainPositions().get(value) ?? null;
-	}
-
-	/**
-	 * value -> display position, for a scale with no identity.
-	 *
-	 * Keyed on the domain ARRAY rather than on `_version`: every writer of the
-	 * domain assigns a fresh array (`#domain` on update, `#frozenDomain` on
-	 * freeze), so a reference comparison is exact, and it cannot miss a change
-	 * that moved the domain without bumping a counter — freezing is one.
-	 */
-	#positions: Map<DimValue, number> | null = null;
-	#positionsFor: DimValue[] | null = null;
-
-	#domainPositions(): Map<DimValue, number> {
-		const domain = this.effectiveDomain;
-		if (this.#positions && this.#positionsFor === domain) return this.#positions;
-		const map = new Map<DimValue, number>();
-		for (let i = 0; i < domain.length; i++) map.set(domain[i], i);
-		this.#positions = map;
-		this.#positionsFor = domain;
-		return map;
+		return this.#resolver.channelValueFor(value, this.effectiveDomain);
 	}
 
 	/**
@@ -612,7 +490,7 @@ export class BandScaleState {
 	 */
 	#rebuildSlotTable(): void {
 		if (this.hasIdentity) {
-			this.#slots.layout('ids', this.#displayOrder, this.#identity!.values.length);
+			this.#slots.layout('ids', this.#displayOrder, this.#resolver.idCount);
 		} else {
 			this.#slots.layout('positions', null, this.#domain.length);
 		}
@@ -630,7 +508,7 @@ export class BandScaleState {
 	 * which therefore never once decided this. Dropped with the Map.
 	 */
 	get isReadyForGPU(): boolean {
-		return this.ready && this.effectiveDomain.length > 0 && this.#extents.size > 0;
+		return this.ready && this.effectiveDomain.length > 0 && this.#resolver.markCount > 0;
 	}
 
 	// =========================================================================
@@ -643,26 +521,10 @@ export class BandScaleState {
 	addMark(
 		categories: (DimValue | number)[],
 		identifier: string,
-		{
-			sorted = false,
-			explicit = false,
-			encoded = false
-		}: { sorted?: boolean; explicit?: boolean; encoded?: boolean } = {}
+		options: { sorted?: boolean; explicit?: boolean; encoded?: boolean } = {}
 	): this {
 		this.#warnIfDestroyed('addMark');
-		// Ids once identity exists, values otherwise. `encoded` says which space
-		// `categories` is already in: the band channel of a scale with identity
-		// carries dim ids straight from the data, everything else supplies source
-		// values. Encoding happens here, once, at the boundary — not by decoding
-		// to strings and re-encoding downstream.
-		const uniqueCategories: (DimValue | number)[] = this.hasIdentity
-			? this.#toIds(categories, encoded)
-			: [...new Set(categories.filter((c) => c != null))];
-
-		this.#extents.set(identifier, {
-			categories: uniqueCategories,
-			role: explicit ? 'explicit' : sorted ? 'sorted' : null
-		});
+		this.#resolver.addMark(categories, identifier, options);
 
 		if (this.#enableUpdates) {
 			this.#scheduleDomainUpdate();
@@ -675,12 +537,8 @@ export class BandScaleState {
 	 * Remove a mark's categories from domain calculation
 	 */
 	removeMark(identifier: string): this {
-		if (this.#extents.has(identifier)) {
-			this.#extents.delete(identifier);
-
-			if (this.#enableUpdates) {
-				this.#scheduleDomainUpdate();
-			}
+		if (this.#resolver.removeMark(identifier) && this.#enableUpdates) {
+			this.#scheduleDomainUpdate();
 		}
 		return this;
 	}
@@ -699,85 +557,27 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Update domain based on all categories from all marks
-	 * Preserves order of first appearance
+	 * Take the resolver's answer and publish it.
+	 *
+	 * What is left here once resolving moved out is all display: whether a
+	 * frozen scale adopts the answer at all, the permutation and its value
+	 * projection as this scale's published state, the slot table that has to
+	 * follow them, the version every reactive reader watches, and the redraw.
+	 *
+	 * Resolving is unconditional and applying is not, which is why the resolver
+	 * reports what CHANGED rather than notifying anyone: nothing below runs for
+	 * an answer identical to the one already on screen.
 	 */
 	updateDomainFromExtents(): void {
 		if (!this.#enableUpdates) {
 			return;
 		}
-		if (this.#extents.size === 0) {
-			this.#domain = [];
-			this.#displayOrder = new Int32Array(0);
-			this.#rebuildSlotTable();
-			this._version++;
-			return;
-		}
 
-		const allCategories: (DimValue | number)[] = [];
-		const seen = new Set<DimValue | number>();
+		const { ids, values, changed } = this.#resolver.resolve();
+		if (!changed) return;
 
-		// Priority 1: an explicit domain from a mark prop (highest specificity)
-		// Priority 2: a ranking a mark's query published
-		// Then everything else in first-appearance order. The preferred list is
-		// one mark's extent like any other, so it needs no intersection against
-		// the rest: it is already only categories that mark returned.
-		const preferred =
-			[...this.#extents.values()].find((e) => e.role === 'explicit') ??
-			[...this.#extents.values()].find((e) => e.role === 'sorted');
-		const ordered = preferred
-			? [preferred, ...[...this.#extents.values()].filter((e) => e !== preferred)]
-			: [...this.#extents.values()];
-		for (const extent of ordered) {
-			for (const category of extent.categories) {
-				if (!seen.has(category)) {
-					seen.add(category);
-					allCategories.push(category);
-				}
-			}
-		}
-
-		// allCategories is ids when the scale has identity. displayOrder is that
-		// list verbatim — the permutation — and #domain is its projection into
-		// source values for the consumers that need them: d3's scaleBand, axis
-		// ticks, TextMark, the tooltip decode. Values are an output here, never
-		// state — and they are not necessarily strings (see DimValue): a band axis
-		// over an INTEGER column carries numbers all the way to scaleBand, which
-		// looks its domain up by the raw value and misses on a stringified one.
-		const values = this.#identity?.values ?? [];
-		// Already ids: every path into #extents encodes at the boundary. This pass de-duplicates and range-checks.
-		//
-		// An id with no value is dropped from the ids THEMSELVES, before either
-		// projection. Filtering only the values would shorten #domain without
-		// shortening #displayOrder, and the permutation would disagree with the
-		// band index space d3 and the shader's categoryCount use — by one, with
-		// nothing failing. Unreachable today (the dim has no NULL values and
-		// synthetic rows carry a label), which is why it is written so the two
-		// cannot diverge rather than checked.
-		const orderedIds = this.hasIdentity
-			? this.#toIds(allCategories, true).filter((id) => values[id] != null)
-			: [];
-		const resolved: DimValue[] = this.hasIdentity
-			? orderedIds.map((id) => values[id] as DimValue)
-			: (allCategories as DimValue[]);
-
-		const oldDomain = this.#domain;
-		const domainChanged =
-			oldDomain.length !== resolved.length || resolved.some((cat, i) => cat !== oldDomain[i]);
-
-		// The permutation can change while its value projection does not — most
-		// obviously when identity arrives after the domain has already settled,
-		// which is the live ordering during setup. Guarding on the strings alone
-		// left displayOrder empty and the slot table stale.
-		const oldOrder = this.#displayOrder;
-		const orderChanged =
-			this.hasIdentity &&
-			(oldOrder.length !== orderedIds.length || orderedIds.some((id, i) => id !== oldOrder[i]));
-
-		if (!domainChanged && !orderChanged) return;
-
-		this.#domain = resolved;
-		this.#displayOrder = this.hasIdentity ? Int32Array.from(orderedIds) : new Int32Array(0);
+		this.#domain = values;
+		this.#displayOrder = ids;
 		this.#rebuildSlotTable();
 		this._version++;
 
@@ -908,7 +708,7 @@ export class BandScaleState {
 	 */
 	getTicks(): Float32Array {
 		void this._version;
-		const n = this.hasIdentity ? this.#identity!.values.length : this.effectiveDomain.length;
+		const n = this.hasIdentity ? this.#resolver.idCount : this.effectiveDomain.length;
 		const ticks = new Float32Array(n);
 		for (let i = 0; i < n; i++) ticks[i] = i;
 		return ticks;
@@ -924,7 +724,7 @@ export class BandScaleState {
 		void this._version;
 		if (!this.hasIdentity) return new Float32Array(this.effectiveDomain.length).fill(1);
 		const target = this.#slots.target;
-		const n = this.#identity!.values.length;
+		const n = this.#resolver.idCount;
 		const out = new Float32Array(n);
 		for (let id = 0; id < n; id++) out[id] = (target[id] ?? -1) >= 0 ? 1 : 0;
 		return out;
@@ -954,9 +754,8 @@ export class BandScaleState {
 			// Headed somewhere on screen: displayed, entering, or leaving toward a
 			// gateway. A hidden id is -1 in both halves.
 			const to = this.#slots.to;
-			const values = this.#identity!.values;
 			for (let id = 0; id < to.length; id++) {
-				if (to[id] >= 0) ticks.push({ key: id, value: values[id] });
+				if (to[id] >= 0) ticks.push({ key: id, value: this.categoryAt(id) });
 			}
 			return ticks;
 		}
@@ -1136,7 +935,7 @@ export class BandScaleState {
 	 * Get all mark extents (for debugging). Ids when the scale has identity.
 	 */
 	getExtents(): Record<string, (DimValue | number)[]> {
-		return Object.fromEntries([...this.#extents].map(([id, e]) => [id, e.categories]));
+		return this.#resolver.debugExtents();
 	}
 
 	// No-op methods for API consistency with LinearScaleState
@@ -1173,7 +972,7 @@ export class BandScaleState {
 			categoryCount: this.effectiveDomain.length,
 
 			// Extent tracking
-			extentsCount: this.#extents.size,
+			extentsCount: this.#resolver.markCount,
 			extents: this.getExtents(),
 
 			// Configuration
@@ -1198,14 +997,14 @@ export class BandScaleState {
 			// equal at rest, and slotCurrent a fraction of the way to slotTarget
 			// mid-transition. One of them alone cannot show that.
 			hasIdentity: this.hasIdentity,
-			identityCount: this.#identity?.values.length ?? 0,
+			identityCount: this.#resolver.idCount,
 
 			// The INPUTS to display order, not just its output. updateDomainFromExtents
 			// takes an explicit extent first, then a sorted one, then the rest in
 			// first-appearance order — so when an axis is in an order nobody asked
 			// for, which mark claimed which role is the whole question. Dumping
 			// only the result cannot answer it.
-			extentRoles: Object.fromEntries([...this.#extents].map(([id, e]) => [id, e.role])),
+			extentRoles: this.#resolver.debugRoles(),
 			displayOrder: Array.from(this.#displayOrder),
 			// The transition. slotCurrent is mix(slotFrom, slotTo, t), and slotTo
 			// differs from slotTarget exactly for the ids on their way out.
