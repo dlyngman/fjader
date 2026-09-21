@@ -20,6 +20,11 @@ import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import {
+	COLOR_CONFIG_BYTES,
+	COLOR_CONFIG_SLOT_BASE_OFFSET,
+	NO_SLOT_TABLE
+} from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
 interface ColorScaleConfig {
@@ -32,11 +37,6 @@ interface ColorScaleConfig {
 	constant?: number; // symlog constant C (default 1)
 	exponent?: number; // pow exponent (default 1)
 }
-
-/** Must match ColorConfig in ColorScaleShaderLib. */
-const COLOR_CONFIG_BYTES = 48;
-/** slotBase meaning "the channel already carries a palette index". */
-const NO_SLOT_TABLE = 0xffffffff;
 
 interface ColorConfigParams {
 	type: number;
@@ -610,7 +610,7 @@ export class ColorScaleState {
 		view.setUint32(20, params.type ?? 0, LE);
 		view.setUint32(24, params.transformType ?? 0, LE);
 		view.setFloat32(28, params.transformParam ?? 0, LE);
-		view.setUint32(32, params.slotBase ?? NO_SLOT_TABLE, LE);
+		view.setUint32(COLOR_CONFIG_SLOT_BASE_OFFSET, params.slotBase ?? NO_SLOT_TABLE, LE);
 
 		return buffer;
 	}

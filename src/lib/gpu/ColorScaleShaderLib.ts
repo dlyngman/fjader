@@ -20,6 +20,26 @@
 // runtime branching is the right trade-off.
 // ---------------------------------------------------------------------------
 
+/**
+ * The ColorConfig layout, in the one file that declares it.
+ *
+ * The struct below is the definition; these are how JS addresses it. They live
+ * here because a byte offset written anywhere else is a copy of a fact stated
+ * in WGSL, with nothing to keep the two in step — the scale wrote the whole
+ * struct from one set of literals and the coordinator patched `slotBase` from
+ * another, each correct and neither able to notice the other drifting.
+ */
+export const COLOR_CONFIG_BYTES = 48;
+
+/**
+ * Where `slotBase` sits. Patched on its own when a scale's block moves in the
+ * shared slot table, which is the one field written without rewriting the rest.
+ */
+export const COLOR_CONFIG_SLOT_BASE_OFFSET = 32;
+
+/** `slotBase` meaning "this channel already carries a palette index". */
+export const NO_SLOT_TABLE = 0xffffffff;
+
 export const COLOR_SCALE_STRUCTS = /* wgsl */ `
 struct ColorConfig {
     domainMin: f32,         // byte 0  — pre-transformed for non-linear types
