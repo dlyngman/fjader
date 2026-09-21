@@ -2,6 +2,7 @@
 	import { getContext } from 'svelte';
 	import type { ChartContext } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
 
 	interface Props {
@@ -51,18 +52,14 @@
 				{c.xLabel}
 			</text>
 		{:else if c.scaleTypes.x === 'band' && c.xScale}
-			{@const bandState = c.xScaleState as BandScaleState}
-			{#each bandTicks as tick (tick.key)}
-				{@const tickX = bandState.tickPosition(tick.key, c.innerWidth, 'x')}
-				<g opacity={bandState.tickOpacity(tick.key)}>
-					<g class:tick-dimmed={bandState.isTickDimmed(tick)}>
-						<line x1={tickX} x2={tickX} y1={0} y2={5} />
-						<text text-anchor="middle" x={tickX} y={16}>
-							{tick.value}
-						</text>
-					</g>
-				</g>
-			{/each}
+			<BandAxisTicks
+				scale={c.xScaleState as BandScaleState}
+				ticks={bandTicks}
+				rangeSize={c.innerWidth}
+				axis="x"
+				tickLength={5}
+				labelGap={16}
+			/>
 
 			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
 				{c.xLabel}
@@ -80,10 +77,5 @@
 		fill: var(--diveplot-text-secondary, #6b7280);
 		font-family: var(--diveplot-font, system-ui, sans-serif);
 		font-size: 10px;
-	}
-
-	.tick-dimmed {
-		opacity: 0.25;
-		transition: opacity 0.15s ease;
 	}
 </style>
