@@ -25,6 +25,8 @@ const SCALE_SPRING_PRESETS = {
 // =============================================================================
 
 export interface LinearScaleOptions {
+	/** Who to ask which charts use this scale. Set by ScaleRegistry. */
+	registry?: { chartsUsing(scale: unknown): string[] } | null;
 	disableZoom?: boolean;
 	zoomInEffect?: boolean;
 	zoomInFactor?: number;
@@ -158,6 +160,7 @@ export class LinearScaleState {
 	// --- Animation State ---
 	#isAnimating: boolean = false;
 	#gpuCoordinator: GPUCoordinator | null = null;
+	#registry: { chartsUsing(scale: unknown): string[] } | null = null;
 
 	// --- Pan Context ---
 	#panContext: PanContext | null = null;
@@ -177,7 +180,26 @@ export class LinearScaleState {
 	};
 
 	// --- Affected Charts Cache (set by GPUCoordinator) ---
-	_affectedChartsArray: string[] = [];
+	/**
+	 * Charts to redraw while this scale animates, asked of the registry rather
+	 * than written into this object.
+	 *
+	 * The registry owns which charts use which scale, and now owns the array
+	 * form too. This used to be a plain field that the registry AND the
+	 * coordinator's topology handler each assigned — one fact, two writers, on
+	 * an object owned by neither, reached by probing for the field. Asking is
+	 * also what keeps it current, which is the lesson the frame uniform taught:
+	 * a derived value that is pushed goes stale when one writer forgets.
+	 *
+	 * Returns a held array either way: the loop reads this once per frame for
+	 * every source it drives, so it must not build one.
+	 */
+	get _affectedChartsArray(): string[] {
+		return this.#registry?.chartsUsing(this) ?? this.#noCharts;
+	}
+
+	/** Returned when no registry owns this scale, as in a unit test. */
+	#noCharts: string[] = [];
 
 	// --- Domain Accessor ---
 	domain!: DomainAccessor;
@@ -194,6 +216,7 @@ export class LinearScaleState {
 		this.name = name;
 		this.type = type;
 		this.#gpuCoordinator = gpuCoordinator;
+		this.#registry = options.registry ?? null;
 
 		// Apply options
 		if (options.disableZoom !== undefined) {

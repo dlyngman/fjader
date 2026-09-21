@@ -1660,17 +1660,14 @@ export class GPUCoordinator {
 		this.#scaleIdToInstance.clear();
 		this.#scaleArray = [];
 
-		for (const [scaleInstance, chartIds] of usageMap) {
-			// Only positional scales (Linear, Band, Time) have id and _affectedChartsArray
+		for (const [scaleInstance] of usageMap) {
+			// Only positional scales (Linear, Band, Time) carry an id.
 			const scale = scaleInstance as unknown as ScaleInstance;
 			if (!scale?.id) continue;
 
-			if (chartIds && typeof chartIds[Symbol.iterator] === 'function') {
-				scale._affectedChartsArray = Array.from(chartIds);
-			} else {
-				scale._affectedChartsArray = [];
-			}
-
+			// The redraw list is NOT rebuilt here any more. It belongs to the
+			// registry, derived from the same usage map this reads, and a scale
+			// asks for it. Copying it from a second owner is how it went stale.
 			ids.push(scale.id);
 			this.#scaleIdToInstance.set(scale.id, scale);
 		}

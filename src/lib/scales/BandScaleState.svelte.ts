@@ -28,7 +28,10 @@ interface BandScaleConfig {
 	paddingInner?: number | null;
 	paddingOuter?: number | null;
 	sourceField?: string | null;
-	registry?: { invalidateChartsUsingScale(scale: unknown): void } | null;
+	registry?: {
+		invalidateChartsUsingScale(scale: unknown): void;
+		chartsUsing(scale: unknown): string[];
+	} | null;
 	/**
 	 * How a transition reaches the animation loop. Structurally typed rather
 	 * than importing GPUCoordinator, which would be a cycle. The loop drives
@@ -144,7 +147,10 @@ export class BandScaleState {
 	 * stored under it stop meaning anything at that point.
 	 */
 	#extentsEncoded: boolean = false;
-	#registry: { invalidateChartsUsingScale(scale: unknown): void } | null = null;
+	#registry: {
+		invalidateChartsUsingScale(scale: unknown): void;
+		chartsUsing(scale: unknown): string[];
+	} | null = null;
 
 	// =========================================================================
 	// FREEZE/DEBOUNCE FUNCTIONALITY
@@ -467,12 +473,25 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Charts to redraw while this axis animates. The registry and the
-	 * coordinator assign it by name on every scale they track, the same as on a
-	 * continuous scale — the clock reads it from here rather than being written
-	 * into, so there is one place it lives and one place it is set.
+	 * Charts to redraw while this scale animates, asked of the registry rather
+	 * than written into this object.
+	 *
+	 * The registry owns which charts use which scale, and now owns the array
+	 * form too. This used to be a plain field that the registry AND the
+	 * coordinator's topology handler each assigned — one fact, two writers, on
+	 * an object owned by neither, reached by probing for the field. Asking is
+	 * also what keeps it current, which is the lesson the frame uniform taught:
+	 * a derived value that is pushed goes stale when one writer forgets.
+	 *
+	 * Returns a held array either way: the loop reads this once per frame for
+	 * every source it drives, so it must not build one.
 	 */
-	_affectedChartsArray: string[] = [];
+	get _affectedChartsArray(): string[] {
+		return this.#registry?.chartsUsing(this) ?? this.#noCharts;
+	}
+
+	/** Returned when no registry owns this scale, as in a unit test. */
+	#noCharts: string[] = [];
 
 	/**
 	 * Tell this axis which id is its Other bucket, if any — where entering and
