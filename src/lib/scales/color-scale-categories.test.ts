@@ -1,0 +1,81 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ColorScaleState } from './ColorScaleState.svelte';
+import type { ScaleRegistry } from './ScaleRegistry.svelte';
+
+/**
+ * The ordinal colour channel's raw-value path, and the cache behind it.
+ *
+ * An ordinary ordinal colour channel never comes through here: it selects its
+ * dim's id column, arrives as a Float32Array and is handed straight to the
+ * GPU. This is the degraded path — a field no dim could be built for, or the
+ * window before identity lands — which is exactly why its map is built on
+ * demand rather than on every palette upload.
+ */
+describe('ColorScaleState ordinal categories', () => {
+	/** Slot allocation is all the constructor asks the registry for. */
+	const registry = {
+		allocateColorSlot: () => 0,
+		allocatePaletteSlot: () => 0,
+		allocateRampSlot: () => 0,
+		releasePaletteSlot: () => {},
+		invalidateChartsUsingScale: () => {}
+	} as unknown as ScaleRegistry;
+
+	const ordinal = (domain: (string | number)[]) =>
+		// No GPU coordinator: uploads are skipped, which leaves the CPU-side
+		// mapping this file is about.
+		new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain },
+			registry,
+			null
+		);
+
+	let warn: ReturnType<typeof vi.spyOn>;
+	let log: ReturnType<typeof vi.spyOn>;
+	beforeEach(() => {
+		warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		log = vi.spyOn(console, 'log').mockImplementation(() => {});
+	});
+	afterEach(() => {
+		warn.mockRestore();
+		log.mockRestore();
+	});
+
+	it('maps raw values to their position in the domain', () => {
+		const scale = ordinal(['a', 'b', 'c']);
+		expect(Array.from(scale.processDataForGPU(['c', 'a', 'b']))).toEqual([2, 0, 1]);
+	});
+
+	it('reports an unknown value and a null as the absent sentinel', () => {
+		const scale = ordinal(['a', 'b']);
+		expect(Array.from(scale.processDataForGPU(['a', 'zzz', null]))).toEqual([0, -1, -1]);
+	});
+
+	it('follows the domain when it changes, which the cache must not outlive', () => {
+		// The map is built on demand and keyed on the domain array. Every writer
+		// assigns a fresh one, so this is what proves the key is exact.
+		const scale = ordinal(['a', 'b', 'c']);
+		expect(Array.from(scale.processDataForGPU(['a', 'c']))).toEqual([0, 2]);
+
+		scale.setDomain(['c', 'b', 'a']);
+		expect(Array.from(scale.processDataForGPU(['a', 'c']))).toEqual([2, 0]);
+	});
+
+	it('does not adopt the caller’s domain array', () => {
+		// The cache keys on the array's identity, so the scale has to own it:
+		// a config array mutated by its owner would otherwise change the domain
+		// without changing the reference.
+		const given: (string | number)[] = ['a', 'b'];
+		const scale = ordinal(given);
+		given.push('c');
+		expect(scale.domain).toEqual(['a', 'b']);
+	});
+
+	it('passes a Float32Array of ids straight through, untouched', () => {
+		// The path every real ordinal colour channel takes. Same object, not a
+		// copy: the query already produced GPU-ready floats.
+		const scale = ordinal(['a', 'b']);
+		const ids = new Float32Array([1, 0, 1]);
+		expect(scale.processDataForGPU(ids)).toBe(ids);
+	});
+});
