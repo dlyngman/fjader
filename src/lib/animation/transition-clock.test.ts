@@ -127,9 +127,29 @@ describe('TransitionClock and the loop', () => {
 		clock.stop();
 		expect(f.sources.has(clock)).toBe(false);
 		expect(clock.running).toBe(false);
+	});
 
-		// And a later restart joins again.
+	it('stays stopped, and a later restart lands at once instead of rejoining', () => {
+		// stop() is for an owner being torn down. Rejoining the loop afterwards
+		// would animate for nobody and keep the loop awake doing it. Landing at
+		// once is the same answer a clock with no loop gives, and it leaves the
+		// consumer's state coherent rather than stuck mid transition.
+		const f = fakeLoop();
+		let rests = 0;
+		const clock = new TransitionClock({ loop: f.loop, onRest: () => rests++ });
+
 		clock.restart();
 		expect(f.sources.has(clock)).toBe(true);
+		clock.stop();
+		rests = 0;
+
+		clock.restart();
+		expect(f.sources.has(clock)).toBe(false);
+		expect(clock.running).toBe(false);
+		// Landed, not abandoned: t is at the end and the owner was told.
+		expect(clock.t).toBe(1);
+		expect(rests).toBe(1);
+		// And the version still moved, so a consumer folds onto the new target.
+		expect(clock.version).toBeGreaterThan(0);
 	});
 });

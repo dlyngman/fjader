@@ -4,6 +4,7 @@ import {
 	VALUE_RESOLVE_WORKGROUP
 } from './ValueResolveShader';
 import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
+import { immediatesSupported } from './immediates';
 
 /**
  * Channels of one mark that morph between data updates rather than replacing
@@ -177,15 +178,17 @@ export class MorphedChannels {
 	#immediatesView = new DataView(this.#immediates);
 
 	/**
-	 * Whether this browser can run the resolve kernel at all. Immediates are
-	 * Chrome-only for now; where they are missing a mark writes these channels
-	 * as static, which is what it did before morphing existed.
+	 * Whether this browser can run the resolve kernel at all.
+	 *
+	 * Where immediates are missing a mark writes these channels as static, which
+	 * is what it did before morphing existed. In practice the coordinator has
+	 * already refused the device by then — the slot kernel needs the same
+	 * feature and cannot degrade — so this fallback is reachable only if that
+	 * floor is ever lowered. It is kept because a silent snap is the right
+	 * behaviour for THIS half either way.
 	 */
 	static get supported(): boolean {
-		return (
-			typeof navigator !== 'undefined' &&
-			!!navigator.gpu?.wgslLanguageFeatures?.has('immediate_address_space')
-		);
+		return immediatesSupported();
 	}
 
 	constructor(options: MorphedChannelsOptions) {

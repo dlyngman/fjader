@@ -20,6 +20,8 @@ import {
 	type IdentitySlotState
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
+import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
+import { COLOR_CONFIG_BYTES, COLOR_CONFIG_SLOT_BASE_OFFSET } from './ColorScaleShaderLib';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -426,8 +428,6 @@ export class GPUCoordinator {
 	// =========================================================================
 	// Color scale buffers (group 2, bindings 1-3)
 	#colorConfigBuffer: GPUBuffer | null = null; // 64 configs × 48 bytes = 3KB
-	/** Must match ColorConfig in ColorScaleShaderLib and ColorScaleState. */
-	#COLOR_CONFIG_BYTES = 48;
 	#colorRampBuffer: GPUBuffer | null = null; // 64 ramps × 256 colors × 16 bytes = 256KB
 	#colorPaletteBuffer: GPUBuffer | null = null; // 64 palettes × 32 colors × 16 bytes = 32KB
 
@@ -565,6 +565,15 @@ export class GPUCoordinator {
 		}
 
 		this.#canTimestamp = adapter.features.has('timestamp-query');
+
+		// Before any pipeline is built. Both resolve kernels declare
+		// `requires immediate_address_space`, and a device that cannot compile
+		// them produces an invalid pipeline, an encoder poisoned by the dispatch
+		// that uses it, and a blank canvas — with only a WGSL feature name to go
+		// on. See immediates.ts for why the floor is deliberate.
+		if (!immediatesSupported()) {
+			throw new Error(IMMEDIATES_MISSING_MESSAGE);
+		}
 
 		this.#device = await adapter.requestDevice({
 			requiredFeatures: this.#canTimestamp ? ['timestamp-query'] : []
@@ -784,7 +793,7 @@ export class GPUCoordinator {
 		// ColorConfig buffer: 64 slots × 48 bytes each
 		this.#colorConfigBuffer = device.createBuffer({
 			label: 'ColorConfig SSBO',
-			size: this.#maxColorSlots * this.#COLOR_CONFIG_BYTES,
+			size: this.#maxColorSlots * COLOR_CONFIG_BYTES,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
 		});
 
@@ -982,7 +991,7 @@ export class GPUCoordinator {
 				this.#slotBasePatch[0] = base;
 				this.#device!.queue.writeBuffer(
 					this.#colorConfigBuffer,
-					configSlot * this.#COLOR_CONFIG_BYTES + 32,
+					configSlot * COLOR_CONFIG_BYTES + COLOR_CONFIG_SLOT_BASE_OFFSET,
 					this.#slotBasePatch
 				);
 			}
@@ -1789,7 +1798,7 @@ export class GPUCoordinator {
 			return;
 		}
 
-		const byteOffset = slot * this.#COLOR_CONFIG_BYTES;
+		const byteOffset = slot * COLOR_CONFIG_BYTES;
 		this.#device!.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
 	}
 

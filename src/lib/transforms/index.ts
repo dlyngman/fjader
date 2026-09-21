@@ -345,8 +345,33 @@ interface DensePlan {
 function densePlan(
 	aliases: string[],
 	config: MarkConfig | undefined,
-	enabled: boolean
+	enabled: boolean,
+	reported?: Set<string>
 ): DensePlan | null {
+	// Say once, per mark, why a mark that LOOKS like it should morph will not.
+	//
+	// A refusal is silent on screen: the bars still draw, with the right
+	// values, and simply snap between updates instead of travelling. That is
+	// the failure this whole line of work is easiest to miss — safer than
+	// wrong numbers and much harder to notice — so the reason is stated rather
+	// than left to be re-derived from these conditions.
+	//
+	// Only for a mark that plainly meant to: one dimmed positional axis, and
+	// then something else in the way. The silent returns below are the cases
+	// where padding was never on the table — a scatter with two continuous
+	// axes, a raw ungrouped mark, a mark whose identity has not landed yet —
+	// and announcing those would be noise on every chart in the library.
+	const say = (reason: string) => {
+		if (!reported) return;
+		const key = `${config?.table ?? '?'}:${reason}`;
+		if (reported.has(key)) return;
+		reported.add(key);
+		console.info(
+			`[dense] ${reason} Categories on this mark will snap between updates ` +
+				`rather than morphing, and a category leaving will vanish rather than shrink out.`
+		);
+	};
+
 	if (!enabled) return null;
 
 	const identity = config?.identity;
@@ -359,10 +384,22 @@ function densePlan(
 	if (!groupKeys) return null;
 
 	const candidates = aliases.filter((ch) => identity[ch]?.positional);
-	if (candidates.length !== 1) return null;
+	if (candidates.length !== 1) {
+		if (candidates.length > 1) {
+			say(
+				`${candidates.length} categorical positional axes (${candidates.join(', ')}), and ` +
+					`padding is defined for one.`
+			);
+		}
+		return null;
+	}
 	const band = candidates[0];
 	const { dim, size } = identity[band];
-	if (!dim || !groupKeys.includes(band)) return null;
+	if (!dim || !groupKeys.includes(band)) {
+		if (!dim) say(`"${band}" has no dim to join against.`);
+		else say(`"${band}" is not a GROUP BY key, so its rows are not one per category.`);
+		return null;
+	}
 
 	const cross: [string, string][] = [];
 	// Padded rows: the band's categories, times each crossed key's ids plus -1.
@@ -370,13 +407,22 @@ function densePlan(
 	for (const key of groupKeys) {
 		if (key === band || !aliases.includes(key)) continue;
 		const keyIdentity = identity[key];
-		if (!keyIdentity) return null;
+		if (!keyIdentity) {
+			say(`the group key "${key}" has no dim, so its missing combinations cannot be enumerated.`);
+			return null;
+		}
 		// A key from the band's own dim is the category again, not a new axis.
 		if (keyIdentity.dim === dim) continue;
 		cross.push([key, keyIdentity.dim]);
 		rows *= keyIdentity.size + 1;
 	}
-	if (rows > DENSE_ROW_LIMIT) return null;
+	if (rows > DENSE_ROW_LIMIT) {
+		say(
+			`padding would produce about ${rows} rows, over the ${DENSE_ROW_LIMIT} limit ` +
+				`(${size} categories${cross.length > 0 ? ` across ${cross.length + 1} group keys` : ''}).`
+		);
+		return null;
+	}
 
 	return { band, dim, cross, identity };
 }
@@ -402,6 +448,9 @@ function densePlan(
  */
 export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 	const enabled = options.enabled !== false;
+	// Per transform instance, so per mark: a refusal is reported once, not once
+	// per query assembled. Both entry points below share it.
+	const reported = new Set<string>();
 	return {
 		stage: 'sql',
 		type: 'dense',
@@ -412,12 +461,12 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 		 * and the query agreeing are one derivation, not two.
 		 */
 		alignment(aliases: string[], config?: MarkConfig): string[] | null {
-			const plan = densePlan(aliases, config, enabled);
+			const plan = densePlan(aliases, config, enabled, reported);
 			return plan ? [plan.band, ...plan.cross.map(([key]) => key)] : null;
 		},
 		apply(query: SelectQuery, config?: MarkConfig) {
 			const aliases = getSelectAliases(query);
-			const plan = densePlan(aliases, config, enabled);
+			const plan = densePlan(aliases, config, enabled, reported);
 			return plan ? densify(query, aliases, plan) : query;
 		},
 		describe() {
