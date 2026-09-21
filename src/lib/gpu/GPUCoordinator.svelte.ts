@@ -20,6 +20,7 @@ import {
 	type IdentitySlotState
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
+import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -565,6 +566,15 @@ export class GPUCoordinator {
 		}
 
 		this.#canTimestamp = adapter.features.has('timestamp-query');
+
+		// Before any pipeline is built. Both resolve kernels declare
+		// `requires immediate_address_space`, and a device that cannot compile
+		// them produces an invalid pipeline, an encoder poisoned by the dispatch
+		// that uses it, and a blank canvas — with only a WGSL feature name to go
+		// on. See immediates.ts for why the floor is deliberate.
+		if (!immediatesSupported()) {
+			throw new Error(IMMEDIATES_MISSING_MESSAGE);
+		}
 
 		this.#device = await adapter.requestDevice({
 			requiredFeatures: this.#canTimestamp ? ['timestamp-query'] : []
