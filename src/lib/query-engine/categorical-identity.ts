@@ -246,7 +246,16 @@ function identityToken(field: string): string {
  * limit is capacity, not taste.
  */
 export const MAX_IDENTITY_CARDINALITY = 10000;
-/** Above this it renders but is unreadable: ~1px per band on a wide axis. */
+/**
+ * Above this it renders but is unreadable: ~1px per band on a wide axis.
+ *
+ * It is also where a second, invisible cost starts to matter. A grid on a band
+ * axis draws one line per id in the DIM, not per displayed category, because
+ * row i has to be the same category on every update for a line's opacity to
+ * morph the way a bar's height does. Hidden ids resolve to slot -1 and are put
+ * off-screen, so they cost nothing to look at and a vertex each to draw, every
+ * frame. Fine at a few hundred; worth knowing at several thousand.
+ */
 export const WARN_IDENTITY_CARDINALITY = 1000;
 /**
  * Quoted in the refusal above. Imported rather than written as a literal so the
@@ -748,7 +757,8 @@ export class CategoricalIdentity {
 		if (size > WARN_IDENTITY_CARDINALITY) {
 			console.warn(
 				`[identity] "${field}" has ${size} distinct values; a band axis with more than ` +
-					`~${WARN_IDENTITY_CARDINALITY} categories is under a pixel per band on most charts.`
+					`~${WARN_IDENTITY_CARDINALITY} categories is under a pixel per band on most charts, ` +
+					`and a grid on that axis draws a line per value whether it is displayed or not.`
 			);
 		}
 	}
