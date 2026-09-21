@@ -1,6 +1,6 @@
 // src/lib/transforms/transforms.test.ts
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
 	filter,
 	topN,
@@ -412,6 +412,58 @@ describe('dense().alignment', () => {
 		expect(dense().alignment!(['y', 'x2'], { ...extra, groupKeys: ['y'] } as MarkConfig)).toEqual([
 			'y'
 		]);
+	});
+
+	describe('says why it refused, once, and only when the mark meant to morph', () => {
+		// A refusal is invisible on screen: right values, no motion. The reason
+		// is stated so it does not have to be re-derived from the conditions.
+		function info() {
+			return vi.spyOn(console, 'info').mockImplementation(() => {});
+		}
+
+		it('names the reason, and repeats it no matter how many queries are built', () => {
+			const spy = info();
+			const both = { ...grouped, identity: { x: axis('dim_a'), y: axis('dim_b') } } as MarkConfig;
+			const d = dense();
+			d.alignment!(['x', 'y'], both);
+			d.alignment!(['x', 'y'], both);
+			d.apply(Query.from('t').select({ x: column('x'), y: column('y') }) as SelectQuery, both);
+
+			expect(spy).toHaveBeenCalledTimes(1);
+			expect(spy.mock.calls[0][0]).toMatch(/2 categorical positional axes/);
+			spy.mockRestore();
+		});
+
+		it('quotes the row count against the limit, which is the actionable one', () => {
+			const spy = info();
+			const huge = {
+				...grouped,
+				groupKeys: ['x', 'fill'],
+				identity: {
+					x: { dim: 'dim_a', size: 5000, positional: true },
+					fill: { dim: 'dim_b', size: 20, positional: false }
+				}
+			} as MarkConfig;
+			dense().alignment!(['x', 'y', 'fill'], huge);
+
+			expect(spy).toHaveBeenCalledTimes(1);
+			expect(spy.mock.calls[0][0]).toMatch(/over the 10000 limit/);
+			spy.mockRestore();
+		});
+
+		it('stays silent for a mark that never could have morphed', () => {
+			// A scatter with two continuous axes, a raw ungrouped mark, an opt-out,
+			// and a mark whose identity has not landed yet. Announcing these would
+			// be noise on every chart in the library.
+			const spy = info();
+			dense().alignment!(['x', 'y'], { markType: 'dot', table: 't' } as MarkConfig);
+			dense().alignment!(['x', 'y'], { ...grouped, groupKeys: null });
+			dense({ enabled: false }).alignment!(['x', 'y'], grouped);
+			dense().alignment!(['x', 'y'], { ...grouped, identity: undefined } as MarkConfig);
+
+			expect(spy).not.toHaveBeenCalled();
+			spy.mockRestore();
+		});
 	});
 
 	it('refuses a group key it cannot enumerate, rather than padding it as a measure', () => {
