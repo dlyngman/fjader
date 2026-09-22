@@ -954,6 +954,17 @@ export class GPUCoordinator {
 
 		const { dirty, length } = packIdentitySlots(scales, state);
 
+		// How much of the buffer is in use, recorded whether or not anything moved.
+		// `length` and `dirty` answer different questions: dropping the LAST packed
+		// scale moves nobody's base and bumps nobody's version, so there is nothing
+		// to re-upload, but the used prefix is shorter. Read below the early return
+		// this kept a stale, too-large count and the resolve kernel went on
+		// dispatching over the departed scale's floats — harmless, since nothing
+		// reads past its own block, and stale by construction in the one file §62
+		// was about. The dispatch itself still only happens when something is
+		// pending.
+		this.#slotResolveCount = length;
+
 		// Hand back the base to any scale that reads it from its own config rather
 		// than from p4. A band scale's base is refilled into p4 every frame; an
 		// ordinal colour scale's lives in a config uploaded only when the scale
@@ -1003,7 +1014,6 @@ export class GPUCoordinator {
 			length
 		);
 
-		this.#slotResolveCount = length;
 		this.#slotResolvePending = true;
 	}
 

@@ -160,6 +160,22 @@ describe('packIdentitySlots dirty tracking', () => {
 		expect(readBlock(state.buffer, state.offsets.get('a')!).slots).toEqual([2, 1, 0]);
 	});
 
+	it('shrinks the used prefix without going dirty when a trailing scale goes', () => {
+		// `length` and `dirty` answer different questions, and the caller has to
+		// treat them that way. Dropping the LAST scale moves nobody's base and
+		// bumps nobody's version, so there is nothing to re-upload — but the used
+		// prefix is shorter, and a caller that reads `length` only on the dirty
+		// path keeps dispatching its resolve over the departed scale's floats.
+		const state = createIdentitySlotState(64);
+		const both = packIdentitySlots([scale('a', [0, 1]), scale('b', [0])], state);
+		const wide = both.length;
+
+		const { dirty, length } = packIdentitySlots([scale('a', [0, 1])], state);
+
+		expect(dirty).toBe(false);
+		expect(length).toBeLessThan(wide);
+	});
+
 	it('re-packs a scale whose base shifted even if its version did not', () => {
 		// The reason bases are compared as well as versions. A scale inserted
 		// ahead of it moves it; its own table never changed, so version alone
