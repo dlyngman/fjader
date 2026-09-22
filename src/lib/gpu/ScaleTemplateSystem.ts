@@ -380,11 +380,46 @@ function _scaleFunctionName(scaleType: string, axis: string): string {
 }
 
 /**
+ * Bytes of immediate data every render pipeline declares: the chart's x and y
+ * `ScaleParam`, 16 bytes each. Every layout declares the same size because a
+ * draw requires every declared byte to have been set, and the pass sets them
+ * once, before its first draw.
+ */
+export const CHART_SCALE_IMMEDIATE_SIZE = 32;
+
+/**
+ * Where a chart's scales are read from.
+ *
+ * - `immediate` — production: the pass's immediates.
+ * - `table` — the global scale table at the frame uniform's indices, the path
+ *   the immediates replaced. Kept only so the parity check has something to
+ *   compare against.
+ * - `swapped` — immediates with x and y exchanged. The parity check's control:
+ *   a wrong scale reaching the shader, which the comparison must catch.
+ */
+export type ChartScaleSource = 'immediate' | 'table' | 'swapped';
+
+const CHART_SCALE_SOURCES: Record<ChartScaleSource, [string, string]> = {
+	immediate: ['chartScales.x', 'chartScales.y'],
+	table: ['scaleParams[frameUniforms.xScaleIndex]', 'scaleParams[frameUniforms.yScaleIndex]'],
+	swapped: ['chartScales.y', 'chartScales.x']
+};
+
+/**
  * Main template system class
  */
 export class ScaleTemplateSystem {
 	shaderCache = new Map<string, ShaderResult>();
 	bufferLayoutCache = new Map<string, unknown>();
+
+	/**
+	 * Where `chartScaleX/Y` read from. `immediate` in production and never
+	 * changed there; the parity check switches it to render the same charts
+	 * through the old table path and through a deliberately wrong one, and
+	 * compare pixels. Part of every cache key, so a pipeline compiled against
+	 * one source is never handed out for another.
+	 */
+	chartScaleSource: ChartScaleSource = 'immediate';
 
 	constructor() {}
 
@@ -410,7 +445,7 @@ export class ScaleTemplateSystem {
 		}
 
 		const defKey = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
-		const cacheKey = `${markType}-${scaleTypes.x}-${scaleTypes.y}${defKey}`;
+		const cacheKey = `${markType}-${scaleTypes.x}-${scaleTypes.y}${defKey}-${this.chartScaleSource}`;
 
 		// Return cached version if available
 		if (this.shaderCache.has(cacheKey)) {
@@ -458,6 +493,8 @@ export class ScaleTemplateSystem {
 		// Generate complete shader
 		// WGSL ordering: structs → bindings → functions → entry points
 		const shaderCode = `
+      requires immediate_address_space;
+
       // Generated shader for scales: ${scaleTypes.x}-x, ${scaleTypes.y}-y
       // Auto-generated - do not edit directly
       
@@ -543,23 +580,32 @@ export class ScaleTemplateSystem {
 		// We can just use the one from xFragment since they are identical.
 		const structDef = xFragment.declaration();
 
+		const [xSource, ySource] = CHART_SCALE_SOURCES[this.chartScaleSource];
+
 		// Global SSBO declaration
 		const globalSSBODeclaration = `
       // Global scale storage buffer
       @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
-      // The chart's own x and y scale params, and the ONE place that says where
-      // they come from. Every consumer of a chart's scales reads through these
-      // — scaleX/scaleY, the bandwidth helpers, and mark code that needs the
-      // raw params — so moving the source is a change here and nowhere else.
-      // Callers holding an index of their own (parallel coordinates) go
-      // through scaleParams directly instead.
+      // The chart's own x and y scale params, pushed into the pass before its
+      // first draw. Pass state rather than a buffer: no upload, no index into a
+      // table that can be renumbered, and nothing to go stale.
+      struct ChartScales {
+        x: ScaleParam,
+        y: ScaleParam,
+      };
+      var<immediate> chartScales: ChartScales;
+
+      // The ONE place that says where a chart's scales come from. Every
+      // consumer reads through these — scaleX/scaleY, the bandwidth helpers,
+      // and mark code that needs the raw params. Callers holding an index of
+      // their own (parallel coordinates) go through scaleParams directly.
       fn chartScaleX() -> ScaleParam {
-        return scaleParams[frameUniforms.xScaleIndex];
+        return ${xSource};
       }
 
       fn chartScaleY() -> ScaleParam {
-        return scaleParams[frameUniforms.yScaleIndex];
+        return ${ySource};
       }
     `;
 

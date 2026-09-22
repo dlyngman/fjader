@@ -1,6 +1,6 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
-import { scaleTemplateSystem } from './ScaleTemplateSystem';
+import { scaleTemplateSystem, CHART_SCALE_IMMEDIATE_SIZE } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
@@ -1039,30 +1039,57 @@ export class GPUCoordinator {
 		const len = this.#scaleArray.length;
 		for (let i = 0; i < len; i++) {
 			const item = this.#scaleArray[i];
-			const scale = item.instance;
-			const off = item.index << 2;
-
-			if (isCategoricalScale(scale.type)) {
-				// BAND SCALE: Write configuration
-				const config = scale.getConfig!();
-
-				view[off] = config.categoryCount;
-				view[off + 1] = config.paddingInner;
-				view[off + 2] = config.paddingOuter;
-				// p4: this scale's base offset into the shared band slot table.
-				view[off + 3] =
-					this.#identitySlots?.offsets.get((scale as { id: string }).id) ?? IDENTITY_SLOT_EMPTY;
-			} else {
-				// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
-				const s = scale.gpuState!;
-
-				view[off] = s.domainMin;
-				view[off + 1] = s.domainMax;
-				view[off + 2] = s.domainScale;
-				view[off + 3] = s.p4; // symlog constant C, 0 for linear/log/time
-			}
+			this.#writeScaleParam(item.instance, view, item.index << 2);
 		}
 	}
+
+	/**
+	 * One scale's four floats, as every shader reads them: a row of the global
+	 * table, or one half of a chart's immediates. Written in one place so the
+	 * two cannot disagree about what a scale looks like to the GPU.
+	 */
+	#writeScaleParam(scale: ScaleInstance, view: Float32Array, off: number): void {
+		if (isCategoricalScale(scale.type)) {
+			// BAND SCALE: Write configuration
+			const config = scale.getConfig!();
+
+			view[off] = config.categoryCount;
+			view[off + 1] = config.paddingInner;
+			view[off + 2] = config.paddingOuter;
+			// p4: this scale's base offset into the shared band slot table.
+			view[off + 3] = this.#identitySlots?.offsets.get(scale.id) ?? IDENTITY_SLOT_EMPTY;
+		} else {
+			// CONTINUOUS SCALE: Write domain state (linear, time, log, symlog)
+			const s = scale.gpuState!;
+
+			view[off] = s.domainMin;
+			view[off + 1] = s.domainMax;
+			view[off + 2] = s.domainScale;
+			view[off + 3] = s.p4; // symlog constant C, 0 for linear/log/time
+		}
+	}
+
+	/**
+	 * Fill a chart's immediates — its x scale's params, then its y scale's — and
+	 * say whether it has both.
+	 *
+	 * Looked up by id on every pass rather than held: the lookup is two Map reads
+	 * per chart per frame, and a value asked for each time cannot go stale the
+	 * way an index written once did. A chart whose scale is not registered yet
+	 * gets false, and the caller draws nothing for it rather than drawing through
+	 * a guess.
+	 */
+	#writeChartScales(chart: ChartConfig, view: Float32Array): boolean {
+		const x = chart.xScaleId ? this.#scaleIdToInstance.get(chart.xScaleId) : undefined;
+		const y = chart.yScaleId ? this.#scaleIdToInstance.get(chart.yScaleId) : undefined;
+		if (!x || !y) return false;
+		this.#writeScaleParam(x, view, 0);
+		this.#writeScaleParam(y, view, 4);
+		return true;
+	}
+
+	/** Reused per pass: the chart's x and y ScaleParam, pushed as immediates. */
+	#chartScaleImmediates = new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4);
 
 	// =========================================================================
 	// ANIMATION LOOP CALLBACKS
@@ -1261,7 +1288,15 @@ export class GPUCoordinator {
 				this.#createRenderPassDescriptor(view, chartConfig)
 			);
 
-			if (chartConfig.perFrameBindGroup) {
+			// The chart's scales, written once for the whole pass and before the
+			// first draw. Every pipeline declares the same 32 bytes and a draw
+			// requires every declared byte to have been set, so this is the whole
+			// range, every pass. Immediate data survives setPipeline between
+			// layouts of the same size, which is what makes once enough.
+			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
+			passEncoder.setImmediates(0, this.#chartScaleImmediates);
+
+			if (chartConfig.perFrameBindGroup && scalesKnown) {
 				passEncoder.setBindGroup(0, chartConfig.perFrameBindGroup);
 				passEncoder.setBindGroup(2, currentScaleBindGroup);
 
@@ -1343,7 +1378,10 @@ export class GPUCoordinator {
 		// Generate stable resource key (includes scale topology and renderer definition)
 		const topologySuffix = `${scaleTypes.x}-${scaleTypes.y}`;
 		const defSuffix = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
-		const resourceKey = `${markType}-${topologySuffix}${defSuffix}`;
+		// The source is fixed in production; a parity check switches it, and a
+		// pipeline compiled against one must not be handed out for the other.
+		const sourceSuffix = `-${scaleTemplateSystem.chartScaleSource}`;
+		const resourceKey = `${markType}-${topologySuffix}${defSuffix}${sourceSuffix}`;
 
 		// Prepare local registry for this renderer
 		if (!this.#rendererRegistry.has(rendererId)) {
@@ -1402,7 +1440,11 @@ export class GPUCoordinator {
 			pipeline = await this.#getOrCreateSharedPipeline(resourceKey, async () => {
 				const pipelineLayout = this.#device!.createPipelineLayout({
 					label: `${resourceKey}-pipeline-layout`,
-					bindGroupLayouts: [frameLayout, dataLayout, this.#globalScaleLayout!]
+					bindGroupLayouts: [frameLayout, dataLayout, this.#globalScaleLayout!],
+					// The same for every render pipeline, so it adds no cache
+					// permutations — and it has to be: a draw needs every declared
+					// byte set, and the pass sets exactly this many.
+					immediateSize: CHART_SCALE_IMMEDIATE_SIZE
 				});
 
 				return this.#device!.createRenderPipeline({
@@ -2239,22 +2281,16 @@ export class GPUCoordinator {
 		const rangeMaxY = canvas.clientHeight * dpr;
 
 		// The fallbacks are a GUESS — whichever scale registered first and second
-		// — and the shader cannot tell a guess from an answer. That is how a chart
-		// came to render every mark through another chart's band layout and slot
+		// — and a shader cannot tell a guess from an answer. That is how a chart
+		// once rendered every mark through another chart's band layout and slot
 		// table while its own scale, domain, ticks and axis were all correct.
 		//
-		// Left in rather than removed, because removing changes nothing: the
-		// buffer is created without mappedAtCreation, so WebGPU zero-initialises
-		// it, and not writing an index reads as 0 exactly as writing one does.
-		// Refusing to DRAW is what would help, and that is a gate around a field
-		// with a known end date — immediates writes a chart's resolved scale
-		// params straight into the pass, and an index that does not exist cannot
-		// be guessed at.
-		//
-		// What makes it survivable meanwhile is #refreshStaleFrameUniforms: the
-		// only window left is between a mapping arriving and the next index
-		// rebuild, and that rebuild bumps the topology counter, which marks this
-		// chart stale again. A frame or two, not the rest of the session.
+		// No shader reads these in production any more: a chart's scales arrive
+		// as immediates, looked up by id per pass, and a chart without both draws
+		// nothing instead (#writeChartScales). Parallel coordinates computes its
+		// own indices and never read this pair. The one reader left is the parity
+		// check's `table` source, which is the old path kept to compare against;
+		// the field goes with the global table.
 		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId!) ?? 0;
 		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId!) ?? 1;
 
@@ -2368,11 +2404,10 @@ export class GPUCoordinator {
 	}
 
 	/**
-	 * Which scale each chart resolves its axes through, and the SSBO index the
-	 * shader reads for it.
+	 * Which scale each chart resolves its axes through, and its SSBO index.
 	 *
-	 * A mark's shader reads `scaleParams[frameUniforms.xScaleIndex]`, so a chart
-	 * pointing at the wrong scale renders through another chart's band layout
+	 * A mark's shader reads its chart's scales as immediates, written per pass
+	 * from these ids, so a chart pointing at the wrong scale renders through another chart's band layout
 	 * and slot table — every id resolving to a slot it does not own. Nothing on
 	 * the CPU side shows that: the scale, its domain and its axis are all
 	 * correct, and only the pixels are wrong. This is the join between them.
