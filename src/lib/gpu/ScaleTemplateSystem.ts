@@ -74,9 +74,12 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleLinear${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
+      // Through the global table, for a caller holding an index into it.
       fn scaleLinear${suffix}(value: f32, scaleIndex: u32) -> f32 {
-        let scale = scaleParams[scaleIndex];
-        
+        return scaleLinear${suffix}From(value, scaleParams[scaleIndex]);
+      }
+
+      fn scaleLinear${suffix}From(value: f32, scale: ScaleParam) -> f32 {
         // ★ Use generic field names
         let domainMin = scale.p1;
         let domainScale = scale.p3;
@@ -122,9 +125,12 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleLog${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
+      // Through the global table, for a caller holding an index into it.
       fn scaleLog${suffix}(value: f32, scaleIndex: u32) -> f32 {
-        let scale = scaleParams[scaleIndex];
+        return scaleLog${suffix}From(value, scaleParams[scaleIndex]);
+      }
 
+      fn scaleLog${suffix}From(value: f32, scale: ScaleParam) -> f32 {
         let logDomainMin = scale.p1;
         let logDomainScale = scale.p3;
 
@@ -168,9 +174,12 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
         return sign(value) * log(1.0 + abs(value / constant));
       }
 
+      // Through the global table, for a caller holding an index into it.
       fn scaleSymlog${suffix}(value: f32, scaleIndex: u32) -> f32 {
-        let scale = scaleParams[scaleIndex];
+        return scaleSymlog${suffix}From(value, scaleParams[scaleIndex]);
+      }
 
+      fn scaleSymlog${suffix}From(value: f32, scale: ScaleParam) -> f32 {
         let symlogMin = scale.p1;
         let symlogScale = scale.p3;
         let constant = scale.p4;
@@ -211,9 +220,12 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleBand${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
+			// Through the global table, for a caller holding an index into it.
 			fn scaleBand${suffix}(value: f32, scaleIndex: u32) -> f32 {
-				let scale = scaleParams[scaleIndex];
+				return scaleBand${suffix}From(value, scaleParams[scaleIndex]);
+			}
 
+			fn scaleBand${suffix}From(value: f32, scale: ScaleParam) -> f32 {
 				// -1 = no identity (unmapped category), matching the COALESCE(-1)
 				// the identity view emits and the value < 0.0 check in
 				// getColorFromScale. Must be rejected before the cast below:
@@ -535,6 +547,20 @@ export class ScaleTemplateSystem {
 		const globalSSBODeclaration = `
       // Global scale storage buffer
       @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
+
+      // The chart's own x and y scale params, and the ONE place that says where
+      // they come from. Every consumer of a chart's scales reads through these
+      // — scaleX/scaleY, the bandwidth helpers, and mark code that needs the
+      // raw params — so moving the source is a change here and nowhere else.
+      // Callers holding an index of their own (parallel coordinates) go
+      // through scaleParams directly instead.
+      fn chartScaleX() -> ScaleParam {
+        return scaleParams[frameUniforms.xScaleIndex];
+      }
+
+      fn chartScaleY() -> ScaleParam {
+        return scaleParams[frameUniforms.yScaleIndex];
+      }
     `;
 
 		return `${structDef}\n${globalSSBODeclaration}`;
@@ -641,7 +667,7 @@ export class ScaleTemplateSystem {
     // not — the same way align came to move the d3 scale and nothing else.
     // There is one formula here now, and a test asserts it appears once.
     fn getBandwidthX() -> f32 {
-      let scale = scaleParams[frameUniforms.xScaleIndex];
+      let scale = chartScaleX();
       return computeBandLayout(
         0.0,
         scale.p1,
@@ -653,7 +679,7 @@ export class ScaleTemplateSystem {
     }
 
     fn getBandwidthY() -> f32 {
-      let scale = scaleParams[frameUniforms.yScaleIndex];
+      let scale = chartScaleY();
       return computeBandLayout(
         0.0,
         scale.p1,
@@ -782,7 +808,7 @@ export class ScaleTemplateSystem {
 			const xFunctionName = _scaleFunctionName(scaleTypes.x, 'X');
 			functions.push(`
       fn scaleX(value: f32) -> f32 {
-        return ${xFunctionName}(value, frameUniforms.xScaleIndex);
+        return ${xFunctionName}From(value, chartScaleX());
       }`);
 		}
 
@@ -791,7 +817,7 @@ export class ScaleTemplateSystem {
 			const yFunctionName = _scaleFunctionName(scaleTypes.y, 'Y');
 			functions.push(`
       fn scaleY(value: f32) -> f32 {
-        return ${yFunctionName}(value, frameUniforms.yScaleIndex);
+        return ${yFunctionName}From(value, chartScaleY());
       }`);
 		}
 
@@ -801,10 +827,10 @@ export class ScaleTemplateSystem {
 			const yFunctionName = _scaleFunctionName(scaleTypes.y, 'Y');
 			functions.push(`
       fn scaleX(value: f32) -> f32 {
-        return ${xFunctionName}(value, frameUniforms.xScaleIndex);
+        return ${xFunctionName}From(value, chartScaleX());
       }
       fn scaleY(value: f32) -> f32 {
-        return ${yFunctionName}(value, frameUniforms.yScaleIndex);
+        return ${yFunctionName}From(value, chartScaleY());
       }`);
 		}
 
