@@ -150,15 +150,45 @@ export class ColorScaleState {
 	}
 	/**
 	 * Where this scale's block sits in the shared identity slot table. Assigned
-	 * by the coordinator's packer, which also patches it into the uploaded
-	 * config — the config is written when the scale changes, while the base can
-	 * move on any frame a neighbouring scale resizes.
+	 * by the coordinator's packer.
+	 *
+	 * -1 until the packer has placed this scale. That is not a base the packer
+	 * can hand out — the offsets it assigns are the empty block or a real one,
+	 * never negative — so it reads unambiguously as "never received one", which
+	 * is what `setSlotBase` leans on below.
 	 */
 	#slotBase: number = -1;
 
-	/** Called by the packer when this scale's block moves. */
+	/**
+	 * Called by the packer when this scale's block moves, and told its own base
+	 * rather than having it written into its config from outside.
+	 *
+	 * The config is uploaded when the scale changes, while the base can move on
+	 * any frame a neighbouring scale resizes — so the two cannot be one write,
+	 * and this patches the four bytes that moved. The offset belongs to
+	 * ColorScaleShaderLib, which declares the struct; nothing here or in the
+	 * coordinator restates it.
+	 *
+	 * SKIPS AN UNCHANGED BASE, which is what keeps a static chart from writing
+	 * anything: the packer calls this every frame. The comparison is against
+	 * this instance's own field, and that is the point. A chart that unmounts
+	 * and remounts is rebuilt, and the new object carries the same scale id —
+	 * the packer, a deterministic running sum over the same scales, hands that
+	 * id the same base. A cache keyed on the ID would say "already delivered"
+	 * and skip an instance that had never received one, leaving #slotBase at -1,
+	 * which #buildColorConfig writes as NO_SLOT_TABLE: the shader then reads the
+	 * channel's DIM ID as a palette index — wrong colours, silently, and
+	 * disagreeing with the CPU legend. A fresh instance starts at -1 and so
+	 * cannot match, which makes that unrepresentable rather than guarded.
+	 */
 	setSlotBase(base: number): void {
+		if (this.#slotBase === base) return;
 		this.#slotBase = base;
+		// Before the scale has a config slot there is nothing to patch; whichever
+		// upload path claims one writes the base with the rest of the struct.
+		if (this.#configSlot >= 0) {
+			this.#gpuCoordinator?.writeColorConfigSlotBase(this.#configSlot, base);
+		}
 	}
 
 	// ViewManager integration - tracks tables this scale has registered columns for
@@ -609,17 +639,12 @@ export class ColorScaleState {
 	 * Build the ColorConfig struct as ArrayBuffer.
 	 * Uses DataView for correct binary layout (mixed f32/u32).
 	 *
-	 * MUST MATCH WGSL LAYOUT:
-	 * struct ColorConfig {
-	 *   domainMin: f32,         // byte 0  — pre-transformed for non-linear
-	 *   domainMax: f32,         // byte 4  — pre-transformed for non-linear
-	 *   rampOffset: u32,        // byte 8
-	 *   paletteOffset: u32,     // byte 12
-	 *   paletteSize: u32,       // byte 16
-	 *   scaleType: u32,         // byte 20 — render type
-	 *   transformType: u32,     // byte 24 — normalization transform
-	 *   transformParam: f32,    // byte 28 — symlog C or pow exponent
-	 * }; // 32 bytes total
+	 * THE LAYOUT IS NOT RESTATED HERE. It is declared once, in
+	 * ColorScaleShaderLib: the WGSL struct, COLOR_CONFIG_BYTES and
+	 * COLOR_CONFIG_SLOT_BASE_OFFSET. A copy of it lived in this comment and had
+	 * already drifted — it listed eight fields, omitted `slotBase` and both
+	 * pads, and called the struct 32 bytes when it is 48 — which is the exact
+	 * failure the constants were introduced to stop. Read the struct there.
 	 */
 	#buildColorConfig(params: ColorConfigParams): ArrayBuffer {
 		const buffer = new ArrayBuffer(COLOR_CONFIG_BYTES);

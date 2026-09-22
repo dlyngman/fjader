@@ -129,10 +129,15 @@ interface GPUCoordinatorConfig {
 	msaaSampleCount?: number;
 }
 
-/** A scale that carries its slot-table base in its own uploaded config. */
+/**
+ * A scale that carries its slot-table base in its own uploaded config, rather
+ * than in the p4 the coordinator refills every frame.
+ *
+ * It is told its base and decides what to do with it — including whether the
+ * base moved at all, which is why nothing here caches what was last handed out.
+ */
 interface SlotBaseConsumer {
 	setSlotBase(base: number): void;
-	readonly gpuSlots?: { configSlot: number };
 }
 
 /** What the coordinator needs from a facet scale: which id sits at a cell. */
@@ -379,25 +384,6 @@ export class GPUCoordinator {
 	/** Reused per frame so the hot path allocates nothing. */
 	#identitySlotScales: IdentitySlotScale[] = [];
 	#identitySlotEntryPool: IdentitySlotScale[] = [];
-	/**
-	 * Last slot base pushed back to a scale, so a static chart patches nothing.
-	 *
-	 * Keyed by the scale INSTANCE, not by its id, and that is the whole point.
-	 * A chart that unmounts and remounts is evicted from the registry and
-	 * rebuilt, so the new object carries the same scale id — and the packer,
-	 * being a deterministic running sum over the same scales, hands that id the
-	 * same base. Keyed by id, the cache would then say "already delivered" and
-	 * skip setSlotBase for an instance that had never received one. It keeps
-	 * ColorScaleState's initial -1, which #buildColorConfig writes as
-	 * NO_SLOT_TABLE, and the shader reads the channel's DIM ID as a palette
-	 * index: wrong colours, silently, and disagreeing with the CPU legend.
-	 *
-	 * A WeakMap also removes the need to sweep it. Sweeping would not have been
-	 * enough anyway — an unmount and remount with no frame between them leaves
-	 * the id present in the packer's offsets, so there is nothing for a sweep to
-	 * notice, while the instance has still changed.
-	 */
-	#slotBaseSeen = new WeakMap<SlotBaseConsumer, number>();
 	/** Index-aligned with #identitySlotScales. Reused; null where not applicable. */
 	#slotBaseConsumers: (SlotBaseConsumer | null)[] = [];
 	/** Reused for the four-byte config patch. */
@@ -971,9 +957,15 @@ export class GPUCoordinator {
 		// Hand back the base to any scale that reads it from its own config rather
 		// than from p4. A band scale's base is refilled into p4 every frame; an
 		// ordinal colour scale's lives in a config uploaded only when the scale
-		// changes, so it is patched directly — four bytes, and only when it
-		// moved. Without that a colour scale keeps a base that belonged to it
-		// before a neighbour resized, and reads another scale's ranks.
+		// changes, so it patches the four bytes itself. Without that a colour
+		// scale keeps a base that belonged to it before a neighbour resized, and
+		// reads another scale's ranks.
+		//
+		// Told unconditionally, because whether the base actually moved is the
+		// scale's own state to compare — it holds the last one it was given, and
+		// an instance that has never received one cannot match. Deduplicating
+		// here instead meant a cache of another object's field, on an object
+		// owned by neither.
 		//
 		// Walks the parallel array captured during collection rather than
 		// searching #scaleArray per entry: this runs every frame.
@@ -981,20 +973,8 @@ export class GPUCoordinator {
 			const scale = consumers[i];
 			if (!scale) continue;
 			const base = state.offsets.get(scales[i].id);
-			if (base === undefined || this.#slotBaseSeen.get(scale) === base) continue;
-
+			if (base === undefined) continue;
 			scale.setSlotBase(base);
-			this.#slotBaseSeen.set(scale, base);
-
-			const configSlot = scale.gpuSlots?.configSlot;
-			if (configSlot !== undefined && configSlot >= 0 && this.#colorConfigBuffer) {
-				this.#slotBasePatch[0] = base;
-				this.#device!.queue.writeBuffer(
-					this.#colorConfigBuffer,
-					configSlot * COLOR_CONFIG_BYTES + COLOR_CONFIG_SLOT_BASE_OFFSET,
-					this.#slotBasePatch
-				);
-			}
 		}
 
 		if (!dirty) return;
@@ -1800,6 +1780,29 @@ export class GPUCoordinator {
 
 		const byteOffset = slot * COLOR_CONFIG_BYTES;
 		this.#device!.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
+	}
+
+	/**
+	 * Patch one colour config's `slotBase` — the four bytes that move when the
+	 * packer shifts this scale's block in the shared slot table.
+	 *
+	 * Separate from `writeColorConfig` because the rest of the struct is written
+	 * when the SCALE changes, while the base moves whenever a NEIGHBOURING scale
+	 * resizes. The scale calls this itself; the coordinator owns the buffer, not
+	 * the decision.
+	 */
+	writeColorConfigSlotBase(slot: number, base: number): void {
+		if (!this.#colorConfigBuffer) return;
+		if (slot < 0 || slot >= this.#maxColorSlots) {
+			console.warn(`[GPUCoordinator] Invalid color config slot: ${slot}`);
+			return;
+		}
+		this.#slotBasePatch[0] = base;
+		this.#device!.queue.writeBuffer(
+			this.#colorConfigBuffer,
+			slot * COLOR_CONFIG_BYTES + COLOR_CONFIG_SLOT_BASE_OFFSET,
+			this.#slotBasePatch
+		);
 	}
 
 	/**
