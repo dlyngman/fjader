@@ -1,8 +1,4 @@
-import {
-	VALUE_RESOLVE_IMMEDIATE_SIZE,
-	VALUE_RESOLVE_SHADER,
-	VALUE_RESOLVE_WORKGROUP
-} from './ValueResolveShader';
+import { RESOLVE_IMMEDIATE_SIZE, RESOLVE_WORKGROUP, resolvePipelineFor } from './ResolveShader';
 import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
 import { immediatesSupported } from './immediates';
 
@@ -74,49 +70,6 @@ interface Channel {
 	bindGroup: GPUBindGroup | null;
 }
 
-interface ResolvePipeline {
-	pipeline: GPUComputePipeline;
-	layout: GPUBindGroupLayout;
-}
-
-const PIPELINES = new WeakMap<GPUDevice, ResolvePipeline>();
-
-/**
- * One resolve pipeline per device: the kernel is channel-agnostic.
- *
- * An explicit layout rather than 'auto', so the immediate range is stated here
- * and not left to how a default layout infers it.
- */
-function pipelineFor(device: GPUDevice): ResolvePipeline {
-	let entry = PIPELINES.get(device);
-	if (!entry) {
-		const stage = GPUShaderStage.COMPUTE;
-		const layout = device.createBindGroupLayout({
-			label: 'value-resolve',
-			entries: [
-				{ binding: 0, visibility: stage, buffer: { type: 'read-only-storage' } },
-				{ binding: 1, visibility: stage, buffer: { type: 'read-only-storage' } },
-				{ binding: 2, visibility: stage, buffer: { type: 'storage' } }
-			]
-		});
-		const pipeline = device.createComputePipeline({
-			label: 'value-resolve',
-			layout: device.createPipelineLayout({
-				label: 'value-resolve',
-				bindGroupLayouts: [layout],
-				immediateSize: VALUE_RESOLVE_IMMEDIATE_SIZE
-			}),
-			compute: {
-				module: device.createShaderModule({ label: 'value-resolve', code: VALUE_RESOLVE_SHADER }),
-				entryPoint: 'main'
-			}
-		});
-		entry = { pipeline, layout };
-		PIPELINES.set(device, entry);
-	}
-	return entry;
-}
-
 /**
  * A cheap fingerprint of the band ids, per update.
  *
@@ -174,7 +127,8 @@ export class MorphedChannels {
 	#passDescriptor: GPUComputePassDescriptor;
 	#ownClock: TransitionClock | null = null;
 
-	#immediates = new ArrayBuffer(VALUE_RESOLVE_IMMEDIATE_SIZE);
+	/** `count`, `t`, `offset`. A channel owns its buffers, so `offset` stays 0. */
+	#immediates = new ArrayBuffer(RESOLVE_IMMEDIATE_SIZE);
 	#immediatesView = new DataView(this.#immediates);
 
 	/**
@@ -182,8 +136,8 @@ export class MorphedChannels {
 	 *
 	 * Where immediates are missing a mark writes these channels as static, which
 	 * is what it did before morphing existed. In practice the coordinator has
-	 * already refused the device by then — the slot kernel needs the same
-	 * feature and cannot degrade — so this fallback is reachable only if that
+	 * already refused the device by then — the slot tables resolve through the
+	 * same kernel and cannot degrade — so this fallback is reachable only if that
 	 * floor is ever lowered. It is kept because a silent snap is the right
 	 * behaviour for THIS half either way.
 	 */
@@ -300,7 +254,7 @@ export class MorphedChannels {
 		this.#dirty = false;
 		this.#resolvedT = resolveT;
 
-		const { pipeline, layout } = pipelineFor(this.#device);
+		const { pipeline, layout } = resolvePipelineFor(this.#device);
 		const pass = encoder.beginComputePass(this.#passDescriptor);
 		pass.setPipeline(pipeline);
 		this.#immediatesView.setFloat32(4, resolveT, true);
@@ -319,7 +273,7 @@ export class MorphedChannels {
 			this.#immediatesView.setUint32(0, channel.count, true);
 			pass.setImmediates(0, this.#immediates);
 			pass.setBindGroup(0, channel.bindGroup);
-			pass.dispatchWorkgroups(Math.ceil(channel.count / VALUE_RESOLVE_WORKGROUP));
+			pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 		}
 		pass.end();
 	}

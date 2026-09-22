@@ -6,7 +6,7 @@ import {
 	type IdentitySlotScale,
 	type IdentitySlotState
 } from './identity-slot-packing';
-import { resolveSlotsReference } from './SlotResolveShader';
+import { resolveReference } from './ResolveShader';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
@@ -38,12 +38,26 @@ function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
 /** Read one scale's block back the way the shader's identitySlot() does. */
 function readBlock(buffer: Float32Array, base: number) {
 	const count = buffer[base];
-	return { count, slots: Array.from(buffer.slice(base + 2, base + 2 + count)) };
+	return { count, slots: Array.from(buffer.slice(base + 1, base + 1 + count)) };
 }
 
-/** The t the shader would interpolate with, from the same block header. */
-function readT(buffer: Float32Array, base: number) {
-	return buffer[base + 1];
+/**
+ * Run a pack's dispatch list through the kernel's JS twin, into `resolved` —
+ * exactly what #encodeSlotResolve encodes. `resolved` persists across packs the
+ * way the GPU buffer does, so a block nobody dispatched keeps its old values.
+ */
+function applyResolves(state: IdentitySlotState, resolved: Float32Array): Float32Array {
+	const { resolves, resolveCount } = state.result;
+	for (let i = 0; i < resolveCount; i++) {
+		const { base, length, t } = resolves[i];
+		resolveReference(state.buffer, state.bufferTo, t, length, resolved, base);
+	}
+	return resolved;
+}
+
+/** Which bases this pack dispatches, in order. */
+function dispatched(state: IdentitySlotState): number[] {
+	return state.result.resolves.slice(0, state.result.resolveCount).map((b) => b.base);
 }
 
 describe('packIdentitySlots layout', () => {
@@ -70,17 +84,21 @@ describe('packIdentitySlots layout', () => {
 		packIdentitySlots([scale('a', [0, 1]), scale('b', [1, 0, 2]), scale('c', [0])], state);
 
 		const [a, b, c] = ['a', 'b', 'c'].map((id) => state.offsets.get(id)!);
-		expect([a, b, c]).toEqual([1, 5, 10]); // 1 + (2+2) = 5, 5 + (3+2) = 10
+		expect([a, b, c]).toEqual([1, 4, 8]); // 1 + (2+1) = 4, 4 + (3+1) = 8
 		expect(readBlock(state.buffer, a)).toEqual({ count: 2, slots: [0, 1] });
 		expect(readBlock(state.buffer, b)).toEqual({ count: 3, slots: [1, 0, 2] });
 		expect(readBlock(state.buffer, c)).toEqual({ count: 1, slots: [0] });
 	});
 
-	it('reports the used prefix so the caller uploads only that much', () => {
-		const state = createIdentitySlotState(16384);
-		const { length } = packIdentitySlots([scale('a', [0, 1]), scale('b', [0])], state);
-		// 1 empty + (2+2) + (1+2)
-		expect(length).toBe(8);
+	it('uploads only the range that was rewritten', () => {
+		// One small scale reordering must not re-upload its neighbours' tables.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1], 1)], state);
+		// 1 empty + (4+1) + (2+1): the first pack writes both blocks.
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([1, 9]);
+
+		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [1, 0], 2)], state);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([6, 9]);
 	});
 
 	it('preserves -1 for ids that are not displayed', () => {
@@ -104,7 +122,8 @@ describe('packIdentitySlots transition state', () => {
 		expect(readBlock(state.buffer, base).slots).toEqual([2, 0, 1]);
 		expect(readBlock(state.bufferTo, base).slots).toEqual([2, 0, 1]);
 		// t = 1 means settled, so mix(from, to, 1) is `to` whatever from holds.
-		expect(readT(state.buffer, base)).toBe(1);
+		const resolved = applyResolves(state, new Float32Array(64));
+		expect(readBlock(resolved, base)).toEqual({ count: 3, slots: [2, 0, 1] });
 	});
 
 	it('writes from and to into their own buffers at the same base', () => {
@@ -115,8 +134,8 @@ describe('packIdentitySlots transition state', () => {
 		// One base serves both buffers — that is what lets p4 stay a single float.
 		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 1, 0] });
 		expect(readBlock(state.bufferTo, base)).toEqual({ count: 3, slots: [0, 1, 2] });
-		expect(readT(state.buffer, base)).toBeCloseTo(0.25, 6);
-		expect(readT(state.bufferTo, base)).toBeCloseTo(0.25, 6);
+		// t is not in either buffer: it goes to this block's dispatch.
+		expect(state.result.resolves[0].t).toBe(0.25);
 	});
 
 	it('keeps the empty block empty in both buffers', () => {
@@ -127,11 +146,12 @@ describe('packIdentitySlots transition state', () => {
 		expect(state.bufferTo[IDENTITY_SLOT_EMPTY]).toBe(0);
 	});
 
-	it('counts the t header against capacity, not just the slots', () => {
-		// Two floats of header per block, so a budget that fit before may not.
-		const state = createIdentitySlotState(8);
+	it('counts the header against capacity, not just the slots', () => {
+		// One float of header per block, so a budget that fits the slots alone
+		// may not fit the block.
+		const state = createIdentitySlotState(7);
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		// 1 empty + (4 slots + 2 header) = 7; a second 4-id scale needs 6 more.
+		// 1 empty + (4 slots + 1 header) = 6; a 1-id scale needs 2 more, 1 remains.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0])], state);
 		expect(state.offsets.get('a')).toBe(1);
 		expect(state.offsets.get('b')).toBe(IDENTITY_SLOT_EMPTY);
@@ -140,14 +160,14 @@ describe('packIdentitySlots transition state', () => {
 });
 
 describe('packIdentitySlots dirty tracking', () => {
-	it('is dirty on first pack and clean when nothing moved', () => {
+	it('uploads on first pack and nothing when nothing moved', () => {
 		const state = createIdentitySlotState(64);
 		const scales = [scale('a', [0, 1]), scale('b', [0])];
 
-		expect(packIdentitySlots(scales, state).dirty).toBe(true);
+		expect(packIdentitySlots(scales, state).uploadEnd).toBeGreaterThan(0);
 		// A static chart must cost no writeBuffer, which is the only reason this
-		// function returns a flag rather than always uploading.
-		expect(packIdentitySlots(scales, state).dirty).toBe(false);
+		// function returns a range rather than always uploading.
+		expect(packIdentitySlots(scales, state).uploadEnd).toBe(0);
 	});
 
 	it('is dirty when a slot table is rebuilt', () => {
@@ -155,25 +175,21 @@ describe('packIdentitySlots dirty tracking', () => {
 		packIdentitySlots([scale('a', [0, 1, 2], 1)], state);
 
 		// A reorder: same length, same base, new contents and a bumped version.
-		const { dirty } = packIdentitySlots([scale('a', [2, 1, 0], 2)], state);
-		expect(dirty).toBe(true);
+		const { uploadEnd } = packIdentitySlots([scale('a', [2, 1, 0], 2)], state);
+		expect(uploadEnd).toBeGreaterThan(0);
 		expect(readBlock(state.buffer, state.offsets.get('a')!).slots).toEqual([2, 1, 0]);
 	});
 
-	it('shrinks the used prefix without going dirty when a trailing scale goes', () => {
-		// `length` and `dirty` answer different questions, and the caller has to
-		// treat them that way. Dropping the LAST scale moves nobody's base and
-		// bumps nobody's version, so there is nothing to re-upload — but the used
-		// prefix is shorter, and a caller that reads `length` only on the dirty
-		// path keeps dispatching its resolve over the departed scale's floats.
+	it('uploads and resolves nothing when a trailing scale goes', () => {
+		// Dropping the LAST scale moves nobody's base and bumps nobody's version.
+		// Its floats are left behind in the buffers, unread: nothing points there.
 		const state = createIdentitySlotState(64);
-		const both = packIdentitySlots([scale('a', [0, 1]), scale('b', [0])], state);
-		const wide = both.length;
+		packIdentitySlots([scale('a', [0, 1]), scale('b', [0])], state);
 
-		const { dirty, length } = packIdentitySlots([scale('a', [0, 1])], state);
+		const { uploadEnd, resolveCount } = packIdentitySlots([scale('a', [0, 1])], state);
 
-		expect(dirty).toBe(false);
-		expect(length).toBeLessThan(wide);
+		expect(uploadEnd).toBe(0);
+		expect(resolveCount).toBe(0);
 	});
 
 	it('re-packs a scale whose base shifted even if its version did not', () => {
@@ -196,7 +212,7 @@ describe('packIdentitySlots capacity', () => {
 	it('parks a scale that does not fit on the empty block', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const state = createIdentitySlotState(10);
-		// 1 empty + (4+2) = 7 used; the next needs 6 and only 3 remain.
+		// 1 empty + (4+1) = 6 used; the next needs 5 and only 4 remain.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 
 		expect(state.offsets.get('a')).toBe(1);
@@ -218,8 +234,8 @@ describe('packIdentitySlots capacity', () => {
 
 		expect(state.offsets.get('a')).toBe(1);
 		expect(state.offsets.get('huge')).toBe(IDENTITY_SLOT_EMPTY);
-		expect(state.offsets.get('c')).toBe(7);
-		expect(readBlock(state.buffer, 7)).toEqual({ count: 1, slots: [0] });
+		expect(state.offsets.get('c')).toBe(6);
+		expect(readBlock(state.buffer, 6)).toEqual({ count: 1, slots: [0] });
 		warn.mockRestore();
 	});
 
@@ -262,6 +278,7 @@ describe('packIdentitySlots eviction', () => {
 
 		expect(state.offsets.has('b')).toBe(false);
 		expect(state.versions.has('b')).toBe(false);
+		expect(state.resolvedT.has('b')).toBe(false);
 	});
 
 	it('does not let a re-registered id inherit a base from a previous life', () => {
@@ -296,12 +313,14 @@ describe('packIdentitySlots eviction', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots([scale('a', [0, 1])], state);
 
-		const { dirty, length } = packIdentitySlots([], state);
+		const { uploadEnd, resolveCount } = packIdentitySlots([], state);
 
 		expect(state.offsets.size).toBe(0);
 		expect(state.versions.size).toBe(0);
-		expect(dirty).toBe(false); // nothing to write; p4 falls back to the empty block
-		expect(length).toBe(1);
+		expect(state.resolvedT.size).toBe(0);
+		// Nothing to write; p4 falls back to the empty block.
+		expect(uploadEnd).toBe(0);
+		expect(resolveCount).toBe(0);
 	});
 });
 
@@ -310,14 +329,15 @@ describe('packIdentitySlots eviction', () => {
 // ---------------------------------------------------------------------------
 
 describe('what the shader reads back', () => {
-	/** identitySlot(base, id) from ScaleTemplateSystem, in TypeScript. */
+	/**
+	 * identitySlot(base, id) from ScaleTemplateSystem, in TypeScript, over the
+	 * buffer this pack's dispatches resolved.
+	 */
 	function identitySlot(state: IdentitySlotState, base: number, id: number): number {
-		const count = state.buffer[base];
+		const resolved = applyResolves(state, new Float32Array(state.buffer.length));
+		const count = resolved[base];
 		if (id >= count) return -1;
-		const t = state.buffer[base + 1];
-		const a = state.buffer[base + 2 + id];
-		const b = state.bufferTo[base + 2 + id];
-		return a + (b - a) * t;
+		return resolved[base + 1 + id];
 	}
 
 	it('agrees with the scale about every id, mid-transition', () => {
@@ -366,111 +386,105 @@ describe('what the shader reads back', () => {
 });
 
 // ---------------------------------------------------------------------------
-// bases — the per-element block lookup the resolve kernel needs
+// The resolve list — which blocks this frame dispatches, and at what t
 // ---------------------------------------------------------------------------
 //
-// The kernel reads `t` from its element's block header, and blocks are
-// variable-length, so a flat thread cannot find its own header by arithmetic.
-// `bases[i]` is that lookup, and getting it wrong means an element reads
-// ANOTHER scale's `t` — which renders, plausibly, at the wrong point in a
-// transition. That is the failure class this whole module exists to prevent
-// (the count header does the same job for ids), so it is asserted rather than
-// assumed.
+// Each scale's block is its own dispatch, with its own t as an immediate. The
+// list is what the coordinator encodes, so getting it wrong is either a block
+// left at a stale position (listed too rarely) or work every frame for a still
+// chart (listed too often). The first renders plausibly wrong, which is the
+// failure class this module exists to prevent, so it is asserted.
 
-describe('packIdentitySlots: bases', () => {
-	it('points every float of a block at that block, header included', () => {
+describe('packIdentitySlots: the resolve list', () => {
+	it('resolves every block on first pack, header included', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[travelling('a', [0, 1, 2], [0, 1, 2], 1), travelling('b', [1, 0], [1, 0], 1)],
-			state
-		);
+		packIdentitySlots([scale('a', [0, 1, 2]), scale('b', [1, 0])], state);
 
-		const a = state.offsets.get('a')!;
-		const b = state.offsets.get('b')!;
-
-		// count + t + 3 slots, then count + t + 2 slots.
-		for (let i = a; i < a + 5; i++) expect(state.bases[i]).toBe(a);
-		for (let i = b; i < b + 4; i++) expect(state.bases[i]).toBe(b);
+		const { resolves, resolveCount } = state.result;
+		expect(resolveCount).toBe(2);
+		// count + 3 slots, then count + 2 slots.
+		expect(resolves.slice(0, 2).map((b) => [b.base, b.length])).toEqual([
+			[1, 4],
+			[5, 3]
+		]);
 	});
 
-	it('lets a thread recover its own t, which is the point of it', () => {
+	it('dispatches nothing on a still frame', () => {
+		// A hover or a pan renders a frame; nothing moved, so nothing resolves.
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[travelling('a', [0, 1], [1, 0], 0.25), travelling('b', [0], [3], 0.75)],
-			state
-		);
+		const scales = [scale('a', [0, 1]), travelling('b', [0], [3], 0.5)];
+		packIdentitySlots(scales, state);
 
-		// Exactly what the kernel does: for each element, find its block, read t
-		// from the header, mix. Two scales with DIFFERENT t, because a shared t
-		// would pass this test by accident.
-		const tAt = (i: number) => state.buffer[state.bases[i] + 1];
-		const a = state.offsets.get('a')!;
-		const b = state.offsets.get('b')!;
-
-		expect(tAt(a + 2)).toBeCloseTo(0.25, 5);
-		expect(tAt(a + 3)).toBeCloseTo(0.25, 5);
-		expect(tAt(b + 2)).toBeCloseTo(0.75, 5);
-
-		const resolve = (i: number) => state.buffer[i] + (state.bufferTo[i] - state.buffer[i]) * tAt(i);
-		expect(resolve(a + 2)).toBeCloseTo(0.25, 5); // 0 -> 1 at t=0.25
-		expect(resolve(a + 3)).toBeCloseTo(0.75, 5); // 1 -> 0 at t=0.25
-		expect(resolve(b + 2)).toBeCloseTo(2.25, 5); // 0 -> 3 at t=0.75
+		expect(packIdentitySlots(scales, state).resolveCount).toBe(0);
 	});
 
-	it('rewrites bases when a scale shrinks and shifts the one after it', () => {
-		// The case a stale bases entry would survive: 'b' moves because 'a' got
-		// smaller, so every float of b's block must be re-pointed. Without the
-		// rewrite, b's slots would read a's t.
+	it('dispatches only the scale whose t moved', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots(
-			[travelling('a', [0, 1, 2, 3], [0, 1, 2, 3], 0.1), travelling('b', [0], [0], 0.9)],
-			state
-		);
+		packIdentitySlots([scale('a', [0, 1]), travelling('b', [0], [3], 0.25)], state);
 
-		packIdentitySlots(
-			[travelling('a', [0, 1], [0, 1], 0.1, 2), travelling('b', [0], [0], 0.9)],
-			state
-		);
+		packIdentitySlots([scale('a', [0, 1]), travelling('b', [0], [3], 0.5)], state);
+
+		expect(dispatched(state)).toEqual([state.offsets.get('b')]);
+		expect(state.result.resolves[0].t).toBe(0.5);
+	});
+
+	it('gives each scale its OWN t', () => {
+		// A shared t would pass every other test in this file. Two scales at
+		// different points in their transitions is the case that separates "each
+		// dispatch carries its own t" from "whichever t was set last" — and
+		// reading a neighbour's t renders plausibly, at the wrong point in a
+		// transition, which is the worst kind of wrong here.
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([travelling('a', [0], [10], 0), travelling('b', [0], [10], 1)], state);
+		const out = applyResolves(state, new Float32Array(64));
+
+		expect(out[state.offsets.get('a')! + 1]).toBeCloseTo(0, 5);
+		expect(out[state.offsets.get('b')! + 1]).toBeCloseTo(10, 5);
+	});
+
+	it('re-resolves a scale shifted by its neighbour, though its t did not move', () => {
+		// 'b' moves because 'a' shrank. Its table and t are unchanged, but the
+		// resolved buffer at its NEW base holds whatever was there before — 'a''s
+		// old slots — until something dispatches over it.
+		const state = createIdentitySlotState(64);
+		const resolved = new Float32Array(64);
+		packIdentitySlots([scale('a', [0, 1, 2, 3]), travelling('b', [0], [4], 0.5)], state);
+		applyResolves(state, resolved);
+
+		packIdentitySlots([scale('a', [0, 1], 2), travelling('b', [0], [4], 0.5)], state);
+		applyResolves(state, resolved);
 
 		const b = state.offsets.get('b')!;
-		for (let i = b; i < b + 3; i++) expect(state.bases[i]).toBe(b);
-		// toBeCloseTo, not toBe: these are Float32Array round trips.
-		expect(state.buffer[state.bases[b + 2] + 1]).toBeCloseTo(0.9, 5);
+		expect(dispatched(state)).toContain(b);
+		expect(readBlock(resolved, b)).toEqual({ count: 1, slots: [2] });
+	});
+
+	it('never dispatches a parked scale', () => {
+		// It points at the empty block, whose count of 0 is what makes every
+		// lookup discard. Resolving over it would be harmless only by accident.
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const state = createIdentitySlotState(8);
+		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
+
+		expect(dispatched(state)).toEqual([1]);
+		expect(dispatched(state)).not.toContain(IDENTITY_SLOT_EMPTY);
+		warn.mockRestore();
 	});
 });
 
 // ---------------------------------------------------------------------------
-// The resolve kernel's formula, against the packed buffers
+// The resolved buffer, against the vertex-stage mix it replaced
 // ---------------------------------------------------------------------------
-//
-// The mix moved out of the vertex stage and into a compute pass, so it is now
-// reachable only through a device — which is the condition that got this module
-// extracted in the first place.
-// `resolveSlotsReference` is the JS twin the WGSL is written against; these
-// tests pin it to the behaviour the vertex stage had, so the port has something
-// to be wrong against rather than only a running browser.
 
-describe('resolveSlotsReference', () => {
-	/** What the vertex stage used to compute, kept here as the oracle. */
-	function vertexStageMix(state: IdentitySlotState, base: number, id: number): number {
-		const count = state.buffer[base];
-		if (id >= count) return -1;
-		const t = state.buffer[base + 1];
-		const a = state.buffer[base + 2 + id];
-		const b = state.bufferTo[base + 2 + id];
-		return a + (b - a) * t;
-	}
-
-	it('reproduces the vertex-stage mix for every id of every scale', () => {
+describe('resolving the packed blocks', () => {
+	it('reproduces mix(from, to, t) for every id of every scale', () => {
 		const state = createIdentitySlotState(64);
 		const scales = [
 			travelling('a', [0, 1, 2], [2, 0, 1], 0.4),
 			travelling('b', [1, -1, 0], [0, -1, 1], 0.85)
 		];
-		const { length } = packIdentitySlots(scales, state);
-
-		const out = new Float32Array(state.buffer.length);
-		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
+		packIdentitySlots(scales, state);
+		const out = applyResolves(state, new Float32Array(64));
 
 		for (const s of scales) {
 			const base = state.offsets.get(s.id)!;
@@ -478,7 +492,9 @@ describe('resolveSlotsReference', () => {
 			// returns it. The shader still reads its bound from `resolved`.
 			expect(out[base]).toBe(s.slots.count);
 			for (let id = 0; id < s.slots.count; id++) {
-				expect(out[base + 2 + id]).toBeCloseTo(vertexStageMix(state, base, id), 5);
+				const a = s.slots.from[id];
+				const b = s.slots.to[id];
+				expect(out[base + 1 + id]).toBeCloseTo(a + (b - a) * s.slots.t, 5);
 			}
 		}
 	});
@@ -487,39 +503,19 @@ describe('resolveSlotsReference', () => {
 		// -1 in both halves for any t. This is why neither the kernel nor the
 		// shader has a sentinel case.
 		const state = createIdentitySlotState(64);
-		const { length } = packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
-		const out = new Float32Array(state.buffer.length);
-		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
-		const base = state.offsets.get('a')!;
-		expect(out[base + 2 + 1]).toBe(-1);
+		packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
+		const out = applyResolves(state, new Float32Array(64));
+		expect(out[state.offsets.get('a')! + 1 + 1]).toBe(-1);
 	});
 
-	it('gives each scale its OWN t, which is the whole reason bases exists', () => {
-		// A shared t would pass every other test in this file. Two scales at
-		// different points in their transitions is the case that separates
-		// "reads t from its own block" from "reads whichever t it happened to
-		// find" — and reading a neighbour's t renders plausibly, at the wrong
-		// point in a transition, which is the worst kind of wrong here.
+	it('writes nothing outside the packed blocks', () => {
+		// The empty block and the unused tail stay as they were, or a buffer
+		// dump is full of values nothing put there.
 		const state = createIdentitySlotState(64);
-		const { length } = packIdentitySlots(
-			[travelling('a', [0], [10], 0), travelling('b', [0], [10], 1)],
-			state
-		);
-		const out = new Float32Array(state.buffer.length);
-		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
-
-		expect(out[state.offsets.get('a')! + 2]).toBeCloseTo(0, 5);
-		expect(out[state.offsets.get('b')! + 2]).toBeCloseTo(10, 5);
-	});
-
-	it('does not write past the packed prefix', () => {
-		// The dispatch covers `length` threads; the tail must stay as it was, or
-		// a buffer dump is full of values nothing put there.
-		const state = createIdentitySlotState(64);
-		const { length } = packIdentitySlots([travelling('a', [0, 1], [0, 1], 1)], state);
-		const out = new Float32Array(state.buffer.length).fill(999);
-		resolveSlotsReference(state.buffer, state.bufferTo, state.bases, length, out);
-		expect(out[length]).toBe(999);
-		expect(out[state.buffer.length - 1]).toBe(999);
+		packIdentitySlots([travelling('a', [0, 1], [0, 1], 1)], state);
+		const out = applyResolves(state, new Float32Array(64).fill(999));
+		expect(out[IDENTITY_SLOT_EMPTY]).toBe(999);
+		expect(out[4]).toBe(999);
+		expect(out[63]).toBe(999);
 	});
 });

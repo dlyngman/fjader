@@ -7,7 +7,7 @@
  * ordinal colour.
  *
  * Every band and point scale's slot table — identity id -> display slot —
- * lives in ONE uniform buffer, at a per-scale base the scale carries in its p4.
+ * lives in ONE shared table, at a per-scale base the scale carries in its p4.
  * This module decides where each block goes and what the buffer holds; the
  * coordinator owns the GPU buffer and the upload.
  *
@@ -19,23 +19,21 @@
  * what it should have been.
  *
  * Layout: index 0 is a permanent zero-length block, then one block per scale of
- * `[count, t, slot0, slot1, ...]`. The count header makes each block
+ * `[count, slot0, slot1, ...]`. The count header makes each block
  * self-describing, so the shader rejects an id past this scale's end instead of
  * reading into the next scale's slots — ids and the slot table can disagree
  * transiently while a dim appends. Budget is therefore
- * `capacity - 1 - (2 per scale)` slots.
+ * `capacity - 1 - (1 per scale)` slots.
  *
  * TWO buffers share one set of offsets: `from` is where each id's current
- * transition started and `to` where it is going, and the shader reads
- * `mix(from[id], to[id], t)`. Two bindings rather than two runs in one buffer,
- * because one buffer would halve the id ceiling while uniform bindings are at
- * three of a default twelve.
+ * transition started and `to` where it is going, and the resolve kernel writes
+ * `mix(from[id], to[id], t)` into a third that the render stages read. Two
+ * bindings rather than two runs in one buffer, so the halves line up at the
+ * same base and one dispatch per block covers both.
  *
- * `t` lives in the block header because it is PER SCALE — each band scale has
- * its own driver — and a band scale's four scaleParams floats are all spoken
- * for (categoryCount, paddingInner, paddingOuter, slot base). Putting it here
- * costs one float per scale and makes the per-frame upload a 4-byte write at a
- * known offset instead of re-uploading every slot.
+ * `t` is not in the buffers. It is PER SCALE — each band scale has its own
+ * driver — and reaches the kernel as an immediate on that scale's dispatch, so
+ * a frame where only `t` moved uploads nothing at all.
  */
 
 /**
@@ -85,35 +83,56 @@ export interface IdentitySlotScale {
 	slots: SlotSource;
 }
 
+/**
+ * One block to resolve this frame: `length` floats from `base`, at `t`.
+ *
+ * The count header is inside the range rather than skipped: it holds the same
+ * value in both halves, so mixing it returns it, and the render stages read
+ * their bound from the resolved copy. Pooled in the state and overwritten by
+ * the next pack.
+ */
+export interface ResolveBlock {
+	base: number;
+	length: number;
+	t: number;
+}
+
+/** What a pack produced. Owned by the state and overwritten by the next pack. */
+export interface PackResult {
+	/**
+	 * The float range `[uploadStart, uploadEnd)` of both buffers that was
+	 * rewritten. Empty when nothing moved — slot tables change on a reorder, not
+	 * per frame, so a static chart costs no writeBuffer. A range rather than the
+	 * whole used prefix, so one small scale reordering does not re-upload every
+	 * other scale's table with it.
+	 */
+	uploadStart: number;
+	uploadEnd: number;
+	/** The first `resolveCount` entries are this frame's dispatches. */
+	resolves: ResolveBlock[];
+	resolveCount: number;
+}
+
 /** Everything that persists between calls. */
 export interface IdentitySlotState {
-	/** CPU mirror of the `from` uniform buffer, and of the header. */
+	/** CPU mirror of the `from` buffer, headers included. */
 	buffer: Float32Array;
-	/** CPU mirror of the `to` uniform buffer. Same offsets, same headers. */
+	/** CPU mirror of the `to` buffer. Same offsets, same headers. */
 	bufferTo: Float32Array;
-	/**
-	 * Which scale's block each float belongs to, parallel to `buffer`.
-	 *
-	 * The resolve kernel needs `t` for the element it is working on, and `t`
-	 * lives in that element's block header. Blocks are variable-length, so a
-	 * flat thread cannot find its own header by arithmetic — this is the lookup
-	 * that lets it, and it turns the whole page into ONE dispatch instead of one
-	 * per scale.
-	 *
-	 * Uint32 rather than Float32 because it is an index, and it is uploaded only
-	 * when the packing moves — a reorder or a scale appearing — never per frame.
-	 * Header floats point at their own block, so a thread landing on one reads
-	 * its own `t` and writes a value nothing reads. Cheaper than excluding them.
-	 */
-	bases: Uint32Array;
 	/** Per-scale base offset, read back into p4. */
 	offsets: Map<string, number>;
+	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
+	versions: Map<string, number>;
+	/**
+	 * The `t` each scale's block was last resolved at, so a still frame
+	 * dispatches nothing and an animating one dispatches only the scales that
+	 * are moving.
+	 */
+	resolvedT: Map<string, number>;
 	/** Scratch for the eviction sweep; cleared, not reallocated, per pack. */
 	seen: Set<string>;
 	/** Returned by every pack and overwritten by the next — read it immediately. */
-	result: { dirty: boolean; length: number };
-	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
-	versions: Map<string, number>;
+	result: PackResult;
 }
 
 /** A state with the permanent empty block in place. */
@@ -122,7 +141,6 @@ export function createIdentitySlotState(
 ): IdentitySlotState {
 	const buffer = new Float32Array(capacity);
 	const bufferTo = new Float32Array(capacity);
-	const bases = new Uint32Array(capacity);
 	buffer.fill(-1);
 	bufferTo.fill(-1);
 	// The permanent empty block: count 0, so it holds no slots.
@@ -131,20 +149,21 @@ export function createIdentitySlotState(
 	return {
 		buffer,
 		bufferTo,
-		bases,
 		offsets: new Map(),
 		versions: new Map(),
+		resolvedT: new Map(),
 		seen: new Set(),
-		result: { dirty: false, length: 0 }
+		result: { uploadStart: 0, uploadEnd: 0, resolves: [], resolveCount: 0 }
 	};
 }
 
 /**
- * Assign every scale a base and write its block, returning what to upload.
+ * Assign every scale a base, write the blocks that moved, and list what to
+ * upload and what to resolve.
  *
- * `dirty` is false when nothing moved — slot tables change on reorder, not per
- * frame, so a static chart costs no writeBuffer. `length` is how much of the
- * buffer is in use, so the caller uploads a prefix rather than the whole allocation.
+ * A block is REWRITTEN when its base or its version moved, and RESOLVED when it
+ * was rewritten or its `t` moved. A parked scale is neither: it has no block,
+ * and the empty block it points at is never written.
  *
  * Offsets are recomputed on every call because a scale appearing or
  * disappearing shifts every scale after it. That is a running sum over a
@@ -154,13 +173,16 @@ export function createIdentitySlotState(
 export function packIdentitySlots(
 	scales: readonly IdentitySlotScale[],
 	state: IdentitySlotState
-): { dirty: boolean; length: number } {
-	const { buffer, bufferTo, bases, offsets, versions } = state;
+): PackResult {
+	const { buffer, bufferTo, offsets, versions, resolvedT, result } = state;
 	const capacity = buffer.length;
+	const resolves = result.resolves;
 
 	// Index 0 is the permanent empty block; real blocks start after it.
 	let offset = 1;
-	let dirty = false;
+	let uploadStart = capacity;
+	let uploadEnd = 0;
+	let resolveCount = 0;
 	// Runs every frame: the scratch set and the result are the state's own.
 	const seen = state.seen;
 	seen.clear();
@@ -170,22 +192,23 @@ export function packIdentitySlots(
 		seen.add(scale.id);
 
 		const slots = scale.slots;
-		// Two extra floats for the block's header: count, then t.
-		const need = slots.count + 2;
+		// One extra float for the block's count header.
+		const need = slots.count + 1;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
 
 		const version = slots.version;
+		let rewritten = false;
 		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== version) {
 			if (fits) {
 				buffer[base] = slots.count;
-				buffer[base + 1] = slots.t;
-				buffer.set(slots.from, base + 2);
+				buffer.set(slots.from, base + 1);
 				bufferTo[base] = slots.count;
-				bufferTo[base + 1] = slots.t;
-				bufferTo.set(slots.to, base + 2);
-				bases.fill(base, base, base + need);
+				bufferTo.set(slots.to, base + 1);
+				if (base < uploadStart) uploadStart = base;
+				if (base + need > uploadEnd) uploadEnd = base + need;
+				rewritten = true;
 			} else {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
@@ -195,11 +218,19 @@ export function packIdentitySlots(
 			}
 			offsets.set(scale.id, base);
 			versions.set(scale.id, version);
-			dirty = true;
 		}
 		// No break: a later scale with a smaller table may still fit, and one
 		// that does not is parked on the empty block rather than left holding a
 		// base that now belongs to someone else.
+
+		if (!fits) continue;
+		const t = slots.t;
+		if (!rewritten && resolvedT.get(scale.id) === t) continue;
+		resolvedT.set(scale.id, t);
+		const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
+		block.base = base;
+		block.length = need;
+		block.t = t;
 	}
 
 	// Drop entries for scales that have gone away, so a re-registered id cannot
@@ -211,11 +242,13 @@ export function packIdentitySlots(
 			if (!seen.has(id)) {
 				offsets.delete(id);
 				versions.delete(id);
+				resolvedT.delete(id);
 			}
 		}
 	}
 
-	state.result.dirty = dirty;
-	state.result.length = offset;
-	return state.result;
+	result.uploadStart = uploadEnd > 0 ? uploadStart : 0;
+	result.uploadEnd = uploadEnd;
+	result.resolveCount = resolveCount;
+	return result;
 }
