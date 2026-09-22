@@ -129,10 +129,15 @@ interface GPUCoordinatorConfig {
 	msaaSampleCount?: number;
 }
 
-/** A scale that carries its slot-table base in its own uploaded config. */
+/**
+ * A scale that carries its slot-table base in its own uploaded config, rather
+ * than in the p4 the coordinator refills every frame.
+ *
+ * It is told its base and decides what to do with it — including whether the
+ * base moved at all, which is why nothing here caches what was last handed out.
+ */
 interface SlotBaseConsumer {
 	setSlotBase(base: number): void;
-	readonly gpuSlots?: { configSlot: number };
 }
 
 /** What the coordinator needs from a facet scale: which id sits at a cell. */
@@ -379,25 +384,6 @@ export class GPUCoordinator {
 	/** Reused per frame so the hot path allocates nothing. */
 	#identitySlotScales: IdentitySlotScale[] = [];
 	#identitySlotEntryPool: IdentitySlotScale[] = [];
-	/**
-	 * Last slot base pushed back to a scale, so a static chart patches nothing.
-	 *
-	 * Keyed by the scale INSTANCE, not by its id, and that is the whole point.
-	 * A chart that unmounts and remounts is evicted from the registry and
-	 * rebuilt, so the new object carries the same scale id — and the packer,
-	 * being a deterministic running sum over the same scales, hands that id the
-	 * same base. Keyed by id, the cache would then say "already delivered" and
-	 * skip setSlotBase for an instance that had never received one. It keeps
-	 * ColorScaleState's initial -1, which #buildColorConfig writes as
-	 * NO_SLOT_TABLE, and the shader reads the channel's DIM ID as a palette
-	 * index: wrong colours, silently, and disagreeing with the CPU legend.
-	 *
-	 * A WeakMap also removes the need to sweep it. Sweeping would not have been
-	 * enough anyway — an unmount and remount with no frame between them leaves
-	 * the id present in the packer's offsets, so there is nothing for a sweep to
-	 * notice, while the instance has still changed.
-	 */
-	#slotBaseSeen = new WeakMap<SlotBaseConsumer, number>();
 	/** Index-aligned with #identitySlotScales. Reused; null where not applicable. */
 	#slotBaseConsumers: (SlotBaseConsumer | null)[] = [];
 	/** Reused for the four-byte config patch. */
@@ -459,7 +445,25 @@ export class GPUCoordinator {
 	// RENDER LOOP STATE (Zero-Allocation)
 	// =========================================================================
 	#chartsToRenderArray: ChartConfig[] = []; // Reused array for charts to render
-	#acquiredTextures: { chartConfig: ChartConfig; texture: GPUTexture; view: GPUTextureView }[] = []; // Reused array for texture acquisition
+	/**
+	 * This frame's swapchain views, INDEX-ALIGNED with the charts being
+	 * rendered, and valid only within one `#coordinatedRender`.
+	 *
+	 * Acquisition is separated from encoding because `getCurrentTexture` is the
+	 * call that can block on the compositor, and doing all of them up front
+	 * keeps that out of the middle of command encoding.
+	 *
+	 * Not a list of `{ chart, view }` pairs. The mapping is 1:1 and dense, so
+	 * the chart is already addressable by the same index and the pair was an
+	 * object per chart per frame for nothing — under a banner promising zero
+	 * allocation. It also carried the GPUTexture, which nothing ever read.
+	 *
+	 * Deliberately NOT the `#identitySlotEntryPool` idiom, which exists one
+	 * function away for a list that is FILTERED — entries there have no
+	 * index to align with, so a pooled object is the cheapest thing available.
+	 * Here there is an index, so the right number of objects is none.
+	 */
+	#acquiredViews: (GPUTextureView | null)[] = [];
 	#encoderDescriptor = { label: 'frame-encoder' };
 	#submitArray: [GPUCommandBuffer | null] = [null]; // Reused array for queue.submit()
 	#framesInFlight = 0;
@@ -968,12 +972,29 @@ export class GPUCoordinator {
 
 		const { dirty, length } = packIdentitySlots(scales, state);
 
+		// How much of the buffer is in use, recorded whether or not anything moved.
+		// `length` and `dirty` answer different questions: dropping the LAST packed
+		// scale moves nobody's base and bumps nobody's version, so there is nothing
+		// to re-upload, but the used prefix is shorter. Read below the early return
+		// this kept a stale, too-large count and the resolve kernel went on
+		// dispatching over the departed scale's floats — harmless, since nothing
+		// reads past its own block, and stale by construction in the one file §62
+		// was about. The dispatch itself still only happens when something is
+		// pending.
+		this.#slotResolveCount = length;
+
 		// Hand back the base to any scale that reads it from its own config rather
 		// than from p4. A band scale's base is refilled into p4 every frame; an
 		// ordinal colour scale's lives in a config uploaded only when the scale
-		// changes, so it is patched directly — four bytes, and only when it
-		// moved. Without that a colour scale keeps a base that belonged to it
-		// before a neighbour resized, and reads another scale's ranks.
+		// changes, so it patches the four bytes itself. Without that a colour
+		// scale keeps a base that belonged to it before a neighbour resized, and
+		// reads another scale's ranks.
+		//
+		// Told unconditionally, because whether the base actually moved is the
+		// scale's own state to compare — it holds the last one it was given, and
+		// an instance that has never received one cannot match. Deduplicating
+		// here instead meant a cache of another object's field, on an object
+		// owned by neither.
 		//
 		// Walks the parallel array captured during collection rather than
 		// searching #scaleArray per entry: this runs every frame.
@@ -981,20 +1002,8 @@ export class GPUCoordinator {
 			const scale = consumers[i];
 			if (!scale) continue;
 			const base = state.offsets.get(scales[i].id);
-			if (base === undefined || this.#slotBaseSeen.get(scale) === base) continue;
-
+			if (base === undefined) continue;
 			scale.setSlotBase(base);
-			this.#slotBaseSeen.set(scale, base);
-
-			const configSlot = scale.gpuSlots?.configSlot;
-			if (configSlot !== undefined && configSlot >= 0 && this.#colorConfigBuffer) {
-				this.#slotBasePatch[0] = base;
-				this.#device!.queue.writeBuffer(
-					this.#colorConfigBuffer,
-					configSlot * COLOR_CONFIG_BYTES + COLOR_CONFIG_SLOT_BASE_OFFSET,
-					this.#slotBasePatch
-				);
-			}
 		}
 
 		if (!dirty) return;
@@ -1023,7 +1032,6 @@ export class GPUCoordinator {
 			length
 		);
 
-		this.#slotResolveCount = length;
 		this.#slotResolvePending = true;
 	}
 
@@ -1286,15 +1294,17 @@ export class GPUCoordinator {
 		const slot = this.#frameId % this.#SSBO_SLOT_COUNT;
 
 		// PHASE 1: EARLY TEXTURE ACQUISITION
-		this.#acquiredTextures.length = 0;
-
 		const numCharts = chartsNeedingRender.length;
+		const views = this.#acquiredViews;
 		for (let i = 0; i < numCharts; i++) {
-			const chartConfig = chartsNeedingRender[i];
-			const texture = chartConfig.context.getCurrentTexture();
-			const view = texture.createView();
-			this.#acquiredTextures.push({ chartConfig, texture, view });
+			views[i] = chartsNeedingRender[i].context.getCurrentTexture().createView();
 		}
+		// Drop any tail left by a frame that rendered more charts than this one,
+		// so a grid shrinking from forty cells to two stops holding thirty-eight
+		// views of swapchain textures the browser has already moved on from. The
+		// live entries are overwritten above rather than cleared, since every one
+		// of them is reassigned before it is read.
+		for (let i = numCharts; i < views.length; i++) views[i] = null;
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#updateIdentitySlots();
@@ -1327,12 +1337,9 @@ export class GPUCoordinator {
 			}
 		}
 
-		for (let i = 0; i < this.#acquiredTextures.length; i++) {
-			// for (let i = 0; i < numCharts; i++) {
-			const { chartConfig, texture, view } = this.#acquiredTextures[i];
-			// const chartConfig = chartsNeedingRender[i];
-			// const texture = chartConfig.context.getCurrentTexture();
-			// const view = texture.createView();
+		for (let i = 0; i < numCharts; i++) {
+			const chartConfig = chartsNeedingRender[i];
+			const view = views[i]!;
 
 			if (chartConfig.needsPlanRebuild) {
 				this.#buildRenderPlanForChart(chartConfig);
@@ -1340,7 +1347,6 @@ export class GPUCoordinator {
 
 			const passEncoder = commandEncoder.beginRenderPass(
 				this.#createRenderPassDescriptor(view, chartConfig)
-				// this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
 			);
 
 			if (chartConfig.perFrameBindGroup) {
@@ -1800,6 +1806,29 @@ export class GPUCoordinator {
 
 		const byteOffset = slot * COLOR_CONFIG_BYTES;
 		this.#device!.queue.writeBuffer(this.#colorConfigBuffer, byteOffset, configData);
+	}
+
+	/**
+	 * Patch one colour config's `slotBase` — the four bytes that move when the
+	 * packer shifts this scale's block in the shared slot table.
+	 *
+	 * Separate from `writeColorConfig` because the rest of the struct is written
+	 * when the SCALE changes, while the base moves whenever a NEIGHBOURING scale
+	 * resizes. The scale calls this itself; the coordinator owns the buffer, not
+	 * the decision.
+	 */
+	writeColorConfigSlotBase(slot: number, base: number): void {
+		if (!this.#colorConfigBuffer) return;
+		if (slot < 0 || slot >= this.#maxColorSlots) {
+			console.warn(`[GPUCoordinator] Invalid color config slot: ${slot}`);
+			return;
+		}
+		this.#slotBasePatch[0] = base;
+		this.#device!.queue.writeBuffer(
+			this.#colorConfigBuffer,
+			slot * COLOR_CONFIG_BYTES + COLOR_CONFIG_SLOT_BASE_OFFSET,
+			this.#slotBasePatch
+		);
 	}
 
 	/**

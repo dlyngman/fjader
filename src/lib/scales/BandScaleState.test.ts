@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BandScaleState } from './BandScaleState.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
+import { DomainResolver } from './DomainResolver';
 
 describe('BandScaleState.processDataForGPU', () => {
 	function scaleWith(domain: string[]): BandScaleState {
@@ -1012,6 +1013,160 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	// A re-sort has to REORDER, not just be remembered.
 	//
+	// Every mark on a shared axis adopts identity, with the same live object:
+	// two marks on one chart, forty facet cells. Only the first adoption does
+	// anything, and the rest used to re-resolve the whole domain to republish an
+	// answer identical to the one on screen — 28ms of setup for a forty-cell
+	// grid at a thousand categories.
+	//
+	// The guard leans on FieldIdentity.version, and the two tests that matter
+	// are the ones that would pass with a WEAKER guard and be wrong: an append
+	// (same object, longer) and a same-length replacement (same object, same
+	// length, different values). A guard testing the reference, or the length,
+	// would swallow one of those and leave the axis showing stale categories.
+	describe('adopting the same identity twice', () => {
+		function ready(vals: string[] = ['Adelie', 'Chinstrap', 'Gentoo']) {
+			const identity = new FieldIdentity(vals);
+			const scale = new BandScaleState('species');
+			scale.setIdentity(identity);
+			scale.addMarkIds(
+				vals.map((_, i) => i),
+				'mark-1'
+			);
+			scale.updateDomainFromExtents();
+			return { scale, identity };
+		}
+
+		it('does no work when nothing about the identity moved', () => {
+			const { scale, identity } = ready();
+			const resolve = vi.spyOn(DomainResolver.prototype, 'resolve');
+			const version = scale._version;
+
+			for (let i = 0; i < 5; i++) scale.setIdentity(identity);
+
+			expect(resolve).not.toHaveBeenCalled();
+			expect(scale._version).toBe(version);
+			resolve.mockRestore();
+		});
+
+		it('still adopts an APPEND, which the Other bucket does on every topN mark', () => {
+			const { scale, identity } = ready();
+			// reserveSyntheticIdentity appends to the value array and re-adopts.
+			identity.reset(['Adelie', 'Chinstrap', 'Gentoo', 'Other']);
+
+			const version = scale._version;
+			scale.setIdentity(identity);
+
+			// The dim is wider, so the grid draws a line per id. getTicks() alone
+			// does NOT pin this — idCount reads the live object, so it reports 4
+			// whether or not the adoption did anything. What a skipped adoption
+			// costs is the version bump, which is the whole of how Grid and the
+			// axis learn to re-read. A guard testing the object reference alone
+			// leaves them on three lines.
+			expect(scale._version).toBeGreaterThan(version);
+			expect(scale.getTicks().length).toBe(4);
+		});
+
+		it('still adopts a SAME-LENGTH replacement', () => {
+			const { scale, identity } = ready();
+			// A reload whose cardinality happens to match. A guard testing
+			// values.length would have skipped this and left the old categories
+			// on the axis — wrong data, nothing thrown.
+			identity.reset(['Emperor', 'King', 'Rockhopper']);
+
+			scale.setIdentity(identity);
+
+			expect(scale.domain()).toEqual(['Emperor', 'King', 'Rockhopper']);
+		});
+
+		it('still adopts an emptying', () => {
+			const { scale, identity } = ready();
+			identity.reset([]);
+
+			scale.setIdentity(identity);
+
+			expect(scale.hasIdentity).toBe(false);
+		});
+	});
+
+	// The production path registers a result and then resolves synchronously,
+	// because it needs the domain before it returns. Registering had already
+	// scheduled a microtask, and that microtask used to recompute the identical
+	// answer in order to discover it had nothing to apply — one wasted resolve
+	// per data update per band axis, which at ten thousand categories is a
+	// whole frame budget.
+	//
+	// The flag is the request rather than the microtask, so an explicit resolve
+	// serves it. These tests pin both halves: the redundant one goes, and one
+	// that is NOT redundant still happens.
+	describe('an explicit resolve serves the scheduled one', () => {
+		function registered(): { scale: BandScaleState; resolve: ReturnType<typeof vi.spyOn> } {
+			const scale = new BandScaleState('species');
+			scale.setIdentity(new FieldIdentity(['Adelie', 'Chinstrap', 'Gentoo']));
+			const resolve = vi.spyOn(DomainResolver.prototype, 'resolve') as unknown as ReturnType<
+				typeof vi.spyOn
+			>;
+			resolve.mockClear();
+			return { scale, resolve };
+		}
+
+		it('resolves once for a register-then-resolve update, not twice', async () => {
+			const { scale, resolve } = registered();
+
+			// Exactly what registerDataDerivedDomains does on every result.
+			scale.addMarkIds([0, 1, 2], 'mark-1', { sorted: true });
+			scale.updateDomainFromExtents();
+			expect(resolve).toHaveBeenCalledTimes(1);
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(resolve).toHaveBeenCalledTimes(1);
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+			resolve.mockRestore();
+		});
+
+		it('still resolves for a registration that lands after the explicit one', async () => {
+			const { scale, resolve } = registered();
+
+			scale.addMarkIds([0], 'mark-1', { sorted: true });
+			scale.updateDomainFromExtents();
+			// A sibling mark on the same shared scale, registering later in the
+			// same tick. Its categories have not been seen, so the request it
+			// makes is a real one and must survive.
+			scale.addMarkIds([2, 1], 'mark-2');
+			expect(resolve).toHaveBeenCalledTimes(1);
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(resolve).toHaveBeenCalledTimes(2);
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Gentoo', 'Chinstrap']);
+			resolve.mockRestore();
+		});
+
+		it('leaves a frozen scale to take the early return in the microtask', async () => {
+			const { scale, resolve } = registered();
+			scale.addMarkIds([0, 1, 2], 'mark-1');
+			await Promise.resolve();
+			resolve.mockClear();
+
+			scale.setUpdatesEnabled(false);
+			// A frozen call resolves nothing, so it has not served the request.
+			scale.addMarkIds([2, 1, 0], 'mark-2', { sorted: true });
+			scale.updateDomainFromExtents();
+			expect(resolve).not.toHaveBeenCalled();
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Frozen throughout, so nothing resolved and the domain is what it was.
+			expect(resolve).not.toHaveBeenCalled();
+			expect(scale.effectiveDomain).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+			resolve.mockRestore();
+		});
+	});
+
 	// Every other test around this one calls updateDomainFromExtents() by hand
 	// after registering a ranking, which is why none of them caught that the
 	// production path once did not: a ranking was stored and nothing downstream

@@ -296,13 +296,27 @@ export class BandScaleState {
 	 * The resolver does the work — re-encoding anything registered before
 	 * identity arrived, and detecting the two reload orderings that make stored
 	 * ids meaningless. What belongs here is what a scale does afterwards:
-	 * republish, and bump the version unconditionally, because `hasIdentity`
-	 * changing alters what the ticks and the grid report even when the domain
-	 * itself has not moved.
+	 * republish, and bump the version, because `hasIdentity` changing alters
+	 * what the ticks and the grid report even when the domain itself has not
+	 * moved.
+	 *
+	 * EVERY MARK ON A SHARED AXIS CALLS THIS, with the same live object — two
+	 * marks on one chart, or forty facet cells. Only the first adoption does
+	 * anything; the rest used to re-resolve the whole domain and bump the
+	 * version to publish an answer identical to the one already on screen. At a
+	 * thousand categories that was 28ms of setup for a forty-cell grid.
+	 *
+	 * So the resolver reports whether adopting MOVED anything, and this returns
+	 * when it did not. What makes that safe is `FieldIdentity.version`: the
+	 * object is live and mutates behind every holder, and the guard cannot be
+	 * "same reference" or "same length" — a dim APPEND (the Other bucket
+	 * reservation does one on every topN mark) and a same-length replacement
+	 * are both real changes that neither test would catch. `reset` is the only
+	 * writer and bumps the counter, so comparing it is complete.
 	 */
 	setIdentity(identity: FieldIdentity): void {
 		this.#warnIfDestroyed('setIdentity');
-		this.#resolver.setIdentity(identity);
+		if (!this.#resolver.setIdentity(identity)) return;
 		this.updateDomainFromExtents();
 		this._version++;
 	}
@@ -561,11 +575,27 @@ export class BandScaleState {
 	/**
 	 * Debounce domain updates via microtask so multiple marks registering
 	 * in the same tick (e.g. sorted + unsorted) settle before views are created.
+	 *
+	 * THE FLAG IS THE REQUEST, not the microtask. A microtask cannot be
+	 * cancelled, so `updateDomainFromExtents` clears the flag to say the request
+	 * has been served, and the queued callback finds nothing to do and returns.
+	 *
+	 * Without that every data update on a band axis resolved TWICE: a mark
+	 * registers its result, which schedules this, and then the same caller
+	 * resolves synchronously because it needs the domain before it returns. The
+	 * microtask then recomputed the identical answer to discover `changed` was
+	 * false and discard it. The resolver's own contract says the debounce
+	 * batches the cost of APPLYING a resolution rather than computing one, and
+	 * this is what makes that true.
+	 *
+	 * A registration landing AFTER the explicit resolve finds the flag clear and
+	 * schedules again, which is correct — its categories have not been seen.
 	 */
 	#scheduleDomainUpdate(): void {
 		if (this.#domainUpdateScheduled) return;
 		this.#domainUpdateScheduled = true;
 		queueMicrotask(() => {
+			if (!this.#domainUpdateScheduled) return;
 			this.#domainUpdateScheduled = false;
 			this.updateDomainFromExtents();
 		});
@@ -587,6 +617,12 @@ export class BandScaleState {
 		if (!this.#enableUpdates) {
 			return;
 		}
+
+		// Any pending microtask asked for exactly this, so it is now served.
+		// Cleared below the freeze guard rather than above it: a frozen call
+		// resolves nothing, so it has not answered the request, and the microtask
+		// should still run and take the same early return.
+		this.#domainUpdateScheduled = false;
 
 		const { ids, values, changed } = this.#resolver.resolve();
 		if (!changed) return;
