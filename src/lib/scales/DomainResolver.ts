@@ -260,51 +260,91 @@ export class DomainResolver {
 	 * rather than the cost of computing one.
 	 */
 	resolve(): DomainResolution {
-		const ordered = this.#inPreferredOrder();
-		const all: (DimValue | number)[] = [];
-		const seen = new Set<DimValue | number>();
-		for (const extent of ordered) {
-			for (const category of extent.categories) {
-				if (seen.has(category)) continue;
-				seen.add(category);
-				all.push(category);
-			}
-		}
-
+		const identity = this.hasIdentity;
 		const values = this.#identity?.values ?? [];
-		// Already ids: every path into #extents encodes at the boundary, so this
-		// pass de-duplicates and range-checks.
+
+		// ONE pass over the extents in preferred order, de-duplicating, dropping
+		// what the dim does not know, and projecting to values as it goes.
+		//
+		// It used to be five: build a deduplicated list, hand it to #toIds to be
+		// deduplicated and range-checked AGAIN, filter, map, then copy into an
+		// Int32Array. That #toIds call could not do anything — every path into
+		// #extents encodes at the boundary, which is the whole point of the two
+		// registration methods, so its input was already ids that had passed the
+		// same check, and the list it was given had just been deduplicated. Its
+		// range check is subsumed by the `value == null` test below, which drops
+		// an id past the end, a negative one and a non-integer one alike, because
+		// all three index the value array to undefined.
 		//
 		// An id with no value is dropped from the IDS, before either projection.
 		// Filtering only the values would shorten the value list without
 		// shortening the permutation, and the two would disagree with the band
 		// index space d3 and the shader's categoryCount use — by one, with
 		// nothing failing. Unreachable today (the dim has no NULL values and
-		// synthetic rows carry a label), which is why it is written so the two
-		// cannot diverge rather than checked.
-		const orderedIds = this.hasIdentity
-			? this.#toIds(all, true).filter((id) => values[id] != null)
-			: [];
-		const resolved: DimValue[] = this.hasIdentity
-			? orderedIds.map((id) => values[id] as DimValue)
-			: (all as DimValue[]);
+		// synthetic rows carry a label), which is why the two are built together
+		// rather than checked against each other.
+		const seen = new Set<DimValue | number>();
+		const orderedIds: number[] = [];
+		const resolved: DimValue[] = [];
+		for (const extent of this.#inPreferredOrder()) {
+			for (const category of extent.categories) {
+				if (seen.has(category)) continue;
+				seen.add(category);
+				if (!identity) {
+					// The channel already carries a display position, so the
+					// registered value is the answer.
+					resolved.push(category as DimValue);
+					continue;
+				}
+				const value = values[category as number];
+				if (value == null) continue;
+				orderedIds.push(category as number);
+				resolved.push(value);
+			}
+		}
 
-		const valuesChanged =
-			this.#lastValues.length !== resolved.length ||
-			resolved.some((cat, i) => cat !== this.#lastValues[i]);
+		// BOTH OUTPUTS ARE FRESHLY ALLOCATED, and neither may be pooled.
+		//
+		// `resolved` becomes the scale's #domain, and #positionsOf caches against
+		// the ARRAY IDENTITY of the displayed values — reusing one would leave
+		// that cache permanently valid and the positions permanently stale.
+		//
+		// `ids` is published as displayOrder AND retained here as #lastIds, so a
+		// reused buffer would compare against itself below and report `changed`
+		// false for every reorder there has ever been, silently.
+		const ids = identity ? Int32Array.from(orderedIds) : EMPTY_IDS;
+
+		let changed = this.#lastValues.length !== resolved.length;
+		if (!changed) {
+			const last = this.#lastValues;
+			for (let i = 0; i < resolved.length; i++) {
+				if (resolved[i] !== last[i]) {
+					changed = true;
+					break;
+				}
+			}
+		}
 		// The permutation can move while its value projection does not — most
 		// obviously when identity arrives after the domain has settled, which is
 		// the live ordering during setup. Comparing the values alone left the
 		// permutation empty and the slot table stale.
-		const idsChanged =
-			this.hasIdentity &&
-			(this.#lastIds.length !== orderedIds.length ||
-				orderedIds.some((id, i) => id !== this.#lastIds[i]));
+		if (!changed && identity) {
+			const last = this.#lastIds;
+			if (last.length !== ids.length) {
+				changed = true;
+			} else {
+				for (let i = 0; i < ids.length; i++) {
+					if (ids[i] !== last[i]) {
+						changed = true;
+						break;
+					}
+				}
+			}
+		}
 
-		const ids = this.hasIdentity ? Int32Array.from(orderedIds) : EMPTY_IDS;
 		this.#lastIds = ids;
 		this.#lastValues = resolved;
-		return { ids, values: resolved, changed: valuesChanged || idsChanged };
+		return { ids, values: resolved, changed };
 	}
 
 	/**
