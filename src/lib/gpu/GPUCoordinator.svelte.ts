@@ -445,7 +445,25 @@ export class GPUCoordinator {
 	// RENDER LOOP STATE (Zero-Allocation)
 	// =========================================================================
 	#chartsToRenderArray: ChartConfig[] = []; // Reused array for charts to render
-	#acquiredTextures: { chartConfig: ChartConfig; texture: GPUTexture; view: GPUTextureView }[] = []; // Reused array for texture acquisition
+	/**
+	 * This frame's swapchain views, INDEX-ALIGNED with the charts being
+	 * rendered, and valid only within one `#coordinatedRender`.
+	 *
+	 * Acquisition is separated from encoding because `getCurrentTexture` is the
+	 * call that can block on the compositor, and doing all of them up front
+	 * keeps that out of the middle of command encoding.
+	 *
+	 * Not a list of `{ chart, view }` pairs. The mapping is 1:1 and dense, so
+	 * the chart is already addressable by the same index and the pair was an
+	 * object per chart per frame for nothing — under a banner promising zero
+	 * allocation. It also carried the GPUTexture, which nothing ever read.
+	 *
+	 * Deliberately NOT the `#identitySlotEntryPool` idiom, which exists one
+	 * function away for a list that is FILTERED — entries there have no
+	 * index to align with, so a pooled object is the cheapest thing available.
+	 * Here there is an index, so the right number of objects is none.
+	 */
+	#acquiredViews: (GPUTextureView | null)[] = [];
 	#encoderDescriptor = { label: 'frame-encoder' };
 	#submitArray: [GPUCommandBuffer | null] = [null]; // Reused array for queue.submit()
 	#framesInFlight = 0;
@@ -1276,15 +1294,17 @@ export class GPUCoordinator {
 		const slot = this.#frameId % this.#SSBO_SLOT_COUNT;
 
 		// PHASE 1: EARLY TEXTURE ACQUISITION
-		this.#acquiredTextures.length = 0;
-
 		const numCharts = chartsNeedingRender.length;
+		const views = this.#acquiredViews;
 		for (let i = 0; i < numCharts; i++) {
-			const chartConfig = chartsNeedingRender[i];
-			const texture = chartConfig.context.getCurrentTexture();
-			const view = texture.createView();
-			this.#acquiredTextures.push({ chartConfig, texture, view });
+			views[i] = chartsNeedingRender[i].context.getCurrentTexture().createView();
 		}
+		// Drop any tail left by a frame that rendered more charts than this one,
+		// so a grid shrinking from forty cells to two stops holding thirty-eight
+		// views of swapchain textures the browser has already moved on from. The
+		// live entries are overwritten above rather than cleared, since every one
+		// of them is reassigned before it is read.
+		for (let i = numCharts; i < views.length; i++) views[i] = null;
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#updateIdentitySlots();
@@ -1317,12 +1337,9 @@ export class GPUCoordinator {
 			}
 		}
 
-		for (let i = 0; i < this.#acquiredTextures.length; i++) {
-			// for (let i = 0; i < numCharts; i++) {
-			const { chartConfig, texture, view } = this.#acquiredTextures[i];
-			// const chartConfig = chartsNeedingRender[i];
-			// const texture = chartConfig.context.getCurrentTexture();
-			// const view = texture.createView();
+		for (let i = 0; i < numCharts; i++) {
+			const chartConfig = chartsNeedingRender[i];
+			const view = views[i]!;
 
 			if (chartConfig.needsPlanRebuild) {
 				this.#buildRenderPlanForChart(chartConfig);
@@ -1330,7 +1347,6 @@ export class GPUCoordinator {
 
 			const passEncoder = commandEncoder.beginRenderPass(
 				this.#createRenderPassDescriptor(view, chartConfig)
-				// this.#createRenderPassDescriptor(view, chartConfig.canvas, chartConfig.chartId)
 			);
 
 			if (chartConfig.perFrameBindGroup) {
