@@ -1013,6 +1013,82 @@ describe('BandScaleState identity <-> display translation', () => {
 
 	// A re-sort has to REORDER, not just be remembered.
 	//
+	// Every mark on a shared axis adopts identity, with the same live object:
+	// two marks on one chart, forty facet cells. Only the first adoption does
+	// anything, and the rest used to re-resolve the whole domain to republish an
+	// answer identical to the one on screen — 28ms of setup for a forty-cell
+	// grid at a thousand categories.
+	//
+	// The guard leans on FieldIdentity.version, and the two tests that matter
+	// are the ones that would pass with a WEAKER guard and be wrong: an append
+	// (same object, longer) and a same-length replacement (same object, same
+	// length, different values). A guard testing the reference, or the length,
+	// would swallow one of those and leave the axis showing stale categories.
+	describe('adopting the same identity twice', () => {
+		function ready(vals: string[] = ['Adelie', 'Chinstrap', 'Gentoo']) {
+			const identity = new FieldIdentity(vals);
+			const scale = new BandScaleState('species');
+			scale.setIdentity(identity);
+			scale.addMarkIds(
+				vals.map((_, i) => i),
+				'mark-1'
+			);
+			scale.updateDomainFromExtents();
+			return { scale, identity };
+		}
+
+		it('does no work when nothing about the identity moved', () => {
+			const { scale, identity } = ready();
+			const resolve = vi.spyOn(DomainResolver.prototype, 'resolve');
+			const version = scale._version;
+
+			for (let i = 0; i < 5; i++) scale.setIdentity(identity);
+
+			expect(resolve).not.toHaveBeenCalled();
+			expect(scale._version).toBe(version);
+			resolve.mockRestore();
+		});
+
+		it('still adopts an APPEND, which the Other bucket does on every topN mark', () => {
+			const { scale, identity } = ready();
+			// reserveSyntheticIdentity appends to the value array and re-adopts.
+			identity.reset(['Adelie', 'Chinstrap', 'Gentoo', 'Other']);
+
+			const version = scale._version;
+			scale.setIdentity(identity);
+
+			// The dim is wider, so the grid draws a line per id. getTicks() alone
+			// does NOT pin this — idCount reads the live object, so it reports 4
+			// whether or not the adoption did anything. What a skipped adoption
+			// costs is the version bump, which is the whole of how Grid and the
+			// axis learn to re-read. A guard testing the object reference alone
+			// leaves them on three lines.
+			expect(scale._version).toBeGreaterThan(version);
+			expect(scale.getTicks().length).toBe(4);
+		});
+
+		it('still adopts a SAME-LENGTH replacement', () => {
+			const { scale, identity } = ready();
+			// A reload whose cardinality happens to match. A guard testing
+			// values.length would have skipped this and left the old categories
+			// on the axis — wrong data, nothing thrown.
+			identity.reset(['Emperor', 'King', 'Rockhopper']);
+
+			scale.setIdentity(identity);
+
+			expect(scale.domain()).toEqual(['Emperor', 'King', 'Rockhopper']);
+		});
+
+		it('still adopts an emptying', () => {
+			const { scale, identity } = ready();
+			identity.reset([]);
+
+			scale.setIdentity(identity);
+
+			expect(scale.hasIdentity).toBe(false);
+		});
+	});
+
 	// The production path registers a result and then resolves synchronously,
 	// because it needs the domain before it returns. Registering had already
 	// scheduled a microtask, and that microtask used to recompute the identical

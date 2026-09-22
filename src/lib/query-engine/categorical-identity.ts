@@ -181,8 +181,17 @@ export class FieldIdentity {
 		if (values) this.reset(values);
 	}
 
+	/**
+	 * Bumped by `reset`, so a holder of this LIVE object can tell whether it
+	 * moved since it last looked. Appends, a same-length replacement and an
+	 * emptying all go through `reset`, so comparing this is complete where
+	 * comparing `values.length` is not.
+	 */
+	version: number = 0;
+
 	/** Replace both directions. The only writer. */
 	reset(values: readonly DimValue[]): void {
+		this.version++;
 		this.values.length = 0;
 		this.ids.clear();
 		for (let i = 0; i < values.length; i++) {

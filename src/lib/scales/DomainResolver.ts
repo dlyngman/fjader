@@ -200,10 +200,28 @@ export class DomainResolver {
 	 * while an entry a re-running mark has already refreshed is a real value
 	 * and encodes correctly. That mixed state is the normal case, since
 	 * `addMark` can land on either side of this call.
+	 *
+	 * RETURNS WHETHER ANYTHING MOVED, so a caller sharing this scale with other
+	 * marks does not republish an answer identical to the one already on
+	 * screen. Every mark on a shared axis adopts, with the same live object,
+	 * and only the first adoption does work.
+	 *
+	 * The test is the reference OR `FieldIdentity.version`, and it has to be
+	 * both. The object is live and mutates behind this class — that is
+	 * deliberate, so the two directions cannot be half-stale — which means
+	 * "same reference" alone would miss every in-place change. `values.length`
+	 * would miss a same-length replacement. `reset` is the only writer of
+	 * either direction and bumps the counter, so this is complete where those
+	 * are not, and it covers the two cases that actually happen: the dim
+	 * APPENDING (the Other-bucket reservation does one on every topN mark) and
+	 * a reload replacing the values outright.
 	 */
-	setIdentity(identity: FieldIdentity): void {
+	setIdentity(identity: FieldIdentity): boolean {
 		const previous = this.#identity;
 		this.#identity = identity;
+
+		const moved = previous !== identity || this.#seenVersion !== identity.version;
+		this.#seenVersion = identity.version;
 
 		if (!identity.present) this.#encoded = false;
 		if (previous && previous !== identity && !previous.present) this.#encoded = false;
@@ -213,8 +231,20 @@ export class DomainResolver {
 			for (const extent of this.#extents.values()) {
 				extent.categories = this.#toIds(extent.categories, false);
 			}
+			// Re-encoding rewrote every extent, so the next resolution has new
+			// input whatever the counter says.
+			return true;
 		}
+		return moved;
 	}
+
+	/**
+	 * The live identity's `version` when this resolver last adopted it.
+	 *
+	 * -1 rather than 0 so a fresh resolver adopting a never-reset identity
+	 * still counts as a move.
+	 */
+	#seenVersion: number = -1;
 
 	// =========================================================================
 	// RESOLUTION
