@@ -155,7 +155,7 @@ export class SlotTransition implements SlotSource {
 	/**
 	 * Bumped whenever `from` or `to` move — a retarget, a fold, a settle. The
 	 * packer compares this rather than the array contents, so a frame where only
-	 * t moved uploads four bytes and nothing else. Writing either array without
+	 * t moved uploads nothing — t reaches the resolve as an immediate. Writing either array without
 	 * bumping this leaves the GPU on the old one.
 	 */
 	version: number = 0;
@@ -233,7 +233,7 @@ export class SlotTransition implements SlotSource {
 	 * Where one id is now: `mix(from, to, t)` for that id alone, or -1.
 	 *
 	 * O(1), for per-frame consumers that want a handful of ids — axis labels —
-	 * and must not pay for `table`, which walks every id in the dim.
+	 * and must not pay for `snapshot`, which walks every id in the dim.
 	 */
 	slotOf(id: number): number {
 		const f = this.#from[id];

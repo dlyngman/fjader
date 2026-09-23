@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { resolveValuesReference, VALUE_RESOLVE_SHADER } from './ValueResolveShader';
+import { resolveReference, RESOLVE_SHADER } from './ResolveShader';
 
 /**
- * The value resolve formula.
+ * The resolve formula, shared by morphing channels and slot tables.
  *
  * It lives in WGSL, where a device is the only thing that can run it, so it is
  * written in JS as well and the shader is asserted against this. These tests pin
  * the JS side; the shader's job is to agree with it.
  */
-describe('resolveValuesReference', () => {
+describe('resolveReference', () => {
 	const run = (from: number[], to: number[], t: number) =>
 		Array.from(
-			resolveValuesReference(
+			resolveReference(
 				Float32Array.from(from),
 				Float32Array.from(to),
 				t,
@@ -74,13 +74,7 @@ describe('resolveValuesReference', () => {
 		// The dispatch covers `count` threads; an over-allocated tail is left as
 		// it was, so a buffer dump has nothing in it that nobody put there.
 		const out = new Float32Array(4).fill(999);
-		resolveValuesReference(
-			Float32Array.from([0, 0, 0, 0]),
-			Float32Array.from([1, 1, 1, 1]),
-			1,
-			2,
-			out
-		);
+		resolveReference(Float32Array.from([0, 0, 0, 0]), Float32Array.from([1, 1, 1, 1]), 1, 2, out);
 		expect(Array.from(out)).toEqual([1, 1, 999, 999]);
 	});
 
@@ -88,8 +82,25 @@ describe('resolveValuesReference', () => {
 		// Not a substitute for running it — it cannot be, without a device. It
 		// catches the two ways these drift in practice: the NaN test being
 		// dropped from one side, and the arguments to mix being swapped.
-		expect(VALUE_RESOLVE_SHADER).toContain('a != a || b != b');
-		expect(VALUE_RESOLVE_SHADER).toContain('select(mix(a, b, params.t), b, undefinedEnd)');
-		expect(VALUE_RESOLVE_SHADER).toContain('i >= params.count');
+		expect(RESOLVE_SHADER).toContain('a == b || a != a || b != b');
+		expect(RESOLVE_SHADER).toContain('select(mix(a, b, params.t), b, takeTo)');
+		expect(RESOLVE_SHADER).toContain('gid.x >= params.count');
+		expect(RESOLVE_SHADER).toContain('let j = params.offset + gid.x');
+	});
+
+	it('resolves only its own range when given an offset', () => {
+		// The slot tables share one buffer, a block per scale, and each block is
+		// its own dispatch. Anything outside the range is another scale's, and
+		// must come out exactly as it went in.
+		const out = new Float32Array(6).fill(999);
+		resolveReference(
+			Float32Array.from([0, 0, 0, 0, 0, 0]),
+			Float32Array.from([8, 8, 8, 8, 8, 8]),
+			0.5,
+			2,
+			out,
+			3
+		);
+		expect(Array.from(out)).toEqual([999, 999, 999, 4, 4, 999]);
 	});
 });

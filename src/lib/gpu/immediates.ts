@@ -1,14 +1,14 @@
 /**
  * The WGSL immediates capability, and one place to ask about it.
  *
- * Two kernels declare `requires immediate_address_space`: the slot resolve,
- * which every band and point axis and every ordinal colour scale depends on,
- * and the value resolve, which animates a mark's channels. So the feature is
- * not an optimisation the library can quietly do without — it is a floor.
+ * The resolve kernel declares `requires immediate_address_space`, and every
+ * band and point axis and every ordinal colour scale depends on it to resolve
+ * its slots, as well as every mark that animates its channels. So the feature
+ * is not an optimisation the library can quietly do without — it is a floor.
  *
  * That floor is a deliberate choice rather than an oversight. Immediates are
  * pass state set in command order, which is what lets one compute pass resolve
- * several channels with a different `count` and `t` for each; a uniform
+ * several channels or slot blocks with a different `count` and `t` for each; a uniform
  * rewritten between dispatches hands every dispatch the last write. The
  * alternative is a buffer and a binding per channel, and the point of the
  * resolve is that an animated channel REPLACES a vertex binding rather than
@@ -21,7 +21,7 @@
  * naming a WGSL feature. Nothing in that names the requirement.
  */
 
-/** The WGSL language feature both resolve kernels declare. */
+/** The WGSL language feature the resolve kernel declares. */
 export const IMMEDIATES_FEATURE = 'immediate_address_space';
 
 /**

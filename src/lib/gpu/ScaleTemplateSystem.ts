@@ -551,7 +551,7 @@ export class ScaleTemplateSystem {
 	 * One read-only storage binding, visible to both stages, written by the
 	 * resolve pass whenever the tables or a t moved.
 	 *
-	 * Each scale's block is [count, t, slot0, slot1, ...] — the layout
+	 * Each scale's block is [count, slot0, slot1, ...] — the layout
 	 * identity-slot-packing.ts owns. The count is what makes
 	 * the lookup safe: ids and the slot table can disagree for a moment while a
 	 * dim appends, and without a per-scale bound an id past this scale's end
@@ -576,11 +576,12 @@ export class ScaleTemplateSystem {
     }
 
     fn identitySlot(base: u32, id: u32) -> f32 {
-      // Block layout: [count, t, slot0, slot1, ...]. The count is what makes a
+      // Block layout: [count, slot0, slot1, ...]. The count is what makes a
       // block self-describing, so an id past this scale's end is discarded
       // instead of reading into the next scale's slots. It survives the resolve
-      // untouched because it holds the same value in both halves, so mixing it
-      // returns it.
+      // exactly because it holds the same value in both halves, and the kernel
+      // returns equal ends as they are — u32() truncates, so an inexact mix
+      // would drop the last id.
       let count = u32(identitySlots[base]);
       if (id >= count) {
         return -1.0;
@@ -589,7 +590,7 @@ export class ScaleTemplateSystem {
       // both halves, so the resolve wrote -1 without a branch; one that is
       // leaving holds a real slot in both, which is what lets it travel. The
       // scale normalises that before packing, so nothing here re-derives it.
-      return identitySlots[base + 2u + id];
+      return identitySlots[base + 1u + id];
     }
     `;
 	}

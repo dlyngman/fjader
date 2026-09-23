@@ -5,11 +5,7 @@ import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
 import { MAX_SIZE_SLOTS } from './SizeScaleShaderLib';
-import {
-	SLOT_RESOLVE_IMMEDIATE_SIZE,
-	SLOT_RESOLVE_SHADER,
-	SLOT_RESOLVE_WORKGROUP
-} from './SlotResolveShader';
+import { RESOLVE_IMMEDIATE_SIZE, RESOLVE_WORKGROUP, resolvePipelineFor } from './ResolveShader';
 import {
 	IDENTITY_SLOT_CAPACITY,
 	IDENTITY_SLOT_EMPTY,
@@ -372,8 +368,8 @@ export class GPUCoordinator {
 	#identitySlotBuffer: GPUBuffer | null = null;
 	/**
 	 * The `to` half. Same size, same per-scale bases, written from the same pack.
-	 * The resolve pass mixes the two with t from the block header, so a reorder
-	 * in flight costs a 4-byte write per frame instead of the whole table.
+	 * The resolve pass mixes the two with each scale's t as an immediate, so a
+	 * reorder in flight uploads nothing per frame.
 	 */
 	#identitySlotBufferTo: GPUBuffer | null = null;
 	/**
@@ -389,20 +385,14 @@ export class GPUCoordinator {
 	/** Reused for the four-byte config patch. */
 	#slotBasePatch = new Uint32Array(1);
 
-	/** Which block each packed float belongs to — the kernel's `t` lookup. */
-	#identitySlotBases: GPUBuffer | null = null;
 	/** What the render stages read: `mix(from, to, t)`, written by compute. */
 	#identitySlotResolved: GPUBuffer | null = null;
-	#slotResolvePipeline: GPUComputePipeline | null = null;
 	#slotResolveBindGroup: GPUBindGroup | null = null;
-	/** Packed prefix in floats — how many threads the dispatch needs. */
-	#slotResolveCount = 0;
-	/** Set when the tables or a t moved; see #encodeSlotResolve. */
-	#slotResolvePending = false;
 	/** Built once; encoded on every frame a t or table moves. */
 	#slotResolvePassDescriptor: GPUComputePassDescriptor = { label: 'slot-resolve' };
-	/** `count` for the resolve, pushed as an immediate. */
-	#slotResolveImmediates = new Uint32Array(1);
+	/** `count`, `t`, `offset` for each block's dispatch, pushed as immediates. */
+	#slotResolveImmediates = new ArrayBuffer(RESOLVE_IMMEDIATE_SIZE);
+	#slotResolveImmediatesView = new DataView(this.#slotResolveImmediates);
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
 	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
@@ -831,10 +821,16 @@ export class GPUCoordinator {
 	 * Zero-allocation hot path.
 	 */
 	/**
-	 * Buffers and pipeline for the slot table and its per-frame resolve.
+	 * Buffers for the slot table and its per-frame resolve.
 	 *
-	 * `from`, `to` and `bases` are compute-stage inputs; `resolved` is what the
-	 * render stages bind. `count` reaches the kernel as an immediate.
+	 * `from` and `to` are compute-stage inputs; `resolved` is what the render
+	 * stages bind. The pipeline is the shared resolve kernel's, the same one a
+	 * mark's morphing channels use.
+	 *
+	 * Nothing ever dispatches over the permanent empty block, so `resolved`
+	 * relies on WebGPU zero-initialising a new buffer for that block's count of
+	 * 0 — which the spec guarantees, and which is exactly what a parked scale
+	 * must read.
 	 */
 	#createIdentitySlotBuffer(): void {
 		if (this.#identitySlotBuffer) return;
@@ -853,84 +849,65 @@ export class GPUCoordinator {
 			size: bytes,
 			usage: storage
 		});
-		this.#identitySlotBases = device.createBuffer({
-			label: 'identity-slot-bases',
-			size: bytes,
-			usage: storage
-		});
 		this.#identitySlotResolved = device.createBuffer({
 			label: 'identity-slot-table-resolved',
 			size: bytes,
-			usage: storage
-		});
-		const layout = device.createBindGroupLayout({
-			label: 'slot-resolve-layout',
-			entries: [
-				{ binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-				{ binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-				{ binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-				{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }
-			]
-		});
-		this.#slotResolvePipeline = device.createComputePipeline({
-			label: 'slot-resolve',
-			layout: device.createPipelineLayout({
-				bindGroupLayouts: [layout],
-				immediateSize: SLOT_RESOLVE_IMMEDIATE_SIZE
-			}),
-			compute: {
-				module: device.createShaderModule({
-					label: 'slot-resolve',
-					code: SLOT_RESOLVE_SHADER
-				}),
-				entryPoint: 'main'
-			}
+			usage: GPUBufferUsage.STORAGE
 		});
 		this.#slotResolveBindGroup = device.createBindGroup({
 			label: 'slot-resolve-bind-group',
-			layout,
+			layout: resolvePipelineFor(device).layout,
 			entries: [
 				{ binding: 0, resource: { buffer: this.#identitySlotBuffer } },
 				{ binding: 1, resource: { buffer: this.#identitySlotBufferTo } },
-				{ binding: 2, resource: { buffer: this.#identitySlotBases } },
-				{ binding: 3, resource: { buffer: this.#identitySlotResolved } }
+				{ binding: 2, resource: { buffer: this.#identitySlotResolved } }
 			]
 		});
 	}
 
 	/**
-	 * Encode the resolve. One dispatch for every scale on the page.
+	 * Encode the resolve: one dispatch per block the pack listed, each with its
+	 * own `count`, `t` and `offset`.
 	 *
-	 * Runs only when an input moved: the tables were repacked, or some scale's
-	 * `t` changed. Settling is one of those — t lands on 1 and the tables are
-	 * repacked — so the final position is resolved without a special case, and
-	 * a frame where nothing moved (a pan, a hover, another mark's own animation)
-	 * dispatches nothing.
+	 * A block is listed when its table was rewritten or its `t` moved. Settling
+	 * is one of those — t lands on 1 and the table is repacked — so the final
+	 * position is resolved without a special case, and a frame where nothing
+	 * moved (a pan, a hover, another mark's own animation) dispatches nothing.
+	 *
+	 * Reads the pack from this same frame: #updateIdentitySlots runs first in
+	 * #coordinatedRender, and the list is overwritten by the next pack.
 	 */
 	#encodeSlotResolve(encoder: GPUCommandEncoder): void {
-		if (!this.#slotResolvePipeline || !this.#slotResolvePending) return;
-		const count = this.#slotResolveCount;
-		if (count === 0) return;
+		const state = this.#identitySlots;
+		if (!state) return;
+		const { resolves, resolveCount } = state.result;
+		if (resolveCount === 0) return;
 
+		const immediates = this.#slotResolveImmediatesView;
 		const pass = encoder.beginComputePass(this.#slotResolvePassDescriptor);
-		pass.setPipeline(this.#slotResolvePipeline);
-		this.#slotResolveImmediates[0] = count;
-		pass.setImmediates(0, this.#slotResolveImmediates);
+		pass.setPipeline(resolvePipelineFor(this.#device!).pipeline);
 		pass.setBindGroup(0, this.#slotResolveBindGroup!);
-		pass.dispatchWorkgroups(Math.ceil(count / SLOT_RESOLVE_WORKGROUP));
+		for (let i = 0; i < resolveCount; i++) {
+			const block = resolves[i];
+			immediates.setUint32(0, block.length, true);
+			immediates.setFloat32(4, block.t, true);
+			immediates.setUint32(8, block.base, true);
+			pass.setImmediates(0, this.#slotResolveImmediates);
+			pass.dispatchWorkgroups(Math.ceil(block.length / RESOLVE_WORKGROUP));
+		}
 		pass.end();
-
-		this.#slotResolvePending = false;
 	}
 
 	/**
 	 * Pack every band/point scale's slot table into the shared buffer and assign
 	 * each one an offset, which #fillAllScales then writes into its p4.
 	 *
-	 * Uploads only when something moved: slot tables change on reorder, not per
-	 * frame, so a static chart costs no writeBuffer here. Offsets are recomputed
-	 * every call because a scale appearing or disappearing shifts the ones after
-	 * it — cheap, since it is a running sum over a handful of scales.
+	 * Uploads only the range that moved: slot tables change on reorder, not per
+	 * frame, so a static chart costs no writeBuffer here, and neither does an
+	 * animating one — its `t` goes to the resolve as an immediate. Offsets are
+	 * recomputed every call because a scale appearing or disappearing shifts
+	 * the ones after it — cheap, since it is a running sum over a handful of
+	 * scales.
 	 */
 	#updateIdentitySlots(): void {
 		const state = this.#identitySlots;
@@ -970,18 +947,7 @@ export class GPUCoordinator {
 			);
 		}
 
-		const { dirty, length } = packIdentitySlots(scales, state);
-
-		// How much of the buffer is in use, recorded whether or not anything moved.
-		// `length` and `dirty` answer different questions: dropping the LAST packed
-		// scale moves nobody's base and bumps nobody's version, so there is nothing
-		// to re-upload, but the used prefix is shorter. Read below the early return
-		// this kept a stale, too-large count and the resolve kernel went on
-		// dispatching over the departed scale's floats — harmless, since nothing
-		// reads past its own block, and stale by construction in the one file §62
-		// was about. The dispatch itself still only happens when something is
-		// pending.
-		this.#slotResolveCount = length;
+		const { uploadStart, uploadEnd } = packIdentitySlots(scales, state);
 
 		// Hand back the base to any scale that reads it from its own config rather
 		// than from p4. A band scale's base is refilled into p4 every frame; an
@@ -1006,78 +972,26 @@ export class GPUCoordinator {
 			scale.setSlotBase(base);
 		}
 
-		if (!dirty) return;
+		if (uploadEnd === 0) return;
 
 		const queue = this.#device!.queue;
+		const bytes = uploadStart * 4;
+		const size = uploadEnd - uploadStart;
 		queue.writeBuffer(
 			this.#identitySlotBuffer!,
-			0,
+			bytes,
 			state.buffer as Float32Array<ArrayBuffer>,
-			0,
-			length
+			uploadStart,
+			size
 		);
 		queue.writeBuffer(
 			this.#identitySlotBufferTo!,
-			0,
+			bytes,
 			state.bufferTo as Float32Array<ArrayBuffer>,
-			0,
-			length
+			uploadStart,
+			size
 		);
-		// Only when the packing moved — never per frame.
-		queue.writeBuffer(
-			this.#identitySlotBases!,
-			0,
-			state.bases as Uint32Array<ArrayBuffer>,
-			0,
-			length
-		);
-
-		this.#slotResolvePending = true;
 	}
-
-	/**
-	 * Push each packed scale's `t` when it moved — four bytes at a known offset.
-	 *
-	 * This is what the whole two-table split buys. slotFrom and slotTo move on a
-	 * retarget, which is rare; only `t` moves per frame, and it is one float in
-	 * the block header rather than one per id. Before this the packer re-uploaded
-	 * the entire packed range on every frame of every animation.
-	 *
-	 * Only the `from` buffer is written: the resolve kernel reads t from
-	 * `slotFrom[bases[i] + 1]`, so the copy in the `to` buffer's header is never
-	 * read by anything.
-	 * The CPU mirror is updated alongside, or the next full upload would push a
-	 * stale t and jump the transition back.
-	 *
-	 * Runs after the pack, so a scale that has just been given a base this frame
-	 * gets its t at that base rather than its previous one.
-	 *
-	 * Walks the scales rather than the animation loop's participants: the loop
-	 * holds a band scale's CLOCK, which has a t but no id or block. The
-	 * comparison against the mirror is what keeps a still frame free.
-	 */
-	#uploadAnimatingT(): void {
-		const state = this.#identitySlots;
-		if (!state) return;
-		for (let i = 0; i < this.#scaleArray.length; i++) {
-			const scale = this.#scaleArray[i].instance as unknown as { id: string; slots?: SlotSource };
-			const t = scale.slots?.t;
-			if (t === undefined) continue;
-			const base = state.offsets.get(scale.id);
-			if (base === undefined || base === IDENTITY_SLOT_EMPTY) continue;
-			const at = base + 1;
-			if (state.buffer[at] === t) continue;
-			state.buffer[at] = t;
-			this.#tPatch[0] = t;
-			this.#device!.queue.writeBuffer(this.#identitySlotBuffer!, at * 4, this.#tPatch);
-			// t moved, so what the render stages read is stale until the kernel
-			// runs again.
-			this.#slotResolvePending = true;
-		}
-	}
-
-	/** Reused so the per-frame t write allocates nothing. */
-	#tPatch = new Float32Array(1);
 
 	/**
 	 * Rewrite the frame uniform of any chart whose inputs have moved under it.
@@ -1308,8 +1222,6 @@ export class GPUCoordinator {
 
 		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#updateIdentitySlots();
-		// After the pack, so a scale given a base this frame gets its t there.
-		this.#uploadAnimatingT();
 		this.#refreshStaleFrameUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
 
@@ -2787,7 +2699,6 @@ export class GPUCoordinator {
 		// The slot tables and their resolve inputs and output.
 		this.#identitySlotBuffer?.destroy();
 		this.#identitySlotBufferTo?.destroy();
-		this.#identitySlotBases?.destroy();
 		this.#identitySlotResolved?.destroy();
 
 		this.#colorConfigBuffer = null;
@@ -2796,12 +2707,8 @@ export class GPUCoordinator {
 		this.#sizeConfigBuffer = null;
 		this.#identitySlotBuffer = null;
 		this.#identitySlotBufferTo = null;
-		this.#identitySlotBases = null;
 		this.#identitySlotResolved = null;
-		this.#slotResolvePipeline = null;
 		this.#slotResolveBindGroup = null;
-		this.#slotResolveCount = 0;
-		this.#slotResolvePending = false;
 		this.#identitySlots = null;
 	}
 
