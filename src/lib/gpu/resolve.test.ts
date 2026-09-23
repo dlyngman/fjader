@@ -82,8 +82,8 @@ describe('resolveReference', () => {
 		// Not a substitute for running it — it cannot be, without a device. It
 		// catches the two ways these drift in practice: the NaN test being
 		// dropped from one side, and the arguments to mix being swapped.
-		expect(RESOLVE_SHADER).toContain('a != a || b != b');
-		expect(RESOLVE_SHADER).toContain('select(mix(a, b, params.t), b, undefinedEnd)');
+		expect(RESOLVE_SHADER).toContain('a == b || a != a || b != b');
+		expect(RESOLVE_SHADER).toContain('select(mix(a, b, params.t), b, takeTo)');
 		expect(RESOLVE_SHADER).toContain('gid.x >= params.count');
 		expect(RESOLVE_SHADER).toContain('let j = params.offset + gid.x');
 	});

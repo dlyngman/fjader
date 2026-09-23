@@ -42,8 +42,19 @@
  *   the row appears or disappears rather than animating through a number that
  *   was never in the data.
  *
- * A slot table never holds NaN — a hidden id is -1 in both halves, so the mix
- * returns -1 for any t without a branch — and the select is inert for it.
+ * A slot table never holds NaN, so for it the select does the other job below.
+ *
+ * EQUAL ENDS ARE RETURNED EXACTLY.
+ *
+ * WGSL defines `mix(a, b, t)` as `a * (1 - t) + b * t`, which in f32 need not
+ * give back `a` when `b == a`: `mix(3, 3, 0.007)` is 2.9999998. A slot block's
+ * count header is the same in both halves and the render stages read it with
+ * `u32()`, which truncates — so an inexact mix drops the last id for that frame.
+ * Metal happens to lower `mix` to `a + (b - a) * t`, exact here; Vulkan's FMix
+ * is free not to. So equal ends take `b` explicitly: the count header, a hidden
+ * id's -1, and every slot not moving in a reorder all come out exactly as
+ * packed, whatever the driver. `mix` itself stays for the rest, because it is
+ * exact at both t = 0 and t = 1, where `a + (b - a) * t` is not at t = 1.
  */
 
 /** Threads per workgroup. 64 is the usual floor for good occupancy. */
@@ -90,8 +101,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   // there is nothing to interpolate along. Take the destination and be done.
   // Note the test has to be explicit: every comparison against NaN is false, so
   // mix() would silently propagate it instead.
-  let undefinedEnd = a != a || b != b;
-  resolved[j] = select(mix(a, b, params.t), b, undefinedEnd);
+  // Equal ends take b too, so they come out exact on any driver — see above.
+  let takeTo = a == b || a != a || b != b;
+  resolved[j] = select(mix(a, b, params.t), b, takeTo);
 }
 `;
 
@@ -114,7 +126,7 @@ export function resolveReference(
 	for (let j = offset; j < offset + count; j++) {
 		const a = valueFrom[j];
 		const b = valueTo[j];
-		out[j] = Number.isNaN(a) || Number.isNaN(b) ? b : a + (b - a) * t;
+		out[j] = a === b || Number.isNaN(a) || Number.isNaN(b) ? b : a + (b - a) * t;
 	}
 	return out;
 }
