@@ -149,6 +149,33 @@ interface ChartRegistrationConfig {
 	facetScale?: FacetScaleRef | null;
 }
 
+/**
+ * One chart's pixels as the coordinator rendered them, for the scale-source
+ * parity check. Tightly packed rows in the canvas's own format.
+ */
+export interface ChartCapture {
+	width: number;
+	height: number;
+	pixels: Uint8Array;
+	/** Whether the pass issued any draw. A chart can be blank for two reasons. */
+	drew: boolean;
+}
+
+interface PendingCapture {
+	canvas: HTMLCanvasElement;
+	buffer: GPUBuffer;
+	width: number;
+	height: number;
+	bytesPerRow: number;
+	drew: boolean;
+}
+
+interface CaptureRequest {
+	resolve: (captures: Map<HTMLCanvasElement, ChartCapture>) => void;
+	reject: (error: unknown) => void;
+	copies: PendingCapture[];
+}
+
 export interface ChartRegistrationResult {
 	setContextReady: () => void;
 	setVisible: (visible: boolean) => void;
@@ -1092,6 +1119,88 @@ export class GPUCoordinator {
 	#chartScaleImmediates = new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4);
 
 	// =========================================================================
+	// READBACK (test-only)
+	// =========================================================================
+
+	/**
+	 * Configure canvases so the coordinator can copy from them. Test-only: set
+	 * it before the charts mount, since a canvas reads it when it configures
+	 * its context. Production leaves canvas usage at the default.
+	 */
+	readbackEnabled = false;
+
+	#captureRequest: CaptureRequest | null = null;
+
+	/**
+	 * Render every chart once more and read back what it drew.
+	 *
+	 * Why here and not from the page. A WebGPU canvas's texture expires once it
+	 * is presented, and `createImageBitmap` on the element after that returned
+	 * transparent pixels for every chart while all of them were on screen. The
+	 * copy has to be encoded in the frame that draws, so the coordinator does it.
+	 *
+	 * Charts that do not render in that frame — hidden, or not configured yet —
+	 * are absent from the map.
+	 */
+	captureCharts(): Promise<Map<HTMLCanvasElement, ChartCapture>> {
+		if (!this.readbackEnabled) {
+			return Promise.reject(new Error('captureCharts needs readbackEnabled set before mount.'));
+		}
+		if (this.#captureRequest) {
+			return Promise.reject(new Error('A capture is already pending.'));
+		}
+		return new Promise((resolve, reject) => {
+			this.#captureRequest = { resolve, reject, copies: [] };
+			for (const chartId of this.#registeredCharts.keys()) this.invalidateChart(chartId);
+		});
+	}
+
+	/** Encode one chart's copy, right after its pass. Runs only while capturing. */
+	#encodeCapture(
+		encoder: GPUCommandEncoder,
+		chart: ChartConfig,
+		drew: boolean,
+		copies: PendingCapture[]
+	): void {
+		const texture = chart.context.getCurrentTexture();
+		const { width, height } = texture;
+		// copyTextureToBuffer wants rows aligned to 256 bytes.
+		const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+		const buffer = this.#device!.createBuffer({
+			label: `capture-${chart.chartId}`,
+			size: bytesPerRow * height,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+		});
+		encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow }, [width, height]);
+		copies.push({ canvas: chart.canvas, buffer, width, height, bytesPerRow, drew });
+	}
+
+	/** Map the frame's copies once it is submitted, and hand them over. */
+	async #resolveCapture(request: CaptureRequest): Promise<void> {
+		try {
+			const captures = new Map<HTMLCanvasElement, ChartCapture>();
+			await Promise.all(request.copies.map((c) => c.buffer.mapAsync(GPUMapMode.READ)));
+			for (const c of request.copies) {
+				const padded = new Uint8Array(c.buffer.getMappedRange());
+				const rowBytes = c.width * 4;
+				const pixels = new Uint8Array(rowBytes * c.height);
+				for (let row = 0; row < c.height; row++) {
+					pixels.set(
+						padded.subarray(row * c.bytesPerRow, row * c.bytesPerRow + rowBytes),
+						row * rowBytes
+					);
+				}
+				c.buffer.unmap();
+				c.buffer.destroy();
+				captures.set(c.canvas, { width: c.width, height: c.height, pixels, drew: c.drew });
+			}
+			request.resolve(captures);
+		} catch (error) {
+			request.reject(error);
+		}
+	}
+
+	// =========================================================================
 	// ANIMATION LOOP CALLBACKS
 	// =========================================================================
 
@@ -1276,6 +1385,8 @@ export class GPUCoordinator {
 			}
 		}
 
+		const capture = this.#captureRequest;
+
 		for (let i = 0; i < numCharts; i++) {
 			const chartConfig = chartsNeedingRender[i];
 			const view = views[i]!;
@@ -1327,11 +1438,24 @@ export class GPUCoordinator {
 			}
 
 			passEncoder.end();
+
+			if (capture) {
+				const drew =
+					!!chartConfig.perFrameBindGroup &&
+					scalesKnown &&
+					chartConfig.renderPlan.some((layer) => !!layer.renderer?.perDataBindGroup);
+				this.#encodeCapture(commandEncoder, chartConfig, drew, capture.copies);
+			}
 		}
 
 		// PHASE 4: SUBMIT
 		this.#submitArray[0] = commandEncoder.finish();
 		this.#device!.queue.submit(this.#submitArray as [GPUCommandBuffer]);
+
+		if (capture) {
+			this.#captureRequest = null;
+			void this.#resolveCapture(capture);
+		}
 
 		this.#framesInFlight++;
 		this.#device!.queue.onSubmittedWorkDone().then(() => {

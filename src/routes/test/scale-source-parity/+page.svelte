@@ -14,6 +14,11 @@
 	 * under a new source builds new pipelines against it. Each source is drawn,
 	 * left to settle (two identical captures in a row), and read back.
 	 *
+	 * Readback goes through the coordinator, which copies each canvas texture in
+	 * the frame that draws it. `createImageBitmap` on the element saw every
+	 * chart as transparent while all of them were on screen: a WebGPU canvas's
+	 * texture expires once presented.
+	 *
 	 * The control. `swapped` is the immediates with x and y exchanged — a wrong
 	 * scale reaching the shader, deliberately. It MUST differ from `table` on
 	 * every chart. If it does not, the comparison cannot see the failure it
@@ -37,7 +42,9 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine, gpuCoordinator } = initDivePlot();
+	// Before any chart mounts: a canvas reads it when it configures its context.
+	gpuCoordinator.readbackEnabled = true;
 
 	let loaded = $state(false);
 	let loadError = $state(null);
@@ -88,13 +95,10 @@
 		}));
 	}
 
-	async function capture(canvas) {
-		const bitmap = await createImageBitmap(canvas);
-		const off = new OffscreenCanvas(bitmap.width, bitmap.height);
-		const ctx = off.getContext('2d');
-		ctx.drawImage(bitmap, 0, 0);
-		bitmap.close();
-		return ctx.getImageData(0, 0, off.width, off.height).data;
+	/** One frame of every canvas in `list`, in order; null for one that did not render. */
+	async function captureAll(list) {
+		const captures = await gpuCoordinator.captureCharts();
+		return list.map(({ canvas }) => captures.get(canvas) ?? null);
 	}
 
 	function differing(a, b) {
@@ -108,6 +112,7 @@
 	}
 
 	function blank(pixels) {
+		if (!pixels) return true;
 		for (let i = 3; i < pixels.length; i += 4) if (pixels[i] !== 0) return false;
 		return true;
 	}
@@ -117,26 +122,59 @@
 	 * two captures 300ms apart that agree, pixel for pixel. Data loads and
 	 * scale springs both finish on their own time, and a fixed wait would
 	 * compare a frame mid-animation against a frame at rest.
+	 *
+	 * A correct source must draw something on every canvas before it counts as
+	 * settled. The control is allowed to be blank — a wrong scale usually puts
+	 * every mark off the canvas, which is the point of it — but blank is also
+	 * what a chart looks like before its data arrives, and nothing the page can
+	 * see tells the two apart. So a blank control is accepted only after
+	 * `minMs`, the time a correct source needed to draw the same charts.
 	 */
-	async function drawWith(source) {
+	async function drawWith(source, { allowBlank = false, minMs = 0 } = {}) {
 		scaleTemplateSystem.chartScaleSource = source;
 		generation++;
 		await tick();
 		status = `drawing through "${source}"…`;
+		const start = performance.now();
 		let previous = null;
+		let list = [];
+		let captures = [];
 		for (let attempt = 0; attempt < 40; attempt++) {
 			await sleep(300);
-			const list = canvases();
-			const shots = [];
-			for (const { canvas } of list) shots.push(await capture(canvas));
+			list = canvases();
+			captures = await captureAll(list);
+			const shots = captures.map((c) => c?.pixels ?? null);
+			// Blank is not settled: right after a remount the pipelines are still
+			// compiling and the data is still in flight, and two blank captures
+			// agree with each other perfectly.
+			const drawn =
+				shots.length > 0 &&
+				captures.every((c) => c?.drew) &&
+				(allowBlank ? performance.now() - start >= minMs : shots.every((s) => !blank(s)));
 			const settled =
+				drawn &&
 				previous &&
 				previous.length === shots.length &&
-				shots.length > 0 &&
 				shots.every((s, i) => differing(s, previous[i]) === 0);
-			if (settled) return shots;
+			if (settled) return { shots, ms: performance.now() - start };
 			previous = shots;
 		}
+		// Why the last capture was not usable, per chart, most basic cause first.
+		const names = (keep) => list.filter((_, i) => keep(captures[i])).map(({ chart }) => chart);
+		const absent = names((c) => !c);
+		const noDraws = names((c) => c && !c.drew);
+		const blankDrawn = names((c) => c && c.drew && blank(c.pixels));
+		const of = `of ${list.length} canvases`;
+		if (absent.length)
+			throw new Error(`"${source}": ${absent.length} ${of} never rendered: ${absent.join(', ')}.`);
+		if (noDraws.length)
+			throw new Error(
+				`"${source}": ${noDraws.length} ${of} rendered but issued no draws: ${noDraws.join(', ')}.`
+			);
+		if (blankDrawn.length)
+			throw new Error(
+				`"${source}": ${blankDrawn.length} ${of} issued draws but stayed blank: ${blankDrawn.join(', ')}. Either the marks land off the canvas or their data never arrived.`
+			);
 		throw new Error(`"${source}" never settled: captures kept changing for 12s.`);
 	}
 
@@ -145,9 +183,9 @@
 		verdict = null;
 		rows = [];
 		try {
-			const table = await drawWith('table');
-			const swapped = await drawWith('swapped');
-			const immediate = await drawWith('immediate');
+			const { shots: table, ms } = await drawWith('table');
+			const { shots: swapped } = await drawWith('swapped', { allowBlank: true, minMs: ms });
+			const { shots: immediate } = await drawWith('immediate');
 			const list = canvases();
 
 			rows = list.map(({ chart }, i) => ({
@@ -155,7 +193,7 @@
 				blank: blank(table[i]),
 				immediate: differing(table[i], immediate[i]),
 				swapped: differing(table[i], swapped[i]),
-				pixels: table[i].length / 4
+				pixels: table[i] ? table[i].length / 4 : 0
 			}));
 
 			const readbackBroken = rows.some((r) => r.blank);
