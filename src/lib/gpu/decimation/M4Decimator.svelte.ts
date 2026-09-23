@@ -54,6 +54,16 @@ const M4_CONFIG_SIZE = 32;
 // Control buffer: 5 × u32 = 20 bytes (4 drawIndirect args + shouldDecimate flag)
 const CONTROL_BUFFER_SIZE = 20;
 
+/**
+ * Test-only: bin by the chart's y scale instead of its x scale.
+ *
+ * The scale-source parity page's control for M4 — a wrong scale reaching the
+ * binning, deliberately, which the comparison must see. Read by LineMark when
+ * it configures the decimator, so it takes effect on the next mount. Never set
+ * in production.
+ */
+export const m4Parity = { swapScale: false };
+
 export class M4Decimator {
 	#device: GPUDevice;
 
