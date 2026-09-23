@@ -218,12 +218,12 @@
         var viewSpan: f32;
         var pixelSpan: f32;
         if (markConstants.orientation == 0u) {
-          let scale = scaleParams[frameUniforms.xScaleIndex];
+          let scale = chartScaleX();
           viewSpan = scale.p2 - scale.p1;
           pixelSpan = (frameUniforms.rangeMax.x - frameUniforms.rangeMin.x)
             * frameUniforms.devicePixelRatio;
         } else {
-          let scale = scaleParams[frameUniforms.yScaleIndex];
+          let scale = chartScaleY();
           viewSpan = scale.p2 - scale.p1;
           pixelSpan = (frameUniforms.rangeMax.y - frameUniforms.rangeMin.y)
             * frameUniforms.devicePixelRatio;
