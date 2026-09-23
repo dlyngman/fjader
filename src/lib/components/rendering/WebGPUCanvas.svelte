@@ -88,7 +88,12 @@
 			context.configure({
 				device,
 				format: presentationFormat,
-				alphaMode: 'premultiplied'
+				alphaMode: 'premultiplied',
+				// COPY_SRC only for the parity check's readback; production keeps
+				// the default usage.
+				usage: gpuCoordinator.readbackEnabled
+					? GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
+					: GPUTextureUsage.RENDER_ATTACHMENT
 			});
 
 			contextConfigured = true;
