@@ -78,6 +78,23 @@ interface LayerConfig {
 	componentId?: string;
 	zIndex: number;
 	cachedPipeline?: GPURenderPipeline | null;
+	/**
+	 * Whether the layer's shader reads the chart's x and y scales. False for a
+	 * mark that brings scales of its own — parallel coordinates, one per axis —
+	 * and so draws in a chart that has no y scale at all. Unset means true.
+	 */
+	readsChartScales?: boolean;
+}
+
+/**
+ * A layer draws once its data is bound, and — when it reads the chart's scales
+ * — once both are known. One missing a scale draws nothing rather than through
+ * a guess; one that never reads them is not held back by their absence.
+ */
+function layerCanDraw(layer: LayerConfig, chartScalesKnown: boolean): boolean {
+	return (
+		!!layer.renderer?.perDataBindGroup && (chartScalesKnown || layer.readsChartScales === false)
+	);
 }
 
 export interface DataBindingEntry {
@@ -1403,11 +1420,13 @@ export class GPUCoordinator {
 			// first draw. Every pipeline declares the same 32 bytes and a draw
 			// requires every declared byte to have been set, so this is the whole
 			// range, every pass. Immediate data survives setPipeline between
-			// layouts of the same size, which is what makes once enough.
+			// layouts of the same size, which is what makes once enough. Pushed even
+			// when the chart's scales are not both known: a layer that does not
+			// read them still needs every byte set before it may draw.
 			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
 			passEncoder.setImmediates(0, this.#chartScaleImmediates);
 
-			if (chartConfig.perFrameBindGroup && scalesKnown) {
+			if (chartConfig.perFrameBindGroup) {
 				passEncoder.setBindGroup(0, chartConfig.perFrameBindGroup);
 				passEncoder.setBindGroup(2, currentScaleBindGroup);
 
@@ -1419,9 +1438,8 @@ export class GPUCoordinator {
 
 				for (let j = 0; j < planLen; j++) {
 					const layer = plan[j];
+					if (!layerCanDraw(layer, scalesKnown)) continue;
 					const renderer = layer.renderer;
-
-					if (!renderer || !renderer.perDataBindGroup) continue;
 
 					if (layer.cachedPipeline !== currentPipeline) {
 						passEncoder.setPipeline(layer.cachedPipeline!);
@@ -1442,8 +1460,7 @@ export class GPUCoordinator {
 			if (capture) {
 				const drew =
 					!!chartConfig.perFrameBindGroup &&
-					scalesKnown &&
-					chartConfig.renderPlan.some((layer) => !!layer.renderer?.perDataBindGroup);
+					chartConfig.renderPlan.some((layer) => layerCanDraw(layer, scalesKnown));
 				this.#encodeCapture(commandEncoder, chartConfig, drew, capture.copies);
 			}
 		}
