@@ -13,11 +13,11 @@
  * within the 8 storage buffer per-stage limit.
  *
  * Usage:
- *   const decimator = new M4Decimator(device, globalScaleLayout);
- *   decimator.configure(numBins, numSeries, xScaleIndex);
+ *   const decimator = new M4Decimator(device, gpuCoordinator);
+ *   decimator.configure(numBins, numSeries, xScaleId);
  *   decimator.setVertexCount(quadVertexCount);
- *   gpuCoordinator.registerComputeWork(key, (encoder, scaleBG) =>
- *       decimator.encode(encoder, inputBuffers, scaleBG, pointCount));
+ *   gpuCoordinator.registerComputeWork(key, (encoder) =>
+ *       decimator.encode(encoder, inputBuffers, pointCount));
  *   passEncoder.setBindGroup(1, decimator.renderBindGroup);
  *   passEncoder.drawIndirect(decimator.indirectBuffer, 0);
  */
@@ -30,8 +30,14 @@ import {
 	EMIT_OUTPUT_SHADER,
 	COMPACT_SHADER,
 	PASSTHROUGH_XY_SHADER,
-	PASSTHROUGH_SC_SHADER
+	PASSTHROUGH_SC_SHADER,
+	X_SCALE_IMMEDIATE_SIZE
 } from './M4Shader';
+
+/** Where the decimator gets its x scale's params: the coordinator, in practice. */
+export interface M4ScaleSource {
+	writeScaleParams(scaleId: string, view: Float32Array, offset: number): boolean;
+}
 
 interface M4InputBuffers {
 	x: GPUBuffer;
@@ -112,8 +118,10 @@ export class M4Decimator {
 	#configured = $state(false);
 
 	// Non-reactive internal state
-	#xScaleIndex = 0;
-	#resolveXScaleIndex: (() => number) | null = null;
+	#scales: M4ScaleSource;
+	#xScaleId: string | null = null;
+	/** Reused per frame: the x scale's four floats, pushed as immediates. */
+	#xScale = new Float32Array(X_SCALE_IMMEDIATE_SIZE / 4);
 	#pointCount = 0;
 	#outputCapacity = 0;
 
@@ -128,10 +136,11 @@ export class M4Decimator {
 	#renderBindGroupLayout: GPUBindGroupLayout | null = null;
 	#renderMarkConstantsBuffer: GPUBuffer | null = null;
 
-	constructor(device: GPUDevice, globalScaleLayout: GPUBindGroupLayout) {
+	constructor(device: GPUDevice, scales: M4ScaleSource) {
 		this.#device = device;
-		this.#createLayouts(globalScaleLayout);
-		this.#createPipelines(globalScaleLayout);
+		this.#scales = scales;
+		this.#createLayouts();
+		this.#createPipelines();
 		this.#createConfigBuffer();
 		this.#createControlBuffers();
 	}
@@ -161,14 +170,14 @@ export class M4Decimator {
 	/**
 	 * Configure dimensions and allocate buffers.
 	 * Call when chart width or series count changes.
-	 * @param resolveXScaleIndex — called at dispatch time to get the current
-	 *   SSBO slot index, so it's always fresh even after ScaleIndexManager rebuilds.
+	 * @param xScaleId — the scale to bin by. Its params are looked up on every
+	 *   dispatch, so they are the ones the chart draws through that frame.
 	 */
-	configure(numBins: number, numSeries: number, resolveXScaleIndex: () => number): void {
+	configure(numBins: number, numSeries: number, xScaleId: string | null): void {
 		const internalBins = numBins + 2;
 		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
 
-		this.#resolveXScaleIndex = resolveXScaleIndex;
+		this.#xScaleId = xScaleId;
 
 		if (!dimsChanged) return;
 
@@ -201,21 +210,19 @@ export class M4Decimator {
 	/**
 	 * Encode M4 compute passes into the provided command encoder.
 	 * 7 passes: initBins → binPoints → findMinMax → emitOutput → compact → passthroughXY → passthroughSC
+	 *
+	 * A frame whose x scale is not registered encodes nothing: the output keeps
+	 * what the last dispatch wrote rather than being binned through a guess.
 	 */
 	encode(
 		commandEncoder: GPUCommandEncoder,
 		inputBuffers: M4InputBuffers,
-		scaleBindGroup: GPUBindGroup,
 		pointCount: number
 	): void {
 		if (!this.#configured || this.#numBins === 0 || pointCount === 0) return;
+		if (!this.#xScaleId || !this.#scales.writeScaleParams(this.#xScaleId, this.#xScale, 0)) return;
 
-		// Resolve xScaleIndex fresh each frame — immune to ScaleIndexManager rebuilds
-		const freshIndex = this.#resolveXScaleIndex?.() ?? 0;
-		const indexChanged = freshIndex !== this.#xScaleIndex;
-		if (indexChanged) this.#xScaleIndex = freshIndex;
-
-		if (pointCount !== this.#pointCount || indexChanged) {
+		if (pointCount !== this.#pointCount) {
 			this.#pointCount = pointCount;
 			this.#updateConfig(pointCount);
 			this.#ensureOutputCapacity(pointCount);
@@ -233,16 +240,16 @@ export class M4Decimator {
 		initPass.setPipeline(this.#initBinsPipeline!);
 		initPass.setBindGroup(0, this.#inputBindGroups.get('initBins')!);
 		initPass.setBindGroup(1, this.#controlBindGroup!);
-		initPass.setBindGroup(2, scaleBindGroup);
 		initPass.dispatchWorkgroups(binWorkgroups);
 		initPass.end();
 
-		// Pass 1: Count visible points + bin points (if decimating)
+		// Pass 1: Count visible points + bin points (if decimating). Immediates
+		// are pass state and start unset in every pass, so 1 and 2 each push.
 		const binPass = commandEncoder.beginComputePass({ label: 'm4-bin-points' });
 		binPass.setPipeline(this.#binPointsPipeline!);
 		binPass.setBindGroup(0, this.#inputBindGroups.get('binPoints')!);
 		binPass.setBindGroup(1, this.#controlBindGroup!);
-		binPass.setBindGroup(2, scaleBindGroup);
+		binPass.setImmediates(0, this.#xScale);
 		binPass.dispatchWorkgroups(pointWorkgroups);
 		binPass.end();
 
@@ -251,7 +258,7 @@ export class M4Decimator {
 		findPass.setPipeline(this.#findMinMaxPipeline!);
 		findPass.setBindGroup(0, this.#inputBindGroups.get('findMinMax')!);
 		findPass.setBindGroup(1, this.#controlBindGroup!);
-		findPass.setBindGroup(2, scaleBindGroup);
+		findPass.setImmediates(0, this.#xScale);
 		findPass.dispatchWorkgroups(pointWorkgroups);
 		findPass.end();
 
@@ -385,8 +392,7 @@ export class M4Decimator {
 		this.#configData[0] = pointCount;
 		this.#configData[1] = this.#numBins;
 		this.#configData[2] = this.#numSeries;
-		this.#configData[3] = this.#xScaleIndex;
-		// Indices 4-6 reserved, index 7 = decimationMode (JS decision) preserved
+		// Indices 3-6 reserved, index 7 = decimationMode (JS decision) preserved
 		this.#device.queue.writeBuffer(
 			this.#configBuffer!,
 			0,
@@ -449,7 +455,7 @@ export class M4Decimator {
 		this.#inputBindGroups.clear();
 	}
 
-	#createLayouts(globalScaleLayout: GPUBindGroupLayout): void {
+	#createLayouts(): void {
 		// Group 0 for passes 0, 1, 2 — input data + config + bins
 		this.#inputLayout = this.#device.createBindGroupLayout({
 			label: 'm4-input-layout',
@@ -525,11 +531,18 @@ export class M4Decimator {
 		});
 	}
 
-	#createPipelines(globalScaleLayout: GPUBindGroupLayout): void {
-		// Passes 0, 1, 2: [inputLayout, controlLayout, globalScaleLayout]
+	#createPipelines(): void {
+		// Pass 0: [inputLayout, controlLayout]
+		const inputControlLayout = this.#device.createPipelineLayout({
+			label: 'm4-input-control-layout',
+			bindGroupLayouts: [this.#inputLayout!, this.#controlLayout!]
+		});
+
+		// Passes 1, 2: the same groups, plus the x scale as immediates
 		const inputControlScaleLayout = this.#device.createPipelineLayout({
 			label: 'm4-input-control-scale-layout',
-			bindGroupLayouts: [this.#inputLayout!, this.#controlLayout!, globalScaleLayout]
+			bindGroupLayouts: [this.#inputLayout!, this.#controlLayout!],
+			immediateSize: X_SCALE_IMMEDIATE_SIZE
 		});
 
 		// Pass 3: [emitInputLayout, outputLayout]
@@ -552,7 +565,7 @@ export class M4Decimator {
 
 		this.#initBinsPipeline = this.#device.createComputePipeline({
 			label: 'm4-init-bins',
-			layout: inputControlScaleLayout,
+			layout: inputControlLayout,
 			compute: {
 				module: this.#device.createShaderModule({ code: INIT_BINS_SHADER }),
 				entryPoint: 'main'

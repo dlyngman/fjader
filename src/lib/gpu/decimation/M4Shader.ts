@@ -24,7 +24,9 @@
  * Bind group layout:
  *   Group 0: Input data + config + bins
  *   Group 1: Control buffer (OR output arrays)
- *   Group 2: Global scale SSBO (shared with render pipeline)
+ *
+ * The x scale's params reach passes 1 and 2 as immediates, pushed before each
+ * dispatch, rather than as an index into the global scale table.
  */
 
 const WORKGROUP_SIZE = 256;
@@ -33,18 +35,11 @@ const WORKGROUP_SIZE = 256;
  * Shared type definitions used across all kernels.
  */
 const SHARED_TYPES = /* wgsl */ `
-struct ScaleParam {
-	p1: f32,
-	p2: f32,
-	p3: f32,
-	p4: f32,
-};
-
 struct M4Config {
 	pointCount: u32,
 	numBins: u32,
 	numSeries: u32,
-	xScaleIndex: u32,
+	_reserved: u32,
 	_reserved0: u32,
 	_reserved1: u32,
 	_reserved2: u32,
@@ -66,6 +61,25 @@ fn floatToSortableUint(f: f32) -> u32 {
 }
 `;
 
+/** Bytes of immediate data passes 1 and 2 read: one ScaleParam. */
+const X_SCALE_IMMEDIATE_SIZE = 16;
+
+/**
+ * The x scale the binning reads, as immediates: the same four floats a chart's
+ * own shaders get, written by the coordinator. A value rather than an index
+ * into the global table, so there is no slot for it to go stale against.
+ */
+const X_SCALE_IMMEDIATE = /* wgsl */ `
+struct ScaleParam {
+	p1: f32,
+	p2: f32,
+	p3: f32,
+	p4: f32,
+};
+
+var<immediate> xScale: ScaleParam;
+`;
+
 /**
  * Pass 0: Read JS decision + initialize bins.
  *
@@ -78,7 +92,6 @@ fn floatToSortableUint(f: f32) -> u32 {
  *
  * Group 0: inputLayout (data dummies + config + bins)
  * Group 1: controlLayout (control)
- * Group 2: globalScaleLayout (scaleParams — unused but bound for layout compatibility)
  */
 const INIT_BINS_SHADER = /* wgsl */ `
 ${SHARED_TYPES}
@@ -86,7 +99,6 @@ ${SHARED_TYPES}
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
-@group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -122,10 +134,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  *
  * Group 0: inputLayout (x, y, series, [color dummy], config, bins)
  * Group 1: controlLayout (control)
- * Group 2: globalScaleLayout (scaleParams)
+ * Immediates: the x scale (ScaleParam)
  */
 const BIN_POINTS_SHADER = /* wgsl */ `
+requires immediate_address_space;
 ${SHARED_TYPES}
+${X_SCALE_IMMEDIATE}
 
 @group(0) @binding(0) var<storage, read> xValues: array<f32>;
 @group(0) @binding(1) var<storage, read> yValues: array<f32>;
@@ -133,7 +147,6 @@ ${SHARED_TYPES}
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
-@group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -149,9 +162,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	// Skip NaN points
 	if (x != x || y != y) { return; }
 
-	let scale = scaleParams[config.xScaleIndex];
-	let domainMin = scale.p1;
-	let domainMax = scale.p2;
+	let domainMin = xScale.p1;
+	let domainMax = xScale.p2;
 
 	let t = (x - domainMin) / (domainMax - domainMin);
 
@@ -192,10 +204,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
  *
  * Group 0: inputLayout (x, y, series, [color dummy], config, bins)
  * Group 1: controlLayout (control — only reads shouldDecimate)
- * Group 2: globalScaleLayout (scaleParams)
+ * Immediates: the x scale (ScaleParam)
  */
 const FIND_MINMAX_SHADER = /* wgsl */ `
+requires immediate_address_space;
 ${SHARED_TYPES}
+${X_SCALE_IMMEDIATE}
 
 @group(0) @binding(0) var<storage, read> xValues: array<f32>;
 @group(0) @binding(1) var<storage, read> yValues: array<f32>;
@@ -203,7 +217,6 @@ ${SHARED_TYPES}
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
-@group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -217,9 +230,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 	if (x != x || y != y) { return; }
 
-	let scale = scaleParams[config.xScaleIndex];
-	let domainMin = scale.p1;
-	let domainMax = scale.p2;
+	let domainMin = xScale.p1;
+	let domainMax = xScale.p2;
 
 	let t = (x - domainMin) / (domainMax - domainMin);
 
@@ -381,7 +393,7 @@ struct M4Config {
 	pointCount: u32,
 	numBins: u32,
 	numSeries: u32,
-	xScaleIndex: u32,
+	_reserved: u32,
 	_reserved0: u32,
 	_reserved1: u32,
 	_reserved2: u32,
@@ -460,7 +472,7 @@ struct M4Config {
 	pointCount: u32,
 	numBins: u32,
 	numSeries: u32,
-	xScaleIndex: u32,
+	_reserved: u32,
 	_reserved0: u32,
 	_reserved1: u32,
 	_reserved2: u32,
@@ -509,7 +521,7 @@ struct M4Config {
 	pointCount: u32,
 	numBins: u32,
 	numSeries: u32,
-	xScaleIndex: u32,
+	_reserved: u32,
 	_reserved0: u32,
 	_reserved1: u32,
 	_reserved2: u32,
@@ -538,6 +550,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 export {
 	WORKGROUP_SIZE,
+	X_SCALE_IMMEDIATE_SIZE,
 	INIT_BINS_SHADER,
 	BIN_POINTS_SHADER,
 	FIND_MINMAX_SHADER,

@@ -118,7 +118,7 @@ interface ScaleArrayEntry {
 	index: number;
 }
 
-type ComputeWorkFn = (commandEncoder: GPUCommandEncoder, scaleBindGroup: GPUBindGroup) => void;
+type ComputeWorkFn = (commandEncoder: GPUCommandEncoder) => void;
 type FrameCallback = (isAnimating: boolean) => void;
 
 interface GPUCoordinatorConfig {
@@ -363,7 +363,7 @@ export class GPUCoordinator {
 	// =========================================================================
 	// PRE-RENDER COMPUTE WORK (M4 decimation, etc.)
 	// =========================================================================
-	#computeWork = new Map<string, ComputeWorkFn>(); // key -> computeFn(commandEncoder, scaleBindGroup)
+	#computeWork = new Map<string, ComputeWorkFn>(); // key -> computeFn(commandEncoder)
 
 	// =========================================================================
 	// SCALE SSBO SYSTEM
@@ -1107,11 +1107,25 @@ export class GPUCoordinator {
 	 * a guess.
 	 */
 	#writeChartScales(chart: ChartConfig, view: Float32Array): boolean {
-		const x = chart.xScaleId ? this.#scaleIdToInstance.get(chart.xScaleId) : undefined;
-		const y = chart.yScaleId ? this.#scaleIdToInstance.get(chart.yScaleId) : undefined;
-		if (!x || !y) return false;
-		this.#writeScaleParam(x, view, 0);
-		this.#writeScaleParam(y, view, 4);
+		return (
+			!!chart.xScaleId &&
+			!!chart.yScaleId &&
+			this.writeScaleParams(chart.xScaleId, view, 0) &&
+			this.writeScaleParams(chart.yScaleId, view, 4)
+		);
+	}
+
+	/**
+	 * One scale's four floats into `view` at `offset`, looked up by id. A
+	 * chart's draw pass fills its immediates through this, and so does compute
+	 * work that pushes a scale of its own — M4 binning by the x scale its chart
+	 * draws through. False for a scale that is not registered, and `view` is
+	 * left alone.
+	 */
+	writeScaleParams(scaleId: string, view: Float32Array, offset: number): boolean {
+		const scale = this.#scaleIdToInstance.get(scaleId);
+		if (!scale) return false;
+		this.#writeScaleParam(scale, view, offset);
 		return true;
 	}
 
@@ -1381,7 +1395,7 @@ export class GPUCoordinator {
 
 		if (this.#computeWork.size > 0) {
 			for (const computeFn of this.#computeWork.values()) {
-				computeFn(commandEncoder, currentScaleBindGroup);
+				computeFn(commandEncoder);
 			}
 		}
 
@@ -2820,10 +2834,6 @@ export class GPUCoordinator {
 		return this.#colorPaletteBuffer;
 	}
 
-	get globalScaleLayout(): GPUBindGroupLayout | null {
-		return this.#globalScaleLayout;
-	}
-
 	getScaleIndex(scaleId: string): number | undefined {
 		return this.#scaleIndexManager.getIndex(scaleId);
 	}
@@ -2836,7 +2846,7 @@ export class GPUCoordinator {
 	 * Register a compute function to run before render passes each frame.
 	 * Used by M4 decimation and other GPU compute optimizations.
 	 * @param {string} key - Unique identifier for this compute work
-	 * @param {function(GPUCommandEncoder, GPUBindGroup): void} computeFn
+	 * @param {function(GPUCommandEncoder): void} computeFn
 	 */
 	registerComputeWork(key: string, computeFn: ComputeWorkFn): void {
 		this.#computeWork.set(key, computeFn);

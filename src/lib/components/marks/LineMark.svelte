@@ -329,8 +329,8 @@
 	let m4Decimator = $state(null);
 
 	$effect(() => {
-		if (m4Eligible && gpuCoordinator?.device && gpuCoordinator?.globalScaleLayout) {
-			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator.globalScaleLayout);
+		if (m4Eligible && gpuCoordinator?.device) {
+			const decimator = new M4Decimator(gpuCoordinator.device, gpuCoordinator);
 			m4Decimator = decimator;
 			return () => {
 				decimator.destroy();
@@ -482,9 +482,7 @@
 		const numBins = Math.ceil(chartContext.innerWidth * dpr);
 		// The y scale only for the parity page's control; see m4Parity.
 		const scaleState = m4Parity.swapScale ? chartContext.yScaleState : chartContext.xScaleState;
-		const resolveIndex = () =>
-			scaleState ? (gpuCoordinator.getScaleIndex?.(scaleState.id) ?? 0) : 0;
-		m4Decimator.configure(numBins, numSeries, resolveIndex);
+		m4Decimator.configure(numBins, numSeries, scaleState?.id ?? null);
 	});
 
 	// --- MARK LOD SURFACE REGISTRATION ---
