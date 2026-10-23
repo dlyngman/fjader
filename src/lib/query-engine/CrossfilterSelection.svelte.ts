@@ -94,20 +94,6 @@ export class CrossfilterSelection {
 	}
 
 	/**
-	 * Compute the filter predicate for a mark, excluding clauses from specific sources.
-	 * Used at preagg table creation time to bake non-active-brush filters into the preagg table.
-	 */
-	predicateExcluding(markId: string, excludeSourceIds: Set<string>): FilterExpr[] {
-		const result: FilterExpr[] = [];
-		for (const [sourceId, clause] of this.#clauses) {
-			if (excludeSourceIds.has(sourceId)) continue;
-			if (clause.excludeMarkIds.has(markId)) continue;
-			if (clause.predicate) result.push(clause.predicate);
-		}
-		return result;
-	}
-
-	/**
 	 * Whether a clause is baked into a mark's preagg table: every clause that
 	 * filters the mark, except the active brush, which the table bins instead.
 	 */

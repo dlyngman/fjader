@@ -44,6 +44,7 @@ import {
 	type IdentityField
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
+import type { Clause } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
@@ -134,21 +135,40 @@ export interface QueryDescriptor {
 	transformCompiler: TransformCompiler;
 }
 
+/** What a preagg table was built from. It serves brush queries only while this still holds. */
+interface PreaggBasis {
+	/** Query parts, compared by reference ($derived memoization keeps them stable). */
+	parts: QueryParts;
+	/** The brush the table bins instead of baking in. */
+	activeSourceId: string;
+	/** Column, domain and pixel extent of each brush dimension. */
+	brushDimsKey: string;
+	/** The clause objects baked into the table, in selection insertion order. */
+	bakedClauses: Clause[];
+}
+
+interface PreaggState {
+	table: string;
+	/** The SELECT the table was created from. Its hash names the table. */
+	sql: string;
+	basis: PreaggBasis;
+	/** Rewritten select expressions that recombine partials at query time. */
+	outputSelect: Record<string, ExprNode>;
+	/** Bin dimension metadata for computing bin filters at query time. */
+	binMeta: Array<{ alias: string; d0: number; scaleFactor: number }>;
+	/** Window channels needing CTE wrapping in the preagg query. */
+	windowChannels: Record<string, import('@uwdata/mosaic-sql').WindowNode> | null;
+}
+
 interface MarkRegistration {
 	descriptor: QueryDescriptor;
 	handle: MarkHandle;
 	filterGroup: FilterGroup;
-	preaggTable: string | null;
-	preaggReady: boolean;
-	lastPreaggParts: QueryParts | null;
-	/** Rewritten select expressions that recombine partials at query time. */
-	preaggOutputSelect: Record<string, ExprNode> | null;
-	/** Bin dimension metadata for computing bin filters at query time. */
-	preaggBinMeta: Array<{ alias: string; d0: number; scaleFactor: number }> | null;
-	/** Mark IDs of the source chart (for identifying active-source clauses). */
-	preaggSourceChartMarkIds: Set<string> | null;
-	/** Window channels needing CTE wrapping in the preagg query. */
-	preaggWindowChannels: Record<string, import('@uwdata/mosaic-sql').WindowNode> | null;
+	/** The built preagg table brush queries read. */
+	preagg: PreaggState | null;
+	/** The latest build started for this mark. A finished build is installed
+	 *  only if it is still this one, so a superseded or dropped build never lands. */
+	preaggBuild: PreaggState | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,10 +186,6 @@ export class QueryEngine {
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
-	/** Active source IDs for the current preagg session. */
-	#activeSourceIds: Set<string> | null = null;
-	/** Source chart mark IDs from the last activate() call. */
-	#lastSourceChartMarkIds: Set<string> | null = null;
 	/** Hash-named preagg tables created this session (for cleanup on destroy). */
 	#preaggTables = new Set<string>();
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
@@ -641,13 +657,8 @@ export class QueryEngine {
 			descriptor,
 			handle,
 			filterGroup,
-			preaggTable: null,
-			preaggReady: false,
-			lastPreaggParts: null,
-			preaggOutputSelect: null,
-			preaggBinMeta: null,
-			preaggSourceChartMarkIds: null,
-			preaggWindowChannels: null
+			preagg: null,
+			preaggBuild: null
 		};
 		this.#marks.set(markId, reg);
 
@@ -692,16 +703,7 @@ export class QueryEngine {
 		for (const [markId, reg] of batch) {
 			const { descriptor, handle } = reg;
 
-			// Preagg routing: use preagg table if available and parts haven't changed.
-			// Reference equality — $derived memoization ensures same object when
-			// dependencies don't change.
-			const usePreagg =
-				PREAGG_ENABLED &&
-				reg.preaggReady &&
-				reg.preaggTable &&
-				descriptor.parts === reg.lastPreaggParts;
-
-			const sqlStr = usePreagg
+			const sqlStr = this.#preaggUsable(reg)
 				? this.#assemblePreaggSQL(markId, reg, handle.params)
 				: this.#assembleSQL(
 						descriptor,
@@ -728,13 +730,7 @@ export class QueryEngine {
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { descriptor, handle } = reg;
 
-		const usePreagg =
-			PREAGG_ENABLED &&
-			reg.preaggReady &&
-			reg.preaggTable &&
-			descriptor.parts === reg.lastPreaggParts;
-
-		const sqlStr = usePreagg
+		const sqlStr = this.#preaggUsable(reg)
 			? this.#assemblePreaggSQL(markId, reg, handle.params)
 			: this.#assembleSQL(
 					descriptor,
@@ -806,60 +802,48 @@ export class QueryEngine {
 	 * Pre-aggregate marks for a filter group before brushing begins.
 	 * Called by interactors on pointerenter — before the first brush drag.
 	 *
-	 * Builds materialized preagg tables (temp tables) for all aggregate marks
-	 * in the filter group that are NOT on the source chart. Each preagg table
-	 * includes pixel-binned brush dimensions so brush queries operate on thousands of
-	 * rows instead of hundreds of thousands.
+	 * Builds materialized preagg tables for all aggregate marks in the filter
+	 * group that are NOT on the source chart. Each table bakes in every clause
+	 * except the active brush, and includes pixel-binned brush dimensions so
+	 * brush queries operate on thousands of rows instead of hundreds of thousands.
+	 *
+	 * The active brush is named by its source ID rather than inferred: before
+	 * the first drag it has no clause yet, and other clauses on the same chart
+	 * (a Toggle) exclude the same marks a brush does.
 	 */
 	async activate(
 		filterGroup: FilterGroup,
+		activeSourceId: string,
 		sourceChartMarkIds: Set<string>,
 		brushDims: BrushActivation[]
 	): Promise<void> {
 		if (this.#destroyed || brushDims.length === 0) return;
 
-		// If the source chart changed (user hovered a different chart),
-		// invalidate all preagg tables — they have stale sourceChartMarkIds and
-		// potentially stale baked-in static filters.
-		if (
-			this.#lastSourceChartMarkIds &&
-			!setsEqual(this.#lastSourceChartMarkIds, sourceChartMarkIds)
-		) {
-			for (const reg of this.#marks.values()) {
-				if (reg.filterGroup === filterGroup) this.#dropPreagg(reg);
-			}
-		}
-		this.#lastSourceChartMarkIds = sourceChartMarkIds;
-
-		// Identify active source IDs: clauses whose excludeMarkIds intersect
-		// with the source chart (i.e., the brush lives on this chart)
-		const activeSourceIds = new Set<string>();
-		for (const entry of filterGroup.selection.items) {
-			for (const markId of entry.excludeMarkIds) {
-				if (sourceChartMarkIds.has(markId)) {
-					activeSourceIds.add(entry.sourceId);
-					break;
-				}
-			}
-		}
-
-		// If active source IDs changed (e.g. a new brush appeared),
-		// also invalidate preagg tables — baked-in static filters may be stale.
-		if (this.#activeSourceIds && !setsEqual(this.#activeSourceIds, activeSourceIds)) {
-			for (const reg of this.#marks.values()) {
-				if (reg.filterGroup === filterGroup) this.#dropPreagg(reg);
-			}
-		}
-		this.#activeSourceIds = activeSourceIds;
-
+		const { selection } = filterGroup;
+		const brushDimsKey = brushDimsKeyOf(brushDims);
 		const promises: Promise<void>[] = [];
 
 		for (const [markId, reg] of this.#marks) {
 			if (reg.filterGroup !== filterGroup) continue;
-			if (sourceChartMarkIds.has(markId)) continue;
+			// Marks on the brushed chart are excluded from its brush: nothing to bin.
+			if (sourceChartMarkIds.has(markId)) {
+				this.#dropPreagg(reg);
+				continue;
+			}
 
-			// Skip if preagg still valid (same query parts, already built)
-			if (reg.preaggReady && reg.descriptor.parts === reg.lastPreaggParts) continue;
+			// Skip if the latest build, finished or in flight, still matches
+			const latest = reg.preaggBuild ?? reg.preagg;
+			if (latest) {
+				const { basis } = latest;
+				if (
+					basis.parts === reg.descriptor.parts &&
+					basis.activeSourceId === activeSourceId &&
+					basis.brushDimsKey === brushDimsKey &&
+					selection.bakedClausesMatch(markId, activeSourceId, basis.bakedClauses)
+				) {
+					continue;
+				}
+			}
 
 			// Drop stale preagg
 			this.#dropPreagg(reg);
@@ -896,8 +880,10 @@ export class QueryEngine {
 				preaggCols[ch] = castNumeric(expr, schema) as ExprNode;
 			}
 
-			// Bake non-active filters into the preagg table
-			const staticFilters = filterGroup.selection.predicateExcluding(markId, activeSourceIds);
+			// Bake every other clause into the preagg table. Sorted by source ID,
+			// so the same filters always give the same SQL, and so the same table.
+			const bakedClauses = selection.bakedClauses(markId, activeSourceId);
+			const staticFilters = selection.bakedPredicates(markId, activeSourceId);
 
 			// Build preagg creation query, sorted by active columns for fast range scans
 			const preaggQuery = Query.from(table)
@@ -915,28 +901,39 @@ export class QueryEngine {
 			const preaggTable = `__dplot_preagg_${fnvHash(preaggSQL).toString(16)}`;
 			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${preaggSQL}`;
 
-			// Store rewrite info for query-time use
-			reg.preaggOutputSelect = outputSelect;
-			reg.preaggBinMeta = binMeta;
-			reg.preaggSourceChartMarkIds = sourceChartMarkIds;
-			reg.preaggWindowChannels = analysis.windowChannels;
+			// The basis is captured now, not when the build finishes: a filter
+			// that changes while the CREATE runs must still read as a mismatch.
+			const build: PreaggState = {
+				table: preaggTable,
+				sql: preaggSQL,
+				basis: { parts, activeSourceId, brushDimsKey, bakedClauses },
+				outputSelect,
+				binMeta,
+				windowChannels: analysis.windowChannels
+			};
+			reg.preaggBuild = build;
 
 			this.#preaggTables.add(preaggTable);
 			promises.push(
 				this.exec(createSQL)
 					.then(() => {
-						reg.preaggTable = preaggTable;
-						reg.preaggReady = true;
-						reg.lastPreaggParts = parts;
+						if (reg.preaggBuild !== build) return;
+						reg.preagg = build;
+						reg.preaggBuild = null;
 					})
 					.catch((e) => {
 						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
-						this.#dropPreagg(reg);
+						if (reg.preaggBuild === build) reg.preaggBuild = null;
 					})
 			);
 		}
 
 		await Promise.all(promises);
+	}
+
+	/** Whether a mark's brush queries can read its preagg table. */
+	#preaggUsable(reg: MarkRegistration): boolean {
+		return PREAGG_ENABLED && !!reg.preagg && reg.descriptor.parts === reg.preagg.basis.parts;
 	}
 
 	/**
@@ -945,43 +942,31 @@ export class QueryEngine {
 	 * then delegates to assembleQuery().
 	 */
 	#assemblePreaggSQL(markId: string, reg: MarkRegistration, params: QueryParams): string | null {
-		const { preaggTable, preaggOutputSelect, preaggBinMeta, preaggSourceChartMarkIds } = reg;
-		if (!preaggTable || !preaggOutputSelect || !preaggBinMeta || !preaggSourceChartMarkIds) {
-			return null;
-		}
+		const { preagg } = reg;
+		if (!preagg) return null;
+		const { binMeta, outputSelect, windowChannels } = preagg;
 
 		const { descriptor } = reg;
 		const { parts, transformCompiler } = descriptor;
 
 		// --- Compute bin filters from active brush extent ---
 		const binFilters: ExprNode[] = [];
-		for (const entry of reg.filterGroup.selection.items) {
-			// Is this clause from the active source?
-			let isActiveSource = false;
-			for (const mid of entry.excludeMarkIds) {
-				if (preaggSourceChartMarkIds.has(mid)) {
-					isActiveSource = true;
-					break;
-				}
-			}
-			if (!isActiveSource) continue;
-			if (entry.excludeMarkIds.has(markId)) continue;
-
-			// Extract extent values and create bin filters
-			const value = entry.value;
-			if (preaggBinMeta.length === 1) {
+		const brush = reg.filterGroup.selection.get(preagg.basis.activeSourceId);
+		if (brush && !brush.excludeMarkIds.has(markId)) {
+			const value = brush.value;
+			if (binMeta.length === 1) {
 				// Interval1D: value = [lo, hi]
 				const [lo, hi] = value as [number, number];
-				const { alias, d0, scaleFactor } = preaggBinMeta[0];
+				const { alias, d0, scaleFactor } = binMeta[0];
 				const binLo = Math.floor((lo - d0) * scaleFactor);
 				const binHi = Math.floor((hi - d0) * scaleFactor);
 				binFilters.push(isBetween(column(alias), [literal(binLo), literal(binHi)]) as ExprNode);
-			} else if (preaggBinMeta.length === 2) {
+			} else if (binMeta.length === 2) {
 				// Interval2D: value = [[xLo, xHi], [yLo, yHi]]
 				const extents = value as [[number, number], [number, number]];
 				for (let i = 0; i < 2; i++) {
 					const [lo, hi] = extents[i];
-					const { alias, d0, scaleFactor } = preaggBinMeta[i];
+					const { alias, d0, scaleFactor } = binMeta[i];
 					const binLo = Math.floor((lo - d0) * scaleFactor);
 					const binHi = Math.floor((hi - d0) * scaleFactor);
 					binFilters.push(isBetween(column(alias), [literal(binLo), literal(binHi)]) as ExprNode);
@@ -991,11 +976,10 @@ export class QueryEngine {
 
 		// --- Build selectDef: CAST recombined aggregates; dimensions are already
 		// CAST in the preagg table; windowed channels are CAST by the outer CTE.
-		const windowChannels = reg.preaggWindowChannels;
 		const castSelect: Record<string, unknown> = {};
 		const preaggGroupBy: ExprNode[] = [];
 		const preaggGroupKeys: string[] = [];
-		for (const [ch, expr] of Object.entries(preaggOutputSelect)) {
+		for (const [ch, expr] of Object.entries(outputSelect)) {
 			if (!isAggregateExpression(expr)) {
 				castSelect[ch] = expr;
 				preaggGroupBy.push(column(ch));
@@ -1020,7 +1004,7 @@ export class QueryEngine {
 		};
 
 		return assembleQuery({
-			table: preaggTable,
+			table: preagg.table,
 			parts: preaggParts,
 			filter: binFilters,
 			filterNulls: null, // preagg table already filtered
@@ -1030,16 +1014,11 @@ export class QueryEngine {
 		}).toString();
 	}
 
-	/** Clear preagg state for a registration. Does NOT drop the table —
-	 *  hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
+	/** Clear preagg state for a registration, including a build in flight.
+	 *  Does NOT drop the table — hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
 	#dropPreagg(reg: MarkRegistration): void {
-		reg.preaggTable = null;
-		reg.preaggReady = false;
-		reg.lastPreaggParts = null;
-		reg.preaggOutputSelect = null;
-		reg.preaggBinMeta = null;
-		reg.preaggSourceChartMarkIds = null;
-		reg.preaggWindowChannels = null;
+		reg.preagg = null;
+		reg.preaggBuild = null;
 	}
 
 	/**
@@ -1074,12 +1053,9 @@ export class QueryEngine {
 	}
 }
 
-function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
-	if (a.size !== b.size) return false;
-	for (const v of a) {
-		if (!b.has(v)) return false;
-	}
-	return true;
+/** Everything about the brush dimensions that the bin expressions depend on. */
+function brushDimsKeyOf(dims: BrushActivation[]): string {
+	return dims.map((d) => `${d.columnRef}|${d.domain[0]}|${d.domain[1]}|${d.pixelExtent}`).join(';');
 }
 
 /** FNV-1a hash (same algorithm as Mosaic). */
