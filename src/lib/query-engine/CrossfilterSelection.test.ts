@@ -177,6 +177,111 @@ describe('CrossfilterSelection', () => {
 		});
 	});
 
+	describe('bakedClauses()', () => {
+		it('returns the clause objects in insertion order, minus the active brush', () => {
+			const sel = new CrossfilterSelection();
+			const toggle = makeClause("cat IN ('a')");
+			const legend = makeClause("kind IN ('x')");
+			sel.update('toggle', toggle);
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10', ['src-mark']));
+			sel.update('legend', legend);
+
+			const baked = sel.bakedClauses('mark-b', 'brush');
+			expect(baked).toHaveLength(2);
+			expect(baked[0]).toBe(toggle);
+			expect(baked[1]).toBe(legend);
+		});
+
+		it('skips clauses the mark is excluded from and clauses without a predicate', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('own-toggle', makeClause("cat IN ('a')", ['mark-b']));
+			sel.update('empty', makeClause(''));
+
+			expect(sel.bakedClauses('mark-b', 'brush')).toEqual([]);
+		});
+	});
+
+	describe('bakedPredicates()', () => {
+		it('sorts by source ID, whatever the insertion order', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('toggle', makeClause("cat IN ('a')"));
+			sel.update('legend', makeClause("kind IN ('x')"));
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10'));
+
+			expect(sel.bakedPredicates('mark-b', 'brush')).toEqual(["kind IN ('x')", "cat IN ('a')"]);
+		});
+
+		it('gives the same result after a clause is removed and re-added', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('legend', makeClause("kind IN ('x')"));
+			sel.update('toggle', makeClause("cat IN ('a')"));
+			const before = sel.bakedPredicates('mark-b', 'brush');
+
+			sel.update('legend', null);
+			sel.update('legend', makeClause("kind IN ('x')"));
+
+			expect(sel.bakedPredicates('mark-b', 'brush')).toEqual(before);
+		});
+	});
+
+	describe('bakedClausesMatch()', () => {
+		function setup() {
+			const sel = new CrossfilterSelection();
+			sel.update('toggle', makeClause("cat IN ('a')"));
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10', ['src-mark']));
+			return { sel, baked: sel.bakedClauses('mark-b', 'brush') };
+		}
+
+		it('matches when nothing changed', () => {
+			const { sel, baked } = setup();
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+		});
+
+		it('matches with no clauses at all', () => {
+			const sel = new CrossfilterSelection();
+			expect(sel.bakedClausesMatch('mark-b', 'brush', [])).toBe(true);
+		});
+
+		it('ignores changes to the active brush', () => {
+			const { sel, baked } = setup();
+			sel.update('brush', makeClause('x BETWEEN 3 AND 7', ['src-mark']));
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+		});
+
+		it('matches when the brush writes its first clause after the build', () => {
+			const sel = new CrossfilterSelection();
+			sel.update('toggle', makeClause("cat IN ('a')"));
+			const baked = sel.bakedClauses('mark-b', 'brush');
+
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10', ['src-mark']));
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+		});
+
+		it('fails when a baked clause is replaced, even with the same SQL', () => {
+			const { sel, baked } = setup();
+			sel.update('toggle', makeClause("cat IN ('a')"));
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(false);
+		});
+
+		it('fails when a baked clause is removed', () => {
+			const { sel, baked } = setup();
+			sel.update('toggle', null);
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(false);
+		});
+
+		it('fails when a new clause starts filtering the mark', () => {
+			const { sel, baked } = setup();
+			sel.update('legend', makeClause("kind IN ('x')"));
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(false);
+		});
+
+		it('ignores clauses the mark is excluded from', () => {
+			const { sel, baked } = setup();
+			sel.update('own-toggle', makeClause("cat IN ('b')", ['mark-b']));
+			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+		});
+	});
+
 	describe('multi-chart crossfilter scenario', () => {
 		it('handles overlapping brushes from different charts', () => {
 			const sel = new CrossfilterSelection();
