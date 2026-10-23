@@ -23,11 +23,19 @@
 	 * scale reaching the shader, deliberately. It MUST differ from `table` on
 	 * every chart. If it does not, the comparison cannot see the failure it
 	 * exists for, and a clean `immediate` result means nothing.
+	 *
+	 * M4 has no old path left to switch to once its scale moves, so it is
+	 * checked against the previous BUILD instead: record a baseline on the
+	 * commit before the change, compare on the commit after. The captures live
+	 * in IndexedDB between the two. Its control is `m4Parity.swapScale`, which
+	 * bins the decimating line by its y scale — the comparison must see that on
+	 * the M4 chart.
 	 */
 	import { onMount, tick } from 'svelte';
 	import { loadParquet, count } from '@uwdata/mosaic-sql';
 	import { initDivePlot } from '$lib';
 	import { scaleTemplateSystem } from '$lib/gpu/ScaleTemplateSystem';
+	import { m4Parity } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -55,6 +63,10 @@
 	/** One row per canvas: which chart, and what each comparison found. */
 	let rows = $state([]);
 	let verdict = $state(null);
+	/** One row per canvas for the baseline comparison. */
+	let baselineRows = $state([]);
+	/** When the stored baseline was recorded, and of how many canvases. */
+	let baselineInfo = $state(null);
 
 	/** @type {HTMLElement | undefined} */
 	let chartsEl = $state();
@@ -78,6 +90,18 @@
 					2.0 + sin(idx * 0.08) AS wave
 				FROM points`
 			]);
+			// Dense enough that M4 has real work: three series of 66,667 points on a
+			// chart a few hundred pixels wide. The fast wobble puts a spread of y in
+			// every pixel column, so which points a bin keeps is visible.
+			await queryEngine.exec([
+				`CREATE OR REPLACE TABLE parity_dense AS
+				SELECT
+					i AS x,
+					's' || s AS series,
+					s * 3 + sin(i * 0.002 + s) + 0.3 * sin(i * 0.37) AS y
+				FROM range(66667) t(i), range(3) u(s)`
+			]);
+			baselineInfo = await loadBaselineInfo();
 			loaded = true;
 		} catch (error) {
 			console.error(error);
@@ -130,8 +154,9 @@
 	 * see tells the two apart. So a blank control is accepted only after
 	 * `minMs`, the time a correct source needed to draw the same charts.
 	 */
-	async function drawWith(source, { allowBlank = false, minMs = 0 } = {}) {
+	async function drawWith(source, { allowBlank = false, minMs = 0, m4Swap = false } = {}) {
 		scaleTemplateSystem.chartScaleSource = source;
+		m4Parity.swapScale = m4Swap;
 		generation++;
 		await tick();
 		status = `drawing through "${source}"…`;
@@ -224,13 +249,139 @@
 		} catch (error) {
 			verdict = { ok: false, text: String(error?.message ?? error) };
 		} finally {
-			// Leave the page on production's source whatever happened.
-			if (scaleTemplateSystem.chartScaleSource !== 'immediate') {
-				scaleTemplateSystem.chartScaleSource = 'immediate';
-				generation++;
-			}
-			status = '';
-			running = false;
+			restoreProduction();
+		}
+	}
+
+	/** Leave the page on production's sources whatever happened. */
+	function restoreProduction() {
+		if (scaleTemplateSystem.chartScaleSource !== 'immediate' || m4Parity.swapScale) {
+			scaleTemplateSystem.chartScaleSource = 'immediate';
+			m4Parity.swapScale = false;
+			generation++;
+		}
+		status = '';
+		running = false;
+	}
+
+	// ---- Baseline across builds, for M4 ----
+
+	const DB_NAME = 'scale-source-parity';
+	const STORE = 'baseline';
+	const KEY = 'immediate';
+
+	/** One IndexedDB request in its own transaction. */
+	function withStore(mode, request) {
+		return new Promise((resolve, reject) => {
+			const open = indexedDB.open(DB_NAME, 1);
+			open.onupgradeneeded = () => open.result.createObjectStore(STORE);
+			open.onerror = () => reject(open.error);
+			open.onsuccess = () => {
+				const db = open.result;
+				const tx = db.transaction(STORE, mode);
+				const req = request(tx.objectStore(STORE));
+				tx.oncomplete = () => {
+					db.close();
+					resolve(req.result);
+				};
+				tx.onerror = () => {
+					db.close();
+					reject(tx.error);
+				};
+			};
+		});
+	}
+
+	async function loadBaselineInfo() {
+		const stored = await withStore('readonly', (store) => store.get(KEY));
+		return stored ? { recordedAt: stored.recordedAt, count: stored.charts.length } : null;
+	}
+
+	/**
+	 * Two remounts, and they must agree. Settling only proves a chart stopped
+	 * moving within one mount; a baseline is compared against a later mount, so
+	 * a chart that settles somewhere different each time would fail every
+	 * comparison for reasons of its own. That is refused here, not stored.
+	 */
+	async function recordBaseline() {
+		running = true;
+		verdict = null;
+		baselineRows = [];
+		try {
+			const { shots } = await drawWith('immediate');
+			const { shots: again } = await drawWith('immediate');
+			const charts = canvases().map(({ chart }) => chart);
+			const unstable = charts.filter((_, i) => differing(shots[i], again[i]) !== 0);
+			if (again.length !== shots.length || unstable.length)
+				throw new Error(
+					`Not recorded: two remounts of this build drew differently on: ${unstable.join(', ') || 'the canvas count'}.`
+				);
+			const recordedAt = new Date().toLocaleString();
+			await withStore('readwrite', (store) => store.put({ recordedAt, charts, shots }, KEY));
+			baselineInfo = { recordedAt, count: charts.length };
+			verdict = { ok: true, text: `Baseline recorded: ${charts.length} canvases.` };
+		} catch (error) {
+			verdict = { ok: false, text: String(error?.message ?? error) };
+		} finally {
+			restoreProduction();
+		}
+	}
+
+	/**
+	 * This build against the recorded one. Every canvas must match, and the M4
+	 * control must differ on the decimating chart. The other canvases are not
+	 * expected to move under the control: only M4 reads it.
+	 */
+	async function compareBaseline() {
+		running = true;
+		verdict = null;
+		baselineRows = [];
+		try {
+			const stored = await withStore('readonly', (store) => store.get(KEY));
+			if (!stored)
+				throw new Error('No baseline recorded. Record one on the build before the change.');
+
+			const { shots: now, ms } = await drawWith('immediate');
+			const { shots: control } = await drawWith('immediate', {
+				allowBlank: true,
+				minMs: ms,
+				m4Swap: true
+			});
+			const charts = canvases().map(({ chart }) => chart);
+			if (charts.join('|') !== stored.charts.join('|'))
+				throw new Error('The charts on the page are not the ones the baseline recorded.');
+
+			baselineRows = charts.map((chart, i) => ({
+				chart,
+				m4: chart.includes('M4'),
+				now: differing(stored.shots[i], now[i]),
+				control: differing(stored.shots[i], control[i])
+			}));
+
+			const mismatched = baselineRows.filter((r) => r.now !== 0).map((r) => r.chart);
+			const m4Rows = baselineRows.filter((r) => r.m4);
+			const controlBlind = m4Rows.filter((r) => r.control === 0).map((r) => r.chart);
+
+			if (m4Rows.length === 0) verdict = { ok: false, text: 'No M4 chart on the page.' };
+			else if (controlBlind.length)
+				verdict = {
+					ok: false,
+					text: `The M4 control did not differ on: ${controlBlind.join(', ')}. The comparison cannot see a wrong scale reaching the binning.`
+				};
+			else if (mismatched.length)
+				verdict = {
+					ok: false,
+					text: `This build differs from the baseline on: ${mismatched.join(', ')}.`
+				};
+			else
+				verdict = {
+					ok: true,
+					text: `Identical to the baseline on all ${charts.length} canvases, and the M4 control differed.`
+				};
+		} catch (error) {
+			verdict = { ok: false, text: String(error?.message ?? error) };
+		} finally {
+			restoreProduction();
 		}
 	}
 </script>
@@ -250,12 +401,27 @@
 	</ul>
 	<p>
 		Covers: continuous × continuous, a sorted band x, a band y, log and symlog, a line, an area with
-		auto-dots (which reads the raw params in mark code), and a facet grid sharing scales across
-		cells. Keep the tab in front while it runs, since a hidden tab stops rendering.
+		auto-dots (which reads the raw params in mark code), a facet grid sharing scales across cells,
+		and a decimating M4 line. Keep the tab in front while it runs, since a hidden tab stops
+		rendering.
+	</p>
+	<p>
+		<strong>Across builds, for M4:</strong> record a baseline on the commit before a change, then
+		compare on the commit after. Every canvas must match, and binning the M4 line by its y scale
+		(the control) must change it.
+		{#if baselineInfo}
+			Stored baseline: {baselineInfo.count} canvases, recorded {baselineInfo.recordedAt}.
+		{:else}
+			No baseline stored.
+		{/if}
 	</p>
 
 	<button onclick={run} disabled={!loaded || running}>
 		{running ? 'Running…' : 'Run parity check'}
+	</button>
+	<button onclick={recordBaseline} disabled={!loaded || running}>Record baseline</button>
+	<button onclick={compareBaseline} disabled={!loaded || running || !baselineInfo}>
+		Compare with baseline
 	</button>
 	{#if status}<span class="status">{status}</span>{/if}
 
@@ -280,6 +446,27 @@
 						<td class:bad={row.immediate !== 0}>{row.immediate}</td>
 						<td class:bad={row.swapped === 0}>{row.swapped}</td>
 						<td>{row.pixels}{row.blank ? ' (blank)' : ''}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	{/if}
+
+	{#if baselineRows.length}
+		<table>
+			<thead>
+				<tr>
+					<th>chart</th>
+					<th>this build vs baseline</th>
+					<th>M4 control vs baseline</th>
+				</tr>
+			</thead>
+			<tbody>
+				{#each baselineRows as row, i (i)}
+					<tr>
+						<td>{row.chart}</td>
+						<td class:bad={row.now !== 0}>{row.now}</td>
+						<td class:bad={row.m4 && row.control === 0}>{row.control}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -412,6 +599,29 @@
 											y="wave"
 											fillOpacity={0.4}
 											dotRadius={-3}
+										/>
+									{/snippet}
+								</WebGPUCanvas>
+							{/snippet}
+						</ChartContainer>
+					</div>
+				</section>
+
+				<section data-chart="line, M4 decimating">
+					<h2>Line, M4 decimating (200k points, 3 series)</h2>
+					<div class="chart">
+						<ChartContainer>
+							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
+							{#snippet canvas()}
+								<WebGPUCanvas>
+									{#snippet canvasComponents()}
+										<LineMark
+											table="parity_dense"
+											x="x"
+											y="y"
+											stroke="series"
+											strokeWidth={1}
+											lod={{ decimate: true, dots: false }}
 										/>
 									{/snippet}
 								</WebGPUCanvas>

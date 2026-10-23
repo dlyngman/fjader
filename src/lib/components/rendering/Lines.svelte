@@ -471,7 +471,7 @@
 		// Ensure decimator knows the vertex count for drawIndirect
 		m4Decimator.setVertexCount(quadVertexCount);
 
-		gpuCoordinator.registerComputeWork(m4ComputeKey, (commandEncoder, scaleBindGroup) => {
+		gpuCoordinator.registerComputeWork(m4ComputeKey, (commandEncoder) => {
 			const xBuf = renderer.getBuffer(BINDINGS.X);
 			const yBuf = renderer.getBuffer(BINDINGS.Y);
 			const seriesBuf = renderer.getBuffer(BINDINGS.SERIES);
@@ -482,7 +482,6 @@
 			m4Decimator.encode(
 				commandEncoder,
 				{ x: xBuf, y: yBuf, series: seriesBuf, color: colorBuf },
-				scaleBindGroup,
 				xData?.length ?? 0
 			);
 		});
