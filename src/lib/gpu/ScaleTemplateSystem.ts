@@ -74,11 +74,6 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleLinear${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
-      // Through the global table, for a caller holding an index into it.
-      fn scaleLinear${suffix}(value: f32, scaleIndex: u32) -> f32 {
-        return scaleLinear${suffix}From(value, scaleParams[scaleIndex]);
-      }
-
       fn scaleLinear${suffix}From(value: f32, scale: ScaleParam) -> f32 {
         // ★ Use generic field names
         let domainMin = scale.p1;
@@ -125,11 +120,6 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleLog${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
-      // Through the global table, for a caller holding an index into it.
-      fn scaleLog${suffix}(value: f32, scaleIndex: u32) -> f32 {
-        return scaleLog${suffix}From(value, scaleParams[scaleIndex]);
-      }
-
       fn scaleLog${suffix}From(value: f32, scale: ScaleParam) -> f32 {
         let logDomainMin = scale.p1;
         let logDomainScale = scale.p3;
@@ -174,11 +164,6 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
         return sign(value) * log(1.0 + abs(value / constant));
       }
 
-      // Through the global table, for a caller holding an index into it.
-      fn scaleSymlog${suffix}(value: f32, scaleIndex: u32) -> f32 {
-        return scaleSymlog${suffix}From(value, scaleParams[scaleIndex]);
-      }
-
       fn scaleSymlog${suffix}From(value: f32, scale: ScaleParam) -> f32 {
         let symlogMin = scale.p1;
         let symlogScale = scale.p3;
@@ -220,11 +205,6 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleBand${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
-			// Through the global table, for a caller holding an index into it.
-			fn scaleBand${suffix}(value: f32, scaleIndex: u32) -> f32 {
-				return scaleBand${suffix}From(value, scaleParams[scaleIndex]);
-			}
-
 			fn scaleBand${suffix}From(value: f32, scale: ScaleParam) -> f32 {
 				// -1 = no identity (unmapped category), matching the COALESCE(-1)
 				// the identity view emits and the value < 0.0 check in
@@ -388,38 +368,11 @@ function _scaleFunctionName(scaleType: string, axis: string): string {
 export const CHART_SCALE_IMMEDIATE_SIZE = 32;
 
 /**
- * Where a chart's scales are read from.
- *
- * - `immediate` — production: the pass's immediates.
- * - `table` — the global scale table at the frame uniform's indices, the path
- *   the immediates replaced. Kept only so the parity check has something to
- *   compare against.
- * - `swapped` — immediates with x and y exchanged. The parity check's control:
- *   a wrong scale reaching the shader, which the comparison must catch.
- */
-export type ChartScaleSource = 'immediate' | 'table' | 'swapped';
-
-const CHART_SCALE_SOURCES: Record<ChartScaleSource, [string, string]> = {
-	immediate: ['chartScales.x', 'chartScales.y'],
-	table: ['scaleParams[frameUniforms.xScaleIndex]', 'scaleParams[frameUniforms.yScaleIndex]'],
-	swapped: ['chartScales.y', 'chartScales.x']
-};
-
-/**
  * Main template system class
  */
 export class ScaleTemplateSystem {
 	shaderCache = new Map<string, ShaderResult>();
 	bufferLayoutCache = new Map<string, unknown>();
-
-	/**
-	 * Where `chartScaleX/Y` read from. `immediate` in production and never
-	 * changed there; the parity check switches it to render the same charts
-	 * through the old table path and through a deliberately wrong one, and
-	 * compare pixels. Part of every cache key, so a pipeline compiled against
-	 * one source is never handed out for another.
-	 */
-	chartScaleSource: ChartScaleSource = 'immediate';
 
 	constructor() {}
 
@@ -445,7 +398,7 @@ export class ScaleTemplateSystem {
 		}
 
 		const defKey = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
-		const cacheKey = `${markType}-${scaleTypes.x}-${scaleTypes.y}${defKey}-${this.chartScaleSource}`;
+		const cacheKey = `${markType}-${scaleTypes.x}-${scaleTypes.y}${defKey}`;
 
 		// Return cached version if available
 		if (this.shaderCache.has(cacheKey)) {
@@ -509,20 +462,6 @@ export class ScaleTemplateSystem {
 
       // ===== 2. UNIFORM & STORAGE BINDINGS =====
       
-      // Per-frame uniforms (@group(0))
-      // struct FrameUniforms {
-      //   resolution: vec2<f32>,        // Canvas dimensions (physical pixels)
-      //   rangeMin: vec2<f32>,          // Chart range minimums  
-      //   rangeMax: vec2<f32>,          // Chart range maximums
-      //   devicePixelRatio: f32,        // Device pixel ratio
-      //   _pad0: f32,                   // Alignment padding
-      //   xScaleIndex: u32,             // Index into scale SSBO
-      //   yScaleIndex: u32,             // Index into scale SSBO
-      //   activeFacetIdx: u32,           // Facet cell index for shader filtering
-      //   _pad1: u32,                    // Pad struct size to 48 bytes
-      // };
-      // @group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
-
 			// Per-frame uniforms (@group(0))
 			struct FrameUniforms {
 				resolution: vec2<f32>,        // bytes 0-8
@@ -530,10 +469,10 @@ export class ScaleTemplateSystem {
 				rangeMax: vec2<f32>,          // bytes 16-24
 				devicePixelRatio: f32,        // bytes 24-28
 				_pad0: f32,                   // bytes 28-32
-				xScaleIndex: u32,             // bytes 32-36
-				yScaleIndex: u32,             // bytes 36-40
+				_pad1: u32,                   // bytes 32-36 (were the scale indices)
+				_pad2: u32,                   // bytes 36-40
 				activeFacetIdx: u32,          // bytes 40-44 (facet cell index for shader filtering)
-				_pad1: u32,                   // bytes 44-48
+				_pad3: u32,                   // bytes 44-48
 				nullColor: vec4<f32>,         // bytes 48-64
 			};
 			@group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
@@ -580,13 +519,7 @@ export class ScaleTemplateSystem {
 		// We can just use the one from xFragment since they are identical.
 		const structDef = xFragment.declaration();
 
-		const [xSource, ySource] = CHART_SCALE_SOURCES[this.chartScaleSource];
-
-		// Global SSBO declaration
-		const globalSSBODeclaration = `
-      // Global scale storage buffer
-      @group(2) @binding(0) var<storage, read> scaleParams: array<ScaleParam>;
-
+		const chartScaleDeclaration = `
       // The chart's own x and y scale params, pushed into the pass before its
       // first draw. Pass state rather than a buffer: no upload, no index into a
       // table that can be renumbered, and nothing to go stale.
@@ -598,18 +531,18 @@ export class ScaleTemplateSystem {
 
       // The ONE place that says where a chart's scales come from. Every
       // consumer reads through these — scaleX/scaleY, the bandwidth helpers,
-      // and mark code that needs the raw params. Callers holding an index of
-      // their own (parallel coordinates) go through scaleParams directly.
+      // and mark code that needs the raw params. A mark with scales of its own
+      // (parallel coordinates) passes them to the ...From functions directly.
       fn chartScaleX() -> ScaleParam {
-        return ${xSource};
+        return chartScales.x;
       }
 
       fn chartScaleY() -> ScaleParam {
-        return ${ySource};
+        return chartScales.y;
       }
     `;
 
-		return `${structDef}\n${globalSSBODeclaration}`;
+		return `${structDef}\n${chartScaleDeclaration}`;
 	}
 
 	/**

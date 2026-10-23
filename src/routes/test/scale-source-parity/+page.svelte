@@ -1,46 +1,35 @@
 <script>
 	/**
-	 * Scale source parity: the same charts drawn with their scales read from the
-	 * pass's immediates and from the old global table, compared pixel for pixel.
+	 * Scale source parity: every chart below drawn by this build and compared,
+	 * pixel for pixel, with the same charts drawn by the previous one.
 	 *
 	 * Why pixels. The failure this guards against is a wrong scale reaching a
-	 * shader — a chart drawing through another chart's params, or x and y
-	 * exchanged — and that renders plausible, wrong pixels rather than an error.
-	 * Unit tests reach neither the pass that pushes the immediates nor the shader
-	 * that reads them, so the only honest check is the one that looks.
+	 * shader — a chart drawing through another chart's params, or an axis
+	 * through another axis's — and that renders plausible, wrong pixels rather
+	 * than an error. Unit tests reach neither the pass that pushes the params
+	 * nor the shader that reads them, so the only honest check is the one that
+	 * looks.
 	 *
-	 * How. `scaleTemplateSystem.chartScaleSource` picks what `chartScaleX/Y`
-	 * compile to, and it is part of every cache key, so remounting the charts
-	 * under a new source builds new pipelines against it. Each source is drawn,
-	 * left to settle (two identical captures in a row), and read back.
+	 * How. Record a baseline on the commit before a change; it lives in
+	 * IndexedDB. Compare on the commit after: every canvas must match. Each
+	 * draw remounts the charts and waits for two identical captures in a row,
+	 * and Record also refuses a baseline that two remounts drew differently.
 	 *
 	 * Readback goes through the coordinator, which copies each canvas texture in
 	 * the frame that draws it. `createImageBitmap` on the element saw every
 	 * chart as transparent while all of them were on screen: a WebGPU canvas's
 	 * texture expires once presented.
 	 *
-	 * The control. `swapped` is the immediates with x and y exchanged — a wrong
-	 * scale reaching the shader, deliberately. It MUST differ from `table` on
-	 * every chart. If it does not, the comparison cannot see the failure it
-	 * exists for, and a clean `immediate` result means nothing.
-	 *
-	 * M4 has no old path left to switch to once its scale moves, so it is
-	 * checked against the previous BUILD instead: record a baseline on the
-	 * commit before the change, compare on the commit after. The captures live
-	 * in IndexedDB between the two. Parallel coordinates is checked the same
-	 * way, and for the same reason once its axes get a source of their own.
-	 * Each has its own control for that comparison, named by `data-control`.
-	 * Parallel coordinates reads no chart scale at all, so `swapped` cannot
-	 * reach it, and a section marked `data-reads-chart-scales="false"` is not
-	 * held to that control. M4's own control is
-	 * `m4Parity.swapScale`, which
-	 * bins the decimating line by its y scale — the comparison must see that on
-	 * the M4 chart.
+	 * The controls. A comparison that cannot see a wrong scale proves nothing,
+	 * so the charts whose scales arrive by a path of their own each have a
+	 * test-only switch that sends a wrong one, named by `data-control`, and
+	 * Compare requires it to change that chart: `m4Parity.swapScale` bins the
+	 * decimating line by its y scale, and `parallelParity.reverseScales` hands
+	 * each parallel axis another axis's scale.
 	 */
 	import { onMount, tick } from 'svelte';
 	import { loadParquet, count } from '@uwdata/mosaic-sql';
 	import { initDivePlot } from '$lib';
-	import { scaleTemplateSystem } from '$lib/gpu/ScaleTemplateSystem';
 	import { m4Parity } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { parallelParity } from '$lib/components/marks/ParallelCoordinatesMark.svelte';
 	import {
@@ -65,12 +54,10 @@
 
 	let loaded = $state(false);
 	let loadError = $state(null);
-	/** Bumped to remount every chart, so its pipelines rebuild against the source. */
+	/** Bumped to remount every chart, so each draw starts from nothing. */
 	let generation = $state(0);
 	let running = $state(false);
 	let status = $state('');
-	/** One row per canvas: which chart, and what each comparison found. */
-	let rows = $state([]);
 	let verdict = $state(null);
 	/** One row per canvas for the baseline comparison. */
 	let baselineRows = $state([]);
@@ -127,9 +114,9 @@
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 	/**
-	 * Every chart canvas, in document order, with the section it belongs to,
-	 * the control it answers to across builds (`chart` unless the section names
-	 * its own), and whether the x/y swap can reach it at all.
+	 * Every chart canvas, in document order, with the section it belongs to and
+	 * the control it answers to (`chart`, meaning none, unless the section
+	 * names its own).
 	 */
 	function canvases() {
 		return [...(chartsEl?.querySelectorAll('canvas') ?? [])].map((canvas) => {
@@ -137,8 +124,7 @@
 			return {
 				canvas,
 				chart: section?.getAttribute('data-chart') ?? '?',
-				control: section?.getAttribute('data-control') ?? 'chart',
-				readsChartScales: section?.getAttribute('data-reads-chart-scales') !== 'false'
+				control: section?.getAttribute('data-control') ?? 'chart'
 			};
 		});
 	}
@@ -166,28 +152,30 @@
 	}
 
 	/**
-	 * Draw everything through `source` and read it back once it has settled:
+	 * Remount everything and read it back once it has settled:
 	 * two captures 300ms apart that agree, pixel for pixel. Data loads and
 	 * scale springs both finish on their own time, and a fixed wait would
 	 * compare a frame mid-animation against a frame at rest.
 	 *
-	 * A correct source must draw something on every canvas before it counts as
+	 * A correct build must draw something on every canvas before it counts as
 	 * settled. The control is allowed to be blank — a wrong scale usually puts
 	 * every mark off the canvas, which is the point of it — but blank is also
 	 * what a chart looks like before its data arrives, and nothing the page can
 	 * see tells the two apart. So a blank control is accepted only after
-	 * `minMs`, the time a correct source needed to draw the same charts.
+	 * `minMs`, the time the correct draw needed for the same charts.
 	 */
-	async function drawWith(
-		source,
-		{ allowBlank = false, minMs = 0, m4Swap = false, parallelReverse = false } = {}
-	) {
-		scaleTemplateSystem.chartScaleSource = source;
+	async function draw({
+		label = 'this build',
+		allowBlank = false,
+		minMs = 0,
+		m4Swap = false,
+		parallelReverse = false
+	} = {}) {
 		m4Parity.swapScale = m4Swap;
 		parallelParity.reverseScales = parallelReverse;
 		generation++;
 		await tick();
-		status = `drawing through "${source}"…`;
+		status = `drawing ${label}…`;
 		const start = performance.now();
 		let previous = null;
 		let list = [];
@@ -219,16 +207,16 @@
 		const blankDrawn = names((c) => c && c.drew && blank(c.pixels));
 		const of = `of ${list.length} canvases`;
 		if (absent.length)
-			throw new Error(`"${source}": ${absent.length} ${of} never rendered: ${absent.join(', ')}.`);
+			throw new Error(`${label}: ${absent.length} ${of} never rendered: ${absent.join(', ')}.`);
 		if (noDraws.length)
 			throw new Error(
-				`"${source}": ${noDraws.length} ${of} rendered but issued no draws: ${noDraws.join(', ')}.`
+				`${label}: ${noDraws.length} ${of} rendered but issued no draws: ${noDraws.join(', ')}.`
 			);
 		if (blankDrawn.length)
 			throw new Error(
-				`"${source}": ${blankDrawn.length} ${of} issued draws but stayed blank: ${blankDrawn.join(', ')}. Either the marks land off the canvas or their data never arrived.`
+				`${label}: ${blankDrawn.length} ${of} issued draws but stayed blank: ${blankDrawn.join(', ')}. Either the marks land off the canvas or their data never arrived.`
 			);
-		throw new Error(`"${source}" never settled: captures kept changing for 12s.`);
+		throw new Error(`${label} never settled: captures kept changing for 12s.`);
 	}
 
 	/**
@@ -292,70 +280,9 @@
 		});
 	}
 
-	async function run() {
-		running = true;
-		verdict = null;
-		rows = [];
-		diffs = [];
-		try {
-			const { shots: table, ms } = await drawWith('table');
-			const { shots: swapped } = await drawWith('swapped', { allowBlank: true, minMs: ms });
-			const { shots: immediate } = await drawWith('immediate');
-			const list = canvases();
-
-			rows = list.map(({ chart, readsChartScales }, i) => ({
-				chart,
-				readsChartScales,
-				blank: blank(table[i]),
-				immediate: differing(table[i], immediate[i]),
-				swapped: differing(table[i], swapped[i]),
-				pixels: table[i] ? table[i].length / 4 : 0
-			}));
-
-			const readbackBroken = rows.some((r) => r.blank);
-			// Only charts that read the chart's scales can see the x/y swap.
-			const controlBlind = rows
-				.filter((r) => r.readsChartScales && r.swapped === 0)
-				.map((r) => r.chart);
-			const mismatched = rows.filter((r) => r.immediate !== 0).map((r) => r.chart);
-			showDiffs(['table', 'immediate'], table, immediate, list, mismatched);
-
-			if (rows.length === 0) verdict = { ok: false, text: 'No canvases found.' };
-			else if (readbackBroken)
-				verdict = {
-					ok: false,
-					text: 'A capture came back blank, so readback is not seeing the charts. Nothing below means anything.'
-				};
-			else if (controlBlind.length)
-				verdict = {
-					ok: false,
-					text: `The control did not differ on: ${controlBlind.join(', ')}. The comparison cannot see a wrong scale there, so a clean result there proves nothing.`
-				};
-			else if (mismatched.length)
-				verdict = {
-					ok: false,
-					text: `Immediates differ from the table on: ${mismatched.join(', ')}.`
-				};
-			else
-				verdict = {
-					ok: true,
-					text: `Parity on all ${rows.length} canvases, and the control differed on every one.`
-				};
-		} catch (error) {
-			verdict = { ok: false, text: String(error?.message ?? error) };
-		} finally {
-			restoreProduction();
-		}
-	}
-
-	/** Leave the page on production's sources whatever happened. */
+	/** Leave the page with every control off, whatever happened. */
 	function restoreProduction() {
-		if (
-			scaleTemplateSystem.chartScaleSource !== 'immediate' ||
-			m4Parity.swapScale ||
-			parallelParity.reverseScales
-		) {
-			scaleTemplateSystem.chartScaleSource = 'immediate';
+		if (m4Parity.swapScale || parallelParity.reverseScales) {
 			m4Parity.swapScale = false;
 			parallelParity.reverseScales = false;
 			generation++;
@@ -409,8 +336,8 @@
 		baselineRows = [];
 		diffs = [];
 		try {
-			const { shots } = await drawWith('immediate');
-			const { shots: again } = await drawWith('immediate');
+			const { shots } = await draw();
+			const { shots: again } = await draw({ label: 'a second remount' });
 			const list = canvases();
 			const charts = list.map(({ chart }) => chart);
 			const unstable = charts.filter((_, i) => differing(shots[i], again[i]) !== 0);
@@ -446,8 +373,9 @@
 			if (!stored)
 				throw new Error('No baseline recorded. Record one on the build before the change.');
 
-			const { shots: now, ms } = await drawWith('immediate');
-			const { shots: control } = await drawWith('immediate', {
+			const { shots: now, ms } = await draw();
+			const { shots: control } = await draw({
+				label: 'the controls',
 				allowBlank: true,
 				minMs: ms,
 				m4Swap: true,
@@ -502,27 +430,16 @@
 <div class="page">
 	<h1>Scale source parity</h1>
 	<p>
-		Draws every chart below through three sources for its x and y scale params, and compares pixels
-		against <code>table</code>, the old path through the global scale table:
+		Draws every chart below and compares it, pixel for pixel, with a baseline recorded on the
+		previous build: record on the commit before a change, compare on the commit after. Every canvas
+		must match, and each own-path chart's control must change it: binning the M4 line by its y
+		scale, and giving each parallel axis another axis's scale.
 	</p>
-	<ul>
-		<li><code>immediate</code>, what ships. It must match <code>table</code> exactly.</li>
-		<li>
-			<code>swapped</code>, immediates with x and y exchanged: the control. It must
-			<strong>differ</strong> on every chart, or the check cannot see the failure it is for.
-		</li>
-	</ul>
 	<p>
 		Covers: continuous × continuous, a sorted band x, a band y, log and symlog, a line, an area with
 		auto-dots (which reads the raw params in mark code), a facet grid sharing scales across cells, a
-		decimating M4 line, and parallel coordinates (its own scale per axis, so the x/y swap cannot
-		reach it). Keep the tab in front while it runs, since a hidden tab stops rendering.
-	</p>
-	<p>
-		<strong>Across builds, for M4 and parallel coordinates:</strong> record a baseline on the commit
-		before a change, then compare on the commit after. Every canvas must match, and each one's own
-		control must change it: binning the M4 line by its y scale, and giving each parallel axis
-		another axis's scale.
+		decimating M4 line, and parallel coordinates (its own scale per axis). Keep the tab in front
+		while it runs, since a hidden tab stops rendering.
 		{#if baselineInfo}
 			Stored baseline: {baselineInfo.count} canvases, recorded {baselineInfo.recordedAt}.
 		{:else}
@@ -530,9 +447,6 @@
 		{/if}
 	</p>
 
-	<button onclick={run} disabled={!loaded || running}>
-		{running ? 'Running…' : 'Run parity check'}
-	</button>
 	<button onclick={recordBaseline} disabled={!loaded || running}>Record baseline</button>
 	<button onclick={compareBaseline} disabled={!loaded || running || !baselineInfo}>
 		Compare with baseline
@@ -541,31 +455,6 @@
 
 	{#if verdict}
 		<p class="verdict" class:ok={verdict.ok}>{verdict.ok ? 'PASS' : 'FAIL'} — {verdict.text}</p>
-	{/if}
-
-	{#if rows.length}
-		<table>
-			<thead>
-				<tr>
-					<th>chart</th>
-					<th>immediate vs table</th>
-					<th>swapped vs table (control)</th>
-					<th>pixels</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each rows as row, i (i)}
-					<tr>
-						<td>{row.chart}</td>
-						<td class:bad={row.immediate !== 0}>{row.immediate}</td>
-						<td class:bad={row.readsChartScales && row.swapped === 0}
-							>{row.swapped}{row.readsChartScales ? '' : ' (reads no chart scale)'}</td
-						>
-						<td>{row.pixels}{row.blank ? ' (blank)' : ''}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
 	{/if}
 
 	{#if baselineRows.length}
@@ -757,11 +646,7 @@
 					</div>
 				</section>
 
-				<section
-					data-chart="parallel coordinates"
-					data-control="parallel"
-					data-reads-chart-scales="false"
-				>
+				<section data-chart="parallel coordinates" data-control="parallel">
 					<h2>Parallel coordinates (4 axes, a scale each)</h2>
 					<div class="chart">
 						<ChartContainer clipPadding={30}>
