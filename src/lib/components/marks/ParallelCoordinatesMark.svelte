@@ -1,3 +1,15 @@
+<script module lang="ts">
+	/**
+	 * Test-only: give each axis another axis's scale (the list reversed).
+	 *
+	 * The scale-source parity page's control for parallel coordinates — a wrong
+	 * scale reaching an axis, deliberately, which the comparison must see. Read
+	 * when the mark mounts, so it takes effect on the next mount. Never set in
+	 * production.
+	 */
+	export const parallelParity = { reverseScales: false };
+</script>
+
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
@@ -155,7 +167,9 @@
 	const currentScaleIndices = $derived.by(() => {
 		const ps = chartContext.parallelScales;
 		if (!ps || !gpuCoordinator) return [];
-		return ps.scaleStates.map((scale) => {
+		// Reversed only for the parity page's control; see parallelParity.
+		const states = parallelParity.reverseScales ? [...ps.scaleStates].reverse() : ps.scaleStates;
+		return states.map((scale) => {
 			return gpuCoordinator.getScaleIndex?.(scale.id) ?? 0;
 		});
 	});
