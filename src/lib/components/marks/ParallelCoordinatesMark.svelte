@@ -17,7 +17,6 @@
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { buildSelectFromChannels, MarkColor, generateMarkId } from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
-	import { getGPUContext } from '$lib/gpu';
 	import type { FieldRef, ChartContext, ColorScheme, CurveType, Transform } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
@@ -52,7 +51,6 @@
 	const chartContext = getContext<ChartContext>('chart');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
-	const gpuCoordinator = getGPUContext();
 
 	// --- ChartConfig registration ---
 	const entry = chartContext.config.registerMark(markId, 'parallel', {
@@ -163,15 +161,14 @@
 		return Array.from({ length: n }, (_, i) => (n > 1 ? i / (n - 1) : 0.5));
 	});
 
-	// Scale SSBO indices — resolved from scale state IDs (UUIDs), not column names
-	const currentScaleIndices = $derived.by(() => {
+	// Each axis's scale id, in data order. The coordinator turns these into
+	// params on every frame the chart draws, so nothing here can go stale.
+	const currentScaleIds = $derived.by(() => {
 		const ps = chartContext.parallelScales;
-		if (!ps || !gpuCoordinator) return [];
+		if (!ps) return [];
 		// Reversed only for the parity page's control; see parallelParity.
 		const states = parallelParity.reverseScales ? [...ps.scaleStates].reverse() : ps.scaleStates;
-		return states.map((scale) => {
-			return gpuCoordinator.getScaleIndex?.(scale.id) ?? 0;
-		});
+		return states.map((scale) => scale.id);
 	});
 
 	onDestroy(() => {
@@ -190,7 +187,7 @@
 		colorScaleIndex={markColor.colorScaleIndex}
 		constantColor={markColor.constantColor}
 		axisOrder={currentAxisOrder}
-		axisScaleIndices={currentScaleIndices}
+		axisScaleIds={currentScaleIds}
 		axisXPositions={currentAxisXPositions}
 		{strokeWidth}
 		{opacity}

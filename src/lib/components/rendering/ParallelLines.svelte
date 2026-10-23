@@ -7,7 +7,9 @@
 	import type { ChartContext, CurveType, WebGPUCanvasContext } from '$lib/types';
 
 	const MAX_AXES = 16;
-	const UNIFORM_SIZE = 240; // bytes, must match WGSL struct layout
+	const UNIFORM_SIZE = 176; // bytes, must match WGSL struct layout
+	// One ScaleParam (16 bytes) per axis, filled by the coordinator.
+	const AXIS_SCALES_SIZE = MAX_AXES * 16;
 
 	// Both x and y so ScaleTemplateSystem generates scaleX(), scaleLinearY(), pixelsToClip()
 	const rendererDefinition = {
@@ -18,7 +20,8 @@
 	const BINDINGS = {
 		DATA: 0, // column-major packed storage buffer
 		COLOR: 1, // per-row color values
-		CONFIG: 2 // ParallelConfig uniform
+		CONFIG: 2, // ParallelConfig uniform
+		AXIS_SCALES: 3 // one ScaleParam per axis, in data order
 	};
 
 	interface Props {
@@ -30,7 +33,8 @@
 		colorScaleIndex?: number;
 		constantColor?: [number, number, number, number];
 		axisOrder: number[];
-		axisScaleIndices: number[];
+		/** Each axis's scale id, in data (not visual) order. */
+		axisScaleIds: string[];
 		axisXPositions: number[];
 		strokeWidth?: number;
 		opacity?: number;
@@ -48,7 +52,7 @@
 		colorScaleIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		axisOrder,
-		axisScaleIndices,
+		axisScaleIds,
 		axisXPositions,
 		strokeWidth = 2,
 		opacity = 1,
@@ -100,7 +104,6 @@
     _pad1: u32,
     constantColor: vec4<f32>,
     axisOrder: array<vec4<u32>, 4>,
-    axisScaleIndices: array<vec4<u32>, 4>,
     axisXPositions: array<vec4<f32>, 4>,
   };
 
@@ -115,16 +118,16 @@
   @group(1) @binding(0) var<storage, read> data: array<f32>;
   @group(1) @binding(1) var<storage, read> colorValues: array<f32>;
   @group(1) @binding(2) var<uniform> config: ParallelConfig;
+  // Each axis's own scale params, written by the coordinator only when one
+  // moves. Full ScaleParams, so an axis can be any scale type the template
+  // writes; only linear math is applied to them today.
+  @group(1) @binding(3) var<uniform> axisScales: array<ScaleParam, ${MAX_AXES}>;
 
   fn isNaN(v: f32) -> bool { return v != v; }
   const DISCARD_POS = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 
   fn getAxisOrder(visualIdx: u32) -> u32 {
     return config.axisOrder[visualIdx / 4u][visualIdx % 4u];
-  }
-
-  fn getAxisScaleIndex(dataIdx: u32) -> u32 {
-    return config.axisScaleIndices[dataIdx / 4u][dataIdx % 4u];
   }
 
   fn getColumnValue(colIdx: u32, rowIdx: u32) -> f32 {
@@ -138,7 +141,7 @@
   }
 
   fn scaleForAxis(value: f32, dataAxisIdx: u32) -> f32 {
-    return scaleLinearY(value, getAxisScaleIndex(dataAxisIdx));
+    return scaleLinearYFrom(value, axisScales[dataAxisIdx]);
   }
 
   // Get pixel position for an axis value, with NaN fallback to a reference point.
@@ -318,7 +321,8 @@
 			binding: BINDINGS.CONFIG,
 			type: 'uniform',
 			visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT
-		}
+		},
+		{ binding: BINDINGS.AXIS_SCALES, type: 'uniform', visibility: GPUShaderStage.VERTEX }
 	];
 
 	// --- Data upload: pack all columns into single column-major buffer ---
@@ -340,13 +344,15 @@
 	});
 
 	// --- Uniform upload ---
+	// One buffer for the mark's life: an axis reorder rewrites this every
+	// frame it animates, and queue.writeBuffer copies, so reuse is safe.
+	const configBytes = new Uint8Array(UNIFORM_SIZE);
+	const f32 = new Float32Array(configBytes.buffer);
+	const u32 = new Uint32Array(configBytes.buffer);
+
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
 		if (colorMode === 1 && !colorValueData) return;
-
-		const buffer = new ArrayBuffer(UNIFORM_SIZE);
-		const f32 = new Float32Array(buffer);
-		const u32 = new Uint32Array(buffer);
 
 		u32[0] = axisCount;
 		u32[1] = rowCount;
@@ -364,16 +370,26 @@
 		for (let i = 0; i < MAX_AXES; i++) {
 			u32[12 + i] = i < axisOrder.length ? axisOrder[i] : 0;
 		}
-		// axisScaleIndices: offset 112 = u32 index 28
+		// axisXPositions: offset 112 = f32 index 28
 		for (let i = 0; i < MAX_AXES; i++) {
-			u32[28 + i] = i < axisScaleIndices.length ? axisScaleIndices[i] : 0;
-		}
-		// axisXPositions: offset 176 = f32 index 44
-		for (let i = 0; i < MAX_AXES; i++) {
-			f32[44 + i] = i < axisXPositions.length ? axisXPositions[i] : 0;
+			f32[28 + i] = i < axisXPositions.length ? axisXPositions[i] : 0;
 		}
 
-		renderer.writeUniform(BINDINGS.CONFIG, new Uint8Array(buffer));
+		renderer.writeUniform(BINDINGS.CONFIG, configBytes);
+	});
+
+	// --- Axis scales ---
+	// The coordinator fills them on frames this chart draws, from the scales
+	// themselves: an axis transition moves `gpuState` outside Svelte's
+	// reactivity, so nothing here could see it.
+	$effect(() => {
+		if (!renderer?.resourcesCreated || axisScaleIds.length === 0) return;
+		const r = renderer;
+		const block = gpuCoordinator.registerScaleBlock(chartContext.chartId, {
+			scaleIds: [...axisScaleIds],
+			buffer: () => r.getBuffer(BINDINGS.AXIS_SCALES)
+		});
+		return () => block.remove();
 	});
 
 	// --- Instance count ---
@@ -433,6 +449,9 @@
 				});
 				device.queue.writeBuffer(quadGeometryBuffer, 0, quadVertices as Float32Array<ArrayBuffer>);
 
+				// Sized once, before the layer can draw; its contents are the
+				// coordinator's from the first frame on.
+				r.writeUniform(BINDINGS.AXIS_SCALES, new Uint8Array(AXIS_SCALES_SIZE));
 				r.registerLayer(drawParallelLines);
 
 				// Colour defaults to zeros until its data arrives.
