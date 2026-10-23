@@ -471,20 +471,26 @@
 		// Ensure decimator knows the vertex count for drawIndirect
 		m4Decimator.setVertexCount(quadVertexCount);
 
-		gpuCoordinator.registerComputeWork(m4ComputeKey, (commandEncoder) => {
-			const xBuf = renderer.getBuffer(BINDINGS.X);
-			const yBuf = renderer.getBuffer(BINDINGS.Y);
-			const seriesBuf = renderer.getBuffer(BINDINGS.SERIES);
-			const colorBuf = renderer.getBuffer(BINDINGS.COLOR);
+		const chartId = chartContext.chartId;
+		gpuCoordinator.registerComputeWork(
+			m4ComputeKey,
+			(commandEncoder) => {
+				const xBuf = renderer.getBuffer(BINDINGS.X);
+				const yBuf = renderer.getBuffer(BINDINGS.Y);
+				const seriesBuf = renderer.getBuffer(BINDINGS.SERIES);
+				const colorBuf = renderer.getBuffer(BINDINGS.COLOR);
 
-			if (!xBuf || !yBuf || !seriesBuf || !colorBuf) return;
+				if (!xBuf || !yBuf || !seriesBuf || !colorBuf) return;
 
-			m4Decimator.encode(
-				commandEncoder,
-				{ x: xBuf, y: yBuf, series: seriesBuf, color: colorBuf },
-				xData?.length ?? 0
-			);
-		});
+				m4Decimator.encode(
+					commandEncoder,
+					{ x: xBuf, y: yBuf, series: seriesBuf, color: colorBuf },
+					xData?.length ?? 0
+				);
+			},
+			// Only this chart reads the decimated output; M4 is never on a facet grid.
+			chartId
+		);
 
 		return () => {
 			gpuCoordinator.removeComputeWork(m4ComputeKey);

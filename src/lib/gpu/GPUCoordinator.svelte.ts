@@ -142,6 +142,12 @@ interface ScaleBlockEntry extends ScaleBlock {
 }
 
 type ComputeWorkFn = (commandEncoder: GPUCommandEncoder) => void;
+
+interface ComputeWork {
+	fn: ComputeWorkFn;
+	/** The chart whose draw reads the result; the work runs only on frames it draws. */
+	chartId: string | null;
+}
 type FrameCallback = (isAnimating: boolean) => void;
 
 interface GPUCoordinatorConfig {
@@ -354,7 +360,7 @@ export class GPUCoordinator {
 	// =========================================================================
 	// PRE-RENDER COMPUTE WORK (M4 decimation, etc.)
 	// =========================================================================
-	#computeWork = new Map<string, ComputeWorkFn>(); // key -> computeFn(commandEncoder)
+	#computeWork = new Map<string, ComputeWork>();
 	#scaleBlocks = new Map<string, Set<ScaleBlockEntry>>(); // chartId -> its marks' scale blocks
 
 	// =========================================================================
@@ -1260,9 +1266,17 @@ export class GPUCoordinator {
 		// scale, and everything in the render passes below reads `resolved`.
 		this.#encodeSlotResolve(commandEncoder);
 
+		// Work tied to a chart runs only when that chart is in this frame's draw
+		// list, which stamped it with this frame's id. Its output buffers keep the
+		// last result in between, and the next frame that draws the chart runs
+		// the work first, in this same encoder.
 		if (this.#computeWork.size > 0) {
-			for (const computeFn of this.#computeWork.values()) {
-				computeFn(commandEncoder);
+			for (const work of this.#computeWork.values()) {
+				if (work.chartId !== null) {
+					const chart = this.#registeredCharts.get(work.chartId);
+					if (chart?._lastRenderFrame !== this.#frameId) continue;
+				}
+				work.fn(commandEncoder);
 			}
 		}
 
@@ -2594,13 +2608,14 @@ export class GPUCoordinator {
 	// =========================================================================
 
 	/**
-	 * Register a compute function to run before render passes each frame.
-	 * Used by M4 decimation and other GPU compute optimizations.
-	 * @param {string} key - Unique identifier for this compute work
-	 * @param {function(GPUCommandEncoder): void} computeFn
+	 * Register a compute function to run before the render passes.
+	 *
+	 * With a `chartId`, only on frames that chart draws: M4 decimation, whose
+	 * output only its own chart reads, and which otherwise re-binned on every
+	 * frame any chart on the page drew. Without one, every rendered frame.
 	 */
-	registerComputeWork(key: string, computeFn: ComputeWorkFn): void {
-		this.#computeWork.set(key, computeFn);
+	registerComputeWork(key: string, computeFn: ComputeWorkFn, chartId: string | null = null): void {
+		this.#computeWork.set(key, { fn: computeFn, chartId });
 	}
 
 	removeComputeWork(key: string): void {
