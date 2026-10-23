@@ -130,6 +130,25 @@ interface ScaleInstance extends AnimatedSource {
 	getConfig?: () => { categoryCount: number; paddingInner: number; paddingOuter: number };
 }
 
+/**
+ * A mark's own list of scales, as one uniform the shader indexes: parallel
+ * coordinates, one scale per axis. The coordinator fills it on frames the
+ * mark's chart draws, through the same writer as a chart's immediates, and
+ * uploads only when a value moved.
+ */
+export interface ScaleBlock {
+	scaleIds: readonly string[];
+	/** Read each frame, so a renderer that reallocates is followed. */
+	buffer: () => GPUBuffer | undefined;
+}
+
+interface ScaleBlockEntry extends ScaleBlock {
+	/** This frame's params, four floats per scale. */
+	view: Float32Array;
+	/** What the buffer holds; NaN until the first upload. */
+	last: Float32Array;
+}
+
 interface ScaleArrayEntry {
 	instance: ScaleInstance;
 	index: number;
@@ -381,6 +400,7 @@ export class GPUCoordinator {
 	// PRE-RENDER COMPUTE WORK (M4 decimation, etc.)
 	// =========================================================================
 	#computeWork = new Map<string, ComputeWorkFn>(); // key -> computeFn(commandEncoder)
+	#scaleBlocks = new Map<string, Set<ScaleBlockEntry>>(); // chartId -> its marks' scale blocks
 
 	// =========================================================================
 	// SCALE SSBO SYSTEM
@@ -1146,6 +1166,30 @@ export class GPUCoordinator {
 		return true;
 	}
 
+	/**
+	 * Fill a scale block and upload it if any value moved. At rest that is a
+	 * compare and no write; during an axis transition, one write of 16 bytes per
+	 * scale. A scale not registered yet leaves the buffer as it was.
+	 */
+	#refreshScaleBlock(block: ScaleBlockEntry): void {
+		const buffer = block.buffer();
+		if (!buffer) return;
+		const { scaleIds, view, last } = block;
+		for (let i = 0; i < scaleIds.length; i++) {
+			if (!this.writeScaleParams(scaleIds[i], view, i << 2)) return;
+		}
+		let moved = false;
+		for (let i = 0; i < view.length; i++) {
+			if (view[i] !== last[i]) {
+				moved = true;
+				break;
+			}
+		}
+		if (!moved) return;
+		this.#device!.queue.writeBuffer(buffer, 0, view as Float32Array<ArrayBuffer>);
+		last.set(view);
+	}
+
 	/** Reused per pass: the chart's x and y ScaleParam, pushed as immediates. */
 	#chartScaleImmediates = new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4);
 
@@ -1391,6 +1435,10 @@ export class GPUCoordinator {
 		this.#updateIdentitySlots();
 		this.#refreshStaleFrameUniforms();
 		this.#fillAllScales(this.#cpuScaleBuffer!);
+		for (let i = 0; i < numCharts; i++) {
+			const blocks = this.#scaleBlocks.get(chartsNeedingRender[i].chartId);
+			if (blocks) for (const block of blocks) this.#refreshScaleBlock(block);
+		}
 
 		const dstOffset = slot * this.#slotByteSize!;
 		this.#device!.queue.writeBuffer(
@@ -2851,8 +2899,28 @@ export class GPUCoordinator {
 		return this.#colorPaletteBuffer;
 	}
 
-	getScaleIndex(scaleId: string): number | undefined {
-		return this.#scaleIndexManager.getIndex(scaleId);
+	/**
+	 * Keep a mark's scale block filled on frames its chart draws. Register
+	 * again with new ids, after removing the old one, when the list changes.
+	 */
+	registerScaleBlock(chartId: string, block: ScaleBlock): { remove(): void } {
+		const n = block.scaleIds.length * 4;
+		const entry: ScaleBlockEntry = {
+			...block,
+			view: new Float32Array(n),
+			last: new Float32Array(n).fill(NaN)
+		};
+		let blocks = this.#scaleBlocks.get(chartId);
+		if (!blocks) this.#scaleBlocks.set(chartId, (blocks = new Set()));
+		blocks.add(entry);
+		this.invalidateChart(chartId);
+		return {
+			remove: () => {
+				blocks.delete(entry);
+				if (blocks.size === 0 && this.#scaleBlocks.get(chartId) === blocks)
+					this.#scaleBlocks.delete(chartId);
+			}
+		};
 	}
 
 	// =========================================================================
@@ -2953,6 +3021,7 @@ export class GPUCoordinator {
 		this.#dataLayouts.clear();
 		this.#frameLayout = null;
 		this.#pendingScaleMappings.clear();
+		this.#scaleBlocks.clear();
 		this.#pendingLayers.clear();
 
 		// Destroy device

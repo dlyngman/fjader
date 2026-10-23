@@ -27,7 +27,13 @@
 	 * M4 has no old path left to switch to once its scale moves, so it is
 	 * checked against the previous BUILD instead: record a baseline on the
 	 * commit before the change, compare on the commit after. The captures live
-	 * in IndexedDB between the two. Its control is `m4Parity.swapScale`, which
+	 * in IndexedDB between the two. Parallel coordinates is checked the same
+	 * way, and for the same reason once its axes get a source of their own.
+	 * Each has its own control for that comparison, named by `data-control`.
+	 * Parallel coordinates reads no chart scale at all, so `swapped` cannot
+	 * reach it, and a section marked `data-reads-chart-scales="false"` is not
+	 * held to that control. M4's own control is
+	 * `m4Parity.swapScale`, which
 	 * bins the decimating line by its y scale — the comparison must see that on
 	 * the M4 chart.
 	 */
@@ -36,6 +42,7 @@
 	import { initDivePlot } from '$lib';
 	import { scaleTemplateSystem } from '$lib/gpu/ScaleTemplateSystem';
 	import { m4Parity } from '$lib/gpu/decimation/M4Decimator.svelte';
+	import { parallelParity } from '$lib/components/marks/ParallelCoordinatesMark.svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -46,7 +53,9 @@
 		BarMarkY,
 		DotsMark,
 		LineMark,
-		AreaMarkY
+		AreaMarkY,
+		ParallelAxes,
+		ParallelCoordinatesMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
@@ -67,6 +76,8 @@
 	let baselineRows = $state([]);
 	/** When the stored baseline was recorded, and of how many canvases. */
 	let baselineInfo = $state(null);
+	/** Where two captures of a chart disagree, for every mismatch the last action found. */
+	let diffs = $state([]);
 
 	/** @type {HTMLElement | undefined} */
 	let chartsEl = $state();
@@ -78,13 +89,17 @@
 			]);
 			// Deterministic: a remount re-queries, and a random() here would make
 			// every source differ from every other for reasons of its own.
+			//
+			// `step`, not `x`: scales are shared by field name, and parity_dense's
+			// `x` runs to 66,666, which squeezed these 200 points into the first
+			// pixel column of every chart that drew them.
 			await queryEngine.exec([
 				`CREATE OR REPLACE TABLE parity_series AS
 				WITH RECURSIVE points AS (
 					SELECT 0 AS idx UNION ALL SELECT idx + 1 FROM points WHERE idx < 199
 				)
 				SELECT
-					idx AS x,
+					idx AS step,
 					POWER(10, idx * 4.0 / 199) AS grows,
 					(idx - 100) * ABS(idx - 100) AS signed,
 					2.0 + sin(idx * 0.08) AS wave
@@ -111,12 +126,21 @@
 
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-	/** Every chart canvas, in document order, with the section it belongs to. */
+	/**
+	 * Every chart canvas, in document order, with the section it belongs to,
+	 * the control it answers to across builds (`chart` unless the section names
+	 * its own), and whether the x/y swap can reach it at all.
+	 */
 	function canvases() {
-		return [...(chartsEl?.querySelectorAll('canvas') ?? [])].map((canvas) => ({
-			canvas,
-			chart: canvas.closest('[data-chart]')?.getAttribute('data-chart') ?? '?'
-		}));
+		return [...(chartsEl?.querySelectorAll('canvas') ?? [])].map((canvas) => {
+			const section = canvas.closest('[data-chart]');
+			return {
+				canvas,
+				chart: section?.getAttribute('data-chart') ?? '?',
+				control: section?.getAttribute('data-control') ?? 'chart',
+				readsChartScales: section?.getAttribute('data-reads-chart-scales') !== 'false'
+			};
+		});
 	}
 
 	/** One frame of every canvas in `list`, in order; null for one that did not render. */
@@ -154,9 +178,13 @@
 	 * see tells the two apart. So a blank control is accepted only after
 	 * `minMs`, the time a correct source needed to draw the same charts.
 	 */
-	async function drawWith(source, { allowBlank = false, minMs = 0, m4Swap = false } = {}) {
+	async function drawWith(
+		source,
+		{ allowBlank = false, minMs = 0, m4Swap = false, parallelReverse = false } = {}
+	) {
 		scaleTemplateSystem.chartScaleSource = source;
 		m4Parity.swapScale = m4Swap;
+		parallelParity.reverseScales = parallelReverse;
 		generation++;
 		await tick();
 		status = `drawing through "${source}"…`;
@@ -203,18 +231,81 @@
 		throw new Error(`"${source}" never settled: captures kept changing for 12s.`);
 	}
 
+	/**
+	 * Picture where `a` and `b` disagree on each chart named in `which`: `a`
+	 * dimmed, red where only `a` has ink, blue where only `b` does, purple where
+	 * both do but differently. Plus the box the differences fall in — whether
+	 * the whole mark moved or one end of it did is most of a diagnosis.
+	 */
+	function showDiffs(labels, a, b, list, which) {
+		diffs = list.flatMap(({ canvas, chart }, i) => {
+			if (!which.includes(chart) || !a[i] || !b[i] || a[i].length !== b[i].length) return [];
+			const { width, height } = canvas;
+			const img = new ImageData(width, height);
+			const out = img.data;
+			let n = 0;
+			let x0 = width;
+			let y0 = height;
+			let x1 = -1;
+			let y1 = -1;
+			for (let p = 0; p < a[i].length; p += 4) {
+				const pa = a[i];
+				const pb = b[i];
+				const same =
+					pa[p] === pb[p] &&
+					pa[p + 1] === pb[p + 1] &&
+					pa[p + 2] === pb[p + 2] &&
+					pa[p + 3] === pb[p + 3];
+				if (same) {
+					const grey = 255 - ((pa[p] + pa[p + 1] + pa[p + 2]) / 3) * 0.3;
+					out[p] = out[p + 1] = out[p + 2] = pa[p + 3] ? grey : 255;
+					out[p + 3] = 255;
+					continue;
+				}
+				n++;
+				const x = (p / 4) % width;
+				const y = Math.floor(p / 4 / width);
+				x0 = Math.min(x0, x);
+				x1 = Math.max(x1, x);
+				y0 = Math.min(y0, y);
+				y1 = Math.max(y1, y);
+				const inkA = pa[p + 3] > 0;
+				const inkB = pb[p + 3] > 0;
+				out[p] = inkA ? 220 : 40;
+				out[p + 1] = 40;
+				out[p + 2] = inkB ? 220 : 40;
+				out[p + 3] = 255;
+			}
+			const c = document.createElement('canvas');
+			c.width = width;
+			c.height = height;
+			c.getContext('2d').putImageData(img, 0, 0);
+			return [
+				{
+					chart,
+					labels,
+					url: c.toDataURL(),
+					n,
+					box: n ? `x ${x0}–${x1}, y ${y0}–${y1} of ${width}×${height}` : ''
+				}
+			];
+		});
+	}
+
 	async function run() {
 		running = true;
 		verdict = null;
 		rows = [];
+		diffs = [];
 		try {
 			const { shots: table, ms } = await drawWith('table');
 			const { shots: swapped } = await drawWith('swapped', { allowBlank: true, minMs: ms });
 			const { shots: immediate } = await drawWith('immediate');
 			const list = canvases();
 
-			rows = list.map(({ chart }, i) => ({
+			rows = list.map(({ chart, readsChartScales }, i) => ({
 				chart,
+				readsChartScales,
 				blank: blank(table[i]),
 				immediate: differing(table[i], immediate[i]),
 				swapped: differing(table[i], swapped[i]),
@@ -222,8 +313,12 @@
 			}));
 
 			const readbackBroken = rows.some((r) => r.blank);
-			const controlBlind = rows.filter((r) => r.swapped === 0).map((r) => r.chart);
+			// Only charts that read the chart's scales can see the x/y swap.
+			const controlBlind = rows
+				.filter((r) => r.readsChartScales && r.swapped === 0)
+				.map((r) => r.chart);
 			const mismatched = rows.filter((r) => r.immediate !== 0).map((r) => r.chart);
+			showDiffs(['table', 'immediate'], table, immediate, list, mismatched);
 
 			if (rows.length === 0) verdict = { ok: false, text: 'No canvases found.' };
 			else if (readbackBroken)
@@ -255,16 +350,21 @@
 
 	/** Leave the page on production's sources whatever happened. */
 	function restoreProduction() {
-		if (scaleTemplateSystem.chartScaleSource !== 'immediate' || m4Parity.swapScale) {
+		if (
+			scaleTemplateSystem.chartScaleSource !== 'immediate' ||
+			m4Parity.swapScale ||
+			parallelParity.reverseScales
+		) {
 			scaleTemplateSystem.chartScaleSource = 'immediate';
 			m4Parity.swapScale = false;
+			parallelParity.reverseScales = false;
 			generation++;
 		}
 		status = '';
 		running = false;
 	}
 
-	// ---- Baseline across builds, for M4 ----
+	// ---- Baseline across builds, for M4 and parallel coordinates ----
 
 	const DB_NAME = 'scale-source-parity';
 	const STORE = 'baseline';
@@ -307,11 +407,14 @@
 		running = true;
 		verdict = null;
 		baselineRows = [];
+		diffs = [];
 		try {
 			const { shots } = await drawWith('immediate');
 			const { shots: again } = await drawWith('immediate');
-			const charts = canvases().map(({ chart }) => chart);
+			const list = canvases();
+			const charts = list.map(({ chart }) => chart);
 			const unstable = charts.filter((_, i) => differing(shots[i], again[i]) !== 0);
+			showDiffs(['first remount', 'second remount'], shots, again, list, unstable);
 			if (again.length !== shots.length || unstable.length)
 				throw new Error(
 					`Not recorded: two remounts of this build drew differently on: ${unstable.join(', ') || 'the canvas count'}.`
@@ -328,14 +431,16 @@
 	}
 
 	/**
-	 * This build against the recorded one. Every canvas must match, and the M4
-	 * control must differ on the decimating chart. The other canvases are not
-	 * expected to move under the control: only M4 reads it.
+	 * This build against the recorded one. Every canvas must match, and each
+	 * own-source control must differ on its chart: M4's on the decimating line,
+	 * parallel coordinates' on its plot. Both run in one control draw; the other
+	 * canvases are not expected to move under it, since neither flag reaches them.
 	 */
 	async function compareBaseline() {
 		running = true;
 		verdict = null;
 		baselineRows = [];
+		diffs = [];
 		try {
 			const stored = await withStore('readonly', (store) => store.get(KEY));
 			if (!stored)
@@ -345,28 +450,36 @@
 			const { shots: control } = await drawWith('immediate', {
 				allowBlank: true,
 				minMs: ms,
-				m4Swap: true
+				m4Swap: true,
+				parallelReverse: true
 			});
-			const charts = canvases().map(({ chart }) => chart);
+			const list = canvases();
+			const charts = list.map(({ chart }) => chart);
 			if (charts.join('|') !== stored.charts.join('|'))
 				throw new Error('The charts on the page are not the ones the baseline recorded.');
 
-			baselineRows = charts.map((chart, i) => ({
+			baselineRows = list.map(({ chart, control: kind }, i) => ({
 				chart,
-				m4: chart.includes('M4'),
+				kind,
 				now: differing(stored.shots[i], now[i]),
 				control: differing(stored.shots[i], control[i])
 			}));
 
 			const mismatched = baselineRows.filter((r) => r.now !== 0).map((r) => r.chart);
-			const m4Rows = baselineRows.filter((r) => r.m4);
-			const controlBlind = m4Rows.filter((r) => r.control === 0).map((r) => r.chart);
+			showDiffs(['baseline', 'this build'], stored.shots, now, list, mismatched);
+			const missing = ['m4', 'parallel'].filter(
+				(kind) => !baselineRows.some((r) => r.kind === kind)
+			);
+			const controlBlind = baselineRows
+				.filter((r) => r.kind !== 'chart' && r.control === 0)
+				.map((r) => r.chart);
 
-			if (m4Rows.length === 0) verdict = { ok: false, text: 'No M4 chart on the page.' };
+			if (missing.length)
+				verdict = { ok: false, text: `No chart on the page for: ${missing.join(', ')}.` };
 			else if (controlBlind.length)
 				verdict = {
 					ok: false,
-					text: `The M4 control did not differ on: ${controlBlind.join(', ')}. The comparison cannot see a wrong scale reaching the binning.`
+					text: `The control did not differ on: ${controlBlind.join(', ')}. The comparison cannot see a wrong scale reaching it.`
 				};
 			else if (mismatched.length)
 				verdict = {
@@ -376,7 +489,7 @@
 			else
 				verdict = {
 					ok: true,
-					text: `Identical to the baseline on all ${charts.length} canvases, and the M4 control differed.`
+					text: `Identical to the baseline on all ${charts.length} canvases, and both own-source controls differed.`
 				};
 		} catch (error) {
 			verdict = { ok: false, text: String(error?.message ?? error) };
@@ -401,14 +514,15 @@
 	</ul>
 	<p>
 		Covers: continuous × continuous, a sorted band x, a band y, log and symlog, a line, an area with
-		auto-dots (which reads the raw params in mark code), a facet grid sharing scales across cells,
-		and a decimating M4 line. Keep the tab in front while it runs, since a hidden tab stops
-		rendering.
+		auto-dots (which reads the raw params in mark code), a facet grid sharing scales across cells, a
+		decimating M4 line, and parallel coordinates (its own scale per axis, so the x/y swap cannot
+		reach it). Keep the tab in front while it runs, since a hidden tab stops rendering.
 	</p>
 	<p>
-		<strong>Across builds, for M4:</strong> record a baseline on the commit before a change, then
-		compare on the commit after. Every canvas must match, and binning the M4 line by its y scale
-		(the control) must change it.
+		<strong>Across builds, for M4 and parallel coordinates:</strong> record a baseline on the commit
+		before a change, then compare on the commit after. Every canvas must match, and each one's own
+		control must change it: binning the M4 line by its y scale, and giving each parallel axis
+		another axis's scale.
 		{#if baselineInfo}
 			Stored baseline: {baselineInfo.count} canvases, recorded {baselineInfo.recordedAt}.
 		{:else}
@@ -444,7 +558,9 @@
 					<tr>
 						<td>{row.chart}</td>
 						<td class:bad={row.immediate !== 0}>{row.immediate}</td>
-						<td class:bad={row.swapped === 0}>{row.swapped}</td>
+						<td class:bad={row.readsChartScales && row.swapped === 0}
+							>{row.swapped}{row.readsChartScales ? '' : ' (reads no chart scale)'}</td
+						>
 						<td>{row.pixels}{row.blank ? ' (blank)' : ''}</td>
 					</tr>
 				{/each}
@@ -458,7 +574,7 @@
 				<tr>
 					<th>chart</th>
 					<th>this build vs baseline</th>
-					<th>M4 control vs baseline</th>
+					<th>own-source controls vs baseline</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -466,12 +582,23 @@
 					<tr>
 						<td>{row.chart}</td>
 						<td class:bad={row.now !== 0}>{row.now}</td>
-						<td class:bad={row.m4 && row.control === 0}>{row.control}</td>
+						<td class:bad={row.kind !== 'chart' && row.control === 0}>{row.control}</td>
 					</tr>
 				{/each}
 			</tbody>
 		</table>
 	{/if}
+
+	{#each diffs as d (d.chart)}
+		<figure class="diff">
+			<img src={d.url} alt="Where {d.labels[0]} and {d.labels[1]} differ on {d.chart}" />
+			<figcaption>
+				<strong>{d.chart}</strong>: {d.n} px differ, in {d.box}.
+				<span class="a">red</span>: ink only in {d.labels[0]};
+				<span class="b">blue</span>: ink only in {d.labels[1]}; purple: both, different colour.
+			</figcaption>
+		</figure>
+	{/each}
 
 	{#if loadError}
 		<p class="verdict">Failed to load data: {loadError}</p>
@@ -573,7 +700,7 @@
 									{#snippet canvasComponents()}
 										<LineMark
 											table="parity_series"
-											x="x"
+											x="step"
 											y="grows"
 											strokeWidth={2}
 											preferredYScaleType="log"
@@ -595,7 +722,7 @@
 									{#snippet canvasComponents()}
 										<AreaMarkY
 											table="parity_series"
-											x="x"
+											x="step"
 											y="wave"
 											fillOpacity={0.4}
 											dotRadius={-3}
@@ -607,7 +734,7 @@
 					</div>
 				</section>
 
-				<section data-chart="line, M4 decimating">
+				<section data-chart="line, M4 decimating" data-control="m4">
 					<h2>Line, M4 decimating (200k points, 3 series)</h2>
 					<div class="chart">
 						<ChartContainer>
@@ -622,6 +749,31 @@
 											stroke="series"
 											strokeWidth={1}
 											lod={{ decimate: true, dots: false }}
+										/>
+									{/snippet}
+								</WebGPUCanvas>
+							{/snippet}
+						</ChartContainer>
+					</div>
+				</section>
+
+				<section
+					data-chart="parallel coordinates"
+					data-control="parallel"
+					data-reads-chart-scales="false"
+				>
+					<h2>Parallel coordinates (4 axes, a scale each)</h2>
+					<div class="chart">
+						<ChartContainer clipPadding={30}>
+							{#snippet background()}<Frame /><ParallelAxes />{/snippet}
+							{#snippet canvas()}
+								<WebGPUCanvas>
+									{#snippet canvasComponents()}
+										<ParallelCoordinatesMark
+											table="penguins"
+											columns={['bill_length', 'bill_depth', 'flipper_length', 'body_mass']}
+											stroke="species"
+											opacity={0.5}
 										/>
 									{/snippet}
 								</WebGPUCanvas>
@@ -666,6 +818,16 @@
 	}
 	.chart {
 		height: 240px;
+	}
+	.diff img {
+		max-width: 100%;
+		border: 1px solid #ccc;
+	}
+	.diff .a {
+		color: rgb(220, 40, 40);
+	}
+	.diff .b {
+		color: rgb(40, 40, 220);
 	}
 	.wide {
 		grid-column: 1 / -1;
