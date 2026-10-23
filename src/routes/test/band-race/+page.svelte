@@ -296,23 +296,23 @@
 	//
 	// The CPU half of a band axis can be entirely correct — right domain, right
 	// slot table, right ticks — while a mark renders through a DIFFERENT
-	// scale's params, because the shader reads scaleParams[xScaleIndex] and that
-	// index belongs to the chart, not to the scale the axis drew. Nothing else
-	// on this page can see that mismatch.
+	// scale's params, because the shader draws through the scales its CHART is
+	// mapped to, not the scale the axis drew. Nothing else on this page can see
+	// that mismatch.
 	function chartScales() {
 		const byId = new Map(allScales().map((s) => [s.scale.id, s.sourceField ?? s.name]));
 		return gpuCoordinator.debugChartScales().map((c) => ({
 			chart: c.chartId,
 			marks: c.layers,
-			x: `${byId.get(c.xScaleId) ?? c.xScaleId} @${c.xScaleIndex}`,
-			y: `${byId.get(c.yScaleId) ?? c.yScaleId} @${c.yScaleIndex}`
+			x: byId.get(c.xScaleId) ?? c.xScaleId,
+			y: byId.get(c.yScaleId) ?? c.yScaleId
 		}));
 	}
 
 	if (typeof window !== 'undefined') {
 		window.bandOrder = bandOrder;
 		window.chartScales = chartScales;
-		window.scaleParams = () => gpuCoordinator.debugScaleParams();
+		window.scaleParams = () => gpuCoordinator.debugScales();
 		window.allScales = allScales;
 		window.lastSQL = lastSQL;
 		window.scaleRegistry = scaleRegistry;

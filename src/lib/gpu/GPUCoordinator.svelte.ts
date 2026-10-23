@@ -60,14 +60,6 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
-	/**
-	 * What this chart's frame uniform was last written against: the scale
-	 * topology at the time, and the two scale ids. Compared per frame; see
-	 * #refreshStaleFrameUniforms.
-	 */
-	_uniformTopology: number;
-	_uniformXScaleId: string | null;
-	_uniformYScaleId: string | null;
 }
 
 interface LayerConfig {
@@ -147,11 +139,6 @@ interface ScaleBlockEntry extends ScaleBlock {
 	view: Float32Array;
 	/** What the buffer holds; NaN until the first upload. */
 	last: Float32Array;
-}
-
-interface ScaleArrayEntry {
-	instance: ScaleInstance;
-	index: number;
 }
 
 type ComputeWorkFn = (commandEncoder: GPUCommandEncoder) => void;
@@ -260,38 +247,6 @@ class NonNegativeRollingAverage {
 	}
 }
 
-/**
- * Manages mapping from scale IDs to SSBO indices.
- * Rebuilds indices when scale topology changes.
- */
-class ScaleIndexManager {
-	#scaleIds: string[] = [];
-	#scaleIdToIndex = new Map<string, number>();
-
-	rebuild(allCurrentScaleIds: Iterable<string>): number {
-		this.#scaleIds = [...allCurrentScaleIds];
-		this.#scaleIdToIndex.clear();
-
-		this.#scaleIds.forEach((scaleId, index) => {
-			this.#scaleIdToIndex.set(scaleId, index);
-		});
-
-		return this.#scaleIds.length;
-	}
-
-	getIndex(scaleId: string): number | undefined {
-		return this.#scaleIdToIndex.get(scaleId);
-	}
-
-	getCount(): number {
-		return this.#scaleIds.length;
-	}
-
-	getAllScaleIds(): string[] {
-		return [...this.#scaleIds];
-	}
-}
-
 // =============================================================================
 // GPU COORDINATOR
 // =============================================================================
@@ -304,7 +259,7 @@ class ScaleIndexManager {
  * - Shared pipeline and resource caching with ref-counting
  * - Registry pattern for tracking renderer → resource ownership
  * - Animation loop with fixed-timestep physics
- * - Scale SSBO management for GPU-based domain transforms
+ * - Scale params into shaders: a chart's as immediates, per pass
  * - Multi-chart render coordination
  */
 export class GPUCoordinator {
@@ -403,25 +358,15 @@ export class GPUCoordinator {
 	#scaleBlocks = new Map<string, Set<ScaleBlockEntry>>(); // chartId -> its marks' scale blocks
 
 	// =========================================================================
-	// SCALE SSBO SYSTEM
+	// SHARED SCALE RESOURCES (@group(2))
 	// =========================================================================
-	#scaleIndexManager = new ScaleIndexManager();
 	/**
-	 * Bumped whenever scale indices are reassigned.
-	 *
-	 * A chart's frame uniform carries the INDEX of its scales, not their ids,
-	 * so a rebuild can move a chart's scale without touching the chart. One
-	 * integer compare per chart per frame is what makes noticing that free.
+	 * What every chart and mark shares: colour configs, ramps and palettes,
+	 * size configs, and the resolved band slot table. Each buffer is created
+	 * once and written on change, so one bind group serves every pass.
 	 */
-	#scaleTopology = 0;
-	#maxScaleSlots = 256;
-	#SSBO_SLOT_COUNT = 16;
-
-	#globalScaleLayout: GPUBindGroupLayout | null = null;
-	#globalScaleSSBO: GPUBuffer | null = null;
-	#slotByteSize: number | null = null;
-	#globalScaleBindGroups: GPUBindGroup[] = [];
-	#cpuScaleBuffer: Float32Array | null = null; // Reusable CPU buffer for scale data
+	#scaleResourcesLayout: GPUBindGroupLayout | null = null;
+	#scaleResourcesBindGroup: GPUBindGroup | null = null;
 	/**
 	 * Band identity id -> display slot, shared by every band and point scale at
 	 * a per-scale base carried in that scale's p4. This is the `from` half.
@@ -459,7 +404,8 @@ export class GPUCoordinator {
 	#slotResolveImmediatesView = new DataView(this.#slotResolveImmediates);
 
 	#scaleIdToInstance = new Map<string, ScaleInstance>(); // scaleId -> scale instance
-	#scaleArray: ScaleArrayEntry[] = []; // Flat array for hot loop: [{instance, index}]
+	/** The same scales as a flat array, for loops that run every frame. */
+	#scales: ScaleInstance[] = [];
 
 	#frameId = 0;
 
@@ -543,7 +489,6 @@ export class GPUCoordinator {
 
 	constructor(config: GPUCoordinatorConfig = {}) {
 		this.#msaaSampleCount = config.msaaSampleCount ?? 4;
-		this.#scaleIndexManager = new ScaleIndexManager();
 
 		// Create ready promise (resolved when WebGPU initialization completes)
 		this.#readyPromise = new Promise((resolve) => {
@@ -662,53 +607,18 @@ export class GPUCoordinator {
 	}
 
 	// =========================================================================
-	// SCALE SSBO SYSTEM
+	// SHARED SCALE RESOURCES
 	// =========================================================================
 
-	// async #initializeScaleBindGroupLayouts() {
-	// 	this.#globalScaleLayout = this.#device.createBindGroupLayout({
-	// 		label: 'global-scale-ssbo-layout',
-	// 		entries: [
-	// 			{
-	// 				binding: 0,
-	// 				visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-	// 				buffer: { type: 'read-only-storage' }
-	// 			}
-	// 		]
-	// 	});
-
-	// 	this.#createGlobalScaleSSBO();
-
-	// 	// Pre-create bind groups for each slot
-	// 	for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-	// 		const slotOffset = slot * this.#slotByteSize;
-	// 		this.#globalScaleBindGroups[slot] = this.#device.createBindGroup({
-	// 			label: `global-scale-bind-group-slot-${slot}`,
-	// 			layout: this.#globalScaleLayout,
-	// 			entries: [
-	// 				{
-	// 					binding: 0,
-	// 					resource: {
-	// 						buffer: this.#globalScaleSSBO,
-	// 						offset: slotOffset,
-	// 						size: this.#slotByteSize
-	// 					}
-	// 				}
-	// 			]
-	// 		});
-	// 	}
-	// }
-
+	/**
+	 * Binding 0 was the global scale table; a chart's scales now arrive as
+	 * immediates, M4's and parallel coordinates' through their own. The rest
+	 * keep their numbers, so no shader that reads them changed.
+	 */
 	async #initializeScaleBindGroupLayouts(): Promise<void> {
-		this.#globalScaleLayout = this.#device!.createBindGroupLayout({
-			label: 'global-scale-ssbo-layout',
+		this.#scaleResourcesLayout = this.#device!.createBindGroupLayout({
+			label: 'scale-resources-layout',
 			entries: [
-				{
-					// Binding 0: Coordinate scale params (vertex + fragment + compute for M4 decimation)
-					binding: 0,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
-					buffer: { type: 'read-only-storage' }
-				},
 				{
 					// Binding 1: Color scale configs (fragment only)
 					binding: 1,
@@ -736,9 +646,6 @@ export class GPUCoordinator {
 					// at the default 8 and has to fit a `from` and a `to` per animated
 					// value channel.
 					//
-					// Still VERTEX-only, so this remains invisible to the compute
-					// pipelines that share this layout (M4Decimator) and continues not
-					// to count against their storage budget.
 					binding: 4,
 					visibility: GPUShaderStage.VERTEX,
 					buffer: { type: 'uniform' }
@@ -768,81 +675,22 @@ export class GPUCoordinator {
 			]
 		});
 
-		this.#createGlobalScaleSSBO();
-
 		// Create color scale buffers (must happen before bind group creation)
 		this.#createColorScaleBuffers();
 		this.#createIdentitySlotBuffer();
 
-		// Pre-create bind groups for each slot
-		for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-			const slotOffset = slot * this.#slotByteSize!;
-			this.#globalScaleBindGroups[slot] = this.#device!.createBindGroup({
-				label: `global-scale-bind-group-slot-${slot}`,
-				layout: this.#globalScaleLayout,
-				entries: [
-					{
-						// Coordinate scales - uses slot offset
-						binding: 0,
-						resource: {
-							buffer: this.#globalScaleSSBO!,
-							offset: slotOffset,
-							size: this.#slotByteSize!
-						}
-					},
-					{
-						// Color configs - full buffer, no offset
-						binding: 1,
-						resource: {
-							buffer: this.#colorConfigBuffer!
-						}
-					},
-					{
-						// Color ramps - full buffer, no offset
-						binding: 2,
-						resource: {
-							buffer: this.#colorRampBuffer!
-						}
-					},
-					{
-						// Ordinal palettes - full buffer, no offset
-						binding: 3,
-						resource: {
-							buffer: this.#colorPaletteBuffer!
-						}
-					},
-					{
-						// Size configs - full buffer, no offset
-						binding: 4,
-						resource: {
-							buffer: this.#sizeConfigBuffer!
-						}
-					},
-					{
-						// The resolved slot table, written by the compute pass.
-						binding: 5,
-						resource: {
-							buffer: this.#identitySlotResolved!
-						}
-					}
-				]
-			});
-		}
-	}
-
-	#createGlobalScaleSSBO(): void {
-		const scaleParamSize = 16; // 4 floats * 4 bytes
-		this.#slotByteSize = this.#maxScaleSlots * scaleParamSize;
-		const totalSSBOSize = this.#slotByteSize * this.#SSBO_SLOT_COUNT;
-
-		this.#globalScaleSSBO = this.#device!.createBuffer({
-			size: totalSSBOSize,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-			label: 'global-scale-ssbo-ring'
+		this.#scaleResourcesBindGroup = this.#device!.createBindGroup({
+			label: 'scale-resources',
+			layout: this.#scaleResourcesLayout,
+			entries: [
+				{ binding: 1, resource: { buffer: this.#colorConfigBuffer! } },
+				{ binding: 2, resource: { buffer: this.#colorRampBuffer! } },
+				{ binding: 3, resource: { buffer: this.#colorPaletteBuffer! } },
+				{ binding: 4, resource: { buffer: this.#sizeConfigBuffer! } },
+				// The resolved slot table, written by the compute pass.
+				{ binding: 5, resource: { buffer: this.#identitySlotResolved! } }
+			]
 		});
-
-		// CPU buffer for building scale data (reused each frame)
-		this.#cpuScaleBuffer = new Float32Array(this.#slotByteSize / 4);
 	}
 
 	#createColorScaleBuffers(): void {
@@ -964,7 +812,7 @@ export class GPUCoordinator {
 
 	/**
 	 * Pack every band/point scale's slot table into the shared buffer and assign
-	 * each one an offset, which #fillAllScales then writes into its p4.
+	 * each one an offset, which #writeScaleParam then writes into its p4.
 	 *
 	 * Uploads only the range that moved: slot tables change on reorder, not per
 	 * frame, so a static chart costs no writeBuffer here, and neither does an
@@ -987,8 +835,8 @@ export class GPUCoordinator {
 		scales.length = 0;
 		const consumers = this.#slotBaseConsumers;
 		consumers.length = 0;
-		for (let i = 0; i < this.#scaleArray.length; i++) {
-			const scale = this.#scaleArray[i].instance as unknown as {
+		for (let i = 0; i < this.#scales.length; i++) {
+			const scale = this.#scales[i] as unknown as {
 				id: string;
 				slots?: SlotSource;
 			};
@@ -1027,7 +875,7 @@ export class GPUCoordinator {
 		// owned by neither.
 		//
 		// Walks the parallel array captured during collection rather than
-		// searching #scaleArray per entry: this runs every frame.
+		// searching #scales per entry: this runs every frame.
 		for (let i = 0; i < consumers.length; i++) {
 			const scale = consumers[i];
 			if (!scale) continue;
@@ -1058,59 +906,26 @@ export class GPUCoordinator {
 	}
 
 	/**
-	 * Rewrite the frame uniform of any chart whose inputs have moved under it.
+	 * Rewrite the frame uniform of any chart whose facet cell now shows a
+	 * different id.
 	 *
-	 * The uniform holds derived state — a scale INDEX, a facet id — and both
-	 * change without anything touching the chart. `updateChartFrameUniforms` is
-	 * otherwise event-driven, so keeping it current means every writer of an
-	 * input remembering to call it, and the writers do not: a facet reorder
-	 * never did, and `setChartScaleMapping` did not either. The second one cost
-	 * a chart that rendered every mark through ANOTHER chart's scale — right
-	 * scale, right domain, right slot table, right axis, wrong pixels — because
-	 * its uniform kept the index it was given before its scales resolved, which
-	 * `updateChartFrameUniforms` reads as 0, the first scale on the page.
-	 *
-	 * Reconciled rather than pushed, which is what `#fillAllScales` already does
-	 * for scale params two lines below. Nothing has to remember, because there
-	 * is nothing to remember: the loop is the subscription and these integers
-	 * are the dirty bit.
-	 *
-	 * The steady state is three compares per chart and no lookups; a write
-	 * happens on a reorder or a remount, never on a frame. What counts as stale,
-	 * and why a rebuild counts even when the ids have not moved, is
-	 * `frameUniformIsStale`.
-	 *
-	 * This disappears with the scale index itself: the immediates work writes a
-	 * chart's resolved scale params straight into the pass, and an index that
-	 * does not exist cannot be stale.
+	 * The uniform carries one piece of derived state, the facet id at this cell,
+	 * and a facet reorder moves it without touching the chart — nothing
+	 * event-driven fires on it. So it is reconciled here instead: one compare per
+	 * faceted chart per frame, and a write only on a reorder or a remount. The
+	 * rule is `frameUniformIsStale`.
 	 */
 	#refreshStaleFrameUniforms(): void {
 		for (const chart of this.#registeredCharts.values()) {
-			if (!frameUniformIsStale(chart, this.#scaleTopology)) continue;
-
-			// Recorded before the write, not after: updateChartFrameUniforms defers
-			// when the context is not configured yet, and re-running it on every
-			// frame until then would be a write per frame for a chart that is not
-			// even drawing. The pending queue replays it once it can.
-			chart._uniformTopology = this.#scaleTopology;
-			chart._uniformXScaleId = chart.xScaleId;
-			chart._uniformYScaleId = chart.yScaleId;
-			this.updateChartFrameUniforms(chart.chartId);
-		}
-	}
-
-	#fillAllScales(view: Float32Array): void {
-		const len = this.#scaleArray.length;
-		for (let i = 0; i < len; i++) {
-			const item = this.#scaleArray[i];
-			this.#writeScaleParam(item.instance, view, item.index << 2);
+			if (frameUniformIsStale(chart)) this.updateChartFrameUniforms(chart.chartId);
 		}
 	}
 
 	/**
-	 * One scale's four floats, as every shader reads them: a row of the global
-	 * table, or one half of a chart's immediates. Written in one place so the
-	 * two cannot disagree about what a scale looks like to the GPU.
+	 * One scale's four floats, as every shader reads them: half of a chart's
+	 * immediates, M4's x scale, or one axis of a parallel coordinates block.
+	 * Written in one place so they cannot disagree about what a scale looks
+	 * like to the GPU.
 	 */
 	#writeScaleParam(scale: ScaleInstance, view: Float32Array, off: number): void {
 		if (isCategoricalScale(scale.type)) {
@@ -1416,8 +1231,6 @@ export class GPUCoordinator {
 	// =========================================================================
 
 	#coordinatedRender(chartsNeedingRender: ChartConfig[]): void {
-		const slot = this.#frameId % this.#SSBO_SLOT_COUNT;
-
 		// PHASE 1: EARLY TEXTURE ACQUISITION
 		const numCharts = chartsNeedingRender.length;
 		const views = this.#acquiredViews;
@@ -1434,24 +1247,13 @@ export class GPUCoordinator {
 		// PHASE 2: CPU WORK (Scale buffer updates)
 		this.#updateIdentitySlots();
 		this.#refreshStaleFrameUniforms();
-		this.#fillAllScales(this.#cpuScaleBuffer!);
 		for (let i = 0; i < numCharts; i++) {
 			const blocks = this.#scaleBlocks.get(chartsNeedingRender[i].chartId);
 			if (blocks) for (const block of blocks) this.#refreshScaleBlock(block);
 		}
 
-		const dstOffset = slot * this.#slotByteSize!;
-		this.#device!.queue.writeBuffer(
-			this.#globalScaleSSBO!,
-			dstOffset,
-			this.#cpuScaleBuffer! as Float32Array<ArrayBuffer>,
-			0,
-			this.#cpuScaleBuffer!.length
-		);
-
 		// PHASE 3: GPU COMMAND ENCODING
 		const commandEncoder = this.#device!.createCommandEncoder(this.#encoderDescriptor);
-		const currentScaleBindGroup = this.#globalScaleBindGroups[slot];
 
 		// PHASE 3a: PRE-RENDER COMPUTE
 		// The slot resolve goes first: registered compute work may read a band
@@ -1490,7 +1292,7 @@ export class GPUCoordinator {
 
 			if (chartConfig.perFrameBindGroup) {
 				passEncoder.setBindGroup(0, chartConfig.perFrameBindGroup);
-				passEncoder.setBindGroup(2, currentScaleBindGroup);
+				passEncoder.setBindGroup(2, this.#scaleResourcesBindGroup!);
 
 				const plan = chartConfig.renderPlan;
 				const planLen = plan.length;
@@ -1578,13 +1380,10 @@ export class GPUCoordinator {
 		}
 		if (!rendererId) throw new Error('acquirePipeline requires a rendererId');
 
-		// Generate stable resource key (includes scale topology and renderer definition)
+		// Generate stable resource key (includes scale types and renderer definition)
 		const topologySuffix = `${scaleTypes.x}-${scaleTypes.y}`;
 		const defSuffix = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
-		// The source is fixed in production; a parity check switches it, and a
-		// pipeline compiled against one must not be handed out for the other.
-		const sourceSuffix = `-${scaleTemplateSystem.chartScaleSource}`;
-		const resourceKey = `${markType}-${topologySuffix}${defSuffix}${sourceSuffix}`;
+		const resourceKey = `${markType}-${topologySuffix}${defSuffix}`;
 
 		// Prepare local registry for this renderer
 		if (!this.#rendererRegistry.has(rendererId)) {
@@ -1643,7 +1442,7 @@ export class GPUCoordinator {
 			pipeline = await this.#getOrCreateSharedPipeline(resourceKey, async () => {
 				const pipelineLayout = this.#device!.createPipelineLayout({
 					label: `${resourceKey}-pipeline-layout`,
-					bindGroupLayouts: [frameLayout, dataLayout, this.#globalScaleLayout!],
+					bindGroupLayouts: [frameLayout, dataLayout, this.#scaleResourcesLayout!],
 					// The same for every render pipeline, so it adds no cache
 					// permutations — and it has to be: a draw needs every declared
 					// byte set, and the pass sets exactly this many.
@@ -1828,9 +1627,7 @@ export class GPUCoordinator {
 		if (!usageMap || typeof usageMap[Symbol.iterator] !== 'function') return;
 
 		// Clear and rebuild
-		const ids: string[] = [];
 		this.#scaleIdToInstance.clear();
-		this.#scaleArray = [];
 
 		for (const [scaleInstance] of usageMap) {
 			// Only positional scales (Linear, Band, Time) carry an id.
@@ -1840,104 +1637,10 @@ export class GPUCoordinator {
 			// The redraw list is NOT rebuilt here any more. It belongs to the
 			// registry, derived from the same usage map this reads, and a scale
 			// asks for it. Copying it from a second owner is how it went stale.
-			ids.push(scale.id);
 			this.#scaleIdToInstance.set(scale.id, scale);
 		}
 
-		const count = this.#scaleIndexManager.rebuild(ids);
-		this.#scaleTopology++;
-
-		// Build flat array for hot loop
-		for (const scale of this.#scaleIdToInstance.values()) {
-			const idx = this.#scaleIndexManager.getIndex(scale.id);
-			if (idx !== undefined) {
-				this.#scaleArray.push({ instance: scale, index: idx });
-			}
-		}
-
-		// Grow SSBO if needed
-		if (count > this.#maxScaleSlots) {
-			let newSlots = this.#maxScaleSlots;
-			while (newSlots < count) newSlots *= 2;
-			this.#maxScaleSlots = newSlots;
-			this.#recreateGlobalScalesSSBOAndBindGroups();
-		}
-
-		// Update per-chart uniforms (scale indices may have changed)
-		for (const [chartId] of this.#registeredCharts) {
-			this.updateChartFrameUniforms(chartId);
-		}
-	}
-
-	#recreateGlobalScalesSSBOAndBindGroups(): void {
-		console.log('Resizing Global Scale SSBO...');
-
-		const oldSSBO = this.#globalScaleSSBO;
-
-		const scaleParamSize = 16;
-		this.#slotByteSize = this.#maxScaleSlots * scaleParamSize;
-		const totalSSBOSize = this.#slotByteSize * this.#SSBO_SLOT_COUNT;
-
-		try {
-			const newSSBO = this.#device!.createBuffer({
-				size: totalSSBOSize,
-				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-				label: `global-scale-ssbo-ring-v${this.#frameId}`
-			});
-
-			const newBindGroups: GPUBindGroup[] = [];
-			for (let slot = 0; slot < this.#SSBO_SLOT_COUNT; slot++) {
-				const offset = slot * this.#slotByteSize;
-				newBindGroups[slot] = this.#device!.createBindGroup({
-					label: `global-scale-bind-group-slot-${slot}`,
-					layout: this.#globalScaleLayout!,
-					entries: [
-						{
-							binding: 0,
-							resource: {
-								buffer: newSSBO,
-								offset,
-								size: this.#slotByteSize
-							}
-						},
-						{
-							binding: 1,
-							resource: { buffer: this.#colorConfigBuffer! }
-						},
-						{
-							binding: 2,
-							resource: { buffer: this.#colorRampBuffer! }
-						},
-						{
-							binding: 3,
-							resource: { buffer: this.#colorPaletteBuffer! }
-						},
-						{
-							binding: 4,
-							resource: { buffer: this.#sizeConfigBuffer! }
-						},
-						{
-							// Resolved slot table. Must be present here too — this
-							// path rebuilds the bind groups on SSBO growth, and a
-							// bind group missing an entry its layout declares is a
-							// validation error at draw time, not here.
-							binding: 5,
-							resource: { buffer: this.#identitySlotResolved! }
-						}
-					]
-				});
-			}
-
-			this.#globalScaleSSBO = newSSBO;
-			this.#globalScaleBindGroups = newBindGroups;
-			this.#cpuScaleBuffer = new Float32Array(this.#slotByteSize / 4);
-
-			if (oldSSBO) {
-				oldSSBO.destroy();
-			}
-		} catch (error) {
-			console.error('Failed to resize Scale SSBO. Keeping old buffer.', error);
-		}
+		this.#scales = [...this.#scaleIdToInstance.values()];
 	}
 
 	// =========================================================================
@@ -2061,7 +1764,7 @@ export class GPUCoordinator {
 	 * Join the loop.
 	 *
 	 * For a scale, prefer `addAnimatingScale`, which also makes sure the scale
-	 * has a parameter slot to be written into. Anything that is not a scale —
+	 * is registered, so its params can be found by id. Anything that is not a scale —
 	 * a mark driving its own data transition — has no such slot and wants this.
 	 */
 	addAnimatedSource(source: AnimatedSource): void {
@@ -2085,22 +1788,15 @@ export class GPUCoordinator {
 	}
 
 	addAnimatingScale(scale: ScaleInstance): void {
-		// console.log(`=== addAnimatingScale ${scale.name} (${scale.id}) ===`);
-		let idx = this.#scaleIndexManager.getIndex(scale.id);
-		// console.log('Initial index lookup:', idx);
-
-		if (idx === undefined) {
-			// console.log('Index undefined, calling registerScale...');
+		if (!this.#scaleIdToInstance.has(scale.id)) {
 			this.registerScale(scale.id, 'linear');
-			idx = this.#scaleIndexManager.getIndex(scale.id);
-			// console.log('Index after registerScale:', idx);
-			if (idx === undefined) {
+			if (!this.#scaleIdToInstance.has(scale.id)) {
 				console.error(`Scale ${scale.id} still not registered after auto-register`);
 				return;
 			}
 		}
 
-		// The slot exists; the rest is just joining the loop.
+		// Registered; the rest is just joining the loop.
 		this.addAnimatedSource(scale);
 	}
 
@@ -2169,11 +1865,6 @@ export class GPUCoordinator {
 			facetIndex: config.facetIndex ?? 0,
 			facetScale: config.facetScale ?? null,
 			_facetVersion: -1,
-			// -1 and null so the first reconcile always fires: a chart registered
-			// before its scales resolve has to be picked up by it.
-			_uniformTopology: -1,
-			_uniformXScaleId: null,
-			_uniformYScaleId: null,
 			visible: true,
 			context: canvas.getContext('webgpu')!,
 			contextConfigured: false,
@@ -2483,20 +2174,6 @@ export class GPUCoordinator {
 		const rangeMinY = 0; // Top of chart (screen coords)
 		const rangeMaxY = canvas.clientHeight * dpr;
 
-		// The fallbacks are a GUESS — whichever scale registered first and second
-		// — and a shader cannot tell a guess from an answer. That is how a chart
-		// once rendered every mark through another chart's band layout and slot
-		// table while its own scale, domain, ticks and axis were all correct.
-		//
-		// No shader reads these in production any more: a chart's scales arrive
-		// as immediates, looked up by id per pass, and a chart without both draws
-		// nothing instead (#writeChartScales). Parallel coordinates computes its
-		// own indices and never read this pair. The one reader left is the parity
-		// check's `table` source, which is the old path kept to compare against;
-		// the field goes with the global table.
-		const xScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.xScaleId!) ?? 0;
-		const yScaleIndex = this.#scaleIndexManager.getIndex(chartConfig.yScaleId!) ?? 1;
-
 		const buf = new ArrayBuffer(64);
 		const f32 = new Float32Array(buf);
 		const u32 = new Uint32Array(buf);
@@ -2509,8 +2186,7 @@ export class GPUCoordinator {
 		f32[5] = rangeMaxY;
 		f32[6] = dpr;
 		// f32[7] = padding
-		u32[8] = xScaleIndex >>> 0;
-		u32[9] = yScaleIndex >>> 0;
+		// u32[8], u32[9] = padding (were the chart's scale indices)
 		// The facet value this cell renders. The vertex shaders compare their
 		// __facet channel against this, and that channel now carries a dim id
 		// rather than a cell index — so this has to be the id displayed at this
@@ -2532,13 +2208,6 @@ export class GPUCoordinator {
 		f32[15] = nullColor[3]; // A
 
 		this.#device!.queue.writeBuffer(chartConfig.frameUniformsBuffer!, 0, buf);
-
-		// console.log(`📏 Frame uniforms for chart ${chartId}:`, {
-		// 	rangeMinY: rangeMinY,
-		// 	rangeMaxY: rangeMaxY,
-		// 	rangeSize: rangeMaxY - rangeMinY,
-		// 	yScaleIndex: yScaleIndex
-		// });
 	}
 
 	#processPendingFrameUpdates(chartId: string): void {
@@ -2607,7 +2276,7 @@ export class GPUCoordinator {
 	}
 
 	/**
-	 * Which scale each chart resolves its axes through, and its SSBO index.
+	 * Which scale each chart resolves its axes through.
 	 *
 	 * A mark's shader reads its chart's scales as immediates, written per pass
 	 * from these ids, so a chart pointing at the wrong scale renders through another chart's band layout
@@ -2622,8 +2291,6 @@ export class GPUCoordinator {
 				chartId: chart.chartId,
 				xScaleId: chart.xScaleId,
 				yScaleId: chart.yScaleId,
-				xScaleIndex: this.#scaleIndexManager.getIndex(chart.xScaleId!) ?? null,
-				yScaleIndex: this.#scaleIndexManager.getIndex(chart.yScaleId!) ?? null,
 				layers: [...chart.layers.values()].map((l) => l.markType).join(', ')
 			});
 		}
@@ -2631,17 +2298,17 @@ export class GPUCoordinator {
 	}
 
 	/**
-	 * What is actually in `scaleParams`, slot by slot, as the shader reads it.
+	 * Every scale the coordinator can write params for, as it sees them.
 	 *
 	 * The registry's inventory is not this list. The coordinator holds scale
 	 * INSTANCES, and one the registry has dropped — destroyed on a refcount
-	 * reaching zero while a component still held it — stays here and keeps being
-	 * written every frame. So a chart can point at an index whose contents
-	 * belong to an object no inventory of the registry can show.
+	 * reaching zero while a component still held it — stays here until the next
+	 * rebuild. So a chart can resolve an id to an object no inventory of the
+	 * registry can show.
 	 */
-	debugScaleParams(): Array<Record<string, unknown>> {
-		return this.#scaleArray.map((entry) => {
-			const scale = entry.instance as unknown as {
+	debugScales(): Array<Record<string, unknown>> {
+		return this.#scales.map((instance) => {
+			const scale = instance as unknown as {
 				id: string;
 				name?: string;
 				type?: string;
@@ -2651,7 +2318,6 @@ export class GPUCoordinator {
 				slots?: SlotSource;
 			};
 			return {
-				index: entry.index,
 				id: scale.id,
 				field: scale.sourceField ?? scale.name,
 				type: scale.type,
@@ -3004,9 +2670,8 @@ export class GPUCoordinator {
 		// }
 		// this.#msaaCache.clear();
 
-		// Cleanup SSBO
-		this.#globalScaleSSBO?.destroy();
-		this.#globalScaleLayout = null;
+		this.#scaleResourcesLayout = null;
+		this.#scaleResourcesBindGroup = null;
 
 		this.#destroyColorScaleBuffers();
 
