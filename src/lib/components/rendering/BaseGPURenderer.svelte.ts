@@ -6,6 +6,8 @@ export interface RendererOptions {
 	zIndex?: number;
 	xScaleType?: string;
 	yScaleType?: string;
+	/** False for a mark whose shader never reads the chart's x and y scales. */
+	readsChartScales?: boolean;
 }
 
 export interface InitConfig {
@@ -62,6 +64,7 @@ export class BaseGPURenderer {
 	#bindGroupUpdateScheduled = false;
 
 	#zIndex: number;
+	#readsChartScales: boolean;
 	#xScaleType: string;
 	#yScaleType: string;
 	/** The last config passed to `initialize`, so it can be re-run. */
@@ -106,6 +109,7 @@ export class BaseGPURenderer {
 		this.#chartContext = chartContext;
 		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
 		this.#zIndex = options.zIndex || 0;
+		this.#readsChartScales = options.readsChartScales ?? true;
 		this.#xScaleType = options.xScaleType || 'linear';
 		this.#yScaleType = options.yScaleType || 'linear';
 	}
@@ -494,7 +498,8 @@ export class BaseGPURenderer {
 			markType: this.#markType,
 			renderer: this,
 			componentId: this.#rendererId,
-			zIndex: this.#zIndex
+			zIndex: this.#zIndex,
+			readsChartScales: this.#readsChartScales
 		});
 		return this.#ownedResources.layerControl;
 	}
@@ -520,7 +525,8 @@ export class BaseGPURenderer {
 				markType: this.#markType,
 				renderer: this,
 				componentId: this.#rendererId,
-				zIndex: this.#zIndex
+				zIndex: this.#zIndex,
+				readsChartScales: this.#readsChartScales
 			});
 			this.#facetLayerControls.push({ chartId, control });
 			this.#facetChartIds.push(chartId);

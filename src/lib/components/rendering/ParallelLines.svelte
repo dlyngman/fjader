@@ -71,6 +71,8 @@
 		chartContext,
 		zIndex: 0,
 		yScaleType: 'linear',
+		// Each axis has its own scale, and the chart registers no y scale at all.
+		readsChartScales: false,
 		label: 'ParallelLines'
 	});
 	const renderer = $derived(host.renderer);

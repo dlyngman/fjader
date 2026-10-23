@@ -40,6 +40,12 @@ export interface RendererHostOptions {
 	 */
 	xScaleType?: string;
 	yScaleType?: string;
+	/**
+	 * False for a mark whose shader never reads the chart's x and y scales, so
+	 * it still draws in a chart missing one. ParallelLines, which scales each
+	 * axis itself in a chart that registers no y scale.
+	 */
+	readsChartScales?: boolean;
 	/** Named in the failure message; defaults to the mark type. */
 	label?: string;
 }
@@ -117,13 +123,21 @@ export class RendererHost {
 		}
 		if (!ctx.isInitialized()) return;
 
-		const { markType, gpuCoordinator, chartContext, zIndex, xScaleType, yScaleType } =
-			this.#options;
+		const {
+			markType,
+			gpuCoordinator,
+			chartContext,
+			zIndex,
+			xScaleType,
+			yScaleType,
+			readsChartScales
+		} = this.#options;
 		try {
 			const renderer = new BaseGPURenderer(markType, ctx, gpuCoordinator, chartContext, {
 				zIndex,
 				xScaleType,
-				yScaleType
+				yScaleType,
+				readsChartScales
 			});
 			// Published before `initialize` is awaited, as the copies did by
 			// assigning first: a component's draw callback closes over this, and
