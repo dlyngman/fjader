@@ -94,17 +94,52 @@ export class CrossfilterSelection {
 	}
 
 	/**
-	 * Compute the filter predicate for a mark, excluding clauses from specific sources.
-	 * Used at preagg table creation time to bake non-active-brush filters into the preagg table.
+	 * Whether a clause is baked into a mark's preagg table: every clause that
+	 * filters the mark, except the active brush, which the table bins instead.
 	 */
-	predicateExcluding(markId: string, excludeSourceIds: Set<string>): FilterExpr[] {
-		const result: FilterExpr[] = [];
+	#isBaked(sourceId: string, clause: Clause, markId: string, activeSourceId: string): boolean {
+		return sourceId !== activeSourceId && !clause.excludeMarkIds.has(markId) && !!clause.predicate;
+	}
+
+	/**
+	 * The clause objects a preagg table bakes in, in map insertion order.
+	 * Stored at build time so bakedClausesMatch() can compare by reference.
+	 */
+	bakedClauses(markId: string, activeSourceId: string): Clause[] {
+		const result: Clause[] = [];
 		for (const [sourceId, clause] of this.#clauses) {
-			if (excludeSourceIds.has(sourceId)) continue;
-			if (clause.excludeMarkIds.has(markId)) continue;
-			if (clause.predicate) result.push(clause.predicate);
+			if (this.#isBaked(sourceId, clause, markId, activeSourceId)) result.push(clause);
 		}
 		return result;
+	}
+
+	/**
+	 * The baked predicates sorted by source ID, so the same filters always
+	 * produce the same preagg SQL whatever order their clauses were added in.
+	 */
+	bakedPredicates(markId: string, activeSourceId: string): FilterExpr[] {
+		const entries: [string, FilterExpr][] = [];
+		for (const [sourceId, clause] of this.#clauses) {
+			if (this.#isBaked(sourceId, clause, markId, activeSourceId)) {
+				entries.push([sourceId, clause.predicate]);
+			}
+		}
+		entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+		return entries.map((e) => e[1]);
+	}
+
+	/**
+	 * Whether the clauses baked into a preagg table are still the ones in force.
+	 * Every filter change replaces its Clause object, so an unchanged filter
+	 * keeps its reference. Runs every brush frame, so it allocates nothing.
+	 */
+	bakedClausesMatch(markId: string, activeSourceId: string, then: Clause[]): boolean {
+		let i = 0;
+		for (const [sourceId, clause] of this.#clauses) {
+			if (!this.#isBaked(sourceId, clause, markId, activeSourceId)) continue;
+			if (i >= then.length || clause !== then[i++]) return false;
+		}
+		return i === then.length;
 	}
 
 	/** Number of active clauses. */

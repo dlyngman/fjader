@@ -170,7 +170,7 @@
 	function handlePointerEnter() {
 		const scale = getScale();
 		if (!scale || !columnRef) return;
-		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), [
+		queryEngine.activate(filterGroup, source, new Set(chart.config.entries.keys()), [
 			{
 				columnRef,
 				domain: scale.domain() as [number, number],

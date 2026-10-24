@@ -8,7 +8,6 @@
 	import type { ChartContext, Point } from '$lib/types';
 	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
-	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	type InvertibleScale = {
 		(v: unknown): number;
@@ -31,7 +30,6 @@
 	const chart = getContext<ChartContext>('chart');
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
-	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const ps = $derived(chart.parallelScales);
 
@@ -242,11 +240,6 @@
 		return true;
 	}
 
-	function handlePointerEnter() {
-		// ParallelBrushes operates on raw rows — no aggregation to pre-aggregate.
-		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), []);
-	}
-
 	function handleMoveStart(i: number, event: PointerEvent) {
 		event.stopPropagation();
 		(event.target as Element).setPointerCapture(event.pointerId);
@@ -296,13 +289,11 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
-		chart.onInteractorPointerEnter = handlePointerEnter;
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
-			chart.onInteractorPointerEnter = null;
 			for (const h of handles) h.destroy();
 		};
 	});

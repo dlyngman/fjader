@@ -144,7 +144,7 @@
 
 	function handlePointerEnter() {
 		if (!xColumnRef || !yColumnRef) return;
-		queryEngine.activate(filterGroup, new Set(chart.config.entries.keys()), [
+		queryEngine.activate(filterGroup, source, new Set(chart.config.entries.keys()), [
 			{
 				columnRef: xColumnRef,
 				domain: chart.xScale.domain() as [number, number],
