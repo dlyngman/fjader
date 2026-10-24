@@ -44,7 +44,7 @@ import {
 	type IdentityField
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
-import type { Clause } from './CrossfilterSelection.svelte';
+import type { Clause, CrossfilterSelection, FilterExpr } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
@@ -143,8 +143,17 @@ interface PreaggBasis {
 	activeSourceId: string;
 	/** Column, domain and pixel extent of each brush dimension. */
 	brushDimsKey: string;
-	/** The clause objects baked into the table, in selection insertion order. */
+	/** The clause objects baked into the table, in selection insertion order.
+	 *  Refreshed when new objects turn out to give the same SQL. */
 	bakedClauses: Clause[];
+}
+
+/** The filter-independent parts of a preagg table's SELECT. */
+interface PreaggCreation {
+	table: string;
+	select: Record<string, ExprNode>;
+	groupby: ExprNode[];
+	orderby: ExprNode[];
 }
 
 interface PreaggState {
@@ -152,6 +161,10 @@ interface PreaggState {
 	/** The SELECT the table was created from. Its hash names the table. */
 	sql: string;
 	basis: PreaggBasis;
+	creation: PreaggCreation;
+	/** Clause objects already found to give different SQL, so frames that
+	 *  still see them go to the base table without rebuilding the SQL. */
+	mismatch: Clause[] | null;
 	/** Rewritten select expressions that recombine partials at query time. */
 	outputSelect: Record<string, ExprNode>;
 	/** Bin dimension metadata for computing bin filters at query time. */
@@ -703,7 +716,7 @@ export class QueryEngine {
 		for (const [markId, reg] of batch) {
 			const { descriptor, handle } = reg;
 
-			const sqlStr = this.#preaggUsable(reg)
+			const sqlStr = this.#preaggUsable(markId, reg)
 				? this.#assemblePreaggSQL(markId, reg, handle.params)
 				: this.#assembleSQL(
 						descriptor,
@@ -730,7 +743,7 @@ export class QueryEngine {
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { descriptor, handle } = reg;
 
-		const sqlStr = this.#preaggUsable(reg)
+		const sqlStr = this.#preaggUsable(markId, reg)
 			? this.#assemblePreaggSQL(markId, reg, handle.params)
 			: this.#assembleSQL(
 					descriptor,
@@ -839,7 +852,7 @@ export class QueryEngine {
 					basis.parts === reg.descriptor.parts &&
 					basis.activeSourceId === activeSourceId &&
 					basis.brushDimsKey === brushDimsKey &&
-					selection.bakedClausesMatch(markId, activeSourceId, basis.bakedClauses)
+					this.#bakedClausesHold(markId, selection, latest)
 				) {
 					continue;
 				}
@@ -885,19 +898,17 @@ export class QueryEngine {
 			const bakedClauses = selection.bakedClauses(markId, activeSourceId);
 			const staticFilters = selection.bakedPredicates(markId, activeSourceId);
 
-			// Build preagg creation query, sorted by active columns for fast range scans
-			const preaggQuery = Query.from(table)
-				.select(preaggCols as Record<string, ExprNode>)
-				.groupby([...preaggGroupBy, ...binGroupBy] as ExprNode[])
-				.orderby(binGroupBy as ExprNode[]);
-
-			if (staticFilters.length > 0) {
-				preaggQuery.where(and(staticFilters as ExprNode[]));
-			}
+			// Sorted by active columns for fast range scans
+			const creation: PreaggCreation = {
+				table,
+				select: preaggCols as Record<string, ExprNode>,
+				groupby: [...preaggGroupBy, ...binGroupBy] as ExprNode[],
+				orderby: binGroupBy
+			};
 
 			// Hash-based naming: identical preagg SQL reuses the same table (like Mosaic).
 			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
-			const preaggSQL = preaggQuery.toString();
+			const preaggSQL = preaggSelectSQL(creation, staticFilters);
 			const preaggTable = `__dplot_preagg_${fnvHash(preaggSQL).toString(16)}`;
 			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${preaggSQL}`;
 
@@ -907,6 +918,8 @@ export class QueryEngine {
 				table: preaggTable,
 				sql: preaggSQL,
 				basis: { parts, activeSourceId, brushDimsKey, bakedClauses },
+				creation,
+				mismatch: null,
 				outputSelect,
 				binMeta,
 				windowChannels: analysis.windowChannels
@@ -931,9 +944,43 @@ export class QueryEngine {
 		await Promise.all(promises);
 	}
 
-	/** Whether a mark's brush queries can read its preagg table. */
-	#preaggUsable(reg: MarkRegistration): boolean {
-		return PREAGG_ENABLED && !!reg.preagg && reg.descriptor.parts === reg.preagg.basis.parts;
+	/**
+	 * Whether a mark's query can read its preagg table: same query parts, and
+	 * the baked clauses still in force. Any other filter change sends the mark
+	 * to the base table, which applies every clause.
+	 */
+	#preaggUsable(markId: string, reg: MarkRegistration): boolean {
+		const { preagg } = reg;
+		if (!PREAGG_ENABLED || !preagg) return false;
+		if (reg.descriptor.parts !== preagg.basis.parts) return false;
+		return this.#bakedClausesHold(markId, reg.filterGroup.selection, preagg);
+	}
+
+	/**
+	 * Whether the clauses baked into a preagg table are still the ones in force.
+	 * Runs on every brush frame. Clause references are compared first, without
+	 * allocating. A changed reference may still mean the same filter (a Toggle
+	 * re-synced with the same values, a clause removed and re-added), so on a
+	 * mismatch the table's SQL is rebuilt from the current clauses and compared.
+	 * Once that fails, frames that still see the same clauses skip the rebuild.
+	 */
+	#bakedClausesHold(markId: string, selection: CrossfilterSelection, state: PreaggState): boolean {
+		const { basis } = state;
+		const { activeSourceId } = basis;
+		if (selection.bakedClausesMatch(markId, activeSourceId, basis.bakedClauses)) return true;
+		if (state.mismatch && selection.bakedClausesMatch(markId, activeSourceId, state.mismatch)) {
+			return false;
+		}
+
+		const current = selection.bakedClauses(markId, activeSourceId);
+		const sql = preaggSelectSQL(state.creation, selection.bakedPredicates(markId, activeSourceId));
+		if (sql === state.sql) {
+			basis.bakedClauses = current;
+			state.mismatch = null;
+			return true;
+		}
+		state.mismatch = current;
+		return false;
 	}
 
 	/**
@@ -1051,6 +1098,16 @@ export class QueryEngine {
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
 		if (conn) await conn.close();
 	}
+}
+
+/** A preagg table's SELECT. Build and validity check share it, so equal SQL means an equal table. */
+function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[]): string {
+	const query = Query.from(creation.table)
+		.select(creation.select)
+		.groupby(creation.groupby)
+		.orderby(creation.orderby);
+	if (filters.length > 0) query.where(and(filters as ExprNode[]));
+	return query.toString();
 }
 
 /** Everything about the brush dimensions that the bin expressions depend on. */

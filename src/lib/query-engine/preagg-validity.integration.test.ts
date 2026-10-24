@@ -39,6 +39,8 @@ const X_DIM = { columnRef: column('x'), domain: [0, 1000] as [number, number], p
 
 interface TestConn extends DuckDBConnection {
 	queries: string[];
+	/** While set, DDL waits on it: holds a preagg build in flight. */
+	gate: Promise<void> | null;
 	all(sql: string): Promise<Record<string, unknown>[]>;
 	close(): Promise<void>;
 }
@@ -50,8 +52,9 @@ function openConn(): TestConn {
 			db.all(sql, (e: Error | null, rows: Record<string, unknown>[]) => (e ? rej(e) : res(rows)))
 		);
 	const queries: string[] = [];
-	return {
+	const conn: TestConn = {
 		queries,
+		gate: null,
 		all,
 		// The handle stores whatever the connection returns, so plain rows will do
 		async query(sql: string) {
@@ -61,11 +64,13 @@ function openConn(): TestConn {
 		},
 		async exec(sql: string) {
 			queries.push(sql);
+			if (conn.gate) await conn.gate;
 			await all(sql);
 		},
 		close: () =>
 			new Promise<void>((res, rej) => db.close((e: Error | null) => (e ? rej(e) : res())))
 	};
+	return conn;
 }
 
 let conn: TestConn;
@@ -228,5 +233,127 @@ describe('preagg validity', () => {
 		await drag(brush(), 100, 599);
 		expect(lastQuery()).toContain('__dplot_preagg_');
 		expect(rows()).toEqual(await expected(`cat = 'a' AND kind = 'p' AND x BETWEEN 100 AND 599`));
+	});
+});
+
+describe('preagg validity: filter changes without a re-hover', () => {
+	it('a changed non-brush clause sends the mark to the base table', async () => {
+		await toggle('cat', ['a']);
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		const b = brush();
+		await drag(b, 100, 599);
+		expect(lastQuery()).toContain('__dplot_preagg_');
+
+		await toggle('cat', ['b']);
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`cat = 'b' AND x BETWEEN 100 AND 599`));
+
+		await drag(b, 100, 699);
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`cat = 'b' AND x BETWEEN 100 AND 699`));
+	});
+
+	it('restoring the clause returns to the preagg table, with no new CREATE', async () => {
+		await toggle('cat', ['a']);
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		const b = brush();
+		await toggle('cat', ['b']);
+		await toggle('cat', ['a']);
+
+		await drag(b, 100, 599);
+		expect(lastQuery()).toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`cat = 'a' AND x BETWEEN 100 AND 599`));
+		expect(creates()).toHaveLength(1);
+	});
+
+	it('a clause removed and re-added keeps the preagg table through the SQL check', async () => {
+		await toggle('cat', ['a']);
+		await toggle('kind', ['p']);
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		const b = brush();
+
+		// Removing cat clears its clause; re-adding moves it to the end of the selection
+		await toggle('cat', []);
+		await toggle('cat', ['a']);
+
+		await drag(b, 100, 599);
+		expect(lastQuery()).toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`cat = 'a' AND kind = 'p' AND x BETWEEN 100 AND 599`));
+		expect(creates()).toHaveLength(1);
+	});
+
+	it('a toggle re-synced with the same values stays on the preagg table', async () => {
+		await toggle('cat', ['a']);
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		await toggle('cat', ['a']);
+
+		await drag(brush(), 100, 599);
+		expect(lastQuery()).toContain('__dplot_preagg_');
+
+		// Re-hovering after a reference-only change does not rebuild either
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		expect(creates()).toHaveLength(1);
+	});
+
+	it('a removed baked clause sends the mark to the base table, unfiltered', async () => {
+		await toggle('cat', ['a']);
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		const b = brush();
+		await toggle('cat', []);
+
+		await drag(b, 100, 599);
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`x BETWEEN 100 AND 599`));
+	});
+
+	it('an upsertManual filter added after the build is applied', async () => {
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		const b = brush();
+		await settle(() =>
+			group.upsertManual('k', isIn(column('kind'), [literal('q')]), ['q'], new Set())
+		);
+
+		await drag(b, 100, 599);
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`kind = 'q' AND x BETWEEN 100 AND 599`));
+	});
+
+	it('a parallel brush drag after an Interval1D hover is applied', async () => {
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		await drag(brush(), 100, 599);
+		const parallel = group.createBrush({
+			sourceId: 'parallel-brush-x-C',
+			excludeMarkIds: () => new Set()
+		});
+
+		await settle(() => parallel.update(isBetween(column('x'), [0, 299]), [0, 299]));
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`x BETWEEN 100 AND 599 AND x BETWEEN 0 AND 299`));
+	});
+
+	it('a clause changed while the build is in flight is caught once the build lands', async () => {
+		let release!: () => void;
+		conn.gate = new Promise((r) => (release = r));
+		const building = engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+
+		await toggle('cat', ['a']);
+		conn.gate = null;
+		release();
+		await building;
+
+		await drag(brush(), 100, 599);
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected(`cat = 'a' AND x BETWEEN 100 AND 599`));
+	});
+
+	it('after a mismatch, drag frames skip rebuilding the SQL', async () => {
+		await engine.activate(group, BRUSH, CHART_A, [X_DIM]);
+		const b = brush();
+		await toggle('cat', ['a']);
+
+		const rebuilds = vi.spyOn(group.selection, 'bakedPredicates');
+		await drag(b, 100, 599);
+		await drag(b, 100, 699);
+		expect(rebuilds).not.toHaveBeenCalled();
 	});
 });
