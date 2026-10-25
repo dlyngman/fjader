@@ -78,13 +78,42 @@ export interface ColumnInfo {
 
 export type JsColumnType = 'number' | 'string' | 'date' | 'boolean';
 
-/** Map a DuckDB SQL type string to a JS type category. */
+// DESCRIBE reports canonical type names, so these match exactly. Anything else (VARCHAR,
+// ENUM, lists, STRUCT, INTERVAL, extension types) is a string, which is never cast to REAL.
+const NUMBER_TYPES = new Set([
+	'TINYINT',
+	'SMALLINT',
+	'INTEGER',
+	'BIGINT',
+	'HUGEINT',
+	'UTINYINT',
+	'USMALLINT',
+	'UINTEGER',
+	'UBIGINT',
+	'UHUGEINT',
+	'FLOAT',
+	'DOUBLE',
+	'DECIMAL',
+	'BIGNUM'
+]);
+const DATE_TYPES = new Set([
+	'DATE',
+	'TIME',
+	'TIME WITH TIME ZONE',
+	'TIMESTAMP',
+	'TIMESTAMP WITH TIME ZONE',
+	'TIMESTAMP_S',
+	'TIMESTAMP_MS',
+	'TIMESTAMP_NS'
+]);
+
+/** Map a DuckDB SQL type, as DESCRIBE reports it, to a JS type category. */
 export function mapSqlTypeToJs(sqlType: string): JsColumnType {
-	const upper = (sqlType || '').toUpperCase();
-	if (/INT|FLOAT|DOUBLE|DECIMAL|NUMERIC|REAL|BIGINT|SMALLINT|TINYINT|HUGEINT/.test(upper))
-		return 'number';
-	if (/DATE|TIME|TIMESTAMP|INTERVAL/.test(upper)) return 'date';
-	if (/BOOL/.test(upper)) return 'boolean';
+	// The name without parameters: DECIMAL(18,3) → DECIMAL, ENUM('a', 'b') → ENUM.
+	const name = (sqlType || '').toUpperCase().split('(')[0];
+	if (NUMBER_TYPES.has(name)) return 'number';
+	if (DATE_TYPES.has(name)) return 'date';
+	if (name === 'BOOLEAN') return 'boolean';
 	return 'string';
 }
 
