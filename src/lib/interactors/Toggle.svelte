@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
-	import { column, isIn, literal, or, and as sqlAnd, isNotDistinct } from '@uwdata/mosaic-sql';
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ActiveValueScale, ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 
@@ -36,36 +35,6 @@
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
 
-	/** One toggle per field key this interactor drives: the declared field
-	 *  (or tuple) plus, lazily, the band axis field for label clicks. */
-	interface OwnedToggle {
-		fields: string[];
-		columnRefs: ReturnType<typeof column>[];
-		state: ToggleState;
-		toKey: (tuple: unknown[]) => unknown;
-		fromKey: (key: unknown) => unknown[];
-	}
-	const owned = new Map<string, OwnedToggle>();
-
-	function getToggle(toggleFields: string[]): OwnedToggle {
-		const id = toggleFields.join(' ');
-		let t = owned.get(id);
-		if (!t) {
-			const single = toggleFields.length === 1;
-			t = {
-				fields: toggleFields,
-				columnRefs: toggleFields.map((f) => column(f)),
-				state: filterGroup.getOrCreateToggle(toggleFields[0]),
-				toKey: single ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple),
-				fromKey: single ? (key) => [key] : (key) => JSON.parse(key as string)
-			};
-			owned.set(id, t);
-		}
-		return t;
-	}
-
-	const declared = getToggle(fields);
-
 	/** Marks in this chart — excluded so the source dims rather than filters. */
 	const excludeMarkIds = () => new Set(chart.config.entries.keys());
 
@@ -83,45 +52,61 @@
 		return out;
 	}
 
-	function syncFilter(t: OwnedToggle) {
-		const values = t.state.values;
-		const single = t.fields.length === 1;
-		const opts = {
+	function registerOn(toggleFields: string[]): ToggleHandle {
+		return filterGroup.getOrCreateToggle(toggleFields).register({
 			excludeMarkIds,
-			// Projection only makes sense for single-field toggles.
-			...(single && {
-				scaleStates: () => scalesFor(t.fields[0]),
-				projectionValues: () => (t.state.values.size ? new Set(t.state.values) : null)
-			})
-		};
-
-		if (values.size === 0) {
-			filterGroup.syncToggle(t.fields[0], null, null, opts);
-			return;
-		}
-
-		const tuples = Array.from(values).map(t.fromKey);
-		let predicate;
-		if (single) {
-			predicate = isIn(
-				t.columnRefs[0],
-				tuples.map((tuple) => literal(tuple[0]))
-			);
-		} else {
-			const clauses = tuples.map((tuple) =>
-				sqlAnd(tuple.map((v: unknown, i: number) => isNotDistinct(t.columnRefs[i], literal(v))))
-			);
-			predicate = clauses.length === 1 ? clauses[0] : or(clauses);
-		}
-
-		filterGroup.syncToggle(t.fields[0], predicate, tuples, opts);
+			scaleStates: () => (toggleFields.length === 1 ? scalesFor(toggleFields[0]) : [])
+		});
 	}
 
-	function toggle(t: OwnedToggle, tuple: unknown[], event: MouseEvent) {
-		const isMulti = event.shiftKey || event.metaKey;
-		t.state.toggle(t.toKey(tuple), isMulti);
-		syncFilter(t);
+	const declaredState = filterGroup.getOrCreateToggle(fields);
+	const declared = registerOn(fields);
+
+	/**
+	 * One registration per band axis field, for label clicks. Kept in step with
+	 * the chart's band scales on every hover and click rather than on the first
+	 * label click, so the field activates before it is clicked and follows a
+	 * band channel reassigned at runtime.
+	 */
+	const bandHandles = new Map<string, ToggleHandle>();
+
+	function bandFields(): Set<string> {
+		const out = new Set<string>();
+		for (const axis of ['x', 'y'] as const) {
+			if (chart.scaleTypes?.[axis] !== 'band') continue;
+			const band = chart[`${axis}ScaleState`] as BandScaleState | null | undefined;
+			// The declared field already has its registration.
+			if (band?.sourceField && !(fields.length === 1 && band.sourceField === fields[0])) {
+				out.add(band.sourceField);
+			}
+		}
+		return out;
 	}
+
+	function syncBandRegistrations() {
+		const wanted = bandFields();
+		for (const [bandField, handle] of bandHandles) {
+			if (wanted.has(bandField)) continue;
+			handle.destroy();
+			bandHandles.delete(bandField);
+		}
+		for (const bandField of wanted) {
+			if (!bandHandles.has(bandField)) bandHandles.set(bandField, registerOn([bandField]));
+		}
+	}
+
+	function handleFor(toggleField: string): ToggleHandle | null {
+		if (fields.length === 1 && toggleField === fields[0]) return declared;
+		syncBandRegistrations();
+		return bandHandles.get(toggleField) ?? null;
+	}
+
+	function activate() {
+		syncBandRegistrations();
+		declared.activate();
+		for (const handle of bandHandles.values()) handle.activate();
+	}
+	chart.activators.add(activate);
 
 	/**
 	 * Band axis click → category under the pointer on that axis, or null.
@@ -152,13 +137,14 @@
 		const tm = chart.tooltipManager;
 		const point = { x: event.offsetX, y: event.offsetY };
 		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
+		const isMulti = event.shiftKey || event.metaKey;
 
 		// Path 1: Inner area click — use tooltip hit data (don't require visible —
 		// pointer micro-movement during click hides tooltip but data stays valid)
 		if (xInBounds && yInBounds && tm?.currentPoint) {
 			const tuple = fields.map((f) => tm.currentPoint![f]);
 			if (tuple.some((v) => v == null)) return;
-			toggle(declared, tuple, event);
+			declared.toggle(tuple, isMulti);
 			return;
 		}
 
@@ -170,7 +156,7 @@
 					? bandCategoryAt('x', innerPoint.x)
 					: null;
 		if (hit) {
-			toggle(getToggle([hit.field]), [hit.value], event);
+			handleFor(hit.field)?.toggle([hit.value], isMulti);
 			return;
 		}
 
@@ -179,15 +165,17 @@
 	};
 
 	function clearAll() {
-		for (const t of owned.values()) {
-			if (!t.state.active) continue;
-			t.state.clear();
-			syncFilter(t);
+		if (declaredState.active) declared.clear();
+		for (const [bandField, handle] of bandHandles) {
+			if (filterGroup.getOrCreateToggle(bandField).active) handle.clear();
 		}
 	}
 
 	onDestroy(() => {
 		clearAll();
+		declared.destroy();
+		for (const handle of bandHandles.values()) handle.destroy();
+		chart.activators.delete(activate);
 		chart.onChartClick = null;
 	});
 </script>

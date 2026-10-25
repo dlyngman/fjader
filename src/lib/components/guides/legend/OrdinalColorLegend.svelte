@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { getContext } from 'svelte';
-	import { column, isIn, literal } from '@uwdata/mosaic-sql';
+	import { getContext, onDestroy } from 'svelte';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
@@ -43,7 +42,6 @@
 	);
 
 	// --- Toggle interaction ---
-	const columnRef = field ? column(field) : null;
 	const isInteractive = $derived(filterGroup != null && field != null);
 
 	// Scales to dim: this color scale + any band scale for the same field.
@@ -57,55 +55,28 @@
 	const toggleState: ToggleState | null =
 		filterGroup && field ? filterGroup.getOrCreateToggle(field) : null;
 
-	// Derive visual state from toggle state
-	const selectedSet = $derived(
-		toggleState?.active ? toggleState.values : null
-	);
-
-	// Sync toggle values to FilterGroup (filter + scale projection).
 	// A legend is not a chart, so it excludes no marks: every chart filters.
-	function syncFilter() {
-		if (!toggleState || !filterGroup || !field) return;
-		const values = toggleState.values;
-		const opts = {
-			excludeMarkIds: () => new Set<string>(),
-			scaleStates: getLegendScaleStates,
-			projectionValues: () => (toggleState.values.size ? new Set(toggleState.values) : null)
-		};
+	const toggle = toggleState?.register({
+		excludeMarkIds: () => new Set<string>(),
+		scaleStates: getLegendScaleStates
+	});
+	onDestroy(() => toggle?.destroy());
 
-		if (values.size === 0) {
-			filterGroup.syncToggle(field, null, null, opts);
-			return;
-		}
+	// Derive visual state from toggle state
+	const selectedSet = $derived(toggleState?.active ? toggleState.values : null);
 
-		const predicate = isIn(columnRef!, Array.from(values).map((v) => literal(v)));
-		filterGroup.syncToggle(field, predicate, [...values], opts);
-	}
-
+	// Shift/meta-click adds or removes; selecting every value clears instead.
 	function handleClick(value: string | number, event: MouseEvent) {
-		if (!toggleState) return;
-
-		const isMulti = event.shiftKey || event.metaKey;
-
-		if (isMulti) {
-			toggleState.toggle(value, true);
-			// If all selected or none selected → clear
-			if (toggleState.values.size === scaleState.domain.length) {
-				toggleState.clear();
-			}
-		} else if (toggleState.values.size === 1 && toggleState.values.has(value)) {
-			toggleState.clear();
-		} else {
-			toggleState.select(value);
-		}
-		syncFilter();
+		toggle?.toggle([value], event.shiftKey || event.metaKey, scaleState.domain.length);
 	}
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="legend-ordinal {className}"
 	class:legend-interactive={isInteractive}
 	style:--columns={columns}
+	onpointerenter={() => toggle?.activate()}
 >
 	{#if title}
 		<span class="legend-title">{title}</span>

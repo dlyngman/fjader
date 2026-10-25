@@ -13,9 +13,8 @@
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
-	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	/** Helper: cast D3Scale to one with invert() for continuous scales. */
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
@@ -31,7 +30,6 @@
 
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
-	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState1D();
@@ -62,9 +60,20 @@
 		)
 	);
 
-	const brushHandle: BrushHandle = filterGroup.createBrush({
-		sourceId: source,
+	const brushHandle: SourceHandle = filterGroup.register(source, {
 		excludeMarkIds: () => new Set(chart.config.entries.keys()),
+		activeDims: () => {
+			const scale = getScale();
+			if (!scale || !columnRef) return [];
+			return [
+				{
+					kind: 'bin',
+					columnRef,
+					domain: scale.domain() as [number, number],
+					pixelExtent: isX ? chart.innerWidth : chart.innerHeight
+				}
+			];
+		},
 		augment: (value) => ({
 			kind: 'range',
 			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
@@ -165,18 +174,6 @@
 		}
 
 		emitFilterClause(dataMin, dataMax);
-	}
-
-	function handlePointerEnter() {
-		const scale = getScale();
-		if (!scale || !columnRef) return;
-		queryEngine.activate(filterGroup, source, new Set(chart.config.entries.keys()), [
-			{
-				columnRef,
-				domain: scale.domain() as [number, number],
-				pixelExtent: isX ? chart.innerWidth : chart.innerHeight
-			}
-		]);
 	}
 
 	function handleWheel(event: WheelEvent) {
@@ -312,13 +309,13 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
-		chart.onInteractorPointerEnter = handlePointerEnter;
+		chart.activators.add(brushHandle.activate);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
-			chart.onInteractorPointerEnter = null;
+			chart.activators.delete(brushHandle.activate);
 			brushHandle.destroy();
 		};
 	});

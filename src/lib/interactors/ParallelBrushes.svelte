@@ -6,7 +6,7 @@
 	import { closeTo, isDragging, createPanModeHandlers } from './brush-utils';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
-	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	type InvertibleScale = {
@@ -35,7 +35,7 @@
 
 	// --- Per-axis state (one per column, grown when columns are added) ---
 	let brushes = $state<BrushState1D[]>([]);
-	const handles: BrushHandle[] = [];
+	const handles: SourceHandle[] = [];
 	const lastEmitted: { min: number | null; max: number | null }[] = [];
 
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
@@ -95,8 +95,7 @@
 
 			const sourceId = `parallel-brush-${col}-${chart.chartId}`;
 			handles.push(
-				filterGroup.createBrush({
-					sourceId,
+				filterGroup.register(sourceId, {
 					excludeMarkIds,
 					augment: (value) => ({
 						kind: 'range',

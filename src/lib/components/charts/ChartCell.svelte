@@ -426,7 +426,7 @@
 		onInteractorPointerDown: null,
 		onInteractorPointerMove: null,
 		onInteractorPointerUp: null,
-		onInteractorPointerEnter: null
+		activators: new Set()
 	};
 
 	setContext('chart', chartContext);
@@ -470,6 +470,7 @@
 	}
 
 	function handleChartPointerEnter(event: PointerEvent) {
+		activateSources();
 		refreshSvgOrigin();
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
@@ -784,7 +785,16 @@
 
 	function handleInnerMouseEnter() {
 		scales.active = true;
-		chartContext.onInteractorPointerEnter?.();
+		activateSources();
+	}
+
+	/**
+	 * Prepare the chart's selection sources. Runs on entering the cell, so band
+	 * labels in the margin count, and again on entering the plot area, as before;
+	 * activation skips tables that are still valid, so the second costs nothing.
+	 */
+	function activateSources() {
+		for (const activate of chartContext.activators) activate();
 	}
 
 	function handleInnerMouseLeave() {
