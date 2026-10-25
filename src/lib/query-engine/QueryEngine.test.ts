@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { QueryEngine } from './QueryEngine';
+import { QueryEngine, mapSqlTypeToJs } from './QueryEngine';
 import type { DuckDBConnection } from './QueryEngine';
 
 // ---------------------------------------------------------------------------
@@ -408,5 +408,44 @@ describe('QueryEngine', () => {
 
 			await expect(p).rejects.toThrow('superseded');
 		});
+	});
+});
+
+describe('mapSqlTypeToJs', () => {
+	// Type names exactly as DESCRIBE reports them (checked against DuckDB 1.4).
+	it.each([
+		...['TINYINT', 'SMALLINT', 'INTEGER', 'BIGINT', 'HUGEINT'].map((t) => [t, 'number']),
+		...['UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'UHUGEINT'].map((t) => [t, 'number']),
+		...['FLOAT', 'DOUBLE', 'DECIMAL(18,3)', 'BIGNUM'].map((t) => [t, 'number']),
+		...['DATE', 'TIME', 'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE'].map((t) => [
+			t,
+			'date'
+		]),
+		...['TIMESTAMP_S', 'TIMESTAMP_MS', 'TIMESTAMP_NS'].map((t) => [t, 'date']),
+		['BOOLEAN', 'boolean'],
+		...['VARCHAR', 'BLOB', 'UUID', 'BIT'].map((t) => [t, 'string'])
+	])('%s → %s', (sqlType, jsType) => {
+		expect(mapSqlTypeToJs(sqlType)).toBe(jsType);
+	});
+
+	// An ENUM's type string lists its members: INTERNATIONAL contains INT, UPDATED DATE.
+	it('maps an ENUM to string whatever its members are', () => {
+		expect(mapSqlTypeToJs("ENUM('DOMESTIC', 'INTERNATIONAL')")).toBe('string');
+		expect(mapSqlTypeToJs("ENUM('NEW', 'UPDATED')")).toBe('string');
+		expect(mapSqlTypeToJs("ENUM('TRUE_BOOL', 'FLOAT_ON')")).toBe('string');
+	});
+
+	it('maps nested types by their own name, not their fields', () => {
+		expect(mapSqlTypeToJs('STRUCT(n INTEGER, at DATE)')).toBe('string');
+		expect(mapSqlTypeToJs('MAP(VARCHAR, INTEGER)')).toBe('string');
+		expect(mapSqlTypeToJs('UNION(n INTEGER)')).toBe('string');
+	});
+
+	// None of these can be cast to REAL, which is what 'number' leads to.
+	it('maps lists, arrays, intervals and names merely containing INT to string', () => {
+		expect(mapSqlTypeToJs('INTEGER[]')).toBe('string');
+		expect(mapSqlTypeToJs('INTEGER[2]')).toBe('string');
+		expect(mapSqlTypeToJs('INTERVAL')).toBe('string');
+		expect(mapSqlTypeToJs('POINT_2D')).toBe('string');
 	});
 });
