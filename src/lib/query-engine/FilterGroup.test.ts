@@ -101,18 +101,6 @@ describe('FilterGroup', () => {
 			b.destroy();
 			expect(group.selection.isActive('brush-x')).toBe(false);
 		});
-
-		it('keepClause leaves the clause when the last registration goes', () => {
-			const group = new FilterGroup();
-			const handle = group.register('toggle-region', {
-				excludeMarkIds: () => new Set(),
-				keepClause: true
-			});
-			handle.update("region IN ('North')", [['North']]);
-
-			handle.destroy();
-			expect(group.selection.isActive('toggle-region')).toBe(true);
-		});
 	});
 
 	describe('items with augmentation', () => {
@@ -410,15 +398,48 @@ describe('ToggleState', () => {
 		expect(sqlOf(group, 'mark-x')).toEqual([`(year("date") IN (2021))`]);
 	});
 
-	it('keeps the clause and selection when its last consumer goes', () => {
+	it('clears the clause and selection when its last consumer goes, not before', () => {
 		const group = new FilterGroup();
 		const state = group.getOrCreateToggle('region');
-		const toggle = state.register({ excludeMarkIds: noMarks });
-		toggle.toggle(['North'], false);
+		const legend = state.register({ excludeMarkIds: noMarks });
+		const chart = state.register({ excludeMarkIds: () => new Set(['mark-chart']) });
+		chart.toggle(['North'], false);
 
-		toggle.destroy();
+		// The legend still shows the selection, so it stays.
+		chart.destroy();
 		expect(group.selection.isActive('toggle-region')).toBe(true);
 		expect(state.values).toEqual(new Set(['North']));
+
+		legend.destroy();
+		expect(group.selection.isActive('toggle-region')).toBe(false);
+		expect(state.active).toBe(false);
+	});
+
+	it('a band label selection is cleared when its axis is reassigned', () => {
+		// Toggle drops the old band field's registration when the band channel
+		// changes; with no other control on that field, nothing could clear it.
+		const group = new FilterGroup();
+		const region = group.getOrCreateToggle('region');
+		const label = region.register({ excludeMarkIds: () => new Set(['mark-chart']) });
+		label.toggle(['North'], false);
+
+		label.destroy();
+		expect(group.selection.isActive('toggle-region')).toBe(false);
+		expect(region.active).toBe(false);
+	});
+
+	it('clearing the clause from outside (a filter chip) clears the selection too', () => {
+		const group = new FilterGroup();
+		const state = group.getOrCreateToggle('region');
+		const legend = state.register({ excludeMarkIds: noMarks });
+		legend.toggle(['North'], true);
+
+		group.clearSource('toggle-region');
+		expect(state.active).toBe(false);
+
+		// The next shift-click starts from nothing, not from the old tuples.
+		legend.toggle(['South'], true);
+		expect(state.values).toEqual(new Set(['South']));
 	});
 
 	it('activates with one value dim per field', () => {

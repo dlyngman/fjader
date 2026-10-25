@@ -55,11 +55,6 @@ export interface SourceOpts {
 	/** Schema written with every clause, for sources whose metadata does not depend on the value. */
 	schema?: FilterSchema;
 	scaleStates?: () => ActiveValueScale[];
-	/**
-	 * Keep the clause when the last registration is destroyed. A toggle's
-	 * selection belongs to its shared state, which outlives any one control.
-	 */
-	keepClause?: boolean;
 	/** Extract values to project onto scales from the clause value.
 	 *  Required when scaleStates is provided — FilterGroup does not assume value shape. */
 	extractProjectionValues?: (value: unknown) => Set<unknown> | null;
@@ -71,8 +66,11 @@ export interface SourceHandle {
 	clear(): void;
 	/** Prepare preagg tables for this source, ahead of its first use. */
 	activate(): void;
-	/** Remove this registration. The last one under an id also removes the clause,
-	 *  unless it was registered with `keepClause`. */
+	/**
+	 * Remove this registration. The last one under an id also removes the clause
+	 * (and a toggle's selection with it): a selection lives exactly as long as
+	 * some control for it does.
+	 */
 	destroy(): void;
 }
 
@@ -102,13 +100,19 @@ function tupleKey(tuple: unknown[]): unknown {
 	return tuple.map((v) => `${v === null ? 'null' : typeof v}:${String(v)}`).join('\u001f');
 }
 
+/** The clause id of a toggle on `fields`. */
+function toggleSourceId(fields: string[]): string {
+	return fields.length === 1 ? `toggle-${fields[0]}` : `toggle-${JSON.stringify(fields)}`;
+}
+
 /**
  * Shared reactive toggle state for a categorical field or field tuple.
  *
  * Owns the source's clause: consumers (a legend, a Toggle's marks or band axis
  * labels) register on it with their own exclusions and scales, and each change
  * through a handle updates the values and writes the clause once, excluding the
- * marks of the consumer that made it.
+ * marks of the consumer that made it. The selection lasts as long as some
+ * consumer is registered: when the last one goes, so do the clause and values.
  */
 export class ToggleState {
 	readonly fields: string[];
@@ -122,8 +126,7 @@ export class ToggleState {
 	constructor(group: FilterGroup, fields: string[]) {
 		this.#group = group;
 		this.fields = fields;
-		this.sourceId =
-			fields.length === 1 ? `toggle-${fields[0]}` : `toggle-${JSON.stringify(fields)}`;
+		this.sourceId = toggleSourceId(fields);
 	}
 
 	get active(): boolean {
@@ -139,7 +142,6 @@ export class ToggleState {
 			excludeMarkIds: opts.excludeMarkIds,
 			activeDims: () => this.fields.map((field) => ({ kind: 'value' as const, field })),
 			schema: { kind: 'toggle', column: this.fields[0], label: this.fields.join(', ') },
-			keepClause: true,
 			// Projection only makes sense for single-field toggles.
 			...(single &&
 				opts.scaleStates && {
@@ -178,7 +180,7 @@ export class ToggleState {
 		};
 	}
 
-	/** Forget the selection without writing a clause (the caller cleared it). */
+	/** Forget the selection without writing a clause (its clause is already gone). */
 	reset(): void {
 		this.#tuples = new Map();
 		this.values = new Set();
@@ -221,7 +223,7 @@ export class FilterGroup {
 
 	/** Registrations per source id. Several under one id are one source. */
 	#sources = new Map<string, Set<SourceOpts>>();
-	// Toggle instances, shared by field list
+	// Toggle instances by clause id, shared by field list
 	#toggles = new Map<string, ToggleState>();
 	// Track which scales we projected to, so we can clear them
 	#projectedScales = new Set<ActiveValueScale>();
@@ -290,9 +292,7 @@ export class FilterGroup {
 				registrations.delete(opts);
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
-				if (opts.keepClause) return;
-				this.selection.update(sourceId, null);
-				this.#afterUpdate();
+				this.clearSource(sourceId);
 			}
 		};
 	}
@@ -326,11 +326,11 @@ export class FilterGroup {
 	/** The shared toggle for a field or field tuple, keyed by the full field list. */
 	getOrCreateToggle(fields: string | string[]): ToggleState {
 		const list = Array.isArray(fields) ? fields : [fields];
-		const key = JSON.stringify(list);
-		let toggle = this.#toggles.get(key);
+		const sourceId = toggleSourceId(list);
+		let toggle = this.#toggles.get(sourceId);
 		if (!toggle) {
 			toggle = new ToggleState(this, list);
-			this.#toggles.set(key, toggle);
+			this.#toggles.set(sourceId, toggle);
 		}
 		return toggle;
 	}
@@ -365,8 +365,10 @@ export class FilterGroup {
 	// Clear
 	// -----------------------------------------------------------------
 
+	/** Remove a source's clause. A toggle's selection goes with it, so its controls agree. */
 	clearSource(sourceId: string): void {
 		this.selection.update(sourceId, null);
+		this.#toggles.get(sourceId)?.reset();
 		this.#afterUpdate();
 	}
 

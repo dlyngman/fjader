@@ -66,7 +66,8 @@
 	 * One registration per band axis field, for label clicks. Kept in step with
 	 * the chart's band scales on every hover and click rather than on the first
 	 * label click, so the field activates before it is clicked and follows a
-	 * band channel reassigned at runtime.
+	 * band channel reassigned at runtime. Dropping a field's registration clears
+	 * its selection unless another control (a legend) still holds it.
 	 */
 	const bandHandles = new Map<string, ToggleHandle>();
 
@@ -171,8 +172,9 @@
 		}
 	}
 
+	// Destroying a registration clears its selection when it was the last
+	// control for it; a selection a legend still shows stays.
 	onDestroy(() => {
-		clearAll();
 		declared.destroy();
 		for (const handle of bandHandles.values()) handle.destroy();
 		chart.activators.delete(activate);

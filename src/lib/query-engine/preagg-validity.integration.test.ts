@@ -316,6 +316,26 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		expect(rows()).toEqual(await expected(`kind = 'q' AND x BETWEEN 100 AND 599`));
 	});
 
+	it('hovering a Toggle-only chart leaves the brush table in place', async () => {
+		await activate();
+		const b = brush();
+		await drag(b, 100, 599);
+		expect(lastQuery()).toContain('__dplot_preagg_');
+		const built = creates().length;
+
+		// A Toggle has no bin dims, so activating it builds nothing, and it must
+		// not drop the table of a mark it excludes, as a brush activation would.
+		group
+			.getOrCreateToggle('cat')
+			.register({ excludeMarkIds: () => new Set([MARK]) })
+			.activate();
+
+		await drag(b, 100, 699);
+		expect(lastQuery()).toContain('__dplot_preagg_');
+		expect(creates()).toHaveLength(built);
+		expect(rows()).toEqual(await expected('x BETWEEN 100 AND 699'));
+	});
+
 	it('a parallel brush drag after an Interval1D hover is applied', async () => {
 		await activate();
 		await drag(brush(), 100, 599);
