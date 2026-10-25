@@ -94,7 +94,10 @@ const NUMBER_TYPES = new Set([
 	'FLOAT',
 	'DOUBLE',
 	'DECIMAL',
-	'BIGNUM'
+	'BIGNUM',
+	// BIGNUM's name before DuckDB 1.4: the installed DuckDB-WASM (1.3.2) and a Python
+	// server's native DuckDB older than 1.4 still report it.
+	'VARINT'
 ]);
 const DATE_TYPES = new Set([
 	'DATE',
