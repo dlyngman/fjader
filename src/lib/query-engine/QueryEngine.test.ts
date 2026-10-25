@@ -417,6 +417,8 @@ describe('mapSqlTypeToJs', () => {
 		...['TINYINT', 'SMALLINT', 'INTEGER', 'BIGINT', 'HUGEINT'].map((t) => [t, 'number']),
 		...['UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'UHUGEINT'].map((t) => [t, 'number']),
 		...['FLOAT', 'DOUBLE', 'DECIMAL(18,3)', 'BIGNUM'].map((t) => [t, 'number']),
+		// The same type as reported by DuckDB before 1.4, including the installed DuckDB-WASM.
+		['VARINT', 'number'],
 		...['DATE', 'TIME', 'TIME WITH TIME ZONE', 'TIMESTAMP', 'TIMESTAMP WITH TIME ZONE'].map((t) => [
 			t,
 			'date'
