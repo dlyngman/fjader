@@ -103,6 +103,24 @@ describe('FilterGroup', () => {
 		});
 	});
 
+	describe('clearSource', () => {
+		it('re-queries only when there was a clause to remove', () => {
+			const { engine, onFilterChange } = mockEngine();
+			const group = new FilterGroup();
+			group.setEngine(engine);
+			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+
+			handle.clear();
+			handle.destroy();
+			expect(onFilterChange).not.toHaveBeenCalled();
+
+			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			again.update('x > 0', null);
+			again.destroy();
+			expect(onFilterChange).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	describe('items with augmentation', () => {
 		it('applies augmenter to produce schema metadata', () => {
 			const group = new FilterGroup();

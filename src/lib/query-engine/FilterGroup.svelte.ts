@@ -365,10 +365,15 @@ export class FilterGroup {
 	// Clear
 	// -----------------------------------------------------------------
 
-	/** Remove a source's clause. A toggle's selection goes with it, so its controls agree. */
+	/**
+	 * Remove a source's clause. A toggle's selection goes with it, so its
+	 * controls agree. Re-queries only when there was a clause to remove: an
+	 * unmount or a clear with nothing selected changes no mark's data.
+	 */
 	clearSource(sourceId: string): void {
-		this.selection.update(sourceId, null);
 		this.#toggles.get(sourceId)?.reset();
+		if (!this.selection.isActive(sourceId)) return;
+		this.selection.update(sourceId, null);
 		this.#afterUpdate();
 	}
 

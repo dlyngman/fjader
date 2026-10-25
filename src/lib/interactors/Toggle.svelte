@@ -5,6 +5,7 @@
 	import type { ActiveValueScale, ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import { BandRegistrations } from './band-registrations';
 
 	/**
 	 * Click-to-filter interactor for categorical fields.
@@ -62,50 +63,33 @@
 	const declaredState = filterGroup.getOrCreateToggle(fields);
 	const declared = registerOn(fields);
 
-	/**
-	 * One registration per band axis field, for label clicks. Kept in step with
-	 * the chart's band scales on every hover and click rather than on the first
-	 * label click, so the field activates before it is clicked and follows a
-	 * band channel reassigned at runtime. Dropping a field's registration clears
-	 * its selection unless another control (a legend) still holds it.
-	 */
-	const bandHandles = new Map<string, ToggleHandle>();
+	/** Label clicks toggle the band axis's own field; see BandRegistrations. */
+	const bands = new BandRegistrations(
+		(bandField) => registerOn([bandField]),
+		(bandField) => fields.length === 1 && bandField === fields[0]
+	);
 
-	function bandFields(): Set<string> {
-		const out = new Set<string>();
-		for (const axis of ['x', 'y'] as const) {
-			if (chart.scaleTypes?.[axis] !== 'band') continue;
-			const band = chart[`${axis}ScaleState`] as BandScaleState | null | undefined;
-			// The declared field already has its registration.
-			if (band?.sourceField && !(fields.length === 1 && band.sourceField === fields[0])) {
-				out.add(band.sourceField);
-			}
-		}
-		return out;
+	/** Each axis's band field, or null while it has no band scale. */
+	function bandField(axis: 'x' | 'y'): string | null {
+		if (chart.scaleTypes?.[axis] !== 'band') return null;
+		const band = chart[`${axis}ScaleState`] as BandScaleState | null | undefined;
+		return band?.sourceField || null;
 	}
 
-	function syncBandRegistrations() {
-		const wanted = bandFields();
-		for (const [bandField, handle] of bandHandles) {
-			if (wanted.has(bandField)) continue;
-			handle.destroy();
-			bandHandles.delete(bandField);
-		}
-		for (const bandField of wanted) {
-			if (!bandHandles.has(bandField)) bandHandles.set(bandField, registerOn([bandField]));
-		}
+	function syncBands() {
+		bands.sync({ x: bandField('x'), y: bandField('y') });
 	}
 
 	function handleFor(toggleField: string): ToggleHandle | null {
 		if (fields.length === 1 && toggleField === fields[0]) return declared;
-		syncBandRegistrations();
-		return bandHandles.get(toggleField) ?? null;
+		syncBands();
+		return bands.handleFor(toggleField);
 	}
 
 	function activate() {
-		syncBandRegistrations();
+		syncBands();
 		declared.activate();
-		for (const handle of bandHandles.values()) handle.activate();
+		for (const [, handle] of bands.entries()) handle.activate();
 	}
 	chart.activators.add(activate);
 
@@ -167,7 +151,7 @@
 
 	function clearAll() {
 		if (declaredState.active) declared.clear();
-		for (const [bandField, handle] of bandHandles) {
+		for (const [bandField, handle] of bands.entries()) {
 			if (filterGroup.getOrCreateToggle(bandField).active) handle.clear();
 		}
 	}
@@ -176,7 +160,7 @@
 	// control for it; a selection a legend still shows stays.
 	onDestroy(() => {
 		declared.destroy();
-		for (const handle of bandHandles.values()) handle.destroy();
+		bands.destroy();
 		chart.activators.delete(activate);
 		chart.onChartClick = null;
 	});
