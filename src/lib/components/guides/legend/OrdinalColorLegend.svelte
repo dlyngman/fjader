@@ -2,7 +2,7 @@
 	import { getContext, onDestroy } from 'svelte';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ActiveValueScale } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
@@ -51,19 +51,19 @@
 		return [scaleState, band].filter(Boolean) as unknown as ActiveValueScale[];
 	}
 
-	// Shared toggle state — deduplicated by field across Toggle + Legend
-	const toggleState: ToggleState | null =
-		filterGroup && field ? filterGroup.getOrCreateToggle(field) : null;
-
+	// The selection is shared with any Toggle on the same field through its clause.
 	// A legend is not a chart, so it excludes no marks: every chart filters.
-	const toggle = toggleState?.register({
-		excludeMarkIds: () => new Set<string>(),
-		scaleStates: getLegendScaleStates
-	});
+	const toggle =
+		filterGroup && field
+			? filterGroup.registerToggle(field, {
+					excludeMarkIds: () => new Set<string>(),
+					scales: getLegendScaleStates
+				})
+			: null;
 	onDestroy(() => toggle?.destroy());
 
-	// Derive visual state from toggle state
-	const selectedSet = $derived(toggleState?.active ? toggleState.values : null);
+	// Derive visual state from the toggle's selection
+	const selectedSet = $derived(toggle?.active ? toggle.values : null);
 
 	// Shift/meta-click adds or removes; selecting every value clears instead.
 	function handleClick(value: string | number, event: MouseEvent) {
@@ -71,7 +71,6 @@
 	}
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="legend-ordinal {className}"
 	class:legend-interactive={isInteractive}

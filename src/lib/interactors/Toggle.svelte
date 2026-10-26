@@ -5,7 +5,8 @@
 	import type { ActiveValueScale, ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-	import { BandRegistrations } from './band-registrations';
+	import BandLabelToggle from './BandLabelToggle.svelte';
+	import { bandFieldsOf } from './band-fields';
 
 	/**
 	 * Click-to-filter interactor for categorical fields.
@@ -35,6 +36,7 @@
 
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
+	const declaredField = fields.length === 1 ? fields[0] : null;
 
 	/** Marks in this chart — excluded so the source dims rather than filters. */
 	const excludeMarkIds = () => new Set(chart.config.entries.keys());
@@ -53,45 +55,21 @@
 		return out;
 	}
 
-	function registerOn(toggleFields: string[]): ToggleHandle {
-		return filterGroup.getOrCreateToggle(toggleFields).register({
-			excludeMarkIds,
-			scaleStates: () => (toggleFields.length === 1 ? scalesFor(toggleFields[0]) : [])
-		});
+	const declared = filterGroup.registerToggle(fields, {
+		excludeMarkIds,
+		scales: () => (declaredField ? scalesFor(declaredField) : [])
+	});
+	chart.activators.add(declared.activate);
+
+	/** One BandLabelToggle per band axis field (see bandFieldsOf). */
+	const bandFields = $derived(bandFieldsOf([chart.xScaleState, chart.yScaleState], declaredField));
+
+	/** Band label toggles, filled by the BandLabelToggle children for clicks. */
+	const bandToggles = new Map<string, ToggleHandle>();
+
+	function toggleFor(toggleField: string): ToggleHandle | null {
+		return toggleField === declaredField ? declared : (bandToggles.get(toggleField) ?? null);
 	}
-
-	const declaredState = filterGroup.getOrCreateToggle(fields);
-	const declared = registerOn(fields);
-
-	/** Label clicks toggle the band axis's own field; see BandRegistrations. */
-	const bands = new BandRegistrations(
-		(bandField) => registerOn([bandField]),
-		(bandField) => fields.length === 1 && bandField === fields[0]
-	);
-
-	/** Each axis's band field, or null while it has no band scale. */
-	function bandField(axis: 'x' | 'y'): string | null {
-		if (chart.scaleTypes?.[axis] !== 'band') return null;
-		const band = chart[`${axis}ScaleState`] as BandScaleState | null | undefined;
-		return band?.sourceField || null;
-	}
-
-	function syncBands() {
-		bands.sync({ x: bandField('x'), y: bandField('y') });
-	}
-
-	function handleFor(toggleField: string): ToggleHandle | null {
-		if (fields.length === 1 && toggleField === fields[0]) return declared;
-		syncBands();
-		return bands.handleFor(toggleField);
-	}
-
-	function activate() {
-		syncBands();
-		declared.activate();
-		for (const [, handle] of bands.entries()) handle.activate();
-	}
-	chart.activators.add(activate);
 
 	/**
 	 * Band axis click → category under the pointer on that axis, or null.
@@ -141,27 +119,31 @@
 					? bandCategoryAt('x', innerPoint.x)
 					: null;
 		if (hit) {
-			handleFor(hit.field)?.toggle([hit.value], isMulti);
+			toggleFor(hit.field)?.toggle([hit.value], isMulti);
 			return;
 		}
 
 		// Path 3: Click on empty space — clear everything this interactor owns
-		clearAll();
+		if (declared.active) declared.clear();
+		for (const toggle of bandToggles.values()) if (toggle.active) toggle.clear();
 	};
 
-	function clearAll() {
-		if (declaredState.active) declared.clear();
-		for (const [bandField, handle] of bands.entries()) {
-			if (filterGroup.getOrCreateToggle(bandField).active) handle.clear();
-		}
-	}
-
-	// Destroying a registration clears its selection when it was the last
-	// control for it; a selection a legend still shows stays.
+	// Destroying the declared registration clears its selection when it was the
+	// last control for it; a selection a legend still shows stays. The band
+	// label children destroy their own.
 	onDestroy(() => {
 		declared.destroy();
-		bands.destroy();
-		chart.activators.delete(activate);
+		chart.activators.delete(declared.activate);
 		chart.onChartClick = null;
 	});
 </script>
+
+{#each bandFields as bandField (bandField)}
+	<BandLabelToggle
+		{filterGroup}
+		field={bandField}
+		{excludeMarkIds}
+		scales={() => scalesFor(bandField)}
+		handles={bandToggles}
+	/>
+{/each}

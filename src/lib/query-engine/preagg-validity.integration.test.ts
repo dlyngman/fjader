@@ -147,9 +147,7 @@ function drag(b: ReturnType<typeof brush>, lo: number, hi: number): Promise<void
 }
 
 function toggle(field: string, values: string[], excludeMarkIds = new Set<string>()) {
-	const consumer = group
-		.getOrCreateToggle(field)
-		.register({ excludeMarkIds: () => excludeMarkIds });
+	const consumer = group.registerToggle(field, { excludeMarkIds: () => excludeMarkIds });
 	return settle(() => consumer.set(values.map((v) => [v])));
 }
 
@@ -325,10 +323,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 
 		// A Toggle has no bin dims, so activating it builds nothing, and it must
 		// not drop the table of a mark it excludes, as a brush activation would.
-		group
-			.getOrCreateToggle('cat')
-			.register({ excludeMarkIds: () => new Set([MARK]) })
-			.activate();
+		group.registerToggle('cat', { excludeMarkIds: () => new Set([MARK]) }).activate();
 
 		await drag(b, 100, 699);
 		expect(lastQuery()).toContain('__dplot_preagg_');

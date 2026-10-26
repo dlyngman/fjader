@@ -1,12 +1,15 @@
 /**
  * FilterGroup — visual concerns layer on top of CrossfilterSelection.
  *
- * Manages the interactor API (register, getOrCreateToggle), schema
- * augmentation for UI filter pills, and scale projection (dimming
- * unselected categories in legends/axes).
+ * Manages the interactor API (register, registerToggle), schema augmentation
+ * for UI filter pills, and scale projection (dimming unselected categories in
+ * legends/axes).
+ *
+ * Owns clauses: a clause lives while at least one registration for its id
+ * exists. Components own their registrations through their own lifecycle.
  *
  * Replaces SelectionGroup from SelectionRegistry. No Mosaic Selection
- * objects, no event listeners, no refcounting.
+ * objects, no event listeners.
  */
 
 import {
@@ -20,7 +23,7 @@ import {
 	type ExprNode
 } from '@uwdata/mosaic-sql';
 import { CrossfilterSelection } from './CrossfilterSelection.svelte';
-import type { FilterExpr, FilterSchema } from './CrossfilterSelection.svelte';
+import type { Clause, FilterExpr, FilterSchema } from './CrossfilterSelection.svelte';
 import type { ActiveDim, QueryEngine } from './QueryEngine';
 
 // ---------------------------------------------------------------------------
@@ -52,12 +55,11 @@ export interface SourceOpts {
 	activeDims?: () => ActiveDim[];
 	/** Schema metadata for UI filter pills, derived from the clause value. */
 	augment?: (value: unknown) => FilterSchema | null;
-	/** Schema written with every clause, for sources whose metadata does not depend on the value. */
-	schema?: FilterSchema;
-	scaleStates?: () => ActiveValueScale[];
-	/** Extract values to project onto scales from the clause value.
-	 *  Required when scaleStates is provided — FilterGroup does not assume value shape. */
-	extractProjectionValues?: (value: unknown) => Set<unknown> | null;
+	/** The scales to dim, and the values to dim them by, taken from the clause value. */
+	projection?: {
+		scales: () => ActiveValueScale[];
+		values: (value: unknown) => Set<unknown> | null;
+	};
 }
 
 export interface SourceHandle {
@@ -67,15 +69,20 @@ export interface SourceHandle {
 	/** Prepare preagg tables for this source, ahead of its first use. */
 	activate(): void;
 	/**
-	 * Remove this registration. The last one under an id also removes the clause
-	 * (and a toggle's selection with it): a selection lives exactly as long as
-	 * some control for it does.
+	 * Remove this registration. The last one under an id also removes the clause:
+	 * a selection lives exactly as long as some control for it does.
 	 */
 	destroy(): void;
 }
 
-/** A consumer's handle on a shared toggle. Each change writes values and clause together. */
+/**
+ * A consumer's toggle on a field or field tuple. Its selection is read from
+ * the clause, so every toggle on the same fields sees the same selection.
+ */
 export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
+	/** Selected tuple keys (see tupleKey). Read-only: the clause is the state. */
+	readonly values: ReadonlySet<unknown>;
+	readonly active: boolean;
 	/**
 	 * Toggle one tuple. Single-select replaces the selection, or clears it if the
 	 * tuple was the only one selected; multi-select adds or removes it. With
@@ -87,8 +94,11 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
 }
 
 // ---------------------------------------------------------------------------
-// ToggleState
+// Toggles
 // ---------------------------------------------------------------------------
+
+/** The selection of a toggle with no clause. Shared, so it never looks changed. */
+const NOTHING_SELECTED: ReadonlySet<unknown> = new Set();
 
 /**
  * A key for a tuple that a Set can hold. A single field's value is its own key,
@@ -105,110 +115,6 @@ function toggleSourceId(fields: string[]): string {
 	return fields.length === 1 ? `toggle-${fields[0]}` : `toggle-${JSON.stringify(fields)}`;
 }
 
-/**
- * Shared reactive toggle state for a categorical field or field tuple.
- *
- * Owns the source's clause: consumers (a legend, a Toggle's marks or band axis
- * labels) register on it with their own exclusions and scales, and each change
- * through a handle updates the values and writes the clause once, excluding the
- * marks of the consumer that made it. The selection lasts as long as some
- * consumer is registered: when the last one goes, so do the clause and values.
- */
-export class ToggleState {
-	readonly fields: string[];
-	readonly sourceId: string;
-	/** Selected tuple keys (see tupleKey). */
-	values: Set<unknown> = $state(new Set());
-
-	#group: FilterGroup;
-	#tuples = new Map<unknown, unknown[]>();
-
-	constructor(group: FilterGroup, fields: string[]) {
-		this.#group = group;
-		this.fields = fields;
-		this.sourceId = toggleSourceId(fields);
-	}
-
-	get active(): boolean {
-		return this.values.size > 0;
-	}
-
-	register(opts: {
-		excludeMarkIds: () => Set<string>;
-		scaleStates?: () => ActiveValueScale[];
-	}): ToggleHandle {
-		const single = this.fields.length === 1;
-		const source = this.#group.register(this.sourceId, {
-			excludeMarkIds: opts.excludeMarkIds,
-			activeDims: () => this.fields.map((field) => ({ kind: 'value' as const, field })),
-			schema: { kind: 'toggle', column: this.fields[0], label: this.fields.join(', ') },
-			// Projection only makes sense for single-field toggles.
-			...(single &&
-				opts.scaleStates && {
-					scaleStates: opts.scaleStates,
-					extractProjectionValues: (value) => new Set((value as unknown[][]).map((t) => t[0]))
-				})
-		});
-
-		const write = (tuples: unknown[][]) => {
-			this.#tuples = new Map(tuples.map((t) => [tupleKey(t), t]));
-			this.values = new Set(this.#tuples.keys());
-			if (tuples.length === 0) source.clear();
-			else source.update(this.#predicate(), tuples);
-		};
-
-		return {
-			toggle: (tuple, multi, total) => {
-				const key = tupleKey(tuple);
-				const next = new Map(this.#tuples);
-				if (!multi) {
-					const onlyThis = next.size === 1 && next.has(key);
-					next.clear();
-					if (!onlyThis) next.set(key, tuple);
-				} else if (next.has(key)) {
-					next.delete(key);
-				} else {
-					next.set(key, tuple);
-					if (total != null && next.size >= total) next.clear();
-				}
-				write([...next.values()]);
-			},
-			set: (tuples) => write(tuples),
-			clear: () => write([]),
-			activate: source.activate,
-			destroy: source.destroy
-		};
-	}
-
-	/** Forget the selection without writing a clause (its clause is already gone). */
-	reset(): void {
-		this.#tuples = new Map();
-		this.values = new Set();
-	}
-
-	/**
-	 * The clause for the current tuples: `IN` for one field, an `OR` of
-	 * `IS NOT DISTINCT FROM` tuples for several. Each field is the SQL its
-	 * identity records (an expression keeps its own text), or the column of
-	 * that name when no mark has registered it.
-	 */
-	#predicate(): ExprNode {
-		const exprs = this.fields.map((field) => {
-			const text = this.#group.fieldSql(field);
-			return text ? sqlTag([text] as unknown as TemplateStringsArray) : column(field);
-		});
-		const tuples = [...this.#tuples.values()];
-		if (exprs.length === 1) {
-			return isIn(
-				exprs[0],
-				tuples.map((t) => literal(t[0]))
-			);
-		}
-		const clauses = tuples.map((t) => sqlAnd(t.map((v, i) => isNotDistinct(exprs[i], literal(v)))));
-		return clauses.length === 1 ? clauses[0] : or(clauses);
-	}
-}
-
 // ---------------------------------------------------------------------------
 // FilterGroup
 // ---------------------------------------------------------------------------
@@ -223,8 +129,6 @@ export class FilterGroup {
 
 	/** Registrations per source id. Several under one id are one source. */
 	#sources = new Map<string, Set<SourceOpts>>();
-	// Toggle instances by clause id, shared by field list
-	#toggles = new Map<string, ToggleState>();
 	// Track which scales we projected to, so we can clear them
 	#projectedScales = new Set<ActiveValueScale>();
 
@@ -281,8 +185,7 @@ export class FilterGroup {
 				this.selection.update(sourceId, {
 					predicate,
 					excludeMarkIds: opts.excludeMarkIds(),
-					value,
-					schema: opts.schema
+					value
 				});
 				this.#afterUpdate();
 			},
@@ -320,19 +223,111 @@ export class FilterGroup {
 	}
 
 	// -----------------------------------------------------------------
-	// Toggle API (for legend/axis categorical selection)
+	// Toggles (legend/axis categorical selection)
 	// -----------------------------------------------------------------
 
-	/** The shared toggle for a field or field tuple, keyed by the full field list. */
-	getOrCreateToggle(fields: string | string[]): ToggleState {
+	/**
+	 * Register a consumer's toggle on a field or field tuple. Toggles on the same
+	 * fields share one clause and so one selection; each writes the clause with
+	 * its own exclusions. The caller owns the registration and destroys it.
+	 *
+	 * Every `toggle-…` clause holds tuples: that is what lets the clause be read
+	 * as the selection. Nothing else writes those ids (`upsertManual` prefixes
+	 * its own with `manual:`).
+	 */
+	registerToggle(
+		fields: string | string[],
+		opts: { excludeMarkIds: () => Set<string>; scales?: () => ActiveValueScale[] }
+	): ToggleHandle {
 		const list = Array.isArray(fields) ? fields : [fields];
 		const sourceId = toggleSourceId(list);
-		let toggle = this.#toggles.get(sourceId);
-		if (!toggle) {
-			toggle = new ToggleState(this, list);
-			this.#toggles.set(sourceId, toggle);
+		const { selection } = this;
+		const schema: FilterSchema = { kind: 'toggle', column: list[0], label: list.join(', ') };
+		const source = this.register(sourceId, {
+			excludeMarkIds: opts.excludeMarkIds,
+			activeDims: () => list.map((field) => ({ kind: 'value' as const, field })),
+			augment: () => schema,
+			// Projection only makes sense for single-field toggles.
+			projection:
+				list.length === 1 && opts.scales
+					? {
+							scales: opts.scales,
+							values: (value) => new Set((value as unknown[][]).map((t) => t[0]))
+						}
+					: undefined
+		});
+
+		const tuplesOf = (clause: Clause | undefined): unknown[][] =>
+			(clause?.value as unknown[][] | undefined) ?? [];
+
+		/**
+		 * The selection, read from the clause. A brush frame bumps the selection
+		 * map's version, so a toggle with nothing selected is re-read on every one;
+		 * returning the same set while the clause is unchanged (and one shared
+		 * empty set without a clause) keeps that from re-rendering its readers.
+		 */
+		let last: { clause: Clause; keys: Set<unknown> } | null = null;
+		const keysOf = (clause: Clause | undefined): ReadonlySet<unknown> => {
+			if (!clause) return NOTHING_SELECTED;
+			if (last?.clause !== clause) {
+				last = { clause, keys: new Set(tuplesOf(clause).map(tupleKey)) };
+			}
+			return last.keys;
+		};
+
+		const write = (tuples: unknown[][]) => {
+			if (tuples.length === 0) source.clear();
+			else source.update(this.#togglePredicate(list, tuples), tuples);
+		};
+
+		return {
+			get values() {
+				return keysOf(selection.get(sourceId));
+			},
+			get active() {
+				return selection.isActive(sourceId);
+			},
+			toggle: (tuple, multi, total) => {
+				const key = tupleKey(tuple);
+				const next = new Map(tuplesOf(selection.get(sourceId)).map((t) => [tupleKey(t), t]));
+				if (!multi) {
+					const onlyThis = next.size === 1 && next.has(key);
+					next.clear();
+					if (!onlyThis) next.set(key, tuple);
+				} else if (next.has(key)) {
+					next.delete(key);
+				} else {
+					next.set(key, tuple);
+					if (total != null && next.size >= total) next.clear();
+				}
+				write([...next.values()]);
+			},
+			set: (tuples) => write(tuples),
+			clear: () => write([]),
+			activate: source.activate,
+			destroy: source.destroy
+		};
+	}
+
+	/**
+	 * The clause for a toggle's tuples: `IN` for one field, an `OR` of
+	 * `IS NOT DISTINCT FROM` tuples for several. Each field is the SQL its
+	 * identity records (an expression keeps its own text), or the column of
+	 * that name when no mark has registered it.
+	 */
+	#togglePredicate(fields: string[], tuples: unknown[][]): ExprNode {
+		const exprs = fields.map((field) => {
+			const text = this.fieldSql(field);
+			return text ? sqlTag([text] as unknown as TemplateStringsArray) : column(field);
+		});
+		if (exprs.length === 1) {
+			return isIn(
+				exprs[0],
+				tuples.map((t) => literal(t[0]))
+			);
 		}
-		return toggle;
+		const clauses = tuples.map((t) => sqlAnd(t.map((v, i) => isNotDistinct(exprs[i], literal(v)))));
+		return clauses.length === 1 ? clauses[0] : or(clauses);
 	}
 
 	// -----------------------------------------------------------------
@@ -366,12 +361,10 @@ export class FilterGroup {
 	// -----------------------------------------------------------------
 
 	/**
-	 * Remove a source's clause. A toggle's selection goes with it, so its
-	 * controls agree. Re-queries only when there was a clause to remove: an
-	 * unmount or a clear with nothing selected changes no mark's data.
+	 * Remove a source's clause. Re-queries only when there was a clause to
+	 * remove: an unmount or a clear with nothing selected changes no mark's data.
 	 */
 	clearSource(sourceId: string): void {
-		this.#toggles.get(sourceId)?.reset();
 		if (!this.selection.isActive(sourceId)) return;
 		this.selection.update(sourceId, null);
 		this.#afterUpdate();
@@ -379,9 +372,6 @@ export class FilterGroup {
 
 	clearAll(): void {
 		this.selection.clear();
-		for (const toggle of this.#toggles.values()) {
-			toggle.reset();
-		}
 		this.#clearAllScaleProjections();
 		this.#engine?.onFilterChange(this);
 	}
@@ -409,13 +399,13 @@ export class FilterGroup {
 			const clause = this.selection.get(sourceId);
 			if (!clause) continue;
 
-			for (const opts of registrations) {
-				if (!opts.scaleStates || !opts.extractProjectionValues) continue;
+			for (const { projection } of registrations) {
+				if (!projection) continue;
 
-				const values = opts.extractProjectionValues(clause.value);
+				const values = projection.values(clause.value);
 				if (!values?.size) continue;
 
-				for (const scale of opts.scaleStates()) {
+				for (const scale of projection.scales()) {
 					const existing = activeByScale.get(scale);
 					if (existing) {
 						for (const v of values) existing.add(v);

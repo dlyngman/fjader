@@ -38,6 +38,8 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 const sqlOf = (group: FilterGroup, markId: string) =>
 	group.selection.predicate(markId).map((p) => String(p));
 
+const strings = (v: unknown) => new Set(v as string[]);
+
 describe('FilterGroup', () => {
 	describe('register', () => {
 		it('returns a handle that updates the selection', () => {
@@ -149,6 +151,13 @@ describe('FilterGroup', () => {
 				values: [10, 50]
 			});
 		});
+
+		it('labels a toggle’s filter item with its field', () => {
+			const group = new FilterGroup();
+			group.registerToggle('region', { excludeMarkIds: () => new Set() }).toggle(['North'], false);
+
+			expect(group.items[0].schema).toEqual({ kind: 'toggle', column: 'region', label: 'region' });
+		});
 	});
 
 	describe('scale projection', () => {
@@ -158,8 +167,7 @@ describe('FilterGroup', () => {
 
 			const handle = group.register('brush-x', {
 				excludeMarkIds: () => new Set(),
-				scaleStates: () => [scale],
-				extractProjectionValues: (v) => new Set(v as string[])
+				projection: { scales: () => [scale], values: strings }
 			});
 
 			handle.update("species IN ('Adelie', 'Gentoo')", ['Adelie', 'Gentoo']);
@@ -173,8 +181,7 @@ describe('FilterGroup', () => {
 
 			const handle = group.register('brush-x', {
 				excludeMarkIds: () => new Set(),
-				scaleStates: () => [scale],
-				extractProjectionValues: (v) => new Set(v as string[])
+				projection: { scales: () => [scale], values: strings }
 			});
 
 			handle.update('x > 0', ['A', 'B']);
@@ -184,34 +191,18 @@ describe('FilterGroup', () => {
 			expect(scale.active).toBeNull();
 		});
 
-		it('does not project when no extractProjectionValues is provided', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-
-			const handle = group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				scaleStates: () => [scale]
-			});
-
-			handle.update('x > 0', ['A', 'B']);
-			expect(scale.active).toBeNull();
-		});
-
 		it('projects onto the union of every registration’s scales, whoever wrote', () => {
 			const legendScale = mockScale();
 			const bandScale = mockScale();
 			const group = new FilterGroup();
-			const extract = (v: unknown) => new Set(v as string[]);
 
 			const legend = group.register('toggle-region', {
 				excludeMarkIds: () => new Set(),
-				scaleStates: () => [legendScale],
-				extractProjectionValues: extract
+				projection: { scales: () => [legendScale], values: strings }
 			});
 			group.register('toggle-region', {
 				excludeMarkIds: () => new Set(['mark-chart']),
-				scaleStates: () => [bandScale],
-				extractProjectionValues: extract
+				projection: { scales: () => [bandScale], values: strings }
 			});
 
 			legend.update("region IN ('North')", ['North']);
@@ -282,13 +273,13 @@ describe('FilterGroup', () => {
 	});
 
 	describe('clearAll', () => {
-		it('removes all clauses and clears toggles', () => {
+		it('removes all clauses, so every toggle reads nothing selected', () => {
 			const group = new FilterGroup();
 			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
 			handle.update('x > 0', null);
 
-			const species = group.getOrCreateToggle('species');
-			species.register({ excludeMarkIds: () => new Set() }).toggle(['Adelie'], false);
+			const species = group.registerToggle('species', { excludeMarkIds: () => new Set() });
+			species.toggle(['Adelie'], false);
 
 			group.clearAll();
 
@@ -298,51 +289,61 @@ describe('FilterGroup', () => {
 	});
 });
 
-describe('ToggleState', () => {
+describe('registerToggle', () => {
 	const noMarks = () => new Set<string>();
+	const chartMarks = () => new Set(['mark-chart']);
 
 	it('single-select replaces the selection, and toggling the only value clears it', () => {
 		const group = new FilterGroup();
-		const state = group.getOrCreateToggle('species');
-		const toggle = state.register({ excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('species', { excludeMarkIds: noMarks });
 
 		toggle.toggle(['Adelie'], false);
-		expect(state.values).toEqual(new Set(['Adelie']));
+		expect(toggle.values).toEqual(new Set(['Adelie']));
 		toggle.toggle(['Gentoo'], false);
-		expect(state.values).toEqual(new Set(['Gentoo']));
+		expect(toggle.values).toEqual(new Set(['Gentoo']));
 		toggle.toggle(['Gentoo'], false);
-		expect(state.active).toBe(false);
+		expect(toggle.active).toBe(false);
 		expect(group.selection.isActive('toggle-species')).toBe(false);
 	});
 
 	it('multi-select adds and removes values', () => {
 		const group = new FilterGroup();
-		const state = group.getOrCreateToggle('species');
-		const toggle = state.register({ excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('species', { excludeMarkIds: noMarks });
 
 		toggle.toggle(['Adelie'], true);
 		toggle.toggle(['Gentoo'], true);
-		expect(state.values).toEqual(new Set(['Adelie', 'Gentoo']));
+		expect(toggle.values).toEqual(new Set(['Adelie', 'Gentoo']));
 		toggle.toggle(['Adelie'], true);
-		expect(state.values).toEqual(new Set(['Gentoo']));
+		expect(toggle.values).toEqual(new Set(['Gentoo']));
 	});
 
 	it('a multi-select that would select every one of `total` values clears instead', () => {
 		const group = new FilterGroup();
-		const state = group.getOrCreateToggle('species');
-		const toggle = state.register({ excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('species', { excludeMarkIds: noMarks });
 
 		toggle.toggle(['Adelie'], true, 2);
 		toggle.toggle(['Gentoo'], true, 2);
-		expect(state.active).toBe(false);
+		expect(toggle.active).toBe(false);
 		expect(group.selection.isActive('toggle-species')).toBe(false);
+	});
+
+	it('toggles on the same field share one selection, read from the clause', () => {
+		const group = new FilterGroup();
+		const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
+		const chart = group.registerToggle('region', { excludeMarkIds: chartMarks });
+
+		legend.toggle(['North'], false);
+		expect(chart.values).toEqual(new Set(['North']));
+
+		// A multi-select on the chart starts from the legend's selection.
+		chart.toggle(['South'], true);
+		expect(legend.values).toEqual(new Set(['North', 'South']));
 	});
 
 	it('writes the clause with the consumer’s exclusions, always as tuples', () => {
 		const group = new FilterGroup();
-		const state = group.getOrCreateToggle('region');
-		const legend = state.register({ excludeMarkIds: noMarks });
-		const chart = state.register({ excludeMarkIds: () => new Set(['mark-chart']) });
+		const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
+		const chart = group.registerToggle('region', { excludeMarkIds: chartMarks });
 
 		legend.toggle(['North'], false);
 		expect(sqlOf(group, 'mark-chart')).toEqual([`("region" IN ('North'))`]);
@@ -354,13 +355,15 @@ describe('ToggleState', () => {
 		expect(group.selection.get('toggle-region')!.value).toEqual([['South']]);
 	});
 
-	it('projects single-field tuples onto every consumer’s scales', () => {
+	it('supplies its projection values itself, onto every consumer’s scales', () => {
 		const group = new FilterGroup();
 		const color = mockScale();
 		const band = mockScale();
-		const state = group.getOrCreateToggle('region');
-		const legend = state.register({ excludeMarkIds: noMarks, scaleStates: () => [color] });
-		state.register({ excludeMarkIds: () => new Set(['mark-chart']), scaleStates: () => [band] });
+		const legend = group.registerToggle('region', {
+			excludeMarkIds: noMarks,
+			scales: () => [color]
+		});
+		group.registerToggle('region', { excludeMarkIds: chartMarks, scales: () => [band] });
 
 		legend.toggle(['North'], false);
 		expect(color.active).toEqual(new Set(['North']));
@@ -371,18 +374,35 @@ describe('ToggleState', () => {
 		expect(band.active).toBeNull();
 	});
 
-	it('is keyed by the full field list', () => {
+	it('reads the same selection object while its clause is unchanged, and one shared empty set without one', () => {
 		const group = new FilterGroup();
-		expect(group.getOrCreateToggle(['region', 'category'])).not.toBe(
-			group.getOrCreateToggle('region')
-		);
-		expect(group.getOrCreateToggle(['region'])).toBe(group.getOrCreateToggle('region'));
+		const brush = group.register('brush-x', { excludeMarkIds: noMarks });
+		const unselected = group.registerToggle('species', { excludeMarkIds: noMarks });
+		const selected = group.registerToggle('region', { excludeMarkIds: noMarks });
+		selected.toggle(['North'], false);
+
+		const empty = unselected.values;
+		const north = selected.values;
+		// Brush frames touch neither toggle's clause.
+		brush.update('x > 0', [0, 1]);
+		brush.update('x > 1', [1, 2]);
+		expect(unselected.values).toBe(empty);
+		expect(selected.values).toBe(north);
+		expect(group.registerToggle('carrier', { excludeMarkIds: noMarks }).values).toBe(empty);
+	});
+
+	it('uses separate clauses for a field tuple and its first field', () => {
+		const group = new FilterGroup();
+		const pair = group.registerToggle(['region', 'category'], { excludeMarkIds: noMarks });
+		const region = group.registerToggle('region', { excludeMarkIds: noMarks });
+
+		pair.toggle(['North', 'Books'], false);
+		expect(region.active).toBe(false);
 	});
 
 	it('builds an OR of IS NOT DISTINCT FROM tuples for several fields', () => {
 		const group = new FilterGroup();
-		const state = group.getOrCreateToggle(['region', 'category']);
-		const toggle = state.register({ excludeMarkIds: noMarks });
+		const toggle = group.registerToggle(['region', 'category'], { excludeMarkIds: noMarks });
 
 		toggle.set([
 			['North', 'Books'],
@@ -396,82 +416,79 @@ describe('ToggleState', () => {
 
 	it('keys BIGINT tuples without throwing, and keeps 1 and "1" apart', () => {
 		const group = new FilterGroup();
-		const state = group.getOrCreateToggle(['year', 'code']);
-		const toggle = state.register({ excludeMarkIds: noMarks });
+		const toggle = group.registerToggle(['year', 'code'], { excludeMarkIds: noMarks });
 
 		expect(() => toggle.toggle([2021n, 1], true)).not.toThrow();
 		toggle.toggle([2021n, '1'], true);
-		expect(state.values.size).toBe(2);
+		expect(toggle.values.size).toBe(2);
 		toggle.toggle([2021n, 1], true);
-		expect(state.values.size).toBe(1);
+		expect(toggle.values.size).toBe(1);
 	});
 
 	it('uses the field’s identity SQL, so an expression field gets a valid predicate', () => {
 		const { engine } = mockEngine({ 'year("date")': 'year("date")' });
 		const group = new FilterGroup();
 		group.setEngine(engine);
-		const toggle = group.getOrCreateToggle('year("date")').register({ excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('year("date")', { excludeMarkIds: noMarks });
 
 		toggle.toggle([2021], false);
 		expect(sqlOf(group, 'mark-x')).toEqual([`(year("date") IN (2021))`]);
-	});
-
-	it('clears the clause and selection when its last consumer goes, not before', () => {
-		const group = new FilterGroup();
-		const state = group.getOrCreateToggle('region');
-		const legend = state.register({ excludeMarkIds: noMarks });
-		const chart = state.register({ excludeMarkIds: () => new Set(['mark-chart']) });
-		chart.toggle(['North'], false);
-
-		// The legend still shows the selection, so it stays.
-		chart.destroy();
-		expect(group.selection.isActive('toggle-region')).toBe(true);
-		expect(state.values).toEqual(new Set(['North']));
-
-		legend.destroy();
-		expect(group.selection.isActive('toggle-region')).toBe(false);
-		expect(state.active).toBe(false);
-	});
-
-	it('a band label selection is cleared when its axis is reassigned', () => {
-		// Toggle drops the old band field's registration when the band channel
-		// changes; with no other control on that field, nothing could clear it.
-		const group = new FilterGroup();
-		const region = group.getOrCreateToggle('region');
-		const label = region.register({ excludeMarkIds: () => new Set(['mark-chart']) });
-		label.toggle(['North'], false);
-
-		label.destroy();
-		expect(group.selection.isActive('toggle-region')).toBe(false);
-		expect(region.active).toBe(false);
-	});
-
-	it('clearing the clause from outside (a filter chip) clears the selection too', () => {
-		const group = new FilterGroup();
-		const state = group.getOrCreateToggle('region');
-		const legend = state.register({ excludeMarkIds: noMarks });
-		legend.toggle(['North'], true);
-
-		group.clearSource('toggle-region');
-		expect(state.active).toBe(false);
-
-		// The next shift-click starts from nothing, not from the old tuples.
-		legend.toggle(['South'], true);
-		expect(state.values).toEqual(new Set(['South']));
 	});
 
 	it('activates with one value dim per field', () => {
 		const { engine, activations } = mockEngine();
 		const group = new FilterGroup();
 		group.setEngine(engine);
-		group
-			.getOrCreateToggle(['region', 'category'])
-			.register({ excludeMarkIds: noMarks })
-			.activate();
+		group.registerToggle(['region', 'category'], { excludeMarkIds: noMarks }).activate();
 
 		expect(activations.at(-1)!.dims).toEqual([
 			{ kind: 'value', field: 'region' },
 			{ kind: 'value', field: 'category' }
 		]);
+	});
+
+	describe('lifetime', () => {
+		it('clears the selection when its last consumer goes, not before', () => {
+			const group = new FilterGroup();
+			const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
+			const chart = group.registerToggle('region', { excludeMarkIds: chartMarks });
+			chart.toggle(['North'], false);
+
+			// The legend still shows the selection, so it stays.
+			chart.destroy();
+			expect(legend.values).toEqual(new Set(['North']));
+
+			legend.destroy();
+			expect(group.selection.isActive('toggle-region')).toBe(false);
+		});
+
+		it('a band label registration destroyed (its axis reassigned) clears its selection unless a legend holds it', () => {
+			// Toggle keys one band-label child per field; reassigning the band
+			// channel unmounts the old field's child, which destroys this.
+			const group = new FilterGroup();
+			const label = group.registerToggle('region', { excludeMarkIds: chartMarks });
+			label.toggle(['North'], false);
+			label.destroy();
+			expect(group.selection.isActive('toggle-region')).toBe(false);
+
+			const legend = group.registerToggle('carrier', { excludeMarkIds: noMarks });
+			const carrierLabel = group.registerToggle('carrier', { excludeMarkIds: chartMarks });
+			carrierLabel.toggle(['UA'], false);
+			carrierLabel.destroy();
+			expect(legend.values).toEqual(new Set(['UA']));
+		});
+
+		it('clearing the clause from outside (a filter chip) clears what every toggle reads', () => {
+			const group = new FilterGroup();
+			const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
+			legend.toggle(['North'], true);
+
+			group.clearSource('toggle-region');
+			expect(legend.active).toBe(false);
+
+			// The next shift-click starts from nothing, not from the old tuples.
+			legend.toggle(['South'], true);
+			expect(legend.values).toEqual(new Set(['South']));
+		});
 	});
 });
