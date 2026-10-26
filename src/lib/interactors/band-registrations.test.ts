@@ -49,6 +49,23 @@ describe('BandRegistrations', () => {
 		expect(bands.handleFor('carrier')).not.toBeNull();
 	});
 
+	it('keeps a label selection when the axes swap fields', () => {
+		const { group, bands } = setup();
+		bands.sync({ x: 'region', y: 'carrier' });
+		bands.handleFor('region')!.toggle(['North'], false);
+
+		// A transpose: region moves to y. It must never be without a registration.
+		bands.sync({ x: 'carrier', y: 'region' });
+		expect(group.selection.isActive('toggle-region')).toBe(true);
+		expect(group.getOrCreateToggle('region').values).toEqual(new Set(['North']));
+		expect(
+			bands
+				.entries()
+				.map(([field]) => field)
+				.sort()
+		).toEqual(['carrier', 'region']);
+	});
+
 	it('keeps the selection when a legend still holds the old field', () => {
 		const { group, bands } = setup();
 		const legend = group.getOrCreateToggle('region').register({ excludeMarkIds: () => new Set() });

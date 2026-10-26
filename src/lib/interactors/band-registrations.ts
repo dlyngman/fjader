@@ -34,17 +34,21 @@ export class BandRegistrations {
 
 	/** Bring registrations in line with each axis's band field, or null where it has none now. */
 	sync(fields: Record<Axis, string | null>): void {
+		const dropped: ToggleHandle[] = [];
 		for (const axis of ['x', 'y'] as const) {
 			const field = fields[axis];
 			if (field == null) continue;
 			const current = this.#byAxis.get(axis);
 			if (current?.field === field) continue;
-			current?.handle.destroy();
+			if (current) dropped.push(current.handle);
 			this.#byAxis.delete(axis);
 			if (!this.#ownedElsewhere(field)) {
 				this.#byAxis.set(axis, { field, handle: this.#register(field) });
 			}
 		}
+		// After the new registrations, so a field that only moved axes (a
+		// transpose) never loses its last one and with it its selection.
+		for (const handle of dropped) handle.destroy();
 	}
 
 	handleFor(field: string): ToggleHandle | null {
