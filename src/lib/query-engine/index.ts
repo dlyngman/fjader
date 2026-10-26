@@ -39,12 +39,27 @@ export function getFilterGroups(): FilterGroupRegistry {
 // Re-exports
 export { initDuckDB } from './duckdb';
 export { QueryEngine } from './QueryEngine';
-export type { DuckDBConnection, QueryOpts, ColumnInfo, ColumnSchema, JsColumnType, QueryDescriptor } from './QueryEngine';
+export type {
+	DuckDBConnection,
+	QueryOpts,
+	ColumnInfo,
+	ColumnSchema,
+	JsColumnType,
+	QueryDescriptor,
+	ActiveDim,
+	ActivationSource
+} from './QueryEngine';
 export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';
 export { MarkHandle } from './MarkHandle.svelte';
 export type { QueryParams } from './MarkHandle.svelte';
 export { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 export { FilterGroup } from './FilterGroup.svelte';
-export type { BrushOpts, BrushHandle, FilterItem, ActiveValueScale } from './FilterGroup.svelte';
+export type {
+	SourceOpts,
+	SourceHandle,
+	ToggleHandle,
+	FilterItem,
+	ActiveValueScale
+} from './FilterGroup.svelte';
 export { CrossfilterSelection } from './CrossfilterSelection.svelte';
 export type { FilterExpr, FilterSchema, Clause, ClauseEntry } from './CrossfilterSelection.svelte';

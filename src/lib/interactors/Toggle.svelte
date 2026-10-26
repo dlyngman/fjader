@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
-	import { column, isIn, literal, or, and as sqlAnd, isNotDistinct } from '@uwdata/mosaic-sql';
 	import type { ChartContext } from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ActiveValueScale, ToggleState } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ActiveValueScale, ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+	import BandLabelToggle from './BandLabelToggle.svelte';
+	import { bandFieldsOf } from './band-fields';
 
 	/**
 	 * Click-to-filter interactor for categorical fields.
@@ -35,36 +36,7 @@
 
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
-
-	/** One toggle per field key this interactor drives: the declared field
-	 *  (or tuple) plus, lazily, the band axis field for label clicks. */
-	interface OwnedToggle {
-		fields: string[];
-		columnRefs: ReturnType<typeof column>[];
-		state: ToggleState;
-		toKey: (tuple: unknown[]) => unknown;
-		fromKey: (key: unknown) => unknown[];
-	}
-	const owned = new Map<string, OwnedToggle>();
-
-	function getToggle(toggleFields: string[]): OwnedToggle {
-		const id = toggleFields.join(' ');
-		let t = owned.get(id);
-		if (!t) {
-			const single = toggleFields.length === 1;
-			t = {
-				fields: toggleFields,
-				columnRefs: toggleFields.map((f) => column(f)),
-				state: filterGroup.getOrCreateToggle(toggleFields[0]),
-				toKey: single ? (tuple) => tuple[0] : (tuple) => JSON.stringify(tuple),
-				fromKey: single ? (key) => [key] : (key) => JSON.parse(key as string)
-			};
-			owned.set(id, t);
-		}
-		return t;
-	}
-
-	const declared = getToggle(fields);
+	const declaredField = fields.length === 1 ? fields[0] : null;
 
 	/** Marks in this chart — excluded so the source dims rather than filters. */
 	const excludeMarkIds = () => new Set(chart.config.entries.keys());
@@ -83,44 +55,20 @@
 		return out;
 	}
 
-	function syncFilter(t: OwnedToggle) {
-		const values = t.state.values;
-		const single = t.fields.length === 1;
-		const opts = {
-			excludeMarkIds,
-			// Projection only makes sense for single-field toggles.
-			...(single && {
-				scaleStates: () => scalesFor(t.fields[0]),
-				projectionValues: () => (t.state.values.size ? new Set(t.state.values) : null)
-			})
-		};
+	const declared = filterGroup.registerToggle(fields, {
+		excludeMarkIds,
+		scales: () => (declaredField ? scalesFor(declaredField) : [])
+	});
+	chart.activators.add(declared.activate);
 
-		if (values.size === 0) {
-			filterGroup.syncToggle(t.fields[0], null, null, opts);
-			return;
-		}
+	/** One BandLabelToggle per band axis field (see bandFieldsOf). */
+	const bandFields = $derived(bandFieldsOf([chart.xScaleState, chart.yScaleState], declaredField));
 
-		const tuples = Array.from(values).map(t.fromKey);
-		let predicate;
-		if (single) {
-			predicate = isIn(
-				t.columnRefs[0],
-				tuples.map((tuple) => literal(tuple[0]))
-			);
-		} else {
-			const clauses = tuples.map((tuple) =>
-				sqlAnd(tuple.map((v: unknown, i: number) => isNotDistinct(t.columnRefs[i], literal(v))))
-			);
-			predicate = clauses.length === 1 ? clauses[0] : or(clauses);
-		}
+	/** Band label toggles, filled by the BandLabelToggle children for clicks. */
+	const bandToggles = new Map<string, ToggleHandle>();
 
-		filterGroup.syncToggle(t.fields[0], predicate, tuples, opts);
-	}
-
-	function toggle(t: OwnedToggle, tuple: unknown[], event: MouseEvent) {
-		const isMulti = event.shiftKey || event.metaKey;
-		t.state.toggle(t.toKey(tuple), isMulti);
-		syncFilter(t);
+	function toggleFor(toggleField: string): ToggleHandle | null {
+		return toggleField === declaredField ? declared : (bandToggles.get(toggleField) ?? null);
 	}
 
 	/**
@@ -152,13 +100,14 @@
 		const tm = chart.tooltipManager;
 		const point = { x: event.offsetX, y: event.offsetY };
 		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
+		const isMulti = event.shiftKey || event.metaKey;
 
 		// Path 1: Inner area click — use tooltip hit data (don't require visible —
 		// pointer micro-movement during click hides tooltip but data stays valid)
 		if (xInBounds && yInBounds && tm?.currentPoint) {
 			const tuple = fields.map((f) => tm.currentPoint![f]);
 			if (tuple.some((v) => v == null)) return;
-			toggle(declared, tuple, event);
+			declared.toggle(tuple, isMulti);
 			return;
 		}
 
@@ -170,24 +119,31 @@
 					? bandCategoryAt('x', innerPoint.x)
 					: null;
 		if (hit) {
-			toggle(getToggle([hit.field]), [hit.value], event);
+			toggleFor(hit.field)?.toggle([hit.value], isMulti);
 			return;
 		}
 
 		// Path 3: Click on empty space — clear everything this interactor owns
-		clearAll();
+		if (declared.active) declared.clear();
+		for (const toggle of bandToggles.values()) if (toggle.active) toggle.clear();
 	};
 
-	function clearAll() {
-		for (const t of owned.values()) {
-			if (!t.state.active) continue;
-			t.state.clear();
-			syncFilter(t);
-		}
-	}
-
+	// Destroying the declared registration clears its selection when it was the
+	// last control for it; a selection a legend still shows stays. The band
+	// label children destroy their own.
 	onDestroy(() => {
-		clearAll();
+		declared.destroy();
+		chart.activators.delete(declared.activate);
 		chart.onChartClick = null;
 	});
 </script>
+
+{#each bandFields as bandField (bandField)}
+	<BandLabelToggle
+		{filterGroup}
+		field={bandField}
+		{excludeMarkIds}
+		scales={() => scalesFor(bandField)}
+		handles={bandToggles}
+	/>
+{/each}

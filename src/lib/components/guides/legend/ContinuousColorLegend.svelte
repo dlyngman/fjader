@@ -4,7 +4,7 @@
 	import { isBetween, column } from '@uwdata/mosaic-sql';
 	import { scaleBrushExtent1D, WHEEL_SENSITIVITY } from '$lib/interactors/brush-utils';
 	import { getContext, onDestroy } from 'svelte';
-	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
@@ -162,9 +162,8 @@
 	const sourceId = `legend-color-${scaleState.field}`;
 	const columnRef = $derived(column(scaleState.field));
 
-	const brushHandle: BrushHandle | null = filterGroup
-		? filterGroup.createBrush({
-				sourceId,
+	const brushHandle: SourceHandle | null = filterGroup
+		? filterGroup.register(sourceId, {
 				excludeMarkIds: () => new Set<string>(),
 				augment: (value) => ({
 					kind: 'range',
@@ -332,9 +331,7 @@
 		stroke="currentColor"
 		stroke-width={0.5}
 	/>
-	<text x={tx} y={ty} {dy} text-anchor={anchor} class="legend-tick-label"
-		>{formatTick(value)}</text
-	>
+	<text x={tx} y={ty} {dy} text-anchor={anchor} class="legend-tick-label">{formatTick(value)}</text>
 {/snippet}
 
 {#snippet hoverLabel(mainPos: number, value: number)}

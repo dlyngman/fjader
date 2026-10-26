@@ -334,6 +334,11 @@ export class CategoricalIdentity {
 		return `__dplot_${identityToken(field)}_idx`;
 	}
 
+	/** SQL producing `field`'s value, once a mark has registered it; undefined before. */
+	sqlFor(field: string): string | undefined {
+		return this.#sqlFor.get(field);
+	}
+
 	/** Name of the dim table for `field`. */
 	dimTable(field: string): string {
 		return `__dplot_dim_${identityToken(field)}_s${this.#session}`;

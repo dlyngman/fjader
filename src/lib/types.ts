@@ -513,7 +513,12 @@ export interface ChartContext {
 	onInteractorPointerDown: ((event: PointerEvent, innerPoint: Point) => boolean) | null;
 	onInteractorPointerMove: ((event: PointerEvent) => boolean) | null;
 	onInteractorPointerUp: ((event: PointerEvent) => boolean) | null;
-	onInteractorPointerEnter: (() => void) | null;
+	/**
+	 * Selection sources to activate when the pointer enters the chart, so their
+	 * preagg tables exist before the first gesture. Interactors add their
+	 * handle's `activate` on mount and delete it on destroy.
+	 */
+	readonly activators: Set<() => void>;
 }
 
 export type { Margin, Point, AxesResult };

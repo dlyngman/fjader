@@ -11,9 +11,8 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
-	import type { BrushHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
-	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 	interface Props {
 		/** Filter group name — selects which FilterGroup this brush writes to. */
@@ -26,7 +25,6 @@
 
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
-	const queryEngine = getContext<QueryEngine>('query-engine');
 
 	const chart = getContext<ChartContext>('chart');
 	const brush = new BrushState2D();
@@ -43,9 +41,25 @@
 
 	const source = `interval-2d-${chart.chartId}`;
 
-	const brushHandle: BrushHandle = filterGroup.createBrush({
-		sourceId: source,
+	const brushHandle: SourceHandle = filterGroup.register(source, {
 		excludeMarkIds: () => new Set(chart.config.entries.keys()),
+		activeDims: () => {
+			if (!xColumnRef || !yColumnRef) return [];
+			return [
+				{
+					kind: 'bin',
+					columnRef: xColumnRef,
+					domain: chart.xScale.domain() as [number, number],
+					pixelExtent: chart.innerWidth
+				},
+				{
+					kind: 'bin',
+					columnRef: yColumnRef,
+					domain: chart.yScale.domain() as [number, number],
+					pixelExtent: chart.innerHeight
+				}
+			];
+		},
 		augment: (value) => ({
 			kind: 'range',
 			label: `${typeof resolvedXField === 'string' ? resolvedXField : resolvedXField?.toString()} × ${typeof resolvedYField === 'string' ? resolvedYField : resolvedYField?.toString()}`,
@@ -139,22 +153,6 @@
 		brushHandle.update(predicate, [
 			[xMin, xMax],
 			[yMin, yMax]
-		]);
-	}
-
-	function handlePointerEnter() {
-		if (!xColumnRef || !yColumnRef) return;
-		queryEngine.activate(filterGroup, source, new Set(chart.config.entries.keys()), [
-			{
-				columnRef: xColumnRef,
-				domain: chart.xScale.domain() as [number, number],
-				pixelExtent: chart.innerWidth
-			},
-			{
-				columnRef: yColumnRef,
-				domain: chart.yScale.domain() as [number, number],
-				pixelExtent: chart.innerHeight
-			}
 		]);
 	}
 
@@ -348,13 +346,13 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
-		chart.onInteractorPointerEnter = handlePointerEnter;
+		chart.activators.add(brushHandle.activate);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
-			chart.onInteractorPointerEnter = null;
+			chart.activators.delete(brushHandle.activate);
 			brushHandle.destroy();
 		};
 	});

@@ -442,7 +442,7 @@
 		onInteractorPointerDown: null,
 		onInteractorPointerMove: null,
 		onInteractorPointerUp: null,
-		onInteractorPointerEnter: null
+		activators: new Set()
 	};
 
 	setContext('chart', marksContext);

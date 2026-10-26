@@ -1,17 +1,30 @@
 /**
  * FilterGroup — visual concerns layer on top of CrossfilterSelection.
  *
- * Manages the interactor API (createBrush, getOrCreateToggle), schema
- * augmentation for UI filter pills, and scale projection (dimming
- * unselected categories in legends/axes).
+ * Manages the interactor API (register, registerToggle), schema augmentation
+ * for UI filter pills, and scale projection (dimming unselected categories in
+ * legends/axes).
+ *
+ * Owns clauses: a clause lives while at least one registration for its id
+ * exists. Components own their registrations through their own lifecycle.
  *
  * Replaces SelectionGroup from SelectionRegistry. No Mosaic Selection
- * objects, no event listeners, no refcounting.
+ * objects, no event listeners.
  */
 
+import {
+	and as sqlAnd,
+	column,
+	isIn,
+	isNotDistinct,
+	literal,
+	or,
+	sql as sqlTag,
+	type ExprNode
+} from '@uwdata/mosaic-sql';
 import { CrossfilterSelection } from './CrossfilterSelection.svelte';
-import type { FilterExpr, FilterSchema, Clause, ClauseEntry } from './CrossfilterSelection.svelte';
-import type { QueryEngine } from './QueryEngine';
+import type { Clause, FilterExpr, FilterSchema } from './CrossfilterSelection.svelte';
+import type { ActiveDim, QueryEngine } from './QueryEngine';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,82 +46,73 @@ export interface FilterItem {
 	schema?: FilterSchema;
 }
 
-export interface BrushOpts {
-	sourceId: string;
-	/** Getter for mark IDs to exclude from this filter (chart-level cross-filtering).
+/** One registration of a selection source: a brush, a legend, a Toggle. */
+export interface SourceOpts {
+	/** Getter for mark IDs this registration's writes exclude (chart-level cross-filtering).
 	 *  A getter rather than a static Set so it stays current if marks are added/removed. */
 	excludeMarkIds: () => Set<string>;
+	/** How the source selects, read at hover time for preagg activation. */
+	activeDims?: () => ActiveDim[];
+	/** Schema metadata for UI filter pills, derived from the clause value. */
 	augment?: (value: unknown) => FilterSchema | null;
-	scaleStates?: () => ActiveValueScale[];
-	/** Extract values to project onto scales from the clause value.
-	 *  Required when scaleStates is provided — FilterGroup does not assume value shape. */
-	extractProjectionValues?: (value: unknown) => Set<unknown> | null;
+	/** The scales to dim, and the values to dim them by, taken from the clause value. */
+	projection?: {
+		scales: () => ActiveValueScale[];
+		values: (value: unknown) => Set<unknown> | null;
+	};
 }
 
-export interface BrushHandle {
+export interface SourceHandle {
+	/** Write the clause, excluding this registration's marks. */
 	update(predicate: FilterExpr, value: unknown): void;
 	clear(): void;
+	/** Prepare preagg tables for this source, ahead of its first use. */
+	activate(): void;
+	/**
+	 * Remove this registration. The last one under an id also removes the clause:
+	 * a selection lives exactly as long as some control for it does.
+	 */
 	destroy(): void;
 }
 
-export interface ToggleSyncOpts {
-	/** Mark IDs to exclude from this toggle's filter (the source chart, for
-	 *  crossfilter semantics: it dims instead of filtering itself). */
-	excludeMarkIds: () => Set<string>;
-	/** Scales to project the toggled values onto (dimming). Registered under
-	 *  the toggle's source id so #projectToScales handles it like brushes. */
-	scaleStates?: () => ActiveValueScale[];
-	/** Values to project. Required when scaleStates is provided. */
-	projectionValues?: () => Set<unknown> | null;
+/**
+ * A consumer's toggle on a field or field tuple. Its selection is read from
+ * the clause, so every toggle on the same fields sees the same selection.
+ */
+export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
+	/** Selected tuple keys (see tupleKey). Read-only: the clause is the state. */
+	readonly values: ReadonlySet<unknown>;
+	readonly active: boolean;
+	/**
+	 * Toggle one tuple. Single-select replaces the selection, or clears it if the
+	 * tuple was the only one selected; multi-select adds or removes it. With
+	 * `total`, a multi-select that would select all `total` values clears instead.
+	 */
+	toggle(tuple: unknown[], multi: boolean, total?: number): void;
+	/** Select exactly these tuples; empty clears. */
+	set(tuples: unknown[][]): void;
 }
 
 // ---------------------------------------------------------------------------
-// ToggleState
+// Toggles
 // ---------------------------------------------------------------------------
 
+/** The selection of a toggle with no clause. Shared, so it never looks changed. */
+const NOTHING_SELECTED: ReadonlySet<unknown> = new Set();
+
 /**
- * Shared reactive toggle state for a categorical field.
- * Multiple consumers (legend, axis click) share the same instance via
- * FilterGroup.getOrCreateToggle(). No refcounting — Svelte handles sharing.
+ * A key for a tuple that a Set can hold. A single field's value is its own key,
+ * so legends can test `values.has(value)`. A tuple joins type-tagged parts, so
+ * `1` and `'1'` stay apart and BIGINT values do not throw as JSON would.
  */
-export class ToggleState {
-	field: string;
-	values: Set<unknown> = $state(new Set());
+function tupleKey(tuple: unknown[]): unknown {
+	if (tuple.length === 1) return tuple[0];
+	return tuple.map((v) => `${v === null ? 'null' : typeof v}:${String(v)}`).join('\u001f');
+}
 
-	constructor(field: string) {
-		this.field = field;
-	}
-
-	toggle(value: unknown, multi: boolean): void {
-		if (multi) {
-			const next = new Set(this.values);
-			if (next.has(value)) {
-				next.delete(value);
-			} else {
-				next.add(value);
-			}
-			this.values = next;
-		} else {
-			// Single-select: if already the only selected, clear; otherwise select only this
-			if (this.values.size === 1 && this.values.has(value)) {
-				this.values = new Set();
-			} else {
-				this.values = new Set([value]);
-			}
-		}
-	}
-
-	select(value: unknown): void {
-		this.values = new Set([value]);
-	}
-
-	clear(): void {
-		this.values = new Set();
-	}
-
-	get active(): boolean {
-		return this.values.size > 0;
-	}
+/** The clause id of a toggle on `fields`. */
+function toggleSourceId(fields: string[]): string {
+	return fields.length === 1 ? `toggle-${fields[0]}` : `toggle-${JSON.stringify(fields)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,14 +127,8 @@ export class FilterGroup {
 		this.#engine = engine;
 	}
 
-	// Augmenters produce schema metadata for UI display (filter pills)
-	#augmenters = new Map<string, (value: unknown) => FilterSchema | null>();
-	// Scale state accessors for active-value projection
-	#scaleStateFns = new Map<string, () => ActiveValueScale[]>();
-	// Value extractors for scale projection — caller owns the shape
-	#valueExtractors = new Map<string, (value: unknown) => Set<unknown> | null>();
-	// Toggle instances, shared by field name
-	#toggles = new Map<string, ToggleState>();
+	/** Registrations per source id. Several under one id are one source. */
+	#sources = new Map<string, Set<SourceOpts>>();
 	// Track which scales we projected to, so we can clear them
 	#projectedScales = new Set<ActiveValueScale>();
 
@@ -139,8 +137,12 @@ export class FilterGroup {
 		const clauses = this.selection.items;
 		const result: FilterItem[] = [];
 		for (const entry of clauses) {
-			const augmenter = this.#augmenters.get(entry.sourceId);
-			const schema = augmenter ? augmenter(entry.value) ?? entry.schema : entry.schema;
+			let schema = entry.schema;
+			for (const opts of this.#sources.get(entry.sourceId) ?? []) {
+				if (!opts.augment) continue;
+				schema = opts.augment(entry.value) ?? entry.schema;
+				break;
+			}
 			result.push({
 				sourceId: entry.sourceId,
 				predicate: entry.predicate,
@@ -156,84 +158,176 @@ export class FilterGroup {
 		return this.selection.activeCount;
 	}
 
+	/** SQL for a field as its categorical identity records it, or null if none. */
+	fieldSql(field: string): string | null {
+		return this.#engine?.identitySqlFor(field) ?? null;
+	}
+
 	// -----------------------------------------------------------------
-	// Brush API (for interval interactors)
+	// Sources (brushes, legends, toggles)
 	// -----------------------------------------------------------------
 
-	createBrush(opts: BrushOpts): BrushHandle {
-		const { sourceId, excludeMarkIds, augment, scaleStates, extractProjectionValues } = opts;
-
-		if (augment) this.#augmenters.set(sourceId, augment);
-		if (scaleStates) this.#scaleStateFns.set(sourceId, scaleStates);
-		if (extractProjectionValues) this.#valueExtractors.set(sourceId, extractProjectionValues);
+	/**
+	 * Register a selection source. Several registrations under one id are one
+	 * source: each writes the clause with its own exclusions, and the scales the
+	 * source dims are the union of theirs.
+	 */
+	register(sourceId: string, opts: SourceOpts): SourceHandle {
+		let registrations = this.#sources.get(sourceId);
+		if (!registrations) {
+			registrations = new Set();
+			this.#sources.set(sourceId, registrations);
+		}
+		registrations.add(opts);
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
 				this.selection.update(sourceId, {
 					predicate,
-					excludeMarkIds: excludeMarkIds(),
+					excludeMarkIds: opts.excludeMarkIds(),
 					value
 				});
 				this.#afterUpdate();
 			},
-			clear: () => {
-				this.selection.update(sourceId, null);
-				this.#afterUpdate();
-			},
+			clear: () => this.clearSource(sourceId),
+			activate: () => this.#activate(sourceId),
 			destroy: () => {
-				this.selection.update(sourceId, null);
-				this.#augmenters.delete(sourceId);
-				this.#scaleStateFns.delete(sourceId);
-				this.#valueExtractors.delete(sourceId);
-				this.#afterUpdate();
+				registrations.delete(opts);
+				if (registrations.size > 0) return;
+				this.#sources.delete(sourceId);
+				this.clearSource(sourceId);
 			}
 		};
 	}
 
+	/**
+	 * Hand the engine a snapshot of the source. It activates every mark some
+	 * registration filters: a table for the source is correct for a mark whether
+	 * or not the clause currently excludes it, so only marks that every
+	 * registration excludes are left out.
+	 */
+	#activate(sourceId: string): void {
+		const registrations = this.#sources.get(sourceId);
+		if (!this.#engine || !registrations?.size) return;
+
+		let excludedByAll: Set<string> | null = null;
+		let dims: ActiveDim[] = [];
+		for (const opts of registrations) {
+			const excluded = opts.excludeMarkIds();
+			excludedByAll = excludedByAll
+				? new Set([...excludedByAll].filter((id) => excluded.has(id)))
+				: excluded;
+			if (opts.activeDims && dims.length === 0) dims = opts.activeDims();
+		}
+		this.#engine.activate(this, { sourceId, excludedByAll: excludedByAll!, dims });
+	}
+
 	// -----------------------------------------------------------------
-	// Toggle API (for legend/axis categorical selection)
+	// Toggles (legend/axis categorical selection)
 	// -----------------------------------------------------------------
 
-	getOrCreateToggle(field: string): ToggleState {
-		let toggle = this.#toggles.get(field);
-		if (!toggle) {
-			toggle = new ToggleState(field);
-			this.#toggles.set(field, toggle);
-		}
-		return toggle;
+	/**
+	 * Register a consumer's toggle on a field or field tuple. Toggles on the same
+	 * fields share one clause and so one selection; each writes the clause with
+	 * its own exclusions. The caller owns the registration and destroys it.
+	 *
+	 * Every `toggle-…` clause holds tuples: that is what lets the clause be read
+	 * as the selection. Nothing else writes those ids (`upsertManual` prefixes
+	 * its own with `manual:`).
+	 */
+	registerToggle(
+		fields: string | string[],
+		opts: { excludeMarkIds: () => Set<string>; scales?: () => ActiveValueScale[] }
+	): ToggleHandle {
+		const list = Array.isArray(fields) ? fields : [fields];
+		const sourceId = toggleSourceId(list);
+		const { selection } = this;
+		const schema: FilterSchema = { kind: 'toggle', column: list[0], label: list.join(', ') };
+		const source = this.register(sourceId, {
+			excludeMarkIds: opts.excludeMarkIds,
+			activeDims: () => list.map((field) => ({ kind: 'value' as const, field })),
+			augment: () => schema,
+			// Projection only makes sense for single-field toggles.
+			projection:
+				list.length === 1 && opts.scales
+					? {
+							scales: opts.scales,
+							values: (value) => new Set((value as unknown[][]).map((t) => t[0]))
+						}
+					: undefined
+		});
+
+		const tuplesOf = (clause: Clause | undefined): unknown[][] =>
+			(clause?.value as unknown[][] | undefined) ?? [];
+
+		/**
+		 * The selection, read from the clause. A brush frame bumps the selection
+		 * map's version, so a toggle with nothing selected is re-read on every one;
+		 * returning the same set while the clause is unchanged (and one shared
+		 * empty set without a clause) keeps that from re-rendering its readers.
+		 */
+		let last: { clause: Clause; keys: Set<unknown> } | null = null;
+		const keysOf = (clause: Clause | undefined): ReadonlySet<unknown> => {
+			if (!clause) return NOTHING_SELECTED;
+			if (last?.clause !== clause) {
+				last = { clause, keys: new Set(tuplesOf(clause).map(tupleKey)) };
+			}
+			return last.keys;
+		};
+
+		const write = (tuples: unknown[][]) => {
+			if (tuples.length === 0) source.clear();
+			else source.update(this.#togglePredicate(list, tuples), tuples);
+		};
+
+		return {
+			get values() {
+				return keysOf(selection.get(sourceId));
+			},
+			get active() {
+				return selection.isActive(sourceId);
+			},
+			toggle: (tuple, multi, total) => {
+				const key = tupleKey(tuple);
+				const next = new Map(tuplesOf(selection.get(sourceId)).map((t) => [tupleKey(t), t]));
+				if (!multi) {
+					const onlyThis = next.size === 1 && next.has(key);
+					next.clear();
+					if (!onlyThis) next.set(key, tuple);
+				} else if (next.has(key)) {
+					next.delete(key);
+				} else {
+					next.set(key, tuple);
+					if (total != null && next.size >= total) next.clear();
+				}
+				write([...next.values()]);
+			},
+			set: (tuples) => write(tuples),
+			clear: () => write([]),
+			activate: source.activate,
+			destroy: source.destroy
+		};
 	}
 
 	/**
-	 * Sync a toggle's current values into the selection as a clause.
-	 * Call this from an $effect that watches toggle.values.
+	 * The clause for a toggle's tuples: `IN` for one field, an `OR` of
+	 * `IS NOT DISTINCT FROM` tuples for several. Each field is the SQL its
+	 * identity records (an expression keeps its own text), or the column of
+	 * that name when no mark has registered it.
 	 */
-	syncToggle(
-		field: string,
-		predicate: FilterExpr | null,
-		value: unknown,
-		opts: ToggleSyncOpts
-	): void {
-		const sourceId = `toggle-${field}`;
-		const { excludeMarkIds, scaleStates, projectionValues } = opts;
-
-		// Scale projection goes through the shared #projectToScales path so
-		// toggles and brushes dim consistently and clear each other correctly.
-		if (scaleStates && projectionValues) {
-			this.#scaleStateFns.set(sourceId, scaleStates);
-			this.#valueExtractors.set(sourceId, () => projectionValues());
+	#togglePredicate(fields: string[], tuples: unknown[][]): ExprNode {
+		const exprs = fields.map((field) => {
+			const text = this.fieldSql(field);
+			return text ? sqlTag([text] as unknown as TemplateStringsArray) : column(field);
+		});
+		if (exprs.length === 1) {
+			return isIn(
+				exprs[0],
+				tuples.map((t) => literal(t[0]))
+			);
 		}
-
-		if (predicate) {
-			this.selection.update(sourceId, {
-				predicate,
-				excludeMarkIds: excludeMarkIds(),
-				value,
-				schema: { kind: 'toggle', column: field, label: field }
-			});
-		} else {
-			this.selection.update(sourceId, null);
-		}
-		this.#afterUpdate();
+		const clauses = tuples.map((t) => sqlAnd(t.map((v, i) => isNotDistinct(exprs[i], literal(v)))));
+		return clauses.length === 1 ? clauses[0] : or(clauses);
 	}
 
 	// -----------------------------------------------------------------
@@ -266,16 +360,18 @@ export class FilterGroup {
 	// Clear
 	// -----------------------------------------------------------------
 
+	/**
+	 * Remove a source's clause. Re-queries only when there was a clause to
+	 * remove: an unmount or a clear with nothing selected changes no mark's data.
+	 */
 	clearSource(sourceId: string): void {
+		if (!this.selection.isActive(sourceId)) return;
 		this.selection.update(sourceId, null);
 		this.#afterUpdate();
 	}
 
 	clearAll(): void {
 		this.selection.clear();
-		for (const toggle of this.#toggles.values()) {
-			toggle.clear();
-		}
 		this.#clearAllScaleProjections();
 		this.#engine?.onFilterChange(this);
 	}
@@ -299,22 +395,23 @@ export class FilterGroup {
 	#projectToScales(): void {
 		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();
 
-		for (const [sourceId, scalesFn] of this.#scaleStateFns) {
+		for (const [sourceId, registrations] of this.#sources) {
 			const clause = this.selection.get(sourceId);
 			if (!clause) continue;
 
-			const extractor = this.#valueExtractors.get(sourceId);
-			if (!extractor) continue;
+			for (const { projection } of registrations) {
+				if (!projection) continue;
 
-			const values = extractor(clause.value);
-			if (!values?.size) continue;
+				const values = projection.values(clause.value);
+				if (!values?.size) continue;
 
-			for (const scale of scalesFn()) {
-				const existing = activeByScale.get(scale);
-				if (existing) {
-					for (const v of values) existing.add(v);
-				} else {
-					activeByScale.set(scale, new Set(values));
+				for (const scale of projection.scales()) {
+					const existing = activeByScale.get(scale);
+					if (existing) {
+						for (const v of values) existing.add(v);
+					} else {
+						activeByScale.set(scale, new Set(values));
+					}
 				}
 			}
 		}

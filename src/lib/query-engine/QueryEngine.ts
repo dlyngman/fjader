@@ -167,6 +167,21 @@ export interface QueryDescriptor {
 	transformCompiler: TransformCompiler;
 }
 
+/**
+ * How a source selects, one entry per active dimension: a pixel-binned
+ * continuous column (`bin`), or a categorical field (`value`, keyed by its
+ * identity key).
+ */
+export type ActiveDim = ({ kind: 'bin' } & BrushActivation) | { kind: 'value'; field: string };
+
+/** What activate() needs to know about a source, as FilterGroup sees it at hover time. */
+export interface ActivationSource {
+	sourceId: string;
+	/** Marks every registration of the source excludes: it filters none of them. */
+	excludedByAll: Set<string>;
+	dims: ActiveDim[];
+}
+
 /** What a preagg table was built from. It serves brush queries only while this still holds. */
 interface PreaggBasis {
 	/** Query parts, compared by reference ($derived memoization keeps them stable). */
@@ -303,6 +318,14 @@ export class QueryEngine {
 	/** The view carrying id columns for `table`, or `table` if it has none. */
 	identitySourceFor(table: string): string {
 		return this.#identity.sourceFor(table);
+	}
+
+	/**
+	 * SQL producing `field`'s value as its identity records it: a quoted column, or
+	 * an expression's own text. Null until a mark has registered the field.
+	 */
+	identitySqlFor(field: string): string | null {
+		return this.#identity.sqlFor(field) ?? null;
 	}
 
 	/** The id column name a view exposes for `field`. */
@@ -844,24 +867,23 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Pre-aggregate marks for a filter group before brushing begins.
-	 * Called by interactors on pointerenter — before the first brush drag.
+	 * Pre-aggregate marks for a filter group before a source is used.
+	 * Called through the source's handle on pointerenter — before the first drag.
 	 *
 	 * Builds materialized preagg tables for all aggregate marks in the filter
-	 * group that are NOT on the source chart. Each table bakes in every clause
-	 * except the active brush, and includes pixel-binned brush dimensions so
-	 * brush queries operate on thousands of rows instead of hundreds of thousands.
+	 * group that the source filters. Each table bakes in every clause except the
+	 * source's own, and includes pixel-binned brush dimensions so brush queries
+	 * operate on thousands of rows instead of hundreds of thousands.
 	 *
-	 * The active brush is named by its source ID rather than inferred: before
-	 * the first drag it has no clause yet, and other clauses on the same chart
-	 * (a Toggle) exclude the same marks a brush does.
+	 * The source is named by its ID rather than inferred: before the first drag
+	 * it has no clause yet, and other clauses on the same chart (a Toggle)
+	 * exclude the same marks a brush does. Only `bin` dims are built so far; a
+	 * source with none (a toggle) builds nothing.
 	 */
-	async activate(
-		filterGroup: FilterGroup,
-		activeSourceId: string,
-		sourceChartMarkIds: Set<string>,
-		brushDims: BrushActivation[]
-	): Promise<void> {
+	async activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
+		const { sourceId: activeSourceId, excludedByAll } = source;
+		const brushDims: BrushActivation[] = [];
+		for (const dim of source.dims) if (dim.kind === 'bin') brushDims.push(dim);
 		if (this.#destroyed || brushDims.length === 0) return;
 
 		const { selection } = filterGroup;
@@ -870,8 +892,8 @@ export class QueryEngine {
 
 		for (const [markId, reg] of this.#marks) {
 			if (reg.filterGroup !== filterGroup) continue;
-			// Marks on the brushed chart are excluded from its brush: nothing to bin.
-			if (sourceChartMarkIds.has(markId)) {
+			// A mark the source never filters has nothing to bin.
+			if (excludedByAll.has(markId)) {
 				this.#dropPreagg(reg);
 				continue;
 			}
