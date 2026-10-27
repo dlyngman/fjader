@@ -234,8 +234,12 @@ export function buildBinExpr(
 	const d0 = domain[0] - BIN_WINDOW_MARGIN * span;
 	const bins = Math.ceil(pixelExtent * (1 + 2 * BIN_WINDOW_MARGIN));
 
+	// In DOUBLE, as the query-time bin filter computes it in JS. A number literal
+	// such as 1.4107142857142858 is a DECIMAL to DuckDB, and an integer column
+	// minus a whole d0 stays an integer: their product overflowed DECIMAL(18).
+	const value = cast(columnRef, 'DOUBLE');
 	const idx = cast(
-		floor(mul(sub(columnRef, literal(d0)), literal(scaleFactor))),
+		floor(mul(sub(value, literal(d0)), literal(scaleFactor))),
 		'INTEGER'
 	) as ExprNode;
 	const expr =

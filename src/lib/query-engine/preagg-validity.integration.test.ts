@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
 import { column, count, isBetween, isIn, literal } from '@uwdata/mosaic-sql';
 import { QueryEngine, type BrushActivation, type DuckDBConnection } from './QueryEngine';
+import { buildBinExpr } from './sufficient-statistics';
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
@@ -461,6 +462,20 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		await vi.waitFor(() => expect(handleX.dataVersion).toBeGreaterThan(version));
 		const query = conn.queries.filter((q) => !q.startsWith('CREATE') && q.includes('"x"')).at(-1)!;
 		expect(query).toContain('__dplot_preagg_');
+	});
+
+	it('bins an integer column at a whole-number window start without DECIMAL overflow', async () => {
+		// A SMALLINT minus a whole d0 stays an integer, and an integer times a
+		// literal like 1.4107142857142858 (a DECIMAL to DuckDB) overflowed
+		// DECIMAL(18). The bins must also equal the query-time Math.floor.
+		await conn.all(`CREATE TABLE s AS SELECT (i - 63)::SMALLINT AS v FROM range(249) r(i)`);
+		const { expr, d0, scaleFactor, bins } = buildBinExpr(column('v'), [-80, 200], 395);
+		expect(Number.isInteger(d0)).toBe(true);
+		const result = await conn.all(`SELECT v, ${expr} AS b FROM s`);
+		for (const row of result) {
+			const fine = Math.floor((Number(row.v) - d0) * scaleFactor);
+			expect(Number(row.b)).toBe(fine < 0 ? -1 : fine >= bins ? bins : fine);
+		}
 	});
 
 	describe('bin resolution', () => {
