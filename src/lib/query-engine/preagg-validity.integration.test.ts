@@ -367,4 +367,71 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		await drag(b, 100, 699);
 		expect(rebuilds).not.toHaveBeenCalled();
 	});
+
+	describe('one table per source', () => {
+		// A second brush on another chart (C), which also filters the mark.
+		const BRUSH_C = 'interval-x-C';
+		const CHART_C = new Set(['dots-c']);
+		const brushC = () => group.register(BRUSH_C, { excludeMarkIds: () => CHART_C });
+		const activateC = () =>
+			engine.activate(group, {
+				sourceId: BRUSH_C,
+				excludedByAll: CHART_C,
+				dims: [{ kind: 'bin', ...X_DIM }]
+			});
+
+		it('activating a second source leaves the first source’s table in place', async () => {
+			await activate();
+			await activateC();
+			expect(creates()).toHaveLength(2);
+
+			// Back on chart A: its table is still there, so no rebuild.
+			await activate();
+			expect(creates()).toHaveLength(2);
+			await drag(brush(), 100, 599);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 599'));
+		});
+
+		it('a source that excludes the mark leaves its other tables in place', async () => {
+			await activate();
+			await engine.activate(group, {
+				sourceId: BRUSH_C,
+				excludedByAll: new Set([MARK]),
+				dims: [{ kind: 'bin', ...X_DIM }]
+			});
+
+			await drag(brush(), 100, 599);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(creates()).toHaveLength(1);
+		});
+
+		it('the table that answers moves to the front, so the next frame rebuilds no SQL', async () => {
+			// Activated in this order, A's table is checked first, and it bakes
+			// C's clause, which moves on every frame of a drag on C.
+			await activate();
+			await activateC();
+			const c = brushC();
+
+			await drag(c, 100, 599);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			const rebuilds = vi.spyOn(group.selection, 'bakedPredicates');
+			await drag(c, 100, 699);
+			await drag(c, 200, 699);
+			expect(rebuilds).not.toHaveBeenCalled();
+			expect(rows()).toEqual(await expected('x BETWEEN 200 AND 699'));
+		});
+
+		it('destroying a source’s last registration forgets its tables', async () => {
+			const c = brushC();
+			await activateC();
+			await activateC();
+			expect(creates()).toHaveLength(1);
+
+			c.destroy();
+			// Forgotten, so activating again builds (CREATE TABLE IF NOT EXISTS) anew.
+			await activateC();
+			expect(creates()).toHaveLength(2);
+		});
+	});
 });

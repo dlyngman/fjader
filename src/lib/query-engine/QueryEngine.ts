@@ -227,11 +227,15 @@ interface MarkRegistration {
 	descriptor: QueryDescriptor;
 	handle: MarkHandle;
 	filterGroup: FilterGroup;
-	/** The built preagg table brush queries read. */
-	preagg: PreaggState | null;
-	/** The latest build started for this mark. A finished build is installed
-	 *  only if it is still this one, so a superseded or dropped build never lands. */
-	preaggBuild: PreaggState | null;
+	/**
+	 * Built preagg tables, one per activated source. A query reads the first
+	 * whose basis holds and moves it to the front, so the next frame of the
+	 * same gesture checks it first.
+	 */
+	preagg: Map<string, PreaggState>;
+	/** The latest build started per source. A finished build is installed only
+	 *  if it is still this one, so a superseded or dropped build never lands. */
+	preaggBuild: Map<string, PreaggState>;
 }
 
 // ---------------------------------------------------------------------------
@@ -738,8 +742,8 @@ export class QueryEngine {
 			descriptor,
 			handle,
 			filterGroup,
-			preagg: null,
-			preaggBuild: null
+			preagg: new Map(),
+			preaggBuild: new Map()
 		};
 		this.#marks.set(markId, reg);
 
@@ -784,8 +788,9 @@ export class QueryEngine {
 		for (const [markId, reg] of batch) {
 			const { descriptor, handle } = reg;
 
-			const sqlStr = this.#preaggUsable(markId, reg)
-				? this.#assemblePreaggSQL(markId, reg, handle.params)
+			const preagg = this.#usablePreagg(markId, reg);
+			const sqlStr = preagg
+				? this.#assemblePreaggSQL(markId, reg, preagg, handle.params)
 				: this.#assembleSQL(
 						descriptor,
 						descriptor.table,
@@ -811,8 +816,9 @@ export class QueryEngine {
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { descriptor, handle } = reg;
 
-		const sqlStr = this.#preaggUsable(markId, reg)
-			? this.#assemblePreaggSQL(markId, reg, handle.params)
+		const preagg = this.#usablePreagg(markId, reg);
+		const sqlStr = preagg
+			? this.#assemblePreaggSQL(markId, reg, preagg, handle.params)
 			: this.#assembleSQL(
 					descriptor,
 					descriptor.table,
@@ -884,9 +890,10 @@ export class QueryEngine {
 	 * Called through the source's handle on pointerenter — before the first drag.
 	 *
 	 * Builds materialized preagg tables for all aggregate marks in the filter
-	 * group that the source filters. Each table bakes in every clause except the
-	 * source's own, and includes pixel-binned brush dimensions so brush queries
-	 * operate on thousands of rows instead of hundreds of thousands.
+	 * group that the source filters, one per source, next to any the mark holds
+	 * for other sources. Each table bakes in every clause except the source's
+	 * own, and includes pixel-binned brush dimensions so brush queries operate
+	 * on thousands of rows instead of hundreds of thousands.
 	 *
 	 * The source is named by its ID rather than inferred: before the first drag
 	 * it has no clause yet, and other clauses on the same chart (a Toggle)
@@ -905,14 +912,12 @@ export class QueryEngine {
 
 		for (const [markId, reg] of this.#marks) {
 			if (reg.filterGroup !== filterGroup) continue;
-			// A mark the source never filters has nothing to bin.
-			if (excludedByAll.has(markId)) {
-				this.#dropPreagg(reg);
-				continue;
-			}
+			// A mark the source never filters gets no table for it, and keeps
+			// the tables it holds for other sources.
+			if (excludedByAll.has(markId)) continue;
 
 			// Skip if the latest build, finished or in flight, still matches
-			const latest = reg.preaggBuild ?? reg.preagg;
+			const latest = reg.preaggBuild.get(activeSourceId) ?? reg.preagg.get(activeSourceId);
 			if (latest) {
 				const { basis } = latest;
 				if (
@@ -925,8 +930,9 @@ export class QueryEngine {
 				}
 			}
 
-			// Drop stale preagg
-			this.#dropPreagg(reg);
+			// Drop this source's stale table; other sources' stay.
+			reg.preagg.delete(activeSourceId);
+			reg.preaggBuild.delete(activeSourceId);
 
 			const { parts, table, schema } = reg.descriptor;
 			if (!parts.hasAggregates && !parts.hasWindowAggregates) continue;
@@ -991,19 +997,21 @@ export class QueryEngine {
 				binMeta,
 				windowChannels: analysis.windowChannels
 			};
-			reg.preaggBuild = build;
+			reg.preaggBuild.set(activeSourceId, build);
 
 			this.#preaggTables.add(preaggTable);
 			promises.push(
 				this.exec(createSQL)
 					.then(() => {
-						if (reg.preaggBuild !== build) return;
-						reg.preagg = build;
-						reg.preaggBuild = null;
+						if (reg.preaggBuild.get(activeSourceId) !== build) return;
+						reg.preaggBuild.delete(activeSourceId);
+						reg.preagg.set(activeSourceId, build);
 					})
 					.catch((e) => {
 						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
-						if (reg.preaggBuild === build) reg.preaggBuild = null;
+						if (reg.preaggBuild.get(activeSourceId) === build) {
+							reg.preaggBuild.delete(activeSourceId);
+						}
 					})
 			);
 		}
@@ -1012,15 +1020,34 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Whether a mark's query can read its preagg table: same query parts, and
-	 * the baked clauses still in force. Any other filter change sends the mark
-	 * to the base table, which applies every clause.
+	 * The preagg table a mark's query can read: the first whose query parts
+	 * match and whose baked clauses are still in force, or null for the base
+	 * table, which applies every clause.
+	 *
+	 * The table that answers moves to the front. One hover activates several
+	 * sources, so the table for the source being dragged need not come first;
+	 * a table ahead of it bakes that source's moving clause and fails, possibly
+	 * through the SQL comparison in #bakedClausesHold. Moving the answering
+	 * table to the front limits that to the first frame of a gesture. When no
+	 * table answers, the frame queries the base table, which costs far more.
 	 */
-	#preaggUsable(markId: string, reg: MarkRegistration): boolean {
-		const { preagg } = reg;
-		if (!PREAGG_ENABLED || !preagg) return false;
-		if (reg.descriptor.parts !== preagg.basis.parts) return false;
-		return this.#bakedClausesHold(markId, reg.filterGroup.selection, preagg);
+	#usablePreagg(markId: string, reg: MarkRegistration): PreaggState | null {
+		if (!PREAGG_ENABLED || reg.preagg.size === 0) return null;
+		const { selection } = reg.filterGroup;
+		let first = true;
+		for (const [sourceId, state] of reg.preagg) {
+			if (
+				state.basis.parts === reg.descriptor.parts &&
+				this.#bakedClausesHold(markId, selection, state)
+			) {
+				// A Map keeps the first insertion position of a key, so listing
+				// this entry first and spreading the rest moves it to the front.
+				if (!first) reg.preagg = new Map([[sourceId, state], ...reg.preagg]);
+				return state;
+			}
+			first = false;
+		}
+		return null;
 	}
 
 	/**
@@ -1055,9 +1082,12 @@ export class QueryEngine {
 	 * Builds modified QueryParts from the stored outputSelect + bin filters,
 	 * then delegates to assembleQuery().
 	 */
-	#assemblePreaggSQL(markId: string, reg: MarkRegistration, params: QueryParams): string | null {
-		const { preagg } = reg;
-		if (!preagg) return null;
+	#assemblePreaggSQL(
+		markId: string,
+		reg: MarkRegistration,
+		preagg: PreaggState,
+		params: QueryParams
+	): string | null {
 		const { binMeta, outputSelect, windowChannels } = preagg;
 
 		const { descriptor } = reg;
@@ -1128,11 +1158,24 @@ export class QueryEngine {
 		}).toString();
 	}
 
-	/** Clear preagg state for a registration, including a build in flight.
-	 *  Does NOT drop the table — hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
+	/**
+	 * Forget a source's tables on every mark of its group: its last registration
+	 * is gone, so nothing can use them. Called by FilterGroup. Does NOT drop the
+	 * tables; hash-named tables are reused via CREATE TABLE IF NOT EXISTS.
+	 */
+	forgetSource(filterGroup: FilterGroup, sourceId: string): void {
+		for (const reg of this.#marks.values()) {
+			if (reg.filterGroup !== filterGroup) continue;
+			reg.preagg.delete(sourceId);
+			reg.preaggBuild.delete(sourceId);
+		}
+	}
+
+	/** Clear preagg state for a registration, including builds in flight.
+	 *  Does NOT drop the tables — hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
 	#dropPreagg(reg: MarkRegistration): void {
-		reg.preagg = null;
-		reg.preaggBuild = null;
+		reg.preagg.clear();
+		reg.preaggBuild.clear();
 	}
 
 	/**

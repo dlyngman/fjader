@@ -187,6 +187,7 @@ export class FilterGroup {
 				registrations.delete(opts);
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
+				this.#engine?.forgetSource(this, sourceId);
 				this.clearSource(sourceId);
 			}
 		};
