@@ -95,6 +95,22 @@ describe('CategoricalIdentity', () => {
 		]);
 	});
 
+	it('reports which tables a dim covers and which fields a view exposes', async () => {
+		expect(identity.dimCovers('species', 'penguins')).toBe(false);
+		expect(identity.viewHas('penguins', 'species')).toBe(false);
+
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		expect(identity.dimCovers('species', 'penguins')).toBe(true);
+		expect(identity.viewHas('penguins', 'species')).toBe(true);
+		expect(identity.viewHas('penguins', 'island')).toBe(false);
+
+		// Another table with the field is not covered until it registers it.
+		await db.run(`CREATE TABLE zoo AS SELECT 'Emperor' AS species`);
+		expect(identity.dimCovers('species', 'zoo')).toBe(false);
+		await identity.ensureColumns('zoo', { categorical: ['species'] });
+		expect(identity.dimCovers('species', 'zoo')).toBe(true);
+	});
+
 	it('is idempotent — a repeat request runs no further statements', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const afterFirst = exec.statements.length;

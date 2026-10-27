@@ -87,6 +87,7 @@ beforeEach(async () => {
 
 	const descriptor = {
 		table: 't',
+		baseTable: 't',
 		parts: buildQueryParts({ g: column('g'), n: count() }, null, false),
 		schema: new Map(),
 		transformCompiler: new TransformCompiler([])

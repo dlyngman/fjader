@@ -161,7 +161,10 @@ export interface DuckDBConnection {
 // ---------------------------------------------------------------------------
 
 export interface QueryDescriptor {
+	/** The table the mark queries: its identity view when it has categorical channels. */
 	table: string;
+	/** The table the mark was configured with, never the view. Identity dims record base tables. */
+	baseTable: string;
 	parts: QueryParts;
 	schema: Map<string, ColumnSchema>;
 	transformCompiler: TransformCompiler;
@@ -326,6 +329,16 @@ export class QueryEngine {
 	 */
 	identitySqlFor(field: string): string | null {
 		return this.#identity.sqlFor(field) ?? null;
+	}
+
+	/** Whether `field`'s dim covers every non-NULL value of base table `table`. */
+	identityCovers(field: string, table: string): boolean {
+		return this.#identity.dimCovers(field, table);
+	}
+
+	/** Whether `table`'s identity view already exposes `field`'s id column. */
+	identityViewHas(table: string, field: string): boolean {
+		return this.#identity.viewHas(table, field);
 	}
 
 	/** The id column name a view exposes for `field`. */

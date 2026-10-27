@@ -586,6 +586,7 @@ export class MarkLifecycleV2 {
 					this.#markId,
 					{
 						table: this.#sourceTable,
+						baseTable: this.#config.table,
 						parts,
 						schema,
 						transformCompiler: this.#transformCompiler
