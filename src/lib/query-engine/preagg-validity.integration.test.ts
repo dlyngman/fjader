@@ -459,4 +459,75 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		const query = conn.queries.filter((q) => !q.startsWith('CREATE') && q.includes('"x"')).at(-1)!;
 		expect(query).toContain('__dplot_preagg_');
 	});
+
+	describe('bin resolution', () => {
+		// The brush's current view, as Interval1D reports it: [d0, d1, pixel extent].
+		let view: [number, number, number];
+		const outs = new Set<Float64Array>();
+		const activateWithView = () =>
+			engine.activate(group, {
+				sourceId: BRUSH,
+				excludedByAll: CHART_A,
+				dims: [{ kind: 'bin', ...X_DIM }],
+				view: (out) => {
+					outs.add(out);
+					out[0] = view[0];
+					out[1] = view[1];
+					out[2] = view[2];
+				}
+			});
+
+		beforeEach(() => {
+			view = [0, 1000, 1000];
+			outs.clear();
+		});
+
+		it('a pan or a zoom out keeps the table; its bins are still at least a pixel wide', async () => {
+			await activateWithView();
+			const b = brush();
+
+			view = [300, 1300, 1000]; // pan: same bin width
+			await drag(b, 400, 799);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 400 AND 799'));
+
+			view = [0, 4000, 1000]; // zoom out: bins finer than the new pixels
+			await drag(b, 100, 2999);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 2999'));
+		});
+
+		it('a zoom in past the built resolution goes to the base table until a rebuild', async () => {
+			await activateWithView();
+			const b = brush();
+
+			view = [0, 500, 1000]; // two pixels per built bin
+			await drag(b, 100, 399);
+			expect(lastQuery()).not.toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 399'));
+
+			// What settling does: activate again with the current view.
+			await engine.activate(group, {
+				sourceId: BRUSH,
+				excludedByAll: CHART_A,
+				dims: [{ kind: 'bin', ...X_DIM, domain: [0, 500] }],
+				view: (out) => {
+					out[0] = view[0];
+					out[1] = view[1];
+					out[2] = view[2];
+				}
+			});
+			await drag(b, 100, 349);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 349'));
+		});
+
+		it('reads the view into the same array on every query', async () => {
+			await activateWithView();
+			const b = brush();
+			await drag(b, 100, 599);
+			await drag(b, 100, 699);
+			expect(outs.size).toBe(1);
+		});
+	});
 });

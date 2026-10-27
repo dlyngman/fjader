@@ -13,6 +13,8 @@
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import type { D3Scale } from '$lib/types';
+	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+	import { HoverSettle } from './hover-settle';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
 	import CommandPalette from '$lib/interactors/CommandPalette.svelte';
@@ -228,6 +230,7 @@
 		(_visible) => {}
 	);
 	onMount(() => removeVisibilityCallback);
+	onMount(() => () => hoverSettle.leave());
 
 	// --- Scale readiness effect ---
 	$effect(() => {
@@ -471,6 +474,7 @@
 
 	function handleChartPointerEnter(event: PointerEvent) {
 		activateSources();
+		hoverSettle.enter();
 		refreshSvgOrigin();
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
@@ -484,6 +488,7 @@
 	}
 
 	function handleChartPointerLeave() {
+		hoverSettle.leave();
 		gpuCoordinator.setChartUnhovered(layout.chartId);
 		wheelControl.handlePointerLeave();
 		tooltipManager?.updatePosition(null, null);
@@ -642,6 +647,7 @@
 	}
 
 	function handlePointerDown(event: PointerEvent) {
+		hoverSettle.hold(true);
 		event.preventDefault();
 		chartCellEl?.focus({ preventScroll: true });
 
@@ -768,6 +774,7 @@
 	}
 
 	function handlePointerUp(event: PointerEvent) {
+		hoverSettle.hold(false);
 		if (isReordering) {
 			isReordering = false;
 			(event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
@@ -787,6 +794,36 @@
 		scales.active = true;
 		activateSources();
 	}
+
+	/**
+	 * Re-arms the chart's sources once filters and the view have been quiet while
+	 * the pointer stays on it (see HoverSettle). "Held" is reported here, for
+	 * every gesture on the chart including its own panning, and also clears on
+	 * pointercancel and lost capture, or a lost release would stop re-arming for
+	 * the rest of the session.
+	 */
+	const hoverSettle = new HoverSettle({
+		interval: 200,
+		lastFilterChangeAt: () => queryEngine?.lastFilterChangeAt ?? 0,
+		view: (out) => {
+			// Reused domain buffers and plain numbers: nothing allocates per tick.
+			const x = chartContext.xScaleState;
+			const y = chartContext.yScaleState;
+			if (x instanceof LinearScaleState) {
+				const domain = x.domain.current;
+				out[0] = domain[0];
+				out[1] = domain[1];
+			}
+			if (y instanceof LinearScaleState) {
+				const domain = y.domain.current;
+				out[2] = domain[0];
+				out[3] = domain[1];
+			}
+			out[4] = layout.innerWidth;
+			out[5] = layout.innerHeight;
+		},
+		settle: activateSources
+	});
 
 	/**
 	 * Prepare the chart's selection sources. Runs on entering the cell, so band
@@ -861,6 +898,7 @@
 				onpointerrawupdate={handlePointerRawUpdate}
 				onpointerup={handlePointerUp}
 				onpointercancel={handlePointerUp}
+				onlostpointercapture={() => hoverSettle.hold(false)}
 				ondblclick={handleDoubleClick}
 				onclick={handleClick}
 				oncontextmenu={handleContextMenu}

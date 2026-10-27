@@ -190,6 +190,12 @@ export interface ActivationSource {
 	/** Marks every registration of the source excludes: it filters none of them. */
 	excludedByAll: Set<string>;
 	dims: ActiveDim[];
+	/**
+	 * For a source with bin dims: writes its current view, `[d0, d1, pixel
+	 * extent]` per bin dim, into `out`. Read on every query, so it must not
+	 * allocate.
+	 */
+	view?: (out: Float64Array) => void;
 }
 
 /** What a preagg table was built from. It serves brush queries only while this still holds. */
@@ -204,6 +210,8 @@ interface PreaggBasis {
 	/** The clause objects baked into the table, in selection insertion order.
 	 *  Refreshed when new objects turn out to give the same SQL. */
 	bakedClauses: Clause[];
+	/** The source's current view, for the bin resolution check (bin dims only). */
+	view: ((out: Float64Array) => void) | null;
 }
 
 /** The filter-independent parts of a preagg table's SELECT. */
@@ -308,6 +316,10 @@ export class QueryEngine {
 	/** The current hover batch. Builds still queued from an older one are dropped. */
 	#batch = 0;
 	#inBatch = false;
+	/** When a filter last changed, in any group (performance.now()). */
+	#lastFilterChangeAt = 0;
+	/** Scratch for a source's view, reused by every query's resolution check. */
+	#viewScratch = new Float64Array(6);
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 	/**
@@ -828,7 +840,13 @@ export class QueryEngine {
 	 * Called by FilterGroup when any filter clause changes.
 	 * Iterates registered marks for this group and batch-queries them.
 	 */
+	/** When a filter last changed, in any group, for settling (performance.now()). */
+	get lastFilterChangeAt(): number {
+		return this.#lastFilterChangeAt;
+	}
+
 	onFilterChange(group: FilterGroup): void {
+		this.#lastFilterChangeAt = performance.now();
 		const batch: Array<[string, MarkRegistration]> = [];
 		for (const [markId, reg] of this.#marks) {
 			if (reg.filterGroup === group) {
@@ -1008,7 +1026,13 @@ export class QueryEngine {
 			const build: PreaggState = {
 				table: preaggTable,
 				sql: preaggSQL,
-				basis: { parts: reg.descriptor.parts, activeSourceId, dimsKey, bakedClauses },
+				basis: {
+					parts: reg.descriptor.parts,
+					activeSourceId,
+					dimsKey,
+					bakedClauses,
+					view: source.view ?? null
+				},
 				creation: plan.creation,
 				mismatch: null,
 				outputSelect: plan.outputSelect,
@@ -1334,6 +1358,7 @@ export class QueryEngine {
 		for (const [sourceId, state] of reg.preagg) {
 			if (
 				state.basis.parts === reg.descriptor.parts &&
+				this.#binsFineEnough(state) &&
 				this.#bakedClausesHold(markId, selection, state)
 			) {
 				// A Map keeps the first insertion position of a key, so listing
@@ -1344,6 +1369,38 @@ export class QueryEngine {
 			first = false;
 		}
 		return null;
+	}
+
+	/**
+	 * Whether a table's pixel bins are still at least as fine as the current
+	 * view's pixels. Bin indexes are floor((v - d0) * scale) with the stored d0
+	 * and scale, and the brush filter uses the same pair, so any brush range can
+	 * be answered from any table; only precision depends on bin width. A pan
+	 * keeps the width (off by at most one bin edge, one pixel) and a zoom out
+	 * makes the bins finer than the pixels, so both keep the table. Only a zoom
+	 * in or a larger chart past the built resolution needs a rebuild, which
+	 * settling starts. Reads the view into a reused array: no allocation.
+	 */
+	#binsFineEnough(state: PreaggState): boolean {
+		const { view } = state.basis;
+		if (!view) return true;
+		const out = this.#viewScratch;
+		out.fill(NaN);
+		view(out);
+		let bin = 0;
+		for (const meta of state.activeMeta) {
+			if (meta.kind !== 'bin') continue;
+			const d0 = out[bin * 3];
+			const d1 = out[bin * 3 + 1];
+			const extent = out[bin * 3 + 2];
+			bin++;
+			const span = d1 - d0;
+			// An unknown view keeps the table.
+			if (!(span > 0) || !(extent > 0)) continue;
+			// A relative tolerance absorbs rounding in a view that did not move.
+			if (meta.scaleFactor < (extent / span) * (1 - 1e-6)) return false;
+		}
+		return true;
 	}
 
 	/**

@@ -67,6 +67,21 @@
 				}
 			];
 		},
+		// Read on every query: the scale states' domain buffers are reused, so this
+		// allocates nothing.
+		view: (out) => {
+			const x = chart.xScaleState;
+			const y = chart.yScaleState;
+			if (!(x instanceof LinearScaleState) || !(y instanceof LinearScaleState)) return;
+			const xDomain = x.domain.current;
+			out[0] = xDomain[0];
+			out[1] = xDomain[1];
+			out[2] = chart.innerWidth;
+			const yDomain = y.domain.current;
+			out[3] = yDomain[0];
+			out[4] = yDomain[1];
+			out[5] = chart.innerHeight;
+		},
 		augment: (value) => ({
 			kind: 'range',
 			label: `${typeof resolvedXField === 'string' ? resolvedXField : resolvedXField?.toString()} × ${typeof resolvedYField === 'string' ? resolvedYField : resolvedYField?.toString()}`,
