@@ -46,14 +46,16 @@
 		log = [{ kind, ms, sql: sql.slice(0, 140) }, ...log].slice(0, 14);
 	}
 
-	// Mark queries carry a callerId; builds are the preagg CREATEs.
+	// Mark queries carry the mark's id as callerId; tooltip lookups ('tooltip')
+	// and domain fits ('<mark>:fitDomain') are left out. Builds are the preagg CREATEs.
+	const isMarkQuery = (callerId) => !!callerId && callerId !== 'tooltip' && !callerId.includes(':');
 	const query = queryEngine.query.bind(queryEngine);
 	queryEngine.query = async (sql, opts) => {
 		const t = performance.now();
 		try {
 			return await query(sql, opts);
 		} finally {
-			if (opts?.callerId) {
+			if (isMarkQuery(opts?.callerId)) {
 				const text = String(sql);
 				record(
 					text.includes('__dplot_preagg_') ? 'preagg read' : 'base read',
