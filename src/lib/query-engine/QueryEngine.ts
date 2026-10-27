@@ -1279,9 +1279,16 @@ export class QueryEngine {
 	}
 
 	/**
-	 * The size guard: whether a planned table would hold more than a tenth of
-	 * its base table's rows (a fixed 100,000 until the row count has been read),
-	 * so querying it would not be much faster than the base table.
+	 * The size guard: whether a planned table would hold more than a quarter of
+	 * its base table's rows (a fixed 100,000 until the row count has been read).
+	 *
+	 * Measured on 1M rows (DuckDB-WASM, one thread): a toggle click on a table a
+	 * quarter the size of the base table is still ~3.7× faster than on the base
+	 * table, and its build costs ~2.5 base queries; at 43% the click is 2.1×
+	 * faster and the build ~3.5 base queries; at 69%, 1.4× and ~4. Builds run
+	 * when the connection is idle, so their cost shows only as the wait of a
+	 * click that lands mid-build, and as memory; past a quarter that outweighs
+	 * the gain.
 	 *
 	 * Counts the table's groups, which are the mark's groups before its SQL
 	 * transforms and before the active source's filter, times what the active
@@ -1296,7 +1303,7 @@ export class QueryEngine {
 		const markGroups = this.#markGroups(reg);
 		if (markGroups == null) return false;
 		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
-		const cap = typeof rows === 'number' ? rows / 10 : 100_000;
+		const cap = typeof rows === 'number' ? rows / 4 : 100_000;
 		return markGroups * groupsPerMarkGroup > cap;
 	}
 

@@ -338,7 +338,7 @@ describe('the size guard', () => {
 	it('estimates a limited mark from its dims, not its few result rows, and skips it', async () => {
 		await engine.ensureColumns('t', { categorical: ['x'] });
 		const view = engine.identitySourceFor('t');
-		// 1000 x ids per row-limited result of 5 rows; cat adds 3 groups: 3003 > 1000 / 10.
+		// 1000 x ids per row-limited result of 5 rows; cat adds 3 groups: 3003 > 1000 / 4.
 		await mark('top', { x: castReal(column(idOf('x'))), n: count() }, { table: view, limit: 5 });
 		await counted();
 		await new Promise((r) => setTimeout(r, 20));
@@ -372,7 +372,7 @@ describe('the size guard', () => {
 	it('the same estimate is skipped on a small base table and built on a large one', async () => {
 		await engine.ensureColumns('t', { categorical: ['x'] });
 		await engine.ensureColumns('big', { categorical: ['x'] });
-		// 4 g-groups × 1001 x ids = 4004: over 1000 / 10, under 100,000 / 10.
+		// 4 g-groups × 1001 x ids = 4004: over 1000 / 4, under 100,000 / 4.
 		await mark('small', { g: column('g'), n: count() });
 		await mark('large', { g: column('g'), n: count() }, { baseTable: 'big' });
 		await vi.waitFor(() =>
@@ -385,10 +385,33 @@ describe('the size guard', () => {
 		expect(creates()[0]).toContain('"big"');
 	});
 
+	it('builds a table between a tenth and a quarter of the base rows', async () => {
+		await mark('large', { g: column('g'), n: count() }, { baseTable: 'big' });
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		// 3001 bins over the data extent × 4 g-groups ≈ 12,000: over 100,000 / 10,
+		// under 100,000 / 4. Measured, such a table still clicks ~3.7× faster.
+		await engine.activate(group, {
+			sourceId: 'interval-x-B',
+			excludedByAll: new Set(),
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 1000],
+					pixelExtent: 3000,
+					extent: [0, 1000]
+				}
+			]
+		});
+		expect(creates()).toHaveLength(1);
+	});
+
 	it('uses the fixed cap before the row count arrives, the relative cap after', async () => {
 		await engine.ensureColumns('t', { categorical: ['x'] });
 		// Group keys all id channels, so the estimate needs no result:
-		// 1001 x ids × 3 cat groups = 3003, under 100,000 but over 1000 / 10.
+		// 1001 x ids × 3 cat groups = 3003, under 100,000 but over 1000 / 4.
 		const descriptor: QueryDescriptor = {
 			table: engine.identitySourceFor('t'),
 			baseTable: 't',
