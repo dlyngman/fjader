@@ -1,0 +1,269 @@
+<script>
+	// Preagg for toggle and legend sources, in the browser, on enough rows for
+	// the size guard to let the builds through.
+	//
+	// What to check:
+	// - Hover the carrier legend, wait a moment, click a carrier: the two
+	//   histograms' queries read preagg tables ("preagg read") instead of the
+	//   base table, and are a few ms instead of tens.
+	// - Hover the carrier bars and click a bar or a band label: the same for the
+	//   other charts; the bars chart itself dims rather than filters.
+	// - Brush the delay histogram right after a toggle click without leaving the
+	//   chart: once the pointer is released and things are quiet, the brush
+	//   table is rebuilt ("build"), and later drags read it.
+	// - Drag the brush: no "build" appears in the log mid-drag.
+	//
+	// The log wraps the engine's query and exec on this page only.
+
+	import { count } from '@uwdata/mosaic-sql';
+	import { initDivePlot } from '$lib';
+	import { onMount } from 'svelte';
+	import {
+		ChartContainer,
+		Frame,
+		AxisLeft,
+		AxisBottom,
+		MarginLabel,
+		WebGPUCanvas,
+		BarMarkY,
+		RectYMark,
+		IntervalX,
+		Legend
+	} from '$lib/components';
+	import { Grid } from '$lib/components/guides';
+	import Toggle from '$lib/interactors/Toggle.svelte';
+	import { bin } from '$lib/sql/bin';
+
+	const ROWS = 1_000_000;
+	const CARRIERS = ['AA', 'DL', 'UA', 'WN', 'B6', 'AS', 'NK', 'F9', 'G4', 'HA'];
+
+	const { queryEngine } = initDivePlot();
+	let isLoaded = $state(false);
+	let loadError = $state(null);
+	let log = $state([]);
+
+	function record(kind, sql, ms) {
+		log = [{ kind, ms, sql: sql.slice(0, 140) }, ...log].slice(0, 14);
+	}
+
+	// Mark queries carry a callerId; builds are the preagg CREATEs.
+	const query = queryEngine.query.bind(queryEngine);
+	queryEngine.query = async (sql, opts) => {
+		const t = performance.now();
+		try {
+			return await query(sql, opts);
+		} finally {
+			if (opts?.callerId) {
+				const text = String(sql);
+				record(
+					text.includes('__dplot_preagg_') ? 'preagg read' : 'base read',
+					text,
+					performance.now() - t
+				);
+			}
+		}
+	};
+	const exec = queryEngine.exec.bind(queryEngine);
+	queryEngine.exec = async (sql) => {
+		const t = performance.now();
+		try {
+			return await exec(sql);
+		} finally {
+			const text = String(sql);
+			if (text.startsWith('CREATE TABLE IF NOT EXISTS "__dplot_preagg_')) {
+				record('build', text, performance.now() - t);
+			}
+		}
+	};
+
+	onMount(async () => {
+		try {
+			const url = `${window.location.origin}/data/flights-200k.parquet`;
+			const carriers = `['${CARRIERS.join("', '")}']`;
+			await exec(`
+				CREATE TABLE preagg_flights AS
+				SELECT (delay + (rep % 11) - 5)::SMALLINT AS delay,
+				       (distance + (rep % 13) * 3)::SMALLINT AS distance,
+				       ${carriers}[1 + floor(10 * pow((hash(rid, rep) % 1000000) / 1e6, 2))::INT] AS carrier
+				FROM (SELECT *, row_number() OVER () AS rid FROM read_parquet('${url}')) base,
+				     range(${Math.ceil(ROWS / 200_000)}) r(rep)
+				LIMIT ${ROWS}
+			`);
+			isLoaded = true;
+		} catch (error) {
+			console.error('Initialization error:', error);
+			loadError = error.message;
+		}
+	});
+</script>
+
+{#if loadError}
+	<p class="status error">Error: {loadError}</p>
+{:else if !isLoaded}
+	<p class="status">Loading {ROWS.toLocaleString()} rows…</p>
+{:else}
+	<div class="container">
+		<h1>Preagg for legends and toggles</h1>
+		<p class="lede">
+			{ROWS.toLocaleString()} rows. Hover a source, pause, then click: the other charts should read preagg
+			tables. Brush the delay histogram after a toggle click: once released and quiet, its table is rebuilt;
+			no build should appear mid-drag.
+		</p>
+
+		<div class="grid">
+			<div class="panel">
+				<h3>Delay (brush)</h3>
+				<ChartContainer xLabel="delay" yLabel="count">
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<RectYMark
+									table="preagg_flights"
+									x={bin('delay', { steps: 50 })}
+									y={count()}
+									inset={0.5}
+									fill="steelblue"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet interactors()}
+						<IntervalX selection="brush" />
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
+				<h3>Carrier (Toggle and legend)</h3>
+				<ChartContainer xLabel="carrier" yLabel="count" legendPosition="top">
+					{#snippet legend()}
+						<Legend color="carrier" selection="brush" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<BarMarkY
+									table="preagg_flights"
+									x="carrier"
+									y={count()}
+									fill="carrier"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet interactors()}
+						<Toggle selection="brush" field="carrier" />
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
+				<h3>Distance (filtered)</h3>
+				<ChartContainer xLabel="distance" yLabel="count">
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<RectYMark
+									table="preagg_flights"
+									x={bin('distance', { steps: 50 })}
+									y={count()}
+									inset={0.5}
+									fill="seagreen"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+				</ChartContainer>
+			</div>
+		</div>
+
+		<h3>Query log (newest first)</h3>
+		<table>
+			<thead><tr><th>kind</th><th>ms</th><th>sql</th></tr></thead>
+			<tbody>
+				{#each log as entry, i (i)}
+					<tr class={entry.kind.replace(' ', '-')}>
+						<td>{entry.kind}</td>
+						<td>{entry.ms.toFixed(1)}</td>
+						<td class="sql">{entry.sql}</td>
+					</tr>
+				{/each}
+			</tbody>
+		</table>
+	</div>
+{/if}
+
+<style>
+	.container {
+		max-width: 1300px;
+		margin: 0 auto;
+		padding: 24px 16px;
+	}
+	.lede {
+		color: #555;
+		max-width: 80ch;
+	}
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+		gap: 16px;
+	}
+	.panel {
+		height: 320px;
+	}
+	table {
+		border-collapse: collapse;
+		font-variant-numeric: tabular-nums;
+		width: 100%;
+		margin-top: 8px;
+	}
+	td,
+	th {
+		border-bottom: 1px solid #eee;
+		padding: 3px 8px;
+		text-align: left;
+	}
+	.sql {
+		font-family: ui-monospace, monospace;
+		font-size: 11px;
+		color: #555;
+	}
+	.preagg-read td:first-child {
+		color: #1b7f3b;
+		font-weight: 600;
+	}
+	.base-read td:first-child {
+		color: #b06000;
+	}
+	.build td:first-child {
+		color: #3949ab;
+		font-weight: 600;
+	}
+	.status.error {
+		color: #b00020;
+	}
+</style>
