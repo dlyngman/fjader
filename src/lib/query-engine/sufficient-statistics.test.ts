@@ -16,7 +16,7 @@ import {
 	type ExprNode,
 	type AggregateNode
 } from '@uwdata/mosaic-sql';
-import { rewriteForPreagg, buildBinExpr } from './sufficient-statistics';
+import { rewriteForPreagg, buildBinExpr, binsFineEnough } from './sufficient-statistics';
 
 // Helper: build a selectDef with the given channel→expression mapping
 function selectDef(entries: Record<string, ExprNode>): Record<string, unknown> {
@@ -155,19 +155,31 @@ describe('rewriteForPreagg', () => {
 });
 
 describe('buildBinExpr', () => {
-	it('produces a CAST(FLOOR(...) AS INTEGER) expression', () => {
-		const { expr, d0, scaleFactor } = buildBinExpr(column('price'), [0, 100], 800);
+	it('bins a window of one viewport each side, with an edge bin beyond each end', () => {
+		const { expr, d0, scaleFactor, bins } = buildBinExpr(column('price'), [0, 100], 800);
 		const sql = expr.toString();
 		expect(sql).toMatch(/FLOOR/i);
 		expect(sql).toMatch(/INTEGER/i);
-		expect(d0).toBe(0);
+		expect(sql).toMatch(/CASE WHEN .* < 0 THEN -1 WHEN .* >= 2400 THEN 2400 ELSE/);
+		expect(d0).toBe(-100); // one viewport below the domain
 		expect(scaleFactor).toBe(8); // 800 / 100
+		expect(bins).toBe(2400); // three viewports of 800 px
 	});
 
 	it('handles non-zero domain start', () => {
 		const { d0, scaleFactor } = buildBinExpr(column('price'), [50, 150], 800);
-		expect(d0).toBe(50);
+		expect(d0).toBe(-50);
 		expect(scaleFactor).toBe(8); // 800 / 100
+	});
+});
+
+describe('binsFineEnough', () => {
+	it('passes bins at least as fine as the pixels, and an unknown view', () => {
+		expect(binsFineEnough(1, 1000, 1000)).toBe(true); // equal
+		expect(binsFineEnough(1, 2000, 1000)).toBe(true); // zoomed out
+		expect(binsFineEnough(1, 500, 1000)).toBe(false); // zoomed in
+		expect(binsFineEnough(1, NaN, 1000)).toBe(true);
+		expect(binsFineEnough(1, 1000, 0)).toBe(true);
 	});
 });
 

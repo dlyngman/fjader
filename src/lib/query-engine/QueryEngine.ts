@@ -32,7 +32,13 @@ import {
 	type WindowNode
 } from '@uwdata/mosaic-sql';
 import { togglePredicate } from './toggle-predicate';
-import { rewriteForPreagg, buildBinExpr, type BrushActivation } from './sufficient-statistics';
+import {
+	rewriteForPreagg,
+	buildBinExpr,
+	binsFineEnough,
+	BIN_WINDOW_MARGIN,
+	type BrushActivation
+} from './sufficient-statistics';
 export type { BrushActivation } from './sufficient-statistics';
 import {
 	assembleQuery,
@@ -204,8 +210,8 @@ interface PreaggBasis {
 	parts: QueryParts;
 	/** The source whose clause the table answers instead of baking in. */
 	activeSourceId: string;
-	/** Everything the active dims' columns depend on: bin column, domain and
-	 *  pixel extent; value field. */
+	/** What the active dims' columns are: bin column, or value field. A bin
+	 *  dim's view is checked separately (binsFitView, #binsFineEnough). */
 	dimsKey: string;
 	/** The clause objects baked into the table, in selection insertion order.
 	 *  Refreshed when new objects turn out to give the same SQL. */
@@ -230,11 +236,12 @@ interface PreaggCreation {
 
 /**
  * How each active dim appears in a preagg table. A `bin` dim is a pixel-bin
- * index; a `value` dim is a column holding the field's ids (`byId`) or its raw
- * values, in the source's field order.
+ * index over a window (`buildBinExpr`): bins 0 .. bins - 1 from d0, with -1
+ * and `bins` for everything outside it. A `value` dim is a column holding the
+ * field's ids (`byId`) or its raw values, in the source's field order.
  */
 type ActiveMeta =
-	| { kind: 'bin'; alias: string; d0: number; scaleFactor: number }
+	| { kind: 'bin'; alias: string; d0: number; scaleFactor: number; bins: number }
 	| { kind: 'value'; field: string; column: string; byId: boolean };
 
 interface PreaggState {
@@ -996,6 +1003,7 @@ export class QueryEngine {
 					basis.parts === reg.descriptor.parts &&
 					basis.activeSourceId === activeSourceId &&
 					basis.dimsKey === dimsKey &&
+					binsFitView(latest.activeMeta, dims) &&
 					this.#bakedClausesHold(markId, selection, latest)
 				) {
 					continue;
@@ -1203,12 +1211,21 @@ export class QueryEngine {
 		dims.forEach((dim, i) => {
 			const alias = `__active${i}`;
 			if (dim.kind === 'bin') {
-				const { expr, d0, scaleFactor } = buildBinExpr(dim.columnRef, dim.domain, dim.pixelExtent);
+				const { expr, d0, scaleFactor, bins } = buildBinExpr(
+					dim.columnRef,
+					dim.domain,
+					dim.pixelExtent
+				);
 				preaggCols[alias] = expr;
 				activeGroupBy.push(column(alias));
 				binOrder.push(column(alias));
-				activeMeta.push({ kind: 'bin', alias, d0, scaleFactor });
-				times(dim.extent ? Math.ceil((dim.extent[1] - dim.extent[0]) * scaleFactor) + 1 : null);
+				activeMeta.push({ kind: 'bin', alias, d0, scaleFactor, bins });
+				// The window's bins plus the two edge bins, or fewer when the data
+				// spans less than the window at this resolution.
+				const dataBins = dim.extent
+					? Math.ceil((dim.extent[1] - dim.extent[0]) * scaleFactor) + 1
+					: Infinity;
+				times(Math.min(bins + 2, dataBins));
 				return;
 			}
 
@@ -1294,14 +1311,16 @@ export class QueryEngine {
 	 * transforms and before the active source's filter, times what the active
 	 * dims add. The mark's own groups are the product of its id channels' dim
 	 * sizes when every group key is one; otherwise its last result's row count
-	 * when it has no SQL transforms and no limit (a lower bound if other filters
-	 * narrow it); otherwise unknown. An unknown estimate builds: the large cases
-	 * the guard exists for (wide band axes, deep zoom) always have one.
+	 * when it has no limit (a lower bound: filters or a transform may cut it);
+	 * otherwise at least one, so the active dims alone can still exceed the cap.
+	 * Only an active dim without a known cardinality (a field with no dim)
+	 * leaves the estimate unknown, and an unknown estimate builds.
 	 */
 	#tooLarge(reg: MarkRegistration, groupsPerMarkGroup: number | null): boolean {
 		if (groupsPerMarkGroup == null) return false;
-		const markGroups = this.#markGroups(reg);
-		if (markGroups == null) return false;
+		// The mark has at least one group, so its active dims alone can tell a
+		// build is too large even when its own groups are unknown.
+		const markGroups = this.#markGroups(reg) ?? 1;
 		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
 		const cap = typeof rows === 'number' ? rows / 4 : 100_000;
 		return markGroups * groupsPerMarkGroup > cap;
@@ -1322,8 +1341,11 @@ export class QueryEngine {
 			product *= this.#identity.values(field).length + 1;
 		}
 		if (allIds) return product;
+		// The last result's rows, a lower bound whatever the mark's transforms
+		// (a stack keeps every row; a topN cuts them, but a topN mark groups by an
+		// id channel and is counted exactly above). Not under a limit.
 		const { handle } = reg;
-		if (parts.hasSQLTransforms || handle.params.limit != null) return null;
+		if (handle.params.limit != null) return null;
 		return handle.arrowTable?.numRows ?? null;
 	}
 
@@ -1381,12 +1403,13 @@ export class QueryEngine {
 	/**
 	 * Whether a table's pixel bins are still at least as fine as the current
 	 * view's pixels. Bin indexes are floor((v - d0) * scale) with the stored d0
-	 * and scale, and the brush filter uses the same pair, so any brush range can
-	 * be answered from any table; only precision depends on bin width. A pan
-	 * keeps the width (off by at most one bin edge, one pixel) and a zoom out
-	 * makes the bins finer than the pixels, so both keep the table. Only a zoom
-	 * in or a larger chart past the built resolution needs a rebuild, which
-	 * settling starts. Reads the view into a reused array: no allocation.
+	 * and scale, and the brush filter uses the same pair, so a brush inside the
+	 * table's window is answered at any view; only precision depends on bin
+	 * width. A pan keeps the width (off by at most one bin edge, one pixel) and
+	 * a zoom out makes the bins finer than the pixels, so both keep the table.
+	 * Only a zoom in or a larger chart past the built resolution fails here; a
+	 * brush past the window is caught where the filter is built. Reads the view
+	 * into a reused array: no allocation.
 	 */
 	#binsFineEnough(state: PreaggState): boolean {
 		const { view } = state.basis;
@@ -1401,11 +1424,7 @@ export class QueryEngine {
 			const d1 = out[bin * 3 + 1];
 			const extent = out[bin * 3 + 2];
 			bin++;
-			const span = d1 - d0;
-			// An unknown view keeps the table.
-			if (!(span > 0) || !(extent > 0)) continue;
-			// A relative tolerance absorbs rounding in a view that did not move.
-			if (meta.scaleFactor < (extent / span) * (1 - 1e-6)) return false;
+			if (!binsFineEnough(meta.scaleFactor, d1 - d0, extent)) return false;
 		}
 		return true;
 	}
@@ -1480,6 +1499,9 @@ export class QueryEngine {
 				bin++;
 				const binLo = Math.floor((range[0] - meta.d0) * meta.scaleFactor);
 				const binHi = Math.floor((range[1] - meta.d0) * meta.scaleFactor);
+				// A brush end past the table's window falls in an edge bin, which
+				// holds everything beyond it: not answerable here, so the base table.
+				if (!(binLo >= 0 && binHi < meta.bins)) return null;
 				filters.push(isBetween(column(meta.alias), [literal(binLo), literal(binHi)]) as ExprNode);
 			}
 			if (valueExprs && valueMeta) {
@@ -1619,15 +1641,38 @@ function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[]): strin
 	return `SELECT p.* EXCLUDE (${raws}), ${ids} FROM (${query}) AS p ${joins}${order}`;
 }
 
-/** Everything the active dims' columns depend on. */
+/**
+ * What the active dims' columns are: bin column, or value field. A bin dim's
+ * domain and pixel extent are left out: a table built at another view still
+ * answers it while it fits that view (binsFitView).
+ */
 function activeDimsKeyOf(dims: ActiveDim[]): string {
-	return dims
-		.map((d) =>
-			d.kind === 'bin'
-				? `bin|${d.columnRef}|${d.domain[0]}|${d.domain[1]}|${d.pixelExtent}`
-				: `value|${d.field}`
-		)
-		.join(';');
+	return dims.map((d) => (d.kind === 'bin' ? `bin|${d.columnRef}` : `value|${d.field}`)).join(';');
+}
+
+/**
+ * Whether a table's bins still suit `dims`' view, so activating keeps it:
+ * fine enough for its pixels (the query-time rule), and the view still well
+ * inside the binned window, at least half a margin from either edge. A small
+ * pan or zoom out keeps the table; a pan of more than half a viewport, a zoom
+ * out past the window, or a zoom in past the built resolution rebuilds it
+ * around the new view, so the brushes drawn there stay inside the window.
+ */
+function binsFitView(activeMeta: ActiveMeta[], dims: ActiveDim[]): boolean {
+	let next = 0;
+	for (const dim of dims) {
+		if (dim.kind !== 'bin') continue;
+		while (next < activeMeta.length && activeMeta[next].kind !== 'bin') next++;
+		const meta = activeMeta[next++];
+		if (!meta || meta.kind !== 'bin') return false;
+		const [v0, v1] = dim.domain;
+		if (!binsFineEnough(meta.scaleFactor, v1 - v0, dim.pixelExtent)) return false;
+		// The window is the built view plus BIN_WINDOW_MARGIN views each side.
+		const width = meta.bins / meta.scaleFactor;
+		const inset = ((width / (1 + 2 * BIN_WINDOW_MARGIN)) * BIN_WINDOW_MARGIN) / 2;
+		if (v0 < meta.d0 + inset || v1 > meta.d0 + width - inset) return false;
+	}
+	return true;
 }
 
 /** A field as SQL: the text its identity records, or the column of that name. */

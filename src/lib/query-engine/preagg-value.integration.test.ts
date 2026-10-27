@@ -497,7 +497,16 @@ describe('the build queue', () => {
 				engine.activate(group, {
 					sourceId: 'interval-x-A',
 					excludedByAll: new Set(),
-					dims: [{ kind: 'bin', columnRef: column('x'), domain: [0, 1000], pixelExtent: 1000 }]
+					// Coarse bins, so the size guard lets the build through on 1,000 rows.
+					dims: [
+						{
+							kind: 'bin',
+							columnRef: column('x'),
+							domain: [0, 1000],
+							pixelExtent: 20,
+							extent: [0, 999]
+						}
+					]
 				})
 			]);
 		});

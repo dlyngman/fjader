@@ -178,7 +178,8 @@ describe('preagg validity', () => {
 		await activate();
 
 		await drag(brush(), 100, 599);
-		expect(lastQuery()).toContain('"__active0" BETWEEN 100 AND 599');
+		// Bins count from the window's start, one viewport (1000) below the domain.
+		expect(lastQuery()).toContain('"__active0" BETWEEN 1100 AND 1599');
 		expect(rows()).toEqual(await expected(`cat = 'a' AND x BETWEEN 100 AND 599`));
 	});
 
@@ -200,17 +201,19 @@ describe('preagg validity', () => {
 		expect(creates()).toHaveLength(1);
 	});
 
-	it('re-activate with a new domain or pixel extent rebuilds with new bin meta', async () => {
-		await activate();
-		await activate([{ ...X_DIM, domain: [0, 500] }]);
-		await activate([{ ...X_DIM, domain: [0, 500], pixelExtent: 500 }]);
+	it('re-activating keeps the table while the view sits well inside its window, at fine enough bins', async () => {
+		await activate(); // [0, 1000] at 1 px per unit: bins over [-1000, 2000]
+		await activate([{ ...X_DIM, domain: [300, 1300] }]); // pan of under half a viewport
+		await activate([{ ...X_DIM, pixelExtent: 500 }]); // smaller chart: coarser pixels
+		expect(creates()).toHaveLength(1);
 
-		// Each change rebuilds. The last has the first one's bins (1 unit per px),
-		// so its SQL hashes to the first table.
+		await activate([{ ...X_DIM, domain: [600, 1600] }]); // pan past half a viewport
+		expect(creates()).toHaveLength(2);
+		await activate([{ ...X_DIM, domain: [-1000, 3000] }]); // zoom out past the window
 		expect(creates()).toHaveLength(3);
-		expect(new Set(creates()).size).toBe(2);
+		await activate([{ ...X_DIM, domain: [0, 500] }]); // zoom in: 2 px per unit
+		expect(creates()).toHaveLength(4);
 
-		// 1 px per unit again: bins align with the base rows
 		await drag(brush(), 100, 399);
 		expect(lastQuery()).toContain('__dplot_preagg_');
 		expect(rows()).toEqual(await expected(`x BETWEEN 100 AND 399`));
@@ -491,10 +494,38 @@ describe('preagg validity: filter changes without a re-hover', () => {
 			expect(lastQuery()).toContain('__dplot_preagg_');
 			expect(rows()).toEqual(await expected('x BETWEEN 400 AND 799'));
 
-			view = [0, 4000, 1000]; // zoom out: bins finer than the new pixels
-			await drag(b, 100, 2999);
+			view = [0, 2000, 1000]; // zoom out: bins finer than the new pixels
+			await drag(b, 100, 1999);
 			expect(lastQuery()).toContain('__dplot_preagg_');
-			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 2999'));
+			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 1999'));
+		});
+
+		it('a brush reaching past the binned window reads the base table', async () => {
+			await activateWithView(); // bins over [-1000, 2000]
+			const b = brush();
+
+			await drag(b, -1500, 499); // below the window: the bottom edge bin
+			expect(lastQuery()).not.toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN -1500 AND 499'));
+
+			await drag(b, -1000, 499); // back inside
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN -1000 AND 499'));
+		});
+
+		it('a deep zoom bins only the window: everything outside shares two edge bins', async () => {
+			// 100 px per unit over [0, 10]: the full range would be 100,000 bins.
+			await activate([{ ...X_DIM, domain: [0, 10] }]);
+			const [create] = creates();
+			const table = create.match(/"(__dplot_preagg_[0-9a-f]+)"/)![1];
+			const [{ n }] = await conn.all(`SELECT count(*) AS n FROM "${table}"`);
+			// x = 0..19 fall in the window [-10, 20], one bin each (all g = 0); 20..999
+			// share the top edge bin, once per g. The full range would be 1,000 rows.
+			expect(Number(n)).toBe(20 + 4);
+
+			await drag(brush(), 2, 7);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 2 AND 7'));
 		});
 
 		it('a zoom in past the built resolution goes to the base table until a rebuild', async () => {
