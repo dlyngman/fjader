@@ -8,7 +8,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
 import { column, count } from '@uwdata/mosaic-sql';
-import { QueryEngine, type DuckDBConnection, type QueryDescriptor } from './QueryEngine';
+import {
+	QueryEngine,
+	type DuckDBConnection,
+	type QueryDescriptor,
+	type QueryEngineOptions
+} from './QueryEngine';
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
@@ -100,14 +105,19 @@ let conn: TestConn;
 let engine: QueryEngine;
 let group: FilterGroup;
 
-beforeEach(async () => {
-	conn = openConn();
-	await conn.exec!(SEED_SQL);
-	engine = new QueryEngine(conn);
+/** A fresh engine and filter group on the connection, with the dims set up. */
+async function useEngine(options?: QueryEngineOptions): Promise<void> {
+	engine = new QueryEngine(conn, options);
 	group = new FilterGroup();
 	group.setEngine(engine);
 	// The dims a legend or band axis on these fields would have built.
 	await engine.ensureColumns('t', { categorical: ['cat'] });
+}
+
+beforeEach(async () => {
+	conn = openConn();
+	await conn.exec!(SEED_SQL);
+	await useEngine();
 });
 
 afterEach(async () => {
@@ -446,6 +456,8 @@ describe('the build queue', () => {
 		);
 
 	it('a build waits while a mark query is in flight', async () => {
+		// No wait limit here: this checks the hold itself.
+		await useEngine({ buildMaxWaitMs: Infinity });
 		const byG = await mark('by-g', { g: column('g'), n: count() });
 		const byKind = await mark('by-kind', { kind: column('kind'), n: count() });
 
@@ -479,6 +491,30 @@ describe('the build queue', () => {
 
 		const [, second] = createIndexes();
 		expect(second).toBeGreaterThan(marker);
+	});
+
+	it('a build waits at most the limit while mark queries keep coming (a drag on the base table)', async () => {
+		await useEngine({ buildMaxWaitMs: 30 });
+		const byG = await mark('by-g', { g: column('g'), n: count() });
+		await mark('by-kind', { kind: column('kind'), n: count() });
+
+		// A mark query held in flight for the whole test, as a drag keeps one.
+		let releaseQueries!: () => void;
+		conn.queryGate = new Promise((r) => (releaseQueries = r));
+		const queriesFrom = conn.queries.length;
+		const settled = settle([byG], () =>
+			byG.updateParams({ sort: undefined, limit: 100, filterNulls: null })
+		);
+		await vi.waitFor(() => expect(conn.queries.length).toBeGreaterThan(queriesFrom));
+
+		const building = activateToggle(['cat']);
+		// Past the limit the build is sent although the query is still in flight.
+		await vi.waitFor(() => expect(createIndexes().length).toBeGreaterThan(0), { timeout: 1000 });
+
+		conn.queryGate = null;
+		releaseQueries();
+		await settled;
+		await building;
 	});
 
 	it('a newer hover drops queued builds of the older one, but not of its own sources', async () => {

@@ -73,6 +73,20 @@ export interface QueryOpts {
 	cache?: boolean;
 }
 
+/**
+ * How long a queued build waits behind mark queries before it is sent anyway,
+ * by default. During a drag on the base table a mark query is always waiting
+ * (each one takes longer than a frame), so without a limit the build that
+ * would make the drag fast never runs. Past it, one frame waits behind the
+ * build instead.
+ */
+const BUILD_MAX_WAIT_MS = 100;
+
+export interface QueryEngineOptions {
+	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
+	buildMaxWaitMs?: number;
+}
+
 /** TEMPORARY: flip to false to bypass preagg routing and force base-table queries.
  *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
 const PREAGG_ENABLED = true;
@@ -269,6 +283,8 @@ interface QueuedBuild {
 	createSQL: string;
 	/** The hover batch that queued it. */
 	batch: number;
+	/** When it was queued, for the wait limit (BUILD_MAX_WAIT_MS). */
+	queuedAt: number;
 	/** Settles the activate() call that queued it. */
 	done: () => void;
 }
@@ -316,10 +332,13 @@ export class QueryEngine {
 	 * scans on the one connection, which runs statements in arrival order, so
 	 * sending them as they are planned would put a click's queries behind all
 	 * of them. The engine holds them instead and sends one at a time, only while
-	 * no mark query is waiting or running.
+	 * no mark query is waiting or running, or once the oldest has waited
+	 * BUILD_MAX_WAIT_MS.
 	 */
 	#buildQueue: QueuedBuild[] = [];
 	#buildRunning = false;
+	/** Pumps the queue when the oldest build's wait runs out, if no query does first. */
+	#waitTimer: ReturnType<typeof setTimeout> | null = null;
 	/** The current hover batch. Builds still queued from an older one are dropped. */
 	#batch = 0;
 	#inBatch = false;
@@ -356,7 +375,13 @@ export class QueryEngine {
 	/** Notified after clearQueryCache() drops the identity dims and views. */
 	#identityResetListeners = new Set<() => void>();
 
-	constructor(connection: DuckDBConnection | Promise<DuckDBConnection>) {
+	#buildMaxWaitMs: number;
+
+	constructor(
+		connection: DuckDBConnection | Promise<DuckDBConnection>,
+		options: QueryEngineOptions = {}
+	) {
+		this.#buildMaxWaitMs = options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS;
 		if (connection instanceof Promise) {
 			this.#connPromise = connection;
 			connection.then((c) => {
@@ -1059,6 +1084,7 @@ export class QueryEngine {
 						build,
 						createSQL,
 						batch,
+						queuedAt: performance.now(),
 						done
 					});
 				})
@@ -1110,20 +1136,30 @@ export class QueryEngine {
 	/**
 	 * Send the next queued build if nothing else is on the connection: no build
 	 * running, and no mark query waiting or running. Called when a build is
-	 * queued, when one finishes, and when the last mark query settles. Queries
-	 * without a caller id (identity lookups, describe, ad-hoc queries) do not
-	 * hold builds back and can wait behind a running one; none is on an
-	 * interaction path.
+	 * queued, when one finishes, and when a mark query settles. Queries without
+	 * a caller id (identity lookups, describe, ad-hoc queries) do not hold builds
+	 * back and can wait behind a running one; none is on an interaction path.
+	 *
+	 * Mark queries hold a build back for at most BUILD_MAX_WAIT_MS. A drag that
+	 * starts before its source's tables are built reads the base table, each
+	 * read slower than a frame, so a query is always waiting and the build would
+	 * never run; past the limit it is sent anyway, and one frame waits for it.
 	 */
 	#pumpBuilds(): void {
-		while (
-			!this.#buildRunning &&
-			!this.#destroyed &&
-			this.#inflight.size === 0 &&
-			this.#pending.size === 0
-		) {
-			const item = this.#buildQueue.shift();
-			if (!item) return;
+		while (!this.#buildRunning && !this.#destroyed) {
+			const head = this.#buildQueue[0];
+			if (!head) return;
+			if (this.#inflight.size > 0 || this.#pending.size > 0) {
+				const waited = performance.now() - head.queuedAt;
+				if (waited < this.#buildMaxWaitMs) {
+					this.#waitTimer ??= setTimeout(() => {
+						this.#waitTimer = null;
+						this.#pumpBuilds();
+					}, this.#buildMaxWaitMs - waited);
+					return;
+				}
+			}
+			const item = this.#buildQueue.shift()!;
 			const { markId, sourceId, build } = item;
 
 			// Checked against the mark's current registration, which a re-setup
@@ -1593,6 +1629,8 @@ export class QueryEngine {
 		// throws once destroyed.
 		await this.#identity.reset().catch(() => {});
 		this.#destroyed = true;
+		if (this.#waitTimer) clearTimeout(this.#waitTimer);
+		this.#waitTimer = null;
 		// Settle activations still waiting on queued builds
 		for (const item of this.#buildQueue) item.done();
 		this.#buildQueue = [];
