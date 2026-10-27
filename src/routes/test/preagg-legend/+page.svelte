@@ -43,25 +43,35 @@
 	let log = $state([]);
 
 	function record(kind, sql, ms) {
-		log = [{ kind, ms, sql: sql.slice(0, 140) }, ...log].slice(0, 14);
+		log = [{ kind, ms, sql: sql.slice(0, 140) }, ...log].slice(0, 60);
 	}
 
 	// Mark queries carry the mark's id as callerId; tooltip lookups ('tooltip')
 	// and domain fits ('<mark>:fitDomain') are left out. Builds are the preagg CREATEs.
 	const isMarkQuery = (callerId) => !!callerId && callerId !== 'tooltip' && !callerId.includes(':');
+	// A cache hit returns the same result object as the mark's previous query: a
+	// mark the brush excludes re-queries every frame with unchanged SQL, and that
+	// is logged as "cached", not as a base read. Each read names its mark.
+	const lastResult = new Map();
 	const query = queryEngine.query.bind(queryEngine);
 	queryEngine.query = async (sql, opts) => {
 		const t = performance.now();
+		let result;
 		try {
-			return await query(sql, opts);
+			result = await query(sql, opts);
+			return result;
 		} finally {
-			if (isMarkQuery(opts?.callerId)) {
+			const callerId = opts?.callerId;
+			if (isMarkQuery(callerId)) {
 				const text = String(sql);
-				record(
-					text.includes('__dplot_preagg_') ? 'preagg read' : 'base read',
-					text,
-					performance.now() - t
-				);
+				const cached = result !== undefined && lastResult.get(callerId) === result;
+				if (result !== undefined) lastResult.set(callerId, result);
+				const kind = cached
+					? 'cached'
+					: text.includes('__dplot_preagg_')
+						? 'preagg read'
+						: 'base read';
+				record(kind, `[${callerId}] ${text}`, performance.now() - t);
 			}
 		}
 	};
@@ -76,6 +86,31 @@
 				record('build', text, performance.now() - t);
 			}
 		}
+	};
+
+	// Activations: a chart hover or a settle is one batch; each source in it is
+	// logged with its dims, so a missing rebuild can be told apart from a missing
+	// activation.
+	const batch = queryEngine.batch.bind(queryEngine);
+	queryEngine.batch = (activations) => {
+		record(
+			'activate',
+			`batch (chart hover or settle) at ${(performance.now() / 1000).toFixed(2)} s`,
+			0
+		);
+		return batch(activations);
+	};
+	const activate = queryEngine.activate.bind(queryEngine);
+	queryEngine.activate = (group, source) => {
+		const dims = source.dims
+			.map((d) =>
+				d.kind === 'bin'
+					? `bin [${d.domain.map((v) => +v.toFixed(1)).join(', ')}] over ${d.pixelExtent}px`
+					: `value ${d.field}`
+			)
+			.join('; ');
+		record('activate', `${source.sourceId}: ${dims}`, 0);
+		return activate(group, source);
 	};
 
 	onMount(async () => {
@@ -260,6 +295,10 @@
 	}
 	.base-read td:first-child {
 		color: #b06000;
+	}
+	.cached td:first-child,
+	.activate td:first-child {
+		color: #777;
 	}
 	.build td:first-child {
 		color: #3949ab;
