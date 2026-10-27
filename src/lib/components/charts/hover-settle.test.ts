@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { HoverSettle } from './hover-settle';
 
-const INTERVAL = 200;
+const INTERVAL = 200; // filter changes
+const VIEW_INTERVAL = 100;
+const TICK = 50;
 
 describe('HoverSettle', () => {
 	let lastFilterChangeAt: number;
@@ -15,7 +17,9 @@ describe('HoverSettle', () => {
 		view = [0, 100, 0, 50, 400, 300];
 		settles = 0;
 		settle = new HoverSettle({
-			interval: INTERVAL,
+			filterInterval: INTERVAL,
+			viewInterval: VIEW_INTERVAL,
+			tick: TICK,
 			lastFilterChangeAt: () => lastFilterChangeAt,
 			view: (out) => out.set(view),
 			settle: () => settles++,
@@ -73,10 +77,25 @@ describe('HoverSettle', () => {
 		expect(settles).toBe(1);
 	});
 
+	it('re-arms sooner after a view change than after a filter change', () => {
+		view = [10, 60, 0, 50, 400, 300];
+		// Seen on the next tick, then quiet for the view interval: well before
+		// a filter change would re-arm.
+		vi.advanceTimersByTime(TICK + VIEW_INTERVAL + TICK);
+		expect(settles).toBe(1);
+
+		// The same wait after a filter change is not enough: it needs the full interval.
+		filterChange();
+		vi.advanceTimersByTime(VIEW_INTERVAL + TICK);
+		expect(settles).toBe(1);
+		vi.advanceTimersByTime(INTERVAL);
+		expect(settles).toBe(2);
+	});
+
 	it('waits while the view keeps moving (an animated reset)', () => {
-		for (let i = 1; i <= 5; i++) {
+		for (let i = 1; i <= 8; i++) {
 			view = [i, 100 + i, 0, 50, 400, 300];
-			vi.advanceTimersByTime(INTERVAL);
+			vi.advanceTimersByTime(TICK);
 		}
 		expect(settles).toBe(0);
 		vi.advanceTimersByTime(INTERVAL * 3);

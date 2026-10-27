@@ -6,19 +6,31 @@
  * invalidates tables that bake the changed clause, and so does a view change
  * (zoom in, resize). Re-running the activators on every change would start
  * builds in the gaps between drag frames and block the frames after them, so
- * this waits for quiet instead: no filter change and no view change for one
- * interval, and no pointer held. That covers clicks, drag ends, pans, zooms,
- * animated domain resets and resizes without listing them.
+ * this waits for quiet instead: no filter change for one interval, no view
+ * change for a shorter one, and no pointer held. That covers clicks, drag
+ * ends, pans, zooms, animated domain resets and resizes without listing them.
  *
- * One timer while the chart is hovered, ticking every interval. Changes are
- * not timed individually: filter changes are read as the engine's last-change
- * timestamp, and the view as six numbers compared in place on each tick, so an
- * animated reset that moves the view every frame costs nothing per frame.
+ * Filters wait longer because clicks come in bursts (a multi-select has
+ * 100–200 ms between clicks). A pan or zoom has no such gaps: wheel and
+ * momentum events keep moving the view until the gesture ends. The view
+ * should be where it is heading (a domain's spring target), not where it is
+ * on screen, so the wait starts when the input stops rather than when the
+ * spring comes to rest.
+ *
+ * One timer while the chart is hovered, ticking at `tick`, well under either
+ * interval, so quiet is noticed promptly. Changes are not timed individually:
+ * filter changes are read as the engine's last-change timestamp, and the view
+ * as six numbers compared in place on each tick, so an animated reset that
+ * moves the view every frame costs nothing per frame.
  */
 
 export interface HoverSettleOpts {
-	/** Quiet time before re-arming, in ms. */
-	interval: number;
+	/** Quiet time after a filter change before re-arming, in ms. */
+	filterInterval: number;
+	/** Quiet time after a view change before re-arming, in ms. */
+	viewInterval: number;
+	/** How often to check, in ms. */
+	tick: number;
 	/** When a filter last changed, on the same clock as `now`. */
 	lastFilterChangeAt: () => number;
 	/** Writes the chart's view (x/y domains and inner size) into `out`. */
@@ -36,7 +48,7 @@ export class HoverSettle {
 	#held = false;
 	#view = new Float64Array(6);
 	#lastView = new Float64Array(6);
-	#lastViewChangeAt = 0;
+	#lastViewChangeAt = -Infinity;
 	/** When the activators last ran: on entering, or the last settle. */
 	#armedAt = 0;
 
@@ -69,7 +81,7 @@ export class HoverSettle {
 	}
 
 	#schedule(): void {
-		this.#timer = this.#opts.setTimer(() => this.#tick(), this.#opts.interval);
+		this.#timer = this.#opts.setTimer(() => this.#tick(), this.#opts.tick);
 	}
 
 	#readView(out: Float64Array): void {
@@ -88,10 +100,14 @@ export class HoverSettle {
 			break;
 		}
 
-		const lastChange = Math.max(this.#opts.lastFilterChangeAt(), this.#lastViewChangeAt);
+		const lastFilter = this.#opts.lastFilterChangeAt();
+		const lastView = this.#lastViewChangeAt;
 		// >= so a change in the same millisecond as entering still re-arms; a spare
 		// re-arm costs nothing, since activation skips tables that are still valid.
-		if (!this.#held && lastChange >= this.#armedAt && now - lastChange >= this.#opts.interval) {
+		const changed = Math.max(lastFilter, lastView) >= this.#armedAt;
+		const quiet =
+			now - lastFilter >= this.#opts.filterInterval && now - lastView >= this.#opts.viewInterval;
+		if (!this.#held && changed && quiet) {
 			this.#armedAt = now;
 			this.#opts.settle();
 		}

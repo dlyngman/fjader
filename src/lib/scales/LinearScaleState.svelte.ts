@@ -52,6 +52,8 @@ export interface GpuScaleState {
 interface DomainAccessor {
 	readonly current: Float64Array;
 	readonly target: [number, number];
+	/** The target domain in a reused buffer, for per-frame and per-query reads. */
+	readonly targetBuffer: Float64Array;
 	set(newValue: [number, number], options?: { instant?: boolean }): void;
 }
 
@@ -103,6 +105,7 @@ export class LinearScaleState {
 
 	//
 	#domainCurrentBuffer: Float64Array = new Float64Array(2);
+	#domainTargetBuffer: Float64Array = new Float64Array(2);
 	#clampResult = { min: 0, max: 0 };
 
 	// --- Cached Render Values (updated via updateRenderState) ---
@@ -289,6 +292,17 @@ export class LinearScaleState {
 					self.fromSpringSpace(self.#springPair.targetA),
 					self.fromSpringSpace(self.#springPair.targetB)
 				];
+			},
+
+			/**
+			 * The target domain, like `target`, but written into a reused buffer:
+			 * no allocation. Hold it only until the next read.
+			 */
+			get targetBuffer() {
+				self._targetVersion; // Register Svelte dependency (only changes on user input)
+				self.#domainTargetBuffer[0] = self.fromSpringSpace(self.#springPair.targetA);
+				self.#domainTargetBuffer[1] = self.fromSpringSpace(self.#springPair.targetB);
+				return self.#domainTargetBuffer;
 			},
 
 			/** Set domain with optional instant mode */

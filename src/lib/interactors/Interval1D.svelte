@@ -69,18 +69,23 @@
 				{
 					kind: 'bin',
 					columnRef,
-					domain: scale.domain() as [number, number],
+					// Where the spring is heading, so a table built while it is still
+					// moving fits the view it settles on.
+					domain:
+						scaleState instanceof LinearScaleState
+							? scaleState.domain.target
+							: (scale.domain() as [number, number]),
 					pixelExtent: isX ? chart.innerWidth : chart.innerHeight,
 					// For the size guard: how many bins the data spans at this zoom.
 					extent: scaleState instanceof LinearScaleState ? scaleState.effectiveExtent : undefined
 				}
 			];
 		},
-		// Read on every query: the scale state's domain buffer is reused, so this
-		// allocates nothing.
+		// Read on every query: the scale state's target buffer is reused, so this
+		// allocates nothing. The target, like activeDims, not the animated domain.
 		view: (out) => {
 			if (!(scaleState instanceof LinearScaleState)) return;
-			const domain = scaleState.domain.current;
+			const domain = scaleState.domain.targetBuffer;
 			out[0] = domain[0];
 			out[1] = domain[1];
 			out[2] = isX ? chart.innerWidth : chart.innerHeight;

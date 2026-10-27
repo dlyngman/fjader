@@ -803,19 +803,22 @@
 	 * the rest of the session.
 	 */
 	const hoverSettle = new HoverSettle({
-		interval: 200,
+		filterInterval: 200,
+		viewInterval: 100,
+		tick: 50,
 		lastFilterChangeAt: () => queryEngine?.lastFilterChangeAt ?? 0,
 		view: (out) => {
-			// Reused domain buffers and plain numbers: nothing allocates per tick.
+			// The spring targets, so a pan or zoom settles when the input stops, not
+			// when the animation does. Reused buffers: nothing allocates per tick.
 			const x = chartContext.xScaleState;
 			const y = chartContext.yScaleState;
 			if (x instanceof LinearScaleState) {
-				const domain = x.domain.current;
+				const domain = x.domain.targetBuffer;
 				out[0] = domain[0];
 				out[1] = domain[1];
 			}
 			if (y instanceof LinearScaleState) {
-				const domain = y.domain.current;
+				const domain = y.domain.targetBuffer;
 				out[2] = domain[0];
 				out[3] = domain[1];
 			}
