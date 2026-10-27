@@ -434,4 +434,29 @@ describe('preagg validity: filter changes without a re-hover', () => {
 			expect(creates()).toHaveLength(2);
 		});
 	});
+
+	it('a channel named like a column of the table still builds and reads its brush table', async () => {
+		// t has a column x; this mark's channel x is g. GROUP BY "x" would bind
+		// to t.x rather than the channel, and the build would fail.
+		const handleX = engine.registerMark(
+			'bars-x',
+			{
+				table: 't',
+				baseTable: 't',
+				parts: buildQueryParts({ x: column('g'), n: count() }, null, false),
+				schema: new Map(),
+				transformCompiler: new TransformCompiler([])
+			},
+			group
+		);
+		handleX.updateParams({ sort: undefined, limit: undefined, filterNulls: null });
+		await activate();
+		expect(creates()).toHaveLength(2);
+
+		const version = handleX.dataVersion;
+		await drag(brush(), 100, 599);
+		await vi.waitFor(() => expect(handleX.dataVersion).toBeGreaterThan(version));
+		const query = conn.queries.filter((q) => !q.startsWith('CREATE') && q.includes('"x"')).at(-1)!;
+		expect(query).toContain('__dplot_preagg_');
+	});
 });

@@ -170,10 +170,13 @@ export function rewriteForPreagg(
 		const aggFlag = isAggregateExpression(expr as ExprNode);
 
 		if (aggFlag === 0) {
-			// Pure dimension (column ref, CASE expression, etc.)
+			// Pure dimension (column ref, CASE expression, etc.). Grouped by the
+			// expression, not the channel name: GROUP BY "x" binds to a source
+			// column named x before the select alias, so a channel named like a
+			// column of the table would group by the wrong thing.
 			preaggCols[channel] = expr as ExprNode;
 			outputSelect[channel] = column(channel);
-			preaggGroupBy.push(column(channel));
+			preaggGroupBy.push(expr as ExprNode);
 		} else {
 			// Contains aggregate(s) — try to decompose
 			const aggNodes = collectAggregates(expr as ExprNode);
