@@ -70,7 +70,9 @@
 					kind: 'bin',
 					columnRef,
 					domain: scale.domain() as [number, number],
-					pixelExtent: isX ? chart.innerWidth : chart.innerHeight
+					pixelExtent: isX ? chart.innerWidth : chart.innerHeight,
+					// For the size guard: how many bins the data spans at this zoom.
+					extent: scaleState instanceof LinearScaleState ? scaleState.effectiveExtent : undefined
 				}
 			];
 		},

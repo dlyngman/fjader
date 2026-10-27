@@ -1,0 +1,396 @@
+/**
+ * Integration test: preagg tables for toggle and legend sources (`value` dims).
+ * Runs QueryEngine end to end against native DuckDB, with categorical identity
+ * built as the app builds it, and checks each mark's rows against the same
+ * query on the base table.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import duckdb from 'duckdb';
+import { column, count } from '@uwdata/mosaic-sql';
+import { QueryEngine, type DuckDBConnection, type QueryDescriptor } from './QueryEngine';
+import { FilterGroup } from './FilterGroup.svelte';
+import type { MarkHandle } from './MarkHandle.svelte';
+import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { buildQueryParts, castReal } from '$lib/components/marks/lifecycle/query-builder';
+
+// ---------------------------------------------------------------------------
+// Fixture
+// ---------------------------------------------------------------------------
+//
+// t: 1000 rows. cat alternates 'a'/'b'; kind cycles 'p'/'q'/'r' with NULL every
+// 7th row; g = i // 250; x = i (1000 distinct values, for the size guard).
+// big: 100,000 rows with the same columns, for the relative cap.
+
+const SEED_SQL = `
+CREATE TABLE t AS
+SELECT i AS x,
+       CASE WHEN i % 2 = 0 THEN 'a' ELSE 'b' END AS cat,
+       CASE WHEN i % 7 = 0 THEN NULL WHEN i % 3 = 0 THEN 'p' WHEN i % 3 = 1 THEN 'q' ELSE 'r' END AS kind,
+       i // 250 AS g
+FROM range(1000) r(i);
+CREATE TABLE big AS
+SELECT i % 1000 AS x, CASE WHEN i % 2 = 0 THEN 'a' ELSE 'b' END AS cat, (i % 1000) // 250 AS g
+FROM range(100000) r(i)
+`;
+
+interface TestConn extends DuckDBConnection {
+	queries: string[];
+	all(sql: string): Promise<Record<string, unknown>[]>;
+	close(): Promise<void>;
+}
+
+/** Rows as plain numbers and strings, with `numRows` and `get` like a result table. */
+function asTable(rows: Record<string, unknown>[]) {
+	const plain = rows.map((r) =>
+		Object.fromEntries(
+			Object.entries(r).map(([k, v]) => [k, typeof v === 'bigint' ? Number(v) : v])
+		)
+	);
+	return Object.assign(plain, { numRows: plain.length, get: (i: number) => plain[i] });
+}
+
+function openConn(): TestConn {
+	const db = new duckdb.Database(':memory:');
+	const all = (sql: string) =>
+		new Promise<Record<string, unknown>[]>((res, rej) =>
+			db.all(sql, (e: Error | null, rows: Record<string, unknown>[]) => (e ? rej(e) : res(rows)))
+		);
+	const queries: string[] = [];
+	return {
+		queries,
+		all,
+		async query(sql: string) {
+			queries.push(sql);
+			return asTable(await all(sql)) as never;
+		},
+		async exec(sql: string) {
+			queries.push(sql);
+			await new Promise<void>((res, rej) =>
+				db.exec(sql, (e: Error | null) => (e ? rej(e) : res()))
+			);
+		},
+		close: () =>
+			new Promise<void>((res, rej) => db.close((e: Error | null) => (e ? rej(e) : res())))
+	};
+}
+
+let conn: TestConn;
+let engine: QueryEngine;
+let group: FilterGroup;
+
+beforeEach(async () => {
+	conn = openConn();
+	await conn.exec!(SEED_SQL);
+	engine = new QueryEngine(conn);
+	group = new FilterGroup();
+	group.setEngine(engine);
+	// The dims a legend or band axis on these fields would have built.
+	await engine.ensureColumns('t', { categorical: ['cat'] });
+});
+
+afterEach(async () => {
+	await engine.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const idOf = (field: string) => engine.identityColumn(field);
+
+/** Register a mark and wait for its first result. */
+async function mark(
+	id: string,
+	select: Record<string, unknown>,
+	opts: { table?: string; baseTable?: string; limit?: number } = {}
+): Promise<MarkHandle> {
+	const baseTable = opts.baseTable ?? 't';
+	const descriptor: QueryDescriptor = {
+		table: opts.table ?? baseTable,
+		baseTable,
+		parts: buildQueryParts(select, null, false),
+		schema: new Map(),
+		transformCompiler: new TransformCompiler([])
+	};
+	const handle = engine.registerMark(id, descriptor, group);
+	await settle([handle], () =>
+		handle.updateParams({ sort: undefined, limit: opts.limit, filterNulls: null })
+	);
+	return handle;
+}
+
+/** Run an action and wait for every handle's next result. */
+async function settle(handles: MarkHandle[], action: () => void): Promise<void> {
+	const versions = handles.map((h) => h.dataVersion);
+	action();
+	await vi.waitFor(() =>
+		handles.forEach((h, i) => expect(h.dataVersion).toBeGreaterThan(versions[i]))
+	);
+}
+
+/** A handle's rows, sorted, as arrays of values. */
+function rowsOf(handle: MarkHandle): unknown[][] {
+	const table = handle.arrowTable as unknown as Record<string, unknown>[];
+	return table.map((r) => Object.values(r).map(Number)).sort(byValues);
+}
+
+async function expected(sql: string): Promise<unknown[][]> {
+	return (await conn.all(sql)).map((r) => Object.values(r).map(Number)).sort(byValues);
+}
+
+function byValues(a: unknown[], b: unknown[]): number {
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return (a[i] as number) < (b[i] as number) ? -1 : 1;
+	}
+	return 0;
+}
+
+const nonDDL = () => conn.queries.filter((q) => !/^(CREATE|INSERT|DROP)/.test(q));
+const creates = () =>
+	conn.queries.filter((q) => q.startsWith('CREATE TABLE IF NOT EXISTS "__dplot_preagg_'));
+
+/** The last query of each mark since `from`, by the mark's distinctive select. */
+function lastQueriesSince(from: number): string[] {
+	return nonDDL().slice(from);
+}
+
+/** Activate a toggle source on `fields` for every aggregate mark, as a legend hover does. */
+function activateToggle(fields: string[]): Promise<void> {
+	return engine.activate(group, {
+		sourceId: fields.length === 1 ? `toggle-${fields[0]}` : `toggle-${JSON.stringify(fields)}`,
+		excludedByAll: new Set(),
+		dims: fields.map((field) => ({ kind: 'value' as const, field }))
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('preagg for value dims', () => {
+	it('legend hover then click: every case reads a preagg table and matches the base query', async () => {
+		const view = engine.identitySourceFor('t');
+		// Case 1: bars by cat's id, read from the view.
+		const bars = await mark(
+			'bars',
+			{ x: castReal(column(idOf('cat'))), n: count() },
+			{ table: view }
+		);
+		// Case 2 (join): a histogram on the bare table.
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		// Case 2 (view shortcut): the same histogram read from the view.
+		const histView = await mark('hist-view', { g: column('g'), n: count() }, { table: view });
+
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(3);
+		expect(creates().some((c) => c.includes('LEFT JOIN'))).toBe(true);
+
+		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const from = nonDDL().length;
+		await settle([bars, hist, histView], () => legend.toggle(['a'], false));
+
+		const after = lastQueriesSince(from);
+		expect(after.length).toBeGreaterThanOrEqual(3);
+		expect(after.every((q) => q.includes('__dplot_preagg_'))).toBe(true);
+		const aId = engine.identityFor('cat').ids.get('a');
+		expect(rowsOf(bars)).toEqual(await expected(`SELECT ${aId}, count(*) FROM t WHERE cat = 'a'`));
+		const histRows = await expected(`SELECT g, count(*) FROM t WHERE cat = 'a' GROUP BY g`);
+		expect(rowsOf(hist)).toEqual(histRows);
+		expect(rowsOf(histView)).toEqual(histRows);
+	});
+
+	it('an empty toggle reads the table with no filter: every category', async () => {
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle(['cat']);
+		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([hist], () => legend.toggle(['a'], false));
+		await settle([hist], () => legend.clear());
+
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual(await expected(`SELECT g, count(*) FROM t GROUP BY g`));
+	});
+
+	it('case 3: a field with no dim filters its values with the toggle predicate', async () => {
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle(['kind']);
+		const toggle = group.registerToggle('kind', { excludeMarkIds: () => new Set() });
+		await settle([hist], () => toggle.set([['p'], ['r']]));
+
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE kind IN ('p', 'r') GROUP BY g`)
+		);
+	});
+
+	it('a multi-field toggle with a NULL member matches the base query', async () => {
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle(['cat', 'kind']);
+		const toggle = group.registerToggle(['cat', 'kind'], { excludeMarkIds: () => new Set() });
+		await settle([hist], () =>
+			toggle.set([
+				['a', null],
+				['b', 'q']
+			])
+		);
+
+		// cat has ids, kind has none: the NULL stays a NULL in kind's raw column.
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual(
+			await expected(
+				`SELECT g, count(*) FROM t WHERE (cat = 'a' AND kind IS NULL) OR (cat = 'b' AND kind = 'q') GROUP BY g`
+			)
+		);
+	});
+
+	it('a value with no id falls back to the base table rather than filter wrongly', async () => {
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle(['cat']);
+		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([hist], () => toggle.set([['zzz']]));
+
+		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual([]);
+	});
+
+	it('a mark on a table its dim does not cover uses raw values, and stays exact as the dim grows', async () => {
+		await conn.exec!(
+			`CREATE TABLE u AS SELECT * FROM (VALUES ('a', 0), ('c', 1), ('c', 1)) v(cat, g)`
+		);
+		const hist = await mark('hist-u', { g: column('g'), n: count() }, { baseTable: 'u' });
+		await activateToggle(['cat']);
+		expect(creates().at(-1)).not.toContain('LEFT JOIN');
+
+		// Another registration folds u into the dim; 'c' gets an id now.
+		await engine.ensureColumns('u', { categorical: ['cat'] });
+		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([hist], () => toggle.toggle(['c'], false));
+
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual([[1, 2]]);
+	});
+
+	it('an expression field filters through its identity SQL', async () => {
+		const field = 'upper("cat")';
+		await engine.ensureColumns('t', { categorical: [{ key: field, sql: field }] });
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle([field]);
+		const toggle = group.registerToggle(field, { excludeMarkIds: () => new Set() });
+		await settle([hist], () => toggle.toggle(['A'], false));
+
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE upper(cat) = 'A' GROUP BY g`)
+		);
+	});
+
+	it('a field named like a channel does not collide in the preagg table', async () => {
+		const bars = await mark('bars-x', { x: column('g'), n: count() });
+		await activateToggle(['x']);
+		const toggle = group.registerToggle('x', { excludeMarkIds: () => new Set() });
+		await settle([bars], () => toggle.set([[5], [600]]));
+
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(bars)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE x IN (5, 600) GROUP BY g`)
+		);
+	});
+
+	it('activation never creates a view or extends a dim', async () => {
+		await mark('hist', { g: column('g'), n: count() });
+		const before = conn.queries.length;
+		await activateToggle(['cat']);
+		await activateToggle(['kind']);
+
+		const ddl = conn.queries.slice(before);
+		expect(ddl.some((q) => q.includes('CREATE OR REPLACE VIEW'))).toBe(false);
+		expect(ddl.some((q) => q.startsWith('INSERT INTO "__dplot_dim'))).toBe(false);
+		expect(ddl.some((q) => q.includes('CREATE TABLE IF NOT EXISTS "__dplot_dim'))).toBe(false);
+	});
+});
+
+describe('the size guard', () => {
+	/** Wait for the base table row counts started at registration. */
+	const counted = () =>
+		vi.waitFor(() => expect(conn.queries.some((q) => q.startsWith('SELECT count(*)'))).toBe(true));
+
+	it('estimates a limited mark from its dims, not its few result rows, and skips it', async () => {
+		await engine.ensureColumns('t', { categorical: ['x'] });
+		const view = engine.identitySourceFor('t');
+		// 1000 x ids per row-limited result of 5 rows; cat adds 3 groups: 3003 > 1000 / 10.
+		await mark('top', { x: castReal(column(idOf('x'))), n: count() }, { table: view, limit: 5 });
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(0);
+	});
+
+	it('skips a bin build planned at deep zoom over a wide data extent', async () => {
+		await mark('hist', { g: column('g'), n: count() });
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		// 50 bins per unit over a 1000-wide extent, times 4 groups.
+		await engine.activate(group, {
+			sourceId: 'interval-x-A',
+			excludedByAll: new Set(),
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 20],
+					pixelExtent: 1000,
+					extent: [0, 1000]
+				}
+			]
+		});
+		expect(creates()).toHaveLength(0);
+	});
+
+	it('the same estimate is skipped on a small base table and built on a large one', async () => {
+		await engine.ensureColumns('t', { categorical: ['x'] });
+		await engine.ensureColumns('big', { categorical: ['x'] });
+		// 4 g-groups × 1001 x ids = 4004: over 1000 / 10, under 100,000 / 10.
+		await mark('small', { g: column('g'), n: count() });
+		await mark('large', { g: column('g'), n: count() }, { baseTable: 'big' });
+		await vi.waitFor(() =>
+			expect(conn.queries.filter((q) => q.startsWith('SELECT count(*)'))).toHaveLength(2)
+		);
+		await new Promise((r) => setTimeout(r, 20));
+
+		await activateToggle(['x']);
+		expect(creates()).toHaveLength(1);
+		expect(creates()[0]).toContain('"big"');
+	});
+
+	it('uses the fixed cap before the row count arrives, the relative cap after', async () => {
+		await engine.ensureColumns('t', { categorical: ['x'] });
+		// Group keys all id channels, so the estimate needs no result:
+		// 1001 x ids × 3 cat groups = 3003, under 100,000 but over 1000 / 10.
+		const descriptor: QueryDescriptor = {
+			table: engine.identitySourceFor('t'),
+			baseTable: 't',
+			parts: buildQueryParts({ x: castReal(column(idOf('x'))), n: count() }, null, false),
+			schema: new Map(),
+			transformCompiler: new TransformCompiler([])
+		};
+		// Registered and activated in the same tick: the count is still in flight.
+		engine.registerMark('early', descriptor, group);
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(1);
+
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+		engine.forgetSource(group, 'toggle-cat');
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(1);
+	});
+
+	it('reads each base table’s row count once', async () => {
+		await mark('one', { g: column('g'), n: count() });
+		await mark('two', { g: column('g'), n: count() });
+		await counted();
+		expect(conn.queries.filter((q) => q.startsWith('SELECT count(*)'))).toHaveLength(1);
+	});
+});

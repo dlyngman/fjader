@@ -11,6 +11,7 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
+	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
@@ -41,6 +42,10 @@
 
 	const source = `interval-2d-${chart.chartId}`;
 
+	/** The data extent of a continuous axis, for the preagg size guard. */
+	const extentOf = (state: unknown) =>
+		state instanceof LinearScaleState ? state.effectiveExtent : undefined;
+
 	const brushHandle: SourceHandle = filterGroup.register(source, {
 		excludeMarkIds: () => new Set(chart.config.entries.keys()),
 		activeDims: () => {
@@ -50,13 +55,15 @@
 					kind: 'bin',
 					columnRef: xColumnRef,
 					domain: chart.xScale.domain() as [number, number],
-					pixelExtent: chart.innerWidth
+					pixelExtent: chart.innerWidth,
+					extent: extentOf(chart.xScaleState)
 				},
 				{
 					kind: 'bin',
 					columnRef: yColumnRef,
 					domain: chart.yScale.domain() as [number, number],
-					pixelExtent: chart.innerHeight
+					pixelExtent: chart.innerHeight,
+					extent: extentOf(chart.yScaleState)
 				}
 			];
 		},

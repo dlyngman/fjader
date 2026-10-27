@@ -349,6 +349,12 @@ export class CategoricalIdentity {
 		return !!dim && !dim.refusal && dim.tables.has(table);
 	}
 
+	/** The field whose id column is `column`, or null if no dim has that column. */
+	fieldOfIdColumn(column: string): string | null {
+		for (const field of this.#dims.keys()) if (this.idColumn(field) === column) return field;
+		return null;
+	}
+
 	/** Whether `table`'s view already exposes `field`'s id column. */
 	viewHas(table: string, field: string): boolean {
 		return this.#views.get(table)?.current.has(field) ?? false;

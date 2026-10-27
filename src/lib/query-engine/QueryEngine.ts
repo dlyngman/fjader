@@ -20,13 +20,18 @@
 import { tableFromIPC, type Table } from '@uwdata/flechette';
 import {
 	isAggregateExpression,
+	isNode,
+	collectColumns,
 	column,
 	and,
 	isBetween,
 	literal,
 	Query,
-	type ExprNode
+	sql as sqlTag,
+	type ExprNode,
+	type WindowNode
 } from '@uwdata/mosaic-sql';
+import { togglePredicate } from './toggle-predicate';
 import { rewriteForPreagg, buildBinExpr, type BrushActivation } from './sufficient-statistics';
 export type { BrushActivation } from './sufficient-statistics';
 import {
@@ -172,10 +177,12 @@ export interface QueryDescriptor {
 
 /**
  * How a source selects, one entry per active dimension: a pixel-binned
- * continuous column (`bin`), or a categorical field (`value`, keyed by its
- * identity key).
+ * continuous column (`bin`, with the data extent when known, for the size
+ * guard), or a categorical field (`value`, keyed by its identity key).
  */
-export type ActiveDim = ({ kind: 'bin' } & BrushActivation) | { kind: 'value'; field: string };
+export type ActiveDim =
+	| ({ kind: 'bin'; extent?: [number, number] } & BrushActivation)
+	| { kind: 'value'; field: string };
 
 /** What activate() needs to know about a source, as FilterGroup sees it at hover time. */
 export interface ActivationSource {
@@ -189,10 +196,11 @@ export interface ActivationSource {
 interface PreaggBasis {
 	/** Query parts, compared by reference ($derived memoization keeps them stable). */
 	parts: QueryParts;
-	/** The brush the table bins instead of baking in. */
+	/** The source whose clause the table answers instead of baking in. */
 	activeSourceId: string;
-	/** Column, domain and pixel extent of each brush dimension. */
-	brushDimsKey: string;
+	/** Everything the active dims' columns depend on: bin column, domain and
+	 *  pixel extent; value field. */
+	dimsKey: string;
 	/** The clause objects baked into the table, in selection insertion order.
 	 *  Refreshed when new objects turn out to give the same SQL. */
 	bakedClauses: Clause[];
@@ -204,7 +212,22 @@ interface PreaggCreation {
 	select: Record<string, ExprNode>;
 	groupby: ExprNode[];
 	orderby: ExprNode[];
+	/**
+	 * Fields grouped by value inside and mapped to their ids on the grouped
+	 * result: `raw` is the inner column, `alias` the id column, `dim` the dim
+	 * table joined on value. Empty for every other table.
+	 */
+	joins: Array<{ raw: string; alias: string; dim: string }>;
 }
+
+/**
+ * How each active dim appears in a preagg table. A `bin` dim is a pixel-bin
+ * index; a `value` dim is a column holding the field's ids (`byId`) or its raw
+ * values, in the source's field order.
+ */
+type ActiveMeta =
+	| { kind: 'bin'; alias: string; d0: number; scaleFactor: number }
+	| { kind: 'value'; field: string; column: string; byId: boolean };
 
 interface PreaggState {
 	table: string;
@@ -217,8 +240,8 @@ interface PreaggState {
 	mismatch: Clause[] | null;
 	/** Rewritten select expressions that recombine partials at query time. */
 	outputSelect: Record<string, ExprNode>;
-	/** Bin dimension metadata for computing bin filters at query time. */
-	binMeta: Array<{ alias: string; d0: number; scaleFactor: number }>;
+	/** The active dims as the table holds them, for the query-time filter. */
+	activeMeta: ActiveMeta[];
 	/** Window channels needing CTE wrapping in the preagg query. */
 	windowChannels: Record<string, import('@uwdata/mosaic-sql').WindowNode> | null;
 }
@@ -255,6 +278,12 @@ export class QueryEngine {
 	#destroyed = false;
 	/** Hash-named preagg tables created this session (for cleanup on destroy). */
 	#preaggTables = new Set<string>();
+	/**
+	 * Row count per base table, for the size guard: a number once read, the
+	 * read in flight before that. Read once per table when its first mark
+	 * registers, outside any interaction.
+	 */
+	#rowCounts = new Map<string, number | Promise<void>>();
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 	/**
@@ -668,6 +697,7 @@ export class QueryEngine {
 			this.exec(`DROP TABLE IF EXISTS "${preaggTable}"`).catch(() => {});
 		}
 		this.#preaggTables.clear();
+		this.#rowCounts.clear();
 		this.#queryCache.clear();
 		return identityReset;
 	}
@@ -746,6 +776,7 @@ export class QueryEngine {
 			preaggBuild: new Map()
 		};
 		this.#marks.set(markId, reg);
+		this.#countRows(descriptor.baseTable);
 
 		handle._onParamsChange = () => this.#queryMark(markId, reg);
 
@@ -789,14 +820,9 @@ export class QueryEngine {
 			const { descriptor, handle } = reg;
 
 			const preagg = this.#usablePreagg(markId, reg);
-			const sqlStr = preagg
-				? this.#assemblePreaggSQL(markId, reg, preagg, handle.params)
-				: this.#assembleSQL(
-						descriptor,
-						descriptor.table,
-						selection.predicate(markId),
-						handle.params
-					);
+			const sqlStr =
+				(preagg && this.#assemblePreaggSQL(markId, reg, preagg, handle.params)) ||
+				this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
 			if (!sqlStr) continue;
 
 			// Use the public query() path — its execute-latest logic ensures
@@ -817,14 +843,14 @@ export class QueryEngine {
 		const { descriptor, handle } = reg;
 
 		const preagg = this.#usablePreagg(markId, reg);
-		const sqlStr = preagg
-			? this.#assemblePreaggSQL(markId, reg, preagg, handle.params)
-			: this.#assembleSQL(
-					descriptor,
-					descriptor.table,
-					reg.filterGroup.selection.predicate(markId),
-					handle.params
-				);
+		const sqlStr =
+			(preagg && this.#assemblePreaggSQL(markId, reg, preagg, handle.params)) ||
+			this.#assembleSQL(
+				descriptor,
+				descriptor.table,
+				reg.filterGroup.selection.predicate(markId),
+				handle.params
+			);
 		if (!sqlStr) return;
 
 		this.query(sqlStr, { callerId: markId })
@@ -892,22 +918,20 @@ export class QueryEngine {
 	 * Builds materialized preagg tables for all aggregate marks in the filter
 	 * group that the source filters, one per source, next to any the mark holds
 	 * for other sources. Each table bakes in every clause except the source's
-	 * own, and includes pixel-binned brush dimensions so brush queries operate
-	 * on thousands of rows instead of hundreds of thousands.
+	 * own and groups by the source's active dims as well as the mark's own, so
+	 * a change to the source is a filter on a table of thousands of rows: pixel
+	 * bins for a brush, the field's ids (or values) for a toggle or legend.
 	 *
 	 * The source is named by its ID rather than inferred: before the first drag
 	 * it has no clause yet, and other clauses on the same chart (a Toggle)
-	 * exclude the same marks a brush does. Only `bin` dims are built so far; a
-	 * source with none (a toggle) builds nothing.
+	 * exclude the same marks a brush does.
 	 */
 	async activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
-		const { sourceId: activeSourceId, excludedByAll } = source;
-		const brushDims: BrushActivation[] = [];
-		for (const dim of source.dims) if (dim.kind === 'bin') brushDims.push(dim);
-		if (this.#destroyed || brushDims.length === 0) return;
+		const { sourceId: activeSourceId, excludedByAll, dims } = source;
+		if (this.#destroyed || dims.length === 0) return;
 
 		const { selection } = filterGroup;
-		const brushDimsKey = brushDimsKeyOf(brushDims);
+		const dimsKey = activeDimsKeyOf(dims);
 		const promises: Promise<void>[] = [];
 
 		for (const [markId, reg] of this.#marks) {
@@ -923,7 +947,7 @@ export class QueryEngine {
 				if (
 					basis.parts === reg.descriptor.parts &&
 					basis.activeSourceId === activeSourceId &&
-					basis.brushDimsKey === brushDimsKey &&
+					basis.dimsKey === dimsKey &&
 					this.#bakedClausesHold(markId, selection, latest)
 				) {
 					continue;
@@ -934,54 +958,18 @@ export class QueryEngine {
 			reg.preagg.delete(activeSourceId);
 			reg.preaggBuild.delete(activeSourceId);
 
-			const { parts, table, schema } = reg.descriptor;
-			if (!parts.hasAggregates && !parts.hasWindowAggregates) continue;
-
-			// Analyze selectDef for preagg compatibility
-			const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels);
-			if (!analysis) continue; // unsupported (window/distinct)
-
-			const { preaggCols, outputSelect, preaggGroupBy } = analysis;
-
-			// Add pixel-binned brush dimensions to preagg table
-			const binMeta: Array<{ alias: string; d0: number; scaleFactor: number }> = [];
-			const binGroupBy: ExprNode[] = [];
-			for (let i = 0; i < brushDims.length; i++) {
-				const alias = `__active${i}`;
-				const { expr, d0, scaleFactor } = buildBinExpr(
-					brushDims[i].columnRef,
-					brushDims[i].domain,
-					brushDims[i].pixelExtent
-				);
-				preaggCols[alias] = expr;
-				binGroupBy.push(column(alias));
-				binMeta.push({ alias, d0, scaleFactor });
-			}
-
-			// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
-			// Partial-aggregate and bin columns stay raw for recombination.
-			for (const [ch, expr] of Object.entries(preaggCols)) {
-				if (ch.startsWith('__ps') || ch.startsWith('__active')) continue;
-				if (isAggregateExpression(expr)) continue;
-				preaggCols[ch] = castNumeric(expr, schema) as ExprNode;
-			}
+			const plan = this.#planPreagg(reg, dims);
+			if (!plan) continue;
+			if (this.#tooLarge(reg, plan.groupsPerMarkGroup)) continue;
 
 			// Bake every other clause into the preagg table. Sorted by source ID,
 			// so the same filters always give the same SQL, and so the same table.
 			const bakedClauses = selection.bakedClauses(markId, activeSourceId);
 			const staticFilters = selection.bakedPredicates(markId, activeSourceId);
 
-			// Sorted by active columns for fast range scans
-			const creation: PreaggCreation = {
-				table,
-				select: preaggCols as Record<string, ExprNode>,
-				groupby: [...preaggGroupBy, ...binGroupBy] as ExprNode[],
-				orderby: binGroupBy
-			};
-
 			// Hash-based naming: identical preagg SQL reuses the same table (like Mosaic).
 			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
-			const preaggSQL = preaggSelectSQL(creation, staticFilters);
+			const preaggSQL = preaggSelectSQL(plan.creation, staticFilters);
 			const preaggTable = `__dplot_preagg_${fnvHash(preaggSQL).toString(16)}`;
 			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${preaggSQL}`;
 
@@ -990,12 +978,12 @@ export class QueryEngine {
 			const build: PreaggState = {
 				table: preaggTable,
 				sql: preaggSQL,
-				basis: { parts, activeSourceId, brushDimsKey, bakedClauses },
-				creation,
+				basis: { parts: reg.descriptor.parts, activeSourceId, dimsKey, bakedClauses },
+				creation: plan.creation,
 				mismatch: null,
-				outputSelect,
-				binMeta,
-				windowChannels: analysis.windowChannels
+				outputSelect: plan.outputSelect,
+				activeMeta: plan.activeMeta,
+				windowChannels: plan.windowChannels
 			};
 			reg.preaggBuild.set(activeSourceId, build);
 
@@ -1017,6 +1005,191 @@ export class QueryEngine {
 		}
 
 		await Promise.all(promises);
+	}
+
+	/**
+	 * The preagg table a mark would build for a source's active dims, or null
+	 * when the mark cannot be pre-aggregated (no aggregates, or an aggregate that
+	 * does not decompose).
+	 *
+	 * A `value` dim's column is resolved per mark:
+	 * 1. The mark already groups by the field's id (a channel reading only its
+	 *    id column): nothing is added; the filter goes on that channel.
+	 * 2. The field's dim covers the mark's base table, so every non-NULL value
+	 *    has an id: the field is grouped by value inside and mapped to its ids
+	 *    on the grouped result, a join over thousands of rows rather than the
+	 *    view's join over every row. A view that already exposes the id column
+	 *    is grouped by it directly.
+	 * 3. Otherwise the field's values themselves, filtered with the toggle's own
+	 *    predicate over that column.
+	 *
+	 * Also returns how many groups the active dims add to each of the mark's own
+	 * groups, or null when that is not known, for the size guard.
+	 */
+	#planPreagg(
+		reg: MarkRegistration,
+		dims: ActiveDim[]
+	): {
+		creation: PreaggCreation;
+		outputSelect: Record<string, ExprNode>;
+		activeMeta: ActiveMeta[];
+		windowChannels: Record<string, WindowNode> | null;
+		groupsPerMarkGroup: number | null;
+	} | null {
+		const { parts, table, baseTable, schema } = reg.descriptor;
+		if (!parts.hasAggregates && !parts.hasWindowAggregates) return null;
+
+		// Analyze selectDef for preagg compatibility
+		const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels);
+		if (!analysis) return null; // unsupported (window/distinct)
+		const { preaggCols, outputSelect, preaggGroupBy } = analysis;
+
+		const activeMeta: ActiveMeta[] = [];
+		const activeGroupBy: ExprNode[] = [];
+		const binOrder: ExprNode[] = [];
+		const joins: PreaggCreation['joins'] = [];
+		let groupsPerMarkGroup: number | null = 1;
+		const times = (n: number | null) => {
+			groupsPerMarkGroup = groupsPerMarkGroup == null || n == null ? null : groupsPerMarkGroup * n;
+		};
+
+		dims.forEach((dim, i) => {
+			const alias = `__active${i}`;
+			if (dim.kind === 'bin') {
+				const { expr, d0, scaleFactor } = buildBinExpr(dim.columnRef, dim.domain, dim.pixelExtent);
+				preaggCols[alias] = expr;
+				activeGroupBy.push(column(alias));
+				binOrder.push(column(alias));
+				activeMeta.push({ kind: 'bin', alias, d0, scaleFactor });
+				times(dim.extent ? Math.ceil((dim.extent[1] - dim.extent[0]) * scaleFactor) + 1 : null);
+				return;
+			}
+
+			const { field } = dim;
+			const channel = this.#idChannelFor(parts.selectDef, field);
+			if (channel) {
+				// Case 1: already a group key of the mark.
+				activeMeta.push({ kind: 'value', field, column: channel, byId: true });
+				return;
+			}
+			// One more group for -1: NULL, or a value the dim does not hold.
+			const idGroups = this.#identity.values(field).length + 1;
+			if (this.#identity.dimCovers(field, baseTable)) {
+				// Case 2.
+				if (table !== baseTable && this.#identity.viewHas(baseTable, field)) {
+					preaggCols[alias] = column(this.#identity.idColumn(field));
+					activeGroupBy.push(column(alias));
+				} else {
+					const raw = `__raw${i}`;
+					preaggCols[raw] = fieldExpr(this.#identity.sqlFor(field), field);
+					activeGroupBy.push(column(raw));
+					joins.push({ raw, alias, dim: this.#identity.dimTable(field) });
+				}
+				activeMeta.push({ kind: 'value', field, column: alias, byId: true });
+				times(idGroups);
+				return;
+			}
+			// Case 3.
+			preaggCols[alias] = fieldExpr(this.#identity.sqlFor(field), field);
+			activeGroupBy.push(column(alias));
+			activeMeta.push({ kind: 'value', field, column: alias, byId: false });
+			times(null);
+		});
+
+		// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
+		// Partial-aggregate and active columns stay raw for recombination.
+		for (const [ch, expr] of Object.entries(preaggCols)) {
+			if (ch.startsWith('__ps') || ch.startsWith('__active') || ch.startsWith('__raw')) continue;
+			if (isAggregateExpression(expr)) continue;
+			preaggCols[ch] = castNumeric(expr, schema) as ExprNode;
+		}
+
+		return {
+			creation: {
+				table,
+				select: preaggCols as Record<string, ExprNode>,
+				groupby: [...preaggGroupBy, ...activeGroupBy] as ExprNode[],
+				// Sorted by bin columns for fast range scans
+				orderby: binOrder,
+				joins
+			},
+			outputSelect,
+			activeMeta,
+			windowChannels: analysis.windowChannels,
+			groupsPerMarkGroup
+		};
+	}
+
+	/** The mark's channel that reads only `field`'s id column, or null. */
+	#idChannelFor(selectDef: Record<string, unknown>, field: string): string | null {
+		const idColumn = this.#identity.idColumn(field);
+		for (const [channel, expr] of Object.entries(selectDef)) {
+			if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) continue;
+			const columns = collectColumns(expr as ExprNode);
+			if (columns.length === 1 && columns[0].column === idColumn) return channel;
+		}
+		return null;
+	}
+
+	/**
+	 * The size guard: whether a planned table would hold more than a tenth of
+	 * its base table's rows (a fixed 100,000 until the row count has been read),
+	 * so querying it would not be much faster than the base table.
+	 *
+	 * Counts the table's groups, which are the mark's groups before its SQL
+	 * transforms and before the active source's filter, times what the active
+	 * dims add. The mark's own groups are the product of its id channels' dim
+	 * sizes when every group key is one; otherwise its last result's row count
+	 * when it has no SQL transforms and no limit (a lower bound if other filters
+	 * narrow it); otherwise unknown. An unknown estimate builds: the large cases
+	 * the guard exists for (wide band axes, deep zoom) always have one.
+	 */
+	#tooLarge(reg: MarkRegistration, groupsPerMarkGroup: number | null): boolean {
+		if (groupsPerMarkGroup == null) return false;
+		const markGroups = this.#markGroups(reg);
+		if (markGroups == null) return false;
+		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
+		const cap = typeof rows === 'number' ? rows / 10 : 100_000;
+		return markGroups * groupsPerMarkGroup > cap;
+	}
+
+	#markGroups(reg: MarkRegistration): number | null {
+		const { parts } = reg.descriptor;
+		let product = 1;
+		let allIds = true;
+		for (const expr of Object.values(parts.selectDef)) {
+			if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) continue;
+			const columns = collectColumns(expr as ExprNode);
+			const field = columns.length === 1 ? this.#identity.fieldOfIdColumn(columns[0].column) : null;
+			if (field == null) {
+				allIds = false;
+				break;
+			}
+			product *= this.#identity.values(field).length + 1;
+		}
+		if (allIds) return product;
+		const { handle } = reg;
+		if (parts.hasSQLTransforms || handle.params.limit != null) return null;
+		return handle.arrowTable?.numRows ?? null;
+	}
+
+	/** Read a base table's row count once, for the size guard. */
+	#countRows(table: string): void {
+		if (this.#rowCounts.has(table)) return;
+		const escaped = table.replace(/"/g, '""');
+		this.#rowCounts.set(
+			table,
+			this.query(`SELECT count(*)::DOUBLE AS n FROM "${escaped}"`, { cache: false })
+				.then((result) => {
+					const n = Number((result.get(0) as { n?: unknown } | null)?.n);
+					if (Number.isFinite(n)) this.#rowCounts.set(table, n);
+					else this.#rowCounts.delete(table);
+				})
+				.catch(() => {
+					// Unknown: the guard keeps its fixed cap, and a later registration retries.
+					this.#rowCounts.delete(table);
+				})
+		);
 	}
 
 	/**
@@ -1088,33 +1261,58 @@ export class QueryEngine {
 		preagg: PreaggState,
 		params: QueryParams
 	): string | null {
-		const { binMeta, outputSelect, windowChannels } = preagg;
+		const { activeMeta, outputSelect, windowChannels } = preagg;
 
 		const { descriptor } = reg;
 		const { parts, transformCompiler } = descriptor;
 
-		// --- Compute bin filters from active brush extent ---
-		const binFilters: ExprNode[] = [];
-		const brush = reg.filterGroup.selection.get(preagg.basis.activeSourceId);
-		if (brush && !brush.excludeMarkIds.has(markId)) {
-			const value = brush.value;
-			if (binMeta.length === 1) {
-				// Interval1D: value = [lo, hi]
-				const [lo, hi] = value as [number, number];
-				const { alias, d0, scaleFactor } = binMeta[0];
-				const binLo = Math.floor((lo - d0) * scaleFactor);
-				const binHi = Math.floor((hi - d0) * scaleFactor);
-				binFilters.push(isBetween(column(alias), [literal(binLo), literal(binHi)]) as ExprNode);
-			} else if (binMeta.length === 2) {
-				// Interval2D: value = [[xLo, xHi], [yLo, yHi]]
-				const extents = value as [[number, number], [number, number]];
-				for (let i = 0; i < 2; i++) {
-					const [lo, hi] = extents[i];
-					const { alias, d0, scaleFactor } = binMeta[i];
-					const binLo = Math.floor((lo - d0) * scaleFactor);
-					const binHi = Math.floor((hi - d0) * scaleFactor);
-					binFilters.push(isBetween(column(alias), [literal(binLo), literal(binHi)]) as ExprNode);
+		// --- The active source's clause as a filter on the active columns. None
+		// when it has no clause (an empty toggle: every category) or excludes
+		// this mark.
+		const filters: ExprNode[] = [];
+		const clause = reg.filterGroup.selection.get(preagg.basis.activeSourceId);
+		if (clause && !clause.excludeMarkIds.has(markId)) {
+			// A drag frame runs this per mark: nothing below allocates for a brush
+			// beyond its filter, so the value arrays are created only when needed.
+			let binCount = 0;
+			for (const meta of activeMeta) if (meta.kind === 'bin') binCount++;
+			let bin = 0;
+			let valueExprs: ExprNode[] | null = null;
+			let valueMeta: Array<{ field: string; byId: boolean }> | null = null;
+			for (const meta of activeMeta) {
+				if (meta.kind === 'value') {
+					(valueExprs ??= []).push(column(meta.column));
+					(valueMeta ??= []).push(meta);
+					continue;
 				}
+				// Interval1D: value = [lo, hi]; Interval2D: [[xLo, xHi], [yLo, yHi]]
+				const range = (binCount === 1 ? clause.value : (clause.value as unknown[])[bin]) as [
+					number,
+					number
+				];
+				bin++;
+				const binLo = Math.floor((range[0] - meta.d0) * meta.scaleFactor);
+				const binHi = Math.floor((range[1] - meta.d0) * meta.scaleFactor);
+				filters.push(isBetween(column(meta.alias), [literal(binLo), literal(binHi)]) as ExprNode);
+			}
+			if (valueExprs && valueMeta) {
+				// A toggle's clause holds tuples in its field order. Id columns
+				// filter by id; a value with no id (NULL, or not in the dim) cannot
+				// be expressed, so this query goes to the base table instead.
+				const tuples: unknown[][] = [];
+				for (const tuple of clause.value as unknown[][]) {
+					const mapped: unknown[] = [];
+					for (let i = 0; i < valueMeta.length; i++) {
+						const { field, byId } = valueMeta[i];
+						const v = byId
+							? this.#identity.identity(field).ids.get(tuple[i] as DimValue)
+							: tuple[i];
+						if (v === undefined) return null;
+						mapped.push(v);
+					}
+					tuples.push(mapped);
+				}
+				filters.push(togglePredicate(valueExprs, tuples));
 			}
 		}
 
@@ -1150,7 +1348,7 @@ export class QueryEngine {
 		return assembleQuery({
 			table: preagg.table,
 			parts: preaggParts,
-			filter: binFilters,
+			filter: filters,
 			filterNulls: null, // preagg table already filtered
 			transformCompiler,
 			limit: params.limit,
@@ -1212,17 +1410,41 @@ export class QueryEngine {
 
 /** A preagg table's SELECT. Build and validity check share it, so equal SQL means an equal table. */
 function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[]): string {
-	const query = Query.from(creation.table)
-		.select(creation.select)
-		.groupby(creation.groupby)
-		.orderby(creation.orderby);
+	const query = Query.from(creation.table).select(creation.select).groupby(creation.groupby);
 	if (filters.length > 0) query.where(and(filters as ExprNode[]));
-	return query.toString();
+	if (creation.joins.length === 0) return query.orderby(creation.orderby).toString();
+
+	// Map fields grouped by value to their ids on the grouped result: a join
+	// over the table's groups, not over every source row. The filters stay in
+	// the inner query, where the source's columns are in scope.
+	const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+	const raws = creation.joins.map((j) => quote(j.raw)).join(', ');
+	const ids = creation.joins
+		.map((j, k) => `COALESCE(d${k}.id, -1) AS ${quote(j.alias)}`)
+		.join(', ');
+	const joins = creation.joins
+		.map((j, k) => `LEFT JOIN ${quote(j.dim)} AS d${k} ON p.${quote(j.raw)} = d${k}.value`)
+		.join(' ');
+	const order = creation.orderby.length ? ` ORDER BY ${creation.orderby.join(', ')}` : '';
+	return `SELECT p.* EXCLUDE (${raws}), ${ids} FROM (${query}) AS p ${joins}${order}`;
 }
 
-/** Everything about the brush dimensions that the bin expressions depend on. */
-function brushDimsKeyOf(dims: BrushActivation[]): string {
-	return dims.map((d) => `${d.columnRef}|${d.domain[0]}|${d.domain[1]}|${d.pixelExtent}`).join(';');
+/** Everything the active dims' columns depend on. */
+function activeDimsKeyOf(dims: ActiveDim[]): string {
+	return dims
+		.map((d) =>
+			d.kind === 'bin'
+				? `bin|${d.columnRef}|${d.domain[0]}|${d.domain[1]}|${d.pixelExtent}`
+				: `value|${d.field}`
+		)
+		.join(';');
+}
+
+/** A field as SQL: the text its identity records, or the column of that name. */
+function fieldExpr(sqlText: string | undefined, field: string): ExprNode {
+	return sqlText
+		? (sqlTag([sqlText] as unknown as TemplateStringsArray) as ExprNode)
+		: column(field);
 }
 
 /** FNV-1a hash (same algorithm as Mosaic). */
