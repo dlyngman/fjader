@@ -36,6 +36,10 @@ FROM range(100000) r(i)
 
 interface TestConn extends DuckDBConnection {
 	queries: string[];
+	/** While set, a preagg build waits on it after it is logged: holds a build running. */
+	gate: Promise<void> | null;
+	/** While set, a query waits on it after it is logged: holds mark queries in flight. */
+	queryGate: Promise<void> | null;
 	all(sql: string): Promise<Record<string, unknown>[]>;
 	close(): Promise<void>;
 }
@@ -57,21 +61,38 @@ function openConn(): TestConn {
 			db.all(sql, (e: Error | null, rows: Record<string, unknown>[]) => (e ? rej(e) : res(rows)))
 		);
 	const queries: string[] = [];
-	return {
+	const conn: TestConn = {
 		queries,
+		gate: null,
+		queryGate: null,
 		all,
 		async query(sql: string) {
 			queries.push(sql);
+			if (conn.queryGate) await conn.queryGate;
 			return asTable(await all(sql)) as never;
 		},
 		async exec(sql: string) {
 			queries.push(sql);
+			if (conn.gate && sql.startsWith('CREATE TABLE IF NOT EXISTS "__dplot_preagg_')) {
+				await conn.gate;
+			}
 			await new Promise<void>((res, rej) =>
 				db.exec(sql, (e: Error | null) => (e ? rej(e) : res()))
 			);
 		},
 		close: () =>
 			new Promise<void>((res, rej) => db.close((e: Error | null) => (e ? rej(e) : res())))
+	};
+	return conn;
+}
+
+/** Hold preagg builds once started until the returned function is called. */
+function holdBuilds(): () => void {
+	let release!: () => void;
+	conn.gate = new Promise((r) => (release = r));
+	return () => {
+		conn.gate = null;
+		release();
 	};
 }
 
@@ -392,5 +413,96 @@ describe('the size guard', () => {
 		await mark('two', { g: column('g'), n: count() });
 		await counted();
 		expect(conn.queries.filter((q) => q.startsWith('SELECT count(*)'))).toHaveLength(1);
+	});
+});
+
+describe('the build queue', () => {
+	const createIndexes = () =>
+		conn.queries.flatMap((q, i) =>
+			q.startsWith('CREATE TABLE IF NOT EXISTS "__dplot_preagg_') ? [i] : []
+		);
+
+	it('a build waits while a mark query is in flight', async () => {
+		const byG = await mark('by-g', { g: column('g'), n: count() });
+		const byKind = await mark('by-kind', { kind: column('kind'), n: count() });
+
+		const release = holdBuilds();
+		const building = activateToggle(['cat']);
+		await vi.waitFor(() => expect(createIndexes()).toHaveLength(1));
+
+		// Mark queries held in flight while the first build finishes. A params
+		// change re-queries without touching any clause, so the queued build stays
+		// valid (a filter change would make the dequeue check drop it).
+		let releaseQueries!: () => void;
+		conn.queryGate = new Promise((r) => (releaseQueries = r));
+		const queriesFrom = conn.queries.length;
+		const settled = settle([byG, byKind], () => {
+			byG.updateParams({ sort: undefined, limit: 100, filterNulls: null });
+			byKind.updateParams({ sort: undefined, limit: 100, filterNulls: null });
+		});
+		await vi.waitFor(() => expect(conn.queries.length).toBeGreaterThanOrEqual(queriesFrom + 2));
+
+		release();
+		await new Promise((r) => setTimeout(r, 50));
+		// The first build is done, but the queries are still in flight.
+		expect(createIndexes()).toHaveLength(1);
+
+		conn.queries.push('-- queries released');
+		const marker = conn.queries.length - 1;
+		conn.queryGate = null;
+		releaseQueries();
+		await settled;
+		await building;
+
+		const [, second] = createIndexes();
+		expect(second).toBeGreaterThan(marker);
+	});
+
+	it('a newer hover drops queued builds of the older one, but not of its own sources', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		await mark('by-kind', { kind: column('kind'), n: count() });
+
+		const release = holdBuilds();
+		const first = activateToggle(['cat']);
+		await vi.waitFor(() => expect(createIndexes()).toHaveLength(1));
+
+		// One hover over a chart with a Toggle on kind and a brush on x.
+		let second!: Promise<unknown>;
+		engine.batch(() => {
+			second = Promise.all([
+				activateToggle(['kind']),
+				engine.activate(group, {
+					sourceId: 'interval-x-A',
+					excludedByAll: new Set(),
+					dims: [{ kind: 'bin', columnRef: column('x'), domain: [0, 1000], pixelExtent: 1000 }]
+				})
+			]);
+		});
+		release();
+		await Promise.all([first, second]);
+
+		const built = conn.queries.filter((q) =>
+			q.startsWith('CREATE TABLE IF NOT EXISTS "__dplot_preagg_')
+		);
+		// cat: only the build already running; kind and the brush: both marks each.
+		expect(built.filter((q) => q.includes('LEFT JOIN'))).toHaveLength(1);
+		expect(built.filter((q) => q.includes('"kind" AS "__active0"'))).toHaveLength(2);
+		expect(built.filter((q) => q.includes('floor('))).toHaveLength(2);
+	});
+
+	it('a build whose baked filters changed while it waited is skipped', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		await mark('by-kind', { kind: column('kind'), n: count() });
+
+		const release = holdBuilds();
+		const building = activateToggle(['cat']);
+		await vi.waitFor(() => expect(createIndexes()).toHaveLength(1));
+
+		// A clause the queued build bakes in changes before it starts.
+		group.registerToggle('kind', { excludeMarkIds: () => new Set() }).set([['p']]);
+		release();
+		await building;
+
+		expect(createIndexes()).toHaveLength(1);
 	});
 });

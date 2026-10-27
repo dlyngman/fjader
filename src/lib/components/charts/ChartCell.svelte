@@ -794,7 +794,13 @@
 	 * activation skips tables that are still valid, so the second costs nothing.
 	 */
 	function activateSources() {
-		for (const activate of chartContext.activators) activate();
+		// One batch: a newer hover drops the builds this one queued, while the
+		// sources activated here (a brush, a Toggle, band labels) keep each other's.
+		const activateAll = () => {
+			for (const activate of chartContext.activators) activate();
+		};
+		if (queryEngine) queryEngine.batch(activateAll);
+		else activateAll();
 	}
 
 	function handleInnerMouseLeave() {

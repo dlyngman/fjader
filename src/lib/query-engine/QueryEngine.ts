@@ -246,6 +246,18 @@ interface PreaggState {
 	windowChannels: Record<string, import('@uwdata/mosaic-sql').WindowNode> | null;
 }
 
+/** A preagg build waiting in the engine's queue. */
+interface QueuedBuild {
+	markId: string;
+	sourceId: string;
+	build: PreaggState;
+	createSQL: string;
+	/** The hover batch that queued it. */
+	batch: number;
+	/** Settles the activate() call that queued it. */
+	done: () => void;
+}
+
 interface MarkRegistration {
 	descriptor: QueryDescriptor;
 	handle: MarkHandle;
@@ -284,6 +296,18 @@ export class QueryEngine {
 	 * registers, outside any interaction.
 	 */
 	#rowCounts = new Map<string, number | Promise<void>>();
+	/**
+	 * Preagg builds waiting to run, oldest first. Builds are speculative full
+	 * scans on the one connection, which runs statements in arrival order, so
+	 * sending them as they are planned would put a click's queries behind all
+	 * of them. The engine holds them instead and sends one at a time, only while
+	 * no mark query is waiting or running.
+	 */
+	#buildQueue: QueuedBuild[] = [];
+	#buildRunning = false;
+	/** The current hover batch. Builds still queued from an older one are dropped. */
+	#batch = 0;
+	#inBatch = false;
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 	/**
@@ -593,6 +617,8 @@ export class QueryEngine {
 					.then(pending.resolve)
 					.catch(pending.reject);
 			}
+			// The last mark query settling frees the connection for a build.
+			this.#pumpBuilds();
 		}
 	}
 
@@ -690,6 +716,8 @@ export class QueryEngine {
 		// ensureColumns still in flight across this rejects rather than resolving
 		// against dropped state (see CategoricalIdentity's generation counter).
 		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
+		for (const item of this.#buildQueue) this.#abandon(item);
+		this.#buildQueue = [];
 		for (const reg of this.#marks.values()) {
 			this.#dropPreagg(reg);
 		}
@@ -929,6 +957,8 @@ export class QueryEngine {
 	async activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
 		const { sourceId: activeSourceId, excludedByAll, dims } = source;
 		if (this.#destroyed || dims.length === 0) return;
+		// An activation outside batch() (a legend's hover) is a batch of one.
+		if (!this.#inBatch) this.#startBatch();
 
 		const { selection } = filterGroup;
 		const dimsKey = activeDimsKeyOf(dims);
@@ -988,23 +1018,116 @@ export class QueryEngine {
 			reg.preaggBuild.set(activeSourceId, build);
 
 			this.#preaggTables.add(preaggTable);
+			const batch = this.#batch;
 			promises.push(
-				this.exec(createSQL)
-					.then(() => {
-						if (reg.preaggBuild.get(activeSourceId) !== build) return;
-						reg.preaggBuild.delete(activeSourceId);
-						reg.preagg.set(activeSourceId, build);
-					})
-					.catch((e) => {
-						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
-						if (reg.preaggBuild.get(activeSourceId) === build) {
-							reg.preaggBuild.delete(activeSourceId);
-						}
-					})
+				new Promise<void>((done) => {
+					this.#buildQueue.push({
+						markId,
+						sourceId: activeSourceId,
+						build,
+						createSQL,
+						batch,
+						done
+					});
+				})
 			);
 		}
 
+		this.#pumpBuilds();
 		await Promise.all(promises);
+	}
+
+	/**
+	 * Run a hover's activations as one batch: builds still queued from an earlier
+	 * batch are dropped. One chart hover activates several sources (a brush, a
+	 * Toggle field, a band-label field), so the batch, not the source, is what a
+	 * newer hover supersedes. Its sources can belong to different filter groups,
+	 * which is why the batch lives here.
+	 */
+	batch(activations: () => void): void {
+		if (this.#inBatch) {
+			activations();
+			return;
+		}
+		this.#startBatch();
+		this.#inBatch = true;
+		try {
+			activations();
+		} finally {
+			this.#inBatch = false;
+		}
+	}
+
+	#startBatch(): void {
+		this.#batch++;
+		const keep: QueuedBuild[] = [];
+		for (const item of this.#buildQueue) {
+			if (item.batch === this.#batch) keep.push(item);
+			else this.#abandon(item);
+		}
+		this.#buildQueue = keep;
+	}
+
+	/** Drop a queued build, so the next activation plans it again. */
+	#abandon(item: QueuedBuild): void {
+		const reg = this.#marks.get(item.markId);
+		if (reg?.preaggBuild.get(item.sourceId) === item.build) reg.preaggBuild.delete(item.sourceId);
+		item.done();
+	}
+
+	/**
+	 * Send the next queued build if nothing else is on the connection: no build
+	 * running, and no mark query waiting or running. Called when a build is
+	 * queued, when one finishes, and when the last mark query settles. Queries
+	 * without a caller id (identity lookups, describe, ad-hoc queries) do not
+	 * hold builds back and can wait behind a running one; none is on an
+	 * interaction path.
+	 */
+	#pumpBuilds(): void {
+		while (
+			!this.#buildRunning &&
+			!this.#destroyed &&
+			this.#inflight.size === 0 &&
+			this.#pending.size === 0
+		) {
+			const item = this.#buildQueue.shift();
+			if (!item) return;
+			const { markId, sourceId, build } = item;
+
+			// Checked against the mark's current registration, which a re-setup
+			// replaces, and against the filters now: a clause baked into the
+			// table may have changed while it waited.
+			const reg = this.#marks.get(markId);
+			if (
+				!reg ||
+				reg.preaggBuild.get(sourceId) !== build ||
+				reg.descriptor.parts !== build.basis.parts ||
+				!this.#bakedClausesHold(markId, reg.filterGroup.selection, build)
+			) {
+				this.#abandon(item);
+				continue;
+			}
+
+			this.#buildRunning = true;
+			this.exec(item.createSQL)
+				.then(() => {
+					const current = this.#marks.get(markId);
+					if (current?.preaggBuild.get(sourceId) !== build) return;
+					current.preaggBuild.delete(sourceId);
+					current.preagg.set(sourceId, build);
+				})
+				.catch((e) => {
+					console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
+					const current = this.#marks.get(markId);
+					if (current?.preaggBuild.get(sourceId) === build) current.preaggBuild.delete(sourceId);
+				})
+				.finally(() => {
+					this.#buildRunning = false;
+					item.done();
+					this.#pumpBuilds();
+				});
+			return;
+		}
 	}
 
 	/**
@@ -1384,6 +1507,9 @@ export class QueryEngine {
 		// throws once destroyed.
 		await this.#identity.reset().catch(() => {});
 		this.#destroyed = true;
+		// Settle activations still waiting on queued builds
+		for (const item of this.#buildQueue) item.done();
+		this.#buildQueue = [];
 		// Clean up mark registrations
 		for (const reg of this.#marks.values()) {
 			this.#dropPreagg(reg);
