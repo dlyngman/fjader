@@ -26,6 +26,7 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 			return Promise.resolve();
 		}),
 		onFilterChange: vi.fn(),
+		forgetSource: vi.fn(),
 		identitySqlFor: (field: string) => sqlFor[field] ?? null
 	};
 	return {

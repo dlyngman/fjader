@@ -339,6 +339,21 @@ export class CategoricalIdentity {
 		return this.#sqlFor.get(field);
 	}
 
+	/**
+	 * Whether `field`'s dim has folded in `table`, so every non-NULL value the
+	 * table holds has an id and `-1` can only mean NULL. A dim another table
+	 * built may lack this table's values; a refused dim covers nothing.
+	 */
+	dimCovers(field: string, table: string): boolean {
+		const dim = this.#dims.get(field);
+		return !!dim && !dim.refusal && dim.tables.has(table);
+	}
+
+	/** Whether `table`'s view already exposes `field`'s id column. */
+	viewHas(table: string, field: string): boolean {
+		return this.#views.get(table)?.current.has(field) ?? false;
+	}
+
 	/** Name of the dim table for `field`. */
 	dimTable(field: string): string {
 		return `__dplot_dim_${identityToken(field)}_s${this.#session}`;

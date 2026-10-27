@@ -12,19 +12,11 @@
  * objects, no event listeners.
  */
 
-import {
-	and as sqlAnd,
-	column,
-	isIn,
-	isNotDistinct,
-	literal,
-	or,
-	sql as sqlTag,
-	type ExprNode
-} from '@uwdata/mosaic-sql';
+import { column, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
 import { CrossfilterSelection } from './CrossfilterSelection.svelte';
 import type { Clause, FilterExpr, FilterSchema } from './CrossfilterSelection.svelte';
 import type { ActiveDim, QueryEngine } from './QueryEngine';
+import { togglePredicate } from './toggle-predicate';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -195,6 +187,7 @@ export class FilterGroup {
 				registrations.delete(opts);
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
+				this.#engine?.forgetSource(this, sourceId);
 				this.clearSource(sourceId);
 			}
 		};
@@ -310,24 +303,16 @@ export class FilterGroup {
 	}
 
 	/**
-	 * The clause for a toggle's tuples: `IN` for one field, an `OR` of
-	 * `IS NOT DISTINCT FROM` tuples for several. Each field is the SQL its
-	 * identity records (an expression keeps its own text), or the column of
-	 * that name when no mark has registered it.
+	 * The clause for a toggle's tuples, with each field as the SQL its identity
+	 * records (an expression keeps its own text), or the column of that name
+	 * when no mark has registered it.
 	 */
 	#togglePredicate(fields: string[], tuples: unknown[][]): ExprNode {
 		const exprs = fields.map((field) => {
 			const text = this.fieldSql(field);
 			return text ? sqlTag([text] as unknown as TemplateStringsArray) : column(field);
 		});
-		if (exprs.length === 1) {
-			return isIn(
-				exprs[0],
-				tuples.map((t) => literal(t[0]))
-			);
-		}
-		const clauses = tuples.map((t) => sqlAnd(t.map((v, i) => isNotDistinct(exprs[i], literal(v)))));
-		return clauses.length === 1 ? clauses[0] : or(clauses);
+		return togglePredicate(exprs, tuples);
 	}
 
 	// -----------------------------------------------------------------
