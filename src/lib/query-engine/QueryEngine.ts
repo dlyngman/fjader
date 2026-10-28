@@ -1330,15 +1330,29 @@ export class QueryEngine {
 		};
 	}
 
-	/** The mark's channel that reads only `field`'s id column, or null. */
+	/** The mark's channel that is `field`'s id channel (see #idFieldOf), or null. */
 	#idChannelFor(selectDef: Record<string, unknown>, field: string): string | null {
-		const idColumn = this.#identity.idColumn(field);
 		for (const [channel, expr] of Object.entries(selectDef)) {
-			if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) continue;
-			const columns = collectColumns(expr as ExprNode);
-			if (columns.length === 1 && columns[0].column === idColumn) return channel;
+			if (this.#idFieldOf(expr) === field) return channel;
 		}
 		return null;
+	}
+
+	/**
+	 * The field whose ids a channel holds, or null. Only the id column itself or
+	 * castReal of it, the forms marks produce: an id filter on any other
+	 * expression over the column (say idx % 2) would filter transformed values.
+	 * Compared as SQL text; runs when a table is planned, not per query.
+	 */
+	#idFieldOf(expr: unknown): string | null {
+		if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) return null;
+		const read = collectColumns(expr as ExprNode);
+		if (read.length !== 1) return null;
+		const field = this.#identity.fieldOfIdColumn(read[0].column);
+		if (field == null) return null;
+		const text = String(expr);
+		const idColumn = column(read[0].column);
+		return text === String(idColumn) || text === String(castReal(idColumn)) ? field : null;
 	}
 
 	/**
@@ -1396,9 +1410,8 @@ export class QueryEngine {
 		let allIds = true;
 		for (const expr of Object.values(parts.selectDef)) {
 			if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) continue;
-			const read = collectColumns(expr as ExprNode);
-			for (const { column: name } of read) columns.add(name);
-			const field = read.length === 1 ? this.#identity.fieldOfIdColumn(read[0].column) : null;
+			for (const { column: name } of collectColumns(expr as ExprNode)) columns.add(name);
+			const field = this.#idFieldOf(expr);
 			if (field == null) allIds = false;
 			else fields.add(field);
 		}

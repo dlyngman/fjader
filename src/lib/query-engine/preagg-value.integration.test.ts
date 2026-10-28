@@ -315,6 +315,23 @@ describe('preagg for value dims', () => {
 		);
 	});
 
+	it('a channel computed from an id column is not taken for the id channel', async () => {
+		const view = engine.identitySourceFor('t');
+		const id = idOf('cat');
+		// x holds id + 1, not the id: filtering x by ids would select the wrong
+		// category. It is grouped like any other channel, and the toggle gets its
+		// own id column.
+		const bars = await mark('shifted', { x: sql`${column(id)} + 1`, n: count() }, { table: view });
+		await activateToggle(['cat']);
+		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([bars], () => toggle.toggle(['a'], false));
+
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expect(rowsOf(bars)).toEqual(
+			await expected(`SELECT "${id}" + 1, count(*) FROM "${view}" WHERE cat = 'a' GROUP BY 1`)
+		);
+	});
+
 	it('a field named like a channel does not collide in the preagg table', async () => {
 		const bars = await mark('bars-x', { x: column('g'), n: count() });
 		await activateToggle(['x']);
