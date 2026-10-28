@@ -16,7 +16,7 @@
 	//   other charts' marks, one batch per axis. Move to another axis: a new
 	//   batch. Drag on the hovered axis: the histograms and the carrier bars
 	//   read preagg tables. The parallel chart's own polyline queries are row
-	//   level and always read the base table (a 20,000-row sample).
+	//   level and always read the base table (a 5,000-row sample).
 	//
 	// The log wraps the engine's query and exec on this page only.
 
@@ -138,7 +138,7 @@
 			// The parallel chart draws one polyline per row: a sample keeps it light.
 			// Its brushes filter delay, distance and time, the same columns as above.
 			await exec(
-				`CREATE TABLE preagg_flights_sample AS SELECT * FROM preagg_flights USING SAMPLE 20000 ROWS`
+				`CREATE TABLE preagg_flights_sample AS SELECT * FROM preagg_flights USING SAMPLE 5000 ROWS`
 			);
 			isLoaded = true;
 		} catch (error) {
@@ -226,7 +226,7 @@
 			</div>
 
 			<div class="panel">
-				<h3>Parallel axes (brush; 20,000-row sample)</h3>
+				<h3>Parallel axes (brush; 5,000-row sample)</h3>
 				<ChartContainer clipPadding={30}>
 					{#snippet background()}
 						<Frame />
