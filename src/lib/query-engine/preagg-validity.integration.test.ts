@@ -10,6 +10,7 @@ import duckdb from 'duckdb';
 import { column, count, isBetween, isIn, literal } from '@uwdata/mosaic-sql';
 import { QueryEngine, type BrushActivation, type DuckDBConnection } from './QueryEngine';
 import { buildBinExpr } from './sufficient-statistics';
+import { buildColumnRef } from '$lib/interactors/brush-utils';
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
@@ -78,8 +79,12 @@ let conn: TestConn;
 let engine: QueryEngine;
 let group: FilterGroup;
 let handle: MarkHandle;
+let warn: ReturnType<typeof vi.spyOn>;
 
 beforeEach(async () => {
+	// A failed build only warns and falls back to the base table, so no test
+	// would notice it; afterEach fails any test whose builds failed.
+	warn = vi.spyOn(console, 'warn');
 	conn = openConn();
 	await conn.all(SEED_SQL);
 	engine = new QueryEngine(conn);
@@ -98,7 +103,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	const failed = warn.mock.calls.filter((args) => String(args[0]).includes('preagg failed'));
+	warn.mockRestore();
 	await engine.destroy();
+	expect(failed.map((args) => String(args[1]))).toEqual([]);
 });
 
 // ---------------------------------------------------------------------------
@@ -575,5 +583,106 @@ describe('preagg validity: filter changes without a re-hover', () => {
 			await drag(b, 100, 699);
 			expect(outs.size).toBe(1);
 		});
+	});
+});
+
+describe('preagg brush bins over every column type a brush can target', () => {
+	// v = i - 300 as each integer type; the fractional types hold v / 4; the
+	// date and timestamp step by a day and an hour from 2024-01-01, binned
+	// through buildColumnRef as Interval1D does (seconds from t0, as REAL).
+	const TYPES_SQL = `
+		CREATE TABLE types AS
+		SELECT (i - 300)::SMALLINT AS v_smallint,
+		       (i - 300)::INTEGER AS v_integer,
+		       (i - 300)::BIGINT AS v_bigint,
+		       (i - 300)::HUGEINT AS v_hugeint,
+		       ((i - 300) / 4)::DECIMAL(9, 2) AS v_decimal,
+		       ((i - 300) / 4)::FLOAT AS v_float,
+		       ((i - 300) / 4)::DOUBLE AS v_double,
+		       DATE '2024-01-01' + (i - 300)::INTEGER AS v_date,
+		       TIMESTAMP '2024-01-01' + to_hours(i - 300) AS v_timestamp,
+		       i // 250 AS g
+		FROM range(1000) r(i)
+	`;
+	const t0 = new Date('2024-01-01T00:00:00Z');
+	const DAY = 86400;
+	const HOUR = 3600;
+
+	// Per column: its unit, and the default view's whole-number start (the
+	// DECIMAL overflow case), a deep zoom, and a fractional start.
+	const cases: Array<[string, number, [number, number]]> = [
+		['v_smallint', 1, [-300, 700]],
+		['v_integer', 1, [-300, 700]],
+		['v_bigint', 1, [-300, 700]],
+		['v_hugeint', 1, [-300, 700]],
+		['v_decimal', 1, [-80, 180]],
+		['v_float', 1, [-80, 180]],
+		['v_double', 1, [-80, 180]],
+		['v_date', DAY, [-300, 700]],
+		['v_timestamp', HOUR, [-300, 700]]
+	];
+
+	it.each(cases)('%s builds its brush table and answers from it', async (name, unit, full) => {
+		await conn.all(TYPES_SQL);
+		const types = new FilterGroup();
+		types.setEngine(engine);
+		const mark = engine.registerMark(
+			`types-${name}`,
+			{
+				table: 'types',
+				baseTable: 'types',
+				parts: buildQueryParts({ g: column('g'), n: count() }, null, false),
+				schema: new Map(),
+				transformCompiler: new TransformCompiler([])
+			},
+			types
+		);
+		const settled = async (action: () => void) => {
+			const version = mark.dataVersion;
+			action();
+			await vi.waitFor(() => expect(mark.dataVersion).toBeGreaterThan(version));
+		};
+		await settled(() =>
+			mark.updateParams({ sort: undefined, limit: undefined, filterNulls: null })
+		);
+
+		const isTime = name === 'v_date' || name === 'v_timestamp';
+		const columnRef = buildColumnRef(name, isTime ? { t0 } : null)!;
+		const views: Array<[number, number]> = [full, [0, 10], [-12.5, 87.3]];
+
+		for (const [v, [lo, hi]] of views.entries()) {
+			const domain: [number, number] = [lo * unit, hi * unit];
+			const sourceId = `interval-x-types-${v}`;
+			const brush = types.register(sourceId, { excludeMarkIds: () => new Set() });
+			await engine.activate(types, {
+				sourceId,
+				excludedByAll: new Set(),
+				dims: [{ kind: 'bin', columnRef, domain, pixelExtent: 395 }]
+			});
+
+			// A brush over the middle of the view, answered by bin index: the
+			// expected rows are the base table filtered by the same bins.
+			const span = domain[1] - domain[0];
+			const range: [number, number] = [domain[0] + 0.3 * span, domain[0] + 0.7 * span];
+			await settled(() => brush.update(isBetween(columnRef, range), range));
+			expect(lastQuery()).toContain('__dplot_preagg_');
+
+			const { d0, scaleFactor } = buildBinExpr(columnRef, domain, 395);
+			const [binLo, binHi] = range.map((x) => Math.floor((x - d0) * scaleFactor));
+			const base = await conn.all(
+				`SELECT g, count(*) AS n FROM types
+				 WHERE floor((CAST(${columnRef} AS DOUBLE) - ${d0}::DOUBLE) * ${scaleFactor}::DOUBLE)
+				       BETWEEN ${binLo} AND ${binHi}
+				 GROUP BY g`
+			);
+			const got = (mark.arrowTable as unknown as Array<{ g: number; n: number }>)
+				.map((r): [number, number] => [r.g, r.n])
+				.sort((a, b) => a[0] - b[0]);
+			expect(got).toEqual(
+				base.map((r): [number, number] => [Number(r.g), Number(r.n)]).sort((a, b) => a[0] - b[0])
+			);
+
+			brush.destroy();
+		}
 	});
 });

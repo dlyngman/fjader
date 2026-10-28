@@ -114,14 +114,22 @@ async function useEngine(options?: QueryEngineOptions): Promise<void> {
 	await engine.ensureColumns('t', { categorical: ['cat'] });
 }
 
+let warn: ReturnType<typeof vi.spyOn>;
+
 beforeEach(async () => {
+	// A failed build only warns and falls back to the base table, so no test
+	// would notice it; afterEach fails any test whose builds failed.
+	warn = vi.spyOn(console, 'warn');
 	conn = openConn();
 	await conn.exec!(SEED_SQL);
 	await useEngine();
 });
 
 afterEach(async () => {
+	const failed = warn.mock.calls.filter((args) => String(args[0]).includes('preagg failed'));
+	warn.mockRestore();
 	await engine.destroy();
+	expect(failed.map((args) => String(args[1]))).toEqual([]);
 });
 
 // ---------------------------------------------------------------------------
