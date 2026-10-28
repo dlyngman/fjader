@@ -454,6 +454,55 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		});
 	});
 
+	describe('continuous color legend', () => {
+		// As ContinuousColorLegend registers it: no exclusions, one bin dim over
+		// the color domain [min, max] at the legend's bar length.
+		const DOMAIN: [number, number] = [0, 999];
+		const BAR = 200;
+		const legend = () =>
+			group.register('legend-color-x', {
+				excludeMarkIds: () => new Set(),
+				activeDims: () => [
+					{ kind: 'bin', columnRef: column('x'), domain: DOMAIN, pixelExtent: BAR, extent: DOMAIN }
+				],
+				view: (out) => {
+					out[0] = DOMAIN[0];
+					out[1] = DOMAIN[1];
+					out[2] = BAR;
+				}
+			});
+
+		/** The base rows a brush answers from the legend's pixel bins. */
+		async function binned(lo: number, hi: number): Promise<Array<[number, number]>> {
+			const { d0, scaleFactor } = buildBinExpr(column('x'), DOMAIN, BAR);
+			const [a, b] = [lo, hi].map((v) => Math.floor((v - d0) * scaleFactor));
+			return expected(
+				`floor((x::DOUBLE - ${d0}::DOUBLE) * ${scaleFactor}::DOUBLE) BETWEEN ${a} AND ${b}`
+			);
+		}
+
+		it('a drag reads the table binned at the legend’s bar length', async () => {
+			const source = legend();
+			const activations = vi.spyOn(engine, 'activate');
+			source.activate();
+			await activations.mock.results.at(-1)!.value;
+
+			await settle(() => source.update(isBetween(column('x'), [200, 600]), [200, 600]));
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await binned(200, 600));
+
+			// Moved past the domain (the brush is unclamped), within the margin.
+			await settle(() => source.update(isBetween(column('x'), [800, 1500]), [800, 1500]));
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await binned(800, 1500));
+
+			// Past the margin (one domain width): the base table.
+			await settle(() => source.update(isBetween(column('x'), [900, 2500]), [900, 2500]));
+			expect(lastQuery()).not.toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 900 AND 2500'));
+		});
+	});
+
 	describe('one table per source', () => {
 		// A second brush on another chart (C), which also filters the mark.
 		const BRUSH_C = 'interval-x-C';
