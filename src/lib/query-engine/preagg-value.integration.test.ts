@@ -613,6 +613,36 @@ describe('the build queue', () => {
 		expect(built.filter((q) => q.includes('floor('))).toHaveLength(2);
 	});
 
+	it('a bin build whose view zoomed in while it waited is skipped', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		await mark('by-kind', { kind: column('kind'), n: count() });
+
+		let view = [0, 1000, 20];
+		const release = holdBuilds();
+		const building = engine.activate(group, {
+			sourceId: 'interval-x-A',
+			excludedByAll: new Set(),
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 1000],
+					pixelExtent: 20,
+					extent: [0, 999]
+				}
+			],
+			view: (out) => out.set(view)
+		});
+		await vi.waitFor(() => expect(createIndexes()).toHaveLength(1));
+
+		// A zoom in while the second build waits: its bins would be too coarse.
+		view = [0, 100, 20];
+		release();
+		await building;
+
+		expect(createIndexes()).toHaveLength(1);
+	});
+
 	it('a build whose baked filters changed while it waited is skipped', async () => {
 		await mark('by-g', { g: column('g'), n: count() });
 		await mark('by-kind', { kind: column('kind'), n: count() });

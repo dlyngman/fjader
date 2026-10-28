@@ -1173,13 +1173,15 @@ export class QueryEngine {
 			const { markId, sourceId, build } = item;
 
 			// Checked against the mark's current registration, which a re-setup
-			// replaces, and against the filters now: a clause baked into the
-			// table may have changed while it waited.
+			// replaces, against the view now (a zoom in or a long pan while it
+			// waited means a table settling would only rebuild), and against the
+			// filters now: a clause baked into the table may have changed.
 			const reg = this.#marks.get(markId);
 			if (
 				!reg ||
 				reg.preaggBuild.get(sourceId) !== build ||
 				reg.descriptor.parts !== build.basis.parts ||
+				!this.#binsFitCurrentView(build) ||
 				!this.#bakedClausesHold(markId, reg.filterGroup.selection, build)
 			) {
 				this.#abandon(item);
@@ -1507,6 +1509,25 @@ export class QueryEngine {
 	}
 
 	/**
+	 * Whether a queued bin build still suits its source's view, read through the
+	 * source's view callback (binFitsView). An unknown view keeps it.
+	 */
+	#binsFitCurrentView(state: PreaggState): boolean {
+		const { view } = state.basis;
+		if (!view) return true;
+		const out = this.#viewScratch;
+		out.fill(NaN);
+		view(out);
+		let bin = 0;
+		for (const meta of state.activeMeta) {
+			if (meta.kind !== 'bin') continue;
+			const i = 3 * bin++;
+			if (!binFitsView(meta, out[i], out[i + 1], out[i + 2])) return false;
+		}
+		return true;
+	}
+
+	/**
 	 * Whether the clauses baked into a preagg table are still the ones in force.
 	 * Runs on every brush frame. Clause references are compared first, without
 	 * allocating. A changed reference may still mean the same filter (a Toggle
@@ -1744,14 +1765,27 @@ function binsFitView(activeMeta: ActiveMeta[], dims: ActiveDim[]): boolean {
 		while (next < activeMeta.length && activeMeta[next].kind !== 'bin') next++;
 		const meta = activeMeta[next++];
 		if (!meta || meta.kind !== 'bin') return false;
-		const [v0, v1] = dim.domain;
-		if (!binsFineEnough(meta.scaleFactor, v1 - v0, dim.pixelExtent)) return false;
-		// The window is the built view plus BIN_WINDOW_MARGIN views each side.
-		const width = meta.bins / meta.scaleFactor;
-		const inset = ((width / (1 + 2 * BIN_WINDOW_MARGIN)) * BIN_WINDOW_MARGIN) / 2;
-		if (v0 < meta.d0 + inset || v1 > meta.d0 + width - inset) return false;
+		if (!binFitsView(meta, dim.domain[0], dim.domain[1], dim.pixelExtent)) return false;
 	}
 	return true;
+}
+
+/**
+ * Whether one bin dim of a table suits a view of [v0, v1] over `pixelExtent`:
+ * its bins are fine enough for the pixels, and the view sits at least half a
+ * margin inside the binned window. Unknown numbers (NaN) pass.
+ */
+function binFitsView(
+	meta: Extract<ActiveMeta, { kind: 'bin' }>,
+	v0: number,
+	v1: number,
+	pixelExtent: number
+): boolean {
+	if (!binsFineEnough(meta.scaleFactor, v1 - v0, pixelExtent)) return false;
+	// The window is the built view plus BIN_WINDOW_MARGIN views each side.
+	const width = meta.bins / meta.scaleFactor;
+	const inset = ((width / (1 + 2 * BIN_WINDOW_MARGIN)) * BIN_WINDOW_MARGIN) / 2;
+	return !(v0 < meta.d0 + inset || v1 > meta.d0 + width - inset);
 }
 
 /** A field as SQL: the text its identity records, or the column of that name. */
