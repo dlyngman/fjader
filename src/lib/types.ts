@@ -490,8 +490,8 @@ export interface ChartContext {
 		columns: string[];
 		axisOrder: number[];
 	} | null;
-	registerParallelColumn: (column: string, markId: string) => void;
-	unregisterParallelColumn: (column: string, markId: string) => void;
+	/** A parallel mark's columns, its whole list in its order; empty when it goes. */
+	setParallelColumns: (markId: string, columns: string[]) => void;
 	reorderParallelAxis: (from: number, to: number) => void;
 	readonly parallelReorderState?: { dataIdx: number | null; currentX: number | null };
 	readonly animatedAxisXPositions?: number[];

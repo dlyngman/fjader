@@ -1,17 +1,34 @@
+<script lang="ts" module>
+	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import { BrushState1D } from './brush-state.svelte';
+
+	/** One parallel axis's state, kept by column for as long as the column is an axis. */
+	export interface ParallelAxis {
+		/** The column's selection source. */
+		handle: SourceHandle;
+		brush: BrushState1D;
+		/** The extent last written to the clause, to skip unchanged frames. */
+		lastEmitted: { min: number | null; max: number | null };
+	}
+</script>
+
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import type { SvelteMap } from 'svelte/reactivity';
 	import { column as sqlColumn } from '@uwdata/mosaic-sql';
 	import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import type { FilterGroup, SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 
 	/**
 	 * One parallel axis's selection source, so a brush on that axis filters its
 	 * column. Renders nothing: it exists for its lifecycle.
 	 *
-	 * ParallelBrushes keys one of these per column, so the registration lives
-	 * exactly as long as the column is an axis, and is registered before its
-	 * first drag (its preagg tables can then be built on hover). Removing the
-	 * column unmounts it, which clears its filter. It declares one pixel-binned
+	 * ParallelBrushes keys one of these per column, so the axis's state (its
+	 * source registration and its brush) lives exactly as long as the column is
+	 * an axis, and is there before its first drag (its preagg tables can then
+	 * be built on hover). Removing the column unmounts it, which clears its
+	 * filter and drops its brush; a column added back starts with none, and no
+	 * other axis's brush moves. It declares one pixel-binned
 	 * dim on its column, at the axis scale's spring target, so a table built
 	 * while the axis still moves fits the view it settles on.
 	 */
@@ -25,12 +42,12 @@
 		scaleState: () => LinearScaleState | null;
 		/** The axes' pixel extent (the chart's inner height). */
 		pixelExtent: () => number;
-		/** Where ParallelBrushes finds this column's handle to write the clause. */
-		handles: Map<string, SourceHandle>;
+		/** Where ParallelBrushes finds this column's axis state. */
+		axes: SvelteMap<string, ParallelAxis>;
 	}
 
 	// Keyed by column in the parent, so none of these change for an instance.
-	const { filterGroup, column, chartId, excludeMarkIds, scaleState, pixelExtent, handles }: Props =
+	const { filterGroup, column, chartId, excludeMarkIds, scaleState, pixelExtent, axes }: Props =
 		$props();
 
 	const columnRef = sqlColumn(column);
@@ -69,10 +86,10 @@
 		})
 	});
 
-	handles.set(column, handle);
+	axes.set(column, { handle, brush: new BrushState1D(), lastEmitted: { min: null, max: null } });
 
 	onDestroy(() => {
-		handles.delete(column);
+		axes.delete(column);
 		handle.destroy();
 	});
 </script>

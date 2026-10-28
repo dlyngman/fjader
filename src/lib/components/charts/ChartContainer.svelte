@@ -402,8 +402,7 @@
 		unregisterScaleType: (dimension, markId) =>
 			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
 
-		registerParallelColumn: (column, markId) => scales?.registerParallelColumn(column, markId),
-		unregisterParallelColumn: (column, markId) => scales?.unregisterParallelColumn(column, markId),
+		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
 			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };

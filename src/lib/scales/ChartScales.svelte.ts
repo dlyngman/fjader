@@ -64,8 +64,8 @@ export class ChartScales {
 	#yScaleInstance = $state<ScaleStateInstance | null>(null);
 
 	// --- PARALLEL COORDINATES SCALES ---
-	// Ref-counted per column: multiple marks sharing a column share the same scale.
-	#parallelColumnMarks = new Map<string, Set<string>>(); // column → markIds
+	// Each parallel mark's columns, in its order. The axes are their union.
+	#parallelColumnsByMark = new Map<string, string[]>();
 	#parallelScaleInstances = $state(new Map<string, LinearScaleState>());
 	#parallelAxisOrder = $state<number[]>([]);
 
@@ -520,41 +520,48 @@ export class ChartScales {
 		return this.#reorder;
 	}
 
-	registerParallelColumn = (column: string, markId: string): void => {
-		if (!this.#parallelColumnMarks.has(column)) {
-			this.#parallelColumnMarks.set(column, new Set());
-			// Create scale instance via ScaleRegistry — uses raw column name as key
-			// so it shares with any other chart using the same column (domain sync).
-			const scale = this.#scaleRegistry.getOrCreateScale(
-				column,
-				'linear',
-				{},
-				this.chartId
-			) as LinearScaleState;
-			const updated = new Map(this.#parallelScaleInstances);
-			updated.set(column, scale);
-			this.#parallelScaleInstances = updated;
-			// Initialize axis order as identity when columns are first registered
-			this.#parallelAxisOrder = [...this.#parallelScaleInstances.keys()].map((_, i) => i);
-			this.#ensureReorder().resetSprings();
-		}
-		this.#parallelColumnMarks.get(column)!.add(markId);
-	};
+	/**
+	 * Set a parallel mark's columns: its whole list, in its order; an empty list
+	 * when it goes. The axes are the union of every mark's columns, in mark
+	 * order, so a column a mark drops loses its axis once no mark has it, and a
+	 * column put back returns to its place in the mark's list. A parallel mark
+	 * draws its i-th column on the i-th axis, so the axes must follow its list.
+	 *
+	 * One call replaces the mark's previous list, so a mark that re-creates its
+	 * setup when its columns change needs nothing else; the mark clears its list
+	 * when it unmounts. A change of axes resets the axis order to column order,
+	 * dropping a manual reorder, as adding a column always has.
+	 */
+	setParallelColumns = (markId: string, columns: string[]): void => {
+		if (columns.length > 0) this.#parallelColumnsByMark.set(markId, [...columns]);
+		else this.#parallelColumnsByMark.delete(markId);
 
-	unregisterParallelColumn = (column: string, markId: string): void => {
-		const marks = this.#parallelColumnMarks.get(column);
-		if (!marks) return;
-		marks.delete(markId);
-		if (marks.size === 0) {
-			const scale = this.#parallelScaleInstances.get(column);
-			if (scale) this.#scaleRegistry.deregisterChart(scale, this.chartId);
-			this.#parallelColumnMarks.delete(column);
-			const updated = new Map(this.#parallelScaleInstances);
-			updated.delete(column);
-			this.#parallelScaleInstances = updated;
-			this.#parallelAxisOrder = [...this.#parallelScaleInstances.keys()].map((_, i) => i);
-			this.#reorder?.resetSprings();
+		const wanted = parallelAxisColumns(this.#parallelColumnsByMark);
+		const current = [...this.#parallelScaleInstances.keys()];
+		if (wanted.length === current.length && wanted.every((c, i) => c === current[i])) return;
+
+		const next = new Map<string, LinearScaleState>();
+		for (const column of wanted) {
+			// Via ScaleRegistry, keyed by the raw column name, so it shares with any
+			// other chart using the same column (domain sync).
+			next.set(
+				column,
+				this.#parallelScaleInstances.get(column) ??
+					(this.#scaleRegistry.getOrCreateScale(
+						column,
+						'linear',
+						{},
+						this.chartId
+					) as LinearScaleState)
+			);
 		}
+		for (const [column, scale] of this.#parallelScaleInstances) {
+			if (!next.has(column)) this.#scaleRegistry.deregisterChart(scale, this.chartId);
+		}
+		this.#parallelScaleInstances = next;
+		this.#parallelAxisOrder = wanted.map((_, i) => i);
+		if (next.size > 0) this.#ensureReorder().resetSprings();
+		else this.#reorder?.resetSprings();
 	};
 
 	get parallelScales(): {
@@ -926,8 +933,7 @@ export class ChartScales {
 			},
 			registerScaleType: coordinator.registerScaleType,
 			unregisterScaleType: coordinator.unregisterScaleType,
-			registerParallelColumn: coordinator.registerParallelColumn,
-			unregisterParallelColumn: coordinator.unregisterParallelColumn,
+			setParallelColumns: coordinator.setParallelColumns,
 			reorderParallelAxis: coordinator.reorderParallelAxis,
 			get parallelReorderState() {
 				return {
@@ -963,9 +969,23 @@ export class ChartScales {
 			this.#scaleRegistry.deregisterChart(scale, this.chartId);
 		}
 		this.#parallelScaleInstances = new Map();
-		this.#parallelColumnMarks.clear();
+		this.#parallelColumnsByMark.clear();
 
 		this.#xScaleInstance = null;
 		this.#yScaleInstance = null;
 	}
+}
+
+/**
+ * A parallel chart's axes: the union of its marks' column lists, each column
+ * once, in mark order (the first mark's columns first, each in its own order).
+ */
+export function parallelAxisColumns(
+	columnsByMark: ReadonlyMap<string, readonly string[]>
+): string[] {
+	const axes: string[] = [];
+	for (const list of columnsByMark.values()) {
+		for (const column of list) if (!axes.includes(column)) axes.push(column);
+	}
+	return axes;
 }
