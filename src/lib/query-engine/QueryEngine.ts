@@ -18,7 +18,6 @@
  */
 
 import { tableFromIPC, type Table } from '@uwdata/flechette';
-import { binsFineEnough } from './sufficient-statistics';
 export type { BrushActivation } from './sufficient-statistics';
 import {
 	assembleQuery,
@@ -26,23 +25,9 @@ import {
 	splitWindowSelect,
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
-import {
-	planPreagg,
-	preaggSelectSQL,
-	preaggQuerySQL,
-	bakedClausesHold,
-	markKeys,
-	estimateGroups,
-	activeDimsKeyOf,
-	binsFitView,
-	binFitsView,
-	fnvHash,
-	type ActivationSource,
-	type GroupKey,
-	type PreaggState
-} from './preagg/plan';
+import { Preagg } from './preagg/Preagg';
+import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
-import { BuildQueue, type QueuedBuild } from './preagg/BuildQueue';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
 import {
 	CategoricalIdentity,
@@ -81,10 +66,6 @@ export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
 	buildMaxWaitMs?: number;
 }
-
-/** TEMPORARY: flip to false to bypass preagg routing and force base-table queries.
- *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
-const PREAGG_ENABLED = true;
 
 // outerAggBuilders + window CTE wrapping now live in query-builder.ts
 // (splitWindowSelect / buildOuterWindow / assembleQuery) so the base path,
@@ -194,15 +175,6 @@ interface MarkRegistration {
 	descriptor: QueryDescriptor;
 	handle: MarkHandle;
 	filterGroup: FilterGroup;
-	/**
-	 * Built preagg tables, one per activated source. A query reads the first
-	 * whose basis holds and moves it to the front, so the next frame of the
-	 * same gesture checks it first.
-	 */
-	preagg: Map<string, PreaggState>;
-	/** The latest build started per source. A finished build is installed only
-	 *  if it is still this one, so a superseded or dropped build never lands. */
-	preaggBuild: Map<string, PreaggState>;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,20 +192,10 @@ export class QueryEngine {
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
-	/** Hash-named preagg tables created this session (for cleanup on destroy). */
-	#preaggTables = new Set<string>();
-	/**
-	 * Row count per base table, for the size guard: a number once read, the
-	 * read in flight before that. Read once per table when its first mark
-	 * registers, outside any interaction.
-	 */
-	#rowCounts = new Map<string, number | Promise<void>>();
-	/** Preagg builds, sent one at a time while no mark query needs the connection. */
-	#builds: BuildQueue;
+	/** Each mark's preagg tables, the build queue and the size guard (see Preagg). */
+	#preagg: Preagg;
 	/** When a filter last changed, in any group (performance.now()). */
 	#lastFilterChangeAt = 0;
-	/** Scratch for a source's view, reused by every query's resolution check. */
-	#viewScratch = new Float64Array(6);
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 	/**
@@ -267,26 +229,14 @@ export class QueryEngine {
 		connection: DuckDBConnection | Promise<DuckDBConnection>,
 		options: QueryEngineOptions = {}
 	) {
-		this.#builds = new BuildQueue(
+		this.#preagg = new Preagg(
 			{
 				exec: (sql) => this.exec(sql),
+				query: (sql, opts) => this.query(sql, opts),
 				busy: () => this.#inflight.size > 0 || this.#pending.size > 0,
-				stillWanted: (item) => this.#stillWanted(item),
-				dropped: ({ markId, sourceId, build }) => {
-					const reg = this.#marks.get(markId);
-					if (reg?.preaggBuild.get(sourceId) === build) reg.preaggBuild.delete(sourceId);
-				},
-				built: ({ markId, sourceId, build }) => {
-					const current = this.#marks.get(markId);
-					if (current?.preaggBuild.get(sourceId) !== build) return;
-					current.preaggBuild.delete(sourceId);
-					current.preagg.set(sourceId, build);
-				},
-				failed: ({ markId, sourceId, build }, e) => {
-					console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
-					const current = this.#marks.get(markId);
-					if (current?.preaggBuild.get(sourceId) === build) current.preaggBuild.delete(sourceId);
-				}
+				identity: this.#identity,
+				mark: (markId) => this.#marks.get(markId),
+				marks: () => this.#marks
 			},
 			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
 		);
@@ -570,7 +520,7 @@ export class QueryEngine {
 					.catch(pending.reject);
 			}
 			// The last mark query settling frees the connection for a build.
-			this.#builds.pump();
+			this.#preagg.pump();
 		}
 	}
 
@@ -668,15 +618,7 @@ export class QueryEngine {
 		// ensureColumns still in flight across this rejects rather than resolving
 		// against dropped state (see CategoricalIdentity's generation counter).
 		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
-		this.#builds.clear();
-		for (const reg of this.#marks.values()) {
-			this.#dropPreagg(reg);
-		}
-		for (const preaggTable of this.#preaggTables) {
-			this.exec(`DROP TABLE IF EXISTS "${preaggTable}"`).catch(() => {});
-		}
-		this.#preaggTables.clear();
-		this.#rowCounts.clear();
+		this.#preagg.reset();
 		this.#queryCache.clear();
 		return identityReset;
 	}
@@ -742,26 +684,20 @@ export class QueryEngine {
 			// Don't cancel inflight queries — let them complete for intermediate
 			// visual updates (e.g. smooth rebin steps during shift+scroll).
 			// Execute-latest in query() handles supersession naturally.
-			this.#dropPreagg(prev);
+			this.#preagg.dropMark(markId);
 		}
 
 		// Reuse existing handle to preserve arrowTable during re-query
 		const handle = prev?.handle ?? new MarkHandle();
-		const reg: MarkRegistration = {
-			descriptor,
-			handle,
-			filterGroup,
-			preagg: new Map(),
-			preaggBuild: new Map()
-		};
+		const reg: MarkRegistration = { descriptor, handle, filterGroup };
 		this.#marks.set(markId, reg);
-		this.#countRows(descriptor.baseTable);
+		this.#preagg.trackTable(descriptor.baseTable);
 
 		handle._onParamsChange = () => this.#queryMark(markId, reg);
 
 		handle.destroy = () => {
 			this.cancel(markId);
-			this.#dropPreagg(reg);
+			this.#preagg.dropMark(markId);
 			this.#marks.delete(markId);
 			handle._onParamsChange = null;
 		};
@@ -804,17 +740,8 @@ export class QueryEngine {
 		for (const [markId, reg] of batch) {
 			const { descriptor, handle } = reg;
 
-			const preagg = this.#usablePreagg(markId, reg);
 			const sqlStr =
-				(preagg &&
-					preaggQuerySQL(
-						markId,
-						descriptor,
-						reg.filterGroup.selection,
-						preagg,
-						handle.params,
-						this.#identity
-					)) ||
+				this.#preagg.sqlFor(markId, reg) ||
 				this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
 			if (!sqlStr) continue;
 
@@ -835,17 +762,8 @@ export class QueryEngine {
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { descriptor, handle } = reg;
 
-		const preagg = this.#usablePreagg(markId, reg);
 		const sqlStr =
-			(preagg &&
-				preaggQuerySQL(
-					markId,
-					descriptor,
-					reg.filterGroup.selection,
-					preagg,
-					handle.params,
-					this.#identity
-				)) ||
+			this.#preagg.sqlFor(markId, reg) ||
 			this.#assembleSQL(
 				descriptor,
 				descriptor.table,
@@ -913,96 +831,12 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Pre-aggregate marks for a filter group before a source is used.
-	 * Called through the source's handle on pointerenter — before the first drag.
-	 *
-	 * Builds materialized preagg tables for all aggregate marks in the filter
-	 * group that the source filters, one per source, next to any the mark holds
-	 * for other sources. Each table bakes in every clause except the source's
-	 * own and groups by the source's active dims as well as the mark's own, so
-	 * a change to the source is a filter on a table of thousands of rows: pixel
-	 * bins for a brush, the field's ids (or values) for a toggle or legend.
-	 *
-	 * The source is named by its ID rather than inferred: before the first drag
-	 * it has no clause yet, and other clauses on the same chart (a Toggle)
-	 * exclude the same marks a brush does.
+	 * Pre-aggregate marks for a filter group before a source is used: builds a
+	 * preagg table per mark the source filters (see Preagg.activate). Called
+	 * through the source's handle on pointerenter — before the first drag.
 	 */
-	async activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
-		const { sourceId: activeSourceId, excludedByAll, dims } = source;
-		if (this.#destroyed || dims.length === 0) return;
-		// An activation outside batch() (a legend's hover) is a batch of one.
-		this.#builds.ensureBatch();
-
-		const { selection } = filterGroup;
-		const dimsKey = activeDimsKeyOf(dims);
-		const promises: Promise<void>[] = [];
-
-		for (const [markId, reg] of this.#marks) {
-			if (reg.filterGroup !== filterGroup) continue;
-			// A mark the source never filters gets no table for it, and keeps
-			// the tables it holds for other sources.
-			if (excludedByAll.has(markId)) continue;
-
-			// Skip if the latest build, finished or in flight, still matches
-			const latest = reg.preaggBuild.get(activeSourceId) ?? reg.preagg.get(activeSourceId);
-			if (latest) {
-				const { basis } = latest;
-				if (
-					basis.parts === reg.descriptor.parts &&
-					basis.activeSourceId === activeSourceId &&
-					basis.dimsKey === dimsKey &&
-					binsFitView(latest.activeMeta, dims) &&
-					bakedClausesHold(markId, selection, latest)
-				) {
-					continue;
-				}
-			}
-
-			// Drop this source's stale table; other sources' stay.
-			reg.preagg.delete(activeSourceId);
-			reg.preaggBuild.delete(activeSourceId);
-
-			const plan = planPreagg(reg.descriptor, dims, this.#identity);
-			if (!plan) continue;
-			if (this.#tooLarge(reg, plan.activeKeys)) continue;
-
-			// Bake every other clause into the preagg table. Sorted by source ID,
-			// so the same filters always give the same SQL, and so the same table.
-			const bakedClauses = selection.bakedClauses(markId, activeSourceId);
-			const staticFilters = selection.bakedPredicates(markId, activeSourceId);
-
-			// Hash-based naming: identical preagg SQL reuses the same table (like Mosaic).
-			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
-			const preaggSQL = preaggSelectSQL(plan.creation, staticFilters);
-			const preaggTable = `__dplot_preagg_${fnvHash(preaggSQL).toString(16)}`;
-			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${preaggSQL}`;
-
-			// The basis is captured now, not when the build finishes: a filter
-			// that changes while the CREATE runs must still read as a mismatch.
-			const build: PreaggState = {
-				table: preaggTable,
-				sql: preaggSQL,
-				basis: {
-					parts: reg.descriptor.parts,
-					activeSourceId,
-					dimsKey,
-					bakedClauses,
-					view: source.view ?? null
-				},
-				creation: plan.creation,
-				mismatch: null,
-				outputSelect: plan.outputSelect,
-				activeMeta: plan.activeMeta,
-				windowChannels: plan.windowChannels
-			};
-			reg.preaggBuild.set(activeSourceId, build);
-
-			this.#preaggTables.add(preaggTable);
-			promises.push(this.#builds.push({ markId, sourceId: activeSourceId, build, createSQL }));
-		}
-
-		this.#builds.pump();
-		await Promise.all(promises);
+	activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
+		return this.#preagg.activate(filterGroup, source);
 	}
 
 	/**
@@ -1010,165 +844,15 @@ export class QueryEngine {
 	 * batch are dropped (see BuildQueue).
 	 */
 	batch(activations: () => void): void {
-		this.#builds.runBatch(activations);
+		this.#preagg.batch(activations);
 	}
 
 	/**
-	 * Whether a queued build is still wanted when it would be sent: checked
-	 * against the mark's current registration, which a re-setup replaces,
-	 * against the view now (a zoom in or a long pan while it waited means a
-	 * table settling would only rebuild), and against the filters now: a clause
-	 * baked into the table may have changed.
-	 */
-	#stillWanted({ markId, sourceId, build }: QueuedBuild): boolean {
-		const reg = this.#marks.get(markId);
-		return (
-			!!reg &&
-			reg.preaggBuild.get(sourceId) === build &&
-			reg.descriptor.parts === build.basis.parts &&
-			this.#binsFitCurrentView(build) &&
-			bakedClausesHold(markId, reg.filterGroup.selection, build)
-		);
-	}
-
-	/**
-	 * The size guard: whether a planned table would hold more than a quarter of
-	 * its base table's rows (a fixed 100,000 until the row count has been read).
-	 *
-	 * Measured on 1M rows (DuckDB-WASM, one thread): a toggle click on a table a
-	 * quarter the size of the base table is still ~3.7× faster than on the base
-	 * table, and its build costs ~2.5 base queries; at 43% the click is 2.1×
-	 * faster and the build ~3.5 base queries; at 69%, 1.4× and ~4. Builds run
-	 * when the connection is idle, so their cost shows only as the wait of a
-	 * click that lands mid-build, and as memory; past a quarter that outweighs
-	 * the gain. The groups are estimated by estimateGroups; an unknown estimate
-	 * builds.
-	 */
-	#tooLarge(reg: MarkRegistration, activeKeys: GroupKey[]): boolean {
-		const groups = estimateGroups(markKeys(reg.descriptor, reg.handle, this.#identity), activeKeys);
-		if (groups == null) return false;
-		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
-		const cap = typeof rows === 'number' ? rows / 4 : 100_000;
-		return groups > cap;
-	}
-
-	/** Read a base table's row count once, for the size guard. */
-	#countRows(table: string): void {
-		if (this.#rowCounts.has(table)) return;
-		const escaped = table.replace(/"/g, '""');
-		this.#rowCounts.set(
-			table,
-			this.query(`SELECT count(*)::DOUBLE AS n FROM "${escaped}"`, { cache: false })
-				.then((result) => {
-					const n = Number((result.get(0) as { n?: unknown } | null)?.n);
-					if (Number.isFinite(n)) this.#rowCounts.set(table, n);
-					else this.#rowCounts.delete(table);
-				})
-				.catch(() => {
-					// Unknown: the guard keeps its fixed cap, and a later registration retries.
-					this.#rowCounts.delete(table);
-				})
-		);
-	}
-
-	/**
-	 * The preagg table a mark's query can read: the first whose query parts
-	 * match and whose baked clauses are still in force, or null for the base
-	 * table, which applies every clause.
-	 *
-	 * The table that answers moves to the front. One hover activates several
-	 * sources, so the table for the source being dragged need not come first;
-	 * a table ahead of it bakes that source's moving clause and fails, possibly
-	 * through the SQL comparison in #bakedClausesHold. Moving the answering
-	 * table to the front limits that to the first frame of a gesture. When no
-	 * table answers, the frame queries the base table, which costs far more.
-	 */
-	#usablePreagg(markId: string, reg: MarkRegistration): PreaggState | null {
-		if (!PREAGG_ENABLED || reg.preagg.size === 0) return null;
-		const { selection } = reg.filterGroup;
-		let first = true;
-		for (const [sourceId, state] of reg.preagg) {
-			if (
-				state.basis.parts === reg.descriptor.parts &&
-				this.#binsFineEnough(state) &&
-				bakedClausesHold(markId, selection, state)
-			) {
-				// A Map keeps the first insertion position of a key, so listing
-				// this entry first and spreading the rest moves it to the front.
-				if (!first) reg.preagg = new Map([[sourceId, state], ...reg.preagg]);
-				return state;
-			}
-			first = false;
-		}
-		return null;
-	}
-
-	/**
-	 * Whether a table's pixel bins are still at least as fine as the current
-	 * view's pixels. Bin indexes are floor((v - d0) * scale) with the stored d0
-	 * and scale, and the brush filter uses the same pair, so a brush inside the
-	 * table's window is answered at any view; only precision depends on bin
-	 * width. A pan keeps the width (off by at most one bin edge, one pixel) and
-	 * a zoom out makes the bins finer than the pixels, so both keep the table.
-	 * Only a zoom in or a larger chart past the built resolution fails here; a
-	 * brush past the window is caught where the filter is built. Reads the view
-	 * into a reused array: no allocation.
-	 */
-	#binsFineEnough(state: PreaggState): boolean {
-		const { view } = state.basis;
-		if (!view) return true;
-		const out = this.#viewScratch;
-		out.fill(NaN);
-		view(out);
-		let bin = 0;
-		for (const meta of state.activeMeta) {
-			if (meta.kind !== 'bin') continue;
-			const d0 = out[bin * 3];
-			const d1 = out[bin * 3 + 1];
-			const extent = out[bin * 3 + 2];
-			bin++;
-			if (!binsFineEnough(meta.scaleFactor, d1 - d0, extent)) return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Whether a queued bin build still suits its source's view, read through the
-	 * source's view callback (binFitsView). An unknown view keeps it.
-	 */
-	#binsFitCurrentView(state: PreaggState): boolean {
-		const { view } = state.basis;
-		if (!view) return true;
-		const out = this.#viewScratch;
-		out.fill(NaN);
-		view(out);
-		let bin = 0;
-		for (const meta of state.activeMeta) {
-			if (meta.kind !== 'bin') continue;
-			const i = 3 * bin++;
-			if (!binFitsView(meta, out[i], out[i + 1], out[i + 2])) return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Forget a source's tables on every mark of its group: its last registration
-	 * is gone, so nothing can use them. Called by FilterGroup. Does NOT drop the
-	 * tables; hash-named tables are reused via CREATE TABLE IF NOT EXISTS.
+	 * Forget a source's preagg tables: its last registration is gone. Called by
+	 * FilterGroup.
 	 */
 	forgetSource(filterGroup: FilterGroup, sourceId: string): void {
-		for (const reg of this.#marks.values()) {
-			if (reg.filterGroup !== filterGroup) continue;
-			reg.preagg.delete(sourceId);
-			reg.preaggBuild.delete(sourceId);
-		}
-	}
-
-	/** Clear preagg state for a registration, including builds in flight.
-	 *  Does NOT drop the tables — hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
-	#dropPreagg(reg: MarkRegistration): void {
-		reg.preagg.clear();
-		reg.preaggBuild.clear();
+		this.#preagg.forgetSource(filterGroup, sourceId);
 	}
 
 	/**
@@ -1179,18 +863,9 @@ export class QueryEngine {
 		// throws once destroyed.
 		await this.#identity.reset().catch(() => {});
 		this.#destroyed = true;
-		// Settle activations still waiting on queued builds
-		this.#builds.destroy();
-		// Clean up mark registrations
-		for (const reg of this.#marks.values()) {
-			this.#dropPreagg(reg);
-		}
+		// Settle activations still waiting on queued builds, drop this session's tables
+		this.#preagg.destroy();
 		this.#marks.clear();
-		// Drop all preagg tables created this session
-		for (const table of this.#preaggTables) {
-			this.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {});
-		}
-		this.#preaggTables.clear();
 		this.#queryCache.clear();
 		for (const controller of this.#inflight.values()) {
 			controller.abort();

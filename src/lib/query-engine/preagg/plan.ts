@@ -3,7 +3,7 @@
  * like, the SQL that builds and reads it, and the checks that decide whether
  * it still answers. Pure functions over a mark's query descriptor and the
  * categorical identity; the state they work on (each mark's tables, the build
- * queue, row counts) lives in the engine.
+ * queue, row counts) lives in Preagg.
  */
 
 import {
