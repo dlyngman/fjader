@@ -40,6 +40,27 @@
 	/** Each column's source, filled by its ParallelAxisSource child. */
 	const handles = new Map<string, SourceHandle>();
 
+	/**
+	 * The axis whose brush strip the pointer is in, by column, or null between
+	 * strips. Only this axis's source is activated: one source per axis means
+	 * one set of preagg tables per axis, and building every axis's on chart
+	 * hover would be axes × marks builds, most for axes never brushed.
+	 */
+	let hoveredAxis: string | null = null;
+
+	/** Make `col` the hovered axis; activate its source when it changes. A batch
+	 *  of its own, so moving to another axis drops the previous one's queued builds. */
+	function hoverAxis(col: string | null) {
+		if (col === hoveredAxis) return;
+		hoveredAxis = col;
+		if (col) handles.get(col)?.activate();
+	}
+
+	/** The chart's activator (hover, settling): the hovered axis, if any. */
+	function activateHoveredAxis() {
+		if (hoveredAxis) handles.get(hoveredAxis)?.activate();
+	}
+
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
 	let isPanModeActive = $state(false);
 	const { handleKeyDown, handleKeyUp } = createPanModeHandlers((active) => {
@@ -167,8 +188,15 @@
 		return true;
 	}
 
-	function handlePointerMove(event: PointerEvent) {
-		if (!isCapturing || activeAxisIdx == null) return false;
+	function handlePointerMove(event: PointerEvent, innerPoint: Point) {
+		if (!isCapturing || activeAxisIdx == null) {
+			// A hover move: track the axis under the pointer, and let ChartCell go on.
+			if (ps && !isPanModeActive) {
+				const axisIdx = nearestAxis(innerPoint.x);
+				hoverAxis(axisIdx == null ? null : ps.columns[axisIdx]);
+			}
+			return false;
+		}
 
 		point.x = event.offsetX;
 		point.y = event.offsetY;
@@ -236,6 +264,9 @@
 
 	function handleMoveStart(i: number, event: PointerEvent) {
 		event.stopPropagation();
+		// A drag that starts on a brush overlay hovers its axis, even without a
+		// pointer move over the axis first.
+		if (ps) hoverAxis(ps.columns[i]);
 		(event.target as Element).setPointerCapture(event.pointerId);
 		activeAxisIdx = i;
 		isCapturing = true;
@@ -250,6 +281,7 @@
 
 	function handleResizeStart(i: number, edge: string, event: PointerEvent) {
 		event.stopPropagation();
+		if (ps) hoverAxis(ps.columns[i]);
 		(event.target as Element).setPointerCapture(event.pointerId);
 		activeAxisIdx = i;
 		isCapturing = true;
@@ -283,11 +315,13 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
+		chart.activators.add(activateHoveredAxis);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
+			chart.activators.delete(activateHoveredAxis);
 		};
 	});
 </script>
