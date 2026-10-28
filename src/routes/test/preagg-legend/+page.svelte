@@ -12,6 +12,11 @@
 	//   chart: once the pointer is released and things are quiet, the brush
 	//   table is rebuilt ("build"), and later drags read it.
 	// - Drag the brush: no "build" appears in the log mid-drag.
+	// - Parallel axes: hover an axis (its brush strip) and wait: builds for the
+	//   other charts' marks, one batch per axis. Move to another axis: a new
+	//   batch. Drag on the hovered axis: the histograms and the carrier bars
+	//   read preagg tables. The parallel chart's own polyline queries are row
+	//   level and always read the base table (a 20,000-row sample).
 	//
 	// The log wraps the engine's query and exec on this page only.
 
@@ -23,6 +28,9 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
+		ParallelAxes,
+		ParallelBrushes,
+		ParallelCoordinatesMark,
 		MarginLabel,
 		WebGPUCanvas,
 		BarMarkY,
@@ -121,11 +129,17 @@
 				CREATE TABLE preagg_flights AS
 				SELECT (delay + (rep % 11) - 5)::SMALLINT AS delay,
 				       (distance + (rep % 13) * 3)::SMALLINT AS distance,
+				       "time",
 				       ${carriers}[1 + floor(10 * pow((hash(rid, rep) % 1000000) / 1e6, 2))::INT] AS carrier
 				FROM (SELECT *, row_number() OVER () AS rid FROM read_parquet('${url}')) base,
 				     range(${Math.ceil(ROWS / 200_000)}) r(rep)
 				LIMIT ${ROWS}
 			`);
+			// The parallel chart draws one polyline per row: a sample keeps it light.
+			// Its brushes filter delay, distance and time, the same columns as above.
+			await exec(
+				`CREATE TABLE preagg_flights_sample AS SELECT * FROM preagg_flights USING SAMPLE 20000 ROWS`
+			);
 			isLoaded = true;
 		} catch (error) {
 			console.error('Initialization error:', error);
@@ -144,7 +158,8 @@
 		<p class="lede">
 			{ROWS.toLocaleString()} rows. Hover a source, pause, then click: the other charts should read preagg
 			tables. Brush the delay histogram after a toggle click: once released and quiet, its table is rebuilt;
-			no build should appear mid-drag.
+			no build should appear mid-drag. Hover a parallel axis, pause, then brush it: the other charts
+			read preagg tables built for that axis.
 		</p>
 
 		<div class="grid">
@@ -206,6 +221,32 @@
 					{/snippet}
 					{#snippet interactors()}
 						<Toggle selection="brush" field="carrier" />
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
+				<h3>Parallel axes (brush; 20,000-row sample)</h3>
+				<ChartContainer clipPadding={30}>
+					{#snippet background()}
+						<Frame />
+						<ParallelAxes />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<ParallelCoordinatesMark
+									table="preagg_flights_sample"
+									columns={['delay', 'distance', 'time']}
+									stroke="carrier"
+									opacity={0.2}
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet interactors()}
+						<ParallelBrushes selection="brush" />
 					{/snippet}
 				</ChartContainer>
 			</div>
