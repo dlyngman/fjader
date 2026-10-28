@@ -526,9 +526,8 @@ export class MarkLifecycleV2 {
 		}
 
 		if (this.#config.parallelMode && this.#config.parallelColumns) {
-			for (const col of this.#config.parallelColumns) {
-				this.#chartContext.registerParallelColumn(col, this.#markId);
-			}
+			// The whole list: columns this mark no longer has lose their axes.
+			this.#chartContext.setParallelColumns(this.#markId, this.#config.parallelColumns);
 		}
 	}
 
