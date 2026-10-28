@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
-import { column, count } from '@uwdata/mosaic-sql';
+import { column, count, sql } from '@uwdata/mosaic-sql';
 import {
 	QueryEngine,
 	type DuckDBConnection,
@@ -438,6 +438,44 @@ describe('the size guard', () => {
 		await new Promise((r) => setTimeout(r, 20));
 		engine.forgetSource(group, 'toggle-cat');
 		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(1);
+	});
+
+	it('counts a field shown on two channels once', async () => {
+		await engine.ensureColumns('big', { categorical: ['x', 'cat'] });
+		const view = engine.identitySourceFor('big');
+		const x = castReal(column(idOf('x')));
+		// Bars colored by their own field: 1001 x groups, not 1001², times 3 cat
+		// groups is 3003, well under 100,000 / 4. Squared it would be about 3M.
+		await mark('bars', { x, fill: x, n: count() }, { table: view, baseTable: 'big' });
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(1);
+	});
+
+	it('adds a bin dim on a column the mark already groups by instead of multiplying', async () => {
+		// A histogram of x in 50 bins, brushed on x at 3 px per unit: about 3001
+		// pixel bins, each in about one histogram bin, so 50 + 3001 groups, not
+		// 50 × 3001 = 150,050 (over 100,000 / 4).
+		await mark('hist', { b: sql`floor(${column('x')} / 20)`, n: count() }, { baseTable: 'big' });
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		await engine.activate(group, {
+			sourceId: 'interval-x-B',
+			excludedByAll: new Set(),
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 1000],
+					pixelExtent: 3000,
+					extent: [0, 1000]
+				}
+			]
+		});
 		expect(creates()).toHaveLength(1);
 	});
 

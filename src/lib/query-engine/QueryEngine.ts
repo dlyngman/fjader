@@ -258,6 +258,16 @@ type ActiveMeta =
 	| { kind: 'bin'; alias: string; d0: number; scaleFactor: number; bins: number }
 	| { kind: 'value'; field: string; column: string; byId: boolean };
 
+/**
+ * A group key of a planned table, for the size guard: how many groups it has
+ * (null: unknown), and the one source column it bins, if it bins exactly one,
+ * so a key on a column the mark already groups by is not counted twice.
+ */
+interface GroupKey {
+	column: string | null;
+	groups: number | null;
+}
+
 interface PreaggState {
 	table: string;
 	/** The SELECT the table was created from. Its hash names the table. */
@@ -868,15 +878,15 @@ export class QueryEngine {
 		return handle;
 	}
 
-	/**
-	 * Called by FilterGroup when any filter clause changes.
-	 * Iterates registered marks for this group and batch-queries them.
-	 */
 	/** When a filter last changed, in any group, for settling (performance.now()). */
 	get lastFilterChangeAt(): number {
 		return this.#lastFilterChangeAt;
 	}
 
+	/**
+	 * Called by FilterGroup when any filter clause changes.
+	 * Iterates registered marks for this group and batch-queries them.
+	 */
 	onFilterChange(group: FilterGroup): void {
 		this.#lastFilterChangeAt = performance.now();
 		const batch: Array<[string, MarkRegistration]> = [];
@@ -1041,7 +1051,7 @@ export class QueryEngine {
 
 			const plan = this.#planPreagg(reg, dims);
 			if (!plan) continue;
-			if (this.#tooLarge(reg, plan.groupsPerMarkGroup)) continue;
+			if (this.#tooLarge(reg, plan.activeKeys)) continue;
 
 			// Bake every other clause into the preagg table. Sorted by source ID,
 			// so the same filters always give the same SQL, and so the same table.
@@ -1214,8 +1224,7 @@ export class QueryEngine {
 	 * 3. Otherwise the field's values themselves, filtered with the toggle's own
 	 *    predicate over that column.
 	 *
-	 * Also returns how many groups the active dims add to each of the mark's own
-	 * groups, or null when that is not known, for the size guard.
+	 * Also returns the active dims' group keys, for the size guard.
 	 */
 	#planPreagg(
 		reg: MarkRegistration,
@@ -1225,7 +1234,7 @@ export class QueryEngine {
 		outputSelect: Record<string, ExprNode>;
 		activeMeta: ActiveMeta[];
 		windowChannels: Record<string, WindowNode> | null;
-		groupsPerMarkGroup: number | null;
+		activeKeys: GroupKey[];
 	} | null {
 		const { parts, table, baseTable, schema } = reg.descriptor;
 		if (!parts.hasAggregates && !parts.hasWindowAggregates) return null;
@@ -1239,10 +1248,7 @@ export class QueryEngine {
 		const activeGroupBy: ExprNode[] = [];
 		const binOrder: ExprNode[] = [];
 		const joins: PreaggCreation['joins'] = [];
-		let groupsPerMarkGroup: number | null = 1;
-		const times = (n: number | null) => {
-			groupsPerMarkGroup = groupsPerMarkGroup == null || n == null ? null : groupsPerMarkGroup * n;
-		};
+		const activeKeys: GroupKey[] = [];
 
 		dims.forEach((dim, i) => {
 			const alias = `__active${i}`;
@@ -1261,7 +1267,11 @@ export class QueryEngine {
 				const dataBins = dim.extent
 					? Math.ceil((dim.extent[1] - dim.extent[0]) * scaleFactor) + 1
 					: Infinity;
-				times(Math.min(bins + 2, dataBins));
+				const binned = collectColumns(dim.columnRef);
+				activeKeys.push({
+					column: binned.length === 1 ? binned[0].column : null,
+					groups: Math.min(bins + 2, dataBins)
+				});
 				return;
 			}
 
@@ -1286,14 +1296,14 @@ export class QueryEngine {
 					joins.push({ raw, alias, dim: this.#identity.dimTable(field) });
 				}
 				activeMeta.push({ kind: 'value', field, column: alias, byId: true });
-				times(idGroups);
+				activeKeys.push({ column: null, groups: idGroups });
 				return;
 			}
 			// Case 3.
 			preaggCols[alias] = fieldExpr(this.#identity.sqlFor(field), field);
 			activeGroupBy.push(column(alias));
 			activeMeta.push({ kind: 'value', field, column: alias, byId: false });
-			times(null);
+			activeKeys.push({ column: null, groups: null });
 		});
 
 		// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
@@ -1316,7 +1326,7 @@ export class QueryEngine {
 			outputSelect,
 			activeMeta,
 			windowChannels: analysis.windowChannels,
-			groupsPerMarkGroup
+			activeKeys
 		};
 	}
 
@@ -1344,45 +1354,63 @@ export class QueryEngine {
 	 * the gain.
 	 *
 	 * Counts the table's groups, which are the mark's groups before its SQL
-	 * transforms and before the active source's filter, times what the active
-	 * dims add. The mark's own groups are the product of its id channels' dim
-	 * sizes when every group key is one; otherwise its last result's row count
-	 * when it has no limit (a lower bound: filters or a transform may cut it);
-	 * otherwise at least one, so the active dims alone can still exceed the cap.
-	 * Only an active dim without a known cardinality (a field with no dim)
-	 * leaves the estimate unknown, and an unknown estimate builds.
+	 * transforms and before the active source's filter, combined with the
+	 * active dims' (#markKeys). Keys multiply, except that a field or column is
+	 * counted once: a mark with x and fill on the same field has that field's
+	 * groups, not their square, and a bin dim on a column the mark already
+	 * groups by adds its bins to that key's (each pixel bin falls in about one
+	 * of the mark's bins) instead of multiplying. Only an active dim without a
+	 * known cardinality (a field with no dim) leaves the estimate unknown, and an
+	 * unknown estimate builds.
 	 */
-	#tooLarge(reg: MarkRegistration, groupsPerMarkGroup: number | null): boolean {
-		if (groupsPerMarkGroup == null) return false;
-		// The mark has at least one group, so its active dims alone can tell a
-		// build is too large even when its own groups are unknown.
-		const markGroups = this.#markGroups(reg) ?? 1;
+	#tooLarge(reg: MarkRegistration, activeKeys: GroupKey[]): boolean {
+		if (activeKeys.some((key) => key.groups == null)) return false;
+		const merged = new Set<GroupKey>();
+		let groups = 1;
+		for (const key of this.#markKeys(reg)) {
+			const same =
+				key.column == null
+					? undefined
+					: activeKeys.find((active) => active.column === key.column && !merged.has(active));
+			if (same) merged.add(same);
+			groups *= key.groups! + (same?.groups ?? 0);
+		}
+		for (const key of activeKeys) if (!merged.has(key)) groups *= key.groups!;
 		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
 		const cap = typeof rows === 'number' ? rows / 4 : 100_000;
-		return markGroups * groupsPerMarkGroup > cap;
+		return groups > cap;
 	}
 
-	#markGroups(reg: MarkRegistration): number | null {
+	/**
+	 * The mark's own group keys. When every one is a categorical field's id
+	 * channel, one key per distinct field, sized by its dim. Otherwise one key
+	 * for the whole mark, sized by its last result's row count (a lower bound:
+	 * filters or a transform may cut it, and a topN mark groups by an id channel
+	 * and is counted exactly above), or one group under a limit or before a
+	 * result; it names the column the mark groups by when there is only one.
+	 */
+	#markKeys(reg: MarkRegistration): GroupKey[] {
 		const { parts } = reg.descriptor;
-		let product = 1;
+		const fields = new Set<string>();
+		const columns = new Set<string>();
 		let allIds = true;
 		for (const expr of Object.values(parts.selectDef)) {
 			if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) continue;
-			const columns = collectColumns(expr as ExprNode);
-			const field = columns.length === 1 ? this.#identity.fieldOfIdColumn(columns[0].column) : null;
-			if (field == null) {
-				allIds = false;
-				break;
-			}
-			product *= this.#identity.values(field).length + 1;
+			const read = collectColumns(expr as ExprNode);
+			for (const { column: name } of read) columns.add(name);
+			const field = read.length === 1 ? this.#identity.fieldOfIdColumn(read[0].column) : null;
+			if (field == null) allIds = false;
+			else fields.add(field);
 		}
-		if (allIds) return product;
-		// The last result's rows, a lower bound whatever the mark's transforms
-		// (a stack keeps every row; a topN cuts them, but a topN mark groups by an
-		// id channel and is counted exactly above). Not under a limit.
+		if (allIds) {
+			return [...fields].map((field) => ({
+				column: null,
+				groups: this.#identity.values(field).length + 1
+			}));
+		}
 		const { handle } = reg;
-		if (handle.params.limit != null) return null;
-		return handle.arrowTable?.numRows ?? null;
+		const rows = handle.params.limit == null ? handle.arrowTable?.numRows : undefined;
+		return [{ column: columns.size === 1 ? [...columns][0] : null, groups: rows ?? 1 }];
 	}
 
 	/** Read a base table's row count once, for the size guard. */
