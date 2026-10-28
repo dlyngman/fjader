@@ -1,13 +1,12 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
 	import { isBetween, column } from '@uwdata/mosaic-sql';
-	import { BrushState1D } from './brush-state.svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import BrushOverlay from './BrushOverlay.svelte';
-	import ParallelAxisSource from './ParallelAxisSource.svelte';
+	import ParallelAxisSource, { type ParallelAxis } from './ParallelAxisSource.svelte';
 	import { closeTo, isDragging, createPanModeHandlers } from './brush-utils';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
-	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	type InvertibleScale = {
@@ -34,11 +33,12 @@
 
 	const ps = $derived(chart.parallelScales);
 
-	// --- Per-axis state (one per column, grown when columns are added) ---
-	let brushes = $state<BrushState1D[]>([]);
-	const lastEmitted: { min: number | null; max: number | null }[] = [];
-	/** Each column's source, filled by its ParallelAxisSource child. */
-	const handles = new Map<string, SourceHandle>();
+	/**
+	 * Each axis's state (source, brush, last emitted extent), by column, created
+	 * and dropped by its ParallelAxisSource child. By column, not by position:
+	 * removing a column renumbers the axes, and a brush must stay on its own.
+	 */
+	const axes = new SvelteMap<string, ParallelAxis>();
 
 	/**
 	 * The axis whose brush strip the pointer is in, by column, or null between
@@ -53,12 +53,12 @@
 	function hoverAxis(col: string | null) {
 		if (col === hoveredAxis) return;
 		hoveredAxis = col;
-		if (col) handles.get(col)?.activate();
+		if (col) axes.get(col)?.handle.activate();
 	}
 
 	/** The chart's activator (hover, settling): the hovered axis, if any. */
 	function activateHoveredAxis() {
-		if (hoveredAxis) handles.get(hoveredAxis)?.activate();
+		if (hoveredAxis) axes.get(hoveredAxis)?.handle.activate();
 	}
 
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
@@ -67,8 +67,8 @@
 		isPanModeActive = active;
 	});
 
-	// Active brush index (which axis the user is currently interacting with)
-	let activeAxisIdx: number | null = null;
+	// The axis the user is dragging on, by column
+	let activeAxis: string | null = null;
 	let anchor = 0;
 	let current = 0;
 	let isCapturing = false;
@@ -108,15 +108,6 @@
 		? () => new Set(chart.config.entries.keys())
 		: () => new Set<string>();
 
-	// Ensure per-axis brush state is sized correctly. The sources are not here:
-	// each column registers its own (ParallelAxisSource), before its first drag.
-	function ensureAxisState(n: number) {
-		while (brushes.length < n) {
-			brushes.push(new BrushState1D());
-			lastEmitted.push({ min: null, max: null });
-		}
-	}
-
 	/** An axis's scale state, looked up by column: removing a column renumbers the axes. */
 	function scaleStateOf(col: string): LinearScaleState | null {
 		if (!ps) return null;
@@ -125,17 +116,17 @@
 	}
 
 	// Get D3 scale for an axis (y-direction)
-	function getAxisScale(i: number): InvertibleScale | null {
-		if (!ps) return null;
-		const state = ps.scaleStates[i] as LinearScaleState;
+	function getAxisScale(col: string): InvertibleScale | null {
+		const state = scaleStateOf(col);
+		if (!state) return null;
 		const base = state.getBaseScale('y', chart.innerHeight);
 		state.updateScaleDomain(base);
 		return base as unknown as InvertibleScale;
 	}
 
-	// Find nearest axis from an x-coordinate
-	function nearestAxis(x: number): number | null {
-		if (!axisPositions.length) return null;
+	// Find the axis (its column) whose brush strip contains an x-coordinate
+	function nearestAxis(x: number): string | null {
+		if (!ps || !axisPositions.length) return null;
 		let bestIdx = 0;
 		let bestDist = Math.abs(x - axisPositions[0]);
 		for (let i = 1; i < axisPositions.length; i++) {
@@ -145,28 +136,32 @@
 				bestIdx = i;
 			}
 		}
-		return bestDist <= brushHalfWidth * 2 ? bestIdx : null;
+		return bestDist <= brushHalfWidth * 2 ? ps.columns[bestIdx] : null;
 	}
 
 	// Emit clause for a specific axis
-	function emitUpdate(i: number) {
-		const brush = brushes[i];
-		if (!brush.active || !ps) return;
+	function emitUpdate(col: string) {
+		const axis = axes.get(col);
+		if (!axis?.brush.active) return;
+		const { brush, lastEmitted } = axis;
 
 		const dataMin = Math.min(brush.dataMin as number, brush.dataMax as number);
 		const dataMax = Math.max(brush.dataMin as number, brush.dataMax as number);
 
-		if (closeTo(dataMin, lastEmitted[i].min) && closeTo(dataMax, lastEmitted[i].max)) return;
-		lastEmitted[i] = { min: dataMin, max: dataMax };
+		if (closeTo(dataMin, lastEmitted.min) && closeTo(dataMax, lastEmitted.max)) return;
+		lastEmitted.min = dataMin;
+		lastEmitted.max = dataMax;
 
-		const col = ps.columns[i];
-		handles.get(col)?.update(isBetween(column(col), [dataMin, dataMax]), [dataMin, dataMax]);
+		axis.handle.update(isBetween(column(col), [dataMin, dataMax]), [dataMin, dataMax]);
 	}
 
-	function clearBrush(i: number) {
-		brushes[i].clear();
-		lastEmitted[i] = { min: null, max: null };
-		if (ps) handles.get(ps.columns[i])?.clear();
+	function clearBrush(col: string) {
+		const axis = axes.get(col);
+		if (!axis) return;
+		axis.brush.clear();
+		axis.lastEmitted.min = null;
+		axis.lastEmitted.max = null;
+		axis.handle.clear();
 	}
 
 	// --- Pointer handlers ---
@@ -174,13 +169,12 @@
 	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
 		if (!ps) return false;
 		if (isPanModeActive) return false; // Fall through to ChartCell for parallel axis pan
-		ensureAxisState(ps.columns.length);
 
-		const axisIdx = nearestAxis(innerPoint.x);
-		if (axisIdx == null) return false;
+		const col = nearestAxis(innerPoint.x);
+		if (col == null || !axes.has(col)) return false;
 
 		(event.target as Element).setPointerCapture(event.pointerId);
-		activeAxisIdx = axisIdx;
+		activeAxis = col;
 		isCapturing = true;
 		hasDragged = false;
 		anchor = innerPoint.y;
@@ -189,12 +183,9 @@
 	}
 
 	function handlePointerMove(event: PointerEvent, innerPoint: Point) {
-		if (!isCapturing || activeAxisIdx == null) {
+		if (!isCapturing || activeAxis == null) {
 			// A hover move: track the axis under the pointer, and let ChartCell go on.
-			if (ps && !isPanModeActive) {
-				const axisIdx = nearestAxis(innerPoint.x);
-				hoverAxis(axisIdx == null ? null : ps.columns[axisIdx]);
-			}
+			if (!isPanModeActive) hoverAxis(nearestAxis(innerPoint.x));
 			return false;
 		}
 
@@ -203,17 +194,19 @@
 		const innerCoords = chart.toInnerCoordinates(point);
 		current = innerCoords.y;
 
-		const brush = brushes[activeAxisIdx];
+		// The axis can have been removed mid-drag.
+		const brush = axes.get(activeAxis)?.brush;
+		if (!brush) return false;
 
 		if (!hasDragged && isDragging(anchor, current)) {
 			hasDragged = true;
 			if (brush.phase === 'idle') {
-				if (brush.active) clearBrush(activeAxisIdx);
+				if (brush.active) clearBrush(activeAxis);
 				brush.phase = 'creating';
 			}
 		}
 
-		const s = getAxisScale(activeAxisIdx);
+		const s = getAxisScale(activeAxis);
 		if (!s) return false;
 
 		if (brush.phase === 'creating') {
@@ -234,41 +227,47 @@
 			);
 		}
 
-		emitUpdate(activeAxisIdx);
+		emitUpdate(activeAxis);
 		return true;
 	}
 
 	function handlePointerUp(event: PointerEvent) {
-		if (!isCapturing || activeAxisIdx == null) return false;
+		if (!isCapturing || activeAxis == null) return false;
 
 		(event.target as Element).releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
-		const brush = brushes[activeAxisIdx];
+		const col = activeAxis;
+		activeAxis = null;
+		const brush = axes.get(col)?.brush;
+		if (!brush) {
+			hasDragged = false;
+			return true;
+		}
 
 		if (!hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
-			clearBrush(activeAxisIdx);
-			activeAxisIdx = null;
+			clearBrush(col);
 			return true;
 		}
 
 		if (brush.phase !== 'idle') {
-			emitUpdate(activeAxisIdx);
+			emitUpdate(col);
 			brush.phase = 'idle';
 		}
 
 		hasDragged = false;
-		activeAxisIdx = null;
 		return true;
 	}
 
-	function handleMoveStart(i: number, event: PointerEvent) {
+	function handleMoveStart(col: string, event: PointerEvent) {
+		const brush = axes.get(col)?.brush;
+		if (!brush) return;
 		event.stopPropagation();
 		// A drag that starts on a brush overlay hovers its axis, even without a
 		// pointer move over the axis first.
-		if (ps) hoverAxis(ps.columns[i]);
+		hoverAxis(col);
 		(event.target as Element).setPointerCapture(event.pointerId);
-		activeAxisIdx = i;
+		activeAxis = col;
 		isCapturing = true;
 		hasDragged = false;
 
@@ -276,39 +275,49 @@
 		point.y = event.offsetY;
 		const innerCoords = chart.toInnerCoordinates(point);
 		anchor = innerCoords.y;
-		brushes[i].phase = 'moving';
+		brush.phase = 'moving';
 	}
 
-	function handleResizeStart(i: number, edge: string, event: PointerEvent) {
+	function handleResizeStart(col: string, edge: string, event: PointerEvent) {
+		const brush = axes.get(col)?.brush;
+		if (!brush) return;
 		event.stopPropagation();
-		if (ps) hoverAxis(ps.columns[i]);
+		hoverAxis(col);
 		(event.target as Element).setPointerCapture(event.pointerId);
-		activeAxisIdx = i;
+		activeAxis = col;
 		isCapturing = true;
 
 		point.x = event.offsetX;
 		point.y = event.offsetY;
 		const innerCoords = chart.toInnerCoordinates(point);
 		anchor = innerCoords.y;
-		brushes[i].phase = 'resizing';
-		brushes[i].resizeEdge = edge === 'top' ? 'start' : 'end';
+		brush.phase = 'resizing';
+		brush.resizeEdge = edge === 'top' ? 'start' : 'end';
 	}
 
-	// Brush screen extents — derived for smooth reactive updates.
-	// brushes is $state so Svelte tracks element access, and each
+	// Brush screen extents, one per active brush, at its axis's x-position —
+	// derived for smooth reactive updates. The axes map is a SvelteMap, and each
 	// BrushState1D's $state fields (dataMin/dataMax) are tracked transitively.
 	const brushScreens = $derived.by(() => {
-		if (!ps || brushes.length === 0) return [];
-		return brushes.map((brush, i) => {
-			if (!brush.active) return null;
-			const s = getAxisScale(i);
-			if (!s) return null;
+		if (!ps) return [];
+		const screens: Array<{ col: string; x: number; pos: number; size: number }> = [];
+		ps.columns.forEach((col, i) => {
+			const brush = axes.get(col)?.brush;
+			if (!brush?.active) return;
+			const s = getAxisScale(col);
+			if (!s) return;
 			const [min, max] = brush.screenExtent(s);
 			const clampedMin = Math.max(0, min);
 			const clampedMax = Math.min(chart.innerHeight, max);
-			if (clampedMax <= clampedMin) return null;
-			return { pos: clampedMin, size: clampedMax - clampedMin };
+			if (clampedMax <= clampedMin) return;
+			screens.push({
+				col,
+				x: axisPositions[i] - brushHalfWidth,
+				pos: clampedMin,
+				size: clampedMax - clampedMin
+			});
 		});
+		return screens;
 	});
 
 	onMount(() => {
@@ -337,21 +346,19 @@
 			{excludeMarkIds}
 			scaleState={() => scaleStateOf(col)}
 			pixelExtent={() => chart.innerHeight}
-			{handles}
+			{axes}
 		/>
 	{/each}
-	{#each brushScreens as screen, i}
-		{#if screen && brushes[i]?.active}
-			<BrushOverlay
-				x={axisPositions[i] - brushHalfWidth}
-				y={screen.pos}
-				width={brushHalfWidth * 2}
-				height={screen.size}
-				orientation="y"
-				onMoveStart={(e) => handleMoveStart(i, e)}
-				onResizeStart={(edge, e) => handleResizeStart(i, edge, e)}
-				onWheel={() => {}}
-			/>
-		{/if}
+	{#each brushScreens as screen (screen.col)}
+		<BrushOverlay
+			x={screen.x}
+			y={screen.pos}
+			width={brushHalfWidth * 2}
+			height={screen.size}
+			orientation="y"
+			onMoveStart={(e) => handleMoveStart(screen.col, e)}
+			onResizeStart={(edge, e) => handleResizeStart(screen.col, edge, e)}
+			onWheel={() => {}}
+		/>
 	{/each}
 {/if}
