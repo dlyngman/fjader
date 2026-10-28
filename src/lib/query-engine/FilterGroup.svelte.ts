@@ -45,6 +45,12 @@ export interface SourceOpts {
 	excludeMarkIds: () => Set<string>;
 	/** How the source selects, read at hover time for preagg activation. */
 	activeDims?: () => ActiveDim[];
+	/**
+	 * A bin source's current view, `[d0, d1, pixel extent]` per bin dim, written
+	 * into `out` without allocating: read on every query to keep a table only
+	 * while its bins are as fine as the pixels.
+	 */
+	view?: (out: Float64Array) => void;
 	/** Schema metadata for UI filter pills, derived from the clause value. */
 	augment?: (value: unknown) => FilterSchema | null;
 	/** The scales to dim, and the values to dim them by, taken from the clause value. */
@@ -205,14 +211,16 @@ export class FilterGroup {
 
 		let excludedByAll: Set<string> | null = null;
 		let dims: ActiveDim[] = [];
+		let view: SourceOpts['view'];
 		for (const opts of registrations) {
 			const excluded = opts.excludeMarkIds();
 			excludedByAll = excludedByAll
 				? new Set([...excludedByAll].filter((id) => excluded.has(id)))
 				: excluded;
 			if (opts.activeDims && dims.length === 0) dims = opts.activeDims();
+			view ??= opts.view;
 		}
-		this.#engine.activate(this, { sourceId, excludedByAll: excludedByAll!, dims });
+		this.#engine.activate(this, { sourceId, excludedByAll: excludedByAll!, dims, view });
 	}
 
 	// -----------------------------------------------------------------

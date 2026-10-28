@@ -11,6 +11,7 @@
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
+	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
@@ -41,6 +42,15 @@
 
 	const source = `interval-2d-${chart.chartId}`;
 
+	/** The data extent of a continuous axis, for the preagg size guard. */
+	const extentOf = (state: unknown) =>
+		state instanceof LinearScaleState ? state.effectiveExtent : undefined;
+
+	/** Where an axis's domain is heading (the spring target), so a table built
+	 *  while it still moves fits the view it settles on. */
+	const targetOf = (state: unknown, scale: { domain(): unknown }) =>
+		state instanceof LinearScaleState ? state.domain.target : (scale.domain() as [number, number]);
+
 	const brushHandle: SourceHandle = filterGroup.register(source, {
 		excludeMarkIds: () => new Set(chart.config.entries.keys()),
 		activeDims: () => {
@@ -49,16 +59,33 @@
 				{
 					kind: 'bin',
 					columnRef: xColumnRef,
-					domain: chart.xScale.domain() as [number, number],
-					pixelExtent: chart.innerWidth
+					domain: targetOf(chart.xScaleState, chart.xScale),
+					pixelExtent: chart.innerWidth,
+					extent: extentOf(chart.xScaleState)
 				},
 				{
 					kind: 'bin',
 					columnRef: yColumnRef,
-					domain: chart.yScale.domain() as [number, number],
-					pixelExtent: chart.innerHeight
+					domain: targetOf(chart.yScaleState, chart.yScale),
+					pixelExtent: chart.innerHeight,
+					extent: extentOf(chart.yScaleState)
 				}
 			];
+		},
+		// Read on every query: the scale states' target buffers are reused, so this
+		// allocates nothing. The targets, like activeDims, not the animated domains.
+		view: (out) => {
+			const x = chart.xScaleState;
+			const y = chart.yScaleState;
+			if (!(x instanceof LinearScaleState) || !(y instanceof LinearScaleState)) return;
+			const xDomain = x.domain.targetBuffer;
+			out[0] = xDomain[0];
+			out[1] = xDomain[1];
+			out[2] = chart.innerWidth;
+			const yDomain = y.domain.targetBuffer;
+			out[3] = yDomain[0];
+			out[4] = yDomain[1];
+			out[5] = chart.innerHeight;
 		},
 		augment: (value) => ({
 			kind: 'range',

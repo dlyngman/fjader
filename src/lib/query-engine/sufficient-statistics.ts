@@ -28,6 +28,7 @@ import {
 	sub,
 	isNode,
 	isAggregateExpression,
+	sql,
 	WindowNode,
 	type AggregateNode,
 	type ExprNode
@@ -61,9 +62,15 @@ export interface PreaggAnalysis {
 
 export interface BinExprResult {
 	expr: ExprNode;
+	/** Start of the binned window: bin i covers [d0 + i / scaleFactor, d0 + (i + 1) / scaleFactor). */
 	d0: number;
 	scaleFactor: number;
+	/** Pixel bins in the window, 0 .. bins - 1. Values below it are bin -1, above it bin `bins`. */
+	bins: number;
 }
+
+/** Viewports binned on each side of the visible domain. */
+export const BIN_WINDOW_MARGIN = 1;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -170,10 +177,13 @@ export function rewriteForPreagg(
 		const aggFlag = isAggregateExpression(expr as ExprNode);
 
 		if (aggFlag === 0) {
-			// Pure dimension (column ref, CASE expression, etc.)
+			// Pure dimension (column ref, CASE expression, etc.). Grouped by the
+			// expression, not the channel name: GROUP BY "x" binds to a source
+			// column named x before the select alias, so a channel named like a
+			// column of the table would group by the wrong thing.
 			preaggCols[channel] = expr as ExprNode;
 			outputSelect[channel] = column(channel);
-			preaggGroupBy.push(column(channel));
+			preaggGroupBy.push(expr as ExprNode);
 		} else {
 			// Contains aggregate(s) — try to decompose
 			const aggNodes = collectAggregates(expr as ExprNode);
@@ -202,22 +212,51 @@ export function rewriteForPreagg(
 
 /**
  * Build a pixel-bin expression for a brush dimension.
- * Produces: CAST(FLOOR((columnRef - d0) * scaleFactor) AS INTEGER)
+ *
+ * Bins at pixel width only across a window: the visible domain plus
+ * BIN_WINDOW_MARGIN viewports on each side. Everything below the window is
+ * bin -1 and everything above it bin `bins`, so the table's size does not grow
+ * with zoom depth. A brush whose ends fall inside the window is answered
+ * exactly by bin index; the edge bins are never selected, so a brush reaching
+ * past the window reads the base table instead.
+ *
+ * Produces, with idx = CAST(FLOOR((columnRef - d0) * scaleFactor) AS INTEGER):
+ * CASE WHEN idx < 0 THEN -1 WHEN idx >= bins THEN bins ELSE idx END
+ * (a NULL value stays NULL).
  */
 export function buildBinExpr(
 	columnRef: ExprNode,
 	domain: [number, number],
 	pixelExtent: number
 ): BinExprResult {
-	const d0 = domain[0];
-	const scaleFactor = pixelExtent / (domain[1] - domain[0]);
+	const span = domain[1] - domain[0];
+	const scaleFactor = pixelExtent / span;
+	const d0 = domain[0] - BIN_WINDOW_MARGIN * span;
+	const bins = Math.ceil(pixelExtent * (1 + 2 * BIN_WINDOW_MARGIN));
 
-	const expr = cast(
-		floor(mul(sub(columnRef, literal(d0)), literal(scaleFactor))),
+	// In DOUBLE, as the query-time bin filter computes it in JS. A number literal
+	// such as 1.4107142857142858 is a DECIMAL to DuckDB, and an integer column
+	// minus a whole d0 stays an integer: their product overflowed DECIMAL(18).
+	const value = cast(columnRef, 'DOUBLE');
+	const idx = cast(
+		floor(mul(sub(value, literal(d0)), literal(scaleFactor))),
 		'INTEGER'
 	) as ExprNode;
+	const expr =
+		sql`CASE WHEN ${idx} < 0 THEN -1 WHEN ${idx} >= ${bins} THEN ${bins} ELSE ${idx} END` as ExprNode;
 
-	return { expr, d0, scaleFactor };
+	return { expr, d0, scaleFactor, bins };
+}
+
+/**
+ * Whether bins at `scaleFactor` are at least as fine as the pixels of a view
+ * of `span` over `pixelExtent`. An unknown view (no span or extent) passes.
+ * One rule for the query-time check and for keeping a table on activation.
+ */
+export function binsFineEnough(scaleFactor: number, span: number, pixelExtent: number): boolean {
+	if (!(span > 0) || !(pixelExtent > 0)) return true;
+	// A relative tolerance absorbs rounding in a view that did not move.
+	return scaleFactor >= (pixelExtent / span) * (1 - 1e-6);
 }
 
 // ---------------------------------------------------------------------------
