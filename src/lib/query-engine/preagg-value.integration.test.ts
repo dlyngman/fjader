@@ -735,3 +735,58 @@ describe('the cap on unused preagg tables', { timeout: 20_000 }, () => {
 		);
 	});
 });
+
+describe('a failed preagg read', () => {
+	it('falls back to the base table, and reads a preagg table again once rebuilt', async () => {
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle(['cat']);
+		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([hist], () => legend.set([['a']]));
+		const table = nonDDL()
+			.at(-1)!
+			.match(/"(__dplot_preagg_[^"]+)"/)![1];
+		const catIs = async (value: string) =>
+			expected(`SELECT g, count(*) FROM t WHERE cat = '${value}' GROUP BY g`);
+
+		// The table goes away under the mark: its next read fails.
+		await conn.exec!(`DROP TABLE "${table}"`);
+		const from = nonDDL().length;
+		await settle([hist], () => legend.set([['b']]));
+
+		const after = lastQueriesSince(from);
+		expect(after).toHaveLength(2);
+		expect(after[0]).toContain(table);
+		expect(after[1]).not.toContain('__dplot_preagg_');
+		expect(hist.error).toBeNull();
+		expect(rowsOf(hist)).toEqual(await catIs('b'));
+		expect(warn.mock.calls.some((args) => String(args[0]).includes('preagg read failed'))).toBe(
+			true
+		);
+
+		// Set aside: later frames go straight to the base table.
+		await settle([hist], () => legend.set([['a']]));
+		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
+		expect(rowsOf(hist)).toEqual(await catIs('a'));
+
+		// A new activation rebuilds the table, and frames read it again.
+		await activateToggle(['cat']);
+		await settle([hist], () => legend.set([['b']]));
+		expect(nonDDL().at(-1)).toContain(table);
+		expect(rowsOf(hist)).toEqual(await catIs('b'));
+	});
+
+	it('reports the error when the base query fails too', async () => {
+		const hist = await mark('hist', { g: column('g'), n: count() });
+		await activateToggle(['cat']);
+		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([hist], () => legend.set([['a']]));
+		const table = nonDDL()
+			.at(-1)!
+			.match(/"(__dplot_preagg_[^"]+)"/)![1];
+
+		await conn.exec!(`DROP TABLE "${table}"; ALTER TABLE t RENAME TO t_gone`);
+		legend.set([['b']]);
+		await vi.waitFor(() => expect(hist.error).not.toBeNull());
+		await conn.exec!(`ALTER TABLE t_gone RENAME TO t`);
+	});
+});
