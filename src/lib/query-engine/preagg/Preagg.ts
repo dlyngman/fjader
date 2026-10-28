@@ -279,17 +279,23 @@ export class Preagg {
 		this.#rowCounts.clear();
 	}
 
-	/** The engine is going: settle waiting activations and drop this session's tables. */
-	destroy(): void {
+	/**
+	 * The engine is going: settle waiting activations and drop this session's
+	 * tables. Resolves once the drops have run; call it while the engine can
+	 * still exec. A build already running is ahead of the drops on the one
+	 * connection, so its table is dropped too.
+	 */
+	async destroy(): Promise<void> {
 		this.#destroyed = true;
 		// Settle activations still waiting on queued builds
 		this.#builds.destroy();
 		this.#marks.clear();
 		// Drop all preagg tables created this session
-		for (const table of this.#tables) {
-			this.#host.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {});
-		}
+		const drops = [...this.#tables].map((table) =>
+			this.#host.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {})
+		);
 		this.#tables.clear();
+		await Promise.all(drops);
 	}
 
 	#of(markId: string): MarkTables {

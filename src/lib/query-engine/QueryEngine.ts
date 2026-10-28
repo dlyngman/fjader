@@ -859,12 +859,12 @@ export class QueryEngine {
 	 * Destroy the engine and close the connection.
 	 */
 	async destroy(): Promise<void> {
-		// Before the destroyed flag: reset() goes through this.exec(), which
-		// throws once destroyed.
+		// Before the destroyed flag: reset() and the preagg drops go through
+		// this.exec(), which throws once destroyed.
 		await this.#identity.reset().catch(() => {});
-		this.#destroyed = true;
 		// Settle activations still waiting on queued builds, drop this session's tables
-		this.#preagg.destroy();
+		await this.#preagg.destroy();
+		this.#destroyed = true;
 		this.#marks.clear();
 		this.#queryCache.clear();
 		for (const controller of this.#inflight.values()) {
