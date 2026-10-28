@@ -833,7 +833,17 @@
 			}
 			out[4] = layout.innerWidth;
 			out[5] = layout.innerHeight;
+			// A parallel chart's axes zoom and pan on their own.
+			const parallel = scales?.parallelScales;
+			if (parallel) {
+				for (let i = 0; i < parallel.scaleStates.length; i++) {
+					const domain = parallel.scaleStates[i].domain.targetBuffer;
+					out[6 + 2 * i] = domain[0];
+					out[7 + 2 * i] = domain[1];
+				}
+			}
 		},
+		size: () => 6 + 2 * (scales?.parallelScales?.scaleStates.length ?? 0),
 		settle: activateSources
 	});
 

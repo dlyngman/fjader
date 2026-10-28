@@ -22,6 +22,7 @@ describe('HoverSettle', () => {
 			tick: TICK,
 			lastFilterChangeAt: () => lastFilterChangeAt,
 			view: (out) => out.set(view),
+			size: () => view.length,
 			settle: () => settles++,
 			now: () => Date.now()
 		});
@@ -100,6 +101,28 @@ describe('HoverSettle', () => {
 		expect(settles).toBe(0);
 		vi.advanceTimersByTime(INTERVAL * 3);
 		expect(settles).toBe(1);
+	});
+
+	it('re-arms after a parallel axis zooms (a view number past the chart’s six)', () => {
+		view = [0, 100, 0, 50, 400, 300, 0, 10, 0, 25];
+		settle.leave();
+		settle.enter();
+		vi.advanceTimersByTime(INTERVAL * 3);
+		expect(settles).toBe(0);
+
+		view = [0, 100, 0, 50, 400, 300, 0, 10, 5, 15]; // the second axis zoomed
+		vi.advanceTimersByTime(TICK + VIEW_INTERVAL + TICK);
+		expect(settles).toBe(1);
+	});
+
+	it('re-arms after an axis is added, and reads the longer view from then on', () => {
+		view = [0, 100, 0, 50, 400, 300, 0, 10];
+		vi.advanceTimersByTime(TICK + VIEW_INTERVAL + TICK);
+		expect(settles).toBe(1);
+
+		view = [0, 100, 0, 50, 400, 300, 2, 8]; // the new axis zoomed
+		vi.advanceTimersByTime(TICK + VIEW_INTERVAL + TICK);
+		expect(settles).toBe(2);
 	});
 
 	it('stops when the pointer leaves', () => {
