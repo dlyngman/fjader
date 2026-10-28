@@ -11,6 +11,12 @@
 		DotsMark,
 		ParallelCoordinatesMark
 	} from '$lib/components';
+
+	// Column removal test: drop the second axis and bring it back. Brush an
+	// axis after it first, to see whether its brush stays on that axis.
+	const ALL_COLUMNS = ['bill_length', 'bill_depth', 'flipper_length', 'body_mass'];
+	let dropDepth = $state(false);
+	const columns = $derived(dropDepth ? ALL_COLUMNS.filter((c) => c !== 'bill_depth') : ALL_COLUMNS);
 </script>
 
 <div class="main-view-container">
@@ -19,7 +25,11 @@
 
 	<div class="charts-grid">
 		<div class="chart-wrapper">
-			<h3>Parallel Coordinates (4 axes)</h3>
+			<h3>Parallel Coordinates ({columns.length} axes)</h3>
+			<button onclick={() => (dropDepth = !dropDepth)}>
+				{dropDepth ? 'Restore bill_depth' : 'Remove bill_depth'}
+			</button>
+			<span>columns: {columns.join(', ')}</span>
 			<ChartContainer clipPadding={30}>
 				{#snippet background()}
 					<Frame />
@@ -31,7 +41,7 @@
 						{#snippet canvasComponents()}
 							<ParallelCoordinatesMark
 								table="penguins"
-								columns={['bill_length', 'bill_depth', 'flipper_length', 'body_mass']}
+								{columns}
 								stroke="species"
 								opacity={0.5}
 								curve="bump-x"
@@ -58,7 +68,13 @@
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" selection="brush" />
+							<DotsMark
+								table="penguins"
+								x="bill_length"
+								y="bill_depth"
+								fill="species"
+								selection="brush"
+							/>
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}
