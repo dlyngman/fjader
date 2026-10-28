@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
-import { column, count, sql } from '@uwdata/mosaic-sql';
+import { column, count, isBetween, sql } from '@uwdata/mosaic-sql';
 import {
 	QueryEngine,
 	type DuckDBConnection,
@@ -665,5 +665,73 @@ describe('the build queue', () => {
 		await building;
 
 		expect(createIndexes()).toHaveLength(1);
+	});
+});
+
+// Each test builds about 40 tables (~2.5 s): a timeout with room for a busy machine.
+describe('the cap on unused preagg tables', { timeout: 20_000 }, () => {
+	const tableOf = (q: string) => q.match(/"(__dplot_preagg_[0-9a-f]+)"/)![1];
+	const drops = () =>
+		conn.queries.filter((q) => q.startsWith('DROP TABLE IF EXISTS "__dplot_preagg_')).map(tableOf);
+
+	/** A new baked filter, set without waiting for the mark's query. */
+	const filterTo = (hi: number) =>
+		group.upsertManual('f', isBetween(column('x'), [0, hi]), hi, new Set());
+
+	/** Rebuild the cat toggle's table under the `i`th filter: one new table per call. */
+	async function rebuildUnder(i: number, handle: MarkHandle): Promise<void> {
+		await settle([handle], () => filterTo(999 - i));
+		await activateToggle(['cat']);
+	}
+
+	it('keeps at most 32 unused tables, dropping the oldest, never one in use', async () => {
+		const byG = await mark('by-g', { g: column('g'), n: count() });
+		for (let i = 0; i < 40; i++) await rebuildUnder(i, byG);
+
+		const built = creates().map(tableOf);
+		expect(built).toHaveLength(40);
+		// 40 tables, one in use: 39 unused, 7 past the cap, the oldest first.
+		expect(drops()).toEqual(built.slice(0, 7));
+		expect(drops()).not.toContain(built.at(-1));
+	});
+
+	it('drops nothing while a mark query is waiting, and catches up once it settles', async () => {
+		const byG = await mark('by-g', { g: column('g'), n: count() });
+		for (let i = 0; i < 33; i++) await rebuildUnder(i, byG);
+		expect(drops()).toHaveLength(0); // 33 tables, 32 unused: at the cap
+
+		// The 34th table while the mark's query is held: past the cap, but busy.
+		let releaseQueries!: () => void;
+		conn.queryGate = new Promise((r) => (releaseQueries = r));
+		const settled = settle([byG], () => filterTo(999 - 33));
+		await activateToggle(['cat']);
+		expect(drops()).toHaveLength(0);
+
+		conn.queryGate = null;
+		releaseQueries();
+		await settled;
+		await vi.waitFor(() => expect(drops()).toHaveLength(1));
+	});
+
+	it('rebuilds a dropped table when it is planned again', async () => {
+		const byG = await mark('by-g', { g: column('g'), n: count() });
+		for (let i = 0; i < 40; i++) await rebuildUnder(i, byG);
+		const first = creates().map(tableOf)[0];
+		expect(drops()).toContain(first);
+
+		// The first filter again: the same SQL, so the same table name, built anew.
+		await rebuildUnder(0, byG);
+		expect(
+			creates()
+				.map(tableOf)
+				.filter((t) => t === first)
+		).toHaveLength(2);
+
+		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		await settle([byG], () => toggle.toggle(['a'], false));
+		expect(nonDDL().at(-1)).toContain(first);
+		expect(rowsOf(byG)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE x BETWEEN 0 AND 999 AND cat = 'a' GROUP BY g`)
+		);
 	});
 });

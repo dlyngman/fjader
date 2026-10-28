@@ -12,7 +12,7 @@
 	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
-	import type { D3Scale } from '$lib/types';
+	import type { D3Scale, Point } from '$lib/types';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import { HoverSettle } from './hover-settle';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
@@ -714,6 +714,13 @@
 		(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
 	}
 
+	/** The pointer buffer set to an SVG-root position, for layout methods that read a Point. */
+	function setPointer(x: number, y: number): Point {
+		pointerBuffer.x = x;
+		pointerBuffer.y = y;
+		return pointerBuffer;
+	}
+
 	function processPointerMove(event: PointerEvent) {
 		const x = ptrX(event);
 		const y = ptrY(event);
@@ -725,7 +732,9 @@
 		if (isPanning) {
 			scales.updatePanPosition(x, y);
 			tooltipManager?.suppress(150);
-		} else if (chartContext.onInteractorPointerMove?.(event)) {
+		} else if (
+			chartContext.onInteractorPointerMove?.(event, layout.toInnerCoordinates(setPointer(x, y)))
+		) {
 			// Brush move/resize use stopPropagation, bypassing handlePointerDown cleanup.
 			// Guard ensures this only runs once on the first captured move.
 			if (currentInnerX != null) {
@@ -824,7 +833,17 @@
 			}
 			out[4] = layout.innerWidth;
 			out[5] = layout.innerHeight;
+			// A parallel chart's axes zoom and pan on their own.
+			const parallel = scales?.parallelScales;
+			if (parallel) {
+				for (let i = 0; i < parallel.scaleStates.length; i++) {
+					const domain = parallel.scaleStates[i].domain.targetBuffer;
+					out[6 + 2 * i] = domain[0];
+					out[7 + 2 * i] = domain[1];
+				}
+			}
 		},
+		size: () => 6 + 2 * (scales?.parallelScales?.scaleStates.length ?? 0),
 		settle: activateSources
 	});
 

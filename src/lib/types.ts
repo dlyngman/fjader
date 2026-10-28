@@ -511,7 +511,10 @@ export interface ChartContext {
 	// Pointer hooks (mutable slots set by interactors)
 	onChartClick: ((event: PointerEvent) => void) | null;
 	onInteractorPointerDown: ((event: PointerEvent, innerPoint: Point) => boolean) | null;
-	onInteractorPointerMove: ((event: PointerEvent) => boolean) | null;
+	/** Every pointer move but a pan; `innerPoint` is the pointer in plot-area coordinates (a
+	 *  shared buffer: read it before calling back into the layout). Returns true when the
+	 *  interactor handled the move (a drag it captured). */
+	onInteractorPointerMove: ((event: PointerEvent, innerPoint: Point) => boolean) | null;
 	onInteractorPointerUp: ((event: PointerEvent) => boolean) | null;
 	/**
 	 * Selection sources to activate when the pointer enters the chart, so their

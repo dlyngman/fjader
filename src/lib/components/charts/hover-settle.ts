@@ -20,7 +20,7 @@
  * One timer while the chart is hovered, ticking at `tick`, well under either
  * interval, so quiet is noticed promptly. Changes are not timed individually:
  * filter changes are read as the engine's last-change timestamp, and the view
- * as six numbers compared in place on each tick, so an animated reset that
+ * as a few numbers compared in place on each tick, so an animated reset that
  * moves the view every frame costs nothing per frame.
  */
 
@@ -33,8 +33,13 @@ export interface HoverSettleOpts {
 	tick: number;
 	/** When a filter last changed, on the same clock as `now`. */
 	lastFilterChangeAt: () => number;
-	/** Writes the chart's view (x/y domains and inner size) into `out`. */
+	/**
+	 * Writes the chart's view into `out`: its x/y domains and inner size, and a
+	 * parallel chart's axis domains. `out` holds `size()` numbers.
+	 */
 	view: (out: Float64Array) => void;
+	/** How many numbers the view has; it changes when a parallel axis is added or removed. */
+	size: () => number;
 	/** Re-runs the chart's activators. */
 	settle: () => void;
 	now?: () => number;
@@ -46,8 +51,9 @@ export class HoverSettle {
 	#opts: Required<HoverSettleOpts>;
 	#timer: unknown = null;
 	#held = false;
-	#view = new Float64Array(6);
-	#lastView = new Float64Array(6);
+	/** Reallocated only when the view's size changes. */
+	#view = new Float64Array(0);
+	#lastView = new Float64Array(0);
 	#lastViewChangeAt = -Infinity;
 	/** When the activators last ran: on entering, or the last settle. */
 	#armedAt = 0;
@@ -64,6 +70,7 @@ export class HoverSettle {
 	/** The pointer entered the chart; its activators have just run. */
 	enter(): void {
 		this.#armedAt = this.#opts.now();
+		this.#fitBuffers();
 		this.#readView(this.#lastView);
 		this.#schedule();
 	}
@@ -89,15 +96,30 @@ export class HoverSettle {
 		this.#opts.view(out);
 	}
 
+	/** Size both buffers to the view; true when they were reallocated. */
+	#fitBuffers(): boolean {
+		const size = this.#opts.size();
+		if (this.#view.length === size) return false;
+		this.#view = new Float64Array(size);
+		this.#lastView = new Float64Array(size);
+		return true;
+	}
+
 	#tick(): void {
 		const now = this.#opts.now();
 
-		this.#readView(this.#view);
-		for (let i = 0; i < 6; i++) {
-			if (Object.is(this.#view[i], this.#lastView[i])) continue;
+		// An axis added or removed is a view change in its own right.
+		if (this.#fitBuffers()) {
+			this.#readView(this.#lastView);
 			this.#lastViewChangeAt = now;
-			this.#lastView.set(this.#view);
-			break;
+		} else {
+			this.#readView(this.#view);
+			for (let i = 0; i < this.#view.length; i++) {
+				if (Object.is(this.#view[i], this.#lastView[i])) continue;
+				this.#lastViewChangeAt = now;
+				this.#lastView.set(this.#view);
+				break;
+			}
 		}
 
 		const lastFilter = this.#opts.lastFilterChangeAt();

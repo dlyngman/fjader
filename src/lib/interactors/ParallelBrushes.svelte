@@ -3,6 +3,7 @@
 	import { isBetween, column } from '@uwdata/mosaic-sql';
 	import { BrushState1D } from './brush-state.svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
+	import ParallelAxisSource from './ParallelAxisSource.svelte';
 	import { closeTo, isDragging, createPanModeHandlers } from './brush-utils';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
@@ -35,8 +36,30 @@
 
 	// --- Per-axis state (one per column, grown when columns are added) ---
 	let brushes = $state<BrushState1D[]>([]);
-	const handles: SourceHandle[] = [];
 	const lastEmitted: { min: number | null; max: number | null }[] = [];
+	/** Each column's source, filled by its ParallelAxisSource child. */
+	const handles = new Map<string, SourceHandle>();
+
+	/**
+	 * The axis whose brush strip the pointer is in, by column, or null between
+	 * strips. Only this axis's source is activated: one source per axis means
+	 * one set of preagg tables per axis, and building every axis's on chart
+	 * hover would be axes × marks builds, most for axes never brushed.
+	 */
+	let hoveredAxis: string | null = null;
+
+	/** Make `col` the hovered axis; activate its source when it changes. A batch
+	 *  of its own, so moving to another axis drops the previous one's queued builds. */
+	function hoverAxis(col: string | null) {
+		if (col === hoveredAxis) return;
+		hoveredAxis = col;
+		if (col) handles.get(col)?.activate();
+	}
+
+	/** The chart's activator (hover, settling): the hovered axis, if any. */
+	function activateHoveredAxis() {
+		if (hoveredAxis) handles.get(hoveredAxis)?.activate();
+	}
 
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
 	let isPanModeActive = $state(false);
@@ -85,27 +108,20 @@
 		? () => new Set(chart.config.entries.keys())
 		: () => new Set<string>();
 
-	// Ensure per-axis arrays are sized correctly
+	// Ensure per-axis brush state is sized correctly. The sources are not here:
+	// each column registers its own (ParallelAxisSource), before its first drag.
 	function ensureAxisState(n: number) {
 		while (brushes.length < n) {
-			const i = brushes.length;
-			const col = ps!.columns[i];
 			brushes.push(new BrushState1D());
 			lastEmitted.push({ min: null, max: null });
-
-			const sourceId = `parallel-brush-${col}-${chart.chartId}`;
-			handles.push(
-				filterGroup.register(sourceId, {
-					excludeMarkIds,
-					augment: (value) => ({
-						kind: 'range',
-						column: col,
-						label: col,
-						values: value ? [(value as number[])[0], (value as number[])[1]] : []
-					})
-				})
-			);
 		}
+	}
+
+	/** An axis's scale state, looked up by column: removing a column renumbers the axes. */
+	function scaleStateOf(col: string): LinearScaleState | null {
+		if (!ps) return null;
+		const i = ps.columns.indexOf(col);
+		return i < 0 ? null : (ps.scaleStates[i] as LinearScaleState);
 	}
 
 	// Get D3 scale for an axis (y-direction)
@@ -144,13 +160,13 @@
 		lastEmitted[i] = { min: dataMin, max: dataMax };
 
 		const col = ps.columns[i];
-		handles[i].update(isBetween(column(col), [dataMin, dataMax]), [dataMin, dataMax]);
+		handles.get(col)?.update(isBetween(column(col), [dataMin, dataMax]), [dataMin, dataMax]);
 	}
 
 	function clearBrush(i: number) {
 		brushes[i].clear();
 		lastEmitted[i] = { min: null, max: null };
-		handles[i].clear();
+		if (ps) handles.get(ps.columns[i])?.clear();
 	}
 
 	// --- Pointer handlers ---
@@ -172,8 +188,15 @@
 		return true;
 	}
 
-	function handlePointerMove(event: PointerEvent) {
-		if (!isCapturing || activeAxisIdx == null) return false;
+	function handlePointerMove(event: PointerEvent, innerPoint: Point) {
+		if (!isCapturing || activeAxisIdx == null) {
+			// A hover move: track the axis under the pointer, and let ChartCell go on.
+			if (ps && !isPanModeActive) {
+				const axisIdx = nearestAxis(innerPoint.x);
+				hoverAxis(axisIdx == null ? null : ps.columns[axisIdx]);
+			}
+			return false;
+		}
 
 		point.x = event.offsetX;
 		point.y = event.offsetY;
@@ -241,6 +264,9 @@
 
 	function handleMoveStart(i: number, event: PointerEvent) {
 		event.stopPropagation();
+		// A drag that starts on a brush overlay hovers its axis, even without a
+		// pointer move over the axis first.
+		if (ps) hoverAxis(ps.columns[i]);
 		(event.target as Element).setPointerCapture(event.pointerId);
 		activeAxisIdx = i;
 		isCapturing = true;
@@ -255,6 +281,7 @@
 
 	function handleResizeStart(i: number, edge: string, event: PointerEvent) {
 		event.stopPropagation();
+		if (ps) hoverAxis(ps.columns[i]);
 		(event.target as Element).setPointerCapture(event.pointerId);
 		activeAxisIdx = i;
 		isCapturing = true;
@@ -288,12 +315,13 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
+		chart.activators.add(activateHoveredAxis);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
-			for (const h of handles) h.destroy();
+			chart.activators.delete(activateHoveredAxis);
 		};
 	});
 </script>
@@ -301,6 +329,17 @@
 <svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
 
 {#if ps}
+	{#each ps.columns as col (col)}
+		<ParallelAxisSource
+			{filterGroup}
+			column={col}
+			chartId={chart.chartId}
+			{excludeMarkIds}
+			scaleState={() => scaleStateOf(col)}
+			pixelExtent={() => chart.innerHeight}
+			{handles}
+		/>
+	{/each}
 	{#each brushScreens as screen, i}
 		{#if screen && brushes[i]?.active}
 			<BrushOverlay

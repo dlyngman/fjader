@@ -133,8 +133,10 @@
 		hoverT = getTFromPointer(e, true);
 	}
 
-	// TODO: Re-implement pre-aggregation for V2 query engine.
-	function onPointerEnter() {}
+	// Hovering the legend prepares its preagg tables, before the first drag.
+	function onPointerEnter() {
+		brushHandle?.activate();
+	}
 
 	function onPointerLeave() {
 		if (!isDragging) hoverT = null;
@@ -165,6 +167,27 @@
 	const brushHandle: SourceHandle | null = filterGroup
 		? filterGroup.register(sourceId, {
 				excludeMarkIds: () => new Set<string>(),
+				// The brush maps the bar linearly onto [min, max], whatever the color
+				// transform, so its pixel bins do too: barLength pixels over the domain.
+				activeDims: () =>
+					min === max
+						? []
+						: [
+								{
+									kind: 'bin',
+									columnRef,
+									domain: [min, max],
+									pixelExtent: barLength,
+									extent: [min, max]
+								}
+							],
+				// Read on every query: plain numbers, nothing allocated. The legend
+				// never zooms; only new data moves its domain.
+				view: (out) => {
+					out[0] = min;
+					out[1] = max;
+					out[2] = barLength;
+				},
 				augment: (value) => ({
 					kind: 'range',
 					column: scaleState.field,

@@ -22,15 +22,23 @@ import {
 	markKeys,
 	estimateGroups,
 	activeDimsKeyOf,
-	binsFitView,
 	binFitsView,
 	fnvHash,
+	type ActiveDim,
 	type ActivationSource,
 	type GroupKey,
 	type PreaggIdentity,
 	type PreaggState
 } from './plan';
 import { BuildQueue, type QueuedBuild } from './BuildQueue';
+
+/**
+ * How many preagg tables no mark uses are kept. Every settle after a filter or
+ * view change can build a new table (its baked filters or window differ), so a
+ * long session would otherwise accumulate them without bound. Kept rather than
+ * dropped at once: returning to a source or filter state finds its table.
+ */
+const MAX_UNUSED_TABLES = 32;
 
 /** TEMPORARY: flip to false to bypass preagg routing and force base-table queries.
  *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
@@ -75,7 +83,10 @@ export class Preagg {
 	#marks = new Map<string, MarkTables>();
 	/** Preagg builds, sent one at a time while no mark query needs the connection. */
 	#builds: BuildQueue;
-	/** Hash-named preagg tables created this session (for cleanup on destroy). */
+	/**
+	 * Hash-named preagg tables created this session, least recently planned
+	 * first: for the cap on unused tables, and for cleanup on reload and destroy.
+	 */
 	#tables = new Set<string>();
 	/**
 	 * Row count per base table, for the size guard: a number once read, the
@@ -164,7 +175,7 @@ export class Preagg {
 					basis.parts === reg.descriptor.parts &&
 					basis.activeSourceId === activeSourceId &&
 					basis.dimsKey === dimsKey &&
-					binsFitView(latest.activeMeta, dims) &&
+					this.#binsFitDims(latest, dims) &&
 					bakedClausesHold(markId, selection, latest)
 				) {
 					continue;
@@ -210,11 +221,14 @@ export class Preagg {
 			};
 			own.building.set(activeSourceId, build);
 
+			// Most recently planned last, for the cap on unused tables.
+			this.#tables.delete(preaggTable);
 			this.#tables.add(preaggTable);
 			promises.push(this.#builds.push({ markId, sourceId: activeSourceId, build, createSQL }));
 		}
 
 		this.#builds.pump();
+		this.#evictUnused();
 		await Promise.all(promises);
 	}
 
@@ -226,9 +240,11 @@ export class Preagg {
 		this.#builds.runBatch(activations);
 	}
 
-	/** A mark query settled: the connection may be free for a build. */
+	/** A mark query settled: the connection may be free for a build, and for dropping
+	 *  unused tables. */
 	pump(): void {
 		this.#builds.pump();
+		this.#evictUnused();
 	}
 
 	/**
@@ -296,6 +312,32 @@ export class Preagg {
 		);
 		this.#tables.clear();
 		await Promise.all(drops);
+	}
+
+	/**
+	 * Drop the oldest tables no mark uses, past MAX_UNUSED_TABLES. A table is in
+	 * use while a mark's built or building map holds it, so a running build is
+	 * never dropped. Only while no mark query is running or waiting: a pending
+	 * query is already assembled, and the table it names may have stopped being
+	 * used since (a rebuild replaced the mark's entry); a DROP sent ahead of it
+	 * would fail it. A dropped table planned again is rebuilt by its CREATE
+	 * TABLE IF NOT EXISTS.
+	 */
+	#evictUnused(): void {
+		if (this.#destroyed || this.#tables.size <= MAX_UNUSED_TABLES || this.#host.busy()) return;
+		const used = new Set<string>();
+		for (const own of this.#marks.values()) {
+			for (const state of own.tables.values()) used.add(state.table);
+			for (const state of own.building.values()) used.add(state.table);
+		}
+		let excess = this.#tables.size - used.size - MAX_UNUSED_TABLES;
+		for (const table of this.#tables) {
+			if (excess <= 0) break;
+			if (used.has(table)) continue;
+			this.#tables.delete(table);
+			this.#host.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {});
+			excess--;
+		}
 	}
 
 	#of(markId: string): MarkTables {
@@ -433,7 +475,7 @@ export class Preagg {
 
 	/**
 	 * Whether a queued bin build still suits its source's view, read through the
-	 * source's view callback (binFitsView). An unknown view keeps it.
+	 * source's view callback. An unknown view keeps it.
 	 */
 	#binsFitCurrentView(state: PreaggState): boolean {
 		const { view } = state.basis;
@@ -441,6 +483,37 @@ export class Preagg {
 		const out = this.#viewScratch;
 		out.fill(NaN);
 		view(out);
+		return this.#binsFitScratch(state);
+	}
+
+	/**
+	 * Whether a table's bins suit an activation's dims, so activating keeps it.
+	 * The dims are written into the view scratch, as a view callback writes it,
+	 * and checked by the same loop; the caller has matched the dims key, so the
+	 * table has a bin dim for each of the dims' bin dims, in order.
+	 */
+	#binsFitDims(state: PreaggState, dims: ActiveDim[]): boolean {
+		const out = this.#viewScratch;
+		out.fill(NaN);
+		let bin = 0;
+		for (const dim of dims) {
+			if (dim.kind !== 'bin') continue;
+			const i = 3 * bin++;
+			out[i] = dim.domain[0];
+			out[i + 1] = dim.domain[1];
+			out[i + 2] = dim.pixelExtent;
+		}
+		return this.#binsFitScratch(state);
+	}
+
+	/**
+	 * The one bin-view rule over the view scratch, `[d0, d1, pixel extent]` per
+	 * bin dim: each bin dim fits its view (binFitsView). Kept tables are judged
+	 * by it on activation (#binsFitDims) and before a queued build is sent
+	 * (#binsFitCurrentView).
+	 */
+	#binsFitScratch(state: PreaggState): boolean {
+		const out = this.#viewScratch;
 		let bin = 0;
 		for (const meta of state.activeMeta) {
 			if (meta.kind !== 'bin') continue;

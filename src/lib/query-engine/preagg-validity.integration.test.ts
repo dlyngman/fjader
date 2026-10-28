@@ -399,6 +399,110 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		expect(left).toEqual([]);
 	});
 
+	describe('parallel axes: one source per axis', () => {
+		// As ParallelAxisSource registers them: no exclusions (cross = false), one
+		// bin dim on the axis column, a view at the axis domain over 1000 px.
+		const axis = (col: string, domain: [number, number]) =>
+			group.register(`parallel-brush-${col}-P`, {
+				excludeMarkIds: () => new Set(),
+				activeDims: () => [
+					{ kind: 'bin', columnRef: column(col), domain, pixelExtent: 1000, extent: domain }
+				],
+				view: (out) => {
+					out[0] = domain[0];
+					out[1] = domain[1];
+					out[2] = 1000;
+				}
+			});
+
+		/** Activate through the handle, as a hover does, and wait for its builds. */
+		async function hover(handle: ReturnType<typeof axis>): Promise<void> {
+			const activations = vi.spyOn(engine, 'activate');
+			handle.activate();
+			await activations.mock.results.at(-1)!.value;
+			activations.mockRestore();
+		}
+
+		const brushAxis = (handle: ReturnType<typeof axis>, col: string, lo: number, hi: number) =>
+			settle(() => handle.update(isBetween(column(col), [lo, hi]), [lo, hi]));
+
+		it('the hovered axis reads its own table, with the other axes’ brushes baked in', async () => {
+			const x = axis('x', [0, 1000]);
+			const g = axis('g', [0, 4]);
+			await brushAxis(g, 'g', 1, 2);
+
+			await hover(x);
+			await brushAxis(x, 'x', 100, 599);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('g BETWEEN 1 AND 2 AND x BETWEEN 100 AND 599'));
+
+			// Moving to the other axis: its table bakes x's brush.
+			await hover(g);
+			await brushAxis(g, 'g', 0, 1);
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 599 AND g BETWEEN 0 AND 1'));
+		});
+
+		it('a removed axis clears its brush', async () => {
+			const x = axis('x', [0, 1000]);
+			await brushAxis(x, 'x', 100, 599);
+			expect(group.selection.isActive('parallel-brush-x-P')).toBe(true);
+
+			await settle(() => x.destroy());
+			expect(group.selection.isActive('parallel-brush-x-P')).toBe(false);
+			expect(rows()).toEqual(await expected('true'));
+		});
+	});
+
+	describe('continuous color legend', () => {
+		// As ContinuousColorLegend registers it: no exclusions, one bin dim over
+		// the color domain [min, max] at the legend's bar length.
+		const DOMAIN: [number, number] = [0, 999];
+		const BAR = 200;
+		const legend = () =>
+			group.register('legend-color-x', {
+				excludeMarkIds: () => new Set(),
+				activeDims: () => [
+					{ kind: 'bin', columnRef: column('x'), domain: DOMAIN, pixelExtent: BAR, extent: DOMAIN }
+				],
+				view: (out) => {
+					out[0] = DOMAIN[0];
+					out[1] = DOMAIN[1];
+					out[2] = BAR;
+				}
+			});
+
+		/** The base rows a brush answers from the legend's pixel bins. */
+		async function binned(lo: number, hi: number): Promise<Array<[number, number]>> {
+			const { d0, scaleFactor } = buildBinExpr(column('x'), DOMAIN, BAR);
+			const [a, b] = [lo, hi].map((v) => Math.floor((v - d0) * scaleFactor));
+			return expected(
+				`floor((x::DOUBLE - ${d0}::DOUBLE) * ${scaleFactor}::DOUBLE) BETWEEN ${a} AND ${b}`
+			);
+		}
+
+		it('a drag reads the table binned at the legend’s bar length', async () => {
+			const source = legend();
+			const activations = vi.spyOn(engine, 'activate');
+			source.activate();
+			await activations.mock.results.at(-1)!.value;
+
+			await settle(() => source.update(isBetween(column('x'), [200, 600]), [200, 600]));
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await binned(200, 600));
+
+			// Moved past the domain (the brush is unclamped), within the margin.
+			await settle(() => source.update(isBetween(column('x'), [800, 1500]), [800, 1500]));
+			expect(lastQuery()).toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await binned(800, 1500));
+
+			// Past the margin (one domain width): the base table.
+			await settle(() => source.update(isBetween(column('x'), [900, 2500]), [900, 2500]));
+			expect(lastQuery()).not.toContain('__dplot_preagg_');
+			expect(rows()).toEqual(await expected('x BETWEEN 900 AND 2500'));
+		});
+	});
+
 	describe('one table per source', () => {
 		// A second brush on another chart (C), which also filters the mark.
 		const BRUSH_C = 'interval-x-C';
