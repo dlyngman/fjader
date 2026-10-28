@@ -251,12 +251,12 @@ export class Preagg {
 	 * The query a mark runs on one of its preagg tables, or null for the base
 	 * table, which applies every clause: no table answers, or the one that does
 	 * cannot express this query (a brush end past its window, a toggled value
-	 * with no id).
+	 * with no id). Names the table read, for readFailed.
 	 */
-	sqlFor(markId: string, reg: PreaggMark): string | null {
+	sqlFor(markId: string, reg: PreaggMark): { sql: string; table: string } | null {
 		const preagg = this.#usable(markId, reg);
 		if (!preagg) return null;
-		return preaggQuerySQL(
+		const sql = preaggQuerySQL(
 			markId,
 			reg.descriptor,
 			reg.filterGroup.selection,
@@ -264,6 +264,22 @@ export class Preagg {
 			reg.handle.params,
 			this.#host.identity
 		);
+		return sql ? { sql, table: preagg.table } : null;
+	}
+
+	/**
+	 * A mark's query on a preagg table failed: stop reading that table, so its
+	 * frames go to the base table until the source activates again and rebuilds
+	 * it. Not dropped here; a query already queued may still name it, and once
+	 * unused it goes through #evictUnused.
+	 */
+	readFailed(markId: string, table: string, error: unknown): void {
+		console.warn(`[QueryEngine] preagg read failed for ${markId}, using the base table:`, error);
+		const own = this.#marks.get(markId);
+		if (!own) return;
+		for (const [sourceId, state] of own.tables) {
+			if (state.table === table) own.tables.delete(sourceId);
+		}
 	}
 
 	/**

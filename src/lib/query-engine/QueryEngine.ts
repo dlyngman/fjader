@@ -729,55 +729,51 @@ export class QueryEngine {
 			}
 		}
 		if (batch.length > 0) {
-			this.#executeBatch(batch, group.selection);
+			this.#executeBatch(batch);
 		}
 	}
 
-	#executeBatch(
-		batch: Array<[string, MarkRegistration]>,
-		selection: { predicate(markId: string): unknown[] }
-	): void {
-		for (const [markId, reg] of batch) {
-			const { descriptor, handle } = reg;
-
-			const sqlStr =
-				this.#preagg.sqlFor(markId, reg) ||
-				this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
-			if (!sqlStr) continue;
-
-			// Use the public query() path — its execute-latest logic ensures
-			// at most 1 inflight + 1 pending per callerId during rapid brushing.
-			this.query(sqlStr, { callerId: markId })
-				.then((table) => handle._setResult(table))
-				.catch((e) => {
-					if ((e as Error)?.name === 'AbortError') return;
-					handle._setError(e as Error);
-				});
-		}
+	#executeBatch(batch: Array<[string, MarkRegistration]>): void {
+		for (const [markId, reg] of batch) this.#queryMark(markId, reg);
 	}
 
 	/**
-	 * Query a single mark (triggered by params change via _onParamsChange).
+	 * Query a single mark: on a filter change (via #executeBatch) or a params
+	 * change (via _onParamsChange). Reads a preagg table when one answers; if
+	 * that read fails, the table is set aside and the base table is queried once.
 	 */
 	#queryMark(markId: string, reg: MarkRegistration): void {
-		const { descriptor, handle } = reg;
-
-		const sqlStr =
-			this.#preagg.sqlFor(markId, reg) ||
-			this.#assembleSQL(
-				descriptor,
-				descriptor.table,
-				reg.filterGroup.selection.predicate(markId),
-				handle.params
-			);
+		const { handle } = reg;
+		const preagg = this.#preagg.sqlFor(markId, reg);
+		const sqlStr = preagg?.sql || this.#baseSQL(markId, reg);
 		if (!sqlStr) return;
 
+		// Use the public query() path — its execute-latest logic ensures
+		// at most 1 inflight + 1 pending per callerId during rapid brushing.
 		this.query(sqlStr, { callerId: markId })
+			.catch((e) => {
+				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
+				this.#preagg.readFailed(markId, preagg.table, e);
+				const baseSQL = this.#baseSQL(markId, reg);
+				if (!baseSQL) throw e;
+				return this.query(baseSQL, { callerId: markId });
+			})
 			.then((table) => handle._setResult(table))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);
 			});
+	}
+
+	/** The query a mark runs on its base table, applying every clause. */
+	#baseSQL(markId: string, reg: MarkRegistration): string | null {
+		const { descriptor, handle } = reg;
+		return this.#assembleSQL(
+			descriptor,
+			descriptor.table,
+			reg.filterGroup.selection.predicate(markId),
+			handle.params
+		);
 	}
 
 	/**
