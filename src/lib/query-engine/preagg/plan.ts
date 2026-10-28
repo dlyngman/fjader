@@ -81,7 +81,7 @@ export interface PreaggBasis {
 	/** The source whose clause the table answers instead of baking in. */
 	activeSourceId: string;
 	/** What the active dims' columns are: bin column, or value field. A bin
-	 *  dim's view is checked separately (binsFitView, #binsFineEnough). */
+	 *  dim's view is checked separately (binFitsView). */
 	dimsKey: string;
 	/** The clause objects baked into the table, in selection insertion order.
 	 *  Refreshed when new objects turn out to give the same SQL. */
@@ -516,36 +516,20 @@ export function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[])
 /**
  * What the active dims' columns are: bin column, or value field. A bin dim's
  * domain and pixel extent are left out: a table built at another view still
- * answers it while it fits that view (binsFitView).
+ * answers it while it fits that view (binFitsView).
  */
 export function activeDimsKeyOf(dims: ActiveDim[]): string {
 	return dims.map((d) => (d.kind === 'bin' ? `bin|${d.columnRef}` : `value|${d.field}`)).join(';');
 }
 
 /**
- * Whether a table's bins still suit `dims`' view, so activating keeps it:
- * fine enough for its pixels (the query-time rule), and the view still well
- * inside the binned window, at least half a margin from either edge. A small
- * pan or zoom out keeps the table; a pan of more than half a viewport, a zoom
- * out past the window, or a zoom in past the built resolution rebuilds it
- * around the new view, so the brushes drawn there stay inside the window.
- */
-export function binsFitView(activeMeta: ActiveMeta[], dims: ActiveDim[]): boolean {
-	let next = 0;
-	for (const dim of dims) {
-		if (dim.kind !== 'bin') continue;
-		while (next < activeMeta.length && activeMeta[next].kind !== 'bin') next++;
-		const meta = activeMeta[next++];
-		if (!meta || meta.kind !== 'bin') return false;
-		if (!binFitsView(meta, dim.domain[0], dim.domain[1], dim.pixelExtent)) return false;
-	}
-	return true;
-}
-
-/**
  * Whether one bin dim of a table suits a view of [v0, v1] over `pixelExtent`:
- * its bins are fine enough for the pixels, and the view sits at least half a
- * margin inside the binned window. Unknown numbers (NaN) pass.
+ * its bins are fine enough for the pixels (the query-time rule), and the view
+ * sits at least half a margin inside the binned window. A small pan or zoom
+ * out keeps the table; a pan of more than half a viewport, a zoom out past
+ * the window, or a zoom in past the built resolution rebuilds it around the
+ * new view, so the brushes drawn there stay inside the window. Unknown
+ * numbers (NaN) pass.
  */
 export function binFitsView(
 	meta: Extract<ActiveMeta, { kind: 'bin' }>,

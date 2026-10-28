@@ -22,9 +22,9 @@ import {
 	markKeys,
 	estimateGroups,
 	activeDimsKeyOf,
-	binsFitView,
 	binFitsView,
 	fnvHash,
+	type ActiveDim,
 	type ActivationSource,
 	type GroupKey,
 	type PreaggIdentity,
@@ -175,7 +175,7 @@ export class Preagg {
 					basis.parts === reg.descriptor.parts &&
 					basis.activeSourceId === activeSourceId &&
 					basis.dimsKey === dimsKey &&
-					binsFitView(latest.activeMeta, dims) &&
+					this.#binsFitDims(latest, dims) &&
 					bakedClausesHold(markId, selection, latest)
 				) {
 					continue;
@@ -475,7 +475,7 @@ export class Preagg {
 
 	/**
 	 * Whether a queued bin build still suits its source's view, read through the
-	 * source's view callback (binFitsView). An unknown view keeps it.
+	 * source's view callback. An unknown view keeps it.
 	 */
 	#binsFitCurrentView(state: PreaggState): boolean {
 		const { view } = state.basis;
@@ -483,6 +483,37 @@ export class Preagg {
 		const out = this.#viewScratch;
 		out.fill(NaN);
 		view(out);
+		return this.#binsFitScratch(state);
+	}
+
+	/**
+	 * Whether a table's bins suit an activation's dims, so activating keeps it.
+	 * The dims are written into the view scratch, as a view callback writes it,
+	 * and checked by the same loop; the caller has matched the dims key, so the
+	 * table has a bin dim for each of the dims' bin dims, in order.
+	 */
+	#binsFitDims(state: PreaggState, dims: ActiveDim[]): boolean {
+		const out = this.#viewScratch;
+		out.fill(NaN);
+		let bin = 0;
+		for (const dim of dims) {
+			if (dim.kind !== 'bin') continue;
+			const i = 3 * bin++;
+			out[i] = dim.domain[0];
+			out[i + 1] = dim.domain[1];
+			out[i + 2] = dim.pixelExtent;
+		}
+		return this.#binsFitScratch(state);
+	}
+
+	/**
+	 * The one bin-view rule over the view scratch, `[d0, d1, pixel extent]` per
+	 * bin dim: each bin dim fits its view (binFitsView). Kept tables are judged
+	 * by it on activation (#binsFitDims) and before a queued build is sent
+	 * (#binsFitCurrentView).
+	 */
+	#binsFitScratch(state: PreaggState): boolean {
+		const out = this.#viewScratch;
 		let bin = 0;
 		for (const meta of state.activeMeta) {
 			if (meta.kind !== 'bin') continue;
