@@ -17,6 +17,8 @@
 	//   batch. Drag on the hovered axis: the histograms and the carrier bars
 	//   read preagg tables. The parallel chart's own polyline queries are row
 	//   level and always read the base table (a 5,000-row sample).
+	// - Continuous legend (time): hover it, pause, then brush it: the histograms
+	//   and the carrier bars read preagg tables binned over the legend's domain.
 	//
 	// The log wraps the engine's query and exec on this page only.
 
@@ -36,7 +38,8 @@
 		BarMarkY,
 		RectYMark,
 		IntervalX,
-		Legend
+		Legend,
+		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import Toggle from '$lib/interactors/Toggle.svelte';
@@ -247,6 +250,33 @@
 					{/snippet}
 					{#snippet interactors()}
 						<ParallelBrushes selection="brush" />
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
+				<h3>Time (continuous legend; 5,000-row sample)</h3>
+				<ChartContainer xLabel="distance" yLabel="delay" legendPosition="top">
+					{#snippet legend()}
+						<Legend color="time" selection="brush" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<DotsMark
+									table="preagg_flights_sample"
+									x="distance"
+									y="delay"
+									fill="time"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
 					{/snippet}
 				</ChartContainer>
 			</div>
