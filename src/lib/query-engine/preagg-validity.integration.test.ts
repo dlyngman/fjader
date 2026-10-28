@@ -380,6 +380,25 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		expect(rebuilds).not.toHaveBeenCalled();
 	});
 
+	it('destroying the engine drops the preagg tables it built', async () => {
+		await activate();
+		await drag(brush(), 100, 599);
+		const built = creates().map((q) => q.match(/"(__dplot_preagg_[0-9a-f]+)"/)![1]);
+		expect(built).toHaveLength(1);
+
+		// afterEach destroys the engine again, which closes the connection again.
+		const close = conn.close;
+		conn.close = async () => {};
+		await engine.destroy();
+		conn.close = close;
+
+		expect(conn.queries).toContain(`DROP TABLE IF EXISTS "${built[0]}"`);
+		const left = await conn.all(
+			`SELECT table_name FROM duckdb_tables() WHERE table_name = '${built[0]}'`
+		);
+		expect(left).toEqual([]);
+	});
+
 	describe('one table per source', () => {
 		// A second brush on another chart (C), which also filters the mark.
 		const BRUSH_C = 'interval-x-C';

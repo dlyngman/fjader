@@ -18,35 +18,16 @@
  */
 
 import { tableFromIPC, type Table } from '@uwdata/flechette';
-import {
-	isAggregateExpression,
-	isNode,
-	collectColumns,
-	column,
-	and,
-	isBetween,
-	literal,
-	Query,
-	sql as sqlTag,
-	type ExprNode,
-	type WindowNode
-} from '@uwdata/mosaic-sql';
-import { togglePredicate } from './toggle-predicate';
-import {
-	rewriteForPreagg,
-	buildBinExpr,
-	binsFineEnough,
-	BIN_WINDOW_MARGIN,
-	type BrushActivation
-} from './sufficient-statistics';
 export type { BrushActivation } from './sufficient-statistics';
 import {
 	assembleQuery,
 	castNumeric,
-	castReal,
 	splitWindowSelect,
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
+import { Preagg } from './preagg/Preagg';
+import type { ActivationSource } from './preagg/plan';
+export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
 import {
 	CategoricalIdentity,
@@ -55,7 +36,6 @@ import {
 	type IdentityField
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
-import type { Clause, CrossfilterSelection, FilterExpr } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
@@ -86,10 +66,6 @@ export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
 	buildMaxWaitMs?: number;
 }
-
-/** TEMPORARY: flip to false to bypass preagg routing and force base-table queries.
- *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
-const PREAGG_ENABLED = true;
 
 // outerAggBuilders + window CTE wrapping now live in query-builder.ts
 // (splitWindowSelect / buildOuterWindow / assembleQuery) so the base path,
@@ -195,123 +171,10 @@ export interface QueryDescriptor {
 	transformCompiler: TransformCompiler;
 }
 
-/**
- * How a source selects, one entry per active dimension: a pixel-binned
- * continuous column (`bin`, with the data extent when known, for the size
- * guard), or a categorical field (`value`, keyed by its identity key).
- */
-export type ActiveDim =
-	| ({ kind: 'bin'; extent?: [number, number] } & BrushActivation)
-	| { kind: 'value'; field: string };
-
-/** What activate() needs to know about a source, as FilterGroup sees it at hover time. */
-export interface ActivationSource {
-	sourceId: string;
-	/** Marks every registration of the source excludes: it filters none of them. */
-	excludedByAll: Set<string>;
-	dims: ActiveDim[];
-	/**
-	 * For a source with bin dims: writes its current view, `[d0, d1, pixel
-	 * extent]` per bin dim, into `out`. Read on every query, so it must not
-	 * allocate.
-	 */
-	view?: (out: Float64Array) => void;
-}
-
-/** What a preagg table was built from. It serves brush queries only while this still holds. */
-interface PreaggBasis {
-	/** Query parts, compared by reference ($derived memoization keeps them stable). */
-	parts: QueryParts;
-	/** The source whose clause the table answers instead of baking in. */
-	activeSourceId: string;
-	/** What the active dims' columns are: bin column, or value field. A bin
-	 *  dim's view is checked separately (binsFitView, #binsFineEnough). */
-	dimsKey: string;
-	/** The clause objects baked into the table, in selection insertion order.
-	 *  Refreshed when new objects turn out to give the same SQL. */
-	bakedClauses: Clause[];
-	/** The source's current view, for the bin resolution check (bin dims only). */
-	view: ((out: Float64Array) => void) | null;
-}
-
-/** The filter-independent parts of a preagg table's SELECT. */
-interface PreaggCreation {
-	table: string;
-	select: Record<string, ExprNode>;
-	groupby: ExprNode[];
-	orderby: ExprNode[];
-	/**
-	 * Fields grouped by value inside and mapped to their ids on the grouped
-	 * result: `raw` is the inner column, `alias` the id column, `dim` the dim
-	 * table joined on value. Empty for every other table.
-	 */
-	joins: Array<{ raw: string; alias: string; dim: string }>;
-}
-
-/**
- * How each active dim appears in a preagg table. A `bin` dim is a pixel-bin
- * index over a window (`buildBinExpr`): bins 0 .. bins - 1 from d0, with -1
- * and `bins` for everything outside it. A `value` dim is a column holding the
- * field's ids (`byId`) or its raw values, in the source's field order.
- */
-type ActiveMeta =
-	| { kind: 'bin'; alias: string; d0: number; scaleFactor: number; bins: number }
-	| { kind: 'value'; field: string; column: string; byId: boolean };
-
-/**
- * A group key of a planned table, for the size guard: how many groups it has
- * (null: unknown), and the one source column it bins, if it bins exactly one,
- * so a key on a column the mark already groups by is not counted twice.
- */
-interface GroupKey {
-	column: string | null;
-	groups: number | null;
-}
-
-interface PreaggState {
-	table: string;
-	/** The SELECT the table was created from. Its hash names the table. */
-	sql: string;
-	basis: PreaggBasis;
-	creation: PreaggCreation;
-	/** Clause objects already found to give different SQL, so frames that
-	 *  still see them go to the base table without rebuilding the SQL. */
-	mismatch: Clause[] | null;
-	/** Rewritten select expressions that recombine partials at query time. */
-	outputSelect: Record<string, ExprNode>;
-	/** The active dims as the table holds them, for the query-time filter. */
-	activeMeta: ActiveMeta[];
-	/** Window channels needing CTE wrapping in the preagg query. */
-	windowChannels: Record<string, import('@uwdata/mosaic-sql').WindowNode> | null;
-}
-
-/** A preagg build waiting in the engine's queue. */
-interface QueuedBuild {
-	markId: string;
-	sourceId: string;
-	build: PreaggState;
-	createSQL: string;
-	/** The hover batch that queued it. */
-	batch: number;
-	/** When it was queued, for the wait limit (BUILD_MAX_WAIT_MS). */
-	queuedAt: number;
-	/** Settles the activate() call that queued it. */
-	done: () => void;
-}
-
 interface MarkRegistration {
 	descriptor: QueryDescriptor;
 	handle: MarkHandle;
 	filterGroup: FilterGroup;
-	/**
-	 * Built preagg tables, one per activated source. A query reads the first
-	 * whose basis holds and moves it to the front, so the next frame of the
-	 * same gesture checks it first.
-	 */
-	preagg: Map<string, PreaggState>;
-	/** The latest build started per source. A finished build is installed only
-	 *  if it is still this one, so a superseded or dropped build never lands. */
-	preaggBuild: Map<string, PreaggState>;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,33 +192,10 @@ export class QueryEngine {
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
-	/** Hash-named preagg tables created this session (for cleanup on destroy). */
-	#preaggTables = new Set<string>();
-	/**
-	 * Row count per base table, for the size guard: a number once read, the
-	 * read in flight before that. Read once per table when its first mark
-	 * registers, outside any interaction.
-	 */
-	#rowCounts = new Map<string, number | Promise<void>>();
-	/**
-	 * Preagg builds waiting to run, oldest first. Builds are speculative full
-	 * scans on the one connection, which runs statements in arrival order, so
-	 * sending them as they are planned would put a click's queries behind all
-	 * of them. The engine holds them instead and sends one at a time, only while
-	 * no mark query is waiting or running, or once the oldest has waited
-	 * BUILD_MAX_WAIT_MS.
-	 */
-	#buildQueue: QueuedBuild[] = [];
-	#buildRunning = false;
-	/** Pumps the queue when the oldest build's wait runs out, if no query does first. */
-	#waitTimer: ReturnType<typeof setTimeout> | null = null;
-	/** The current hover batch. Builds still queued from an older one are dropped. */
-	#batch = 0;
-	#inBatch = false;
+	/** Each mark's preagg tables, the build queue and the size guard (see Preagg). */
+	#preagg: Preagg;
 	/** When a filter last changed, in any group (performance.now()). */
 	#lastFilterChangeAt = 0;
-	/** Scratch for a source's view, reused by every query's resolution check. */
-	#viewScratch = new Float64Array(6);
 	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 	/**
@@ -385,13 +225,21 @@ export class QueryEngine {
 	/** Notified after clearQueryCache() drops the identity dims and views. */
 	#identityResetListeners = new Set<() => void>();
 
-	#buildMaxWaitMs: number;
-
 	constructor(
 		connection: DuckDBConnection | Promise<DuckDBConnection>,
 		options: QueryEngineOptions = {}
 	) {
-		this.#buildMaxWaitMs = options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS;
+		this.#preagg = new Preagg(
+			{
+				exec: (sql) => this.exec(sql),
+				query: (sql, opts) => this.query(sql, opts),
+				busy: () => this.#inflight.size > 0 || this.#pending.size > 0,
+				identity: this.#identity,
+				mark: (markId) => this.#marks.get(markId),
+				marks: () => this.#marks
+			},
+			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
+		);
 		if (connection instanceof Promise) {
 			this.#connPromise = connection;
 			connection.then((c) => {
@@ -672,7 +520,7 @@ export class QueryEngine {
 					.catch(pending.reject);
 			}
 			// The last mark query settling frees the connection for a build.
-			this.#pumpBuilds();
+			this.#preagg.pump();
 		}
 	}
 
@@ -770,16 +618,7 @@ export class QueryEngine {
 		// ensureColumns still in flight across this rejects rather than resolving
 		// against dropped state (see CategoricalIdentity's generation counter).
 		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
-		for (const item of this.#buildQueue) this.#abandon(item);
-		this.#buildQueue = [];
-		for (const reg of this.#marks.values()) {
-			this.#dropPreagg(reg);
-		}
-		for (const preaggTable of this.#preaggTables) {
-			this.exec(`DROP TABLE IF EXISTS "${preaggTable}"`).catch(() => {});
-		}
-		this.#preaggTables.clear();
-		this.#rowCounts.clear();
+		this.#preagg.reset();
 		this.#queryCache.clear();
 		return identityReset;
 	}
@@ -845,26 +684,20 @@ export class QueryEngine {
 			// Don't cancel inflight queries — let them complete for intermediate
 			// visual updates (e.g. smooth rebin steps during shift+scroll).
 			// Execute-latest in query() handles supersession naturally.
-			this.#dropPreagg(prev);
+			this.#preagg.dropMark(markId);
 		}
 
 		// Reuse existing handle to preserve arrowTable during re-query
 		const handle = prev?.handle ?? new MarkHandle();
-		const reg: MarkRegistration = {
-			descriptor,
-			handle,
-			filterGroup,
-			preagg: new Map(),
-			preaggBuild: new Map()
-		};
+		const reg: MarkRegistration = { descriptor, handle, filterGroup };
 		this.#marks.set(markId, reg);
-		this.#countRows(descriptor.baseTable);
+		this.#preagg.trackTable(descriptor.baseTable);
 
 		handle._onParamsChange = () => this.#queryMark(markId, reg);
 
 		handle.destroy = () => {
 			this.cancel(markId);
-			this.#dropPreagg(reg);
+			this.#preagg.dropMark(markId);
 			this.#marks.delete(markId);
 			handle._onParamsChange = null;
 		};
@@ -907,9 +740,8 @@ export class QueryEngine {
 		for (const [markId, reg] of batch) {
 			const { descriptor, handle } = reg;
 
-			const preagg = this.#usablePreagg(markId, reg);
 			const sqlStr =
-				(preagg && this.#assemblePreaggSQL(markId, reg, preagg, handle.params)) ||
+				this.#preagg.sqlFor(markId, reg) ||
 				this.#assembleSQL(descriptor, descriptor.table, selection.predicate(markId), handle.params);
 			if (!sqlStr) continue;
 
@@ -930,9 +762,8 @@ export class QueryEngine {
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { descriptor, handle } = reg;
 
-		const preagg = this.#usablePreagg(markId, reg);
 		const sqlStr =
-			(preagg && this.#assemblePreaggSQL(markId, reg, preagg, handle.params)) ||
+			this.#preagg.sqlFor(markId, reg) ||
 			this.#assembleSQL(
 				descriptor,
 				descriptor.table,
@@ -1000,712 +831,41 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Pre-aggregate marks for a filter group before a source is used.
-	 * Called through the source's handle on pointerenter — before the first drag.
-	 *
-	 * Builds materialized preagg tables for all aggregate marks in the filter
-	 * group that the source filters, one per source, next to any the mark holds
-	 * for other sources. Each table bakes in every clause except the source's
-	 * own and groups by the source's active dims as well as the mark's own, so
-	 * a change to the source is a filter on a table of thousands of rows: pixel
-	 * bins for a brush, the field's ids (or values) for a toggle or legend.
-	 *
-	 * The source is named by its ID rather than inferred: before the first drag
-	 * it has no clause yet, and other clauses on the same chart (a Toggle)
-	 * exclude the same marks a brush does.
+	 * Pre-aggregate marks for a filter group before a source is used: builds a
+	 * preagg table per mark the source filters (see Preagg.activate). Called
+	 * through the source's handle on pointerenter — before the first drag.
 	 */
-	async activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
-		const { sourceId: activeSourceId, excludedByAll, dims } = source;
-		if (this.#destroyed || dims.length === 0) return;
-		// An activation outside batch() (a legend's hover) is a batch of one.
-		if (!this.#inBatch) this.#startBatch();
-
-		const { selection } = filterGroup;
-		const dimsKey = activeDimsKeyOf(dims);
-		const promises: Promise<void>[] = [];
-
-		for (const [markId, reg] of this.#marks) {
-			if (reg.filterGroup !== filterGroup) continue;
-			// A mark the source never filters gets no table for it, and keeps
-			// the tables it holds for other sources.
-			if (excludedByAll.has(markId)) continue;
-
-			// Skip if the latest build, finished or in flight, still matches
-			const latest = reg.preaggBuild.get(activeSourceId) ?? reg.preagg.get(activeSourceId);
-			if (latest) {
-				const { basis } = latest;
-				if (
-					basis.parts === reg.descriptor.parts &&
-					basis.activeSourceId === activeSourceId &&
-					basis.dimsKey === dimsKey &&
-					binsFitView(latest.activeMeta, dims) &&
-					this.#bakedClausesHold(markId, selection, latest)
-				) {
-					continue;
-				}
-			}
-
-			// Drop this source's stale table; other sources' stay.
-			reg.preagg.delete(activeSourceId);
-			reg.preaggBuild.delete(activeSourceId);
-
-			const plan = this.#planPreagg(reg, dims);
-			if (!plan) continue;
-			if (this.#tooLarge(reg, plan.activeKeys)) continue;
-
-			// Bake every other clause into the preagg table. Sorted by source ID,
-			// so the same filters always give the same SQL, and so the same table.
-			const bakedClauses = selection.bakedClauses(markId, activeSourceId);
-			const staticFilters = selection.bakedPredicates(markId, activeSourceId);
-
-			// Hash-based naming: identical preagg SQL reuses the same table (like Mosaic).
-			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
-			const preaggSQL = preaggSelectSQL(plan.creation, staticFilters);
-			const preaggTable = `__dplot_preagg_${fnvHash(preaggSQL).toString(16)}`;
-			const createSQL = `CREATE TABLE IF NOT EXISTS "${preaggTable}" AS ${preaggSQL}`;
-
-			// The basis is captured now, not when the build finishes: a filter
-			// that changes while the CREATE runs must still read as a mismatch.
-			const build: PreaggState = {
-				table: preaggTable,
-				sql: preaggSQL,
-				basis: {
-					parts: reg.descriptor.parts,
-					activeSourceId,
-					dimsKey,
-					bakedClauses,
-					view: source.view ?? null
-				},
-				creation: plan.creation,
-				mismatch: null,
-				outputSelect: plan.outputSelect,
-				activeMeta: plan.activeMeta,
-				windowChannels: plan.windowChannels
-			};
-			reg.preaggBuild.set(activeSourceId, build);
-
-			this.#preaggTables.add(preaggTable);
-			const batch = this.#batch;
-			promises.push(
-				new Promise<void>((done) => {
-					this.#buildQueue.push({
-						markId,
-						sourceId: activeSourceId,
-						build,
-						createSQL,
-						batch,
-						queuedAt: performance.now(),
-						done
-					});
-				})
-			);
-		}
-
-		this.#pumpBuilds();
-		await Promise.all(promises);
+	activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
+		return this.#preagg.activate(filterGroup, source);
 	}
 
 	/**
 	 * Run a hover's activations as one batch: builds still queued from an earlier
-	 * batch are dropped. One chart hover activates several sources (a brush, a
-	 * Toggle field, a band-label field), so the batch, not the source, is what a
-	 * newer hover supersedes. Its sources can belong to different filter groups,
-	 * which is why the batch lives here.
+	 * batch are dropped (see BuildQueue).
 	 */
 	batch(activations: () => void): void {
-		if (this.#inBatch) {
-			activations();
-			return;
-		}
-		this.#startBatch();
-		this.#inBatch = true;
-		try {
-			activations();
-		} finally {
-			this.#inBatch = false;
-		}
-	}
-
-	#startBatch(): void {
-		this.#batch++;
-		const keep: QueuedBuild[] = [];
-		for (const item of this.#buildQueue) {
-			if (item.batch === this.#batch) keep.push(item);
-			else this.#abandon(item);
-		}
-		this.#buildQueue = keep;
-	}
-
-	/** Drop a queued build, so the next activation plans it again. */
-	#abandon(item: QueuedBuild): void {
-		const reg = this.#marks.get(item.markId);
-		if (reg?.preaggBuild.get(item.sourceId) === item.build) reg.preaggBuild.delete(item.sourceId);
-		item.done();
+		this.#preagg.batch(activations);
 	}
 
 	/**
-	 * Send the next queued build if nothing else is on the connection: no build
-	 * running, and no mark query waiting or running. Called when a build is
-	 * queued, when one finishes, and when a mark query settles. Queries without
-	 * a caller id (identity lookups, describe, ad-hoc queries) do not hold builds
-	 * back and can wait behind a running one; none is on an interaction path.
-	 *
-	 * Mark queries hold a build back for at most BUILD_MAX_WAIT_MS. A drag that
-	 * starts before its source's tables are built reads the base table, each
-	 * read slower than a frame, so a query is always waiting and the build would
-	 * never run; past the limit it is sent anyway, and one frame waits for it.
-	 */
-	#pumpBuilds(): void {
-		while (!this.#buildRunning && !this.#destroyed) {
-			const head = this.#buildQueue[0];
-			if (!head) return;
-			if (this.#inflight.size > 0 || this.#pending.size > 0) {
-				const waited = performance.now() - head.queuedAt;
-				if (waited < this.#buildMaxWaitMs) {
-					this.#waitTimer ??= setTimeout(() => {
-						this.#waitTimer = null;
-						this.#pumpBuilds();
-					}, this.#buildMaxWaitMs - waited);
-					return;
-				}
-			}
-			const item = this.#buildQueue.shift()!;
-			const { markId, sourceId, build } = item;
-
-			// Checked against the mark's current registration, which a re-setup
-			// replaces, against the view now (a zoom in or a long pan while it
-			// waited means a table settling would only rebuild), and against the
-			// filters now: a clause baked into the table may have changed.
-			const reg = this.#marks.get(markId);
-			if (
-				!reg ||
-				reg.preaggBuild.get(sourceId) !== build ||
-				reg.descriptor.parts !== build.basis.parts ||
-				!this.#binsFitCurrentView(build) ||
-				!this.#bakedClausesHold(markId, reg.filterGroup.selection, build)
-			) {
-				this.#abandon(item);
-				continue;
-			}
-
-			this.#buildRunning = true;
-			this.exec(item.createSQL)
-				.then(() => {
-					const current = this.#marks.get(markId);
-					if (current?.preaggBuild.get(sourceId) !== build) return;
-					current.preaggBuild.delete(sourceId);
-					current.preagg.set(sourceId, build);
-				})
-				.catch((e) => {
-					console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
-					const current = this.#marks.get(markId);
-					if (current?.preaggBuild.get(sourceId) === build) current.preaggBuild.delete(sourceId);
-				})
-				.finally(() => {
-					this.#buildRunning = false;
-					item.done();
-					this.#pumpBuilds();
-				});
-			return;
-		}
-	}
-
-	/**
-	 * The preagg table a mark would build for a source's active dims, or null
-	 * when the mark cannot be pre-aggregated (no aggregates, or an aggregate that
-	 * does not decompose).
-	 *
-	 * A `value` dim's column is resolved per mark:
-	 * 1. The mark already groups by the field's id (a channel reading only its
-	 *    id column): nothing is added; the filter goes on that channel.
-	 * 2. The field's dim covers the mark's base table, so every non-NULL value
-	 *    has an id: the field is grouped by value inside and mapped to its ids
-	 *    on the grouped result, a join over thousands of rows rather than the
-	 *    view's join over every row. A view that already exposes the id column
-	 *    is grouped by it directly.
-	 * 3. Otherwise the field's values themselves, filtered with the toggle's own
-	 *    predicate over that column.
-	 *
-	 * Also returns the active dims' group keys, for the size guard.
-	 */
-	#planPreagg(
-		reg: MarkRegistration,
-		dims: ActiveDim[]
-	): {
-		creation: PreaggCreation;
-		outputSelect: Record<string, ExprNode>;
-		activeMeta: ActiveMeta[];
-		windowChannels: Record<string, WindowNode> | null;
-		activeKeys: GroupKey[];
-	} | null {
-		const { parts, table, baseTable, schema } = reg.descriptor;
-		if (!parts.hasAggregates && !parts.hasWindowAggregates) return null;
-
-		// Analyze selectDef for preagg compatibility
-		const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels);
-		if (!analysis) return null; // unsupported (window/distinct)
-		const { preaggCols, outputSelect, preaggGroupBy } = analysis;
-
-		const activeMeta: ActiveMeta[] = [];
-		const activeGroupBy: ExprNode[] = [];
-		const binOrder: ExprNode[] = [];
-		const joins: PreaggCreation['joins'] = [];
-		const activeKeys: GroupKey[] = [];
-
-		dims.forEach((dim, i) => {
-			const alias = `__active${i}`;
-			if (dim.kind === 'bin') {
-				const { expr, d0, scaleFactor, bins } = buildBinExpr(
-					dim.columnRef,
-					dim.domain,
-					dim.pixelExtent
-				);
-				preaggCols[alias] = expr;
-				activeGroupBy.push(column(alias));
-				binOrder.push(column(alias));
-				activeMeta.push({ kind: 'bin', alias, d0, scaleFactor, bins });
-				// The window's bins plus the two edge bins, or fewer when the data
-				// spans less than the window at this resolution.
-				const dataBins = dim.extent
-					? Math.ceil((dim.extent[1] - dim.extent[0]) * scaleFactor) + 1
-					: Infinity;
-				const binned = collectColumns(dim.columnRef);
-				activeKeys.push({
-					column: binned.length === 1 ? binned[0].column : null,
-					groups: Math.min(bins + 2, dataBins)
-				});
-				return;
-			}
-
-			const { field } = dim;
-			const channel = this.#idChannelFor(parts.selectDef, field);
-			if (channel) {
-				// Case 1: already a group key of the mark.
-				activeMeta.push({ kind: 'value', field, column: channel, byId: true });
-				return;
-			}
-			// One more group for -1: NULL, or a value the dim does not hold.
-			const idGroups = this.#identity.values(field).length + 1;
-			if (this.#identity.dimCovers(field, baseTable)) {
-				// Case 2.
-				if (table !== baseTable && this.#identity.viewHas(baseTable, field)) {
-					preaggCols[alias] = column(this.#identity.idColumn(field));
-					activeGroupBy.push(column(alias));
-				} else {
-					const raw = `__raw${i}`;
-					preaggCols[raw] = fieldExpr(this.#identity.sqlFor(field), field);
-					activeGroupBy.push(column(raw));
-					joins.push({ raw, alias, dim: this.#identity.dimTable(field) });
-				}
-				activeMeta.push({ kind: 'value', field, column: alias, byId: true });
-				activeKeys.push({ column: null, groups: idGroups });
-				return;
-			}
-			// Case 3.
-			preaggCols[alias] = fieldExpr(this.#identity.sqlFor(field), field);
-			activeGroupBy.push(column(alias));
-			activeMeta.push({ kind: 'value', field, column: alias, byId: false });
-			activeKeys.push({ column: null, groups: null });
-		});
-
-		// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
-		// Partial-aggregate and active columns stay raw for recombination.
-		for (const [ch, expr] of Object.entries(preaggCols)) {
-			if (ch.startsWith('__ps') || ch.startsWith('__active') || ch.startsWith('__raw')) continue;
-			if (isAggregateExpression(expr)) continue;
-			preaggCols[ch] = castNumeric(expr, schema) as ExprNode;
-		}
-
-		return {
-			creation: {
-				table,
-				select: preaggCols as Record<string, ExprNode>,
-				groupby: [...preaggGroupBy, ...activeGroupBy] as ExprNode[],
-				// Sorted by bin columns for fast range scans
-				orderby: binOrder,
-				joins
-			},
-			outputSelect,
-			activeMeta,
-			windowChannels: analysis.windowChannels,
-			activeKeys
-		};
-	}
-
-	/** The mark's channel that is `field`'s id channel (see #idFieldOf), or null. */
-	#idChannelFor(selectDef: Record<string, unknown>, field: string): string | null {
-		for (const [channel, expr] of Object.entries(selectDef)) {
-			if (this.#idFieldOf(expr) === field) return channel;
-		}
-		return null;
-	}
-
-	/**
-	 * The field whose ids a channel holds, or null. Only the id column itself or
-	 * castReal of it, the forms marks produce: an id filter on any other
-	 * expression over the column (say idx % 2) would filter transformed values.
-	 * Compared as SQL text; runs when a table is planned, not per query.
-	 */
-	#idFieldOf(expr: unknown): string | null {
-		if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) return null;
-		const read = collectColumns(expr as ExprNode);
-		if (read.length !== 1) return null;
-		const field = this.#identity.fieldOfIdColumn(read[0].column);
-		if (field == null) return null;
-		const text = String(expr);
-		const idColumn = column(read[0].column);
-		return text === String(idColumn) || text === String(castReal(idColumn)) ? field : null;
-	}
-
-	/**
-	 * The size guard: whether a planned table would hold more than a quarter of
-	 * its base table's rows (a fixed 100,000 until the row count has been read).
-	 *
-	 * Measured on 1M rows (DuckDB-WASM, one thread): a toggle click on a table a
-	 * quarter the size of the base table is still ~3.7× faster than on the base
-	 * table, and its build costs ~2.5 base queries; at 43% the click is 2.1×
-	 * faster and the build ~3.5 base queries; at 69%, 1.4× and ~4. Builds run
-	 * when the connection is idle, so their cost shows only as the wait of a
-	 * click that lands mid-build, and as memory; past a quarter that outweighs
-	 * the gain.
-	 *
-	 * Counts the table's groups, which are the mark's groups before its SQL
-	 * transforms and before the active source's filter, combined with the
-	 * active dims' (#markKeys). Keys multiply, except that a field or column is
-	 * counted once: a mark with x and fill on the same field has that field's
-	 * groups, not their square, and a bin dim on a column the mark already
-	 * groups by adds its bins to that key's (each pixel bin falls in about one
-	 * of the mark's bins) instead of multiplying. Only an active dim without a
-	 * known cardinality (a field with no dim) leaves the estimate unknown, and an
-	 * unknown estimate builds.
-	 */
-	#tooLarge(reg: MarkRegistration, activeKeys: GroupKey[]): boolean {
-		if (activeKeys.some((key) => key.groups == null)) return false;
-		const merged = new Set<GroupKey>();
-		let groups = 1;
-		for (const key of this.#markKeys(reg)) {
-			const same =
-				key.column == null
-					? undefined
-					: activeKeys.find((active) => active.column === key.column && !merged.has(active));
-			if (same) merged.add(same);
-			groups *= key.groups! + (same?.groups ?? 0);
-		}
-		for (const key of activeKeys) if (!merged.has(key)) groups *= key.groups!;
-		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
-		const cap = typeof rows === 'number' ? rows / 4 : 100_000;
-		return groups > cap;
-	}
-
-	/**
-	 * The mark's own group keys. When every one is a categorical field's id
-	 * channel, one key per distinct field, sized by its dim. Otherwise one key
-	 * for the whole mark, sized by its last result's row count (a lower bound:
-	 * filters or a transform may cut it, and a topN mark groups by an id channel
-	 * and is counted exactly above), or one group under a limit or before a
-	 * result; it names the column the mark groups by when there is only one.
-	 */
-	#markKeys(reg: MarkRegistration): GroupKey[] {
-		const { parts } = reg.descriptor;
-		const fields = new Set<string>();
-		const columns = new Set<string>();
-		let allIds = true;
-		for (const expr of Object.values(parts.selectDef)) {
-			if (!isNode(expr) || isAggregateExpression(expr as ExprNode)) continue;
-			for (const { column: name } of collectColumns(expr as ExprNode)) columns.add(name);
-			const field = this.#idFieldOf(expr);
-			if (field == null) allIds = false;
-			else fields.add(field);
-		}
-		if (allIds) {
-			return [...fields].map((field) => ({
-				column: null,
-				groups: this.#identity.values(field).length + 1
-			}));
-		}
-		const { handle } = reg;
-		const rows = handle.params.limit == null ? handle.arrowTable?.numRows : undefined;
-		return [{ column: columns.size === 1 ? [...columns][0] : null, groups: rows ?? 1 }];
-	}
-
-	/** Read a base table's row count once, for the size guard. */
-	#countRows(table: string): void {
-		if (this.#rowCounts.has(table)) return;
-		const escaped = table.replace(/"/g, '""');
-		this.#rowCounts.set(
-			table,
-			this.query(`SELECT count(*)::DOUBLE AS n FROM "${escaped}"`, { cache: false })
-				.then((result) => {
-					const n = Number((result.get(0) as { n?: unknown } | null)?.n);
-					if (Number.isFinite(n)) this.#rowCounts.set(table, n);
-					else this.#rowCounts.delete(table);
-				})
-				.catch(() => {
-					// Unknown: the guard keeps its fixed cap, and a later registration retries.
-					this.#rowCounts.delete(table);
-				})
-		);
-	}
-
-	/**
-	 * The preagg table a mark's query can read: the first whose query parts
-	 * match and whose baked clauses are still in force, or null for the base
-	 * table, which applies every clause.
-	 *
-	 * The table that answers moves to the front. One hover activates several
-	 * sources, so the table for the source being dragged need not come first;
-	 * a table ahead of it bakes that source's moving clause and fails, possibly
-	 * through the SQL comparison in #bakedClausesHold. Moving the answering
-	 * table to the front limits that to the first frame of a gesture. When no
-	 * table answers, the frame queries the base table, which costs far more.
-	 */
-	#usablePreagg(markId: string, reg: MarkRegistration): PreaggState | null {
-		if (!PREAGG_ENABLED || reg.preagg.size === 0) return null;
-		const { selection } = reg.filterGroup;
-		let first = true;
-		for (const [sourceId, state] of reg.preagg) {
-			if (
-				state.basis.parts === reg.descriptor.parts &&
-				this.#binsFineEnough(state) &&
-				this.#bakedClausesHold(markId, selection, state)
-			) {
-				// A Map keeps the first insertion position of a key, so listing
-				// this entry first and spreading the rest moves it to the front.
-				if (!first) reg.preagg = new Map([[sourceId, state], ...reg.preagg]);
-				return state;
-			}
-			first = false;
-		}
-		return null;
-	}
-
-	/**
-	 * Whether a table's pixel bins are still at least as fine as the current
-	 * view's pixels. Bin indexes are floor((v - d0) * scale) with the stored d0
-	 * and scale, and the brush filter uses the same pair, so a brush inside the
-	 * table's window is answered at any view; only precision depends on bin
-	 * width. A pan keeps the width (off by at most one bin edge, one pixel) and
-	 * a zoom out makes the bins finer than the pixels, so both keep the table.
-	 * Only a zoom in or a larger chart past the built resolution fails here; a
-	 * brush past the window is caught where the filter is built. Reads the view
-	 * into a reused array: no allocation.
-	 */
-	#binsFineEnough(state: PreaggState): boolean {
-		const { view } = state.basis;
-		if (!view) return true;
-		const out = this.#viewScratch;
-		out.fill(NaN);
-		view(out);
-		let bin = 0;
-		for (const meta of state.activeMeta) {
-			if (meta.kind !== 'bin') continue;
-			const d0 = out[bin * 3];
-			const d1 = out[bin * 3 + 1];
-			const extent = out[bin * 3 + 2];
-			bin++;
-			if (!binsFineEnough(meta.scaleFactor, d1 - d0, extent)) return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Whether a queued bin build still suits its source's view, read through the
-	 * source's view callback (binFitsView). An unknown view keeps it.
-	 */
-	#binsFitCurrentView(state: PreaggState): boolean {
-		const { view } = state.basis;
-		if (!view) return true;
-		const out = this.#viewScratch;
-		out.fill(NaN);
-		view(out);
-		let bin = 0;
-		for (const meta of state.activeMeta) {
-			if (meta.kind !== 'bin') continue;
-			const i = 3 * bin++;
-			if (!binFitsView(meta, out[i], out[i + 1], out[i + 2])) return false;
-		}
-		return true;
-	}
-
-	/**
-	 * Whether the clauses baked into a preagg table are still the ones in force.
-	 * Runs on every brush frame. Clause references are compared first, without
-	 * allocating. A changed reference may still mean the same filter (a Toggle
-	 * re-synced with the same values, a clause removed and re-added), so on a
-	 * mismatch the table's SQL is rebuilt from the current clauses and compared.
-	 * Once that fails, frames that still see the same clauses skip the rebuild.
-	 */
-	#bakedClausesHold(markId: string, selection: CrossfilterSelection, state: PreaggState): boolean {
-		const { basis } = state;
-		const { activeSourceId } = basis;
-		if (selection.bakedClausesMatch(markId, activeSourceId, basis.bakedClauses)) return true;
-		if (state.mismatch && selection.bakedClausesMatch(markId, activeSourceId, state.mismatch)) {
-			return false;
-		}
-
-		const current = selection.bakedClauses(markId, activeSourceId);
-		const sql = preaggSelectSQL(state.creation, selection.bakedPredicates(markId, activeSourceId));
-		if (sql === state.sql) {
-			basis.bakedClauses = current;
-			state.mismatch = null;
-			return true;
-		}
-		state.mismatch = current;
-		return false;
-	}
-
-	/**
-	 * Assemble SQL for a preagg brush query.
-	 * Builds modified QueryParts from the stored outputSelect + bin filters,
-	 * then delegates to assembleQuery().
-	 */
-	#assemblePreaggSQL(
-		markId: string,
-		reg: MarkRegistration,
-		preagg: PreaggState,
-		params: QueryParams
-	): string | null {
-		const { activeMeta, outputSelect, windowChannels } = preagg;
-
-		const { descriptor } = reg;
-		const { parts, transformCompiler } = descriptor;
-
-		// --- The active source's clause as a filter on the active columns. None
-		// when it has no clause (an empty toggle: every category) or excludes
-		// this mark.
-		const filters: ExprNode[] = [];
-		const clause = reg.filterGroup.selection.get(preagg.basis.activeSourceId);
-		if (clause && !clause.excludeMarkIds.has(markId)) {
-			// A drag frame runs this per mark: nothing below allocates for a brush
-			// beyond its filter, so the value arrays are created only when needed.
-			let binCount = 0;
-			for (const meta of activeMeta) if (meta.kind === 'bin') binCount++;
-			let bin = 0;
-			let valueExprs: ExprNode[] | null = null;
-			let valueMeta: Array<{ field: string; byId: boolean }> | null = null;
-			for (const meta of activeMeta) {
-				if (meta.kind === 'value') {
-					(valueExprs ??= []).push(column(meta.column));
-					(valueMeta ??= []).push(meta);
-					continue;
-				}
-				// Interval1D: value = [lo, hi]; Interval2D: [[xLo, xHi], [yLo, yHi]]
-				const range = (binCount === 1 ? clause.value : (clause.value as unknown[])[bin]) as [
-					number,
-					number
-				];
-				bin++;
-				const binLo = Math.floor((range[0] - meta.d0) * meta.scaleFactor);
-				const binHi = Math.floor((range[1] - meta.d0) * meta.scaleFactor);
-				// A brush end past the table's window falls in an edge bin, which
-				// holds everything beyond it: not answerable here, so the base table.
-				if (!(binLo >= 0 && binHi < meta.bins)) return null;
-				filters.push(isBetween(column(meta.alias), [literal(binLo), literal(binHi)]) as ExprNode);
-			}
-			if (valueExprs && valueMeta) {
-				// A toggle's clause holds tuples in its field order. Id columns
-				// filter by id; a value with no id (NULL, or not in the dim) cannot
-				// be expressed, so this query goes to the base table instead.
-				const tuples: unknown[][] = [];
-				for (const tuple of clause.value as unknown[][]) {
-					const mapped: unknown[] = [];
-					for (let i = 0; i < valueMeta.length; i++) {
-						const { field, byId } = valueMeta[i];
-						const v = byId
-							? this.#identity.identity(field).ids.get(tuple[i] as DimValue)
-							: tuple[i];
-						if (v === undefined) return null;
-						mapped.push(v);
-					}
-					tuples.push(mapped);
-				}
-				filters.push(togglePredicate(valueExprs, tuples));
-			}
-		}
-
-		// --- Build selectDef: CAST recombined aggregates; dimensions are already
-		// CAST in the preagg table; windowed channels are CAST by the outer CTE.
-		const castSelect: Record<string, unknown> = {};
-		const preaggGroupBy: ExprNode[] = [];
-		const preaggGroupKeys: string[] = [];
-		for (const [ch, expr] of Object.entries(outputSelect)) {
-			if (!isAggregateExpression(expr)) {
-				castSelect[ch] = expr;
-				preaggGroupBy.push(column(ch));
-				preaggGroupKeys.push(ch);
-			} else if (windowChannels && ch in windowChannels) {
-				castSelect[ch] = expr;
-			} else {
-				castSelect[ch] = castReal(expr);
-			}
-		}
-
-		const preaggParts: QueryParts = {
-			selectDef: castSelect,
-			nonAggregateGroupBy: preaggGroupBy,
-			hasAggregates: true,
-			groupKeys: preaggGroupKeys,
-			hasWindowAggregates: false,
-			hasSQLTransforms: parts.hasSQLTransforms,
-			orderChannels: parts.orderChannels,
-			aliasMap: parts.aliasMap,
-			passthroughChannels: parts.passthroughChannels
-		};
-
-		return assembleQuery({
-			table: preagg.table,
-			parts: preaggParts,
-			filter: filters,
-			filterNulls: null, // preagg table already filtered
-			transformCompiler,
-			limit: params.limit,
-			window: windowChannels ? { channels: windowChannels, cteName: '__preagg_cte' } : null
-		}).toString();
-	}
-
-	/**
-	 * Forget a source's tables on every mark of its group: its last registration
-	 * is gone, so nothing can use them. Called by FilterGroup. Does NOT drop the
-	 * tables; hash-named tables are reused via CREATE TABLE IF NOT EXISTS.
+	 * Forget a source's preagg tables: its last registration is gone. Called by
+	 * FilterGroup.
 	 */
 	forgetSource(filterGroup: FilterGroup, sourceId: string): void {
-		for (const reg of this.#marks.values()) {
-			if (reg.filterGroup !== filterGroup) continue;
-			reg.preagg.delete(sourceId);
-			reg.preaggBuild.delete(sourceId);
-		}
-	}
-
-	/** Clear preagg state for a registration, including builds in flight.
-	 *  Does NOT drop the tables — hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
-	#dropPreagg(reg: MarkRegistration): void {
-		reg.preagg.clear();
-		reg.preaggBuild.clear();
+		this.#preagg.forgetSource(filterGroup, sourceId);
 	}
 
 	/**
 	 * Destroy the engine and close the connection.
 	 */
 	async destroy(): Promise<void> {
-		// Before the destroyed flag: reset() goes through this.exec(), which
-		// throws once destroyed.
+		// Before the destroyed flag: reset() and the preagg drops go through
+		// this.exec(), which throws once destroyed.
 		await this.#identity.reset().catch(() => {});
+		// Settle activations still waiting on queued builds, drop this session's tables
+		await this.#preagg.destroy();
 		this.#destroyed = true;
-		if (this.#waitTimer) clearTimeout(this.#waitTimer);
-		this.#waitTimer = null;
-		// Settle activations still waiting on queued builds
-		for (const item of this.#buildQueue) item.done();
-		this.#buildQueue = [];
-		// Clean up mark registrations
-		for (const reg of this.#marks.values()) {
-			this.#dropPreagg(reg);
-		}
 		this.#marks.clear();
-		// Drop all preagg tables created this session
-		for (const table of this.#preaggTables) {
-			this.exec(`DROP TABLE IF EXISTS "${table}"`).catch(() => {});
-		}
-		this.#preaggTables.clear();
 		this.#queryCache.clear();
 		for (const controller of this.#inflight.values()) {
 			controller.abort();
@@ -1718,91 +878,6 @@ export class QueryEngine {
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
 		if (conn) await conn.close();
 	}
-}
-
-/** A preagg table's SELECT. Build and validity check share it, so equal SQL means an equal table. */
-function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[]): string {
-	const query = Query.from(creation.table).select(creation.select).groupby(creation.groupby);
-	if (filters.length > 0) query.where(and(filters as ExprNode[]));
-	if (creation.joins.length === 0) return query.orderby(creation.orderby).toString();
-
-	// Map fields grouped by value to their ids on the grouped result: a join
-	// over the table's groups, not over every source row. The filters stay in
-	// the inner query, where the source's columns are in scope.
-	const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-	const raws = creation.joins.map((j) => quote(j.raw)).join(', ');
-	const ids = creation.joins
-		.map((j, k) => `COALESCE(d${k}.id, -1) AS ${quote(j.alias)}`)
-		.join(', ');
-	const joins = creation.joins
-		.map((j, k) => `LEFT JOIN ${quote(j.dim)} AS d${k} ON p.${quote(j.raw)} = d${k}.value`)
-		.join(' ');
-	const order = creation.orderby.length ? ` ORDER BY ${creation.orderby.join(', ')}` : '';
-	return `SELECT p.* EXCLUDE (${raws}), ${ids} FROM (${query}) AS p ${joins}${order}`;
-}
-
-/**
- * What the active dims' columns are: bin column, or value field. A bin dim's
- * domain and pixel extent are left out: a table built at another view still
- * answers it while it fits that view (binsFitView).
- */
-function activeDimsKeyOf(dims: ActiveDim[]): string {
-	return dims.map((d) => (d.kind === 'bin' ? `bin|${d.columnRef}` : `value|${d.field}`)).join(';');
-}
-
-/**
- * Whether a table's bins still suit `dims`' view, so activating keeps it:
- * fine enough for its pixels (the query-time rule), and the view still well
- * inside the binned window, at least half a margin from either edge. A small
- * pan or zoom out keeps the table; a pan of more than half a viewport, a zoom
- * out past the window, or a zoom in past the built resolution rebuilds it
- * around the new view, so the brushes drawn there stay inside the window.
- */
-function binsFitView(activeMeta: ActiveMeta[], dims: ActiveDim[]): boolean {
-	let next = 0;
-	for (const dim of dims) {
-		if (dim.kind !== 'bin') continue;
-		while (next < activeMeta.length && activeMeta[next].kind !== 'bin') next++;
-		const meta = activeMeta[next++];
-		if (!meta || meta.kind !== 'bin') return false;
-		if (!binFitsView(meta, dim.domain[0], dim.domain[1], dim.pixelExtent)) return false;
-	}
-	return true;
-}
-
-/**
- * Whether one bin dim of a table suits a view of [v0, v1] over `pixelExtent`:
- * its bins are fine enough for the pixels, and the view sits at least half a
- * margin inside the binned window. Unknown numbers (NaN) pass.
- */
-function binFitsView(
-	meta: Extract<ActiveMeta, { kind: 'bin' }>,
-	v0: number,
-	v1: number,
-	pixelExtent: number
-): boolean {
-	if (!binsFineEnough(meta.scaleFactor, v1 - v0, pixelExtent)) return false;
-	// The window is the built view plus BIN_WINDOW_MARGIN views each side.
-	const width = meta.bins / meta.scaleFactor;
-	const inset = ((width / (1 + 2 * BIN_WINDOW_MARGIN)) * BIN_WINDOW_MARGIN) / 2;
-	return !(v0 < meta.d0 + inset || v1 > meta.d0 + width - inset);
-}
-
-/** A field as SQL: the text its identity records, or the column of that name. */
-function fieldExpr(sqlText: string | undefined, field: string): ExprNode {
-	return sqlText
-		? (sqlTag([sqlText] as unknown as TemplateStringsArray) as ExprNode)
-		: column(field);
-}
-
-/** FNV-1a hash (same algorithm as Mosaic). */
-function fnvHash(s: string): number {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < s.length; i++) {
-		h ^= s.charCodeAt(i);
-		h = Math.imul(h, 0x01000193);
-	}
-	return h >>> 0;
 }
 
 // ---------------------------------------------------------------------------
