@@ -5,16 +5,16 @@ import { setQueryContext, initDuckDB } from '$lib/query-engine';
 import type { DuckDBConnection } from '$lib/query-engine';
 
 /**
- * Initialize DivePlot: QueryEngine, ScaleRegistry, GPUCoordinator, FilterGroups.
+ * Initialize Fjader: QueryEngine, ScaleRegistry, GPUCoordinator, FilterGroups.
  * Call once in a top-level component's <script> block.
  *
- *   import { initDivePlot } from 'diveplot';
- *   const { queryEngine } = initDivePlot();
+ *   import { initFjader } from 'fjader';
+ *   const { queryEngine } = initFjader();
  *
  * Pass an existing DuckDB connection to skip internal DuckDB-WASM init:
- *   const { queryEngine } = initDivePlot(myConnection);
+ *   const { queryEngine } = initFjader(myConnection);
  */
-export function initDivePlot(connection?: DuckDBConnection | Promise<DuckDBConnection>) {
+export function initFjader(connection?: DuckDBConnection | Promise<DuckDBConnection>) {
 	const { queryEngine, filterGroups } = setQueryContext(connection ?? initDuckDB());
 
 	const scaleRegistry = setScaleRegistry();
@@ -32,5 +32,5 @@ export * from './sql/bin';
 export * from './types';
 
 // Spec-driven rendering API
-export { DivePlot, render } from './spec';
-export type { DivePlotSpec, DivePlotHandle, RenderOptions } from './spec';
+export { Fjader, render } from './spec';
+export type { FjaderSpec, FjaderHandle, RenderOptions } from './spec';

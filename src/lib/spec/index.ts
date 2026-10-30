@@ -1,10 +1,10 @@
 /**
- * DivePlot Spec API — render charts from JSON specs.
+ * Fjader Spec API — render charts from JSON specs.
  *
  * Usage:
- *   import { DivePlot } from 'diveplot';
+ *   import { Fjader } from 'fjader';
  *
- *   const handle = await DivePlot.render(element, {
+ *   const handle = await Fjader.render(element, {
  *     data: { penguins: { url: 'penguins.parquet', type: 'parquet' } },
  *     plot: {
  *       width: 600, height: 400,
@@ -22,10 +22,10 @@ import { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelt
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import { getOrCreateQueryEngine, loadData } from './LazyQueryEngine';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
-import type { DivePlotSpec, RenderOptions, DivePlotHandle } from './types';
+import type { FjaderSpec, RenderOptions, FjaderHandle } from './types';
 
 /**
- * Render a DivePlot chart from a JSON spec into a target DOM element.
+ * Render a Fjader chart from a JSON spec into a target DOM element.
  *
  * The QueryEngine (DuckDB-WASM) is lazily created as a singleton —
  * multiple render() calls share it. ScaleRegistry and GPUCoordinator are
@@ -33,9 +33,9 @@ import type { DivePlotSpec, RenderOptions, DivePlotHandle } from './types';
  */
 export async function render(
 	target: HTMLElement,
-	spec: DivePlotSpec,
+	spec: FjaderSpec,
 	options: RenderOptions = {}
-): Promise<DivePlotHandle> {
+): Promise<FjaderHandle> {
 	// 1. Lazy-create or reuse QueryEngine
 	const queryEngine = await getOrCreateQueryEngine(options.queryEngine);
 
@@ -44,7 +44,7 @@ export async function render(
 		await loadData(queryEngine, spec.data, options.baseUrl);
 	}
 
-	// 3. Create per-render DivePlot services
+	// 3. Create per-render Fjader services
 	const scaleRegistry = new ScaleRegistry();
 	const gpuCoordinator = new GPUCoordinator({ msaaSampleCount: 4 });
 
@@ -58,7 +58,7 @@ export async function render(
 	}
 
 	// 4. Build context map — injected into Svelte mount() so child components
-	//    find these via getContext() calls (same keys as initDivePlot())
+	//    find these via getContext() calls (same keys as initFjader())
 	const filterGroups = new FilterGroupRegistry();
 	tableSchemaService.setQueryEngine(queryEngine);
 	const context = new Map<string, unknown>();
@@ -83,11 +83,11 @@ export async function render(
 	};
 }
 
-export const DivePlot = { render };
+export const Fjader = { render };
 
 // Re-export spec export
 export { exportSpec, exportSpecJSON } from './export';
 
 // Re-export types
-export type { DivePlotSpec, DivePlotHandle, RenderOptions } from './types';
+export type { FjaderSpec, FjaderHandle, RenderOptions } from './types';
 export type { MarkSpec, PlotSpec, DataSpec, TransformSpec, FieldSpec } from './types';

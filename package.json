@@ -1,7 +1,20 @@
 {
-	"name": "diveplot",
-	"private": true,
+	"name": "fjader",
+	"description": "Declarative, GPU-rendered charts for millions of rows, powered by DuckDB",
+	"keywords": [
+		"visualization",
+		"declarative",
+		"grammar-of-graphics",
+		"webgpu",
+		"duckdb",
+		"svelte",
+		"crossfilter"
+	],
 	"license": "BSD-3-Clause",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/dlyngman/fjader.git"
+	},
 	"version": "0.1.11",
 	"type": "module",
 	"svelte": "./dist/index.js",
@@ -28,7 +41,7 @@
 		"typecheck": "svelte-check --tsconfig ./jsconfig.json",
 		"build:widget": "vite build --config vite.widget.config.js",
 		"build:streamlit": "vite build --config vite.streamlit.config.js",
-		"build:streamlit:bundled": "vite build --config vite.streamlit-bundled.config.js && mv python/diveplot/streamlit_frontend/index-bundled.html python/diveplot/streamlit_frontend/index.html",
+		"build:streamlit:bundled": "vite build --config vite.streamlit-bundled.config.js && mv python/fjader/streamlit_frontend/index-bundled.html python/fjader/streamlit_frontend/index.html",
 		"build:all": "npm run build:widget && npm run build:streamlit",
 		"build:python": "npm run build:all && cd python && uv build"
 	},

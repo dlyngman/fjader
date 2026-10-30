@@ -83,16 +83,16 @@
 
 <style>
 	.axis-line {
-		stroke: var(--diveplot-text-secondary, #6b7280);
+		stroke: var(--fjader-text-secondary, #6b7280);
 	}
 
 	line {
-		stroke: var(--diveplot-text-secondary, #6b7280);
+		stroke: var(--fjader-text-secondary, #6b7280);
 	}
 
 	text {
-		fill: var(--diveplot-text-secondary, #6b7280);
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		fill: var(--fjader-text-secondary, #6b7280);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 10px;
 	}
 </style>

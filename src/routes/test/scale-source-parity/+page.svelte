@@ -29,7 +29,7 @@
 	 */
 	import { onMount, tick } from 'svelte';
 	import { loadParquet, count } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { m4Parity } from '$lib/gpu/decimation/M4Decimator.svelte';
 	import { parallelParity } from '$lib/components/marks/ParallelCoordinatesMark.svelte';
 	import {
@@ -48,7 +48,7 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-	const { queryEngine, gpuCoordinator } = initDivePlot();
+	const { queryEngine, gpuCoordinator } = initFjader();
 	// Before any chart mounts: a canvas reads it when it configures its context.
 	gpuCoordinator.readbackEnabled = true;
 

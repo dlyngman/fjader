@@ -50,11 +50,11 @@
 	// second run of each shape would report the map lookup rather than the query.
 
 	import { onMount } from 'svelte';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { loadParquet } from '@uwdata/mosaic-sql';
 	import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 
 	// Dim cardinalities to sweep. 50 is an ordinary bar chart, 500 a large one,
 	// 5000 the point where a racing chart is still plausible, 50000 the case

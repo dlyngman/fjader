@@ -5,7 +5,7 @@
  *   render({ model, el }) → cleanup function
  */
 
-import { renderFromData, showError, type DivePlotHandle, type ManifestEntry } from './core';
+import { renderFromData, showError, type FjaderHandle, type ManifestEntry } from './core';
 import '$lib/theme.css';
 
 interface AnywidgetModel {
@@ -21,7 +21,7 @@ interface RenderContext {
 	el: HTMLElement;
 }
 
-async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<DivePlotHandle> {
+async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<FjaderHandle> {
 	const blobView = model.get('data_blob');
 
 	// Copy blob immediately — anywidget may detach the underlying ArrayBuffer
@@ -53,7 +53,7 @@ async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<DivePlo
 const WATCHED_TRAITS = ['change:spec', 'change:data_manifest', 'change:data_blob'] as const;
 
 function render({ model, el }: RenderContext): () => void {
-	let handle: DivePlotHandle | null = null;
+	let handle: FjaderHandle | null = null;
 	let renderPromise: Promise<void> = Promise.resolve();
 	let pendingRender = false;
 

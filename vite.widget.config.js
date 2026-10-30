@@ -8,7 +8,7 @@ export default defineConfig({
 		svelte({
 			compilerOptions: { css: 'external', dev: false }
 		}),
-		thirdPartyLicenses('./python/diveplot/static')
+		thirdPartyLicenses('./python/fjader/static')
 	],
 	define: {
 		'process.env.NODE_ENV': '"production"'
@@ -24,7 +24,7 @@ export default defineConfig({
 			formats: ['es'],
 			fileName: 'widget'
 		},
-		outDir: path.resolve('./python/diveplot/static'),
+		outDir: path.resolve('./python/fjader/static'),
 		emptyOutDir: true,
 		rollupOptions: {
 			output: {

@@ -1,38 +1,38 @@
 @import 'open-props/style';
 @import 'open-props/normalize.min.css';
 
-/* DivePlot theme overrides using open-props tokens */
+/* Fjader theme overrides using open-props tokens */
 :root {
-	--diveplot-text-secondary: var(--gray-8);
-	--diveplot-text-muted: var(--gray-3);
-	--diveplot-bg: var(--gray-0);
-	--diveplot-primary: var(--blue-6);
-	--diveplot-accent: var(--blue-4);
+	--fjader-text-secondary: var(--gray-8);
+	--fjader-text-muted: var(--gray-3);
+	--fjader-bg: var(--gray-0);
+	--fjader-primary: var(--blue-6);
+	--fjader-accent: var(--blue-4);
 	color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--diveplot-text-secondary: var(--gray-3);
-		--diveplot-text-muted: var(--gray-8);
-		--diveplot-bg: var(--gray-10);
-		--diveplot-primary: var(--blue-3);
-		--diveplot-accent: var(--blue-1);
-		--diveplot-tooltip-bg: rgba(255, 255, 255, 0.92);
-		--diveplot-tooltip-text: var(--gray-10);
-		--diveplot-palette-bg: rgba(255, 255, 255, 0.95);
-		--diveplot-palette-text: var(--gray-10);
-		--diveplot-palette-text-secondary: rgba(17, 24, 39, 0.5);
-		--diveplot-palette-text-muted: rgba(17, 24, 39, 0.35);
-		--diveplot-palette-border: rgba(17, 24, 39, 0.1);
-		--diveplot-palette-highlight: rgba(17, 24, 39, 0.08);
+		--fjader-text-secondary: var(--gray-3);
+		--fjader-text-muted: var(--gray-8);
+		--fjader-bg: var(--gray-10);
+		--fjader-primary: var(--blue-3);
+		--fjader-accent: var(--blue-1);
+		--fjader-tooltip-bg: rgba(255, 255, 255, 0.92);
+		--fjader-tooltip-text: var(--gray-10);
+		--fjader-palette-bg: rgba(255, 255, 255, 0.95);
+		--fjader-palette-text: var(--gray-10);
+		--fjader-palette-text-secondary: rgba(17, 24, 39, 0.5);
+		--fjader-palette-text-muted: rgba(17, 24, 39, 0.35);
+		--fjader-palette-border: rgba(17, 24, 39, 0.1);
+		--fjader-palette-highlight: rgba(17, 24, 39, 0.08);
 		color-scheme: dark;
 	}
 }
 
 /* Demo page layout */
 body {
-	background-color: var(--diveplot-bg);
+	background-color: var(--fjader-bg);
 	color: var(--gray-10);
 	font-family: system-ui, sans-serif;
 	transition:

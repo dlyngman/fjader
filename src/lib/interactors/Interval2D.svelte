@@ -115,7 +115,7 @@
 	let lastEmittedMaxY = null;
 
 	// Scale validation for both dimensions
-	// Always validate as 'linear': DivePlot time scales use float offsets, not Dates.
+	// Always validate as 'linear': Fjader time scales use float offsets, not Dates.
 	$effect(() => {
 		let invalid = false;
 		if (

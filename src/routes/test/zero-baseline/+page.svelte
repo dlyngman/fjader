@@ -1,6 +1,6 @@
 <script>
 	import { sum } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -14,7 +14,7 @@
 	import { Grid } from '$lib/components/guides';
 
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
@@ -56,7 +56,7 @@
 </script>
 
 <svelte:head>
-	<title>Zero Baseline Test - DivePlot</title>
+	<title>Zero Baseline Test - Fjader</title>
 </svelte:head>
 
 <div class="app-container">

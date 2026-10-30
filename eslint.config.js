@@ -68,8 +68,8 @@ export default ts.config(
 	{
 		ignores: [
 			'.claude/',
-			'python/diveplot/static/',
-			'python/diveplot/streamlit_frontend/',
+			'python/fjader/static/',
+			'python/fjader/streamlit_frontend/',
 			'python/__marimo__/',
 			'python/layouts/'
 		]

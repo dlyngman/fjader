@@ -40,8 +40,8 @@ import { BuildQueue, type QueuedBuild } from './BuildQueue';
  */
 const MAX_UNUSED_TABLES = 32;
 
-/** TEMPORARY: flip to false to bypass preagg routing and force base-table queries.
- *  Used for benchmarking preagg vs. base. Revert to true before shipping. */
+/** Flip to false to bypass preagg routing and force base-table queries, to
+ *  benchmark preagg against the base table. */
 const PREAGG_ENABLED = true;
 
 /** A registered mark, as preagg sees it. */

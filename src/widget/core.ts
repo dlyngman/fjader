@@ -2,10 +2,10 @@
  * Shared rendering core for anywidget and Streamlit entry points.
  *
  * Provides framework-agnostic functions for loading data into DuckDB
- * and rendering a DivePlot spec into a DOM element.
+ * and rendering a Fjader spec into a DOM element.
  */
 
-import { render as divePlotRender } from '$lib/spec';
+import { render as fjaderRender } from '$lib/spec';
 import { getOrCreateQueryEngine, isUsingRestConnector } from '$lib/spec/LazyQueryEngine';
 import { loadArrowIPCTable } from './loadArrowIPC';
 
@@ -15,12 +15,12 @@ export interface ManifestEntry {
 	[key: string]: unknown;
 }
 
-export interface DivePlotHandle {
+export interface FjaderHandle {
 	destroy(): void;
 }
 
 /**
- * Render a DivePlot spec, loading Arrow IPC tables via the provided callback.
+ * Render a Fjader spec, loading Arrow IPC tables via the provided callback.
  *
  * The `getTableIPC` callback abstracts the data source:
  * - anywidget: slices from a concatenated blob
@@ -31,7 +31,7 @@ export async function renderFromData(
 	specJson: string,
 	manifestJson: string,
 	getTableIPC: (entry: ManifestEntry) => Uint8Array
-): Promise<DivePlotHandle> {
+): Promise<FjaderHandle> {
 	const spec = JSON.parse(specJson);
 	const manifest: ManifestEntry[] = JSON.parse(manifestJson);
 
@@ -48,7 +48,7 @@ export async function renderFromData(
 		);
 	}
 
-	return divePlotRender(el, spec, { queryEngine });
+	return fjaderRender(el, spec, { queryEngine });
 }
 
 /** Display a styled error message inline in the target element. */
@@ -60,7 +60,7 @@ export function showError(el: HTMLElement, err: unknown): void {
 		'padding:12px;color:#dc2626;font:13px/1.5 monospace;' +
 		'white-space:pre-wrap;border:1px solid #fca5a5;' +
 		'border-radius:4px;background:#fef2f2;';
-	div.textContent = `[diveplot] ${msg}`;
+	div.textContent = `[fjader] ${msg}`;
 	el.appendChild(div);
-	console.error('[diveplot] render failed:', err);
+	console.error('[fjader] render failed:', err);
 }

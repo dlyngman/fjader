@@ -1,13 +1,13 @@
-"""Native Streamlit custom component for DivePlot.
+"""Native Streamlit custom component for Fjader.
 
 Usage::
 
     import streamlit as st
-    import diveplot as dp
+    import fjader as fj
     import polars as pl
 
     df = pl.DataFrame({"x": range(50), "y": [i**0.5 for i in range(50)]})
-    dp.streamlit.render(dp.dot(data=df, x="x", y="y"))
+    fj.streamlit.render(fj.dot(data=df, x="x", y="y"))
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ try:
     import streamlit.components.v1 as components
 except ImportError as e:
     raise ImportError(
-        "DivePlot Streamlit support requires streamlit. "
-        "Install with: pip install 'diveplot[streamlit]'"
+        "Fjader Streamlit support requires streamlit. "
+        "Install with: pip install 'fjader[streamlit]'"
     ) from e
 
 _FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "streamlit_frontend")
-_component = components.declare_component("diveplot", path=_FRONTEND_DIR)
+_component = components.declare_component("fjader", path=_FRONTEND_DIR)
 
 
 def _to_pandas(df: Any) -> Any:
@@ -44,10 +44,10 @@ def render(
     key: str | None = None,
     server_duckdb: bool = False,
 ) -> Any:
-    """Render a DivePlot chart in a Streamlit app.
+    """Render a Fjader chart in a Streamlit app.
 
     Args:
-        obj: A DivePlot mark, plot, or layout object.
+        obj: A Fjader mark, plot, or layout object.
         height: Component height in pixels.
         key: Streamlit component key for state management.
         server_duckdb: If True, use Python-side DuckDB instead of browser WASM.
@@ -108,7 +108,7 @@ def _setup_server_fallback(dataframes: dict[str, Any]) -> None:
         # will still try WASM. Only log at debug level.
         import logging
 
-        logging.getLogger("diveplot").debug(
+        logging.getLogger("fjader").debug(
             "Server-side DuckDB fallback setup failed", exc_info=True
         )
 

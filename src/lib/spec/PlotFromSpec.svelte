@@ -54,7 +54,7 @@
 </script>
 
 <div
-	class="diveplot-spec-plot"
+	class="fjader-spec-plot"
 	style:width={spec.width ? `${spec.width}px` : '100%'}
 	style:height={spec.height ? `${spec.height}px` : undefined}
 	style:aspect-ratio={spec.height ? undefined : '4/3'}
@@ -149,7 +149,7 @@
 </div>
 
 <style>
-	.diveplot-spec-plot {
+	.fjader-spec-plot {
 		position: relative;
 	}
 </style>

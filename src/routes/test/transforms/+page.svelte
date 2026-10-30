@@ -2,12 +2,12 @@
 <script>
 	import { onMount } from 'svelte';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX, RectXMark } from '$lib/components';
 	import { filter, topN, normalize, stack } from '$lib/transforms';
 	import { bin } from '$lib/sql/bin';
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 
 	onMount(async () => {

@@ -23,7 +23,7 @@
 	// The log wraps the engine's query and exec on this page only.
 
 	import { count } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -48,7 +48,7 @@
 	const ROWS = 1_000_000;
 	const CARRIERS = ['AA', 'DL', 'UA', 'WN', 'B6', 'AS', 'NK', 'F9', 'G4', 'HA'];
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 	let log = $state([]);

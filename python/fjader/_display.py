@@ -1,4 +1,4 @@
-"""Display wiring: Mark/Plot/Layout → DivePlotWidget."""
+"""Display wiring: Mark/Plot/Layout → FjaderWidget."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from ._data import df_to_ipc_cached
 
 @runtime_checkable
 class Displayable(Protocol):
-    """Protocol for objects that can be rendered as DivePlot widgets."""
+    """Protocol for objects that can be rendered as Fjader widgets."""
 
     def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]: ...
 
@@ -43,7 +43,7 @@ def _serialize_dataframes(
 
 
 _DEFAULT_WIDGET_HEIGHT = 400
-_LAYOUT_GAP = 8  # matches .diveplot-vconcat/.diveplot-hconcat { gap: 8px }
+_LAYOUT_GAP = 8  # matches .fjader-vconcat/.fjader-hconcat { gap: 8px }
 
 
 def _inject_default_height(spec: dict[str, Any], height: int) -> None:
@@ -72,14 +72,14 @@ def _inject_default_height(spec: dict[str, Any], height: int) -> None:
 
 
 def make_widget(obj: Displayable) -> Any:
-    """Convert Mark/Plot/Overlay/Layout to a renderable DivePlotWidget."""
-    from ._widget import DivePlotWidget
+    """Convert Mark/Plot/Overlay/Layout to a renderable FjaderWidget."""
+    from ._widget import FjaderWidget
 
     spec_dict, dataframes = obj._to_full_spec()
     _inject_default_height(spec_dict, _DEFAULT_WIDGET_HEIGHT)
     manifest, blob = _serialize_dataframes(dataframes)
 
-    return DivePlotWidget(
+    return FjaderWidget(
         spec=json.dumps(spec_dict),
         data_manifest=json.dumps(manifest),
         data_blob=blob,
@@ -88,7 +88,7 @@ def make_widget(obj: Displayable) -> Any:
 
 
 def show(obj: Displayable) -> Any:
-    """Display a DivePlot object in a Jupyter notebook.
+    """Display a Fjader object in a Jupyter notebook.
 
     Convenience function — equivalent to calling ``make_widget(obj)``
     and displaying it. In most cases you can just let the ``_repr_mimebundle_``

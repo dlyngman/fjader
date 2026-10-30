@@ -1,7 +1,7 @@
 <!-- src/routes/performance-demo/+page.svelte -->
 <script>
 	import { loadParquet } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -15,7 +15,7 @@
 	} from '$lib/components';
 	import Frame from '$lib/components/background/Frame.svelte';
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 	let performanceReport = $state(null);
@@ -67,10 +67,10 @@
 				console.log('2. Manual commands: Try the console commands');
 				console.log('3. Adjust settings and re-test for comparison');
 				console.log('\n📊 Available Commands:');
-				console.log('DivePlotDebug.performance.startMonitoring()');
-				console.log('DivePlotDebug.performance.stopMonitoring()');
-				console.log('DivePlotDebug.gpu().quickStats()');
-				console.log('DivePlotDebug.gpu().analyzeResourceSharing()');
+				console.log('FjaderDebug.performance.startMonitoring()');
+				console.log('FjaderDebug.performance.stopMonitoring()');
+				console.log('FjaderDebug.gpu().quickStats()');
+				console.log('FjaderDebug.gpu().analyzeResourceSharing()');
 			}, 1000);
 		} catch (error) {
 			console.error('❌ Initialization error:', error);
@@ -80,7 +80,7 @@
 
 	// Performance monitoring functions
 	function startMonitoring() {
-		if (typeof window === 'undefined' || !window.DivePlotDebug) {
+		if (typeof window === 'undefined' || !window.FjaderDebug) {
 			alert("Debug tools not available. Make sure you're in development mode.");
 			return;
 		}
@@ -95,7 +95,7 @@
 		console.log('  2. Try different interactions for 20-30 seconds');
 		console.log('  3. Click "Stop Monitoring" to see results');
 
-		window.DivePlotDebug.performance.startMonitoring();
+		window.FjaderDebug.performance.startMonitoring();
 		isMonitoring = true;
 		monitoringDuration = 0;
 
@@ -106,14 +106,14 @@
 	}
 
 	function stopMonitoring() {
-		if (typeof window === 'undefined' || !window.DivePlotDebug) {
+		if (typeof window === 'undefined' || !window.FjaderDebug) {
 			alert('Debug tools not available.');
 			return;
 		}
 
 		console.log('\n🏁 Stopping Performance Monitoring...');
 
-		const report = window.DivePlotDebug.performance.stopMonitoring();
+		const report = window.FjaderDebug.performance.stopMonitoring();
 		performanceReport = report;
 		isMonitoring = false;
 
@@ -133,20 +133,20 @@
 			} else {
 				console.log('❌ Poor: Performance needs attention');
 				console.log(
-					'💡 Try: Check GPU coordination with DivePlotDebug.gpu().analyzeResourceSharing()'
+					'💡 Try: Check GPU coordination with FjaderDebug.gpu().analyzeResourceSharing()'
 				);
 			}
 		}, 500);
 	}
 
 	function showGPUStats() {
-		if (typeof window === 'undefined' || !window.DivePlotDebug) {
+		if (typeof window === 'undefined' || !window.FjaderDebug) {
 			alert('Debug tools not available.');
 			return;
 		}
 
 		console.log('\n🔧 Showing GPU Coordination Stats...');
-		window.DivePlotDebug.gpu().quickStats();
+		window.FjaderDebug.gpu().quickStats();
 
 		setTimeout(() => {
 			console.log('\n💡 What to look for:');
@@ -157,13 +157,13 @@
 	}
 
 	function analyzeResourceSharing() {
-		if (typeof window === 'undefined' || !window.DivePlotDebug) {
+		if (typeof window === 'undefined' || !window.FjaderDebug) {
 			alert('Debug tools not available.');
 			return;
 		}
 
 		console.log('\n🔍 Analyzing Resource Sharing...');
-		window.DivePlotDebug.gpu().analyzeResourceSharing();
+		window.FjaderDebug.gpu().analyzeResourceSharing();
 
 		setTimeout(() => {
 			console.log('\n💡 Analysis Tips:');
@@ -174,7 +174,7 @@
 	}
 
 	function runQuickBenchmark() {
-		if (typeof window === 'undefined' || !window.DivePlotDebug?.benchmark) {
+		if (typeof window === 'undefined' || !window.FjaderDebug?.benchmark) {
 			alert('Benchmark tools not available.');
 			return;
 		}
@@ -182,7 +182,7 @@
 		console.log('\n🏃‍♂️ Running Quick Benchmark (10 seconds)...');
 		console.log('📋 This will test performance automatically');
 
-		window.DivePlotDebug.benchmark.quick().then((results) => {
+		window.FjaderDebug.benchmark.quick().then((results) => {
 			console.log('\n🎯 Benchmark Complete!');
 			console.log('📊 Check the detailed results above');
 		});
@@ -378,28 +378,28 @@
 			<div class="commands-grid">
 				<div class="command-group">
 					<h4>Basic Performance</h4>
-					<code>DivePlotDebug.performance.startMonitoring()</code>
-					<code>DivePlotDebug.performance.stopMonitoring()</code>
-					<code>DivePlotDebug.performance.getStats()</code>
+					<code>FjaderDebug.performance.startMonitoring()</code>
+					<code>FjaderDebug.performance.stopMonitoring()</code>
+					<code>FjaderDebug.performance.getStats()</code>
 				</div>
 
 				<div class="command-group">
 					<h4>GPU Coordination</h4>
-					<code>DivePlotDebug.gpu().quickStats()</code>
-					<code>DivePlotDebug.gpu().analyzeResourceSharing()</code>
-					<code>DivePlotDebug.gpu().debugChart('chart-id')</code>
+					<code>FjaderDebug.gpu().quickStats()</code>
+					<code>FjaderDebug.gpu().analyzeResourceSharing()</code>
+					<code>FjaderDebug.gpu().debugChart('chart-id')</code>
 				</div>
 
 				<div class="command-group">
 					<h4>Benchmarking</h4>
-					<code>DivePlotDebug.benchmark.quick()</code>
-					<code>DivePlotDebug.benchmark.full()</code>
+					<code>FjaderDebug.benchmark.quick()</code>
+					<code>FjaderDebug.benchmark.full()</code>
 				</div>
 
 				<div class="command-group">
 					<h4>Help & Utils</h4>
-					<code>DivePlotDebug.help()</code>
-					<code>DivePlotErrorUtils.simulate.webgpuNotSupported()</code>
+					<code>FjaderDebug.help()</code>
+					<code>FjaderErrorUtils.simulate.webgpuNotSupported()</code>
 				</div>
 			</div>
 		</div>

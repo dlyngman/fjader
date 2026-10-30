@@ -1,11 +1,11 @@
 <script>
 	import { loadCSV, loadParquet } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	//
 	let isLoaded = $state(false);
 	let loadError = $state(null);

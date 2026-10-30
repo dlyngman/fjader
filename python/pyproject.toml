@@ -1,7 +1,7 @@
 [project]
-name = "diveplot"
+name = "fjader"
 version = "0.1.11"
-description = "GPU-accelerated data visualization — Python spec builder"
+description = "Declarative, GPU-rendered charts for millions of rows, powered by DuckDB"
 requires-python = ">=3.10"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
@@ -20,9 +20,9 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 source-include = [
-    "diveplot/static/**",
-    "diveplot/streamlit_frontend/**",
+    "fjader/static/**",
+    "fjader/streamlit_frontend/**",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["diveplot/tests"]
+testpaths = ["fjader/tests"]

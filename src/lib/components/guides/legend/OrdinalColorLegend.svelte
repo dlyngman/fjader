@@ -119,7 +119,7 @@
 
 <style>
 	.legend-ordinal {
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 10px;
 	}
 
@@ -180,6 +180,6 @@
 	}
 
 	.legend-label {
-		color: var(--diveplot-text-secondary, #6b7280);
+		color: var(--fjader-text-secondary, #6b7280);
 	}
 </style>

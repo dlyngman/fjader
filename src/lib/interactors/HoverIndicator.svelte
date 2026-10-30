@@ -26,7 +26,7 @@
 			points.length > 0
 	);
 	let isDot = $derived(tm?.currentMarkType === 'dot');
-	let fallbackColor = 'var(--diveplot-text-muted, #d1d5db)';
+	let fallbackColor = 'var(--fjader-text-muted, #d1d5db)';
 
 	// Radius for the indicator circle, based on the actual rendered dot radius
 	let dotR = $derived(tm?.matchedRadius ?? 3);
@@ -86,6 +86,6 @@
 	}
 
 	.outline {
-		stroke: var(--diveplot-bg, white);
+		stroke: var(--fjader-bg, white);
 	}
 </style>

@@ -1,4 +1,4 @@
-"""Render a DivePlot chart from a raw JSON spec (e.g. exported from the palette)."""
+"""Render a Fjader chart from a raw JSON spec (e.g. exported from the palette)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from typing import Any
 
 
 class SpecPlot:
-    """Wraps a raw DivePlotSpec dict for rendering in Jupyter or Streamlit.
+    """Wraps a raw FjaderSpec dict for rendering in Jupyter or Streamlit.
 
     Created by :func:`from_spec`. Implements the ``Displayable`` protocol
-    so it can be passed to ``dp.show()``, ``dp.streamlit.render()``, or
+    so it can be passed to ``fj.show()``, ``fj.streamlit.render()``, or
     displayed directly in Jupyter/Marimo.
     """
 
@@ -38,7 +38,7 @@ class SpecPlot:
 
 
 def _normalize_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    """Wrap a bare PlotSpec in a DivePlotSpec if needed.
+    """Wrap a bare PlotSpec in a FjaderSpec if needed.
 
     The palette exports bare PlotSpec (``{"marks": [...]}``) without
     the outer ``{"plot": ...}`` wrapper. The renderer expects the full form.
@@ -55,11 +55,11 @@ def from_spec(
 ) -> SpecPlot:
     """Create a renderable chart from a raw JSON spec.
 
-    Use this to render specs exported from the DivePlot command palette
+    Use this to render specs exported from the Fjader command palette
     (Cmd+E), or any hand-written spec dict.
 
     Args:
-        spec: A DivePlotSpec dict or JSON string. Accepts both the full form
+        spec: A FjaderSpec dict or JSON string. Accepts both the full form
             (``{"plot": {"marks": [...]}}``) and the bare PlotSpec form
             (``{"marks": [...]}``) exported by the palette.
         data: Optional dict mapping table names to DataFrames. Required when
@@ -68,12 +68,12 @@ def from_spec(
 
     Returns:
         A ``SpecPlot`` object that can be displayed in Jupyter, passed to
-        ``dp.show()``, or rendered with ``dp.streamlit.render()``.
+        ``fj.show()``, or rendered with ``fj.streamlit.render()``.
 
     Examples::
 
         # Paste a spec exported from the palette
-        chart = dp.from_spec({
+        chart = fj.from_spec({
             "marks": [{
                 "mark": "dot",
                 "table": "penguins",
@@ -83,8 +83,8 @@ def from_spec(
             }]
         }, data={"penguins": df})
 
-        # Full DivePlotSpec with file-based data sources
-        chart = dp.from_spec({
+        # Full FjaderSpec with file-based data sources
+        chart = fj.from_spec({
             "data": {"flights": {"url": "flights.parquet", "type": "parquet"}},
             "plot": {
                 "marks": [{"mark": "barY", "table": "flights", "x": "carrier", "y": "count()"}]
@@ -122,7 +122,7 @@ def _rewrite_table_refs(spec: dict[str, Any], old: str, new: str) -> None:
 
 
 def _iter_plot_specs(spec: dict[str, Any]):
-    """Yield all PlotSpec dicts from a DivePlotSpec."""
+    """Yield all PlotSpec dicts from a FjaderSpec."""
     if "plot" in spec:
         yield spec["plot"]
     for item in spec.get("hconcat", []):

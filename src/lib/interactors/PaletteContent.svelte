@@ -1505,14 +1505,14 @@
 		max-height: calc(100% - 20px);
 		display: flex;
 		flex-direction: column;
-		background: var(--diveplot-palette-bg, rgba(0, 0, 0, 0.92));
-		color: var(--diveplot-palette-text, #ffffff);
-		border: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		background: var(--fjader-palette-bg, rgba(0, 0, 0, 0.92));
+		color: var(--fjader-palette-text, #ffffff);
+		border: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		border-radius: 8px;
 		box-shadow:
 			0 8px 32px rgba(0, 0, 0, 0.4),
 			0 2px 8px rgba(0, 0, 0, 0.2);
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		overflow: hidden;
 		outline: none;
 	}
@@ -1521,7 +1521,7 @@
 	.tab-bar {
 		display: flex;
 		gap: 0;
-		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		border-bottom: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		padding: 0 8px;
 	}
 
@@ -1532,7 +1532,7 @@
 		padding: 5px 8px 4px;
 		font-size: 10px;
 		font-weight: 600;
-		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		cursor: pointer;
 		text-transform: lowercase;
 		letter-spacing: 0.02em;
@@ -1540,18 +1540,18 @@
 	}
 
 	.tab:hover {
-		color: var(--diveplot-palette-text, #ffffff);
+		color: var(--fjader-palette-text, #ffffff);
 		opacity: 0.7;
 	}
 
 	.tab.active {
-		color: var(--diveplot-palette-text, #ffffff);
+		color: var(--fjader-palette-text, #ffffff);
 		opacity: 0.85;
 		border-bottom-color: currentColor;
 	}
 
 	.tab.focused {
-		outline: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		outline: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		outline-offset: -2px;
 		border-radius: 3px 3px 0 0;
 	}
@@ -1575,7 +1575,7 @@
 	.palette-body.split .channel-list {
 		width: 90px;
 		flex: none;
-		border-right: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		border-right: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 	}
 
 	.ch-row {
@@ -1597,11 +1597,11 @@
 
 	.palette-panel:not(.keyboard-nav) .ch-row:hover,
 	.ch-row.highlighted {
-		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		background: var(--fjader-palette-highlight, rgba(255, 255, 255, 0.08));
 	}
 
 	.ch-row.expanded {
-		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		background: var(--fjader-palette-highlight, rgba(255, 255, 255, 0.08));
 		opacity: 1;
 	}
 
@@ -1611,7 +1611,7 @@
 	}
 
 	.ch-value {
-		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		font-size: 10px;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -1624,12 +1624,12 @@
 	}
 
 	.reset-row {
-		border-top: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		border-top: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		margin-top: 2px;
 	}
 
 	.reset-label {
-		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		font-style: italic;
 	}
 
@@ -1644,13 +1644,13 @@
 
 	.filter-row {
 		padding: 4px 6px;
-		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		border-bottom: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 	}
 
 	.filter-input {
 		width: 100%;
-		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
-		border: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		background: var(--fjader-palette-highlight, rgba(255, 255, 255, 0.08));
+		border: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		border-radius: 3px;
 		padding: 3px 6px;
 		font-size: 10px;
@@ -1660,11 +1660,11 @@
 	}
 
 	.filter-input::placeholder {
-		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		color: var(--fjader-palette-text-muted, rgba(255, 255, 255, 0.3));
 	}
 
 	.filter-input:focus {
-		border-color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		border-color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 	}
 
 	.value-list {
@@ -1690,7 +1690,7 @@
 
 	.palette-panel:not(.keyboard-nav) .val-row:hover,
 	.val-row.highlighted {
-		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		background: var(--fjader-palette-highlight, rgba(255, 255, 255, 0.08));
 	}
 
 	.val-name {
@@ -1708,25 +1708,25 @@
 	}
 
 	.val-type {
-		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		color: var(--fjader-palette-text-muted, rgba(255, 255, 255, 0.3));
 		font-size: 9px;
 		font-style: italic;
 	}
 
 	.clear-row {
-		border-top: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		border-top: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		margin-top: 2px;
 	}
 
 	.clear-label {
-		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		font-style: italic;
 	}
 
 	.palette-empty {
 		padding: 8px 6px;
 		text-align: center;
-		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		color: var(--fjader-palette-text-muted, rgba(255, 255, 255, 0.3));
 		font-size: 10px;
 	}
 
@@ -1742,7 +1742,7 @@
 		width: 48px;
 		background: none;
 		border: none;
-		border-bottom: 1px solid var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		border-bottom: 1px solid var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		padding: 1px 0;
 		font-size: 10px;
 		font-weight: 500;
@@ -1760,13 +1760,13 @@
 	}
 
 	.scrubber-input:focus {
-		border-bottom-color: var(--diveplot-palette-text, #ffffff);
+		border-bottom-color: var(--fjader-palette-text, #ffffff);
 		cursor: text;
 	}
 
 	.scrubber-range {
 		font-size: 9px;
-		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		color: var(--fjader-palette-text-muted, rgba(255, 255, 255, 0.3));
 	}
 
 	/* ---- Numeric group ---- */
@@ -1785,17 +1785,17 @@
 	}
 
 	.group-label {
-		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 		font-weight: 500;
 	}
 
 	.group-row.highlighted {
-		background: var(--diveplot-palette-highlight, rgba(255, 255, 255, 0.08));
+		background: var(--fjader-palette-highlight, rgba(255, 255, 255, 0.08));
 		border-radius: 4px;
 	}
 
 	.constant-entry {
-		border-bottom: 1px solid var(--diveplot-palette-border, rgba(255, 255, 255, 0.1));
+		border-bottom: 1px solid var(--fjader-palette-border, rgba(255, 255, 255, 0.1));
 		margin-bottom: 2px;
 	}
 
@@ -1803,16 +1803,16 @@
 	.lod-readout {
 		font-size: 10px;
 		font-variant-numeric: tabular-nums;
-		color: var(--diveplot-palette-text-secondary, rgba(255, 255, 255, 0.5));
+		color: var(--fjader-palette-text-secondary, rgba(255, 255, 255, 0.5));
 	}
 
 	.lod-readout.lod-active {
-		color: var(--diveplot-palette-text, #ffffff);
+		color: var(--fjader-palette-text, #ffffff);
 	}
 
 	.lod-hint {
 		font-size: 9px;
-		color: var(--diveplot-palette-text-muted, rgba(255, 255, 255, 0.3));
+		color: var(--fjader-palette-text-muted, rgba(255, 255, 255, 0.3));
 		font-style: italic;
 		padding: 3px 6px 0;
 	}

@@ -90,7 +90,7 @@
 
 	.size-display {
 		padding: 8px 16px;
-		background-color: var(--diveplot-bg, #ffffff);
+		background-color: var(--fjader-bg, #ffffff);
 		border: 1px solid #ccc;
 		border-radius: 4px;
 		cursor: pointer;
@@ -104,7 +104,7 @@
 		top: 100%;
 		left: 0;
 		margin-top: 5px;
-		background-color: var(--diveplot-bg, #ffffff);
+		background-color: var(--fjader-bg, #ffffff);
 		border: 1px solid #ccc;
 		border-radius: 4px;
 		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
@@ -132,12 +132,12 @@
 	}
 
 	.grid-cell.active {
-		background-color: var(--diveplot-accent, #93c5fd);
+		background-color: var(--fjader-accent, #93c5fd);
 		/* border-color: #2980b9; */
 	}
 
 	.grid-cell.selected {
-		background-color: var(--diveplot-primary, #3b82f6);
+		background-color: var(--fjader-primary, #3b82f6);
 		/* border-color: #27ae60; */
 	}
 

@@ -33,11 +33,11 @@
 	const DATA_MAX = 1000;
 	const DOT_RADIUS = 4; // CSS pixels
 
-	// --- Spring physics (inline copy of DivePlot's Spring) ---
+	// --- Spring physics (inline copy of Fjader's Spring) ---
 	const PHYSICS_HZ = 360;
 	const DT = 1 / PHYSICS_HZ; // ~2.78ms
 	const MAX_DELTA = 0.1;
-	const PAN_STIFFNESS = 600; // matches DivePlot pan preset
+	const PAN_STIFFNESS = 600; // matches Fjader pan preset
 	const DEFAULT_STIFFNESS = 400;
 
 	function createSpring(initial, stiffness = DEFAULT_STIFFNESS) {
@@ -113,7 +113,7 @@
 	let useIdleDetection = $state(false);
 	let useExtraBufferWrites = $state(false);
 
-	// Extra buffer writes (simulate DivePlot's per-frame SSBO updates)
+	// Extra buffer writes (simulate Fjader's per-frame SSBO updates)
 	let extraBuffers = [];
 	const extraBufferData = new Float32Array(16);
 	const NUM_EXTRA_BUFFERS = 6;
@@ -235,7 +235,7 @@
 		ensureLoopRunning();
 	}
 
-	function applyDivePlot() {
+	function applyFjader() {
 		useRafAtEnd = true;
 		useFixedTimestep = true;
 		useSpring = true;
@@ -602,7 +602,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 	const uniformData = new Float32Array(8);
 
 	function frame(time) {
-		// --- RAF position: top (default) or bottom (DivePlot style) ---
+		// --- RAF position: top (default) or bottom (Fjader style) ---
 		if (!useRafAtEnd) {
 			rafId = requestAnimationFrame(frame);
 		}
@@ -630,7 +630,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 		//   spring OFF + fixedTS OFF  = direct (target → render)
 		//   spring ON  + fixedTS OFF  = spring stepped once per frame, no accumulator
 		//   spring OFF + fixedTS ON   = accumulator loop runs (busywork) but render uses target directly
-		//   spring ON  + fixedTS ON   = full DivePlot: accumulator + spring steps + extrapolation
+		//   spring ON  + fixedTS ON   = full Fjader: accumulator + spring steps + extrapolation
 		let renderXMin, renderXMax, renderYMin, renderYMax;
 
 		if (useFixedTimestep) {
@@ -782,7 +782,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 		}
 	}
 
-	// --- Pointer handlers (simulate DivePlot panning exactly) ---
+	// --- Pointer handlers (simulate Fjader panning exactly) ---
 	function trackPointerRate() {
 		const now = performance.now();
 		pointerEvents.push(now);
@@ -901,7 +901,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 				<div class="row">
 					<button onclick={applyBare}>Bare</button>
 					<button onclick={applyLoopOnly}>Loop only</button>
-					<button onclick={applyDivePlot}>Full DivePlot</button>
+					<button onclick={applyFjader}>Full Fjader</button>
 					<button onclick={resetStats}>Reset Stats</button>
 					<button
 						class="toggle-canvas"
@@ -1166,7 +1166,7 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 
 		<h3>The Problem</h3>
 		<p>
-			DivePlot shows intermittent microstutter/jank when panning on Chrome at 120fps. Safari 26 with
+			Fjader shows intermittent microstutter/jank when panning on Chrome at 120fps. Safari 26 with
 			WebGPU is buttery smooth. The jank manifests as periods of lower perceived refresh rate that
 			come and go during interaction.
 		</p>
@@ -1178,12 +1178,12 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 			<li>Chrome FPS counter shows 120fps throughout</li>
 			<li>GPU timing queries show fast execution</li>
 			<li>
-				<code>/test/gpu-minimal</code> (standalone WebGPU, no DivePlot) is smooth on the same Chrome
+				<code>/test/gpu-minimal</code> (standalone WebGPU, no Fjader) is smooth on the same Chrome
 			</li>
-			<li>Safari 26 is buttery smooth with identical DivePlot code</li>
+			<li>Safari 26 is buttery smooth with identical Fjader code</li>
 		</ul>
 
-		<h3>Phase 1: DivePlot Component Testing (all no improvement)</h3>
+		<h3>Phase 1: Fjader Component Testing (all no improvement)</h3>
 		<table>
 			<thead>
 				<tr><th>Test</th><th>Change</th><th>Result</th></tr>
@@ -1240,16 +1240,16 @@ fn fs(input: VSOut) -> @location(0) vec4f {
 
 		<h3>Phase 2: CSS/DOM Bisect (this page)</h3>
 		<p>
-			Built this isolated test page replicating DivePlot's DOM structure (contain: strict,
-			isolation: isolate, translateZ(0), will-change, z-indexed SVG/canvas/overlay layers).
+			Built this isolated test page replicating Fjader's DOM structure (contain: strict, isolation:
+			isolate, translateZ(0), will-change, z-indexed SVG/canvas/overlay layers).
 		</p>
 		<p>
-			<strong>Result: "Full DivePlot" CSS preset looked smooth.</strong>
+			<strong>Result: "Full Fjader" CSS preset looked smooth.</strong>
 			CSS properties and DOM structure alone are NOT the cause.
 		</p>
 
 		<h3>Phase 3: Animation Loop Bisect</h3>
-		<p>Added toggles for DivePlot's runtime behaviors:</p>
+		<p>Added toggles for Fjader's runtime behaviors:</p>
 		<ul>
 			<li><strong>RAF at end</strong> — requestAnimationFrame after submit (vs top of frame)</li>
 			<li>

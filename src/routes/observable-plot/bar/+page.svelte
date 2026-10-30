@@ -1,6 +1,6 @@
 <script>
 	import * as msql from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -19,7 +19,7 @@
 	import { orderby, stack } from '$lib/transforms';
 
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 

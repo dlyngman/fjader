@@ -1,46 +1,46 @@
 /*
- * DivePlot Default Theme
+ * Fjader Default Theme
  *
  * Import this file for automatic dark-mode support:
- *   import 'diveplot/theme.css';
+ *   import 'fjader/theme.css';
  *
  * Or copy and customize the variables below in your own CSS.
- * All variables are optional — DivePlot components have sensible
+ * All variables are optional — Fjader components have sensible
  * inline fallbacks and work without any CSS imports.
  */
 
 :where(:root) {
-	--diveplot-font: system-ui, sans-serif;
-	--diveplot-text-secondary: #6b7280;
-	--diveplot-text-muted: #d1d5db;
-	--diveplot-bg: #ffffff;
-	--diveplot-primary: #3b82f6;
-	--diveplot-accent: #93c5fd;
-	--diveplot-tooltip-bg: rgba(0, 0, 0, 0.88);
-	--diveplot-tooltip-text: #ffffff;
-	--diveplot-palette-bg: rgba(0, 0, 0, 0.92);
-	--diveplot-palette-text: #ffffff;
-	--diveplot-palette-text-secondary: rgba(255, 255, 255, 0.5);
-	--diveplot-palette-text-muted: rgba(255, 255, 255, 0.3);
-	--diveplot-palette-border: rgba(255, 255, 255, 0.1);
-	--diveplot-palette-highlight: rgba(255, 255, 255, 0.08);
+	--fjader-font: system-ui, sans-serif;
+	--fjader-text-secondary: #6b7280;
+	--fjader-text-muted: #d1d5db;
+	--fjader-bg: #ffffff;
+	--fjader-primary: #3b82f6;
+	--fjader-accent: #93c5fd;
+	--fjader-tooltip-bg: rgba(0, 0, 0, 0.88);
+	--fjader-tooltip-text: #ffffff;
+	--fjader-palette-bg: rgba(0, 0, 0, 0.92);
+	--fjader-palette-text: #ffffff;
+	--fjader-palette-text-secondary: rgba(255, 255, 255, 0.5);
+	--fjader-palette-text-muted: rgba(255, 255, 255, 0.3);
+	--fjader-palette-border: rgba(255, 255, 255, 0.1);
+	--fjader-palette-highlight: rgba(255, 255, 255, 0.08);
 	color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
 	:where(:root) {
-		--diveplot-text-secondary: #9ca3af;
-		--diveplot-text-muted: #4b5563;
-		--diveplot-bg: #111827;
-		--diveplot-primary: #60a5fa;
-		--diveplot-accent: #3b82f6;
-		--diveplot-tooltip-bg: rgba(255, 255, 255, 0.92);
-		--diveplot-tooltip-text: #111827;
-		--diveplot-palette-bg: rgba(255, 255, 255, 0.95);
-		--diveplot-palette-text: #111827;
-		--diveplot-palette-text-secondary: rgba(17, 24, 39, 0.5);
-		--diveplot-palette-text-muted: rgba(17, 24, 39, 0.35);
-		--diveplot-palette-border: rgba(17, 24, 39, 0.1);
-		--diveplot-palette-highlight: rgba(17, 24, 39, 0.08);
+		--fjader-text-secondary: #9ca3af;
+		--fjader-text-muted: #4b5563;
+		--fjader-bg: #111827;
+		--fjader-primary: #60a5fa;
+		--fjader-accent: #3b82f6;
+		--fjader-tooltip-bg: rgba(255, 255, 255, 0.92);
+		--fjader-tooltip-text: #111827;
+		--fjader-palette-bg: rgba(255, 255, 255, 0.95);
+		--fjader-palette-text: #111827;
+		--fjader-palette-text-secondary: rgba(17, 24, 39, 0.5);
+		--fjader-palette-text-muted: rgba(17, 24, 39, 0.35);
+		--fjader-palette-border: rgba(17, 24, 39, 0.1);
+		--fjader-palette-highlight: rgba(17, 24, 39, 0.08);
 	}
 }

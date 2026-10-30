@@ -1,14 +1,14 @@
-"""Streamlit test app for DivePlot — mirrors marimo_widget_test.py."""
+"""Streamlit test app for Fjader — mirrors marimo_widget_test.py."""
 
 from pathlib import Path
 
 import polars as pl
 import streamlit as st
 
-import diveplot as dp
+import fjader as fj
 
 st.set_page_config(layout="wide")
-st.title("DivePlot Streamlit Test")
+st.title("Fjader Streamlit Test")
 
 # --- Simple scatter + line overlay ---
 st.header("Dot + Line overlay")
@@ -19,18 +19,18 @@ df = pl.DataFrame({
     "category": ["A", "B"] * 25,
 })
 
-overlay = dp.dot(data=df, x="x", y="y") * dp.line(data=df, x="x", y="y")
+overlay = fj.dot(data=df, x="x", y="y") * fj.line(data=df, x="x", y="y")
 USE_SERVER = st.toggle("Use server-side DuckDB (no WASM)", value=False)
 
-dp.streamlit.render(overlay, height=400, server_duckdb=USE_SERVER)
+fj.streamlit.render(overlay, height=400, server_duckdb=USE_SERVER)
 
 # --- Seattle weather scatter ---
 st.header("Seattle Weather — Dots")
 
 weather = pl.read_parquet(Path(__file__).parent / "../static/data/seattle-weather.parquet")
 
-dots = dp.plot(
-    dp.dot(
+dots = fj.plot(
+    fj.dot(
         data=weather,
         x="date",
         y="temp_max",
@@ -45,31 +45,31 @@ dots = dp.plot(
     x_label="Date",
     y_label="Max Temperature (°F)",
 )
-dp.streamlit.render(dots, height=450, server_duckdb=USE_SERVER)
+fj.streamlit.render(dots, height=450, server_duckdb=USE_SERVER)
 
 # --- Weather: legend toggle + bar chart (replicates Svelte weather demo) ---
 st.header("Seattle Weather — Legend Toggle + Bars")
 
-weather_dots = dp.plot(
-    dp.dot(
+weather_dots = fj.plot(
+    fj.dot(
         data=weather, x="date", y="temp_max", fill="weather",
         r="precipitation", opacity=0.7, preferred_x_scale_type="time",
         selection="sel",
     ),
     width=800, height=350,
     legend=True,
-    interactors=[dp.interval_x()],
+    interactors=[fj.interval_x()],
 )
-weather_bars = dp.plot(
-    dp.bar_x(
-        data=weather, x=dp.count(), y="weather", fill="weather",
+weather_bars = fj.plot(
+    fj.bar_x(
+        data=weather, x=fj.count(), y="weather", fill="weather",
         selection="sel",
     ),
     width=800, height=200,
-    interactors=[dp.toggle(field="weather")],
+    interactors=[fj.toggle(field="weather")],
 )
-dp.streamlit.render(
-    dp.vconcat(weather_dots, weather_bars),
+fj.streamlit.render(
+    fj.vconcat(weather_dots, weather_bars),
     server_duckdb=USE_SERVER,
 )
 
@@ -87,23 +87,23 @@ simple = pl.DataFrame({
 
 col1, col2 = st.columns(2)
 with col1:
-    dp.streamlit.render(
-        dp.plot(
-            dp.bar_x(data=simple, x="count", y="weather", selection="togX1"),
+    fj.streamlit.render(
+        fj.plot(
+            fj.bar_x(data=simple, x="count", y="weather", selection="togX1"),
             width=450, height=250, y_label="default order",
-            interactors=[dp.toggle(field="weather", selection="togX1")],
+            interactors=[fj.toggle(field="weather", selection="togX1")],
         ),
         server_duckdb=USE_SERVER,
     )
 with col2:
-    dp.streamlit.render(
-        dp.plot(
-            dp.bar_x(
+    fj.streamlit.render(
+        fj.plot(
+            fj.bar_x(
                 data=simple, x="count", y="weather", selection="togX2",
                 domain={"y": ["snow", "drizzle", "fog", "rain", "sun"]},
             ),
             width=450, height=250, y_label="explicit domain",
-            interactors=[dp.toggle(field="weather", selection="togX2")],
+            interactors=[fj.toggle(field="weather", selection="togX2")],
         ),
         server_duckdb=USE_SERVER,
     )
@@ -113,23 +113,23 @@ st.markdown("Left: default order. Right: explicit domain controls category order
 
 col3, col4 = st.columns(2)
 with col3:
-    dp.streamlit.render(
-        dp.plot(
-            dp.bar_y(data=simple, x="weather", y="count", selection="togY1"),
+    fj.streamlit.render(
+        fj.plot(
+            fj.bar_y(data=simple, x="weather", y="count", selection="togY1"),
             width=450, height=250, x_label="default order",
-            interactors=[dp.toggle(field="weather", selection="togY1")],
+            interactors=[fj.toggle(field="weather", selection="togY1")],
         ),
         server_duckdb=USE_SERVER,
     )
 with col4:
-    dp.streamlit.render(
-        dp.plot(
-            dp.bar_y(
+    fj.streamlit.render(
+        fj.plot(
+            fj.bar_y(
                 data=simple, x="weather", y="count", selection="togY2",
                 domain={"x": ["snow", "drizzle", "fog", "rain", "sun"]},
             ),
             width=450, height=250, x_label="explicit domain",
-            interactors=[dp.toggle(field="weather", selection="togY2")],
+            interactors=[fj.toggle(field="weather", selection="togY2")],
         ),
         server_duckdb=USE_SERVER,
     )
@@ -138,8 +138,8 @@ with col4:
 st.header("Crossfilter (brush dots → filters bars)")
 
 # Dots with brush interactor driving the crossfilter
-filtered_dots = dp.plot(
-    dp.dot(
+filtered_dots = fj.plot(
+    fj.dot(
         data=weather, x="date", y="temp_max", fill="weather",
         r="precipitation",
         opacity=0.7, preferred_x_scale_type="time",
@@ -147,21 +147,21 @@ filtered_dots = dp.plot(
     ),
     width=800, height=350,
     # x_label="Date", y_label="Max Temp (°F)",
-    interactors=[dp.interval_x()],
+    interactors=[fj.interval_x()],
 )
 
 # Bar chart filtered by the crossfilter selection
-bar_brush = dp.plot(
-    dp.bar_x(
-        data=weather, x=dp.count(), y="weather", fill="weather",
+bar_brush = fj.plot(
+    fj.bar_x(
+        data=weather, x=fj.count(), y="weather", fill="weather",
         selection="brush",
     ),
     width=800, height=200,
     # x_label="Count", y_label="Weather",
 )
 
-dp.streamlit.render(
-    dp.vconcat(filtered_dots, bar_brush),
+fj.streamlit.render(
+    fj.vconcat(filtered_dots, bar_brush),
     server_duckdb=USE_SERVER,
 )
 
@@ -170,40 +170,40 @@ st.header("2D Brush (rectangle brush → filters bars)")
 
 penguins = pl.read_parquet(Path(__file__).parent / "../static/data/penguins.parquet")
 
-brush_scatter = dp.plot(
-    dp.dot(
+brush_scatter = fj.plot(
+    fj.dot(
         data=penguins, x="bill_length", y="bill_depth", fill="species",
         opacity=0.6, selection="brush2d",
     ),
     width=600, height=400,
-    interactors=[dp.interval_2d()],
+    interactors=[fj.interval_2d()],
 )
-brush_bars = dp.plot(
-    dp.bar_y(
-        data=penguins, x="species", y=dp.count(), fill="species",
+brush_bars = fj.plot(
+    fj.bar_y(
+        data=penguins, x="species", y=fj.count(), fill="species",
         selection="brush2d",
         domain={"x": ["Chinstrap", "Gentoo", "Adelie"]},
     ),
     width=600, height=300,
 )
-dp.streamlit.render(
-    dp.hconcat(brush_scatter, brush_bars),
+fj.streamlit.render(
+    fj.hconcat(brush_scatter, brush_bars),
     server_duckdb=USE_SERVER,
 )
 
 # --- Overview + Detail (domain zoom, not crossfilter) ---
 st.header("Overview + Detail (domain zoom)")
-detail = dp.plot(
-    dp.line(data=weather, x="date", y="temp_max"),
+detail = fj.plot(
+    fj.line(data=weather, x="date", y="temp_max"),
     height=400, x_label="Date",
     use_selection='x',
 )
-overview = dp.plot(
-    dp.line(data=weather, x="date", y="temp_max"),
+overview = fj.plot(
+    fj.line(data=weather, x="date", y="temp_max"),
     x_label="Date", height=100,
-    interactors=[dp.interval_x()],
+    interactors=[fj.interval_x()],
 )
-dp.streamlit.render(dp.vconcat(detail, overview), server_duckdb=USE_SERVER)
+fj.streamlit.render(fj.vconcat(detail, overview), server_duckdb=USE_SERVER)
 
 # --- fitDomain: auto-fit y-axis to visible range ---
 st.header("fitDomain (y-axis auto-fits to visible data)")
@@ -215,20 +215,20 @@ ts = pl.DataFrame({
     "value": [math.sin(i / 20) * 10 + i * 0.05 for i in range(500)],
 })
 
-fit_detail = dp.plot(
-    dp.line(data=ts, x="t", y="value", fit_domain="y"),
+fit_detail = fj.plot(
+    fj.line(data=ts, x="t", y="value", fit_domain="y"),
     height=300,
     x_label="Time",
     y_label="Value (auto-fit)",
     use_selection="x",
 )
-fit_overview = dp.plot(
-    dp.line(data=ts, x="t", y="value"),
+fit_overview = fj.plot(
+    fj.line(data=ts, x="t", y="value"),
     height=100,
     x_label="Time",
-    interactors=[dp.interval_x()],
+    interactors=[fj.interval_x()],
 )
-dp.streamlit.render(dp.vconcat(fit_detail, fit_overview), server_duckdb=USE_SERVER)
+fj.streamlit.render(fj.vconcat(fit_detail, fit_overview), server_duckdb=USE_SERVER)
 
 # --- autoDots: density-based dot fading on area marks ---
 st.header("autoDots on AreaY (dots appear when data is sparse)")
@@ -239,15 +239,15 @@ area_df = pl.DataFrame({
     "group": ["A"] * 15 + ["B"] * 15,
 })
 
-dp.streamlit.render(
-    dp.area_y(
+fj.streamlit.render(
+    fj.area_y(
         data=area_df,
         x="x",
         y="y",
         fill="group",
         auto_dots=True,
         curve="monotone",
-        transforms=[dp.stack_y()],
+        transforms=[fj.stack_y()],
     ),
     height=400,
     server_duckdb=USE_SERVER,
@@ -261,9 +261,9 @@ big_line = pl.DataFrame({
     "y": [math.sin(i / 50) * 100 + (i % 7) for i in range(5000)],
 })
 
-dp.streamlit.render(
-    dp.plot(
-        dp.line(
+fj.streamlit.render(
+    fj.plot(
+        fj.line(
             data=big_line,
             x="x",
             y="y",
@@ -284,13 +284,13 @@ window_df = pl.DataFrame({
     "price": [math.sin(i / 10) * 20 + 50 + (i % 3) * 2 for i in range(200)],
 })
 
-dp.streamlit.render(
-    dp.plot(
-        dp.dot(data=window_df, x="date", y="price", opacity=0.3, r=2)
-        * dp.line(
+fj.streamlit.render(
+    fj.plot(
+        fj.dot(data=window_df, x="date", y="price", opacity=0.3, r=2)
+        * fj.line(
             data=window_df,
             x="date",
-            y=dp.window("avg", "price", order_by="date", frame=[-10, 0]),
+            y=fj.window("avg", "price", order_by="date", frame=[-10, 0]),
             stroke_width=2,
         ),
         height=350,
@@ -310,8 +310,8 @@ spec_df = pl.DataFrame({
     "count": [152, 68, 124],
 })
 
-dp.streamlit.render(
-    dp.from_spec(
+fj.streamlit.render(
+    fj.from_spec(
         {
             "marks": [{
                 "mark": "barY",
@@ -346,8 +346,8 @@ default_spec = """{
 spec_text = st.text_area("Paste a spec (JSON)", value=default_spec, height=250)
 
 try:
-    dp.streamlit.render(
-        dp.from_spec(spec_text, data={"weather": weather}),
+    fj.streamlit.render(
+        fj.from_spec(spec_text, data={"weather": weather}),
         server_duckdb=USE_SERVER,
     )
 except Exception as e:
@@ -355,8 +355,8 @@ except Exception as e:
 
 st.subheader("Multi-mark overlay from spec")
 
-dp.streamlit.render(
-    dp.from_spec(
+fj.streamlit.render(
+    fj.from_spec(
         {
             "marks": [
                 {

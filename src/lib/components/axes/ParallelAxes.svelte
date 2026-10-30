@@ -108,37 +108,37 @@
 
 <style>
 	.axis-line {
-		stroke: var(--diveplot-text-secondary, #6b7280);
+		stroke: var(--fjader-text-secondary, #6b7280);
 		stroke-width: 1;
 	}
 
 	.tick-line {
-		stroke: var(--diveplot-text-secondary, #6b7280);
+		stroke: var(--fjader-text-secondary, #6b7280);
 	}
 
 	.tick-halo {
 		fill: none;
-		stroke: var(--diveplot-bg, #ffffff);
+		stroke: var(--fjader-bg, #ffffff);
 		stroke-width: 3px;
 		stroke-linejoin: round;
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 10px;
 	}
 
 	.tick-label {
-		fill: var(--diveplot-text-secondary, #6b7280);
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		fill: var(--fjader-text-secondary, #6b7280);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 10px;
 	}
 
 	.axis-label {
 		font-size: 11px;
 		font-weight: 500;
-		fill: var(--diveplot-text-primary, #374151);
+		fill: var(--fjader-text-primary, #374151);
 	}
 
 	.axis-label-dragging {
-		fill: var(--diveplot-accent, #3b82f6);
+		fill: var(--fjader-accent, #3b82f6);
 	}
 
 	.dragging {
@@ -146,7 +146,7 @@
 	}
 
 	.drop-indicator {
-		stroke: var(--diveplot-accent, #3b82f6);
+		stroke: var(--fjader-accent, #3b82f6);
 		stroke-width: 2;
 		stroke-dasharray: 4 3;
 	}
