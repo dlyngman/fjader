@@ -51,6 +51,7 @@
 		"open-props": "^1.7.23",
 		"prettier": "^3.4.2",
 		"prettier-plugin-svelte": "^3.3.3",
+		"rollup-plugin-license": "^3.7.1",
 		"streamlit-component-lib": "^2.0.0",
 		"svelte": "^5.0.0",
 		"svelte-check": "^4.4.1",

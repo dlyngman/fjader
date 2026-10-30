@@ -551,7 +551,7 @@ function fieldExpr(sqlText: string | undefined, field: string): ExprNode {
 		: column(field);
 }
 
-/** FNV-1a hash (same algorithm as Mosaic). */
+/** 32-bit FNV-1a hash. */
 export function fnvHash(s: string): number {
 	let h = 0x811c9dc5;
 	for (let i = 0; i < s.length; i++) {
