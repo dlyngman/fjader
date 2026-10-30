@@ -125,6 +125,15 @@ npm run format       # Auto-format
 npx vitest           # Run tests
 ```
 
+## Acknowledgements
+
+DivePlot owes a great deal to two projects:
+
+- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. DivePlot started out on Mosaic and still builds every query with `@uwdata/mosaic-sql`. Its query layer adapts Mosaic's pre-aggregation with sufficient statistics, its crossfilter selection model and its REST connector protocol, and the API, interactors and JSON spec follow vgplot.
+- **[Observable Plot](https://github.com/observablehq/plot)**, by Observable. The mark API, its channel shorthands, stacking conventions and many defaults follow Plot.
+
+It also rests on [DuckDB](https://duckdb.org) and [DuckDB-WASM](https://github.com/duckdb/duckdb-wasm), [Flechette](https://github.com/uwdata/flechette), [d3](https://d3js.org) and [Svelte](https://svelte.dev).
+
 ## License
 
-See [LICENSE](LICENSE).
+BSD 3-Clause. See [LICENSE](LICENSE), which also reproduces the licenses of Mosaic and Observable Plot in full. The Python package's bundled JavaScript ships with a `THIRD_PARTY_LICENSES.txt` covering every package compiled into it.
