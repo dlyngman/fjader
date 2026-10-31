@@ -1,6 +1,6 @@
 <script>
 	import { loadParquet, count, dateMonthDay } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -18,7 +18,7 @@
 	import BarMarkX from '$lib/components/marks/BarMarkX.svelte';
 	import Toggle from '$lib/interactors/Toggle.svelte';
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 

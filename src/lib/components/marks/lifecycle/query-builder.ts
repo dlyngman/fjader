@@ -50,7 +50,7 @@ export interface QueryParts {
 	aliasMap: Map<string, string>;
 	/** Channels whose raw config value was a column-name passthrough (string
 	 *  or plain ColumnRefNode). For these, the channel alias is provably 1:1
-	 *  with the source column under DivePlot's automatic wrappings (epoch /
+	 *  with the source column under Fjader's automatic wrappings (epoch /
 	 *  CAST for ORDER BY, ordinal CASE for PARTITION BY). Used by preagg to
 	 *  fold redundant window col refs into channel aliases. */
 	passthroughChannels: Map<string, string>;

@@ -168,11 +168,11 @@
 <style>
 	.tooltip {
 		position: absolute;
-		background: var(--diveplot-tooltip-bg, rgba(0, 0, 0, 0.88));
-		color: var(--diveplot-tooltip-text, #ffffff);
+		background: var(--fjader-tooltip-bg, rgba(0, 0, 0, 0.88));
+		color: var(--fjader-tooltip-text, #ffffff);
 		padding: 6px 10px;
 		border-radius: 4px;
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 12px;
 		line-height: 1.4;
 		pointer-events: none;

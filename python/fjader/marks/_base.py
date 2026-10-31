@@ -18,8 +18,8 @@ def _serialize_tip_entry(entry: Any) -> Any:
     """Serialize a single tip array entry.
 
     Handles: strings, AggregateField, and labeled entries via either:
-    - tuple: ``("Min", dp.min_("value"))``
-    - dict:  ``{"Min": dp.min_("value")}``
+    - tuple: ``("Min", fj.min_("value"))``
+    - dict:  ``{"Min": fj.min_("value")}``
     Both serialize to ``{"value": {...}, "label": "Min"}``.
     """
     if isinstance(entry, str):
@@ -75,7 +75,7 @@ class Mark:
             self.table = f"_df_{h}"
 
     def to_mark_dict(self) -> dict[str, Any]:
-        """Serialize to a MarkSpec dict (without DivePlotSpec wrapper)."""
+        """Serialize to a MarkSpec dict (without FjaderSpec wrapper)."""
         result: dict[str, Any] = {"mark": self._mark_type}
         for f in dc_fields(self):
             if f.name.startswith("_") or f.name == "data":
@@ -99,7 +99,7 @@ class Mark:
         return Plot(self, **kwargs)
 
     def to_dict(self) -> dict[str, Any]:
-        """Full DivePlotSpec with this mark in a single-chart plot."""
+        """Full FjaderSpec with this mark in a single-chart plot."""
         from ..plot import Plot
 
         return Plot(self, **self._opts).to_dict()

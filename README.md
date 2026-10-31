@@ -1,135 +1,123 @@
-# DivePlot
+# Fjäder
 
-A high-performance data visualization library built with Svelte 5 and WebGPU, implementing a Grammar of Graphics architecture. Designed for interactive exploration of large datasets using DuckDB (via Mosaic) as the query engine.
+**Declarative, GPU-rendered charts for millions of rows, powered by DuckDB.**
 
-## Quick Start
+_Fjäder_ (say "fyeh-der") is Swedish for both spring and feather: the springs that animate every chart, and the feathers that steer an Arrow.
+
+You describe a chart in marks and channels. Fjäder compiles it to SQL that runs in DuckDB, moves only the aggregated result into the browser as Arrow, and draws it with WebGPU. Brushing, crossfiltering, pan and zoom stay interactive at 120 fps on datasets far beyond what an SVG or Canvas chart can hold.
+
+If you know [Observable Plot](https://observablehq.com/plot/), you already know most of the API.
+
+## Install
 
 ```bash
-npm install
-npm run dev
+npm install fjader                 # Svelte 5 components
+pip install "fjader[jupyter]"      # Python: Jupyter and marimo
+pip install "fjader[streamlit]"    # Python: Streamlit
 ```
 
-## Design Principles
+Fjäder needs a browser with WebGPU. There is no fallback renderer.
 
-**Database-first processing** — Heavy operations (aggregation, binning, filtering) run in DuckDB. Only small, aggregated results cross into JavaScript. Mosaic's PreAggregator provides instant cached results for repeated queries.
-
-**Mark-based composition** — Visualizations are built from composable marks, not chart types. Marks declare scale requirements with priorities that get resolved automatically when multiple marks share a chart.
-
-**GPU rendering** — WebGPU for all mark rendering. Shared pipelines, zero-GC interaction loops, and a fixed-timestep animation system targeting 120fps.
-
-## Usage
+## Svelte
 
 ```svelte
 <script>
-	import { ChartContainer, DotsMark, BarMarkY, LineMark } from 'diveplot';
-	import { count, sum } from '@uwdata/mosaic-sql';
-	import { filter, stack } from '$lib/transforms';
+	import {
+		initFjader,
+		ChartContainer,
+		WebGPUCanvas,
+		AxisLeft,
+		AxisBottom,
+		Grid,
+		BarMarkY,
+		stack
+	} from 'fjader';
+	import { count, loadParquet } from '@uwdata/mosaic-sql';
+
+	const { queryEngine } = initFjader();
+	const ready = queryEngine.exec([loadParquet('penguins', '/data/penguins.parquet').toString()]);
 </script>
 
-<ChartContainer xLabel="species" yLabel="count">
-	<DotsMark table="penguins" x="bill_length" y="body_mass" color="species" />
-</ChartContainer>
-
-<ChartContainer xLabel="island" yLabel="count">
-	<BarMarkY table="penguins" x="island" y={count()} color="species" transforms={[stack()]} />
-</ChartContainer>
+{#await ready then}
+	<ChartContainer xLabel="island" yLabel="count">
+		{#snippet background()}
+			<AxisLeft />
+			<AxisBottom />
+		{/snippet}
+		{#snippet canvas()}
+			<WebGPUCanvas>
+				{#snippet canvasComponents()}
+					<Grid />
+					<BarMarkY table="penguins" x="island" y={count()} fill="species" transforms={[stack()]} />
+				{/snippet}
+			</WebGPUCanvas>
+		{/snippet}
+	</ChartContainer>
+{/await}
 ```
 
-## Architecture
+A chart is a container with layers: axes in the background, marks on the GPU canvas. Charts can also be rendered from a JSON spec, from any JavaScript, with `Fjader.render(element, spec)`.
 
-### Marks
+## Python
 
-Each mark is a Svelte component backed by `BaseMarkSetup`, which orchestrates scale registration, data fetching, and transform compilation.
+```python
+import polars as pl
+import fjader as fj
 
-| Mark                             | Description                           |
-| -------------------------------- | ------------------------------------- |
-| DotsMark                         | Scatter plots, bubble charts          |
-| BarMarkX / BarMarkY              | Horizontal / vertical bars            |
-| RectMark / RectXMark / RectYMark | Rectangles, histograms, heatmaps      |
-| LineMark                         | Lines with curve interpolation        |
-| AreaMarkY / AreaMarkX            | Filled areas with curve interpolation |
-| TextMark                         | Text labels                           |
+weather = pl.read_parquet("seattle-weather.parquet")
 
-### Scale System
-
-Four-layer architecture in `src/lib/scales/`:
-
-1. **ChartScales** — Per-chart scale orchestration. Collects requirements from marks, resolves conflicts via priority system (MANDATE > PREFER > ACCEPT).
-2. **ScaleRegistry** — Global singleton cache. Ensures charts sharing the same variable share the same scale state.
-3. **Scale States** — LinearScaleState, BandScaleState, ColorScaleState, TimeScaleState, SizeScaleState. Each manages domain, range, and reactive updates.
-4. **ScalePriorities** — Conflict resolution. Throws clear errors when marks have incompatible requirements.
-
-### Data Pipeline
-
-```
-DuckDB (Mosaic)  -->  SQL Transforms  -->  Arrow Table  -->  JS Transforms  -->  GPU Buffers
-  10M rows           filter/having          ~100 rows        stack/topN           Float32Arrays
+fj.plot(
+    fj.dot(data=weather, x="date", y="temp_max", fill="weather", r="precipitation"),
+    x_label="Date",
+    y_label="Max temperature (°F)",
+)
 ```
 
-- **SQL transforms** modify the Mosaic Query AST (filter, having, limit, orderby). Must produce flat queries to preserve PreAggregator optimization.
-- **JS transforms** process the small aggregated result (stack, topN, normalize, dodge).
-- **ViewManager** pushes categorical-to-integer indexing into SQL, enabling zero-copy Float32 data flow from DuckDB to GPU.
+Charts display on their own in Jupyter and marimo; in Streamlit, call `fj.streamlit.render(chart)`. Marks compose: `*` overlays two marks in one chart, `+` places charts side by side, and `df.fj.dot(x=..., y=...)` works straight from a pandas or polars DataFrame.
 
-See `docs/architecture/` for detailed documentation.
+## How it works
 
-### GPU Rendering
+**The database does the heavy lifting.** Aggregation, binning, filtering, top-N, stacking and normalization compile to SQL and run in DuckDB-WASM, or in a server-side DuckDB from Python. Only results sized by the screen, not by the data, reach JavaScript.
 
-**GPUCoordinator** (`src/lib/gpu/GPUCoordinator.svelte.js`) manages:
+**Interactions stay instant.** Brushes crossfilter every other chart. On the first hover, Fjäder builds pre-aggregated tables binned at pixel resolution, so each brush frame reads a small table instead of rescanning the data.
 
-- WebGPU device/queue and shared pipeline caching
-- Fixed-timestep animation loop (360Hz physics, spring-based, with render extrapolation)
-- SSBO management for scale parameters (linear, color, size configs)
-- Render batching via `queueMicrotask` invalidation
+**Marks compose.** Charts are built from marks (dots, bars, rects, lines, areas, rules, text, parallel coordinates), not chart types. Marks declare what scales they need, and charts sharing a variable share its scale.
 
-**Renderers** in `src/lib/components/rendering/`:
+**Everything renders on the GPU.** WebGPU shaders draw every mark. A fixed-timestep spring simulation animates domain changes, filters and morphs between states. Level-of-detail rungs move between dots, bins and smoothed density, and shift+scroll scrubs through them.
 
-- Dots, Rects, Lines, Areas — each with WGSL shaders
-- Scale transforms injected at compile time via template system
-- Curve interpolation (linear, step, catmull-rom, monotone, bump) evaluated in vertex shader
-
-### Interactions
-
-- **Brushing**: IntervalX, IntervalY, Interval2D with Mosaic crossfiltering
-- **Tooltips**: DB-first hit testing, queries DuckDB temp tables on hover
-- **Pan/Zoom**: Spring-based domain animation, zero-GC memory pooling
-
-## Project Structure
+## Project structure
 
 ```
 src/lib/
-  components/
-    marks/          Mark components and BaseMarkSetup
-    rendering/      WebGPU renderers (Dots, Rects, Lines, Areas)
-    axes/           AxisBottom, AxisLeft, AxisCenter
-    guides/         Grid, legends
-    charts/         ChartContainer, ChartCell (faceting)
-  scales/           Scale system (ChartScales, ScaleRegistry, state classes)
-  gpu/              GPUCoordinator, shader libraries
-  data-clients/     Mosaic/DataClient bridge
-  transforms/       Transform pipeline (SQL + JS)
-  interactors/      Tooltip, brush, interval selection
-  animation/        Spring physics, fixed-timestep loop
-  sql/              SQL helpers (bin)
-  data/             DataAccessor, ViewManager
-docs/
-  architecture/     Implementation documentation
+  components/     Marks, charts, axes, legends, interaction overlays
+  query-engine/   DuckDB connection, crossfilter, pre-aggregation
+  transforms/     Transform pipeline (SQL first, then JS)
+  scales/         Scale requirements, resolution and shared scale state
+  gpu/            GPUCoordinator, pipelines, shader libraries
+  animation/      Spring physics and the fixed-timestep loop
+  lod/            Level-of-detail rungs
+  interactors/    Brushes, toggles, tooltips, pan and zoom
+  spec/           JSON spec renderer and export
+python/fjader/    Python API, Jupyter widget, Streamlit component
+docs/             Design and implementation notes
 ```
 
 ## Development
 
 ```bash
-npm run dev          # Dev server
-npm run build        # Production build
-npm run lint         # ESLint + Prettier
-npm run format       # Auto-format
-npx vitest           # Run tests
+npm install
+npm run dev              # Dev server with examples and test routes
+npm run build            # Production build
+npm run lint             # ESLint + Prettier
+npx vitest               # JavaScript tests
+npm run build:python     # Widget and Streamlit bundles, then the Python wheel
 ```
 
 ## Acknowledgements
 
-DivePlot owes a great deal to two projects:
+Fjäder owes a great deal to two projects:
 
-- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. DivePlot started out on Mosaic and still builds every query with `@uwdata/mosaic-sql`. Its query layer adapts Mosaic's pre-aggregation with sufficient statistics, its crossfilter selection model and its REST connector protocol, and the API, interactors and JSON spec follow vgplot.
+- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. Fjäder started out on Mosaic and still builds every query with `@uwdata/mosaic-sql`. Its query layer adapts Mosaic's pre-aggregation with sufficient statistics, its crossfilter selection model and its REST connector protocol, and the API, interactors and JSON spec follow vgplot.
 - **[Observable Plot](https://github.com/observablehq/plot)**, by Observable. The mark API, its channel shorthands, stacking conventions and many defaults follow Plot.
 
 It also rests on [DuckDB](https://duckdb.org) and [DuckDB-WASM](https://github.com/duckdb/duckdb-wasm), [Flechette](https://github.com/uwdata/flechette), [d3](https://d3js.org) and [Svelte](https://svelte.dev).

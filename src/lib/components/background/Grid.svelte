@@ -28,6 +28,6 @@
 
 <style>
 	line {
-		stroke: var(--diveplot-text-muted, #d1d5db);
+		stroke: var(--fjader-text-muted, #d1d5db);
 	}
 </style>

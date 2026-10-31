@@ -211,44 +211,6 @@ wheels = [
 ]
 
 [[package]]
-name = "diveplot"
-version = "0.1.11"
-source = { editable = "." }
-dependencies = [
-    { name = "narwhals" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-]
-jupyter = [
-    { name = "anywidget" },
-]
-pyarrow = [
-    { name = "pyarrow" },
-]
-streamlit = [
-    { name = "duckdb" },
-    { name = "pyarrow" },
-    { name = "streamlit" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anywidget", marker = "extra == 'jupyter'", specifier = ">=0.9" },
-    { name = "duckdb", marker = "extra == 'streamlit'", specifier = ">=1.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
-    { name = "narwhals", specifier = ">=1.0" },
-    { name = "pyarrow", marker = "extra == 'pyarrow'", specifier = ">=14.0" },
-    { name = "pyarrow", marker = "extra == 'streamlit'", specifier = ">=14.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "streamlit", marker = "extra == 'streamlit'", specifier = ">=1.0" },
-]
-provides-extras = ["dev", "jupyter", "streamlit", "pyarrow"]
-
-[[package]]
 name = "duckdb"
 version = "1.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -310,6 +272,44 @@ sdist = { url = "https://files.pythonhosted.org/packages/cc/28/c14e053b6762b1044
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/ea/53f2148663b321f21b5a606bd5f191517cf40b7072c0497d3c92c4a13b1e/executing-2.2.1-py2.py3-none-any.whl", hash = "sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017", size = 28317, upload-time = "2025-09-01T09:48:08.5Z" },
 ]
+
+[[package]]
+name = "fjader"
+version = "0.1.11"
+source = { editable = "." }
+dependencies = [
+    { name = "narwhals" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+]
+jupyter = [
+    { name = "anywidget" },
+]
+pyarrow = [
+    { name = "pyarrow" },
+]
+streamlit = [
+    { name = "duckdb" },
+    { name = "pyarrow" },
+    { name = "streamlit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anywidget", marker = "extra == 'jupyter'", specifier = ">=0.9" },
+    { name = "duckdb", marker = "extra == 'streamlit'", specifier = ">=1.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "narwhals", specifier = ">=1.0" },
+    { name = "pyarrow", marker = "extra == 'pyarrow'", specifier = ">=14.0" },
+    { name = "pyarrow", marker = "extra == 'streamlit'", specifier = ">=14.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "streamlit", marker = "extra == 'streamlit'", specifier = ">=1.0" },
+]
+provides-extras = ["dev", "jupyter", "streamlit", "pyarrow"]
 
 [[package]]
 name = "gitdb"

@@ -1,7 +1,7 @@
 /**
  * Lazy singleton QueryEngine for spec-driven rendering.
  *
- * Multiple DivePlot.render() calls on the same page share one QueryEngine
+ * Multiple Fjader.render() calls on the same page share one QueryEngine
  * (and thus one DuckDB instance). Data loading is idempotent —
  * tables already loaded are skipped.
  *
@@ -65,7 +65,7 @@ export async function getOrCreateQueryEngine(userEngine?: QueryEngine): Promise<
 
 async function initEngine(): Promise<QueryEngine> {
 	if (_forceServer) {
-		console.info('[diveplot] Server-side DuckDB forced via configuration');
+		console.info('[fjader] Server-side DuckDB forced via configuration');
 		return initFromRest();
 	}
 
@@ -75,7 +75,7 @@ async function initEngine(): Promise<QueryEngine> {
 		_engine = new QueryEngine(conn);
 		return _engine;
 	} catch (err) {
-		console.warn('[diveplot] WASM init failed, trying server-side DuckDB fallback:', err);
+		console.warn('[fjader] WASM init failed, trying server-side DuckDB fallback:', err);
 	}
 
 	// Fall back to REST connector
@@ -125,13 +125,13 @@ async function initFromInlineBundle(): Promise<DuckDBConnection> {
 // ---------------------------------------------------------------------------
 
 async function initFromRest(): Promise<QueryEngine> {
-	const uri = `${window.location.origin}/_diveplot/query`;
+	const uri = `${window.location.origin}/_fjader/query`;
 
 	// Verify the endpoint exists before committing
 	const probe = await fetch(uri, { method: 'OPTIONS' }).catch(() => null);
 	if (!probe || !probe.ok) {
 		throw new Error(
-			'[diveplot] WASM init failed and server-side DuckDB endpoint not available at ' + uri
+			'[fjader] WASM init failed and server-side DuckDB endpoint not available at ' + uri
 		);
 	}
 

@@ -1,5 +1,5 @@
 /**
- * DivePlot Spec Schema — TypeScript interfaces defining the JSON contract
+ * Fjader Spec Schema — TypeScript interfaces defining the JSON contract
  * between spec producers (Python wrapper, JS API) and the spec renderer.
  */
 
@@ -13,7 +13,7 @@ import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 /** A layout item: either a single plot or a nested layout. */
 export type LayoutItem = PlotSpec | { hconcat: LayoutItem[] } | { vconcat: LayoutItem[] };
 
-export interface DivePlotSpec {
+export interface FjaderSpec {
 	data?: Record<string, DataSpec>;
 	plot?: PlotSpec;
 	hconcat?: LayoutItem[];
@@ -442,7 +442,7 @@ export interface RenderOptions {
 	queryEngine?: QueryEngine;
 }
 
-export interface DivePlotHandle {
+export interface FjaderHandle {
 	/** Destroy the rendered chart and clean up resources */
 	destroy(): void;
 }

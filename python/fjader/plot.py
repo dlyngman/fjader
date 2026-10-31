@@ -114,7 +114,7 @@ class Plot:
         return spec
 
     def to_dict(self) -> dict[str, Any]:
-        """Full DivePlotSpec."""
+        """Full FjaderSpec."""
         result: dict[str, Any] = {}
         result["plot"] = self._to_plot_spec()
         return result
@@ -188,7 +188,7 @@ def plot(
         columns: Number of columns for facet grid.
         legend: Legend config — ``True`` for auto-detect, or a dict like
             ``{"color": "species", "position": "right"}``.
-        interactors: List of interactor specs (e.g. ``[dp.interval_x()]``).
+        interactors: List of interactor specs (e.g. ``[fj.interval_x()]``).
         use_selection: Follow the shared scale's selection extent —
             ``'x'``, ``'y'``, or ``'xy'`` for both axes.
         zoom_limit: Max zoom depth. A number applies to both axes;

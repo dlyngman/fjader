@@ -136,7 +136,7 @@ export function rewriteForPreagg(
 			//   (a) Rewrite to a channel alias, when another non-window channel
 			//       passes through the same source column. The channel's CAST/
 			//       EPOCH/CASE wrapping is provably 1:1 with the source value
-			//       under DivePlot's automatic transforms — monotonic for ORDER
+			//       under Fjader's automatic transforms — monotonic for ORDER
 			//       BY, distinct-preserving for PARTITION BY. This avoids
 			//       carrying redundant raw columns through the preagg table.
 			//

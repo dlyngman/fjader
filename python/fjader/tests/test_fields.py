@@ -1,39 +1,39 @@
 """Tests for FieldSpec helpers."""
 
-import diveplot as dp
+import fjader as fj
 
 
 class TestAggregateFields:
     def test_count(self):
-        assert dp.count().to_dict() == {"aggregate": "count"}
+        assert fj.count().to_dict() == {"aggregate": "count"}
 
     def test_sum(self):
-        assert dp.sum("revenue").to_dict() == {"aggregate": "sum", "field": "revenue"}
+        assert fj.sum("revenue").to_dict() == {"aggregate": "sum", "field": "revenue"}
 
     def test_avg(self):
-        assert dp.avg("score").to_dict() == {"aggregate": "avg", "field": "score"}
+        assert fj.avg("score").to_dict() == {"aggregate": "avg", "field": "score"}
 
     def test_min(self):
-        assert dp.min_("price").to_dict() == {"aggregate": "min", "field": "price"}
+        assert fj.min_("price").to_dict() == {"aggregate": "min", "field": "price"}
 
     def test_max(self):
-        assert dp.max_("price").to_dict() == {"aggregate": "max", "field": "price"}
+        assert fj.max_("price").to_dict() == {"aggregate": "max", "field": "price"}
 
     def test_median(self):
-        assert dp.median("age").to_dict() == {"aggregate": "median", "field": "age"}
+        assert fj.median("age").to_dict() == {"aggregate": "median", "field": "age"}
 
 
 class TestBinField:
     def test_bin_no_steps(self):
-        assert dp.bin("bill_length").to_dict() == {"bin": "bill_length"}
+        assert fj.bin("bill_length").to_dict() == {"bin": "bill_length"}
 
     def test_bin_with_steps(self):
-        assert dp.bin("bill_length", steps=30).to_dict() == {"bin": "bill_length", "steps": 30}
+        assert fj.bin("bill_length", steps=30).to_dict() == {"bin": "bill_length", "steps": 30}
 
 
 class TestWindowField:
     def test_window_basic(self):
-        w = dp.window("avg", "value", order_by="date", frame=[-10, 0])
+        w = fj.window("avg", "value", order_by="date", frame=[-10, 0])
         assert w.to_dict() == {
             "window": "avg",
             "field": "value",
@@ -42,7 +42,7 @@ class TestWindowField:
         }
 
     def test_window_with_partition(self):
-        w = dp.window("sum", "revenue", order_by="ts", partition_by="region", frame=[-5, 5])
+        w = fj.window("sum", "revenue", order_by="ts", partition_by="region", frame=[-5, 5])
         assert w.to_dict() == {
             "window": "sum",
             "field": "revenue",
@@ -52,7 +52,7 @@ class TestWindowField:
         }
 
     def test_window_count_no_field(self):
-        w = dp.window("count", order_by="date", frame=[-3, 0])
+        w = fj.window("count", order_by="date", frame=[-3, 0])
         assert w.to_dict() == {
             "window": "count",
             "orderBy": "date",
@@ -61,13 +61,13 @@ class TestWindowField:
 
     def test_window_minimal(self):
         """Window with only aggregate + field, no order/partition/frame."""
-        w = dp.window("avg", "value")
+        w = fj.window("avg", "value")
         assert w.to_dict() == {"window": "avg", "field": "value"}
 
     def test_window_serialized_via_to_dict(self):
-        from diveplot._convert import serialize_value
+        from fjader._convert import serialize_value
 
-        result = serialize_value(dp.window("avg", "x", order_by="t", frame=[-10, 0]))
+        result = serialize_value(fj.window("avg", "x", order_by="t", frame=[-10, 0]))
         assert result == {
             "window": "avg",
             "field": "x",
@@ -77,10 +77,10 @@ class TestWindowField:
 
     def test_window_in_mark(self):
         """Window field used as a channel value on a mark."""
-        m = dp.line(
+        m = fj.line(
             table="t",
             x="date",
-            y=dp.window("avg", "value", order_by="date", frame=[-10, 0]),
+            y=fj.window("avg", "value", order_by="date", frame=[-10, 0]),
         )
         d = m.to_mark_dict()
         assert d["y"] == {
@@ -93,45 +93,45 @@ class TestWindowField:
 
 class TestRawSqlField:
     def test_sql_expr_basic(self):
-        f = dp.sql_expr('EXTRACT(HOUR FROM "ts")')
+        f = fj.sql_expr('EXTRACT(HOUR FROM "ts")')
         assert f.to_dict() == {"sql": 'EXTRACT(HOUR FROM "ts")'}
 
     def test_sql_expr_case(self):
-        f = dp.sql_expr("CASE WHEN x > 0 THEN 'pos' ELSE 'neg' END")
+        f = fj.sql_expr("CASE WHEN x > 0 THEN 'pos' ELSE 'neg' END")
         assert f.to_dict() == {"sql": "CASE WHEN x > 0 THEN 'pos' ELSE 'neg' END"}
 
     def test_sql_expr_in_mark(self):
-        m = dp.dot(
+        m = fj.dot(
             table="t",
-            x=dp.sql_expr('EXTRACT(HOUR FROM "ts")'),
+            x=fj.sql_expr('EXTRACT(HOUR FROM "ts")'),
             y="value",
         )
         d = m.to_mark_dict()
         assert d["x"] == {"sql": 'EXTRACT(HOUR FROM "ts")'}
 
     def test_sql_expr_serialized_via_to_dict(self):
-        from diveplot._convert import serialize_value
+        from fjader._convert import serialize_value
 
-        result = serialize_value(dp.sql_expr("x + y"))
+        result = serialize_value(fj.sql_expr("x + y"))
         assert result == {"sql": "x + y"}
 
 
 class TestFieldSpecSerialization:
     def test_string_passes_through(self):
         """Plain strings are serialized as-is by serialize_value."""
-        from diveplot._convert import serialize_value
+        from fjader._convert import serialize_value
 
         assert serialize_value("bill_length") == "bill_length"
         assert serialize_value("count()") == "count()"
 
     def test_aggregate_serialized_via_to_dict(self):
-        from diveplot._convert import serialize_value
+        from fjader._convert import serialize_value
 
-        result = serialize_value(dp.count())
+        result = serialize_value(fj.count())
         assert result == {"aggregate": "count"}
 
     def test_bin_serialized_via_to_dict(self):
-        from diveplot._convert import serialize_value
+        from fjader._convert import serialize_value
 
-        result = serialize_value(dp.bin("x", steps=20))
+        result = serialize_value(fj.bin("x", steps=20))
         assert result == {"bin": "x", "steps": 20}

@@ -1,4 +1,4 @@
-"""Time Series Explorer — Streamlit test app for DivePlot.
+"""Time Series Explorer — Streamlit test app for Fjader.
 
 Demonstrates overview+detail, hourly/weekly distributions, and
 crossfilter via day-of-week toggle — all in a single render call
@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 import streamlit as st
 
-import diveplot as dp
+import fjader as fj
 
 st.set_page_config(layout="wide", page_title="Time Series Explorer")
 st.title("Time Series Explorer")
@@ -149,8 +149,8 @@ st.caption(f"{len(df):,} rows · {N_HOURS:,} hours × {N_GROUPS} groups · {len(
 # ---------------------------------------------------------------------------
 
 # Detail: hourly lines per group, zoomed by overview brush, filtered by day toggle
-detail = dp.plot(
-    dp.line(
+detail = fj.plot(
+    fj.line(
         data=df,
         x="ts",
         y="value",
@@ -161,10 +161,10 @@ detail = dp.plot(
         fit_domain="y",
         tooltip_proximity="x",
     ),
-    dp.line(
+    fj.line(
         data=df,
         x="ts",
-        y=dp.window("avg", "value", order_by="ts", partition_by="group", frame=[-168, 0]),
+        y=fj.window("avg", "value", order_by="ts", partition_by="group", frame=[-168, 0]),
         stroke="group",
         stroke_width=2,
         selection="daysel",
@@ -181,16 +181,16 @@ detail = dp.plot(
 )
 
 # Holiday strip: colored bars at holiday dates
-holiday_strip = dp.plot(
-    dp.rect_y(
+holiday_strip = fj.plot(
+    fj.rect_y(
         data=df,
-        x=dp.bin("ts", steps=730),
-        y=dp.count(),
+        x=fj.bin("ts", steps=730),
+        y=fj.count(),
         fill="holiday_name",
         selection="daysel",
         preferred_x_scale_type="time",
         tip=["holiday_name"],
-        transforms=[dp.filter("is_holiday = true")],
+        transforms=[fj.filter("is_holiday = true")],
     ),
     height=200,
     x_label="Date",
@@ -198,14 +198,14 @@ holiday_strip = dp.plot(
 )
 
 # Overview: provides brush for detail zoom
-overview_interactors = [dp.interval_x(selection="daysel")]
+overview_interactors = [fj.interval_x(selection="daysel")]
 if show_comparison:
     overview_interactors.append(
-        dp.derived_interval(source="daysel", selection="cmpsel", offset=comparison_offset)
+        fj.derived_interval(source="daysel", selection="cmpsel", offset=comparison_offset)
     )
 
-overview = dp.plot(
-    dp.line(
+overview = fj.plot(
+    fj.line(
         data=df,
         x="ts",
         y="value",
@@ -223,29 +223,29 @@ overview = dp.plot(
 )
 
 # Hourly profile: min/max range (area) + avg (line), per group
-hourly = dp.plot(
-    dp.area_y(
+hourly = fj.plot(
+    fj.area_y(
         data=df,
         x="hour",
-        y1=dp.min_("value"),
-        y2=dp.max_("value"),
+        y1=fj.min_("value"),
+        y2=fj.max_("value"),
         fill="group",
         fill_opacity=0.2,
         selection="daysel",
         curve="monotone",
         tip=False,
     ),
-    dp.line(
+    fj.line(
         data=df,
         x="hour",
-        y=dp.avg("value"),
+        y=fj.avg("value"),
         stroke="group",
         stroke_width=2,
         selection="daysel",
         curve="monotone",
         tooltip_proximity="x",
         tip=["x", "stroke", "y",
-             ("Min", dp.min_("value")), ("Max", dp.max_("value"))],
+             ("Min", fj.min_("value")), ("Max", fj.max_("value"))],
     ),
     height=340,
     x_label="Hour of Day",
@@ -255,29 +255,29 @@ hourly = dp.plot(
 
 # Comparison hourly profile (only when comparison is enabled)
 if show_comparison:
-    hourly_cmp = dp.plot(
-        dp.area_y(
+    hourly_cmp = fj.plot(
+        fj.area_y(
             data=df,
             x="hour",
-            y1=dp.min_("value"),
-            y2=dp.max_("value"),
+            y1=fj.min_("value"),
+            y2=fj.max_("value"),
             fill="group",
             fill_opacity=0.2,
             selection="cmpsel",
             curve="monotone",
             tip=False,
         ),
-        dp.line(
+        fj.line(
             data=df,
             x="hour",
-            y=dp.avg("value"),
+            y=fj.avg("value"),
             stroke="group",
             stroke_width=2,
             selection="cmpsel",
             curve="monotone",
             tooltip_proximity="x",
             tip=["x", "stroke", "y",
-                 ("Min", dp.min_("value")), ("Max", dp.max_("value"))],
+                 ("Min", fj.min_("value")), ("Max", fj.max_("value"))],
         ),
         height=340,
         x_label="Hour of Day",
@@ -286,21 +286,21 @@ if show_comparison:
     )
 
 # Day-of-week selector: toggle bars to filter all other charts
-day_selector = dp.plot(
-    dp.bar_y(
+day_selector = fj.plot(
+    fj.bar_y(
         data=df,
         x="day_of_week",
-        y=dp.sum("value"),
+        y=fj.sum("value"),
         fill="group",
         selection="daysel",
-        transforms=[dp.stack_y()],
+        transforms=[fj.stack_y()],
         sort={"x": "dow_num", "order": "asc"},
         fit_domain="y",
     ),
     height=340,
     x_label="Day of Week",
     y_label="Total kWh",
-    interactors=[dp.toggle(field="day_of_week")],
+    interactors=[fj.toggle(field="day_of_week")],
     legend=True,
 )
 
@@ -308,11 +308,11 @@ day_selector = dp.plot(
 # Layout
 # ---------------------------------------------------------------------------
 if show_comparison:
-    bottom_row = dp.hconcat(hourly, hourly_cmp, day_selector)
+    bottom_row = fj.hconcat(hourly, hourly_cmp, day_selector)
 else:
-    bottom_row = dp.hconcat(hourly, day_selector)
+    bottom_row = fj.hconcat(hourly, day_selector)
 
-dp.streamlit.render(
-    dp.vconcat(detail, holiday_strip, overview, bottom_row),
+fj.streamlit.render(
+    fj.vconcat(detail, holiday_strip, overview, bottom_row),
     server_duckdb=USE_SERVER,
 )

@@ -584,12 +584,12 @@
 		align-items: center;
 		justify-content: center;
 		text-align: center;
-		color: var(--diveplot-error-text, #b00020);
-		background: var(--diveplot-error-bg, rgba(176, 0, 32, 0.06));
+		color: var(--fjader-error-text, #b00020);
+		background: var(--fjader-error-bg, rgba(176, 0, 32, 0.06));
 	}
 
 	.facet-warning {
-		color: var(--diveplot-text-muted, #6b7280);
+		color: var(--fjader-text-muted, #6b7280);
 	}
 
 	.facet-loading {
@@ -597,7 +597,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: var(--diveplot-text-muted, #d1d5db);
+		color: var(--fjader-text-muted, #d1d5db);
 		font-size: 13px;
 	}
 </style>

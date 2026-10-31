@@ -442,7 +442,7 @@
 
 <style>
 	.legend-continuous {
-		font-family: var(--diveplot-font, system-ui, sans-serif);
+		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 10px;
 		pointer-events: auto;
 	}
@@ -460,7 +460,7 @@
 
 	.legend-tick-label {
 		font-size: 10px;
-		fill: var(--diveplot-text-secondary, #6b7280);
+		fill: var(--fjader-text-secondary, #6b7280);
 	}
 
 	.legend-crosshair {
@@ -468,7 +468,7 @@
 	}
 
 	.legend-hover-halo {
-		stroke: var(--diveplot-bg, white);
+		stroke: var(--fjader-bg, white);
 		stroke-width: 3px;
 		stroke-linejoin: round;
 		pointer-events: none;
@@ -477,19 +477,19 @@
 	.legend-hover-label {
 		font-size: 10px;
 		font-weight: 600;
-		fill: var(--diveplot-text-secondary, #6b7280);
+		fill: var(--fjader-text-secondary, #6b7280);
 		pointer-events: none;
 	}
 
 	.legend-brush-mask {
-		fill: var(--diveplot-bg, white);
+		fill: var(--fjader-bg, white);
 		opacity: 0.65;
 		pointer-events: none;
 	}
 
 	.legend-brush-extent {
 		fill: transparent;
-		stroke: var(--diveplot-text-secondary, #6b7280);
+		stroke: var(--fjader-text-secondary, #6b7280);
 		stroke-width: 1;
 		pointer-events: none;
 	}

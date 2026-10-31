@@ -2,14 +2,14 @@
 # requires-python = ">=3.13"
 # dependencies = [
 #     "anywidget>=0.9.21",
-#     "diveplot",
+#     "fjader",
 #     "marimo>=0.20.2",
 #     "polars>=1.38.1",
 #     "pyzmq>=27.1.0",
 # ]
 #
 # [tool.uv.sources]
-# diveplot = { path = "." }
+# fjader = { path = "." }
 # ///
 
 import marimo
@@ -23,10 +23,10 @@ def _():
     import marimo as mo
     from pathlib import Path
     import polars as pl
-    # import diveplot as dp
-    import diveplot.polars as dp
-    # mo.md("# DivePlot anywidget Test")
-    return Path, dp, pl
+    # import fjader as fj
+    import fjader.polars as fj
+    # mo.md("# Fjader anywidget Test")
+    return Path, fj, pl
 
 
 @app.cell
@@ -40,26 +40,26 @@ def _(pl):
         "category": ["A", "B"] * 25,
     })
 
-    df.dp.dot(x="x", y="y") * df.dp.line(x="x", y="y")
-    # dp.show(dp.dot(data=df, x="x", y="y", fill="category", opacity=1))
+    df.fj.dot(x="x", y="y") * df.fj.line(x="x", y="y")
+    # fj.show(fj.dot(data=df, x="x", y="y", fill="category", opacity=1))
     return
 
 
 @app.cell
 def _():
-    # df.dp.dot(x='x', y='y')                                    # auto-displays
-    # df.dp.dot(x='a', y='b') * df.dp.line(x='a', y='b')        # overlay
-    # df.dp.dot(x='a', y='b') + df.dp.bar_y(x='c', y=dp.count()) # layout
-    # df.dp.dot(x='a', y='b').opts(width=800)                     # config
+    # df.fj.dot(x='x', y='y')                                    # auto-displays
+    # df.fj.dot(x='a', y='b') * df.fj.line(x='a', y='b')        # overlay
+    # df.fj.dot(x='a', y='b') + df.fj.bar_y(x='c', y=fj.count()) # layout
+    # df.fj.dot(x='a', y='b').opts(width=800)                     # config
     return
 
 
 @app.cell
-def _(Path, dp, pl):
+def _(Path, fj, pl):
     weather = pl.read_parquet(Path(__file__).parent / "../static/data/seattle-weather.parquet")
 
-    dots = dp.plot(
-        dp.dot(
+    dots = fj.plot(
+        fj.dot(
             data=weather,
             x="date",
             y="temp_max",
@@ -75,10 +75,10 @@ def _(Path, dp, pl):
         y_label="Max Temperature (°F)",
     )
 
-    bars = dp.plot(
-        dp.bar_x(
+    bars = fj.plot(
+        fj.bar_x(
             data=weather,
-            x=dp.count(),
+            x=fj.count(),
             y="weather",
             fill="weather",
         ),
@@ -87,28 +87,28 @@ def _(Path, dp, pl):
         x_label="Count",
         y_label="weather",
     )
-    dp.show(dp.vconcat(dots, bars))
+    fj.show(fj.vconcat(dots, bars))
     return bars, weather
 
 
 @app.cell
-def _(bars, dp):
-    dp.show(bars)
+def _(bars, fj):
+    fj.show(bars)
     return
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     simple = pl.DataFrame({
         "weather": ["sun", "rain", "fog", "snow", "drizzle"],
         "count": [640, 641, 101, 26, 53],
     })
-    dp.show(dp.bar_x(data=simple, x="count", y="weather", fill="weather"))
+    fj.show(fj.bar_x(data=simple, x="count", y="weather", fill="weather"))
     return
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     # --- fitDomain: auto-fit y-axis to visible data in overview+detail ---
     import math
 
@@ -117,25 +117,25 @@ def _(dp, pl):
         "value": [math.sin(i / 20) * 10 + i * 0.05 for i in range(500)],
     })
 
-    detail = dp.plot(
-        dp.line(data=ts, x="t", y="value", fit_domain="y"),
+    detail = fj.plot(
+        fj.line(data=ts, x="t", y="value", fit_domain="y"),
         height=300,
         x_label="Time",
         y_label="Value (auto-fit)",
         use_selection="x",
     )
-    overview = dp.plot(
-        dp.line(data=ts, x="t", y="value"),
+    overview = fj.plot(
+        fj.line(data=ts, x="t", y="value"),
         height=100,
         x_label="Time",
-        interactors=[dp.interval_x()],
+        interactors=[fj.interval_x()],
     )
-    dp.show(dp.vconcat(detail, overview))
+    fj.show(fj.vconcat(detail, overview))
     return
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     # --- autoDots: density-based dot fading on area marks ---
     area_df = pl.DataFrame({
         "x": list(range(30)),
@@ -143,20 +143,20 @@ def _(dp, pl):
         "group": ["A"] * 15 + ["B"] * 15,
     })
 
-    dp.show(dp.area_y(
+    fj.show(fj.area_y(
         data=area_df,
         x="x",
         y="y",
         fill="group",
         auto_dots=True,
         curve="monotone",
-        transforms=[dp.stack_y()],
+        transforms=[fj.stack_y()],
     ))
     return
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     # --- LOD config on line marks (replaces old optimize) ---
     import math as _math
 
@@ -165,8 +165,8 @@ def _(dp, pl):
         "y": [_math.sin(i / 50) * 100 + (i % 7) for i in range(5000)],
     })
 
-    dp.show(dp.plot(
-        dp.line(
+    fj.show(fj.plot(
+        fj.line(
             data=big_line,
             x="x",
             y="y",
@@ -180,7 +180,7 @@ def _(dp, pl):
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     # --- Window function: rolling average as a channel value ---
     import math as _m
 
@@ -189,12 +189,12 @@ def _(dp, pl):
         "price": [50 + _m.sin(i / 10) * 20 + (i % 3) * 2 for i in range(200)],
     })
 
-    dp.show(dp.plot(
-        dp.dot(data=window_df, x="date", y="price", opacity=0.3, r=2)
-        * dp.line(
+    fj.show(fj.plot(
+        fj.dot(data=window_df, x="date", y="price", opacity=0.3, r=2)
+        * fj.line(
             data=window_df,
             x="date",
-            y=dp.window("avg", "price", order_by="date", frame=[-50, 0]),
+            y=fj.window("avg", "price", order_by="date", frame=[-50, 0]),
             stroke_width=2,
         ),
         height=350,
@@ -205,7 +205,7 @@ def _(dp, pl):
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     # --- from_spec: render a chart from a raw JSON spec ---
     # This is how you'd render a spec exported from the palette (Cmd+E)
 
@@ -214,7 +214,7 @@ def _(dp, pl):
         "count": [152, 68, 124],
     })
 
-    dp.show(dp.from_spec(
+    fj.show(fj.from_spec(
         {
             "marks": [{
                 "mark": "barY",
@@ -231,12 +231,12 @@ def _(dp, pl):
 
 
 @app.cell
-def _(dp, weather):
+def _(fj, weather):
     # --- from_spec: render from exported palette spec ---
     # NOTE: Known issue — GPU marks may not render on first page load when
     # this cell shares a DuckDB table with other widgets and marimo's
     # destroy-recreate cycle races with ViewManager. See python/ISSUES.md #1.
-    dp.show(dp.from_spec(
+    fj.show(fj.from_spec(
         {
             "marks": [
                 {
@@ -258,7 +258,7 @@ def _(dp, weather):
 
 
 @app.cell
-def _(dp, pl):
+def _(fj, pl):
     # --- from_spec: JSON string input (works on first load) ---
     import json
 
@@ -280,7 +280,7 @@ def _(dp, pl):
         "cat": ["A", "B", "C", "D"] * 25,
     })
 
-    dp.show(dp.from_spec(spec_json, data={"t": tiny}))
+    fj.show(fj.from_spec(spec_json, data={"t": tiny}))
     return
 
 

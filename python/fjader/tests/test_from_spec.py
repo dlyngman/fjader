@@ -1,16 +1,16 @@
-"""Tests for dp.from_spec() — rendering from raw JSON specs."""
+"""Tests for fj.from_spec() — rendering from raw JSON specs."""
 
 import json
 
 import pytest
 
-import diveplot as dp
+import fjader as fj
 
 
 class TestFromSpecBasic:
     def test_bare_plot_spec_wrapped(self):
         """A bare PlotSpec (no 'plot' key) gets wrapped automatically."""
-        chart = dp.from_spec({
+        chart = fj.from_spec({
             "marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]
         })
         spec = chart.to_dict()
@@ -18,14 +18,14 @@ class TestFromSpecBasic:
         assert spec["plot"]["marks"][0]["mark"] == "dot"
 
     def test_full_spec_passthrough(self):
-        """A full DivePlotSpec passes through unchanged."""
+        """A full FjaderSpec passes through unchanged."""
         original = {
             "plot": {
                 "marks": [{"mark": "barY", "table": "t", "x": "x", "y": "count()"}],
                 "width": 600,
             }
         }
-        chart = dp.from_spec(original)
+        chart = fj.from_spec(original)
         spec = chart.to_dict()
         assert spec["plot"]["width"] == 600
         assert spec["plot"]["marks"][0]["mark"] == "barY"
@@ -38,7 +38,7 @@ class TestFromSpecBasic:
                 {"marks": [{"mark": "line", "table": "t", "x": "a", "y": "b"}]},
             ]
         }
-        chart = dp.from_spec(original)
+        chart = fj.from_spec(original)
         spec = chart.to_dict()
         assert "hconcat" in spec
         assert len(spec["hconcat"]) == 2
@@ -50,7 +50,7 @@ class TestFromSpecBasic:
                 {"marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]},
             ]
         }
-        chart = dp.from_spec(original)
+        chart = fj.from_spec(original)
         assert "vconcat" in chart.to_dict()
 
     def test_json_string_input(self):
@@ -58,14 +58,14 @@ class TestFromSpecBasic:
         raw = json.dumps({
             "marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]
         })
-        chart = dp.from_spec(raw)
+        chart = fj.from_spec(raw)
         spec = chart.to_dict()
         assert "plot" in spec
         assert spec["plot"]["marks"][0]["x"] == "a"
 
     def test_to_json(self):
         """to_json produces valid JSON."""
-        chart = dp.from_spec({
+        chart = fj.from_spec({
             "marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]
         })
         result = json.loads(chart.to_json())
@@ -84,7 +84,7 @@ class TestFromSpecWithData:
             import pandas as pd
             df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
 
-        chart = dp.from_spec(
+        chart = fj.from_spec(
             {"marks": [{"mark": "dot", "table": "mydata", "x": "x", "y": "y"}]},
             data={"mydata": df},
         )
@@ -105,7 +105,7 @@ class TestFromSpecWithData:
             import pandas as pd
             df = pd.DataFrame({"a": [1]})
 
-        chart = dp.from_spec(
+        chart = fj.from_spec(
             {"marks": [{"mark": "dot", "table": "t", "x": "a", "y": "a"}]},
             data={"t": df},
         )
@@ -117,7 +117,7 @@ class TestFromSpecWithData:
 
     def test_no_data_empty_dataframes(self):
         """Without data kwarg, dataframes dict is empty."""
-        chart = dp.from_spec({
+        chart = fj.from_spec({
             "marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]
         })
         _, dataframes = chart._to_full_spec()
@@ -125,7 +125,7 @@ class TestFromSpecWithData:
 
     def test_file_data_in_spec_preserved(self):
         """File-based data sources in spec.data are preserved as-is."""
-        chart = dp.from_spec({
+        chart = fj.from_spec({
             "data": {"flights": {"url": "flights.parquet", "type": "parquet"}},
             "plot": {
                 "marks": [{"mark": "barY", "table": "flights", "x": "carrier", "y": "count()"}]
@@ -140,7 +140,7 @@ class TestFromSpecWithData:
 class TestFromSpecDisplayProtocol:
     def test_implements_displayable(self):
         """SpecPlot satisfies the Displayable protocol."""
-        from diveplot._display import Displayable
+        from fjader._display import Displayable
 
-        chart = dp.from_spec({"marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]})
+        chart = fj.from_spec({"marks": [{"mark": "dot", "table": "t", "x": "a", "y": "b"}]})
         assert isinstance(chart, Displayable)

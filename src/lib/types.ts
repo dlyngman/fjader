@@ -1,6 +1,6 @@
 // src/lib/types.ts
 //
-// Shared type definitions for DivePlot.
+// Shared type definitions for Fjader.
 // This file is the single source of truth for types that cross module boundaries.
 
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';

@@ -7,12 +7,12 @@
 
 import { Streamlit, type RenderData } from 'streamlit-component-lib';
 import type { ArrowTable } from 'streamlit-component-lib';
-import { renderFromData, showError, type DivePlotHandle, type ManifestEntry } from '../widget/core';
+import { renderFromData, showError, type FjaderHandle, type ManifestEntry } from '../widget/core';
 import { configureForceServer } from '$lib/spec/LazyQueryEngine';
 import '$lib/theme.css';
 
 const root = document.getElementById('root')!;
-let handle: DivePlotHandle | null = null;
+let handle: FjaderHandle | null = null;
 let generation = 0;
 
 function onRender(event: Event): void {

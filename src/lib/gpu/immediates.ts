@@ -44,7 +44,7 @@ export function immediatesSupported(): boolean {
  */
 export const IMMEDIATES_MISSING_MESSAGE =
 	`This browser's WebGPU implementation does not support the WGSL ` +
-	`"${IMMEDIATES_FEATURE}" feature, which DivePlot requires: categorical axes ` +
+	`"${IMMEDIATES_FEATURE}" feature, which Fjader requires: categorical axes ` +
 	`resolve their positions in a compute pass that uses it. Chrome 149 or later ` +
 	`supports it. Without it nothing renders, so this fails here rather than ` +
 	`leaving an empty canvas and a shader validation error to be diagnosed.`;

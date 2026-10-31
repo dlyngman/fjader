@@ -1,7 +1,7 @@
 <script>
 	import { onMount } from 'svelte';
 
-	// A CONTROL. No DivePlot, no WebGPU, no canvas, no data — deliberately nothing to
+	// A CONTROL. No Fjader, no WebGPU, no canvas, no data — deliberately nothing to
 	// import from $lib. The only question it answers: does this browser deliver frames
 	// steadily on this machine, with nothing asked of it?
 	//
@@ -9,11 +9,11 @@
 	// animation with no JS at all — also janked. That has two readings, and they need
 	// opposite responses:
 	//
-	//   (a) Chrome's frame pacing is off on this machine. Nothing in DivePlot causes it
-	//       and nothing in DivePlot can fix it.
+	//   (a) Chrome's frame pacing is off on this machine. Nothing in Fjader causes it
+	//       and nothing in Fjader can fix it.
 	//   (b) The chart saturates the GPU process, and everything on the page degrades
 	//       with it. Compositor animations survive a busy main thread; they do not
-	//       survive a backed-up Viz. That IS a DivePlot problem, in the present path.
+	//       survive a backed-up Viz. That IS a Fjader problem, in the present path.
 	//
 	// This page reproduces (a) alone. Same strips, same speed, nothing else running.
 	//   janks here too      -> (a). Stop looking in this codebase.
@@ -21,7 +21,7 @@
 	//                          process, not the frame callback.
 	//
 	// Run it in Safari too. Safari being smooth on the same hardware is what made this
-	// look like a DivePlot bug; if Safari is smooth HERE and Chrome is not, the split is
+	// look like a Fjader bug; if Safari is smooth HERE and Chrome is not, the split is
 	// in the browsers' presentation paths, on a page with no application code in it.
 
 	let jsStrip = $state();
@@ -107,7 +107,7 @@
 <div class="page">
 	<h2>Frame Pacing Control</h2>
 	<p>
-		No DivePlot, no WebGPU, no canvas. If these strips jank here, the jank is not coming from this
+		No Fjader, no WebGPU, no canvas. If these strips jank here, the jank is not coming from this
 		codebase. Run it in Safari as well as Chrome.
 	</p>
 

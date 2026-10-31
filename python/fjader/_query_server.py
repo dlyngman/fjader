@@ -1,6 +1,6 @@
-"""Server-side DuckDB query endpoint for DivePlot Streamlit components.
+"""Server-side DuckDB query endpoint for Fjader Streamlit components.
 
-Injects a Tornado HTTP handler into Streamlit's own server at /_diveplot/query.
+Injects a Tornado HTTP handler into Streamlit's own server at /_fjader/query.
 Same-origin, same-port -- no CSP issues in managed hosting environments.
 
 Protocol matches Mosaic's restConnector:
@@ -20,7 +20,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import tornado.web
 
-_logger = logging.getLogger("diveplot.query_server")
+_logger = logging.getLogger("fjader.query_server")
 
 # ---------------------------------------------------------------------------
 # Shared DuckDB connection
@@ -42,7 +42,7 @@ def _get_connection() -> duckdb.DuckDBPyConnection:
 
 
 class DuckDBQueryHandler(tornado.web.RequestHandler):
-    """Handle SQL query requests from the DivePlot frontend."""
+    """Handle SQL query requests from the Fjader frontend."""
 
     def check_xsrf_cookie(self) -> None:
         # Bypass Streamlit's XSRF protection for our API endpoint.
@@ -63,7 +63,7 @@ class DuckDBQueryHandler(tornado.web.RequestHandler):
         sql: str = body.get("sql", "")
 
         conn = _get_connection()
-        print(f"[diveplot-query] [{query_type}] {sql[:500]}")
+        print(f"[fjader-query] [{query_type}] {sql[:500]}")
         try:
             if query_type == "exec":
                 conn.execute(sql)
@@ -106,7 +106,7 @@ def _find_tornado_app() -> tornado.web.Application | None:
 
 
 def ensure_query_endpoint() -> None:
-    """Register the /_diveplot/query handler with Streamlit's Tornado server.
+    """Register the /_fjader/query handler with Streamlit's Tornado server.
 
     Idempotent -- safe to call on every render().
     """
@@ -123,11 +123,11 @@ def ensure_query_endpoint() -> None:
     # before Streamlit's catch-all handlers.
     from tornado.routing import Rule, PathMatches
 
-    rule = Rule(PathMatches(r"/_diveplot/query"), DuckDBQueryHandler)
+    rule = Rule(PathMatches(r"/_fjader/query"), DuckDBQueryHandler)
     app.wildcard_router.rules.insert(0, rule)
     _registered = True
-    _logger.info("DivePlot query endpoint registered at /_diveplot/query")
-    logging.getLogger("diveplot.query_server").setLevel(logging.DEBUG)
+    _logger.info("Fjader query endpoint registered at /_fjader/query")
+    logging.getLogger("fjader.query_server").setLevel(logging.DEBUG)
 
 
 # ---------------------------------------------------------------------------

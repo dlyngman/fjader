@@ -1,5 +1,5 @@
 <div class="wrapper">
-	<h1>DivePlot Demos</h1>
+	<h1>Fjader Demos</h1>
 
 	<section>
 		<h2>Examples</h2>

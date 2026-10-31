@@ -118,7 +118,7 @@
 	});
 
 	// Scale validation
-	// Always validate as 'linear': DivePlot time scales use float offsets, not Dates,
+	// Always validate as 'linear': Fjader time scales use float offsets, not Dates,
 	// so the 'time' validation (requires Date instances) would incorrectly clear the brush.
 	$effect(() => {
 		const s = getScale();

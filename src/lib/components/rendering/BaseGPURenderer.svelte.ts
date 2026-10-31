@@ -318,7 +318,7 @@ export class BaseGPURenderer {
 			if (!warnedMorphUnsupported) {
 				warnedMorphUnsupported = true;
 				console.warn(
-					'[DivePlot] WGSL immediates are not available, so values will not animate between updates.'
+					'[Fjader] WGSL immediates are not available, so values will not animate between updates.'
 				);
 			}
 			for (const [binding, data] of channels) this.writeAttribute(binding, data);

@@ -64,7 +64,7 @@
 	//   all three smooth ............ not reproducing right now
 	//   chart janks, both strips OK .. the WebGPU present path, not your frame work
 	//   chart + JS strip jank ........ main-thread scheduling
-	//   all three jank ............... browser/display pacing; nothing in DivePlot
+	//   all three jank ............... browser/display pacing; nothing in Fjader
 	//
 	// The last case is the one worth ruling out first: it means no change to this
 	// codebase can fix it, and everything measured so far is consistent with it.

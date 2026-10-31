@@ -1,6 +1,6 @@
 """Tests for snake_case → camelCase conversion and serialization."""
 
-from diveplot._convert import clean_dict, serialize_value, to_camel_case
+from fjader._convert import clean_dict, serialize_value, to_camel_case
 
 
 class TestToCamelCase:

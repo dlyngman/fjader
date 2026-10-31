@@ -1,6 +1,6 @@
 """Mark factory functions — the public API for creating marks.
 
-Each function mirrors a DivePlot Svelte mark component with full type hints
+Each function mirrors a Fjader Svelte mark component with full type hints
 for IDE autocompletion.
 """
 
@@ -57,7 +57,7 @@ def dot(
 
     Args:
         table: Table name in DuckDB.
-        x: X position — column name, aggregate (``dp.count()``), or bin (``dp.bin('col')``).
+        x: X position — column name, aggregate (``fj.count()``), or bin (``fj.bin('col')``).
         y: Y position — column name, aggregate, or bin.
         fill: Fill color — column name for color scale, aggregate, or bin.
         opacity: Constant opacity (0–1).
@@ -69,7 +69,7 @@ def dot(
         scheme: Color scheme name (e.g. ``'category10'``, ``'viridis'``).
         limit: Maximum number of rows to query.
         filter_nulls: Whether to filter null values from the query.
-        transforms: List of transforms (e.g. ``[dp.topN(10), dp.filter(...)]``).
+        transforms: List of transforms (e.g. ``[fj.topN(10), fj.filter(...)]``).
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
         tooltip: Enable tooltip on hover.
@@ -194,7 +194,7 @@ def bar_y(
     Args:
         table: Table name in DuckDB.
         x: Category axis — column name.
-        y: Bar height — column name, aggregate (e.g. ``dp.count()``), or bin.
+        y: Bar height — column name, aggregate (e.g. ``fj.count()``), or bin.
         y1: Bar start position (for ranged/stacked bars).
         y2: Bar end position (for ranged/stacked bars).
         fill: Fill color — column name for color scale.
@@ -350,7 +350,7 @@ def area_y(
         scheme: Color scheme name.
         limit: Maximum number of rows.
         filter_nulls: Filter null values.
-        transforms: List of transforms (e.g. ``[dp.stack_y()]``).
+        transforms: List of transforms (e.g. ``[fj.stack_y()]``).
         sort: Sort configuration.
         domain: Explicit category order for band scales.
         tooltip: Enable tooltip on hover.

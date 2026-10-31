@@ -90,7 +90,7 @@
 
 	import { onMount } from 'svelte';
 	import { loadParquet, count, sql } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import {
 		ChartContainer,
 		Frame,
@@ -104,7 +104,7 @@
 	import { Grid } from '$lib/components/guides';
 	import { topN } from '$lib/transforms';
 
-	const { queryEngine } = initDivePlot();
+	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let error = $state(null);
 

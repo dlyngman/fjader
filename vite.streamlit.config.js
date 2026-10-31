@@ -9,7 +9,7 @@ export default defineConfig({
 		svelte({
 			compilerOptions: { css: 'injected', dev: false }
 		}),
-		thirdPartyLicenses('./python/diveplot/streamlit_frontend')
+		thirdPartyLicenses('./python/fjader/streamlit_frontend')
 	],
 	define: {
 		'process.env.NODE_ENV': '"production"'
@@ -21,7 +21,7 @@ export default defineConfig({
 	},
 	base: './',
 	build: {
-		outDir: path.resolve('./python/diveplot/streamlit_frontend'),
+		outDir: path.resolve('./python/fjader/streamlit_frontend'),
 		emptyOutDir: true,
 		rollupOptions: {
 			output: {

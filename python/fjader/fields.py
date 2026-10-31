@@ -55,8 +55,8 @@ class WindowField:
 
     Examples::
 
-        dp.window("avg", "value", order_by="date", frame=[-10, 0])   # trailing 10
-        dp.window("sum", "value", order_by="ts", partition_by="grp", frame=[-5, 5])  # centered ±5
+        fj.window("avg", "value", order_by="date", frame=[-10, 0])   # trailing 10
+        fj.window("sum", "value", order_by="ts", partition_by="grp", frame=[-5, 5])  # centered ±5
     """
 
     window: AggregateType
@@ -90,7 +90,7 @@ class RawSqlField:
 
     Example::
 
-        dp.dot(x=dp.sql_expr('EXTRACT(HOUR FROM "ts")'), y="value")
+        fj.dot(x=fj.sql_expr('EXTRACT(HOUR FROM "ts")'), y="value")
     """
 
     sql: str
@@ -147,7 +147,7 @@ def sql_expr(expression: str) -> RawSqlField:
 
     Example::
 
-        dp.dot(x=dp.sql_expr('EXTRACT(HOUR FROM "ts")'), y="temp")
+        fj.dot(x=fj.sql_expr('EXTRACT(HOUR FROM "ts")'), y="temp")
     """
     return RawSqlField(sql=expression)
 

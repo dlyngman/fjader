@@ -1,9 +1,9 @@
 <script lang="ts">
 	import PlotFromSpec from './PlotFromSpec.svelte';
-	import type { DivePlotSpec, LayoutItem } from './types';
+	import type { FjaderSpec, LayoutItem } from './types';
 
 	interface Props {
-		spec: DivePlotSpec;
+		spec: FjaderSpec;
 	}
 
 	let { spec }: Props = $props();
@@ -14,9 +14,9 @@
 </script>
 
 {#if spec.hconcat?.length}
-	<div class="diveplot-hconcat">
+	<div class="fjader-hconcat">
 		{#each spec.hconcat as item, i (i)}
-			<div class="diveplot-hconcat-item">
+			<div class="fjader-hconcat-item">
 				{#if isPlot(item)}
 					<PlotFromSpec spec={item} />
 				{:else}
@@ -26,7 +26,7 @@
 		{/each}
 	</div>
 {:else if spec.vconcat?.length}
-	<div class="diveplot-vconcat">
+	<div class="fjader-vconcat">
 		{#each spec.vconcat as item, i (i)}
 			{#if isPlot(item)}
 				<PlotFromSpec spec={item} />
@@ -40,17 +40,17 @@
 {/if}
 
 <style>
-	.diveplot-hconcat {
+	.fjader-hconcat {
 		display: flex;
 		gap: 8px;
 	}
 
-	.diveplot-hconcat-item {
+	.fjader-hconcat-item {
 		flex: 1;
 		min-width: 0;
 	}
 
-	.diveplot-vconcat {
+	.fjader-vconcat {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;

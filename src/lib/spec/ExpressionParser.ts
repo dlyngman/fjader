@@ -38,7 +38,7 @@ const AGG_FUNCTIONS = { count, sum, avg, min, max, median } as const;
 export type ResolvedField = FieldRef | AutoBinNode;
 
 /**
- * Resolve a FieldSpec from a JSON spec into a value that DivePlot marks accept.
+ * Resolve a FieldSpec from a JSON spec into a value that Fjader marks accept.
  *
  * - Plain string without parens → column name (pass through)
  * - `"count()"` / `"sum(field)"` → Mosaic aggregate expression node

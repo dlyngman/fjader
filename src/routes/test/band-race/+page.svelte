@@ -189,7 +189,7 @@
 
 	import { onMount } from 'svelte';
 	import { sql } from '@uwdata/mosaic-sql';
-	import { initDivePlot } from '$lib';
+	import { initFjader } from '$lib';
 	import {
 		ChartContainer,
 		Frame,
@@ -205,7 +205,7 @@
 	import { topN } from '$lib/transforms';
 	import { count } from '@uwdata/mosaic-sql';
 
-	const { queryEngine, filterGroups, scaleRegistry, gpuCoordinator } = initDivePlot();
+	const { queryEngine, filterGroups, scaleRegistry, gpuCoordinator } = initFjader();
 
 	// Capture every SQL string the engine runs, so the query the APP sends can be
 	// compared against the one the integration test asserts. Those are assembled
