@@ -33,30 +33,46 @@ fjader needs Chrome 149 or later, or another Chromium browser on that version. I
 		stack
 	} from 'fjader';
 	import { count, loadParquet } from '@uwdata/mosaic-sql';
+	import { onMount } from 'svelte';
 
 	const { queryEngine } = initFjader();
-	const ready = queryEngine.exec([loadParquet('penguins', '/data/penguins.parquet').toString()]);
+	let loaded = $state(false);
+
+	// DuckDB-WASM fetches only full URLs; a bare path means its own file system.
+	onMount(async () => {
+		const url = new URL('/data/penguins.parquet', location.href).href;
+		await queryEngine.exec([loadParquet('penguins', url).toString()]);
+		loaded = true;
+	});
 </script>
 
-{#await ready then}
-	<ChartContainer xLabel="island" yLabel="count">
-		{#snippet background()}
-			<AxisLeft />
-			<AxisBottom />
-		{/snippet}
-		{#snippet canvas()}
-			<WebGPUCanvas>
-				{#snippet canvasComponents()}
-					<Grid />
-					<BarMarkY table="penguins" x="island" y={count()} fill="species" transforms={[stack()]} />
-				{/snippet}
-			</WebGPUCanvas>
-		{/snippet}
-	</ChartContainer>
-{/await}
+{#if loaded}
+	<div style="height: 400px">
+		<ChartContainer xLabel="island" yLabel="count">
+			{#snippet background()}
+				<AxisLeft />
+				<AxisBottom />
+			{/snippet}
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<Grid />
+						<BarMarkY
+							table="penguins"
+							x="island"
+							y={count()}
+							fill="species"
+							transforms={[stack()]}
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+		</ChartContainer>
+	</div>
+{/if}
 ```
 
-A chart is a container with layers: axes in the background, marks on the GPU canvas. Charts can also be rendered from a JSON spec, from any JavaScript, with `Fjader.render(element, spec)`.
+A chart is a container with layers: axes in the background, marks on the GPU canvas. It fills its parent, so give the parent a height; the Python widget and Streamlit set one for you (400 and 500 px). Charts can also be rendered from a JSON spec, from any JavaScript, with `Fjader.render(element, spec)`.
 
 ## Python
 
