@@ -1,5 +1,5 @@
 <script>
-	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
 	import { IntervalX } from '$lib/interactors';
 
 	// Diagnostic state from the LOD surface

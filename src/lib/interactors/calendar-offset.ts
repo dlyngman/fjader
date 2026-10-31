@@ -79,11 +79,7 @@ export function applyOffset(date: Date, offset: ParsedOffset): Date {
  *
  * ISO 8601: week 1 contains January 4th. Day 1 = Monday.
  */
-function isoWeekDate(
-	isoYear: number,
-	week: number,
-	dayOfWeek: number
-): Temporal.PlainDate {
+function isoWeekDate(isoYear: number, week: number, dayOfWeek: number): Temporal.PlainDate {
 	// January 4 is always in ISO week 1
 	const jan4 = Temporal.PlainDate.from({ year: isoYear, month: 1, day: 4 });
 	// Monday of week 1

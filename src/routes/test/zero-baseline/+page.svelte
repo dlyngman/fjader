@@ -13,7 +13,6 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);

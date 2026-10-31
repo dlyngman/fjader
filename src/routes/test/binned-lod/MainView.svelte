@@ -23,7 +23,7 @@
 						binStep: bins.binStep,
 						numVisibleBins: bins.numVisibleBins,
 						binWidthPx: bins.binWidthPx,
-						multiplier: (bins.props.multiplier) ?? 1.0,
+						multiplier: bins.props.multiplier ?? 1.0,
 						frameCallbackCount: bins.frameCallbackCount
 					};
 				}
@@ -36,8 +36,8 @@
 <div class="page">
 	<h2>Binned LOD Rung Test</h2>
 	<p class="description">
-		AdaptiveBinRung: geometric metric derivation, adaptive re-binning, per-mark
-		shift+scroll routing. Hover a bar and shift+scroll to adjust bin resolution.
+		AdaptiveBinRung: geometric metric derivation, adaptive re-binning, per-mark shift+scroll
+		routing. Hover a bar and shift+scroll to adjust bin resolution.
 	</p>
 
 	<div class="layout">

@@ -258,9 +258,7 @@ describe('topN against a DuckDB reference', () => {
 		expect(text).toContain(RANK_COLUMN);
 
 		const rows = await db.all(text);
-		const byRank = rows
-			.slice()
-			.sort((a, b) => Number(a[RANK_COLUMN]) - Number(b[RANK_COLUMN]));
+		const byRank = rows.slice().sort((a, b) => Number(a[RANK_COLUMN]) - Number(b[RANK_COLUMN]));
 		expect(byRank.map((r) => r.x)).toEqual(['Electronics', 'Clothing', 'Food', 'Music', 'Books']);
 
 		// And nothing is ordering the result: the ONLY ORDER BY in the whole query

@@ -87,7 +87,11 @@
 	$effect(() => {
 		if (isCategorical && !categoricalSchemes.includes(colorScheme)) {
 			colorScheme = 'tableau10';
-		} else if (!isCategorical && !continuousSchemes.includes(colorScheme) && !divergingSchemes.includes(colorScheme)) {
+		} else if (
+			!isCategorical &&
+			!continuousSchemes.includes(colorScheme) &&
+			!divergingSchemes.includes(colorScheme)
+		) {
 			colorScheme = 'viridis';
 		}
 	});
@@ -202,13 +206,13 @@
 			<h3>Testing:</h3>
 			<p>
 				{#if colorScaleType}
-					Try different transforms on the <strong>distance</strong> field (positive, skewed)
-					or the <strong>delay</strong> field (negative values, good for symlog).
+					Try different transforms on the <strong>distance</strong> field (positive, skewed) or the
+					<strong>delay</strong> field (negative values, good for symlog).
 				{:else if markType === 'bar' && colorField === 'origin'}
 					Deduplication Test Active! Both X-axis (band scale) and color use "origin".
 				{:else}
-					Select a transform type (log, symlog, sqrt, pow) to test non-linear
-					color normalization on the GPU.
+					Select a transform type (log, symlog, sqrt, pow) to test non-linear color normalization on
+					the GPU.
 				{/if}
 			</p>
 		</div>

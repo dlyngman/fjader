@@ -199,8 +199,8 @@
 		<section>
 			<h2>LineMark — tip with aggregate expressions</h2>
 			<p class="desc">
-				Should show: species, avg(body_mass), min(body_mass), max(body_mass).
-				The min/max are computed lazily in the tooltip query only (Path A, no JS transforms).
+				Should show: species, avg(body_mass), min(body_mass), max(body_mass). The min/max are
+				computed lazily in the tooltip query only (Path A, no JS transforms).
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="species" yLabel="body_mass">
@@ -232,8 +232,8 @@
 		<section>
 			<h2>BarMarkY — tip with aggregate expressions (Path B)</h2>
 			<p class="desc">
-				Should show: species, avg(body_mass), min(body_mass), max(body_mass).
-				Uses sidecar query since BarMarkY has implicit stack (JS transform → Path B).
+				Should show: species, avg(body_mass), min(body_mass), max(body_mass). Uses sidecar query
+				since BarMarkY has implicit stack (JS transform → Path B).
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="species" yLabel="body_mass">

@@ -91,9 +91,10 @@
 		try {
 			const parsed = JSON.parse(specText);
 			// Bare PlotSpec (has marks but no data) — wrap with the active preset's data
-			const spec = parsed.marks && !parsed.data
-				? { data: PRESETS[activePreset].spec.data, plot: parsed }
-				: parsed;
+			const spec =
+				parsed.marks && !parsed.data
+					? { data: PRESETS[activePreset].spec.data, plot: parsed }
+					: parsed;
 			handle = await render(container, spec);
 			if (isA) {
 				handleA = handle;
@@ -144,10 +145,7 @@
 		{#if errorA}
 			<div class="error">{errorA}</div>
 		{/if}
-		<textarea
-			bind:value={specTextA}
-			spellcheck="false"
-			onkeydown={(e) => handleEditorKey(e, 'A')}
+		<textarea bind:value={specTextA} spellcheck="false" onkeydown={(e) => handleEditorKey(e, 'A')}
 		></textarea>
 		<div class="chart-area" bind:this={containerA}></div>
 	</div>

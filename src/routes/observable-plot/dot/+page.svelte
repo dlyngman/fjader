@@ -14,7 +14,6 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-
 	const { queryEngine } = initFjader();
 
 	let isLoaded = $state(false);
@@ -126,13 +125,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<DotsMark
-									table="gistemp"
-									x="Date"
-									y="Anomaly"
-									fill="Anomaly"
-									scheme="BuRd"
-								/>
+								<DotsMark table="gistemp" x="Date" y="Anomaly" fill="Anomaly" scheme="BuRd" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}

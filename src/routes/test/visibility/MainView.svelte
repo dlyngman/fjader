@@ -6,7 +6,8 @@
 		WebGPUCanvas,
 		LineMark,
 		DotsMark,
-		BarMarkY} from '$lib/components';
+		BarMarkY
+	} from '$lib/components';
 	import { IntervalX } from '$lib/interactors';
 	import { count } from '@uwdata/mosaic-sql';
 
@@ -17,8 +18,8 @@
 <div class="container">
 	<h1>Viewport Visibility Test</h1>
 	<p>
-		Open the console to see <code>[visibility]</code> logs when charts are enabled/disabled.
-		Charts outside the viewport or in collapsed sections should log DISABLED.
+		Open the console to see <code>[visibility]</code> logs when charts are enabled/disabled. Charts outside
+		the viewport or in collapsed sections should log DISABLED.
 	</p>
 
 	<!-- ============================================================ -->
@@ -26,7 +27,10 @@
 	<!-- ============================================================ -->
 	<section>
 		<h2>1. Always visible — brush here to test crossfilter</h2>
-		<p>Brush the line chart. Linked charts below should still respond when visible, and stop querying when hidden.</p>
+		<p>
+			Brush the line chart. Linked charts below should still respond when visible, and stop querying
+			when hidden.
+		</p>
 		<div class="chart-row">
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="x" yLabel="y">
@@ -34,12 +38,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<LineMark
-									table="timeseries"
-									x="x"
-									y="y"
-									strokeWidth={1.5}
-								/>
+								<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -57,13 +56,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<LineMark
-									table="timeseries"
-									x="x"
-									y="y2"
-									strokeWidth={1.5}
-									selection="brush"
-								/>
+								<LineMark table="timeseries" x="x" y="y2" strokeWidth={1.5} selection="brush" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -80,10 +73,13 @@
 	<!-- ============================================================ -->
 	<section>
 		<h2>2. Collapsible sections</h2>
-		<p>Collapse these to see charts get DISABLED. Expand to see them re-enable and catch up with the current brush.</p>
+		<p>
+			Collapse these to see charts get DISABLED. Expand to see them re-enable and catch up with the
+			current brush.
+		</p>
 
 		<div class="collapsible">
-			<button onclick={() => collapsedA = !collapsedA}>
+			<button onclick={() => (collapsedA = !collapsedA)}>
 				{collapsedA ? 'Show' : 'Hide'} scatter plot
 			</button>
 			{#if !collapsedA}
@@ -93,13 +89,7 @@
 							<WebGPUCanvas>
 								{#snippet canvasComponents()}
 									<Grid />
-									<DotsMark
-										table="penguins"
-										x="bill_length"
-										y="bill_depth"
-										fill="species"
-										r={4}
-									/>
+									<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={4} />
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
@@ -112,7 +102,7 @@
 		</div>
 
 		<div class="collapsible">
-			<button onclick={() => collapsedB = !collapsedB}>
+			<button onclick={() => (collapsedB = !collapsedB)}>
 				{collapsedB ? 'Show' : 'Hide'} bar chart
 			</button>
 			{#if !collapsedB}
@@ -122,12 +112,7 @@
 							<WebGPUCanvas>
 								{#snippet canvasComponents()}
 									<Grid />
-									<BarMarkY
-										table="penguins"
-										x="species"
-										y={count()}
-										fill="island"
-									/>
+									<BarMarkY table="penguins" x="species" y={count()} fill="island" />
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
@@ -142,7 +127,9 @@
 	<!-- ============================================================ -->
 	<section class="spacer">
 		<h2>3. Scroll down to find more charts</h2>
-		<p>The charts below should be DISABLED until you scroll them into view (with 200px lookahead).</p>
+		<p>
+			The charts below should be DISABLED until you scroll them into view (with 200px lookahead).
+		</p>
 		<div class="spacer-block">
 			<div class="scroll-indicator">Scroll down ~800px</div>
 		</div>
@@ -160,13 +147,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<LineMark
-									table="timeseries"
-									x="x"
-									y="y"
-									strokeWidth={1.5}
-									selection="brush"
-								/>
+								<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} selection="brush" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -181,13 +162,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<LineMark
-									table="timeseries"
-									x="x"
-									y="y2"
-									strokeWidth={1.5}
-									selection="brush"
-								/>
+								<LineMark table="timeseries" x="x" y="y2" strokeWidth={1.5} selection="brush" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -227,7 +202,10 @@
 	<!-- ============================================================ -->
 	<section>
 		<h2>5. Tab visibility</h2>
-		<p>Switch to another browser tab and back. All charts should log DISABLED then ENABLED in the console.</p>
+		<p>
+			Switch to another browser tab and back. All charts should log DISABLED then ENABLED in the
+			console.
+		</p>
 	</section>
 </div>
 

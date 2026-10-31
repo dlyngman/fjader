@@ -19,7 +19,6 @@
 	import { bin } from '$lib/sql/bin';
 	import { filter } from '$lib/transforms';
 
-
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
@@ -61,11 +60,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<RectYMark
-									table="olympians"
-									x={bin('weight')}
-									y={msql.count()}
-								/>
+								<RectYMark table="olympians" x={bin('weight')} y={msql.count()} />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -98,12 +93,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<RectYMark
-									table="olympians"
-									x={bin('weight')}
-									y={msql.count()}
-									fill="sex"
-								/>
+								<RectYMark table="olympians" x={bin('weight')} y={msql.count()} fill="sex" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -133,11 +123,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<RectXMark
-									table="olympians"
-									y={bin('weight')}
-									x={msql.count()}
-								/>
+								<RectXMark table="olympians" y={bin('weight')} x={msql.count()} />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -192,7 +178,11 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top" yLabel="Count (overlapping)" xLabel="Weight (kg, overlapping)">
+				<ChartContainer
+					legendPosition="top"
+					yLabel="Count (overlapping)"
+					xLabel="Weight (kg, overlapping)"
+				>
 					{#snippet legend()}
 						<Legend color="sex" />
 					{/snippet}

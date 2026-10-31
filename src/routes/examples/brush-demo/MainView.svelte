@@ -11,7 +11,8 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		MarginLabel} from '$lib/components';
+		MarginLabel
+	} from '$lib/components';
 
 	const filterGroup = getContext('filter-group');
 </script>
@@ -104,7 +105,9 @@
 								active
 							{/if}
 						</span>
-						<button class="chip-clear" onclick={() => filterGroup?.clearSource(item.sourceId)}>×</button>
+						<button class="chip-clear" onclick={() => filterGroup?.clearSource(item.sourceId)}
+							>×</button
+						>
 					</div>
 				{/each}
 			</div>

@@ -260,10 +260,7 @@ describe('CrossfilterSelection', () => {
 			expect(sel.predicate('dots-b')).toEqual(['x BETWEEN 10 AND 20']);
 
 			// Chart C marks: get both brushes
-			expect(sel.predicate('dots-c')).toEqual([
-				'x BETWEEN 10 AND 20',
-				'y BETWEEN 0 AND 50'
-			]);
+			expect(sel.predicate('dots-c')).toEqual(['x BETWEEN 10 AND 20', 'y BETWEEN 0 AND 50']);
 		});
 
 		it('handles brush clear from one chart', () => {

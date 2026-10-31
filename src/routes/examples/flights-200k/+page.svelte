@@ -4,7 +4,6 @@
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-
 	const { queryEngine } = initFjader();
 
 	let isLoaded = $state(false);

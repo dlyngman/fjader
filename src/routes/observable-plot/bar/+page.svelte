@@ -18,7 +18,6 @@
 	import { Grid } from '$lib/components/guides';
 	import { orderby, stack } from '$lib/transforms';
 
-
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
@@ -27,12 +26,14 @@
 		try {
 			await queryEngine.exec([
 				msql.loadCSV('alphabet', `${window.location.origin}/data/alphabet.csv`).toString(),
-				msql.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`).toString(),
-				msql.loadCSV(
-					'statepop',
-					`${window.location.origin}/data/us-state-population-2010-2019.csv`,
-					{ header: true }
-				).toString(),
+				msql
+					.loadCSV('civilizations', `${window.location.origin}/data/civilizations.csv`)
+					.toString(),
+				msql
+					.loadCSV('statepop', `${window.location.origin}/data/us-state-population-2010-2019.csv`, {
+						header: true
+					})
+					.toString(),
 				msql.loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
 			]);
 
@@ -204,7 +205,6 @@
 			</div>
 		</div>
 	</div>
-
 {/if}
 
 <style>

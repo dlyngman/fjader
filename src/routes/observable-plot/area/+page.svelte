@@ -17,7 +17,6 @@
 	import { Grid } from '$lib/components/guides';
 	import { stackY } from '$lib/transforms';
 
-
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
@@ -27,7 +26,9 @@
 			await queryEngine.exec([
 				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`).toString(),
 				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`).toString(),
-				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`).toString(),
+				msql
+					.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
+					.toString(),
 				`CREATE TABLE random_walk AS SELECT i, SUM(random() - 0.5) OVER (ORDER BY i) AS value FROM generate_series(1, 600) AS t(i)`
 			]);
 
@@ -61,13 +62,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<AreaMarkY
-									table="aapl"
-									x="Date"
-									y="Close"
-									curve="monotone"
-									strokeWidth={2}
-								/>
+								<AreaMarkY table="aapl" x="Date" y="Close" curve="monotone" strokeWidth={2} />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -384,7 +379,6 @@
 			</div>
 		</div>
 	</div>
-
 {/if}
 
 <style>

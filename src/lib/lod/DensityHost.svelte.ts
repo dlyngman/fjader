@@ -196,7 +196,6 @@ export class DensityHost {
 		const t0 = performance.now();
 
 		try {
-
 			const result = await this.#queryEngine.query(sqlStr, { callerId: this.#callerId });
 			const t1 = performance.now();
 
