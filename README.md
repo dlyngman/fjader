@@ -1,6 +1,6 @@
 # fjader
 
-A charting library for Svelte and Python that queries DuckDB and renders with WebGPU.
+An experimental charting library for Svelte and Python with a declarative, grammar-of-graphics API, that queries DuckDB and renders with WebGPU. It is not feature complete, and the API may still change.
 
 fjader builds on the ideas of [Mosaic](https://github.com/uwdata/mosaic): charts are described as marks whose data comes from SQL queries run in DuckDB, and linked charts filter each other through selections. Its mark API follows [Observable Plot](https://observablehq.com/plot/). Query results arrive as Arrow and are drawn with WebGPU.
 

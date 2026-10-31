@@ -1,6 +1,6 @@
 {
 	"name": "fjader",
-	"description": "A charting library for Svelte and Python that queries DuckDB and renders with WebGPU",
+	"description": "An experimental, declarative charting library for Svelte and Python that queries DuckDB and renders with WebGPU",
 	"keywords": [
 		"visualization",
 		"declarative",
