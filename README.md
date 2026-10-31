@@ -106,6 +106,7 @@ docs/             Design and implementation notes
 
 ```bash
 npm install
+npm run fetch-data       # Example datasets, from their upstream sources
 npm run dev              # Dev server with examples and test routes
 npm run build            # Production build
 npm run lint             # ESLint + Prettier
