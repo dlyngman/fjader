@@ -44,7 +44,6 @@ def dot(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -68,7 +67,6 @@ def dot(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name (e.g. ``'category10'``, ``'viridis'``).
         limit: Maximum number of rows to query.
-        filter_nulls: Whether to filter null values from the query.
         transforms: List of transforms (e.g. ``[fj.topN(10), fj.filter(...)]``).
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
@@ -83,7 +81,7 @@ def dot(
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -110,7 +108,6 @@ def bar_x(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -139,7 +136,6 @@ def bar_x(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         domain: Explicit category order for band scales, e.g. ``{'y': ['sun', 'rain', ...]}``.
@@ -153,7 +149,7 @@ def bar_x(
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -180,7 +176,6 @@ def bar_y(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -209,7 +204,6 @@ def bar_y(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'x': 'name', 'order': 'asc'}``.
         domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
@@ -223,7 +217,7 @@ def bar_y(
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -248,7 +242,6 @@ def line(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -275,7 +268,6 @@ def line(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -291,7 +283,7 @@ def line(
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -319,7 +311,6 @@ def area_y(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -349,7 +340,6 @@ def area_y(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms (e.g. ``[fj.stack_y()]``).
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -365,7 +355,7 @@ def area_y(
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -393,7 +383,6 @@ def area_x(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -423,7 +412,6 @@ def area_x(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -439,7 +427,7 @@ def area_x(
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -470,7 +458,6 @@ def rect(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -503,7 +490,6 @@ def rect(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -520,7 +506,7 @@ def rect(
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -546,7 +532,6 @@ def rect_x(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -574,7 +559,6 @@ def rect_x(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -588,7 +572,7 @@ def rect_x(
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -614,7 +598,6 @@ def rect_y(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -642,7 +625,6 @@ def rect_y(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -656,7 +638,7 @@ def rect_y(
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_x_scale_type=preferred_x_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,
@@ -684,7 +666,6 @@ def text(
     selection: str | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
-    filter_nulls: bool | None = None,
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
@@ -714,7 +695,6 @@ def text(
         selection: Selection parameter name for linked interactors.
         scheme: Color scheme name.
         limit: Maximum number of rows.
-        filter_nulls: Filter null values.
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
@@ -731,7 +711,7 @@ def text(
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         selection=selection, scheme=scheme, limit=limit,
-        filter_nulls=filter_nulls, transforms=transforms,
+        transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
         fit_domain=fit_domain,

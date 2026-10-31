@@ -47,7 +47,6 @@ class Mark:
     selection: str | None = None
     scheme: ColorScheme | None = None
     limit: int | None = None
-    filter_nulls: bool | None = None
     transforms: list[TransformSpec] | None = None
     sort: SortConfig | None = None
     domain: DomainConfig | None = None

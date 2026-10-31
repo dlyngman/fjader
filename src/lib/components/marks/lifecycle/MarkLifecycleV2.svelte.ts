@@ -13,7 +13,7 @@
  * Registration: watches #resolvedQueryParts, registers with engine.
  *   Engine handles filter-driven re-queries via onFilterChange().
  *
- * Params: watches sort/limit/filterNulls on ReactiveConfig.
+ * Params: watches sort/limit on ReactiveConfig.
  *   Changes trigger re-query for this mark only, no teardown.
  */
 
@@ -120,7 +120,6 @@ export interface MarkLifecycleV2Config {
 export interface ReactiveConfig {
 	readonly sort: NormalizedSortConfig | undefined;
 	readonly limit: number | undefined;
-	readonly filterNulls: unknown[] | null | undefined;
 	readonly domain: { x?: string[]; y?: string[] } | null | undefined;
 	readonly tooltip: boolean | { sortTable?: boolean };
 	readonly fitDomain: 'x' | 'y' | boolean | undefined;
@@ -610,7 +609,7 @@ export class MarkLifecycleV2 {
 
 		// Push per-mark params and trigger query. Runs immediately after
 		// registration (Svelte flushes effects in creation order), providing
-		// the initial query. On subsequent changes to sort/limit/filterNulls,
+		// the initial query. On subsequent changes to sort/limit,
 		// or to a transform parameter given as a getter, re-queries this mark
 		// only via _onParamsChange.
 		//
@@ -621,7 +620,6 @@ export class MarkLifecycleV2 {
 			if (!this.#handle) return;
 			const sort = this.#reactiveConfig.sort;
 			const limit = this.#reactiveConfig.limit;
-			const filterNulls = this.#reactiveConfig.filterNulls;
 			// Read for tracking only: transforms read their parameters when the query
 			// is assembled, so a changed count needs a re-query and not a rebuild.
 			void this.#transformCompiler.specs;
@@ -629,7 +627,7 @@ export class MarkLifecycleV2 {
 				// A mark sorted at any point takes its band axis from the data from
 				// then on; see the field.
 				if (this.#rankingSort) this.#bandDomainFromData = true;
-				this.#handle!.updateParams({ sort, limit, filterNulls });
+				this.#handle!.updateParams({ sort, limit });
 			});
 		});
 
@@ -805,9 +803,7 @@ export class MarkLifecycleV2 {
 					this.#channelsNeedingDataDomain,
 					this.#autoBinNodes.size,
 					this.#buildQueryForAggregates.bind(this),
-					// DataClientConfig is the older shape: it requires _filterNulls.
-					// eslint-disable-next-line @typescript-eslint/no-explicit-any
-					this.#config as any,
+					this.#config,
 					this.#chartContext.xScaleState as ContinuousScaleState | null,
 					this.#chartContext.yScaleState as ContinuousScaleState | null,
 					this.#colorScaleState,
@@ -1455,7 +1451,6 @@ export class MarkLifecycleV2 {
 			table: this.#config.table,
 			parts,
 			filter,
-			filterNulls: this.#reactiveConfig.filterNulls ?? null,
 			transformCompiler: this.#transformCompiler
 		});
 		if (!q) return null;
@@ -1480,7 +1475,6 @@ export class MarkLifecycleV2 {
 			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
 			filter: filter as unknown[],
-			filterNulls: this.#reactiveConfig.filterNulls ?? null,
 			transformCompiler: this.#transformCompiler,
 			limit: this.#reactiveConfig.limit
 		});
@@ -1804,7 +1798,6 @@ export class MarkLifecycleV2 {
 			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
 			filter: filter as unknown[],
-			filterNulls: this.#reactiveConfig.filterNulls ?? null,
 			transformCompiler: this.#transformCompiler,
 			limit: this.#reactiveConfig.limit
 		});
@@ -1866,7 +1859,6 @@ export class MarkLifecycleV2 {
 			table: this.#sourceTable,
 			parts: sidecarParts,
 			filter: filter as unknown[],
-			filterNulls: this.#reactiveConfig.filterNulls ?? null,
 			transformCompiler: this.#transformCompiler
 		});
 		if (!sidecarQuery) return;

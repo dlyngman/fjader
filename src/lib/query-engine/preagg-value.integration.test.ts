@@ -153,9 +153,7 @@ async function mark(
 		transformCompiler: new TransformCompiler([])
 	};
 	const handle = engine.registerMark(id, descriptor, group);
-	await settle([handle], () =>
-		handle.updateParams({ sort: undefined, limit: opts.limit, filterNulls: null })
-	);
+	await settle([handle], () => handle.updateParams({ sort: undefined, limit: opts.limit }));
 	return handle;
 }
 
@@ -535,8 +533,8 @@ describe('the build queue', () => {
 		conn.queryGate = new Promise((r) => (releaseQueries = r));
 		const queriesFrom = conn.queries.length;
 		const settled = settle([byG, byKind], () => {
-			byG.updateParams({ sort: undefined, limit: 100, filterNulls: null });
-			byKind.updateParams({ sort: undefined, limit: 100, filterNulls: null });
+			byG.updateParams({ sort: undefined, limit: 100 });
+			byKind.updateParams({ sort: undefined, limit: 100 });
 		});
 		await vi.waitFor(() => expect(conn.queries.length).toBeGreaterThanOrEqual(queriesFrom + 2));
 
@@ -565,9 +563,7 @@ describe('the build queue', () => {
 		let releaseQueries!: () => void;
 		conn.queryGate = new Promise((r) => (releaseQueries = r));
 		const queriesFrom = conn.queries.length;
-		const settled = settle([byG], () =>
-			byG.updateParams({ sort: undefined, limit: 100, filterNulls: null })
-		);
+		const settled = settle([byG], () => byG.updateParams({ sort: undefined, limit: 100 }));
 		await vi.waitFor(() => expect(conn.queries.length).toBeGreaterThan(queriesFrom));
 
 		const building = activateToggle(['cat']);

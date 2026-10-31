@@ -69,7 +69,6 @@ export interface AssembleOptions {
 	/** Per-call filter predicates (crossfilter, bin filters). */
 	filter?: unknown[];
 	/** Columns to add IS NOT NULL predicates for. */
-	filterNulls?: unknown[] | null;
 	transformCompiler: TransformCompiler;
 	limit?: number | null;
 	/** When set, the inner query is wrapped in a CTE and these window
@@ -387,7 +386,7 @@ export function outerOrder(
 }
 
 export function assembleQuery(opts: AssembleOptions): Query {
-	const { table, parts, filter = [], filterNulls, transformCompiler, limit, window } = opts;
+	const { table, parts, filter = [], transformCompiler, limit, window } = opts;
 	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;
 
 	const q = Query.from(table).select(selectDef as Record<string, ExprNode>);
@@ -397,9 +396,6 @@ export function assembleQuery(opts: AssembleOptions): Query {
 	}
 
 	const allFilters = [...filter] as ExprNode[];
-	if (filterNulls && Array.isArray(filterNulls)) {
-		allFilters.push(...filterNulls.map((col) => isNotNull(col as ExprNode)));
-	}
 	if (allFilters.length > 0) {
 		q.where(and(allFilters));
 	}

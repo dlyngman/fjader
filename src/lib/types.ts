@@ -298,7 +298,6 @@ export interface BaseMarkProps {
 	selection?: string;
 	scheme?: ColorScheme;
 	limit?: number;
-	filterNulls?: boolean;
 	transforms?: Transform[];
 	sort?: SortConfig | null;
 	domain?: DomainConfig | null;
