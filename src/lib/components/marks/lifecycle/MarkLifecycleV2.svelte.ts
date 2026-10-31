@@ -211,6 +211,8 @@ export class MarkLifecycleV2 {
 	#schema = $state<Map<string, ColumnSchema> | null>(null);
 	#lastBinDomain = $state<Record<string, [number, number]>>({});
 	#adaptiveBinRung: AdaptiveBinRung | null = null;
+	/** Set when this lifecycle registered a MarkLODSurface, to undo it on destroy. */
+	#onMarkLOD: ((surface: MarkLODSurface | null) => void) | null = null;
 
 	// --- Engine Registration ---
 	#handle = $state<MarkHandle | null>(null);
@@ -345,7 +347,7 @@ export class MarkLifecycleV2 {
 		filterGroup: FilterGroup,
 		options?: {
 			gpuCoordinator?: GPUCoordinator | null;
-			onMarkLOD?: ((surface: MarkLODSurface) => void) | null;
+			onMarkLOD?: ((surface: MarkLODSurface | null) => void) | null;
 		}
 	) {
 		this.#config = config;
@@ -413,12 +415,18 @@ export class MarkLifecycleV2 {
 				}
 			});
 			if (options.onMarkLOD) {
-				// AdaptiveBinRung lacks MarkLODSurface's getRungs, getDensityCtx and
-				// getDensityHost, which the palette calls on a registered surface.
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				chartContext.config.registerMarkLOD(markId, this.#adaptiveBinRung as any);
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				options.onMarkLOD(this.#adaptiveBinRung as any);
+				// The palette, tooltips and shift+scroll reach a mark's rungs through
+				// its MarkLODSurface; a binned mark has one rung and no DensityHost.
+				const rung = this.#adaptiveBinRung;
+				const surface: MarkLODSurface = {
+					adjustResolution: (deltaY) => rung.adjustResolution(deltaY),
+					getRungs: () => (rung.destroyed ? [] : [rung]),
+					getDensityCtx: () => null,
+					getDensityHost: () => null
+				};
+				chartContext.config.registerMarkLOD(markId, surface);
+				options.onMarkLOD(surface);
+				this.#onMarkLOD = options.onMarkLOD;
 			}
 		}
 
@@ -2074,6 +2082,11 @@ export class MarkLifecycleV2 {
 		clearTimeout(this.#fitDomainTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
+		if (this.#onMarkLOD) {
+			this.#chartContext.config.unregisterMarkLOD(this.#markId);
+			this.#onMarkLOD(null);
+			this.#onMarkLOD = null;
+		}
 		if (this.#adaptiveBinRung) {
 			this.#adaptiveBinRung.destroy();
 			this.#adaptiveBinRung = null;
