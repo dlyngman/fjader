@@ -139,8 +139,7 @@
 
 		if (!columnRef) return;
 
-		const fieldStr =
-			typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? '');
+		const fieldStr = resolvedField ?? '';
 
 		targetGroup.upsertManual(
 			sourceKey,
@@ -170,8 +169,7 @@
 		}
 
 		const items = sourceGroup.items;
-		const fieldStr =
-			typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? '');
+		const fieldStr = resolvedField ?? '';
 
 		const currentKeys = new Set<string>();
 		for (const item of items) {

@@ -243,8 +243,7 @@ const JSTYPE_SCALE_TYPES: Record<JsColumnType, Array<{ value: string; label: str
 	],
 	string: [{ value: 'band', label: 'band' }],
 	date: [{ value: 'time', label: 'time' }],
-	boolean: [],
-	other: []
+	boolean: []
 };
 
 /**

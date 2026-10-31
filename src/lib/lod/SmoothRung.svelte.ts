@@ -32,7 +32,7 @@ export class SmoothRung implements LODRung {
 
 	// --- Reactive ---
 	node: RollingAvgNode | null = $state(null);
-	active = $derived(this.#getWindow() > 0);
+	active = $derived.by(() => this.#getWindow() > 0);
 
 	get props(): Record<string, unknown> {
 		return { window: this.#getWindow(), mode: this.#getMode() };

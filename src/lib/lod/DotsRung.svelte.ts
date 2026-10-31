@@ -39,7 +39,7 @@ export class DotsRung implements LODRung {
 	#invalidateLayer: (() => void) | null = null;
 
 	// --- Reactive ---
-	active = $derived(this.#densityHost.ctx.avgSpacing > 8);
+	active = $derived.by(() => this.#densityHost.ctx.avgSpacing > 8);
 
 	#springTarget = $derived.by(() => {
 		const { avgSpacing } = this.#densityHost.ctx;

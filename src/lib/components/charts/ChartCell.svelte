@@ -121,9 +121,11 @@
 	// the same scale state don't overwrite each other's range via the shared
 	// internal scale object. Copies are only created when the scale state
 	// identity changes (rare); range/domain updates are in-place (zero-alloc).
-	let ownXScale: D3Scale | null = null;
+	// D3Scale declares only the getters; the copies also set their range.
+	type CellScale = D3Scale & { range(range: number[]): unknown; copy(): CellScale };
+	let ownXScale: CellScale | null = null;
 	let ownXSource: unknown = null;
-	let ownYScale: D3Scale | null = null;
+	let ownYScale: CellScale | null = null;
 	let ownYSource: unknown = null;
 
 	const cellXScale = $derived.by((): D3Scale | null => {
@@ -131,7 +133,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		if (ownXSource !== ss) {
-			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as D3Scale & { copy(): D3Scale }).copy();
+			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as CellScale).copy();
 			ownXSource = ss;
 		}
 		ownXScale!.range([0, layout.innerWidth]);
@@ -143,9 +145,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		if (ownYSource !== ss) {
-			ownYScale = (
-				ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }
-			).copy();
+			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as CellScale).copy();
 			ownYSource = ss;
 		}
 		ownYScale!.range([layout.innerHeight, 0]);
@@ -158,7 +158,7 @@
 		ss.domainForReactivity;
 		// Target scales can reuse the same cell-local copy since they read the same state
 		if (ownXSource !== ss) {
-			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as D3Scale & { copy(): D3Scale }).copy();
+			ownXScale = (ss.getBaseScale('x', layout.innerWidth) as CellScale).copy();
 			ownXSource = ss;
 		}
 		ownXScale!.range([0, layout.innerWidth]);
@@ -170,9 +170,7 @@
 		if (!layout.isReady || !ss) return null;
 		ss.domainForReactivity;
 		if (ownYSource !== ss) {
-			ownYScale = (
-				ss.getBaseScale('y', layout.innerHeight) as D3Scale & { copy(): D3Scale }
-			).copy();
+			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as CellScale).copy();
 			ownYSource = ss;
 		}
 		ownYScale!.range([layout.innerHeight, 0]);
