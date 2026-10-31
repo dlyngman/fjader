@@ -1,6 +1,5 @@
 {
 	"name": "fjader",
-	"private": true,
 	"description": "Declarative, GPU-rendered charts for millions of rows, powered by DuckDB",
 	"keywords": [
 		"visualization",
@@ -16,7 +15,7 @@
 		"type": "git",
 		"url": "git+https://github.com/dlyngman/fjader.git"
 	},
-	"version": "0.1.11",
+	"version": "0.2.0",
 	"type": "module",
 	"svelte": "./dist/index.js",
 	"exports": {
