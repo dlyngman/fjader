@@ -20,6 +20,7 @@
 	import { withImplicitStack } from '$lib/transforms';
 	import { isNode } from '@uwdata/mosaic-sql';
 	import type {
+		ChannelRef,
 		FieldRef,
 		ScaleType,
 		BaseMarkProps,
@@ -34,9 +35,9 @@
 		x: FieldRef;
 		x1?: number | FieldRef;
 		x2?: FieldRef;
-		y?: FieldRef | null;
-		y1?: FieldRef | null;
-		y2?: FieldRef | null;
+		y?: ChannelRef | null;
+		y1?: ChannelRef | null;
+		y2?: ChannelRef | null;
 		fill?: FieldRef | null;
 		opacity?: number;
 		preferredYScaleType?: ScaleType | null;

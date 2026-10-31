@@ -20,6 +20,7 @@
 	import { buildReactiveConfig } from './utils/reactive-config';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
+		ChannelRef,
 		FieldRef,
 		ScaleType,
 		BaseMarkProps,
@@ -31,9 +32,9 @@
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props extends BaseMarkProps, RectOffsetProps {
-		x?: FieldRef | null;
-		x1?: FieldRef | null;
-		x2?: FieldRef | null;
+		x?: ChannelRef | null;
+		x1?: ChannelRef | null;
+		x2?: ChannelRef | null;
 		y: FieldRef;
 		y1?: number | FieldRef;
 		y2?: FieldRef;
