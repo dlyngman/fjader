@@ -1,5 +1,6 @@
 {
 	"name": "fjader",
+	"private": true,
 	"description": "Declarative, GPU-rendered charts for millions of rows, powered by DuckDB",
 	"keywords": [
 		"visualization",

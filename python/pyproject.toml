@@ -5,6 +5,8 @@ description = "Declarative, GPU-rendered charts for millions of rows, powered by
 requires-python = ">=3.10"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
+# Not public yet: PyPI rejects uploads carrying this classifier.
+classifiers = ["Private :: Do Not Upload"]
 dependencies = ["narwhals>=1.0"]
 
 [project.optional-dependencies]
