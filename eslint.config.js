@@ -53,6 +53,21 @@ export default ts.config(
 		}
 	},
 	{
+		// TypeScript already checks that names exist, including WebGPU's types;
+		// typescript-eslint recommends turning no-undef off for typed code.
+		files: ['**/*.ts', '**/*.svelte'],
+		rules: {
+			'no-undef': 'off'
+		}
+	},
+	{
+		// Tests reach into internals and build partial fixtures.
+		files: ['**/*.test.ts'],
+		rules: {
+			'@typescript-eslint/no-explicit-any': 'off'
+		}
+	},
+	{
 		rules: {
 			// Allow _prefixed unused vars (intentional placeholders)
 			'@typescript-eslint/no-unused-vars': [
@@ -68,6 +83,9 @@ export default ts.config(
 	{
 		ignores: [
 			'.claude/',
+			// Emscripten output of the custom DuckDB-WASM build
+			'src/streamlit/custom-duckdb/',
+			'python/.venv/',
 			'python/fjader/static/',
 			'python/fjader/streamlit_frontend/',
 			'python/__marimo__/',

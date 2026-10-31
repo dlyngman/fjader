@@ -83,7 +83,8 @@
 
 		if (handle) {
 			handle.destroy();
-			handle = null;
+			if (isA) handleA = null;
+			else handleB = null;
 		}
 		if (container) container.innerHTML = '';
 
@@ -133,7 +134,7 @@
 		<div class="toolbar">
 			<span class="label">Original</span>
 			<select onchange={(e) => loadPreset(e.target.value)} value={activePreset}>
-				{#each Object.entries(PRESETS) as [key, preset]}
+				{#each Object.entries(PRESETS) as [key, preset] (key)}
 					<option value={key}>{preset.label}</option>
 				{/each}
 			</select>

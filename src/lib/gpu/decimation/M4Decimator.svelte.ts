@@ -127,7 +127,6 @@ export class M4Decimator {
 
 	// CPU-side config buffer for updates (8 × u32 = 32 bytes)
 	#configData = new Uint32Array(8);
-	#configF32 = new Float32Array(this.#configData.buffer);
 
 	#lastInputBuffers: M4InputBuffers | null = null;
 	#dummyBuffer: GPUBuffer | null = null;

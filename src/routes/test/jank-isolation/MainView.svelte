@@ -168,7 +168,7 @@
 	<div class="controls">
 		<span class="group">
 			<strong>Background</strong> (axes, frame — below canvas)
-			{#each modes as mode}
+			{#each modes as mode (mode)}
 				<label><input type="radio" bind:group={bgMode} value={mode} /> {mode}</label>
 			{/each}
 		</span>

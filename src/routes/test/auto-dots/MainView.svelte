@@ -59,11 +59,11 @@
 	<h2>Auto-Dots Test</h2>
 	<p>Zoom in to see dots appear. Zoomed out = smooth lines, no dots.</p>
 
-	{#each [0, 1] as idx}
+	{#each [0, 1] as idx (idx)}
 		{@const config = configs[selected[idx]]}
 		<div class="chart-section">
 			<select bind:value={selected[idx]}>
-				{#each configs as cfg, i}
+				{#each configs as cfg, i (i)}
 					<option value={i}>{cfg.label}</option>
 				{/each}
 			</select>

@@ -147,7 +147,8 @@
 			x1Expanded != null &&
 			'isAutoBinNode' in x1Expanded &&
 			x1Expanded.isAutoBinNode;
-		const hasAggregateY = typeof y2 === 'object' && y2 != null && (y2 as any).type === 'AGGREGATE';
+		const hasAggregateY =
+			typeof y2 === 'object' && y2 != null && (y2 as { type?: unknown }).type === 'AGGREGATE';
 		return hasBinnedX && hasAggregateY;
 	});
 

@@ -75,7 +75,7 @@ describe('QueryEngine', () => {
 
 	describe('cancel-on-supersede', () => {
 		it('queues second query as pending when first is inflight', async () => {
-			let resolvers: Array<(v: unknown) => void> = [];
+			const resolvers: Array<(v: unknown) => void> = [];
 
 			const conn = createMockConnection({
 				queryFn: () =>

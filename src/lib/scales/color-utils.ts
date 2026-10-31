@@ -622,7 +622,9 @@ export function createD3Scale(
 
 // D3's type definitions for scaleSequentialPow/Symlog and scaleDivergingPow/Symlog
 // return ScaleSequential/ScaleDiverging without .exponent()/.constant() methods,
-// even though the runtime objects support them.  We use 'as any' to work around this.
+// even though the runtime objects support them. These types add the missing method.
+type WithConstant<S> = S & { constant(constant: number): S };
+type WithExponent<S> = S & { exponent(exponent: number): S };
 
 /** Create a sequential (or cyclical) D3 scale, optionally with a non-linear transform. */
 function createSequentialScale(
@@ -636,11 +638,17 @@ function createSequentialScale(
 		case 'log':
 			return scaleSequentialLog(interpolator).domain(domain);
 		case 'symlog':
-			return (scaleSequentialSymlog(interpolator).domain(domain) as any).constant(constant ?? 1);
+			return (
+				scaleSequentialSymlog(interpolator).domain(domain) as WithConstant<ScaleSequential<string>>
+			).constant(constant ?? 1);
 		case 'sqrt':
-			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(0.5);
+			return (
+				scaleSequentialPow(interpolator).domain(domain) as WithExponent<ScaleSequential<string>>
+			).exponent(0.5);
 		case 'pow':
-			return (scaleSequentialPow(interpolator).domain(domain) as any).exponent(exponent ?? 1);
+			return (
+				scaleSequentialPow(interpolator).domain(domain) as WithExponent<ScaleSequential<string>>
+			).exponent(exponent ?? 1);
 		default:
 			return scaleSequential(interpolator).domain(domain);
 	}
@@ -658,11 +666,17 @@ function createDivergingScale(
 		case 'log':
 			return scaleDivergingLog(interpolator).domain(domain);
 		case 'symlog':
-			return (scaleDivergingSymlog(interpolator).domain(domain) as any).constant(constant ?? 1);
+			return (
+				scaleDivergingSymlog(interpolator).domain(domain) as WithConstant<ScaleDiverging<string>>
+			).constant(constant ?? 1);
 		case 'sqrt':
-			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(0.5);
+			return (
+				scaleDivergingPow(interpolator).domain(domain) as WithExponent<ScaleDiverging<string>>
+			).exponent(0.5);
 		case 'pow':
-			return (scaleDivergingPow(interpolator).domain(domain) as any).exponent(exponent ?? 1);
+			return (
+				scaleDivergingPow(interpolator).domain(domain) as WithExponent<ScaleDiverging<string>>
+			).exponent(exponent ?? 1);
 		default:
 			return scaleDiverging(interpolator).domain(domain);
 	}

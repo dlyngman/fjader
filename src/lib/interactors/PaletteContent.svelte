@@ -1027,7 +1027,7 @@
 					const curIdx = item.options.indexOf(String(item.getValue()));
 					const dir = key === 'ArrowUp' || key === 'k' ? -1 : 1;
 					const nextIdx = (curIdx + dir + item.options.length) % item.options.length;
-					setLodTunable(item.key, item.options[nextIdx] as any);
+					setLodTunable(item.key, item.options[nextIdx]);
 					const el = groupInputs[groupFocusIndex];
 					if (el) el.textContent = item.options[nextIdx];
 				} else {
@@ -1322,7 +1322,7 @@
 											onclick={() => {
 												const curIdx = item.options!.indexOf(String(item.getValue()));
 												const next = item.options![(curIdx + 1) % item.options!.length];
-												setLodTunable(item.key, next as any);
+												setLodTunable(item.key, next);
 											}}>{item.getValue()}</span
 										>
 									{:else}
