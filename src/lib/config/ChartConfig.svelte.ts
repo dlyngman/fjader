@@ -48,7 +48,6 @@ export interface MarkEntry {
 	transforms?: Transform[];
 	selection?: string;
 	limit?: number;
-	filterNulls?: boolean;
 	preferredXScaleType?: string | null;
 	preferredYScaleType?: string | null;
 	sort?: SortConfig | null;

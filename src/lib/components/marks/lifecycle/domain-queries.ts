@@ -16,14 +16,6 @@ import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { ContinuousScaleState } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
-interface DataClientConfig {
-	_filterNulls: unknown[] | null;
-	select?: Record<string, unknown>;
-	sort?: { channel: string; direction: 'asc' | 'desc' } | null;
-	domain?: { x?: string[]; y?: string[] } | null;
-	limit?: number;
-	[key: string]: unknown;
-}
 
 // ---------------------------------------------------------------------------
 // fetchCategoricalDomains
@@ -345,13 +337,8 @@ export async function fetchGlobalAggregates(
 	select: Record<string, unknown>,
 	channelsNeedingDataDomain: Set<string>,
 	autoBinNodeCount: number,
-	buildQueryFn: (
-		table: string,
-		config: DataClientConfig,
-		filter: unknown[],
-		forMosaic: boolean
-	) => Query,
-	config: DataClientConfig,
+	buildQueryFn: (table: string, config: unknown, filter: unknown[], forMosaic: boolean) => Query,
+	config: unknown,
 	xScaleState: ContinuousScaleState | null,
 	yScaleState: ContinuousScaleState | null,
 	colorScaleState: ColorScaleState | null,

@@ -6,6 +6,7 @@
  */
 
 import type { ReactiveConfig } from '../lifecycle/MarkLifecycleV2.svelte';
+import type { MarkEntry } from '$lib/config/ChartConfig.svelte';
 import { normalizeSortConfig } from './index';
 
 /**
@@ -15,10 +16,7 @@ import { normalizeSortConfig } from './index';
  * @param opts.resolveFitDomain - Getter for resolved fitDomain (deferred read)
  */
 export function buildReactiveConfig(
-	// Callers pass MarkEntry and other prop bags; MarkEntry's filterNulls is a boolean
-	// while ReactiveConfig's is an array, so the shapes need reconciling first.
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	entry: Record<string, any>,
+	entry: Partial<Pick<MarkEntry, 'sort' | 'limit' | 'domain' | 'tooltip' | 'tip' | 'fitDomain'>>,
 	opts?: {
 		resolveFitDomain?: () => 'x' | 'y' | boolean | undefined;
 	}
@@ -29,9 +27,6 @@ export function buildReactiveConfig(
 		},
 		get limit() {
 			return entry.limit;
-		},
-		get filterNulls() {
-			return entry.filterNulls;
 		},
 		get domain() {
 			return entry.domain ?? null;

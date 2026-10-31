@@ -803,7 +803,6 @@ export class QueryEngine {
 					hasAggregates: true
 				},
 				filter,
-				filterNulls: params.filterNulls ?? null,
 				transformCompiler,
 				limit: params.limit,
 				window: { channels: split.windowChannels, cteName: '__window_cte' }
@@ -820,7 +819,6 @@ export class QueryEngine {
 			table: sourceTable,
 			parts: { ...parts, selectDef: castSelectDef },
 			filter,
-			filterNulls: params.filterNulls ?? null,
 			transformCompiler,
 			limit: params.limit
 		}).toString();

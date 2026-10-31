@@ -25,6 +25,7 @@
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
 	import type { SmoothMode, RollingAvgNode } from '$lib/sql/rolling-avg';
 	import type {
+		ChannelRef,
 		FieldRef,
 		BaseMarkProps,
 		ContinuousScaleTypeProps,
@@ -52,7 +53,7 @@
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps, ConnectedTopologyProps {
 		x: FieldRef;
-		y: FieldRef;
+		y: ChannelRef;
 		stroke?: FieldRef | null;
 		strokeWidth?: number;
 		dotRadius?: number;
@@ -79,7 +80,6 @@
 		strokeWidth = 2,
 		dotRadius = 0,
 		limit,
-		filterNulls = false,
 		preferredXScaleType = null,
 		preferredYScaleType = null,
 		transforms = [],
@@ -123,7 +123,6 @@
 		transforms: () => transforms,
 		selection: () => selection,
 		limit: () => limit,
-		filterNulls: () => filterNulls,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,
 		sort: () => sort,
@@ -548,9 +547,6 @@
 
 	// --- SMOOTHING OVERLAY ---
 	const effectiveGlobalAlpha = $derived(opacity * (smoothRung?.active ? 0.3 : 1.0));
-	// The smoothed y channel. FieldRef does not list RollingAvgNode yet.
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const smoothY = $derived(smoothRung?.node as any);
 
 	onDestroy(() => {
 		dotsRung?.destroy();
@@ -600,7 +596,7 @@
 				table={entry.table}
 				selection={entry.selection}
 				x={entry.x}
-				y={smoothY}
+				y={smoothRung.node}
 				stroke={entry.stroke}
 				z={entry.z}
 				scheme={entry.scheme}

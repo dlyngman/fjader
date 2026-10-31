@@ -16,7 +16,6 @@ export interface QueryParams {
 	 */
 	sort?: NormalizedSortConfig;
 	limit?: number;
-	filterNulls?: unknown[] | null;
 }
 
 export class MarkHandle {
@@ -24,13 +23,13 @@ export class MarkHandle {
 	dataVersion = $state(0);
 	error = $state<Error | null>(null);
 
-	#params = $state<QueryParams>({ sort: undefined, limit: undefined, filterNulls: null });
+	#params = $state<QueryParams>({ sort: undefined, limit: undefined });
 
 	get params(): QueryParams {
 		return this.#params;
 	}
 
-	/** Called by mark lifecycle when sort/limit/filterNulls change. */
+	/** Called by mark lifecycle when sort/limit change. */
 	updateParams(params: QueryParams): void {
 		this.#params = params;
 		this._onParamsChange?.();

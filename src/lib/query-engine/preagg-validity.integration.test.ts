@@ -99,7 +99,7 @@ beforeEach(async () => {
 		transformCompiler: new TransformCompiler([])
 	};
 	handle = engine.registerMark(MARK, descriptor, group);
-	await settle(() => handle.updateParams({ sort: undefined, limit: undefined, filterNulls: null }));
+	await settle(() => handle.updateParams({ sort: undefined, limit: undefined }));
 });
 
 afterEach(async () => {
@@ -584,7 +584,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 			},
 			group
 		);
-		handleX.updateParams({ sort: undefined, limit: undefined, filterNulls: null });
+		handleX.updateParams({ sort: undefined, limit: undefined });
 		await activate();
 		expect(creates()).toHaveLength(2);
 
@@ -765,9 +765,7 @@ describe('preagg brush bins over every column type a brush can target', () => {
 			action();
 			await vi.waitFor(() => expect(mark.dataVersion).toBeGreaterThan(version));
 		};
-		await settled(() =>
-			mark.updateParams({ sort: undefined, limit: undefined, filterNulls: null })
-		);
+		await settled(() => mark.updateParams({ sort: undefined, limit: undefined }));
 
 		const isTime = name === 'v_date' || name === 'v_timestamp';
 		const columnRef = buildColumnRef(name, isTime ? { t0 } : null)!;

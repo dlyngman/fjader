@@ -25,8 +25,8 @@ class TestToCamelCase:
     def test_include_others(self):
         assert to_camel_case("include_others") == "includeOthers"
 
-    def test_filter_nulls(self):
-        assert to_camel_case("filter_nulls") == "filterNulls"
+    def test_tooltip_proximity(self):
+        assert to_camel_case("tooltip_proximity") == "tooltipProximity"
 
     def test_viewport_local_domain(self):
         assert to_camel_case("viewport_local_domain") == "viewportLocalDomain"

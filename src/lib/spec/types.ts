@@ -193,7 +193,6 @@ interface BaseMarkSpec {
 	selection?: string; // selection group name (auto-created in SelectionRegistry)
 	scheme?: ColorScheme;
 	limit?: number;
-	filterNulls?: boolean;
 	transforms?: TransformSpec[];
 	sort?: SortConfig | null;
 	domain?: { x?: string[]; y?: string[] } | null;

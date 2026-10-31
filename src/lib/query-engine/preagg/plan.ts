@@ -485,7 +485,6 @@ export function preaggQuerySQL(
 		table: preagg.table,
 		parts: preaggParts,
 		filter: filters,
-		filterNulls: null, // preagg table already filtered
 		transformCompiler,
 		limit: params.limit,
 		window: windowChannels ? { channels: windowChannels, cteName: '__preagg_cte' } : null

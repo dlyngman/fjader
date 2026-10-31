@@ -56,7 +56,6 @@
 		rotate = 0,
 		format = String,
 		limit,
-		filterNulls = false,
 		preferredXScaleType = null,
 		preferredYScaleType = null,
 		transforms = [],
@@ -129,9 +128,6 @@
 		},
 		get limit() {
 			return limit;
-		},
-		get filterNulls() {
-			return filterNulls;
 		},
 		get domain() {
 			return domain;

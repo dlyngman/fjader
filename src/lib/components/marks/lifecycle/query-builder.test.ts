@@ -233,11 +233,6 @@ describe('assembleQuery', () => {
 		expect(s).toContain('"a" > 10');
 	});
 
-	it('applies null filters', () => {
-		const s = assemble(simpleParts({ x: 'a', y: 'b' }), { filterNulls: [sqlColumn('a')] });
-		expect(s).toContain('NOT NULL');
-	});
-
 	it('adds ORDER BY for connected config', () => {
 		const parts = simpleParts(
 			{ x: 'date', y: 'value', stroke: 'series' },

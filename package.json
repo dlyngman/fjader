@@ -70,6 +70,7 @@
 		"streamlit-component-lib": "^2.0.0",
 		"svelte": "^5.0.0",
 		"svelte-check": "^4.4.1",
+		"temporal-spec": "^1.0.1",
 		"typescript": "^5.9.3",
 		"typescript-eslint": "^8.56.1",
 		"vite": "^7.0.0",

@@ -16,7 +16,7 @@ pip install "fjader[jupyter]"      # Python: Jupyter and marimo
 pip install "fjader[streamlit]"    # Python: Streamlit
 ```
 
-Fjäder needs a browser with WebGPU. There is no fallback renderer.
+Fjäder needs Chrome 149 or later, or another Chromium browser on that version. It relies on two recent features other browsers don't ship yet: WebGPU's `immediate_address_space` (used by the compute pass that places categorical axes) and the `Temporal` API (used for calendar offsets). There is no fallback renderer.
 
 ## Svelte
 

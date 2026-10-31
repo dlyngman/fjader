@@ -7,6 +7,8 @@ import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
+import type { AutoBinNode } from '$lib/sql/bin';
+import type { RollingAvgNode } from '$lib/sql/rolling-avg';
 
 // ---------------------------------------------------------------------------
 // Scales
@@ -47,6 +49,12 @@ export interface D3BandScale extends D3Scale {
 
 /** A column name (string) or inline Mosaic SQL expression node. */
 export type FieldRef = string | ExprNode;
+
+/**
+ * What a mark channel accepts: a FieldRef, or a lazy node the mark lifecycle
+ * resolves against the chart's state, such as bin() or a rolling average.
+ */
+export type ChannelRef = FieldRef | AutoBinNode | RollingAvgNode;
 
 /** Color prop: CSS constant, column name, object wrapper {field, scheme?, type?}, SQL node, or null. */
 export type ColorProp =
@@ -290,7 +298,6 @@ export interface BaseMarkProps {
 	selection?: string;
 	scheme?: ColorScheme;
 	limit?: number;
-	filterNulls?: boolean;
 	transforms?: Transform[];
 	sort?: SortConfig | null;
 	domain?: DomainConfig | null;
