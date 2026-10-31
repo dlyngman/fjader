@@ -114,9 +114,10 @@ Observable Plot, by Observable, Inc.
 https://github.com/observablehq/plot
 --------------------------------------------------------------------------------
 
-fjader's mark API follows Observable Plot: mark names and channels, the
-shorthands that imply stacking (x for x1/x2, y for y1/y2), the stackX/stackY
-conventions, z as the series grouping channel, and many defaults.
+fjader's mark API borrows from Observable Plot, though it is its own API and
+not compatible with Plot's: mark names and channels, the shorthands that imply
+stacking (x for x1/x2, y for y1/y2), the stackX/stackY conventions, z as the
+series grouping channel, and many defaults.
 
 Observable Plot's license (ISC):
 

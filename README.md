@@ -2,7 +2,7 @@
 
 An experimental charting library for Svelte and Python with a declarative, grammar-of-graphics API, that queries DuckDB and renders with WebGPU. It is not feature complete, and the API may still change.
 
-fjader builds on the ideas of [Mosaic](https://github.com/uwdata/mosaic): charts are described as marks whose data comes from SQL queries run in DuckDB, and linked charts filter each other through selections. Its mark API follows [Observable Plot](https://observablehq.com/plot/). Query results arrive as Arrow and are drawn with WebGPU.
+fjader builds on the ideas of [Mosaic](https://github.com/uwdata/mosaic): charts are described as marks whose data comes from SQL queries run in DuckDB, and linked charts filter each other through selections. Its marks and channels borrow from [Observable Plot](https://observablehq.com/plot/), but the API is its own and not compatible with Plot's. Query results arrive as Arrow and are drawn with WebGPU.
 
 There are three ways to use it: Svelte components; a JSON spec, rendered from JavaScript with `Fjader.render(element, spec)`; and a Python package that builds specs and renders them in Jupyter, marimo or Streamlit.
 
@@ -137,7 +137,7 @@ The pages under `src/routes/` are development and test pages for working on fjad
 fjader takes ideas, and in places code, from two projects:
 
 - **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. fjader began as a Mosaic client, with `@uwdata/mosaic-core` as a dependency, and its query layer still follows Mosaic's design: pre-aggregation with sufficient statistics, the crossfilter selection model and the REST connector protocol. The API, interactors and JSON spec follow vgplot. As fjader moved to rendering directly in WebGPU, it needed its queries tied more closely to its marks: results shaped for GPU buffers, query timing coupled to interaction frames, and state that follows Svelte 5's reactivity rather than a callback protocol. So it replaced `mosaic-core` with its own query layer, adapted from Mosaic's, and still builds every query with `@uwdata/mosaic-sql`.
-- **[Observable Plot](https://github.com/observablehq/plot)**, by Observable. The mark API, its channel shorthands, stacking conventions and many defaults follow Plot.
+- **[Observable Plot](https://github.com/observablehq/plot)**, by Observable. Mark names, channel shorthands, stacking conventions and many defaults are modeled on Plot's.
 
 It also rests on [DuckDB](https://duckdb.org) and [DuckDB-WASM](https://github.com/duckdb/duckdb-wasm), [Flechette](https://github.com/uwdata/flechette), [d3](https://d3js.org) and [Svelte](https://svelte.dev).
 
