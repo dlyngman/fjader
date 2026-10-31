@@ -1,12 +1,10 @@
 # fjader
 
-**Declarative, GPU-rendered charts for millions of rows, powered by DuckDB.**
+A charting library for Svelte and Python that queries DuckDB and renders with WebGPU.
 
-The name comes from Swedish _fjäder_ (say "fyeh-der"), which means both spring and feather: the springs that animate every chart, and the feathers that steer an Arrow.
+fjader builds on the ideas of [Mosaic](https://github.com/uwdata/mosaic): charts are described as marks whose data comes from SQL queries run in DuckDB, and linked charts filter each other through selections. Its mark API follows [Observable Plot](https://observablehq.com/plot/). Query results arrive as Arrow and are drawn with WebGPU.
 
-You describe a chart in marks and channels. fjader compiles it to SQL that runs in DuckDB, moves only the aggregated result into the browser as Arrow, and draws it with WebGPU. Brushing, crossfiltering, pan and zoom stay interactive at 120 fps on datasets far beyond what an SVG or Canvas chart can hold.
-
-If you know [Observable Plot](https://observablehq.com/plot/), you already know most of the API.
+The name comes from Swedish _fjäder_ (say "fyeh-der"), which means both spring and feather: the springs that animate the charts, and the feathers that steer an Arrow.
 
 ## Install
 
@@ -93,13 +91,13 @@ Charts display on their own in Jupyter and marimo; in Streamlit, call `fj.stream
 
 ## How it works
 
-**The database does the heavy lifting.** Aggregation, binning, filtering, top-N, stacking and normalization compile to SQL and run in DuckDB-WASM, or in a server-side DuckDB from Python. Only results sized by the screen, not by the data, reach JavaScript.
+**Queries.** Aggregation, binning, filtering, top-N, stacking and normalization compile to SQL and run in DuckDB-WASM in the browser, or in a server-side DuckDB from Python. What reaches JavaScript is sized by the chart, not by the data.
 
-**Interactions stay instant.** Brushes crossfilter every other chart. On the first hover, fjader builds pre-aggregated tables binned at pixel resolution, so each brush frame reads a small table instead of rescanning the data.
+**Selections.** As in Mosaic, brushes crossfilter the other charts, and pre-aggregated tables binned at pixel resolution keep brushing fast. fjader builds them on the first hover over a chart.
 
-**Marks compose.** Charts are built from marks (dots, bars, rects, lines, areas, rules, text, parallel coordinates), not chart types. Marks declare what scales they need, and charts sharing a variable share its scale.
+**Marks.** Charts are built from marks (dots, bars, rects, lines, areas, rules, text, parallel coordinates). Marks declare the scales they need, and charts sharing a variable share its scale.
 
-**Everything renders on the GPU.** WebGPU shaders draw every mark. A fixed-timestep spring simulation animates domain changes, filters and morphs between states. Level-of-detail rungs move between dots, bins and smoothed density, and shift+scroll scrubs through them.
+**Rendering.** WebGPU shaders draw the marks. A fixed-timestep spring simulation animates domain changes and transitions between states. Level-of-detail rungs move between dots, bins and smoothed density; shift+scroll moves through them.
 
 ## Project structure
 
