@@ -2,7 +2,7 @@
  * Downloads the example datasets into static/data/ from the upstream
  * repositories that publish them, pinned to a commit and checked by SHA-256.
  *
- * Fjäder does not redistribute these files: each one comes from its upstream
+ * fjader does not redistribute these files: each one comes from its upstream
  * copy. Sources and licenses are in static/data/SOURCES.md.
  *
  *   npm run fetch-data

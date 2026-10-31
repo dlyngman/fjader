@@ -31,7 +31,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 THIRD-PARTY NOTICES
 ================================================================================
 
-Fjäder stands on the work of others. The projects below shaped its design,
+fjader stands on the work of others. The projects below shaped its design,
 and parts of its code are adapted from them. Their licenses follow in full.
 
 --------------------------------------------------------------------------------
@@ -39,10 +39,13 @@ Mosaic, by the UW Interactive Data Lab
 https://github.com/uwdata/mosaic
 --------------------------------------------------------------------------------
 
-Fjäder started out on Mosaic, and its query layer is built on what Mosaic
-showed works. Fjäder builds every query with @uwdata/mosaic-sql, a direct
-dependency. When it replaced @uwdata/mosaic-core with its own query layer, it
-kept Mosaic's ideas and, in places, the structure of Mosaic's code:
+fjader began as a Mosaic client, with @uwdata/mosaic-core as a dependency, and
+its query layer is built on what Mosaic showed works. It replaced mosaic-core
+with its own query layer when rendering in WebGPU required queries, GPU buffers
+and Svelte's reactivity to be coupled more tightly than a general coordinator
+provides. It still builds every query with @uwdata/mosaic-sql, a direct
+dependency, and it kept Mosaic's ideas and, in places, the structure of
+Mosaic's code:
 
 - Pre-aggregation with sufficient statistics. The preaggregation code in
   src/lib/query-engine/ (sufficient-statistics.ts and preagg/) follows
@@ -111,7 +114,7 @@ Observable Plot, by Observable, Inc.
 https://github.com/observablehq/plot
 --------------------------------------------------------------------------------
 
-Fjäder's mark API follows Observable Plot: mark names and channels, the
+fjader's mark API follows Observable Plot: mark names and channels, the
 shorthands that imply stacking (x for x1/x2, y for y1/y2), the stackX/stackY
 conventions, z as the series grouping channel, and many defaults.
 
