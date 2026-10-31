@@ -16,7 +16,6 @@
 	} from '$lib/components';
 	import { bin } from '$lib';
 	import LineMark from '$lib/components/marks/LineMark.svelte';
-
 </script>
 
 <div class="main-view-container">

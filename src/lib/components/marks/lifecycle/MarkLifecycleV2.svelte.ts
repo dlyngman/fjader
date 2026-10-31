@@ -33,7 +33,7 @@ import {
 	isNotNull,
 	and
 } from '@uwdata/mosaic-sql';
-import type { ExprNode, ExprValue, GroupByExpr } from '@uwdata/mosaic-sql';
+import type { ExprNode, ExprValue, FilterExpr, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { withDenseCategories, withRanking } from '$lib/transforms';
@@ -63,6 +63,7 @@ import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
+import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
@@ -344,7 +345,7 @@ export class MarkLifecycleV2 {
 		filterGroup: FilterGroup,
 		options?: {
 			gpuCoordinator?: GPUCoordinator | null;
-			onMarkLOD?: ((surface: any) => void) | null;
+			onMarkLOD?: ((surface: MarkLODSurface) => void) | null;
 		}
 	) {
 		this.#config = config;
@@ -412,7 +413,11 @@ export class MarkLifecycleV2 {
 				}
 			});
 			if (options.onMarkLOD) {
+				// AdaptiveBinRung lacks MarkLODSurface's getRungs, getDensityCtx and
+				// getDensityHost, which the palette calls on a registered surface.
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				chartContext.config.registerMarkLOD(markId, this.#adaptiveBinRung as any);
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				options.onMarkLOD(this.#adaptiveBinRung as any);
 			}
 		}
@@ -792,6 +797,8 @@ export class MarkLifecycleV2 {
 					this.#channelsNeedingDataDomain,
 					this.#autoBinNodes.size,
 					this.#buildQueryForAggregates.bind(this),
+					// DataClientConfig is the older shape: it requires _filterNulls.
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					this.#config as any,
 					this.#chartContext.xScaleState as ContinuousScaleState | null,
 					this.#chartContext.yScaleState as ContinuousScaleState | null,
@@ -993,8 +1000,8 @@ export class MarkLifecycleV2 {
 					continue;
 				}
 				if (!isNumericScale(scaleType)) continue;
-				if (isNode(expr) && isAggregateExpression(expr as any)) continue;
-				if (isNode(expr) && isWindowExpression(expr as any)) continue;
+				if (isNode(expr) && isAggregateExpression(expr)) continue;
+				if (isNode(expr) && isWindowExpression(expr)) continue;
 				fields.push({ key, expr });
 			}
 		}
@@ -1428,7 +1435,7 @@ export class MarkLifecycleV2 {
 	 * Standalone assembly — doesn't depend on #resolvedQueryParts
 	 * (which isn't available yet during Phase 1 setup).
 	 */
-	#buildQueryForAggregates(_table: string, _config: any, filter: unknown[]): Query | null {
+	#buildQueryForAggregates(_table: string, _config: unknown, filter: unknown[]): Query | null {
 		// Build raw query parts directly from config.select (no identity columns,
 		// no bin resolution — scale states aren't ready yet during Phase 1).
 		const parts = buildQueryParts(
@@ -1444,7 +1451,7 @@ export class MarkLifecycleV2 {
 			transformCompiler: this.#transformCompiler
 		});
 		if (!q) return null;
-		return Query.from(sql`(${q.toString()})` as any).select('*');
+		return Query.from(sql`(${q.toString()})`).select('*');
 	}
 
 	// ===========================================================================
@@ -1828,7 +1835,7 @@ export class MarkLifecycleV2 {
 		// Identify non-aggregate channel columns — these are the join keys
 		const joinCols: string[] = [];
 		for (const [ch, expr] of Object.entries(this.#resolvedQueryParts.selectDef)) {
-			if (!isAggregateExpression(expr as any) && !isWindowExpression(expr as any)) {
+			if (!isAggregateExpression(expr as ExprNode) && !isWindowExpression(expr)) {
 				joinCols.push(ch);
 			}
 		}
@@ -1991,7 +1998,7 @@ export class MarkLifecycleV2 {
 
 		if (useTooltipTable) {
 			const q = Query.from(this.#tooltipTableName).select(outerSelect as Record<string, ExprValue>);
-			if (whereClause) q.where(whereClause as any);
+			if (whereClause) q.where(whereClause as FilterExpr);
 			return q;
 		}
 
@@ -2020,10 +2027,10 @@ export class MarkLifecycleV2 {
 	#buildSidecarQuery(outerSelect: Record<string, unknown>, where?: unknown): Query | null {
 		const tooltipQuery = this.#buildTooltipQuery();
 		if (!tooltipQuery) return null;
-		const q = Query.from({ mark_data: sql`(${tooltipQuery})` as any }).select(
+		const q = Query.from({ mark_data: sql`(${tooltipQuery})` }).select(
 			outerSelect as Record<string, ExprValue>
 		);
-		if (where) q.where(where as any);
+		if (where) q.where(where as FilterExpr);
 		return q;
 	}
 

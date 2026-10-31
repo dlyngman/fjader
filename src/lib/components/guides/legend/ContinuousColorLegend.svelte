@@ -401,7 +401,7 @@
 		>
 			<defs>
 				<linearGradient id={gradientId} x1={gradX1} y1={gradY1} x2={gradX2} y2={gradY2}>
-					{#each gradientStops as stop}
+					{#each gradientStops as stop, i (i)}
 						<stop offset={stop.offset} stop-color={stop.color} />
 					{/each}
 				</linearGradient>
@@ -426,7 +426,7 @@
 			{/if}
 
 			<!-- Tick marks -->
-			{#each tickValues as tick}
+			{#each tickValues as tick, i (i)}
 				{@render tickLabel(tToPx((tick - min) / (max - min)), tick)}
 			{/each}
 

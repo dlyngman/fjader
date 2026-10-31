@@ -548,6 +548,9 @@
 
 	// --- SMOOTHING OVERLAY ---
 	const effectiveGlobalAlpha = $derived(opacity * (smoothRung?.active ? 0.3 : 1.0));
+	// The smoothed y channel. FieldRef does not list RollingAvgNode yet.
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const smoothY = $derived(smoothRung?.node as any);
 
 	onDestroy(() => {
 		dotsRung?.destroy();
@@ -597,7 +600,7 @@
 				table={entry.table}
 				selection={entry.selection}
 				x={entry.x}
-				y={smoothRung.node as any}
+				y={smoothY}
 				stroke={entry.stroke}
 				z={entry.z}
 				scheme={entry.scheme}

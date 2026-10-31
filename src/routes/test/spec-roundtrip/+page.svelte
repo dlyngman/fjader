@@ -83,16 +83,18 @@
 
 		if (handle) {
 			handle.destroy();
-			handle = null;
+			if (isA) handleA = null;
+			else handleB = null;
 		}
 		if (container) container.innerHTML = '';
 
 		try {
 			const parsed = JSON.parse(specText);
 			// Bare PlotSpec (has marks but no data) — wrap with the active preset's data
-			const spec = parsed.marks && !parsed.data
-				? { data: PRESETS[activePreset].spec.data, plot: parsed }
-				: parsed;
+			const spec =
+				parsed.marks && !parsed.data
+					? { data: PRESETS[activePreset].spec.data, plot: parsed }
+					: parsed;
 			handle = await render(container, spec);
 			if (isA) {
 				handleA = handle;
@@ -133,7 +135,7 @@
 		<div class="toolbar">
 			<span class="label">Original</span>
 			<select onchange={(e) => loadPreset(e.target.value)} value={activePreset}>
-				{#each Object.entries(PRESETS) as [key, preset]}
+				{#each Object.entries(PRESETS) as [key, preset] (key)}
 					<option value={key}>{preset.label}</option>
 				{/each}
 			</select>
@@ -143,10 +145,7 @@
 		{#if errorA}
 			<div class="error">{errorA}</div>
 		{/if}
-		<textarea
-			bind:value={specTextA}
-			spellcheck="false"
-			onkeydown={(e) => handleEditorKey(e, 'A')}
+		<textarea bind:value={specTextA} spellcheck="false" onkeydown={(e) => handleEditorKey(e, 'A')}
 		></textarea>
 		<div class="chart-area" bind:this={containerA}></div>
 	</div>

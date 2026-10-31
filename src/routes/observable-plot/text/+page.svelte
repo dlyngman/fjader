@@ -17,7 +17,6 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-
 	const { queryEngine } = initFjader();
 
 	let isLoaded = $state(false);
@@ -144,25 +143,13 @@
 									strokeWidth={1}
 									curve="catmull-rom"
 								/>
-								<DotsMark
-									table="driving"
-									x="miles"
-									y="gas"
-									r={2}
-								/>
+								<DotsMark table="driving" x="miles" y="gas" r={2} />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
-						<TextMark
-							table="driving"
-							x="miles"
-							y="gas"
-							text="year"
-							fontSize={9}
-							dy={-8}
-						/>
+						<TextMark table="driving" x="miles" y="gas" text="year" fontSize={9} dy={-8} />
 					{/snippet}
 				</ChartContainer>
 			</div>

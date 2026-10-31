@@ -11,7 +11,6 @@
 		RectYMark
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
-
 </script>
 
 <div class="demo-container">

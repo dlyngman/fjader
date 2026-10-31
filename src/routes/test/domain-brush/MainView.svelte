@@ -5,7 +5,8 @@
 		Crosshair,
 		WebGPUCanvas,
 		LineMark,
-		IntervalX} from '$lib/components';
+		IntervalX
+	} from '$lib/components';
 </script>
 
 <div class="main-view-container">

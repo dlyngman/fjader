@@ -13,3 +13,9 @@ python/fjader/static/
 python/fjader/streamlit_frontend/
 python/__marimo__/
 python/layouts/
+
+# Vendored: Emscripten output of the custom DuckDB-WASM build
+src/streamlit/custom-duckdb/
+
+# Python environment
+python/.venv/

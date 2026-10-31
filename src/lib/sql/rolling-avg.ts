@@ -88,5 +88,9 @@ export class RollingAvgNode {
 }
 
 export function isRollingAvgExpression(expr: unknown): expr is RollingAvgNode {
-	return typeof expr === 'object' && expr !== null && (expr as any).isRollingAvgNode === true;
+	return (
+		typeof expr === 'object' &&
+		expr !== null &&
+		(expr as { isRollingAvgNode?: unknown }).isRollingAvgNode === true
+	);
 }

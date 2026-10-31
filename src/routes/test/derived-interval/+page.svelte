@@ -3,7 +3,6 @@
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-
 	const { queryEngine } = initFjader();
 
 	let isLoaded = $state(false);
@@ -47,8 +46,8 @@
 <div class="app-container">
 	<h2>Derived Interval Test</h2>
 	<p>
-		Draw a brush on the overview. A ghost overlay should appear 1 year earlier.
-		The detail chart zooms to the primary selection.
+		Draw a brush on the overview. A ghost overlay should appear 1 year earlier. The detail chart
+		zooms to the primary selection.
 	</p>
 	{#if loadError}
 		<div class="status">Error: {loadError}</div>
@@ -74,7 +73,8 @@
 		min-height: 200px;
 		padding: 2rem;
 	}
-	h2, p {
+	h2,
+	p {
 		margin: 0.5rem 0;
 	}
 </style>

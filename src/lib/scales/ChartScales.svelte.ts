@@ -428,26 +428,22 @@ export class ChartScales {
 	get xScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
 		this.#xScaleInstance.domainForReactivity; // Register dependency
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		return this.#xScaleInstance.updateScaleDomain(this.baseXScale) as D3Scale;
 	}
 
 	get yScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
 		this.#yScaleInstance.domainForReactivity; // Register dependency
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		return this.#yScaleInstance.updateScaleDomain(this.baseYScale) as D3Scale;
 	}
 
 	get xTargetScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseXScale || !this.#xScaleInstance) return null;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		return this.#xScaleInstance.updateScaleDomain(this.baseXScale) as D3Scale;
 	}
 
 	get yTargetScale(): D3Scale | null {
 		if (!this.layout.isReady || !this.baseYScale || !this.#yScaleInstance) return null;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		return this.#yScaleInstance.updateScaleDomain(this.baseYScale) as D3Scale;
 	}
 

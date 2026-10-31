@@ -14,14 +14,15 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
 	onMount(async () => {
 		try {
-			await queryEngine.exec([loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()]);
+			await queryEngine.exec([
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
+			]);
 
 			isLoaded = true;
 		} catch (error) {
@@ -37,7 +38,7 @@
 	{:else if !isLoaded}
 		<div class="loading-container">Loading parquet data...</div>
 	{:else}
-	<div class="demo-container">
+		<div class="demo-container">
 			<h1>GPU Grid Test</h1>
 			<p>Testing the new hybrid Grid architecture (GPU lines + SVG axes)</p>
 

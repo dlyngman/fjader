@@ -99,7 +99,11 @@ export function resolveMarkEntry(markSpec: MarkSpec): {
 				// Labeled entry
 				if ('value' in entry && 'label' in entry) {
 					const labeled = entry as { value: unknown; label: string };
-					if (typeof labeled.value === 'object' && labeled.value !== null && 'aggregate' in labeled.value) {
+					if (
+						typeof labeled.value === 'object' &&
+						labeled.value !== null &&
+						'aggregate' in labeled.value
+					) {
 						return { value: resolveFieldSpec(labeled.value as FieldSpec), label: labeled.label };
 					}
 					return entry;

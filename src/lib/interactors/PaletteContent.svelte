@@ -360,12 +360,10 @@
 			const rungs = markLOD.getRungs();
 			if (densityCtx) {
 				const smooth = rungs.find((r) => r.name === 'smooth' && !r.destroyed);
-				const w = smooth ? (smooth.props.window as number) ?? 0 : 0;
-				const mode = smooth ? (smooth.props.mode as string) ?? 'centered' : 'centered';
+				const w = smooth ? ((smooth.props.window as number) ?? 0) : 0;
+				const mode = smooth ? ((smooth.props.mode as string) ?? 'centered') : 'centered';
 				const suffix =
-					w > 0
-						? ` ${mode === 'trailing' ? '←' : mode === 'leading' ? '→' : '±'}${w}`
-						: '';
+					w > 0 ? ` ${mode === 'trailing' ? '←' : mode === 'leading' ? '→' : '±'}${w}` : '';
 				return `${densityCtx.density.toFixed(1)} pt/px${suffix}`;
 			}
 			const bins = rungs.find((r) => r.name === 'bins' && !r.destroyed);
@@ -1027,7 +1025,7 @@
 					const curIdx = item.options.indexOf(String(item.getValue()));
 					const dir = key === 'ArrowUp' || key === 'k' ? -1 : 1;
 					const nextIdx = (curIdx + dir + item.options.length) % item.options.length;
-					setLodTunable(item.key, item.options[nextIdx] as any);
+					setLodTunable(item.key, item.options[nextIdx]);
 					const el = groupInputs[groupFocusIndex];
 					if (el) el.textContent = item.options[nextIdx];
 				} else {
@@ -1289,20 +1287,28 @@
 								</div>
 								<div class="group-row">
 									<span class="group-label">M4</span>
-									<span class="lod-readout {densityCtx.shouldDecimate ? 'lod-active' : ''}">{densityCtx.shouldDecimate ? 'on' : 'off'}</span>
+									<span class="lod-readout {densityCtx.shouldDecimate ? 'lod-active' : ''}"
+										>{densityCtx.shouldDecimate ? 'on' : 'off'}</span
+									>
 								</div>
 							{:else if binsRung}
 								<div class="group-row">
 									<span class="group-label">bins</span>
-									<span class="lod-readout">{Math.round((binsRung.props.numVisibleBins as number) ?? 0)}</span>
+									<span class="lod-readout"
+										>{Math.round((binsRung.props.numVisibleBins as number) ?? 0)}</span
+									>
 								</div>
 								<div class="group-row">
 									<span class="group-label">bin width</span>
-									<span class="lod-readout">{((binsRung.props.binWidthPx as number) ?? 0).toFixed(1)} px</span>
+									<span class="lod-readout"
+										>{((binsRung.props.binWidthPx as number) ?? 0).toFixed(1)} px</span
+									>
 								</div>
 								<div class="group-row">
 									<span class="group-label">step</span>
-									<span class="lod-readout">{((binsRung.props.binStep as number) ?? 0).toPrecision(3)}</span>
+									<span class="lod-readout"
+										>{((binsRung.props.binStep as number) ?? 0).toPrecision(3)}</span
+									>
 								</div>
 							{/if}
 							<!-- Editable tunables (group navigation) -->
@@ -1322,7 +1328,7 @@
 											onclick={() => {
 												const curIdx = item.options!.indexOf(String(item.getValue()));
 												const next = item.options![(curIdx + 1) % item.options!.length];
-												setLodTunable(item.key, next as any);
+												setLodTunable(item.key, next);
 											}}>{item.getValue()}</span
 										>
 									{:else}

@@ -4,7 +4,6 @@
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 
-
 	const { queryEngine } = initFjader();
 
 	let isLoaded = $state(false);
@@ -13,7 +12,9 @@
 	onMount(async () => {
 		try {
 			// Load penguins dataset for the brush demo
-			await queryEngine.exec([loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()]);
+			await queryEngine.exec([
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
+			]);
 
 			isLoaded = true;
 		} catch (error) {

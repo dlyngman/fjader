@@ -66,11 +66,7 @@
 
 				{#snippet interactors()}
 					<IntervalX selection="brush" />
-					<DerivedIntervalX
-						sourceSelection="brush"
-						selection="comparison"
-						offset="-1yw"
-					/>
+					<DerivedIntervalX sourceSelection="brush" selection="comparison" offset="-1yw" />
 				{/snippet}
 			</ChartContainer>
 		</div>

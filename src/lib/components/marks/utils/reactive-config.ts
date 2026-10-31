@@ -15,6 +15,9 @@ import { normalizeSortConfig } from './index';
  * @param opts.resolveFitDomain - Getter for resolved fitDomain (deferred read)
  */
 export function buildReactiveConfig(
+	// Callers pass MarkEntry and other prop bags; MarkEntry's filterNulls is a boolean
+	// while ReactiveConfig's is an array, so the shapes need reconciling first.
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	entry: Record<string, any>,
 	opts?: {
 		resolveFitDomain?: () => 'x' | 'y' | boolean | undefined;

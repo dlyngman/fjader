@@ -30,9 +30,12 @@ interface DB {
 function openDB(): DB {
 	const db = new duckdb.Database(':memory:');
 	return {
-		run: (sql: string) => new Promise((res, rej) => db.run(sql, (e: Error | null) => (e ? rej(e) : res()))),
+		run: (sql: string) =>
+			new Promise((res, rej) => db.run(sql, (e: Error | null) => (e ? rej(e) : res()))),
 		all: (sql: string) =>
-			new Promise((res, rej) => db.all(sql, (e: Error | null, rows: Record<string, unknown>[]) => (e ? rej(e) : res(rows)))),
+			new Promise((res, rej) =>
+				db.all(sql, (e: Error | null, rows: Record<string, unknown>[]) => (e ? rej(e) : res(rows)))
+			),
 		close: () => new Promise((res, rej) => db.close((e: Error | null) => (e ? rej(e) : res())))
 	};
 }

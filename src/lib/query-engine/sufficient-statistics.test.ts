@@ -31,7 +31,7 @@ describe('rewriteForPreagg', () => {
 		// Dimension goes into preagg table as-is
 		expect(Object.keys(result!.preaggCols)).toContain('x');
 		// Output references the preagg column
-		expect(result!.outputSelect.x.toString()).toMatch(/\"x\"/);
+		expect(result!.outputSelect.x.toString()).toMatch(/"x"/);
 	});
 
 	it('rewrites COUNT(*)', () => {

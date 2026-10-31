@@ -16,7 +16,6 @@
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
-
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
 	let loadError = $state(null);
@@ -25,7 +24,9 @@
 		try {
 			await queryEngine.exec([
 				msql.loadCSV('aapl', `${window.location.origin}/data/aapl.csv`).toString(),
-				msql.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`).toString(),
+				msql
+					.loadCSV('unemployment', `${window.location.origin}/data/bls-industry-unemployment.csv`)
+					.toString(),
 				msql.loadCSV('driving', `${window.location.origin}/data/driving.csv`).toString(),
 				msql.loadCSV('sftemp', `${window.location.origin}/data/sf-temperatures.csv`).toString(),
 				`CREATE TABLE random_walk AS SELECT i, SUM(random() - 0.5) OVER (ORDER BY i) AS value FROM generate_series(1, 600) AS t(i)`
@@ -61,12 +62,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<LineMark
-									table="aapl"
-									x="Date"
-									y="Close"
-									curve="monotone"
-								/>
+								<LineMark table="aapl" x="Date" y="Close" curve="monotone" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -200,20 +196,8 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<Grid />
-								<LineMark
-									table="driving"
-									x="miles"
-									y="gas"
-									order="year"
-									curve="catmull-rom"
-								/>
-								<DotsMark
-									table="driving"
-									x="miles"
-									y="gas"
-									r={3}
-									fill="black"
-								/>
+								<LineMark table="driving" x="miles" y="gas" order="year" curve="catmull-rom" />
+								<DotsMark table="driving" x="miles" y="gas" r={3} fill="black" />
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
@@ -268,7 +252,6 @@
 			</div>
 		</div>
 	</div>
-
 {/if}
 
 <style>
