@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: Lint, test and package (JS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npx vitest run
+      - name: Svelte package builds
+        run: npm run package
+      - name: Committed Python bundles match the source
+        run: |
+          npm run build:widget
+          npm run build:streamlit
+          if [ -n "$(git status --porcelain python/fjader)" ]; then
+            git status --short python/fjader
+            echo "::error::The widget or Streamlit bundles are stale. Run npm run build:all and commit the result."
+            exit 1
+          fi
+
+  python:
+    name: Test and build (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests, with every optional dependency so none are skipped
+        run: uv run --extra dev --extra jupyter --extra pyarrow --with polars --with pandas pytest -q
+      - run: uv build
+      - name: Wheel installs and imports in a clean environment
+        run: |
+          uv venv /tmp/wheel-env
+          uv pip install --python /tmp/wheel-env/bin/python dist/*.whl
+          /tmp/wheel-env/bin/python -I -c "import fjader; print(fjader.__version__)"
