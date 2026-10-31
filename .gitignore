@@ -29,7 +29,8 @@ llm_context.*
 .ipynb_checkpoints
 
 # Static data
-/static/data
+/static/data/*
+!/static/data/SOURCES.md
 
 # markdown and notes
 /proposals
