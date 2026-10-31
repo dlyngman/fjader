@@ -32,7 +32,7 @@
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props extends BaseMarkProps, RectOffsetProps {
-		x: FieldRef;
+		x?: FieldRef;
 		x1?: number | FieldRef;
 		x2?: FieldRef;
 		y?: ChannelRef | null;

@@ -27,7 +27,8 @@
 		"./theme.css": "./dist/theme.css"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"!dist/**/*.test.*"
 	],
 	"scripts": {
 		"dev": "vite dev",
