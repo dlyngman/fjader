@@ -35,7 +35,7 @@
 		x?: ChannelRef | null;
 		x1?: ChannelRef | null;
 		x2?: ChannelRef | null;
-		y: FieldRef;
+		y?: FieldRef;
 		y1?: number | FieldRef;
 		y2?: FieldRef;
 		fill?: FieldRef | null;
