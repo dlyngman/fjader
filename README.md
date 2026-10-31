@@ -1,10 +1,10 @@
-# Fjäder
+# fjader
 
 **Declarative, GPU-rendered charts for millions of rows, powered by DuckDB.**
 
-_Fjäder_ (say "fyeh-der") is Swedish for both spring and feather: the springs that animate every chart, and the feathers that steer an Arrow.
+The name comes from Swedish _fjäder_ (say "fyeh-der"), which means both spring and feather: the springs that animate every chart, and the feathers that steer an Arrow.
 
-You describe a chart in marks and channels. Fjäder compiles it to SQL that runs in DuckDB, moves only the aggregated result into the browser as Arrow, and draws it with WebGPU. Brushing, crossfiltering, pan and zoom stay interactive at 120 fps on datasets far beyond what an SVG or Canvas chart can hold.
+You describe a chart in marks and channels. fjader compiles it to SQL that runs in DuckDB, moves only the aggregated result into the browser as Arrow, and draws it with WebGPU. Brushing, crossfiltering, pan and zoom stay interactive at 120 fps on datasets far beyond what an SVG or Canvas chart can hold.
 
 If you know [Observable Plot](https://observablehq.com/plot/), you already know most of the API.
 
@@ -16,7 +16,7 @@ pip install "fjader[jupyter]"      # Python: Jupyter and marimo
 pip install "fjader[streamlit]"    # Python: Streamlit
 ```
 
-Fjäder needs Chrome 149 or later, or another Chromium browser on that version. It relies on two recent features other browsers don't ship yet: WebGPU's `immediate_address_space` (used by the compute pass that places categorical axes) and the `Temporal` API (used for calendar offsets). There is no fallback renderer.
+fjader needs Chrome 149 or later, or another Chromium browser on that version. It relies on two recent features other browsers don't ship yet: WebGPU's `immediate_address_space` (used by the compute pass that places categorical axes) and the `Temporal` API (used for calendar offsets). There is no fallback renderer.
 
 ## Svelte
 
@@ -79,7 +79,7 @@ Charts display on their own in Jupyter and marimo; in Streamlit, call `fj.stream
 
 **The database does the heavy lifting.** Aggregation, binning, filtering, top-N, stacking and normalization compile to SQL and run in DuckDB-WASM, or in a server-side DuckDB from Python. Only results sized by the screen, not by the data, reach JavaScript.
 
-**Interactions stay instant.** Brushes crossfilter every other chart. On the first hover, Fjäder builds pre-aggregated tables binned at pixel resolution, so each brush frame reads a small table instead of rescanning the data.
+**Interactions stay instant.** Brushes crossfilter every other chart. On the first hover, fjader builds pre-aggregated tables binned at pixel resolution, so each brush frame reads a small table instead of rescanning the data.
 
 **Marks compose.** Charts are built from marks (dots, bars, rects, lines, areas, rules, text, parallel coordinates), not chart types. Marks declare what scales they need, and charts sharing a variable share its scale.
 
@@ -114,11 +114,13 @@ npx vitest               # JavaScript tests
 npm run build:python     # Widget and Streamlit bundles, then the Python wheel
 ```
 
+The pages under `src/routes/` are development and test pages for working on fjader, not documentation. They read the example data that `npm run fetch-data` downloads.
+
 ## Acknowledgements
 
-Fjäder owes a great deal to two projects:
+fjader owes a great deal to two projects:
 
-- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. Fjäder started out on Mosaic and still builds every query with `@uwdata/mosaic-sql`. Its query layer adapts Mosaic's pre-aggregation with sufficient statistics, its crossfilter selection model and its REST connector protocol, and the API, interactors and JSON spec follow vgplot.
+- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. fjader began as a Mosaic client, with `@uwdata/mosaic-core` as a dependency, and its query layer still follows Mosaic's design: pre-aggregation with sufficient statistics, the crossfilter selection model and the REST connector protocol. The API, interactors and JSON spec follow vgplot. As fjader moved to rendering directly in WebGPU, it needed its queries tied more closely to its marks: results shaped for GPU buffers, query timing coupled to interaction frames, and state that follows Svelte 5's reactivity rather than a callback protocol. So it replaced `mosaic-core` with its own query layer, adapted from Mosaic's, and still builds every query with `@uwdata/mosaic-sql`.
 - **[Observable Plot](https://github.com/observablehq/plot)**, by Observable. The mark API, its channel shorthands, stacking conventions and many defaults follow Plot.
 
 It also rests on [DuckDB](https://duckdb.org) and [DuckDB-WASM](https://github.com/duckdb/duckdb-wasm), [Flechette](https://github.com/uwdata/flechette), [d3](https://d3js.org) and [Svelte](https://svelte.dev).

@@ -1,6 +1,6 @@
 # Example data
 
-The examples and test pages read these datasets from `static/data/`. They are not part of this repository or of the Fjäder packages: `npm run fetch-data` downloads each file from the upstream repository that publishes it, pinned to a commit and checked by SHA-256 (see `scripts/fetch-data.js`).
+The examples and test pages read these datasets from `static/data/`. They are not part of this repository or of the fjader packages: `npm run fetch-data` downloads each file from the upstream repository that publishes it, pinned to a commit and checked by SHA-256 (see `scripts/fetch-data.js`).
 
 Thanks to [Observable Plot](https://github.com/observablehq/plot/tree/main/test/data) and [Mosaic](https://github.com/uwdata/mosaic/tree/main/data), whose curated copies these are. The original sources and their terms are below, as the upstream projects record them ([Plot's data notes](https://github.com/observablehq/plot/blob/main/test/data/README.md), [vega-datasets' metadata](https://github.com/vega/vega-datasets/blob/main/datapackage.json)).
 
