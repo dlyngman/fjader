@@ -240,7 +240,7 @@ describe('topN against a DuckDB reference', () => {
 		// its ORDER BY land outermost, and concluded topN returned ranked rows. It
 		// does not: DuckDB re-partitions for the window and the row order that
 		// reaches the axis is keyed by dim id. Asserting on a query shape the app
-		// never emits is what let that ship (§34.4/§34.5).
+		// never emits is what let that ship.
 		const s = scenarios.find((x) => x.name.startsWith('vertical bars'))!;
 		const compiler = new TransformCompiler([topN(s.n), stackY()], s.config);
 		const parts = buildQueryParts(s.select, s.orderConfig, true);

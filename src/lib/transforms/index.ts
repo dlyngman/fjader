@@ -130,7 +130,7 @@ function passthroughSelect(aliases: string[]): Record<string, ExprNode> {
  * JS path: value axis is y for vertical marks, x for horizontal (barx); the
  * mark lifecycle has already resolved y → y2 etc. for extent-based marks.
  * Shared by topN and normalize — the two transforms that need "which
- * channel is the measure, which is the group" (proposals/review_preagg_v2_phase2.md).
+ * channel is the measure, which is the group".
  */
 function resolveValueAndBand(
 	aliases: string[],

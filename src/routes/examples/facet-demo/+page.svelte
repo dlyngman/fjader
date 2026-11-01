@@ -18,8 +18,7 @@
 			// scales by name + type + config, and a facet scale is named
 			// __facet__<fx>, so every container faceting on `species` shares one
 			// BandScaleState — an explicit fxDomain on any of them reorders all
-			// of them. Its own column gives it its own scale, which is the same
-			// workaround /test/band-identity uses for the positional axes.
+			// of them. Its own column gives it its own scale.
 			await queryEngine.exec([
 				`CREATE TABLE penguins_fx_ordered AS SELECT *, species AS species_ordered FROM penguins`
 			]);

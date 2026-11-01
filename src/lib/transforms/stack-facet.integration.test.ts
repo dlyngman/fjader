@@ -4,8 +4,8 @@
  * `PARTITION BY band` alone pools rows from every cell that share a band value.
  * That was invisible for as long as it existed because every faceted bar chart
  * in the repo sets `x` and `fx` to the SAME field, which makes each partition a
- * single row and the pooling arithmetically a no-op — the §25.3 lesson again,
- * in a different component: the case where two things differ has to be BUILT
+ * single row and the pooling arithmetically a no-op. The same lesson as the
+ * shared facet scale, in a different component: the case where two things differ has to be BUILT
  * before a confusion between them can show.
  *
  * Both halves are checked here. The SQL shape says the partition key is right;

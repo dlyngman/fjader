@@ -13,8 +13,8 @@
  * normalization to strings on the way through the dim would leave every axis
  * tick, TextMark label and tooltip position resolving to undefined.
  *
- * Runs against native DuckDB rather than a mock for the same reason §16's tests
- * do: the question is what the driver hands back, which a mock would decide by
+ * Runs against native DuckDB rather than a mock for the same reason the other
+ * identity tests do: the question is what the driver hands back, which a mock would decide by
  * assumption — the exact assumption that was wrong.
  */
 
@@ -185,10 +185,10 @@ describe('band axis over a non-VARCHAR column', () => {
 		});
 	});
 
-	describe('a fixed expression producing numbers (§16)', () => {
+	describe('a fixed expression producing numbers', () => {
 		it('dims the expression and keeps its numeric output', async () => {
 			await db.run(`CREATE TABLE e AS SELECT * FROM (VALUES (1),(2),(3),(11),(12)) v(n)`);
-			// year(ts)-shaped: numeric, tiny distinct set. §16.6 says syntax and
+			// year(ts)-shaped: numeric, tiny distinct set. Syntax and
 			// result type cannot answer the cardinality question, and this is the
 			// shape that makes the point.
 			const expr = 'CAST(n / 10 AS INTEGER)';

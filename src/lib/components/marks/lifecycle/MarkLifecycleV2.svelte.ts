@@ -1139,7 +1139,7 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Request identity id columns for this mark's categorical axes (band step 3a).
+	 * Request identity id columns for this mark's categorical axes.
 	 *
 	 * Runs inside the setup Promise.all, so every mark on a chart calls it in the
 	 * same tick — which is what CategoricalIdentity's coalescer is built for: they

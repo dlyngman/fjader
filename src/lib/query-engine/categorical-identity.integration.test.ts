@@ -2,7 +2,7 @@
  * Integration test: CategoricalIdentity against real DuckDB.
  *
  * Uses native DuckDB (not duckdb-wasm) for fast in-process execution, same as
- * window-correctness.integration.test.ts. The three cases band §13 step 2 calls
+ * window-correctness.integration.test.ts. The three cases the dim design calls
  * for — idempotent create, append from a second table, and the mid-flight
  * superset rebuild — all turn on SQL semantics (window functions applied after
  * WHERE, MAX(id) read inside the INSERT), so a mock connection would prove
@@ -199,7 +199,7 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Fixed expressions (§16, #197)
+	// Fixed expressions (#197)
 	// -----------------------------------------------------------------------
 
 	it('dims a fixed SQL expression the same way as a column', async () => {
@@ -225,7 +225,7 @@ describe('CategoricalIdentity', () => {
 		await identity.ensureColumns('penguins', { categorical: [{ key: a, sql: a }] });
 		await identity.ensureColumns('penguins', { categorical: [{ key: b, sql: b }] });
 
-		// Duplicated work, but each internally consistent — §16.3. The failure to
+		// Duplicated work, but each internally consistent, which is accepted. The failure to
 		// avoid is one scale with two disagreeing dims, not two dims.
 		expect(identity.dimTable(a)).not.toBe(identity.dimTable(b));
 		expect(identity.identity(a).values).toEqual(identity.identity(b).values);
@@ -262,7 +262,7 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Cardinality gate (§16.6)
+	// Cardinality gate
 	// -----------------------------------------------------------------------
 
 	it('refuses a field with more distinct values than can render', async () => {
@@ -348,7 +348,7 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Synthetic ids (§16.9)
+	// Synthetic ids
 	// -----------------------------------------------------------------------
 
 	it('reserves a synthetic id at the top of the space, through the same array', async () => {
@@ -467,7 +467,7 @@ describe('CategoricalIdentity', () => {
 		// one dim. Without serializing per field they both see tables.size === 0
 		// and both take the create branch — the second's CREATE TABLE IF NOT
 		// EXISTS is a silent no-op and its categories never reach the dim.
-		// Caught in the browser on /test/band-identity chart 5: Emperor vanished.
+		// Caught in the browser: a second table's Emperor rows never appeared.
 		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
 		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);
 
@@ -568,7 +568,7 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// Labels (§9.4)
+	// Labels
 	// -----------------------------------------------------------------------
 
 	it('exposes values indexed by id', async () => {
@@ -579,7 +579,7 @@ describe('CategoricalIdentity', () => {
 	it('grows the SAME array in place when a second table appends', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		// A scale takes the reference at its own setup, before the second table
-		// exists. §9.4: a snapshot here is what breaks, and only in multi-table
+		// exists. A snapshot here is what breaks, and only in multi-table
 		// charts — ids from the later table index past the end of the copy.
 		const held = identity.values('species');
 
@@ -592,7 +592,7 @@ describe('CategoricalIdentity', () => {
 	});
 
 	it('owns both directions of the bijection, and they agree', async () => {
-		// §17.2: the reverse map used to be rebuilt per scale, with a
+		// The reverse map used to be rebuilt per scale, with a
 		// length-based self-heal because the array it mirrored was live and owned
 		// elsewhere. One writer now rewrites both in a single pass.
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
@@ -692,7 +692,7 @@ describe('CategoricalIdentity', () => {
 		expect(identity.dimTable(expr).length).toBeLessThan(40);
 
 		// Still keyed on the exact text: whitespace differences are different
-		// fields, which §16.3 accepts as duplicated-but-correct.
+		// fields, which is accepted as duplicated-but-correct.
 		expect(identity.idColumn(expr)).not.toBe(identity.idColumn(expr.replace(/\s+/g, ' ')));
 	});
 
@@ -709,7 +709,7 @@ describe('CategoricalIdentity', () => {
 	});
 
 	describe('cardinality is a property of the dim, not of one table', () => {
-		// §20.4 B. The pre-flight check runs approx_count_distinct against a single
+		// The pre-flight check runs approx_count_distinct against a single
 		// source table, but the dim spans every table that registers the field, and
 		// the dim is what sizes the slot table. Two tables under the limit
 		// individually can union to a dim over it.
@@ -790,7 +790,7 @@ describe('CategoricalIdentity', () => {
 
 			// 'critical' sorts first but was appended last, so domain order and
 			// id order disagree. If this ever starts passing as ascending, the
-			// dim stopped being append-only and §9.2's invariant is gone.
+			// dim stopped being append-only, and ids are no longer stable.
 			const idsInDomainOrder = domain.map((v) => ids.get(v)!);
 			expect(idsInDomainOrder).not.toEqual([...idsInDomainOrder].sort((a, b) => a - b));
 			expect(ids.get('critical')).toBeGreaterThan(ids.get('low')!);
