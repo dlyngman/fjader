@@ -54,9 +54,7 @@ function onRender(event: Event): void {
 
 /**
  * Register the Streamlit render listener and signal readiness.
- * Exported so entry-bundled.ts can defer this until after inline WASM is configured.
- * (With inlineDynamicImports, top-level code runs at bundle load — before async
- * WASM decompression finishes — so the bundled entry must control the timing.)
+ * Exported so an entry point can defer this until its DuckDB-WASM is configured.
  */
 export function init(): void {
 	Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);

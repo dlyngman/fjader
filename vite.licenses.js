@@ -21,8 +21,7 @@ const MISSING_TEXTS = {
  * license text of every package compiled into it. The Python wheels ship these
  * bundles, and MIT, ISC and BSD all require the notice to travel with copies.
  *
- * `extra` lists code the bundle carries that is not an npm package, such as
- * the custom DuckDB WebAssembly build imported as raw files.
+ * `extra` lists code a bundle carries that is not an npm package.
  */
 export function thirdPartyLicenses(outDir, extra = []) {
 	return license({
@@ -68,11 +67,3 @@ export function thirdPartyLicenses(outDir, extra = []) {
 		}
 	});
 }
-
-/** The custom DuckDB-WASM build the bundled Streamlit component inlines. */
-export const CUSTOM_DUCKDB = {
-	title: 'DuckDB (custom WebAssembly build, src/streamlit/custom-duckdb)',
-	license: 'MIT',
-	url: 'https://github.com/duckdb/duckdb-wasm',
-	text: vendored('duckdb.txt')
-};

@@ -83,8 +83,6 @@ export default ts.config(
 	{
 		ignores: [
 			'.claude/',
-			// Emscripten output of the custom DuckDB-WASM build
-			'src/streamlit/custom-duckdb/',
 			'python/.venv/',
 			'python/fjader/static/',
 			'python/fjader/streamlit_frontend/',
