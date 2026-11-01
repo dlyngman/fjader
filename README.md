@@ -12,7 +12,7 @@ The name comes from Swedish _fjäder_ (say "fyeh-der"), which means both spring 
 
 ```bash
 npm install fjader                 # Svelte 5 components
-pip install "fjader[jupyter]"      # Python: Jupyter and marimo
+pip install fjader                 # Python: marimo and Jupyter
 pip install "fjader[streamlit]"    # Python: Streamlit
 ```
 
@@ -89,7 +89,7 @@ fj.plot(
 )
 ```
 
-Charts display on their own in Jupyter and marimo; in Streamlit, call `fj.streamlit.render(chart)`. Marks compose: `*` overlays two marks in one chart, `+` places charts side by side, and `df.fj.dot(x=..., y=...)` works straight from a pandas or polars DataFrame.
+Charts display on their own in marimo and Jupyter; in Streamlit, call `fj.streamlit.render(chart)`. polars DataFrames need nothing more; pandas ones need pyarrow (`pip install "fjader[pyarrow]"`). Marks compose: `*` overlays two marks in one chart, `+` places charts side by side, and `df.fj.dot(x=..., y=...)` works straight from a pandas or polars DataFrame.
 
 ## How it works
 

@@ -13,14 +13,13 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
-dependencies = ["narwhals>=1.0"]
+dependencies = ["narwhals>=1.0", "anywidget>=0.9"]
 
 [project.urls]
 Repository = "https://github.com/dlyngman/fjader"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "mypy>=1.0"]
-jupyter = ["anywidget>=0.9"]
 streamlit = ["streamlit>=1.0", "pyarrow>=14.0", "duckdb>=1.0"]
 pyarrow = ["pyarrow>=14.0"]
 

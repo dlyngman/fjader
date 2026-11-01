@@ -278,6 +278,7 @@ name = "fjader"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anywidget" },
     { name = "narwhals" },
 ]
 
@@ -285,9 +286,6 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "pytest" },
-]
-jupyter = [
-    { name = "anywidget" },
 ]
 pyarrow = [
     { name = "pyarrow" },
@@ -300,7 +298,7 @@ streamlit = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anywidget", marker = "extra == 'jupyter'", specifier = ">=0.9" },
+    { name = "anywidget", specifier = ">=0.9" },
     { name = "duckdb", marker = "extra == 'streamlit'", specifier = ">=1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "narwhals", specifier = ">=1.0" },
@@ -309,7 +307,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "streamlit", marker = "extra == 'streamlit'", specifier = ">=1.0" },
 ]
-provides-extras = ["dev", "jupyter", "streamlit", "pyarrow"]
+provides-extras = ["dev", "streamlit", "pyarrow"]
 
 [[package]]
 name = "gitdb"
