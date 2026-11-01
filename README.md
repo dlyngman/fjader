@@ -134,10 +134,12 @@ The pages under `src/routes/` are development and test pages for working on fjad
 
 ## Acknowledgements
 
-fjader takes ideas, and in places code, from two projects:
+fjader takes ideas from two projects, and in places code from Mosaic:
 
-- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. fjader began as a Mosaic client, with `@uwdata/mosaic-core` as a dependency, and its query layer still follows Mosaic's design: pre-aggregation with sufficient statistics, the crossfilter selection model and the REST connector protocol. The API, interactors and JSON spec follow vgplot. As fjader moved to rendering directly in WebGPU, it needed its queries tied more closely to its marks: results shaped for GPU buffers, query timing coupled to interaction frames, and state that follows Svelte 5's reactivity rather than a callback protocol. So it replaced `mosaic-core` with its own query layer, adapted from Mosaic's, and still builds every query with `@uwdata/mosaic-sql`.
+- **[Mosaic](https://github.com/uwdata/mosaic)**, by the UW Interactive Data Lab. fjader began as a Mosaic client, with `@uwdata/mosaic-core` as a dependency, and its query layer still follows Mosaic's design: pre-aggregation with sufficient statistics, the crossfilter selection model and the REST connector protocol. The API, interactors and JSON spec layout are modeled on vgplot's, without being compatible with it. As fjader moved to rendering directly in WebGPU, it needed its queries tied more closely to its marks: results shaped for GPU buffers, query timing coupled to interaction frames, and state that follows Svelte 5's reactivity rather than a callback protocol. So it replaced `mosaic-core` with its own query layer, adapted from Mosaic's, and still builds every query with `@uwdata/mosaic-sql`.
 - **[Observable Plot](https://github.com/observablehq/plot)**, by Observable. Mark names, channel shorthands, stacking conventions and many defaults are modeled on Plot's.
+
+Mosaic is described in Jeffrey Heer and Dominik Moritz, [_Mosaic: An Architecture for Scalable & Interoperable Data Views_](https://idl.uw.edu/papers/mosaic), IEEE Transactions on Visualization and Computer Graphics 30 (Proc. VIS 2023), 2024, [doi:10.1109/TVCG.2023.3327189](https://doi.org/10.1109/TVCG.2023.3327189).
 
 It also rests on [DuckDB](https://duckdb.org) and [DuckDB-WASM](https://github.com/duckdb/duckdb-wasm), [Flechette](https://github.com/uwdata/flechette), [d3](https://d3js.org) and [Svelte](https://svelte.dev).
 

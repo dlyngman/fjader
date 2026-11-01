@@ -9,9 +9,10 @@
  * Unsupported aggregates (DISTINCT, MEDIAN, etc.) cause the entire mark to
  * fall back to base-table queries — no partial preagg.
  *
- * Adapted from Mosaic's preaggregation (mosaic-core preagg/sufficient-statistics.ts
- * and PreAggregator.ts): the partial statistics per aggregate, FILTER clauses
- * carried onto them, and pixel-level binning of the active dimension.
+ * Adapted from @uwdata/mosaic-core 0.21 (packages/mosaic/core/src/preagg/
+ * sufficient-statistics.ts and PreAggregator.ts): the partial statistics per
+ * aggregate, FILTER clauses carried onto them, and pixel-level binning of the
+ * active dimension.
  * Copyright (c) 2023-2025, UW Interactive Data Lab. BSD 3-Clause License;
  * see LICENSE.
  */

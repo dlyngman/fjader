@@ -4,6 +4,12 @@
  * it still answers. Pure functions over a mark's query descriptor and the
  * categorical identity; the state they work on (each mark's tables, the build
  * queue, row counts) lives in Preagg.
+ *
+ * The table shape follows @uwdata/mosaic-core 0.21's PreAggregator
+ * (packages/mosaic/core/src/preagg/): the active dimensions as GROUP BY
+ * columns, sufficient statistics for the aggregates, and a name hashed from
+ * the query. Copyright (c) 2023-2025, UW Interactive Data Lab. BSD 3-Clause
+ * License; see LICENSE.
  */
 
 import {
