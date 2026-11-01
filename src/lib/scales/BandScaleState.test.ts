@@ -19,7 +19,7 @@ describe('BandScaleState.processDataForGPU', () => {
 	});
 
 	it('reports raw category strings instead of mapping them', () => {
-		// The per-row string mapping is gone (§16.10 item 3). Nothing produces
+		// The per-row string mapping is gone. Nothing produces
 		// strings on a band channel any more, so strings here mean a defect
 		// upstream — reported, and drawn as the no-identity sentinel so nothing
 		// renders rather than something wrong.
@@ -42,7 +42,7 @@ describe('BandScaleState.processDataForGPU', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Slot table (band step 3a / §9.5)
+// Slot table
 // ---------------------------------------------------------------------------
 
 describe('BandScaleState slot table', () => {
@@ -94,7 +94,7 @@ describe('BandScaleState slot table', () => {
 		scale.addMark(['Adelie', 'Chinstrap', 'Gentoo'], 'mark-1');
 		scale.updateDomainFromExtents();
 
-		// Indexable by Emperor's id without running off the end — the §9.4 failure.
+		// Indexable by Emperor's id without running off the end, which a snapshot would fail.
 		expect(scale.slots.snapshot().length).toBe(4);
 		expect(scale.slots.snapshot()[3]).toBe(-1);
 	});
@@ -146,7 +146,7 @@ describe('BandScaleState slot table', () => {
 
 	it('encodes a value added to the live array after identity was adopted', () => {
 		// The engine's value array grows IN PLACE when a second table appends to
-		// the dim (§9.4), and a mark can call addMark between that append and its
+		// the dim, and a mark can call addMark between that append and its
 		// own setIdentity. A value->id map snapshotted at adoption time
 		// drops the new category silently — a bar missing from multi-table charts
 		// on some interleavings only.
@@ -346,7 +346,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			// withLoop adopts identity first, which is the order every other test
 			// here uses and NOT the only order the app produces: setIdentity is
 			// reached through a coalesced promise, so addMark can land on either
-			// side of it (§29.8's transient).
+			// side of it.
 			//
 			// Arriving on the early side used to make the first real layout look
 			// like a reorder. The passthrough branch had already written slots
@@ -497,7 +497,7 @@ describe('BandScaleState identity <-> display translation', () => {
 			expect(s.slots.isAnimating).toBe(false);
 		});
 
-		// §12 Q1, answered (C4): enter and leave TRAVEL, from beyond the end.
+		// Enter and leave TRAVEL, from beyond the end.
 		//
 		// A leaver cannot take -1 as its spring target — the shader discards
 		// slot < 0.0 before the lookup, so the bar would vanish on the frame the
@@ -937,7 +937,7 @@ describe('BandScaleState identity <-> display translation', () => {
 		});
 	});
 
-	// The slot table is now a target and a current (§9.5, step 5 C1).
+	// The slot table is a target and a current.
 	//
 	// C1's whole assertion is that splitting them changes nothing: with no
 	// spring, slotCurrent is settled straight onto slotTarget, so the array the
@@ -1170,7 +1170,7 @@ describe('BandScaleState identity <-> display translation', () => {
 	// Every other test around this one calls updateDomainFromExtents() by hand
 	// after registering a ranking, which is why none of them caught that the
 	// production path once did not: a ranking was stored and nothing downstream
-	// recomputed, so a reactive sort change moved no bars at all (§3.1, §32.7).
+	// recomputed, so a reactive sort change moved no bars at all.
 	// These tests deliberately do NOT crank the handle.
 	describe('a re-sort schedules its own domain update', () => {
 		function sorted(): BandScaleState {
@@ -1620,7 +1620,7 @@ describe('BandScaleState as a facet scale', () => {
 });
 
 describe('BandScaleState after the registry tears it down', () => {
-	// §25.4. ScaleRegistry destroys a scale when its chart-id usage hits zero and
+	// ScaleRegistry destroys a scale when its chart-id usage hits zero and
 	// then drops it from storage — but a component can still hold the reference,
 	// and a faceted container guarantees it: it obtains the facet scale, hands it
 	// to its cells, and stops being a chart itself.

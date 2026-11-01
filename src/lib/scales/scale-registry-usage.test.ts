@@ -1,5 +1,5 @@
 /**
- * The registry's refcount, and the holder it could not see (§27.2).
+ * The registry's refcount, and the holder it could not see.
  *
  * A scale stays alive while at least one chart id claims it. Until
  * `registerChart` existed, the count could only be incremented by the call that

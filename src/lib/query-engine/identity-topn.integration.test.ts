@@ -4,8 +4,8 @@
  * The unit tests either side of this seam pass each other consistent data by
  * construction — the transform tests supply their own reserved ids, and
  * the engine tests never see a channel alias. So neither could catch the two
- * defects that actually shipped: a synthetic row fabricating a band value
- * (§16.9), and the reserved id being published under the source column while
+ * defects that actually shipped: a synthetic row fabricating a band value,
+ * and the reserved id being published under the source column while
  * the transform looked it up by the data column name.
  *
  * This walks the real chain instead: dim -> view -> the mark's query shape,

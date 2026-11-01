@@ -616,7 +616,7 @@ export class ScaleTemplateSystem {
     // tooltip and hit-testing share and which is asserted against d3's own
     // scaleBand — that pair is what keeps labels on their bars.
     //
-    // Takes the DISPLAY SLOT, not the identity id. Band step 3a split the two:
+    // Takes the DISPLAY SLOT, not the identity id. The two are separate:
     // the id is stable and comes from the dim, the slot says where that id
     // currently sits and changes on every reorder. scaleBand resolves one to
     // the other through identitySlots before calling this.

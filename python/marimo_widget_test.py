@@ -233,9 +233,6 @@ def _(fj, pl):
 @app.cell
 def _(fj, weather):
     # --- from_spec: render from exported palette spec ---
-    # NOTE: Known issue — GPU marks may not render on first page load when
-    # this cell shares a DuckDB table with other widgets and marimo's
-    # destroy-recreate cycle races with ViewManager. See python/ISSUES.md #1.
     fj.show(fj.from_spec(
         {
             "marks": [

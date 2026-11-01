@@ -354,7 +354,7 @@ export class TooltipManager {
 	// BAND IDENTITY
 	// =========================================================================
 	//
-	// Band step 3a split identity from position: a band channel holds a stable
+	// Identity and position are separate: a band channel holds a stable
 	// dim id, while invertScreenToData and the d3 band scale both work in
 	// display slots. The two are the same number only while the axis is in dim
 	// order — no sort, no explicit domain, no category-reducing transform —
