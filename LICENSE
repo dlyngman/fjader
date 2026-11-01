@@ -31,8 +31,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 THIRD-PARTY NOTICES
 ================================================================================
 
-fjader stands on the work of others. The projects below shaped its design,
-and parts of its code are adapted from them. Their licenses follow in full.
+The projects below shaped fjader's design, and parts of its code are adapted
+from Mosaic. Their licenses follow in full.
 
 --------------------------------------------------------------------------------
 Mosaic, by the UW Interactive Data Lab
@@ -56,7 +56,7 @@ Mosaic's code:
   mark except those its source excludes.
 - The REST connector protocol, which the Python query server speaks.
 - vgplot's API style, its interactors (interval brushes, toggles) and its
-  JSON spec layout (hconcat, vconcat).
+  JSON spec layout (hconcat, vconcat), without being compatible with vgplot.
 
 Mosaic's license, reproduced in full, including its own notice for the parts
 it derives from Observable Plot:
@@ -114,11 +114,13 @@ Observable Plot, by Observable, Inc.
 https://github.com/observablehq/plot
 --------------------------------------------------------------------------------
 
-fjader's mark API follows Observable Plot: mark names and channels, the
-shorthands that imply stacking (x for x1/x2, y for y1/y2), the stackX/stackY
-conventions, z as the series grouping channel, and many defaults.
+fjader's mark API borrows from Observable Plot, though it is its own API and
+not compatible with Plot's: mark names and channels, the shorthands that imply
+stacking (x for x1/x2, y for y1/y2), the stackX/stackY conventions, z as the
+series grouping channel, and many defaults.
 
-Observable Plot's license (ISC):
+fjader contains no code from Observable Plot; its license is included as a
+courtesy. Observable Plot's license (ISC):
 
 Copyright 2020-2025 Observable, Inc.
 

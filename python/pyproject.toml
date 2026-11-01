@@ -1,17 +1,25 @@
 [project]
 name = "fjader"
-version = "0.1.11"
-description = "Declarative, GPU-rendered charts for millions of rows, powered by DuckDB"
+version = "0.2.0"
+description = "An experimental, declarative charting library for Svelte and Python that queries DuckDB and renders with WebGPU"
 requires-python = ">=3.10"
+readme = "README.md"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
-# Not public yet: PyPI rejects uploads carrying this classifier.
-classifiers = ["Private :: Do Not Upload"]
-dependencies = ["narwhals>=1.0"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Jupyter",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = ["narwhals>=1.0", "anywidget>=0.9"]
+
+[project.urls]
+Repository = "https://github.com/dlyngman/fjader"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "mypy>=1.0"]
-jupyter = ["anywidget>=0.9"]
 streamlit = ["streamlit>=1.0", "pyarrow>=14.0", "duckdb>=1.0"]
 pyarrow = ["pyarrow>=14.0"]
 

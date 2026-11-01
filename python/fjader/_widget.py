@@ -1,18 +1,12 @@
-"""anywidget-based Jupyter widget for Fjader."""
+"""anywidget-based widget for fjader, for marimo and Jupyter."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-try:
-    import anywidget
-    import traitlets
-except ImportError as e:
-    raise ImportError(
-        "Fjader Jupyter support requires anywidget. "
-        "Install with: pip install 'fjader[jupyter]'"
-    ) from e
+import anywidget
+import traitlets
 
 
 class FjaderWidget(anywidget.AnyWidget):

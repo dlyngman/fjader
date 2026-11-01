@@ -14,19 +14,16 @@ class TestAccessorPolars:
         return pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": ["x", "y", "z"]})
 
     def test_returns_widget(self, df):
-        pytest.importorskip("anywidget")
         w = df.fj.dot(x="a", y="b", fill="c")
         from fjader._widget import FjaderWidget
 
         assert isinstance(w, FjaderWidget)
 
     def test_widget_has_source(self, df):
-        pytest.importorskip("anywidget")
         w = df.fj.dot(x="a", y="b")
         assert w._source is not None
 
     def test_all_mark_types(self, df):
-        pytest.importorskip("anywidget")
         from fjader._widget import FjaderWidget
 
         for method in ("dot", "bar_x", "bar_y", "line", "area_y", "area_x",
@@ -38,31 +35,26 @@ class TestAccessorPolars:
             assert isinstance(w, FjaderWidget), f"{method} didn't return widget"
 
     def test_rejects_data_kwarg(self, df):
-        pytest.importorskip("anywidget")
         with pytest.raises(TypeError, match="Cannot pass 'data'"):
             df.fj.dot(data=df, x="a", y="b")
 
     def test_rejects_table_kwarg(self, df):
-        pytest.importorskip("anywidget")
         with pytest.raises(TypeError, match="Cannot pass 'table'"):
             df.fj.dot(table="foo", x="a", y="b")
 
     def test_composition_overlay(self, df):
-        pytest.importorskip("anywidget")
         from fjader._widget import FjaderWidget
 
         w = df.fj.dot(x="a", y="b") * df.fj.line(x="a", y="b")
         assert isinstance(w, FjaderWidget)
 
     def test_composition_layout(self, df):
-        pytest.importorskip("anywidget")
         from fjader._widget import FjaderWidget
 
         w = df.fj.dot(x="a", y="b") + df.fj.bar_y(x="c", y=fj.count())
         assert isinstance(w, FjaderWidget)
 
     def test_opts(self, df):
-        pytest.importorskip("anywidget")
         from fjader._widget import FjaderWidget
 
         w = df.fj.dot(x="a", y="b").opts(width=800)
@@ -70,7 +62,6 @@ class TestAccessorPolars:
 
     def test_same_df_deduplicates(self, df):
         """Two accessor calls on the same df share the same table name."""
-        pytest.importorskip("anywidget")
         w1 = df.fj.dot(x="a", y="b")
         w2 = df.fj.line(x="a", y="b")
         assert w1._source.table == w2._source.table
@@ -86,19 +77,16 @@ class TestAccessorPandas:
         return pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": ["x", "y", "z"]})
 
     def test_returns_widget(self, df):
-        pytest.importorskip("anywidget")
         from fjader._widget import FjaderWidget
 
         w = df.fj.dot(x="a", y="b", fill="c")
         assert isinstance(w, FjaderWidget)
 
     def test_rejects_data_kwarg(self, df):
-        pytest.importorskip("anywidget")
         with pytest.raises(TypeError, match="Cannot pass 'data'"):
             df.fj.dot(data=df, x="a", y="b")
 
     def test_composition(self, df):
-        pytest.importorskip("anywidget")
         from fjader._widget import FjaderWidget
 
         w = df.fj.dot(x="a", y="b") * df.fj.line(x="a", y="b")

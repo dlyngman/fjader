@@ -54,7 +54,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Tests, with every optional dependency so none are skipped
-        run: uv run --extra dev --extra jupyter --extra pyarrow --with polars --with pandas pytest -q
+        run: uv run --extra dev --extra pyarrow --with polars --with pandas pytest -q
       - run: uv build
       - name: Wheel installs and imports in a clean environment
         run: |

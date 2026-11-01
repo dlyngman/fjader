@@ -39,8 +39,15 @@ def df_to_arrow_ipc(df: Any) -> bytes:
 
     # Pandas/others: convert to Arrow via narwhals → pyarrow IPC
     import narwhals as nw
-    import pyarrow as pa
-    import pyarrow.ipc as ipc
+
+    try:
+        import pyarrow as pa
+        import pyarrow.ipc as ipc
+    except ImportError as e:
+        raise ImportError(
+            "fjader needs pyarrow for pandas and other non-polars DataFrames. "
+            "Install with: pip install 'fjader[pyarrow]'"
+        ) from e
 
     nf = nw.from_native(df, eager_only=True)
     table = nf.to_arrow()

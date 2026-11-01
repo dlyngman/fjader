@@ -1,10 +1,13 @@
 /**
  * The WGSL immediates capability, and one place to ask about it.
  *
- * The resolve kernel declares `requires immediate_address_space`, and every
- * band and point axis and every ordinal colour scale depends on it to resolve
- * its slots, as well as every mark that animates its channels. So the feature
- * is not an optimisation the library can quietly do without — it is a floor.
+ * Every chart passes its x and y scales to the shaders as immediates on each
+ * draw, so every zoom and pan goes through them. The resolve kernel declares
+ * `requires immediate_address_space` too: every band and point axis and every
+ * ordinal colour scale depends on it to resolve its slots, as does every mark
+ * that animates its channels, and the M4 line decimation uses it as well. So
+ * the feature is not an optimisation the library can quietly do without — it
+ * is a floor.
  *
  * That floor is a deliberate choice rather than an oversight. Immediates are
  * pass state set in command order, which is what lets one compute pass resolve
@@ -44,7 +47,8 @@ export function immediatesSupported(): boolean {
  */
 export const IMMEDIATES_MISSING_MESSAGE =
 	`This browser's WebGPU implementation does not support the WGSL ` +
-	`"${IMMEDIATES_FEATURE}" feature, which Fjader requires: categorical axes ` +
-	`resolve their positions in a compute pass that uses it. Chrome 149 or later ` +
+	`"${IMMEDIATES_FEATURE}" feature, which fjader requires: every chart passes ` +
+	`its scales to the shaders through it, and categorical axes, animated ` +
+	`channels and line decimation use it in their compute passes. Chrome 149 or later ` +
 	`supports it. Without it nothing renders, so this fails here rather than ` +
 	`leaving an empty canvas and a shader validation error to be diagnosed.`;
