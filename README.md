@@ -115,7 +115,6 @@ src/lib/
   interactors/    Brushes, toggles, tooltips, pan and zoom
   spec/           JSON spec renderer and export
 python/fjader/    Python API, Jupyter widget, Streamlit component
-docs/             Design and implementation notes
 ```
 
 ## Development
