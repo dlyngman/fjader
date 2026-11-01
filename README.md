@@ -129,6 +129,8 @@ npx vitest               # JavaScript tests
 npm run build:python     # Widget and Streamlit bundles, then the Python wheel
 ```
 
+The Python package's widget and Streamlit bundles are build output and not in git. In a checkout, run `npm run build:all` before using the Python package, and again after changing JavaScript code.
+
 The pages under `src/routes/` are development and test pages for working on fjader, not documentation. They read the example data that `npm run fetch-data` downloads.
 
 ## Acknowledgements

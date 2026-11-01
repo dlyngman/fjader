@@ -8,6 +8,14 @@ from typing import Any
 import anywidget
 import traitlets
 
+_STATIC = Path(__file__).parent / "static"
+
+if not (_STATIC / "widget.js").is_file():
+    raise ImportError(
+        "fjader's widget bundle is missing. In a source checkout, build it with "
+        "`npm run build:all` from the repository root."
+    )
+
 
 class FjaderWidget(anywidget.AnyWidget):
     """Renders a Fjader chart in a Jupyter cell via anywidget protocol.
@@ -18,8 +26,8 @@ class FjaderWidget(anywidget.AnyWidget):
         df.fj.dot(x='a', y='b').opts(width=800)
     """
 
-    _esm = Path(__file__).parent / "static" / "widget.js"
-    _css = Path(__file__).parent / "static" / "widget.css"
+    _esm = _STATIC / "widget.js"
+    _css = _STATIC / "widget.css"
 
     spec = traitlets.Unicode("{}").tag(sync=True)
     data_manifest = traitlets.Unicode("[]").tag(sync=True)

@@ -28,15 +28,6 @@ jobs:
       - run: npx vitest run
       - name: Svelte package builds
         run: npm run package
-      - name: Committed Python bundles match the source
-        run: |
-          npm run build:widget
-          npm run build:streamlit
-          if [ -n "$(git status --porcelain python/fjader)" ]; then
-            git status --short python/fjader
-            echo "::error::The widget or Streamlit bundles are stale. Run npm run build:all and commit the result."
-            exit 1
-          fi
 
   python:
     name: Test and build (Python ${{ matrix.python }})
@@ -50,12 +41,23 @@ jobs:
         working-directory: python
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Widget and Streamlit bundles
+        working-directory: .
+        run: npm ci && npm run build:all
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python }}
       - name: Tests, with every optional dependency so none are skipped
         run: uv run --extra dev --extra pyarrow --with polars --with pandas pytest -q
       - run: uv build
+      - name: The wheel carries both bundles
+        run: |
+          unzip -l dist/*.whl | grep -q 'fjader/static/widget.js'
+          unzip -l dist/*.whl | grep -q 'fjader/streamlit_frontend/index.html'
       - name: Wheel installs and imports in a clean environment
         run: |
           uv venv /tmp/wheel-env

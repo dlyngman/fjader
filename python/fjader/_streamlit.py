@@ -30,6 +30,11 @@ except ImportError as e:
     ) from e
 
 _FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "streamlit_frontend")
+if not os.path.isfile(os.path.join(_FRONTEND_DIR, "index.html")):
+    raise ImportError(
+        "fjader's Streamlit bundle is missing. In a source checkout, build it with "
+        "`npm run build:all` from the repository root."
+    )
 _component = components.declare_component("fjader", path=_FRONTEND_DIR)
 
 

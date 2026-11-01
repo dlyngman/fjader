@@ -17,3 +17,4 @@ python/layouts/
 
 # Python environment
 python/.venv/
+python/.pytest_cache/

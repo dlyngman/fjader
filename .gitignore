@@ -43,3 +43,7 @@ __pycache__/
 # marimo session caches and layouts
 python/__marimo__/
 python/layouts/
+
+# Python bundles: built by npm run build:all and packaged at wheel build time
+/python/fjader/static/
+/python/fjader/streamlit_frontend/
