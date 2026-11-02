@@ -29,6 +29,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+wheel-exclude = ["fjader/tests"]
 source-include = [
     "fjader/static/**",
     "fjader/streamlit_frontend/**",
