@@ -29,7 +29,6 @@ export function thirdPartyLicenses(outDir, extra = []) {
 			output: {
 				file: path.join(outDir, 'THIRD_PARTY_LICENSES.txt'),
 				template(dependencies) {
-					const self = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
 					const entries = [
 						...dependencies.map((dep) => ({
 							title: `${dep.name}@${dep.version}`,
@@ -47,7 +46,7 @@ export function thirdPartyLicenses(outDir, extra = []) {
 						throw new Error(`No license text for bundled ${missing.join(', ')}`);
 					}
 					const header =
-						`${self.name} bundles the third-party software listed below. ` +
+						`fjader bundles the third-party software listed below. ` +
 						`Its own license is in LICENSE, and notices for the work it adapts are in NOTICE.\n`;
 					const body = entries.map((e) =>
 						[

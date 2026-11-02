@@ -1,5 +1,5 @@
 {
-	"name": "fjader",
+	"name": "@fjader/svelte",
 	"description": "An experimental, declarative charting library for Svelte and Python that queries DuckDB and renders with WebGPU",
 	"keywords": [
 		"visualization",
@@ -11,6 +11,9 @@
 		"crossfilter"
 	],
 	"license": "BSD-3-Clause",
+	"publishConfig": {
+		"access": "public"
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/dlyngman/fjader.git"
