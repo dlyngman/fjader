@@ -152,4 +152,4 @@ It also rests on [DuckDB](https://duckdb.org) and [DuckDB-WASM](https://github.c
 
 ## License
 
-BSD 3-Clause. See [LICENSE](https://github.com/dlyngman/fjader/blob/main/LICENSE), which also reproduces the licenses of Mosaic and Observable Plot in full. The Python package's bundled JavaScript ships with a `THIRD_PARTY_LICENSES.txt` covering every package compiled into it.
+BSD 3-Clause; see [LICENSE](https://github.com/dlyngman/fjader/blob/main/LICENSE). [NOTICE](https://github.com/dlyngman/fjader/blob/main/NOTICE) credits the work fjader adapts and reproduces the licenses of Mosaic and Observable Plot in full. The Python package's bundled JavaScript ships with a `THIRD_PARTY_LICENSES.txt` covering every package compiled into it.

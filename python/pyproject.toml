@@ -5,7 +5,7 @@ description = "An experimental, declarative charting library for Svelte and Pyth
 requires-python = ">=3.10"
 readme = "README.md"
 license = "BSD-3-Clause"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: Jupyter",

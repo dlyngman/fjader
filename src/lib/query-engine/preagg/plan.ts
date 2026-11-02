@@ -9,7 +9,7 @@
  * (packages/mosaic/core/src/preagg/): the active dimensions as GROUP BY
  * columns, sufficient statistics for the aggregates, and a name hashed from
  * the query. Copyright (c) 2023-2025, UW Interactive Data Lab. BSD 3-Clause
- * License; see LICENSE.
+ * License; see NOTICE.
  */
 
 import {

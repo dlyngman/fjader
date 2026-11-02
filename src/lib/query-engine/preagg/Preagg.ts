@@ -12,7 +12,7 @@
  * (packages/mosaic/core/src/preagg/): per-mark tables grouped by the active
  * selection's dimensions, named by a hash of their query and read in place of
  * the base table. Copyright (c) 2023-2025, UW Interactive Data Lab. BSD
- * 3-Clause License; see LICENSE.
+ * 3-Clause License; see NOTICE.
  */
 
 import type { Table } from '@uwdata/flechette';

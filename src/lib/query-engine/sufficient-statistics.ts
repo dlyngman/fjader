@@ -14,7 +14,7 @@
  * aggregate, FILTER clauses carried onto them, and pixel-level binning of the
  * active dimension.
  * Copyright (c) 2023-2025, UW Interactive Data Lab. BSD 3-Clause License;
- * see LICENSE.
+ * see NOTICE.
  */
 
 import {
