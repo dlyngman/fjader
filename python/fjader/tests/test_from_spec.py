@@ -7,6 +7,22 @@ import pytest
 import fjader as fj
 
 
+def _frame(data):
+    """A polars DataFrame if polars is installed, else pandas; skip without either."""
+    try:
+        import polars as pl
+
+        return pl.DataFrame(data)
+    except ImportError:
+        pass
+    try:
+        import pandas as pd
+
+        return pd.DataFrame(data)
+    except ImportError:
+        pytest.skip("needs polars or pandas")
+
+
 class TestFromSpecBasic:
     def test_bare_plot_spec_wrapped(self):
         """A bare PlotSpec (no 'plot' key) gets wrapped automatically."""
@@ -77,12 +93,7 @@ class TestFromSpecWithData:
         """DataFrames get hashed names and mark table refs are rewritten."""
         pytest.importorskip("pyarrow")
 
-        try:
-            import polars as pl
-            df = pl.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
-        except ImportError:
-            import pandas as pd
-            df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+        df = _frame({"x": [1, 2, 3], "y": [4, 5, 6]})
 
         chart = fj.from_spec(
             {"marks": [{"mark": "dot", "table": "mydata", "x": "x", "y": "y"}]},
@@ -98,12 +109,7 @@ class TestFromSpecWithData:
         """_to_full_spec returns the dataframes dict for widget serialization."""
         pytest.importorskip("pyarrow")
 
-        try:
-            import polars as pl
-            df = pl.DataFrame({"a": [1]})
-        except ImportError:
-            import pandas as pd
-            df = pd.DataFrame({"a": [1]})
+        df = _frame({"a": [1]})
 
         chart = fj.from_spec(
             {"marks": [{"mark": "dot", "table": "t", "x": "a", "y": "a"}]},
