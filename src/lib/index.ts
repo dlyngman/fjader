@@ -8,7 +8,7 @@ import type { DuckDBConnection } from '$lib/query-engine';
  * Initialize Fjader: QueryEngine, ScaleRegistry, GPUCoordinator, FilterGroups.
  * Call once in a top-level component's <script> block.
  *
- *   import { initFjader } from 'fjader';
+ *   import { initFjader } from '@fjader/svelte';
  *   const { queryEngine } = initFjader();
  *
  * Pass an existing DuckDB connection to skip internal DuckDB-WASM init:

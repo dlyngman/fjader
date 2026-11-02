@@ -2,7 +2,7 @@
  * Fjader Spec API — render charts from JSON specs.
  *
  * Usage:
- *   import { Fjader } from 'fjader';
+ *   import { Fjader } from '@fjader/svelte';
  *
  *   const handle = await Fjader.render(element, {
  *     data: { penguins: { url: 'penguins.parquet', type: 'parquet' } },

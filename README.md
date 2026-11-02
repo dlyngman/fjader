@@ -11,7 +11,7 @@ The name comes from Swedish _fjäder_ (say "fyeh-der"), which means both spring 
 ## Install
 
 ```bash
-npm install fjader @uwdata/mosaic-sql   # Svelte 5 components, and the SQL builder the examples use
+npm install @fjader/svelte @uwdata/mosaic-sql   # Svelte 5 components, and the SQL builder the examples use
 pip install fjader                 # Python: marimo and Jupyter
 pip install "fjader[streamlit]"    # Python: Streamlit
 ```
@@ -37,7 +37,7 @@ Three things to know before using it in a deployed app:
 		Grid,
 		BarMarkY,
 		stack
-	} from 'fjader';
+	} from '@fjader/svelte';
 	import { count, loadParquet } from '@uwdata/mosaic-sql';
 	import { onMount } from 'svelte';
 
