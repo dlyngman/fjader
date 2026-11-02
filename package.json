@@ -27,7 +27,8 @@
 	},
 	"files": [
 		"dist",
-		"!dist/**/*.test.*"
+		"!dist/**/*.test.*",
+		"NOTICE"
 	],
 	"scripts": {
 		"dev": "vite dev",

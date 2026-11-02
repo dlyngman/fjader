@@ -48,7 +48,7 @@ export function thirdPartyLicenses(outDir, extra = []) {
 					}
 					const header =
 						`${self.name} bundles the third-party software listed below. ` +
-						`Its own license, including notices for work it derives from, is in LICENSE.\n`;
+						`Its own license is in LICENSE, and notices for the work it adapts are in NOTICE.\n`;
 					const body = entries.map((e) =>
 						[
 							'-'.repeat(80),
