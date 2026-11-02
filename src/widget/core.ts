@@ -6,7 +6,7 @@
  */
 
 import { render as fjaderRender } from '$lib/spec';
-import { getOrCreateQueryEngine, isUsingRestConnector } from '$lib/spec/LazyQueryEngine';
+import { getOrCreateQueryEngine } from '$lib/spec/LazyQueryEngine';
 import { loadArrowIPCTable } from './loadArrowIPC';
 
 export interface ManifestEntry {
@@ -37,9 +37,7 @@ export async function renderFromData(
 
 	const queryEngine = await getOrCreateQueryEngine();
 
-	// Skip Arrow data loading when using REST connector — data is already
-	// loaded into Python-side DuckDB by the Streamlit render function.
-	if (!isUsingRestConnector() && manifest.length > 0) {
+	if (manifest.length > 0) {
 		await Promise.all(
 			manifest.map((entry) => {
 				const ipcBytes = getTableIPC(entry);

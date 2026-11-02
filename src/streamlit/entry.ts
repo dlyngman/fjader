@@ -8,7 +8,6 @@
 import { Streamlit, type RenderData } from 'streamlit-component-lib';
 import type { ArrowTable } from 'streamlit-component-lib';
 import { renderFromData, showError, type FjaderHandle, type ManifestEntry } from '../widget/core';
-import { configureForceServer } from '$lib/spec/LazyQueryEngine';
 import '$lib/theme.css';
 
 const root = document.getElementById('root')!;
@@ -18,9 +17,6 @@ let generation = 0;
 function onRender(event: Event): void {
 	const gen = ++generation;
 	const { args } = (event as CustomEvent<RenderData>).detail;
-
-	// Configure server-side DuckDB if requested
-	configureForceServer(!!args.server_duckdb);
 
 	// Destroy previous render
 	if (handle) {

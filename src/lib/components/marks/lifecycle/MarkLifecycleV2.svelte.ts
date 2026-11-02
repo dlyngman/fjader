@@ -64,6 +64,11 @@ import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
+
+/** A SQL identifier, quoted, with any double quote in it doubled. */
+function ident(name: string): string {
+	return `"${name.replace(/"/g, '""')}"`;
+}
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
@@ -1746,7 +1751,7 @@ export class MarkLifecycleV2 {
 					.map((col) => {
 						const sample = columnArrays[col]?.[0];
 						const sqlType = typeof sample === 'number' ? 'DOUBLE' : 'VARCHAR';
-						return `"${col}" ${sqlType}`;
+						return `${ident(col)} ${sqlType}`;
 					})
 					.join(', ');
 
@@ -1865,13 +1870,15 @@ export class MarkLifecycleV2 {
 
 		// ALTER TABLE to add columns, then UPDATE from sidecar query
 		const alterStmts = Object.keys(tipExtras).map(
-			(col) => `ALTER TABLE "${tableName}" ADD COLUMN "${col}" DOUBLE`
+			(col) => `ALTER TABLE ${ident(tableName)} ADD COLUMN ${ident(col)} DOUBLE`
 		);
 		const setClauses = Object.keys(tipExtras)
-			.map((col) => `"${col}" = _s."${col}"`)
+			.map((col) => `${ident(col)} = _s.${ident(col)}`)
 			.join(', ');
-		const joinCondition = joinCols.map((ch) => `"${tableName}"."${ch}" = _s."${ch}"`).join(' AND ');
-		const updateStmt = `UPDATE "${tableName}" SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
+		const joinCondition = joinCols
+			.map((ch) => `${ident(tableName)}.${ident(ch)} = _s.${ident(ch)}`)
+			.join(' AND ');
+		const updateStmt = `UPDATE ${ident(tableName)} SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
 
 		await this.#queryEngine.exec([...alterStmts, updateStmt]);
 	}

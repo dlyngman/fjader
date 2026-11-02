@@ -20,7 +20,7 @@ Repository = "https://github.com/dlyngman/fjader"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "mypy>=1.0"]
-streamlit = ["streamlit>=1.0", "pyarrow>=14.0", "duckdb>=1.0"]
+streamlit = ["streamlit>=1.0", "pyarrow>=14.0"]
 pyarrow = ["pyarrow>=14.0"]
 
 [build-system]

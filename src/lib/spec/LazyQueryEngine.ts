@@ -5,10 +5,7 @@
  * (and thus one DuckDB instance). Data loading is idempotent —
  * tables already loaded are skipped.
  *
- * Supports three connection modes:
- * - WASM (default): DuckDB runs in-browser via @duckdb/duckdb-wasm
- * - Inline WASM: pre-bundled WASM bytes (for widget embeds)
- * - REST: server-side DuckDB via HTTP (Python Tornado handler)
+ * DuckDB runs in the browser via @duckdb/duckdb-wasm, loaded from jsDelivr.
  */
 
 import { QueryEngine } from '$lib/query-engine/QueryEngine';
@@ -20,26 +17,6 @@ import type { DataSpec } from './types';
 // ---------------------------------------------------------------------------
 
 /** Inline WASM bytes + worker code (for environments where separate assets can't be served). */
-let _wasmInline: { wasmBytes: ArrayBuffer; workerCode: string } | null = null;
-
-/** Skip WASM and go straight to server-side DuckDB via REST. */
-let _forceServer = false;
-
-/** Whether the engine was initialized via REST (server-side DuckDB). */
-let _usingRest = false;
-
-export function configureWasmInline(inline: { wasmBytes: ArrayBuffer; workerCode: string }): void {
-	_wasmInline = inline;
-}
-
-export function configureForceServer(force: boolean): void {
-	_forceServer = force;
-}
-
-export function isUsingRestConnector(): boolean {
-	return _usingRest;
-}
-
 // ---------------------------------------------------------------------------
 // Singleton QueryEngine
 // ---------------------------------------------------------------------------
@@ -64,22 +41,8 @@ export async function getOrCreateQueryEngine(userEngine?: QueryEngine): Promise<
 }
 
 async function initEngine(): Promise<QueryEngine> {
-	if (_forceServer) {
-		console.info('[fjader] Server-side DuckDB forced via configuration');
-		return initFromRest();
-	}
-
-	// Try WASM first
-	try {
-		const conn = _wasmInline ? await initFromInlineBundle() : await initFromWasm();
-		_engine = new QueryEngine(conn);
-		return _engine;
-	} catch (err) {
-		console.warn('[fjader] WASM init failed, trying server-side DuckDB fallback:', err);
-	}
-
-	// Fall back to REST connector
-	return initFromRest();
+	_engine = new QueryEngine(await initFromWasm());
+	return _engine;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,88 +61,6 @@ async function initFromWasm(): Promise<DuckDBConnection> {
 	await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
 	URL.revokeObjectURL(workerUrl);
 	return (await db.connect()) as unknown as DuckDBConnection;
-}
-
-// ---------------------------------------------------------------------------
-// Inline WASM init (bundled widget)
-// ---------------------------------------------------------------------------
-
-async function initFromInlineBundle(): Promise<DuckDBConnection> {
-	const duckdb = await import('@duckdb/duckdb-wasm');
-	const workerUrl = URL.createObjectURL(
-		new Blob([_wasmInline!.workerCode], { type: 'text/javascript' })
-	);
-	const worker = new Worker(workerUrl);
-	const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
-	const wasmUrl = URL.createObjectURL(
-		new Blob([_wasmInline!.wasmBytes], { type: 'application/wasm' })
-	);
-	await db.instantiate(wasmUrl);
-	URL.revokeObjectURL(workerUrl);
-	URL.revokeObjectURL(wasmUrl);
-	return (await db.connect()) as unknown as DuckDBConnection;
-}
-
-// ---------------------------------------------------------------------------
-// REST init (server-side DuckDB via HTTP)
-// ---------------------------------------------------------------------------
-
-async function initFromRest(): Promise<QueryEngine> {
-	const uri = `${window.location.origin}/_fjader/query`;
-
-	// Verify the endpoint exists before committing
-	const probe = await fetch(uri, { method: 'OPTIONS' }).catch(() => null);
-	if (!probe || !probe.ok) {
-		throw new Error(
-			'[fjader] WASM init failed and server-side DuckDB endpoint not available at ' + uri
-		);
-	}
-
-	const conn = new RestConnection(uri);
-	_engine = new QueryEngine(conn);
-	_usingRest = true;
-	return _engine;
-}
-
-/**
- * DuckDBConnection over HTTP — sends SQL to a server-side DuckDB.
- * Protocol matches mosaic-core's restConnector (POST JSON with type + sql).
- */
-class RestConnection implements DuckDBConnection {
-	#uri: string;
-	constructor(uri: string) {
-		this.#uri = uri;
-	}
-
-	async query(sql: string): Promise<import('@uwdata/flechette').Table> {
-		const res = await fetch(this.#uri, {
-			method: 'POST',
-			mode: 'cors',
-			credentials: 'omit',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'arrow', sql })
-		});
-		if (!res.ok) {
-			throw new Error(`Query failed with HTTP status ${res.status}: ${await res.text()}`);
-		}
-		const { tableFromIPC } = await import('@uwdata/flechette');
-		return tableFromIPC(new Uint8Array(await res.arrayBuffer()));
-	}
-
-	async exec(sql: string): Promise<void> {
-		const res = await fetch(this.#uri, {
-			method: 'POST',
-			mode: 'cors',
-			credentials: 'omit',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ type: 'exec', sql })
-		});
-		if (!res.ok) {
-			throw new Error(`Exec failed with HTTP status ${res.status}: ${await res.text()}`);
-		}
-	}
-
-	async close(): Promise<void> {}
 }
 
 // ---------------------------------------------------------------------------

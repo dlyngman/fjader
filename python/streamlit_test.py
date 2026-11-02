@@ -20,9 +20,8 @@ df = pl.DataFrame({
 })
 
 overlay = fj.dot(data=df, x="x", y="y") * fj.line(data=df, x="x", y="y")
-USE_SERVER = st.toggle("Use server-side DuckDB (no WASM)", value=False)
 
-fj.streamlit.render(overlay, height=400, server_duckdb=USE_SERVER)
+fj.streamlit.render(overlay, height=400)
 
 # --- Seattle weather scatter ---
 st.header("Seattle Weather — Dots")
@@ -45,7 +44,7 @@ dots = fj.plot(
     x_label="Date",
     y_label="Max Temperature (°F)",
 )
-fj.streamlit.render(dots, height=450, server_duckdb=USE_SERVER)
+fj.streamlit.render(dots, height=450)
 
 # --- Weather: legend toggle + bar chart (replicates Svelte weather demo) ---
 st.header("Seattle Weather — Legend Toggle + Bars")
@@ -70,7 +69,6 @@ weather_bars = fj.plot(
 )
 fj.streamlit.render(
     fj.vconcat(weather_dots, weather_bars),
-    server_duckdb=USE_SERVER,
 )
 
 # --- Explicit domain comparison ---
@@ -93,7 +91,6 @@ with col1:
             width=450, height=250, y_label="default order",
             interactors=[fj.toggle(field="weather", selection="togX1")],
         ),
-        server_duckdb=USE_SERVER,
     )
 with col2:
     fj.streamlit.render(
@@ -105,7 +102,6 @@ with col2:
             width=450, height=250, y_label="explicit domain",
             interactors=[fj.toggle(field="weather", selection="togX2")],
         ),
-        server_duckdb=USE_SERVER,
     )
 
 st.header("Explicit Domain — BarY (vertical)")
@@ -119,7 +115,6 @@ with col3:
             width=450, height=250, x_label="default order",
             interactors=[fj.toggle(field="weather", selection="togY1")],
         ),
-        server_duckdb=USE_SERVER,
     )
 with col4:
     fj.streamlit.render(
@@ -131,7 +126,6 @@ with col4:
             width=450, height=250, x_label="explicit domain",
             interactors=[fj.toggle(field="weather", selection="togY2")],
         ),
-        server_duckdb=USE_SERVER,
     )
 
 # --- Crossfilter: brush dots to filter bars ---
@@ -162,7 +156,6 @@ bar_brush = fj.plot(
 
 fj.streamlit.render(
     fj.vconcat(filtered_dots, bar_brush),
-    server_duckdb=USE_SERVER,
 )
 
 # --- 2D Brush: rectangle brush on scatter, cross-filters bar chart ---
@@ -188,7 +181,6 @@ brush_bars = fj.plot(
 )
 fj.streamlit.render(
     fj.hconcat(brush_scatter, brush_bars),
-    server_duckdb=USE_SERVER,
 )
 
 # --- Overview + Detail (domain zoom, not crossfilter) ---
@@ -203,7 +195,7 @@ overview = fj.plot(
     x_label="Date", height=100,
     interactors=[fj.interval_x()],
 )
-fj.streamlit.render(fj.vconcat(detail, overview), server_duckdb=USE_SERVER)
+fj.streamlit.render(fj.vconcat(detail, overview))
 
 # --- fitDomain: auto-fit y-axis to visible range ---
 st.header("fitDomain (y-axis auto-fits to visible data)")
@@ -228,7 +220,7 @@ fit_overview = fj.plot(
     x_label="Time",
     interactors=[fj.interval_x()],
 )
-fj.streamlit.render(fj.vconcat(fit_detail, fit_overview), server_duckdb=USE_SERVER)
+fj.streamlit.render(fj.vconcat(fit_detail, fit_overview))
 
 # --- autoDots: density-based dot fading on area marks ---
 st.header("autoDots on AreaY (dots appear when data is sparse)")
@@ -250,7 +242,6 @@ fj.streamlit.render(
         transforms=[fj.stack_y()],
     ),
     height=400,
-    server_duckdb=USE_SERVER,
 )
 
 # --- LOD config on line marks (replaces old optimize) ---
@@ -273,7 +264,6 @@ fj.streamlit.render(
         x_label="X",
         y_label="Y (LOD: decimate + smooth)",
     ),
-    server_duckdb=USE_SERVER,
 )
 
 # --- Window function: rolling average as a channel value ---
@@ -297,7 +287,6 @@ fj.streamlit.render(
         x_label="Date",
         y_label="Price (dots = raw, line = trailing avg 10)",
     ),
-    server_duckdb=USE_SERVER,
 )
 
 # --- from_spec: render from a raw JSON spec (e.g. exported from the palette) ---
@@ -324,7 +313,6 @@ fj.streamlit.render(
         },
         data={"penguins_summary": spec_df},
     ),
-    server_duckdb=USE_SERVER,
 )
 
 st.subheader("Editable spec textarea")
@@ -348,7 +336,6 @@ spec_text = st.text_area("Paste a spec (JSON)", value=default_spec, height=250)
 try:
     fj.streamlit.render(
         fj.from_spec(spec_text, data={"weather": weather}),
-        server_duckdb=USE_SERVER,
     )
 except Exception as e:
     st.error(f"Invalid spec: {e}")
@@ -380,5 +367,4 @@ fj.streamlit.render(
         },
         data={"weather": weather},
     ),
-    server_duckdb=USE_SERVER,
 )

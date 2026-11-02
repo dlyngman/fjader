@@ -5,11 +5,6 @@ export default defineConfig({
 	test: {
 		include: ['src/**/*.test.ts']
 	},
-	server: {
-		fs: {
-			allow: ['../../..']
-		}
-	},
 	plugins: [
 		sveltekit(),
 		{

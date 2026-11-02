@@ -19,7 +19,6 @@ st.title("Time Series Explorer")
 # ---------------------------------------------------------------------------
 # Sidebar controls
 # ---------------------------------------------------------------------------
-USE_SERVER = st.sidebar.toggle("Use server-side DuckDB", value=False)
 
 show_comparison = st.sidebar.toggle("Show comparison period", value=False)
 comparison_offset = st.sidebar.selectbox(
@@ -314,5 +313,4 @@ else:
 
 fj.streamlit.render(
     fj.vconcat(detail, holiday_strip, overview, bottom_row),
-    server_duckdb=USE_SERVER,
 )
