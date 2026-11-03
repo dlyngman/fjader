@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount } from 'svelte';
+	import { getContext, onMount, untrack } from 'svelte';
 	import { isBetween } from '@uwdata/mosaic-sql';
 	import { BrushState1D } from './brush-state.svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
@@ -132,19 +132,26 @@
 	});
 
 	// Watch for external selection changes (from detail chart pan/zoom)
-	// to keep brush visual in sync and update Mosaic filter
+	// to keep brush visual in sync and update Mosaic filter.
+	// Tracks only the selection extent and its source. The rest runs untracked:
+	// emitting the clause reads state it then writes (the filter group's
+	// selection, the scales' active values), which made this effect re-run
+	// itself without end while a detail chart was panned.
 	$effect(() => {
 		if (!(scaleState instanceof LinearScaleState)) return;
 		const extent = scaleState.selectionExtent;
-		if (extent && scaleState.selectionSource === 'external') {
-			brush.setExtent(extent[0], extent[1]);
-			lastEmittedMin = extent[0];
-			lastEmittedMax = extent[1];
-			emitFilterClause(extent[0], extent[1]);
-		} else if (!extent && brush.active) {
-			// Selection was cleared externally (e.g. detail chart reset) — clear brush
-			clearBrush();
-		}
+		const source = scaleState.selectionSource;
+		untrack(() => {
+			if (extent && source === 'external') {
+				brush.setExtent(extent[0], extent[1]);
+				lastEmittedMin = extent[0];
+				lastEmittedMax = extent[1];
+				emitFilterClause(extent[0], extent[1]);
+			} else if (!extent && brush.active) {
+				// Selection was cleared externally (e.g. detail chart reset) — clear brush
+				clearBrush();
+			}
+		});
 	});
 
 	// Derived screen coordinates — read chart.xScale/yScale directly so the
