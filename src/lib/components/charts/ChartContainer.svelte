@@ -441,6 +441,9 @@
 		onInteractorPointerDown: null,
 		onInteractorPointerMove: null,
 		onInteractorPointerUp: null,
+		onInteractorDragEnd: null,
+		// Presses belong to the chart cells, whose context the brushes get.
+		reroutePress: () => {},
 		activators: new Set()
 	};
 

@@ -9,6 +9,7 @@
 		isDragging,
 		scaleBrushExtent2D,
 		createPanModeHandlers,
+		brushHandleAt,
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
@@ -105,12 +106,15 @@
 	let currentY = 0;
 	let isCapturing = false;
 	let hasDragged = false;
-	let isPanModeActive = $state(false);
+	let isPanModeActive = false;
 
 	// Space held: presses pan the chart instead of brushing
-	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers((active) => {
-		isPanModeActive = active;
-	});
+	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers(
+		(active) => {
+			isPanModeActive = active;
+		},
+		() => chart.reroutePress()
+	);
 
 	// Reusable point object to reduce GC pressure
 	const point = { x: 0, y: 0 };
@@ -225,11 +229,12 @@
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
 
-	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
+	/** A press: move or resize on the brush's handles, else draw; decline in pan mode. */
+	function handlePointerDown(target: Element, pointerId: number, innerPoint: Point) {
 		if (brush.phase !== 'idle') return false;
 		if (isPanModeActive) return false;
 
-		(event.target as Element).setPointerCapture(event.pointerId);
+		target.setPointerCapture(pointerId);
 		isCapturing = true;
 		hasDragged = false;
 
@@ -237,6 +242,23 @@
 		anchorY = innerPoint.y;
 		currentX = innerPoint.x;
 		currentY = innerPoint.y;
+
+		const hit = brushHandleAt(target);
+		if (hit?.handle === 'move') {
+			brush.phase = 'moving';
+		} else if (hit) {
+			brush.phase = 'resizing';
+			const edge = hit.handle;
+			if (edge === 'nw' || edge === 'ne' || edge === 'sw' || edge === 'se') {
+				brush.resizeCorner = edge;
+				brush.x.resizeEdge = null;
+				brush.y.resizeEdge = null;
+			} else {
+				brush.resizeCorner = null;
+				brush.x.resizeEdge = edge === 'left' || edge === 'right' ? edge : null;
+				brush.y.resizeEdge = edge === 'top' || edge === 'bottom' ? edge : null;
+			}
+		}
 		return true;
 	}
 
@@ -310,11 +332,18 @@
 		(event.target as Element).releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
+		// A press that never moved is a click, which clears the brush.
 		if (!hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
 			clearBrush();
 			return true;
 		}
 
+		endDrag();
+		return true;
+	}
+
+	/** Keep what the drag did and go idle. */
+	function endDrag() {
 		if (brush.phase !== 'idle') {
 			emitClause();
 			brush.phase = 'idle';
@@ -322,58 +351,14 @@
 			brush.x.resizeEdge = null;
 			brush.y.resizeEdge = null;
 		}
-
 		hasDragged = false;
-		return true;
 	}
 
-	function handleMoveStart(event: PointerEvent) {
-		event.stopPropagation();
-		(event.target as Element).setPointerCapture(event.pointerId);
-		isCapturing = true;
-		hasDragged = false;
-
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		anchorX = innerCoords.x;
-		anchorY = innerCoords.y;
-		currentX = innerCoords.x;
-		currentY = innerCoords.y;
-		brush.phase = 'moving';
-	}
-
-	function handleResizeStart(
-		edge: 'left' | 'right' | 'top' | 'bottom' | 'nw' | 'ne' | 'sw' | 'se',
-		event: PointerEvent
-	) {
-		event.stopPropagation();
-		(event.target as HTMLElement).setPointerCapture(event.pointerId);
-		isCapturing = true;
-
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		anchorX = innerCoords.x;
-		anchorY = innerCoords.y;
-		currentX = innerCoords.x;
-		currentY = innerCoords.y;
-		brush.phase = 'resizing';
-
-		if (edge === 'nw' || edge === 'ne' || edge === 'sw' || edge === 'se') {
-			brush.resizeCorner = edge;
-			brush.x.resizeEdge = null;
-			brush.y.resizeEdge = null;
-		} else {
-			brush.resizeCorner = null;
-			if (edge === 'left' || edge === 'right') {
-				brush.x.resizeEdge = edge;
-				brush.y.resizeEdge = null;
-			} else {
-				brush.x.resizeEdge = null;
-				brush.y.resizeEdge = edge;
-			}
-		}
+	/** The chart re-routes the press: end the drag as it stands, never as a click. */
+	function handleDragEnd() {
+		if (!isCapturing) return;
+		isCapturing = false;
+		endDrag();
 	}
 
 	// Register callbacks
@@ -381,12 +366,14 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
+		chart.onInteractorDragEnd = handleDragEnd;
 		chart.activators.add(brushHandle.activate);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
+			chart.onInteractorDragEnd = null;
 			chart.activators.delete(brushHandle.activate);
 			brushHandle.destroy();
 		};
@@ -402,9 +389,6 @@
 		width={brushScreen.width}
 		height={brushScreen.height}
 		orientation="2d"
-		onMoveStart={handleMoveStart}
-		onResizeStart={handleResizeStart}
 		onWheel={handleWheel}
-		panMode={isPanModeActive}
 	/>
 {/if}
