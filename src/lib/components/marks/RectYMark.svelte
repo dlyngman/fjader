@@ -366,5 +366,4 @@
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
 	/>
-	>
 {/if}
