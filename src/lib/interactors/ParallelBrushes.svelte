@@ -63,7 +63,7 @@
 
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
 	let isPanModeActive = $state(false);
-	const { handleKeyDown, handleKeyUp } = createPanModeHandlers((active) => {
+	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers((active) => {
 		isPanModeActive = active;
 	});
 
@@ -335,7 +335,7 @@
 	});
 </script>
 
-<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} onblur={handleBlur} />
 
 {#if ps}
 	{#each ps.columns as col (col)}
@@ -359,6 +359,7 @@
 			onMoveStart={(e) => handleMoveStart(screen.col, e)}
 			onResizeStart={(edge, e) => handleResizeStart(screen.col, edge, e)}
 			onWheel={() => {}}
+			panMode={isPanModeActive}
 		/>
 	{/each}
 {/if}

@@ -8,9 +8,24 @@
 		onMoveStart: (event: PointerEvent) => void;
 		onResizeStart: (edge: string, event: PointerEvent) => void;
 		onWheel: (event: WheelEvent) => void;
+		/**
+		 * While true the overlay ignores the pointer, so a press on the brush
+		 * reaches the chart, which pans as it does outside the brush.
+		 */
+		panMode?: boolean;
 	}
 
-	let { x, y, width, height, orientation, onMoveStart, onResizeStart, onWheel }: Props = $props();
+	let {
+		x,
+		y,
+		width,
+		height,
+		orientation,
+		onMoveStart,
+		onResizeStart,
+		onWheel,
+		panMode = false
+	}: Props = $props();
 
 	// Normalize to ensure positive dimensions (avoid GC by using primitives)
 	const nx = $derived(width < 0 ? x + width : x);
@@ -19,7 +34,7 @@
 	const nh = $derived(Math.abs(height));
 </script>
 
-<g class="brush-overlay" onwheel={onWheel}>
+<g class="brush-overlay" class:pan-mode={panMode} onwheel={onWheel}>
 	<!-- Selection box - minimal style like D3 defaults -->
 	<rect
 		class="brush-selection"
@@ -97,6 +112,10 @@
 </g>
 
 <style>
+	.pan-mode {
+		pointer-events: none;
+	}
+
 	.brush-selection:hover {
 		fill: rgba(128, 128, 128, 0.15);
 	}

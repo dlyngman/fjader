@@ -113,7 +113,7 @@
 	let lastEmittedMax: number | null = null;
 
 	// Keyboard handlers for Space key pan mode
-	const { handleKeyDown, handleKeyUp } = createPanModeHandlers((active) => {
+	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers((active) => {
 		isPanModeActive = active;
 	});
 
@@ -337,7 +337,7 @@
 	});
 </script>
 
-<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} onblur={handleBlur} />
 
 {#if brush.active && brushScreen}
 	<BrushOverlay
@@ -349,5 +349,6 @@
 		onMoveStart={handleMoveStart}
 		onResizeStart={handleResizeStart}
 		onWheel={handleWheel}
+		panMode={isPanModeActive}
 	/>
 {/if}

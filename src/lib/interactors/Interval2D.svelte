@@ -8,6 +8,7 @@
 		closeTo,
 		isDragging,
 		scaleBrushExtent2D,
+		createPanModeHandlers,
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point } from '$lib/types';
@@ -104,6 +105,12 @@
 	let currentY = 0;
 	let isCapturing = false;
 	let hasDragged = false;
+	let isPanModeActive = $state(false);
+
+	// Space held: presses pan the chart instead of brushing
+	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers((active) => {
+		isPanModeActive = active;
+	});
 
 	// Reusable point object to reduce GC pressure
 	const point = { x: 0, y: 0 };
@@ -220,6 +227,7 @@
 
 	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
 		if (brush.phase !== 'idle') return false;
+		if (isPanModeActive) return false;
 
 		(event.target as Element).setPointerCapture(event.pointerId);
 		isCapturing = true;
@@ -385,6 +393,8 @@
 	});
 </script>
 
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} onblur={handleBlur} />
+
 {#if brush.active && brushScreen}
 	<BrushOverlay
 		x={brushScreen.x}
@@ -395,5 +405,6 @@
 		onMoveStart={handleMoveStart}
 		onResizeStart={handleResizeStart}
 		onWheel={handleWheel}
+		panMode={isPanModeActive}
 	/>
 {/if}

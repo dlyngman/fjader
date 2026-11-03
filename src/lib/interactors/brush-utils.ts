@@ -20,9 +20,15 @@ export function closeTo(a: number | null | undefined, b: number | null | undefin
 	return diff < EPS_ABSOLUTE;
 }
 
+/**
+ * Space-held pan mode for brushes, wired to <svelte:window> keydown, keyup and
+ * blur. Blur ends pan mode: a Space released while the window is unfocused
+ * sends no keyup, which would leave pan mode stuck on.
+ */
 export function createPanModeHandlers(setActive: (active: boolean) => void): {
 	handleKeyDown: (event: KeyboardEvent) => void;
 	handleKeyUp: (event: KeyboardEvent) => void;
+	handleBlur: () => void;
 } {
 	const handleKeyDown = (event: KeyboardEvent) => {
 		if (event.code === 'Space') {
@@ -36,7 +42,9 @@ export function createPanModeHandlers(setActive: (active: boolean) => void): {
 		}
 	};
 
-	return { handleKeyDown, handleKeyUp };
+	const handleBlur = () => setActive(false);
+
+	return { handleKeyDown, handleKeyUp, handleBlur };
 }
 
 export function scaleBrushExtent1D(
