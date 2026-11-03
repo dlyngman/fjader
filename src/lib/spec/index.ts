@@ -18,8 +18,7 @@
 import { mount, unmount } from 'svelte';
 import { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
-import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
+import { createQueryServices } from '$lib/query-engine';
 import { getOrCreateQueryEngine, loadData } from './LazyQueryEngine';
 import LayoutFromSpec from './LayoutFromSpec.svelte';
 import type { FjaderSpec, RenderOptions, FjaderHandle } from './types';
@@ -59,8 +58,7 @@ export async function render(
 
 	// 4. Build context map — injected into Svelte mount() so child components
 	//    find these via getContext() calls (same keys as initFjader())
-	const filterGroups = new FilterGroupRegistry();
-	tableSchemaService.setQueryEngine(queryEngine);
+	const { filterGroups } = createQueryServices(queryEngine);
 	const context = new Map<string, unknown>();
 	context.set('query-engine', queryEngine);
 	context.set('filter-groups', filterGroups);

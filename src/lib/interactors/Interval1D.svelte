@@ -9,6 +9,7 @@
 		isDragging,
 		scaleBrushExtent1D,
 		createPanModeHandlers,
+		brushHandleAt,
 		WHEEL_SENSITIVITY
 	} from './brush-utils';
 	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
@@ -103,7 +104,7 @@
 	let current = 0;
 	let isCapturing = false;
 	let hasDragged = false;
-	let isPanModeActive = $state(false);
+	let isPanModeActive = false;
 
 	// Reusable point object to reduce GC pressure
 	const point = { x: 0, y: 0 };
@@ -113,9 +114,12 @@
 	let lastEmittedMax: number | null = null;
 
 	// Keyboard handlers for Space key pan mode
-	const { handleKeyDown, handleKeyUp } = createPanModeHandlers((active) => {
-		isPanModeActive = active;
-	});
+	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers(
+		(active) => {
+			isPanModeActive = active;
+		},
+		() => chart.reroutePress()
+	);
 
 	// Scale validation
 	// Always validate as 'linear': Fjader time scales use float offsets, not Dates,
@@ -223,16 +227,25 @@
 
 	// --- Pointer Event Handlers (registered as chart context callbacks) ---
 
-	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
+	/** A press: move or resize on the brush's handles, else draw; decline in pan mode. */
+	function handlePointerDown(target: Element, pointerId: number, innerPoint: Point) {
 		if (brush.phase !== 'idle') return false;
 		if (isPanModeActive) return false;
 
-		(event.target as Element).setPointerCapture(event.pointerId);
+		target.setPointerCapture(pointerId);
 		isCapturing = true;
 		hasDragged = false;
 
 		anchor = innerCoord(innerPoint);
 		current = anchor;
+
+		const hit = brushHandleAt(target);
+		if (hit?.handle === 'move') {
+			brush.phase = 'moving';
+		} else if (hit) {
+			brush.phase = 'resizing';
+			brush.resizeEdge = hit.handle === edgeStart ? 'start' : 'end';
+		}
 		return true;
 	}
 
@@ -280,44 +293,30 @@
 		(event.target as Element).releasePointerCapture(event.pointerId);
 		isCapturing = false;
 
+		// A press that never moved is a click, which clears the brush.
 		if (!hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
 			clearBrush();
 			return true;
 		}
 
+		endDrag();
+		return true;
+	}
+
+	/** Keep what the drag did and go idle. */
+	function endDrag() {
 		if (brush.phase !== 'idle') {
 			emitUpdate();
 			brush.phase = 'idle';
 		}
-
 		hasDragged = false;
-		return true;
 	}
 
-	function handleMoveStart(event: PointerEvent) {
-		event.stopPropagation();
-		(event.target as Element).setPointerCapture(event.pointerId);
-		isCapturing = true;
-		hasDragged = false;
-
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		anchor = innerCoord(innerCoords);
-		brush.phase = 'moving';
-	}
-
-	function handleResizeStart(edge: string, event: PointerEvent) {
-		event.stopPropagation();
-		(event.target as Element).setPointerCapture(event.pointerId);
-		isCapturing = true;
-
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		anchor = innerCoord(innerCoords);
-		brush.phase = 'resizing';
-		brush.resizeEdge = edge === edgeStart ? 'start' : 'end';
+	/** The chart re-routes the press: end the drag as it stands, never as a click. */
+	function handleDragEnd() {
+		if (!isCapturing) return;
+		isCapturing = false;
+		endDrag();
 	}
 
 	// Register pointer callbacks; the keys are on <svelte:window> below.
@@ -325,19 +324,21 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
+		chart.onInteractorDragEnd = handleDragEnd;
 		chart.activators.add(brushHandle.activate);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
+			chart.onInteractorDragEnd = null;
 			chart.activators.delete(brushHandle.activate);
 			brushHandle.destroy();
 		};
 	});
 </script>
 
-<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} onblur={handleBlur} />
 
 {#if brush.active && brushScreen}
 	<BrushOverlay
@@ -346,8 +347,6 @@
 		width={isX ? brushScreen.size : chart.innerWidth}
 		height={isX ? chart.innerHeight : brushScreen.size}
 		orientation={axis}
-		onMoveStart={handleMoveStart}
-		onResizeStart={handleResizeStart}
 		onWheel={handleWheel}
 	/>
 {/if}

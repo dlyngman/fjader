@@ -20,23 +20,59 @@ export function closeTo(a: number | null | undefined, b: number | null | undefin
 	return diff < EPS_ABSOLUTE;
 }
 
-export function createPanModeHandlers(setActive: (active: boolean) => void): {
+/**
+ * Space-held pan mode for brushes, wired to <svelte:window> keydown, keyup and
+ * blur. Each change calls `reroutePress` (the chart's), so a press already
+ * under way switches between panning and brushing where the pointer is now:
+ * with three-finger drag on a trackpad, one press can last seconds after the
+ * fingers lift. Key repeats while Space is held change nothing. Blur ends pan
+ * mode: a Space released while the window is unfocused sends no keyup.
+ */
+export function createPanModeHandlers(
+	setActive: (active: boolean) => void,
+	reroutePress: () => void
+): {
 	handleKeyDown: (event: KeyboardEvent) => void;
 	handleKeyUp: (event: KeyboardEvent) => void;
+	handleBlur: () => void;
 } {
+	let active = false;
+
+	const set = (next: boolean) => {
+		if (next === active) return;
+		active = next;
+		setActive(next);
+		reroutePress();
+	};
+
 	const handleKeyDown = (event: KeyboardEvent) => {
-		if (event.code === 'Space') {
-			setActive(true);
-		}
+		if (event.code === 'Space') set(true);
 	};
 
 	const handleKeyUp = (event: KeyboardEvent) => {
-		if (event.code === 'Space') {
-			setActive(false);
-		}
+		if (event.code === 'Space') set(false);
 	};
 
-	return { handleKeyDown, handleKeyUp };
+	return { handleKeyDown, handleKeyUp, handleBlur: () => set(false) };
+}
+
+/** The parts of a brush overlay a press can land on, from its `data-brush-handle`. */
+export type BrushHandle = 'move' | 'left' | 'right' | 'top' | 'bottom' | 'nw' | 'ne' | 'sw' | 'se';
+
+/**
+ * The brush handle under a press, read from the overlay's DOM: its element's
+ * `data-brush-handle`, and the `data-brush-owner` of its overlay (a parallel
+ * axis's column), or null when the press is not on a brush.
+ */
+export function brushHandleAt(
+	target: Element | null
+): { handle: BrushHandle; owner: string | null } | null {
+	const el = target?.closest?.('[data-brush-handle]');
+	if (!el) return null;
+	return {
+		handle: el.getAttribute('data-brush-handle') as BrushHandle,
+		owner: el.closest('[data-brush-owner]')?.getAttribute('data-brush-owner') ?? null
+	};
 }
 
 export function scaleBrushExtent1D(

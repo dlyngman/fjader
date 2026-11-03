@@ -4,7 +4,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import ParallelAxisSource, { type ParallelAxis } from './ParallelAxisSource.svelte';
-	import { closeTo, isDragging, createPanModeHandlers } from './brush-utils';
+	import { closeTo, isDragging, createPanModeHandlers, brushHandleAt } from './brush-utils';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -62,10 +62,13 @@
 	}
 
 	// Pan mode (Space key) — when active, pointer events fall through to ChartCell for pan
-	let isPanModeActive = $state(false);
-	const { handleKeyDown, handleKeyUp } = createPanModeHandlers((active) => {
-		isPanModeActive = active;
-	});
+	let isPanModeActive = false;
+	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers(
+		(active) => {
+			isPanModeActive = active;
+		},
+		() => chart.reroutePress()
+	);
 
 	// The axis the user is dragging on, by column
 	let activeAxis: string | null = null;
@@ -166,19 +169,35 @@
 
 	// --- Pointer handlers ---
 
-	function handlePointerDown(event: PointerEvent, innerPoint: Point) {
+	/**
+	 * A press: move or resize on an axis's brush handles (that axis, from the
+	 * overlay's owner), else draw on the nearest axis; decline in pan mode.
+	 */
+	function handlePointerDown(target: Element, pointerId: number, innerPoint: Point) {
 		if (!ps) return false;
 		if (isPanModeActive) return false; // Fall through to ChartCell for parallel axis pan
 
-		const col = nearestAxis(innerPoint.x);
+		const hit = brushHandleAt(target);
+		const col = hit?.owner ?? nearestAxis(innerPoint.x);
 		if (col == null || !axes.has(col)) return false;
+		// A drag that starts on a brush overlay hovers its axis, even without a
+		// pointer move over the axis first.
+		if (hit) hoverAxis(col);
 
-		(event.target as Element).setPointerCapture(event.pointerId);
+		target.setPointerCapture(pointerId);
 		activeAxis = col;
 		isCapturing = true;
 		hasDragged = false;
 		anchor = innerPoint.y;
 		current = anchor;
+
+		const brush = axes.get(col)!.brush;
+		if (hit?.handle === 'move') {
+			brush.phase = 'moving';
+		} else if (hit) {
+			brush.phase = 'resizing';
+			brush.resizeEdge = hit.handle === 'top' ? 'start' : 'end';
+		}
 		return true;
 	}
 
@@ -240,59 +259,39 @@
 		const col = activeAxis;
 		activeAxis = null;
 		const brush = axes.get(col)?.brush;
-		if (!brush) {
-			hasDragged = false;
-			return true;
-		}
 
-		if (!hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
+		// A press that never moved is a click, which clears the brush.
+		if (
+			brush &&
+			!hasDragged &&
+			brush.active &&
+			(brush.phase === 'idle' || brush.phase === 'moving')
+		) {
 			clearBrush(col);
 			return true;
 		}
 
-		if (brush.phase !== 'idle') {
-			emitUpdate(col);
-			brush.phase = 'idle';
-		}
-
-		hasDragged = false;
+		endDrag(col);
 		return true;
 	}
 
-	function handleMoveStart(col: string, event: PointerEvent) {
+	/** Keep what the drag on an axis did and go idle. */
+	function endDrag(col: string) {
 		const brush = axes.get(col)?.brush;
-		if (!brush) return;
-		event.stopPropagation();
-		// A drag that starts on a brush overlay hovers its axis, even without a
-		// pointer move over the axis first.
-		hoverAxis(col);
-		(event.target as Element).setPointerCapture(event.pointerId);
-		activeAxis = col;
-		isCapturing = true;
+		if (brush && brush.phase !== 'idle') {
+			emitUpdate(col);
+			brush.phase = 'idle';
+		}
 		hasDragged = false;
-
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		anchor = innerCoords.y;
-		brush.phase = 'moving';
 	}
 
-	function handleResizeStart(col: string, edge: string, event: PointerEvent) {
-		const brush = axes.get(col)?.brush;
-		if (!brush) return;
-		event.stopPropagation();
-		hoverAxis(col);
-		(event.target as Element).setPointerCapture(event.pointerId);
-		activeAxis = col;
-		isCapturing = true;
-
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		anchor = innerCoords.y;
-		brush.phase = 'resizing';
-		brush.resizeEdge = edge === 'top' ? 'start' : 'end';
+	/** The chart re-routes the press: end the drag as it stands, never as a click. */
+	function handleDragEnd() {
+		if (!isCapturing || activeAxis == null) return;
+		isCapturing = false;
+		const col = activeAxis;
+		activeAxis = null;
+		endDrag(col);
 	}
 
 	// Brush screen extents, one per active brush, at its axis's x-position —
@@ -324,18 +323,20 @@
 		chart.onInteractorPointerDown = handlePointerDown;
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
+		chart.onInteractorDragEnd = handleDragEnd;
 		chart.activators.add(activateHoveredAxis);
 
 		return () => {
 			chart.onInteractorPointerDown = null;
 			chart.onInteractorPointerMove = null;
 			chart.onInteractorPointerUp = null;
+			chart.onInteractorDragEnd = null;
 			chart.activators.delete(activateHoveredAxis);
 		};
 	});
 </script>
 
-<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} />
+<svelte:window onkeydown={handleKeyDown} onkeyup={handleKeyUp} onblur={handleBlur} />
 
 {#if ps}
 	{#each ps.columns as col (col)}
@@ -356,8 +357,7 @@
 			width={brushHalfWidth * 2}
 			height={screen.size}
 			orientation="y"
-			onMoveStart={(e) => handleMoveStart(screen.col, e)}
-			onResizeStart={(edge, e) => handleResizeStart(screen.col, edge, e)}
+			owner={screen.col}
 			onWheel={() => {}}
 		/>
 	{/each}

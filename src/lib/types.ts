@@ -517,12 +517,36 @@ export interface ChartContext {
 
 	// Pointer hooks (mutable slots set by interactors)
 	onChartClick: ((event: PointerEvent) => void) | null;
-	onInteractorPointerDown: ((event: PointerEvent, innerPoint: Point) => boolean) | null;
+	/**
+	 * A press, offered to the interactor before the chart pans. `target` is the
+	 * element under the pointer, which a brush reads for the handle it is on
+	 * (brushHandleAt); `innerPoint` is in plot-area coordinates. Returns true when
+	 * the interactor takes the press. Called again when the chart re-routes a
+	 * press under way (reroutePress).
+	 */
+	onInteractorPointerDown:
+		| ((target: Element, pointerId: number, innerPoint: Point) => boolean)
+		| null;
 	/** Every pointer move but a pan; `innerPoint` is the pointer in plot-area coordinates (a
 	 *  shared buffer: read it before calling back into the layout). Returns true when the
 	 *  interactor handled the move (a drag it captured). */
 	onInteractorPointerMove: ((event: PointerEvent, innerPoint: Point) => boolean) | null;
 	onInteractorPointerUp: ((event: PointerEvent) => boolean) | null;
+	/**
+	 * End the interactor's drag where it is, as a pointer up would but without
+	 * treating a drag that never moved as a click (which clears a brush). The
+	 * chart calls it when it re-routes the press.
+	 */
+	onInteractorDragEnd: (() => void) | null;
+	/**
+	 * Route the press under way again, as if it began now where the pointer is:
+	 * end what it is doing (a pan, or the interactor's drag), then offer it to
+	 * the interactor and pan if declined, as a new press would be. Brushes call
+	 * it when Space changes, since one press can outlast that: with three-finger
+	 * drag on a trackpad it goes on for seconds after the fingers lift. Without a
+	 * press under way it does nothing.
+	 */
+	reroutePress: () => void;
 	/**
 	 * Selection sources to activate when the pointer enters the chart, so their
 	 * preagg tables exist before the first gesture. Interactors add their

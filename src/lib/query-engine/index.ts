@@ -5,9 +5,10 @@
  *   import { setQueryContext } from '$lib/query-engine';
  *   setQueryContext(wasm.getConnection());  // Promise OK — resolves lazily
  *
- * Usage in spec renderer:
- *   context.set('query-engine', new QueryEngine(connection));
- *   context.set('filter-groups', new FilterGroupRegistry());
+ * Usage outside a component (the spec renderer), passing contexts to mount():
+ *   const { filterGroups } = createQueryServices(queryEngine);
+ *   context.set('query-engine', queryEngine);
+ *   context.set('filter-groups', filterGroups);
  */
 
 import { setContext, getContext } from 'svelte';
@@ -17,15 +18,24 @@ import { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 
 /**
+ * Create the FilterGroupRegistry for an engine and wire both to the schema
+ * service. Brushes and toggles reach the engine only through this wiring:
+ * a FilterGroup without an engine updates its selection but never re-queries.
+ */
+export function createQueryServices(queryEngine: QueryEngine) {
+	const filterGroups = new FilterGroupRegistry();
+	filterGroups.setEngine(queryEngine);
+	tableSchemaService.setQueryEngine(queryEngine);
+	return { queryEngine, filterGroups };
+}
+
+/**
  * Create QueryEngine + FilterGroupRegistry and set Svelte contexts.
  * Call this synchronously in a component's <script> block.
  * Accepts a Promise<DuckDBConnection> — queries defer until it resolves.
  */
 export function setQueryContext(connection: DuckDBConnection | Promise<DuckDBConnection>) {
-	const queryEngine = new QueryEngine(connection);
-	const filterGroups = new FilterGroupRegistry();
-	filterGroups.setEngine(queryEngine);
-	tableSchemaService.setQueryEngine(queryEngine);
+	const { queryEngine, filterGroups } = createQueryServices(new QueryEngine(connection));
 	setContext('query-engine', queryEngine);
 	setContext('filter-groups', filterGroups);
 	return { queryEngine, filterGroups };

@@ -426,6 +426,8 @@
 		onInteractorPointerDown: null,
 		onInteractorPointerMove: null,
 		onInteractorPointerUp: null,
+		onInteractorDragEnd: null,
+		reroutePress: () => reroutePress(),
 		activators: new Set()
 	};
 
@@ -643,22 +645,61 @@
 		activePanY = false;
 	}
 
+	// The press under way, for reroutePress: its pointer, where it is now, and
+	// whether it was re-routed (then never a click, which would clear a brush).
+	let pressPointerId: number | null = null;
+	let pressClientX = 0;
+	let pressClientY = 0;
+	let pressRerouted = false;
+
 	function handlePointerDown(event: PointerEvent) {
 		hoverSettle.hold(true);
 		event.preventDefault();
 		chartCellEl?.focus({ preventScroll: true });
 
-		pointerBuffer.x = ptrX(event);
-		pointerBuffer.y = ptrY(event);
+		pressPointerId = event.pointerId;
+		pressRerouted = false;
+		pressClientX = event.clientX;
+		pressClientY = event.clientY;
+		routePress(event.target as Element, event.pointerId, event.clientX, event.clientY);
+	}
+
+	/**
+	 * Route the press under way again where the pointer is now, ending what it
+	 * was doing first. The element under the pointer comes from a fresh hit test
+	 * on the chart's root (a shadow root, if the host renders into one), since
+	 * during pointer capture the events' target is the capturing element.
+	 */
+	function reroutePress() {
+		if (pressPointerId == null || isReordering) return;
+		if (isPanning) stopPan();
+		else chartContext.onInteractorDragEnd?.();
+		pressRerouted = true;
+
+		const root = chartCellEl?.getRootNode() as Document | ShadowRoot | undefined;
+		const hit = root?.elementFromPoint?.(pressClientX, pressClientY) ?? null;
+		const target = hit && svg?.contains(hit) ? hit : svg;
+		if (target) routePress(target, pressPointerId, pressClientX, pressClientY);
+	}
+
+	/**
+	 * Offer a press to the interactor, and pan if it declines. `target` is the
+	 * element under the pointer: a press on a brush's overlay goes to the brush
+	 * even just outside the plot area, where its edge handles reach.
+	 */
+	function routePress(target: Element, pointerId: number, clientX: number, clientY: number) {
+		pointerBuffer.x = clientX - svgLeft;
+		pointerBuffer.y = clientY - svgTop;
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 
 		// Parallel axes are vertical — yInBounds is sufficient, nearestParallelAxis handles x-proximity.
 		// This mirrors how regular charts let margin interactions target the in-bounds axis.
 		const parallelInBounds = yInBounds && !!scales.parallelScales;
 
+		const onBrush = !!target.closest?.('[data-brush-handle]');
 		if (
-			((xInBounds && yInBounds) || parallelInBounds) &&
-			chartContext.onInteractorPointerDown?.(event, innerPoint)
+			((xInBounds && yInBounds) || parallelInBounds || onBrush) &&
+			chartContext.onInteractorPointerDown?.(target, pointerId, innerPoint)
 		) {
 			currentInnerX = null;
 			currentInnerY = null;
@@ -676,7 +717,7 @@
 			scales.clearCurrentDataPoints();
 			currentInnerX = null;
 			currentInnerY = null;
-			(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
+			target.setPointerCapture?.(pointerId);
 			return;
 		}
 
@@ -688,7 +729,7 @@
 			scales.startParallelReorder(innerPoint.x, layout.innerWidth)
 		) {
 			isReordering = true;
-			(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
+			target.setPointerCapture?.(pointerId);
 			return;
 		}
 
@@ -708,7 +749,7 @@
 		scales.clearCurrentDataPoints();
 		currentInnerX = null;
 		currentInnerY = null;
-		(event.target as Element | null)?.setPointerCapture?.(event.pointerId);
+		target.setPointerCapture?.(pointerId);
 	}
 
 	/** The pointer buffer set to an SVG-root position, for layout methods that read a Point. */
@@ -719,6 +760,10 @@
 	}
 
 	function processPointerMove(event: PointerEvent) {
+		if (event.pointerId === pressPointerId) {
+			pressClientX = event.clientX;
+			pressClientY = event.clientY;
+		}
 		const x = ptrX(event);
 		const y = ptrY(event);
 		if (isReordering) {
@@ -732,8 +777,8 @@
 		} else if (
 			chartContext.onInteractorPointerMove?.(event, layout.toInnerCoordinates(setPointer(x, y)))
 		) {
-			// Brush move/resize use stopPropagation, bypassing handlePointerDown cleanup.
-			// Guard ensures this only runs once on the first captured move.
+			// Clear the hover point once per drag. A press clears it when the
+			// interactor takes it, but a press re-routed mid-drag can start one too.
 			if (currentInnerX != null) {
 				currentInnerX = null;
 				currentInnerY = null;
@@ -780,6 +825,11 @@
 	}
 
 	function handlePointerUp(event: PointerEvent) {
+		const rerouted = pressRerouted && event.pointerId === pressPointerId;
+		if (event.pointerId === pressPointerId) {
+			pressPointerId = null;
+			pressRerouted = false;
+		}
 		hoverSettle.hold(false);
 		if (isReordering) {
 			isReordering = false;
@@ -787,11 +837,17 @@
 			scales.endParallelReorder();
 			return;
 		}
-		if (chartContext.onInteractorPointerUp?.(event)) return;
+		// A re-routed press ends as a drag even if it never moved: it is no click.
+		if (rerouted) chartContext.onInteractorDragEnd?.();
+		else if (chartContext.onInteractorPointerUp?.(event)) return;
+		(event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
+		stopPan();
+	}
+
+	function stopPan() {
 		isPanning = false;
 		activePanX = false;
 		activePanY = false;
-		(event.target as Element | null)?.releasePointerCapture?.(event.pointerId);
 		scales.endPan();
 		scales.endParallelPan();
 	}
