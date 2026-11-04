@@ -62,7 +62,7 @@ export class ColorScaleState {
 	#field: string;
 	#registry: ScaleRegistry;
 	#gpuCoordinator: GPUCoordinator | null;
-	#scaleId: string = crypto.randomUUID(); // Unique ID for ViewManager registration
+	#id: string = crypto.randomUUID();
 
 	// GPU slot indices (allocated from registry)
 	#configSlot: number = -1;
@@ -288,10 +288,14 @@ export class ColorScaleState {
 	}
 
 	/**
-	 * Unique scale ID for ViewManager registration.
+	 * The id the coordinator tracks this scale by, as it does every scale.
+	 *
+	 * Tracking is what puts the scale in front of the identity slot packer
+	 * (see tracked-scales.ts). Without an id, its rank table was never packed:
+	 * the shader read the channel's dim id as a palette index.
 	 */
-	get scaleId(): string {
-		return this.#scaleId;
+	get id(): string {
+		return this.#id;
 	}
 
 	// ============================================================

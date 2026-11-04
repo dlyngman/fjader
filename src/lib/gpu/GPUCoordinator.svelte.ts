@@ -18,6 +18,7 @@ import {
 import { frameUniformIsStale } from './frame-uniform-sync';
 import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
 import { COLOR_CONFIG_BYTES, COLOR_CONFIG_SLOT_BASE_OFFSET } from './ColorScaleShaderLib';
+import { trackScalesById } from './tracked-scales';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -1640,19 +1641,15 @@ export class GPUCoordinator {
 		const usageMap = this.#scaleRegistry.scaleUsage;
 		if (!usageMap || typeof usageMap[Symbol.iterator] !== 'function') return;
 
-		// Clear and rebuild
-		this.#scaleIdToInstance.clear();
-
-		for (const [scaleInstance] of usageMap) {
-			// Only positional scales (Linear, Band, Time) carry an id.
-			const scale = scaleInstance as unknown as ScaleInstance;
-			if (!scale?.id) continue;
-
-			// The redraw list is NOT rebuilt here any more. It belongs to the
-			// registry, derived from the same usage map this reads, and a scale
-			// asks for it. Copying it from a second owner is how it went stale.
-			this.#scaleIdToInstance.set(scale.id, scale);
-		}
+		// Clear and rebuild: every scale with an id — positional scales, and
+		// ordinal colour, whose slots the packer needs too. The id map is only
+		// looked up with a chart's x and y scale ids, so a colour scale in it is
+		// never mistaken for a positional one.
+		//
+		// The redraw list is NOT rebuilt here any more. It belongs to the
+		// registry, derived from the same usage map this reads, and a scale asks
+		// for it. Copying it from a second owner is how it went stale.
+		trackScalesById(usageMap.keys() as unknown as Iterable<ScaleInstance>, this.#scaleIdToInstance);
 
 		this.#scales = [...this.#scaleIdToInstance.values()];
 	}
