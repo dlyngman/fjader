@@ -649,9 +649,10 @@ export class GPUCoordinator {
 					//
 					// Uniform, and visible to the VERTEX stage as well: selection
 					// dimming reads a colour scale's slotBase per vertex. As storage
-					// it would count against the vertex stage's 8 storage buffers,
-					// where Rects already is; as a uniform it counts against the
-					// separate uniform limit instead. Same move as binding 4.
+					// it would take the last of the vertex stage's default 8 storage
+					// buffers on Rects, which uses 7; as a uniform it counts against
+					// the separate uniform limit and leaves that slot free. Same move
+					// as binding 4.
 					binding: 1,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: 'uniform' }
@@ -688,8 +689,9 @@ export class GPUCoordinator {
 					// buffer and do no interpolation.
 					//
 					// Storage, where it used to be two uniforms. It costs the vertex
-					// stage one binding where the pair cost none — Rects lands at 8 of
-					// 8, the default maxStorageBuffersPerShaderStage — and in exchange
+					// stage one binding where the pair cost none — Rects lands at 7 of
+					// the default maxStorageBuffersPerShaderStage of 8, its six channels
+					// and this — and in exchange
 					// the vec4 packing, the 64 KB uniform binding cap and the
 					// 16384-float global ceiling all go away with the address space.
 					//
@@ -697,8 +699,9 @@ export class GPUCoordinator {
 					// the compute pipeline, which has its own budget.
 					//
 					// FRAGMENT as well as VERTEX: band axes resolve a slot in the
-					// vertex stage, ordinal colour carries the same ids and resolves
-					// in the fragment stage.
+					// vertex stage, and ordinal colour resolves its palette rank in
+					// the fragment stage. Both read their selection activity, the
+					// second half of each block, in the vertex stage.
 					binding: 5,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: 'read-only-storage' }

@@ -923,11 +923,6 @@ export class BandScaleState {
 		return axis === 'y' ? rangeSize - centre : centre;
 	}
 
-	/** Whether a tick's category is outside the current selection. */
-	isTickDimmed(tick: BandTick): boolean {
-		return tick.value != null && !this.isActive(tick.value);
-	}
-
 	/**
 	 * Centre of a (possibly fractional) slot, measured from the start of the
 	 * range — the same layout the shader's computeBandLayout uses, so a label

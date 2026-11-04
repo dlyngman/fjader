@@ -83,9 +83,11 @@ const COLOR_TRANSFORM_POW: u32 = 4u;
 `;
 
 // colorConfigs is a UNIFORM, visible to the vertex stage as well: selection
-// dimming reads a colour scale's slotBase per vertex, and the vertex stage of
-// Rects is already at the default limit of 8 storage buffers. 64 × 48 bytes is
-// 3 KB, written when a scale changes, which is what uniform buffers are for.
+// dimming reads a colour scale's slotBase per vertex. As storage it would take
+// the last of the vertex stage's default 8 storage buffers on Rects, which uses
+// 7 (six channels and the identity slot table); as a uniform it leaves that
+// slot free. 64 × 48 bytes is 3 KB, written when a scale changes, which is what
+// uniform buffers are for.
 export const COLOR_SCALE_BINDINGS = /* wgsl */ `
 @group(2) @binding(1) var<uniform> colorConfigs: array<ColorConfig, ${MAX_COLOR_SLOTS}>;
 @group(2) @binding(2) var<storage, read> colorRamps: array<vec4<f32>>;
