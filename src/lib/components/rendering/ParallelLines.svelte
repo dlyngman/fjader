@@ -3,6 +3,7 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
+	import { NAN_WGSL } from '$lib/gpu/NanShaderLib';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, CurveType, WebGPUCanvasContext } from '$lib/types';
 
@@ -123,7 +124,7 @@
   // writes; only linear math is applied to them today.
   @group(1) @binding(3) var<uniform> axisScales: array<ScaleParam, ${MAX_AXES}>;
 
-  fn isNaN(v: f32) -> bool { return v != v; }
+  ${NAN_WGSL}
   const DISCARD_POS = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 
   fn getAxisOrder(visualIdx: u32) -> u32 {

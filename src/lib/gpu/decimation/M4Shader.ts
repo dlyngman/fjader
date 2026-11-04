@@ -27,7 +27,15 @@
  *
  * The x scale's params reach passes 1 and 2 as immediates, pushed before each
  * dispatch, rather than as an index into the global scale table.
+ *
+ * Every pass reads and writes the data through u32 views. NaN (a null, or an
+ * empty bin) is found by its bit pattern and moved as bits, never compared as
+ * a float: Metal compilers may fold `x != x` to false (see NanShaderLib), and
+ * where they do, compaction keeps the empty bins and the line loses every
+ * segment that touches one.
  */
+
+import { NAN_WGSL } from '../NanShaderLib';
 
 const WORKGROUP_SIZE = 256;
 
@@ -55,10 +63,11 @@ struct M4Bin {
 	maxYIdx: atomic<u32>,
 };
 
-fn floatToSortableUint(f: f32) -> u32 {
-	let bits = bitcast<u32>(f);
+fn sortableFromBits(bits: u32) -> u32 {
 	return select(~bits, bits ^ 0x80000000u, (bits & 0x80000000u) == 0u);
 }
+
+${NAN_WGSL}
 `;
 
 /** Bytes of immediate data passes 1 and 2 read: one ScaleParam. */
@@ -141,9 +150,9 @@ requires immediate_address_space;
 ${SHARED_TYPES}
 ${X_SCALE_IMMEDIATE}
 
-@group(0) @binding(0) var<storage, read> xValues: array<f32>;
-@group(0) @binding(1) var<storage, read> yValues: array<f32>;
-@group(0) @binding(2) var<storage, read> seriesValues: array<f32>;
+@group(0) @binding(0) var<storage, read> xBits: array<u32>;
+@group(0) @binding(1) var<storage, read> yBits: array<u32>;
+@group(0) @binding(2) var<storage, read> seriesBits: array<u32>;
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
@@ -156,11 +165,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let idx = gid.x;
 	if (idx >= config.pointCount) { return; }
 
-	let x = xValues[idx];
-	let y = yValues[idx];
-
-	// Skip NaN points
-	if (x != x || y != y) { return; }
+	// Skip NaN points, tested on the bits before either becomes a float
+	let xb = xBits[idx];
+	let yb = yBits[idx];
+	if (isNanBits(xb) || isNanBits(yb)) { return; }
+	let x = bitcast<f32>(xb);
 
 	let domainMin = xScale.p1;
 	let domainMax = xScale.p2;
@@ -168,8 +177,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let t = (x - domainMin) / (domainMax - domainMin);
 
 	// Series: 0-indexed from ViewManager (-1 = null/unknown, 0+ = categories)
-	let seriesF = seriesValues[idx];
-	if (seriesF < 0.0 || seriesF != seriesF) { return; }
+	let seriesB = seriesBits[idx];
+	if (isNanBits(seriesB)) { return; }
+	let seriesF = bitcast<f32>(seriesB);
+	if (seriesF < 0.0) { return; }
 	let series = u32(seriesF);
 	if (series >= config.numSeries) { return; }
 
@@ -189,7 +200,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	atomicMin(&bins[binKey].firstIdx, idx);
 	atomicMax(&bins[binKey].lastIdx, idx);
 
-	let ySortable = floatToSortableUint(y);
+	let ySortable = sortableFromBits(yb);
 	atomicMin(&bins[binKey].minYSortable, ySortable);
 	atomicMax(&bins[binKey].maxYSortable, ySortable);
 }
@@ -211,9 +222,9 @@ requires immediate_address_space;
 ${SHARED_TYPES}
 ${X_SCALE_IMMEDIATE}
 
-@group(0) @binding(0) var<storage, read> xValues: array<f32>;
-@group(0) @binding(1) var<storage, read> yValues: array<f32>;
-@group(0) @binding(2) var<storage, read> seriesValues: array<f32>;
+@group(0) @binding(0) var<storage, read> xBits: array<u32>;
+@group(0) @binding(1) var<storage, read> yBits: array<u32>;
+@group(0) @binding(2) var<storage, read> seriesBits: array<u32>;
 @group(0) @binding(4) var<uniform> config: M4Config;
 @group(0) @binding(5) var<storage, read_write> bins: array<M4Bin>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
@@ -225,10 +236,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let idx = gid.x;
 	if (idx >= config.pointCount) { return; }
 
-	let x = xValues[idx];
-	let y = yValues[idx];
-
-	if (x != x || y != y) { return; }
+	// NaN skip on the bits (matches binPoints pass)
+	let xb = xBits[idx];
+	let yb = yBits[idx];
+	if (isNanBits(xb) || isNanBits(yb)) { return; }
+	let x = bitcast<f32>(xb);
 
 	let domainMin = xScale.p1;
 	let domainMax = xScale.p2;
@@ -236,8 +248,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let t = (x - domainMin) / (domainMax - domainMin);
 
 	// Series: 0-indexed (matches binPoints pass)
-	let seriesF = seriesValues[idx];
-	if (seriesF < 0.0 || seriesF != seriesF) { return; }
+	let seriesB = seriesBits[idx];
+	if (isNanBits(seriesB)) { return; }
+	let seriesF = bitcast<f32>(seriesB);
+	if (seriesF < 0.0) { return; }
 	let series = u32(seriesF);
 	if (series >= config.numSeries) { return; }
 
@@ -253,7 +267,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	}
 	let binKey = series * config.numBins + bin;
 
-	let ySortable = floatToSortableUint(y);
+	let ySortable = sortableFromBits(yb);
 
 	if (ySortable == atomicLoad(&bins[binKey].minYSortable)) {
 		atomicMin(&bins[binKey].minYIdx, idx);
@@ -283,15 +297,15 @@ ${SHARED_TYPES}
 
 // Note: seriesValues not bound here — series is derived from binKey / numBins.
 // This keeps total storage buffers within WebGPU default limit.
-@group(0) @binding(0) var<storage, read> xValues: array<f32>;
-@group(0) @binding(1) var<storage, read> yValues: array<f32>;
-@group(0) @binding(2) var<storage, read> colorValues: array<f32>;
+@group(0) @binding(0) var<storage, read> xBits: array<u32>;
+@group(0) @binding(1) var<storage, read> yBits: array<u32>;
+@group(0) @binding(2) var<storage, read> colorBits: array<u32>;
 @group(0) @binding(3) var<uniform> config: M4Config;
 @group(0) @binding(4) var<storage, read_write> bins: array<M4Bin>;
-@group(1) @binding(0) var<storage, read_write> xOut: array<f32>;
-@group(1) @binding(1) var<storage, read_write> yOut: array<f32>;
-@group(1) @binding(2) var<storage, read_write> seriesOut: array<f32>;
-@group(1) @binding(3) var<storage, read_write> colorOut: array<f32>;
+@group(1) @binding(0) var<storage, read_write> xOut: array<u32>;
+@group(1) @binding(1) var<storage, read_write> yOut: array<u32>;
+@group(1) @binding(2) var<storage, read_write> seriesOut: array<u32>;
+@group(1) @binding(3) var<storage, read_write> colorOut: array<u32>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -302,16 +316,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let outBase = binKey * 4u;
 	let firstIdx = atomicLoad(&bins[binKey].firstIdx);
 
-	// Empty bin: write NaN to all 4 output slots
-	// Use var to avoid const-expression NaN (WGSL disallows NaN in const context)
+	// Empty bin: NaN in all 4 output slots, written as bits
 	if (firstIdx == 0xFFFFFFFFu) {
-		var nanBits = 0x7FC00000u;
-		let nan = bitcast<f32>(nanBits);
 		for (var i = 0u; i < 4u; i++) {
-			xOut[outBase + i] = nan;
-			yOut[outBase + i] = nan;
-			seriesOut[outBase + i] = nan;
-			colorOut[outBase + i] = nan;
+			xOut[outBase + i] = NAN_BITS;
+			yOut[outBase + i] = NAN_BITS;
+			seriesOut[outBase + i] = NAN_BITS;
+			colorOut[outBase + i] = NAN_BITS;
 		}
 		return;
 	}
@@ -358,15 +369,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 	// Derive series value from bin key (0-indexed, matching ViewManager convention).
 	// Vertex shader uses != comparison for series breaks, so any distinct values work.
-	let seriesVal = f32(binKey / config.numBins);
+	let seriesVal = bitcast<u32>(f32(binKey / config.numBins));
 
-	// Write unique points, fill remaining slots with last unique point
+	// Write unique points, fill remaining slots with last unique point.
+	// Copied as bits, so a value arrives exactly as it left.
 	for (var i = 0u; i < 4u; i++) {
 		let srcIdx = indices[min(i, count - 1u)];
-		xOut[outBase + i] = xValues[srcIdx];
-		yOut[outBase + i] = yValues[srcIdx];
+		xOut[outBase + i] = xBits[srcIdx];
+		yOut[outBase + i] = yBits[srcIdx];
 		seriesOut[outBase + i] = seriesVal;
-		colorOut[outBase + i] = colorValues[srcIdx];
+		colorOut[outBase + i] = colorBits[srcIdx];
 	}
 }
 `;
@@ -400,11 +412,13 @@ struct M4Config {
 	decimationMode: u32,
 };
 
+${NAN_WGSL}
+
 @group(0) @binding(0) var<uniform> config: M4Config;
-@group(0) @binding(1) var<storage, read_write> xOut: array<f32>;
-@group(0) @binding(2) var<storage, read_write> yOut: array<f32>;
-@group(0) @binding(3) var<storage, read_write> seriesOut: array<f32>;
-@group(0) @binding(4) var<storage, read_write> colorOut: array<f32>;
+@group(0) @binding(1) var<storage, read_write> xOut: array<u32>;
+@group(0) @binding(2) var<storage, read_write> yOut: array<u32>;
+@group(0) @binding(3) var<storage, read_write> seriesOut: array<u32>;
+@group(0) @binding(4) var<storage, read_write> colorOut: array<u32>;
 @group(1) @binding(0) var<storage, read_write> control: array<atomic<u32>>;
 
 @compute @workgroup_size(1)
@@ -418,14 +432,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	let end = start + 4u * config.numBins;
 
 	// Pack non-NaN points to the front, skipping consecutive duplicates.
+	// All on bits: NaN by its pattern, duplicates by identical bits. lastX
+	// starts as NaN, which no kept x can equal.
 	var writeIdx = start;
-	var nanBits = 0x7FC00000u;
-	var lastX: f32 = bitcast<f32>(nanBits);
-	var lastY: f32 = bitcast<f32>(nanBits);
+	var lastX = NAN_BITS;
+	var lastY = NAN_BITS;
 
 	for (var i = start; i < end; i++) {
 		let x = xOut[i];
-		if (x != x) { continue; }
+		if (isNanBits(x)) { continue; }
 		let y = yOut[i];
 		if (x == lastX && y == lastY) { continue; }
 
@@ -441,12 +456,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 	}
 
 	// NaN-pad remaining slots
-	let nan = bitcast<f32>(nanBits);
 	for (var i = writeIdx; i < end; i++) {
-		xOut[i] = nan;
-		yOut[i] = nan;
-		seriesOut[i] = nan;
-		colorOut[i] = nan;
+		xOut[i] = NAN_BITS;
+		yOut[i] = NAN_BITS;
+		seriesOut[i] = NAN_BITS;
+		colorOut[i] = NAN_BITS;
 	}
 
 	// Instance count is set by pass 0 (outputSize) — compact only reorganizes
@@ -479,12 +493,13 @@ struct M4Config {
 	decimationMode: u32,
 };
 
-@group(0) @binding(0) var<storage, read> xIn: array<f32>;
-@group(0) @binding(1) var<storage, read> yIn: array<f32>;
+// Copied as bits, so a null's NaN arrives exactly as it left.
+@group(0) @binding(0) var<storage, read> xIn: array<u32>;
+@group(0) @binding(1) var<storage, read> yIn: array<u32>;
 @group(0) @binding(2) var<uniform> config: M4Config;
 @group(0) @binding(3) var<storage, read_write> control: array<atomic<u32>>;
-@group(1) @binding(0) var<storage, read_write> xOut: array<f32>;
-@group(1) @binding(1) var<storage, read_write> yOut: array<f32>;
+@group(1) @binding(0) var<storage, read_write> xOut: array<u32>;
+@group(1) @binding(1) var<storage, read_write> yOut: array<u32>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -528,12 +543,13 @@ struct M4Config {
 	decimationMode: u32,
 };
 
-@group(0) @binding(0) var<storage, read> seriesIn: array<f32>;
-@group(0) @binding(1) var<storage, read> colorIn: array<f32>;
+// Copied as bits, like pass 5a.
+@group(0) @binding(0) var<storage, read> seriesIn: array<u32>;
+@group(0) @binding(1) var<storage, read> colorIn: array<u32>;
 @group(0) @binding(2) var<uniform> config: M4Config;
 @group(0) @binding(3) var<storage, read_write> control: array<atomic<u32>>;
-@group(1) @binding(0) var<storage, read_write> seriesOut: array<f32>;
-@group(1) @binding(1) var<storage, read_write> colorOut: array<f32>;
+@group(1) @binding(0) var<storage, read_write> seriesOut: array<u32>;
+@group(1) @binding(1) var<storage, read_write> colorOut: array<u32>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {

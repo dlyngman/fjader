@@ -1,3 +1,4 @@
+import { isNanExpr } from './NanShaderLib';
 /**
  * The resolve kernel: `resolved[j] = mix(from[j], to[j], t)` over one range.
  *
@@ -99,10 +100,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let b = valueTo[j];
   // A NaN on either side means one end of this transition is not a number, so
   // there is nothing to interpolate along. Take the destination and be done.
-  // Note the test has to be explicit: every comparison against NaN is false, so
-  // mix() would silently propagate it instead.
+  // Note the test has to be explicit, and on the bits: mix() would silently
+  // propagate a NaN, and a compiler may fold a float test like a != a to false.
   // Equal ends take b too, so they come out exact on any driver — see above.
-  let takeTo = a == b || a != a || b != b;
+  let takeTo = a == b || ${isNanExpr('a')} || ${isNanExpr('b')};
   resolved[j] = select(mix(a, b, params.t), b, takeTo);
 }
 `;

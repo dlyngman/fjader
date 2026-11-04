@@ -1,6 +1,6 @@
 [project]
 name = "fjader"
-version = "0.2.1"
+version = "0.2.2"
 description = "An experimental, declarative charting library for Svelte and Python that queries DuckDB and renders with WebGPU"
 requires-python = ">=3.10"
 readme = "README.md"

@@ -1,3 +1,4 @@
+import { isNanExpr } from './NanShaderLib';
 // src/lib/gpu/SizeScaleShaderLib.js
 
 export const SIZE_SCALE_STRUCTS = /* wgsl */ `
@@ -47,7 +48,7 @@ fn getSizeFromScale(scaleIndex: u32, value: f32) -> f32 {
     let config = sizeConfigs[scaleIndex];
 
     // Handle NaN → rangeMin
-    if (value != value) {
+    if (${isNanExpr('value')}) {
         return config.rangeMin;
     }
 

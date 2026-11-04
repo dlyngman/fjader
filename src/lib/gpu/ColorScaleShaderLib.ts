@@ -1,3 +1,4 @@
+import { isNanExpr } from './NanShaderLib';
 // src/lib/gpu/ColorScaleShaderLib.ts
 
 // ---------------------------------------------------------------------------
@@ -155,7 +156,7 @@ fn getColorFromScale(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<
         return samplePalette(config, catIdx);
     }
 
-    if (value != value) {
+    if (${isNanExpr('value')}) {
         return nullColor;
     }
 
@@ -175,7 +176,7 @@ fn getOrdinalColor(scaleIndex: u32, categoryIndex: u32, nullColor: vec4<f32>) ->
 }
 
 fn getContinuousColor(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<f32> {
-    if (value != value) {
+    if (${isNanExpr('value')}) {
         return nullColor;
     }
     let config = colorConfigs[scaleIndex];
