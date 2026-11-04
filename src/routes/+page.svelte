@@ -82,6 +82,19 @@
 					</div>
 				</div>
 			</a>
+			<a class="card" href="/examples/timeseries-detail">
+				<div class="route">/examples/timeseries-detail</div>
+				<div class="cols">
+					<div class="col">
+						<span class="label">Components</span>
+						Spec: line, areaY, barY, intervalX, derivedInterval, toggle
+					</div>
+					<div class="col">
+						<span class="label">Description</span>
+						Overview + detail with a panned detail, year-back comparison, day toggle
+					</div>
+				</div>
+			</a>
 		</div>
 	</section>
 

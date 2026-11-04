@@ -7,7 +7,7 @@
 	 * selection → target group. Marks declare which group they belong to via
 	 * their own `selection` prop.
 	 */
-	import { getContext, onMount } from 'svelte';
+	import { getContext, onMount, untrack } from 'svelte';
 	import { isBetween, column as sqlColumn } from '@uwdata/mosaic-sql';
 	import GhostBrushOverlay from './GhostBrushOverlay.svelte';
 	import { buildColumnRef } from './brush-utils';
@@ -111,8 +111,18 @@
 	let lastEmittedMin: number | null = null;
 	let lastEmittedMax: number | null = null;
 
+	// Tracks only the derived extent and the column it filters. The rest runs
+	// untracked: writing to the target group reads state it then writes, which
+	// would make the effect re-run itself without end.
 	$effect(() => {
-		if (!derivedExtent) {
+		const extent = derivedExtent;
+		const ref = columnRef;
+		const fieldStr = resolvedField ?? '';
+		untrack(() => emitDerived(extent, ref, fieldStr));
+	});
+
+	function emitDerived(extent: [number, number] | null, ref: typeof columnRef, fieldStr: string) {
+		if (!extent) {
 			// Clear derived filter when primary is cleared
 			if (lastEmittedMin != null) {
 				lastEmittedMin = null;
@@ -122,8 +132,8 @@
 			return;
 		}
 
-		const dataMin = Math.min(derivedExtent[0], derivedExtent[1]);
-		const dataMax = Math.max(derivedExtent[0], derivedExtent[1]);
+		const dataMin = Math.min(extent[0], extent[1]);
+		const dataMax = Math.max(extent[0], extent[1]);
 
 		// Skip if unchanged
 		if (
@@ -137,13 +147,11 @@
 		lastEmittedMin = dataMin;
 		lastEmittedMax = dataMax;
 
-		if (!columnRef) return;
-
-		const fieldStr = resolvedField ?? '';
+		if (!ref) return;
 
 		targetGroup.upsertManual(
 			sourceKey,
-			isBetween(columnRef, [dataMin, dataMax]),
+			isBetween(ref, [dataMin, dataMax]),
 			[dataMin, dataMax],
 			new Set<string>(), // No excludeMarkIds — target group only has comparison marks
 			{
@@ -153,7 +161,7 @@
 				values: [dataMin, dataMax]
 			}
 		);
-	});
+	}
 
 	// =========================================================================
 	// Relay non-axis clauses from source → target
@@ -161,18 +169,21 @@
 
 	let relayedKeys = new Set<string>();
 
+	// Tracks only the source group's clauses and what decides which to relay.
+	// The writes to the target group run untracked, as above: tracked, they
+	// made this effect re-run itself without end once the source had a clause
+	// to relay (a day-of-week toggle beside the brush).
 	$effect(() => {
-		if (!relayClauses) {
-			for (const key of relayedKeys) targetGroup.removeManual(key);
-			relayedKeys = new Set();
-			return;
-		}
-
+		const relay = relayClauses;
 		const items = sourceGroup.items;
 		const fieldStr = resolvedField ?? '';
+		untrack(() => relayItems(relay ? items : null, fieldStr));
+	});
 
+	/** Mirror the source's clauses, but the axis range, into the target group. */
+	function relayItems(items: typeof sourceGroup.items | null, fieldStr: string) {
 		const currentKeys = new Set<string>();
-		for (const item of items) {
+		for (const item of items ?? []) {
 			// Skip the range clause on the axis column — we replace it with the shifted version
 			if (item.schema?.kind === 'range' && item.schema?.column === fieldStr) continue;
 
@@ -194,7 +205,7 @@
 			if (!currentKeys.has(key)) targetGroup.removeManual(key);
 		}
 		relayedKeys = currentKeys;
-	});
+	}
 
 	onMount(() => {
 		return () => {
