@@ -3,7 +3,7 @@ import { ColorScaleState } from './ColorScaleState.svelte';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 import { createIdentitySlotState, packIdentitySlots } from '$lib/gpu/identity-slot-packing';
-import type { ActivityTable } from './ActivityTable';
+import { DEFAULT_INACTIVE_OPACITY, type ActivityTable } from './ActivityTable';
 
 /**
  * An ordinal colour scale's selection, as the GPU will see it: the activity
@@ -119,5 +119,51 @@ describe('ColorScaleState selection activity', () => {
 		expect(Array.from(state.bufferTo.slice(base + 1 + count, base + 1 + 2 * count))).toEqual([
 			1, 0, 1
 		]);
+	});
+
+	it('gives a legend entry the inactive opacity for an unselected category', () => {
+		const scale = ordinal();
+		scale.setIdentity(new FieldIdentity(['a', 'b', 'c']));
+		expect(scale.categoryOpacity('b')).toBe(1);
+		scale.setActiveValues(['a']);
+		expect(scale.categoryOpacity('a')).toBe(1);
+		expect(scale.categoryOpacity('b')).toBe(DEFAULT_INACTIVE_OPACITY);
+	});
+
+	it('fades a legend entry on the selection clock', () => {
+		// The animation loop is the coordinator, which a colour scale also uploads
+		// through, so the stand-in takes those writes too.
+		const loop = {
+			addAnimatedSource: () => {},
+			removeAnimatedSource: () => {},
+			writeColorConfig: () => {},
+			writeColorConfigSlotBase: () => {},
+			writeColorPalette: () => {},
+			writeColorRamp: () => {}
+		};
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a', 'b'] },
+			registry,
+			loop as never
+		);
+		scale.setIdentity(new FieldIdentity(['a', 'b']));
+		scale.setActiveValues(['a']);
+		const clock = (scale.slots.activity as ActivityTable).clock;
+		for (let i = 0; i < 20; i++) {
+			clock.step();
+			clock.updateRenderState(0);
+		}
+		const midway = scale.categoryOpacity('b');
+		expect(midway).toBeLessThan(1);
+		expect(midway).toBeGreaterThan(DEFAULT_INACTIVE_OPACITY);
+		clock._markAtRest();
+		expect(scale.categoryOpacity('b')).toBeCloseTo(DEFAULT_INACTIVE_OPACITY, 6);
+	});
+
+	it('dims a legend entry by selection alone before identity lands', () => {
+		const scale = ordinal();
+		scale.setActiveValues(['a']);
+		expect(scale.categoryOpacity('a')).toBe(1);
+		expect(scale.categoryOpacity('b')).toBe(DEFAULT_INACTIVE_OPACITY);
 	});
 });

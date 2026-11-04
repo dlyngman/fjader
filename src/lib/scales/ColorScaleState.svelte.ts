@@ -26,7 +26,7 @@ import {
 	NO_SLOT_TABLE
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
-import { ActivityTable } from './ActivityTable';
+import { ActivityTable, DEFAULT_INACTIVE_OPACITY } from './ActivityTable';
 
 interface ColorScaleConfig {
 	field: string;
@@ -232,7 +232,8 @@ export class ColorScaleState {
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
 		this.#activity = new ActivityTable(gpuCoordinator, {
-			charts: () => this._affectedChartsArray
+			charts: () => this._affectedChartsArray,
+			onFrame: () => this.#activityFrame++
 		});
 		this.#slots.activity = this.#activity;
 
@@ -904,6 +905,30 @@ export class ColorScaleState {
 
 	isActive(value: string | number): boolean {
 		return this.#activeValues == null || this.#activeValues.has(value);
+	}
+
+	/** Bumped on every frame the selection fade is driven, and once at rest. */
+	#activityFrame = $state(0);
+
+	/**
+	 * How visible a category's legend entry is now, 0..1: its selection fade, on
+	 * the same clock and with the same floor as the marks, so a legend dims with
+	 * the bars for any selection on this field, whichever control made it.
+	 *
+	 * Per frame while a fade runs, O(1). Without identity there is no table, and
+	 * the entry is simply selected or not.
+	 */
+	categoryOpacity(value: string | number): number {
+		void this.#activityFrame;
+		const active = this.#activeValues;
+		if (this.hasIdentity) {
+			const id = this.#identity!.ids.get(value as never);
+			if (id !== undefined) {
+				const activity = this.#activity.activityOf(id);
+				return DEFAULT_INACTIVE_OPACITY + (1 - DEFAULT_INACTIVE_OPACITY) * activity;
+			}
+		}
+		return active == null || active.has(value) ? 1 : DEFAULT_INACTIVE_OPACITY;
 	}
 
 	// ============================================================

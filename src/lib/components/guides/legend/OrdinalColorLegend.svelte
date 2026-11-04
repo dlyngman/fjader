@@ -62,9 +62,6 @@
 			: null;
 	onDestroy(() => toggle?.destroy());
 
-	// Derive visual state from the toggle's selection
-	const selectedSet = $derived(toggle?.active ? toggle.values : null);
-
 	// Shift/meta-click adds or removes; selecting every value clears instead.
 	function handleClick(value: string | number, event: MouseEvent) {
 		toggle?.toggle([value], event.shiftKey || event.metaKey, scaleState.domain.length);
@@ -89,7 +86,7 @@
 			{#if isInteractive}
 				<button
 					class="legend-item legend-item-interactive"
-					class:legend-item-dimmed={selectedSet != null && !selectedSet.has(value)}
+					style:opacity={scaleState.categoryOpacity(value)}
 					onclick={(e) => handleClick(value, e)}
 				>
 					<span
@@ -102,7 +99,7 @@
 					<span class="legend-label">{value}</span>
 				</button>
 			{:else}
-				<span class="legend-item">
+				<span class="legend-item" style:opacity={scaleState.categoryOpacity(value)}>
 					<span
 						class="legend-swatch"
 						style:background={color}
@@ -157,7 +154,6 @@
 		align-items: center;
 		gap: 4px;
 		white-space: nowrap;
-		transition: opacity 0.15s ease;
 	}
 
 	.legend-item-interactive {
@@ -168,10 +164,6 @@
 		padding: 0;
 		font: inherit;
 		color: inherit;
-	}
-
-	.legend-item-dimmed {
-		opacity: 0.2;
 	}
 
 	.legend-swatch {
