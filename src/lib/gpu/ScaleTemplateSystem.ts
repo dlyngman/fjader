@@ -361,11 +361,17 @@ function _scaleFunctionName(scaleType: string, axis: string): string {
 
 /**
  * Bytes of immediate data every render pipeline declares: the chart's x and y
- * `ScaleParam`, 16 bytes each. Every layout declares the same size because a
- * draw requires every declared byte to have been set, and the pass sets them
- * once, before its first draw.
+ * `ScaleParam`, 16 bytes each, then the chart's selection dim strength. Every
+ * layout declares the same size because a draw requires every declared byte to
+ * have been set, and the pass sets them once, before its first draw.
+ *
+ * Immediates carry state shared across the pass and read by several marks: the
+ * chart's scales and settings. 64 bytes are available on M-series Macs.
  */
-export const CHART_SCALE_IMMEDIATE_SIZE = 32;
+export const CHART_SCALE_IMMEDIATE_SIZE = 36;
+
+/** Float index of `dimStrength` in the chart immediates. */
+export const CHART_DIM_STRENGTH_INDEX = 8;
 
 /**
  * Main template system class
@@ -526,8 +532,28 @@ export class ScaleTemplateSystem {
       struct ChartScales {
         x: ScaleParam,
         y: ScaleParam,
+        // How strongly inactive categories dim in this chart: 0 = off,
+        // 1 - inactiveOpacity otherwise. A strength rather than an opacity so
+        // that zero is the harmless value.
+        dimStrength: f32,
       };
       var<immediate> chartScales: ChartScales;
+
+      // Selection dimming, combined once per vertex: the product of a mark's
+      // activities (colour, and band for marks with band axes), mapped through
+      // the chart's dim strength. Multiplying first keeps a bar whose colour and
+      // band are the same field from dimming twice.
+      fn selectionDim(activity: f32) -> f32 {
+        return 1.0 - chartScales.dimStrength * (1.0 - activity);
+      }
+
+      // A mark's colour activity: 1.0 unless it colours through a scale.
+      fn markColorActivity(colorMode: u32, colorScaleIndex: u32, colorValue: f32) -> f32 {
+        if (colorMode != 1u) {
+          return 1.0;
+        }
+        return colorActivity(colorScaleIndex, colorValue);
+      }
 
       // The ONE place that says where a chart's scales come from. Every
       // consumer reads through these — scaleX/scaleY, the bandwidth helpers,
@@ -596,6 +622,18 @@ export class ScaleTemplateSystem {
       // leaving holds a real slot in both, which is what lets it travel. The
       // scale normalises that before packing, so nothing here re-derives it.
       return identitySlots[base + 1u + id];
+    }
+
+    fn identityActivity(base: u32, id: u32) -> f32 {
+      // The block's activity half follows its slots: [count, slots, activity].
+      // How selected each id is, 1 active and 0 inactive, already resolved at
+      // the selection clock's t. Past the end, or in the empty block, an id is
+      // fully active.
+      let count = u32(identitySlots[base]);
+      if (id >= count) {
+        return 1.0;
+      }
+      return identitySlots[base + 1u + count + id];
     }
     `;
 	}

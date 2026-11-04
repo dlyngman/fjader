@@ -175,7 +175,9 @@
       output.colorValue = colorValue;
       output.uv = quadPosition;
       output.radius = displayRadius;
-      output.alpha = alpha;
+      output.alpha = alpha * selectionDim(
+        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue)
+      );
       return output;
     }
 

@@ -1,6 +1,10 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
-import { scaleTemplateSystem, CHART_SCALE_IMMEDIATE_SIZE } from './ScaleTemplateSystem';
+import {
+	scaleTemplateSystem,
+	CHART_SCALE_IMMEDIATE_SIZE,
+	CHART_DIM_STRENGTH_INDEX
+} from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
@@ -17,7 +21,11 @@ import {
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
 import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
-import { COLOR_CONFIG_BYTES, COLOR_CONFIG_SLOT_BASE_OFFSET } from './ColorScaleShaderLib';
+import {
+	COLOR_CONFIG_BYTES,
+	COLOR_CONFIG_SLOT_BASE_OFFSET,
+	MAX_COLOR_SLOTS
+} from './ColorScaleShaderLib';
 import { trackScalesById } from './tracked-scales';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
@@ -61,7 +69,16 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
+	/**
+	 * How strongly inactive categories dim in this chart: 0 = off, otherwise
+	 * 1 - inactiveOpacity. Pushed with the chart's scales every pass, so a
+	 * change reaches the GPU on the next frame drawn.
+	 */
+	dimStrength: number;
 }
+
+/** Default dim strength: inactive categories at 0.25 opacity. */
+const DEFAULT_DIM_STRENGTH = 0.75;
 
 interface LayerConfig {
 	id: string;
@@ -430,7 +447,7 @@ export class GPUCoordinator {
 	#maxSizeSlots = MAX_SIZE_SLOTS;
 
 	// Constants
-	#maxColorSlots = 64;
+	#maxColorSlots = MAX_COLOR_SLOTS;
 	#rampColorsPerSlot = COLOR_RAMP_RESOLUTION;
 	#paletteColorsPerSlot = 32;
 
@@ -627,10 +644,16 @@ export class GPUCoordinator {
 			label: 'scale-resources-layout',
 			entries: [
 				{
-					// Binding 1: Color scale configs (fragment only)
+					// Binding 1: Color scale configs.
+					//
+					// Uniform, and visible to the VERTEX stage as well: selection
+					// dimming reads a colour scale's slotBase per vertex. As storage
+					// it would count against the vertex stage's 8 storage buffers,
+					// where Rects already is; as a uniform it counts against the
+					// separate uniform limit instead. Same move as binding 4.
 					binding: 1,
-					visibility: GPUShaderStage.FRAGMENT, // ← Changed
-					buffer: { type: 'read-only-storage' }
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: { type: 'uniform' }
 				},
 				{
 					// Binding 2: Color ramps (fragment only)
@@ -703,11 +726,12 @@ export class GPUCoordinator {
 	#createColorScaleBuffers(): void {
 		const device = this.#device!;
 
-		// ColorConfig buffer: 64 slots × 48 bytes each
+		// ColorConfig buffer: 64 slots × 48 bytes each. A uniform, so the vertex
+		// stage can read it without a storage binding — see COLOR_SCALE_BINDINGS.
 		this.#colorConfigBuffer = device.createBuffer({
-			label: 'ColorConfig SSBO',
+			label: 'ColorConfig uniform',
 			size: this.#maxColorSlots * COLOR_CONFIG_BYTES,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 
 		// Color ramp buffer: 64 slots × 256 colors × 4 floats × 4 bytes
@@ -1295,14 +1319,16 @@ export class GPUCoordinator {
 				this.#createRenderPassDescriptor(view, chartConfig)
 			);
 
-			// The chart's scales, written once for the whole pass and before the
-			// first draw. Every pipeline declares the same 32 bytes and a draw
-			// requires every declared byte to have been set, so this is the whole
-			// range, every pass. Immediate data survives setPipeline between
-			// layouts of the same size, which is what makes once enough. Pushed even
-			// when the chart's scales are not both known: a layer that does not
-			// read them still needs every byte set before it may draw.
+			// The chart's scales and dim strength, written once for the whole pass
+			// and before the first draw. Every pipeline declares the same
+			// CHART_SCALE_IMMEDIATE_SIZE and a draw requires every declared byte to
+			// have been set, so this is the whole range, every pass. Immediate data
+			// survives setPipeline between layouts of the same size, which is what
+			// makes once enough. Pushed even when the chart's scales are not both
+			// known: a layer that does not read them still needs every byte set
+			// before it may draw.
 			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
+			this.#chartScaleImmediates[CHART_DIM_STRENGTH_INDEX] = chartConfig.dimStrength;
 			passEncoder.setImmediates(0, this.#chartScaleImmediates);
 
 			if (chartConfig.perFrameBindGroup) {
@@ -1889,7 +1915,8 @@ export class GPUCoordinator {
 			renderPassDescriptor: null,
 			msaa: null,
 			_lastRenderFrame: -1,
-			_isDirty: false
+			_isDirty: false,
+			dimStrength: DEFAULT_DIM_STRENGTH
 		};
 
 		this.#registeredCharts.set(chartId, chartConfig);

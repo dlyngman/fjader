@@ -191,7 +191,9 @@
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[rowIdx];
-      output.alpha = config.opacity;
+      output.alpha = config.opacity * selectionDim(
+        markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx])
+      );
       output.circleUV = quadPosition;
       output.circleRadius = halfWidth;
       return output;
@@ -270,7 +272,9 @@
     var output: VertexOutput;
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[rowIdx];
-    output.alpha = config.opacity;
+    output.alpha = config.opacity * selectionDim(
+      markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx])
+    );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
     return output;

@@ -41,6 +41,12 @@ export const COLOR_CONFIG_SLOT_BASE_OFFSET = 32;
 /** `slotBase` meaning "this channel already carries a palette index". */
 export const NO_SLOT_TABLE = 0xffffffff;
 
+/**
+ * How many colour configs the buffer holds. A uniform array has a fixed length
+ * in WGSL, so the shader declaration and the buffer size both read this.
+ */
+export const MAX_COLOR_SLOTS = 64;
+
 export const COLOR_SCALE_STRUCTS = /* wgsl */ `
 struct ColorConfig {
     domainMin: f32,         // byte 0  — pre-transformed for non-linear types
@@ -76,8 +82,12 @@ const COLOR_TRANSFORM_SQRT: u32 = 3u;
 const COLOR_TRANSFORM_POW: u32 = 4u;
 `;
 
+// colorConfigs is a UNIFORM, visible to the vertex stage as well: selection
+// dimming reads a colour scale's slotBase per vertex, and the vertex stage of
+// Rects is already at the default limit of 8 storage buffers. 64 × 48 bytes is
+// 3 KB, written when a scale changes, which is what uniform buffers are for.
 export const COLOR_SCALE_BINDINGS = /* wgsl */ `
-@group(2) @binding(1) var<storage, read> colorConfigs: array<ColorConfig>;
+@group(2) @binding(1) var<uniform> colorConfigs: array<ColorConfig, ${MAX_COLOR_SLOTS}>;
 @group(2) @binding(2) var<storage, read> colorRamps: array<vec4<f32>>;
 @group(2) @binding(3) var<storage, read> ordinalPalettes: array<vec4<f32>>;
 `;
@@ -185,5 +195,25 @@ fn getContinuousColor(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4
     }
     let t = normalizeValue(config, value);
     return sampleRamp(config, t);
+}
+
+/**
+ * How selected this value's category is on an ordinal colour scale, 0..1.
+ *
+ * Read per vertex for selection dimming. 1.0 for anything that has no category
+ * to select: a continuous scale, an ordinal scale whose channel does not carry
+ * identity ids yet (NO_SLOT_TABLE), and a missing category. The -1 and NaN
+ * checks come before the cast, because u32() of a negative or NaN float is
+ * indeterminate in WGSL and would read an arbitrary activity.
+ */
+fn colorActivity(scaleIndex: u32, value: f32) -> f32 {
+    if (value < 0.0 || ${isNanExpr('value')}) {
+        return 1.0;
+    }
+    let config = colorConfigs[scaleIndex];
+    if (config.scaleType != COLOR_SCALE_ORDINAL || config.slotBase == NO_SLOT_TABLE) {
+        return 1.0;
+    }
+    return identityActivity(config.slotBase, u32(value));
 }
 `;

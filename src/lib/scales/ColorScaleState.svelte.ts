@@ -26,6 +26,7 @@ import {
 	NO_SLOT_TABLE
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
+import { ActivityTable } from './ActivityTable';
 
 interface ColorScaleConfig {
 	field: string;
@@ -142,8 +143,32 @@ export class ColorScaleState {
 	 * Ranks do not animate, so both ends of the "transition" are the same table
 	 * at t = 1. `version` is bumped on every rebuild; the packer uploads only on
 	 * a change.
+	 *
+	 * `activity` is the block's second half: how selected each id is, which the
+	 * vertex shaders read to dim inactive categories. Set in the constructor.
 	 */
-	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
+	#slots: {
+		count: number;
+		from: Float32Array;
+		to: Float32Array;
+		t: number;
+		version: number;
+		activity: ActivityTable | null;
+	} = {
+		count: 0,
+		from: new Float32Array(0),
+		to: new Float32Array(0),
+		t: 1,
+		version: 0,
+		activity: null
+	};
+
+	/**
+	 * Which categories are selected, as a fade over every id of the dim. Sized
+	 * with the rank table, fed from `setActiveValues`, packed as the activity half
+	 * of this scale's block.
+	 */
+	#activity: ActivityTable;
 
 	get slots(): SlotSource {
 		return this.#slots;
@@ -206,6 +231,10 @@ export class ColorScaleState {
 		this.#exponent = config.exponent ?? 1;
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
+		this.#activity = new ActivityTable(gpuCoordinator, {
+			charts: () => this._affectedChartsArray
+		});
+		this.#slots.activity = this.#activity;
 
 		// Explicit type wins, fallback to inference from scheme
 		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
@@ -291,8 +320,9 @@ export class ColorScaleState {
 	 * The id the coordinator tracks this scale by, as it does every scale.
 	 *
 	 * Tracking is what puts the scale in front of the identity slot packer
-	 * (see tracked-scales.ts). Without an id, its rank table was never packed:
-	 * the shader read the channel's dim id as a palette index.
+	 * (see tracked-scales.ts). Without an id, its rank table and selection
+	 * activity were never packed: the shader read the channel's dim id as a
+	 * palette index, and selection dimming had nothing to read.
 	 */
 	get id(): string {
 		return this.#id;
@@ -546,6 +576,11 @@ export class ColorScaleState {
 		slots.to = table;
 		slots.count = table.length;
 		slots.version++;
+
+		// The activity table covers the same ids. A selection made before these
+		// ids existed (or before identity landed) is applied to them now.
+		this.#activity.resize(table.length);
+		if (this.#activeValues) this.#applyActiveValues(this.#activeValues);
 	}
 
 	#hasRanks(): boolean {
@@ -826,11 +861,45 @@ export class ColorScaleState {
 	// ============================================================
 
 	setActiveValues(values: Iterable<string | number>): void {
-		this.#activeValues = values instanceof Set ? values : new Set(values);
+		const set = values instanceof Set ? values : new Set(values);
+		this.#activeValues = set;
+		this.#applyActiveValues(set);
 	}
 
 	clearActiveValues(): void {
 		this.#activeValues = null;
+		this.#activity.clear();
+	}
+
+	/**
+	 * Charts to redraw while this scale's selection fades. Asked of the
+	 * registry, as BandScaleState does, so it is current when charts come and
+	 * go; the selection clock reads it every frame it runs.
+	 */
+	get _affectedChartsArray(): string[] {
+		return this.#registry?.chartsUsing(this) ?? ColorScaleState.#noCharts;
+	}
+
+	static #noCharts: string[] = [];
+
+	/** Reused id list for #applyActiveValues, which runs on every filter update. */
+	#activeIds: number[] = [];
+
+	/**
+	 * Point the activity table at the ids of these values. Without identity the
+	 * channel carries no ids, so there is nothing on the GPU to dim yet; the
+	 * values are kept in #activeValues and applied once identity lands.
+	 */
+	#applyActiveValues(values: Set<string | number>): void {
+		const identity = this.#identity;
+		if (!this.isOrdinal || !identity?.present) return;
+		const ids = this.#activeIds;
+		ids.length = 0;
+		for (const value of values) {
+			const id = identity.ids.get(value as never);
+			if (id !== undefined) ids.push(id);
+		}
+		this.#activity.setActive(ids);
 	}
 
 	isActive(value: string | number): boolean {
@@ -861,6 +930,9 @@ export class ColorScaleState {
 	 */
 	destroy(): void {
 		this.#destroyed = true;
+		// Leaves the animation loop; a later selection lands at once rather than
+		// animating for a scale nothing draws.
+		this.#activity.destroy();
 	}
 
 	/** True once the registry has torn this scale down. */
