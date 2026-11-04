@@ -8,6 +8,13 @@ import { TransitionClock, type ClockLoop } from '$lib/animation';
 export const SELECTION_STIFFNESS = 400;
 
 /**
+ * How visible an inactive category is, by default: marks are drawn at this
+ * opacity (the coordinator pushes 1 - this as the chart's dim strength), and
+ * band labels fade to it.
+ */
+export const DEFAULT_INACTIVE_OPACITY = 0.25;
+
+/**
  * Which categories of a scale are selected, and how far each one has faded.
  *
  * One float per identity id: 1 active, 0 inactive. A categorical scale owns one

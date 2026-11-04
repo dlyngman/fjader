@@ -50,6 +50,7 @@ import {
 	SIZE_SCALE_BINDINGS,
 	SIZE_SCALE_FUNCTIONS
 } from './SizeScaleShaderLib';
+import { isNanExpr } from './NanShaderLib';
 
 /**
  * Scale fragment definitions
@@ -492,6 +493,7 @@ export class ScaleTemplateSystem {
       // ===== 3. HELPER FUNCTIONS =====
       
       ${this._buildSlotTableHelpers()}
+      ${this._buildBandActivityHelpers(scaleTypes)}
       ${bandHelpers}
       ${implementations}
       ${scaleFunctions}
@@ -590,6 +592,39 @@ export class ScaleTemplateSystem {
 	 * visible failure. Index 0 is a permanent zero-length block, which is where
 	 * a scale that did not fit in the buffer points.
 	 */
+	/**
+	 * `bandActivityX(value)` and `bandActivityY(value)`: how selected a band or
+	 * point axis's category is, 0..1, for selection dimming.
+	 *
+	 * Emitted for every shader, so a renderer can call both without knowing its
+	 * scale types: an axis that is not band or point returns 1.0. On a band or
+	 * point axis the value is an identity id and the chart's scale carries its
+	 * block base in p4, as for the slot lookup. A missing category (-1) or a NaN
+	 * is fully active, checked before the cast, since u32() of a negative or NaN
+	 * float is indeterminate in WGSL.
+	 */
+	_buildBandActivityHelpers(scaleTypes: { x: string; y: string }): string {
+		const helper = (axis: 'X' | 'Y', type: string) => {
+			if (type !== 'band' && type !== 'point') {
+				return `fn bandActivity${axis}(value: f32) -> f32 {
+      return 1.0;
+    }`;
+			}
+			return `fn bandActivity${axis}(value: f32) -> f32 {
+      if (value < 0.0 || ${isNanExpr('value')}) {
+        return 1.0;
+      }
+      return identityActivity(u32(chartScale${axis}().p4), u32(value));
+    }`;
+		};
+		return `
+    // ===== BAND SELECTION ACTIVITY =====
+    ${helper('X', scaleTypes.x)}
+
+    ${helper('Y', scaleTypes.y)}
+    `;
+	}
+
 	_buildSlotTableHelpers(): string {
 		return `
     // ===== SHARED SLOT TABLE (identity id -> display slot) =====

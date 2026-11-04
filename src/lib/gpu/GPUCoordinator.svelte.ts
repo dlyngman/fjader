@@ -27,6 +27,7 @@ import {
 	MAX_COLOR_SLOTS
 } from './ColorScaleShaderLib';
 import { trackScalesById } from './tracked-scales';
+import { DEFAULT_INACTIVE_OPACITY } from '$lib/scales/ActivityTable';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -77,8 +78,8 @@ interface ChartConfig {
 	dimStrength: number;
 }
 
-/** Default dim strength: inactive categories at 0.25 opacity. */
-const DEFAULT_DIM_STRENGTH = 0.75;
+/** Default dim strength: inactive categories at DEFAULT_INACTIVE_OPACITY. */
+const DEFAULT_DIM_STRENGTH = 1 - DEFAULT_INACTIVE_OPACITY;
 
 interface LayerConfig {
 	id: string;
