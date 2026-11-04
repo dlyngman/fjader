@@ -471,10 +471,87 @@
 		}
 	}
 
+	// The origin is read on pointer enter, but the chart can move under a pointer
+	// already inside it: a scroll that carries on after the pointer arrives (the
+	// wheel passes through to the page for a moment, see WheelInteractionControl),
+	// a resize, or content above it changing height. Scroll and resize mark it
+	// stale; layout shifts fire no event, so it is also re-read every
+	// ORIGIN_CHECK_MS while hovered. Re-reading every frame instead cost a forced
+	// layout on most frames, for a chart that almost never moves.
+	const ORIGIN_CHECK_MS = 250;
+	let pointerInside = false;
+	let originStale = false;
+	let originCheckedAt = 0;
+	// Whether the pointer is over the SVG and its last position there, to
+	// re-apply the hover when the chart moves under a still pointer. The position
+	// is current only while pointerOverSvg holds: moves over the facet label or
+	// palette are not tracked.
+	let pointerOverSvg = false;
+	let lastClientX = 0;
+	let lastClientY = 0;
+
+	/**
+	 * The element of the SVG at a viewport position, or null outside it. A fresh
+	 * hit test on the chart's root (a shadow root, if the host renders into one),
+	 * for when an event's target cannot say: during pointer capture it is the
+	 * capturing element, and a chart moving under a still pointer fires no event.
+	 */
+	function svgElementAt(clientX: number, clientY: number): Element | null {
+		const root = chartCellEl?.getRootNode() as Document | ShadowRoot | undefined;
+		const hit = root?.elementFromPoint?.(clientX, clientY) ?? null;
+		return hit && svg?.contains(hit) ? hit : null;
+	}
+
+	function markOriginStale(): void {
+		originStale = true;
+	}
+
+	/** Re-read the origin when stale or due, from the frame callback while hovered. */
+	function checkSvgOrigin(): void {
+		const now = performance.now();
+		if (!originStale && now - originCheckedAt < ORIGIN_CHECK_MS) return;
+		originStale = false;
+		originCheckedAt = now;
+
+		const left = svgLeft;
+		const top = svgTop;
+		refreshSvgOrigin();
+		if (svgLeft === left && svgTop === top) return;
+		// The chart moved under a still pointer: move the crosshair with it. A
+		// drag or pan in progress gets its next position from the next move.
+		if (!pointerOverSvg || pressPointerId != null) return;
+		// Something else may be under the pointer now. Layout was just flushed by
+		// the origin read, so the hit test is cheap, and this runs only on a move.
+		const overBrush = !!svgElementAt(lastClientX, lastClientY)?.closest('.brush-overlay');
+		updateHover(lastClientX - svgLeft, lastClientY - svgTop, overBrush);
+	}
+
+	// Its own callback rather than the tooltip's, which faceted cells do not have.
+	onMount(() => {
+		const originCallback = () => {
+			if (pointerInside) checkSvgOrigin();
+		};
+		gpuCoordinator.addFrameCallback(originCallback);
+		return () => gpuCoordinator.removeFrameCallback(originCallback);
+	});
+
+	function handleSvgPointerEnter(event: PointerEvent) {
+		pointerOverSvg = true;
+		lastClientX = event.clientX;
+		lastClientY = event.clientY;
+	}
+
+	function handleSvgPointerLeave() {
+		pointerOverSvg = false;
+	}
+
 	function handleChartPointerEnter(event: PointerEvent) {
 		activateSources();
 		hoverSettle.enter();
 		refreshSvgOrigin();
+		pointerInside = true;
+		originStale = false;
+		originCheckedAt = performance.now();
 		gpuCoordinator.setChartHovered(layout.chartId);
 		wheelControl.handlePointerEnter();
 		// Focus so [ / ] keyboard shortcuts work for tooltip cycling.
@@ -487,6 +564,8 @@
 	}
 
 	function handleChartPointerLeave() {
+		pointerInside = false;
+		pointerOverSvg = false;
 		hoverSettle.leave();
 		gpuCoordinator.setChartUnhovered(layout.chartId);
 		wheelControl.handlePointerLeave();
@@ -666,9 +745,9 @@
 
 	/**
 	 * Route the press under way again where the pointer is now, ending what it
-	 * was doing first. The element under the pointer comes from a fresh hit test
-	 * on the chart's root (a shadow root, if the host renders into one), since
-	 * during pointer capture the events' target is the capturing element.
+	 * was doing first. The element under the pointer comes from a fresh hit
+	 * test, since during pointer capture the events' target is the capturing
+	 * element.
 	 */
 	function reroutePress() {
 		if (pressPointerId == null || isReordering) return;
@@ -676,9 +755,7 @@
 		else chartContext.onInteractorDragEnd?.();
 		pressRerouted = true;
 
-		const root = chartCellEl?.getRootNode() as Document | ShadowRoot | undefined;
-		const hit = root?.elementFromPoint?.(pressClientX, pressClientY) ?? null;
-		const target = hit && svg?.contains(hit) ? hit : svg;
+		const target = svgElementAt(pressClientX, pressClientY) ?? svg;
 		if (target) routePress(target, pressPointerId, pressClientX, pressClientY);
 	}
 
@@ -764,6 +841,8 @@
 			pressClientX = event.clientX;
 			pressClientY = event.clientY;
 		}
+		lastClientX = event.clientX;
+		lastClientY = event.clientY;
 		const x = ptrX(event);
 		const y = ptrY(event);
 		if (isReordering) {
@@ -786,31 +865,36 @@
 				tooltipManager?.updatePosition(null, null);
 			}
 		} else {
-			pointerBuffer.x = x;
-			pointerBuffer.y = y;
+			const overBrush = !!(event.target as Element)?.closest?.('.brush-overlay');
+			updateHover(x, y, overBrush);
+		}
+	}
 
-			if (layout.isWithinInnerBounds(pointerBuffer)) {
-				const innerPoint = layout.toInnerCoordinates(pointerBuffer);
-				currentInnerX = innerPoint.x;
-				currentInnerY = innerPoint.y;
-				scales.updateCurrentDataPoints(innerPoint, layout.innerWidth, layout.innerHeight);
-				// Suppress tooltip over brush overlays — crosshair/margin labels stay active
-				const overBrush = (event.target as Element)?.closest?.('.brush-overlay');
-				if (overBrush) {
-					tooltipManager?.updatePosition(null, null);
-				} else {
-					tooltipManager?.updatePointerScreen(x, y);
-					tooltipManager?.updatePosition(
-						scales.xScaleState?.currentDataPoint,
-						scales.yScaleState?.currentDataPoint
-					);
-				}
-			} else {
-				currentInnerX = null;
-				currentInnerY = null;
-				scales.clearCurrentDataPoints();
+	/** Crosshair, hover points and tooltip for the pointer at an SVG-root position. */
+	function updateHover(x: number, y: number, overBrush: boolean): void {
+		pointerBuffer.x = x;
+		pointerBuffer.y = y;
+
+		if (layout.isWithinInnerBounds(pointerBuffer)) {
+			const innerPoint = layout.toInnerCoordinates(pointerBuffer);
+			currentInnerX = innerPoint.x;
+			currentInnerY = innerPoint.y;
+			scales.updateCurrentDataPoints(innerPoint, layout.innerWidth, layout.innerHeight);
+			// Suppress tooltip over brush overlays — crosshair/margin labels stay active
+			if (overBrush) {
 				tooltipManager?.updatePosition(null, null);
+			} else {
+				tooltipManager?.updatePointerScreen(x, y);
+				tooltipManager?.updatePosition(
+					scales.xScaleState?.currentDataPoint,
+					scales.yScaleState?.currentDataPoint
+				);
 			}
+		} else {
+			currentInnerX = null;
+			currentInnerY = null;
+			scales.clearCurrentDataPoints();
+			tooltipManager?.updatePosition(null, null);
 		}
 	}
 
@@ -928,6 +1012,8 @@
 	const cellReady = $derived(layout.isReady);
 </script>
 
+<svelte:window onscrollcapture={markOriginStale} onresize={markOriginStale} />
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="chart-cell"
@@ -968,6 +1054,8 @@
 				width={layout.width}
 				height={layout.height}
 				onwheel={handleWheel}
+				onpointerenter={handleSvgPointerEnter}
+				onpointerleave={handleSvgPointerLeave}
 				onpointerdown={handlePointerDown}
 				onpointermove={handlePointerMove}
 				onpointerrawupdate={handlePointerRawUpdate}
