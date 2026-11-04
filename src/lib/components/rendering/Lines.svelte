@@ -3,6 +3,7 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
+	import { NAN_WGSL } from '$lib/gpu/NanShaderLib';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 	import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -156,9 +157,7 @@
   @group(1) @binding(3) var<storage, read> colorValues: array<f32>;
   {{FACET_BINDING}}
 
-  fn isNaN(v: f32) -> bool {
-    return v != v;
-  }
+  ${NAN_WGSL}
 
   const DISCARD_POS = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 

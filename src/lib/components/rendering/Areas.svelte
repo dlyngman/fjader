@@ -3,6 +3,7 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
+	import { NAN_WGSL } from '$lib/gpu/NanShaderLib';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 
@@ -159,9 +160,7 @@
   @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
   {{FACET_BINDING}}
 
-  fn isNaN(v: f32) -> bool {
-    return v != v;
-  }
+  ${NAN_WGSL}
 
   // Map (dimension, boundary) to (x, y) based on orientation
   fn makePoint(dimVal: f32, boundaryVal: f32) -> vec2<f32> {

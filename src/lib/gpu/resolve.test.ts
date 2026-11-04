@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { resolveReference, RESOLVE_SHADER } from './ResolveShader';
+import { isNanExpr } from './NanShaderLib';
 
 /**
  * The resolve formula, shared by morphing channels and slot tables.
@@ -80,9 +81,8 @@ describe('resolveReference', () => {
 
 	it('the shader computes the same expression from the same inputs', () => {
 		// Not a substitute for running it — it cannot be, without a device. It
-		// catches the two ways these drift in practice: the NaN test being
-		// dropped from one side, and the arguments to mix being swapped.
-		expect(RESOLVE_SHADER).toContain('a == b || a != a || b != b');
+		// &		// dropped from one side, and the arguments to mix being swapped.
+		expect(RESOLVE_SHADER).toContain(`a == b || ${isNanExpr('a')} || ${isNanExpr('b')}`);
 		expect(RESOLVE_SHADER).toContain('select(mix(a, b, params.t), b, takeTo)');
 		expect(RESOLVE_SHADER).toContain('gid.x >= params.count');
 		expect(RESOLVE_SHADER).toContain('let j = params.offset + gid.x');
