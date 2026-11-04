@@ -638,7 +638,20 @@
 		paletteOpen = !paletteOpen;
 	}
 
+	/** Whether a key event's target takes text: an input, a textarea, or contenteditable. */
+	function isEditable(target: EventTarget | null): boolean {
+		const el = target as HTMLElement | null;
+		return !!el && (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA');
+	}
+
 	function handleKeyDown(event: KeyboardEvent) {
+		// Space over a chart is the brushes' pan key, so it must not scroll the
+		// page, which is what the browser does with Space on the focused cell.
+		// Only while the pointer is inside: the cell keeps focus after it leaves.
+		// Not in a text field, such as the command palette's input.
+		if (event.code === 'Space' && pointerInside && !isEditable(event.target)) {
+			event.preventDefault();
+		}
 		if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
 			event.preventDefault();
 			paletteOpen = !paletteOpen;
