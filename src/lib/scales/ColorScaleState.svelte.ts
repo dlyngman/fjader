@@ -26,7 +26,6 @@ import {
 	NO_SLOT_TABLE
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
-import { DEFAULT_INACTIVE_OPACITY } from './ActivityTable';
 import type { ActivitySource } from '$lib/gpu/identity-slot-packing';
 import { ScaleSelection } from './ScaleSelection.svelte';
 
@@ -874,11 +873,7 @@ export class ColorScaleState {
 	 * the entry is simply selected or not.
 	 */
 	categoryOpacity(value: string | number): number {
-		if (this.hasIdentity) {
-			const id = this.#identity!.ids.get(value as never);
-			if (id !== undefined) return this.#selection.opacityOf(id);
-		}
-		return this.#selection.isSelected(value) ? 1 : DEFAULT_INACTIVE_OPACITY;
+		return this.#selection.opacityOfValue(value);
 	}
 
 	// ============================================================

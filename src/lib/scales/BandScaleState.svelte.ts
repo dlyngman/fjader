@@ -856,10 +856,8 @@ export class BandScaleState {
 		const slot = this.#slots.slotOf(key);
 		const n = this.getConfig().categoryCount;
 		const inside = Math.min(1, Math.max(0, (n - 0.5 - slot) * 2), Math.max(0, (slot + 0.5) * 2));
-		// The selection fade, on the same clock and mapping as the bars. Without
-		// identity the key is a position, not an id, and there is no table.
-		const selected = this.hasIdentity ? this.#selection.opacityOf(key) : 1;
-		return this.#slots.alphaOf(key) * inside * selected;
+		// The selection fade, on the same clock and mapping as the bars.
+		return this.#slots.alphaOf(key) * inside * this.#selection.opacityOf(key);
 	}
 
 	/**

@@ -75,19 +75,28 @@ export class ScaleSelection<V> {
 		if (this.#values) this.#apply(this.#values);
 	}
 
-	/** How visible one category id is now. Per frame while a fade runs, O(1). */
+	/**
+	 * How visible one category id is now. Per frame while a fade runs, O(1).
+	 * Fully visible for a scale without identity, whose keys are not ids.
+	 */
 	opacityOf(id: number, inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY): number {
+		if (!this.#ready()) return 1;
 		void this.#frame;
 		return selectionOpacity(this.table.activityOf(id), inactiveOpacity);
 	}
 
 	/**
-	 * Whether a value is selected, from the values alone: for a scale without
-	 * identity, which has no table to fade.
+	 * How visible one category is now, by value: its fade when the value has an
+	 * id, and otherwise simply selected or not, from the values alone (a scale
+	 * without identity yet has no table to fade).
 	 */
-	isSelected(value: V): boolean {
+	opacityOfValue(value: V, inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY): number {
+		if (this.#ready()) {
+			const id = this.#idOf(value);
+			if (id != null) return this.opacityOf(id, inactiveOpacity);
+		}
 		const values = this.#values;
-		return values == null || values.has(value);
+		return values == null || values.has(value) ? 1 : inactiveOpacity;
 	}
 
 	/** Leave the animation loop, for a scale being torn down. */
