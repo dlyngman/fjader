@@ -129,6 +129,12 @@ export class FilterGroup {
 	#sources = new Map<string, Set<SourceOpts>>();
 	// Track which scales we projected to, so we can clear them
 	#projectedScales = new Set<ActiveValueScale>();
+	/**
+	 * Sources some registration projects onto scales (toggles, legends). Only a
+	 * change to one of these can change what is dimmed, so a brush, which
+	 * writes on every pointer move, never rebuilds the projection.
+	 */
+	#projectingSources = new Set<string>();
 
 	/** Active filter items with schema metadata, for UI consumption. */
 	get items(): FilterItem[] {
@@ -177,6 +183,7 @@ export class FilterGroup {
 			this.#sources.set(sourceId, registrations);
 		}
 		registrations.add(opts);
+		if (opts.projection) this.#projectingSources.add(sourceId);
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
@@ -185,7 +192,7 @@ export class FilterGroup {
 					excludeMarkIds: opts.excludeMarkIds(),
 					value
 				});
-				this.#afterUpdate();
+				this.#afterUpdate(sourceId);
 			},
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
@@ -194,7 +201,9 @@ export class FilterGroup {
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
 				this.#engine?.forgetSource(this, sourceId);
+				// Still projecting while it clears, so its scales are un-dimmed.
 				this.clearSource(sourceId);
+				this.#projectingSources.delete(sourceId);
 			}
 		};
 	}
@@ -341,12 +350,12 @@ export class FilterGroup {
 			value,
 			schema
 		});
-		this.#afterUpdate();
+		this.#afterUpdate(`manual:${key}`);
 	}
 
 	removeManual(key: string): void {
 		this.selection.update(`manual:${key}`, null);
-		this.#afterUpdate();
+		this.#afterUpdate(`manual:${key}`);
 	}
 
 	// -----------------------------------------------------------------
@@ -360,7 +369,7 @@ export class FilterGroup {
 	clearSource(sourceId: string): void {
 		if (!this.selection.isActive(sourceId)) return;
 		this.selection.update(sourceId, null);
-		this.#afterUpdate();
+		this.#afterUpdate(sourceId);
 	}
 
 	clearAll(): void {
@@ -374,11 +383,13 @@ export class FilterGroup {
 	// -----------------------------------------------------------------
 
 	/**
-	 * After any filter update: project to scales (visual dimming) and notify
-	 * the engine to re-query affected marks.
+	 * After a filter update to `sourceId`: re-project to scales (visual
+	 * dimming) if that source dims anything, and notify the engine to re-query
+	 * affected marks. A brush move skips the projection, which would rebuild the
+	 * same answer and allocate doing it on every pointer move.
 	 */
-	#afterUpdate(): void {
-		this.#projectToScales();
+	#afterUpdate(sourceId: string): void {
+		if (this.#projectingSources.has(sourceId)) this.#projectToScales();
 		this.#engine?.onFilterChange(this);
 	}
 
