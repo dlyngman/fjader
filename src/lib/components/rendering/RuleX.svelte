@@ -173,7 +173,11 @@
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
-      output.alpha = alpha;
+      output.alpha = alpha * selectionDim(
+        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue) *
+          bandActivityX(x) *
+          ${hasExtent ? 'bandActivityY(y0)' : '1.0'}
+      );
       return output;
     }
 

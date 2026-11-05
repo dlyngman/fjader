@@ -1700,16 +1700,6 @@ describe('BandScaleState tick placement', () => {
 		expect(scale.tickPosition(0, 300, 'y')).toBeCloseTo(centreY, 6);
 		expect(centreY).not.toBeCloseTo(centreX, 0);
 	});
-
-	it('dims a tick outside the selection, and none without one', () => {
-		const scale = scaleOf(['a', 'b']);
-		const [a, b] = scale.bandTicks();
-		expect(scale.isTickDimmed(a) || scale.isTickDimmed(b)).toBe(false);
-
-		scale.setActiveValues(['a']);
-		expect(scale.isTickDimmed(a)).toBe(false);
-		expect(scale.isTickDimmed(b)).toBe(true);
-	});
 });
 
 describe('BandScaleState pointer inversion', () => {

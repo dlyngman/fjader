@@ -7,8 +7,8 @@ import { isNanExpr } from './NanShaderLib';
  * are bound to the compute pipeline; the render stages bind `resolved` alone.
  * So an animated channel REPLACES a vertex binding rather than adding one, and
  * animating any number of channels leaves that stage's budget where it was —
- * which is what makes this affordable on a mark that already sits at the
- * default limit of 8.
+ * which is what makes this affordable on a mark that already uses 7 of the
+ * default 8 storage buffers (Rects).
  *
  * ONE KERNEL FOR BOTH, because the two differ only in where a range starts. A
  * value channel is one mark's rows in buffers of their own, so it starts at 0.

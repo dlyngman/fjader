@@ -196,7 +196,9 @@
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
-      output.alpha = markConstants.globalAlpha;
+      output.alpha = markConstants.globalAlpha * selectionDim(
+        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx])
+      );
       output.circleUV = quadPosition;
       output.circleRadius = circleR;
       return output;
@@ -291,7 +293,9 @@
     var output: VertexOutput;
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
-    output.alpha = markConstants.globalAlpha;
+    output.alpha = markConstants.globalAlpha * selectionDim(
+      markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx])
+    );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
     return output;

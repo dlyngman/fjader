@@ -19,11 +19,19 @@
  * what it should have been.
  *
  * Layout: index 0 is a permanent zero-length block, then one block per scale of
- * `[count, slot0, slot1, ...]`. The count header makes each block
- * self-describing, so the shader rejects an id past this scale's end instead of
- * reading into the next scale's slots — ids and the slot table can disagree
- * transiently while a dim appends. Budget is therefore
- * `capacity - 1 - (1 per scale)` slots.
+ * `[count, slot0 … slot(count-1), act0 … act(count-1)]`. The count header makes
+ * each block self-describing, so the shader rejects an id past this scale's end
+ * instead of reading into the next scale's slots — ids and the slot table can
+ * disagree transiently while a dim appends — and it is also how the shader finds
+ * the activity half, at `base + 1 + count`, with no second base to store.
+ *
+ * The ACTIVITY half says how selected each id is (1 active, 0 inactive; see
+ * ActivityTable). It is always allocated, all 1 for a scale without a table, so
+ * every block has the same shape and an activity read never lands in the next
+ * block. Each half has its own version and its own `t`: a click rewrites and
+ * resolves only the activity half, a reorder only the slot half, as long as
+ * `count` is unchanged. The activity half starts after the slots, so a change of
+ * `count` moves it and rewrites it too.
  *
  * TWO buffers share one set of offsets: `from` is where each id's current
  * transition started and `to` where it is going, and the resolve kernel writes
@@ -31,9 +39,10 @@
  * bindings rather than two runs in one buffer, so the halves line up at the
  * same base and one dispatch per block covers both.
  *
- * `t` is not in the buffers. It is PER SCALE — each band scale has its own
- * driver — and reaches the kernel as an immediate on that scale's dispatch, so
- * a frame where only `t` moved uploads nothing at all.
+ * `t` is not in the buffers. It is PER HALF of each scale — the slots have the
+ * scale's data clock and the activity its selection clock — and reaches the
+ * kernel as an immediate on that half's dispatch, so a frame where only `t`
+ * moved uploads nothing at all.
  */
 
 /**
@@ -45,6 +54,10 @@
  * number is left over from when they were 64 KB uniforms, and making the
  * allocation grow on demand (recreate the buffers, rebuild the bind groups) is
  * what would retire it.
+ *
+ * Each scale takes `1 + 2 · count`: a header, the slots and the activity half.
+ * Category counts are usually tens to hundreds, so the doubling for the
+ * activity half is accepted rather than worked around.
  */
 export const IDENTITY_SLOT_CAPACITY = 16384;
 
@@ -77,19 +90,43 @@ export interface SlotSource {
 	readonly version: number;
 }
 
-/** A scale with a slot table, as the packer needs it. */
-export interface IdentitySlotScale {
-	id: string;
-	slots: SlotSource;
+/**
+ * One scale's activity as the packer reads it: 1 active, 0 inactive, as the two
+ * ends of a fade. ActivityTable has this shape.
+ *
+ * Its length is not trusted: the packer takes `count` from the slots and pads
+ * with 1 or truncates, so a moment where the two disagree (a dim append reaching
+ * one before the other) cannot shift the activity half onto the wrong ids.
+ */
+export interface ActivitySource {
+	readonly from: Float32Array;
+	readonly to: Float32Array;
+	/** 0 -> from, 1 -> to. Its own clock, not the slots'. */
+	readonly t: number;
+	/** Bumped whenever `from` or `to` change. */
+	readonly version: number;
 }
 
 /**
- * One block to resolve this frame: `length` floats from `base`, at `t`.
+ * A scale with a slot table, as the packer needs it: its slots and, beside
+ * them, its selection fade for the block's activity half. Absent for a scale
+ * without a selection table, whose activity half is then all 1.
+ */
+export interface IdentitySlotScale {
+	id: string;
+	slots: SlotSource;
+	activity?: ActivitySource | null;
+}
+
+/**
+ * One range to resolve this frame: `length` floats from `base`, at `t`. A
+ * scale's slot half and activity half are separate ranges, since each has its
+ * own `t`.
  *
- * The count header is inside the range rather than skipped: it holds the same
- * value in both halves, so mixing it returns it, and the render stages read
- * their bound from the resolved copy. Pooled in the state and overwritten by
- * the next pack.
+ * The count header is inside the slot range rather than skipped: it holds the
+ * same value in both buffers, so mixing it returns it, and the render stages
+ * read their bound from the resolved copy. Pooled in the state and overwritten
+ * by the next pack.
  */
 export interface ResolveBlock {
 	base: number;
@@ -124,13 +161,30 @@ export interface IdentitySlotState {
 	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
 	versions: Map<string, number>;
 	/**
-	 * The `t` each scale's block was last resolved at, so a still frame
-	 * dispatches nothing and an animating one dispatches only the scales that
-	 * are moving.
+	 * The `t` each scale's halves were last resolved at, `[slots, activity]`, so a
+	 * still frame dispatches nothing and an animating one dispatches only the
+	 * halves that are moving.
+	 *
+	 * A typed array per scale, created once, rather than a `Map<string, number>`:
+	 * a fractional `t` stored as a Map value is boxed, which allocated on every
+	 * frame of every transition.
 	 */
-	resolvedT: Map<string, number>;
-	/** Scratch for the eviction sweep; cleared, not reallocated, per pack. */
-	seen: Set<string>;
+	resolvedT: Map<string, Float64Array>;
+	/** Last packed activity version per scale; -1 for a scale without a table. */
+	activityVersions: Map<string, number>;
+	/** Last packed count per scale: a change moves the activity half. */
+	counts: Map<string, number>;
+	/**
+	 * The pass each scale was last seen in, for the eviction sweep.
+	 *
+	 * A pass counter rather than a Set cleared every pack: clearing a Set
+	 * allocates a new table in V8, which made every frame allocate ~370 bytes
+	 * (measured, 20 scales) even when nothing moved. Re-setting an existing key
+	 * to a small integer allocates nothing.
+	 */
+	seenPass: Map<string, number>;
+	/** The current pass, a small integer that wraps. */
+	pass: number;
 	/** Returned by every pack and overwritten by the next — read it immediately. */
 	result: PackResult;
 }
@@ -152,18 +206,27 @@ export function createIdentitySlotState(
 		offsets: new Map(),
 		versions: new Map(),
 		resolvedT: new Map(),
-		seen: new Set(),
+		activityVersions: new Map(),
+		counts: new Map(),
+		seenPass: new Map(),
+		pass: 0,
 		result: { uploadStart: 0, uploadEnd: 0, resolves: [], resolveCount: 0 }
 	};
 }
 
 /**
- * Assign every scale a base, write the blocks that moved, and list what to
+ * Assign every scale a base, write the halves that moved, and list what to
  * upload and what to resolve.
  *
- * A block is REWRITTEN when its base or its version moved, and RESOLVED when it
- * was rewritten or its `t` moved. A parked scale is neither: it has no block,
- * and the empty block it points at is never written.
+ * | Half | Rewritten when | Resolved when |
+ * |---|---|---|
+ * | Slots | base or slot version changed | rewritten, or slot `t` changed |
+ * | Activity | base, count or activity version changed | rewritten, or activity `t` changed |
+ *
+ * A half that is rewritten must be resolved even when its `t` did not move: the
+ * render stages read the resolved buffer, not these. A parked scale is neither
+ * rewritten nor resolved: it has no block, and the empty block it points at is
+ * never written.
  *
  * Offsets are recomputed on every call because a scale appearing or
  * disappearing shifts every scale after it. That is a running sum over a
@@ -175,6 +238,7 @@ export function packIdentitySlots(
 	state: IdentitySlotState
 ): PackResult {
 	const { buffer, bufferTo, offsets, versions, resolvedT, result } = state;
+	const { activityVersions, counts, seenPass } = state;
 	const capacity = buffer.length;
 	const resolves = result.resolves;
 
@@ -183,66 +247,116 @@ export function packIdentitySlots(
 	let uploadStart = capacity;
 	let uploadEnd = 0;
 	let resolveCount = 0;
-	// Runs every frame: the scratch set and the result are the state's own.
-	const seen = state.seen;
-	seen.clear();
+	// Runs every frame, so nothing here may allocate on a frame where no scale
+	// appeared: the pass stamp replaces a Set cleared every pack. Kept a small
+	// integer (a Smi) so storing it never boxes.
+	const pass = (state.pass = state.pass >= 0x3fffffff ? 1 : state.pass + 1);
+	let seenCount = 0;
 
 	for (let i = 0; i < scales.length; i++) {
 		const scale = scales[i];
-		seen.add(scale.id);
+		if (seenPass.get(scale.id) !== pass) {
+			seenPass.set(scale.id, pass);
+			seenCount++;
+		}
 
 		const slots = scale.slots;
-		// One extra float for the block's count header.
-		const need = slots.count + 1;
+		const count = slots.count;
+		const activity = scale.activity ?? null;
+		// A header, the slots, and the activity half.
+		const need = 1 + 2 * count;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
+		const activityBase = base + 1 + count;
 
 		const version = slots.version;
-		let rewritten = false;
-		if (offsets.get(scale.id) !== base || versions.get(scale.id) !== version) {
+		const activityVersion = activity ? activity.version : -1;
+		const baseMoved = offsets.get(scale.id) !== base;
+		const slotsDirty = baseMoved || versions.get(scale.id) !== version;
+		const activityDirty =
+			baseMoved ||
+			counts.get(scale.id) !== count ||
+			activityVersions.get(scale.id) !== activityVersion;
+
+		let slotsRewritten = false;
+		let activityRewritten = false;
+		if (slotsDirty || activityDirty) {
 			if (fits) {
-				buffer[base] = slots.count;
-				buffer.set(slots.from, base + 1);
-				bufferTo[base] = slots.count;
-				bufferTo.set(slots.to, base + 1);
-				if (base < uploadStart) uploadStart = base;
-				if (base + need > uploadEnd) uploadEnd = base + need;
-				rewritten = true;
-			} else {
+				if (slotsDirty) {
+					buffer[base] = count;
+					buffer.set(slots.from, base + 1);
+					bufferTo[base] = count;
+					bufferTo.set(slots.to, base + 1);
+					if (base < uploadStart) uploadStart = base;
+					if (activityBase > uploadEnd) uploadEnd = activityBase;
+					slotsRewritten = true;
+				}
+				if (activityDirty) {
+					writeActivity(buffer, bufferTo, activityBase, count, activity);
+					if (activityBase < uploadStart) uploadStart = activityBase;
+					if (base + need > uploadEnd) uploadEnd = base + need;
+					activityRewritten = true;
+				}
+			} else if (slotsDirty) {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
-					`[GPUCoordinator] Band slot capacity (${capacity}) exhausted; ` +
-						`scale "${scale.id}" (${slots.count} ids) will not render.`
+					`[GPUCoordinator] Identity slot capacity (${capacity}) exhausted; ` +
+						`scale "${scale.id}" (${count} ids) will not render.`
 				);
 			}
 			offsets.set(scale.id, base);
 			versions.set(scale.id, version);
+			counts.set(scale.id, count);
+			activityVersions.set(scale.id, activityVersion);
 		}
 		// No break: a later scale with a smaller table may still fit, and one
 		// that does not is parked on the empty block rather than left holding a
 		// base that now belongs to someone else.
 
 		if (!fits) continue;
+
+		// Created once per scale; NaN so the first comparison always differs.
+		let lastT = resolvedT.get(scale.id);
+		if (!lastT) {
+			lastT = new Float64Array(2).fill(NaN);
+			resolvedT.set(scale.id, lastT);
+		}
+
 		const t = slots.t;
-		if (!rewritten && resolvedT.get(scale.id) === t) continue;
-		resolvedT.set(scale.id, t);
-		const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
-		block.base = base;
-		block.length = need;
-		block.t = t;
+		if (slotsRewritten || lastT[0] !== t) {
+			lastT[0] = t;
+			const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
+			block.base = base;
+			block.length = 1 + count;
+			block.t = t;
+		}
+
+		// An empty activity half has nothing to resolve.
+		const at = activity ? activity.t : 1;
+		if (count > 0 && (activityRewritten || lastT[1] !== at)) {
+			lastT[1] = at;
+			const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
+			block.base = activityBase;
+			block.length = count;
+			block.t = at;
+		}
 	}
 
 	// Drop entries for scales that have gone away, so a re-registered id cannot
-	// inherit a base from a previous life. `offsets` is a superset of `seen` by
-	// construction — every scale above is written — so comparing sizes is a
-	// sound test for set equality and not just a cheap approximation of one.
-	if (offsets.size !== seen.size) {
+	// inherit a base from a previous life. `offsets` is a superset of this pass's
+	// scales by construction — every scale above is written — so comparing sizes
+	// is a sound test for set equality and not just a cheap approximation of one.
+	// The sweep allocates, but only on a frame where a scale went away.
+	if (offsets.size !== seenCount) {
 		for (const id of [...offsets.keys()]) {
-			if (!seen.has(id)) {
+			if (seenPass.get(id) !== pass) {
 				offsets.delete(id);
 				versions.delete(id);
 				resolvedT.delete(id);
+				activityVersions.delete(id);
+				counts.delete(id);
+				seenPass.delete(id);
 			}
 		}
 	}
@@ -251,4 +365,28 @@ export function packIdentitySlots(
 	result.uploadEnd = uploadEnd;
 	result.resolveCount = resolveCount;
 	return result;
+}
+
+/**
+ * Write a block's activity half: `count` floats from `start`, in both buffers.
+ *
+ * The length comes from the slots, not from the activity arrays: ids past their
+ * end are fully active, and entries past `count` are dropped. A plain loop, so a
+ * rewrite allocates nothing. With no table every id is active.
+ */
+function writeActivity(
+	buffer: Float32Array,
+	bufferTo: Float32Array,
+	start: number,
+	count: number,
+	activity: ActivitySource | null
+): void {
+	const from = activity?.from;
+	const to = activity?.to;
+	const fromLen = from ? from.length : 0;
+	const toLen = to ? to.length : 0;
+	for (let i = 0; i < count; i++) {
+		buffer[start + i] = i < fromLen ? from![i] : 1;
+		bufferTo[start + i] = i < toLen ? to![i] : 1;
+	}
 }

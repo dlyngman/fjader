@@ -8,6 +8,7 @@ import {
 } from './identity-slot-packing';
 import { resolveReference } from './ResolveShader';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
+import { ActivityTable } from '$lib/scales/ActivityTable';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 /** A scale whose slots travel from `from` to `to`, `t` of the way. */
@@ -84,7 +85,8 @@ describe('packIdentitySlots layout', () => {
 		packIdentitySlots([scale('a', [0, 1]), scale('b', [1, 0, 2]), scale('c', [0])], state);
 
 		const [a, b, c] = ['a', 'b', 'c'].map((id) => state.offsets.get(id)!);
-		expect([a, b, c]).toEqual([1, 4, 8]); // 1 + (2+1) = 4, 4 + (3+1) = 8
+		// Header + slots + activity half: 1 + (1+2+2) = 6, 6 + (1+3+3) = 13
+		expect([a, b, c]).toEqual([1, 6, 13]);
 		expect(readBlock(state.buffer, a)).toEqual({ count: 2, slots: [0, 1] });
 		expect(readBlock(state.buffer, b)).toEqual({ count: 3, slots: [1, 0, 2] });
 		expect(readBlock(state.buffer, c)).toEqual({ count: 1, slots: [0] });
@@ -94,11 +96,12 @@ describe('packIdentitySlots layout', () => {
 		// One small scale reordering must not re-upload its neighbours' tables.
 		const state = createIdentitySlotState(64);
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1], 1)], state);
-		// 1 empty + (4+1) + (2+1): the first pack writes both blocks.
-		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([1, 9]);
+		// 1 empty + (1+4+4) + (1+2+2): the first pack writes both blocks.
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([1, 15]);
 
+		// A reorder of b: only its header and slots, not its activity half.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [1, 0], 2)], state);
-		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([6, 9]);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([10, 13]);
 	});
 
 	it('preserves -1 for ids that are not displayed', () => {
@@ -149,9 +152,10 @@ describe('packIdentitySlots transition state', () => {
 	it('counts the header against capacity, not just the slots', () => {
 		// One float of header per block, so a budget that fits the slots alone
 		// may not fit the block.
-		const state = createIdentitySlotState(7);
+		const state = createIdentitySlotState(12);
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		// 1 empty + (4 slots + 1 header) = 6; a 1-id scale needs 2 more, 1 remains.
+		// 1 empty + (1 header + 4 slots + 4 activity) = 10; a 1-id scale needs 3
+		// more, 2 remain.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0])], state);
 		expect(state.offsets.get('a')).toBe(1);
 		expect(state.offsets.get('b')).toBe(IDENTITY_SLOT_EMPTY);
@@ -212,7 +216,7 @@ describe('packIdentitySlots capacity', () => {
 	it('parks a scale that does not fit on the empty block', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const state = createIdentitySlotState(10);
-		// 1 empty + (4+1) = 6 used; the next needs 5 and only 4 remain.
+		// 1 empty + (1+4+4) = 10 used; the next needs 9 and none remain.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 
 		expect(state.offsets.get('a')).toBe(1);
@@ -226,7 +230,7 @@ describe('packIdentitySlots capacity', () => {
 	it('still places a later scale small enough to fit', () => {
 		// The reason the loop does not break on the first scale that overflows.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(12);
+		const state = createIdentitySlotState(13);
 		packIdentitySlots(
 			[scale('a', [0, 1, 2, 3]), scale('huge', new Array(20).fill(0)), scale('c', [0])],
 			state
@@ -234,8 +238,8 @@ describe('packIdentitySlots capacity', () => {
 
 		expect(state.offsets.get('a')).toBe(1);
 		expect(state.offsets.get('huge')).toBe(IDENTITY_SLOT_EMPTY);
-		expect(state.offsets.get('c')).toBe(6);
-		expect(readBlock(state.buffer, 6)).toEqual({ count: 1, slots: [0] });
+		expect(state.offsets.get('c')).toBe(10);
+		expect(readBlock(state.buffer, 10)).toEqual({ count: 1, slots: [0] });
 		warn.mockRestore();
 	});
 
@@ -401,11 +405,13 @@ describe('packIdentitySlots: the resolve list', () => {
 		packIdentitySlots([scale('a', [0, 1, 2]), scale('b', [1, 0])], state);
 
 		const { resolves, resolveCount } = state.result;
-		expect(resolveCount).toBe(2);
-		// count + 3 slots, then count + 2 slots.
-		expect(resolves.slice(0, 2).map((b) => [b.base, b.length])).toEqual([
+		expect(resolveCount).toBe(4);
+		// Per scale: header + slots, then the activity half, each its own range.
+		expect(resolves.slice(0, 4).map((b) => [b.base, b.length])).toEqual([
 			[1, 4],
-			[5, 3]
+			[5, 3],
+			[8, 3],
+			[11, 2]
 		]);
 	});
 
@@ -463,10 +469,11 @@ describe('packIdentitySlots: the resolve list', () => {
 		// It points at the empty block, whose count of 0 is what makes every
 		// lookup discard. Resolving over it would be harmless only by accident.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(8);
+		const state = createIdentitySlotState(10);
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 
-		expect(dispatched(state)).toEqual([1]);
+		// a's slot half at 1 and its activity half at 1 + 1 + 4; nothing for b.
+		expect(dispatched(state)).toEqual([1, 6]);
 		expect(dispatched(state)).not.toContain(IDENTITY_SLOT_EMPTY);
 		warn.mockRestore();
 	});
@@ -515,7 +522,221 @@ describe('resolving the packed blocks', () => {
 		packIdentitySlots([travelling('a', [0, 1], [0, 1], 1)], state);
 		const out = applyResolves(state, new Float32Array(64).fill(999));
 		expect(out[IDENTITY_SLOT_EMPTY]).toBe(999);
-		expect(out[4]).toBe(999);
+		// The block is 1..5 (header, two slots, two activity); 6 is past its end.
+		expect(out[5]).toBe(1);
+		expect(out[6]).toBe(999);
 		expect(out[63]).toBe(999);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The activity half: how selected each id is, after the slots in each block
+// ---------------------------------------------------------------------------
+
+/** `s` with an activity table fading from `from` to `to`, `t` of the way. */
+function withActivity(
+	s: IdentitySlotScale,
+	from: number[],
+	to: number[],
+	t: number,
+	version = 1
+): IdentitySlotScale {
+	return {
+		id: s.id,
+		slots: s.slots,
+		activity: { from: Float32Array.from(from), to: Float32Array.from(to), t, version }
+	};
+}
+
+/** A block's activity half, read the way the shader finds it: after `count` slots. */
+function readActivity(buffer: Float32Array, base: number): number[] {
+	const count = buffer[base];
+	return Array.from(buffer.slice(base + 1 + count, base + 1 + 2 * count));
+}
+
+/** identityActivity(base, id) from the shader, in TypeScript, over a resolved buffer. */
+function identityActivity(resolved: Float32Array, base: number, id: number): number {
+	const count = resolved[base];
+	if (id >= count) return 1;
+	return resolved[base + 1 + count + id];
+}
+
+describe('packIdentitySlots: the activity half', () => {
+	it('is all 1 for a scale without a table, so every id is active', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([scale('a', [2, 0, 1])], state);
+		const base = state.offsets.get('a')!;
+		expect(readActivity(state.buffer, base)).toEqual([1, 1, 1]);
+		expect(readActivity(state.bufferTo, base)).toEqual([1, 1, 1]);
+	});
+
+	it('writes from and to after the slots, leaving the slots alone', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([withActivity(scale('a', [2, 0, 1]), [1, 1, 1], [0, 1, 0], 0)], state);
+		const base = state.offsets.get('a')!;
+		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 0, 1] });
+		expect(readActivity(state.buffer, base)).toEqual([1, 1, 1]);
+		expect(readActivity(state.bufferTo, base)).toEqual([0, 1, 0]);
+	});
+
+	it('answers 1 for an id past the end, and for a parked scale', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([withActivity(scale('a', [0, 1]), [0, 0], [0, 0], 1)], state);
+		const out = applyResolves(state, new Float32Array(64));
+		const base = state.offsets.get('a')!;
+		expect(identityActivity(out, base, 1)).toBe(0);
+		expect(identityActivity(out, base, 2)).toBe(1);
+		expect(identityActivity(out, IDENTITY_SLOT_EMPTY, 0)).toBe(1);
+	});
+
+	it('rewrites and resolves only the activity half on a click', () => {
+		const state = createIdentitySlotState(64);
+		const a = scale('a', [0, 1, 2, 3]);
+		packIdentitySlots([withActivity(a, [1, 1, 1, 1], [1, 1, 1, 1], 1, 1)], state);
+		const base = state.offsets.get('a')!;
+		const activityBase = base + 1 + 4;
+
+		packIdentitySlots([withActivity(a, [1, 1, 1, 1], [0, 1, 0, 0], 0, 2)], state);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([
+			activityBase,
+			activityBase + 4
+		]);
+		expect(dispatched(state)).toEqual([activityBase]);
+	});
+
+	it('rewrites and resolves only the slot half on a reorder', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([withActivity(scale('a', [0, 1, 2], 1), [1, 0, 1], [1, 0, 1], 1)], state);
+		const base = state.offsets.get('a')!;
+
+		packIdentitySlots([withActivity(scale('a', [2, 1, 0], 2), [1, 0, 1], [1, 0, 1], 1)], state);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([base, base + 4]);
+		expect(dispatched(state)).toEqual([base]);
+	});
+
+	it('dispatches only the activity half while only its t moves, uploading nothing', () => {
+		const state = createIdentitySlotState(64);
+		const a = scale('a', [0, 1]);
+		packIdentitySlots([withActivity(a, [1, 1], [0, 1], 0.25)], state);
+
+		packIdentitySlots([withActivity(a, [1, 1], [0, 1], 0.5)], state);
+		expect(state.result.uploadEnd).toBe(0);
+		expect(dispatched(state)).toEqual([state.offsets.get('a')! + 1 + 2]);
+		expect(state.result.resolves[0].t).toBe(0.5);
+	});
+
+	it('resolves a rewritten half even when its t did not move', () => {
+		// The render stages read the resolved buffer. A new table at the same t
+		// left unresolved would keep drawing the old one.
+		const state = createIdentitySlotState(64);
+		const a = scale('a', [0, 1]);
+		const resolved = new Float32Array(64);
+		packIdentitySlots([withActivity(a, [1, 1], [1, 1], 1, 1)], state);
+		applyResolves(state, resolved);
+
+		packIdentitySlots([withActivity(a, [0, 1], [0, 1], 1, 2)], state);
+		applyResolves(state, resolved);
+		expect(identityActivity(resolved, state.offsets.get('a')!, 0)).toBe(0);
+	});
+
+	it('moves and rewrites the activity half when count changes, though its version did not', () => {
+		// A dim append grows the slots. The activity half starts after them, so it
+		// moves; a version check alone would leave it where the old count put it.
+		const state = createIdentitySlotState(64);
+		const resolved = new Float32Array(64);
+		packIdentitySlots([withActivity(scale('a', [0, 1], 1), [0, 1], [0, 1], 1, 5)], state);
+		applyResolves(state, resolved);
+
+		packIdentitySlots([withActivity(scale('a', [0, 1, 2], 2), [0, 1], [0, 1], 1, 5)], state);
+		applyResolves(state, resolved);
+		const base = state.offsets.get('a')!;
+		expect(readActivity(state.buffer, base)).toEqual([0, 1, 1]);
+		expect([0, 1, 2].map((id) => identityActivity(resolved, base, id))).toEqual([0, 1, 1]);
+	});
+
+	it('takes its length from the slots: pads a short table with 1, drops a long one', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots(
+			[
+				withActivity(scale('short', [0, 1, 2]), [0], [0], 1),
+				withActivity(scale('long', [0, 1]), [0, 0, 0, 0], [0, 0, 0, 0], 1),
+				scale('next', [0])
+			],
+			state
+		);
+		expect(readActivity(state.buffer, state.offsets.get('short')!)).toEqual([0, 1, 1]);
+		expect(readActivity(state.buffer, state.offsets.get('long')!)).toEqual([0, 0]);
+		// The long table's extra entries did not spill into the next block.
+		expect(readBlock(state.buffer, state.offsets.get('next')!)).toEqual({
+			count: 1,
+			slots: [0]
+		});
+	});
+
+	it('resolves each half at its own t', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([withActivity(travelling('a', [0], [10], 0.5), [1], [0], 0.25)], state);
+		const out = applyResolves(state, new Float32Array(64));
+		const base = state.offsets.get('a')!;
+		expect(out[base + 1]).toBeCloseTo(5, 5);
+		expect(identityActivity(out, base, 0)).toBeCloseTo(0.75, 5);
+	});
+
+	it('agrees with ActivityTable about every id, mid-fade', () => {
+		// JS answers activityOf as mix(from, to, t); the resolve computes the same
+		// from the same numbers. If they drift, labels and bars dim differently.
+		const table = new ActivityTable(
+			{ addAnimatedSource: () => {}, removeAnimatedSource: () => {} },
+			{ charts: () => [] }
+		);
+		table.resize(3);
+		table.setActive([1]);
+		for (let i = 0; i < 15; i++) {
+			table.clock.step();
+			table.clock.updateRenderState(0);
+		}
+
+		const state = createIdentitySlotState(64);
+		const s = scale('a', [0, 1, 2]);
+		packIdentitySlots([{ id: 'a', slots: s.slots, activity: table }], state);
+		const out = applyResolves(state, new Float32Array(64));
+		const base = state.offsets.get('a')!;
+		for (let id = 0; id < 3; id++) {
+			expect(identityActivity(out, base, id)).toBeCloseTo(table.activityOf(id), 5);
+		}
+		expect(table.activityOf(0)).toBeGreaterThan(0);
+		expect(table.activityOf(0)).toBeLessThan(1);
+	});
+
+	it('forgets the activity state of a scale that has gone away', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([scale('a', [0]), withActivity(scale('b', [0]), [0], [0], 1)], state);
+		packIdentitySlots([scale('a', [0])], state);
+		expect(state.activityVersions.has('b')).toBe(false);
+		expect(state.counts.has('b')).toBe(false);
+		expect(state.resolvedT.has('b')).toBe(false);
+		expect(state.seenPass.has('b')).toBe(false);
+	});
+
+	it('evicts correctly across many passes, with the pass stamp rather than a cleared set', () => {
+		// The stamp must mark exactly this pass's scales, every pass: a scale seen
+		// in an earlier pass and not this one is gone.
+		const state = createIdentitySlotState(64);
+		for (let i = 0; i < 50; i++) packIdentitySlots([scale('a', [0]), scale('b', [0])], state);
+		packIdentitySlots([scale('b', [0])], state);
+		expect([...state.offsets.keys()]).toEqual(['b']);
+		for (let i = 0; i < 50; i++) packIdentitySlots([scale('b', [0])], state);
+		expect([...state.offsets.keys()]).toEqual(['b']);
+	});
+
+	it('wraps the pass counter without forgetting a live scale', () => {
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([scale('a', [0])], state);
+		state.pass = 0x3fffffff;
+		packIdentitySlots([scale('a', [0])], state);
+		expect(state.pass).toBe(1);
+		expect(state.offsets.has('a')).toBe(true);
+		packIdentitySlots([scale('a', [0])], state);
+		expect(state.offsets.has('a')).toBe(true);
 	});
 });

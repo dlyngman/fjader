@@ -10,6 +10,7 @@ import { ColorScaleState } from './ColorScaleState.svelte';
 import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { MAX_COLOR_SLOTS } from '$lib/gpu/ColorScaleShaderLib';
 import type { ColorScaleType } from '$lib/types';
 import { isTransformType } from './color-utils';
 
@@ -74,7 +75,8 @@ export class ScaleRegistry {
 	#nextRampSlot = 0;
 	#nextPaletteSlot = 0;
 
-	#maxColorSlots = 64;
+	// The shader's array length and the coordinator's buffer size, stated once.
+	#maxColorSlots = MAX_COLOR_SLOTS;
 	#maxRampSlots = 64;
 	#maxPaletteSlots = 64;
 

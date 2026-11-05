@@ -1,6 +1,10 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
-import { scaleTemplateSystem, CHART_SCALE_IMMEDIATE_SIZE } from './ScaleTemplateSystem';
+import {
+	scaleTemplateSystem,
+	CHART_SCALE_IMMEDIATE_SIZE,
+	CHART_DIM_STRENGTH_INDEX
+} from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
@@ -13,11 +17,18 @@ import {
 	packIdentitySlots,
 	type IdentitySlotScale,
 	type SlotSource,
+	type ActivitySource,
 	type IdentitySlotState
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
 import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
-import { COLOR_CONFIG_BYTES, COLOR_CONFIG_SLOT_BASE_OFFSET } from './ColorScaleShaderLib';
+import {
+	COLOR_CONFIG_BYTES,
+	COLOR_CONFIG_SLOT_BASE_OFFSET,
+	MAX_COLOR_SLOTS
+} from './ColorScaleShaderLib';
+import { trackScalesById } from './tracked-scales';
+import { DEFAULT_INACTIVE_OPACITY } from '$lib/scales/ActivityTable';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -60,7 +71,16 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
+	/**
+	 * How strongly inactive categories dim in this chart: 0 = off, otherwise
+	 * 1 - inactiveOpacity. Pushed with the chart's scales every pass, so a
+	 * change reaches the GPU on the next frame drawn.
+	 */
+	dimStrength: number;
 }
+
+/** Default dim strength: inactive categories at DEFAULT_INACTIVE_OPACITY. */
+const DEFAULT_DIM_STRENGTH = 1 - DEFAULT_INACTIVE_OPACITY;
 
 interface LayerConfig {
 	id: string;
@@ -429,7 +449,7 @@ export class GPUCoordinator {
 	#maxSizeSlots = MAX_SIZE_SLOTS;
 
 	// Constants
-	#maxColorSlots = 64;
+	#maxColorSlots = MAX_COLOR_SLOTS;
 	#rampColorsPerSlot = COLOR_RAMP_RESOLUTION;
 	#paletteColorsPerSlot = 32;
 
@@ -626,10 +646,17 @@ export class GPUCoordinator {
 			label: 'scale-resources-layout',
 			entries: [
 				{
-					// Binding 1: Color scale configs (fragment only)
+					// Binding 1: Color scale configs.
+					//
+					// Uniform, and visible to the VERTEX stage as well: selection
+					// dimming reads a colour scale's slotBase per vertex. As storage
+					// it would take the last of the vertex stage's default 8 storage
+					// buffers on Rects, which uses 7; as a uniform it counts against
+					// the separate uniform limit and leaves that slot free. Same move
+					// as binding 4.
 					binding: 1,
-					visibility: GPUShaderStage.FRAGMENT, // ← Changed
-					buffer: { type: 'read-only-storage' }
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: { type: 'uniform' }
 				},
 				{
 					// Binding 2: Color ramps (fragment only)
@@ -663,8 +690,9 @@ export class GPUCoordinator {
 					// buffer and do no interpolation.
 					//
 					// Storage, where it used to be two uniforms. It costs the vertex
-					// stage one binding where the pair cost none — Rects lands at 8 of
-					// 8, the default maxStorageBuffersPerShaderStage — and in exchange
+					// stage one binding where the pair cost none — Rects lands at 7 of
+					// the default maxStorageBuffersPerShaderStage of 8, its six channels
+					// and this — and in exchange
 					// the vec4 packing, the 64 KB uniform binding cap and the
 					// 16384-float global ceiling all go away with the address space.
 					//
@@ -672,8 +700,9 @@ export class GPUCoordinator {
 					// the compute pipeline, which has its own budget.
 					//
 					// FRAGMENT as well as VERTEX: band axes resolve a slot in the
-					// vertex stage, ordinal colour carries the same ids and resolves
-					// in the fragment stage.
+					// vertex stage, and ordinal colour resolves its palette rank in
+					// the fragment stage. Both read their selection activity, the
+					// second half of each block, in the vertex stage.
 					binding: 5,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 					buffer: { type: 'read-only-storage' }
@@ -702,11 +731,12 @@ export class GPUCoordinator {
 	#createColorScaleBuffers(): void {
 		const device = this.#device!;
 
-		// ColorConfig buffer: 64 slots × 48 bytes each
+		// ColorConfig buffer: 64 slots × 48 bytes each. A uniform, so the vertex
+		// stage can read it without a storage binding — see COLOR_SCALE_BINDINGS.
 		this.#colorConfigBuffer = device.createBuffer({
-			label: 'ColorConfig SSBO',
+			label: 'ColorConfig uniform',
 			size: this.#maxColorSlots * COLOR_CONFIG_BYTES,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 
 		// Color ramp buffer: 64 slots × 256 colors × 4 floats × 4 bytes
@@ -845,6 +875,7 @@ export class GPUCoordinator {
 			const scale = this.#scales[i] as unknown as {
 				id: string;
 				slots?: SlotSource;
+				activity?: ActivitySource;
 			};
 			// Any scale that offers slots wants them packed. It used to gate on
 			// band|point, which was the same set at the time; ordinal colour offers
@@ -852,9 +883,11 @@ export class GPUCoordinator {
 			// here as each migrates.
 			const slots = scale.slots;
 			if (!slots) continue;
-			const entry = (pool[scales.length] ??= { id: '', slots });
+			const entry = (pool[scales.length] ??= { id: '', slots, activity: null });
 			entry.id = scale.id;
 			entry.slots = slots;
+			// The selection fade beside the slots, for the block's activity half.
+			entry.activity = scale.activity ?? null;
 			scales.push(entry);
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.
@@ -1294,14 +1327,16 @@ export class GPUCoordinator {
 				this.#createRenderPassDescriptor(view, chartConfig)
 			);
 
-			// The chart's scales, written once for the whole pass and before the
-			// first draw. Every pipeline declares the same 32 bytes and a draw
-			// requires every declared byte to have been set, so this is the whole
-			// range, every pass. Immediate data survives setPipeline between
-			// layouts of the same size, which is what makes once enough. Pushed even
-			// when the chart's scales are not both known: a layer that does not
-			// read them still needs every byte set before it may draw.
+			// The chart's scales and dim strength, written once for the whole pass
+			// and before the first draw. Every pipeline declares the same
+			// CHART_SCALE_IMMEDIATE_SIZE and a draw requires every declared byte to
+			// have been set, so this is the whole range, every pass. Immediate data
+			// survives setPipeline between layouts of the same size, which is what
+			// makes once enough. Pushed even when the chart's scales are not both
+			// known: a layer that does not read them still needs every byte set
+			// before it may draw.
 			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
+			this.#chartScaleImmediates[CHART_DIM_STRENGTH_INDEX] = chartConfig.dimStrength;
 			passEncoder.setImmediates(0, this.#chartScaleImmediates);
 
 			if (chartConfig.perFrameBindGroup) {
@@ -1640,19 +1675,15 @@ export class GPUCoordinator {
 		const usageMap = this.#scaleRegistry.scaleUsage;
 		if (!usageMap || typeof usageMap[Symbol.iterator] !== 'function') return;
 
-		// Clear and rebuild
-		this.#scaleIdToInstance.clear();
-
-		for (const [scaleInstance] of usageMap) {
-			// Only positional scales (Linear, Band, Time) carry an id.
-			const scale = scaleInstance as unknown as ScaleInstance;
-			if (!scale?.id) continue;
-
-			// The redraw list is NOT rebuilt here any more. It belongs to the
-			// registry, derived from the same usage map this reads, and a scale
-			// asks for it. Copying it from a second owner is how it went stale.
-			this.#scaleIdToInstance.set(scale.id, scale);
-		}
+		// Clear and rebuild: every scale with an id — positional scales, and
+		// ordinal colour, whose slots the packer needs too. The id map is only
+		// looked up with a chart's x and y scale ids, so a colour scale in it is
+		// never mistaken for a positional one.
+		//
+		// The redraw list is NOT rebuilt here any more. It belongs to the
+		// registry, derived from the same usage map this reads, and a scale asks
+		// for it. Copying it from a second owner is how it went stale.
+		trackScalesById(usageMap.keys() as unknown as Iterable<ScaleInstance>, this.#scaleIdToInstance);
 
 		this.#scales = [...this.#scaleIdToInstance.values()];
 	}
@@ -1892,7 +1923,8 @@ export class GPUCoordinator {
 			renderPassDescriptor: null,
 			msaa: null,
 			_lastRenderFrame: -1,
-			_isDirty: false
+			_isDirty: false,
+			dimStrength: DEFAULT_DIM_STRENGTH
 		};
 
 		this.#registeredCharts.set(chartId, chartConfig);
