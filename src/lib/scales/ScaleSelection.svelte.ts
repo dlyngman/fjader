@@ -80,8 +80,11 @@ export class ScaleSelection<V> {
 	 * Fully visible for a scale without identity, whose keys are not ids.
 	 */
 	opacityOf(id: number, inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY): number {
-		if (!this.#ready()) return 1;
+		// Read first, before any early return: whether the scale has identity is
+		// not reactive, so a consumer that ran before identity landed must
+		// already depend on the frame counter for the fade that follows to reach it.
 		void this.#frame;
+		if (!this.#ready()) return 1;
 		return selectionOpacity(this.table.activityOf(id), inactiveOpacity);
 	}
 
@@ -91,6 +94,7 @@ export class ScaleSelection<V> {
 	 * without identity yet has no table to fade).
 	 */
 	opacityOfValue(value: V, inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY): number {
+		void this.#frame; // first, for the reason in opacityOf
 		if (this.#ready()) {
 			const id = this.#idOf(value);
 			if (id != null) return this.opacityOf(id, inactiveOpacity);
