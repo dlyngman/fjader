@@ -30,11 +30,19 @@ export class ScaleSelection<V> {
 	#idOf: (value: V) => number | null | undefined;
 	#ready: () => boolean;
 	#count: () => number;
+	#identity: () => object | null;
+
+	/**
+	 * The identity the table's ids belong to. A different one is a rebuilt dim
+	 * (a reload), where the same id can name another category.
+	 */
+	#tableIdentity: object | null = null;
 
 	/**
 	 * `idOf` turns a value into its identity id, `ready` says whether the scale
-	 * has identity yet, and `count` is how many ids its slots cover. `charts` is
-	 * the redraw list for the fade's clock.
+	 * has identity yet, `identity` is the FieldIdentity its ids come from, and
+	 * `count` is how many ids its slots cover. `charts` is the redraw list for
+	 * the fade's clock.
 	 */
 	constructor(
 		loop: ClockLoop | null,
@@ -42,12 +50,14 @@ export class ScaleSelection<V> {
 			charts: () => string[];
 			idOf: (value: V) => number | null | undefined;
 			ready: () => boolean;
+			identity: () => object | null;
 			count: () => number;
 		}
 	) {
 		this.#idOf = options.idOf;
 		this.#ready = options.ready;
 		this.#count = options.count;
+		this.#identity = options.identity;
 		this.table = new ActivityTable(loop, {
 			charts: options.charts,
 			onFrame: () => this.#frame++
@@ -66,13 +76,20 @@ export class ScaleSelection<V> {
 	}
 
 	/**
-	 * After the scale's ids changed (identity landed, the dim grew): cover them,
-	 * and apply a selection made before they existed.
+	 * After the scale's ids changed (identity landed or went, the dim grew, a
+	 * reload rebuilt it): cover them, and apply a selection made before they
+	 * existed.
+	 *
+	 * Without identity the table is emptied, so the GPU reads every position
+	 * as active instead of the per-id state of a numbering that is gone.
 	 */
 	reapply(): void {
-		if (!this.#ready()) return;
-		this.table.resize(this.#count());
-		if (this.#values) this.#apply(this.#values);
+		if (!this.#ready()) {
+			this.table.resize(0);
+			this.#tableIdentity = null;
+			return;
+		}
+		this.#apply(this.#values);
 	}
 
 	/**
@@ -108,15 +125,34 @@ export class ScaleSelection<V> {
 		this.table.destroy();
 	}
 
-	#apply(values: Set<V>): void {
+	/**
+	 * Point the table at `values`, or at nothing selected for null.
+	 *
+	 * Ids are only comparable within one identity: across a reload the same id
+	 * can name another category, so a fade from it would start from the wrong
+	 * state. The table is dropped then and rebuilt at rest, the selection
+	 * snapping into place as it does when identity first lands. A dim that only
+	 * grew keeps its ids and their fades; the new ids start at their state.
+	 */
+	#apply(values: Set<V> | null): void {
 		if (!this.#ready()) return;
-		this.table.resize(this.#count());
+		const identity = this.#identity();
+		if (identity !== this.#tableIdentity) {
+			this.table.resize(0);
+			this.#tableIdentity = identity;
+		}
+		if (values == null) {
+			this.table.resize(this.#count(), null);
+			this.table.clear();
+			return;
+		}
 		const ids = this.#ids;
 		ids.length = 0;
 		for (const value of values) {
 			const id = this.#idOf(value);
 			if (id != null) ids.push(id);
 		}
+		this.table.resize(this.#count(), ids);
 		this.table.setActive(ids);
 	}
 }

@@ -223,6 +223,7 @@ export class ColorScaleState {
 			charts: () => this._affectedChartsArray,
 			idOf: (value) => this.#identity?.ids.get(value as never),
 			ready: () => this.hasIdentity,
+			identity: () => this.#identity,
 			count: () => this.#slots.count
 		});
 

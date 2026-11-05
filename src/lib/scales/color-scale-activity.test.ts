@@ -166,4 +166,50 @@ describe('ColorScaleState selection activity', () => {
 		expect(scale.categoryOpacity('a')).toBe(1);
 		expect(scale.categoryOpacity('b')).toBe(DEFAULT_INACTIVE_OPACITY);
 	});
+
+	it('keeps a legend entry dim when identity lands under an earlier selection', () => {
+		const loop = {
+			addAnimatedSource: () => {},
+			removeAnimatedSource: () => {},
+			writeColorConfig: () => {},
+			writeColorConfigSlotBase: () => {},
+			writeColorPalette: () => {},
+			writeColorRamp: () => {}
+		};
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a', 'b'] },
+			registry,
+			loop as never
+		);
+		scale.setActiveValues(['a']);
+		expect(scale.categoryOpacity('b')).toBe(DEFAULT_INACTIVE_OPACITY);
+		scale.setIdentity(new FieldIdentity(['a', 'b']));
+		// No fade up to 1 and back: the entry was dim and stays dim.
+		expect(scale.categoryOpacity('b')).toBe(DEFAULT_INACTIVE_OPACITY);
+		expect(scale.categoryOpacity('a')).toBe(1);
+	});
+
+	it('snaps to the new ids after a reload renumbers the dim', () => {
+		const loop = {
+			addAnimatedSource: () => {},
+			removeAnimatedSource: () => {},
+			writeColorConfig: () => {},
+			writeColorConfigSlotBase: () => {},
+			writeColorPalette: () => {},
+			writeColorRamp: () => {}
+		};
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a', 'b'] },
+			registry,
+			loop as never
+		);
+		const first = new FieldIdentity(['a', 'b']);
+		scale.setIdentity(first);
+		scale.setActiveValues(['a']);
+		(scale.activity as ActivityTable).clock._markAtRest();
+		first.reset([]);
+		scale.setIdentity(new FieldIdentity(['b', 'a']));
+		expect(Array.from(scale.activity.from)).toEqual([0, 1]);
+		expect(Array.from(scale.activity.to)).toEqual([0, 1]);
+	});
 });

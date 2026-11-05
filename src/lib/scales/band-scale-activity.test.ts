@@ -89,4 +89,58 @@ describe('BandScaleState selection activity', () => {
 			0, 0, 1
 		]);
 	});
+
+	it('does not fade a selection made before identity landed: it is already shown', () => {
+		const scale = new BandScaleState('category', [], { gpuCoordinator: loop });
+		scale.setActiveValues(['b']);
+		scale.setIdentity(new FieldIdentity(['a', 'b', 'c']));
+		scale.addMark(['a', 'b', 'c'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(Array.from(table(scale).from)).toEqual([0, 1, 0]);
+		expect(Array.from(table(scale).to)).toEqual([0, 1, 0]);
+	});
+
+	it('dims a label by value while the axis has no identity', () => {
+		const scale = new BandScaleState('category');
+		scale.addMark(['a', 'b', 'c'], 'mark-1');
+		scale.updateDomainFromExtents();
+		scale.setActiveValues(['b']);
+		const opacity = scale.bandTicks().map((t) => scale.tickOpacity(t.key));
+		expect(opacity).toEqual([DEFAULT_INACTIVE_OPACITY, 1, DEFAULT_INACTIVE_OPACITY]);
+	});
+
+	it('drops per-id activity when identity is emptied by a reload', () => {
+		const identity = new FieldIdentity(['a', 'b', 'c']);
+		const scale = new BandScaleState('category');
+		scale.setIdentity(identity);
+		scale.addMark(['a', 'b', 'c'], 'mark-1');
+		scale.updateDomainFromExtents();
+		scale.setActiveValues(['c']);
+
+		identity.reset([]);
+		scale.setIdentity(identity);
+		expect(scale.hasIdentity).toBe(false);
+		expect(table(scale).count).toBe(0);
+
+		const state = createIdentitySlotState(64);
+		packIdentitySlots([{ id: scale.id, slots: scale.slots, activity: scale.activity }], state);
+		const base = state.offsets.get(scale.id)!;
+		const count = state.bufferTo[base];
+		const half = Array.from(state.bufferTo.slice(base + 1 + count, base + 1 + 2 * count));
+		expect(half.every((v) => v === 1)).toBe(true);
+	});
+
+	it('snaps to the new ids after a reload renumbers the dim, rather than fading from the old ones', () => {
+		const scale = scaleOf(['a', 'b', 'c'], ['a', 'b', 'c'], true);
+		scale.setActiveValues(['a']);
+		table(scale).clock._markAtRest();
+		expect(activity(scale)).toEqual([1, 0, 0]);
+
+		// The same values, numbered differently: 'a' is now id 2.
+		scale.setIdentity(new FieldIdentity(['c', 'b', 'a']));
+		scale.addMark(['a', 'b', 'c'], 'mark-1');
+		scale.updateDomainFromExtents();
+		expect(Array.from(table(scale).from)).toEqual([0, 0, 1]);
+		expect(Array.from(table(scale).to)).toEqual([0, 0, 1]);
+	});
 });

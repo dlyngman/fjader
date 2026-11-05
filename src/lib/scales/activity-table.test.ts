@@ -143,6 +143,26 @@ describe('ActivityTable', () => {
 		expect(a.activityOf(4)).toBe(1);
 	});
 
+	it('starts new ids at a selection the table has not seen, rather than fading to it', () => {
+		const a = table(0);
+		a.resize(3, [1]);
+		expect(activity(a)).toEqual([0, 1, 0]);
+		expect(Array.from(a.from)).toEqual([0, 1, 0]);
+
+		const b = table(0);
+		b.resize(2, null);
+		expect(Array.from(b.from)).toEqual([1, 1]);
+	});
+
+	it('drops every id on resize(0)', () => {
+		const a = table();
+		a.setActive([0]);
+		settle(a);
+		a.resize(0);
+		expect(a.count).toBe(0);
+		expect(a.activityOf(1)).toBe(1);
+	});
+
 	it('keeps an existing fade across a grow, and truncates on a shrink', () => {
 		const a = table();
 		a.setActive([0]);
