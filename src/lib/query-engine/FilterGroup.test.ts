@@ -210,6 +210,42 @@ describe('FilterGroup', () => {
 			expect(legendScale.active).toEqual(new Set(['North']));
 			expect(bandScale.active).toEqual(new Set(['North']));
 		});
+
+		it('leaves the projection alone while a brush moves, and re-queries all the same', () => {
+			const scale = mockScale();
+			const { engine, onFilterChange } = mockEngine();
+			const group = new FilterGroup();
+			group.setEngine(engine);
+			const setActive = vi.spyOn(scale, 'setActiveValues');
+
+			const legend = group.registerToggle('region', {
+				excludeMarkIds: () => new Set(),
+				scales: () => [scale]
+			});
+			legend.toggle(['North'], false);
+			expect(setActive).toHaveBeenCalledTimes(1);
+			const projected = scale.active;
+
+			const brush = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			for (let i = 0; i < 10; i++) brush.update(`x > ${i}`, [i, i + 1]);
+			brush.clear();
+
+			expect(setActive).toHaveBeenCalledTimes(1);
+			expect(scale.active).toBe(projected);
+			expect(onFilterChange).toHaveBeenCalledTimes(12);
+		});
+
+		it('un-dims a toggle’s scales when its last registration goes', () => {
+			const scale = mockScale();
+			const group = new FilterGroup();
+			const legend = group.registerToggle('region', {
+				excludeMarkIds: () => new Set(),
+				scales: () => [scale]
+			});
+			legend.toggle(['North'], false);
+			legend.destroy();
+			expect(scale.active).toBeNull();
+		});
 	});
 
 	describe('activate', () => {

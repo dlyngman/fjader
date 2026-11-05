@@ -9,7 +9,7 @@ export const SELECTION_STIFFNESS = 400;
 
 /**
  * How visible an inactive category is, by default: marks are drawn at this
- * opacity (the coordinator pushes 1 - this as the chart's dim strength), and
+ * opacity (the shaders' SELECTION_DIM_STRENGTH is 1 - this), and
  * band labels fade to it.
  */
 export const DEFAULT_INACTIVE_OPACITY = 0.25;
@@ -125,18 +125,31 @@ export class ActivityTable {
 
 	/**
 	 * Cover `count` ids. Existing ids keep their fade; new ones snap to their
-	 * state rather than fading in: active when nothing is selected, inactive
-	 * when something is, since a category that did not exist when the selection
-	 * was made is not part of it.
+	 * state rather than fading in.
+	 *
+	 * `active` is the selection the new ids join, as ids: null for none, so
+	 * every new id is active. Without it, a new id is inactive while something
+	 * is selected, since a category that did not exist when the selection was
+	 * made is not part of it. Passing it matters when the selection was made
+	 * before the ids existed (before identity landed, or across a reload): the
+	 * table has not seen it, and a new id it names must start selected rather
+	 * than fade in from 0, and one it does not name must start dim rather than
+	 * fade down from 1.
+	 *
+	 * `resize(0)` drops every id, for ids that stopped meaning their category.
 	 */
-	resize(count: number): void {
+	resize(count: number, active?: readonly number[] | null): void {
 		if (count === this.#to.length) return;
 		const keep = Math.min(this.#to.length, count);
-		const fill = this.#selecting ? 0 : 1;
+		const selecting = active === undefined ? this.#selecting : active !== null;
+		const fill = selecting ? 0 : 1;
 		const grown = (old: Float32Array) => {
 			const next = new Float32Array(count);
 			next.fill(fill);
 			next.set(old.subarray(0, keep), 0);
+			if (active) {
+				for (const id of active) if (id >= keep && id < count) next[id] = 1;
+			}
 			return next;
 		};
 		this.#from = grown(this.#from);

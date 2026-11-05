@@ -1,10 +1,6 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
-import {
-	scaleTemplateSystem,
-	CHART_SCALE_IMMEDIATE_SIZE,
-	CHART_DIM_STRENGTH_INDEX
-} from './ScaleTemplateSystem';
+import { scaleTemplateSystem, CHART_SCALE_IMMEDIATE_SIZE } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
@@ -28,7 +24,6 @@ import {
 	MAX_COLOR_SLOTS
 } from './ColorScaleShaderLib';
 import { trackScalesById } from './tracked-scales';
-import { DEFAULT_INACTIVE_OPACITY } from '$lib/scales/ActivityTable';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -71,16 +66,7 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
-	/**
-	 * How strongly inactive categories dim in this chart: 0 = off, otherwise
-	 * 1 - inactiveOpacity. Pushed with the chart's scales every pass, so a
-	 * change reaches the GPU on the next frame drawn.
-	 */
-	dimStrength: number;
 }
-
-/** Default dim strength: inactive categories at DEFAULT_INACTIVE_OPACITY. */
-const DEFAULT_DIM_STRENGTH = 1 - DEFAULT_INACTIVE_OPACITY;
 
 interface LayerConfig {
 	id: string;
@@ -1327,8 +1313,8 @@ export class GPUCoordinator {
 				this.#createRenderPassDescriptor(view, chartConfig)
 			);
 
-			// The chart's scales and dim strength, written once for the whole pass
-			// and before the first draw. Every pipeline declares the same
+			// The chart's scales, written once for the whole pass and before the
+			// first draw. Every pipeline declares the same
 			// CHART_SCALE_IMMEDIATE_SIZE and a draw requires every declared byte to
 			// have been set, so this is the whole range, every pass. Immediate data
 			// survives setPipeline between layouts of the same size, which is what
@@ -1336,7 +1322,6 @@ export class GPUCoordinator {
 			// known: a layer that does not read them still needs every byte set
 			// before it may draw.
 			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
-			this.#chartScaleImmediates[CHART_DIM_STRENGTH_INDEX] = chartConfig.dimStrength;
 			passEncoder.setImmediates(0, this.#chartScaleImmediates);
 
 			if (chartConfig.perFrameBindGroup) {
@@ -1923,8 +1908,7 @@ export class GPUCoordinator {
 			renderPassDescriptor: null,
 			msaa: null,
 			_lastRenderFrame: -1,
-			_isDirty: false,
-			dimStrength: DEFAULT_DIM_STRENGTH
+			_isDirty: false
 		};
 
 		this.#registeredCharts.set(chartId, chartConfig);

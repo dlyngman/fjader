@@ -161,6 +161,7 @@ export class BandScaleState {
 			charts: () => this._affectedChartsArray,
 			idOf: (value) => this.channelValueFor(value),
 			ready: () => this.hasIdentity,
+			identity: () => this.#resolver.identity,
 			count: () => this.#slots.count
 		});
 	}
@@ -189,8 +190,9 @@ export class BandScaleState {
 	 * Which categories are selected, as a fade over every id of the dim: the
 	 * activity half of this scale's block, which bars, dots and rules on this
 	 * axis read to dim, and which the axis labels follow. Without identity the
-	 * channel carries positions, not ids, and an axis without identity draws
-	 * nothing, so it applies once identity lands and the slots are laid out.
+	 * channel carries positions, not ids, so the table is empty and the marks
+	 * draw at full opacity; the labels, keyed by position, dim by value instead
+	 * (see tickOpacity). It applies once identity lands and the slots are laid out.
 	 */
 	#selection: ScaleSelection<DimValue>;
 
@@ -524,6 +526,9 @@ export class BandScaleState {
 			this.#selection.reapply();
 		} else {
 			this.#slots.layout('positions', null, this.#domain.length);
+			// The channel now carries positions, which the selection's per-id
+			// state does not describe: drop it until identity is back.
+			this.#selection.reapply();
 		}
 	}
 
@@ -856,8 +861,12 @@ export class BandScaleState {
 		const slot = this.#slots.slotOf(key);
 		const n = this.getConfig().categoryCount;
 		const inside = Math.min(1, Math.max(0, (n - 0.5 - slot) * 2), Math.max(0, (slot + 0.5) * 2));
-		// The selection fade, on the same clock and mapping as the bars.
-		return this.#slots.alphaOf(key) * inside * this.#selection.opacityOf(key);
+		// The selection fade, on the same clock and mapping as the bars. Without
+		// identity the key is a position, not an id: selected or not, by value.
+		const selected = this.hasIdentity
+			? this.#selection.opacityOf(key)
+			: this.#selection.opacityOfValue(this.effectiveDomain[key]);
+		return this.#slots.alphaOf(key) * inside * selected;
 	}
 
 	/**

@@ -459,6 +459,11 @@ export class DomainResolver {
 		return this.#identity?.present ?? false;
 	}
 
+	/** The dim adopted last; a different object after a reload. */
+	get identity(): FieldIdentity | null {
+		return this.#identity;
+	}
+
 	/** How many ids the dim holds — the width of a slot table over it. */
 	get idCount(): number {
 		return this.#identity?.values.length ?? 0;

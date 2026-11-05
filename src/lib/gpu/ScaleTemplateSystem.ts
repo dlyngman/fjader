@@ -51,6 +51,7 @@ import {
 	SIZE_SCALE_FUNCTIONS
 } from './SizeScaleShaderLib';
 import { isNanExpr } from './NanShaderLib';
+import { DEFAULT_INACTIVE_OPACITY } from '$lib/scales/ActivityTable';
 
 /**
  * Scale fragment definitions
@@ -362,17 +363,14 @@ function _scaleFunctionName(scaleType: string, axis: string): string {
 
 /**
  * Bytes of immediate data every render pipeline declares: the chart's x and y
- * `ScaleParam`, 16 bytes each, then the chart's selection dim strength. Every
- * layout declares the same size because a draw requires every declared byte to
- * have been set, and the pass sets them once, before its first draw.
+ * `ScaleParam`, 16 bytes each. Every layout declares the same size because a
+ * draw requires every declared byte to have been set, and the pass sets them
+ * once, before its first draw.
  *
  * Immediates carry state shared across the pass and read by several marks: the
  * chart's scales and settings. 64 bytes are available on M-series Macs.
  */
-export const CHART_SCALE_IMMEDIATE_SIZE = 36;
-
-/** Float index of `dimStrength` in the chart immediates. */
-export const CHART_DIM_STRENGTH_INDEX = 8;
+export const CHART_SCALE_IMMEDIATE_SIZE = 32;
 
 /**
  * Main template system class
@@ -534,20 +532,25 @@ export class ScaleTemplateSystem {
       struct ChartScales {
         x: ScaleParam,
         y: ScaleParam,
-        // How strongly inactive categories dim in this chart: 0 = off,
-        // 1 - inactiveOpacity otherwise. A strength rather than an opacity so
-        // that zero is the harmless value.
-        dimStrength: f32,
       };
       var<immediate> chartScales: ChartScales;
 
-      // Selection dimming, combined once per vertex: the product of a mark's
-      // activities (colour, and band for marks with band axes), mapped through
-      // the chart's dim strength. Multiplying first keeps a bar whose colour and
-      // band are the same field from dimming twice. selectionOpacity in
-      // ActivityTable.ts is its CPU twin, for band labels and legend entries.
+      // Selection dimming: a mark's activity mapped to an opacity, with
+      // inactive categories at DEFAULT_INACTIVE_OPACITY. selectionOpacity in
+      // ActivityTable.ts is its CPU twin, for band labels and legend entries,
+      // and both read the same constant so they cannot drift apart.
+      const SELECTION_DIM_STRENGTH: f32 = ${(1 - DEFAULT_INACTIVE_OPACITY).toFixed(6)};
       fn selectionDim(activity: f32) -> f32 {
-        return 1.0 - chartScales.dimStrength * (1.0 - activity);
+        return 1.0 - SELECTION_DIM_STRENGTH * (1.0 - activity);
+      }
+
+      // A mark's activities combined: colour, and band for marks on band axes.
+      // The least active wins rather than the product, so a bar whose colour
+      // and band are the same field fades on the same curve as its label
+      // instead of twice as fast. At rest every activity is 0 or 1, where the
+      // two agree.
+      fn markActivity(color: f32, bandX: f32, bandY: f32) -> f32 {
+        return min(color, min(bandX, bandY));
       }
 
       // The ONE place that says where a chart's scales come from. Every
