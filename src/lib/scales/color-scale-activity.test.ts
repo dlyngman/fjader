@@ -29,7 +29,7 @@ describe('ColorScaleState selection activity', () => {
 
 	/** Activity per id, read through the slots the packer reads. */
 	const activity = (scale: ColorScaleState) => {
-		const table = scale.slots.activity!;
+		const table = scale.activity;
 		return Array.from(
 			{ length: scale.slots.count },
 			(_, id) => table.from[id] + (table.to[id] - table.from[id]) * table.t
@@ -102,7 +102,7 @@ describe('ColorScaleState selection activity', () => {
 
 	it('names the charts drawing it to the selection clock', () => {
 		const scale = ordinal();
-		const table = scale.slots.activity as ActivityTable;
+		const table = scale.activity as ActivityTable;
 		expect(table.clock._affectedChartsArray).toEqual(['chart-1']);
 	});
 
@@ -112,7 +112,7 @@ describe('ColorScaleState selection activity', () => {
 		scale.setActiveValues(['a', 'c']);
 
 		const state = createIdentitySlotState(64);
-		packIdentitySlots([{ id: 'colour', slots: scale.slots }], state);
+		packIdentitySlots([{ id: 'colour', slots: scale.slots, activity: scale.activity }], state);
 		const base = state.offsets.get('colour')!;
 		const count = state.bufferTo[base];
 		expect(count).toBe(3);
@@ -148,7 +148,7 @@ describe('ColorScaleState selection activity', () => {
 		);
 		scale.setIdentity(new FieldIdentity(['a', 'b']));
 		scale.setActiveValues(['a']);
-		const clock = (scale.slots.activity as ActivityTable).clock;
+		const clock = (scale.activity as ActivityTable).clock;
 		for (let i = 0; i < 20; i++) {
 			clock.step();
 			clock.updateRenderState(0);

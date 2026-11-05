@@ -543,10 +543,8 @@ function withActivity(
 ): IdentitySlotScale {
 	return {
 		id: s.id,
-		slots: {
-			...s.slots,
-			activity: { from: Float32Array.from(from), to: Float32Array.from(to), t, version }
-		}
+		slots: s.slots,
+		activity: { from: Float32Array.from(from), to: Float32Array.from(to), t, version }
 	};
 }
 
@@ -700,7 +698,7 @@ describe('packIdentitySlots: the activity half', () => {
 
 		const state = createIdentitySlotState(64);
 		const s = scale('a', [0, 1, 2]);
-		packIdentitySlots([{ id: 'a', slots: { ...s.slots, activity: table } }], state);
+		packIdentitySlots([{ id: 'a', slots: s.slots, activity: table }], state);
 		const out = applyResolves(state, new Float32Array(64));
 		const base = state.offsets.get('a')!;
 		for (let id = 0; id < 3; id++) {

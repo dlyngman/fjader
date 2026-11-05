@@ -26,7 +26,9 @@ import {
 	NO_SLOT_TABLE
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
-import { ActivityTable, DEFAULT_INACTIVE_OPACITY } from './ActivityTable';
+import { DEFAULT_INACTIVE_OPACITY } from './ActivityTable';
+import type { ActivitySource } from '$lib/gpu/identity-slot-packing';
+import { ScaleSelection } from './ScaleSelection.svelte';
 
 interface ColorScaleConfig {
 	field: string;
@@ -83,7 +85,6 @@ export class ColorScaleState {
 	// Reactive state
 	domain: (string | number)[] = $state([]);
 	ready: boolean = $state(false);
-	#activeValues: Set<string | number> | null = $state(null); // null = all active, Set = only these active
 
 	// Bumped on any visual-config change (transform type, constant, exponent, scheme).
 	// Legend components read this to know when to re-render the gradient.
@@ -143,32 +144,20 @@ export class ColorScaleState {
 	 * Ranks do not animate, so both ends of the "transition" are the same table
 	 * at t = 1. `version` is bumped on every rebuild; the packer uploads only on
 	 * a change.
-	 *
-	 * `activity` is the block's second half: how selected each id is, which the
-	 * vertex shaders read to dim inactive categories. Set in the constructor.
 	 */
-	#slots: {
-		count: number;
-		from: Float32Array;
-		to: Float32Array;
-		t: number;
-		version: number;
-		activity: ActivityTable | null;
-	} = {
-		count: 0,
-		from: new Float32Array(0),
-		to: new Float32Array(0),
-		t: 1,
-		version: 0,
-		activity: null
-	};
+	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
 
 	/**
-	 * Which categories are selected, as a fade over every id of the dim. Sized
-	 * with the rank table, fed from `setActiveValues`, packed as the activity half
-	 * of this scale's block.
+	 * Which categories are selected, as a fade over every id of the dim: sized
+	 * with the rank table, fed from `setActiveValues`, and packed as the activity
+	 * half of this scale's block.
 	 */
-	#activity: ActivityTable;
+	#selection: ScaleSelection<string | number>;
+
+	/** The selection fade, for the packer's activity half. */
+	get activity(): ActivitySource {
+		return this.#selection.table;
+	}
 
 	get slots(): SlotSource {
 		return this.#slots;
@@ -231,11 +220,12 @@ export class ColorScaleState {
 		this.#exponent = config.exponent ?? 1;
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
-		this.#activity = new ActivityTable(gpuCoordinator, {
+		this.#selection = new ScaleSelection<string | number>(gpuCoordinator, {
 			charts: () => this._affectedChartsArray,
-			onFrame: () => this.#activityFrame++
+			idOf: (value) => this.#identity?.ids.get(value as never),
+			ready: () => this.hasIdentity,
+			count: () => this.#slots.count
 		});
-		this.#slots.activity = this.#activity;
 
 		// Explicit type wins, fallback to inference from scheme
 		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
@@ -278,10 +268,6 @@ export class ColorScaleState {
 
 	get scaleType(): ColorScaleType {
 		return this.#scaleType;
-	}
-
-	get activeValues(): Set<string | number> | null {
-		return this.#activeValues;
 	}
 
 	get isOrdinal(): boolean {
@@ -578,10 +564,9 @@ export class ColorScaleState {
 		slots.count = table.length;
 		slots.version++;
 
-		// The activity table covers the same ids. A selection made before these
-		// ids existed (or before identity landed) is applied to them now.
-		this.#activity.resize(table.length);
-		if (this.#activeValues) this.#applyActiveValues(this.#activeValues);
+		// The selection covers the same ids. One made before these ids existed
+		// (or before identity landed) is applied to them now.
+		this.#selection.reapply();
 	}
 
 	#hasRanks(): boolean {
@@ -862,14 +847,11 @@ export class ColorScaleState {
 	// ============================================================
 
 	setActiveValues(values: Iterable<string | number>): void {
-		const set = values instanceof Set ? values : new Set(values);
-		this.#activeValues = set;
-		this.#applyActiveValues(set);
+		this.#selection.set(values);
 	}
 
 	clearActiveValues(): void {
-		this.#activeValues = null;
-		this.#activity.clear();
+		this.#selection.clear();
 	}
 
 	/**
@@ -883,33 +865,6 @@ export class ColorScaleState {
 
 	static #noCharts: string[] = [];
 
-	/** Reused id list for #applyActiveValues, which runs on every filter update. */
-	#activeIds: number[] = [];
-
-	/**
-	 * Point the activity table at the ids of these values. Without identity the
-	 * channel carries no ids, so there is nothing on the GPU to dim yet; the
-	 * values are kept in #activeValues and applied once identity lands.
-	 */
-	#applyActiveValues(values: Set<string | number>): void {
-		const identity = this.#identity;
-		if (!this.isOrdinal || !identity?.present) return;
-		const ids = this.#activeIds;
-		ids.length = 0;
-		for (const value of values) {
-			const id = identity.ids.get(value as never);
-			if (id !== undefined) ids.push(id);
-		}
-		this.#activity.setActive(ids);
-	}
-
-	isActive(value: string | number): boolean {
-		return this.#activeValues == null || this.#activeValues.has(value);
-	}
-
-	/** Bumped on every frame the selection fade is driven, and once at rest. */
-	#activityFrame = $state(0);
-
 	/**
 	 * How visible a category's legend entry is now, 0..1: its selection fade, on
 	 * the same clock and with the same floor as the marks, so a legend dims with
@@ -919,16 +874,11 @@ export class ColorScaleState {
 	 * the entry is simply selected or not.
 	 */
 	categoryOpacity(value: string | number): number {
-		void this.#activityFrame;
-		const active = this.#activeValues;
 		if (this.hasIdentity) {
 			const id = this.#identity!.ids.get(value as never);
-			if (id !== undefined) {
-				const activity = this.#activity.activityOf(id);
-				return DEFAULT_INACTIVE_OPACITY + (1 - DEFAULT_INACTIVE_OPACITY) * activity;
-			}
+			if (id !== undefined) return this.#selection.opacityOf(id);
 		}
-		return active == null || active.has(value) ? 1 : DEFAULT_INACTIVE_OPACITY;
+		return this.#selection.isSelected(value) ? 1 : DEFAULT_INACTIVE_OPACITY;
 	}
 
 	// ============================================================
@@ -957,7 +907,7 @@ export class ColorScaleState {
 		this.#destroyed = true;
 		// Leaves the animation loop; a later selection lands at once rather than
 		// animating for a scale nothing draws.
-		this.#activity.destroy();
+		this.#selection.destroy();
 	}
 
 	/** True once the registry has torn this scale down. */

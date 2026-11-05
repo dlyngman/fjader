@@ -88,11 +88,6 @@ export interface SlotSource {
 	readonly t: number;
 	/** Bumped whenever `from` or `to` move; the packer re-uploads on it alone. */
 	readonly version: number;
-	/**
-	 * How selected each id is, for the block's activity half. Absent for a scale
-	 * without a selection table, whose activity half is then all 1.
-	 */
-	readonly activity?: ActivitySource | null;
 }
 
 /**
@@ -112,10 +107,15 @@ export interface ActivitySource {
 	readonly version: number;
 }
 
-/** A scale with a slot table, as the packer needs it. */
+/**
+ * A scale with a slot table, as the packer needs it: its slots and, beside
+ * them, its selection fade for the block's activity half. Absent for a scale
+ * without a selection table, whose activity half is then all 1.
+ */
 export interface IdentitySlotScale {
 	id: string;
 	slots: SlotSource;
+	activity?: ActivitySource | null;
 }
 
 /**
@@ -262,7 +262,7 @@ export function packIdentitySlots(
 
 		const slots = scale.slots;
 		const count = slots.count;
-		const activity = slots.activity ?? null;
+		const activity = scale.activity ?? null;
 		// A header, the slots, and the activity half.
 		const need = 1 + 2 * count;
 		const fits = offset + need <= capacity;
@@ -301,7 +301,7 @@ export function packIdentitySlots(
 			} else if (slotsDirty) {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
-					`[GPUCoordinator] Band slot capacity (${capacity}) exhausted; ` +
+					`[GPUCoordinator] Identity slot capacity (${capacity}) exhausted; ` +
 						`scale "${scale.id}" (${count} ids) will not render.`
 				);
 			}

@@ -1,5 +1,5 @@
 import { TransitionClock, type ClockLoop } from '$lib/animation';
-import type { ActivitySource, SlotSource } from '$lib/gpu/identity-slot-packing';
+import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
 /**
  * Where every category of a band axis sits, and how it gets there.
@@ -62,7 +62,6 @@ export type BandSlots = Pick<
 	| 'slotOf'
 	| 'alphaOf'
 	| 'snapshot'
-	| 'activity'
 >;
 
 export class SlotTransition implements SlotSource {
@@ -160,13 +159,6 @@ export class SlotTransition implements SlotSource {
 	 * bumping this leaves the GPU on the old one.
 	 */
 	version: number = 0;
-
-	/**
-	 * How selected each id is, packed as the activity half of this block. Owned
-	 * and set by the band scale; this class only carries it to the packer, which
-	 * reads `slots.activity`.
-	 */
-	activity: ActivitySource | null = null;
 
 	#onFrame: (() => void) | null;
 

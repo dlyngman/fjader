@@ -218,4 +218,12 @@ fn colorActivity(scaleIndex: u32, value: f32) -> f32 {
     }
     return identityActivity(config.slotBase, u32(value));
 }
+
+/** A mark's colour activity: 1.0 unless it colours through a scale. */
+fn markColorActivity(colorMode: u32, colorScaleIndex: u32, colorValue: f32) -> f32 {
+    if (colorMode != 1u) {
+        return 1.0;
+    }
+    return colorActivity(colorScaleIndex, colorValue);
+}
 `;

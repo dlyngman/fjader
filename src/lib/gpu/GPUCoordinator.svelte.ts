@@ -17,6 +17,7 @@ import {
 	packIdentitySlots,
 	type IdentitySlotScale,
 	type SlotSource,
+	type ActivitySource,
 	type IdentitySlotState
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
@@ -874,6 +875,7 @@ export class GPUCoordinator {
 			const scale = this.#scales[i] as unknown as {
 				id: string;
 				slots?: SlotSource;
+				activity?: ActivitySource;
 			};
 			// Any scale that offers slots wants them packed. It used to gate on
 			// band|point, which was the same set at the time; ordinal colour offers
@@ -881,9 +883,11 @@ export class GPUCoordinator {
 			// here as each migrates.
 			const slots = scale.slots;
 			if (!slots) continue;
-			const entry = (pool[scales.length] ??= { id: '', slots });
+			const entry = (pool[scales.length] ??= { id: '', slots, activity: null });
 			entry.id = scale.id;
 			entry.slots = slots;
+			// The selection fade beside the slots, for the block's activity half.
+			entry.activity = scale.activity ?? null;
 			scales.push(entry);
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.

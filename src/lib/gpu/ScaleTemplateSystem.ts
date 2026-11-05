@@ -544,17 +544,10 @@ export class ScaleTemplateSystem {
       // Selection dimming, combined once per vertex: the product of a mark's
       // activities (colour, and band for marks with band axes), mapped through
       // the chart's dim strength. Multiplying first keeps a bar whose colour and
-      // band are the same field from dimming twice.
+      // band are the same field from dimming twice. selectionOpacity in
+      // ActivityTable.ts is its CPU twin, for band labels and legend entries.
       fn selectionDim(activity: f32) -> f32 {
         return 1.0 - chartScales.dimStrength * (1.0 - activity);
-      }
-
-      // A mark's colour activity: 1.0 unless it colours through a scale.
-      fn markColorActivity(colorMode: u32, colorScaleIndex: u32, colorValue: f32) -> f32 {
-        if (colorMode != 1u) {
-          return 1.0;
-        }
-        return colorActivity(colorScaleIndex, colorValue);
       }
 
       // The ONE place that says where a chart's scales come from. Every
@@ -573,25 +566,6 @@ export class ScaleTemplateSystem {
 		return `${structDef}\n${chartScaleDeclaration}`;
 	}
 
-	/**
-	 * The shared slot table, and the lookup into it.
-	 *
-	 * Emitted ALWAYS, not only for band axes. It started band-only because band
-	 * axes were the only channel carrying identity ids; ordinal colour carries
-	 * them too now, and resolves in the FRAGMENT stage, so the declaration has
-	 * to be present even in a shader with no band scale at all.
-	 *
-	 * One read-only storage binding, visible to both stages, written by the
-	 * resolve pass whenever the tables or a t moved.
-	 *
-	 * Each scale's block is [count, slot0, slot1, ...] — the layout
-	 * identity-slot-packing.ts owns. The count is what makes
-	 * the lookup safe: ids and the slot table can disagree for a moment while a
-	 * dim appends, and without a per-scale bound an id past this scale's end
-	 * reads the NEXT scale's slots — a plausible wrong answer rather than a
-	 * visible failure. Index 0 is a permanent zero-length block, which is where
-	 * a scale that did not fit in the buffer points.
-	 */
 	/**
 	 * `bandActivityX(value)` and `bandActivityY(value)`: how selected a band or
 	 * point axis's category is, 0..1, for selection dimming.
@@ -625,6 +599,25 @@ export class ScaleTemplateSystem {
     `;
 	}
 
+	/**
+	 * The shared slot table, and the lookup into it.
+	 *
+	 * Emitted ALWAYS, not only for band axes. It started band-only because band
+	 * axes were the only channel carrying identity ids; ordinal colour carries
+	 * them too now, and resolves in the FRAGMENT stage, so the declaration has
+	 * to be present even in a shader with no band scale at all.
+	 *
+	 * One read-only storage binding, visible to both stages, written by the
+	 * resolve pass whenever the tables or a t moved.
+	 *
+	 * Each scale's block is [count, slot0, slot1, ...] — the layout
+	 * identity-slot-packing.ts owns. The count is what makes
+	 * the lookup safe: ids and the slot table can disagree for a moment while a
+	 * dim appends, and without a per-scale bound an id past this scale's end
+	 * reads the NEXT scale's slots — a plausible wrong answer rather than a
+	 * visible failure. Index 0 is a permanent zero-length block, which is where
+	 * a scale that did not fit in the buffer points.
+	 */
 	_buildSlotTableHelpers(): string {
 		return `
     // ===== SHARED SLOT TABLE (identity id -> display slot) =====

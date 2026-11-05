@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ActivityTable } from './ActivityTable';
+import { ActivityTable, selectionOpacity, DEFAULT_INACTIVE_OPACITY } from './ActivityTable';
 
 // The table every categorical scale will own for selection dimming. These drive
 // it directly, with a stand-in loop, the way slot-transition.test.ts drives
@@ -184,5 +184,20 @@ describe('ActivityTable', () => {
 		a.setActive([1]);
 		expect(a.isAnimating).toBe(false);
 		expect(activity(a)).toEqual([0, 1, 0]);
+	});
+});
+
+describe('selectionOpacity', () => {
+	it('maps activity to opacity the way the shaders do', () => {
+		// The shaders compute 1 - dimStrength * (1 - activity), with
+		// dimStrength = 1 - inactiveOpacity; this must agree with it.
+		const dim = (activity: number, inactive: number) => 1 - (1 - inactive) * (1 - activity);
+		for (const inactive of [DEFAULT_INACTIVE_OPACITY, 0, 0.6, 1]) {
+			for (const activity of [0, 0.3, 1]) {
+				expect(selectionOpacity(activity, inactive)).toBeCloseTo(dim(activity, inactive), 6);
+			}
+		}
+		expect(selectionOpacity(0)).toBe(DEFAULT_INACTIVE_OPACITY);
+		expect(selectionOpacity(1)).toBe(1);
 	});
 });

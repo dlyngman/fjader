@@ -15,6 +15,21 @@ export const SELECTION_STIFFNESS = 400;
 export const DEFAULT_INACTIVE_OPACITY = 0.25;
 
 /**
+ * How visible a category is for its activity: `inactiveOpacity` when
+ * unselected, 1 when selected, and in between mid-fade.
+ *
+ * The CPU twin of the shaders' `selectionDim`, which computes the same thing as
+ * `1 - dimStrength * (1 - activity)` with `dimStrength = 1 - inactiveOpacity`.
+ * Band labels and legend entries use this, so they match the marks.
+ */
+export function selectionOpacity(
+	activity: number,
+	inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY
+): number {
+	return inactiveOpacity + (1 - inactiveOpacity) * activity;
+}
+
+/**
  * Which categories of a scale are selected, and how far each one has faded.
  *
  * One float per identity id: 1 active, 0 inactive. A categorical scale owns one

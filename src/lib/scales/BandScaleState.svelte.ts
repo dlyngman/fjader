@@ -5,7 +5,8 @@ import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ClockLoop } from '$lib/animation';
 import { SlotTransition, type BandSlots } from './SlotTransition';
-import { ActivityTable, DEFAULT_INACTIVE_OPACITY } from './ActivityTable';
+import { ScaleSelection } from './ScaleSelection.svelte';
+import type { ActivitySource } from '$lib/gpu/identity-slot-packing';
 import { DomainResolver } from './DomainResolver';
 
 /**
@@ -96,7 +97,6 @@ export class BandScaleState {
 	// =========================================================================
 	// SELECTION STATE
 	// =========================================================================
-	#activeValues: Set<DimValue> | null = $state(null); // null = all active, Set = only these active
 
 	// =========================================================================
 	// POINTER STATE
@@ -157,11 +157,12 @@ export class BandScaleState {
 			onFrame: () => this.#slotFrame++,
 			onRest: () => this.#slotRest++
 		});
-		this.#activity = new ActivityTable(config.gpuCoordinator ?? null, {
+		this.#selection = new ScaleSelection<DimValue>(config.gpuCoordinator ?? null, {
 			charts: () => this._affectedChartsArray,
-			onFrame: () => this.#activityFrame++
+			idOf: (value) => this.channelValueFor(value),
+			ready: () => this.hasIdentity,
+			count: () => this.#slots.count
 		});
-		this.#slots.activity = this.#activity;
 	}
 
 	// =========================================================================
@@ -176,54 +177,26 @@ export class BandScaleState {
 	// ACTIVE VALUES (selection feedback)
 	// =========================================================================
 
-	get activeValues(): Set<DimValue> | null {
-		return this.#activeValues;
-	}
-
 	setActiveValues(values: Iterable<DimValue>): void {
-		const set = values instanceof Set ? values : new Set(values);
-		this.#activeValues = set;
-		this.#applyActiveValues(set);
+		this.#selection.set(values);
 	}
 
 	clearActiveValues(): void {
-		this.#activeValues = null;
-		this.#activity.clear();
+		this.#selection.clear();
 	}
 
 	/**
 	 * Which categories are selected, as a fade over every id of the dim: the
 	 * activity half of this scale's block, which bars, dots and rules on this
-	 * axis read to dim, and which the axis labels follow.
-	 */
-	#activity: ActivityTable;
-
-	/** Bumped on every frame the selection fade is driven, and once at rest. */
-	#activityFrame = $state(0);
-
-	/** Reused id list for #applyActiveValues, which runs on every filter update. */
-	#activeIds: number[] = [];
-
-	/**
-	 * Point the activity table at the ids of these values. Without identity the
+	 * axis read to dim, and which the axis labels follow. Without identity the
 	 * channel carries positions, not ids, and an axis without identity draws
-	 * nothing, so there is nothing to dim; the values are applied once
-	 * identity lands and the slots are laid out.
+	 * nothing, so it applies once identity lands and the slots are laid out.
 	 */
-	#applyActiveValues(values: Set<DimValue>): void {
-		if (!this.hasIdentity) return;
-		this.#activity.resize(this.#slots.count);
-		const ids = this.#activeIds;
-		ids.length = 0;
-		for (const value of values) {
-			const id = this.channelValueFor(value);
-			if (id !== null) ids.push(id);
-		}
-		this.#activity.setActive(ids);
-	}
+	#selection: ScaleSelection<DimValue>;
 
-	isActive(value: DimValue): boolean {
-		return this.#activeValues == null || this.#activeValues.has(value);
+	/** The selection fade, for the packer's activity half. */
+	get activity(): ActivitySource {
+		return this.#selection.table;
 	}
 
 	/**
@@ -257,7 +230,7 @@ export class BandScaleState {
 	destroy(): void {
 		this.#destroyed = true;
 		this.#slots.clock.stop();
-		this.#activity.destroy();
+		this.#selection.destroy();
 	}
 
 	/**
@@ -546,10 +519,9 @@ export class BandScaleState {
 	#rebuildSlotTable(): void {
 		if (this.hasIdentity) {
 			this.#slots.layout('ids', this.#displayOrder, this.#resolver.idCount);
-			// The activity table covers the same ids. A selection made before these
-			// ids existed (or before identity landed) is applied to them now.
-			this.#activity.resize(this.#slots.count);
-			if (this.#activeValues) this.#applyActiveValues(this.#activeValues);
+			// The selection covers the same ids. One made before these ids existed
+			// (or before identity landed) is applied to them now.
+			this.#selection.reapply();
 		} else {
 			this.#slots.layout('positions', null, this.#domain.length);
 		}
@@ -881,23 +853,13 @@ export class BandScaleState {
 	 */
 	tickOpacity(key: number): number {
 		void this.#slotFrame;
-		void this.#activityFrame;
 		const slot = this.#slots.slotOf(key);
 		const n = this.getConfig().categoryCount;
 		const inside = Math.min(1, Math.max(0, (n - 0.5 - slot) * 2), Math.max(0, (slot + 0.5) * 2));
-		return this.#slots.alphaOf(key) * inside * this.#selectionOpacity(key);
-	}
-
-	/**
-	 * A label's selection fade, on the same clock and the same mapping as the
-	 * bars: an inactive category's label fades to DEFAULT_INACTIVE_OPACITY with
-	 * them. Without identity the key is a position, not an id, and there is no
-	 * table to read.
-	 */
-	#selectionOpacity(key: number): number {
-		if (!this.hasIdentity) return 1;
-		const activity = this.#activity.activityOf(key);
-		return DEFAULT_INACTIVE_OPACITY + (1 - DEFAULT_INACTIVE_OPACITY) * activity;
+		// The selection fade, on the same clock and mapping as the bars. Without
+		// identity the key is a position, not an id, and there is no table.
+		const selected = this.hasIdentity ? this.#selection.opacityOf(key) : 1;
+		return this.#slots.alphaOf(key) * inside * selected;
 	}
 
 	/**

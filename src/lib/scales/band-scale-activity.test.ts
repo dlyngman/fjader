@@ -21,7 +21,7 @@ function scaleOf(dim: string[], shown: string[] = dim, withLoop = false) {
 	return scale;
 }
 
-const table = (scale: BandScaleState) => scale.slots.activity as unknown as ActivityTable;
+const table = (scale: BandScaleState) => scale.activity as ActivityTable;
 const activity = (scale: BandScaleState) =>
 	Array.from({ length: scale.slots.count }, (_, id) => table(scale).activityOf(id));
 
@@ -82,7 +82,7 @@ describe('BandScaleState selection activity', () => {
 		const scale = scaleOf(['a', 'b', 'c']);
 		scale.setActiveValues(['c']);
 		const state = createIdentitySlotState(64);
-		packIdentitySlots([{ id: scale.id, slots: scale.slots }], state);
+		packIdentitySlots([{ id: scale.id, slots: scale.slots, activity: scale.activity }], state);
 		const base = state.offsets.get(scale.id)!;
 		const count = state.bufferTo[base];
 		expect(Array.from(state.bufferTo.slice(base + 1 + count, base + 1 + 2 * count))).toEqual([
