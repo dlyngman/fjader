@@ -663,12 +663,12 @@ export class ScaleTemplateSystem {
       // how many ids it covers (n); the block holds one run of n per group.
       // Header first, so this is two dependent reads. Past n, or in the empty
       // block where n is 0, an id is fully active.
-      let ref = u32(identitySlots[base + 1u]);
+      let actRef = u32(identitySlots[base + 1u]);
       let n = u32(identitySlots[base + 2u]);
       if (id >= n) {
         return 1.0;
       }
-      return identitySlots[ref + n * group + id];
+      return identitySlots[actRef + n * group + id];
     }
     `;
 	}
