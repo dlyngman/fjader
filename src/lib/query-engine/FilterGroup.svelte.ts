@@ -193,12 +193,21 @@ export class FilterGroup {
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
 			destroy: () => {
+				// Once only: a second call must not remove a newer registration
+				// under the same id, or clear its clause.
+				if (!registrations.has(opts)) return;
+				if (registrations.size === 1) {
+					// The last one: drop the source's preagg tables first, so the
+					// re-query below cannot start reading one about to go. Then clear
+					// while the registration is still in place, so whatever reads the
+					// source's registrations to route the removal still finds them,
+					// and its scales are un-dimmed.
+					this.#engine?.forgetSource(this, sourceId);
+					this.clearSource(sourceId);
+				}
 				registrations.delete(opts);
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
-				this.#engine?.forgetSource(this, sourceId);
-				// Still projecting while it clears, so its scales are un-dimmed.
-				this.clearSource(sourceId);
 				this.#projectingSources.delete(sourceId);
 			}
 		};

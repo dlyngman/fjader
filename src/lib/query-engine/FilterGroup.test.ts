@@ -79,6 +79,30 @@ describe('FilterGroup', () => {
 			expect(group.selection.isActive('brush-x')).toBe(false);
 		});
 
+		it('the last destroy drops preagg tables before clearing, and only once', () => {
+			const { engine, onClauseChange } = mockEngine();
+			const forget = engine.forgetSource as ReturnType<typeof vi.fn>;
+			const group = new FilterGroup();
+			group.setEngine(engine);
+			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			handle.update('x > 0', null);
+			onClauseChange.mockClear();
+
+			handle.destroy();
+			expect(forget).toHaveBeenCalledTimes(1);
+			expect(onClauseChange).toHaveBeenCalledTimes(1);
+			expect(forget.mock.invocationCallOrder[0]).toBeLessThan(
+				onClauseChange.mock.invocationCallOrder[0]
+			);
+
+			// A newer registration under the same id survives a second destroy.
+			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			again.update('x > 1', null);
+			handle.destroy();
+			expect(group.selection.isActive('brush-x')).toBe(true);
+			expect(forget).toHaveBeenCalledTimes(1);
+		});
+
 		it('several registrations are one source, and the clause carries the writer’s exclusions', () => {
 			const group = new FilterGroup();
 			const legend = group.register('toggle-region', { excludeMarkIds: () => new Set() });
