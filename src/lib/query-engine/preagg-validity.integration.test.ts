@@ -35,7 +35,9 @@ FROM range(1000) r(i)
 `;
 
 const BRUSH = 'interval-x-A';
-const CHART_A = new Set(['dots-a']);
+/** Charts are compared by reference, as ChartConfig objects are. The mark is in B. */
+const CHART_A = { name: 'A' };
+const CHART_B = { name: 'B' };
 const MARK = 'bars-b';
 const X_DIM = { columnRef: column('x'), domain: [0, 1000] as [number, number], pixelExtent: 1000 };
 
@@ -96,7 +98,8 @@ beforeEach(async () => {
 		baseTable: 't',
 		parts: buildQueryParts({ g: column('g'), n: count() }, null, false),
 		schema: new Map(),
-		transformCompiler: new TransformCompiler([])
+		transformCompiler: new TransformCompiler([]),
+		route: { reads: [], chart: CHART_B }
 	};
 	handle = engine.registerMark(MARK, descriptor, group);
 	await settle(() => handle.updateParams({ sort: undefined, limit: undefined }));
@@ -141,13 +144,13 @@ function creates(): string[] {
 	return conn.queries.filter((q) => q.startsWith('CREATE TABLE IF NOT EXISTS "__dplot_preagg_'));
 }
 
-const brush = () => group.register(BRUSH, { excludeMarkIds: () => CHART_A });
+const brush = () => group.register(BRUSH, { chart: CHART_A });
 
 /** Activate the brush on chart A, as its hover does. */
 function activate(dims: BrushActivation[] = [X_DIM]): Promise<void> {
 	return engine.activate(group, {
 		sourceId: BRUSH,
-		excludedByAll: CHART_A,
+		categoricalKey: null,
 		dims: dims.map((d) => ({ kind: 'bin' as const, ...d }))
 	});
 }
@@ -156,8 +159,8 @@ function drag(b: ReturnType<typeof brush>, lo: number, hi: number): Promise<void
 	return settle(() => b.update(isBetween(column('x'), [lo, hi]), [lo, hi]));
 }
 
-function toggle(field: string, values: string[], excludeMarkIds = new Set<string>()) {
-	const consumer = group.registerToggle(field, { excludeMarkIds: () => excludeMarkIds });
+function toggle(field: string, values: string[], chart: object | null = null) {
+	const consumer = group.registerToggle(field, { chart });
 	return settle(() => consumer.set(values.map((v) => [v])));
 }
 
@@ -182,7 +185,7 @@ describe('preagg validity', () => {
 	});
 
 	it('bakes a toggle on the brushed chart, and its bin bounds stay finite', async () => {
-		// Excludes the same marks as the brush: the old inference took it for the brush
+		// Skips the same chart as the brush: the old inference took it for the brush
 		await toggle('cat', ['a'], CHART_A);
 		await activate();
 
@@ -318,9 +321,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 	it('an upsertManual filter added after the build is applied', async () => {
 		await activate();
 		const b = brush();
-		await settle(() =>
-			group.upsertManual('k', isIn(column('kind'), [literal('q')]), ['q'], new Set())
-		);
+		await settle(() => group.upsertManual('k', isIn(column('kind'), [literal('q')]), ['q']));
 
 		await drag(b, 100, 599);
 		expect(lastQuery()).not.toContain('__dplot_preagg_');
@@ -336,7 +337,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 
 		// A Toggle has no bin dims, so activating it builds nothing, and it must
 		// not drop the table of a mark it excludes, as a brush activation would.
-		group.registerToggle('cat', { excludeMarkIds: () => new Set([MARK]) }).activate();
+		group.registerToggle('cat', { chart: CHART_B }).activate();
 
 		await drag(b, 100, 699);
 		expect(lastQuery()).toContain('__dplot_preagg_');
@@ -347,7 +348,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 	it('a parallel brush drag after an Interval1D hover is applied', async () => {
 		await activate();
 		await drag(brush(), 100, 599);
-		const parallel = group.register('parallel-brush-x-C', { excludeMarkIds: () => new Set() });
+		const parallel = group.register('parallel-brush-x-C', {});
 
 		await settle(() => parallel.update(isBetween(column('x'), [0, 299]), [0, 299]));
 		expect(lastQuery()).not.toContain('__dplot_preagg_');
@@ -404,7 +405,6 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		// bin dim on the axis column, a view at the axis domain over 1000 px.
 		const axis = (col: string, domain: [number, number]) =>
 			group.register(`parallel-brush-${col}-P`, {
-				excludeMarkIds: () => new Set(),
 				activeDims: () => [
 					{ kind: 'bin', columnRef: column(col), domain, pixelExtent: 1000, extent: domain }
 				],
@@ -461,7 +461,6 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		const BAR = 200;
 		const legend = () =>
 			group.register('legend-color-x', {
-				excludeMarkIds: () => new Set(),
 				activeDims: () => [
 					{ kind: 'bin', columnRef: column('x'), domain: DOMAIN, pixelExtent: BAR, extent: DOMAIN }
 				],
@@ -506,12 +505,12 @@ describe('preagg validity: filter changes without a re-hover', () => {
 	describe('one table per source', () => {
 		// A second brush on another chart (C), which also filters the mark.
 		const BRUSH_C = 'interval-x-C';
-		const CHART_C = new Set(['dots-c']);
-		const brushC = () => group.register(BRUSH_C, { excludeMarkIds: () => CHART_C });
+		const CHART_C = { name: 'C' };
+		const brushC = () => group.register(BRUSH_C, { chart: CHART_C });
 		const activateC = () =>
 			engine.activate(group, {
 				sourceId: BRUSH_C,
-				excludedByAll: CHART_C,
+				categoricalKey: null,
 				dims: [{ kind: 'bin', ...X_DIM }]
 			});
 
@@ -528,11 +527,12 @@ describe('preagg validity: filter changes without a re-hover', () => {
 			expect(rows()).toEqual(await expected('x BETWEEN 100 AND 599'));
 		});
 
-		it('a source that excludes the mark leaves its other tables in place', async () => {
+		it('a source that skips the mark’s chart leaves its other tables in place', async () => {
 			await activate();
+			group.register(BRUSH_C, { chart: CHART_B });
 			await engine.activate(group, {
 				sourceId: BRUSH_C,
-				excludedByAll: new Set([MARK]),
+				categoricalKey: null,
 				dims: [{ kind: 'bin', ...X_DIM }]
 			});
 
@@ -616,7 +616,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 		const activateWithView = () =>
 			engine.activate(group, {
 				sourceId: BRUSH,
-				excludedByAll: CHART_A,
+				categoricalKey: null,
 				dims: [{ kind: 'bin', ...X_DIM }],
 				view: (out) => {
 					outs.add(out);
@@ -686,7 +686,7 @@ describe('preagg validity: filter changes without a re-hover', () => {
 			// What settling does: activate again with the current view.
 			await engine.activate(group, {
 				sourceId: BRUSH,
-				excludedByAll: CHART_A,
+				categoricalKey: null,
 				dims: [{ kind: 'bin', ...X_DIM, domain: [0, 500] }],
 				view: (out) => {
 					out[0] = view[0];
@@ -774,10 +774,10 @@ describe('preagg brush bins over every column type a brush can target', () => {
 		for (const [v, [lo, hi]] of views.entries()) {
 			const domain: [number, number] = [lo * unit, hi * unit];
 			const sourceId = `interval-x-types-${v}`;
-			const brush = types.register(sourceId, { excludeMarkIds: () => new Set() });
+			const brush = types.register(sourceId, {});
 			await engine.activate(types, {
 				sourceId,
-				excludedByAll: new Set(),
+				categoricalKey: null,
 				dims: [{ kind: 'bin', columnRef, domain, pixelExtent: 395 }]
 			});
 

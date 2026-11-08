@@ -15,9 +15,10 @@
 	 * - Band axis label: toggles the axis's own source field, whatever the
 	 *   declared field is. Labels are a ready-made category picker.
 	 *
-	 * Toggles on different fields AND together. The source chart is excluded
-	 * from its own toggles (crossfilter semantics) and dims instead, through its
-	 * filter group's selection on the field; other charts in the group filter.
+	 * Toggles on different fields AND together. The chart skips its own toggles
+	 * (crossfilter): its marks that read the toggled field dim, the rest keep
+	 * their data. Elsewhere in the group, marks that read the field dim and the
+	 * rest filter.
 	 */
 
 	interface Props {
@@ -36,10 +37,13 @@
 	const fields = Array.isArray(field) ? field : [field];
 	const declaredField = fields.length === 1 ? fields[0] : null;
 
-	/** Marks in this chart — excluded so the source dims rather than filters. */
-	const excludeMarkIds = () => new Set(chart.config.entries.keys());
+	/**
+	 * This chart skips its own toggles (crossfilter): its marks keyed by the
+	 * toggled field dim, the rest keep their data.
+	 */
+	const skips = chart.config;
 
-	const declared = filterGroup.registerToggle(fields, { excludeMarkIds });
+	const declared = filterGroup.registerToggle(fields, { chart: skips });
 	chart.activators.add(declared.activate);
 
 	/** One BandLabelToggle per band axis field (see bandFieldsOf). */
@@ -120,5 +124,5 @@
 </script>
 
 {#each bandFields as bandField (bandField)}
-	<BandLabelToggle {filterGroup} field={bandField} {excludeMarkIds} handles={bandToggles} />
+	<BandLabelToggle {filterGroup} field={bandField} chart={skips} handles={bandToggles} />
 {/each}

@@ -1489,7 +1489,7 @@ export class MarkLifecycleV2 {
 	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
 		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
 
-		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const q = assembleQuery({
 			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
@@ -1865,7 +1865,7 @@ export class MarkLifecycleV2 {
 	 */
 	#buildTooltipQuery(): string | null {
 		if (!this.#resolvedQueryParts) return null;
-		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 
 		const q = assembleQuery({
 			table: this.#sourceTable,
@@ -1927,7 +1927,7 @@ export class MarkLifecycleV2 {
 			this.#transformCompiler.hasSQLTransforms()
 		);
 
-		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const sidecarQuery = assembleQuery({
 			table: this.#sourceTable,
 			parts: sidecarParts,

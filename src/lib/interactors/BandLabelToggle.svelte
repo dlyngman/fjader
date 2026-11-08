@@ -18,16 +18,17 @@
 	interface Props {
 		filterGroup: FilterGroup;
 		field: string;
-		excludeMarkIds: () => Set<string>;
+		/** The chart its toggle skips (see Toggle). */
+		chart: object;
 		/** Where the parent's click handler finds this field's toggle. */
 		handles: Map<string, ToggleHandle>;
 	}
 
 	// Keyed by field in the parent, so none of these change for an instance.
-	const { filterGroup, field, excludeMarkIds, handles }: Props = $props();
+	const { filterGroup, field, chart: skips, handles }: Props = $props();
 
 	const chart = getContext<ChartContext>('chart');
-	const toggle = filterGroup.registerToggle(field, { excludeMarkIds });
+	const toggle = filterGroup.registerToggle(field, { chart: skips });
 
 	handles.set(field, toggle);
 	chart.activators.add(toggle.activate);

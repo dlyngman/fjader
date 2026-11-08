@@ -166,7 +166,8 @@
 
 	const brushHandle: SourceHandle | null = filterGroup
 		? filterGroup.register(sourceId, {
-				excludeMarkIds: () => new Set<string>(),
+				// No chart: an interval cannot dim, so the chart it sits in filters by
+				// it rather than showing nothing.
 				// The brush maps the bar linearly onto [min, max], whatever the color
 				// transform, so its pixel bins do too: barLength pixels over the domain.
 				activeDims: () =>

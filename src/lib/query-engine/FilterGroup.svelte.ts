@@ -18,7 +18,8 @@ import type {
 	CategoricalSelection,
 	Clause,
 	FilterExpr,
-	FilterSchema
+	FilterSchema,
+	SourceRegistration
 } from './CrossfilterSelection.svelte';
 import type { ActiveDim, QueryEngine } from './QueryEngine';
 import { togglePredicate } from './toggle-predicate';
@@ -37,10 +38,14 @@ export interface FilterItem {
 }
 
 /** One registration of a selection source: a brush, a legend, a Toggle. */
-export interface SourceOpts {
-	/** Getter for mark IDs this registration's writes exclude (chart-level cross-filtering).
-	 *  A getter rather than a static Set so it stays current if marks are added/removed. */
-	excludeMarkIds: () => Set<string>;
+export interface SourceOpts extends SourceRegistration {
+	/**
+	 * The chart this registration skips: its ChartConfig, or nothing. A chart
+	 * holding a control for a selection is not filtered by it (crossfilter), so
+	 * its marks that do not read the field keep their data; those that do, dim.
+	 * Opt-in: a control that wants its own chart filtered passes none.
+	 */
+	chart?: object | null;
 	/**
 	 * For a source that selects categories of one field: that field's identity
 	 * key, and how to read the selected values from a write. Every clause the
@@ -63,7 +68,7 @@ export interface SourceOpts {
 }
 
 export interface SourceHandle {
-	/** Write the clause, excluding this registration's marks. */
+	/** Write the source's clause. */
 	update(predicate: FilterExpr, value: unknown): void;
 	clear(): void;
 	/** Prepare preagg tables for this source, ahead of its first use. */
@@ -100,13 +105,13 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
  * relay looking for a range brush) sees it too.
  */
 function schemaOf(
-	registrations: Set<SourceOpts>,
+	registrations: ReadonlySet<SourceOpts> | undefined,
 	writer: SourceOpts,
 	value: unknown
 ): FilterSchema | undefined {
 	let augment = writer.augment;
 	if (!augment) {
-		for (const opts of registrations) {
+		for (const opts of registrations ?? []) {
 			if (opts.augment) {
 				augment = opts.augment;
 				break;
@@ -121,13 +126,13 @@ function schemaOf(
  * registration's: every registration under a toggle id selects the same field.
  */
 function categoricalOf(
-	registrations: Set<SourceOpts>,
+	registrations: ReadonlySet<SourceOpts> | undefined,
 	writer: SourceOpts,
 	value: unknown
 ): CategoricalSelection | null {
 	let declared = writer.categorical;
 	if (!declared) {
-		for (const opts of registrations) {
+		for (const opts of registrations ?? []) {
 			if (opts.categorical) {
 				declared = opts.categorical;
 				break;
@@ -206,9 +211,6 @@ export class FilterGroup {
 		this.#engine = engine;
 	}
 
-	/** Registrations per source id. Several under one id are one source. */
-	#sources = new Map<string, Set<SourceOpts>>();
-
 	/**
 	 * Active filter items with schema metadata, for UI consumption. The schema
 	 * is the clause's own, computed when it was written (see `update`).
@@ -233,70 +235,75 @@ export class FilterGroup {
 
 	/**
 	 * Register a selection source. Several registrations under one id are one
-	 * source: each writes the clause with its own exclusions.
+	 * source and write one clause.
 	 */
 	register(sourceId: string, opts: SourceOpts): SourceHandle {
-		let registrations = this.#sources.get(sourceId);
-		if (!registrations) {
-			registrations = new Set();
-			this.#sources.set(sourceId, registrations);
+		const { selection } = this;
+		selection.addRegistration(sourceId, opts);
+		// A chart that starts skipping a selection already in force has marks
+		// whose filters just changed.
+		if (opts.chart && selection.isActive(sourceId)) {
+			this.#engine?.onChartRouteChange(this, opts.chart);
 		}
-		registrations.add(opts);
+		const registrations = () => selection.registrationsOf(sourceId) as ReadonlySet<SourceOpts>;
+		let registered = true;
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
 				const next: Clause = {
 					predicate,
-					excludeMarkIds: opts.excludeMarkIds(),
 					value,
-					schema: schemaOf(registrations, opts, value),
-					categorical: categoricalOf(registrations, opts, value)
+					schema: schemaOf(registrations(), opts, value),
+					categorical: categoricalOf(registrations(), opts, value)
 				};
-				this.#afterUpdate(this.selection.update(sourceId, next), next);
+				this.#afterUpdate(sourceId, selection.update(sourceId, next), next);
 			},
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
 			destroy: () => {
 				// Once only: a second call must not remove a newer registration
 				// under the same id, or clear its clause.
-				if (!registrations.has(opts)) return;
-				if (registrations.size === 1) {
+				if (!registered) return;
+				registered = false;
+				if (registrations()?.size === 1) {
 					// The last one: drop the source's preagg tables first, so the
 					// re-query below cannot start reading one about to go. Then clear
-					// while the registration is still in place, so whatever reads the
-					// source's registrations to route the removal still finds them.
+					// while the registration is still in place, so the removal is
+					// routed by it: the marks re-queried are those the clause filtered.
 					this.#engine?.forgetSource(this, sourceId);
 					this.clearSource(sourceId);
+					selection.removeRegistration(sourceId, opts);
+					return;
 				}
-				registrations.delete(opts);
-				if (registrations.size > 0) return;
-				this.#sources.delete(sourceId);
+				selection.removeRegistration(sourceId, opts);
+				// Another registration keeps the clause; its chart may stop skipping it.
+				if (opts.chart && selection.isActive(sourceId)) {
+					this.#engine?.onChartRouteChange(this, opts.chart);
+				}
 			}
 		};
 	}
 
 	/**
-	 * Hand the engine a snapshot of the source. It activates every mark some
-	 * registration filters: a table for the source is correct for a mark whether
-	 * or not the clause currently excludes it, so only marks that every
-	 * registration excludes are left out.
+	 * Hand the engine a snapshot of the source: its dims, its view, and its
+	 * categorical field, so activation can tell which marks it would filter
+	 * before it has written a clause.
 	 */
 	#activate(sourceId: string): void {
-		const registrations = this.#sources.get(sourceId);
+		const registrations = this.selection.registrationsOf(sourceId) as
+			| ReadonlySet<SourceOpts>
+			| undefined;
 		if (!this.#engine || !registrations?.size) return;
 
-		let excludedByAll: Set<string> | null = null;
 		let dims: ActiveDim[] = [];
 		let view: SourceOpts['view'];
+		let categoricalKey: string | null = null;
 		for (const opts of registrations) {
-			const excluded = opts.excludeMarkIds();
-			excludedByAll = excludedByAll
-				? new Set([...excludedByAll].filter((id) => excluded.has(id)))
-				: excluded;
 			if (opts.activeDims && dims.length === 0) dims = opts.activeDims();
 			view ??= opts.view;
+			categoricalKey ??= opts.categorical?.key ?? null;
 		}
-		this.#engine.activate(this, { sourceId, excludedByAll: excludedByAll!, dims, view });
+		this.#engine.activate(this, { sourceId, categoricalKey, dims, view });
 	}
 
 	// -----------------------------------------------------------------
@@ -312,10 +319,7 @@ export class FilterGroup {
 	 * as the selection. Nothing else writes those ids (`upsertManual` prefixes
 	 * its own with `manual:`).
 	 */
-	registerToggle(
-		fields: string | string[],
-		opts: { excludeMarkIds: () => Set<string> }
-	): ToggleHandle {
+	registerToggle(fields: string | string[], opts: { chart?: object | null } = {}): ToggleHandle {
 		const list = Array.isArray(fields) ? fields : [fields];
 		const sourceId = toggleSourceId(list);
 		const { selection } = this;
@@ -323,7 +327,7 @@ export class FilterGroup {
 		// One field selects categories; a tuple does not (see Clause.categorical).
 		const categoricalKey = list.length === 1 ? (identityKeyFor(list[0])?.key ?? null) : null;
 		const source = this.register(sourceId, {
-			excludeMarkIds: opts.excludeMarkIds,
+			chart: opts.chart ?? null,
 			categorical: categoricalKey
 				? {
 						key: categoricalKey,
@@ -407,17 +411,10 @@ export class FilterGroup {
 	// Manual entries (for DerivedInterval1D relay, programmatic filters)
 	// -----------------------------------------------------------------
 
-	upsertManual(
-		key: string,
-		predicate: FilterExpr,
-		value: unknown,
-		excludeMarkIds: Set<string> | (() => Set<string>),
-		schema?: FilterSchema
-	): void {
-		const resolved = typeof excludeMarkIds === 'function' ? excludeMarkIds() : excludeMarkIds;
-		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema, categorical: null };
+	upsertManual(key: string, predicate: FilterExpr, value: unknown, schema?: FilterSchema): void {
+		const next: Clause = { predicate, value, schema, categorical: null };
 		const sourceId = `manual:${key}`;
-		this.#afterUpdate(this.selection.update(sourceId, next), next);
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 	}
 
 	/**
@@ -429,12 +426,12 @@ export class FilterGroup {
 	relayClause(key: string, clause: Clause): void {
 		const sourceId = `manual:${key}`;
 		if (this.selection.get(sourceId) === clause) return;
-		this.#afterUpdate(this.selection.update(sourceId, clause), clause);
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, clause), clause);
 	}
 
 	removeManual(key: string): void {
 		const sourceId = `manual:${key}`;
-		this.#afterUpdate(this.selection.update(sourceId, null), null);
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
 	}
 
 	// -----------------------------------------------------------------
@@ -447,7 +444,7 @@ export class FilterGroup {
 	 */
 	clearSource(sourceId: string): void {
 		if (!this.selection.isActive(sourceId)) return;
-		this.#afterUpdate(this.selection.update(sourceId, null), null);
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
 	}
 
 	clearAll(): void {
@@ -467,12 +464,12 @@ export class FilterGroup {
 	 * marks either clause applies to. A brush, which writes on every pointer
 	 * move, touches no selection.
 	 */
-	#afterUpdate(prev: Clause | undefined, next: Clause | null): void {
+	#afterUpdate(sourceId: string, prev: Clause | undefined, next: Clause | null): void {
 		if (prev?.categorical) this.#syncActivity(prev.categorical.key);
 		if (next?.categorical && next.categorical.key !== prev?.categorical?.key) {
 			this.#syncActivity(next.categorical.key);
 		}
-		if (prev || next) this.#engine?.onClauseChange(this, prev, next);
+		if (prev || next) this.#engine?.onClauseChange(this, sourceId, prev, next);
 	}
 
 	/**

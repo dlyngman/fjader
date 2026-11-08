@@ -15,7 +15,7 @@ const opacity = (group: FilterGroup, key: string, values: string[]) =>
 describe('FilterGroup selection activity', () => {
 	it('follows a toggle on the field, and clears with it', () => {
 		const group = new FilterGroup();
-		const toggle = group.registerToggle('carrier', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('carrier');
 		toggle.set([['UA']]);
 		expect(opacity(group, 'carrier', ['UA', 'DL'])).toEqual([1, DIM]);
 		toggle.clear();
@@ -25,8 +25,8 @@ describe('FilterGroup selection activity', () => {
 	it('intersects two categorical clauses on one field, since the filters AND', () => {
 		const source = new FilterGroup();
 		const group = new FilterGroup();
-		group.registerToggle('carrier', { excludeMarkIds: () => new Set() }).set([['UA'], ['DL']]);
-		source.registerToggle('carrier', { excludeMarkIds: () => new Set() }).set([['DL'], ['AA']]);
+		group.registerToggle('carrier').set([['UA'], ['DL']]);
+		source.registerToggle('carrier').set([['DL'], ['AA']]);
 		group.relayClause('relay:toggle-carrier', source.selection.get('toggle-carrier')!);
 
 		expect(opacity(group, 'carrier', ['UA', 'DL', 'AA'])).toEqual([DIM, 1, DIM]);
@@ -37,18 +37,16 @@ describe('FilterGroup selection activity', () => {
 
 	it('ignores brushes, tuples and other fields', () => {
 		const group = new FilterGroup();
-		group.register('brush', { excludeMarkIds: () => new Set() }).update('x > 0', [0, 1]);
-		group
-			.registerToggle(['carrier', 'origin'], { excludeMarkIds: () => new Set() })
-			.set([['UA', 'JFK']]);
-		group.registerToggle('origin', { excludeMarkIds: () => new Set() }).set([['JFK']]);
+		group.register('brush', {}).update('x > 0', [0, 1]);
+		group.registerToggle(['carrier', 'origin'], {}).set([['UA', 'JFK']]);
+		group.registerToggle('origin').set([['JFK']]);
 		expect(opacity(group, 'carrier', ['UA', 'DL'])).toEqual([1, 1]);
 	});
 
 	it('clearAll clears every field it selected on', () => {
 		const group = new FilterGroup();
-		group.registerToggle('carrier', { excludeMarkIds: () => new Set() }).set([['UA']]);
-		group.registerToggle('origin', { excludeMarkIds: () => new Set() }).set([['JFK']]);
+		group.registerToggle('carrier').set([['UA']]);
+		group.registerToggle('origin').set([['JFK']]);
 		group.clearAll();
 		expect(opacity(group, 'carrier', ['DL'])).toEqual([1]);
 		expect(opacity(group, 'origin', ['LGA'])).toEqual([1]);
@@ -61,7 +59,7 @@ describe('FilterGroup selection activity', () => {
 		expect([registry.get().index, a.index, b.index]).toEqual([2, 0, 1]);
 		expect(a.activity('carrier')).toBe(b.activity('carrier'));
 
-		a.registerToggle('carrier', { excludeMarkIds: () => new Set() }).set([['UA']]);
+		a.registerToggle('carrier').set([['UA']]);
 		expect(opacity(a, 'carrier', ['DL'])).toEqual([DIM]);
 		expect(opacity(b, 'carrier', ['DL'])).toEqual([1]);
 		expect(registry.fields.map((f) => f.key)).toEqual(['carrier']);

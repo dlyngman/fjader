@@ -20,6 +20,7 @@ import { binsFineEnough } from '../sufficient-statistics';
 import type { QueryDescriptor } from '../QueryEngine';
 import type { MarkHandle } from '../MarkHandle.svelte';
 import type { FilterGroup } from '../FilterGroup.svelte';
+import { NO_ROUTE } from '../CrossfilterSelection.svelte';
 import {
 	planPreagg,
 	preaggSelectSQL,
@@ -154,10 +155,10 @@ export class Preagg {
 	 *
 	 * The source is named by its ID rather than inferred: before the first drag
 	 * it has no clause yet, and other clauses on the same chart (a Toggle)
-	 * exclude the same marks a brush does.
+	 * skip the same chart a brush does.
 	 */
 	async activate(filterGroup: FilterGroup, source: ActivationSource): Promise<void> {
-		const { sourceId: activeSourceId, excludedByAll, dims } = source;
+		const { sourceId: activeSourceId, categoricalKey, dims } = source;
 		if (this.#destroyed || dims.length === 0) return;
 		// An activation outside batch() (a legend's hover) is a batch of one.
 		this.#builds.ensureBatch();
@@ -170,7 +171,8 @@ export class Preagg {
 			if (reg.filterGroup !== filterGroup) continue;
 			// A mark the source never filters gets no table for it, and keeps
 			// the tables it holds for other sources.
-			if (excludedByAll.has(markId)) continue;
+			const route = reg.descriptor.route ?? NO_ROUTE;
+			if (!selection.filters(route, activeSourceId, categoricalKey)) continue;
 			const own = this.#of(markId);
 
 			// Skip if the latest build, finished or in flight, still matches
@@ -182,7 +184,7 @@ export class Preagg {
 					basis.activeSourceId === activeSourceId &&
 					basis.dimsKey === dimsKey &&
 					this.#binsFitDims(latest, dims) &&
-					bakedClausesHold(markId, selection, latest)
+					bakedClausesHold(route, selection, latest)
 				) {
 					continue;
 				}
@@ -198,8 +200,8 @@ export class Preagg {
 
 			// Bake every other clause into the preagg table. Sorted by source ID,
 			// so the same filters always give the same SQL, and so the same table.
-			const bakedClauses = selection.bakedClauses(markId, activeSourceId);
-			const staticFilters = selection.bakedPredicates(markId, activeSourceId);
+			const bakedClauses = selection.bakedClauses(route, activeSourceId);
+			const staticFilters = selection.bakedPredicates(route, activeSourceId);
 
 			// Hash-based naming: identical preagg SQL reuses the same table (like Mosaic).
 			// CREATE TABLE IF NOT EXISTS avoids rebuilding when switching charts.
@@ -263,7 +265,7 @@ export class Preagg {
 		const preagg = this.#usable(markId, reg);
 		if (!preagg) return null;
 		const sql = preaggQuerySQL(
-			markId,
+			reg.descriptor.route ?? NO_ROUTE,
 			reg.descriptor,
 			reg.filterGroup.selection,
 			preagg,
@@ -385,7 +387,7 @@ export class Preagg {
 			this.#marks.get(markId)?.building.get(sourceId) === build &&
 			reg.descriptor.parts === build.basis.parts &&
 			this.#binsFitCurrentView(build) &&
-			bakedClausesHold(markId, reg.filterGroup.selection, build)
+			bakedClausesHold(reg.descriptor.route ?? NO_ROUTE, reg.filterGroup.selection, build)
 		);
 	}
 
@@ -454,7 +456,7 @@ export class Preagg {
 			if (
 				state.basis.parts === reg.descriptor.parts &&
 				this.#binsFineEnough(state) &&
-				bakedClausesHold(markId, selection, state)
+				bakedClausesHold(reg.descriptor.route ?? NO_ROUTE, selection, state)
 			) {
 				// A Map keeps the first insertion position of a key, so listing
 				// this entry first and spreading the rest moves it to the front.

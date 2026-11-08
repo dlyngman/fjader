@@ -62,7 +62,8 @@
 	);
 
 	const brushHandle: SourceHandle = filterGroup.register(source, {
-		excludeMarkIds: () => new Set(chart.config.entries.keys()),
+		// Its own chart is not filtered by it (crossfilter).
+		chart: chart.config,
 		activeDims: () => {
 			const scale = getScale();
 			if (!scale || !columnRef) return [];

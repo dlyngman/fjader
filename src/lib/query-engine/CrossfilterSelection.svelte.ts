@@ -2,12 +2,19 @@
  * CrossfilterSelection — Svelte 5-native crossfilter predicate engine.
  *
  * Replaces Mosaic's Selection.intersect({ cross: true }) with a reactive
- * $state Map. Marks derive their filter via predicate(markId), which
- * returns all active predicates except those that exclude that mark.
+ * $state Map of clauses, plus the registrations of the sources that write
+ * them. Marks derive their filter via predicate(route): every clause that
+ * filters the mark.
  *
- * Cross-filtering is chart-level: interactors pass excludeMarkIds (the set
- * of all marks in the source chart). When a brush in chart A fires, all
- * marks in chart A skip that clause. All other marks receive it.
+ * WHICH CLAUSES FILTER A MARK. The mark decides, not the control that wrote
+ * the clause. A clause filters a mark unless:
+ * - it is a categorical selection on a field the mark reads selection
+ *   activity for (the mark dims by it instead), or
+ * - the mark's chart holds a registration of the clause's source that opted
+ *   into skipping its chart (crossfilter: a brush does not filter its own
+ *   chart).
+ * Both are computed when asked, from the clause, the mark's route and the
+ * live registrations: nothing is cached, so nothing goes stale.
  */
 
 import { SvelteMap } from 'svelte/reactivity';
@@ -37,10 +44,9 @@ export interface CategoricalSelection {
 	values: ReadonlySet<unknown>;
 }
 
-/** A clause stored in the selection. */
+/** A clause stored in the selection. Nothing in it depends on its group. */
 export interface Clause {
 	predicate: FilterExpr;
-	excludeMarkIds: Set<string>;
 	value: unknown;
 	schema?: FilterSchema;
 	/** Set when the clause selects categories of one field; written with the clause. */
@@ -61,6 +67,17 @@ export interface MarkRoute {
 	readonly chart: object | null;
 }
 
+/**
+ * What routing reads from one registration of a source: the chart it skips,
+ * if it opted into skipping one. Compared by reference with a mark's route.
+ */
+export interface SourceRegistration {
+	readonly chart?: object | null;
+}
+
+/** A mark with no route: it reads no activity and is in no chart. */
+export const NO_ROUTE: MarkRoute = { reads: [], chart: null };
+
 /** A clause with its source identifier, for external consumers. */
 export interface ClauseEntry extends Clause {
 	sourceId: string;
@@ -73,17 +90,64 @@ export interface ClauseEntry extends Clause {
 export class CrossfilterSelection {
 	#clauses: SvelteMap<string, Clause> = new SvelteMap();
 
+	/** Registrations per source id. Several under one id are one source. Not reactive. */
+	#sources = new Map<string, Set<SourceRegistration>>();
+
+	/** Add a registration of `sourceId`. */
+	addRegistration(sourceId: string, registration: SourceRegistration): void {
+		let registrations = this.#sources.get(sourceId);
+		if (!registrations) {
+			registrations = new Set();
+			this.#sources.set(sourceId, registrations);
+		}
+		registrations.add(registration);
+	}
+
+	/** Remove a registration of `sourceId`; the last one removes the source. */
+	removeRegistration(sourceId: string, registration: SourceRegistration): void {
+		const registrations = this.#sources.get(sourceId);
+		if (!registrations?.delete(registration)) return;
+		if (registrations.size === 0) this.#sources.delete(sourceId);
+	}
+
+	/** The live registrations of `sourceId`, or undefined when it has none. */
+	registrationsOf(sourceId: string): ReadonlySet<SourceRegistration> | undefined {
+		return this.#sources.get(sourceId);
+	}
+
 	/**
-	 * Compute the filter predicate for a given mark.
-	 * Returns all active predicates except those whose excludeMarkIds
-	 * contains the given markId.
+	 * Whether a clause of `sourceId` filters the mark with `route`. `key` is
+	 * the clause's categorical field (its identity key), or null for a brush,
+	 * a tuple or a manual clause; before the source has written a clause, its
+	 * registrations' key, which preagg activation needs on hover.
+	 *
+	 * A plain loop over the registrations, which are one to three: no closure,
+	 * no allocation, as it runs per mark per clause on every brush frame.
 	 */
-	predicate(markId: string): FilterExpr[] {
-		const result: FilterExpr[] = [];
-		for (const clause of this.#clauses.values()) {
-			if (CrossfilterSelection.applies(clause, markId)) {
-				result.push(clause.predicate);
+	filters(route: MarkRoute, sourceId: string, key: string | null): boolean {
+		if (key !== null && route.reads.includes(key)) return false;
+		const chart = route.chart;
+		if (chart) {
+			const registrations = this.#sources.get(sourceId);
+			if (registrations) {
+				for (const registration of registrations) {
+					if (registration.chart === chart) return false;
+				}
 			}
+		}
+		return true;
+	}
+
+	/** Whether `clause`, written by `sourceId`, filters the mark with `route`. */
+	applies(sourceId: string, clause: Clause, route: MarkRoute): boolean {
+		return !!clause.predicate && this.filters(route, sourceId, clause.categorical?.key ?? null);
+	}
+
+	/** Every predicate that filters the mark with `route`. */
+	predicate(route: MarkRoute): FilterExpr[] {
+		const result: FilterExpr[] = [];
+		for (const [sourceId, clause] of this.#clauses) {
+			if (this.applies(sourceId, clause, route)) result.push(clause.predicate);
 		}
 		return result;
 	}
@@ -93,8 +157,7 @@ export class CrossfilterSelection {
 	 * Pass null to remove (clear) the clause for the given source.
 	 *
 	 * Returns the clause it replaced or removed, so the caller can re-query the
-	 * marks either one applies to: a clause's exclusions belong to whichever
-	 * control wrote it, so the old and the new one can apply to different marks.
+	 * marks either one applies to.
 	 */
 	update(sourceId: string, clause: Clause | null): Clause | undefined {
 		const prev = this.#clauses.get(sourceId);
@@ -104,11 +167,6 @@ export class CrossfilterSelection {
 			this.#clauses.delete(sourceId);
 		}
 		return prev;
-	}
-
-	/** Whether a clause filters a mark: it has a predicate and does not exclude it. */
-	static applies(clause: Clause, markId: string): boolean {
-		return !!clause.predicate && !clause.excludeMarkIds.has(markId);
 	}
 
 	/** Whether a given source has an active (non-null) clause. */
@@ -143,18 +201,18 @@ export class CrossfilterSelection {
 	 * Whether a clause is baked into a mark's preagg table: every clause that
 	 * filters the mark, except the active brush, which the table bins instead.
 	 */
-	#isBaked(sourceId: string, clause: Clause, markId: string, activeSourceId: string): boolean {
-		return sourceId !== activeSourceId && CrossfilterSelection.applies(clause, markId);
+	#isBaked(sourceId: string, clause: Clause, route: MarkRoute, activeSourceId: string): boolean {
+		return sourceId !== activeSourceId && this.applies(sourceId, clause, route);
 	}
 
 	/**
 	 * The clause objects a preagg table bakes in, in map insertion order.
 	 * Stored at build time so bakedClausesMatch() can compare by reference.
 	 */
-	bakedClauses(markId: string, activeSourceId: string): Clause[] {
+	bakedClauses(route: MarkRoute, activeSourceId: string): Clause[] {
 		const result: Clause[] = [];
 		for (const [sourceId, clause] of this.#clauses) {
-			if (this.#isBaked(sourceId, clause, markId, activeSourceId)) result.push(clause);
+			if (this.#isBaked(sourceId, clause, route, activeSourceId)) result.push(clause);
 		}
 		return result;
 	}
@@ -163,10 +221,10 @@ export class CrossfilterSelection {
 	 * The baked predicates sorted by source ID, so the same filters always
 	 * produce the same preagg SQL whatever order their clauses were added in.
 	 */
-	bakedPredicates(markId: string, activeSourceId: string): FilterExpr[] {
+	bakedPredicates(route: MarkRoute, activeSourceId: string): FilterExpr[] {
 		const entries: [string, FilterExpr][] = [];
 		for (const [sourceId, clause] of this.#clauses) {
-			if (this.#isBaked(sourceId, clause, markId, activeSourceId)) {
+			if (this.#isBaked(sourceId, clause, route, activeSourceId)) {
 				entries.push([sourceId, clause.predicate]);
 			}
 		}
@@ -179,10 +237,10 @@ export class CrossfilterSelection {
 	 * Every filter change replaces its Clause object, so an unchanged filter
 	 * keeps its reference. Runs every brush frame, so it allocates nothing.
 	 */
-	bakedClausesMatch(markId: string, activeSourceId: string, then: Clause[]): boolean {
+	bakedClausesMatch(route: MarkRoute, activeSourceId: string, then: Clause[]): boolean {
 		let i = 0;
 		for (const [sourceId, clause] of this.#clauses) {
-			if (!this.#isBaked(sourceId, clause, markId, activeSourceId)) continue;
+			if (!this.#isBaked(sourceId, clause, route, activeSourceId)) continue;
 			if (i >= then.length || clause !== then[i++]) return false;
 		}
 		return i === then.length;

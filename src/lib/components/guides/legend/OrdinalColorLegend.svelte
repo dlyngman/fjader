@@ -2,6 +2,7 @@
 	import { getContext, onDestroy } from 'svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { ChartContext } from '$lib/types';
 
 	interface Props {
 		scaleState: ColorScaleState;
@@ -57,12 +58,13 @@
 	}
 
 	// The selection is shared with any Toggle on the same field through its clause.
-	// A legend is not a chart, so it excludes no marks: every chart filters.
+	// A legend inside a chart skips that chart, as a Toggle there does: its marks
+	// keyed by the field dim, the rest keep their data. A standalone legend is in
+	// no chart, so every chart in its group is routed by its marks alone.
+	const chartContext = getContext<ChartContext | undefined>('chart');
 	const toggle =
 		filterGroup && field
-			? filterGroup.registerToggle(field, {
-					excludeMarkIds: () => new Set<string>()
-				})
+			? filterGroup.registerToggle(field, { chart: chartContext?.config ?? null })
 			: null;
 	onDestroy(() => toggle?.destroy());
 

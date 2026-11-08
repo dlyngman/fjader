@@ -37,7 +37,7 @@ import {
 	type IdentityField
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
-import { CrossfilterSelection, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
+import { NO_ROUTE, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
@@ -737,23 +737,45 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Called by FilterGroup when one clause changes: `prev` is the clause it
-	 * replaced or removed, `next` the one now in force (null when removed).
+	 * Called by FilterGroup when the clause of `sourceId` changes: `prev` is the
+	 * clause it replaced or removed, `next` the one now in force (null when
+	 * removed).
 	 *
-	 * Re-queries only the group's marks that either one applies to. A mark
-	 * neither applies to has the same SQL as before, so querying it would only
-	 * assemble that SQL to find the cached result, on every brush frame. Both
-	 * clauses count because a clause's exclusions belong to whichever control
-	 * wrote it: after a Toggle, a legend's write applies to the Toggle's chart.
+	 * Re-queries only the group's marks that either one filters. A mark neither
+	 * filters has the same SQL as before, so querying it would only assemble that
+	 * SQL to find the cached result, on every brush frame. A mark that reads the
+	 * clause's categorical field dims by it instead, and a mark in a chart that
+	 * skips the source is not filtered by it: neither is re-queried.
 	 */
-	onClauseChange(group: FilterGroup, prev: Clause | undefined, next: Clause | null): void {
+	onClauseChange(
+		group: FilterGroup,
+		sourceId: string,
+		prev: Clause | undefined,
+		next: Clause | null
+	): void {
 		this.#lastFilterChangeAt = performance.now();
+		const { selection } = group;
 		for (const [markId, reg] of this.#marks) {
 			if (reg.filterGroup !== group) continue;
+			const route = reg.descriptor.route ?? NO_ROUTE;
 			if (
-				(prev && CrossfilterSelection.applies(prev, markId)) ||
-				(next && CrossfilterSelection.applies(next, markId))
+				(prev && selection.applies(sourceId, prev, route)) ||
+				(next && selection.applies(sourceId, next, route))
 			) {
+				this.#queryMark(markId, reg);
+			}
+		}
+	}
+
+	/**
+	 * Called by FilterGroup when a registration that skips `chart` comes or
+	 * goes while its source has a clause: re-queries the group's marks in that
+	 * chart, whose filters may have changed. A mark whose SQL did not change
+	 * stops at the cache and the same-Table guard.
+	 */
+	onChartRouteChange(group: FilterGroup, chart: object): void {
+		for (const [markId, reg] of this.#marks) {
+			if (reg.filterGroup === group && reg.descriptor.route?.chart === chart) {
 				this.#queryMark(markId, reg);
 			}
 		}
@@ -793,7 +815,7 @@ export class QueryEngine {
 		return this.#assembleSQL(
 			descriptor,
 			descriptor.table,
-			reg.filterGroup.selection.predicate(markId),
+			reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE),
 			handle.params
 		);
 	}

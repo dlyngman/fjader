@@ -19,6 +19,8 @@ const range = (column: string) => (value: unknown) => ({
 	values: value as number[]
 });
 
+const SOURCE_CHART = { name: 'source chart' };
+
 let source: FilterGroup;
 let target: FilterGroup;
 let targetEngine: ReturnType<typeof mockEngine>;
@@ -35,11 +37,8 @@ beforeEach(() => {
 
 describe('ClauseRelay', () => {
 	it('relays a toggle once, however often the axis brush moves', () => {
-		const brush = source.register('brush-ts', {
-			excludeMarkIds: () => new Set(['source-mark']),
-			augment: range('ts')
-		});
-		const toggle = source.registerToggle('dow', { excludeMarkIds: () => new Set() });
+		const brush = source.register('brush-ts', { chart: SOURCE_CHART, augment: range('ts') });
+		const toggle = source.registerToggle('dow');
 		toggle.set([['Mon']]);
 		relay.sync(true, 'ts');
 		expect(targetEngine.onClauseChange).toHaveBeenCalledTimes(1);
@@ -54,7 +53,7 @@ describe('ClauseRelay', () => {
 	});
 
 	it('re-sends a clause when it changes, and removes it when it goes', () => {
-		const toggle = source.registerToggle('dow', { excludeMarkIds: () => new Set() });
+		const toggle = source.registerToggle('dow');
 		toggle.set([['Mon']]);
 		relay.sync(true, 'ts');
 		toggle.set([['Tue']]);
@@ -67,22 +66,29 @@ describe('ClauseRelay', () => {
 		expect(target.items).toHaveLength(0);
 	});
 
-	it('relays a brush on another column, and drops the source exclusions', () => {
+	it('relays the source’s own clause object, without its chart skip', () => {
 		source
-			.register('brush-delay', {
-				excludeMarkIds: () => new Set(['source-mark']),
-				augment: range('delay')
-			})
+			.register('brush-delay', { chart: SOURCE_CHART, augment: range('delay') })
 			.update('delay > 5', [5, 10]);
 		relay.sync(true, 'ts');
 
 		const relayed = target.selection.get('manual:relay:brush-delay')!;
+		expect(relayed).toBe(source.selection.get('brush-delay'));
 		expect(relayed.schema).toEqual({ kind: 'range', column: 'delay', values: [5, 10] });
-		expect(target.selection.predicate('source-mark')).toEqual(['delay > 5']);
+		// The skip belongs to the source group's registration: in the target, a
+		// mark in the source chart is filtered.
+		expect(target.selection.predicate({ reads: [], chart: SOURCE_CHART })).toEqual(['delay > 5']);
+	});
+
+	it('relays a categorical toggle so it dims, not filters, the target marks reading its field', () => {
+		source.registerToggle('carrier').set([['UA']]);
+		relay.sync(true, 'ts');
+		expect(target.selection.predicate({ reads: ['carrier'], chart: null })).toEqual([]);
+		expect(target.activity('carrier').opacityOfValue(target.index, 'DL')).toBeLessThan(1);
 	});
 
 	it('with relaying off, or on clear, removes what it relayed', () => {
-		source.registerToggle('dow', { excludeMarkIds: () => new Set() }).set([['Mon']]);
+		source.registerToggle('dow').set([['Mon']]);
 		relay.sync(true, 'ts');
 		relay.sync(false, 'ts');
 		expect(target.items).toHaveLength(0);
