@@ -51,7 +51,10 @@ export interface SourceOpts {
 	 * while its bins are as fine as the pixels.
 	 */
 	view?: (out: Float64Array) => void;
-	/** Schema metadata for UI filter pills, derived from the clause value. */
+	/**
+	 * Schema metadata for UI filter pills, derived from the clause value. Run
+	 * once per write and stored on the clause.
+	 */
 	augment?: (value: unknown) => FilterSchema | null;
 	/** The scales to dim, and the values to dim them by, taken from the clause value. */
 	projection?: {
@@ -89,6 +92,29 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
 	toggle(tuple: unknown[], multi: boolean, total?: number): void;
 	/** Select exactly these tuples; empty clears. */
 	set(tuples: unknown[][]): void;
+}
+
+/**
+ * A clause's schema, computed once when it is written rather than on every
+ * read of `items`: from the writer's `augment`, or another registration's when
+ * the writer has none. Stored on the clause, so a reader of raw clauses (the
+ * relay looking for a range brush) sees it too.
+ */
+function schemaOf(
+	registrations: Set<SourceOpts>,
+	writer: SourceOpts,
+	value: unknown
+): FilterSchema | undefined {
+	let augment = writer.augment;
+	if (!augment) {
+		for (const opts of registrations) {
+			if (opts.augment) {
+				augment = opts.augment;
+				break;
+			}
+		}
+	}
+	return augment?.(value) ?? undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,25 +162,12 @@ export class FilterGroup {
 	 */
 	#projectingSources = new Set<string>();
 
-	/** Active filter items with schema metadata, for UI consumption. */
+	/**
+	 * Active filter items with schema metadata, for UI consumption. The schema
+	 * is the clause's own, computed when it was written (see `update`).
+	 */
 	get items(): FilterItem[] {
-		const clauses = this.selection.items;
-		const result: FilterItem[] = [];
-		for (const entry of clauses) {
-			let schema = entry.schema;
-			for (const opts of this.#sources.get(entry.sourceId) ?? []) {
-				if (!opts.augment) continue;
-				schema = opts.augment(entry.value) ?? entry.schema;
-				break;
-			}
-			result.push({
-				sourceId: entry.sourceId,
-				predicate: entry.predicate,
-				value: entry.value,
-				schema
-			});
-		}
-		return result;
+		return this.selection.items;
 	}
 
 	/** Number of active filters. */
@@ -187,7 +200,12 @@ export class FilterGroup {
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
-				const next: Clause = { predicate, excludeMarkIds: opts.excludeMarkIds(), value };
+				const next: Clause = {
+					predicate,
+					excludeMarkIds: opts.excludeMarkIds(),
+					value,
+					schema: schemaOf(registrations, opts, value)
+				};
 				this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 			},
 			clear: () => this.clearSource(sourceId),

@@ -152,21 +152,15 @@ describe('FilterGroup', () => {
 	describe('items with augmentation', () => {
 		it('applies augmenter to produce schema metadata', () => {
 			const group = new FilterGroup();
-			group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				augment: (value) => ({
-					kind: 'range',
-					column: 'price',
-					label: 'Price',
-					values: value as unknown[]
-				})
-			});
+			const augment = vi.fn((value: unknown) => ({
+				kind: 'range',
+				column: 'price',
+				label: 'Price',
+				values: value as unknown[]
+			}));
+			const handle = group.register('brush-x', { excludeMarkIds: () => new Set(), augment });
 
-			group.selection.update('brush-x', {
-				predicate: 'price BETWEEN 10 AND 50',
-				excludeMarkIds: new Set(),
-				value: [10, 50]
-			});
+			handle.update('price BETWEEN 10 AND 50', [10, 50]);
 
 			const items = group.items;
 			expect(items).toHaveLength(1);
@@ -176,6 +170,22 @@ describe('FilterGroup', () => {
 				label: 'Price',
 				values: [10, 50]
 			});
+			// On the raw clause too, computed once per write rather than per read.
+			expect(group.selection.get('brush-x')!.schema).toBe(items[0].schema);
+			void group.items;
+			expect(augment).toHaveBeenCalledTimes(1);
+		});
+
+		it('takes the schema from another registration when the writer has no augment', () => {
+			const group = new FilterGroup();
+			group.register('brush-x', {
+				excludeMarkIds: () => new Set(),
+				augment: () => ({ kind: 'range', column: 'x' })
+			});
+			const plain = group.register('brush-x', { excludeMarkIds: () => new Set() });
+
+			plain.update('x > 0', [0, 1]);
+			expect(group.selection.get('brush-x')!.schema).toEqual({ kind: 'range', column: 'x' });
 		});
 
 		it('labels a toggle’s filter item with its field', () => {
