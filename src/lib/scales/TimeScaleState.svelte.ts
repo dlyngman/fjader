@@ -25,7 +25,13 @@ export class TimeScaleState extends LinearScaleState {
 	}
 
 	// --- Time Metadata ---
-	#t0: Date | null = null; // Origin Date (raw global min datetime)
+	/**
+	 * Origin Date (raw global min datetime). State, because SQL is built from
+	 * it: a mark's offset select and a brush's predicate are $derived, and one
+	 * computed before the first datetime extent landed must rebuild when it
+	 * does, or it keeps comparing the raw column with offsets.
+	 */
+	#t0: Date | null = $state.raw(null);
 	#unit: number = 1; // Seconds per offset unit (1 = seconds)
 
 	// --- Datetime Extent Tracking ---
