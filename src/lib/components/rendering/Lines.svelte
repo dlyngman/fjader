@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
@@ -395,7 +396,7 @@
 			// re-fires once data loads.
 			if (colorMode === 1 && !colorValueData) return;
 
-			const buffer = new ArrayBuffer(48);
+			const buffer = new ArrayBuffer(UNIFORM_BYTES.linesMarkConstants);
 			const view = new DataView(buffer);
 			const LE = true;
 

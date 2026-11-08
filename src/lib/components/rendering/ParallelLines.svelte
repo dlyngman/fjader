@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { PARALLEL_MAX_AXES, UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
@@ -7,10 +8,10 @@
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, CurveType, WebGPUCanvasContext } from '$lib/types';
 
-	const MAX_AXES = 16;
-	const UNIFORM_SIZE = 176; // bytes, must match WGSL struct layout
+	const MAX_AXES = PARALLEL_MAX_AXES;
+	const UNIFORM_SIZE = UNIFORM_BYTES.parallelConfig;
 	// One ScaleParam (16 bytes) per axis, filled by the coordinator.
-	const AXIS_SCALES_SIZE = MAX_AXES * 16;
+	const AXIS_SCALES_SIZE = UNIFORM_BYTES.parallelAxisScales;
 
 	// Both x and y so ScaleTemplateSystem generates scaleX(), scaleLinearY(), pixelsToClip()
 	const rendererDefinition = {
