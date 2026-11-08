@@ -21,7 +21,7 @@ export const UNIFORM_BYTES = {
 	rectsMarkConstants: 48,
 	ruleXMarkConstants: 48,
 	ruleYMarkConstants: 48,
-	linesMarkConstants: 48,
+	linesMarkConstants: 64,
 	areasMarkConstants: 64,
 	gridLineRuleConstants: 32,
 	parallelConfig: 176,

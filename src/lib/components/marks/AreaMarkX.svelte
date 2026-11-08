@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { outlineColor } from './utils/area-outline';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Areas, Lines } from '../rendering';
@@ -155,6 +156,15 @@
 		() => setup,
 		scaleRegistry,
 		chartContext
+	);
+
+	/** The outline's colour, and the fill's activity it dims by (see area-outline.ts). */
+	const outline = $derived(
+		outlineColor(entry.stroke, {
+			data: markColor.data,
+			colorMode: markColor.colorMode,
+			colorScaleIndex: markColor.colorScaleIndex
+		})
 	);
 
 	// Detect if x2 is an aggregate expression
@@ -382,9 +392,11 @@
 				{yData}
 				{seriesData}
 				curve={effectiveCurve}
-				colorValueData={entry.stroke ? null : markColor.data}
-				colorMode={entry.stroke ? 0 : markColor.colorMode}
-				colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
+				colorValueData={outline.colorValueData}
+				colorMode={outline.colorMode}
+				colorScaleIndex={outline.colorScaleIndex}
+				activityColorMode={outline.activityColorMode}
+				activityColorScaleIndex={outline.activityColorScaleIndex}
 				groupIndex={setup?.groupIndex ?? 0}
 				constantColor={strokeConstantColor}
 				strokeWidth={entry.strokeWidth ?? 0}
@@ -398,9 +410,11 @@
 					{yData}
 					{seriesData}
 					curve={effectiveCurve}
-					colorValueData={entry.stroke ? null : markColor.data}
-					colorMode={entry.stroke ? 0 : markColor.colorMode}
-					colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
+					colorValueData={outline.colorValueData}
+					colorMode={outline.colorMode}
+					colorScaleIndex={outline.colorScaleIndex}
+					activityColorMode={outline.activityColorMode}
+					activityColorScaleIndex={outline.activityColorScaleIndex}
 					groupIndex={setup?.groupIndex ?? 0}
 					constantColor={strokeConstantColor}
 					strokeWidth={entry.strokeWidth ?? 0}

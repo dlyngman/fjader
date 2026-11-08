@@ -36,7 +36,9 @@
 		CONSTANT_COLOR: 16, // vec4<f32>
 		DOT_RADIUS: 32, // f32
 		GLOBAL_ALPHA: 36, // f32
-		GROUP_INDEX: 40 // u32
+		GROUP_INDEX: 40, // u32
+		ACTIVITY_COLOR_MODE: 44, // u32
+		ACTIVITY_COLOR_SCALE_INDEX: 48 // u32
 	};
 
 	interface Props {
@@ -54,6 +56,13 @@
 		colorScaleIndex?: number;
 		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
 		groupIndex?: number;
+		/**
+		 * The colour mode and scale index selection activity is read through,
+		 * from `colorValueData`; null for the line's own colour. An area's
+		 * outline in a constant stroke passes its fill's, with the fill's values.
+		 */
+		activityColorMode?: number | null;
+		activityColorScaleIndex?: number | null;
 		constantColor?: [number, number, number, number];
 		m4Decimator?: M4Decimator | null;
 		dotsRung?: import('$lib/lod/DotsRung.svelte').DotsRung | null;
@@ -75,6 +84,8 @@
 		colorMode = 0,
 		colorScaleIndex = 0,
 		groupIndex = 0,
+		activityColorMode = null,
+		activityColorScaleIndex = null,
 		constantColor = DEFAULT_STROKE_COLOR,
 		m4Decimator = null,
 		dotsRung = null,
@@ -148,7 +159,12 @@
     constantColor: vec4<f32>,
     dotRadius: f32,
     globalAlpha: f32,
-    groupIndex: u32 // Page-wide filter group index, for activity reads
+    groupIndex: u32, // Page-wide filter group index, for activity reads
+    // Which colour scale this line's selection activity is read through. Its
+    // own colour by default; an area's outline, drawn in a constant stroke,
+    // reads its fill's so it dims with the fill.
+    activityColorMode: u32,
+    activityColorScaleIndex: u32
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
 
@@ -207,7 +223,8 @@
       output.colorValue = colorValues[instanceIdx];
       output.alpha = markConstants.globalAlpha * selectionDim(
         ${colorActivityWGSL(ACTIVITY_READS, {
-					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx]',
+					color:
+						'markConstants.activityColorMode, markConstants.activityColorScaleIndex, colorValues[instanceIdx]',
 					group: 'markConstants.groupIndex'
 				})}
       );
@@ -307,7 +324,8 @@
     output.colorValue = colorValues[currIdx];
     output.alpha = markConstants.globalAlpha * selectionDim(
       ${colorActivityWGSL(ACTIVITY_READS, {
-				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx]',
+				color:
+					'markConstants.activityColorMode, markConstants.activityColorScaleIndex, colorValues[currIdx]',
 				group: 'markConstants.groupIndex'
 			})}
     );
@@ -404,7 +422,9 @@
 			// Guard: skip uniform write when colorMode=1 but color data hasn't
 			// arrived yet. colorValueData is tracked reactively so the effect
 			// re-fires once data loads.
-			if (colorMode === 1 && !colorValueData) return;
+			const activityMode = activityColorMode ?? colorMode;
+			const activityScale = activityColorScaleIndex ?? colorScaleIndex;
+			if ((colorMode === 1 || activityMode === 1) && !colorValueData) return;
 
 			const buffer = new ArrayBuffer(UNIFORM_BYTES.linesMarkConstants);
 			const view = new DataView(buffer);
@@ -421,6 +441,8 @@
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
 			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_COLOR_MODE, activityMode, LE);
+			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_COLOR_SCALE_INDEX, activityScale, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);
