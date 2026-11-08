@@ -51,7 +51,10 @@ export interface SourceOpts {
 	 * while its bins are as fine as the pixels.
 	 */
 	view?: (out: Float64Array) => void;
-	/** Schema metadata for UI filter pills, derived from the clause value. */
+	/**
+	 * Schema metadata for UI filter pills, derived from the clause value. Run
+	 * once per write and stored on the clause.
+	 */
 	augment?: (value: unknown) => FilterSchema | null;
 	/** The scales to dim, and the values to dim them by, taken from the clause value. */
 	projection?: {
@@ -89,6 +92,29 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
 	toggle(tuple: unknown[], multi: boolean, total?: number): void;
 	/** Select exactly these tuples; empty clears. */
 	set(tuples: unknown[][]): void;
+}
+
+/**
+ * A clause's schema, computed once when it is written rather than on every
+ * read of `items`: from the writer's `augment`, or another registration's when
+ * the writer has none. Stored on the clause, so a reader of raw clauses (the
+ * relay looking for a range brush) sees it too.
+ */
+function schemaOf(
+	registrations: Set<SourceOpts>,
+	writer: SourceOpts,
+	value: unknown
+): FilterSchema | undefined {
+	let augment = writer.augment;
+	if (!augment) {
+		for (const opts of registrations) {
+			if (opts.augment) {
+				augment = opts.augment;
+				break;
+			}
+		}
+	}
+	return augment?.(value) ?? undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,25 +162,12 @@ export class FilterGroup {
 	 */
 	#projectingSources = new Set<string>();
 
-	/** Active filter items with schema metadata, for UI consumption. */
+	/**
+	 * Active filter items with schema metadata, for UI consumption. The schema
+	 * is the clause's own, computed when it was written (see `update`).
+	 */
 	get items(): FilterItem[] {
-		const clauses = this.selection.items;
-		const result: FilterItem[] = [];
-		for (const entry of clauses) {
-			let schema = entry.schema;
-			for (const opts of this.#sources.get(entry.sourceId) ?? []) {
-				if (!opts.augment) continue;
-				schema = opts.augment(entry.value) ?? entry.schema;
-				break;
-			}
-			result.push({
-				sourceId: entry.sourceId,
-				predicate: entry.predicate,
-				value: entry.value,
-				schema
-			});
-		}
-		return result;
+		return this.selection.items;
 	}
 
 	/** Number of active filters. */
@@ -187,22 +200,32 @@ export class FilterGroup {
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
-				this.selection.update(sourceId, {
+				const next: Clause = {
 					predicate,
 					excludeMarkIds: opts.excludeMarkIds(),
-					value
-				});
-				this.#afterUpdate(sourceId);
+					value,
+					schema: schemaOf(registrations, opts, value)
+				};
+				this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 			},
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
 			destroy: () => {
+				// Once only: a second call must not remove a newer registration
+				// under the same id, or clear its clause.
+				if (!registrations.has(opts)) return;
+				if (registrations.size === 1) {
+					// The last one: drop the source's preagg tables first, so the
+					// re-query below cannot start reading one about to go. Then clear
+					// while the registration is still in place, so whatever reads the
+					// source's registrations to route the removal still finds them,
+					// and its scales are un-dimmed.
+					this.#engine?.forgetSource(this, sourceId);
+					this.clearSource(sourceId);
+				}
 				registrations.delete(opts);
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
-				this.#engine?.forgetSource(this, sourceId);
-				// Still projecting while it clears, so its scales are un-dimmed.
-				this.clearSource(sourceId);
 				this.#projectingSources.delete(sourceId);
 			}
 		};
@@ -344,18 +367,26 @@ export class FilterGroup {
 		schema?: FilterSchema
 	): void {
 		const resolved = typeof excludeMarkIds === 'function' ? excludeMarkIds() : excludeMarkIds;
-		this.selection.update(`manual:${key}`, {
-			predicate,
-			excludeMarkIds: resolved,
-			value,
-			schema
-		});
-		this.#afterUpdate(`manual:${key}`);
+		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema };
+		const sourceId = `manual:${key}`;
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
+	}
+
+	/**
+	 * Hold `clause` under a manual key, as given: the relay passes another
+	 * group's clause on. The clause it already holds there changes nothing, so
+	 * it neither re-projects nor re-queries: the relay runs on every change in
+	 * its source group, on every brush frame there.
+	 */
+	relayClause(key: string, clause: Clause): void {
+		const sourceId = `manual:${key}`;
+		if (this.selection.get(sourceId) === clause) return;
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, clause), clause);
 	}
 
 	removeManual(key: string): void {
-		this.selection.update(`manual:${key}`, null);
-		this.#afterUpdate(`manual:${key}`);
+		const sourceId = `manual:${key}`;
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
 	}
 
 	// -----------------------------------------------------------------
@@ -368,8 +399,7 @@ export class FilterGroup {
 	 */
 	clearSource(sourceId: string): void {
 		if (!this.selection.isActive(sourceId)) return;
-		this.selection.update(sourceId, null);
-		this.#afterUpdate(sourceId);
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
 	}
 
 	clearAll(): void {
@@ -383,14 +413,15 @@ export class FilterGroup {
 	// -----------------------------------------------------------------
 
 	/**
-	 * After a filter update to `sourceId`: re-project to scales (visual
-	 * dimming) if that source dims anything, and notify the engine to re-query
-	 * affected marks. A brush move skips the projection, which would rebuild the
-	 * same answer and allocate doing it on every pointer move.
+	 * After `sourceId`'s clause went from `prev` to `next`: re-project to scales
+	 * (visual dimming) if that source dims anything, and have the engine
+	 * re-query the marks either clause applies to. A brush move skips the
+	 * projection, which would rebuild the same answer and allocate doing it on
+	 * every pointer move.
 	 */
-	#afterUpdate(sourceId: string): void {
+	#afterUpdate(sourceId: string, prev: Clause | undefined, next: Clause | null): void {
 		if (this.#projectingSources.has(sourceId)) this.#projectToScales();
-		this.#engine?.onFilterChange(this);
+		if (prev || next) this.#engine?.onClauseChange(this, prev, next);
 	}
 
 	/**

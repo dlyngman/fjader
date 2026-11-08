@@ -11,7 +11,8 @@
  *   → setupComplete = true
  *
  * Registration: watches #resolvedQueryParts, registers with engine.
- *   Engine handles filter-driven re-queries via onFilterChange().
+ *   Engine handles filter-driven re-queries via onClauseChange() and
+ *   onFilterChange().
  *
  * Params: watches sort/limit on ReactiveConfig.
  *   Changes trigger re-query for this mark only, no teardown.

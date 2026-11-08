@@ -39,11 +39,20 @@ export class MarkHandle {
 	// Conventional underscore — engine needs external access.
 	_onParamsChange: (() => void) | null = null;
 
-	/** Engine-internal: called to deliver query results. */
+	/**
+	 * Engine-internal: called to deliver query results.
+	 *
+	 * The table it already holds changes nothing, so it bumps nothing: a cache
+	 * hit hands back the same object, and bumping `dataVersion` for it reran
+	 * every effect that reads it (the tooltip table, data-following domains).
+	 * The error is cleared either way, so a success after a failure still
+	 * clears it.
+	 */
 	_setResult(table: Table): void {
+		this.error = null;
+		if (table === this.arrowTable) return;
 		this.arrowTable = table;
 		this.dataVersion++;
-		this.error = null;
 	}
 
 	/** Engine-internal: called on query error. */

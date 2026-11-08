@@ -26,13 +26,14 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 			return Promise.resolve();
 		}),
 		onFilterChange: vi.fn(),
+		onClauseChange: vi.fn(),
 		forgetSource: vi.fn(),
 		identitySqlFor: (field: string) => sqlFor[field] ?? null
 	};
 	return {
 		engine: engine as unknown as QueryEngine,
 		activations,
-		onFilterChange: engine.onFilterChange
+		onClauseChange: engine.onClauseChange
 	};
 }
 
@@ -78,6 +79,30 @@ describe('FilterGroup', () => {
 			expect(group.selection.isActive('brush-x')).toBe(false);
 		});
 
+		it('the last destroy drops preagg tables before clearing, and only once', () => {
+			const { engine, onClauseChange } = mockEngine();
+			const forget = engine.forgetSource as ReturnType<typeof vi.fn>;
+			const group = new FilterGroup();
+			group.setEngine(engine);
+			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			handle.update('x > 0', null);
+			onClauseChange.mockClear();
+
+			handle.destroy();
+			expect(forget).toHaveBeenCalledTimes(1);
+			expect(onClauseChange).toHaveBeenCalledTimes(1);
+			expect(forget.mock.invocationCallOrder[0]).toBeLessThan(
+				onClauseChange.mock.invocationCallOrder[0]
+			);
+
+			// A newer registration under the same id survives a second destroy.
+			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			again.update('x > 1', null);
+			handle.destroy();
+			expect(group.selection.isActive('brush-x')).toBe(true);
+			expect(forget).toHaveBeenCalledTimes(1);
+		});
+
 		it('several registrations are one source, and the clause carries the writer’s exclusions', () => {
 			const group = new FilterGroup();
 			const legend = group.register('toggle-region', { excludeMarkIds: () => new Set() });
@@ -108,40 +133,34 @@ describe('FilterGroup', () => {
 
 	describe('clearSource', () => {
 		it('re-queries only when there was a clause to remove', () => {
-			const { engine, onFilterChange } = mockEngine();
+			const { engine, onClauseChange } = mockEngine();
 			const group = new FilterGroup();
 			group.setEngine(engine);
 			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
 
 			handle.clear();
 			handle.destroy();
-			expect(onFilterChange).not.toHaveBeenCalled();
+			expect(onClauseChange).not.toHaveBeenCalled();
 
 			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
 			again.update('x > 0', null);
 			again.destroy();
-			expect(onFilterChange).toHaveBeenCalledTimes(2);
+			expect(onClauseChange).toHaveBeenCalledTimes(2);
 		});
 	});
 
 	describe('items with augmentation', () => {
 		it('applies augmenter to produce schema metadata', () => {
 			const group = new FilterGroup();
-			group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				augment: (value) => ({
-					kind: 'range',
-					column: 'price',
-					label: 'Price',
-					values: value as unknown[]
-				})
-			});
+			const augment = vi.fn((value: unknown) => ({
+				kind: 'range',
+				column: 'price',
+				label: 'Price',
+				values: value as unknown[]
+			}));
+			const handle = group.register('brush-x', { excludeMarkIds: () => new Set(), augment });
 
-			group.selection.update('brush-x', {
-				predicate: 'price BETWEEN 10 AND 50',
-				excludeMarkIds: new Set(),
-				value: [10, 50]
-			});
+			handle.update('price BETWEEN 10 AND 50', [10, 50]);
 
 			const items = group.items;
 			expect(items).toHaveLength(1);
@@ -151,6 +170,22 @@ describe('FilterGroup', () => {
 				label: 'Price',
 				values: [10, 50]
 			});
+			// On the raw clause too, computed once per write rather than per read.
+			expect(group.selection.get('brush-x')!.schema).toBe(items[0].schema);
+			void group.items;
+			expect(augment).toHaveBeenCalledTimes(1);
+		});
+
+		it('takes the schema from another registration when the writer has no augment', () => {
+			const group = new FilterGroup();
+			group.register('brush-x', {
+				excludeMarkIds: () => new Set(),
+				augment: () => ({ kind: 'range', column: 'x' })
+			});
+			const plain = group.register('brush-x', { excludeMarkIds: () => new Set() });
+
+			plain.update('x > 0', [0, 1]);
+			expect(group.selection.get('brush-x')!.schema).toEqual({ kind: 'range', column: 'x' });
 		});
 
 		it('labels a toggle’s filter item with its field', () => {
@@ -213,7 +248,7 @@ describe('FilterGroup', () => {
 
 		it('leaves the projection alone while a brush moves, and re-queries all the same', () => {
 			const scale = mockScale();
-			const { engine, onFilterChange } = mockEngine();
+			const { engine, onClauseChange } = mockEngine();
 			const group = new FilterGroup();
 			group.setEngine(engine);
 			const setActive = vi.spyOn(scale, 'setActiveValues');
@@ -232,7 +267,7 @@ describe('FilterGroup', () => {
 
 			expect(setActive).toHaveBeenCalledTimes(1);
 			expect(scale.active).toBe(projected);
-			expect(onFilterChange).toHaveBeenCalledTimes(12);
+			expect(onClauseChange).toHaveBeenCalledTimes(12);
 		});
 
 		it('un-dims a toggle’s scales when its last registration goes', () => {

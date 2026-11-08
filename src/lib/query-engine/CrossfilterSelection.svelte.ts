@@ -55,7 +55,7 @@ export class CrossfilterSelection {
 	predicate(markId: string): FilterExpr[] {
 		const result: FilterExpr[] = [];
 		for (const clause of this.#clauses.values()) {
-			if (!clause.excludeMarkIds.has(markId) && clause.predicate) {
+			if (CrossfilterSelection.applies(clause, markId)) {
 				result.push(clause.predicate);
 			}
 		}
@@ -65,13 +65,24 @@ export class CrossfilterSelection {
 	/**
 	 * Update or remove a clause.
 	 * Pass null to remove (clear) the clause for the given source.
+	 *
+	 * Returns the clause it replaced or removed, so the caller can re-query the
+	 * marks either one applies to: a clause's exclusions belong to whichever
+	 * control wrote it, so the old and the new one can apply to different marks.
 	 */
-	update(sourceId: string, clause: Clause | null): void {
+	update(sourceId: string, clause: Clause | null): Clause | undefined {
+		const prev = this.#clauses.get(sourceId);
 		if (clause) {
 			this.#clauses.set(sourceId, clause);
 		} else {
 			this.#clauses.delete(sourceId);
 		}
+		return prev;
+	}
+
+	/** Whether a clause filters a mark: it has a predicate and does not exclude it. */
+	static applies(clause: Clause, markId: string): boolean {
+		return !!clause.predicate && !clause.excludeMarkIds.has(markId);
 	}
 
 	/** Whether a given source has an active (non-null) clause. */
@@ -82,6 +93,15 @@ export class CrossfilterSelection {
 	/** O(1) lookup of a clause by source ID. */
 	get(sourceId: string): Clause | undefined {
 		return this.#clauses.get(sourceId);
+	}
+
+	/**
+	 * Visit every active clause: the stored objects themselves, not copies, so a
+	 * caller can tell an unchanged clause by reference. Reactive like `items`,
+	 * without building an entry object per clause.
+	 */
+	forEach(visit: (clause: Clause, sourceId: string) => void): void {
+		this.#clauses.forEach(visit);
 	}
 
 	/** Reactive list of all active clauses with their source IDs. */
@@ -98,7 +118,7 @@ export class CrossfilterSelection {
 	 * filters the mark, except the active brush, which the table bins instead.
 	 */
 	#isBaked(sourceId: string, clause: Clause, markId: string, activeSourceId: string): boolean {
-		return sourceId !== activeSourceId && !clause.excludeMarkIds.has(markId) && !!clause.predicate;
+		return sourceId !== activeSourceId && CrossfilterSelection.applies(clause, markId);
 	}
 
 	/**

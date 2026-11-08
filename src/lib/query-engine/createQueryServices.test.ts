@@ -7,6 +7,7 @@ function mockEngine() {
 	return {
 		activate: vi.fn(() => Promise.resolve()),
 		onFilterChange: vi.fn(),
+		onClauseChange: vi.fn(),
 		forgetSource: vi.fn(),
 		identitySqlFor: () => null
 	};
@@ -20,7 +21,7 @@ describe('createQueryServices', () => {
 		const group = filterGroups.get('brush');
 		group.register('brush-x', { excludeMarkIds: () => new Set() }).update('x > 0', null);
 
-		expect(engine.onFilterChange).toHaveBeenCalledWith(group);
+		expect(engine.onClauseChange).toHaveBeenCalledWith(group, undefined, expect.anything());
 	});
 
 	it('connects the default group too', () => {
@@ -30,6 +31,6 @@ describe('createQueryServices', () => {
 		const group = filterGroups.get();
 		group.register('brush-x', { excludeMarkIds: () => new Set() }).update('x > 0', null);
 
-		expect(engine.onFilterChange).toHaveBeenCalledWith(group);
+		expect(engine.onClauseChange).toHaveBeenCalledWith(group, undefined, expect.anything());
 	});
 });

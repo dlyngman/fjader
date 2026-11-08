@@ -15,6 +15,8 @@
 	import type { ChartContext } from '$lib/types';
 	import { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { Clause } from '$lib/query-engine/CrossfilterSelection.svelte';
+	import { ClauseRelay } from './relay-clauses';
 
 	interface Props {
 		sourceSelection: string;
@@ -63,13 +65,15 @@
 	// Filter Bridge: Watch source group items → compute derived extent
 	// =========================================================================
 
-	// Extract primary range from source group's active filter items
+	// The primary range: the source group's first range clause, found by the
+	// schema its brush stored when writing it.
 	const primaryRange = $derived.by((): [number, number] | null => {
-		const items = sourceGroup.items;
-		const rangeItem = items.find((item) => item.schema?.kind === 'range');
-		if (!rangeItem?.schema?.values?.length) return null;
-		const values = rangeItem.schema.values as number[];
-		return [values[0], values[1]];
+		let rangeClause: Clause | null = null;
+		sourceGroup.selection.forEach((clause) => {
+			if (!rangeClause && clause.schema?.kind === 'range') rangeClause = clause;
+		});
+		const values = (rangeClause as Clause | null)?.schema?.values as number[] | undefined;
+		return values?.length ? [values[0], values[1]] : null;
 	});
 
 	// Compute derived extent via Temporal calendar offset
@@ -167,51 +171,25 @@
 	// Relay non-axis clauses from source → target
 	// =========================================================================
 
-	let relayedKeys = new Set<string>();
+	const relay = new ClauseRelay(sourceGroup, targetGroup);
+	/** Does nothing: forEach(track) only subscribes the effect to every clause. */
+	const track = () => {};
 
 	// Tracks only the source group's clauses and what decides which to relay.
-	// The writes to the target group run untracked, as above: tracked, they
-	// made this effect re-run itself without end once the source had a clause
-	// to relay (a day-of-week toggle beside the brush).
+	// The writes to the target group run untracked: tracked, they made this
+	// effect re-run itself without end once the source had a clause to relay
+	// (a day-of-week toggle beside the brush).
 	$effect(() => {
-		const relay = relayClauses;
-		const items = sourceGroup.items;
+		const enabled = relayClauses;
 		const fieldStr = resolvedField ?? '';
-		untrack(() => relayItems(relay ? items : null, fieldStr));
+		sourceGroup.selection.forEach(track);
+		untrack(() => relay.sync(enabled, fieldStr));
 	});
-
-	/** Mirror the source's clauses, but the axis range, into the target group. */
-	function relayItems(items: typeof sourceGroup.items | null, fieldStr: string) {
-		const currentKeys = new Set<string>();
-		for (const item of items ?? []) {
-			// Skip the range clause on the axis column — we replace it with the shifted version
-			if (item.schema?.kind === 'range' && item.schema?.column === fieldStr) continue;
-
-			if (item.predicate) {
-				const key = `relay:${item.sourceId}`;
-				currentKeys.add(key);
-				targetGroup.upsertManual(
-					key,
-					item.predicate,
-					item.value,
-					new Set<string>(),
-					item.schema ?? undefined
-				);
-			}
-		}
-
-		// Remove stale relayed clauses
-		for (const key of relayedKeys) {
-			if (!currentKeys.has(key)) targetGroup.removeManual(key);
-		}
-		relayedKeys = currentKeys;
-	}
 
 	onMount(() => {
 		return () => {
 			targetGroup.removeManual(sourceKey);
-			for (const key of relayedKeys) targetGroup.removeManual(key);
-			relayedKeys = new Set();
+			relay.clear();
 		};
 	});
 </script>
