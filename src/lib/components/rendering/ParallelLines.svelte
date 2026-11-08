@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { activityReads, colorActivityWGSL } from './activity-reads';
 	import { PARALLEL_MAX_AXES, UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
@@ -94,6 +95,9 @@
 	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
 	// With linear (resolution=1): single quad per segment, identical to original.
 	// With bump-x (resolution=128): smooth S-curves between axes, adaptive.
+	/** The selection activity this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('parallel');
+
 	function buildShaderCode() {
 		return `
   ${getCurveWGSL(curve)}
@@ -196,7 +200,10 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[rowIdx];
       output.alpha = config.opacity * selectionDim(
-        markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx], config.groupIndex)
+        ${colorActivityWGSL(ACTIVITY_READS, {
+					color: 'config.colorMode, config.colorScaleIndex, colorValues[rowIdx]',
+					group: 'config.groupIndex'
+				})}
       );
       output.circleUV = quadPosition;
       output.circleRadius = halfWidth;
@@ -277,7 +284,10 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[rowIdx];
     output.alpha = config.opacity * selectionDim(
-      markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx], config.groupIndex)
+      ${colorActivityWGSL(ACTIVITY_READS, {
+				color: 'config.colorMode, config.colorScaleIndex, colorValues[rowIdx]',
+				group: 'config.groupIndex'
+			})}
     );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;

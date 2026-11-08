@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	activityReads,
+	colorActivityWGSL,
 	markActivityWGSL,
 	readsFor,
 	ruleHasExtent,
@@ -93,5 +94,13 @@ describe('activity reads', () => {
 		// A scale without identity has no activity block: a selection on it filters.
 		expect(readsFor(activityReads('dots'), { color: null, x: null, y: null })).toEqual([]);
 		expect(readsFor(activityReads('lines'), { color: 'c', x: 'a', y: 'b' })).toEqual(['c']);
+	});
+
+	it('builds a colour-only renderer’s activity, and refuses one that reads a band axis', () => {
+		const args = { color: 'cm, ci, cv', group: 'g' };
+		expect(colorActivityWGSL(activityReads('lines'), args)).toBe(
+			'markColorActivity(cm, ci, cv, g)'
+		);
+		expect(() => colorActivityWGSL(activityReads('dots'), args)).toThrow();
 	});
 });

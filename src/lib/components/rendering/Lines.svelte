@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { activityReads, colorActivityWGSL } from './activity-reads';
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
@@ -94,6 +95,9 @@
 	// consecutive points span different facet cells. Vertex attributes only provide
 	// the current instance's value. (Dots/Rects use vertex attributes since they
 	// only need their own instance's facet index.)
+	/** The selection activity this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('lines');
+
 	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
 	const FACET_DISCARD_WGSL = `
     // Facet filtering: discard vertices not belonging to this cell
@@ -202,7 +206,10 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
       output.alpha = markConstants.globalAlpha * selectionDim(
-        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx], markConstants.groupIndex)
+        ${colorActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx]',
+					group: 'markConstants.groupIndex'
+				})}
       );
       output.circleUV = quadPosition;
       output.circleRadius = circleR;
@@ -299,7 +306,10 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
     output.alpha = markConstants.globalAlpha * selectionDim(
-      markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx], markConstants.groupIndex)
+      ${colorActivityWGSL(ACTIVITY_READS, {
+				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx]',
+				group: 'markConstants.groupIndex'
+			})}
     );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;

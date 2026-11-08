@@ -121,6 +121,20 @@ export function readsFor(
 const NO_READS: readonly string[] = [];
 
 /**
+ * The WGSL activity of a renderer that reads colour only (lines, areas,
+ * parallel coordinates): `markColorActivity(...)`, or 1.0 if the table says
+ * it reads nothing. Throws for a renderer that reads a band axis, whose call
+ * is markActivityWGSL.
+ */
+export function colorActivityWGSL(
+	reads: ActivityReads,
+	args: { color: string; group: string }
+): string {
+	if (reads.x || reads.y) throw new Error('colorActivityWGSL: this renderer reads a band axis');
+	return reads.color ? `markColorActivity(${args.color}, ${args.group})` : '1.0';
+}
+
+/**
  * The WGSL `markActivity(...)` call for `reads`: each activity the renderer
  * reads, and 1.0 for each it does not. `color` is markColorActivity's first
  * three arguments; `x` and `y` are the band channel values; `group` the mark's
