@@ -301,6 +301,7 @@
 		alphaData={opacityData}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
+		groupIndex={setup?.groupIndex ?? 0}
 		constantColor={markColor.constantColor}
 		{strokeWidth}
 		facetData={setup?.facetData}

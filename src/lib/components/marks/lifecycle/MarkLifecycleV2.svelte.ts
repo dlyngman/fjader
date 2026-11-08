@@ -1520,6 +1520,14 @@ export class MarkLifecycleV2 {
 		return buildChannelFieldMap(this.#config.select);
 	}
 
+	/**
+	 * The page-wide index of this mark's filter group. Its renderer stores it in
+	 * MarkConstants to read its group's run of each field's activity block.
+	 */
+	get groupIndex(): number {
+		return this.#filterGroup.index;
+	}
+
 	get dataVersion(): number {
 		return this.#handle?.dataVersion ?? 0;
 	}

@@ -570,8 +570,9 @@ export class ScaleTemplateSystem {
 	}
 
 	/**
-	 * `bandActivityX(value)` and `bandActivityY(value)`: how selected a band or
-	 * point axis's category is, 0..1, for selection dimming.
+	 * `bandActivityX(value, group)` and `bandActivityY(value, group)`: how
+	 * selected a band or point axis's category is in the mark's filter group,
+	 * 0..1, for selection dimming.
 	 *
 	 * Emitted for every shader, so a renderer can call both without knowing its
 	 * scale types: an axis that is not band or point returns 1.0. On a band or
@@ -583,15 +584,15 @@ export class ScaleTemplateSystem {
 	_buildBandActivityHelpers(scaleTypes: { x: string; y: string }): string {
 		const helper = (axis: 'X' | 'Y', type: string) => {
 			if (type !== 'band' && type !== 'point') {
-				return `fn bandActivity${axis}(value: f32) -> f32 {
+				return `fn bandActivity${axis}(value: f32, group: u32) -> f32 {
       return 1.0;
     }`;
 			}
-			return `fn bandActivity${axis}(value: f32) -> f32 {
+			return `fn bandActivity${axis}(value: f32, group: u32) -> f32 {
       if (value < 0.0 || ${isNanExpr('value')}) {
         return 1.0;
       }
-      return identityActivity(u32(chartScale${axis}().p4), u32(value));
+      return identityActivity(u32(chartScale${axis}().p4), group, u32(value));
     }`;
 		};
 		return `
@@ -638,12 +639,12 @@ export class ScaleTemplateSystem {
     }
 
     fn identitySlot(base: u32, id: u32) -> f32 {
-      // Block layout: [count, slot0, slot1, ...]. The count is what makes a
-      // block self-describing, so an id past this scale's end is discarded
-      // instead of reading into the next scale's slots. It survives the resolve
-      // exactly because it holds the same value in both halves, and the kernel
-      // returns equal ends as they are — u32() truncates, so an inexact mix
-      // would drop the last id.
+      // Block layout: [count, actRef, n, slot0, slot1, ...]. The count is what
+      // makes a block self-describing, so an id past this scale's end is
+      // discarded instead of reading into the next scale's slots. It survives
+      // the resolve exactly because it holds the same value in both halves, and
+      // the kernel returns equal ends as they are — u32() truncates, so an
+      // inexact mix would drop the last id.
       let count = u32(identitySlots[base]);
       if (id >= count) {
         return -1.0;
@@ -652,19 +653,22 @@ export class ScaleTemplateSystem {
       // both halves, so the resolve wrote -1 without a branch; one that is
       // leaving holds a real slot in both, which is what lets it travel. The
       // scale normalises that before packing, so nothing here re-derives it.
-      return identitySlots[base + 1u + id];
+      return identitySlots[base + 3u + id];
     }
 
-    fn identityActivity(base: u32, id: u32) -> f32 {
-      // The block's activity half follows its slots: [count, slots, activity].
-      // How selected each id is, 1 active and 0 inactive, already resolved at
-      // the selection clock's t. Past the end, or in the empty block, an id is
-      // fully active.
-      let count = u32(identitySlots[base]);
-      if (id >= count) {
+    fn identityActivity(base: u32, group: u32, id: u32) -> f32 {
+      // How selected this id is in the mark's filter group, 1 active and 0
+      // inactive, already resolved at that group's selection clock. The scale
+      // block's header points at its field's activity block (actRef) and says
+      // how many ids it covers (n); the block holds one run of n per group.
+      // Header first, so this is two dependent reads. Past n, or in the empty
+      // block where n is 0, an id is fully active.
+      let ref = u32(identitySlots[base + 1u]);
+      let n = u32(identitySlots[base + 2u]);
+      if (id >= n) {
         return 1.0;
       }
-      return identitySlots[base + 1u + count + id];
+      return identitySlots[ref + n * group + id];
     }
     `;
 	}

@@ -33,7 +33,8 @@
 		COLOR_SCALE_INDEX: 12, // u32
 		CONSTANT_COLOR: 16, // vec4<f32>
 		DOT_RADIUS: 32, // f32
-		GLOBAL_ALPHA: 36 // f32
+		GLOBAL_ALPHA: 36, // f32
+		GROUP_INDEX: 40 // u32
 	};
 
 	interface Props {
@@ -49,6 +50,8 @@
 		dotRadius?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		m4Decimator?: M4Decimator | null;
 		dotsRung?: import('$lib/lod/DotsRung.svelte').DotsRung | null;
@@ -69,6 +72,7 @@
 		dotRadius = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		m4Decimator = null,
 		dotsRung = null,
@@ -139,7 +143,7 @@
     constantColor: vec4<f32>,
     dotRadius: f32,
     globalAlpha: f32,
-    _pad1: u32
+    groupIndex: u32 // Page-wide filter group index, for activity reads
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
 
@@ -197,7 +201,7 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
       output.alpha = markConstants.globalAlpha * selectionDim(
-        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx])
+        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx], markConstants.groupIndex)
       );
       output.circleUV = quadPosition;
       output.circleRadius = circleR;
@@ -294,7 +298,7 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
     output.alpha = markConstants.globalAlpha * selectionDim(
-      markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx])
+      markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx], markConstants.groupIndex)
     );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
@@ -405,6 +409,7 @@
 			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, pointCount, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ColorScaleState } from './ColorScaleState.svelte';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
-import { createIdentitySlotState, packIdentitySlots } from '$lib/gpu/identity-slot-packing';
 import { DEFAULT_INACTIVE_OPACITY, type ActivityTable } from './ActivityTable';
 
 /**
@@ -104,21 +103,6 @@ describe('ColorScaleState selection activity', () => {
 		const scale = ordinal();
 		const table = scale.activity as ActivityTable;
 		expect(table.clock._affectedChartsArray).toEqual(['chart-1']);
-	});
-
-	it('reaches the packed block as its activity half', () => {
-		const scale = ordinal();
-		scale.setIdentity(new FieldIdentity(['a', 'b', 'c']));
-		scale.setActiveValues(['a', 'c']);
-
-		const state = createIdentitySlotState(64);
-		packIdentitySlots([{ id: 'colour', slots: scale.slots, activity: scale.activity }], state);
-		const base = state.offsets.get('colour')!;
-		const count = state.bufferTo[base];
-		expect(count).toBe(3);
-		expect(Array.from(state.bufferTo.slice(base + 1 + count, base + 1 + 2 * count))).toEqual([
-			1, 0, 1
-		]);
 	});
 
 	it('gives a legend entry the inactive opacity for an unselected category', () => {

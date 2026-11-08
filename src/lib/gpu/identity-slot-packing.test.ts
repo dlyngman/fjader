@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
 	IDENTITY_SLOT_EMPTY,
+	IDENTITY_SLOT_HEADER,
 	createIdentitySlotState,
 	packIdentitySlots,
+	type ActivityField,
 	type IdentitySlotScale,
 	type IdentitySlotState
 } from './identity-slot-packing';
@@ -39,7 +41,8 @@ function scale(id: string, slots: number[], version = 1): IdentitySlotScale {
 /** Read one scale's block back the way the shader's identitySlot() does. */
 function readBlock(buffer: Float32Array, base: number) {
 	const count = buffer[base];
-	return { count, slots: Array.from(buffer.slice(base + 1, base + 1 + count)) };
+	const start = base + IDENTITY_SLOT_HEADER;
+	return { count, slots: Array.from(buffer.slice(start, start + count)) };
 }
 
 /**
@@ -66,9 +69,11 @@ describe('packIdentitySlots layout', () => {
 		const state = createIdentitySlotState(64);
 		// Before anything is packed, and after: a scale parked here must find
 		// count 0 and discard, which is the whole point of the fallback.
-		expect(state.buffer[IDENTITY_SLOT_EMPTY]).toBe(0);
+		// It is [count 0, actRef 0, n 0]: never -1, which u32() cannot read.
+		expect(Array.from(state.buffer.slice(0, 3))).toEqual([0, 0, 0]);
 		packIdentitySlots([scale('a', [0, 1, 2])], state);
-		expect(state.buffer[IDENTITY_SLOT_EMPTY]).toBe(0);
+		expect(Array.from(state.buffer.slice(0, 3))).toEqual([0, 0, 0]);
+		expect(Array.from(state.bufferTo.slice(0, 3))).toEqual([0, 0, 0]);
 	});
 
 	it('writes a count header before each block', () => {
@@ -76,7 +81,7 @@ describe('packIdentitySlots layout', () => {
 		packIdentitySlots([scale('a', [2, 0, 1])], state);
 
 		const base = state.offsets.get('a')!;
-		expect(base).toBe(1); // straight after the empty block
+		expect(base).toBe(3); // straight after the empty block
 		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 0, 1] });
 	});
 
@@ -85,8 +90,8 @@ describe('packIdentitySlots layout', () => {
 		packIdentitySlots([scale('a', [0, 1]), scale('b', [1, 0, 2]), scale('c', [0])], state);
 
 		const [a, b, c] = ['a', 'b', 'c'].map((id) => state.offsets.get(id)!);
-		// Header + slots + activity half: 1 + (1+2+2) = 6, 6 + (1+3+3) = 13
-		expect([a, b, c]).toEqual([1, 6, 13]);
+		// Header + slots: 3 + (3+2) = 8, 8 + (3+3) = 14
+		expect([a, b, c]).toEqual([3, 8, 14]);
 		expect(readBlock(state.buffer, a)).toEqual({ count: 2, slots: [0, 1] });
 		expect(readBlock(state.buffer, b)).toEqual({ count: 3, slots: [1, 0, 2] });
 		expect(readBlock(state.buffer, c)).toEqual({ count: 1, slots: [0] });
@@ -96,12 +101,12 @@ describe('packIdentitySlots layout', () => {
 		// One small scale reordering must not re-upload its neighbours' tables.
 		const state = createIdentitySlotState(64);
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1], 1)], state);
-		// 1 empty + (1+4+4) + (1+2+2): the first pack writes both blocks.
-		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([1, 15]);
+		// 3 empty + (3+4) + (3+2): the first pack writes both blocks.
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([3, 15]);
 
-		// A reorder of b: only its header and slots, not its activity half.
+		// A reorder of b: only its block.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [1, 0], 2)], state);
-		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([10, 13]);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([10, 15]);
 	});
 
 	it('preserves -1 for ids that are not displayed', () => {
@@ -150,14 +155,13 @@ describe('packIdentitySlots transition state', () => {
 	});
 
 	it('counts the header against capacity, not just the slots', () => {
-		// One float of header per block, so a budget that fits the slots alone
+		// Three floats of header per block, so a budget that fits the slots alone
 		// may not fit the block.
 		const state = createIdentitySlotState(12);
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		// 1 empty + (1 header + 4 slots + 4 activity) = 10; a 1-id scale needs 3
-		// more, 2 remain.
+		// 3 empty + (3 header + 4 slots) = 10; a 1-id scale needs 4 more, 2 remain.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0])], state);
-		expect(state.offsets.get('a')).toBe(1);
+		expect(state.offsets.get('a')).toBe(3);
 		expect(state.offsets.get('b')).toBe(IDENTITY_SLOT_EMPTY);
 		warn.mockRestore();
 	});
@@ -216,10 +220,10 @@ describe('packIdentitySlots capacity', () => {
 	it('parks a scale that does not fit on the empty block', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const state = createIdentitySlotState(10);
-		// 1 empty + (1+4+4) = 10 used; the next needs 9 and none remain.
+		// 3 empty + (3+4) = 10 used; the next needs 7 and none remain.
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 
-		expect(state.offsets.get('a')).toBe(1);
+		expect(state.offsets.get('a')).toBe(3);
 		expect(state.offsets.get('b')).toBe(IDENTITY_SLOT_EMPTY);
 		// Parked, not merely unwritten: a lookup there finds count 0 and
 		// discards, rather than reading scale "a"'s slots.
@@ -230,13 +234,13 @@ describe('packIdentitySlots capacity', () => {
 	it('still places a later scale small enough to fit', () => {
 		// The reason the loop does not break on the first scale that overflows.
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		const state = createIdentitySlotState(13);
+		const state = createIdentitySlotState(14);
 		packIdentitySlots(
 			[scale('a', [0, 1, 2, 3]), scale('huge', new Array(20).fill(0)), scale('c', [0])],
 			state
 		);
 
-		expect(state.offsets.get('a')).toBe(1);
+		expect(state.offsets.get('a')).toBe(3);
 		expect(state.offsets.get('huge')).toBe(IDENTITY_SLOT_EMPTY);
 		expect(state.offsets.get('c')).toBe(10);
 		expect(readBlock(state.buffer, 10)).toEqual({ count: 1, slots: [0] });
@@ -267,8 +271,8 @@ describe('packIdentitySlots capacity', () => {
 
 		// "a" unmounts; "b" should now be placed rather than left parked.
 		packIdentitySlots([scale('b', [0, 1, 2, 3])], state);
-		expect(state.offsets.get('b')).toBe(1);
-		expect(readBlock(state.buffer, 1)).toEqual({ count: 4, slots: [0, 1, 2, 3] });
+		expect(state.offsets.get('b')).toBe(3);
+		expect(readBlock(state.buffer, 3)).toEqual({ count: 4, slots: [0, 1, 2, 3] });
 		warn.mockRestore();
 	});
 });
@@ -341,7 +345,7 @@ describe('what the shader reads back', () => {
 		const resolved = applyResolves(state, new Float32Array(state.buffer.length));
 		const count = resolved[base];
 		if (id >= count) return -1;
-		return resolved[base + 1 + id];
+		return resolved[base + IDENTITY_SLOT_HEADER + id];
 	}
 
 	it('agrees with the scale about every id, mid-transition', () => {
@@ -405,13 +409,11 @@ describe('packIdentitySlots: the resolve list', () => {
 		packIdentitySlots([scale('a', [0, 1, 2]), scale('b', [1, 0])], state);
 
 		const { resolves, resolveCount } = state.result;
-		expect(resolveCount).toBe(4);
-		// Per scale: header + slots, then the activity half, each its own range.
-		expect(resolves.slice(0, 4).map((b) => [b.base, b.length])).toEqual([
-			[1, 4],
-			[5, 3],
-			[8, 3],
-			[11, 2]
+		expect(resolveCount).toBe(2);
+		// Per scale: header + slots, one range.
+		expect(resolves.slice(0, 2).map((b) => [b.base, b.length])).toEqual([
+			[3, 6],
+			[9, 5]
 		]);
 	});
 
@@ -444,8 +446,8 @@ describe('packIdentitySlots: the resolve list', () => {
 		packIdentitySlots([travelling('a', [0], [10], 0), travelling('b', [0], [10], 1)], state);
 		const out = applyResolves(state, new Float32Array(64));
 
-		expect(out[state.offsets.get('a')! + 1]).toBeCloseTo(0, 5);
-		expect(out[state.offsets.get('b')! + 1]).toBeCloseTo(10, 5);
+		expect(out[state.offsets.get('a')! + IDENTITY_SLOT_HEADER]).toBeCloseTo(0, 5);
+		expect(out[state.offsets.get('b')! + IDENTITY_SLOT_HEADER]).toBeCloseTo(10, 5);
 	});
 
 	it('re-resolves a scale shifted by its neighbour, though its t did not move', () => {
@@ -472,8 +474,8 @@ describe('packIdentitySlots: the resolve list', () => {
 		const state = createIdentitySlotState(10);
 		packIdentitySlots([scale('a', [0, 1, 2, 3]), scale('b', [0, 1, 2, 3])], state);
 
-		// a's slot half at 1 and its activity half at 1 + 1 + 4; nothing for b.
-		expect(dispatched(state)).toEqual([1, 6]);
+		// a's block at 3; nothing for b.
+		expect(dispatched(state)).toEqual([3]);
 		expect(dispatched(state)).not.toContain(IDENTITY_SLOT_EMPTY);
 		warn.mockRestore();
 	});
@@ -501,7 +503,7 @@ describe('resolving the packed blocks', () => {
 			for (let id = 0; id < s.slots.count; id++) {
 				const a = s.slots.from[id];
 				const b = s.slots.to[id];
-				expect(out[base + 1 + id]).toBeCloseTo(a + (b - a) * s.slots.t, 5);
+				expect(out[base + IDENTITY_SLOT_HEADER + id]).toBeCloseTo(a + (b - a) * s.slots.t, 5);
 			}
 		}
 	});
@@ -512,7 +514,7 @@ describe('resolving the packed blocks', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots([travelling('a', [0, -1, 1], [1, -1, 0], 0.5)], state);
 		const out = applyResolves(state, new Float32Array(64));
-		expect(out[state.offsets.get('a')! + 1 + 1]).toBe(-1);
+		expect(out[state.offsets.get('a')! + IDENTITY_SLOT_HEADER + 1]).toBe(-1);
 	});
 
 	it('writes nothing outside the packed blocks', () => {
@@ -522,200 +524,200 @@ describe('resolving the packed blocks', () => {
 		packIdentitySlots([travelling('a', [0, 1], [0, 1], 1)], state);
 		const out = applyResolves(state, new Float32Array(64).fill(999));
 		expect(out[IDENTITY_SLOT_EMPTY]).toBe(999);
-		// The block is 1..5 (header, two slots, two activity); 6 is past its end.
-		expect(out[5]).toBe(1);
-		expect(out[6]).toBe(999);
+		// The block is 3..7 (three of header, two slots); 8 is past its end.
+		expect(out[3]).toBe(2);
+		expect(out[7]).toBe(1);
+		expect(out[8]).toBe(999);
 		expect(out[63]).toBe(999);
 	});
 });
 
 // ---------------------------------------------------------------------------
-// The activity half: how selected each id is, after the slots in each block
+// Activity: one block per field, one run per group, referenced from scale headers
 // ---------------------------------------------------------------------------
 
-/** `s` with an activity table fading from `from` to `to`, `t` of the way. */
-function withActivity(
-	s: IdentitySlotScale,
-	from: number[],
-	to: number[],
-	t: number,
-	version = 1
-): IdentitySlotScale {
+/** A field whose group fades are given as [from, to, t, version], or null for none. */
+function field(
+	key: string,
+	count: number,
+	fades: Array<[number[], number[], number, number] | null>
+): ActivityField {
 	return {
-		id: s.id,
-		slots: s.slots,
-		activity: { from: Float32Array.from(from), to: Float32Array.from(to), t, version }
+		key,
+		count,
+		fadeOf: (g) => {
+			const f = fades[g];
+			return f
+				? { from: Float32Array.from(f[0]), to: Float32Array.from(f[1]), t: f[2], version: f[3] }
+				: null;
+		}
 	};
 }
 
-/** A block's activity half, read the way the shader finds it: after `count` slots. */
-function readActivity(buffer: Float32Array, base: number): number[] {
-	const count = buffer[base];
-	return Array.from(buffer.slice(base + 1 + count, base + 1 + 2 * count));
+/** A settled scale on `key`. */
+function on(key: string, id: string, slots: number[], version = 1): IdentitySlotScale {
+	return { ...scale(id, slots, version), field: key };
 }
 
-/** identityActivity(base, id) from the shader, in TypeScript, over a resolved buffer. */
-function identityActivity(resolved: Float32Array, base: number, id: number): number {
-	const count = resolved[base];
-	if (id >= count) return 1;
-	return resolved[base + 1 + count + id];
+/** identityActivity(base, group, id) from the shader, in TypeScript. */
+function identityActivity(resolved: Float32Array, base: number, group: number, id: number) {
+	const ref = resolved[base + 1];
+	const n = resolved[base + 2];
+	if (id >= n) return 1;
+	return resolved[ref + n * group + id];
 }
 
-describe('packIdentitySlots: the activity half', () => {
-	it('is all 1 for a scale without a table, so every id is active', () => {
+const resolvedOf = (state: IdentitySlotState) =>
+	applyResolves(state, new Float32Array(state.buffer.length));
+
+describe('packIdentitySlots: field activity blocks', () => {
+	it('points every scale on a field at one block, read per group', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots([scale('a', [2, 0, 1])], state);
-		const base = state.offsets.get('a')!;
-		expect(readActivity(state.buffer, base)).toEqual([1, 1, 1]);
-		expect(readActivity(state.bufferTo, base)).toEqual([1, 1, 1]);
+		const carrier = field('carrier', 3, [null, [[1, 0, 1], [1, 0, 1], 1, 1]]);
+		packIdentitySlots(
+			[on('carrier', 'colour', [0, 1, 2]), on('carrier', 'band', [2, 1, 0])],
+			state,
+			[carrier],
+			2
+		);
+
+		const out = resolvedOf(state);
+		const colour = state.offsets.get('colour')!;
+		const band = state.offsets.get('band')!;
+		// One field block, after the empty block: 3 ids × 2 groups.
+		expect(out[colour + 1]).toBe(3);
+		expect(out[band + 1]).toBe(3);
+		expect(out[colour + 2]).toBe(3);
+		// Group 0 has no selection here; group 1 dims id 1.
+		expect([0, 1, 2].map((id) => identityActivity(out, colour, 0, id))).toEqual([1, 1, 1]);
+		expect([0, 1, 2].map((id) => identityActivity(out, band, 1, id))).toEqual([1, 0, 1]);
+		// The slots are still where the slot lookup reads them.
+		expect(readBlock(out, band)).toEqual({ count: 3, slots: [2, 1, 0] });
 	});
 
-	it('writes from and to after the slots, leaving the slots alone', () => {
-		const state = createIdentitySlotState(64);
-		packIdentitySlots([withActivity(scale('a', [2, 0, 1]), [1, 1, 1], [0, 1, 0], 0)], state);
-		const base = state.offsets.get('a')!;
-		expect(readBlock(state.buffer, base)).toEqual({ count: 3, slots: [2, 0, 1] });
-		expect(readActivity(state.buffer, base)).toEqual([1, 1, 1]);
-		expect(readActivity(state.bufferTo, base)).toEqual([0, 1, 0]);
-	});
-
-	it('answers 1 for an id past the end, and for a parked scale', () => {
-		const state = createIdentitySlotState(64);
-		packIdentitySlots([withActivity(scale('a', [0, 1]), [0, 0], [0, 0], 1)], state);
-		const out = applyResolves(state, new Float32Array(64));
-		const base = state.offsets.get('a')!;
-		expect(identityActivity(out, base, 1)).toBe(0);
-		expect(identityActivity(out, base, 2)).toBe(1);
-		expect(identityActivity(out, IDENTITY_SLOT_EMPTY, 0)).toBe(1);
-	});
-
-	it('rewrites and resolves only the activity half on a click', () => {
-		const state = createIdentitySlotState(64);
-		const a = scale('a', [0, 1, 2, 3]);
-		packIdentitySlots([withActivity(a, [1, 1, 1, 1], [1, 1, 1, 1], 1, 1)], state);
-		const base = state.offsets.get('a')!;
-		const activityBase = base + 1 + 4;
-
-		packIdentitySlots([withActivity(a, [1, 1, 1, 1], [0, 1, 0, 0], 0, 2)], state);
-		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([
-			activityBase,
-			activityBase + 4
-		]);
-		expect(dispatched(state)).toEqual([activityBase]);
-	});
-
-	it('rewrites and resolves only the slot half on a reorder', () => {
-		const state = createIdentitySlotState(64);
-		packIdentitySlots([withActivity(scale('a', [0, 1, 2], 1), [1, 0, 1], [1, 0, 1], 1)], state);
-		const base = state.offsets.get('a')!;
-
-		packIdentitySlots([withActivity(scale('a', [2, 1, 0], 2), [1, 0, 1], [1, 0, 1], 1)], state);
-		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([base, base + 4]);
-		expect(dispatched(state)).toEqual([base]);
-	});
-
-	it('dispatches only the activity half while only its t moves, uploading nothing', () => {
-		const state = createIdentitySlotState(64);
-		const a = scale('a', [0, 1]);
-		packIdentitySlots([withActivity(a, [1, 1], [0, 1], 0.25)], state);
-
-		packIdentitySlots([withActivity(a, [1, 1], [0, 1], 0.5)], state);
-		expect(state.result.uploadEnd).toBe(0);
-		expect(dispatched(state)).toEqual([state.offsets.get('a')! + 1 + 2]);
-		expect(state.result.resolves[0].t).toBe(0.5);
-	});
-
-	it('resolves a rewritten half even when its t did not move', () => {
-		// The render stages read the resolved buffer. A new table at the same t
-		// left unresolved would keep drawing the old one.
-		const state = createIdentitySlotState(64);
-		const a = scale('a', [0, 1]);
-		const resolved = new Float32Array(64);
-		packIdentitySlots([withActivity(a, [1, 1], [1, 1], 1, 1)], state);
-		applyResolves(state, resolved);
-
-		packIdentitySlots([withActivity(a, [0, 1], [0, 1], 1, 2)], state);
-		applyResolves(state, resolved);
-		expect(identityActivity(resolved, state.offsets.get('a')!, 0)).toBe(0);
-	});
-
-	it('moves and rewrites the activity half when count changes, though its version did not', () => {
-		// A dim append grows the slots. The activity half starts after them, so it
-		// moves; a version check alone would leave it where the old count put it.
-		const state = createIdentitySlotState(64);
-		const resolved = new Float32Array(64);
-		packIdentitySlots([withActivity(scale('a', [0, 1], 1), [0, 1], [0, 1], 1, 5)], state);
-		applyResolves(state, resolved);
-
-		packIdentitySlots([withActivity(scale('a', [0, 1, 2], 2), [0, 1], [0, 1], 1, 5)], state);
-		applyResolves(state, resolved);
-		const base = state.offsets.get('a')!;
-		expect(readActivity(state.buffer, base)).toEqual([0, 1, 1]);
-		expect([0, 1, 2].map((id) => identityActivity(resolved, base, id))).toEqual([0, 1, 1]);
-	});
-
-	it('takes its length from the slots: pads a short table with 1, drops a long one', () => {
+	it('points a scale without a field, or with an empty one, at the empty block', () => {
 		const state = createIdentitySlotState(64);
 		packIdentitySlots(
-			[
-				withActivity(scale('short', [0, 1, 2]), [0], [0], 1),
-				withActivity(scale('long', [0, 1]), [0, 0, 0, 0], [0, 0, 0, 0], 1),
-				scale('next', [0])
-			],
-			state
+			[scale('plain', [0, 1]), on('none', 'empty', [0])],
+			state,
+			[field('none', 0, [])],
+			1
 		);
-		expect(readActivity(state.buffer, state.offsets.get('short')!)).toEqual([0, 1, 1]);
-		expect(readActivity(state.buffer, state.offsets.get('long')!)).toEqual([0, 0]);
-		// The long table's extra entries did not spill into the next block.
-		expect(readBlock(state.buffer, state.offsets.get('next')!)).toEqual({
-			count: 1,
-			slots: [0]
-		});
+		const out = resolvedOf(state);
+		for (const id of ['plain', 'empty']) {
+			const base = state.offsets.get(id)!;
+			expect([out[base + 1], out[base + 2]]).toEqual([IDENTITY_SLOT_EMPTY, 0]);
+			expect(identityActivity(out, base, 0, 0)).toBe(1);
+		}
+		expect(identityActivity(out, IDENTITY_SLOT_EMPTY, 0, 0)).toBe(1);
 	});
 
-	it('resolves each half at its own t', () => {
+	it('answers 1 for an id past n', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots([withActivity(travelling('a', [0], [10], 0.5), [1], [0], 0.25)], state);
-		const out = applyResolves(state, new Float32Array(64));
+		packIdentitySlots(
+			[on('f', 'a', [0, 1, 2])],
+			state,
+			[field('f', 2, [[[0, 0], [0, 0], 1, 1]])],
+			1
+		);
+		const out = resolvedOf(state);
 		const base = state.offsets.get('a')!;
-		expect(out[base + 1]).toBeCloseTo(5, 5);
-		expect(identityActivity(out, base, 0)).toBeCloseTo(0.75, 5);
+		expect([0, 1, 2].map((id) => identityActivity(out, base, 0, id))).toEqual([0, 0, 1]);
+	});
+
+	it('rewrites and resolves only the clicked group, uploading only its run', () => {
+		const state = createIdentitySlotState(64);
+		const fades: Array<[number[], number[], number, number] | null> = [
+			[[1, 1], [1, 1], 1, 1],
+			[[1, 1], [1, 1], 1, 1]
+		];
+		const f = field('f', 2, fades);
+		const scales = [on('f', 'a', [0, 1]), on('f', 'b', [1, 0])];
+		packIdentitySlots(scales, state, [f], 2);
+
+		fades[1] = [[1, 1], [0, 1], 0, 2];
+		packIdentitySlots(scales, state, [f], 2);
+		// Group 1's run starts after group 0's: 3 + 2.
+		expect(dispatched(state)).toEqual([5]);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([5, 7]);
+	});
+
+	it('dispatches only the fading run while only its t moves, uploading nothing', () => {
+		const state = createIdentitySlotState(64);
+		const fades: Array<[number[], number[], number, number] | null> = [[[1, 1], [0, 1], 0.2, 1]];
+		const f = field('f', 2, fades);
+		// Persists across packs, as the GPU buffer does.
+		const resolved = new Float32Array(64);
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
+		applyResolves(state, resolved);
+		fades[0] = [[1, 1], [0, 1], 0.6, 1];
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
+		expect(state.result.uploadEnd).toBe(0);
+		expect(dispatched(state)).toEqual([3]);
+		expect(state.result.resolves[0].t).toBe(0.6);
+		expect(
+			identityActivity(applyResolves(state, resolved), state.offsets.get('a')!, 0, 0)
+		).toBeCloseTo(0.4, 5);
+	});
+
+	it('dispatches nothing on a still frame', () => {
+		const state = createIdentitySlotState(64);
+		const f = field('f', 2, [[[1, 0], [1, 0], 1, 1]]);
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
+		expect(state.result.resolveCount).toBe(0);
+		expect(state.result.uploadEnd).toBe(0);
+	});
+
+	it('rewrites the header of every scale on a field whose block moved', () => {
+		const state = createIdentitySlotState(64);
+		const g = field('g', 2, [null]);
+		const scales = [on('g', 'a', [0, 1]), on('g', 'b', [1, 0])];
+		packIdentitySlots(scales, state, [g], 1);
+		// A field before it appears: g's block moves, and both headers follow.
+		packIdentitySlots(scales, state, [field('f', 3, [null]), g], 1);
+		const out = resolvedOf(state);
+		for (const id of ['a', 'b']) {
+			expect(out[state.offsets.get(id)! + 1]).toBe(state.fieldBases.get('g'));
+		}
+		expect(state.fieldBases.get('g')).toBe(6);
+	});
+
+	it('grows field blocks, not scale headers, when the page gains a group', () => {
+		const state = createIdentitySlotState(64);
+		const fades: Array<[number[], number[], number, number] | null> = [[[0, 1], [0, 1], 1, 1]];
+		const f = field('f', 2, fades);
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 2);
+		const out = resolvedOf(state);
+		const base = state.offsets.get('a')!;
+		expect(identityActivity(out, base, 0, 0)).toBe(0);
+		// The new group has no fade: all active.
+		expect(identityActivity(out, base, 1, 0)).toBe(1);
 	});
 
 	it('agrees with ActivityTable about every id, mid-fade', () => {
-		// JS answers activityOf as mix(from, to, t); the resolve computes the same
-		// from the same numbers. If they drift, labels and bars dim differently.
-		const table = new ActivityTable(
-			{ addAnimatedSource: () => {}, removeAnimatedSource: () => {} },
-			{ charts: () => [] }
-		);
-		table.resize(3);
+		const table = new ActivityTable(null, { charts: () => [] });
+		table.resize(3, null);
 		table.setActive([1]);
-		for (let i = 0; i < 15; i++) {
-			table.clock.step();
-			table.clock.updateRenderState(0);
-		}
-
 		const state = createIdentitySlotState(64);
-		const s = scale('a', [0, 1, 2]);
-		packIdentitySlots([{ id: 'a', slots: s.slots, activity: table }], state);
-		const out = applyResolves(state, new Float32Array(64));
+		const f: ActivityField = { key: 'f', count: 3, fadeOf: () => table };
+		packIdentitySlots([on('f', 'a', [0, 1, 2])], state, [f], 1);
+		const out = resolvedOf(state);
 		const base = state.offsets.get('a')!;
 		for (let id = 0; id < 3; id++) {
-			expect(identityActivity(out, base, id)).toBeCloseTo(table.activityOf(id), 5);
+			expect(identityActivity(out, base, 0, id)).toBeCloseTo(table.activityOf(id), 5);
 		}
-		expect(table.activityOf(0)).toBeGreaterThan(0);
-		expect(table.activityOf(0)).toBeLessThan(1);
 	});
 
-	it('forgets the activity state of a scale that has gone away', () => {
+	it('forgets the state of a scale that has gone away', () => {
 		const state = createIdentitySlotState(64);
-		packIdentitySlots([scale('a', [0]), withActivity(scale('b', [0]), [0], [0], 1)], state);
-		packIdentitySlots([scale('a', [0])], state);
-		expect(state.activityVersions.has('b')).toBe(false);
-		expect(state.counts.has('b')).toBe(false);
-		expect(state.resolvedT.has('b')).toBe(false);
-		expect(state.seenPass.has('b')).toBe(false);
+		const f = field('f', 1, [null]);
+		packIdentitySlots([on('f', 'a', [0]), on('f', 'b', [0])], state, [f], 1);
+		packIdentitySlots([on('f', 'a', [0])], state, [f], 1);
+		for (const map of [state.counts, state.refs, state.ns, state.resolvedT, state.seenPass]) {
+			expect(map.has('b')).toBe(false);
+		}
 	});
 
 	it('evicts correctly across many passes, with the pass stamp rather than a cleared set', () => {

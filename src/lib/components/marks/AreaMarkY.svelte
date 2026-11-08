@@ -366,6 +366,7 @@
 			colorValueData={markColor.data}
 			colorMode={markColor.colorMode}
 			colorScaleIndex={markColor.colorScaleIndex}
+			groupIndex={setup?.groupIndex ?? 0}
 			constantColor={markColor.constantColor}
 			fillOpacity={entry.fillOpacity ?? 0.5}
 			dotRadius={effectiveDotRadius}
@@ -384,6 +385,7 @@
 				colorValueData={entry.stroke ? null : markColor.data}
 				colorMode={entry.stroke ? 0 : markColor.colorMode}
 				colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
+				groupIndex={setup?.groupIndex ?? 0}
 				constantColor={strokeConstantColor}
 				strokeWidth={entry.strokeWidth ?? 0}
 				zIndex={1}
@@ -399,6 +401,7 @@
 					colorValueData={entry.stroke ? null : markColor.data}
 					colorMode={entry.stroke ? 0 : markColor.colorMode}
 					colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
+					groupIndex={setup?.groupIndex ?? 0}
 					constantColor={strokeConstantColor}
 					strokeWidth={entry.strokeWidth ?? 0}
 					zIndex={1}

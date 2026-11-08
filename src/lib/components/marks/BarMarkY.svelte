@@ -304,6 +304,7 @@
 		alphaData={opacityData}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
+		groupIndex={setup?.groupIndex ?? 0}
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}

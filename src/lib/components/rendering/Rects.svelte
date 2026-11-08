@@ -30,7 +30,7 @@
 		COLOR_MODE: 0,
 		COLOR_SCALE_INDEX: 4,
 		INSET: 8,
-		_PAD0: 12,
+		GROUP_INDEX: 12,
 		CONSTANT_COLOR: 16,
 		DX: 32,
 		DY: 36
@@ -49,6 +49,8 @@
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		inset?: number;
 		dx?: number;
@@ -78,6 +80,7 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_FILL_COLOR,
 		inset = 0,
 		dx = 0,
@@ -125,7 +128,7 @@
       colorMode: u32,           // 0 = constant, 1 = scale
       colorScaleIndex: u32,     // Index into colorConfigs
       inset: f32,               // Pixel inset on all sides
-      _pad0: u32,
+      groupIndex: u32,          // Page-wide filter group index, for activity reads
       constantColor: vec4<f32>, // Used when colorMode = 0
       dx: f32,                  // Horizontal pixel offset
       dy: f32,                  // Vertical pixel offset
@@ -184,9 +187,9 @@
       output.colorValue = colorValue;
       output.alpha = alpha * selectionDim(
         markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue),
-          bandActivityX(x0),
-          bandActivityY(y0)
+          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue, markConstants.groupIndex),
+          bandActivityX(x0, markConstants.groupIndex),
+          bandActivityY(y0, markConstants.groupIndex)
         )
       );
       return output;
@@ -307,8 +310,8 @@
 
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.INSET, inset, LE);
-			// padding at 12
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

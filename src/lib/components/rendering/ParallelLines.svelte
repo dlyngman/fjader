@@ -32,6 +32,8 @@
 		colorValueData?: Float32Array | null;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		axisOrder: number[];
 		/** Each axis's scale id, in data (not visual) order. */
@@ -51,6 +53,7 @@
 		colorValueData = null,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		axisOrder,
 		axisScaleIds,
@@ -101,7 +104,7 @@
     opacity: f32,
     colorMode: u32,
     colorScaleIndex: u32,
-    _pad0: u32,
+    groupIndex: u32,
     _pad1: u32,
     constantColor: vec4<f32>,
     axisOrder: array<vec4<u32>, 4>,
@@ -192,7 +195,7 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[rowIdx];
       output.alpha = config.opacity * selectionDim(
-        markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx])
+        markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx], config.groupIndex)
       );
       output.circleUV = quadPosition;
       output.circleRadius = halfWidth;
@@ -273,7 +276,7 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[rowIdx];
     output.alpha = config.opacity * selectionDim(
-      markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx])
+      markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx], config.groupIndex)
     );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
@@ -365,7 +368,8 @@
 		f32[3] = opacity;
 		u32[4] = colorMode;
 		u32[5] = colorScaleIndex;
-		// u32[6], u32[7] = padding
+		u32[6] = groupIndex;
+		// u32[7] = padding
 		f32[8] = constantColor[0];
 		f32[9] = constantColor[1];
 		f32[10] = constantColor[2];

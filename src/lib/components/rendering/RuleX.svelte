@@ -23,7 +23,7 @@
 		COLOR_MODE: 0,
 		COLOR_SCALE_INDEX: 4,
 		STROKE_WIDTH: 8,
-		_PAD0: 12,
+		GROUP_INDEX: 12,
 		CONSTANT_COLOR: 16,
 		_PAD1: 32,
 		_PAD2: 36,
@@ -42,6 +42,8 @@
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		strokeWidth?: number;
 		markId?: string;
@@ -58,6 +60,7 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_FILL_COLOR,
 		strokeWidth = 1,
 		markId = ''
@@ -118,7 +121,7 @@
       colorMode: u32,
       colorScaleIndex: u32,
       strokeWidth: f32,
-      _pad0: u32,
+      groupIndex: u32,
       constantColor: vec4<f32>,
       _pad1: f32,
       _pad2: f32,
@@ -175,9 +178,9 @@
       output.colorValue = colorValue;
       output.alpha = alpha * selectionDim(
         markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue),
-          bandActivityX(x),
-          ${hasExtent ? 'bandActivityY(y0)' : '1.0'}
+          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue, markConstants.groupIndex),
+          bandActivityX(x, markConstants.groupIndex),
+          ${hasExtent ? 'bandActivityY(y0, markConstants.groupIndex)' : '1.0'}
         )
       );
       return output;
@@ -278,8 +281,8 @@
 
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
-			// padding at 12
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

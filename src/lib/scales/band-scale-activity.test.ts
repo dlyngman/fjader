@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { BandScaleState } from './BandScaleState.svelte';
 import { DEFAULT_INACTIVE_OPACITY, type ActivityTable } from './ActivityTable';
 import { FieldIdentity } from '$lib/query-engine/categorical-identity';
-import { createIdentitySlotState, packIdentitySlots } from '$lib/gpu/identity-slot-packing';
 
 /**
  * A band axis's selection, as the GPU and the axis labels see it: the activity
@@ -78,18 +77,6 @@ describe('BandScaleState selection activity', () => {
 		expect(scale.tickOpacity(1)).toBeCloseTo(DEFAULT_INACTIVE_OPACITY, 6);
 	});
 
-	it('reaches the packed block as its activity half', () => {
-		const scale = scaleOf(['a', 'b', 'c']);
-		scale.setActiveValues(['c']);
-		const state = createIdentitySlotState(64);
-		packIdentitySlots([{ id: scale.id, slots: scale.slots, activity: scale.activity }], state);
-		const base = state.offsets.get(scale.id)!;
-		const count = state.bufferTo[base];
-		expect(Array.from(state.bufferTo.slice(base + 1 + count, base + 1 + 2 * count))).toEqual([
-			0, 0, 1
-		]);
-	});
-
 	it('does not fade a selection made before identity landed: it is already shown', () => {
 		const scale = new BandScaleState('category', [], { gpuCoordinator: loop });
 		scale.setActiveValues(['b']);
@@ -121,13 +108,6 @@ describe('BandScaleState selection activity', () => {
 		scale.setIdentity(identity);
 		expect(scale.hasIdentity).toBe(false);
 		expect(table(scale).count).toBe(0);
-
-		const state = createIdentitySlotState(64);
-		packIdentitySlots([{ id: scale.id, slots: scale.slots, activity: scale.activity }], state);
-		const base = state.offsets.get(scale.id)!;
-		const count = state.bufferTo[base];
-		const half = Array.from(state.bufferTo.slice(base + 1 + count, base + 1 + 2 * count));
-		expect(half.every((v) => v === 1)).toBe(true);
 	});
 
 	it('snaps to the new ids after a reload renumbers the dim, rather than fading from the old ones', () => {

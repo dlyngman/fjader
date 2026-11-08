@@ -306,6 +306,7 @@
 		colorValueData={markColor.data}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
+		groupIndex={setup?.groupIndex ?? 0}
 		constantColor={markColor.constantColor}
 		sizeMode={markSize.sizeMode}
 		sizeScaleIndex={markSize.sizeScaleIndex}
