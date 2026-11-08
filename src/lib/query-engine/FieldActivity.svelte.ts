@@ -69,6 +69,11 @@ export class FieldActivity {
 	readonly key: string;
 	#host: FieldActivityHost;
 	#groups: GroupFade[] = [];
+	/**
+	 * Bumped when a group's fade is created, so a reader that found none runs
+	 * again once it exists. Fades are created by `set`, never while rendering.
+	 */
+	#groupsVersion = $state(0);
 
 	/** The identity the tables' ids belong to, or null when they have none. */
 	#identity: FieldIdentity | null = null;
@@ -149,6 +154,7 @@ export class FieldActivity {
 		value: unknown,
 		inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY
 	): number {
+		void this.#groupsVersion;
 		const group = this.#groups[index];
 		if (!group) return 1;
 		// Read first, so a reader that ran before identity landed already depends
@@ -178,6 +184,7 @@ export class FieldActivity {
 				this.#groups[i] = new GroupFade(this.#host, this.key, []);
 			}
 			group = this.#groups[index];
+			this.#groupsVersion++;
 		}
 		return group;
 	}

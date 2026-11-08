@@ -1,21 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FilterGroup } from './FilterGroup.svelte';
-import type { ActiveValueScale } from './FilterGroup.svelte';
 import type { ActivationSource, QueryEngine } from './QueryEngine';
-
-function mockScale(): ActiveValueScale & { active: Set<unknown> | null; clearCount: number } {
-	return {
-		active: null,
-		clearCount: 0,
-		setActiveValues(values: Set<unknown>) {
-			this.active = values;
-		},
-		clearActiveValues() {
-			this.active = null;
-			this.clearCount++;
-		}
-	};
-}
 
 /** The parts of QueryEngine FilterGroup calls, recording activations. */
 function mockEngine(sqlFor: Record<string, string> = {}) {
@@ -39,8 +24,6 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 
 const sqlOf = (group: FilterGroup, markId: string) =>
 	group.selection.predicate(markId).map((p) => String(p));
-
-const strings = (v: unknown) => new Set(v as string[]);
 
 describe('FilterGroup', () => {
 	describe('register', () => {
@@ -221,93 +204,6 @@ describe('FilterGroup', () => {
 		});
 	});
 
-	describe('scale projection', () => {
-		it('projects active values to scales on update', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-
-			const handle = group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				projection: { scales: () => [scale], values: strings }
-			});
-
-			handle.update("species IN ('Adelie', 'Gentoo')", ['Adelie', 'Gentoo']);
-
-			expect(scale.active).toEqual(new Set(['Adelie', 'Gentoo']));
-		});
-
-		it('clears scale projection when the clause is cleared', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-
-			const handle = group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				projection: { scales: () => [scale], values: strings }
-			});
-
-			handle.update('x > 0', ['A', 'B']);
-			expect(scale.active).toBeDefined();
-
-			handle.clear();
-			expect(scale.active).toBeNull();
-		});
-
-		it('projects onto the union of every registration’s scales, whoever wrote', () => {
-			const legendScale = mockScale();
-			const bandScale = mockScale();
-			const group = new FilterGroup();
-
-			const legend = group.register('toggle-region', {
-				excludeMarkIds: () => new Set(),
-				projection: { scales: () => [legendScale], values: strings }
-			});
-			group.register('toggle-region', {
-				excludeMarkIds: () => new Set(['mark-chart']),
-				projection: { scales: () => [bandScale], values: strings }
-			});
-
-			legend.update("region IN ('North')", ['North']);
-			expect(legendScale.active).toEqual(new Set(['North']));
-			expect(bandScale.active).toEqual(new Set(['North']));
-		});
-
-		it('leaves the projection alone while a brush moves, and re-queries all the same', () => {
-			const scale = mockScale();
-			const { engine, onClauseChange } = mockEngine();
-			const group = new FilterGroup();
-			group.setEngine(engine);
-			const setActive = vi.spyOn(scale, 'setActiveValues');
-
-			const legend = group.registerToggle('region', {
-				excludeMarkIds: () => new Set(),
-				scales: () => [scale]
-			});
-			legend.toggle(['North'], false);
-			expect(setActive).toHaveBeenCalledTimes(1);
-			const projected = scale.active;
-
-			const brush = group.register('brush-x', { excludeMarkIds: () => new Set() });
-			for (let i = 0; i < 10; i++) brush.update(`x > ${i}`, [i, i + 1]);
-			brush.clear();
-
-			expect(setActive).toHaveBeenCalledTimes(1);
-			expect(scale.active).toBe(projected);
-			expect(onClauseChange).toHaveBeenCalledTimes(12);
-		});
-
-		it('un-dims a toggle’s scales when its last registration goes', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-			const legend = group.registerToggle('region', {
-				excludeMarkIds: () => new Set(),
-				scales: () => [scale]
-			});
-			legend.toggle(['North'], false);
-			legend.destroy();
-			expect(scale.active).toBeNull();
-		});
-	});
-
 	describe('activate', () => {
 		it('hands the engine the marks every registration excludes, and the dims', () => {
 			const { engine, activations } = mockEngine();
@@ -450,25 +346,6 @@ describe('registerToggle', () => {
 		expect(sqlOf(group, 'mark-chart')).toEqual([]);
 		expect(sqlOf(group, 'mark-other')).toEqual([`("region" IN ('South'))`]);
 		expect(group.selection.get('toggle-region')!.value).toEqual([['South']]);
-	});
-
-	it('supplies its projection values itself, onto every consumer’s scales', () => {
-		const group = new FilterGroup();
-		const color = mockScale();
-		const band = mockScale();
-		const legend = group.registerToggle('region', {
-			excludeMarkIds: noMarks,
-			scales: () => [color]
-		});
-		group.registerToggle('region', { excludeMarkIds: chartMarks, scales: () => [band] });
-
-		legend.toggle(['North'], false);
-		expect(color.active).toEqual(new Set(['North']));
-		expect(band.active).toEqual(new Set(['North']));
-
-		legend.clear();
-		expect(color.active).toBeNull();
-		expect(band.active).toBeNull();
 	});
 
 	it('reads the same selection object while its clause is unchanged, and one shared empty set without one', () => {

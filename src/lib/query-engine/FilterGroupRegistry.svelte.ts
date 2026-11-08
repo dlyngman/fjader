@@ -21,6 +21,12 @@ export class FilterGroupRegistry {
 	#engine: QueryEngine | null = null;
 
 	#fields = new Map<string, FieldActivity>();
+	/**
+	 * Bumped when a field is created, so a reader that found none (and so read
+	 * no fade) runs again once it exists. Fields are created by selections and
+	 * by the packer, never while a template renders.
+	 */
+	#fieldsVersion = $state(0);
 	/** The same activities as an array, for the packer's per-frame loop. */
 	#fieldList: FieldActivity[] = [];
 
@@ -90,8 +96,26 @@ export class FilterGroupRegistry {
 			activity = new FieldActivity(key, this.#host);
 			this.#fields.set(key, activity);
 			this.#fieldList.push(activity);
+			this.#fieldsVersion++;
 		}
 		return activity;
+	}
+
+	/**
+	 * How visible `value` of field `key` is now, for a label shown for marks of
+	 * several groups: the least visible over `groups`, so it dims when any of
+	 * those groups dims it. 1 for a field no group ever selected on. Pure, so
+	 * safe in a template: it creates nothing and reconciles nothing.
+	 */
+	opacityOfValue(key: string, groups: readonly number[], value: unknown): number {
+		void this.#fieldsVersion;
+		const activity = this.#fields.get(key);
+		if (!activity) return 1;
+		let opacity = 1;
+		for (let i = 0; i < groups.length; i++) {
+			opacity = Math.min(opacity, activity.opacityOfValue(groups[i], value));
+		}
+		return opacity;
 	}
 
 	/** Every field's activity, in creation order. Read every frame; do not mutate. */

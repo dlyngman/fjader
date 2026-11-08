@@ -5,8 +5,6 @@ import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
 import type { ClockLoop } from '$lib/animation';
 import { SlotTransition, type BandSlots } from './SlotTransition';
-import { ScaleSelection } from './ScaleSelection.svelte';
-import type { ActivitySource } from '$lib/gpu/identity-slot-packing';
 import { DomainResolver } from './DomainResolver';
 
 /**
@@ -157,13 +155,6 @@ export class BandScaleState {
 			onFrame: () => this.#slotFrame++,
 			onRest: () => this.#slotRest++
 		});
-		this.#selection = new ScaleSelection<DimValue>(config.gpuCoordinator ?? null, {
-			charts: () => this._affectedChartsArray,
-			idOf: (value) => this.channelValueFor(value),
-			ready: () => this.hasIdentity,
-			identity: () => this.#resolver.identity,
-			count: () => this.#slots.count
-		});
 	}
 
 	// =========================================================================
@@ -172,33 +163,6 @@ export class BandScaleState {
 
 	setReady(): void {
 		this.ready = true;
-	}
-
-	// =========================================================================
-	// ACTIVE VALUES (selection feedback)
-	// =========================================================================
-
-	setActiveValues(values: Iterable<DimValue>): void {
-		this.#selection.set(values);
-	}
-
-	clearActiveValues(): void {
-		this.#selection.clear();
-	}
-
-	/**
-	 * Which categories are selected, as a fade over every id of the dim: the
-	 * activity half of this scale's block, which bars, dots and rules on this
-	 * axis read to dim, and which the axis labels follow. Without identity the
-	 * channel carries positions, not ids, so the table is empty and the marks
-	 * draw at full opacity; the labels, keyed by position, dim by value instead
-	 * (see tickOpacity). It applies once identity lands and the slots are laid out.
-	 */
-	#selection: ScaleSelection<DimValue>;
-
-	/** The selection fade, for the packer's activity half. */
-	get activity(): ActivitySource {
-		return this.#selection.table;
 	}
 
 	/**
@@ -232,7 +196,6 @@ export class BandScaleState {
 	destroy(): void {
 		this.#destroyed = true;
 		this.#slots.clock.stop();
-		this.#selection.destroy();
 	}
 
 	/**
@@ -530,14 +493,8 @@ export class BandScaleState {
 	#rebuildSlotTable(): void {
 		if (this.hasIdentity) {
 			this.#slots.layout('ids', this.#displayOrder, this.#resolver.idCount);
-			// The selection covers the same ids. One made before these ids existed
-			// (or before identity landed) is applied to them now.
-			this.#selection.reapply();
 		} else {
 			this.#slots.layout('positions', null, this.#domain.length);
-			// The channel now carries positions, which the selection's per-id
-			// state does not describe: drop it until identity is back.
-			this.#selection.reapply();
 		}
 	}
 
@@ -864,18 +821,16 @@ export class BandScaleState {
 	 * so it fades out over the half slot before that centre reaches the axis end
 	 * (the animated count), and is gone from there; the same at the start. An
 	 * entrant's label appears as its band crosses in.
+	 *
+	 * A selection's dimming is not here: it belongs to the filter groups of the
+	 * marks the axis labels, so the axis multiplies it in (BandAxisTicks).
 	 */
 	tickOpacity(key: number): number {
 		void this.#slotFrame;
 		const slot = this.#slots.slotOf(key);
 		const n = this.getConfig().categoryCount;
 		const inside = Math.min(1, Math.max(0, (n - 0.5 - slot) * 2), Math.max(0, (slot + 0.5) * 2));
-		// The selection fade, on the same clock and mapping as the bars. Without
-		// identity the key is a position, not an id: selected or not, by value.
-		const selected = this.hasIdentity
-			? this.#selection.opacityOf(key)
-			: this.#selection.opacityOfValue(this.effectiveDomain[key]);
-		return this.#slots.alphaOf(key) * inside * selected;
+		return this.#slots.alphaOf(key) * inside;
 	}
 
 	/**

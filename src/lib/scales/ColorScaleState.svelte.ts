@@ -26,8 +26,6 @@ import {
 	NO_SLOT_TABLE
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
-import type { ActivitySource } from '$lib/gpu/identity-slot-packing';
-import { ScaleSelection } from './ScaleSelection.svelte';
 
 interface ColorScaleConfig {
 	field: string;
@@ -146,18 +144,6 @@ export class ColorScaleState {
 	 */
 	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
 
-	/**
-	 * Which categories are selected, as a fade over every id of the dim: sized
-	 * with the rank table, fed from `setActiveValues`, and packed as the activity
-	 * half of this scale's block.
-	 */
-	#selection: ScaleSelection<string | number>;
-
-	/** The selection fade, for the packer's activity half. */
-	get activity(): ActivitySource {
-		return this.#selection.table;
-	}
-
 	get slots(): SlotSource {
 		return this.#slots;
 	}
@@ -219,13 +205,6 @@ export class ColorScaleState {
 		this.#exponent = config.exponent ?? 1;
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
-		this.#selection = new ScaleSelection<string | number>(gpuCoordinator, {
-			charts: () => this._affectedChartsArray,
-			idOf: (value) => this.#identity?.ids.get(value as never),
-			ready: () => this.hasIdentity,
-			identity: () => this.#identity,
-			count: () => this.#slots.count
-		});
 
 		// Explicit type wins, fallback to inference from scheme
 		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
@@ -572,10 +551,6 @@ export class ColorScaleState {
 		slots.to = table;
 		slots.count = table.length;
 		slots.version++;
-
-		// The selection covers the same ids. One made before these ids existed
-		// (or before identity landed) is applied to them now.
-		this.#selection.reapply();
 	}
 
 	#hasRanks(): boolean {
@@ -851,40 +826,15 @@ export class ColorScaleState {
 		return parseColorToRGBA(cssColor);
 	}
 
-	// ============================================================
-	// ACTIVE VALUES (selection feedback)
-	// ============================================================
-
-	setActiveValues(values: Iterable<string | number>): void {
-		this.#selection.set(values);
-	}
-
-	clearActiveValues(): void {
-		this.#selection.clear();
-	}
-
 	/**
-	 * Charts to redraw while this scale's selection fades. Asked of the
-	 * registry, as BandScaleState does, so it is current when charts come and
-	 * go; the selection clock reads it every frame it runs.
+	 * Charts drawing this scale. Asked of the registry, as BandScaleState does,
+	 * so it is current when charts come and go.
 	 */
 	get _affectedChartsArray(): string[] {
 		return this.#registry?.chartsUsing(this) ?? ColorScaleState.#noCharts;
 	}
 
 	static #noCharts: string[] = [];
-
-	/**
-	 * How visible a category's legend entry is now, 0..1: its selection fade, on
-	 * the same clock and with the same floor as the marks, so a legend dims with
-	 * the bars for any selection on this field, whichever control made it.
-	 *
-	 * Per frame while a fade runs, O(1). Without identity there is no table, and
-	 * the entry is simply selected or not.
-	 */
-	categoryOpacity(value: string | number): number {
-		return this.#selection.opacityOfValue(value);
-	}
 
 	// ============================================================
 	// CLEANUP
@@ -910,9 +860,6 @@ export class ColorScaleState {
 	 */
 	destroy(): void {
 		this.#destroyed = true;
-		// Leaves the animation loop; a later selection lands at once rather than
-		// animating for a scale nothing draws.
-		this.#selection.destroy();
 	}
 
 	/** True once the registry has torn this scale down. */

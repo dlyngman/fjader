@@ -2,8 +2,8 @@
  * FilterGroup — visual concerns layer on top of CrossfilterSelection.
  *
  * Manages the interactor API (register, registerToggle), schema augmentation
- * for UI filter pills, and scale projection (dimming unselected categories in
- * legends/axes).
+ * for UI filter pills, and this group's selection on each categorical field
+ * (FieldActivity), which marks, legends and band axes dim by.
  *
  * Owns clauses: a clause lives while at least one registration for its id
  * exists. Components own their registrations through their own lifecycle.
@@ -28,15 +28,6 @@ import { FieldActivity } from './FieldActivity.svelte';
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-/**
- * Narrow protocol for scale states that support active-value projection.
- * Implemented by ColorScaleState and BandScaleState.
- */
-export interface ActiveValueScale {
-	setActiveValues(values: Set<unknown>): void;
-	clearActiveValues(): void;
-}
 
 export interface FilterItem {
 	sourceId: string;
@@ -69,11 +60,6 @@ export interface SourceOpts {
 	 * once per write and stored on the clause.
 	 */
 	augment?: (value: unknown) => FilterSchema | null;
-	/** The scales to dim, and the values to dim them by, taken from the clause value. */
-	projection?: {
-		scales: () => ActiveValueScale[];
-		values: (value: unknown) => Set<unknown> | null;
-	};
 }
 
 export interface SourceHandle {
@@ -222,14 +208,6 @@ export class FilterGroup {
 
 	/** Registrations per source id. Several under one id are one source. */
 	#sources = new Map<string, Set<SourceOpts>>();
-	// Track which scales we projected to, so we can clear them
-	#projectedScales = new Set<ActiveValueScale>();
-	/**
-	 * Sources some registration projects onto scales (toggles, legends). Only a
-	 * change to one of these can change what is dimmed, so a brush, which
-	 * writes on every pointer move, never rebuilds the projection.
-	 */
-	#projectingSources = new Set<string>();
 
 	/**
 	 * Active filter items with schema metadata, for UI consumption. The schema
@@ -255,8 +233,7 @@ export class FilterGroup {
 
 	/**
 	 * Register a selection source. Several registrations under one id are one
-	 * source: each writes the clause with its own exclusions, and the scales the
-	 * source dims are the union of theirs.
+	 * source: each writes the clause with its own exclusions.
 	 */
 	register(sourceId: string, opts: SourceOpts): SourceHandle {
 		let registrations = this.#sources.get(sourceId);
@@ -265,7 +242,6 @@ export class FilterGroup {
 			this.#sources.set(sourceId, registrations);
 		}
 		registrations.add(opts);
-		if (opts.projection) this.#projectingSources.add(sourceId);
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
@@ -276,7 +252,7 @@ export class FilterGroup {
 					schema: schemaOf(registrations, opts, value),
 					categorical: categoricalOf(registrations, opts, value)
 				};
-				this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
+				this.#afterUpdate(this.selection.update(sourceId, next), next);
 			},
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
@@ -288,15 +264,13 @@ export class FilterGroup {
 					// The last one: drop the source's preagg tables first, so the
 					// re-query below cannot start reading one about to go. Then clear
 					// while the registration is still in place, so whatever reads the
-					// source's registrations to route the removal still finds them,
-					// and its scales are un-dimmed.
+					// source's registrations to route the removal still finds them.
 					this.#engine?.forgetSource(this, sourceId);
 					this.clearSource(sourceId);
 				}
 				registrations.delete(opts);
 				if (registrations.size > 0) return;
 				this.#sources.delete(sourceId);
-				this.#projectingSources.delete(sourceId);
 			}
 		};
 	}
@@ -340,7 +314,7 @@ export class FilterGroup {
 	 */
 	registerToggle(
 		fields: string | string[],
-		opts: { excludeMarkIds: () => Set<string>; scales?: () => ActiveValueScale[] }
+		opts: { excludeMarkIds: () => Set<string> }
 	): ToggleHandle {
 		const list = Array.isArray(fields) ? fields : [fields];
 		const sourceId = toggleSourceId(list);
@@ -357,15 +331,7 @@ export class FilterGroup {
 					}
 				: undefined,
 			activeDims: () => list.map((field) => ({ kind: 'value' as const, field })),
-			augment: () => schema,
-			// Projection only makes sense for single-field toggles.
-			projection:
-				list.length === 1 && opts.scales
-					? {
-							scales: opts.scales,
-							values: (value) => new Set((value as unknown[][]).map((t) => t[0]))
-						}
-					: undefined
+			augment: () => schema
 		});
 
 		const tuplesOf = (clause: Clause | undefined): unknown[][] =>
@@ -451,7 +417,7 @@ export class FilterGroup {
 		const resolved = typeof excludeMarkIds === 'function' ? excludeMarkIds() : excludeMarkIds;
 		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema, categorical: null };
 		const sourceId = `manual:${key}`;
-		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
+		this.#afterUpdate(this.selection.update(sourceId, next), next);
 	}
 
 	/**
@@ -463,12 +429,12 @@ export class FilterGroup {
 	relayClause(key: string, clause: Clause): void {
 		const sourceId = `manual:${key}`;
 		if (this.selection.get(sourceId) === clause) return;
-		this.#afterUpdate(sourceId, this.selection.update(sourceId, clause), clause);
+		this.#afterUpdate(this.selection.update(sourceId, clause), clause);
 	}
 
 	removeManual(key: string): void {
 		const sourceId = `manual:${key}`;
-		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
+		this.#afterUpdate(this.selection.update(sourceId, null), null);
 	}
 
 	// -----------------------------------------------------------------
@@ -481,34 +447,31 @@ export class FilterGroup {
 	 */
 	clearSource(sourceId: string): void {
 		if (!this.selection.isActive(sourceId)) return;
-		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
+		this.#afterUpdate(this.selection.update(sourceId, null), null);
 	}
 
 	clearAll(): void {
 		this.selection.clear();
 		for (const key of this.#selectedFields) this.#activityOf(key).set(this.index, null);
 		this.#selectedFields.clear();
-		this.#clearAllScaleProjections();
 		this.#engine?.onFilterChange(this);
 	}
 
 	// -----------------------------------------------------------------
-	// Scale projection
+	// After a change
 	// -----------------------------------------------------------------
 
 	/**
-	 * After `sourceId`'s clause went from `prev` to `next`: re-project to scales
-	 * (visual dimming) if that source dims anything, and have the engine
-	 * re-query the marks either clause applies to. A brush move skips the
-	 * projection, which would rebuild the same answer and allocate doing it on
-	 * every pointer move.
+	 * After a clause went from `prev` to `next`: update this group's selection on
+	 * the field of either if it is categorical, and have the engine re-query the
+	 * marks either clause applies to. A brush, which writes on every pointer
+	 * move, touches no selection.
 	 */
-	#afterUpdate(sourceId: string, prev: Clause | undefined, next: Clause | null): void {
+	#afterUpdate(prev: Clause | undefined, next: Clause | null): void {
 		if (prev?.categorical) this.#syncActivity(prev.categorical.key);
 		if (next?.categorical && next.categorical.key !== prev?.categorical?.key) {
 			this.#syncActivity(next.categorical.key);
 		}
-		if (this.#projectingSources.has(sourceId)) this.#projectToScales();
 		if (prev || next) this.#engine?.onClauseChange(this, prev, next);
 	}
 
@@ -533,52 +496,5 @@ export class FilterGroup {
 		if (active) this.#selectedFields.add(key);
 		else this.#selectedFields.delete(key);
 		this.#activityOf(key).set(this.index, active);
-	}
-
-	/**
-	 * Project active filter values onto scales (dim unselected categories).
-	 */
-	#projectToScales(): void {
-		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();
-
-		for (const [sourceId, registrations] of this.#sources) {
-			const clause = this.selection.get(sourceId);
-			if (!clause) continue;
-
-			for (const { projection } of registrations) {
-				if (!projection) continue;
-
-				const values = projection.values(clause.value);
-				if (!values?.size) continue;
-
-				for (const scale of projection.scales()) {
-					const existing = activeByScale.get(scale);
-					if (existing) {
-						for (const v of values) existing.add(v);
-					} else {
-						activeByScale.set(scale, new Set(values));
-					}
-				}
-			}
-		}
-
-		// Set active values on scales that have them
-		for (const [scale, values] of activeByScale) {
-			scale.setActiveValues(values);
-		}
-		// Clear scales that are no longer active
-		for (const scale of this.#projectedScales) {
-			if (!activeByScale.has(scale)) {
-				scale.clearActiveValues();
-			}
-		}
-		this.#projectedScales = new Set(activeByScale.keys());
-	}
-
-	#clearAllScaleProjections(): void {
-		for (const scale of this.#projectedScales) {
-			scale.clearActiveValues();
-		}
-		this.#projectedScales.clear();
 	}
 }

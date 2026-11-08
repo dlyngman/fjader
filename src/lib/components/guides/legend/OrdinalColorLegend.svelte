@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
-	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { ActiveValueScale } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	interface Props {
@@ -31,7 +29,6 @@
 
 	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
 	const filterGroup = filterGroups?.get(selection);
-	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Reactive: re-renders when domain or scheme changes
 	const items = $derived(
@@ -44,11 +41,19 @@
 	// --- Toggle interaction ---
 	const isInteractive = $derived(filterGroup != null && field != null);
 
-	// Scales to dim: this color scale + any band scale for the same field.
-	// Projection itself is handled by FilterGroup, shared with Toggle/brushes.
-	function getLegendScaleStates(): ActiveValueScale[] {
-		const band = scaleRegistry?.getScaleByField(field!, 'band');
-		return [scaleState, band].filter(Boolean) as unknown as ActiveValueScale[];
+	/**
+	 * The field's identity key: what its selection is kept under. The scale's
+	 * own once it has identity; the field before, as the toggle keys it.
+	 */
+	const key = $derived(scaleState.identityKey ?? field ?? scaleState.field);
+	const groups = $derived(filterGroup ? [filterGroup.index] : []);
+
+	/**
+	 * How visible an entry is now: its group's selection fade on the field, on
+	 * the same clock and with the same floor as the marks.
+	 */
+	function opacityOf(value: string | number): number {
+		return filterGroups ? filterGroups.opacityOfValue(key, groups, value) : 1;
 	}
 
 	// The selection is shared with any Toggle on the same field through its clause.
@@ -56,8 +61,7 @@
 	const toggle =
 		filterGroup && field
 			? filterGroup.registerToggle(field, {
-					excludeMarkIds: () => new Set<string>(),
-					scales: getLegendScaleStates
+					excludeMarkIds: () => new Set<string>()
 				})
 			: null;
 	onDestroy(() => toggle?.destroy());
@@ -86,7 +90,7 @@
 			{#if isInteractive}
 				<button
 					class="legend-item legend-item-interactive"
-					style:opacity={scaleState.categoryOpacity(value)}
+					style:opacity={opacityOf(value)}
 					onclick={(e) => handleClick(value, e)}
 				>
 					<span
@@ -99,7 +103,7 @@
 					<span class="legend-label">{value}</span>
 				</button>
 			{:else}
-				<span class="legend-item" style:opacity={scaleState.categoryOpacity(value)}>
+				<span class="legend-item" style:opacity={opacityOf(value)}>
 					<span
 						class="legend-swatch"
 						style:background={color}
