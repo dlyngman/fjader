@@ -187,12 +187,8 @@ export class FilterGroup {
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
-				this.selection.update(sourceId, {
-					predicate,
-					excludeMarkIds: opts.excludeMarkIds(),
-					value
-				});
-				this.#afterUpdate(sourceId);
+				const next: Clause = { predicate, excludeMarkIds: opts.excludeMarkIds(), value };
+				this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 			},
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
@@ -344,18 +340,14 @@ export class FilterGroup {
 		schema?: FilterSchema
 	): void {
 		const resolved = typeof excludeMarkIds === 'function' ? excludeMarkIds() : excludeMarkIds;
-		this.selection.update(`manual:${key}`, {
-			predicate,
-			excludeMarkIds: resolved,
-			value,
-			schema
-		});
-		this.#afterUpdate(`manual:${key}`);
+		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema };
+		const sourceId = `manual:${key}`;
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 	}
 
 	removeManual(key: string): void {
-		this.selection.update(`manual:${key}`, null);
-		this.#afterUpdate(`manual:${key}`);
+		const sourceId = `manual:${key}`;
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
 	}
 
 	// -----------------------------------------------------------------
@@ -368,8 +360,7 @@ export class FilterGroup {
 	 */
 	clearSource(sourceId: string): void {
 		if (!this.selection.isActive(sourceId)) return;
-		this.selection.update(sourceId, null);
-		this.#afterUpdate(sourceId);
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
 	}
 
 	clearAll(): void {
@@ -383,14 +374,15 @@ export class FilterGroup {
 	// -----------------------------------------------------------------
 
 	/**
-	 * After a filter update to `sourceId`: re-project to scales (visual
-	 * dimming) if that source dims anything, and notify the engine to re-query
-	 * affected marks. A brush move skips the projection, which would rebuild the
-	 * same answer and allocate doing it on every pointer move.
+	 * After `sourceId`'s clause went from `prev` to `next`: re-project to scales
+	 * (visual dimming) if that source dims anything, and have the engine
+	 * re-query the marks either clause applies to. A brush move skips the
+	 * projection, which would rebuild the same answer and allocate doing it on
+	 * every pointer move.
 	 */
-	#afterUpdate(sourceId: string): void {
+	#afterUpdate(sourceId: string, prev: Clause | undefined, next: Clause | null): void {
 		if (this.#projectingSources.has(sourceId)) this.#projectToScales();
-		this.#engine?.onFilterChange(this);
+		if (prev || next) this.#engine?.onClauseChange(this, prev, next);
 	}
 
 	/**

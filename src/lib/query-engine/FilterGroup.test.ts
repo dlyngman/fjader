@@ -26,13 +26,14 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 			return Promise.resolve();
 		}),
 		onFilterChange: vi.fn(),
+		onClauseChange: vi.fn(),
 		forgetSource: vi.fn(),
 		identitySqlFor: (field: string) => sqlFor[field] ?? null
 	};
 	return {
 		engine: engine as unknown as QueryEngine,
 		activations,
-		onFilterChange: engine.onFilterChange
+		onClauseChange: engine.onClauseChange
 	};
 }
 
@@ -108,19 +109,19 @@ describe('FilterGroup', () => {
 
 	describe('clearSource', () => {
 		it('re-queries only when there was a clause to remove', () => {
-			const { engine, onFilterChange } = mockEngine();
+			const { engine, onClauseChange } = mockEngine();
 			const group = new FilterGroup();
 			group.setEngine(engine);
 			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
 
 			handle.clear();
 			handle.destroy();
-			expect(onFilterChange).not.toHaveBeenCalled();
+			expect(onClauseChange).not.toHaveBeenCalled();
 
 			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
 			again.update('x > 0', null);
 			again.destroy();
-			expect(onFilterChange).toHaveBeenCalledTimes(2);
+			expect(onClauseChange).toHaveBeenCalledTimes(2);
 		});
 	});
 
@@ -213,7 +214,7 @@ describe('FilterGroup', () => {
 
 		it('leaves the projection alone while a brush moves, and re-queries all the same', () => {
 			const scale = mockScale();
-			const { engine, onFilterChange } = mockEngine();
+			const { engine, onClauseChange } = mockEngine();
 			const group = new FilterGroup();
 			group.setEngine(engine);
 			const setActive = vi.spyOn(scale, 'setActiveValues');
@@ -232,7 +233,7 @@ describe('FilterGroup', () => {
 
 			expect(setActive).toHaveBeenCalledTimes(1);
 			expect(scale.active).toBe(projected);
-			expect(onFilterChange).toHaveBeenCalledTimes(12);
+			expect(onClauseChange).toHaveBeenCalledTimes(12);
 		});
 
 		it('un-dims a toggle’s scales when its last registration goes', () => {

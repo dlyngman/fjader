@@ -36,6 +36,7 @@ import {
 	type IdentityField
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
+import { CrossfilterSelection, type Clause } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
@@ -717,28 +718,41 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Called by FilterGroup when any filter clause changes.
-	 * Iterates registered marks for this group and batch-queries them.
+	 * Called by FilterGroup when its clauses change wholesale (clearAll):
+	 * re-queries every mark in the group.
 	 */
 	onFilterChange(group: FilterGroup): void {
 		this.#lastFilterChangeAt = performance.now();
-		const batch: Array<[string, MarkRegistration]> = [];
 		for (const [markId, reg] of this.#marks) {
-			if (reg.filterGroup === group) {
-				batch.push([markId, reg]);
-			}
+			if (reg.filterGroup === group) this.#queryMark(markId, reg);
 		}
-		if (batch.length > 0) {
-			this.#executeBatch(batch);
-		}
-	}
-
-	#executeBatch(batch: Array<[string, MarkRegistration]>): void {
-		for (const [markId, reg] of batch) this.#queryMark(markId, reg);
 	}
 
 	/**
-	 * Query a single mark: on a filter change (via #executeBatch) or a params
+	 * Called by FilterGroup when one clause changes: `prev` is the clause it
+	 * replaced or removed, `next` the one now in force (null when removed).
+	 *
+	 * Re-queries only the group's marks that either one applies to. A mark
+	 * neither applies to has the same SQL as before, so querying it would only
+	 * assemble that SQL to find the cached result, on every brush frame. Both
+	 * clauses count because a clause's exclusions belong to whichever control
+	 * wrote it: after a Toggle, a legend's write applies to the Toggle's chart.
+	 */
+	onClauseChange(group: FilterGroup, prev: Clause | undefined, next: Clause | null): void {
+		this.#lastFilterChangeAt = performance.now();
+		for (const [markId, reg] of this.#marks) {
+			if (reg.filterGroup !== group) continue;
+			if (
+				(prev && CrossfilterSelection.applies(prev, markId)) ||
+				(next && CrossfilterSelection.applies(next, markId))
+			) {
+				this.#queryMark(markId, reg);
+			}
+		}
+	}
+
+	/**
+	 * Query a single mark: on a filter change or a params
 	 * change (via _onParamsChange). Reads a preagg table when one answers; if
 	 * that read fails, the table is set aside and the base table is queried once.
 	 */
