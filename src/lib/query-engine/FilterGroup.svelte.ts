@@ -23,6 +23,7 @@ import type {
 import type { ActiveDim, QueryEngine } from './QueryEngine';
 import { togglePredicate } from './toggle-predicate';
 import { identityKeyFor } from './identity-key';
+import { FieldActivity } from './FieldActivity.svelte';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -179,6 +180,41 @@ function toggleSourceId(fields: string[]): string {
 export class FilterGroup {
 	readonly selection = new CrossfilterSelection();
 	#engine: QueryEngine | null = null;
+
+	/**
+	 * This group's page-wide index, assigned by FilterGroupRegistry and never
+	 * reused: a mark stores it to read this group's half of an activity block.
+	 */
+	readonly index: number;
+
+	/** The selection state of a field, shared with the other groups on the page. */
+	#activityOf: (key: string) => FieldActivity;
+
+	/** Fields this group has an active categorical selection on, for clearAll. */
+	#selectedFields = new Set<string>();
+
+	/**
+	 * A group made outside a registry (unit tests) keeps its field activity to
+	 * itself, with no loop: its fades land at once.
+	 */
+	constructor(index: number = 0, activityOf?: (key: string) => FieldActivity) {
+		this.index = index;
+		if (activityOf) {
+			this.#activityOf = activityOf;
+		} else {
+			const own = new Map<string, FieldActivity>();
+			this.#activityOf = (key) => {
+				let activity = own.get(key);
+				if (!activity) own.set(key, (activity = new FieldActivity(key)));
+				return activity;
+			};
+		}
+	}
+
+	/** The selection state of a categorical field, by identity key: this group's fade is `index`. */
+	activity(key: string): FieldActivity {
+		return this.#activityOf(key);
+	}
 
 	setEngine(engine: QueryEngine): void {
 		this.#engine = engine;
@@ -450,6 +486,8 @@ export class FilterGroup {
 
 	clearAll(): void {
 		this.selection.clear();
+		for (const key of this.#selectedFields) this.#activityOf(key).set(this.index, null);
+		this.#selectedFields.clear();
 		this.#clearAllScaleProjections();
 		this.#engine?.onFilterChange(this);
 	}
@@ -466,8 +504,35 @@ export class FilterGroup {
 	 * every pointer move.
 	 */
 	#afterUpdate(sourceId: string, prev: Clause | undefined, next: Clause | null): void {
+		if (prev?.categorical) this.#syncActivity(prev.categorical.key);
+		if (next?.categorical && next.categorical.key !== prev?.categorical?.key) {
+			this.#syncActivity(next.categorical.key);
+		}
 		if (this.#projectingSources.has(sourceId)) this.#projectToScales();
 		if (prev || next) this.#engine?.onClauseChange(this, prev, next);
+	}
+
+	/**
+	 * Set this group's selection on field `key` from its clauses: the
+	 * intersection of the selected values of every categorical clause on that
+	 * field, because the filters AND, or nothing when there is none. Usually one
+	 * clause; a native toggle and a relayed one make two. Runs on categorical
+	 * clause changes only, never on a brush frame.
+	 */
+	#syncActivity(key: string): void {
+		let active: Set<unknown> | null = null;
+		this.selection.forEach((clause) => {
+			const categorical = clause.categorical;
+			if (!categorical || categorical.key !== key) return;
+			if (!active) {
+				active = new Set(categorical.values);
+				return;
+			}
+			for (const value of active) if (!categorical.values.has(value)) active.delete(value);
+		});
+		if (active) this.#selectedFields.add(key);
+		else this.#selectedFields.delete(key);
+		this.#activityOf(key).set(this.index, active);
 	}
 
 	/**
