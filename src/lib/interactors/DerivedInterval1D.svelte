@@ -172,6 +172,7 @@
 	// =========================================================================
 
 	const relay = new ClauseRelay(sourceGroup, targetGroup);
+	/** Does nothing: forEach(track) only subscribes the effect to every clause. */
 	const track = () => {};
 
 	// Tracks only the source group's clauses and what decides which to relay.

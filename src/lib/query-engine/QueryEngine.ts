@@ -3,8 +3,9 @@
  * mark registration for batch filter-driven re-queries.
  *
  * The mark layer's only interface to DuckDB. All query execution goes through
- * queryEngine.query(sql, opts) for ad-hoc queries, or registerMark() +
- * onFilterChange() for the reactive registration path.
+ * queryEngine.query(sql, opts) for ad-hoc queries, or registerMark() for the
+ * reactive registration path: FilterGroup calls onClauseChange() when one
+ * clause changes, and onFilterChange() when all of a group's do (clearAll).
  *
  * v1: Direct execution (await connection.query(sql))
  * v2: Cancel-on-supersede — keyed on callerId, drops stale in-flight queries.
