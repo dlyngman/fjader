@@ -253,6 +253,68 @@
 		return result;
 	});
 
+	// --- Selection dimming ---
+	//
+	// A label dims with the bars it labels: by its band axes and its ordinal
+	// colour, in its own filter group, the fields activity-reads.ts lists for
+	// text. Routing reads the same list, so a categorical selection on one of
+	// these fields dims the labels instead of filtering them away.
+
+	/** The value a raw channel entry names: an id resolves through the scale. */
+	function categoryOf(
+		scale: { categoryAt(id: number): unknown; hasIdentity?: boolean } | null,
+		raw: unknown
+	): unknown {
+		if (scale && typeof raw === 'number' && scale.hasIdentity !== false) {
+			return scale.categoryAt(raw) ?? raw;
+		}
+		return raw;
+	}
+
+	/** Per-label dimming sources, resolved once per data change, not per frame. */
+	const dimming = $derived.by(() => {
+		if (!setup || !filterGroups) return null;
+		const groups = [setup.groupIndex];
+		const sources: Array<{ key: string; values: unknown[] }> = [];
+		for (const axis of ['x', 'y'] as const) {
+			const type = chartContext.scaleTypes?.[axis];
+			if (type !== 'band' && type !== 'point') continue;
+			const band = chartContext[`${axis}ScaleState`] as BandScaleState | null;
+			const raw = axis === 'x' ? xRaw : yRaw;
+			if (!band || !raw) continue;
+			const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(band, r));
+			sources.push({ key: band.identityKey ?? band.sourceField, values });
+		}
+		const color = markColor.scaleState;
+		if (color?.isOrdinal && fill && !(typeof fill === 'string' && isColorConstant(fill))) {
+			const raw = resolveChannel({
+				value: fill,
+				channel: 'fill',
+				dataAccessor: setup.data,
+				instanceCount
+			});
+			if (raw) {
+				const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(color, r));
+				sources.push({ key: color.identityKey ?? color.field, values });
+			}
+		}
+		return sources.length ? { groups, sources } : null;
+	});
+
+	/** How visible label `idx` is now: the least visible of its categories. */
+	function labelOpacity(idx: number): number {
+		const d = dimming;
+		if (!d) return 1;
+		let opacity = 1;
+		for (const source of d.sources) {
+			opacity = Math.min(
+				opacity,
+				filterGroups.opacityOfValue(source.key, d.groups, source.values[idx])
+			);
+		}
+		return opacity;
+	}
+
 	// --- Animation-aware positioning ---
 
 	let useFadeMode = $derived(labelItems.length > FADE_THRESHOLD);
@@ -427,6 +489,7 @@
 			{#if pos}
 				<text
 					fill={item.color}
+					fill-opacity={labelOpacity(item.idx)}
 					font-size="{fontSize}px"
 					font-weight={fontWeight}
 					font-family={fontFamily}

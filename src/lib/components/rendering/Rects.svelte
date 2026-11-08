@@ -4,6 +4,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import { activityReads, markActivityWGSL } from './activity-reads';
 
 	const rectRendererDefinition = {
 		x: { concept: 'extent', channels: ['x0', 'x1'] },
@@ -122,6 +123,9 @@
 
 	const rectVertexCount = 6;
 
+	/** The selection activities this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('rects');
+
 	const rectsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
@@ -186,11 +190,12 @@
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
       output.alpha = alpha * selectionDim(
-        markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue, markConstants.groupIndex),
-          bandActivityX(x0, markConstants.groupIndex),
-          bandActivityY(y0, markConstants.groupIndex)
-        )
+        ${markActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					x: 'x0',
+					y: 'y0',
+					group: 'markConstants.groupIndex'
+				})}
       );
       return output;
     }

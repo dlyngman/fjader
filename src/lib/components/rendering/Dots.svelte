@@ -4,6 +4,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import { activityReads, markActivityWGSL } from './activity-reads';
 
 	const dotRendererDefinition = {
 		x: { concept: 'position', channels: ['x'] },
@@ -116,6 +117,9 @@
         return degen;
       }`;
 
+	/** The selection activities this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('dots');
+
 	const dotsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
@@ -184,11 +188,12 @@
       output.uv = quadPosition;
       output.radius = displayRadius;
       output.alpha = alpha * selectionDim(
-        markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue, markConstants.groupIndex),
-          bandActivityX(x, markConstants.groupIndex),
-          bandActivityY(y, markConstants.groupIndex)
-        )
+        ${markActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					x: 'x',
+					y: 'y',
+					group: 'markConstants.groupIndex'
+				})}
       );
       return output;
     }

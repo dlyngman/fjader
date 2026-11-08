@@ -47,6 +47,20 @@ export interface Clause {
 	categorical?: CategoricalSelection | null;
 }
 
+/**
+ * What routing needs to know about a mark: the identity keys of the
+ * categorical fields its renderer reads selection activity for, and its chart.
+ * One object per mark, owned by its lifecycle and handed around by reference.
+ *
+ * A categorical selection on a field in `reads` dims the mark instead of
+ * filtering it. `chart` is the chart's ChartConfig, compared by reference: a
+ * faceted chart's cells have ids of their own, but share one config.
+ */
+export interface MarkRoute {
+	readonly reads: readonly string[];
+	readonly chart: object | null;
+}
+
 /** A clause with its source identifier, for external consumers. */
 export interface ClauseEntry extends Clause {
 	sourceId: string;

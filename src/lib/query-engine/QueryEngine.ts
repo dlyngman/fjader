@@ -37,7 +37,7 @@ import {
 	type IdentityField
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
-import { CrossfilterSelection, type Clause } from './CrossfilterSelection.svelte';
+import { CrossfilterSelection, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 
 // ---------------------------------------------------------------------------
@@ -171,6 +171,8 @@ export interface QueryDescriptor {
 	parts: QueryParts;
 	schema: Map<string, ColumnSchema>;
 	transformCompiler: TransformCompiler;
+	/** What routing needs to know about the mark. Absent in tests that route nothing. */
+	route?: MarkRoute;
 }
 
 interface MarkRegistration {

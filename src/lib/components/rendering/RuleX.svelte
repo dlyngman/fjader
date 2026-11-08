@@ -4,6 +4,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import { activityReads, markActivityWGSL } from './activity-reads';
 
 	// Named Bindings — stable indices regardless of hasExtent
 	const BINDINGS = {
@@ -116,6 +117,9 @@
 	const initializationError = $derived(host.error);
 	let lineGeometryBuffer: GPUBuffer;
 
+	/** The selection activities this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('rulex', hasExtent);
+
 	const ruleXShaderCode = `
     struct MarkConstants {
       colorMode: u32,
@@ -177,11 +181,12 @@
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
       output.alpha = alpha * selectionDim(
-        markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue, markConstants.groupIndex),
-          bandActivityX(x, markConstants.groupIndex),
-          ${hasExtent ? 'bandActivityY(y0, markConstants.groupIndex)' : '1.0'}
-        )
+        ${markActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					x: 'x',
+					y: 'y0',
+					group: 'markConstants.groupIndex'
+				})}
       );
       return output;
     }

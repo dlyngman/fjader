@@ -63,6 +63,9 @@ import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
+import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
+import { activityReads, rendererForMark } from '$lib/components/rendering/activity-reads';
+
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 
@@ -82,6 +85,9 @@ import {
 	registerDataDerivedDomains
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
+
+/** A mark that reads no activity. Shared, so its reads never look changed. */
+const NO_READS: readonly string[] = [];
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -594,8 +600,14 @@ export class MarkLifecycleV2 {
 			if (!parts || !this.setupComplete) return;
 			const schema = this.#schema;
 			if (!schema) return;
+			// Read after setup, once the scales have adopted identity. A change of
+			// reads re-registers the mark: a selection that dimmed it may now
+			// filter it. The key is a string, so reads rebuilt with the same
+			// contents do not.
+			void this.#readsKey;
 
 			untrack(() => {
+				this.#route = { reads: this.#reads, chart: this.#chartContext.config };
 				// registerMark handles cleanup of previous registration for this
 				// markId and reuses the existing handle (preserves arrowTable
 				// during re-query so the chart doesn't flash empty on rebin).
@@ -606,7 +618,8 @@ export class MarkLifecycleV2 {
 						baseTable: this.#config.table,
 						parts,
 						schema,
-						transformCompiler: this.#transformCompiler
+						transformCompiler: this.#transformCompiler,
+						route: this.#route
 					},
 					this.#filterGroup
 				);
@@ -1518,6 +1531,52 @@ export class MarkLifecycleV2 {
 
 	get channelFieldMap(): Record<string, string> {
 		return buildChannelFieldMap(this.#config.select);
+	}
+
+	// --- Selection routing ---
+
+	/**
+	 * The identity keys of the categorical fields this mark's renderer reads
+	 * selection activity for, sorted: its ordinal colour and its band axes, as
+	 * activity-reads.ts says the renderer reads them. A categorical selection on
+	 * one of these dims the mark; on any other field it filters it.
+	 */
+	#reads: readonly string[] = $derived.by(() => {
+		const renderer = rendererForMark(this.#config.markType);
+		if (!renderer) return NO_READS;
+		const select = this.#config.select ?? {};
+		const hasExtent =
+			renderer === 'rulex'
+				? 'y1' in select && 'y2' in select
+				: renderer === 'ruley'
+					? 'x1' in select && 'x2' in select
+					: false;
+		const reads = activityReads(renderer, hasExtent);
+
+		const keys: string[] = [];
+		const color = this.#colorScaleState;
+		if (reads.color && color?.isOrdinal) keys.push(color.identityKey ?? color.field);
+		for (const axis of ['x', 'y'] as const) {
+			if (!reads[axis]) continue;
+			const type = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (type !== 'band' && type !== 'point') continue;
+			const band = this.#chartContext[`${axis}ScaleState`] as BandScaleState | null;
+			const key = band ? (band.identityKey ?? band.sourceField) : null;
+			if (key) keys.push(key);
+		}
+		if (keys.length === 0) return NO_READS;
+		return [...new Set(keys)].sort();
+	});
+
+	/** `#reads` as one string, so the registration effect re-runs only on a real change. */
+	#readsKey: string = $derived(this.#reads.join('\u001f'));
+
+	/** Built at registration; the engine and every predicate call hold this object. */
+	#route: MarkRoute = { reads: NO_READS, chart: null };
+
+	/** What routing knows about this mark: its reads and its chart. */
+	get route(): MarkRoute {
+		return this.#route;
 	}
 
 	/**
