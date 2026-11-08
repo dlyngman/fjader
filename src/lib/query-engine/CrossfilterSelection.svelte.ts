@@ -95,6 +95,15 @@ export class CrossfilterSelection {
 		return this.#clauses.get(sourceId);
 	}
 
+	/**
+	 * Visit every active clause: the stored objects themselves, not copies, so a
+	 * caller can tell an unchanged clause by reference. Reactive like `items`,
+	 * without building an entry object per clause.
+	 */
+	forEach(visit: (clause: Clause, sourceId: string) => void): void {
+		this.#clauses.forEach(visit);
+	}
+
 	/** Reactive list of all active clauses with their source IDs. */
 	get items(): ClauseEntry[] {
 		const result: ClauseEntry[] = [];

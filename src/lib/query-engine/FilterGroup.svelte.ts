@@ -372,6 +372,18 @@ export class FilterGroup {
 		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 	}
 
+	/**
+	 * Hold `clause` under a manual key, as given: the relay passes another
+	 * group's clause on. The clause it already holds there changes nothing, so
+	 * it neither re-projects nor re-queries: the relay runs on every change in
+	 * its source group, on every brush frame there.
+	 */
+	relayClause(key: string, clause: Clause): void {
+		const sourceId = `manual:${key}`;
+		if (this.selection.get(sourceId) === clause) return;
+		this.#afterUpdate(sourceId, this.selection.update(sourceId, clause), clause);
+	}
+
 	removeManual(key: string): void {
 		const sourceId = `manual:${key}`;
 		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
