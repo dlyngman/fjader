@@ -149,6 +149,31 @@ describe('FilterGroup', () => {
 		});
 	});
 
+	describe('categorical selections', () => {
+		it('a single-field toggle states its field and values on every clause it writes', () => {
+			const group = new FilterGroup();
+			const toggle = group.registerToggle('carrier', { excludeMarkIds: () => new Set() });
+			toggle.set([['UA'], ['DL']]);
+
+			const clause = group.selection.get('toggle-carrier')!;
+			expect(clause.categorical?.key).toBe('carrier');
+			expect(clause.categorical?.values).toEqual(new Set(['UA', 'DL']));
+			// The handle's selection is that same set, not a copy.
+			expect(toggle.values).toBe(clause.categorical!.values);
+		});
+
+		it('a tuple toggle, a brush and a manual clause state none', () => {
+			const group = new FilterGroup();
+			group.registerToggle(['a', 'b'], { excludeMarkIds: () => new Set() }).set([[1, 2]]);
+			group.register('brush', { excludeMarkIds: () => new Set() }).update('x > 0', [0, 1]);
+			group.upsertManual('m', 'y > 0', null, new Set());
+
+			expect(group.selection.get('toggle-["a","b"]')!.categorical).toBeNull();
+			expect(group.selection.get('brush')!.categorical).toBeNull();
+			expect(group.selection.get('manual:m')!.categorical).toBeNull();
+		});
+	});
+
 	describe('items with augmentation', () => {
 		it('applies augmenter to produce schema metadata', () => {
 			const group = new FilterGroup();

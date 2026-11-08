@@ -76,7 +76,8 @@ export class ClauseRelay {
 				predicate: clause.predicate,
 				excludeMarkIds: NO_EXCLUSIONS,
 				value: clause.value,
-				schema: clause.schema
+				schema: clause.schema,
+				categorical: clause.categorical
 			};
 			this.#copies.set(clause, copy);
 		}

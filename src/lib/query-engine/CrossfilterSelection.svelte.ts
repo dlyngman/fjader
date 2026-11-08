@@ -27,12 +27,24 @@ export interface FilterSchema {
 	[key: string]: unknown;
 }
 
+/**
+ * A single-field categorical selection, as a clause states it: the field's
+ * identity key and the selected values. Brushes, tuples and manual clauses have
+ * none.
+ */
+export interface CategoricalSelection {
+	key: string;
+	values: ReadonlySet<unknown>;
+}
+
 /** A clause stored in the selection. */
 export interface Clause {
 	predicate: FilterExpr;
 	excludeMarkIds: Set<string>;
 	value: unknown;
 	schema?: FilterSchema;
+	/** Set when the clause selects categories of one field; written with the clause. */
+	categorical?: CategoricalSelection | null;
 }
 
 /** A clause with its source identifier, for external consumers. */

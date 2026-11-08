@@ -14,9 +14,15 @@
 
 import { column, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
 import { CrossfilterSelection } from './CrossfilterSelection.svelte';
-import type { Clause, FilterExpr, FilterSchema } from './CrossfilterSelection.svelte';
+import type {
+	CategoricalSelection,
+	Clause,
+	FilterExpr,
+	FilterSchema
+} from './CrossfilterSelection.svelte';
 import type { ActiveDim, QueryEngine } from './QueryEngine';
 import { togglePredicate } from './toggle-predicate';
+import { identityKeyFor } from './identity-key';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +49,12 @@ export interface SourceOpts {
 	/** Getter for mark IDs this registration's writes exclude (chart-level cross-filtering).
 	 *  A getter rather than a static Set so it stays current if marks are added/removed. */
 	excludeMarkIds: () => Set<string>;
+	/**
+	 * For a source that selects categories of one field: that field's identity
+	 * key, and how to read the selected values from a write. Every clause the
+	 * source writes carries both (`Clause.categorical`).
+	 */
+	categorical?: { key: string; values: (value: unknown) => ReadonlySet<unknown> };
 	/** How the source selects, read at hover time for preagg activation. */
 	activeDims?: () => ActiveDim[];
 	/**
@@ -115,6 +127,27 @@ function schemaOf(
 		}
 	}
 	return augment?.(value) ?? undefined;
+}
+
+/**
+ * A clause's categorical selection, from the writer's declaration or another
+ * registration's: every registration under a toggle id selects the same field.
+ */
+function categoricalOf(
+	registrations: Set<SourceOpts>,
+	writer: SourceOpts,
+	value: unknown
+): CategoricalSelection | null {
+	let declared = writer.categorical;
+	if (!declared) {
+		for (const opts of registrations) {
+			if (opts.categorical) {
+				declared = opts.categorical;
+				break;
+			}
+		}
+	}
+	return declared ? { key: declared.key, values: declared.values(value) } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +237,8 @@ export class FilterGroup {
 					predicate,
 					excludeMarkIds: opts.excludeMarkIds(),
 					value,
-					schema: schemaOf(registrations, opts, value)
+					schema: schemaOf(registrations, opts, value),
+					categorical: categoricalOf(registrations, opts, value)
 				};
 				this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 			},
@@ -276,8 +310,16 @@ export class FilterGroup {
 		const sourceId = toggleSourceId(list);
 		const { selection } = this;
 		const schema: FilterSchema = { kind: 'toggle', column: list[0], label: list.join(', ') };
+		// One field selects categories; a tuple does not (see Clause.categorical).
+		const categoricalKey = list.length === 1 ? (identityKeyFor(list[0])?.key ?? null) : null;
 		const source = this.register(sourceId, {
 			excludeMarkIds: opts.excludeMarkIds,
+			categorical: categoricalKey
+				? {
+						key: categoricalKey,
+						values: (value) => new Set((value as unknown[][]).map((t) => t[0]))
+					}
+				: undefined,
 			activeDims: () => list.map((field) => ({ kind: 'value' as const, field })),
 			augment: () => schema,
 			// Projection only makes sense for single-field toggles.
@@ -298,10 +340,14 @@ export class FilterGroup {
 		 * map's version, so a toggle with nothing selected is re-read on every one;
 		 * returning the same set while the clause is unchanged (and one shared
 		 * empty set without a clause) keeps that from re-rendering its readers.
+		 *
+		 * One field's values are the clause's own categorical set, built once per
+		 * write. A tuple's keys are built here, once per clause.
 		 */
 		let last: { clause: Clause; keys: Set<unknown> } | null = null;
 		const keysOf = (clause: Clause | undefined): ReadonlySet<unknown> => {
 			if (!clause) return NOTHING_SELECTED;
+			if (clause.categorical) return clause.categorical.values;
 			if (last?.clause !== clause) {
 				last = { clause, keys: new Set(tuplesOf(clause).map(tupleKey)) };
 			}
@@ -367,7 +413,7 @@ export class FilterGroup {
 		schema?: FilterSchema
 	): void {
 		const resolved = typeof excludeMarkIds === 'function' ? excludeMarkIds() : excludeMarkIds;
-		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema };
+		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema, categorical: null };
 		const sourceId = `manual:${key}`;
 		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 	}
