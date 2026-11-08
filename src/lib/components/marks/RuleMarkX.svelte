@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ruleHasExtent } from '$lib/components/rendering/activity-reads';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { RuleX, GridLine } from '../rendering';
@@ -93,7 +94,7 @@
 		return undefined;
 	});
 
-	const hasExtent = $derived(y1 !== undefined && y2 !== undefined);
+	const hasExtent = $derived(ruleHasExtent(y1, y2));
 
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
@@ -174,7 +175,9 @@
 				...(hasExtent && { y1: entry.y1, y2: entry.y2 })
 			}),
 			// When y shorthand is used, include 0 in domain
-			zeroBaseline: yShorthand !== undefined ? { y: true } : null
+			zeroBaseline: yShorthand !== undefined ? { y: true } : null,
+			// The value the renderer's y0Data is built from: routing must agree.
+			ruleExtent: hasExtent
 		};
 	});
 

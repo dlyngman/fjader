@@ -64,7 +64,7 @@ import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
-import { activityReads, rendererForMark } from '$lib/components/rendering/activity-reads';
+import { activityReads, readsFor, rendererForMark } from '$lib/components/rendering/activity-reads';
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
@@ -119,6 +119,12 @@ export interface MarkLifecycleV2Config {
 	sizeChannel?: string;
 	_orderConfig?: { seriesChannel: string | null; dimensionChannel: string };
 	zeroBaseline?: { x?: boolean; y?: boolean };
+	/**
+	 * A rule's: whether it spans an extent on its cross axis (RuleX with
+	 * y1/y2, RuleY with x1/x2, constants included). Decides whether it reads
+	 * that axis's selection activity.
+	 */
+	ruleExtent?: boolean;
 	passiveScales?: boolean;
 	parallelMode?: boolean;
 	parallelColumns?: string[];
@@ -1544,28 +1550,18 @@ export class MarkLifecycleV2 {
 	#reads: readonly string[] = $derived.by(() => {
 		const renderer = rendererForMark(this.#config.markType);
 		if (!renderer) return NO_READS;
-		const select = this.#config.select ?? {};
-		const hasExtent =
-			renderer === 'rulex'
-				? 'y1' in select && 'y2' in select
-				: renderer === 'ruley'
-					? 'x1' in select && 'x2' in select
-					: false;
-		const reads = activityReads(renderer, hasExtent);
-
-		const keys: string[] = [];
 		const color = this.#colorScaleState;
-		if (reads.color && color?.isOrdinal) keys.push(color.identityKey ?? color.field);
-		for (const axis of ['x', 'y'] as const) {
-			if (!reads[axis]) continue;
+		const bandKey = (axis: 'x' | 'y'): string | null => {
 			const type = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			if (type !== 'band' && type !== 'point') continue;
+			if (type !== 'band' && type !== 'point') return null;
 			const band = this.#chartContext[`${axis}ScaleState`] as BandScaleState | null;
-			const key = band ? (band.identityKey ?? band.sourceField) : null;
-			if (key) keys.push(key);
-		}
-		if (keys.length === 0) return NO_READS;
-		return [...new Set(keys)].sort();
+			return band?.identityKey ?? null;
+		};
+		return readsFor(activityReads(renderer, this.#config.ruleExtent ?? false), {
+			color: color?.isOrdinal ? color.identityKey : null,
+			x: bandKey('x'),
+			y: bandKey('y')
+		});
 	});
 
 	/** `#reads` as one string, so the registration effect re-runs only on a real change. */

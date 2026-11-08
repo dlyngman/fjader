@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { activityReads, markActivityWGSL, rendererForMark } from './activity-reads';
+import {
+	activityReads,
+	markActivityWGSL,
+	readsFor,
+	ruleHasExtent,
+	rendererForMark
+} from './activity-reads';
 
 const ARGS = { color: 'cm, ci, cv', x: 'x', y: 'y', group: 'g' };
 
@@ -68,5 +74,24 @@ describe('activity reads', () => {
 		expect(markActivityWGSL(activityReads('dots'), ARGS)).toBe(
 			'markActivity(markColorActivity(cm, ci, cv, g), bandActivityX(x, g), bandActivityY(y, g))'
 		);
+	});
+
+	it('counts a constant rule end as an extent, as the renderer does', () => {
+		// y1={0}, or the y shorthand's 0: a constant, absent from the select.
+		expect(ruleHasExtent(0, 'value')).toBe(true);
+		expect(ruleHasExtent(undefined, 'value')).toBe(false);
+		const keys = { color: null, x: 'cat', y: 'region' };
+		expect(readsFor(activityReads('rulex', ruleHasExtent(0, 'value')), keys)).toEqual([
+			'cat',
+			'region'
+		]);
+		expect(readsFor(activityReads('rulex', false), keys)).toEqual(['cat']);
+	});
+
+	it('reads only fields with an identity key, sorted and once each', () => {
+		expect(readsFor(activityReads('dots'), { color: 'b', x: 'a', y: 'b' })).toEqual(['a', 'b']);
+		// A scale without identity has no activity block: a selection on it filters.
+		expect(readsFor(activityReads('dots'), { color: null, x: null, y: null })).toEqual([]);
+		expect(readsFor(activityReads('lines'), { color: 'c', x: 'a', y: 'b' })).toEqual(['c']);
 	});
 });

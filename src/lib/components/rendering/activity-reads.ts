@@ -60,6 +60,16 @@ export function activityReads(renderer: ActivityRenderer, hasExtent = false): Ac
 	}
 }
 
+/**
+ * Whether a rule spans an extent on its cross axis: both ends given, as a
+ * field or a constant. A rule mark builds its renderer's extent data from this
+ * and hands it to routing as `ruleExtent`, so the two cannot disagree; a
+ * constant end (y1={0}, or the y shorthand) counts like a field.
+ */
+export function ruleHasExtent(lo: unknown, hi: unknown): boolean {
+	return lo !== undefined && hi !== undefined;
+}
+
 /** The renderer a mark type draws with, or null for one that reads no activity. */
 export function rendererForMark(markType: string): ActivityRenderer | null {
 	switch (markType) {
@@ -88,6 +98,27 @@ export function rendererForMark(markType: string): ActivityRenderer | null {
 			return null;
 	}
 }
+
+/**
+ * A mark's reads: the identity keys of the fields whose activity it reads,
+ * sorted, from what its renderer reads and the identity key of each of its
+ * categorical scales (null for a channel with no such scale, or a scale with
+ * no identity: a field with no identity has no activity to dim by, so a
+ * selection on it filters the mark).
+ */
+export function readsFor(
+	reads: ActivityReads,
+	keys: { color: string | null; x: string | null; y: string | null }
+): readonly string[] {
+	const out: string[] = [];
+	if (reads.color && keys.color) out.push(keys.color);
+	if (reads.x && keys.x) out.push(keys.x);
+	if (reads.y && keys.y) out.push(keys.y);
+	if (out.length === 0) return NO_READS;
+	return [...new Set(out)].sort();
+}
+
+const NO_READS: readonly string[] = [];
 
 /**
  * The WGSL `markActivity(...)` call for `reads`: each activity the renderer
