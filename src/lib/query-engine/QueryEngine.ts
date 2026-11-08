@@ -342,6 +342,11 @@ export class QueryEngine {
 		return this.#identity.identity(field);
 	}
 
+	/** The field's current bijection, or null; never creates one (see CategoricalIdentity). */
+	peekIdentity(field: string): FieldIdentity | null {
+		return this.#identity.peekIdentity(field);
+	}
+
 	/**
 	 * Reserve an id for a value present in no table — the synthetic "Other"
 	 * bucket from `topN({ includeOthers })`. Call after ensureColumns.

@@ -262,6 +262,15 @@ export class ColorScaleState {
 		return this.#field;
 	}
 
+	/**
+	 * The identity key of the dim this scale adopted, or null before it has one.
+	 * Selection activity is kept per identity key, so this is what the packer
+	 * points the scale's block at.
+	 */
+	get identityKey(): string | null {
+		return this.#identity?.key || null;
+	}
+
 	get scheme(): string {
 		return this.#scheme;
 	}

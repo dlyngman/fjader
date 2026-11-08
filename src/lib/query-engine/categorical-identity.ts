@@ -177,7 +177,15 @@ export class FieldIdentity {
 	/** source value -> id. The exact inverse of `values`. */
 	readonly ids = new Map<DimValue, number>();
 
-	constructor(values?: readonly DimValue[]) {
+	/**
+	 * The identity key this is the bijection for, as `identityKeyFor` derives
+	 * it: what a scale that adopted it is keyed by for selection activity.
+	 * Empty for one built outside the engine, as tests do.
+	 */
+	readonly key: string;
+
+	constructor(values?: readonly DimValue[], key: string = '') {
+		this.key = key;
 		if (values) this.reset(values);
 	}
 
@@ -406,10 +414,19 @@ export class CategoricalIdentity {
 	identity(field: string): FieldIdentity {
 		let entry = this.#identities.get(field);
 		if (!entry) {
-			entry = new FieldIdentity();
+			entry = new FieldIdentity(undefined, field);
 			this.#identities.set(field, entry);
 		}
 		return entry;
+	}
+
+	/**
+	 * The field's current bijection, or null if nothing has asked for it since
+	 * the last reset. Unlike `identity`, never creates one: for a holder checking
+	 * whether the identity it applied is still the live one, on every frame.
+	 */
+	peekIdentity(field: string): FieldIdentity | null {
+		return this.#identities.get(field) ?? null;
 	}
 
 	/** Fields the view for `table` currently exposes. Empty when there is no view. */
