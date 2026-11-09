@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ruleHasExtent } from '$lib/components/rendering/activity-reads';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { RuleY, GridLine } from '../rendering';
@@ -92,7 +93,7 @@
 		return undefined;
 	});
 
-	const hasExtent = $derived(x1 !== undefined && x2 !== undefined);
+	const hasExtent = $derived(ruleHasExtent(x1, x2));
 
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
@@ -170,7 +171,11 @@
 				y: entry.y,
 				...(hasExtent && { x1: entry.x1, x2: entry.x2 })
 			}),
-			zeroBaseline: xShorthand !== undefined ? { x: true } : null
+			zeroBaseline: xShorthand !== undefined ? { x: true } : null,
+			// The value the renderer's x0Data is built from: routing must agree.
+			ruleExtent: hasExtent,
+			// Coloured by stroke: the lifecycle requests that channel's identity.
+			colorChannel: 'stroke'
 		};
 	});
 
@@ -297,6 +302,7 @@
 		alphaData={opacityData}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
+		groupIndex={setup?.groupIndex ?? 0}
 		constantColor={markColor.constantColor}
 		{strokeWidth}
 		facetData={setup?.facetData}

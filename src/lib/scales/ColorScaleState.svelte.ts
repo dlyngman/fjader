@@ -26,8 +26,6 @@ import {
 	NO_SLOT_TABLE
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
-import type { ActivitySource } from '$lib/gpu/identity-slot-packing';
-import { ScaleSelection } from './ScaleSelection.svelte';
 
 interface ColorScaleConfig {
 	field: string;
@@ -146,18 +144,6 @@ export class ColorScaleState {
 	 */
 	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
 
-	/**
-	 * Which categories are selected, as a fade over every id of the dim: sized
-	 * with the rank table, fed from `setActiveValues`, and packed as the activity
-	 * half of this scale's block.
-	 */
-	#selection: ScaleSelection<string | number>;
-
-	/** The selection fade, for the packer's activity half. */
-	get activity(): ActivitySource {
-		return this.#selection.table;
-	}
-
 	get slots(): SlotSource {
 		return this.#slots;
 	}
@@ -200,8 +186,18 @@ export class ColorScaleState {
 		// Before the scale has a config slot there is nothing to patch; whichever
 		// upload path claims one writes the base with the rest of the struct.
 		if (this.#configSlot >= 0) {
-			this.#gpuCoordinator?.writeColorConfigSlotBase(this.#configSlot, base);
+			this.#gpuCoordinator?.writeColorConfigSlotBase(this.#configSlot, this.#configSlotBase);
 		}
+	}
+
+	/**
+	 * The slot base the config carries: this scale's block while its channel
+	 * carries ids, NO_SLOT_TABLE while it carries palette indices. The one rule
+	 * for both writers (setSlotBase's patch and the full upload), so which wrote
+	 * last cannot change what the GPU reads.
+	 */
+	get #configSlotBase(): number {
+		return this.hasIdentity && this.#slotBase >= 0 ? this.#slotBase : NO_SLOT_TABLE;
 	}
 
 	// ViewManager integration - tracks tables this scale has registered columns for
@@ -219,13 +215,6 @@ export class ColorScaleState {
 		this.#exponent = config.exponent ?? 1;
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
-		this.#selection = new ScaleSelection<string | number>(gpuCoordinator, {
-			charts: () => this._affectedChartsArray,
-			idOf: (value) => this.#identity?.ids.get(value as never),
-			ready: () => this.hasIdentity,
-			identity: () => this.#identity,
-			count: () => this.#slots.count
-		});
 
 		// Explicit type wins, fallback to inference from scheme
 		this.#scaleType = config.type || getSchemeType(this.#scheme) || 'sequential';
@@ -260,6 +249,17 @@ export class ColorScaleState {
 
 	get field(): string {
 		return this.#field;
+	}
+
+	/**
+	 * The identity key of the dim this scale adopted, or null before it has one.
+	 * Selection activity is kept per identity key, so this is what the packer
+	 * points the scale's block at.
+	 */
+	get identityKey(): string | null {
+		// Only while the channel carries ids: a key without them would route a
+		// mark to dim by activity the shader cannot read.
+		return this.hasIdentity ? this.#identity!.key || null : null;
 	}
 
 	get scheme(): string {
@@ -412,6 +412,9 @@ export class ColorScaleState {
 	}
 
 	#uploadToGPU(): void {
+		// A destroyed scale's slots may already belong to another scale: a late
+		// upload (identity landing after the chart unmounted) would overwrite them.
+		if (this.#destroyed) return;
 		if (!this.#gpuCoordinator) {
 			console.warn('[ColorScaleState] No GPU coordinator, skipping upload');
 			return;
@@ -514,13 +517,21 @@ export class ColorScaleState {
 	 */
 	setIdentity(identity: FieldIdentity): void {
 		this.#warnIfDestroyed('setIdentity');
+		const hadIdentity = this.hasIdentity;
 		const previous = this.#identity;
 		this.#identity = identity;
 		if (previous && previous !== identity && !previous.present) {
 			this.#paletteRank.clear();
 			this.#nextRank = 0;
 		}
+		// Identity landing after the config was uploaded, or going (a reload
+		// empties it). The domain fetch and the identity columns are fetched in
+		// parallel, so either can arrive first; the config's slot base, its palette
+		// size and the CPU scale all depend on whether the channel carries ids,
+		// so a change of that uploads again. The ranks are refreshed here either
+		// way: they are CPU state, needed without a coordinator too.
 		this.#refreshRanks();
+		if (hadIdentity !== this.hasIdentity && this.domain.length > 0) this.#uploadToGPU();
 	}
 
 	/** True once this scale's channel carries dim ids rather than palette indices. */
@@ -563,10 +574,6 @@ export class ColorScaleState {
 		slots.to = table;
 		slots.count = table.length;
 		slots.version++;
-
-		// The selection covers the same ids. One made before these ids existed
-		// (or before identity landed) is applied to them now.
-		this.#selection.reapply();
 	}
 
 	#hasRanks(): boolean {
@@ -611,10 +618,8 @@ export class ColorScaleState {
 		return this.#identity!.values[id] as string | number | undefined;
 	}
 
+	/** Called from #uploadToGPU only, which has refreshed the ranks. */
 	#uploadOrdinal(): void {
-		// New categories in the domain need ranks before the palette is sized.
-		this.#refreshRanks();
-
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
 		this.#gpuCoordinator.writeColorPalette(
@@ -637,7 +642,7 @@ export class ColorScaleState {
 			type: 0, // ORDINAL
 			paletteOffset: this.#paletteSlot * 32,
 			paletteSize: Math.min(Math.max(rankSpace, 1), 32),
-			slotBase: this.hasIdentity ? this.#slotBase : undefined
+			slotBase: this.#configSlotBase
 		});
 		this.#gpuCoordinator.writeColorConfig(this.#configSlot, config);
 	}
@@ -842,40 +847,15 @@ export class ColorScaleState {
 		return parseColorToRGBA(cssColor);
 	}
 
-	// ============================================================
-	// ACTIVE VALUES (selection feedback)
-	// ============================================================
-
-	setActiveValues(values: Iterable<string | number>): void {
-		this.#selection.set(values);
-	}
-
-	clearActiveValues(): void {
-		this.#selection.clear();
-	}
-
 	/**
-	 * Charts to redraw while this scale's selection fades. Asked of the
-	 * registry, as BandScaleState does, so it is current when charts come and
-	 * go; the selection clock reads it every frame it runs.
+	 * Charts drawing this scale. Asked of the registry, as BandScaleState does,
+	 * so it is current when charts come and go.
 	 */
 	get _affectedChartsArray(): string[] {
 		return this.#registry?.chartsUsing(this) ?? ColorScaleState.#noCharts;
 	}
 
 	static #noCharts: string[] = [];
-
-	/**
-	 * How visible a category's legend entry is now, 0..1: its selection fade, on
-	 * the same clock and with the same floor as the marks, so a legend dims with
-	 * the bars for any selection on this field, whichever control made it.
-	 *
-	 * Per frame while a fade runs, O(1). Without identity there is no table, and
-	 * the entry is simply selected or not.
-	 */
-	categoryOpacity(value: string | number): number {
-		return this.#selection.opacityOfValue(value);
-	}
 
 	// ============================================================
 	// CLEANUP
@@ -901,9 +881,6 @@ export class ColorScaleState {
 	 */
 	destroy(): void {
 		this.#destroyed = true;
-		// Leaves the animation loop; a later selection lands at once rather than
-		// animating for a scale nothing draws.
-		this.#selection.destroy();
 	}
 
 	/** True once the registry has torn this scale down. */

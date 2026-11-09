@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
@@ -194,7 +195,7 @@ ${placement}
 	// Update uniform constants
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
-			const buffer = new ArrayBuffer(32);
+			const buffer = new ArrayBuffer(UNIFORM_BYTES.gridLineRuleConstants);
 			const view = new DataView(buffer);
 			const LE = true;
 

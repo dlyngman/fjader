@@ -1,21 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FilterGroup } from './FilterGroup.svelte';
-import type { ActiveValueScale } from './FilterGroup.svelte';
 import type { ActivationSource, QueryEngine } from './QueryEngine';
-
-function mockScale(): ActiveValueScale & { active: Set<unknown> | null; clearCount: number } {
-	return {
-		active: null,
-		clearCount: 0,
-		setActiveValues(values: Set<unknown>) {
-			this.active = values;
-		},
-		clearActiveValues() {
-			this.active = null;
-			this.clearCount++;
-		}
-	};
-}
+import type { MarkRoute } from './CrossfilterSelection.svelte';
 
 /** The parts of QueryEngine FilterGroup calls, recording activations. */
 function mockEngine(sqlFor: Record<string, string> = {}) {
@@ -37,27 +23,30 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 	};
 }
 
-const sqlOf = (group: FilterGroup, markId: string) =>
-	group.selection.predicate(markId).map((p) => String(p));
+/** Charts are compared by reference, as ChartConfig objects are. */
+const CHART = { name: 'chart' };
+const OTHER = { name: 'other' };
+const inChart = (chart: object | null): MarkRoute => ({ reads: [], chart });
 
-const strings = (v: unknown) => new Set(v as string[]);
+const sqlOf = (group: FilterGroup, chart: object | null) =>
+	group.selection.predicate(inChart(chart)).map((p) => String(p));
 
 describe('FilterGroup', () => {
 	describe('register', () => {
 		it('returns a handle that updates the selection', () => {
 			const group = new FilterGroup();
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set(['mark-a']) });
+			const handle = group.register('brush-x', { chart: CHART });
 
 			handle.update('x BETWEEN 10 AND 20', [10, 20]);
 
 			expect(group.selection.isActive('brush-x')).toBe(true);
-			expect(group.selection.predicate('mark-b')).toEqual(['x BETWEEN 10 AND 20']);
-			expect(group.selection.predicate('mark-a')).toEqual([]);
+			expect(group.selection.predicate(inChart(OTHER))).toEqual(['x BETWEEN 10 AND 20']);
+			expect(group.selection.predicate(inChart(CHART))).toEqual([]);
 		});
 
 		it('clear removes the clause', () => {
 			const group = new FilterGroup();
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set(['mark-a']) });
+			const handle = group.register('brush-x', { chart: CHART });
 
 			handle.update('x > 0', null);
 			handle.clear();
@@ -69,7 +58,7 @@ describe('FilterGroup', () => {
 		it('destroy removes the clause and the augmenter', () => {
 			const group = new FilterGroup();
 			const augment = vi.fn(() => ({ kind: 'range', column: 'x' }));
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set(), augment });
+			const handle = group.register('brush-x', { augment });
 
 			handle.update('x > 0', [0, 100]);
 			expect(group.items).toHaveLength(1);
@@ -84,7 +73,7 @@ describe('FilterGroup', () => {
 			const forget = engine.forgetSource as ReturnType<typeof vi.fn>;
 			const group = new FilterGroup();
 			group.setEngine(engine);
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const handle = group.register('brush-x', {});
 			handle.update('x > 0', null);
 			onClauseChange.mockClear();
 
@@ -96,32 +85,30 @@ describe('FilterGroup', () => {
 			);
 
 			// A newer registration under the same id survives a second destroy.
-			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const again = group.register('brush-x', {});
 			again.update('x > 1', null);
 			handle.destroy();
 			expect(group.selection.isActive('brush-x')).toBe(true);
 			expect(forget).toHaveBeenCalledTimes(1);
 		});
 
-		it('several registrations are one source, and the clause carries the writer’s exclusions', () => {
+		it('several registrations are one source: a chart one of them skips skips every write', () => {
 			const group = new FilterGroup();
-			const legend = group.register('toggle-region', { excludeMarkIds: () => new Set() });
-			const chart = group.register('toggle-region', {
-				excludeMarkIds: () => new Set(['mark-chart'])
-			});
+			const legend = group.register('toggle-region', {});
+			const chart = group.register('toggle-region', { chart: CHART });
 
 			legend.update("region IN ('North')", [['North']]);
-			expect(group.selection.predicate('mark-chart')).toEqual(["region IN ('North')"]);
+			expect(group.selection.predicate(inChart(CHART))).toEqual([]);
 
 			chart.update("region IN ('South')", [['South']]);
-			expect(group.selection.predicate('mark-chart')).toEqual([]);
-			expect(group.selection.predicate('mark-other')).toEqual(["region IN ('South')"]);
+			expect(group.selection.predicate(inChart(CHART))).toEqual([]);
+			expect(group.selection.predicate(inChart(OTHER))).toEqual(["region IN ('South')"]);
 		});
 
 		it('only the last registration to go removes the clause', () => {
 			const group = new FilterGroup();
-			const a = group.register('brush-x', { excludeMarkIds: () => new Set() });
-			const b = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const a = group.register('brush-x', {});
+			const b = group.register('brush-x', {});
 			a.update('x > 0', null);
 
 			a.destroy();
@@ -136,16 +123,41 @@ describe('FilterGroup', () => {
 			const { engine, onClauseChange } = mockEngine();
 			const group = new FilterGroup();
 			group.setEngine(engine);
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const handle = group.register('brush-x', {});
 
 			handle.clear();
 			handle.destroy();
 			expect(onClauseChange).not.toHaveBeenCalled();
 
-			const again = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const again = group.register('brush-x', {});
 			again.update('x > 0', null);
 			again.destroy();
 			expect(onClauseChange).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe('categorical selections', () => {
+		it('a single-field toggle states its field and values on every clause it writes', () => {
+			const group = new FilterGroup();
+			const toggle = group.registerToggle('carrier');
+			toggle.set([['UA'], ['DL']]);
+
+			const clause = group.selection.get('toggle-carrier')!;
+			expect(clause.categorical?.key).toBe('carrier');
+			expect(clause.categorical?.values).toEqual(new Set(['UA', 'DL']));
+			// The handle's selection is that same set, not a copy.
+			expect(toggle.values).toBe(clause.categorical!.values);
+		});
+
+		it('a tuple toggle, a brush and a manual clause state none', () => {
+			const group = new FilterGroup();
+			group.registerToggle(['a', 'b'], {}).set([[1, 2]]);
+			group.register('brush', {}).update('x > 0', [0, 1]);
+			group.upsertManual('m', 'y > 0', null);
+
+			expect(group.selection.get('toggle-["a","b"]')!.categorical).toBeNull();
+			expect(group.selection.get('brush')!.categorical).toBeNull();
+			expect(group.selection.get('manual:m')!.categorical).toBeNull();
 		});
 	});
 
@@ -158,7 +170,7 @@ describe('FilterGroup', () => {
 				label: 'Price',
 				values: value as unknown[]
 			}));
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set(), augment });
+			const handle = group.register('brush-x', { augment });
 
 			handle.update('price BETWEEN 10 AND 50', [10, 50]);
 
@@ -179,10 +191,9 @@ describe('FilterGroup', () => {
 		it('takes the schema from another registration when the writer has no augment', () => {
 			const group = new FilterGroup();
 			group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
 				augment: () => ({ kind: 'range', column: 'x' })
 			});
-			const plain = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const plain = group.register('brush-x', {});
 
 			plain.update('x > 0', [0, 1]);
 			expect(group.selection.get('brush-x')!.schema).toEqual({ kind: 'range', column: 'x' });
@@ -190,134 +201,34 @@ describe('FilterGroup', () => {
 
 		it('labels a toggle’s filter item with its field', () => {
 			const group = new FilterGroup();
-			group.registerToggle('region', { excludeMarkIds: () => new Set() }).toggle(['North'], false);
+			group.registerToggle('region').toggle(['North'], false);
 
 			expect(group.items[0].schema).toEqual({ kind: 'toggle', column: 'region', label: 'region' });
 		});
 	});
 
-	describe('scale projection', () => {
-		it('projects active values to scales on update', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-
-			const handle = group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				projection: { scales: () => [scale], values: strings }
-			});
-
-			handle.update("species IN ('Adelie', 'Gentoo')", ['Adelie', 'Gentoo']);
-
-			expect(scale.active).toEqual(new Set(['Adelie', 'Gentoo']));
-		});
-
-		it('clears scale projection when the clause is cleared', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-
-			const handle = group.register('brush-x', {
-				excludeMarkIds: () => new Set(),
-				projection: { scales: () => [scale], values: strings }
-			});
-
-			handle.update('x > 0', ['A', 'B']);
-			expect(scale.active).toBeDefined();
-
-			handle.clear();
-			expect(scale.active).toBeNull();
-		});
-
-		it('projects onto the union of every registration’s scales, whoever wrote', () => {
-			const legendScale = mockScale();
-			const bandScale = mockScale();
-			const group = new FilterGroup();
-
-			const legend = group.register('toggle-region', {
-				excludeMarkIds: () => new Set(),
-				projection: { scales: () => [legendScale], values: strings }
-			});
-			group.register('toggle-region', {
-				excludeMarkIds: () => new Set(['mark-chart']),
-				projection: { scales: () => [bandScale], values: strings }
-			});
-
-			legend.update("region IN ('North')", ['North']);
-			expect(legendScale.active).toEqual(new Set(['North']));
-			expect(bandScale.active).toEqual(new Set(['North']));
-		});
-
-		it('leaves the projection alone while a brush moves, and re-queries all the same', () => {
-			const scale = mockScale();
-			const { engine, onClauseChange } = mockEngine();
-			const group = new FilterGroup();
-			group.setEngine(engine);
-			const setActive = vi.spyOn(scale, 'setActiveValues');
-
-			const legend = group.registerToggle('region', {
-				excludeMarkIds: () => new Set(),
-				scales: () => [scale]
-			});
-			legend.toggle(['North'], false);
-			expect(setActive).toHaveBeenCalledTimes(1);
-			const projected = scale.active;
-
-			const brush = group.register('brush-x', { excludeMarkIds: () => new Set() });
-			for (let i = 0; i < 10; i++) brush.update(`x > ${i}`, [i, i + 1]);
-			brush.clear();
-
-			expect(setActive).toHaveBeenCalledTimes(1);
-			expect(scale.active).toBe(projected);
-			expect(onClauseChange).toHaveBeenCalledTimes(12);
-		});
-
-		it('un-dims a toggle’s scales when its last registration goes', () => {
-			const scale = mockScale();
-			const group = new FilterGroup();
-			const legend = group.registerToggle('region', {
-				excludeMarkIds: () => new Set(),
-				scales: () => [scale]
-			});
-			legend.toggle(['North'], false);
-			legend.destroy();
-			expect(scale.active).toBeNull();
-		});
-	});
-
 	describe('activate', () => {
-		it('hands the engine the marks every registration excludes, and the dims', () => {
+		it('hands the engine the source, its categorical field and its dims', () => {
 			const { engine, activations } = mockEngine();
 			const group = new FilterGroup();
 			group.setEngine(engine);
-			const dims = [{ kind: 'value' as const, field: 'region' }];
 
-			const chart = group.register('toggle-region', {
-				excludeMarkIds: () => new Set(['mark-a', 'mark-b']),
-				activeDims: () => dims
-			});
-			chart.activate();
+			group.registerToggle('region', { chart: CHART }).activate();
 			expect(activations.at(-1)).toEqual({
 				sourceId: 'toggle-region',
-				excludedByAll: new Set(['mark-a', 'mark-b']),
-				dims
+				categoricalKey: 'region',
+				dims: [{ kind: 'value', field: 'region' }]
 			});
 
-			// A second consumer that excludes only mark-a: mark-b is filtered by it.
-			group.register('toggle-region', {
-				excludeMarkIds: () => new Set(['mark-a']),
-				activeDims: () => dims
-			});
-			chart.activate();
-			expect(activations.at(-1)!.excludedByAll).toEqual(new Set(['mark-a']));
-
-			// A legend excludes nothing, so every mark is activated.
-			group.register('toggle-region', { excludeMarkIds: () => new Set() });
-			chart.activate();
-			expect(activations.at(-1)!.excludedByAll).toEqual(new Set());
+			// A brush has no categorical field.
+			const dims = [{ kind: 'value' as const, field: 'x' }];
+			group.register('brush-x', { activeDims: () => dims }).activate();
+			expect(activations.at(-1)).toEqual({ sourceId: 'brush-x', categoricalKey: null, dims });
 		});
 
 		it('does nothing without an engine', () => {
 			const group = new FilterGroup();
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const handle = group.register('brush-x', {});
 			expect(() => handle.activate()).not.toThrow();
 		});
 	});
@@ -325,19 +236,19 @@ describe('FilterGroup', () => {
 	describe('manual entries', () => {
 		it('upsertManual adds a clause', () => {
 			const group = new FilterGroup();
-			group.upsertManual('derived-1', 'x BETWEEN 100 AND 200', [100, 200], new Set(['mark-a']), {
+			group.upsertManual('derived-1', 'x BETWEEN 100 AND 200', [100, 200], {
 				kind: 'range',
 				column: 'x'
 			});
 
 			expect(group.selection.isActive('manual:derived-1')).toBe(true);
-			expect(group.selection.predicate('mark-b')).toEqual(['x BETWEEN 100 AND 200']);
-			expect(group.selection.predicate('mark-a')).toEqual([]);
+			// No registration, so no chart skips it.
+			expect(group.selection.predicate(inChart(CHART))).toEqual(['x BETWEEN 100 AND 200']);
 		});
 
 		it('removeManual removes the clause', () => {
 			const group = new FilterGroup();
-			group.upsertManual('derived-1', 'x > 0', null, new Set());
+			group.upsertManual('derived-1', 'x > 0', null);
 			group.removeManual('derived-1');
 
 			expect(group.selection.isActive('manual:derived-1')).toBe(false);
@@ -347,10 +258,10 @@ describe('FilterGroup', () => {
 	describe('clearAll', () => {
 		it('removes all clauses, so every toggle reads nothing selected', () => {
 			const group = new FilterGroup();
-			const handle = group.register('brush-x', { excludeMarkIds: () => new Set() });
+			const handle = group.register('brush-x', {});
 			handle.update('x > 0', null);
 
-			const species = group.registerToggle('species', { excludeMarkIds: () => new Set() });
+			const species = group.registerToggle('species');
 			species.toggle(['Adelie'], false);
 
 			group.clearAll();
@@ -362,12 +273,9 @@ describe('FilterGroup', () => {
 });
 
 describe('registerToggle', () => {
-	const noMarks = () => new Set<string>();
-	const chartMarks = () => new Set(['mark-chart']);
-
 	it('single-select replaces the selection, and toggling the only value clears it', () => {
 		const group = new FilterGroup();
-		const toggle = group.registerToggle('species', { excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('species', {});
 
 		toggle.toggle(['Adelie'], false);
 		expect(toggle.values).toEqual(new Set(['Adelie']));
@@ -380,7 +288,7 @@ describe('registerToggle', () => {
 
 	it('multi-select adds and removes values', () => {
 		const group = new FilterGroup();
-		const toggle = group.registerToggle('species', { excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('species', {});
 
 		toggle.toggle(['Adelie'], true);
 		toggle.toggle(['Gentoo'], true);
@@ -391,7 +299,7 @@ describe('registerToggle', () => {
 
 	it('a multi-select that would select every one of `total` values clears instead', () => {
 		const group = new FilterGroup();
-		const toggle = group.registerToggle('species', { excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('species', {});
 
 		toggle.toggle(['Adelie'], true, 2);
 		toggle.toggle(['Gentoo'], true, 2);
@@ -401,8 +309,8 @@ describe('registerToggle', () => {
 
 	it('toggles on the same field share one selection, read from the clause', () => {
 		const group = new FilterGroup();
-		const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
-		const chart = group.registerToggle('region', { excludeMarkIds: chartMarks });
+		const legend = group.registerToggle('region', {});
+		const chart = group.registerToggle('region', { chart: CHART });
 
 		legend.toggle(['North'], false);
 		expect(chart.values).toEqual(new Set(['North']));
@@ -412,45 +320,27 @@ describe('registerToggle', () => {
 		expect(legend.values).toEqual(new Set(['North', 'South']));
 	});
 
-	it('writes the clause with the consumer’s exclusions, always as tuples', () => {
+	it('writes the clause as tuples, and the chart a toggle sits in skips it, whoever writes', () => {
 		const group = new FilterGroup();
-		const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
-		const chart = group.registerToggle('region', { excludeMarkIds: chartMarks });
+		const legend = group.registerToggle('region', {});
+		const chart = group.registerToggle('region', { chart: CHART });
 
 		legend.toggle(['North'], false);
-		expect(sqlOf(group, 'mark-chart')).toEqual([`("region" IN ('North'))`]);
+		expect(sqlOf(group, CHART)).toEqual([]);
+		expect(sqlOf(group, OTHER)).toEqual([`("region" IN ('North'))`]);
 		expect(group.selection.get('toggle-region')!.value).toEqual([['North']]);
 
 		chart.toggle(['South'], false);
-		expect(sqlOf(group, 'mark-chart')).toEqual([]);
-		expect(sqlOf(group, 'mark-other')).toEqual([`("region" IN ('South'))`]);
+		expect(sqlOf(group, CHART)).toEqual([]);
+		expect(sqlOf(group, OTHER)).toEqual([`("region" IN ('South'))`]);
 		expect(group.selection.get('toggle-region')!.value).toEqual([['South']]);
-	});
-
-	it('supplies its projection values itself, onto every consumer’s scales', () => {
-		const group = new FilterGroup();
-		const color = mockScale();
-		const band = mockScale();
-		const legend = group.registerToggle('region', {
-			excludeMarkIds: noMarks,
-			scales: () => [color]
-		});
-		group.registerToggle('region', { excludeMarkIds: chartMarks, scales: () => [band] });
-
-		legend.toggle(['North'], false);
-		expect(color.active).toEqual(new Set(['North']));
-		expect(band.active).toEqual(new Set(['North']));
-
-		legend.clear();
-		expect(color.active).toBeNull();
-		expect(band.active).toBeNull();
 	});
 
 	it('reads the same selection object while its clause is unchanged, and one shared empty set without one', () => {
 		const group = new FilterGroup();
-		const brush = group.register('brush-x', { excludeMarkIds: noMarks });
-		const unselected = group.registerToggle('species', { excludeMarkIds: noMarks });
-		const selected = group.registerToggle('region', { excludeMarkIds: noMarks });
+		const brush = group.register('brush-x', {});
+		const unselected = group.registerToggle('species', {});
+		const selected = group.registerToggle('region', {});
 		selected.toggle(['North'], false);
 
 		const empty = unselected.values;
@@ -460,13 +350,13 @@ describe('registerToggle', () => {
 		brush.update('x > 1', [1, 2]);
 		expect(unselected.values).toBe(empty);
 		expect(selected.values).toBe(north);
-		expect(group.registerToggle('carrier', { excludeMarkIds: noMarks }).values).toBe(empty);
+		expect(group.registerToggle('carrier', {}).values).toBe(empty);
 	});
 
 	it('uses separate clauses for a field tuple and its first field', () => {
 		const group = new FilterGroup();
-		const pair = group.registerToggle(['region', 'category'], { excludeMarkIds: noMarks });
-		const region = group.registerToggle('region', { excludeMarkIds: noMarks });
+		const pair = group.registerToggle(['region', 'category'], {});
+		const region = group.registerToggle('region', {});
 
 		pair.toggle(['North', 'Books'], false);
 		expect(region.active).toBe(false);
@@ -474,13 +364,13 @@ describe('registerToggle', () => {
 
 	it('builds an OR of IS NOT DISTINCT FROM tuples for several fields', () => {
 		const group = new FilterGroup();
-		const toggle = group.registerToggle(['region', 'category'], { excludeMarkIds: noMarks });
+		const toggle = group.registerToggle(['region', 'category'], {});
 
 		toggle.set([
 			['North', 'Books'],
 			['South', null]
 		]);
-		const [sql] = sqlOf(group, 'mark-x');
+		const [sql] = sqlOf(group, null);
 		expect(sql).toContain(`"region" IS NOT DISTINCT FROM 'North'`);
 		expect(sql).toContain(`"category" IS NOT DISTINCT FROM NULL`);
 		expect(sql).toContain(' OR ');
@@ -488,7 +378,7 @@ describe('registerToggle', () => {
 
 	it('keys BIGINT tuples without throwing, and keeps 1 and "1" apart', () => {
 		const group = new FilterGroup();
-		const toggle = group.registerToggle(['year', 'code'], { excludeMarkIds: noMarks });
+		const toggle = group.registerToggle(['year', 'code'], {});
 
 		expect(() => toggle.toggle([2021n, 1], true)).not.toThrow();
 		toggle.toggle([2021n, '1'], true);
@@ -501,17 +391,17 @@ describe('registerToggle', () => {
 		const { engine } = mockEngine({ 'year("date")': 'year("date")' });
 		const group = new FilterGroup();
 		group.setEngine(engine);
-		const toggle = group.registerToggle('year("date")', { excludeMarkIds: noMarks });
+		const toggle = group.registerToggle('year("date")', {});
 
 		toggle.toggle([2021], false);
-		expect(sqlOf(group, 'mark-x')).toEqual([`(year("date") IN (2021))`]);
+		expect(sqlOf(group, null)).toEqual([`(year("date") IN (2021))`]);
 	});
 
 	it('activates with one value dim per field', () => {
 		const { engine, activations } = mockEngine();
 		const group = new FilterGroup();
 		group.setEngine(engine);
-		group.registerToggle(['region', 'category'], { excludeMarkIds: noMarks }).activate();
+		group.registerToggle(['region', 'category'], {}).activate();
 
 		expect(activations.at(-1)!.dims).toEqual([
 			{ kind: 'value', field: 'region' },
@@ -522,8 +412,8 @@ describe('registerToggle', () => {
 	describe('lifetime', () => {
 		it('clears the selection when its last consumer goes, not before', () => {
 			const group = new FilterGroup();
-			const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
-			const chart = group.registerToggle('region', { excludeMarkIds: chartMarks });
+			const legend = group.registerToggle('region', {});
+			const chart = group.registerToggle('region', { chart: CHART });
 			chart.toggle(['North'], false);
 
 			// The legend still shows the selection, so it stays.
@@ -538,13 +428,13 @@ describe('registerToggle', () => {
 			// Toggle keys one band-label child per field; reassigning the band
 			// channel unmounts the old field's child, which destroys this.
 			const group = new FilterGroup();
-			const label = group.registerToggle('region', { excludeMarkIds: chartMarks });
+			const label = group.registerToggle('region', { chart: CHART });
 			label.toggle(['North'], false);
 			label.destroy();
 			expect(group.selection.isActive('toggle-region')).toBe(false);
 
-			const legend = group.registerToggle('carrier', { excludeMarkIds: noMarks });
-			const carrierLabel = group.registerToggle('carrier', { excludeMarkIds: chartMarks });
+			const legend = group.registerToggle('carrier', {});
+			const carrierLabel = group.registerToggle('carrier', { chart: CHART });
 			carrierLabel.toggle(['UA'], false);
 			carrierLabel.destroy();
 			expect(legend.values).toEqual(new Set(['UA']));
@@ -552,7 +442,7 @@ describe('registerToggle', () => {
 
 		it('clearing the clause from outside (a filter chip) clears what every toggle reads', () => {
 			const group = new FilterGroup();
-			const legend = group.registerToggle('region', { excludeMarkIds: noMarks });
+			const legend = group.registerToggle('region', {});
 			legend.toggle(['North'], true);
 
 			group.clearSource('toggle-region');

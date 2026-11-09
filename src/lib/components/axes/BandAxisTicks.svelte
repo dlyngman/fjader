@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { getContext } from 'svelte';
 	import type { BandScaleState, BandTick } from '$lib/scales/BandScaleState.svelte';
+	import type { ChartContext } from '$lib/types';
+	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	/**
 	 * The labels on a band axis, wherever that axis is drawn.
@@ -54,13 +57,45 @@
 		textAnchor = 'middle'
 	}: Props = $props();
 
+	const chart = getContext<ChartContext | undefined>('chart');
+	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
+
+	/**
+	 * The filter groups whose selection the labels show: those of the chart's
+	 * marks. A selection dims the axis's marks in their own group, so a label
+	 * dims when any of those groups dims its category; a background mark in a
+	 * group with nothing selected changes nothing.
+	 */
+	const groups = $derived.by(() => {
+		if (!chart || !filterGroups) return [];
+		const indices: number[] = [];
+		for (const entry of chart.config.entries.values()) {
+			const index = filterGroups.get(entry.selection).index;
+			if (!indices.includes(index)) indices.push(index);
+		}
+		return indices;
+	});
+
+	/**
+	 * The field the axis's selection is kept under: its identity key, or its
+	 * column before. As for the legend, the two differ for a computed field,
+	 * so its labels briefly lose their dimming while a reload empties identity.
+	 */
+	const key = $derived(scale.identityKey ?? scale.sourceField);
+
+	/** A label's opacity: the scale's own (travel, clipping) times its selection fade. */
+	function opacityOf(tick: BandTick): number {
+		const selected = filterGroups ? filterGroups.opacityOfValue(key, groups, tick.value) : 1;
+		return scale.tickOpacity(tick.key) * selected;
+	}
+
 	const tickEnd = $derived(base + dir * tickLength);
 	const labelAt = $derived(base + dir * labelGap);
 </script>
 
 {#each ticks as tick (tick.key)}
 	{@const pos = scale.tickPosition(tick.key, rangeSize, axis)}
-	<g opacity={scale.tickOpacity(tick.key)}>
+	<g opacity={opacityOf(tick)}>
 		{#if axis === 'x'}
 			<line x1={pos} x2={pos} y1={base} y2={tickEnd} />
 			<text text-anchor={textAnchor} x={pos} y={labelAt}>

@@ -19,9 +19,14 @@ describe('createQueryServices', () => {
 		const { filterGroups } = createQueryServices(engine as unknown as QueryEngine);
 
 		const group = filterGroups.get('brush');
-		group.register('brush-x', { excludeMarkIds: () => new Set() }).update('x > 0', null);
+		group.register('brush-x', {}).update('x > 0', null);
 
-		expect(engine.onClauseChange).toHaveBeenCalledWith(group, undefined, expect.anything());
+		expect(engine.onClauseChange).toHaveBeenCalledWith(
+			group,
+			'brush-x',
+			undefined,
+			expect.anything()
+		);
 	});
 
 	it('connects the default group too', () => {
@@ -29,8 +34,13 @@ describe('createQueryServices', () => {
 		const { filterGroups } = createQueryServices(engine as unknown as QueryEngine);
 
 		const group = filterGroups.get();
-		group.register('brush-x', { excludeMarkIds: () => new Set() }).update('x > 0', null);
+		group.register('brush-x', {}).update('x > 0', null);
 
-		expect(engine.onClauseChange).toHaveBeenCalledWith(group, undefined, expect.anything());
+		expect(engine.onClauseChange).toHaveBeenCalledWith(
+			group,
+			'brush-x',
+			undefined,
+			expect.anything()
+		);
 	});
 });

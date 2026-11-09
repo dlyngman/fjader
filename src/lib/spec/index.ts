@@ -59,6 +59,7 @@ export async function render(
 	// 4. Build context map — injected into Svelte mount() so child components
 	//    find these via getContext() calls (same keys as initFjader())
 	const { filterGroups } = createQueryServices(queryEngine);
+	gpuCoordinator.setFilterGroups(filterGroups);
 	const context = new Map<string, unknown>();
 	context.set('query-engine', queryEngine);
 	context.set('filter-groups', filterGroups);

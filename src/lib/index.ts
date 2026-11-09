@@ -21,6 +21,7 @@ export function initFjader(connection?: DuckDBConnection | Promise<DuckDBConnect
 	const gpuCoordinator = setGPUCoordinator({ msaaSampleCount: 4 });
 
 	gpuCoordinator.setScaleRegistry(scaleRegistry);
+	gpuCoordinator.setFilterGroups(filterGroups);
 	scaleRegistry.setGPUCoordinator(gpuCoordinator);
 
 	return { queryEngine, filterGroups, scaleRegistry, gpuCoordinator };

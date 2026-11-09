@@ -65,12 +65,7 @@ export { MarkHandle } from './MarkHandle.svelte';
 export type { QueryParams } from './MarkHandle.svelte';
 export { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 export { FilterGroup } from './FilterGroup.svelte';
-export type {
-	SourceOpts,
-	SourceHandle,
-	ToggleHandle,
-	FilterItem,
-	ActiveValueScale
-} from './FilterGroup.svelte';
+export type { SourceOpts, SourceHandle, ToggleHandle, FilterItem } from './FilterGroup.svelte';
+export { FieldActivity } from './FieldActivity.svelte';
 export { CrossfilterSelection } from './CrossfilterSelection.svelte';
 export type { FilterExpr, FilterSchema, Clause, ClauseEntry } from './CrossfilterSelection.svelte';

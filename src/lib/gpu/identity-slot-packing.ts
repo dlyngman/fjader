@@ -18,20 +18,45 @@
  * on it. It is a pure function over plain arrays and maps, which is
  * what it should have been.
  *
- * Layout: index 0 is a permanent zero-length block, then one block per scale of
- * `[count, slot0 … slot(count-1), act0 … act(count-1)]`. The count header makes
- * each block self-describing, so the shader rejects an id past this scale's end
- * instead of reading into the next scale's slots — ids and the slot table can
- * disagree transiently while a dim appends — and it is also how the shader finds
- * the activity half, at `base + 1 + count`, with no second base to store.
+ * LAYOUT. Index 0 is a permanent empty block `[0, 0, 0]`. Then one SLOT
+ * block per scale, then one ACTIVITY block per live categorical field:
  *
- * The ACTIVITY half says how selected each id is (1 active, 0 inactive; see
- * ActivityTable). It is always allocated, all 1 for a scale without a table, so
- * every block has the same shape and an activity read never lands in the next
- * block. Each half has its own version and its own `t`: a click rewrites and
- * resolves only the activity half, a reorder only the slot half, as long as
- * `count` is unchanged. The activity half starts after the slots, so a change of
- * `count` moves it and rewrites it too.
+ *   scale block: [count, actRef, n, slot0 … slot(count-1)]
+ *   field block: [group 0: act0 … act(n-1), group 1: act0 … act(n-1), …]
+ *
+ * Slots come first so that when the buffer runs out it is activity that is
+ * lost (a mark draws undimmed), never an axis. A field has a block while a
+ * scale draws it, selected on or not, and a field no chart draws any more
+ * frees its space. Tying the block to the selection instead saved that space
+ * on pages with nothing selected, but every select and clear then moved the
+ * block and rewrote every scale block pointing at it, slots included:
+ * measured at about 105000 floats uploaded per click for 20 scales on a
+ * 5000-category field, against 5000 when the block stays.
+ *
+ * KNOWN LIMIT: a field block that does not fit leaves a selection on that
+ * field doing nothing for the marks that dim by it. Routing (the mark's reads,
+ * see activity-reads.ts) still sends them to dim rather than filter, and their
+ * shader finds no activity. Routing does not ask the packer whether a field
+ * got a block, which would tie the query layer to the GPU layout; the packer
+ * warns instead, on load. It takes fields of tens of thousands of ids across
+ * several groups to reach. A buffer that grows on demand is the real fix.
+ *
+ * A scale block's header says how many ids its slots cover (`count`), where its
+ * field's activity block starts (`actRef`) and how many ids that block covers
+ * (`n`). The count is what makes a block self-describing, so the shader rejects
+ * an id past this scale's end instead of reading into the next scale's slots —
+ * ids and the slot table can disagree transiently while a dim appends.
+ *
+ * ACTIVITY says how selected each id is in each filter group (1 active, 0
+ * inactive; see FieldActivity). It belongs to the field, not to the scale:
+ * every scale on one field reads the same block, a mark choosing its group's
+ * half by its group index. So a click rewrites and resolves one half of one
+ * field block, however many scales draw that field. The header comes first so
+ * the shader finds `actRef` and `n` without reading `count`: the activity read
+ * is two dependent loads, as it was when the activity sat after the slots. No
+ * mark holds `actRef`; the packer writes it in the same pass that moves the
+ * field block, so it cannot go stale. A scale with no field to dim points at
+ * the empty block, where `n` is 0 and every id is active.
  *
  * TWO buffers share one set of offsets: `from` is where each id's current
  * transition started and `to` where it is going, and the resolve kernel writes
@@ -39,35 +64,38 @@
  * bindings rather than two runs in one buffer, so the halves line up at the
  * same base and one dispatch per block covers both.
  *
- * `t` is not in the buffers. It is PER HALF of each scale — the slots have the
- * scale's data clock and the activity its selection clock — and reaches the
- * kernel as an immediate on that half's dispatch, so a frame where only `t`
- * moved uploads nothing at all.
+ * `t` is not in the buffers. It is per scale (its data clock) and per field
+ * half (that group's selection clock), and reaches the kernel as an immediate
+ * on that range's dispatch, so a frame where only `t` moved uploads nothing.
  */
 
 /**
  * Floats GLOBALLY across every band and point scale on the page, headers
- * included.
+ * included, and every live field's activity.
  *
  * No longer a binding limit: the tables are storage buffers, bound only to the
- * resolve pass, and the render stages read one resolved storage buffer. The
- * number is left over from when they were 64 KB uniforms, and making the
- * allocation grow on demand (recreate the buffers, rebuild the bind groups) is
- * what would retire it.
+ * resolve pass, and the render stages read one resolved storage buffer. Making
+ * the allocation grow on demand (recreate the buffers, rebuild the bind groups)
+ * is what would retire it.
  *
- * Each scale takes `1 + 2 · count`: a header, the slots and the activity half.
- * Category counts are usually tens to hundreds, so the doubling for the
- * activity half is accepted rather than worked around.
+ * Each scale takes `3 + count`; each live field `n × groups`. 65536 fits a
+ * 5000-category field selected on across 3 groups (15000) with its scales
+ * (about 5000 each) several times over. It costs 256 KB per buffer, 768 KB for
+ * the three; the resolve pass dispatches per block, sized by the block, so a
+ * larger buffer costs no GPU time.
  */
-export const IDENTITY_SLOT_CAPACITY = 16384;
+export const IDENTITY_SLOT_CAPACITY = 65536;
 
 /**
- * Base of the permanent zero-length block. A scale that cannot be placed points
- * here, so every lookup finds count 0 and discards — which is what the capacity
- * warning claims happens. Pointing it at a stale base instead left the scale
- * rendering, from another scale's slots.
+ * Base of the permanent empty block `[0, 0, 0]`. A scale that cannot be placed
+ * points here, so every lookup finds count 0 and discards, and every activity
+ * read finds n 0 and is fully active. Pointing it at a stale base instead left
+ * the scale rendering, from another scale's slots.
  */
 export const IDENTITY_SLOT_EMPTY = 0;
+
+/** Floats before a scale block's slots: count, actRef, n. */
+export const IDENTITY_SLOT_HEADER = 3;
 
 /**
  * One scale's slot table as the packer reads it: identity id -> display slot,
@@ -91,12 +119,12 @@ export interface SlotSource {
 }
 
 /**
- * One scale's activity as the packer reads it: 1 active, 0 inactive, as the two
- * ends of a fade. ActivityTable has this shape.
+ * One group's activity on one field as the packer reads it: 1 active, 0
+ * inactive, as the two ends of a fade. ActivityTable has this shape.
  *
- * Its length is not trusted: the packer takes `count` from the slots and pads
- * with 1 or truncates, so a moment where the two disagree (a dim append reaching
- * one before the other) cannot shift the activity half onto the wrong ids.
+ * Its length is not trusted: the packer takes `n` from the field and pads with
+ * 1 or truncates, so a moment where the two disagree cannot shift the half onto
+ * the wrong ids.
  */
 export interface ActivitySource {
 	readonly from: Float32Array;
@@ -108,25 +136,37 @@ export interface ActivitySource {
 }
 
 /**
- * A scale with a slot table, as the packer needs it: its slots and, beside
- * them, its selection fade for the block's activity half. Absent for a scale
- * without a selection table, whose activity half is then all 1.
+ * A scale with a slot table, as the packer needs it: its slots, and the identity
+ * key of its field, whose activity block its header points at. No field (or a
+ * field with no activity block) points it at the empty block.
  */
 export interface IdentitySlotScale {
 	id: string;
 	slots: SlotSource;
-	activity?: ActivitySource | null;
+	field?: string | null;
+}
+
+/**
+ * A categorical field's selection activity, as the packer reads it: one fade
+ * per filter group, over `count` ids. FieldActivity has this shape.
+ */
+export interface ActivityField {
+	readonly key: string;
+	/** Ids covered: the block's `n`. */
+	readonly count: number;
+	/** Group `index`'s fade, or null when that group never selected here (all 1). */
+	fadeOf(index: number): ActivitySource | null;
 }
 
 /**
  * One range to resolve this frame: `length` floats from `base`, at `t`. A
- * scale's slot half and activity half are separate ranges, since each has its
- * own `t`.
+ * scale's slots and each group's half of a field block are separate ranges,
+ * since each has its own `t`.
  *
- * The count header is inside the slot range rather than skipped: it holds the
- * same value in both buffers, so mixing it returns it, and the render stages
- * read their bound from the resolved copy. Pooled in the state and overwritten
- * by the next pack.
+ * The header is inside the slot range rather than skipped: it holds the same
+ * values in both buffers, so the kernel returns them exactly, and the render
+ * stages read it from the resolved copy. Pooled in the state and overwritten by
+ * the next pack.
  */
 export interface ResolveBlock {
 	base: number;
@@ -160,20 +200,29 @@ export interface IdentitySlotState {
 	offsets: Map<string, number>;
 	/** Last packed slotVersion per scale, so a static chart re-uploads nothing. */
 	versions: Map<string, number>;
+	/** Last packed count per scale. */
+	counts: Map<string, number>;
+	/** Last packed actRef and n per scale: a field block that moved rewrites the header. */
+	refs: Map<string, number>;
+	ns: Map<string, number>;
 	/**
-	 * The `t` each scale's halves were last resolved at, `[slots, activity]`, so a
-	 * still frame dispatches nothing and an animating one dispatches only the
-	 * halves that are moving.
-	 *
-	 * A typed array per scale, created once, rather than a `Map<string, number>`:
-	 * a fractional `t` stored as a Map value is boxed, which allocated on every
-	 * frame of every transition.
+	 * The `t` each scale's slots were last resolved at, so a still frame
+	 * dispatches nothing. A typed array per scale, created once, rather than a
+	 * `Map<string, number>`: a fractional `t` stored as a Map value is boxed,
+	 * which allocated on every frame of every transition.
 	 */
 	resolvedT: Map<string, Float64Array>;
-	/** Last packed activity version per scale; -1 for a scale without a table. */
-	activityVersions: Map<string, number>;
-	/** Last packed count per scale: a change moves the activity half. */
-	counts: Map<string, number>;
+	/** Per field: its block's base, `n` and the group count it was packed for. */
+	fieldBases: Map<string, number>;
+	fieldNs: Map<string, number>;
+	fieldGroups: Map<string, number>;
+	/** Per field, per group: the fade version last written and the `t` last resolved. */
+	fieldVersions: Map<string, Float64Array>;
+	fieldT: Map<string, Float64Array>;
+	/** The pass a scale last drew each field in: a field no scale draws gets no block. */
+	fieldSeen: Map<string, number>;
+	/** Fields whose block did not fit, warned about once until they fit again. */
+	warnedFields: Set<string>;
 	/**
 	 * The pass each scale was last seen in, for the eviction sweep.
 	 *
@@ -197,17 +246,26 @@ export function createIdentitySlotState(
 	const bufferTo = new Float32Array(capacity);
 	buffer.fill(-1);
 	bufferTo.fill(-1);
-	// The permanent empty block: count 0, so it holds no slots.
-	buffer[IDENTITY_SLOT_EMPTY] = 0;
-	bufferTo[IDENTITY_SLOT_EMPTY] = 0;
+	// The permanent empty block: count 0, actRef 0, n 0. Never -1: u32(-1.0)
+	// is undefined in WGSL.
+	buffer.fill(0, IDENTITY_SLOT_EMPTY, IDENTITY_SLOT_EMPTY + IDENTITY_SLOT_HEADER);
+	bufferTo.fill(0, IDENTITY_SLOT_EMPTY, IDENTITY_SLOT_EMPTY + IDENTITY_SLOT_HEADER);
 	return {
 		buffer,
 		bufferTo,
 		offsets: new Map(),
 		versions: new Map(),
-		resolvedT: new Map(),
-		activityVersions: new Map(),
 		counts: new Map(),
+		refs: new Map(),
+		ns: new Map(),
+		resolvedT: new Map(),
+		fieldBases: new Map(),
+		fieldNs: new Map(),
+		fieldGroups: new Map(),
+		fieldVersions: new Map(),
+		fieldT: new Map(),
+		fieldSeen: new Map(),
+		warnedFields: new Set(),
 		seenPass: new Map(),
 		pass: 0,
 		result: { uploadStart: 0, uploadEnd: 0, resolves: [], resolveCount: 0 }
@@ -215,44 +273,128 @@ export function createIdentitySlotState(
 }
 
 /**
- * Assign every scale a base, write the halves that moved, and list what to
- * upload and what to resolve.
+ * Assign every field and scale a base, write the ranges that moved, and list
+ * what to upload and what to resolve.
  *
- * | Half | Rewritten when | Resolved when |
+ * | Range | Rewritten when | Resolved when |
  * |---|---|---|
- * | Slots | base or slot version changed | rewritten, or slot `t` changed |
- * | Activity | base, count or activity version changed | rewritten, or activity `t` changed |
+ * | A field's group half | its base, `n` or the group count moved, or that group's fade version | rewritten, or that fade's `t` moved |
+ * | A scale's header + slots | its base, slot version, or its field block's base or `n` moved | rewritten, or slot `t` moved |
  *
- * A half that is rewritten must be resolved even when its `t` did not move: the
- * render stages read the resolved buffer, not these. A parked scale is neither
- * rewritten nor resolved: it has no block, and the empty block it points at is
- * never written.
+ * A range that is rewritten must be resolved even when its `t` did not move:
+ * the render stages read the resolved buffer, not these. A parked scale is
+ * neither rewritten nor resolved: it has no block, and the empty block it
+ * points at is never written.
  *
- * Offsets are recomputed on every call because a scale appearing or
- * disappearing shifts every scale after it. That is a running sum over a
- * handful of scales, and the alternative — a free list — would have to survive
- * a scale changing size, which happens whenever a dim appends.
+ * Offsets are recomputed on every call because a block appearing or
+ * disappearing shifts every block after it. That is a running sum over a
+ * handful of blocks, and the alternative — a free list — would have to survive
+ * a block changing size, which happens whenever a dim appends. A field block
+ * that moves rewrites the headers pointing at it in the same pass.
+ *
+ * `fields` and `groups` default to none, which packs the slots alone.
  */
 export function packIdentitySlots(
 	scales: readonly IdentitySlotScale[],
-	state: IdentitySlotState
+	state: IdentitySlotState,
+	fields: readonly ActivityField[] = NO_FIELDS,
+	groups: number = 0
 ): PackResult {
-	const { buffer, bufferTo, offsets, versions, resolvedT, result } = state;
-	const { activityVersions, counts, seenPass } = state;
+	const { buffer, bufferTo, offsets, versions, counts, refs, ns, resolvedT, result } = state;
+	const { fieldBases, fieldNs, fieldGroups, fieldVersions, fieldT, seenPass } = state;
+	const { fieldSeen, warnedFields } = state;
 	const capacity = buffer.length;
 	const resolves = result.resolves;
 
-	// Index 0 is the permanent empty block; real blocks start after it.
-	let offset = 1;
+	// The permanent empty block comes first; real blocks start after it.
+	let offset = IDENTITY_SLOT_EMPTY + IDENTITY_SLOT_HEADER;
 	let uploadStart = capacity;
 	let uploadEnd = 0;
 	let resolveCount = 0;
-	// Runs every frame, so nothing here may allocate on a frame where no scale
+	// Runs every frame, so nothing here may allocate on a frame where no block
 	// appeared: the pass stamp replaces a Set cleared every pack. Kept a small
 	// integer (a Smi) so storing it never boxes.
 	const pass = (state.pass = state.pass >= 0x3fffffff ? 1 : state.pass + 1);
 	let seenCount = 0;
 
+	// --- Where the scale blocks end, and which fields a scale draws ---
+	// The same running sum the scale loop below makes, so the field blocks can
+	// be placed after the scales before the scale headers are written.
+	let fieldOffset = offset;
+	for (let i = 0; i < scales.length; i++) {
+		const need = IDENTITY_SLOT_HEADER + scales[i].slots.count;
+		if (fieldOffset + need <= capacity) fieldOffset += need;
+		const key = scales[i].field;
+		if (key) fieldSeen.set(key, pass);
+	}
+
+	// --- Field blocks: one run per group, after the scales ---
+	for (let f = 0; f < fields.length; f++) {
+		const field = fields[f];
+		const key = field.key;
+		const count = field.count;
+		const live = fieldSeen.get(key) === pass;
+		const need = live ? count * groups : 0;
+		const fits = need > 0 && fieldOffset + need <= capacity;
+		const base = fits ? fieldOffset : IDENTITY_SLOT_EMPTY;
+		const n = fits ? count : 0;
+		if (fits) fieldOffset += need;
+		if (need > 0 && !fits) {
+			// On the transition only: this runs every frame.
+			if (!warnedFields.has(key)) {
+				warnedFields.add(key);
+				console.warn(
+					`[GPUCoordinator] Identity slot capacity (${capacity}) exhausted; ` +
+						`"${key}" (${count} ids × ${groups} groups) will not dim: a selection on it ` +
+						`leaves the marks that dim by it unchanged.`
+				);
+			}
+		} else if (fits && warnedFields.size > 0) {
+			warnedFields.delete(key);
+		}
+
+		const moved =
+			fieldBases.get(key) !== base || fieldNs.get(key) !== n || fieldGroups.get(key) !== groups;
+		let written = fieldVersions.get(key);
+		let lastT = fieldT.get(key);
+		if (!written || written.length !== groups) {
+			// Created when a field first packs or the page gains a group: rare.
+			written = new Float64Array(groups).fill(NaN);
+			lastT = new Float64Array(groups).fill(NaN);
+			fieldVersions.set(key, written);
+			fieldT.set(key, lastT!);
+		}
+		if (moved) {
+			fieldBases.set(key, base);
+			fieldNs.set(key, n);
+			fieldGroups.set(key, groups);
+		}
+		if (!fits) continue;
+
+		for (let g = 0; g < groups; g++) {
+			const fade = field.fadeOf(g);
+			const version = fade ? fade.version : -1;
+			const start = base + n * g;
+			let rewritten = false;
+			if (moved || written[g] !== version) {
+				writeActivity(buffer, bufferTo, start, n, fade);
+				written[g] = version;
+				if (start < uploadStart) uploadStart = start;
+				if (start + n > uploadEnd) uploadEnd = start + n;
+				rewritten = true;
+			}
+			const t = fade ? fade.t : 1;
+			if (rewritten || lastT![g] !== t) {
+				lastT![g] = t;
+				const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
+				block.base = start;
+				block.length = n;
+				block.t = t;
+			}
+		}
+	}
+
+	// --- Scale blocks: [count, actRef, n, slots…] ---
 	for (let i = 0; i < scales.length; i++) {
 		const scale = scales[i];
 		if (seenPass.get(scale.id) !== pass) {
@@ -262,43 +404,38 @@ export function packIdentitySlots(
 
 		const slots = scale.slots;
 		const count = slots.count;
-		const activity = scale.activity ?? null;
-		// A header, the slots, and the activity half.
-		const need = 1 + 2 * count;
+		const need = IDENTITY_SLOT_HEADER + count;
 		const fits = offset + need <= capacity;
 		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
 		if (fits) offset += need;
-		const activityBase = base + 1 + count;
+
+		const fieldKey = scale.field;
+		const ref = fieldKey ? (fieldBases.get(fieldKey) ?? IDENTITY_SLOT_EMPTY) : IDENTITY_SLOT_EMPTY;
+		const n = ref === IDENTITY_SLOT_EMPTY ? 0 : (fieldNs.get(fieldKey!) ?? 0);
 
 		const version = slots.version;
-		const activityVersion = activity ? activity.version : -1;
-		const baseMoved = offsets.get(scale.id) !== base;
-		const slotsDirty = baseMoved || versions.get(scale.id) !== version;
-		const activityDirty =
-			baseMoved ||
+		const dirty =
+			offsets.get(scale.id) !== base ||
+			versions.get(scale.id) !== version ||
 			counts.get(scale.id) !== count ||
-			activityVersions.get(scale.id) !== activityVersion;
+			refs.get(scale.id) !== ref ||
+			ns.get(scale.id) !== n;
 
-		let slotsRewritten = false;
-		let activityRewritten = false;
-		if (slotsDirty || activityDirty) {
+		let rewritten = false;
+		if (dirty) {
 			if (fits) {
-				if (slotsDirty) {
-					buffer[base] = count;
-					buffer.set(slots.from, base + 1);
-					bufferTo[base] = count;
-					bufferTo.set(slots.to, base + 1);
-					if (base < uploadStart) uploadStart = base;
-					if (activityBase > uploadEnd) uploadEnd = activityBase;
-					slotsRewritten = true;
-				}
-				if (activityDirty) {
-					writeActivity(buffer, bufferTo, activityBase, count, activity);
-					if (activityBase < uploadStart) uploadStart = activityBase;
-					if (base + need > uploadEnd) uploadEnd = base + need;
-					activityRewritten = true;
-				}
-			} else if (slotsDirty) {
+				buffer[base] = count;
+				buffer[base + 1] = ref;
+				buffer[base + 2] = n;
+				buffer.set(slots.from, base + IDENTITY_SLOT_HEADER);
+				bufferTo[base] = count;
+				bufferTo[base + 1] = ref;
+				bufferTo[base + 2] = n;
+				bufferTo.set(slots.to, base + IDENTITY_SLOT_HEADER);
+				if (base < uploadStart) uploadStart = base;
+				if (base + need > uploadEnd) uploadEnd = base + need;
+				rewritten = true;
+			} else if (offsets.get(scale.id) !== base || versions.get(scale.id) !== version) {
 				// Warn on the transition only — the caller runs this every frame.
 				console.warn(
 					`[GPUCoordinator] Identity slot capacity (${capacity}) exhausted; ` +
@@ -308,7 +445,8 @@ export function packIdentitySlots(
 			offsets.set(scale.id, base);
 			versions.set(scale.id, version);
 			counts.set(scale.id, count);
-			activityVersions.set(scale.id, activityVersion);
+			refs.set(scale.id, ref);
+			ns.set(scale.id, n);
 		}
 		// No break: a later scale with a smaller table may still fit, and one
 		// that does not is parked on the empty block rather than left holding a
@@ -319,27 +457,17 @@ export function packIdentitySlots(
 		// Created once per scale; NaN so the first comparison always differs.
 		let lastT = resolvedT.get(scale.id);
 		if (!lastT) {
-			lastT = new Float64Array(2).fill(NaN);
+			lastT = new Float64Array(1).fill(NaN);
 			resolvedT.set(scale.id, lastT);
 		}
 
 		const t = slots.t;
-		if (slotsRewritten || lastT[0] !== t) {
+		if (rewritten || lastT[0] !== t) {
 			lastT[0] = t;
 			const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
 			block.base = base;
-			block.length = 1 + count;
+			block.length = need;
 			block.t = t;
-		}
-
-		// An empty activity half has nothing to resolve.
-		const at = activity ? activity.t : 1;
-		if (count > 0 && (activityRewritten || lastT[1] !== at)) {
-			lastT[1] = at;
-			const block = (resolves[resolveCount++] ??= { base: 0, length: 0, t: 0 });
-			block.base = activityBase;
-			block.length = count;
-			block.t = at;
 		}
 	}
 
@@ -347,15 +475,17 @@ export function packIdentitySlots(
 	// inherit a base from a previous life. `offsets` is a superset of this pass's
 	// scales by construction — every scale above is written — so comparing sizes
 	// is a sound test for set equality and not just a cheap approximation of one.
-	// The sweep allocates, but only on a frame where a scale went away.
+	// The sweep allocates, but only on a frame where a scale went away. Fields
+	// are not swept: the registry keeps every field it created.
 	if (offsets.size !== seenCount) {
 		for (const id of [...offsets.keys()]) {
 			if (seenPass.get(id) !== pass) {
 				offsets.delete(id);
 				versions.delete(id);
-				resolvedT.delete(id);
-				activityVersions.delete(id);
 				counts.delete(id);
+				refs.delete(id);
+				ns.delete(id);
+				resolvedT.delete(id);
 				seenPass.delete(id);
 			}
 		}
@@ -367,12 +497,15 @@ export function packIdentitySlots(
 	return result;
 }
 
+const NO_FIELDS: readonly ActivityField[] = [];
+
 /**
- * Write a block's activity half: `count` floats from `start`, in both buffers.
+ * Write one group's half of a field block: `count` floats from `start`, in
+ * both buffers.
  *
- * The length comes from the slots, not from the activity arrays: ids past their
- * end are fully active, and entries past `count` are dropped. A plain loop, so a
- * rewrite allocates nothing. With no table every id is active.
+ * The length is the block's `n`, not the fade's: ids past the fade's end are
+ * fully active, and entries past `n` are dropped. A plain loop, so a rewrite
+ * allocates nothing. With no fade every id is active.
  */
 function writeActivity(
 	buffer: Float32Array,

@@ -142,7 +142,7 @@ const idOf = (field: string) => engine.identityColumn(field);
 async function mark(
 	id: string,
 	select: Record<string, unknown>,
-	opts: { table?: string; baseTable?: string; limit?: number } = {}
+	opts: { table?: string; baseTable?: string; limit?: number; reads?: string[] } = {}
 ): Promise<MarkHandle> {
 	const baseTable = opts.baseTable ?? 't';
 	const descriptor: QueryDescriptor = {
@@ -150,7 +150,8 @@ async function mark(
 		baseTable,
 		parts: buildQueryParts(select, null, false),
 		schema: new Map(),
-		transformCompiler: new TransformCompiler([])
+		transformCompiler: new TransformCompiler([]),
+		route: { reads: opts.reads ?? [], chart: null }
 	};
 	const handle = engine.registerMark(id, descriptor, group);
 	await settle([handle], () => handle.updateParams({ sort: undefined, limit: opts.limit }));
@@ -196,7 +197,7 @@ function lastQueriesSince(from: number): string[] {
 function activateToggle(fields: string[]): Promise<void> {
 	return engine.activate(group, {
 		sourceId: fields.length === 1 ? `toggle-${fields[0]}` : `toggle-${JSON.stringify(fields)}`,
-		excludedByAll: new Set(),
+		categoricalKey: null,
 		dims: fields.map((field) => ({ kind: 'value' as const, field }))
 	});
 }
@@ -223,7 +224,7 @@ describe('preagg for value dims', () => {
 		expect(creates()).toHaveLength(3);
 		expect(creates().some((c) => c.includes('LEFT JOIN'))).toBe(true);
 
-		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const legend = group.registerToggle('cat');
 		const from = nonDDL().length;
 		await settle([bars, hist, histView], () => legend.toggle(['a'], false));
 
@@ -237,10 +238,35 @@ describe('preagg for value dims', () => {
 		expect(rowsOf(histView)).toEqual(histRows);
 	});
 
+	it('a legend hover builds no table for a mark that reads the field, which dims instead', async () => {
+		const view = engine.identitySourceFor('t');
+		const bars = await mark(
+			'bars',
+			{ x: castReal(column(idOf('cat'))), n: count() },
+			{ table: view, reads: ['cat'] }
+		);
+		const hist = await mark('hist', { g: column('g'), n: count() });
+
+		await engine.activate(group, {
+			sourceId: 'toggle-cat',
+			categoricalKey: 'cat',
+			dims: [{ kind: 'value', field: 'cat' }]
+		});
+		// Only the histogram, which the selection filters, gets a table.
+		expect(creates()).toHaveLength(1);
+
+		const barsVersion = bars.dataVersion;
+		const legend = group.registerToggle('cat');
+		await settle([hist], () => legend.toggle(['a'], false));
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		// The bars are not re-queried: their data is the whole dataset, dimmed.
+		expect(bars.dataVersion).toBe(barsVersion);
+	});
+
 	it('an empty toggle reads the table with no filter: every category', async () => {
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle(['cat']);
-		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const legend = group.registerToggle('cat');
 		await settle([hist], () => legend.toggle(['a'], false));
 		await settle([hist], () => legend.clear());
 
@@ -251,7 +277,7 @@ describe('preagg for value dims', () => {
 	it('case 3: a field with no dim filters its values with the toggle predicate', async () => {
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle(['kind']);
-		const toggle = group.registerToggle('kind', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('kind');
 		await settle([hist], () => toggle.set([['p'], ['r']]));
 
 		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
@@ -263,7 +289,7 @@ describe('preagg for value dims', () => {
 	it('a multi-field toggle with a NULL member matches the base query', async () => {
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle(['cat', 'kind']);
-		const toggle = group.registerToggle(['cat', 'kind'], { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle(['cat', 'kind'], {});
 		await settle([hist], () =>
 			toggle.set([
 				['a', null],
@@ -283,7 +309,7 @@ describe('preagg for value dims', () => {
 	it('a value with no id falls back to the base table rather than filter wrongly', async () => {
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle(['cat']);
-		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('cat');
 		await settle([hist], () => toggle.set([['zzz']]));
 
 		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
@@ -300,7 +326,7 @@ describe('preagg for value dims', () => {
 
 		// Another registration folds u into the dim; 'c' gets an id now.
 		await engine.ensureColumns('u', { categorical: ['cat'] });
-		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('cat');
 		await settle([hist], () => toggle.toggle(['c'], false));
 
 		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
@@ -312,7 +338,7 @@ describe('preagg for value dims', () => {
 		await engine.ensureColumns('t', { categorical: [{ key: field, sql: field }] });
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle([field]);
-		const toggle = group.registerToggle(field, { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle(field);
 		await settle([hist], () => toggle.toggle(['A'], false));
 
 		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
@@ -329,7 +355,7 @@ describe('preagg for value dims', () => {
 		// own id column.
 		const bars = await mark('shifted', { x: sql`${column(id)} + 1`, n: count() }, { table: view });
 		await activateToggle(['cat']);
-		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('cat');
 		await settle([bars], () => toggle.toggle(['a'], false));
 
 		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
@@ -341,7 +367,7 @@ describe('preagg for value dims', () => {
 	it('a field named like a channel does not collide in the preagg table', async () => {
 		const bars = await mark('bars-x', { x: column('g'), n: count() });
 		await activateToggle(['x']);
-		const toggle = group.registerToggle('x', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('x');
 		await settle([bars], () => toggle.set([[5], [600]]));
 
 		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
@@ -388,7 +414,7 @@ describe('the size guard', () => {
 		// 50 bins per unit over a 1000-wide extent, times 4 groups.
 		await engine.activate(group, {
 			sourceId: 'interval-x-A',
-			excludedByAll: new Set(),
+			categoricalKey: null,
 			dims: [
 				{
 					kind: 'bin',
@@ -427,7 +453,7 @@ describe('the size guard', () => {
 		// under 100,000 / 4. Measured, such a table still clicks ~3.7× faster.
 		await engine.activate(group, {
 			sourceId: 'interval-x-B',
-			excludedByAll: new Set(),
+			categoricalKey: null,
 			dims: [
 				{
 					kind: 'bin',
@@ -488,7 +514,7 @@ describe('the size guard', () => {
 
 		await engine.activate(group, {
 			sourceId: 'interval-x-B',
-			excludedByAll: new Set(),
+			categoricalKey: null,
 			dims: [
 				{
 					kind: 'bin',
@@ -591,7 +617,7 @@ describe('the build queue', () => {
 				activateToggle(['kind']),
 				engine.activate(group, {
 					sourceId: 'interval-x-A',
-					excludedByAll: new Set(),
+					categoricalKey: null,
 					// Coarse bins, so the size guard lets the build through on 1,000 rows.
 					dims: [
 						{
@@ -625,7 +651,7 @@ describe('the build queue', () => {
 		const release = holdBuilds();
 		const building = engine.activate(group, {
 			sourceId: 'interval-x-A',
-			excludedByAll: new Set(),
+			categoricalKey: null,
 			dims: [
 				{
 					kind: 'bin',
@@ -656,7 +682,7 @@ describe('the build queue', () => {
 		await vi.waitFor(() => expect(createIndexes()).toHaveLength(1));
 
 		// A clause the queued build bakes in changes before it starts.
-		group.registerToggle('kind', { excludeMarkIds: () => new Set() }).set([['p']]);
+		group.registerToggle('kind').set([['p']]);
 		release();
 		await building;
 
@@ -671,8 +697,7 @@ describe('the cap on unused preagg tables', { timeout: 20_000 }, () => {
 		conn.queries.filter((q) => q.startsWith('DROP TABLE IF EXISTS "__dplot_preagg_')).map(tableOf);
 
 	/** A new baked filter, set without waiting for the mark's query. */
-	const filterTo = (hi: number) =>
-		group.upsertManual('f', isBetween(column('x'), [0, hi]), hi, new Set());
+	const filterTo = (hi: number) => group.upsertManual('f', isBetween(column('x'), [0, hi]), hi);
 
 	/** Rebuild the cat toggle's table under the `i`th filter: one new table per call. */
 	async function rebuildUnder(i: number, handle: MarkHandle): Promise<void> {
@@ -723,7 +748,7 @@ describe('the cap on unused preagg tables', { timeout: 20_000 }, () => {
 				.filter((t) => t === first)
 		).toHaveLength(2);
 
-		const toggle = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const toggle = group.registerToggle('cat');
 		await settle([byG], () => toggle.toggle(['a'], false));
 		expect(nonDDL().at(-1)).toContain(first);
 		expect(rowsOf(byG)).toEqual(
@@ -736,7 +761,7 @@ describe('a failed preagg read', () => {
 	it('falls back to the base table, and reads a preagg table again once rebuilt', async () => {
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle(['cat']);
-		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const legend = group.registerToggle('cat');
 		await settle([hist], () => legend.set([['a']]));
 		const table = nonDDL()
 			.at(-1)!
@@ -774,7 +799,7 @@ describe('a failed preagg read', () => {
 	it('reports the error when the base query fails too', async () => {
 		const hist = await mark('hist', { g: column('g'), n: count() });
 		await activateToggle(['cat']);
-		const legend = group.registerToggle('cat', { excludeMarkIds: () => new Set() });
+		const legend = group.registerToggle('cat');
 		await settle([hist], () => legend.set([['a']]));
 		const table = nonDDL()
 			.at(-1)!

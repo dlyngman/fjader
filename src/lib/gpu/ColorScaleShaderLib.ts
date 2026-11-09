@@ -208,7 +208,7 @@ fn getContinuousColor(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4
  * checks come before the cast, because u32() of a negative or NaN float is
  * indeterminate in WGSL and would read an arbitrary activity.
  */
-fn colorActivity(scaleIndex: u32, value: f32) -> f32 {
+fn colorActivity(scaleIndex: u32, value: f32, group: u32) -> f32 {
     if (value < 0.0 || ${isNanExpr('value')}) {
         return 1.0;
     }
@@ -216,14 +216,14 @@ fn colorActivity(scaleIndex: u32, value: f32) -> f32 {
     if (config.scaleType != COLOR_SCALE_ORDINAL || config.slotBase == NO_SLOT_TABLE) {
         return 1.0;
     }
-    return identityActivity(config.slotBase, u32(value));
+    return identityActivity(config.slotBase, group, u32(value));
 }
 
-/** A mark's colour activity: 1.0 unless it colours through a scale. */
-fn markColorActivity(colorMode: u32, colorScaleIndex: u32, colorValue: f32) -> f32 {
+/** A mark's colour activity in its filter group: 1.0 unless it colours through a scale. */
+fn markColorActivity(colorMode: u32, colorScaleIndex: u32, colorValue: f32, group: u32) -> f32 {
     if (colorMode != 1u) {
         return 1.0;
     }
-    return colorActivity(colorScaleIndex, colorValue);
+    return colorActivity(colorScaleIndex, colorValue, group);
 }
 `;

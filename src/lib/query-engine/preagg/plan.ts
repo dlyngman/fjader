@@ -41,7 +41,12 @@ import {
 } from '$lib/components/marks/lifecycle/query-builder';
 import type { MarkHandle, QueryParams } from '../MarkHandle.svelte';
 import type { CategoricalIdentity, DimValue } from '../categorical-identity';
-import type { Clause, CrossfilterSelection, FilterExpr } from '../CrossfilterSelection.svelte';
+import type {
+	Clause,
+	CrossfilterSelection,
+	FilterExpr,
+	MarkRoute
+} from '../CrossfilterSelection.svelte';
 import type { QueryDescriptor } from '../QueryEngine';
 
 /** What planning needs from the categorical identity. */
@@ -69,8 +74,12 @@ export type ActiveDim =
 /** What activate() needs to know about a source, as FilterGroup sees it at hover time. */
 export interface ActivationSource {
 	sourceId: string;
-	/** Marks every registration of the source excludes: it filters none of them. */
-	excludedByAll: Set<string>;
+	/**
+	 * The source's categorical field (identity key), or null for a brush or a
+	 * tuple. With the registrations, decides which marks the source would
+	 * filter: a mark that reads this field dims by it and needs no table.
+	 */
+	categoricalKey: string | null;
 	dims: ActiveDim[];
 	/**
 	 * For a source with bin dims: writes its current view, `[d0, d1, pixel
@@ -367,19 +376,19 @@ export function estimateGroups(markKeys: GroupKey[], activeKeys: GroupKey[]): nu
  * Once that fails, frames that still see the same clauses skip the rebuild.
  */
 export function bakedClausesHold(
-	markId: string,
+	route: MarkRoute,
 	selection: CrossfilterSelection,
 	state: PreaggState
 ): boolean {
 	const { basis } = state;
 	const { activeSourceId } = basis;
-	if (selection.bakedClausesMatch(markId, activeSourceId, basis.bakedClauses)) return true;
-	if (state.mismatch && selection.bakedClausesMatch(markId, activeSourceId, state.mismatch)) {
+	if (selection.bakedClausesMatch(route, activeSourceId, basis.bakedClauses)) return true;
+	if (state.mismatch && selection.bakedClausesMatch(route, activeSourceId, state.mismatch)) {
 		return false;
 	}
 
-	const current = selection.bakedClauses(markId, activeSourceId);
-	const sql = preaggSelectSQL(state.creation, selection.bakedPredicates(markId, activeSourceId));
+	const current = selection.bakedClauses(route, activeSourceId);
+	const sql = preaggSelectSQL(state.creation, selection.bakedPredicates(route, activeSourceId));
 	if (sql === state.sql) {
 		basis.bakedClauses = current;
 		state.mismatch = null;
@@ -396,7 +405,7 @@ export function bakedClausesHold(
  * then delegates to assembleQuery().
  */
 export function preaggQuerySQL(
-	markId: string,
+	route: MarkRoute,
 	descriptor: QueryDescriptor,
 	selection: CrossfilterSelection,
 	preagg: PreaggState,
@@ -408,11 +417,12 @@ export function preaggQuerySQL(
 	const { parts, transformCompiler } = descriptor;
 
 	// --- The active source's clause as a filter on the active columns. None
-	// when it has no clause (an empty toggle: every category) or excludes
-	// this mark.
+	// when it has no clause (an empty toggle: every category) or does not
+	// filter this mark.
 	const filters: ExprNode[] = [];
-	const clause = selection.get(preagg.basis.activeSourceId);
-	if (clause && !clause.excludeMarkIds.has(markId)) {
+	const activeSourceId = preagg.basis.activeSourceId;
+	const clause = selection.get(activeSourceId);
+	if (clause && selection.applies(activeSourceId, clause, route)) {
 		// A drag frame runs this per mark: nothing below allocates for a brush
 		// beyond its filter, so the value arrays are created only when needed.
 		let binCount = 0;

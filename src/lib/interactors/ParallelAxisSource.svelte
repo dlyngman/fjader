@@ -37,7 +37,8 @@
 		filterGroup: FilterGroup;
 		column: string;
 		chartId: string;
-		excludeMarkIds: () => Set<string>;
+		/** The chart the brush skips, or null for a chart that filters its own lines. */
+		chart: object | null;
 		/** The axis's scale state now: removing another column renumbers the axes. */
 		scaleState: () => LinearScaleState | null;
 		/** The axes' pixel extent (the chart's inner height). */
@@ -47,13 +48,12 @@
 	}
 
 	// Keyed by column in the parent, so none of these change for an instance.
-	const { filterGroup, column, chartId, excludeMarkIds, scaleState, pixelExtent, axes }: Props =
-		$props();
+	const { filterGroup, column, chartId, chart, scaleState, pixelExtent, axes }: Props = $props();
 
 	const columnRef = sqlColumn(column);
 
 	const handle = filterGroup.register(`parallel-brush-${column}-${chartId}`, {
-		excludeMarkIds,
+		chart,
 		activeDims: () => {
 			const state = scaleState();
 			if (!state) return [];

@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
-	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-	import type { ActiveValueScale } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import type { ChartContext } from '$lib/types';
 
 	interface Props {
 		scaleState: ColorScaleState;
@@ -31,7 +30,6 @@
 
 	const filterGroups = getContext<FilterGroupRegistry | undefined>('filter-groups');
 	const filterGroup = filterGroups?.get(selection);
-	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Reactive: re-renders when domain or scheme changes
 	const items = $derived(
@@ -44,21 +42,32 @@
 	// --- Toggle interaction ---
 	const isInteractive = $derived(filterGroup != null && field != null);
 
-	// Scales to dim: this color scale + any band scale for the same field.
-	// Projection itself is handled by FilterGroup, shared with Toggle/brushes.
-	function getLegendScaleStates(): ActiveValueScale[] {
-		const band = scaleRegistry?.getScaleByField(field!, 'band');
-		return [scaleState, band].filter(Boolean) as unknown as ActiveValueScale[];
+	/**
+	 * The field's identity key: what its selection is kept under. The scale's
+	 * own once it has identity; the field before, as the toggle keys it. For a
+	 * plain column the two are the same. For a computed field (an expression)
+	 * they differ, so while a reload empties the identity the legend reads the
+	 * selection under the field's name and its highlight is briefly lost.
+	 */
+	const key = $derived(scaleState.identityKey ?? field ?? scaleState.field);
+	const groups = $derived(filterGroup ? [filterGroup.index] : []);
+
+	/**
+	 * How visible an entry is now: its group's selection fade on the field, on
+	 * the same clock and with the same floor as the marks.
+	 */
+	function opacityOf(value: string | number): number {
+		return filterGroups ? filterGroups.opacityOfValue(key, groups, value) : 1;
 	}
 
 	// The selection is shared with any Toggle on the same field through its clause.
-	// A legend is not a chart, so it excludes no marks: every chart filters.
+	// A legend inside a chart skips that chart, as a Toggle there does: its marks
+	// keyed by the field dim, the rest keep their data. A standalone legend is in
+	// no chart, so every chart in its group is routed by its marks alone.
+	const chartContext = getContext<ChartContext | undefined>('chart');
 	const toggle =
 		filterGroup && field
-			? filterGroup.registerToggle(field, {
-					excludeMarkIds: () => new Set<string>(),
-					scales: getLegendScaleStates
-				})
+			? filterGroup.registerToggle(field, { chart: chartContext?.config ?? null })
 			: null;
 	onDestroy(() => toggle?.destroy());
 
@@ -86,7 +95,7 @@
 			{#if isInteractive}
 				<button
 					class="legend-item legend-item-interactive"
-					style:opacity={scaleState.categoryOpacity(value)}
+					style:opacity={opacityOf(value)}
 					onclick={(e) => handleClick(value, e)}
 				>
 					<span
@@ -99,7 +108,7 @@
 					<span class="legend-label">{value}</span>
 				</button>
 			{:else}
-				<span class="legend-item" style:opacity={scaleState.categoryOpacity(value)}>
+				<span class="legend-item" style:opacity={opacityOf(value)}>
 					<span
 						class="legend-swatch"
 						style:background={color}

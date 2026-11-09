@@ -3,6 +3,8 @@ import { AnimationLoop } from '$lib/animation';
 import { scaleTemplateSystem, CHART_SCALE_IMMEDIATE_SIZE } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+import type { FieldActivity } from '$lib/query-engine/FieldActivity.svelte';
 import { isCategoricalScale } from '$lib/scales/scale-categories';
 import { MAX_SIZE_SLOTS } from './SizeScaleShaderLib';
 import { RESOLVE_IMMEDIATE_SIZE, RESOLVE_WORKGROUP, resolvePipelineFor } from './ResolveShader';
@@ -13,7 +15,6 @@ import {
 	packIdentitySlots,
 	type IdentitySlotScale,
 	type SlotSource,
-	type ActivitySource,
 	type IdentitySlotState
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
@@ -170,6 +171,9 @@ interface GPUCoordinatorConfig {
 interface SlotBaseConsumer {
 	setSlotBase(base: number): void;
 }
+
+/** No fields to pack, for a coordinator without filter groups. */
+const NO_FIELDS: readonly FieldActivity[] = [];
 
 /** What the coordinator needs from a facet scale: which id sits at a cell. */
 export interface FacetScaleRef {
@@ -341,6 +345,7 @@ export class GPUCoordinator {
 	#animatedSources = new Set<AnimatedSource>(); // Set for O(1) membership check
 	#animatedSourcesArray: AnimatedSource[] = []; // Array for O(1) iteration (no allocation)
 	#scaleRegistry: ScaleRegistry | null = null;
+	#filterGroups: FilterGroupRegistry | null = null;
 
 	// =========================================================================
 	// HOVER STATE (Keep loop warm while any chart is hovered)
@@ -861,7 +866,7 @@ export class GPUCoordinator {
 			const scale = this.#scales[i] as unknown as {
 				id: string;
 				slots?: SlotSource;
-				activity?: ActivitySource;
+				identityKey?: string | null;
 			};
 			// Any scale that offers slots wants them packed. It used to gate on
 			// band|point, which was the same set at the time; ordinal colour offers
@@ -869,11 +874,15 @@ export class GPUCoordinator {
 			// here as each migrates.
 			const slots = scale.slots;
 			if (!slots) continue;
-			const entry = (pool[scales.length] ??= { id: '', slots, activity: null });
+			const entry = (pool[scales.length] ??= { id: '', slots, field: null });
 			entry.id = scale.id;
 			entry.slots = slots;
-			// The selection fade beside the slots, for the block's activity half.
-			entry.activity = scale.activity ?? null;
+			// The field whose activity block this scale's header points at. Every
+			// field a scale draws has one, so a selection moves nothing; the
+			// registry creates its FieldActivity once (a Map lookup after that).
+			const field = scale.identityKey ?? null;
+			entry.field = field;
+			if (field) this.#filterGroups?.field(field);
 			scales.push(entry);
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.
@@ -884,7 +893,19 @@ export class GPUCoordinator {
 			);
 		}
 
-		const { uploadStart, uploadEnd } = packIdentitySlots(scales, state);
+		// Every field follows its live identity here, where nothing is reactive:
+		// a reload snaps its fades, a grown dim extends them. Two comparisons a
+		// field when nothing moved.
+		const registry = this.#filterGroups;
+		const fields = registry?.fields ?? NO_FIELDS;
+		for (let i = 0; i < fields.length; i++) fields[i].reconcile();
+
+		const { uploadStart, uploadEnd } = packIdentitySlots(
+			scales,
+			state,
+			fields,
+			registry?.groupCount ?? 0
+		);
 
 		// Hand back the base to any scale that reads it from its own config rather
 		// than from p4. A band scale's base is refilled into p4 every frame; an
@@ -1633,6 +1654,19 @@ export class GPUCoordinator {
 
 	setScaleRegistry(scaleRegistry: ScaleRegistry): void {
 		this.#scaleRegistry = scaleRegistry;
+	}
+
+	/**
+	 * The page's filter groups, whose field activity the packer writes into the
+	 * identity slot table. Their fades run on this loop and redraw the charts
+	 * drawing any scale on their field. Set before any selection, so no fade is
+	 * created without the loop.
+	 */
+	setFilterGroups(filterGroups: FilterGroupRegistry): void {
+		this.#filterGroups = filterGroups;
+		filterGroups.setAnimation(this, (key, out) =>
+			this.#scaleRegistry ? this.#scaleRegistry.chartsDrawingField(key, out) : out
+		);
 	}
 
 	registerScale(scaleId: string, scaleType: string = 'linear'): void {

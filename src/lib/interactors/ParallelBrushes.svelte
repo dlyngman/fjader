@@ -19,9 +19,9 @@
 	interface Props {
 		/** Filter group name — selects which FilterGroup these brushes write to. */
 		selection?: string;
-		/** When true, the parallel chart excludes itself from its own brush filters
-		 *  (standard crossfilter behavior). When false (default), brushes self-filter
-		 *  the chart — typical for parallel coordinates. */
+		/** When true, the brushes skip their own chart (standard crossfilter
+		 *  behavior). When false (default), they filter it — typical for parallel
+		 *  coordinates. */
 		cross?: boolean;
 	}
 
@@ -105,11 +105,10 @@
 		return Math.min(30, (chart.innerWidth / (ps.columns.length - 1)) * 0.35);
 	});
 
-	// Cross-filter: when cross=true, exclude chart's own marks (standard crossfilter).
-	// When cross=false (default for parallel coords), empty set — all marks self-filter.
-	const excludeMarkIds = cross
-		? () => new Set(chart.config.entries.keys())
-		: () => new Set<string>();
+	// Cross-filter: with cross=true the brushes skip their own chart (standard
+	// crossfilter). With cross=false, the default for parallel coordinates, the
+	// chart filters its own lines.
+	const skips = cross ? chart.config : null;
 
 	/** An axis's scale state, looked up by column: removing a column renumbers the axes. */
 	function scaleStateOf(col: string): LinearScaleState | null {
@@ -344,7 +343,7 @@
 			{filterGroup}
 			column={col}
 			chartId={chart.chartId}
-			{excludeMarkIds}
+			chart={skips}
 			scaleState={() => scaleStateOf(col)}
 			pixelExtent={() => chart.innerHeight}
 			{axes}

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { trackScalesById } from './tracked-scales';
-import { createIdentitySlotState, packIdentitySlots } from './identity-slot-packing';
+import {
+	IDENTITY_SLOT_HEADER,
+	createIdentitySlotState,
+	packIdentitySlots
+} from './identity-slot-packing';
 import { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -70,6 +74,10 @@ describe('trackScalesById', () => {
 		// id -> rank: a (id 0) has rank 1, b (id 1) rank 2, c (id 2) rank 0.
 		const base = state.offsets.get(colour.id)!;
 		const count = state.bufferTo[base];
-		expect(Array.from(state.bufferTo.slice(base + 1, base + 1 + count))).toEqual([1, 2, 0]);
+		expect(
+			Array.from(
+				state.bufferTo.slice(base + IDENTITY_SLOT_HEADER, base + IDENTITY_SLOT_HEADER + count)
+			)
+		).toEqual([1, 2, 0]);
 	});
 });

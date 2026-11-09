@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { outlineColor } from './utils/area-outline';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Areas, Lines } from '../rendering';
@@ -156,6 +157,9 @@
 		scaleRegistry,
 		chartContext
 	);
+
+	/** The outline's colour, and the fill's activity it dims by (see area-outline.ts). */
+	const outline = $derived(outlineColor(entry.stroke, markColor));
 
 	// Detect if x2 is an aggregate expression
 	const hasAggregateX = $derived.by(() => {
@@ -366,6 +370,7 @@
 			colorValueData={markColor.data}
 			colorMode={markColor.colorMode}
 			colorScaleIndex={markColor.colorScaleIndex}
+			groupIndex={setup?.groupIndex ?? 0}
 			constantColor={markColor.constantColor}
 			fillOpacity={entry.fillOpacity ?? 0.5}
 			dotRadius={effectiveDotRadius}
@@ -381,9 +386,12 @@
 				{yData}
 				{seriesData}
 				curve={effectiveCurve}
-				colorValueData={entry.stroke ? null : markColor.data}
-				colorMode={entry.stroke ? 0 : markColor.colorMode}
-				colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
+				colorValueData={outline.colorValueData}
+				colorMode={outline.colorMode}
+				colorScaleIndex={outline.colorScaleIndex}
+				activityColorMode={outline.activityColorMode}
+				activityColorScaleIndex={outline.activityColorScaleIndex}
+				groupIndex={setup?.groupIndex ?? 0}
 				constantColor={strokeConstantColor}
 				strokeWidth={entry.strokeWidth ?? 0}
 				zIndex={1}
@@ -396,9 +404,12 @@
 					{yData}
 					{seriesData}
 					curve={effectiveCurve}
-					colorValueData={entry.stroke ? null : markColor.data}
-					colorMode={entry.stroke ? 0 : markColor.colorMode}
-					colorScaleIndex={entry.stroke ? 0 : markColor.colorScaleIndex}
+					colorValueData={outline.colorValueData}
+					colorMode={outline.colorMode}
+					colorScaleIndex={outline.colorScaleIndex}
+					activityColorMode={outline.activityColorMode}
+					activityColorScaleIndex={outline.activityColorScaleIndex}
+					groupIndex={setup?.groupIndex ?? 0}
 					constantColor={strokeConstantColor}
 					strokeWidth={entry.strokeWidth ?? 0}
 					zIndex={1}

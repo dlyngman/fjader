@@ -1,11 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
 	import type { ChartContext } from '$lib/types';
-	import type {
-		ActiveValueScale,
-		FilterGroup,
-		ToggleHandle
-	} from '$lib/query-engine/FilterGroup.svelte';
+	import type { FilterGroup, ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
 
 	/**
 	 * A Toggle's registration for one band axis field, so label clicks toggle
@@ -22,17 +18,17 @@
 	interface Props {
 		filterGroup: FilterGroup;
 		field: string;
-		excludeMarkIds: () => Set<string>;
-		scales: () => ActiveValueScale[];
+		/** The chart its toggle skips (see Toggle). */
+		chart: object;
 		/** Where the parent's click handler finds this field's toggle. */
 		handles: Map<string, ToggleHandle>;
 	}
 
 	// Keyed by field in the parent, so none of these change for an instance.
-	const { filterGroup, field, excludeMarkIds, scales, handles }: Props = $props();
+	const { filterGroup, field, chart: skips, handles }: Props = $props();
 
 	const chart = getContext<ChartContext>('chart');
-	const toggle = filterGroup.registerToggle(field, { excludeMarkIds, scales });
+	const toggle = filterGroup.registerToggle(field, { chart: skips });
 
 	handles.set(field, toggle);
 	chart.activators.add(toggle.activate);

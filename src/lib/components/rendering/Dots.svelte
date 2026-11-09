@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import { activityReads, markActivityWGSL } from './activity-reads';
 
 	const dotRendererDefinition = {
 		x: { concept: 'position', channels: ['x'] },
@@ -29,7 +31,8 @@
 		COLOR_SCALE_INDEX: 4,
 		SIZE_MODE: 8,
 		SIZE_SCALE_INDEX: 12,
-		CONSTANT_COLOR: 16
+		CONSTANT_COLOR: 16,
+		GROUP_INDEX: 32
 	};
 
 	interface Props {
@@ -43,6 +46,8 @@
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		sizeMode?: number;
 		sizeScaleIndex?: number;
@@ -72,6 +77,7 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		sizeMode = 0,
 		sizeScaleIndex = 0,
@@ -112,6 +118,9 @@
         return degen;
       }`;
 
+	/** The selection activities this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('dots');
+
 	const dotsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
@@ -120,6 +129,10 @@
       sizeMode: u32,            // 0 = raw value, 1 = scale
       sizeScaleIndex: u32,      // Index into sizeConfigs
       constantColor: vec4<f32>, // Used when colorMode = 0
+      groupIndex: u32,          // Page-wide filter group index, for activity reads
+      _pad0: u32,
+      _pad1: u32,
+      _pad2: u32,
     };
     @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
 
@@ -176,11 +189,12 @@
       output.uv = quadPosition;
       output.radius = displayRadius;
       output.alpha = alpha * selectionDim(
-        markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue),
-          bandActivityX(x),
-          bandActivityY(y)
-        )
+        ${markActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					x: 'x',
+					y: 'y',
+					group: 'markConstants.groupIndex'
+				})}
       );
       return output;
     }
@@ -289,12 +303,13 @@
 			// which re-triggers the guard and avoids stale-buffer flashes.
 			if (colorMode === 1 && !colorValueData) return;
 
-			const buffer = new ArrayBuffer(32);
+			const buffer = new ArrayBuffer(UNIFORM_BYTES.dotsMarkConstants);
 			const view = new DataView(buffer);
 			const LE = true;
 
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
 			view.setUint32(UNIFORM_OFFSETS.SIZE_MODE, sizeMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.SIZE_SCALE_INDEX, sizeScaleIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);

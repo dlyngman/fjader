@@ -1,3 +1,4 @@
+import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost } from '$lib/gpu/MorphedChannels';
@@ -476,7 +477,9 @@ export class BaseGPURenderer {
 	get #sharedDummyBuffer(): GPUBuffer {
 		if (!this.#dummyBuffer) {
 			this.#dummyBuffer = this.#device!.createBuffer({
-				size: 48, // Must fit the largest uniform struct (e.g. Rects MarkConstants = 48 bytes)
+				// Bound to any binding not written yet, uniforms included: as large as
+				// the largest uniform struct, or a draw before the first write fails.
+				size: UNIFORM_STAND_IN_BYTES,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 				label: `${this.#markType}-dummy`
 			});

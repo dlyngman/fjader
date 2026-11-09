@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { activityReads, colorActivityWGSL } from './activity-reads';
+	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
@@ -25,7 +27,7 @@
 		FACET: 6
 	};
 
-	// Uniform struct offsets (matching WGSL MarkConstants layout, 48 bytes)
+	// Uniform struct offsets (matching WGSL MarkConstants; size in uniform-sizes.ts)
 	const UNIFORM_OFFSETS = {
 		POINT_COUNT: 0, // u32
 		COLOR_MODE: 4, // u32
@@ -35,7 +37,8 @@
 		FILL_OPACITY: 32, // f32
 		DOT_RADIUS: 36, // f32
 		SHOW_BOTTOM_DOTS: 40, // u32 (0 or 1)
-		FULL_DOMAIN_SPAN: 44 // f32
+		FULL_DOMAIN_SPAN: 44, // f32
+		GROUP_INDEX: 48 // u32
 	};
 
 	interface Props {
@@ -55,6 +58,8 @@
 		orientation?: 'vertical' | 'horizontal';
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		markId?: string;
 	}
@@ -76,6 +81,7 @@
 		orientation = 'vertical',
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_FILL_COLOR,
 		markId = ''
 	}: Props = $props();
@@ -86,6 +92,9 @@
 	const faceted = !!chartContext.fx;
 	const baseMarkType = curve === 'linear' ? 'areas' : `areas-${curve}`;
 	const effectiveMarkType = faceted ? `${baseMarkType}-faceted` : baseMarkType;
+
+	/** The selection activity this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('areas');
 
 	// --- Facet compile-time specialization ---
 	// Areas uses a storage buffer (not a vertex attribute) for facet indices because
@@ -141,7 +150,11 @@
     fillOpacity: f32,
     dotRadius: f32,
     showBottomDots: u32,
-    fullDomainSpan: f32
+    fullDomainSpan: f32,
+    groupIndex: u32, // Page-wide filter group index, for activity reads
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32
   };
   @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
 
@@ -242,7 +255,10 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
       output.alpha = selectionDim(
-        markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx])
+        ${colorActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx]',
+					group: 'markConstants.groupIndex'
+				})}
       );
       output.circleUV = quadCorner;
       output.circleRadius = circleR;
@@ -344,7 +360,10 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
     output.alpha = markConstants.fillOpacity * selectionDim(
-      markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx])
+      ${colorActivityWGSL(ACTIVITY_READS, {
+				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx]',
+				group: 'markConstants.groupIndex'
+			})}
     );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
@@ -444,13 +463,14 @@
 			// re-fires once data loads.
 			if (colorMode === 1 && !colorValueData) return;
 
-			const buffer = new ArrayBuffer(48);
+			const buffer = new ArrayBuffer(UNIFORM_BYTES.areasMarkConstants);
 			const view = new DataView(buffer);
 			const LE = true;
 
 			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, dimData ? dimData.length : 0, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
 			view.setUint32(UNIFORM_OFFSETS.ORIENTATION, orientation === 'horizontal' ? 1 : 0, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);

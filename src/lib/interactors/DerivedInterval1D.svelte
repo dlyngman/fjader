@@ -153,18 +153,12 @@
 
 		if (!ref) return;
 
-		targetGroup.upsertManual(
-			sourceKey,
-			isBetween(ref, [dataMin, dataMax]),
-			[dataMin, dataMax],
-			new Set<string>(), // No excludeMarkIds — target group only has comparison marks
-			{
-				kind: 'range',
-				column: fieldStr,
-				label: fieldStr,
-				values: [dataMin, dataMax]
-			}
-		);
+		targetGroup.upsertManual(sourceKey, isBetween(ref, [dataMin, dataMax]), [dataMin, dataMax], {
+			kind: 'range',
+			column: fieldStr,
+			label: fieldStr,
+			values: [dataMin, dataMax]
+		});
 	}
 
 	// =========================================================================

@@ -63,6 +63,14 @@ import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
+import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
+import {
+	activityReads,
+	NO_READS,
+	readsFor,
+	rendererForMark
+} from '$lib/components/rendering/activity-reads';
+
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 
@@ -113,6 +121,12 @@ export interface MarkLifecycleV2Config {
 	sizeChannel?: string;
 	_orderConfig?: { seriesChannel: string | null; dimensionChannel: string };
 	zeroBaseline?: { x?: boolean; y?: boolean };
+	/**
+	 * A rule's: whether it spans an extent on its cross axis (RuleX with
+	 * y1/y2, RuleY with x1/x2, constants included). Decides whether it reads
+	 * that axis's selection activity.
+	 */
+	ruleExtent?: boolean;
 	passiveScales?: boolean;
 	parallelMode?: boolean;
 	parallelColumns?: string[];
@@ -594,8 +608,14 @@ export class MarkLifecycleV2 {
 			if (!parts || !this.setupComplete) return;
 			const schema = this.#schema;
 			if (!schema) return;
+			// Read after setup, once the scales have adopted identity. A change of
+			// reads re-registers the mark: a selection that dimmed it may now
+			// filter it. The key is a string, so reads rebuilt with the same
+			// contents do not.
+			void this.#readsKey;
 
 			untrack(() => {
+				this.#route = { reads: this.#reads, chart: this.#chartContext.config };
 				// registerMark handles cleanup of previous registration for this
 				// markId and reuses the existing handle (preserves arrowTable
 				// during re-query so the chart doesn't flash empty on rebin).
@@ -606,7 +626,8 @@ export class MarkLifecycleV2 {
 						baseTable: this.#config.table,
 						parts,
 						schema,
-						transformCompiler: this.#transformCompiler
+						transformCompiler: this.#transformCompiler,
+						route: this.#route
 					},
 					this.#filterGroup
 				);
@@ -1476,7 +1497,7 @@ export class MarkLifecycleV2 {
 	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
 		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
 
-		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const q = assembleQuery({
 			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
@@ -1518,6 +1539,45 @@ export class MarkLifecycleV2 {
 
 	get channelFieldMap(): Record<string, string> {
 		return buildChannelFieldMap(this.#config.select);
+	}
+
+	// --- Selection routing ---
+
+	/**
+	 * The identity keys of the categorical fields this mark's renderer reads
+	 * selection activity for, sorted: its ordinal colour and its band axes, as
+	 * activity-reads.ts says the renderer reads them. A categorical selection on
+	 * one of these dims the mark; on any other field it filters it.
+	 */
+	#reads: readonly string[] = $derived.by(() => {
+		const renderer = rendererForMark(this.#config.markType);
+		if (!renderer) return NO_READS;
+		const color = this.#colorScaleState;
+		const bandKey = (axis: 'x' | 'y'): string | null => {
+			const type = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			if (type !== 'band' && type !== 'point') return null;
+			const band = this.#chartContext[`${axis}ScaleState`] as BandScaleState | null;
+			return band?.identityKey ?? null;
+		};
+		return readsFor(activityReads(renderer, this.#config.ruleExtent ?? false), {
+			color: color?.isOrdinal ? color.identityKey : null,
+			x: bandKey('x'),
+			y: bandKey('y')
+		});
+	});
+
+	/** `#reads` as one string, so the registration effect re-runs only on a real change. */
+	#readsKey: string = $derived(this.#reads.join('\u001f'));
+
+	/** Built at registration; the engine and every predicate call hold this object. */
+	#route: MarkRoute = { reads: NO_READS, chart: null };
+
+	/**
+	 * The page-wide index of this mark's filter group. Its renderer stores it in
+	 * MarkConstants to read its group's run of each field's activity block.
+	 */
+	get groupIndex(): number {
+		return this.#filterGroup.index;
 	}
 
 	get dataVersion(): number {
@@ -1798,7 +1858,7 @@ export class MarkLifecycleV2 {
 	 */
 	#buildTooltipQuery(): string | null {
 		if (!this.#resolvedQueryParts) return null;
-		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 
 		const q = assembleQuery({
 			table: this.#sourceTable,
@@ -1860,7 +1920,7 @@ export class MarkLifecycleV2 {
 			this.#transformCompiler.hasSQLTransforms()
 		);
 
-		const filter = this.#filterGroup.selection.predicate(this.#markId) ?? [];
+		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const sidecarQuery = assembleQuery({
 			table: this.#sourceTable,
 			parts: sidecarParts,

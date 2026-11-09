@@ -483,6 +483,24 @@ export class ScaleRegistry {
 		return this.#chartsFor.get(scale) ?? NO_CHARTS;
 	}
 
+	/**
+	 * Fill `out` with every chart drawing a scale on the categorical field
+	 * `key` (by identity key), each once: the charts a selection fade on that
+	 * field redraws. A superset of the charts whose marks read the field's
+	 * activity, since every such mark draws through a scale on it; the extra
+	 * charts (other groups, marks holding the scale without reading it) redraw
+	 * for the 0.25 s of a fade. Read on every frame a fade runs.
+	 */
+	chartsDrawingField(key: string, out: string[]): string[] {
+		for (const [scale, charts] of this.#chartsFor) {
+			if ((scale as { identityKey?: string | null }).identityKey !== key) continue;
+			for (let i = 0; i < charts.length; i++) {
+				if (!out.includes(charts[i])) out.push(charts[i]);
+			}
+		}
+		return out;
+	}
+
 	/** Re-derive one scale's redraw list. The only writer. */
 	#publishCharts(scale: AnyScaleState, chartIds: Set<string>): void {
 		this.#chartsFor.set(scale, Array.from(chartIds));

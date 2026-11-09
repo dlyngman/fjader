@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
 	import type { ChartContext } from '$lib/types';
-	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ActiveValueScale, ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
+	import type { ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import BandLabelToggle from './BandLabelToggle.svelte';
@@ -16,9 +15,10 @@
 	 * - Band axis label: toggles the axis's own source field, whatever the
 	 *   declared field is. Labels are a ready-made category picker.
 	 *
-	 * Toggles on different fields AND together. The source chart is excluded
-	 * from its own toggles (crossfilter semantics) and dims instead via scale
-	 * active-value projection; other charts in the filter group filter.
+	 * Toggles on different fields AND together. The chart skips its own toggles
+	 * (crossfilter): its marks that read the toggled field dim, the rest keep
+	 * their data. Elsewhere in the group, marks that read the field dim and the
+	 * rest filter.
 	 */
 
 	interface Props {
@@ -32,33 +32,18 @@
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);
 	const chart = getContext<ChartContext>('chart');
-	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
 	// Normalize field to array for multi-column support
 	const fields = Array.isArray(field) ? field : [field];
 	const declaredField = fields.length === 1 ? fields[0] : null;
 
-	/** Marks in this chart — excluded so the source dims rather than filters. */
-	const excludeMarkIds = () => new Set(chart.config.entries.keys());
+	/**
+	 * This chart skips its own toggles (crossfilter): its marks keyed by the
+	 * toggled field dim, the rest keep their data.
+	 */
+	const skips = chart.config;
 
-	/** Scales keyed by the toggled field: its color scale and any band scale
-	 *  whose source column is that field. Never a band scale for another field. */
-	function scalesFor(toggleField: string): ActiveValueScale[] {
-		const out: ActiveValueScale[] = [];
-		const color = scaleRegistry?.getScaleByField(toggleField, 'color');
-		if (color) out.push(color as unknown as ActiveValueScale);
-		for (const axis of ['x', 'y'] as const) {
-			if (chart.scaleTypes?.[axis] !== 'band') continue;
-			const band = chart[`${axis}ScaleState`] as BandScaleState | null | undefined;
-			if (band && band.sourceField === toggleField) out.push(band as unknown as ActiveValueScale);
-		}
-		return out;
-	}
-
-	const declared = filterGroup.registerToggle(fields, {
-		excludeMarkIds,
-		scales: () => (declaredField ? scalesFor(declaredField) : [])
-	});
+	const declared = filterGroup.registerToggle(fields, { chart: skips });
 	chart.activators.add(declared.activate);
 
 	/** One BandLabelToggle per band axis field (see bandFieldsOf). */
@@ -139,11 +124,5 @@
 </script>
 
 {#each bandFields as bandField (bandField)}
-	<BandLabelToggle
-		{filterGroup}
-		field={bandField}
-		{excludeMarkIds}
-		scales={() => scalesFor(bandField)}
-		handles={bandToggles}
-	/>
+	<BandLabelToggle {filterGroup} field={bandField} chart={skips} handles={bandToggles} />
 {/each}

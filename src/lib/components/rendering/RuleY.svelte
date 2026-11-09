@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import { activityReads, markActivityWGSL } from './activity-reads';
 
 	// Named Bindings — stable indices regardless of hasExtent
 	const BINDINGS = {
@@ -23,7 +25,7 @@
 		COLOR_MODE: 0,
 		COLOR_SCALE_INDEX: 4,
 		STROKE_WIDTH: 8,
-		_PAD0: 12,
+		GROUP_INDEX: 12,
 		CONSTANT_COLOR: 16,
 		_PAD1: 32,
 		_PAD2: 36,
@@ -42,6 +44,8 @@
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		strokeWidth?: number;
 		markId?: string;
@@ -58,6 +62,7 @@
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_FILL_COLOR,
 		strokeWidth = 1,
 		markId = ''
@@ -112,12 +117,15 @@
 	const initializationError = $derived(host.error);
 	let lineGeometryBuffer: GPUBuffer;
 
+	/** The selection activities this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('ruley', hasExtent);
+
 	const ruleYShaderCode = `
     struct MarkConstants {
       colorMode: u32,
       colorScaleIndex: u32,
       strokeWidth: f32,
-      _pad0: u32,
+      groupIndex: u32,
       constantColor: vec4<f32>,
       _pad1: f32,
       _pad2: f32,
@@ -173,11 +181,12 @@
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
       output.alpha = alpha * selectionDim(
-        markActivity(
-          markColorActivity(markConstants.colorMode, markConstants.colorScaleIndex, colorValue),
-          bandActivityY(y),
-          ${hasExtent ? 'bandActivityX(x0)' : '1.0'}
-        )
+        ${markActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					x: 'x0',
+					y: 'y',
+					group: 'markConstants.groupIndex'
+				})}
       );
       return output;
     }
@@ -271,14 +280,14 @@
 		if (renderer?.resourcesCreated) {
 			if (colorMode === 1 && !colorValueData) return;
 
-			const buffer = new ArrayBuffer(48);
+			const buffer = new ArrayBuffer(UNIFORM_BYTES.ruleYMarkConstants);
 			const view = new DataView(buffer);
 			const LE = true;
 
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
 			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
-			// padding at 12
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

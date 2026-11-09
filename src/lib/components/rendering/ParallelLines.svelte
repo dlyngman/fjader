@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { activityReads, colorActivityWGSL } from './activity-reads';
+	import { PARALLEL_MAX_AXES, UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
@@ -7,10 +9,10 @@
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, CurveType, WebGPUCanvasContext } from '$lib/types';
 
-	const MAX_AXES = 16;
-	const UNIFORM_SIZE = 176; // bytes, must match WGSL struct layout
+	const MAX_AXES = PARALLEL_MAX_AXES;
+	const UNIFORM_SIZE = UNIFORM_BYTES.parallelConfig;
 	// One ScaleParam (16 bytes) per axis, filled by the coordinator.
-	const AXIS_SCALES_SIZE = MAX_AXES * 16;
+	const AXIS_SCALES_SIZE = UNIFORM_BYTES.parallelAxisScales;
 
 	// Both x and y so ScaleTemplateSystem generates scaleX(), scaleLinearY(), pixelsToClip()
 	const rendererDefinition = {
@@ -32,6 +34,8 @@
 		colorValueData?: Float32Array | null;
 		colorMode?: number;
 		colorScaleIndex?: number;
+		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
+		groupIndex?: number;
 		constantColor?: [number, number, number, number];
 		axisOrder: number[];
 		/** Each axis's scale id, in data (not visual) order. */
@@ -51,6 +55,7 @@
 		colorValueData = null,
 		colorMode = 0,
 		colorScaleIndex = 0,
+		groupIndex = 0,
 		constantColor = DEFAULT_STROKE_COLOR,
 		axisOrder,
 		axisScaleIds,
@@ -87,6 +92,9 @@
 	// (N-1) segments × resolution sub-quads × 6 verts + N circles × 6 verts
 	const vertexCount = $derived((axisCount - 1) * 6 * resolution + axisCount * 6);
 
+	/** The selection activity this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('parallel');
+
 	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
 	// With linear (resolution=1): single quad per segment, identical to original.
 	// With bump-x (resolution=128): smooth S-curves between axes, adaptive.
@@ -101,7 +109,7 @@
     opacity: f32,
     colorMode: u32,
     colorScaleIndex: u32,
-    _pad0: u32,
+    groupIndex: u32,
     _pad1: u32,
     constantColor: vec4<f32>,
     axisOrder: array<vec4<u32>, 4>,
@@ -192,7 +200,10 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[rowIdx];
       output.alpha = config.opacity * selectionDim(
-        markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx])
+        ${colorActivityWGSL(ACTIVITY_READS, {
+					color: 'config.colorMode, config.colorScaleIndex, colorValues[rowIdx]',
+					group: 'config.groupIndex'
+				})}
       );
       output.circleUV = quadPosition;
       output.circleRadius = halfWidth;
@@ -273,7 +284,10 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[rowIdx];
     output.alpha = config.opacity * selectionDim(
-      markColorActivity(config.colorMode, config.colorScaleIndex, colorValues[rowIdx])
+      ${colorActivityWGSL(ACTIVITY_READS, {
+				color: 'config.colorMode, config.colorScaleIndex, colorValues[rowIdx]',
+				group: 'config.groupIndex'
+			})}
     );
     output.circleUV = vec2<f32>(-2.0, -2.0);
     output.circleRadius = 0.0;
@@ -365,7 +379,8 @@
 		f32[3] = opacity;
 		u32[4] = colorMode;
 		u32[5] = colorScaleIndex;
-		// u32[6], u32[7] = padding
+		u32[6] = groupIndex;
+		// u32[7] = padding
 		f32[8] = constantColor[0];
 		f32[9] = constantColor[1];
 		f32[10] = constantColor[2];

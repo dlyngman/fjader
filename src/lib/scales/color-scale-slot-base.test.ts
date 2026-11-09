@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ColorScaleState } from './ColorScaleState.svelte';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 /**
  * Where an ordinal colour scale's slot-table base is written, and when it is
@@ -35,6 +36,10 @@ describe('ColorScaleState slot base', () => {
 			registry,
 			coordinator
 		);
+		// With identity, so its channel carries ids and its config reads the slot
+		// table; without it the patch is NO_SLOT_TABLE (see
+		// color-scale-identity-upload.test.ts).
+		scale.setIdentity(new FieldIdentity(['a', 'b'], 'f'));
 		return { scale, writes };
 	}
 

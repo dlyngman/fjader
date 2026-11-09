@@ -1,109 +1,128 @@
 import { describe, it, expect } from 'vitest';
-import { CrossfilterSelection } from './CrossfilterSelection.svelte';
-import type { Clause } from './CrossfilterSelection.svelte';
+import { CrossfilterSelection, NO_ROUTE } from './CrossfilterSelection.svelte';
+import type { Clause, MarkRoute } from './CrossfilterSelection.svelte';
 
-function makeClause(
-	predicate: string,
-	excludeMarkIds: string[] = [],
-	value: unknown = null
-): Clause {
+function makeClause(predicate: string, value: unknown = null, key: string | null = null): Clause {
 	return {
 		predicate,
-		excludeMarkIds: new Set(excludeMarkIds),
-		value
+		value,
+		categorical: key ? { key, values: new Set(value as unknown[]) } : null
 	};
+}
+
+/** Charts are compared by reference, as ChartConfig objects are. */
+const CHART_A = { name: 'A' };
+const CHART_B = { name: 'B' };
+const CHART_C = { name: 'C' };
+
+const inChart = (chart: object | null, reads: string[] = []): MarkRoute => ({ reads, chart });
+
+/** A selection whose sources skip the given charts. */
+function selection(sources: Record<string, object | null> = {}): CrossfilterSelection {
+	const sel = new CrossfilterSelection();
+	for (const [sourceId, chart] of Object.entries(sources)) sel.addRegistration(sourceId, { chart });
+	return sel;
 }
 
 describe('CrossfilterSelection', () => {
 	describe('predicate()', () => {
 		it('returns empty array when no clauses', () => {
-			const sel = new CrossfilterSelection();
-			expect(sel.predicate('mark-1')).toEqual([]);
+			expect(selection().predicate(NO_ROUTE)).toEqual([]);
 		});
 
-		it('returns all predicates when mark is not excluded', () => {
-			const sel = new CrossfilterSelection();
-			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20', ['mark-a']));
-			sel.update('brush-y', makeClause('y > 5', ['mark-b']));
+		it('gives a mark every clause whose source does not skip its chart', () => {
+			const sel = selection({ 'brush-x': CHART_A, 'brush-y': CHART_B });
+			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20'));
+			sel.update('brush-y', makeClause('y > 5'));
 
-			const result = sel.predicate('mark-c');
-			expect(result).toEqual(['x BETWEEN 10 AND 20', 'y > 5']);
+			expect(sel.predicate(inChart(CHART_C))).toEqual(['x BETWEEN 10 AND 20', 'y > 5']);
+			expect(sel.predicate(inChart(CHART_A))).toEqual(['y > 5']);
+			expect(sel.predicate(inChart(CHART_B))).toEqual(['x BETWEEN 10 AND 20']);
+			expect(sel.predicate(NO_ROUTE)).toEqual(['x BETWEEN 10 AND 20', 'y > 5']);
 		});
 
-		it('excludes clauses where mark is in excludeMarkIds', () => {
-			const sel = new CrossfilterSelection();
-			sel.update('brush-x', makeClause('x BETWEEN 10 AND 20', ['mark-a', 'mark-b']));
-			sel.update('brush-y', makeClause('y > 5', ['mark-c']));
+		it('skips a chart while any registration of the source skips it', () => {
+			const sel = selection({ toggle: CHART_A });
+			const legend = { chart: null };
+			sel.addRegistration('toggle', legend);
+			sel.update('toggle', makeClause("cat IN ('a')"));
+			expect(sel.predicate(inChart(CHART_A))).toEqual([]);
 
-			// mark-a is excluded from brush-x, but not brush-y
-			expect(sel.predicate('mark-a')).toEqual(['y > 5']);
-			// mark-c is excluded from brush-y, but not brush-x
-			expect(sel.predicate('mark-c')).toEqual(['x BETWEEN 10 AND 20']);
-			// mark-d is excluded from nothing
-			expect(sel.predicate('mark-d')).toEqual(['x BETWEEN 10 AND 20', 'y > 5']);
+			// The legend leaving changes nothing; the Toggle leaving does.
+			sel.removeRegistration('toggle', legend);
+			expect(sel.predicate(inChart(CHART_A))).toEqual([]);
+			const [toggle] = sel.registrationsOf('toggle')!;
+			sel.removeRegistration('toggle', toggle);
+			expect(sel.predicate(inChart(CHART_A))).toEqual(["cat IN ('a')"]);
 		});
 
-		it('handles chart-level cross-filtering (all marks in source chart excluded)', () => {
-			const sel = new CrossfilterSelection();
-			const chartAMarks = ['dots-a1', 'bars-a2', 'line-a3'];
+		it('leaves out a categorical clause on a field the mark reads: it dims instead', () => {
+			const sel = selection({ legend: null });
+			sel.update('legend', makeClause("carrier IN ('UA')", ['UA'], 'carrier'));
+			expect(sel.predicate(inChart(CHART_A, ['carrier']))).toEqual([]);
+			expect(sel.predicate(inChart(CHART_A, ['origin']))).toEqual(["carrier IN ('UA')"]);
+		});
 
-			sel.update('interval-x-chartA', makeClause('x BETWEEN 0 AND 100', chartAMarks));
+		it('filters a mark by a brush even on a field it reads: an interval cannot dim', () => {
+			const sel = selection({ brush: null });
+			sel.update('brush', makeClause('hour BETWEEN 3 AND 9'));
+			expect(sel.predicate(inChart(CHART_A, ['hour']))).toEqual(['hour BETWEEN 3 AND 9']);
+		});
+	});
 
-			// All marks in chart A are excluded
-			expect(sel.predicate('dots-a1')).toEqual([]);
-			expect(sel.predicate('bars-a2')).toEqual([]);
-			expect(sel.predicate('line-a3')).toEqual([]);
-
-			// Marks in chart B receive the filter
-			expect(sel.predicate('dots-b1')).toEqual(['x BETWEEN 0 AND 100']);
+	describe('filters()', () => {
+		it('answers before any clause exists, from the source key and registrations', () => {
+			const sel = selection({ legend: CHART_A });
+			expect(sel.filters(inChart(CHART_B), 'legend', 'carrier')).toBe(true);
+			expect(sel.filters(inChart(CHART_B, ['carrier']), 'legend', 'carrier')).toBe(false);
+			expect(sel.filters(inChart(CHART_A), 'legend', 'carrier')).toBe(false);
 		});
 	});
 
 	describe('update()', () => {
 		it('adds a clause', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection();
 			sel.update('src-1', makeClause('x > 0'));
 			expect(sel.activeCount).toBe(1);
 			expect(sel.isActive('src-1')).toBe(true);
 		});
 
-		it('removes a clause when passed null', () => {
-			const sel = new CrossfilterSelection();
-			sel.update('src-1', makeClause('x > 0'));
-			sel.update('src-1', null);
+		it('removes a clause when passed null, and returns it', () => {
+			const sel = selection();
+			const clause = makeClause('x > 0');
+			sel.update('src-1', clause);
+			expect(sel.update('src-1', null)).toBe(clause);
 			expect(sel.activeCount).toBe(0);
 			expect(sel.isActive('src-1')).toBe(false);
 		});
 
 		it('replaces a clause for the same source', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection();
 			sel.update('src-1', makeClause('x > 0'));
 			sel.update('src-1', makeClause('x > 10'));
 			expect(sel.activeCount).toBe(1);
-			expect(sel.predicate('other')).toEqual(['x > 10']);
+			expect(sel.predicate(NO_ROUTE)).toEqual(['x > 10']);
 		});
 	});
 
 	describe('get()', () => {
 		it('returns clause by sourceId', () => {
-			const sel = new CrossfilterSelection();
-			const clause = makeClause('x > 0', ['m1'], 42);
+			const sel = selection();
+			const clause = makeClause('x > 0', 42);
 			sel.update('src-1', clause);
-
-			expect(sel.get('src-1')).toEqual(clause);
+			expect(sel.get('src-1')).toBe(clause);
 		});
 
 		it('returns undefined for unknown sourceId', () => {
-			const sel = new CrossfilterSelection();
-			expect(sel.get('nonexistent')).toBeUndefined();
+			expect(selection().get('nonexistent')).toBeUndefined();
 		});
 	});
 
 	describe('items', () => {
 		it('returns all active clauses with sourceId', () => {
-			const sel = new CrossfilterSelection();
-			sel.update('src-1', makeClause('x > 0', ['m1'], [0, 100]));
-			sel.update('src-2', makeClause('y < 50', ['m2'], [0, 50]));
+			const sel = selection();
+			sel.update('src-1', makeClause('x > 0', [0, 100]));
+			sel.update('src-2', makeClause('y < 50', [0, 50]));
 
 			const items = sel.items;
 			expect(items).toHaveLength(2);
@@ -113,7 +132,7 @@ describe('CrossfilterSelection', () => {
 		});
 
 		it('reflects removals', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection();
 			sel.update('src-1', makeClause('x > 0'));
 			sel.update('src-2', makeClause('y > 0'));
 			sel.update('src-1', null);
@@ -125,156 +144,151 @@ describe('CrossfilterSelection', () => {
 
 	describe('clear()', () => {
 		it('removes all clauses', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection();
 			sel.update('src-1', makeClause('x > 0'));
 			sel.update('src-2', makeClause('y > 0'));
 			sel.clear();
 
 			expect(sel.activeCount).toBe(0);
 			expect(sel.items).toHaveLength(0);
-			expect(sel.predicate('any')).toEqual([]);
+			expect(sel.predicate(NO_ROUTE)).toEqual([]);
 		});
 	});
 
 	describe('bakedClauses()', () => {
 		it('returns the clause objects in insertion order, minus the active brush', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection({ brush: CHART_A });
 			const toggle = makeClause("cat IN ('a')");
 			const legend = makeClause("kind IN ('x')");
 			sel.update('toggle', toggle);
-			sel.update('brush', makeClause('x BETWEEN 0 AND 10', ['src-mark']));
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10'));
 			sel.update('legend', legend);
 
-			const baked = sel.bakedClauses('mark-b', 'brush');
+			const baked = sel.bakedClauses(inChart(CHART_B), 'brush');
 			expect(baked).toHaveLength(2);
 			expect(baked[0]).toBe(toggle);
 			expect(baked[1]).toBe(legend);
 		});
 
-		it('skips clauses the mark is excluded from and clauses without a predicate', () => {
-			const sel = new CrossfilterSelection();
-			sel.update('own-toggle', makeClause("cat IN ('a')", ['mark-b']));
+		it('skips clauses that do not filter the mark, and clauses without a predicate', () => {
+			const sel = selection({ 'own-toggle': CHART_B });
+			sel.update('own-toggle', makeClause("cat IN ('a')"));
 			sel.update('empty', makeClause(''));
+			sel.update('dimmed', makeClause("kind IN ('x')", ['x'], 'kind'));
 
-			expect(sel.bakedClauses('mark-b', 'brush')).toEqual([]);
+			expect(sel.bakedClauses(inChart(CHART_B, ['kind']), 'brush')).toEqual([]);
 		});
 	});
 
 	describe('bakedPredicates()', () => {
 		it('sorts by source ID, whatever the insertion order', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection();
 			sel.update('toggle', makeClause("cat IN ('a')"));
 			sel.update('legend', makeClause("kind IN ('x')"));
 			sel.update('brush', makeClause('x BETWEEN 0 AND 10'));
 
-			expect(sel.bakedPredicates('mark-b', 'brush')).toEqual(["kind IN ('x')", "cat IN ('a')"]);
+			expect(sel.bakedPredicates(NO_ROUTE, 'brush')).toEqual(["kind IN ('x')", "cat IN ('a')"]);
 		});
 
 		it('gives the same result after a clause is removed and re-added', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection();
 			sel.update('legend', makeClause("kind IN ('x')"));
 			sel.update('toggle', makeClause("cat IN ('a')"));
-			const before = sel.bakedPredicates('mark-b', 'brush');
+			const before = sel.bakedPredicates(NO_ROUTE, 'brush');
 
 			sel.update('legend', null);
 			sel.update('legend', makeClause("kind IN ('x')"));
 
-			expect(sel.bakedPredicates('mark-b', 'brush')).toEqual(before);
+			expect(sel.bakedPredicates(NO_ROUTE, 'brush')).toEqual(before);
 		});
 	});
 
 	describe('bakedClausesMatch()', () => {
+		const route = inChart(CHART_B);
+
 		function setup() {
-			const sel = new CrossfilterSelection();
+			const sel = selection({ brush: CHART_A, 'own-toggle': CHART_B });
 			sel.update('toggle', makeClause("cat IN ('a')"));
-			sel.update('brush', makeClause('x BETWEEN 0 AND 10', ['src-mark']));
-			return { sel, baked: sel.bakedClauses('mark-b', 'brush') };
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10'));
+			return { sel, baked: sel.bakedClauses(route, 'brush') };
 		}
 
 		it('matches when nothing changed', () => {
 			const { sel, baked } = setup();
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(true);
 		});
 
 		it('matches with no clauses at all', () => {
-			const sel = new CrossfilterSelection();
-			expect(sel.bakedClausesMatch('mark-b', 'brush', [])).toBe(true);
+			expect(selection().bakedClausesMatch(route, 'brush', [])).toBe(true);
 		});
 
 		it('ignores changes to the active brush', () => {
 			const { sel, baked } = setup();
-			sel.update('brush', makeClause('x BETWEEN 3 AND 7', ['src-mark']));
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+			sel.update('brush', makeClause('x BETWEEN 3 AND 7'));
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(true);
 		});
 
 		it('matches when the brush writes its first clause after the build', () => {
-			const sel = new CrossfilterSelection();
+			const sel = selection({ brush: CHART_A });
 			sel.update('toggle', makeClause("cat IN ('a')"));
-			const baked = sel.bakedClauses('mark-b', 'brush');
+			const baked = sel.bakedClauses(route, 'brush');
 
-			sel.update('brush', makeClause('x BETWEEN 0 AND 10', ['src-mark']));
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+			sel.update('brush', makeClause('x BETWEEN 0 AND 10'));
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(true);
 		});
 
 		it('fails when a baked clause is replaced, even with the same SQL', () => {
 			const { sel, baked } = setup();
 			sel.update('toggle', makeClause("cat IN ('a')"));
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(false);
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(false);
 		});
 
 		it('fails when a baked clause is removed', () => {
 			const { sel, baked } = setup();
 			sel.update('toggle', null);
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(false);
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(false);
 		});
 
 		it('fails when a new clause starts filtering the mark', () => {
 			const { sel, baked } = setup();
 			sel.update('legend', makeClause("kind IN ('x')"));
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(false);
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(false);
 		});
 
-		it('ignores clauses the mark is excluded from', () => {
+		it('ignores clauses that do not filter the mark', () => {
 			const { sel, baked } = setup();
-			sel.update('own-toggle', makeClause("cat IN ('b')", ['mark-b']));
-			expect(sel.bakedClausesMatch('mark-b', 'brush', baked)).toBe(true);
+			sel.update('own-toggle', makeClause("cat IN ('b')"));
+			expect(sel.bakedClausesMatch(route, 'brush', baked)).toBe(true);
 		});
 	});
 
 	describe('multi-chart crossfilter scenario', () => {
 		it('handles overlapping brushes from different charts', () => {
-			const sel = new CrossfilterSelection();
-			const chartAMarks = ['dots-a', 'bars-a'];
-			const chartBMarks = ['dots-b'];
-
-			// Brush on chart A's x-axis
-			sel.update('brush-x-A', makeClause('x BETWEEN 10 AND 20', chartAMarks));
-			// Brush on chart B's y-axis
-			sel.update('brush-y-B', makeClause('y BETWEEN 0 AND 50', chartBMarks));
+			const sel = selection({ 'brush-x-A': CHART_A, 'brush-y-B': CHART_B });
+			sel.update('brush-x-A', makeClause('x BETWEEN 10 AND 20'));
+			sel.update('brush-y-B', makeClause('y BETWEEN 0 AND 50'));
 
 			// Chart A marks: get chart B's brush, not their own
-			expect(sel.predicate('dots-a')).toEqual(['y BETWEEN 0 AND 50']);
-			expect(sel.predicate('bars-a')).toEqual(['y BETWEEN 0 AND 50']);
-
+			expect(sel.predicate(inChart(CHART_A))).toEqual(['y BETWEEN 0 AND 50']);
 			// Chart B marks: get chart A's brush, not their own
-			expect(sel.predicate('dots-b')).toEqual(['x BETWEEN 10 AND 20']);
-
+			expect(sel.predicate(inChart(CHART_B))).toEqual(['x BETWEEN 10 AND 20']);
 			// Chart C marks: get both brushes
-			expect(sel.predicate('dots-c')).toEqual(['x BETWEEN 10 AND 20', 'y BETWEEN 0 AND 50']);
+			expect(sel.predicate(inChart(CHART_C))).toEqual([
+				'x BETWEEN 10 AND 20',
+				'y BETWEEN 0 AND 50'
+			]);
 		});
 
 		it('handles brush clear from one chart', () => {
-			const sel = new CrossfilterSelection();
-			sel.update('brush-x-A', makeClause('x BETWEEN 10 AND 20', ['dots-a']));
-			sel.update('brush-y-B', makeClause('y BETWEEN 0 AND 50', ['dots-b']));
+			const sel = selection({ 'brush-x-A': CHART_A, 'brush-y-B': CHART_B });
+			sel.update('brush-x-A', makeClause('x BETWEEN 10 AND 20'));
+			sel.update('brush-y-B', makeClause('y BETWEEN 0 AND 50'));
 
-			// Clear chart A's brush
 			sel.update('brush-x-A', null);
 
-			// Only chart B's brush remains
-			expect(sel.predicate('dots-a')).toEqual(['y BETWEEN 0 AND 50']);
-			expect(sel.predicate('dots-b')).toEqual([]);
-			expect(sel.predicate('dots-c')).toEqual(['y BETWEEN 0 AND 50']);
+			expect(sel.predicate(inChart(CHART_A))).toEqual(['y BETWEEN 0 AND 50']);
+			expect(sel.predicate(inChart(CHART_B))).toEqual([]);
+			expect(sel.predicate(inChart(CHART_C))).toEqual(['y BETWEEN 0 AND 50']);
 		});
 	});
 });

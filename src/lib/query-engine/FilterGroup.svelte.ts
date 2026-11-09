@@ -2,8 +2,8 @@
  * FilterGroup — visual concerns layer on top of CrossfilterSelection.
  *
  * Manages the interactor API (register, registerToggle), schema augmentation
- * for UI filter pills, and scale projection (dimming unselected categories in
- * legends/axes).
+ * for UI filter pills, and this group's selection on each categorical field
+ * (FieldActivity), which marks, legends and band axes dim by.
  *
  * Owns clauses: a clause lives while at least one registration for its id
  * exists. Components own their registrations through their own lifecycle.
@@ -14,22 +14,21 @@
 
 import { column, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
 import { CrossfilterSelection } from './CrossfilterSelection.svelte';
-import type { Clause, FilterExpr, FilterSchema } from './CrossfilterSelection.svelte';
+import type {
+	CategoricalSelection,
+	Clause,
+	FilterExpr,
+	FilterSchema,
+	SourceRegistration
+} from './CrossfilterSelection.svelte';
 import type { ActiveDim, QueryEngine } from './QueryEngine';
 import { togglePredicate } from './toggle-predicate';
+import { identityKeyFor } from './identity-key';
+import { FieldActivity } from './FieldActivity.svelte';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-/**
- * Narrow protocol for scale states that support active-value projection.
- * Implemented by ColorScaleState and BandScaleState.
- */
-export interface ActiveValueScale {
-	setActiveValues(values: Set<unknown>): void;
-	clearActiveValues(): void;
-}
 
 export interface FilterItem {
 	sourceId: string;
@@ -39,10 +38,20 @@ export interface FilterItem {
 }
 
 /** One registration of a selection source: a brush, a legend, a Toggle. */
-export interface SourceOpts {
-	/** Getter for mark IDs this registration's writes exclude (chart-level cross-filtering).
-	 *  A getter rather than a static Set so it stays current if marks are added/removed. */
-	excludeMarkIds: () => Set<string>;
+export interface SourceOpts extends SourceRegistration {
+	/**
+	 * The chart this registration skips: its ChartConfig, or nothing. A chart
+	 * holding a control for a selection is not filtered by it (crossfilter), so
+	 * its marks that do not read the field keep their data; those that do, dim.
+	 * Opt-in: a control that wants its own chart filtered passes none.
+	 */
+	chart?: object | null;
+	/**
+	 * For a source that selects categories of one field: that field's identity
+	 * key, and how to read the selected values from a write. Every clause the
+	 * source writes carries both (`Clause.categorical`).
+	 */
+	categorical?: { key: string; values: (value: unknown) => ReadonlySet<unknown> };
 	/** How the source selects, read at hover time for preagg activation. */
 	activeDims?: () => ActiveDim[];
 	/**
@@ -56,15 +65,10 @@ export interface SourceOpts {
 	 * once per write and stored on the clause.
 	 */
 	augment?: (value: unknown) => FilterSchema | null;
-	/** The scales to dim, and the values to dim them by, taken from the clause value. */
-	projection?: {
-		scales: () => ActiveValueScale[];
-		values: (value: unknown) => Set<unknown> | null;
-	};
 }
 
 export interface SourceHandle {
-	/** Write the clause, excluding this registration's marks. */
+	/** Write the source's clause. */
 	update(predicate: FilterExpr, value: unknown): void;
 	clear(): void;
 	/** Prepare preagg tables for this source, ahead of its first use. */
@@ -95,26 +99,41 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
 }
 
 /**
+ * A source's declaration of `key`: the writer's, or another registration's
+ * when the writer has none. Every registration under one id is one source, so
+ * any of them can say what its clause is.
+ */
+function declared<K extends 'augment' | 'categorical'>(
+	registrations: ReadonlySet<SourceOpts> | undefined,
+	writer: SourceOpts,
+	key: K
+): SourceOpts[K] {
+	if (writer[key]) return writer[key];
+	for (const opts of registrations ?? []) if (opts[key]) return opts[key];
+	return undefined;
+}
+
+/**
  * A clause's schema, computed once when it is written rather than on every
- * read of `items`: from the writer's `augment`, or another registration's when
- * the writer has none. Stored on the clause, so a reader of raw clauses (the
+ * read of `items`, and stored on the clause, so a reader of raw clauses (the
  * relay looking for a range brush) sees it too.
  */
 function schemaOf(
-	registrations: Set<SourceOpts>,
+	registrations: ReadonlySet<SourceOpts> | undefined,
 	writer: SourceOpts,
 	value: unknown
 ): FilterSchema | undefined {
-	let augment = writer.augment;
-	if (!augment) {
-		for (const opts of registrations) {
-			if (opts.augment) {
-				augment = opts.augment;
-				break;
-			}
-		}
-	}
-	return augment?.(value) ?? undefined;
+	return declared(registrations, writer, 'augment')?.(value) ?? undefined;
+}
+
+/** A clause's categorical selection: the field's identity key and the selected values. */
+function categoricalOf(
+	registrations: ReadonlySet<SourceOpts> | undefined,
+	writer: SourceOpts,
+	value: unknown
+): CategoricalSelection | null {
+	const categorical = declared(registrations, writer, 'categorical');
+	return categorical ? { key: categorical.key, values: categorical.values(value) } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,20 +166,44 @@ export class FilterGroup {
 	readonly selection = new CrossfilterSelection();
 	#engine: QueryEngine | null = null;
 
+	/**
+	 * This group's page-wide index, assigned by FilterGroupRegistry and never
+	 * reused: a mark stores it to read this group's half of an activity block.
+	 */
+	readonly index: number;
+
+	/** The selection state of a field, shared with the other groups on the page. */
+	#activityOf: (key: string) => FieldActivity;
+
+	/** Fields this group has an active categorical selection on, for clearAll. */
+	#selectedFields = new Set<string>();
+
+	/**
+	 * A group made outside a registry (unit tests) keeps its field activity to
+	 * itself, with no loop: its fades land at once.
+	 */
+	constructor(index: number = 0, activityOf?: (key: string) => FieldActivity) {
+		this.index = index;
+		if (activityOf) {
+			this.#activityOf = activityOf;
+		} else {
+			const own = new Map<string, FieldActivity>();
+			this.#activityOf = (key) => {
+				let activity = own.get(key);
+				if (!activity) own.set(key, (activity = new FieldActivity(key)));
+				return activity;
+			};
+		}
+	}
+
+	/** The selection state of a categorical field, by identity key: this group's fade is `index`. */
+	activity(key: string): FieldActivity {
+		return this.#activityOf(key);
+	}
+
 	setEngine(engine: QueryEngine): void {
 		this.#engine = engine;
 	}
-
-	/** Registrations per source id. Several under one id are one source. */
-	#sources = new Map<string, Set<SourceOpts>>();
-	// Track which scales we projected to, so we can clear them
-	#projectedScales = new Set<ActiveValueScale>();
-	/**
-	 * Sources some registration projects onto scales (toggles, legends). Only a
-	 * change to one of these can change what is dimmed, so a brush, which
-	 * writes on every pointer move, never rebuilds the projection.
-	 */
-	#projectingSources = new Set<string>();
 
 	/**
 	 * Active filter items with schema metadata, for UI consumption. The schema
@@ -186,73 +229,75 @@ export class FilterGroup {
 
 	/**
 	 * Register a selection source. Several registrations under one id are one
-	 * source: each writes the clause with its own exclusions, and the scales the
-	 * source dims are the union of theirs.
+	 * source and write one clause.
 	 */
 	register(sourceId: string, opts: SourceOpts): SourceHandle {
-		let registrations = this.#sources.get(sourceId);
-		if (!registrations) {
-			registrations = new Set();
-			this.#sources.set(sourceId, registrations);
+		const { selection } = this;
+		selection.addRegistration(sourceId, opts);
+		// A chart that starts skipping a selection already in force has marks
+		// whose filters just changed.
+		if (opts.chart && selection.isActive(sourceId)) {
+			this.#engine?.onChartRouteChange(this, opts.chart);
 		}
-		registrations.add(opts);
-		if (opts.projection) this.#projectingSources.add(sourceId);
+		const registrations = () => selection.registrationsOf(sourceId) as ReadonlySet<SourceOpts>;
+		let registered = true;
 
 		return {
 			update: (predicate: FilterExpr, value: unknown) => {
 				const next: Clause = {
 					predicate,
-					excludeMarkIds: opts.excludeMarkIds(),
 					value,
-					schema: schemaOf(registrations, opts, value)
+					schema: schemaOf(registrations(), opts, value),
+					categorical: categoricalOf(registrations(), opts, value)
 				};
-				this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
+				this.#afterUpdate(sourceId, selection.update(sourceId, next), next);
 			},
 			clear: () => this.clearSource(sourceId),
 			activate: () => this.#activate(sourceId),
 			destroy: () => {
 				// Once only: a second call must not remove a newer registration
 				// under the same id, or clear its clause.
-				if (!registrations.has(opts)) return;
-				if (registrations.size === 1) {
+				if (!registered) return;
+				registered = false;
+				if (registrations()?.size === 1) {
 					// The last one: drop the source's preagg tables first, so the
 					// re-query below cannot start reading one about to go. Then clear
-					// while the registration is still in place, so whatever reads the
-					// source's registrations to route the removal still finds them,
-					// and its scales are un-dimmed.
+					// while the registration is still in place, so the removal is
+					// routed by it: the marks re-queried are those the clause filtered.
 					this.#engine?.forgetSource(this, sourceId);
 					this.clearSource(sourceId);
+					selection.removeRegistration(sourceId, opts);
+					return;
 				}
-				registrations.delete(opts);
-				if (registrations.size > 0) return;
-				this.#sources.delete(sourceId);
-				this.#projectingSources.delete(sourceId);
+				selection.removeRegistration(sourceId, opts);
+				// Another registration keeps the clause; its chart may stop skipping it.
+				if (opts.chart && selection.isActive(sourceId)) {
+					this.#engine?.onChartRouteChange(this, opts.chart);
+				}
 			}
 		};
 	}
 
 	/**
-	 * Hand the engine a snapshot of the source. It activates every mark some
-	 * registration filters: a table for the source is correct for a mark whether
-	 * or not the clause currently excludes it, so only marks that every
-	 * registration excludes are left out.
+	 * Hand the engine a snapshot of the source: its dims, its view, and its
+	 * categorical field, so activation can tell which marks it would filter
+	 * before it has written a clause.
 	 */
 	#activate(sourceId: string): void {
-		const registrations = this.#sources.get(sourceId);
+		const registrations = this.selection.registrationsOf(sourceId) as
+			| ReadonlySet<SourceOpts>
+			| undefined;
 		if (!this.#engine || !registrations?.size) return;
 
-		let excludedByAll: Set<string> | null = null;
 		let dims: ActiveDim[] = [];
 		let view: SourceOpts['view'];
+		let categoricalKey: string | null = null;
 		for (const opts of registrations) {
-			const excluded = opts.excludeMarkIds();
-			excludedByAll = excludedByAll
-				? new Set([...excludedByAll].filter((id) => excluded.has(id)))
-				: excluded;
 			if (opts.activeDims && dims.length === 0) dims = opts.activeDims();
 			view ??= opts.view;
+			categoricalKey ??= opts.categorical?.key ?? null;
 		}
-		this.#engine.activate(this, { sourceId, excludedByAll: excludedByAll!, dims, view });
+		this.#engine.activate(this, { sourceId, categoricalKey, dims, view });
 	}
 
 	// -----------------------------------------------------------------
@@ -268,26 +313,23 @@ export class FilterGroup {
 	 * as the selection. Nothing else writes those ids (`upsertManual` prefixes
 	 * its own with `manual:`).
 	 */
-	registerToggle(
-		fields: string | string[],
-		opts: { excludeMarkIds: () => Set<string>; scales?: () => ActiveValueScale[] }
-	): ToggleHandle {
+	registerToggle(fields: string | string[], opts: { chart?: object | null } = {}): ToggleHandle {
 		const list = Array.isArray(fields) ? fields : [fields];
 		const sourceId = toggleSourceId(list);
 		const { selection } = this;
 		const schema: FilterSchema = { kind: 'toggle', column: list[0], label: list.join(', ') };
+		// One field selects categories; a tuple does not (see Clause.categorical).
+		const categoricalKey = list.length === 1 ? (identityKeyFor(list[0])?.key ?? null) : null;
 		const source = this.register(sourceId, {
-			excludeMarkIds: opts.excludeMarkIds,
+			chart: opts.chart ?? null,
+			categorical: categoricalKey
+				? {
+						key: categoricalKey,
+						values: (value) => new Set((value as unknown[][]).map((t) => t[0]))
+					}
+				: undefined,
 			activeDims: () => list.map((field) => ({ kind: 'value' as const, field })),
-			augment: () => schema,
-			// Projection only makes sense for single-field toggles.
-			projection:
-				list.length === 1 && opts.scales
-					? {
-							scales: opts.scales,
-							values: (value) => new Set((value as unknown[][]).map((t) => t[0]))
-						}
-					: undefined
+			augment: () => schema
 		});
 
 		const tuplesOf = (clause: Clause | undefined): unknown[][] =>
@@ -298,10 +340,14 @@ export class FilterGroup {
 		 * map's version, so a toggle with nothing selected is re-read on every one;
 		 * returning the same set while the clause is unchanged (and one shared
 		 * empty set without a clause) keeps that from re-rendering its readers.
+		 *
+		 * One field's values are the clause's own categorical set, built once per
+		 * write. A tuple's keys are built here, once per clause.
 		 */
 		let last: { clause: Clause; keys: Set<unknown> } | null = null;
 		const keysOf = (clause: Clause | undefined): ReadonlySet<unknown> => {
 			if (!clause) return NOTHING_SELECTED;
+			if (clause.categorical) return clause.categorical.values;
 			if (last?.clause !== clause) {
 				last = { clause, keys: new Set(tuplesOf(clause).map(tupleKey)) };
 			}
@@ -359,15 +405,8 @@ export class FilterGroup {
 	// Manual entries (for DerivedInterval1D relay, programmatic filters)
 	// -----------------------------------------------------------------
 
-	upsertManual(
-		key: string,
-		predicate: FilterExpr,
-		value: unknown,
-		excludeMarkIds: Set<string> | (() => Set<string>),
-		schema?: FilterSchema
-	): void {
-		const resolved = typeof excludeMarkIds === 'function' ? excludeMarkIds() : excludeMarkIds;
-		const next: Clause = { predicate, excludeMarkIds: resolved, value, schema };
+	upsertManual(key: string, predicate: FilterExpr, value: unknown, schema?: FilterSchema): void {
+		const next: Clause = { predicate, value, schema, categorical: null };
 		const sourceId = `manual:${key}`;
 		this.#afterUpdate(sourceId, this.selection.update(sourceId, next), next);
 	}
@@ -404,70 +443,49 @@ export class FilterGroup {
 
 	clearAll(): void {
 		this.selection.clear();
-		this.#clearAllScaleProjections();
+		for (const key of this.#selectedFields) this.#activityOf(key).set(this.index, null);
+		this.#selectedFields.clear();
 		this.#engine?.onFilterChange(this);
 	}
 
 	// -----------------------------------------------------------------
-	// Scale projection
+	// After a change
 	// -----------------------------------------------------------------
 
 	/**
-	 * After `sourceId`'s clause went from `prev` to `next`: re-project to scales
-	 * (visual dimming) if that source dims anything, and have the engine
-	 * re-query the marks either clause applies to. A brush move skips the
-	 * projection, which would rebuild the same answer and allocate doing it on
-	 * every pointer move.
+	 * After a clause went from `prev` to `next`: update this group's selection on
+	 * the field of either if it is categorical, and have the engine re-query the
+	 * marks either clause applies to. A brush, which writes on every pointer
+	 * move, touches no selection.
 	 */
 	#afterUpdate(sourceId: string, prev: Clause | undefined, next: Clause | null): void {
-		if (this.#projectingSources.has(sourceId)) this.#projectToScales();
-		if (prev || next) this.#engine?.onClauseChange(this, prev, next);
+		if (prev?.categorical) this.#syncActivity(prev.categorical.key);
+		if (next?.categorical && next.categorical.key !== prev?.categorical?.key) {
+			this.#syncActivity(next.categorical.key);
+		}
+		if (prev || next) this.#engine?.onClauseChange(this, sourceId, prev, next);
 	}
 
 	/**
-	 * Project active filter values onto scales (dim unselected categories).
+	 * Set this group's selection on field `key` from its clauses: the
+	 * intersection of the selected values of every categorical clause on that
+	 * field, because the filters AND, or nothing when there is none. Usually one
+	 * clause; a native toggle and a relayed one make two. Runs on categorical
+	 * clause changes only, never on a brush frame.
 	 */
-	#projectToScales(): void {
-		const activeByScale = new Map<ActiveValueScale, Set<unknown>>();
-
-		for (const [sourceId, registrations] of this.#sources) {
-			const clause = this.selection.get(sourceId);
-			if (!clause) continue;
-
-			for (const { projection } of registrations) {
-				if (!projection) continue;
-
-				const values = projection.values(clause.value);
-				if (!values?.size) continue;
-
-				for (const scale of projection.scales()) {
-					const existing = activeByScale.get(scale);
-					if (existing) {
-						for (const v of values) existing.add(v);
-					} else {
-						activeByScale.set(scale, new Set(values));
-					}
-				}
+	#syncActivity(key: string): void {
+		let active: Set<unknown> | null = null;
+		this.selection.forEach((clause) => {
+			const categorical = clause.categorical;
+			if (!categorical || categorical.key !== key) return;
+			if (!active) {
+				active = new Set(categorical.values);
+				return;
 			}
-		}
-
-		// Set active values on scales that have them
-		for (const [scale, values] of activeByScale) {
-			scale.setActiveValues(values);
-		}
-		// Clear scales that are no longer active
-		for (const scale of this.#projectedScales) {
-			if (!activeByScale.has(scale)) {
-				scale.clearActiveValues();
-			}
-		}
-		this.#projectedScales = new Set(activeByScale.keys());
-	}
-
-	#clearAllScaleProjections(): void {
-		for (const scale of this.#projectedScales) {
-			scale.clearActiveValues();
-		}
-		this.#projectedScales.clear();
+			for (const value of active) if (!categorical.values.has(value)) active.delete(value);
+		});
+		if (active) this.#selectedFields.add(key);
+		else this.#selectedFields.delete(key);
+		this.#activityOf(key).set(this.index, active);
 	}
 }
