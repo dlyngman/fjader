@@ -92,19 +92,6 @@ export class FieldActivity {
 		return this.#identity ? this.#identity.values.length : 0;
 	}
 
-	/**
-	 * Whether any group selects on this field, or is still fading back from a
-	 * selection: only then does it need an activity block. Read every frame by
-	 * the packer: a plain loop, no allocation.
-	 */
-	get active(): boolean {
-		for (let i = 0; i < this.#groups.length; i++) {
-			const group = this.#groups[i];
-			if (group.values !== null || group.table.isAnimating) return true;
-		}
-		return false;
-	}
-
 	/** Group `index`'s fade, or null when that group never selected on this field. */
 	fadeOf(index: number): ActivityTable | null {
 		return this.#groups[index]?.table ?? null;

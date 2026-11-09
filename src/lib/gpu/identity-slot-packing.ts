@@ -25,10 +25,13 @@
  *   field block: [group 0: act0 … act(n-1), group 1: act0 … act(n-1), …]
  *
  * Slots come first so that when the buffer runs out it is activity that is
- * lost (a mark draws undimmed), never an axis. A field has a block only while
- * a scale draws it and it is active (some group selects on it, or a fade is
- * still running), so a page with no selection spends nothing on activity and a
- * field no chart draws any more frees its space.
+ * lost (a mark draws undimmed), never an axis. A field has a block while a
+ * scale draws it, selected on or not, and a field no chart draws any more
+ * frees its space. Tying the block to the selection instead saved that space
+ * on pages with nothing selected, but every select and clear then moved the
+ * block and rewrote every scale block pointing at it, slots included:
+ * measured at about 105000 floats uploaded per click for 20 scales on a
+ * 5000-category field, against 5000 when the block stays.
  *
  * A scale block's header says how many ids its slots cover (`count`), where its
  * field's activity block starts (`actRef`) and how many ids that block covers
@@ -145,12 +148,6 @@ export interface ActivityField {
 	readonly count: number;
 	/** Group `index`'s fade, or null when that group never selected here (all 1). */
 	fadeOf(index: number): ActivitySource | null;
-	/**
-	 * Whether any group selects on the field or is still fading: a field that
-	 * is not has every id active, and needs no block. A fade back to full
-	 * opacity keeps the block until it lands.
-	 */
-	readonly active: boolean;
 }
 
 /**
@@ -328,7 +325,7 @@ export function packIdentitySlots(
 		const field = fields[f];
 		const key = field.key;
 		const count = field.count;
-		const live = fieldSeen.get(key) === pass && field.active;
+		const live = fieldSeen.get(key) === pass;
 		const need = live ? count * groups : 0;
 		const fits = need > 0 && fieldOffset + need <= capacity;
 		const base = fits ? fieldOffset : IDENTITY_SLOT_EMPTY;
@@ -340,7 +337,8 @@ export function packIdentitySlots(
 				warnedFields.add(key);
 				console.warn(
 					`[GPUCoordinator] Identity slot capacity (${capacity}) exhausted; ` +
-						`"${key}" (${count} ids × ${groups} groups) will not dim.`
+						`"${key}" (${count} ids × ${groups} groups) will not dim: a selection on it ` +
+						`leaves the marks that dim by it unchanged.`
 				);
 			}
 		} else if (fits && warnedFields.size > 0) {

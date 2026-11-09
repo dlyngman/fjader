@@ -877,9 +877,12 @@ export class GPUCoordinator {
 			const entry = (pool[scales.length] ??= { id: '', slots, field: null });
 			entry.id = scale.id;
 			entry.slots = slots;
-			// The field whose activity block this scale's header points at, while
-			// the field has one (see packIdentitySlots).
-			entry.field = scale.identityKey ?? null;
+			// The field whose activity block this scale's header points at. Every
+			// field a scale draws has one, so a selection moves nothing; the
+			// registry creates its FieldActivity once (a Map lookup after that).
+			const field = scale.identityKey ?? null;
+			entry.field = field;
+			if (field) this.#filterGroups?.field(field);
 			scales.push(entry);
 			// Index-aligned with `scales`, so the base can be handed back after
 			// packing without searching for the instance again.

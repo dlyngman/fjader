@@ -540,13 +540,11 @@ describe('resolving the packed blocks', () => {
 function field(
 	key: string,
 	count: number,
-	fades: Array<[number[], number[], number, number] | null>,
-	active = true
-): ActivityField & { active: boolean } {
+	fades: Array<[number[], number[], number, number] | null>
+): ActivityField {
 	return {
 		key,
 		count,
-		active,
 		fadeOf: (g) => {
 			const f = fades[g];
 			return f
@@ -712,7 +710,7 @@ describe('packIdentitySlots: field activity blocks', () => {
 		table.resize(3, null);
 		table.setActive([1]);
 		const state = createIdentitySlotState(64);
-		const f: ActivityField = { key: 'f', count: 3, active: true, fadeOf: () => table };
+		const f: ActivityField = { key: 'f', count: 3, fadeOf: () => table };
 		packIdentitySlots([on('f', 'a', [0, 1, 2])], state, [f], 1);
 		const out = resolvedOf(state);
 		const base = state.offsets.get('a')!;
@@ -741,32 +739,46 @@ describe('packIdentitySlots: field activity blocks', () => {
 		warn.mockRestore();
 	});
 
-	it('gives no block to a field no scale draws, or one no group selects on', () => {
+	it('gives a block to every field a scale draws, selected on or not, and none to the rest', () => {
 		const state = createIdentitySlotState(64);
 		const undrawn = field('undrawn', 50, [[[0], [0], 1, 1]]);
-		const idle = field('idle', 50, [null], false);
+		const idle = field('idle', 2, [null]);
+		const out = new Float32Array(64);
 		packIdentitySlots([on('idle', 'a', [0, 1])], state, [undrawn, idle], 1);
+		applyResolves(state, out);
 		expect(state.fieldBases.get('undrawn')).toBe(IDENTITY_SLOT_EMPTY);
-		expect(state.fieldBases.get('idle')).toBe(IDENTITY_SLOT_EMPTY);
-		// Only a's block was written: 3..8.
-		expect(state.result.uploadEnd).toBe(8);
+		// After a's block (3..8); with no selection, every id is active.
+		expect(state.fieldBases.get('idle')).toBe(8);
+		expect(identityActivity(out, state.offsets.get('a')!, 0, 1)).toBe(1);
 	});
 
-	it('drops a field’s block once it is no longer active, and its scales read all active', () => {
-		const state = createIdentitySlotState(64);
-		const resolved = new Float32Array(64);
-		const f = field('f', 2, [[[1, 1], [1, 0], 0.5, 1]]);
-		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
-		applyResolves(state, resolved);
-		const base = state.offsets.get('a')!;
-		expect(identityActivity(resolved, base, 0, 1)).toBeCloseTo(0.5, 5);
+	it('a selection uploads only the field’s run: no scale block or header is rewritten', () => {
+		const state = createIdentitySlotState(1024);
+		const fades: Array<[number[], number[], number, number] | null> = [null];
+		const f = field('f', 4, fades);
+		const scales = [on('f', 'a', [0, 1, 2, 3]), on('f', 'b', [3, 2, 1, 0])];
+		packIdentitySlots(scales, state, [f], 1);
+		packIdentitySlots(scales, state, [f], 1);
 
-		// The fade back has landed and nothing is selected.
-		f.active = false;
+		fades[0] = [[1, 1, 1, 1], [0, 1, 0, 0], 0, 1];
+		packIdentitySlots(scales, state, [f], 1);
+		const base = state.fieldBases.get('f')!;
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([base, base + 4]);
+		expect(dispatched(state)).toEqual([base]);
+
+		// The fade lands and the selection clears: still only the run.
+		fades[0] = [[0, 1, 0, 0], [1, 1, 1, 1], 1, 2];
+		packIdentitySlots(scales, state, [f], 1);
+		expect([state.result.uploadStart, state.result.uploadEnd]).toEqual([base, base + 4]);
+	});
+
+	it('drops a field’s block once no scale draws it', () => {
+		const state = createIdentitySlotState(64);
+		const f = field('f', 2, [[[1, 1], [1, 0], 1, 1]]);
 		packIdentitySlots([on('f', 'a', [0, 1])], state, [f], 1);
-		applyResolves(state, resolved);
+		expect(state.fieldBases.get('f')).not.toBe(IDENTITY_SLOT_EMPTY);
+		packIdentitySlots([scale('b', [0])], state, [f], 1);
 		expect(state.fieldBases.get('f')).toBe(IDENTITY_SLOT_EMPTY);
-		expect(identityActivity(resolved, base, 0, 1)).toBe(1);
 	});
 
 	it('forgets the state of a scale that has gone away', () => {
