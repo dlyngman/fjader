@@ -49,8 +49,8 @@ class Mark:
     # categorical selection on a field the mark draws by dims it, others filter
     # it. "filter": every selection filters it, so aggregates are recomputed
     # for the subset (top N within the selected region). A "filter" mark never
-    # dims; a categorical selection filters it in its own chart too, while a
-    # brush still skips its own chart.
+    # dims; a legend, Toggle or band label filters it in its own chart too,
+    # while a brush still skips its own chart.
     selection_response: Literal["auto", "filter"] | None = None
     scheme: ColorScheme | None = None
     limit: int | None = None

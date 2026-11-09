@@ -67,8 +67,10 @@ def dot(
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name (e.g. ``'category10'``, ``'viridis'``).
         limit: Maximum number of rows to query.
         transforms: List of transforms (e.g. ``[fj.topN(10), fj.filter(...)]``).
@@ -140,8 +142,10 @@ def bar_x(
         dy: Vertical pixel offset.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -212,8 +216,10 @@ def bar_y(
         dy: Vertical pixel offset.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -280,8 +286,10 @@ def line(
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -356,8 +364,10 @@ def area_y(
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms (e.g. ``[fj.stack_y()]``).
@@ -432,8 +442,10 @@ def area_x(
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -514,8 +526,10 @@ def rect(
         dy: Vertical pixel offset.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -587,8 +601,10 @@ def rect_x(
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -657,8 +673,10 @@ def rect_y(
         preferred_x_scale_type: Force x-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -731,8 +749,10 @@ def text(
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
-            a field it draws by (top N within the selected region); "auto" (default)
-            dims it for a categorical selection on such a field.
+            a field it draws by (top N within the selected region), and it never
+            dims. A legend, Toggle or band label filters it in its own chart too;
+            a brush still skips its own chart. "auto" (default) dims it for a
+            categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
