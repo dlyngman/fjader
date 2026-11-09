@@ -166,4 +166,43 @@ describe('FieldActivity', () => {
 		activity.set(0, values('a'));
 		expect(table(activity).clock._affectedChartsArray).toEqual(['chart-1']);
 	});
+
+	describe('opacityOfId', () => {
+		/** a, b, then an Other bucket (id 2) labelled 'Other'. */
+		const withBucket = () => new FieldIdentity(['a', 'b', 'Other'], 'f');
+		// Built through reset, as #refreshValues does, so the bucket is flagged.
+		const identity = () => {
+			const i = withBucket();
+			i.reset(['a', 'b', 'Other'], [2]);
+			return i;
+		};
+
+		it('reads the fade at the id, as opacityOfValue does at the value', () => {
+			const activity = new FieldActivity('f', hostWith(identity()));
+			activity.set(0, values('a'));
+			expect(activity.opacityOfId(0, 0)).toBe(1);
+			expect(activity.opacityOfId(0, 1)).toBe(DEFAULT_INACTIVE_OPACITY);
+			expect(activity.opacityOfId(0, 1)).toBe(activity.opacityOfValue(0, 'b'));
+		});
+
+		it('reaches an Other bucket, which no value names', () => {
+			const id = identity();
+			expect(id.ids.has('Other')).toBe(false);
+			const activity = new FieldActivity('f', hostWith(id));
+			activity.set(0, values('a'));
+			// The bucket's fade is read at its id. By value it falls back to the
+			// selected set, where its label never is.
+			expect(activity.opacityOfId(0, 2)).toBe(DEFAULT_INACTIVE_OPACITY);
+			activity.set(0, null);
+			expect(activity.opacityOfId(0, 2)).toBe(1);
+		});
+
+		it('never dims on a guess: an identity that is not live reads fully visible', () => {
+			const host = hostWith(identity());
+			const activity = new FieldActivity('f', host);
+			activity.set(0, values('a'));
+			host.identity = null;
+			expect(activity.opacityOfId(0, 1)).toBe(1);
+		});
+	});
 });

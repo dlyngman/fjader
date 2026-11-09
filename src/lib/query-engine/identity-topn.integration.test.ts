@@ -98,7 +98,7 @@ describe('identity ids through topN', () => {
 
 	it('carries a reserved id through the query and back to its label', async () => {
 		await identity.ensureColumns('sales', { categorical: ['category'] });
-		const otherId = await identity.reserveSynthetic('category', 'Other');
+		const { id: otherId } = await identity.acquireSynthetic('category', 'Other');
 		const values = identity.identity('category').values;
 
 		// alpha/bravo/charlie/delta = 0..3 alphabetically; Other is 4.
@@ -118,27 +118,26 @@ describe('identity ids through topN', () => {
 		expect(xs.map((id) => values[id])).toEqual(['bravo', 'charlie', 'Other']);
 	});
 
-	it('folds into a real category that already carries the label', async () => {
-		// 'Other' exists in the data, so reserveSynthetic reuses its id rather
-		// than duplicating the value — and the transform must add the excluded
-		// total into that row rather than emit a second row at the same id.
+	it('keeps a real "Other" a ranked category beside the bucket', async () => {
+		// 'Other' exists in the data. It stays a category of its own, ranked like
+		// any other, and the bucket takes a label of its own beside it.
 		await db.run(`INSERT INTO sales VALUES ('Other', 500)`);
 		await identity.ensureColumns('sales', { categorical: ['category'] });
-		const otherId = await identity.reserveSynthetic('category', 'Other');
+		const bucket = await identity.acquireSynthetic('category', 'Other');
 		const values = identity.identity('category').values;
 
 		// Capital O sorts ahead of lowercase, so the real category took id 0.
-		expect(otherId).toBe(0);
-		expect(values.filter((v) => v === 'Other')).toHaveLength(1);
+		const realId = identity.identity('category').ids.get('Other');
+		expect(realId).toBe(0);
+		expect(bucket.id).not.toBe(realId);
+		expect(bucket.label).toBe('Other (rest)');
 
-		const { xs, totals } = await topTwoWithOther('category', otherId);
+		const { xs, totals } = await topTwoWithOther('category', bucket.id);
 
-		// Two rows, not three: no duplicate bar in Other's slot.
-		expect(xs).toHaveLength(2);
-		expect(new Set(xs).size).toBe(2);
-		// Other (500) and bravo (400) survive; alpha 10 + charlie 300 + delta 20
-		// fold into Other.
-		expect(totals[xs.indexOf(otherId)]).toBe(830);
+		// The real Other (500) and bravo (400) are the top two; alpha 10 +
+		// charlie 300 + delta 20 go to the bucket.
+		expect(xs.map((id) => values[id])).toEqual(['Other', 'bravo', 'Other (rest)']);
+		expect(totals).toEqual([500, 400, 330]);
 	});
 
 	// The two axes this suite and identity-numeric each cover alone: a synthetic
@@ -158,13 +157,13 @@ describe('identity ids through topN', () => {
 				await db.run(`INSERT INTO t VALUES ${values}`);
 
 				await identity.ensureColumns('t', { categorical: ['k'] });
-				const otherId = await identity.reserveSynthetic('k', 'Other');
+				const { id: otherId } = await identity.acquireSynthetic('k', 'Other');
 				const dim = identity.identity('k');
 
 				// Appended after the three real values, and decodes to its label.
 				expect(otherId).toBe(3);
 				expect(dim.values[otherId]).toBe('Other');
-				expect(dim.ids.get('Other')).toBe(otherId);
+				expect(dim.synthetic.has(otherId)).toBe(true);
 
 				// The real values kept their own type — the label column exists so
 				// that the synthetic row does not force them all to VARCHAR. (A
@@ -185,8 +184,8 @@ describe('identity ids through topN', () => {
 			await db.run(`INSERT INTO t VALUES (1), (2)`);
 			await identity.ensureColumns('t', { categorical: ['k'] });
 
-			const other = await identity.reserveSynthetic('k', 'Other');
-			const missing = await identity.reserveSynthetic('k', 'Missing');
+			const { id: other } = await identity.acquireSynthetic('k', 'Other');
+			const { id: missing } = await identity.acquireSynthetic('k', 'Missing');
 
 			expect(other).toBe(2);
 			expect(missing).toBe(3);
@@ -200,7 +199,7 @@ describe('identity ids through topN', () => {
 		await identity.ensureColumns('sales', { categorical: ['category'] });
 		const before = await db.all(`SELECT COUNT(*) AS n FROM "${identity.sourceFor('sales')}"`);
 
-		await identity.reserveSynthetic('category', 'Other');
+		await identity.acquireSynthetic('category', 'Other');
 		const after = await db.all(`SELECT COUNT(*) AS n FROM "${identity.sourceFor('sales')}"`);
 
 		expect(Number(after[0].n)).toBe(Number(before[0].n));

@@ -508,6 +508,9 @@ export class MarkLifecycleV2 {
 	#onIdentityReset(): void {
 		if (this.#destroyed) return;
 		this.#identityFields.clear();
+		// The Other ids name rows of the dropped dims. Every holder lets go, so
+		// the scale acquires afresh when setup re-runs.
+		for (const scale of [...this.#otherScales]) this.#releaseOther(scale);
 		// Every dim it names just went away — topN must not bucket into one.
 		this.#setIdentity(null);
 		this.setupComplete = false;
@@ -1379,29 +1382,33 @@ export class MarkLifecycleV2 {
 		// be reserved before a transform can write it. Reserved for every
 		// categorical field of this mark rather than guessing which axis topN
 		// will pick — at most two, and the transform looks its own field up.
+		const otherScales = new Set<BandScaleState>();
 		if (this.#transformCompiler.hasSyntheticOtherBucket()) {
 			const otherIds: Partial<Record<'x' | 'y', number>> = {};
 			for (const { axis, key } of axes) {
-				const id = await this.#queryEngine.reserveSyntheticIdentity(key, 'Other');
-				otherIds[axis] = id;
-
-				// Re-adopt: the reservation appended to the value array, and a scale
-				// that adopted before it must see the new entry.
 				const scale = (
 					axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 				) as BandScaleState | null;
-				scale?.setIdentity(this.#queryEngine.identityFor(key));
-				// And tell it WHICH id is the bucket, so an entrance can come out of
-				// Other and an exit can go into it rather than past the end of the
-				// axis. With an Other bucket that is where the value actually goes.
+				if (!scale) continue;
+				// One Other per band scale, shared by every mark on it (see
+				// retainOther). The scale also takes it as its Other id, so an
+				// entrance can come out of Other and an exit go into it rather than
+				// past the end of the axis.
 				//
-				// Set on EVERY categorical axis, like the reservation above, rather
-				// than re-deriving which axis topN picked — that derivation living
-				// in two places is what silently dropped the Other row once already.
-				// The axes topN did not pick are unaffected: their reserved id is on
-				// no row, so it is never displayed, and setOtherId documents why an
-				// undisplayed id cannot act as a gateway.
-				scale?.setOtherId(id);
+				// Held on EVERY categorical axis rather than re-deriving which axis
+				// topN picked — that derivation living in two places is what silently
+				// dropped the Other row once already. The axes topN did not pick are
+				// unaffected: their id is on no row, so it is never displayed.
+				otherScales.add(scale);
+				this.#otherScales.add(scale);
+				const other = await scale.retainOther(this.#markId, () =>
+					this.#queryEngine.acquireSyntheticIdentity(key, 'Other')
+				);
+				otherIds[axis] = other.id;
+
+				// Re-adopt: acquiring may have appended to the value array, and a
+				// scale that adopted before it must see the new entry.
+				scale.setIdentity(this.#queryEngine.identityFor(key));
 			}
 			// topN buckets past its cutoff into these ids. The query parts rebuild:
 			// anything assembled before the reservation had no id and left Other
@@ -1421,6 +1428,19 @@ export class MarkLifecycleV2 {
 				this.#setIdentity(withOther);
 			}
 		}
+		// Scales this mark no longer draws an Other on (its axis or transform
+		// changed) get their claim back.
+		for (const scale of this.#otherScales) {
+			if (!otherScales.has(scale)) this.#releaseOther(scale);
+		}
+	}
+
+	/** The band scales whose Other bucket this mark holds a claim on. */
+	#otherScales = new Set<BandScaleState>();
+
+	#releaseOther(scale: BandScaleState): void {
+		this.#otherScales.delete(scale);
+		scale.releaseOther(this.#markId, (other) => this.#queryEngine.releaseSyntheticIdentity(other));
 	}
 
 	/**
@@ -2147,6 +2167,7 @@ export class MarkLifecycleV2 {
 		this.#destroyed = true;
 		this.#identityResetOff?.();
 		this.#identityResetOff = null;
+		for (const scale of [...this.#otherScales]) this.#releaseOther(scale);
 		this.#handle?.destroy();
 		clearTimeout(this.#fitDomainTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);

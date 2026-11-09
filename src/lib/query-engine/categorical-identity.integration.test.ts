@@ -351,37 +351,77 @@ describe('CategoricalIdentity', () => {
 	// Synthetic ids
 	// -----------------------------------------------------------------------
 
-	it('reserves a synthetic id at the top of the space, through the same array', async () => {
+	it('acquires a synthetic id at the top of the space, through the same array', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const held = identity.identity('species');
 
-		const otherId = await identity.reserveSynthetic('species', 'Other');
+		const other = await identity.acquireSynthetic('species', 'Other');
 
 		// Non-negative — scaleBand discards value < 0 before the slot lookup.
-		expect(otherId).toBe(3);
-		// Reachable through the ordinary accessor: no consumer branches on it.
-		expect(held.values[otherId]).toBe('Other');
-		expect(held.ids.get('Other')).toBe(otherId);
+		expect(other.id).toBe(3);
+		expect(other.label).toBe('Other');
+		// Its label reads through the ordinary accessor, so labels need no branch.
+		expect(held.values[other.id]).toBe('Other');
+		// But it is a bucket, not a value: flagged, and out of the value -> id map.
+		expect(held.synthetic.has(other.id)).toBe(true);
+		expect(held.ids.has('Other')).toBe(false);
 	});
 
-	it('reuses the id when a real category already carries the label', async () => {
+	it('gives each acquire its own id, and reuses a released one', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+
+		const a = await identity.acquireSynthetic('species', 'Other');
+		const b = await identity.acquireSynthetic('species', 'Other');
+		expect(b.id).not.toBe(a.id);
+		const rowsBefore = identity.identity('species').values.length;
+
+		// A remount: released, then acquired again. No new dim row.
+		identity.releaseSynthetic(a);
+		const c = await identity.acquireSynthetic('species', 'Other');
+		expect(c.id).toBe(a.id);
+		expect(identity.identity('species').values.length).toBe(rowsBefore);
+
+		// Released ids are per label: another label never takes this one.
+		identity.releaseSynthetic(c);
+		const d = await identity.acquireSynthetic('species', 'Missing');
+		expect(d.id).not.toBe(c.id);
+		expect(identity.identity('species').values[d.id]).toBe('Missing');
+	});
+
+	it('keeps a real "Other" a category, and labels the bucket beside it apart', async () => {
 		await db.run(`CREATE TABLE labelled (species VARCHAR)`);
 		await db.run(`INSERT INTO labelled VALUES ('Adelie'), ('Other'), ('Gentoo')`);
 		await identity.ensureColumns('labelled', { categorical: ['species'] });
 
-		const before = identity.identity('species').values.length;
-		const realId = identity.identity('species').ids.get('Other');
+		const held = identity.identity('species');
+		const realId = held.ids.get('Other');
+		const other = await identity.acquireSynthetic('species', 'Other');
 
-		const otherId = await identity.reserveSynthetic('species', 'Other');
-
-		// No duplicate row: #createView joins ON value, so two rows sharing a
-		// value would fan out every matching source row.
-		expect(otherId).toBe(realId);
-		expect(identity.identity('species').values.length).toBe(before);
+		// Its own row, never the real category's id, and never its label.
+		expect(other.id).not.toBe(realId);
+		expect(other.label).toBe('Other (rest)');
+		expect(held.values[other.id]).toBe('Other (rest)');
+		expect(held.ids.get('Other')).toBe(realId);
+		// The real row is still the only one whose value is 'Other', so the view's
+		// join on value cannot fan out.
 		const rows = await db.all(
 			`SELECT COUNT(*) AS n FROM "${identity.dimTable('species')}" WHERE value = 'Other'`
 		);
 		expect(Number(rows[0].n)).toBe(1);
+	});
+
+	it('ignores a release from before a reset', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const stale = await identity.acquireSynthetic('species', 'Other');
+		await identity.reset();
+
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		identity.releaseSynthetic(stale);
+		const fresh = await identity.acquireSynthetic('species', 'Other');
+		// A fresh row of the new dim, which happens to land on the same number;
+		// what matters is that it is a synthetic row there, not a reused stale one.
+		expect(identity.identity('species').synthetic.has(fresh.id)).toBe(true);
+		expect(fresh.generation).not.toBe(stale.generation);
 	});
 
 	it('a unique index makes the duplicate structurally impossible', async () => {
@@ -398,7 +438,7 @@ describe('CategoricalIdentity', () => {
 
 	it('an append after a reservation continues past it without renumbering', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
-		const otherId = await identity.reserveSynthetic('species', 'Other');
+		const { id: otherId } = await identity.acquireSynthetic('species', 'Other');
 
 		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
 		await db.run(`INSERT INTO more_penguins VALUES ('Emperor')`);

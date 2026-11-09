@@ -34,7 +34,8 @@ import {
 	CategoricalIdentity,
 	type DimValue,
 	type FieldIdentity,
-	type IdentityField
+	type IdentityField,
+	type SyntheticId
 } from './categorical-identity';
 import type { FilterGroup } from './FilterGroup.svelte';
 import { NO_ROUTE, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
@@ -323,21 +324,28 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Dim values for `field`, indexed by id — the decode side of the string -> id
-	 * encode. Not display labels: formatting belongs to the scale/axis layer.
+	 * The field's categories as of now, in id order: every real value of the dim,
+	 * without the synthetic Other buckets. What a domain registers — a bucket is
+	 * not a category of the data, and another chart's bucket must not appear on
+	 * an axis, a facet or a colour legend that has none.
 	 *
-	 * The LIVE array — hold the reference, do not snapshot it. A second table
-	 * registering the same field appends to the dim afterwards and this array
-	 * grows in place.
+	 * A snapshot, not the live array: for decoding ids, hold `identityFor(field)`.
 	 */
-	identityValues(field: string): DimValue[] {
-		return this.#identity.values(field);
+	categoryValues(field: string): DimValue[] {
+		const identity = this.#identity.identity(field);
+		const values = identity.values;
+		if (identity.synthetic.size === 0) return values.slice();
+		const out: DimValue[] = [];
+		for (let id = 0; id < values.length; id++) {
+			if (!identity.synthetic.has(id)) out.push(values[id]);
+		}
+		return out;
 	}
 
 	/**
 	 * The field's id <-> value bijection. One live object owning both
 	 * directions, so a holder cannot end up with a value array and a reverse map
-	 * that disagree. Prefer this over identityValues() anywhere the reverse
+	 * that disagree. Prefer this over categoryValues() anywhere the reverse
 	 * direction is needed; do not rebuild it locally.
 	 */
 	identityFor(field: string): FieldIdentity {
@@ -350,12 +358,17 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Reserve an id for a value present in no table — the synthetic "Other"
-	 * bucket from `topN({ includeOthers })`. Call after ensureColumns.
-	 * Returns an existing id when a real category already carries the label.
+	 * Acquire an id for a value present in no table — the synthetic "Other"
+	 * bucket from `topN({ includeOthers })` — with the label it displays. Call
+	 * after ensureColumns; release it when its holder goes.
 	 */
-	reserveSyntheticIdentity(field: string, label: string): Promise<number> {
-		return this.#identity.reserveSynthetic(field, label);
+	acquireSyntheticIdentity(field: string, label: string): Promise<SyntheticId> {
+		return this.#identity.acquireSynthetic(field, label);
+	}
+
+	/** Give back an id from `acquireSyntheticIdentity`, for the next acquire to reuse. */
+	releaseSyntheticIdentity(synthetic: SyntheticId): void {
+		this.#identity.releaseSynthetic(synthetic);
 	}
 
 	/**

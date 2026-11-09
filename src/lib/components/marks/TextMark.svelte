@@ -269,23 +269,17 @@
 	// text. Routing reads the same list, so a categorical selection on one of
 	// these fields dims the labels instead of filtering them away.
 
-	/** The value a raw channel entry names: an id resolves through the scale. */
-	function categoryOf(
-		scale: { categoryAt(id: number): unknown; hasIdentity?: boolean } | null,
-		raw: unknown
-	): unknown {
-		if (scale && typeof raw === 'number' && scale.hasIdentity !== false) {
-			return scale.categoryAt(raw) ?? raw;
-		}
-		return raw;
-	}
-
-	/** Per-label dimming sources, resolved once per data change, not per frame. */
+	/**
+	 * Per-label dimming sources, resolved once per data change, not per frame.
+	 * Each is a field's identity key and the label's dim ids on it: a scale has an
+	 * identity key only while its channel carries ids, so the raw column is the
+	 * ids, and reading the fade by id is what reaches an Other bucket.
+	 */
 	const dimming = $derived.by(() => {
 		// A 'filter' mark (NO_GROUP) never dims, as its GPU marks do not.
 		if (!setup || !filterGroups || setup.groupIndex === NO_GROUP) return null;
 		const groups = [setup.groupIndex];
-		const sources: Array<{ key: string; values: unknown[] }> = [];
+		const sources: Array<{ key: string; ids: ArrayLike<number> }> = [];
 		for (const axis of ['x', 'y'] as const) {
 			const type = chartContext.scaleTypes?.[axis];
 			if (type !== 'band' && type !== 'point') continue;
@@ -295,16 +289,12 @@
 			// filters the labels, so they do not dim by it too.
 			const key = band?.identityKey;
 			if (!key || !raw) continue;
-			const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(band, r));
-			sources.push({ key, values });
+			sources.push({ key, ids: raw as ArrayLike<number> });
 		}
 		const color = markColor.scaleState;
 		const raw = fillRaw;
 		const colorKey = color?.isOrdinal ? color.identityKey : null;
-		if (colorKey && raw) {
-			const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(color, r));
-			sources.push({ key: colorKey, values });
-		}
+		if (colorKey && raw) sources.push({ key: colorKey, ids: raw as ArrayLike<number> });
 		return sources.length ? { groups, sources } : null;
 	});
 
@@ -316,7 +306,7 @@
 		for (const source of d.sources) {
 			opacity = Math.min(
 				opacity,
-				filterGroups.opacityOfValue(source.key, d.groups, source.values[idx])
+				filterGroups.opacityOfId(source.key, d.groups, Number(source.ids[idx]))
 			);
 		}
 		return opacity;

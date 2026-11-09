@@ -128,6 +128,22 @@ export class FilterGroupRegistry {
 		return opacity;
 	}
 
+	/**
+	 * How visible the category with dim id `id` of field `key` is now: the id form
+	 * of `opacityOfValue`, and the one a label for an Other bucket must use. The
+	 * least visible over `groups`. Pure, so safe in a template.
+	 */
+	opacityOfId(key: string, groups: readonly number[], id: number): number {
+		void this.#fieldsVersion;
+		const activity = this.#fields.get(key);
+		if (!activity) return 1;
+		let opacity = 1;
+		for (let i = 0; i < groups.length; i++) {
+			opacity = Math.min(opacity, activity.opacityOfId(groups[i], id));
+		}
+		return opacity;
+	}
+
 	/** Every field's activity, in creation order. Read every frame; do not mutate. */
 	get fields(): readonly FieldActivity[] {
 		return this.#fieldList;

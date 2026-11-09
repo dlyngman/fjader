@@ -166,6 +166,37 @@ export class FieldActivity {
 		return values == null || values.has(value) ? 1 : inactiveOpacity;
 	}
 
+	/**
+	 * How visible the category with dim id `id` is now in group `index`: its fade.
+	 * The id form of `opacityOfValue`, and the only one that reaches a synthetic
+	 * id (an Other bucket): a bucket has a label, not a value, and several may
+	 * share one label. Pure, so it is safe in a template.
+	 *
+	 * Before the group's table covers the id, falls back to the selected values
+	 * for a real id, and to fully visible for a bucket or an identity that is not
+	 * live: a label is never dimmed on a guess.
+	 */
+	opacityOfId(
+		index: number,
+		id: number,
+		inactiveOpacity: number = DEFAULT_INACTIVE_OPACITY
+	): number {
+		void this.#groupsVersion;
+		const group = this.#groups[index];
+		if (!group) return 1;
+		void group.frame;
+		const values = group.values;
+		const identity = this.#identity;
+		if (!identity || identity !== this.#host.identityOf(this.key)) return 1;
+		if (id >= 0 && id < group.table.count) {
+			return selectionOpacity(group.table.activityOf(id), inactiveOpacity);
+		}
+		if (values == null || identity.synthetic.has(id) || id < 0 || id >= identity.values.length) {
+			return 1;
+		}
+		return values.has(identity.values[id]) ? 1 : inactiveOpacity;
+	}
+
 	#group(index: number): GroupFade {
 		let group = this.#groups[index];
 		if (!group) {

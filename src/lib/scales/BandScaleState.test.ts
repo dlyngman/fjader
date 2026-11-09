@@ -1874,3 +1874,73 @@ describe('BandScaleState teardown', () => {
 		expect(Array.from(scale.slots.target)).toEqual([0, 1]);
 	});
 });
+
+describe('BandScaleState Other bucket', () => {
+	const synthetic = (id: number) => ({ field: 'f', id, label: 'Other', generation: 0 });
+	/** The id the slot transition uses as its gateway (SlotTransition.otherId). */
+	const otherIdOf = (scale: BandScaleState) =>
+		(scale.slots as unknown as { otherId: number | null }).otherId;
+
+	it('acquires once for every mark on the axis, and takes the id as its Other', async () => {
+		const scale = new BandScaleState('category');
+		const acquire = vi.fn(() => Promise.resolve(synthetic(7)));
+
+		// Two marks setting up in the same tick: one acquire, shared.
+		const [a, b] = await Promise.all([
+			scale.retainOther('bar', acquire),
+			scale.retainOther('label', acquire)
+		]);
+		expect(acquire).toHaveBeenCalledTimes(1);
+		expect(a.id).toBe(7);
+		expect(b.id).toBe(7);
+		expect(otherIdOf(scale)).toBe(7);
+	});
+
+	it('releases only when the last mark lets go', async () => {
+		const scale = new BandScaleState('category');
+		const release = vi.fn();
+		await scale.retainOther('bar', () => Promise.resolve(synthetic(7)));
+		await scale.retainOther('label', () => Promise.resolve(synthetic(8)));
+
+		scale.releaseOther('bar', release);
+		await Promise.resolve();
+		expect(release).not.toHaveBeenCalled();
+		expect(otherIdOf(scale)).toBe(7);
+
+		scale.releaseOther('label', release);
+		await Promise.resolve();
+		expect(release).toHaveBeenCalledWith(synthetic(7));
+		expect(otherIdOf(scale)).toBeNull();
+	});
+
+	it('releases an acquire still in flight once it lands, and never adopts it', async () => {
+		const scale = new BandScaleState('category');
+		let land!: (s: ReturnType<typeof synthetic>) => void;
+		const pending = new Promise<ReturnType<typeof synthetic>>((r) => (land = r));
+		const release = vi.fn();
+		scale.retainOther('bar', () => pending);
+		scale.releaseOther('bar', release);
+
+		land(synthetic(7));
+		await pending;
+		await Promise.resolve();
+		expect(release).toHaveBeenCalledWith(synthetic(7));
+		expect(otherIdOf(scale)).toBeNull();
+	});
+
+	it('acquires afresh after everyone let go (a reset, or a remount)', async () => {
+		const scale = new BandScaleState('category');
+		await scale.retainOther('bar', () => Promise.resolve(synthetic(7)));
+		scale.releaseOther('bar', () => {});
+		const again = await scale.retainOther('bar', () => Promise.resolve(synthetic(9)));
+		expect(again.id).toBe(9);
+		expect(otherIdOf(scale)).toBe(9);
+	});
+
+	it('ignores a release from a mark that holds nothing', () => {
+		const scale = new BandScaleState('category');
+		const release = vi.fn();
+		scale.releaseOther('stranger', release);
+		expect(release).not.toHaveBeenCalled();
+	});
+});

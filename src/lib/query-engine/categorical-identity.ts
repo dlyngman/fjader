@@ -45,6 +45,19 @@
 import { IDENTITY_SLOT_CAPACITY } from '$lib/gpu/identity-slot-packing';
 
 /** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
+/**
+ * A synthetic id handed out by `acquireSynthetic`: what to release it with.
+ * `generation` ties it to the dims it was acquired from, so a release after a
+ * reset does not offer a dropped row to the next acquire.
+ */
+export interface SyntheticId {
+	readonly field: string;
+	readonly id: number;
+	/** The label it displays: the requested one, or `"<label> (rest)"` beside a real one. */
+	readonly label: string;
+	readonly generation: number;
+}
+
 export interface IdentityExec {
 	exec(sql: string | string[]): Promise<void>;
 	/** Rows as plain objects. Callers adapt whatever their driver returns. */
@@ -172,10 +185,19 @@ export type DimValue = string | number | bigint;
  * once and stay correct when a second table appends to the dim.
  */
 export class FieldIdentity {
-	/** id -> source value. Dense and 0-based, so position is the id. */
+	/**
+	 * id -> source value. Dense and 0-based, so position is the id. A synthetic
+	 * id (an Other bucket) holds its display label here.
+	 */
 	readonly values: DimValue[] = [];
-	/** source value -> id. The exact inverse of `values`. */
+	/**
+	 * source value -> id, for real values only: the inverse of `values` with the
+	 * synthetic ids left out. A label is not a value, and several synthetic ids
+	 * may share one, so nothing resolves a bucket by its label.
+	 */
 	readonly ids = new Map<DimValue, number>();
+	/** The synthetic ids (Other buckets): rows of the dim no source row joins to. */
+	readonly synthetic = new Set<number>();
 
 	/**
 	 * The identity key this is the bijection for, as `identityKeyFor` derives
@@ -197,14 +219,20 @@ export class FieldIdentity {
 	 */
 	version: number = 0;
 
-	/** Replace both directions. The only writer. */
-	reset(values: readonly DimValue[]): void {
+	/**
+	 * Replace both directions. The only writer. `synthetic` names the ids that
+	 * are buckets rather than values: they keep their label in `values` and stay
+	 * out of `ids`.
+	 */
+	reset(values: readonly DimValue[], synthetic: Iterable<number> = []): void {
 		this.version++;
 		this.values.length = 0;
 		this.ids.clear();
+		this.synthetic.clear();
+		for (const id of synthetic) this.synthetic.add(id);
 		for (let i = 0; i < values.length; i++) {
 			this.values.push(values[i]);
-			this.ids.set(values[i], i);
+			if (!this.synthetic.has(i)) this.ids.set(values[i], i);
 		}
 	}
 
@@ -330,6 +358,12 @@ export class CategoricalIdentity {
 	 * flight.
 	 */
 	#identities = new Map<string, FieldIdentity>();
+	/**
+	 * Released synthetic ids, per field and label, for the next acquire. Keeps the
+	 * dim from growing a row per remount: mark ids are random, so nothing about a
+	 * remounted mark can name the id it held before. Cleared with the dims.
+	 */
+	#freeSynthetic = new Map<string, Map<string, number[]>>();
 	/** key -> SQL producing the value. Set at registration, read by the drain. */
 	#sqlFor = new Map<string, string>();
 
@@ -603,31 +637,37 @@ export class CategoricalIdentity {
 	}
 
 	/**
-	 * Reserve an id for a value that exists in no table — the synthetic "Other"
-	 * bucket a `topN({ includeOthers })` produces.
+	 * Acquire an id for a value that exists in no table — the synthetic "Other"
+	 * bucket a `topN({ includeOthers })` produces — and return it with the label
+	 * it displays.
 	 *
-	 * Goes through the same writer as every other id, so `values(f)[otherId]` is
-	 * the label and no consumer has to know it was synthetic. Serialized on the
-	 * per-field chain, so it cannot interleave with an append.
+	 * A released id with the same label is reused before a dim row is inserted,
+	 * so remounting a chart does not grow the dim or the field's activity block.
+	 * Keyed by label too, so a reused id never needs relabelling.
+	 *
+	 * Goes through the same writer as every other id, so `values(f)[id]` is the
+	 * label; `synthetic` records that it is a bucket, which keeps it out of the
+	 * value -> id map. Serialized on the per-field chain, so it cannot interleave
+	 * with an append.
 	 *
 	 * Non-negative by construction: `scaleBand` discards `value < 0.0` before the
 	 * slot lookup, so a negative sentinel could never render.
 	 *
-	 * **Reuses the id if a real category already carries this label**, rather
-	 * than inserting a duplicate value — see the fan-out note above. Callers get
-	 * an id that may already be in the data, which the transform has to fold
-	 * into rather than append beside.
+	 * **A real category carrying the label stays a category.** The bucket takes
+	 * `"<label> (rest)"` instead, so two bars never share a label and the real
+	 * one stays selectable. The check runs at acquire; a reload re-acquires.
 	 *
 	 * Requires the dim to exist: call after `ensureColumns` has resolved.
 	 */
-	reserveSynthetic(field: string, label: string): Promise<number> {
+	acquireSynthetic(field: string, label: string): Promise<SyntheticId> {
 		const dim = this.#dims.get(field);
 		if (!dim) {
 			return Promise.reject(
-				new Error(`No dim for "${field}" — reserveSynthetic must follow ensureColumns.`)
+				new Error(`No dim for "${field}" — acquireSynthetic must follow ensureColumns.`)
 			);
 		}
-		const next = dim.chain.then(() => this.#reserveSyntheticNow(dim, field, label));
+		const generation = this.#generation;
+		const next = dim.chain.then(() => this.#acquireSyntheticNow(dim, field, label, generation));
 		// Drop both the value and any rejection: the chain only sequences work,
 		// and one failure must not poison every later append.
 		dim.chain = next.then(
@@ -637,9 +677,32 @@ export class CategoricalIdentity {
 		return next;
 	}
 
-	async #reserveSyntheticNow(dim: DimEntry, field: string, label: string): Promise<number> {
-		const existing = this.identity(field).ids.get(label);
-		if (existing !== undefined) return existing;
+	/**
+	 * Give an acquired id back for the next acquire of the same label. One from
+	 * before a reset names a row of a dropped dim, and is ignored.
+	 */
+	releaseSynthetic(synthetic: SyntheticId): void {
+		if (synthetic.generation !== this.#generation) return;
+		let byLabel = this.#freeSynthetic.get(synthetic.field);
+		if (!byLabel) this.#freeSynthetic.set(synthetic.field, (byLabel = new Map()));
+		let free = byLabel.get(synthetic.label);
+		if (!free) byLabel.set(synthetic.label, (free = []));
+		if (!free.includes(synthetic.id)) free.push(synthetic.id);
+	}
+
+	async #acquireSyntheticNow(
+		dim: DimEntry,
+		field: string,
+		requested: string,
+		generation: number
+	): Promise<SyntheticId> {
+		const identity = this.identity(field);
+		let label = requested;
+		while (identity.ids.has(label)) label = `${label} (rest)`;
+
+		const free = this.#freeSynthetic.get(field)?.get(label);
+		const reused = free?.pop();
+		if (reused !== undefined) return { field, id: reused, label, generation };
 
 		const dimName = quote(dim.name);
 		// value NULL, label carrying the text. The label cannot go in `value`:
@@ -652,18 +715,22 @@ export class CategoricalIdentity {
 		// joins ON t.key = d.value. Any in-range sentinel would collide with a
 		// real category the moment the data contained it; NULL cannot, since
 		// NULL = anything is never true.
-		await this.#exec.exec(
+		//
+		// RETURNING, not a lookup by label afterwards: several buckets may carry
+		// one label, and labels are kept out of the value -> id map.
+		const rows = await this.#exec.queryRows(
 			`INSERT INTO ${dimName} (value, label, id) ` +
 				`SELECT NULL, ${literal(label)}, ` +
-				`(SELECT COALESCE(MAX(id), -1) + 1 FROM ${dimName})::INT`
+				`(SELECT COALESCE(MAX(id), -1) + 1 FROM ${dimName})::INT ` +
+				`RETURNING id`
 		);
 		await this.#refreshValues(field);
 
-		const id = this.identity(field).ids.get(label);
-		if (id === undefined) {
-			throw new Error(`Reserved "${label}" for "${field}" but it is absent from the dim.`);
+		const id = Number(rows[0]?.id);
+		if (!Number.isInteger(id) || !identity.synthetic.has(id)) {
+			throw new Error(`Acquired "${label}" for "${field}" but it is absent from the dim.`);
 		}
-		return id;
+		return { field, id, label, generation };
 	}
 
 	async #ensureDimNow(
@@ -835,10 +902,15 @@ export class CategoricalIdentity {
 		//
 		// `label` wins where it is set, which is only ever a synthetic row. Every
 		// real row has label NULL and keeps its native value, so this does not
-		// stringify anything the dim read from the source (see DimValue). It is
-		// the one place the two columns collapse back into one space, and it is
-		// why no consumer has to know a bucket was synthetic.
-		this.identity(field).reset(rows.map((row) => (row.label ?? row.value) as DimValue));
+		// stringify anything the dim read from the source (see DimValue). A row
+		// with a label is recorded as synthetic, which keeps it out of the
+		// value -> id map: a label is not a value.
+		const synthetic: number[] = [];
+		for (let i = 0; i < rows.length; i++) if (rows[i].label != null) synthetic.push(i);
+		this.identity(field).reset(
+			rows.map((row) => (row.label ?? row.value) as DimValue),
+			synthetic
+		);
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */
@@ -903,6 +975,8 @@ export class CategoricalIdentity {
 		// In place, so any scale still holding the reference empties with it.
 		for (const identity of this.#identities.values()) identity.reset([]);
 		this.#identities.clear();
+		// Their ids name rows of the dims being dropped.
+		this.#freeSynthetic.clear();
 
 		for (const view of views) {
 			await this.#exec.exec(`DROP VIEW IF EXISTS ${quote(view)}`);
