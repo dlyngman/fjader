@@ -35,6 +35,7 @@
 	let {
 		table = undefined,
 		selection = undefined,
+		selectionResponse = undefined,
 		x,
 		y: yShorthand = undefined,
 		y1: y1Prop = undefined,
@@ -122,6 +123,7 @@
 			opacity: () => opacity,
 			transforms: () => transforms,
 			selection: () => selection,
+			selectionResponse: () => selectionResponse,
 			limit: () => limit,
 			sort: () => sort,
 			domain: () => domain,

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { NO_GROUP } from '$lib/components/rendering/activity-reads';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
@@ -41,6 +42,7 @@
 	let {
 		table,
 		selection = undefined,
+		selectionResponse = undefined,
 		x,
 		y,
 		text,
@@ -125,6 +127,9 @@
 	const reactiveConfig = buildReactiveConfig({
 		get sort() {
 			return sort;
+		},
+		get selectionResponse() {
+			return selectionResponse;
 		},
 		get limit() {
 			return limit;
@@ -277,7 +282,8 @@
 
 	/** Per-label dimming sources, resolved once per data change, not per frame. */
 	const dimming = $derived.by(() => {
-		if (!setup || !filterGroups) return null;
+		// A 'filter' mark (NO_GROUP) never dims, as its GPU marks do not.
+		if (!setup || !filterGroups || setup.groupIndex === NO_GROUP) return null;
 		const groups = [setup.groupIndex];
 		const sources: Array<{ key: string; values: unknown[] }> = [];
 		for (const axis of ['x', 'y'] as const) {

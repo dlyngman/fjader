@@ -16,7 +16,12 @@ import { normalizeSortConfig } from './index';
  * @param opts.resolveFitDomain - Getter for resolved fitDomain (deferred read)
  */
 export function buildReactiveConfig(
-	entry: Partial<Pick<MarkEntry, 'sort' | 'limit' | 'domain' | 'tooltip' | 'tip' | 'fitDomain'>>,
+	entry: Partial<
+		Pick<
+			MarkEntry,
+			'sort' | 'limit' | 'domain' | 'tooltip' | 'tip' | 'fitDomain' | 'selectionResponse'
+		>
+	>,
 	opts?: {
 		resolveFitDomain?: () => 'x' | 'y' | boolean | undefined;
 	}
@@ -39,6 +44,9 @@ export function buildReactiveConfig(
 		},
 		get tip() {
 			return entry.tip;
+		},
+		get selectionResponse() {
+			return entry.selectionResponse;
 		}
 	};
 }

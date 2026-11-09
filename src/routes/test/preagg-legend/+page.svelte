@@ -19,6 +19,11 @@
 	//   level and always read the base table (a 5,000-row sample).
 	// - Continuous legend (time): hover it, pause, then brush it: the histograms
 	//   and the carrier bars read preagg tables binned over the legend's domain.
+	// - Delay by carrier, selectionResponse="filter": hover either carrier
+	//   legend, pause, then click a carrier. This chart is filtered, not dimmed,
+	//   though it is coloured by carrier, and its own legend filters it too. Its
+	//   query reads a preagg table (delay bins by carrier) like the other
+	//   histograms, a few ms; a "base read" here is a regression.
 	//
 	// The log wraps the engine's query and exec on this page only.
 
@@ -57,6 +62,45 @@
 		log = [{ kind, ms, sql: sql.slice(0, 140) }, ...log].slice(0, 60);
 	}
 
+	// One row per chart: its latest read. Mark ids are generated, so a mark is
+	// named from its first query, which reads the base table unfiltered. A
+	// pointerdown starts a new click; rows not updated since then are faded.
+	const CHARTS = [
+		'Delay',
+		'Carrier bars',
+		'Parallel axes',
+		'Time dots',
+		'Delay by carrier',
+		'Distance'
+	];
+	let click = $state(0);
+	let latest = $state({});
+
+	function chartOf(sql) {
+		const has = (name) => sql.includes(name);
+		if (has('preagg_flights_sample')) return has('carrier') ? 'Parallel axes' : 'Time dots';
+		if (has('delay')) return has('carrier') ? 'Delay by carrier' : 'Delay';
+		if (has('distance')) return 'Distance';
+		return has('carrier') ? 'Carrier bars' : null;
+	}
+
+	const names = new Map();
+	function recordRead(callerId, kind, sql, ms) {
+		let name = names.get(callerId);
+		if (name === undefined) {
+			name = chartOf(sql) ?? callerId;
+			names.set(callerId, name);
+		}
+		latest = { ...latest, [name]: { kind, ms, click } };
+	}
+
+	const rows = $derived(
+		[...CHARTS, ...Object.keys(latest).filter((n) => !CHARTS.includes(n))].map((name) => ({
+			name,
+			...(latest[name] ?? { kind: '—', ms: null, click: -1 })
+		}))
+	);
+
 	// Mark queries carry the mark's id as callerId; tooltip lookups ('tooltip')
 	// and domain fits ('<mark>:fitDomain') are left out. Builds are the preagg CREATEs.
 	const isMarkQuery = (callerId) => !!callerId && callerId !== 'tooltip' && !callerId.includes(':');
@@ -82,7 +126,9 @@
 					: text.includes('__dplot_preagg_')
 						? 'preagg read'
 						: 'base read';
-				record(kind, `[${callerId}] ${text}`, performance.now() - t);
+				const ms = performance.now() - t;
+				record(kind, `[${callerId}] ${text}`, ms);
+				recordRead(callerId, kind, text, ms);
 			}
 		}
 	};
@@ -162,7 +208,8 @@
 			{ROWS.toLocaleString()} rows. Hover a source, pause, then click: the other charts should read preagg
 			tables. Brush the delay histogram after a toggle click: once released and quiet, its table is rebuilt;
 			no build should appear mid-drag. Hover a parallel axis, pause, then brush it: the other charts
-			read preagg tables built for that axis.
+			read preagg tables built for that axis. Click a carrier: "Delay by carrier" is filtered, not dimmed,
+			and should read a preagg table too.
 		</p>
 
 		<div class="grid">
@@ -282,6 +329,37 @@
 			</div>
 
 			<div class="panel">
+				<h3>Delay by carrier (selectionResponse="filter")</h3>
+				<ChartContainer xLabel="delay" yLabel="count" legendPosition="top">
+					{#snippet legend()}
+						<Legend color="carrier" selection="brush" />
+					{/snippet}
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<RectYMark
+									table="preagg_flights"
+									x={bin('delay', { steps: 50 })}
+									y={count()}
+									inset={0.5}
+									fill="carrier"
+									selection="brush"
+									selectionResponse="filter"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
 				<h3>Distance (filtered)</h3>
 				<ChartContainer xLabel="distance" yLabel="count">
 					{#snippet background()}
@@ -309,21 +387,40 @@
 			</div>
 		</div>
 
-		<h3>Query log (newest first)</h3>
-		<table>
-			<thead><tr><th>kind</th><th>ms</th><th>sql</th></tr></thead>
+		<h3>Latest read per chart</h3>
+		<p class="hint">Rows updated since your last click are bold; the rest are faded.</p>
+		<table class="summary">
+			<thead><tr><th>chart</th><th>kind</th><th>ms</th></tr></thead>
 			<tbody>
-				{#each log as entry, i (i)}
-					<tr class={entry.kind.replace(' ', '-')}>
-						<td>{entry.kind}</td>
-						<td>{entry.ms.toFixed(1)}</td>
-						<td class="sql">{entry.sql}</td>
+				{#each rows as row (row.name)}
+					<tr class="{row.kind.replace(' ', '-')} {row.click === click ? 'fresh' : 'stale'}">
+						<td class="name">{row.name}</td>
+						<td>{row.kind}</td>
+						<td>{row.ms === null ? '' : row.ms.toFixed(1)}</td>
 					</tr>
 				{/each}
 			</tbody>
 		</table>
+
+		<details>
+			<summary>Full query log (newest first)</summary>
+			<table>
+				<thead><tr><th>kind</th><th>ms</th><th>sql</th></tr></thead>
+				<tbody>
+					{#each log as entry, i (i)}
+						<tr class={entry.kind.replace(' ', '-')}>
+							<td>{entry.kind}</td>
+							<td>{entry.ms.toFixed(1)}</td>
+							<td class="sql">{entry.sql}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</details>
 	</div>
 {/if}
+
+<svelte:window onpointerdown={() => click++} />
 
 <style>
 	.container {
@@ -374,6 +471,27 @@
 	.build td:first-child {
 		color: #3949ab;
 		font-weight: 600;
+	}
+	.summary {
+		width: auto;
+		min-width: 420px;
+		font-size: 15px;
+	}
+	.summary .name {
+		font-weight: 600;
+	}
+	.summary .stale {
+		opacity: 0.35;
+	}
+	.summary .fresh td:first-child {
+		font-weight: 700;
+	}
+	.hint {
+		color: #777;
+		margin: 0;
+	}
+	details {
+		margin-top: 16px;
 	}
 	.status.error {
 		color: #b00020;

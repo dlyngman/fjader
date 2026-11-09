@@ -322,6 +322,7 @@ export class FilterGroup {
 		const categoricalKey = list.length === 1 ? (identityKeyFor(list[0])?.key ?? null) : null;
 		const source = this.register(sourceId, {
 			chart: opts.chart ?? null,
+			discrete: true,
 			categorical: categoricalKey
 				? {
 						key: categoricalKey,

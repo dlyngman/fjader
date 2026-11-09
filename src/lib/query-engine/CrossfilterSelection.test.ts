@@ -17,10 +17,22 @@ const CHART_C = { name: 'C' };
 
 const inChart = (chart: object | null, reads: string[] = []): MarkRoute => ({ reads, chart });
 
+/** A selectionResponse 'filter' mark: it reads nothing, as its lifecycle builds it. */
+const filterIn = (chart: object | null): MarkRoute => ({ reads: [], chart, response: 'filter' });
+
 /** A selection whose sources skip the given charts. */
 function selection(sources: Record<string, object | null> = {}): CrossfilterSelection {
 	const sel = new CrossfilterSelection();
 	for (const [sourceId, chart] of Object.entries(sources)) sel.addRegistration(sourceId, { chart });
+	return sel;
+}
+
+/** A selection whose click sources (Toggles, legends) skip the given charts. */
+function clicks(sources: Record<string, object | null>): CrossfilterSelection {
+	const sel = new CrossfilterSelection();
+	for (const [sourceId, chart] of Object.entries(sources)) {
+		sel.addRegistration(sourceId, { chart, discrete: true });
+	}
 	return sel;
 }
 
@@ -76,6 +88,27 @@ describe('CrossfilterSelection', () => {
 			expect(sel.filters(inChart(CHART_B), 'legend', 'carrier')).toBe(true);
 			expect(sel.filters(inChart(CHART_B, ['carrier']), 'legend', 'carrier')).toBe(false);
 			expect(sel.filters(inChart(CHART_A), 'legend', 'carrier')).toBe(false);
+		});
+
+		it("filters a 'filter' mark by a categorical source registered in its own chart", () => {
+			const sel = clicks({ 'toggle-region': CHART_A });
+			sel.addRegistration('toggle-region', { chart: CHART_B, discrete: true });
+			expect(sel.filters(filterIn(CHART_A), 'toggle-region', 'region')).toBe(true);
+			expect(sel.filters(filterIn(CHART_B), 'toggle-region', 'region')).toBe(true);
+			// An 'auto' mark in that chart still skips it.
+			expect(sel.filters(inChart(CHART_A), 'toggle-region', 'region')).toBe(false);
+		});
+
+		it("filters a 'filter' mark by a multi-field Toggle in its own chart: it has no key", () => {
+			const sel = clicks({ 'toggle-["region","year"]': CHART_A });
+			expect(sel.filters(filterIn(CHART_A), 'toggle-["region","year"]', null)).toBe(true);
+			expect(sel.filters(inChart(CHART_A), 'toggle-["region","year"]', null)).toBe(false);
+		});
+
+		it("lets a brush skip its own chart for a 'filter' mark too", () => {
+			const sel = selection({ brush: CHART_A });
+			expect(sel.filters(filterIn(CHART_A), 'brush', null)).toBe(false);
+			expect(sel.filters(filterIn(CHART_B), 'brush', null)).toBe(true);
 		});
 	});
 

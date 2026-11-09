@@ -8,6 +8,7 @@ import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { AutoBinNode } from '$lib/sql/bin';
+import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 import type { RollingAvgNode } from '$lib/sql/rolling-avg';
 
 // ---------------------------------------------------------------------------
@@ -296,6 +297,28 @@ export interface DomainConfig {
 export interface BaseMarkProps {
 	table: string;
 	selection?: string;
+	/**
+	 * How this mark responds to selections in its filter group.
+	 *
+	 * - `'auto'` (the default): a categorical selection (a legend, a Toggle, a
+	 *   band label) on a field this mark draws by, its band axis or its ordinal
+	 *   colour, dims it: it keeps its data and the unselected categories fade.
+	 *   Any other selection filters it.
+	 * - `'filter'`: every selection filters it, even on a field it draws by, so
+	 *   its aggregates are recomputed for the subset: top N within the selected
+	 *   region, shares within the selected groups.
+	 *
+	 * A `'filter'` mark never dims. A legend, Toggle or band label filters it
+	 * in its own chart too: every such control on the same fields shares one
+	 * selection, so any chart with one would otherwise ignore it, and this
+	 * chart's legend re-ranks its own top N. A Toggle on its own bars therefore
+	 * filters them: the unselected bars leave the chart. Known limit: on a band
+	 * axis drawn from the data (a sorted mark), clicking a label filters the
+	 * other categories out, their labels go with them, and a second category
+	 * cannot be added from this chart; clicking the label again clears it. A brush still skips its
+	 * own chart, so the marks under it do not move while it is dragged.
+	 */
+	selectionResponse?: SelectionResponse;
 	scheme?: ColorScheme;
 	limit?: number;
 	transforms?: Transform[];

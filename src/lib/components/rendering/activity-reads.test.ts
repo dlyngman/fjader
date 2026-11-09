@@ -5,6 +5,9 @@ import {
 	markActivityWGSL,
 	readsFor,
 	ruleHasExtent,
+	readsForResponse,
+	groupIndexForResponse,
+	NO_GROUP,
 	rendererForMark
 } from './activity-reads';
 
@@ -102,5 +105,27 @@ describe('activity reads', () => {
 			'markColorActivity(cm, ci, cv, g)'
 		);
 		expect(() => colorActivityWGSL(activityReads('dots'), args)).toThrow();
+	});
+
+	it("'filter' reads nothing and has no group; 'auto' keeps both", () => {
+		expect(readsForResponse('filter', ['carrier'])).toEqual([]);
+		expect(readsForResponse('auto', ['carrier'])).toEqual(['carrier']);
+		expect(readsForResponse(undefined, ['carrier'])).toEqual(['carrier']);
+		expect(groupIndexForResponse('filter', 2)).toBe(NO_GROUP);
+		expect(groupIndexForResponse(undefined, 2)).toBe(2);
+	});
+
+	it('identityActivity returns fully active for NO_GROUP before reading anything', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { fileURLToPath } = await import('node:url');
+		const wgsl = readFileSync(
+			fileURLToPath(new URL('../../gpu/ScaleTemplateSystem.ts', import.meta.url)),
+			'utf8'
+		);
+		const body = /fn identityActivity\([^)]*\)[^{]*\{([\s\S]*?)\n {4}\}/.exec(wgsl)?.[1] ?? '';
+		const check = body.indexOf('if (group == ${NO_GROUP}u)');
+		const firstRead = body.indexOf('identitySlots[');
+		expect(check).toBeGreaterThanOrEqual(0);
+		expect(check).toBeLessThan(firstRead);
 	});
 });

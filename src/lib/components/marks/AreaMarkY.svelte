@@ -47,6 +47,7 @@
 	let {
 		table,
 		selection = undefined,
+		selectionResponse = undefined,
 		x,
 		y,
 		y1: y1Prop,
@@ -99,6 +100,7 @@
 		strokeWidth: () => strokeWidth,
 		transforms: () => transforms,
 		selection: () => selection,
+		selectionResponse: () => selectionResponse,
 		limit: () => limit,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,

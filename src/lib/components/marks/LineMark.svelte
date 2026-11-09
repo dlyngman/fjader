@@ -70,6 +70,7 @@
 	let {
 		table,
 		selection = undefined,
+		selectionResponse = undefined,
 		x,
 		y,
 		stroke = null,
@@ -122,6 +123,7 @@
 		dotRadius: () => dotRadius,
 		transforms: () => transforms,
 		selection: () => selection,
+		selectionResponse: () => selectionResponse,
 		limit: () => limit,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,

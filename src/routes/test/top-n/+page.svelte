@@ -257,11 +257,14 @@
 
 			<!-- Chart 6: Selection + topN(5) -->
 			<div class="chart-panel">
-				<h3>6. Selection + topN(5) — SQL, crossfiltered</h3>
+				<h3>6. Selection + topN(5) — SQL, selectionResponse="filter"</h3>
 				<p class="desc">
-					Filter is applied before ranking, so toggling regions re-ranks within the subset. No
+					selectionResponse="filter": a region selection filters this chart even though it is
+					coloured by region, so the top 5 is re-ranked within the subset. Select regions here or in
+					chart 5 or 7: a categorical selection filters a "filter" mark in its own chart too. No
 					filter: Electronics, Clothing, Food, Music, Books. North only: Music, Garden, Health,
-					Auto, Sports. West only: Electronics, Food, Clothing, Books, Toys.
+					Auto, Sports. West only: Electronics, Food, Clothing, Books, Toys. Clicking a bar here
+					toggles its region, so the other regions' bars leave the chart.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
@@ -285,6 +288,7 @@
 										fill="region"
 										sort={{ x: 'y', order: 'desc' }}
 										selection="brush"
+										selectionResponse="filter"
 										transforms={[topN(5)]}
 										tooltip
 									/>

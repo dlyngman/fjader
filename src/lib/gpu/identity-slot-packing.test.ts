@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
 	IDENTITY_SLOT_EMPTY,
 	IDENTITY_SLOT_HEADER,
+	NO_GROUP,
 	createIdentitySlotState,
 	packIdentitySlots,
 	type ActivityField,
@@ -561,6 +562,7 @@ function on(key: string, id: string, slots: number[], version = 1): IdentitySlot
 
 /** identityActivity(base, group, id) from the shader, in TypeScript. */
 function identityActivity(resolved: Float32Array, base: number, group: number, id: number) {
+	if (group === NO_GROUP) return 1;
 	const ref = resolved[base + 1];
 	const n = resolved[base + 2];
 	if (id >= n) return 1;
@@ -779,6 +781,16 @@ describe('packIdentitySlots: field activity blocks', () => {
 		expect(state.fieldBases.get('f')).not.toBe(IDENTITY_SLOT_EMPTY);
 		packIdentitySlots([scale('b', [0])], state, [f], 1);
 		expect(state.fieldBases.get('f')).toBe(IDENTITY_SLOT_EMPTY);
+	});
+
+	it('reads NO_GROUP as fully active, even on a fully dimmed field', () => {
+		const state = createIdentitySlotState(64);
+		const out = new Float32Array(64);
+		packIdentitySlots([on('f', 'a', [0, 1])], state, [field('f', 2, [[[0, 0], [0, 0], 1, 1]])], 1);
+		applyResolves(state, out);
+		const base = state.offsets.get('a')!;
+		expect(identityActivity(out, base, 0, 0)).toBe(0);
+		expect(identityActivity(out, base, NO_GROUP, 0)).toBe(1);
 	});
 
 	it('forgets the state of a scale that has gone away', () => {

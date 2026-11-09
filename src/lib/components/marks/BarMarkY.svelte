@@ -39,6 +39,7 @@
 	let {
 		table,
 		selection = undefined,
+		selectionResponse = undefined,
 		x,
 		y,
 		y1: y1Prop,
@@ -80,6 +81,7 @@
 		opacity: () => opacity,
 		transforms: () => transforms,
 		selection: () => selection,
+		selectionResponse: () => selectionResponse,
 		limit: () => limit,
 		padding: () => padding,
 		paddingInner: () => paddingInner,

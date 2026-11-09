@@ -55,16 +55,21 @@ export interface Clause {
 
 /**
  * What routing needs to know about a mark: the identity keys of the
- * categorical fields its renderer reads selection activity for, and its chart.
- * One object per mark, owned by its lifecycle and handed around by reference.
+ * categorical fields its renderer reads selection activity for, its chart, and
+ * its selectionResponse. One object per mark, owned by its lifecycle and
+ * handed around by reference.
  *
  * A categorical selection on a field in `reads` dims the mark instead of
  * filtering it. `chart` is the chart's ChartConfig, compared by reference: a
  * faceted chart's cells have ids of their own, but share one config.
+ * `response` 'filter' makes every selection filter the mark, and a click
+ * control's (a discrete registration's) in its own chart too; brushes still
+ * skip their own chart.
  */
 export interface MarkRoute {
 	readonly reads: readonly string[];
 	readonly chart: object | null;
+	readonly response?: 'auto' | 'filter';
 }
 
 /**
@@ -73,6 +78,12 @@ export interface MarkRoute {
  */
 export interface SourceRegistration {
 	readonly chart?: object | null;
+	/**
+	 * The source writes its clauses on a click (a Toggle, a legend, a band
+	 * label), not under a dragged pointer. A 'filter' mark in the chart it
+	 * skips is filtered by it all the same.
+	 */
+	readonly discrete?: boolean;
 }
 
 /** A mark with no route: it reads no activity and is in no chart. */
@@ -128,10 +139,17 @@ export class CrossfilterSelection {
 		if (key !== null && route.reads.includes(key)) return false;
 		const chart = route.chart;
 		if (chart) {
+			// Every chart with a Toggle or legend on the same fields registers
+			// their one source, so a chart skip would let a 'filter' mark ignore
+			// those fields wherever it has such a control. A click does not move
+			// under the pointer, so filtering the own chart is safe for it.
+			const filterMark = route.response === 'filter';
 			const registrations = this.#sources.get(sourceId);
 			if (registrations) {
 				for (const registration of registrations) {
-					if (registration.chart === chart) return false;
+					if (registration.chart === chart && !(filterMark && registration.discrete)) {
+						return false;
+					}
 				}
 			}
 		}

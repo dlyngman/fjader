@@ -17,6 +17,8 @@ import {
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { topN } from '$lib/transforms';
+import type { MarkConfig, Transform } from '$lib/types';
 import { buildQueryParts, castReal } from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
@@ -142,18 +144,30 @@ const idOf = (field: string) => engine.identityColumn(field);
 async function mark(
 	id: string,
 	select: Record<string, unknown>,
-	opts: { table?: string; baseTable?: string; limit?: number; reads?: string[] } = {}
+	opts: {
+		table?: string;
+		baseTable?: string;
+		limit?: number;
+		reads?: string[];
+		transforms?: { transforms: Transform[]; config: MarkConfig };
+		into?: FilterGroup;
+		chart?: object;
+		response?: 'auto' | 'filter';
+	} = {}
 ): Promise<MarkHandle> {
 	const baseTable = opts.baseTable ?? 't';
 	const descriptor: QueryDescriptor = {
 		table: opts.table ?? baseTable,
 		baseTable,
-		parts: buildQueryParts(select, null, false),
+		parts: buildQueryParts(select, null, !!opts.transforms),
 		schema: new Map(),
-		transformCompiler: new TransformCompiler([]),
-		route: { reads: opts.reads ?? [], chart: null }
+		transformCompiler: new TransformCompiler(
+			opts.transforms?.transforms ?? [],
+			opts.transforms?.config
+		),
+		route: { reads: opts.reads ?? [], chart: opts.chart ?? null, response: opts.response }
 	};
-	const handle = engine.registerMark(id, descriptor, group);
+	const handle = engine.registerMark(id, descriptor, opts.into ?? group);
 	await settle([handle], () => handle.updateParams({ sort: undefined, limit: opts.limit }));
 	return handle;
 }
@@ -236,6 +250,59 @@ describe('preagg for value dims', () => {
 		const histRows = await expected(`SELECT g, count(*) FROM t WHERE cat = 'a' GROUP BY g`);
 		expect(rowsOf(hist)).toEqual(histRows);
 		expect(rowsOf(histView)).toEqual(histRows);
+	});
+
+	it('a mark that filters by a field it draws reads the same rows through preagg, top N with Other', async () => {
+		// selectionResponse 'filter': no reads, so a toggle on the field it is
+		// coloured by filters it, though the legend sits in the mark's own
+		// chart. Bars by kind, top 1 plus Other, coloured by cat.
+		await engine.ensureColumns('t', { categorical: ['cat', 'kind'] });
+		const otherId = await engine.reserveSyntheticIdentity('kind', 'Other');
+		const view = engine.identitySourceFor('t');
+		const select = {
+			x: castReal(column(idOf('kind'))),
+			fill: castReal(column(idOf('cat'))),
+			n: count()
+		};
+		const transforms = {
+			transforms: [topN(1, { includeOthers: true })],
+			config: {
+				markType: 'bar',
+				table: 't',
+				x: 'x',
+				y: 'n',
+				fill: 'fill',
+				groupKeys: ['x', 'fill'],
+				identity: {
+					x: { dim: engine.dimTableFor('kind'), size: otherId + 1, positional: true, otherId }
+				}
+			} as MarkConfig
+		};
+		const chart = { name: 'bars' };
+		const own = { table: view, transforms, chart, response: 'filter' as const };
+		const viaPreagg = await mark('bars', select, own);
+		// The same mark in a group that never activates: it reads the base table.
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('bars-ref', select, { ...own, into: reference });
+
+		await engine.activate(group, {
+			sourceId: 'toggle-cat',
+			categoricalKey: 'cat',
+			dims: [{ kind: 'value', field: 'cat' }]
+		});
+		expect(creates()).toHaveLength(1);
+
+		const legend = group.registerToggle('cat', { chart });
+		const referenceLegend = reference.registerToggle('cat', { chart });
+		await settle([viaPreagg], () => legend.toggle(['a'], false));
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		await settle([viaBase], () => referenceLegend.toggle(['a'], false));
+		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
+
+		expect(rowsOf(viaPreagg)).toEqual(rowsOf(viaBase));
+		// Top 1 kind within cat 'a', plus Other: two rows.
+		expect(rowsOf(viaPreagg)).toHaveLength(2);
 	});
 
 	it('a legend hover builds no table for a mark that reads the field, which dims instead', async () => {
