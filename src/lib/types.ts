@@ -8,6 +8,7 @@ import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { AutoBinNode } from '$lib/sql/bin';
+import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 import type { RollingAvgNode } from '$lib/sql/rolling-avg';
 
 // ---------------------------------------------------------------------------
@@ -296,6 +297,26 @@ export interface DomainConfig {
 export interface BaseMarkProps {
 	table: string;
 	selection?: string;
+	/**
+	 * How this mark responds to selections in its filter group.
+	 *
+	 * - `'auto'` (the default): a categorical selection (a legend, a Toggle, a
+	 *   band label) on a field this mark draws by, its band axis or its ordinal
+	 *   colour, dims it: it keeps its data and the unselected categories fade.
+	 *   Any other selection filters it.
+	 * - `'filter'`: every selection filters it, even on a field it draws by, so
+	 *   its aggregates are recomputed for the subset: top N within the selected
+	 *   region, shares within the selected groups.
+	 *
+	 * In the chart that holds the selection's control (a Toggle in this chart, a
+	 * legend inside it), a `'filter'` mark keeps its data and does not dim:
+	 * clicking that chart's own legend fades the legend entries, and the mark
+	 * stays as it is. That is the crossfilter convention, which keeps every
+	 * category clickable; the other charts in the group show the subset. Dimming
+	 * it there instead would make it dim in its own chart and filter elsewhere,
+	 * the inconsistency this setting exists to avoid.
+	 */
+	selectionResponse?: SelectionResponse;
 	scheme?: ColorScheme;
 	limit?: number;
 	transforms?: Transform[];

@@ -42,6 +42,7 @@
 	let {
 		table,
 		selection = undefined,
+		selectionResponse = undefined,
 		x,
 		y,
 		fill = null,
@@ -80,6 +81,7 @@
 		radiusRange: () => radiusRange,
 		transforms: () => transforms,
 		selection: () => selection,
+		selectionResponse: () => selectionResponse,
 		limit: () => limit,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,

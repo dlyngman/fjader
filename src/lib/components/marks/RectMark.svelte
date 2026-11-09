@@ -47,6 +47,7 @@
 	let {
 		table,
 		selection = undefined,
+		selectionResponse = undefined,
 		x = null,
 		x1: x1Prop = null,
 		x2: x2Prop = null,
@@ -95,6 +96,7 @@
 		opacity: () => opacity,
 		transforms: () => transforms,
 		selection: () => selection,
+		selectionResponse: () => selectionResponse,
 		limit: () => limit,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,

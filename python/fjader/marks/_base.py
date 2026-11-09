@@ -45,6 +45,12 @@ class Mark:
     # Common props from BaseMarkSpec in types.ts
     table: str | None = None
     selection: str | None = None
+    # How the mark responds to selections in its group. "auto" (default): a
+    # categorical selection on a field the mark draws by dims it, others filter
+    # it. "filter": every selection filters it, so aggregates are recomputed
+    # for the subset (top N within the selected region). In the chart holding
+    # the selection's control, a "filter" mark keeps its data and does not dim.
+    selection_response: Literal["auto", "filter"] | None = None
     scheme: ColorScheme | None = None
     limit: int | None = None
     transforms: list[TransformSpec] | None = None

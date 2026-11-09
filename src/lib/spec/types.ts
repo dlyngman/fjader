@@ -191,6 +191,8 @@ export type MarkSpec =
 interface BaseMarkSpec {
 	table: string;
 	selection?: string; // selection group name (auto-created in SelectionRegistry)
+	/** How the mark responds to selections in its group; see BaseMarkProps. Default 'auto'. */
+	selectionResponse?: 'auto' | 'filter';
 	scheme?: ColorScheme;
 	limit?: number;
 	transforms?: TransformSpec[];

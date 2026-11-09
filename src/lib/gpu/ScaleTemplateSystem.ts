@@ -50,6 +50,7 @@ import {
 	SIZE_SCALE_BINDINGS,
 	SIZE_SCALE_FUNCTIONS
 } from './SizeScaleShaderLib';
+import { NO_GROUP } from './identity-slot-packing';
 import { isNanExpr } from './NanShaderLib';
 import { DEFAULT_INACTIVE_OPACITY } from '$lib/scales/ActivityTable';
 
@@ -663,6 +664,12 @@ export class ScaleTemplateSystem {
       // how many ids it covers (n); the block holds one run of n per group.
       // Header first, so this is two dependent reads. Past n, or in the empty
       // block where n is 0, an id is fully active.
+      //
+      // NO_GROUP (a mark whose selectionResponse is 'filter') is fully active,
+      // checked before anything is read, so it never becomes an offset.
+      if (group == ${NO_GROUP}u) {
+        return 1.0;
+      }
       let actRef = u32(identitySlots[base + 1u]);
       let n = u32(identitySlots[base + 2u]);
       if (id >= n) {

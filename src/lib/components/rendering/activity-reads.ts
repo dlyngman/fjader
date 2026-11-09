@@ -20,6 +20,8 @@
  * axis, belongs to no category on it, and must not dim by it.
  */
 
+import { NO_GROUP } from '$lib/gpu/identity-slot-packing';
+
 /** The renderers that read selection activity. Text reads it on the CPU. */
 export type ActivityRenderer =
 	| 'dots'
@@ -122,6 +124,33 @@ export function readsFor(
 
 /** A mark that reads no activity. Shared, so its reads never look changed. */
 export const NO_READS: readonly string[] = [];
+
+/**
+ * How a mark responds to selections in its filter group (the `selectionResponse`
+ * prop). 'auto', the default: a categorical selection on a field the mark draws
+ * by (its band axes, its ordinal colour) dims it, and any other selection
+ * filters it. 'filter': every selection filters it, even on a field it draws
+ * by, so its aggregates are recomputed for the subset (top N within a region).
+ */
+export type SelectionResponse = 'auto' | 'filter';
+
+export { NO_GROUP };
+
+/** A mark's reads under its selection response: none for 'filter', which never dims. */
+export function readsForResponse(
+	response: SelectionResponse | undefined,
+	reads: readonly string[]
+): readonly string[] {
+	return response === 'filter' ? NO_READS : reads;
+}
+
+/** The group index a mark's shader reads activity with: NO_GROUP for 'filter'. */
+export function groupIndexForResponse(
+	response: SelectionResponse | undefined,
+	groupIndex: number
+): number {
+	return response === 'filter' ? NO_GROUP : groupIndex;
+}
 
 /**
  * The WGSL activity of a renderer that reads colour only (lines, areas,

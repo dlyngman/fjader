@@ -42,6 +42,7 @@ def dot(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -65,6 +66,9 @@ def dot(
         preferred_x_scale_type: Force x-axis scale type (e.g. ``'log'``, ``'time'``).
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name (e.g. ``'category10'``, ``'viridis'``).
         limit: Maximum number of rows to query.
         transforms: List of transforms (e.g. ``[fj.topN(10), fj.filter(...)]``).
@@ -80,7 +84,7 @@ def dot(
         radius_range=radius_range,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -106,6 +110,7 @@ def bar_x(
     dx: float | None = None,
     dy: float | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -134,6 +139,9 @@ def bar_x(
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -148,7 +156,7 @@ def bar_x(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -174,6 +182,7 @@ def bar_y(
     dx: float | None = None,
     dy: float | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -202,6 +211,9 @@ def bar_y(
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -216,7 +228,7 @@ def bar_y(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -240,6 +252,7 @@ def line(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -266,6 +279,9 @@ def line(
         preferred_x_scale_type: Force x-axis scale type (e.g. ``'time'``).
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -282,7 +298,7 @@ def line(
         curve=curve, lod=lod,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -309,6 +325,7 @@ def area_y(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -338,6 +355,9 @@ def area_y(
         preferred_x_scale_type: Force x-axis scale type.
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms (e.g. ``[fj.stack_y()]``).
@@ -354,7 +374,7 @@ def area_y(
         dot_radius=dot_radius, auto_dots=auto_dots, curve=curve,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -381,6 +401,7 @@ def area_x(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -410,6 +431,9 @@ def area_x(
         preferred_x_scale_type: Force x-axis scale type.
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -426,7 +450,7 @@ def area_x(
         dot_radius=dot_radius, auto_dots=auto_dots, curve=curve,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -456,6 +480,7 @@ def rect(
     dx: float | None = None,
     dy: float | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -488,6 +513,9 @@ def rect(
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -505,7 +533,7 @@ def rect(
         preferred_y_scale_type=preferred_y_scale_type,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
         align=align, inset=inset, dx=dx, dy=dy,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -530,6 +558,7 @@ def rect_x(
     dy: float | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -557,6 +586,9 @@ def rect_x(
         dy: Vertical pixel offset.
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -571,7 +603,7 @@ def rect_x(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_y_scale_type=preferred_y_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -596,6 +628,7 @@ def rect_y(
     dy: float | None = None,
     preferred_x_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -623,6 +656,9 @@ def rect_y(
         dy: Vertical pixel offset.
         preferred_x_scale_type: Force x-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -637,7 +673,7 @@ def rect_y(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, y1=y1, y2=y2,
         fill=fill, opacity=opacity, inset=inset, dx=dx, dy=dy,
         preferred_x_scale_type=preferred_x_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,
@@ -664,6 +700,7 @@ def text(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
+    selection_response: Literal["auto", "filter"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
     transforms: list[TransformSpec] | None = None,
@@ -693,6 +730,9 @@ def text(
         preferred_x_scale_type: Force x-axis scale type.
         preferred_y_scale_type: Force y-axis scale type.
         selection: Selection parameter name for linked interactors.
+        selection_response: "filter" makes every selection filter this mark, even on
+            a field it draws by (top N within the selected region); "auto" (default)
+            dims it for a categorical selection on such a field.
         scheme: Color scheme name.
         limit: Maximum number of rows.
         transforms: List of transforms.
@@ -710,7 +750,7 @@ def text(
         rotate=rotate,
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
-        selection=selection, scheme=scheme, limit=limit,
+        selection=selection, selection_response=selection_response, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
         tooltip_proximity=tooltip_proximity, tip=tip,

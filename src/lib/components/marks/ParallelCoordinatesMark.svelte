@@ -11,6 +11,7 @@
 </script>
 
 <script lang="ts">
+	import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { ParallelLines } from '../rendering';
@@ -31,6 +32,8 @@
 		strokeWidth?: number;
 		curve?: CurveType;
 		selection?: string;
+		/** How this mark responds to selections in its group (see BaseMarkProps). */
+		selectionResponse?: SelectionResponse;
 		transforms?: Transform[];
 	}
 
@@ -43,6 +46,7 @@
 		strokeWidth = 2,
 		curve = 'linear',
 		selection = undefined,
+		selectionResponse = undefined,
 		transforms = []
 	}: Props = $props();
 
@@ -59,6 +63,7 @@
 		stroke: () => stroke,
 		scheme: () => scheme,
 		selection: () => selection,
+		selectionResponse: () => selectionResponse,
 		transforms: () => transforms
 	});
 

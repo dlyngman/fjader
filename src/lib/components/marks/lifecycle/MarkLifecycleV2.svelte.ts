@@ -66,9 +66,12 @@ import { identityKeyFor } from '$lib/query-engine/identity-key';
 import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
 import {
 	activityReads,
+	groupIndexForResponse,
 	NO_READS,
 	readsFor,
-	rendererForMark
+	readsForResponse,
+	rendererForMark,
+	type SelectionResponse
 } from '$lib/components/rendering/activity-reads';
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
@@ -144,6 +147,7 @@ export interface ReactiveConfig {
 	readonly tooltip: boolean | { sortTable?: boolean };
 	readonly fitDomain: 'x' | 'y' | boolean | undefined;
 	readonly tip: (unknown | '*')[] | false | undefined;
+	readonly selectionResponse: SelectionResponse | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -1559,11 +1563,14 @@ export class MarkLifecycleV2 {
 			const band = this.#chartContext[`${axis}ScaleState`] as BandScaleState | null;
 			return band?.identityKey ?? null;
 		};
-		return readsFor(activityReads(renderer, this.#config.ruleExtent ?? false), {
-			color: color?.isOrdinal ? color.identityKey : null,
-			x: bandKey('x'),
-			y: bandKey('y')
-		});
+		return readsForResponse(
+			this.#reactiveConfig.selectionResponse,
+			readsFor(activityReads(renderer, this.#config.ruleExtent ?? false), {
+				color: color?.isOrdinal ? color.identityKey : null,
+				x: bandKey('x'),
+				y: bandKey('y')
+			})
+		);
 	});
 
 	/** `#reads` as one string, so the registration effect re-runs only on a real change. */
@@ -1577,7 +1584,8 @@ export class MarkLifecycleV2 {
 	 * MarkConstants to read its group's run of each field's activity block.
 	 */
 	get groupIndex(): number {
-		return this.#filterGroup.index;
+		// NO_GROUP for selectionResponse 'filter', which never dims.
+		return groupIndexForResponse(this.#reactiveConfig.selectionResponse, this.#filterGroup.index);
 	}
 
 	get dataVersion(): number {

@@ -70,6 +70,8 @@
 		if (!chart || !filterGroups) return [];
 		const indices: number[] = [];
 		for (const entry of chart.config.entries.values()) {
+			// A 'filter' mark never dims; its labels follow it.
+			if (entry.selectionResponse === 'filter') continue;
 			const index = filterGroups.get(entry.selection).index;
 			if (!indices.includes(index)) indices.push(index);
 		}

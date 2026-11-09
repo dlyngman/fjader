@@ -15,6 +15,7 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { createOverridable, type Overridable } from './overridable.svelte';
+import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 import type {
 	FieldRef,
 	LODConfig,
@@ -47,6 +48,7 @@ export interface MarkEntry {
 	scheme?: ColorScheme;
 	transforms?: Transform[];
 	selection?: string;
+	selectionResponse?: SelectionResponse;
 	limit?: number;
 	preferredXScaleType?: string | null;
 	preferredYScaleType?: string | null;

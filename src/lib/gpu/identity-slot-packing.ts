@@ -94,6 +94,15 @@ export const IDENTITY_SLOT_CAPACITY = 65536;
  */
 export const IDENTITY_SLOT_EMPTY = 0;
 
+/**
+ * The group index of a mark that reads no selection activity: identityActivity
+ * returns fully active for it before computing any offset, so it never indexes
+ * past a field block. A mark whose selectionResponse is 'filter' gets it: in
+ * the chart holding a selection's control it keeps its data (the chart skips
+ * its own selection), and this keeps it from dimming there too.
+ */
+export const NO_GROUP = 0xffffffff;
+
 /** Floats before a scale block's slots: count, actRef, n. */
 export const IDENTITY_SLOT_HEADER = 3;
 
