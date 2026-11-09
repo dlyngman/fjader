@@ -257,10 +257,11 @@ function identityToken(field: string): string {
 }
 
 /**
- * Above this many distinct values a band axis is refused outright.
- * The shared slot buffer holds 16384 floats across every band and point scale,
- * so a single axis this large cannot render whatever else is on the page — the
- * limit is capacity, not taste.
+ * Above this many distinct values a band axis is refused outright. The shared
+ * slot buffer (IDENTITY_SLOT_CAPACITY floats) holds every band and point
+ * scale's slots and every selected field's activity, one run per filter group,
+ * so an axis this large would crowd out the rest of the page — the limit is
+ * capacity, not taste.
  */
 export const MAX_IDENTITY_CARDINALITY = 10000;
 /**

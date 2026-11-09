@@ -60,17 +60,20 @@
 
 /**
  * Floats GLOBALLY across every band and point scale on the page, headers
- * included.
+ * included, and every live field's activity.
  *
  * No longer a binding limit: the tables are storage buffers, bound only to the
- * resolve pass, and the render stages read one resolved storage buffer. The
- * number is left over from when they were 64 KB uniforms, and making the
- * allocation grow on demand (recreate the buffers, rebuild the bind groups) is
- * what would retire it.
+ * resolve pass, and the render stages read one resolved storage buffer. Making
+ * the allocation grow on demand (recreate the buffers, rebuild the bind groups)
+ * is what would retire it.
  *
- * Each scale takes `3 + count`; each field `n × groups`.
+ * Each scale takes `3 + count`; each live field `n × groups`. 65536 fits a
+ * 5000-category field selected on across 3 groups (15000) with its scales
+ * (about 5000 each) several times over. It costs 256 KB per buffer, 768 KB for
+ * the three; the resolve pass dispatches per block, sized by the block, so a
+ * larger buffer costs no GPU time.
  */
-export const IDENTITY_SLOT_CAPACITY = 16384;
+export const IDENTITY_SLOT_CAPACITY = 65536;
 
 /**
  * Base of the permanent empty block `[0, 0, 0]`. A scale that cannot be placed
