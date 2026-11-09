@@ -502,6 +502,7 @@ export class ColorScaleState {
 	 */
 	setIdentity(identity: FieldIdentity): void {
 		this.#warnIfDestroyed('setIdentity');
+		const hadIdentity = this.hasIdentity;
 		const previous = this.#identity;
 		this.#identity = identity;
 		if (previous && previous !== identity && !previous.present) {
@@ -509,6 +510,14 @@ export class ColorScaleState {
 			this.#nextRank = 0;
 		}
 		this.#refreshRanks();
+		// Identity landing after the config was uploaded. The domain fetch and the
+		// identity columns are fetched in parallel, so either can arrive first;
+		// an upload made before identity wrote no slot base (the channel carried
+		// palette indices then), sized the palette by the domain, and built the
+		// CPU scale from domain order. A later setSlotBase skips a base it already
+		// holds, so nothing would correct it: the shader would read ids as
+		// palette indices and read no selection activity. Upload again.
+		if (!hadIdentity && this.hasIdentity && this.domain.length > 0) this.#uploadToGPU();
 	}
 
 	/** True once this scale's channel carries dim ids rather than palette indices. */
