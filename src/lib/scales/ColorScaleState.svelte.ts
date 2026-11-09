@@ -186,8 +186,18 @@ export class ColorScaleState {
 		// Before the scale has a config slot there is nothing to patch; whichever
 		// upload path claims one writes the base with the rest of the struct.
 		if (this.#configSlot >= 0) {
-			this.#gpuCoordinator?.writeColorConfigSlotBase(this.#configSlot, base);
+			this.#gpuCoordinator?.writeColorConfigSlotBase(this.#configSlot, this.#configSlotBase);
 		}
+	}
+
+	/**
+	 * The slot base the config carries: this scale's block while its channel
+	 * carries ids, NO_SLOT_TABLE while it carries palette indices. The one rule
+	 * for both writers (setSlotBase's patch and the full upload), so which wrote
+	 * last cannot change what the GPU reads.
+	 */
+	get #configSlotBase(): number {
+		return this.hasIdentity && this.#slotBase >= 0 ? this.#slotBase : NO_SLOT_TABLE;
 	}
 
 	// ViewManager integration - tracks tables this scale has registered columns for
@@ -247,7 +257,9 @@ export class ColorScaleState {
 	 * points the scale's block at.
 	 */
 	get identityKey(): string | null {
-		return this.#identity?.key || null;
+		// Only while the channel carries ids: a key without them would route a
+		// mark to dim by activity the shader cannot read.
+		return this.hasIdentity ? this.#identity!.key || null : null;
 	}
 
 	get scheme(): string {
@@ -400,6 +412,9 @@ export class ColorScaleState {
 	}
 
 	#uploadToGPU(): void {
+		// A destroyed scale's slots may already belong to another scale: a late
+		// upload (identity landing after the chart unmounted) would overwrite them.
+		if (this.#destroyed) return;
 		if (!this.#gpuCoordinator) {
 			console.warn('[ColorScaleState] No GPU coordinator, skipping upload');
 			return;
@@ -509,15 +524,14 @@ export class ColorScaleState {
 			this.#paletteRank.clear();
 			this.#nextRank = 0;
 		}
+		// Identity landing after the config was uploaded, or going (a reload
+		// empties it). The domain fetch and the identity columns are fetched in
+		// parallel, so either can arrive first; the config's slot base, its palette
+		// size and the CPU scale all depend on whether the channel carries ids,
+		// so a change of that uploads again. The ranks are refreshed here either
+		// way: they are CPU state, needed without a coordinator too.
 		this.#refreshRanks();
-		// Identity landing after the config was uploaded. The domain fetch and the
-		// identity columns are fetched in parallel, so either can arrive first;
-		// an upload made before identity wrote no slot base (the channel carried
-		// palette indices then), sized the palette by the domain, and built the
-		// CPU scale from domain order. A later setSlotBase skips a base it already
-		// holds, so nothing would correct it: the shader would read ids as
-		// palette indices and read no selection activity. Upload again.
-		if (!hadIdentity && this.hasIdentity && this.domain.length > 0) this.#uploadToGPU();
+		if (hadIdentity !== this.hasIdentity && this.domain.length > 0) this.#uploadToGPU();
 	}
 
 	/** True once this scale's channel carries dim ids rather than palette indices. */
@@ -604,10 +618,8 @@ export class ColorScaleState {
 		return this.#identity!.values[id] as string | number | undefined;
 	}
 
+	/** Called from #uploadToGPU only, which has refreshed the ranks. */
 	#uploadOrdinal(): void {
-		// New categories in the domain need ranks before the palette is sized.
-		this.#refreshRanks();
-
 		// Bake and upload palette
 		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
 		this.#gpuCoordinator.writeColorPalette(
@@ -630,7 +642,7 @@ export class ColorScaleState {
 			type: 0, // ORDINAL
 			paletteOffset: this.#paletteSlot * 32,
 			paletteSize: Math.min(Math.max(rankSpace, 1), 32),
-			slotBase: this.hasIdentity ? this.#slotBase : undefined
+			slotBase: this.#configSlotBase
 		});
 		this.#gpuCoordinator.writeColorConfig(this.#configSlot, config);
 	}

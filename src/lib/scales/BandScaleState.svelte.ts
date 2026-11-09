@@ -245,7 +245,8 @@ export class BandScaleState {
 	 * points the scale's block at.
 	 */
 	get identityKey(): string | null {
-		return this.#resolver.identity?.key || null;
+		// Only while the channel carries ids, as for colour.
+		return this.hasIdentity ? this.#resolver.identity!.key || null : null;
 	}
 
 	// =========================================================================

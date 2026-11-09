@@ -22,12 +22,14 @@ describe('ColorScaleState: identity after the first upload', () => {
 
 	/** The slot base each full config write carried, in order. */
 	let fullWrites: number[];
+	/** The slot base each four-byte patch carried, in order. */
+	let patches: number[];
 	const coordinator = {
 		addAnimatedSource: () => {},
 		removeAnimatedSource: () => {},
 		writeColorConfig: (_slot: number, data: ArrayBufferLike) =>
 			fullWrites.push(new Uint32Array(data as ArrayBuffer)[8]),
-		writeColorConfigSlotBase: () => {},
+		writeColorConfigSlotBase: (_slot: number, base: number) => patches.push(base),
 		writeColorPalette: () => {},
 		writeColorRamp: () => {}
 	};
@@ -36,6 +38,7 @@ describe('ColorScaleState: identity after the first upload', () => {
 	let log: ReturnType<typeof vi.spyOn>;
 	beforeEach(() => {
 		fullWrites = [];
+		patches = [];
 		warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		log = vi.spyOn(console, 'log').mockImplementation(() => {});
 	});
@@ -68,5 +71,57 @@ describe('ColorScaleState: identity after the first upload', () => {
 		const writes = fullWrites.length;
 		scale.setIdentity(new FieldIdentity(['a', 'b'], 'f'));
 		expect(fullWrites.length).toBe(writes);
+	});
+
+	it('patches NO_SLOT_TABLE, not its base, while the channel carries palette indices', () => {
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a', 'b'] },
+			registry,
+			coordinator as never
+		);
+		scale.setSlotBase(3);
+		expect(patches.at(-1)).toBe(NO_SLOT_TABLE);
+		expect(scale.identityKey).toBeNull();
+
+		scale.setIdentity(new FieldIdentity(['a', 'b'], 'f'));
+		expect(fullWrites.at(-1)).toBe(3);
+		expect(scale.identityKey).toBe('f');
+		scale.setSlotBase(5);
+		expect(patches.at(-1)).toBe(5);
+	});
+
+	it('has no identity key for an identity with no values', () => {
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a'] },
+			registry,
+			coordinator as never
+		);
+		scale.setIdentity(new FieldIdentity([], 'f'));
+		expect(scale.identityKey).toBeNull();
+	});
+
+	it('uploads nothing once destroyed: its slots may belong to another scale', () => {
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a', 'b'] },
+			registry,
+			coordinator as never
+		);
+		const writes = fullWrites.length;
+		scale.destroy();
+		scale.setIdentity(new FieldIdentity(['a', 'b'], 'f'));
+		expect(fullWrites.length).toBe(writes);
+	});
+
+	it('uploads NO_SLOT_TABLE again when a reload empties the identity', () => {
+		const scale = new ColorScaleState(
+			{ field: 'f', type: 'ordinal', scheme: 'tableau10', domain: ['a', 'b'] },
+			registry,
+			coordinator as never
+		);
+		scale.setSlotBase(3);
+		scale.setIdentity(new FieldIdentity(['a', 'b'], 'f'));
+		expect(fullWrites.at(-1)).toBe(3);
+		scale.setIdentity(new FieldIdentity([], 'f'));
+		expect(fullWrites.at(-1)).toBe(NO_SLOT_TABLE);
 	});
 });
