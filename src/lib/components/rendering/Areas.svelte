@@ -27,7 +27,7 @@
 		FACET: 6
 	};
 
-	// Uniform struct offsets (matching WGSL MarkConstants layout, 48 bytes)
+	// Uniform struct offsets (matching WGSL MarkConstants; size in uniform-sizes.ts)
 	const UNIFORM_OFFSETS = {
 		POINT_COUNT: 0, // u32
 		COLOR_MODE: 4, // u32
@@ -93,15 +93,15 @@
 	const baseMarkType = curve === 'linear' ? 'areas' : `areas-${curve}`;
 	const effectiveMarkType = faceted ? `${baseMarkType}-faceted` : baseMarkType;
 
+	/** The selection activity this shader reads; routing reads the same table. */
+	const ACTIVITY_READS = activityReads('areas');
+
 	// --- Facet compile-time specialization ---
 	// Areas uses a storage buffer (not a vertex attribute) for facet indices because
 	// the boundary check needs random access: facetIndices[nextIdx] to detect when
 	// consecutive points span different facet cells. Vertex attributes only provide
 	// the current instance's value. (Dots/Rects use vertex attributes since they
 	// only need their own instance's facet index.)
-	/** The selection activity this shader reads; routing reads the same table. */
-	const ACTIVITY_READS = activityReads('areas');
-
 	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
 	const FACET_DISCARD_WGSL = `
     // Facet filtering: discard vertices not belonging to this cell

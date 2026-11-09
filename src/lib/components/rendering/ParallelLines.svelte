@@ -92,12 +92,12 @@
 	// (N-1) segments × resolution sub-quads × 6 verts + N circles × 6 verts
 	const vertexCount = $derived((axisCount - 1) * 6 * resolution + axisCount * 6);
 
-	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
-	// With linear (resolution=1): single quad per segment, identical to original.
-	// With bump-x (resolution=128): smooth S-curves between axes, adaptive.
 	/** The selection activity this shader reads; routing reads the same table. */
 	const ACTIVITY_READS = activityReads('parallel');
 
+	// evaluateCurve() and CURVE_RESOLUTION are prepended from CurveShaderLib.
+	// With linear (resolution=1): single quad per segment, identical to original.
+	// With bump-x (resolution=128): smooth S-curves between axes, adaptive.
 	function buildShaderCode() {
 		return `
   ${getCurveWGSL(curve)}

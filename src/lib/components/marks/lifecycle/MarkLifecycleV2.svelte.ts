@@ -64,7 +64,12 @@ import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
-import { activityReads, readsFor, rendererForMark } from '$lib/components/rendering/activity-reads';
+import {
+	activityReads,
+	NO_READS,
+	readsFor,
+	rendererForMark
+} from '$lib/components/rendering/activity-reads';
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
@@ -85,9 +90,6 @@ import {
 	registerDataDerivedDomains
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
-
-/** A mark that reads no activity. Shared, so its reads never look changed. */
-const NO_READS: readonly string[] = [];
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)

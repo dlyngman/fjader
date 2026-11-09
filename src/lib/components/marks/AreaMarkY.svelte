@@ -159,13 +159,7 @@
 	);
 
 	/** The outline's colour, and the fill's activity it dims by (see area-outline.ts). */
-	const outline = $derived(
-		outlineColor(entry.stroke, {
-			data: markColor.data,
-			colorMode: markColor.colorMode,
-			colorScaleIndex: markColor.colorScaleIndex
-		})
-	);
+	const outline = $derived(outlineColor(entry.stroke, markColor));
 
 	// Detect if y2 is an aggregate expression (count, sum, mean, etc.)
 	const hasAggregateY = $derived.by(() => {

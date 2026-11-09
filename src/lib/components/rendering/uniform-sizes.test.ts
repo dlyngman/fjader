@@ -23,8 +23,12 @@ function layoutOf(type: string): [number, number] {
 	const array = /^array<(.+),\s*(\d+)>$/.exec(type);
 	if (array) {
 		const [size, align] = layoutOf(array[1]);
-		// Uniform arrays: every element on a 16-byte stride.
-		const stride = Math.ceil(Math.max(size, align, 16) / 16) * 16;
+		// Uniform arrays need a 16-byte element stride, so array<f32, N> is not a
+		// valid uniform: refuse it rather than lay out a shader that cannot compile.
+		if (Math.max(size, align) < 16) {
+			throw new Error(`array<${array[1]}, N> is not valid in a uniform struct`);
+		}
+		const stride = Math.ceil(size / 16) * 16;
 		return [stride * Number(array[2]), 16];
 	}
 	throw new Error(`no layout for WGSL type ${type}`);
@@ -93,5 +97,9 @@ describe('uniform struct sizes', () => {
 			expect(source(file)).not.toMatch(/new ArrayBuffer\(\d+\)/);
 		}
 		expect(source('./BaseGPURenderer.svelte.ts')).toMatch(/size: UNIFORM_STAND_IN_BYTES/);
+	});
+
+	it('refuses an array of elements smaller than 16 bytes', () => {
+		expect(() => structSize('struct S { a: array<f32, 4>, };', 'S')).toThrow();
 	});
 });

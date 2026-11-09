@@ -118,7 +118,8 @@ export function readsFor(
 	return [...new Set(out)].sort();
 }
 
-const NO_READS: readonly string[] = [];
+/** A mark that reads no activity. Shared, so its reads never look changed. */
+export const NO_READS: readonly string[] = [];
 
 /**
  * The WGSL activity of a renderer that reads colour only (lines, areas,
