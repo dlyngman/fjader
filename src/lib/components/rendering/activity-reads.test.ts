@@ -122,7 +122,7 @@ describe('activity reads', () => {
 			fileURLToPath(new URL('../../gpu/ScaleTemplateSystem.ts', import.meta.url)),
 			'utf8'
 		);
-		const body = /fn identityActivity\([^)]*\)[^{]*\{([\s\S]*?)\n    \}/.exec(wgsl)?.[1] ?? '';
+		const body = /fn identityActivity\([^)]*\)[^{]*\{([\s\S]*?)\n {4}\}/.exec(wgsl)?.[1] ?? '';
 		const check = body.indexOf('if (group == ${NO_GROUP}u)');
 		const firstRead = body.indexOf('identitySlots[');
 		expect(check).toBeGreaterThanOrEqual(0);
