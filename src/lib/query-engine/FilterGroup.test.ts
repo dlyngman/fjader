@@ -27,6 +27,7 @@ function mockEngine(sqlFor: Record<string, string> = {}) {
 const CHART = { name: 'chart' };
 const OTHER = { name: 'other' };
 const inChart = (chart: object | null): MarkRoute => ({ reads: [], chart });
+const filterIn = (chart: object | null): MarkRoute => ({ reads: [], chart, response: 'filter' });
 
 const sqlOf = (group: FilterGroup, chart: object | null) =>
 	group.selection.predicate(inChart(chart)).map((p) => String(p));
@@ -351,6 +352,17 @@ describe('registerToggle', () => {
 		expect(unselected.values).toBe(empty);
 		expect(selected.values).toBe(north);
 		expect(group.registerToggle('carrier', {}).values).toBe(empty);
+	});
+
+	it("filters a 'filter' mark in a chart holding the same Toggle, one field or several", () => {
+		const group = new FilterGroup();
+		for (const fields of ['region', ['region', 'year']]) {
+			const elsewhere = group.registerToggle(fields, { chart: OTHER });
+			group.registerToggle(fields, { chart: CHART });
+			elsewhere.toggle(Array.isArray(fields) ? ['North', 2024] : ['North'], false);
+		}
+		expect(group.selection.predicate(filterIn(CHART))).toHaveLength(2);
+		expect(group.selection.predicate(inChart(CHART))).toEqual([]);
 	});
 
 	it('uses separate clauses for a field tuple and its first field', () => {
