@@ -12,6 +12,8 @@
 	// - The leak: do group B's carrier bars dim too? If they do, the selection
 	//   reaches group B through the shared colour scale's activity table.
 	// - Click a carrier in group B: same question the other way round.
+	// - The areas are coloured by carrier with a constant outline: a carrier
+	//   click in the same group dims each unselected area, outline included.
 
 	import { count } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
@@ -25,6 +27,7 @@
 		WebGPUCanvas,
 		BarMarkY,
 		RectYMark,
+		AreaMarkY,
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -116,6 +119,33 @@
 										y={count()}
 										inset={0.5}
 										fill="steelblue"
+										selection={group}
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="count">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<AreaMarkY
+										table="cg_flights"
+										x={bin('delay', { steps: 50 })}
+										y={count()}
+										fill="carrier"
+										fillOpacity={0.3}
+										stroke="#333"
+										strokeWidth={1.5}
 										selection={group}
 									/>
 								{/snippet}
