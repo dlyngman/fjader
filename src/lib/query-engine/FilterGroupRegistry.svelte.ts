@@ -13,7 +13,6 @@
 import type { ClockLoop } from '$lib/animation';
 import { FilterGroup } from './FilterGroup.svelte';
 import { FieldActivity, type FieldActivityHost } from './FieldActivity.svelte';
-import type { FieldIdentity } from './categorical-identity';
 import type { QueryEngine } from './QueryEngine';
 
 export class FilterGroupRegistry {
@@ -121,10 +120,5 @@ export class FilterGroupRegistry {
 	/** Every field's activity, in creation order. Read every frame; do not mutate. */
 	get fields(): readonly FieldActivity[] {
 		return this.#fieldList;
-	}
-
-	/** The live identity of a field, for code reading a FieldActivity's ids. */
-	identityOf(key: string): FieldIdentity | null {
-		return this.#host.identityOf(key);
 	}
 }

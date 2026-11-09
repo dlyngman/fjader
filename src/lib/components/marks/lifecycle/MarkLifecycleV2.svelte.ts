@@ -1570,11 +1570,6 @@ export class MarkLifecycleV2 {
 	/** Built at registration; the engine and every predicate call hold this object. */
 	#route: MarkRoute = { reads: NO_READS, chart: null };
 
-	/** What routing knows about this mark: its reads and its chart. */
-	get route(): MarkRoute {
-		return this.#route;
-	}
-
 	/**
 	 * The page-wide index of this mark's filter group. Its renderer stores it in
 	 * MarkConstants to read its group's run of each field's activity block.

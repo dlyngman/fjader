@@ -99,9 +99,23 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
 }
 
 /**
+ * A source's declaration of `key`: the writer's, or another registration's
+ * when the writer has none. Every registration under one id is one source, so
+ * any of them can say what its clause is.
+ */
+function declared<K extends 'augment' | 'categorical'>(
+	registrations: ReadonlySet<SourceOpts> | undefined,
+	writer: SourceOpts,
+	key: K
+): SourceOpts[K] {
+	if (writer[key]) return writer[key];
+	for (const opts of registrations ?? []) if (opts[key]) return opts[key];
+	return undefined;
+}
+
+/**
  * A clause's schema, computed once when it is written rather than on every
- * read of `items`: from the writer's `augment`, or another registration's when
- * the writer has none. Stored on the clause, so a reader of raw clauses (the
+ * read of `items`, and stored on the clause, so a reader of raw clauses (the
  * relay looking for a range brush) sees it too.
  */
 function schemaOf(
@@ -109,37 +123,17 @@ function schemaOf(
 	writer: SourceOpts,
 	value: unknown
 ): FilterSchema | undefined {
-	let augment = writer.augment;
-	if (!augment) {
-		for (const opts of registrations ?? []) {
-			if (opts.augment) {
-				augment = opts.augment;
-				break;
-			}
-		}
-	}
-	return augment?.(value) ?? undefined;
+	return declared(registrations, writer, 'augment')?.(value) ?? undefined;
 }
 
-/**
- * A clause's categorical selection, from the writer's declaration or another
- * registration's: every registration under a toggle id selects the same field.
- */
+/** A clause's categorical selection: the field's identity key and the selected values. */
 function categoricalOf(
 	registrations: ReadonlySet<SourceOpts> | undefined,
 	writer: SourceOpts,
 	value: unknown
 ): CategoricalSelection | null {
-	let declared = writer.categorical;
-	if (!declared) {
-		for (const opts of registrations ?? []) {
-			if (opts.categorical) {
-				declared = opts.categorical;
-				break;
-			}
-		}
-	}
-	return declared ? { key: declared.key, values: declared.values(value) } : null;
+	const categorical = declared(registrations, writer, 'categorical');
+	return categorical ? { key: categorical.key, values: categorical.values(value) } : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -92,11 +92,6 @@ export class FieldActivity {
 		return this.#identity ? this.#identity.values.length : 0;
 	}
 
-	/** How many groups have a fade here; the packer writes one half per group on the page. */
-	get groupCount(): number {
-		return this.#groups.length;
-	}
-
 	/**
 	 * Whether any group selects on this field, or is still fading back from a
 	 * selection: only then does it need an activity block. Read every frame by
@@ -182,11 +177,6 @@ export class FieldActivity {
 		}
 		const values = group.values;
 		return values == null || values.has(value) ? 1 : inactiveOpacity;
-	}
-
-	/** Leave the animation loop, for a page being torn down. */
-	destroy(): void {
-		for (const group of this.#groups) group.table.destroy();
 	}
 
 	#group(index: number): GroupFade {

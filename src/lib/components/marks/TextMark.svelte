@@ -203,18 +203,22 @@
 
 	// --- Color Resolution (pre-resolved once, not per-label) ---
 
-	const colorCSSValues = $derived.by(() => {
+	/** The raw fill channel, once per data change: colours and dimming both read it. */
+	const fillRaw = $derived.by(() => {
 		if (!fill) return null;
 		if (typeof fill === 'string' && isColorConstant(fill)) return null;
 		if (!markColor.scaleState || !instanceCount) return null;
-
-		const raw = resolveChannel({
+		return resolveChannel({
 			value: fill,
 			channel: 'fill',
 			dataAccessor: setup?.data,
 			instanceCount
 		});
-		if (!raw) return null;
+	});
+
+	const colorCSSValues = $derived.by(() => {
+		const raw = fillRaw;
+		if (!raw || !markColor.scaleState) return null;
 
 		const scale = markColor.scaleState;
 		const colors = new Array(instanceCount);
@@ -286,17 +290,10 @@
 			sources.push({ key: band.identityKey ?? band.sourceField, values });
 		}
 		const color = markColor.scaleState;
-		if (color?.isOrdinal && fill && !(typeof fill === 'string' && isColorConstant(fill))) {
-			const raw = resolveChannel({
-				value: fill,
-				channel: 'fill',
-				dataAccessor: setup.data,
-				instanceCount
-			});
-			if (raw) {
-				const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(color, r));
-				sources.push({ key: color.identityKey ?? color.field, values });
-			}
+		const raw = fillRaw;
+		if (color?.isOrdinal && raw) {
+			const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(color, r));
+			sources.push({ key: color.identityKey ?? color.field, values });
 		}
 		return sources.length ? { groups, sources } : null;
 	});

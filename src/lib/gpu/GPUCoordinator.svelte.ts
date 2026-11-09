@@ -168,12 +168,12 @@ interface GPUCoordinatorConfig {
  * It is told its base and decides what to do with it — including whether the
  * base moved at all, which is why nothing here caches what was last handed out.
  */
-/** No fields to pack, for a coordinator without filter groups. */
-const NO_FIELDS: readonly FieldActivity[] = [];
-
 interface SlotBaseConsumer {
 	setSlotBase(base: number): void;
 }
+
+/** No fields to pack, for a coordinator without filter groups. */
+const NO_FIELDS: readonly FieldActivity[] = [];
 
 /** What the coordinator needs from a facet scale: which id sits at a cell. */
 export interface FacetScaleRef {
