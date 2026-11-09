@@ -23,8 +23,8 @@ export class FilterGroupRegistry {
 	#fields = new Map<string, FieldActivity>();
 	/**
 	 * Bumped when a field is created, so a reader that found none (and so read
-	 * no fade) runs again once it exists. Fields are created by selections and
-	 * by the packer, never while a template renders.
+	 * no fade) runs again once it exists. Fields are created by selections, never
+	 * while a template renders.
 	 */
 	#fieldsVersion = $state(0);
 	/** The same activities as an array, for the packer's per-frame loop. */

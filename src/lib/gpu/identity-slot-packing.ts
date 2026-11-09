@@ -18,11 +18,17 @@
  * on it. It is a pure function over plain arrays and maps, which is
  * what it should have been.
  *
- * LAYOUT. Index 0 is a permanent empty block `[0, 0, 0]`. Then one ACTIVITY
- * block per categorical field, then one SLOT block per scale:
+ * LAYOUT. Index 0 is a permanent empty block `[0, 0, 0]`. Then one SLOT
+ * block per scale, then one ACTIVITY block per live categorical field:
  *
- *   field block: [group 0: act0 … act(n-1), group 1: act0 … act(n-1), …]
  *   scale block: [count, actRef, n, slot0 … slot(count-1)]
+ *   field block: [group 0: act0 … act(n-1), group 1: act0 … act(n-1), …]
+ *
+ * Slots come first so that when the buffer runs out it is activity that is
+ * lost (a mark draws undimmed), never an axis. A field has a block only while
+ * a scale draws it and it is active (some group selects on it, or a fade is
+ * still running), so a page with no selection spends nothing on activity and a
+ * field no chart draws any more frees its space.
  *
  * A scale block's header says how many ids its slots cover (`count`), where its
  * field's activity block starts (`actRef`) and how many ids that block covers
@@ -136,6 +142,12 @@ export interface ActivityField {
 	readonly count: number;
 	/** Group `index`'s fade, or null when that group never selected here (all 1). */
 	fadeOf(index: number): ActivitySource | null;
+	/**
+	 * Whether any group selects on the field or is still fading: a field that
+	 * is not has every id active, and needs no block. A fade back to full
+	 * opacity keeps the block until it lands.
+	 */
+	readonly active: boolean;
 }
 
 /**
@@ -199,6 +211,10 @@ export interface IdentitySlotState {
 	/** Per field, per group: the fade version last written and the `t` last resolved. */
 	fieldVersions: Map<string, Float64Array>;
 	fieldT: Map<string, Float64Array>;
+	/** The pass a scale last drew each field in: a field no scale draws gets no block. */
+	fieldSeen: Map<string, number>;
+	/** Fields whose block did not fit, warned about once until they fit again. */
+	warnedFields: Set<string>;
 	/**
 	 * The pass each scale was last seen in, for the eviction sweep.
 	 *
@@ -240,6 +256,8 @@ export function createIdentitySlotState(
 		fieldGroups: new Map(),
 		fieldVersions: new Map(),
 		fieldT: new Map(),
+		fieldSeen: new Map(),
+		warnedFields: new Set(),
 		seenPass: new Map(),
 		pass: 0,
 		result: { uploadStart: 0, uploadEnd: 0, resolves: [], resolveCount: 0 }
@@ -263,8 +281,8 @@ export function createIdentitySlotState(
  * Offsets are recomputed on every call because a block appearing or
  * disappearing shifts every block after it. That is a running sum over a
  * handful of blocks, and the alternative — a free list — would have to survive
- * a block changing size, which happens whenever a dim appends. Field blocks
- * come first, so a chart mounting moves no field block.
+ * a block changing size, which happens whenever a dim appends. A field block
+ * that moves rewrites the headers pointing at it in the same pass.
  *
  * `fields` and `groups` default to none, which packs the slots alone.
  */
@@ -276,6 +294,7 @@ export function packIdentitySlots(
 ): PackResult {
 	const { buffer, bufferTo, offsets, versions, counts, refs, ns, resolvedT, result } = state;
 	const { fieldBases, fieldNs, fieldGroups, fieldVersions, fieldT, seenPass } = state;
+	const { fieldSeen, warnedFields } = state;
 	const capacity = buffer.length;
 	const resolves = result.resolves;
 
@@ -290,16 +309,40 @@ export function packIdentitySlots(
 	const pass = (state.pass = state.pass >= 0x3fffffff ? 1 : state.pass + 1);
 	let seenCount = 0;
 
-	// --- Field blocks: one half per group ---
+	// --- Where the scale blocks end, and which fields a scale draws ---
+	// The same running sum the scale loop below makes, so the field blocks can
+	// be placed after the scales before the scale headers are written.
+	let fieldOffset = offset;
+	for (let i = 0; i < scales.length; i++) {
+		const need = IDENTITY_SLOT_HEADER + scales[i].slots.count;
+		if (fieldOffset + need <= capacity) fieldOffset += need;
+		const key = scales[i].field;
+		if (key) fieldSeen.set(key, pass);
+	}
+
+	// --- Field blocks: one run per group, after the scales ---
 	for (let f = 0; f < fields.length; f++) {
 		const field = fields[f];
 		const key = field.key;
 		const count = field.count;
-		const need = count * groups;
-		const fits = need > 0 && offset + need <= capacity;
-		const base = fits ? offset : IDENTITY_SLOT_EMPTY;
+		const live = fieldSeen.get(key) === pass && field.active;
+		const need = live ? count * groups : 0;
+		const fits = need > 0 && fieldOffset + need <= capacity;
+		const base = fits ? fieldOffset : IDENTITY_SLOT_EMPTY;
 		const n = fits ? count : 0;
-		if (fits) offset += need;
+		if (fits) fieldOffset += need;
+		if (need > 0 && !fits) {
+			// On the transition only: this runs every frame.
+			if (!warnedFields.has(key)) {
+				warnedFields.add(key);
+				console.warn(
+					`[GPUCoordinator] Identity slot capacity (${capacity}) exhausted; ` +
+						`"${key}" (${count} ids × ${groups} groups) will not dim.`
+				);
+			}
+		} else if (fits && warnedFields.size > 0) {
+			warnedFields.delete(key);
+		}
 
 		const moved =
 			fieldBases.get(key) !== base || fieldNs.get(key) !== n || fieldGroups.get(key) !== groups;

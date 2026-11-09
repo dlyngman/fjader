@@ -166,4 +166,19 @@ describe('FieldActivity', () => {
 		activity.set(0, values('a'));
 		expect(table(activity).clock._affectedChartsArray).toEqual(['chart-1']);
 	});
+
+	it('is active while a group selects, and while its fade back is still running', () => {
+		const activity = new FieldActivity('f', hostWith(new FieldIdentity(['a', 'b'], 'f'), true));
+		expect(activity.active).toBe(false);
+		activity.set(0, values('a'));
+		expect(activity.active).toBe(true);
+		table(activity).clock._markAtRest();
+
+		activity.set(0, null);
+		// Fading back to full opacity: the block must stay until it lands.
+		expect(table(activity).clock.running).toBe(true);
+		expect(activity.active).toBe(true);
+		table(activity).clock._markAtRest();
+		expect(activity.active).toBe(false);
+	});
 });
