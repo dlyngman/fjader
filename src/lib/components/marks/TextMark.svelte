@@ -285,15 +285,19 @@
 			if (type !== 'band' && type !== 'point') continue;
 			const band = chartContext[`${axis}ScaleState`] as BandScaleState | null;
 			const raw = axis === 'x' ? xRaw : yRaw;
-			if (!band || !raw) continue;
+			// Identity keys only, as routing reads them: a field without identity
+			// filters the labels, so they do not dim by it too.
+			const key = band?.identityKey;
+			if (!key || !raw) continue;
 			const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(band, r));
-			sources.push({ key: band.identityKey ?? band.sourceField, values });
+			sources.push({ key, values });
 		}
 		const color = markColor.scaleState;
 		const raw = fillRaw;
-		if (color?.isOrdinal && raw) {
+		const colorKey = color?.isOrdinal ? color.identityKey : null;
+		if (colorKey && raw) {
 			const values = Array.from(raw as ArrayLike<unknown>, (r) => categoryOf(color, r));
-			sources.push({ key: color.identityKey ?? color.field, values });
+			sources.push({ key: colorKey, values });
 		}
 		return sources.length ? { groups, sources } : null;
 	});
