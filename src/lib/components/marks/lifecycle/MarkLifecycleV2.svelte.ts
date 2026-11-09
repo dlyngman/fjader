@@ -613,13 +613,14 @@ export class MarkLifecycleV2 {
 			const schema = this.#schema;
 			if (!schema) return;
 			// Read after setup, once the scales have adopted identity. A change of
-			// reads re-registers the mark: a selection that dimmed it may now
-			// filter it. The key is a string, so reads rebuilt with the same
-			// contents do not.
+			// reads or of selectionResponse re-registers the mark: a selection
+			// that dimmed it may now filter it. The key is a string, so reads
+			// rebuilt with the same contents do not.
 			void this.#readsKey;
+			const response = this.#reactiveConfig.selectionResponse;
 
 			untrack(() => {
-				this.#route = { reads: this.#reads, chart: this.#chartContext.config };
+				this.#route = { reads: this.#reads, chart: this.#chartContext.config, response };
 				// registerMark handles cleanup of previous registration for this
 				// markId and reuses the existing handle (preserves arrowTable
 				// during re-query so the chart doesn't flash empty on rebin).

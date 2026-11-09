@@ -308,13 +308,12 @@ export interface BaseMarkProps {
 	 *   its aggregates are recomputed for the subset: top N within the selected
 	 *   region, shares within the selected groups.
 	 *
-	 * In the chart that holds the selection's control (a Toggle in this chart, a
-	 * legend inside it), a `'filter'` mark keeps its data and does not dim:
-	 * clicking that chart's own legend fades the legend entries, and the mark
-	 * stays as it is. That is the crossfilter convention, which keeps every
-	 * category clickable; the other charts in the group show the subset. Dimming
-	 * it there instead would make it dim in its own chart and filter elsewhere,
-	 * the inconsistency this setting exists to avoid.
+	 * A `'filter'` mark never dims. A categorical selection filters it in its
+	 * own chart too: every legend and Toggle on a field shares one selection, so
+	 * any chart with a control on the field would otherwise ignore it, and this
+	 * chart's legend re-ranks its own top N. A Toggle on its own bars therefore
+	 * filters them: the unselected bars leave the chart. A brush still skips its
+	 * own chart, so the marks under it do not move while it is dragged.
 	 */
 	selectionResponse?: SelectionResponse;
 	scheme?: ColorScheme;

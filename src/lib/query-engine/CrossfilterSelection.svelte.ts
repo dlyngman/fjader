@@ -55,16 +55,20 @@ export interface Clause {
 
 /**
  * What routing needs to know about a mark: the identity keys of the
- * categorical fields its renderer reads selection activity for, and its chart.
- * One object per mark, owned by its lifecycle and handed around by reference.
+ * categorical fields its renderer reads selection activity for, its chart, and
+ * its selectionResponse. One object per mark, owned by its lifecycle and
+ * handed around by reference.
  *
  * A categorical selection on a field in `reads` dims the mark instead of
  * filtering it. `chart` is the chart's ChartConfig, compared by reference: a
  * faceted chart's cells have ids of their own, but share one config.
+ * `response` 'filter' makes every categorical selection filter the mark, in
+ * its own chart too; brushes still skip their own chart.
  */
 export interface MarkRoute {
 	readonly reads: readonly string[];
 	readonly chart: object | null;
+	readonly response?: 'auto' | 'filter';
 }
 
 /**
@@ -125,7 +129,14 @@ export class CrossfilterSelection {
 	 * no allocation, as it runs per mark per clause on every brush frame.
 	 */
 	filters(route: MarkRoute, sourceId: string, key: string | null): boolean {
-		if (key !== null && route.reads.includes(key)) return false;
+		if (key !== null) {
+			// Every chart with a control on a field registers that field's one
+			// source, so a chart skip would let a 'filter' mark ignore the field
+			// wherever it has a legend or Toggle. Categorical clauses never move
+			// under the pointer, so filtering the own chart is safe for them.
+			if (route.response === 'filter') return true;
+			if (route.reads.includes(key)) return false;
+		}
 		const chart = route.chart;
 		if (chart) {
 			const registrations = this.#sources.get(sourceId);

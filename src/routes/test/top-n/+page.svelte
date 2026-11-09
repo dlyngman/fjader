@@ -260,10 +260,11 @@
 				<h3>6. Selection + topN(5) — SQL, selectionResponse="filter"</h3>
 				<p class="desc">
 					selectionResponse="filter": a region selection filters this chart even though it is
-					coloured by region, so the top 5 is re-ranked within the subset. Select regions in chart 5
-					or 7. No filter: Electronics, Clothing, Food, Music, Books. North only: Music, Garden,
-					Health, Auto, Sports. West only: Electronics, Food, Clothing, Books, Toys. This chart's
-					own legend and Toggle leave it unchanged: a chart skips its own selection.
+					coloured by region, so the top 5 is re-ranked within the subset. Select regions here or in
+					chart 5 or 7: a categorical selection filters a "filter" mark in its own chart too. No
+					filter: Electronics, Clothing, Food, Music, Books. North only: Music, Garden, Health,
+					Auto, Sports. West only: Electronics, Food, Clothing, Books, Toys. Clicking a bar here
+					toggles its region, so the other regions' bars leave the chart.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">

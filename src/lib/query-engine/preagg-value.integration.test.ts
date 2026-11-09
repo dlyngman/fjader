@@ -151,6 +151,8 @@ async function mark(
 		reads?: string[];
 		transforms?: { transforms: Transform[]; config: MarkConfig };
 		into?: FilterGroup;
+		chart?: object;
+		response?: 'auto' | 'filter';
 	} = {}
 ): Promise<MarkHandle> {
 	const baseTable = opts.baseTable ?? 't';
@@ -163,7 +165,7 @@ async function mark(
 			opts.transforms?.transforms ?? [],
 			opts.transforms?.config
 		),
-		route: { reads: opts.reads ?? [], chart: null }
+		route: { reads: opts.reads ?? [], chart: opts.chart ?? null, response: opts.response }
 	};
 	const handle = engine.registerMark(id, descriptor, opts.into ?? group);
 	await settle([handle], () => handle.updateParams({ sort: undefined, limit: opts.limit }));
@@ -252,7 +254,8 @@ describe('preagg for value dims', () => {
 
 	it('a mark that filters by a field it draws reads the same rows through preagg, top N with Other', async () => {
 		// selectionResponse 'filter': no reads, so a toggle on the field it is
-		// coloured by filters it. Bars by kind, top 1 plus Other, coloured by cat.
+		// coloured by filters it, though the legend sits in the mark's own
+		// chart. Bars by kind, top 1 plus Other, coloured by cat.
 		await engine.ensureColumns('t', { categorical: ['cat', 'kind'] });
 		const otherId = await engine.reserveSyntheticIdentity('kind', 'Other');
 		const view = engine.identitySourceFor('t');
@@ -275,11 +278,13 @@ describe('preagg for value dims', () => {
 				}
 			} as MarkConfig
 		};
-		const viaPreagg = await mark('bars', select, { table: view, transforms });
+		const chart = { name: 'bars' };
+		const own = { table: view, transforms, chart, response: 'filter' as const };
+		const viaPreagg = await mark('bars', select, own);
 		// The same mark in a group that never activates: it reads the base table.
 		const reference = new FilterGroup();
 		reference.setEngine(engine);
-		const viaBase = await mark('bars-ref', select, { table: view, transforms, into: reference });
+		const viaBase = await mark('bars-ref', select, { ...own, into: reference });
 
 		await engine.activate(group, {
 			sourceId: 'toggle-cat',
@@ -288,8 +293,8 @@ describe('preagg for value dims', () => {
 		});
 		expect(creates()).toHaveLength(1);
 
-		const legend = group.registerToggle('cat');
-		const referenceLegend = reference.registerToggle('cat');
+		const legend = group.registerToggle('cat', { chart });
+		const referenceLegend = reference.registerToggle('cat', { chart });
 		await settle([viaPreagg], () => legend.toggle(['a'], false));
 		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
 		await settle([viaBase], () => referenceLegend.toggle(['a'], false));
