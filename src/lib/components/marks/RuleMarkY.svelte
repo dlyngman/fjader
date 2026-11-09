@@ -173,7 +173,9 @@
 			}),
 			zeroBaseline: xShorthand !== undefined ? { x: true } : null,
 			// The value the renderer's x0Data is built from: routing must agree.
-			ruleExtent: hasExtent
+			ruleExtent: hasExtent,
+			// Coloured by stroke: the lifecycle requests that channel's identity.
+			colorChannel: 'stroke'
 		};
 	});
 

@@ -177,7 +177,9 @@
 			// When y shorthand is used, include 0 in domain
 			zeroBaseline: yShorthand !== undefined ? { y: true } : null,
 			// The value the renderer's y0Data is built from: routing must agree.
-			ruleExtent: hasExtent
+			ruleExtent: hasExtent,
+			// Coloured by stroke: the lifecycle requests that channel's identity.
+			colorChannel: 'stroke'
 		};
 	});
 
