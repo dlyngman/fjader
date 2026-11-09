@@ -76,7 +76,11 @@
 		return indices;
 	});
 
-	/** The field the axis's selection is kept under: its identity key, or its column before. */
+	/**
+	 * The field the axis's selection is kept under: its identity key, or its
+	 * column before. As for the legend, the two differ for a computed field,
+	 * so its labels briefly lose their dimming while a reload empties identity.
+	 */
 	const key = $derived(scale.identityKey ?? scale.sourceField);
 
 	/** A label's opacity: the scale's own (travel, clipping) times its selection fade. */

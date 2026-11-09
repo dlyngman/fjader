@@ -11,7 +11,9 @@
  * The two must agree exactly. A mark routed to dim on a field its shader does
  * not read would be neither dimmed nor filtered; one whose shader reads a field
  * routing missed would be filtered and dimmed at once. Deriving both from this
- * table is what keeps them together.
+ * table is what keeps them together. One case they still disagree on: a field
+ * whose activity block did not fit in the identity slot buffer (see the known
+ * limit in identity-slot-packing.ts).
  *
  * A function of the config, not a constant per renderer, because a rule's
  * answer depends on a prop: a rule without an extent spans the whole cross

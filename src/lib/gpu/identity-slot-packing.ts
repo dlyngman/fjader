@@ -33,6 +33,14 @@
  * measured at about 105000 floats uploaded per click for 20 scales on a
  * 5000-category field, against 5000 when the block stays.
  *
+ * KNOWN LIMIT: a field block that does not fit leaves a selection on that
+ * field doing nothing for the marks that dim by it. Routing (the mark's reads,
+ * see activity-reads.ts) still sends them to dim rather than filter, and their
+ * shader finds no activity. Routing does not ask the packer whether a field
+ * got a block, which would tie the query layer to the GPU layout; the packer
+ * warns instead, on load. It takes fields of tens of thousands of ids across
+ * several groups to reach. A buffer that grows on demand is the real fix.
+ *
  * A scale block's header says how many ids its slots cover (`count`), where its
  * field's activity block starts (`actRef`) and how many ids that block covers
  * (`n`). The count is what makes a block self-describing, so the shader rejects

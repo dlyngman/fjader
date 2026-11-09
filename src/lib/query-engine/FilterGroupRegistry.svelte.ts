@@ -89,7 +89,17 @@ export class FilterGroupRegistry {
 		return this.#groups.size;
 	}
 
-	/** The selection state of a categorical field, by identity key. Created on first ask. */
+	/**
+	 * The selection state of a categorical field, by identity key. Created on
+	 * first ask, by a selection or by the coordinator for a field a scale draws.
+	 *
+	 * Never removed: a session that switches through many categorical columns
+	 * keeps every field it drew, each one step of the coordinator's per-frame
+	 * reconcile loop. Their buffer space is freed (the packer gives a block only
+	 * to fields a scale draws), so this costs a loop step, not memory on the GPU.
+	 * Dropping a field once no scale draws it and no group selects on it is a
+	 * possible follow-up.
+	 */
 	field(key: string): FieldActivity {
 		let activity = this.#fields.get(key);
 		if (!activity) {

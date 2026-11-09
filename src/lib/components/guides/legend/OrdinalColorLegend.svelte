@@ -44,7 +44,10 @@
 
 	/**
 	 * The field's identity key: what its selection is kept under. The scale's
-	 * own once it has identity; the field before, as the toggle keys it.
+	 * own once it has identity; the field before, as the toggle keys it. For a
+	 * plain column the two are the same. For a computed field (an expression)
+	 * they differ, so while a reload empties the identity the legend reads the
+	 * selection under the field's name and its highlight is briefly lost.
 	 */
 	const key = $derived(scaleState.identityKey ?? field ?? scaleState.field);
 	const groups = $derived(filterGroup ? [filterGroup.index] : []);
