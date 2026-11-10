@@ -650,6 +650,16 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 			const aliases = getSelectAliases(query);
 			const { by, band, series } = resolveTopNColumns(aliases, options, config);
 
+			// A NULL category ranks after every real one. A band axis cannot draw it
+			// (its id is -1, which the scale has no value for and the shader
+			// discards), so ranking it by its measure spent a top-n slot on a bar
+			// that never appears: n - 1 bars. Last, it only takes a slot when fewer
+			// than n real categories exist, and with includeOthers it folds into
+			// Other, which is where "the rest" belongs.
+			const nullLast = config?.identity?.[band]
+				? sqlTag`(${column(band)} = -1) ASC`
+				: sqlTag`(${column(band)} IS NULL) ASC`;
+
 			let ranked: SelectQuery;
 			if (series) {
 				// Grouped: rank CATEGORIES by their total across every series, so
@@ -669,13 +679,13 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 				});
 				ranked = Query.from({ __topn_totals: totals }).select({
 					...passthroughSelect(aliases),
-					[RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
+					[RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY ${nullLast}, "__dplot_topn_total" DESC, ${column(band)})`
 				});
 			} else {
 				// Simple: rank rows by value.
 				ranked = Query.from({ __topn_base: query }).select({
 					...passthroughSelect(aliases),
-					[RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+					[RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${nullLast}, ${column(by)} DESC)`
 				});
 			}
 

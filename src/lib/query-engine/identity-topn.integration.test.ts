@@ -118,6 +118,23 @@ describe('identity ids through topN', () => {
 		expect(xs.map((id) => values[id])).toEqual(['bravo', 'charlie', 'Other']);
 	});
 
+	it('never spends a top-n slot on NULL, which no band axis can draw', async () => {
+		// NULL has the largest total. Ranked by measure it took the first slot,
+		// and the axis showed one bar fewer than asked for, since id -1 has no
+		// value and the shader discards it. It ranks last now, so it folds into
+		// Other with the rest.
+		await db.run(`INSERT INTO sales VALUES (NULL, 1000)`);
+		await identity.ensureColumns('sales', { categorical: ['category'] });
+		const bucket = await identity.acquireSynthetic('category', 'Other');
+		const values = identity.identity('category').values;
+
+		const { xs, totals } = await topTwoWithOther('category', bucket.id);
+
+		expect(xs.map((id) => values[id])).toEqual(['bravo', 'charlie', 'Other']);
+		// alpha 10 + delta 20 + NULL 1000.
+		expect(totals).toEqual([400, 300, 1030]);
+	});
+
 	it('keeps a real "Other" a ranked category beside the bucket', async () => {
 		// 'Other' exists in the data. It stays a category of its own, ranked like
 		// any other, and the bucket takes a label of its own beside it.

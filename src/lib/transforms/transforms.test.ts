@@ -268,7 +268,9 @@ describe('Transforms', () => {
 				.groupby(column('category'));
 			const sql = compiler.applyToQuery(q).toString();
 
-			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC\)/);
+			// NULL last, then by the measure: a NULL category cannot be drawn on a
+			// band axis, so it never takes a top-n slot from a real one.
+			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY \("x" IS NULL\) ASC, "y2" DESC\)/);
 			expect(sql).toMatch(/"__dplot_rank" <= 3/);
 			// Published rather than consumed and dropped: the band axis reads this
 			// column to order itself, because row order does not survive the stack
@@ -289,7 +291,7 @@ describe('Transforms', () => {
 				.groupby(column('category'));
 			const sql = compiler.applyToQuery(q).toString();
 
-			expect(sql).toMatch(/ORDER BY "x2" DESC/);
+			expect(sql).toMatch(/ORDER BY \("y" IS NULL\) ASC, "x2" DESC/);
 		});
 
 		it('SQL topN throws a clear error when the value alias is missing', () => {
