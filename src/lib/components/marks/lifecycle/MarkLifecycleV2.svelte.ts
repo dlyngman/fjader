@@ -1834,7 +1834,9 @@ export class MarkLifecycleV2 {
 
 				// Without Other's member lists: every hover query is `SELECT *` from
 				// this table, so lists of up to the field's cardinality would ship on
-				// each one.
+				// each one. Only those, not every `__dplot_` column as Path B drops:
+				// the rest are scalars (the rank, id columns), cheap to keep, and the
+				// lists are the only ones whose size grows with the field.
 				const withoutMembers = withoutOtherMembers(tooltipQuery);
 				await this.#queryEngine.exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,

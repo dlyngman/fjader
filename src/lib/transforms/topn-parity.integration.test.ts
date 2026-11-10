@@ -1109,6 +1109,44 @@ describe('topN includeOthers in SQL', () => {
 		expect(idsOf(otherRow)).not.toContain(gone);
 	});
 
+	it('lists one entry per category on an ungrouped mark, not one per raw row', async () => {
+		// Raw rows, no GROUP BY: topN ranks rows, and every row past the cutoff
+		// folds into Other. A category has several such rows; it is listed once,
+		// with their sum.
+		const raw = await db.all(
+			`SELECT category_idx AS c, revenue::DOUBLE AS v FROM sales_o2 ORDER BY v DESC`
+		);
+		// The top 5 rows have distinct revenues (400, 250, 200, 180, 170), so the
+		// cutoff does not depend on how ties are broken.
+		const past = raw.slice(5);
+		const expected = new Map<number, number>();
+		for (const r of past) expected.set(Number(r.c), (expected.get(Number(r.c)) ?? 0) + Number(r.v));
+
+		let q = Query.from('sales_o2').select({
+			x: column('category_idx'),
+			y2: column('revenue')
+		}) as SelectQuery;
+		const config = {
+			markType: 'dot',
+			table: 'sales_o2',
+			x: 'x',
+			y: 'y2',
+			identity: { x: { dim: CAT, size: otherId + 1, positional: true, otherId } }
+		} as MarkConfig;
+		q = (topN(5, { by: 'y2', includeOthers: true }) as unknown as SqlTransform).apply(q, config);
+		const rows = await db.all(String(q));
+		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
+
+		const ids = idsOf(otherRow)!;
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(ids).toEqual([...expected.keys()].sort((a, b) => a - b));
+		valuesOf(otherRow)!.forEach((v, i) => expect(v).toBeCloseTo(expected.get(ids[i])!, 3));
+		// Bounded by the categories, not the rows, and still what Other summed.
+		expect(ids.length).toBeLessThan(past.length);
+		const sum = valuesOf(otherRow)!.reduce((a, b) => a + b, 0);
+		expect(sum).toBeCloseTo(Number(otherRow.y2), 3);
+	});
+
 	it('keeps the lists through dense(), NULL on every padded row', async () => {
 		const sparse = await run({});
 		const dense = await run({ dense: true });
