@@ -2,6 +2,7 @@
 	import { getContext } from 'svelte';
 	import type { BandScaleState, BandTick } from '$lib/scales/BandScaleState.svelte';
 	import type { ChartContext } from '$lib/types';
+	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	/**
@@ -109,12 +110,12 @@
 		{#if axis === 'x'}
 			<line x1={pos} x2={pos} y1={base} y2={tickEnd} />
 			<text text-anchor={textAnchor} x={pos} y={labelAt}>
-				{tick.value}
+				{categoryLabel(tick.value)}
 			</text>
 		{:else}
 			<line x1={base} x2={tickEnd} y1={pos} y2={pos} />
 			<text text-anchor={textAnchor} dominant-baseline="middle" x={labelAt} y={pos}>
-				{tick.value}
+				{categoryLabel(tick.value)}
 			</text>
 		{/if}
 	</g>

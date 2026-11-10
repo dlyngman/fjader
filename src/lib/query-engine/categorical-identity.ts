@@ -11,14 +11,16 @@
  *    later tables APPEND unseen values with continuing ids. It never reorders and
  *    never renumbers, so an id already baked into a vertex buffer stays valid and
  *    no earlier mark has to requery. `value` carries the source column's own type
- *    and `label` is NULL, except on a synthetic row (`reserveSynthetic`), where
- *    that is inverted.
+ *    and `label` is NULL, except on a synthetic row (`acquireSynthetic`), where
+ *    that is inverted, and on the NULL category's row, where both are NULL.
  *
  * 2. A **per-table view**, `<table>_v_s<session>`, selecting `*` plus one
  *    `__dplot_<field>_idx` column per requested field. Always LEFT JOIN with
  *    COALESCE(-1): an inner join silently drops rows whose value is not in the
- *    dim (NULLs, values added later), which is data loss presenting as a
- *    rendering bug. -1 is the unmapped sentinel, unified in `1ac4fd4`.
+ *    dim (a value a later append will add), which is data loss presenting as a
+ *    rendering bug. -1 is the unmapped sentinel, unified in `1ac4fd4`. A NULL
+ *    value is not unmapped: the dim has a row for it (value NULL, label NULL),
+ *    joined with IS NOT DISTINCT FROM, so NULL is a category like any other.
  *
  * 3. An **additive coalescer**, `ensureColumns()`. Concurrent callers union into
  *    a pending set, one CREATE OR REPLACE VIEW runs with the full union, and a
@@ -175,7 +177,18 @@ interface ViewEntry {
  * (SameValueZero, which covers bigint). That is why the round trip is correct
  * today; it is the declared types that were wrong.
  */
-export type DimValue = string | number | bigint;
+export type DimValue = string | number | bigint | null;
+
+/**
+ * How a category value is shown: as itself, except the NULL category, which has
+ * no text of its own. The one formatter for axis ticks, legend entries, facet
+ * labels and tooltips, so NULL reads the same everywhere. Selections keep the
+ * raw `null`: this is display only.
+ */
+export const NULL_CATEGORY_LABEL = '(null)';
+export function categoryLabel<T>(value: T): T | string {
+	return value === null ? NULL_CATEGORY_LABEL : value;
+}
 
 /**
  * A field's id <-> value bijection, both directions in one object.
@@ -205,6 +218,12 @@ export class FieldIdentity {
 	readonly ids = new Map<DimValue, number>();
 	/** The synthetic ids (Other buckets): rows of the dim no source row joins to. */
 	readonly synthetic = new Set<number>();
+	/**
+	 * The NULL category's id, or null while the data has no NULL. An ordinary
+	 * category: ranked, drawn, selectable; `values[nullId]` is `null`, and `ids`
+	 * maps `null` to it, so value lookups need no special case.
+	 */
+	nullId: number | null = null;
 
 	/**
 	 * The identity key this is the bijection for, as `identityKeyFor` derives
@@ -236,10 +255,13 @@ export class FieldIdentity {
 		this.values.length = 0;
 		this.ids.clear();
 		this.synthetic.clear();
+		this.nullId = null;
 		for (const id of synthetic) this.synthetic.add(id);
 		for (let i = 0; i < values.length; i++) {
 			this.values.push(values[i]);
-			if (!this.synthetic.has(i)) this.ids.set(values[i], i);
+			if (this.synthetic.has(i)) continue;
+			this.ids.set(values[i], i);
+			if (values[i] === null) this.nullId = i;
 		}
 	}
 
@@ -390,9 +412,9 @@ export class CategoricalIdentity {
 	}
 
 	/**
-	 * Whether `field`'s dim has folded in `table`, so every non-NULL value the
-	 * table holds has an id and `-1` can only mean NULL. A dim another table
-	 * built may lack this table's values; a refused dim covers nothing.
+	 * Whether `field`'s dim has folded in `table`, so every value the table holds,
+	 * NULL included, has an id and `-1` never appears. A dim another table built
+	 * may lack this table's values; a refused dim covers nothing.
 	 */
 	dimCovers(field: string, table: string): boolean {
 		const dim = this.#dims.get(field);
@@ -824,8 +846,8 @@ export class CategoricalIdentity {
 			await this.#exec.exec(
 				`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
 					`SELECT value, NULL::VARCHAR AS label, ` +
-					`(ROW_NUMBER() OVER (ORDER BY value) - 1)::INT AS id ` +
-					`FROM (SELECT DISTINCT ${expr} AS value FROM ${src} WHERE ${expr} IS NOT NULL)`
+					`(ROW_NUMBER() OVER (ORDER BY value NULLS LAST) - 1)::INT AS id ` +
+					`FROM (SELECT DISTINCT ${expr} AS value FROM ${src})`
 			);
 			// A second statement: CTAS cannot carry a constraint. `value` is unique
 			// by construction here (DISTINCT) and on append (WHERE NOT EXISTS), but
@@ -846,9 +868,14 @@ export class CategoricalIdentity {
 			await this.#exec.exec(
 				`INSERT INTO ${dimName} (value, label, id) ` +
 					`SELECT s.v, NULL, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
-					`ROW_NUMBER() OVER (ORDER BY s.v))::INT ` +
-					`FROM (SELECT DISTINCT ${expr} AS v FROM ${src} WHERE ${expr} IS NOT NULL) s ` +
-					`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d WHERE d.value = s.v)`
+					`ROW_NUMBER() OVER (ORDER BY s.v NULLS LAST))::INT ` +
+					`FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
+					// IS NOT DISTINCT FROM, so a second table's NULLs find the NULL row
+					// (NULL = NULL is never true, and `=` appended one per table). The
+					// label test keeps a synthetic row, also value NULL, from passing
+					// for it.
+					`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d ` +
+					`WHERE d.value IS NOT DISTINCT FROM s.v AND d.label IS NULL)`
 			);
 		}
 
@@ -988,7 +1015,14 @@ export class CategoricalIdentity {
 			keyExprs.push(`(${this.#dims.get(field)!.sql}) AS ${quote(keyCol)}`);
 			keyCols.push(quote(keyCol));
 			columns.push(`COALESCE(${alias}.id, -1) AS ${quote(this.idColumn(field))}`);
-			joins.push(`LEFT JOIN ${dimName} ${alias} ON t.${quote(keyCol)} = ${alias}.value`);
+			// IS NOT DISTINCT FROM, so a NULL source value joins the NULL row; the
+			// label test keeps synthetic rows (also value NULL) out. Measured free:
+			// it keeps the hash join. An `= OR (both NULL)` form falls back to a
+			// nested loop, 73 s on 2 M rows x 10 000 categories — never write it.
+			joins.push(
+				`LEFT JOIN ${dimName} ${alias} ON t.${quote(keyCol)} IS NOT DISTINCT FROM ${alias}.value ` +
+					`AND ${alias}.label IS NULL`
+			);
 		});
 
 		// The value expression is computed in an inner SELECT, where only the

@@ -82,17 +82,67 @@ describe('CategoricalIdentity', () => {
 	// Dim creation
 	// -----------------------------------------------------------------------
 
-	it('assigns dense 0-based ids ordered by value, excluding NULL', async () => {
+	it('assigns dense 0-based ids ordered by value, with NULL as the last category', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 
 		const rows = await db.all(
-			`SELECT value, id FROM "${identity.dimTable('species')}" ORDER BY id`
+			`SELECT value, label, id FROM "${identity.dimTable('species')}" ORDER BY id`
 		);
+		// NULL is a category: a row of its own (value NULL, label NULL), last, so
+		// the real ids are what they were before it had one.
 		expect(rows).toEqual([
-			{ value: 'Adelie', id: 0 },
-			{ value: 'Chinstrap', id: 1 },
-			{ value: 'Gentoo', id: 2 }
+			{ value: 'Adelie', label: null, id: 0 },
+			{ value: 'Chinstrap', label: null, id: 1 },
+			{ value: 'Gentoo', label: null, id: 2 },
+			{ value: null, label: null, id: 3 }
 		]);
+		const held = identity.identity('species');
+		expect(held.nullId).toBe(3);
+		expect(held.values[3]).toBeNull();
+		expect(held.ids.get(null)).toBe(3);
+	});
+
+	it('keeps one NULL row when a second table with NULLs appends', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES (NULL), ('Emperor'), (NULL)`);
+		await identity.ensureColumns('more_penguins', { categorical: ['species'] });
+
+		const rows = await db.all(
+			`SELECT COUNT(*) AS n FROM "${identity.dimTable('species')}" WHERE value IS NULL AND label IS NULL`
+		);
+		expect(Number(rows[0].n)).toBe(1);
+		// Both tables' NULL rows carry the one NULL id.
+		const nullId = identity.identity('species').nullId;
+		const ids = await db.all(
+			`SELECT DISTINCT "${identity.idColumn('species')}" AS idx FROM "${identity.sourceFor('more_penguins')}" WHERE species IS NULL`
+		);
+		expect(ids.map((r) => Number(r.idx))).toEqual([nullId]);
+	});
+
+	it('appends a NULL row when only a later table has NULLs', async () => {
+		await db.run(`CREATE TABLE full_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO full_penguins VALUES ('Adelie'), ('Gentoo')`);
+		await identity.ensureColumns('full_penguins', { categorical: ['species'] });
+		expect(identity.identity('species').nullId).toBeNull();
+
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const held = identity.identity('species');
+		expect(held.nullId).not.toBeNull();
+		expect(held.values[held.nullId!]).toBeNull();
+	});
+
+	it('never joins a source NULL to an Other bucket, which is also value NULL', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const other = await identity.acquireSynthetic('species', 'Other');
+		const rows = await db.all(
+			`SELECT "${identity.idColumn('species')}" AS idx, COUNT(*) AS n FROM "${identity.sourceFor('penguins')}" WHERE species IS NULL GROUP BY 1`
+		);
+		// One row per source NULL, at the NULL id: not fanned out, not the bucket.
+		expect(rows.map((r) => [Number(r.idx), Number(r.n)])).toEqual([
+			[identity.identity('species').nullId, 1]
+		]);
+		expect(Number(rows[0].idx)).not.toBe(other.id);
 	});
 
 	it('records the ids each table holds, apart from the dim they share', async () => {
@@ -184,7 +234,7 @@ describe('CategoricalIdentity', () => {
 		);
 
 		expect(rows).toEqual([
-			{ species: null, mass: 3600, idx: -1 },
+			{ species: null, mass: 3600, idx: 3 },
 			{ species: 'Chinstrap', mass: 3700, idx: 1 },
 			{ species: 'Adelie', mass: 3750, idx: 0 },
 			{ species: 'Adelie', mass: 3800, idx: 0 },
@@ -318,7 +368,7 @@ describe('CategoricalIdentity', () => {
 		await expect(
 			identity.ensureColumns('penguins', { categorical: ['species'] })
 		).resolves.toBeUndefined();
-		expect(identity.identity('species').values).toHaveLength(3);
+		expect(identity.identity('species').values).toHaveLength(4);
 	});
 
 	// -----------------------------------------------------------------------
@@ -394,7 +444,8 @@ describe('CategoricalIdentity', () => {
 		const other = await identity.acquireSynthetic('species', 'Other');
 
 		// Non-negative — scaleBand discards value < 0 before the slot lookup.
-		expect(other.id).toBe(3);
+		// After the three species and the NULL category.
+		expect(other.id).toBe(4);
 		expect(other.label).toBe('Other');
 		// Its label reads through the ordinary accessor, so labels need no branch.
 		expect(held.values[other.id]).toBe('Other');
@@ -524,8 +575,9 @@ describe('CategoricalIdentity', () => {
 			{ value: 'Adelie', id: 0 },
 			{ value: 'Chinstrap', id: 1 },
 			{ value: 'Gentoo', id: 2 },
-			{ value: 'Emperor', id: 3 },
-			{ value: 'Rockhopper', id: 4 }
+			{ value: null, id: 3 },
+			{ value: 'Emperor', id: 4 },
+			{ value: 'Rockhopper', id: 5 }
 		]);
 	});
 
@@ -576,13 +628,16 @@ describe('CategoricalIdentity', () => {
 			await db.all(`SELECT value FROM "${identity.dimTable('species')}" ORDER BY id`)
 		).map((r) => r.value);
 		expect(values).toContain('Emperor');
-		expect(values).toHaveLength(4);
+		// Adelie, Chinstrap, Gentoo, Emperor and one NULL row, whichever table
+		// came first.
+		expect(values).toHaveLength(5);
+		expect(values.filter((v) => v === null)).toHaveLength(1);
 
 		// And ids stay dense with no duplicates, whichever table won the race.
 		const ids = (await db.all(`SELECT id FROM "${identity.dimTable('species')}" ORDER BY id`)).map(
 			(r) => Number(r.id)
 		);
-		expect(ids).toEqual([0, 1, 2, 3]);
+		expect(ids).toEqual([0, 1, 2, 3, 4]);
 	});
 
 	it('both views resolve ids for a concurrently-registered shared field', async () => {
@@ -669,7 +724,7 @@ describe('CategoricalIdentity', () => {
 
 	it('exposes values indexed by id', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
-		expect(identity.values('species')).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		expect(identity.values('species')).toEqual(['Adelie', 'Chinstrap', 'Gentoo', null]);
 	});
 
 	it('grows the SAME array in place when a second table appends', async () => {
@@ -684,7 +739,7 @@ describe('CategoricalIdentity', () => {
 		await identity.ensureColumns('more_penguins', { categorical: ['species'] });
 
 		expect(held).toBe(identity.values('species'));
-		expect(held).toEqual(['Adelie', 'Chinstrap', 'Gentoo', 'Emperor']);
+		expect(held).toEqual(['Adelie', 'Chinstrap', 'Gentoo', null, 'Emperor']);
 	});
 
 	it('owns both directions of the bijection, and they agree', async () => {
@@ -694,7 +749,7 @@ describe('CategoricalIdentity', () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 
 		const fi = identity.identity('species');
-		expect(fi.values).toEqual(['Adelie', 'Chinstrap', 'Gentoo']);
+		expect(fi.values).toEqual(['Adelie', 'Chinstrap', 'Gentoo', null]);
 		for (let id = 0; id < fi.values.length; id++) {
 			expect(fi.ids.get(fi.values[id])).toBe(id);
 		}
@@ -713,8 +768,8 @@ describe('CategoricalIdentity', () => {
 
 		// Same object, both directions extended — no staleness test anywhere.
 		expect(held).toBe(identity.identity('species'));
-		expect(held.values[3]).toBe('Emperor');
-		expect(held.ids.get('Emperor')).toBe(3);
+		expect(held.values[4]).toBe('Emperor');
+		expect(held.ids.get('Emperor')).toBe(4);
 		expect(held.ids.size).toBe(held.values.length);
 	});
 
@@ -762,7 +817,8 @@ describe('CategoricalIdentity', () => {
 		);
 		expect(rows).toEqual([
 			{ value: 'Chinstrap', id: 0 },
-			{ value: 'Gentoo', id: 1 }
+			{ value: 'Gentoo', id: 1 },
+			{ value: null, id: 2 }
 		]);
 	});
 

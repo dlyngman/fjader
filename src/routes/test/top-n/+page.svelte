@@ -62,6 +62,14 @@
 				) AS t(category, region, revenue)
 			`);
 
+			// Table 3: chart 1's data plus NULL categories, the largest total of all.
+			// NULL is a category: it ranks by its measure, so it takes a top-5 slot.
+			await queryEngine.exec(`
+				CREATE TABLE top_n_nulls AS
+				SELECT * FROM top_n_sales
+				UNION ALL SELECT * FROM (VALUES (NULL, 400), (NULL, 250)) AS t(category, revenue)
+			`);
+
 			isLoaded = true;
 		} catch (error) {
 			console.error('Initialization error:', error);
@@ -340,6 +348,49 @@
 						{/snippet}
 						{#snippet interactors()}
 							<Toggle selection="brush" field="region" />
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
+			<!-- Chart 8: NULL as a category -->
+			<div class="chart-panel">
+				<h3>8. NULL as a category — topN(5, includeOthers), coloured by category</h3>
+				<p class="desc">
+					Chart 1's data plus NULL rows totalling 650, the largest. Expect 5 bars plus Other, the
+					first labelled "(null)" on the axis and in the legend, drawn grey like Other (no palette
+					colour; the others keep chart 1's colours). Clicking "(null)" in the legend or its bar
+					dims the rest; its tooltip reads "(null)".
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Category (with NULL)" yLabel="Revenue" legendPosition="top">
+						{#snippet legend()}
+							<Legend color="category" selection="nulls" />
+						{/snippet}
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="top_n_nulls"
+										x="category"
+										y={sum('revenue')}
+										fill="category"
+										sort={{ x: 'y', order: 'desc' }}
+										selection="nulls"
+										transforms={[topN(5, { includeOthers: true })]}
+										tooltip
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+						{#snippet interactors()}
+							<Toggle selection="nulls" field="category" />
 						{/snippet}
 					</ChartContainer>
 				</div>

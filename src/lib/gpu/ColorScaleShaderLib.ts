@@ -42,6 +42,14 @@ export const COLOR_CONFIG_SLOT_BASE_OFFSET = 32;
 export const NO_SLOT_TABLE = 0xffffffff;
 
 /**
+ * The rank of a category an ordinal colour scale draws in the null colour: it
+ * takes no palette slot, so it reads as missing data and shifts no category's
+ * colour. The NULL category and the Other buckets. -1, by contrast, is a category
+ * outside this scale's domain, which draws transparent.
+ */
+export const NULL_COLOR_RANK = -2;
+
+/**
  * How many colour configs the buffer holds. A uniform array has a fixed length
  * in WGSL, so the shader declaration and the buffer size both read this.
  */
@@ -139,7 +147,7 @@ fn sampleRamp(config: ColorConfig, t: f32) -> vec4<f32> {
     return colorRamps[config.rampOffset + idx];
 }
 
-fn samplePalette(config: ColorConfig, categoryIndex: u32) -> vec4<f32> {
+fn samplePalette(config: ColorConfig, categoryIndex: u32, nullColor: vec4<f32>) -> vec4<f32> {
     // The channel carries an identity id, which is stable and has nothing to do
     // with this scale's palette. Resolve it to this scale's own rank first; the
     // palette is indexed by rank, so the plotted categories take palette colours
@@ -148,7 +156,12 @@ fn samplePalette(config: ColorConfig, categoryIndex: u32) -> vec4<f32> {
     if (config.slotBase != NO_SLOT_TABLE) {
         let slot = identitySlot(config.slotBase, categoryIndex);
         if (slot < 0.0) {
-            // Not ranked by this scale: a category outside its domain.
+            // ${NULL_COLOR_RANK}: a category drawn in the null colour, which takes no
+            // palette slot (the NULL category, an Other bucket).
+            if (slot < -1.5) {
+                return nullColor;
+            }
+            // -1: not ranked by this scale, a category outside its domain.
             return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
         idx = u32(slot);
@@ -165,7 +178,7 @@ fn getColorFromScale(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<
             return nullColor;
         }
         let catIdx = u32(value);
-        return samplePalette(config, catIdx);
+        return samplePalette(config, catIdx, nullColor);
     }
 
     if (${isNanExpr('value')}) {
@@ -184,7 +197,7 @@ fn getColorFromScale(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<
 fn getOrdinalColor(scaleIndex: u32, categoryIndex: u32, nullColor: vec4<f32>) -> vec4<f32> {
     // Note: This function expects u32, so caller must handle -1 check before casting
     let config = colorConfigs[scaleIndex];
-    return samplePalette(config, categoryIndex);
+    return samplePalette(config, categoryIndex, nullColor);
 }
 
 fn getContinuousColor(scaleIndex: u32, value: f32, nullColor: vec4<f32>) -> vec4<f32> {

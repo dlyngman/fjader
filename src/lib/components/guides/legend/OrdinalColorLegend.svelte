@@ -3,6 +3,7 @@
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { ChartContext } from '$lib/types';
+	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 
 	interface Props {
 		scaleState: ColorScaleState;
@@ -105,7 +106,7 @@
 						style:height="{swatchSize}px"
 						style:border-radius="{swatchRadius}px"
 					></span>
-					<span class="legend-label">{value}</span>
+					<span class="legend-label">{categoryLabel(value)}</span>
 				</button>
 			{:else}
 				<span class="legend-item" style:opacity={opacityOf(value)}>
@@ -116,7 +117,7 @@
 						style:height="{swatchSize}px"
 						style:border-radius="{swatchRadius}px"
 					></span>
-					<span class="legend-label">{value}</span>
+					<span class="legend-label">{categoryLabel(value)}</span>
 				</span>
 			{/if}
 		{/each}

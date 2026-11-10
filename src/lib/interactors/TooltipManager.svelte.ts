@@ -581,7 +581,8 @@ export class TooltipManager {
 			const index = row[col as string];
 			if (index == null) return null;
 			const category = this.#bandScale(axis)?.categoryAt(index as number);
-			if (category == null) return null;
+			// undefined is no category; null is the NULL category, which has a band.
+			if (category === undefined) return null;
 			const pos = scale(category);
 			const bandwidth = 'bandwidth' in scale ? (scale as D3BandScale).bandwidth() : 0;
 			return pos != null ? pos + bandwidth / 2 : null;
@@ -645,7 +646,8 @@ export class TooltipManager {
 
 		// Band channel → category label
 		if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
-			return this.#bandScale(key)?.categoryAt(value as number) ?? value;
+			const category = this.#bandScale(key)?.categoryAt(value as number);
+			return category === undefined ? value : category;
 		}
 
 		// Time offset → formatted datetime
@@ -751,7 +753,10 @@ export class TooltipManager {
 			// field name to build its filter tuples, so this is also what makes a
 			// click on a reordered band axis filter the right category.
 			if ((key === 'x' || key === 'y') && scaleTypes[key] === 'band' && bandDomains?.[key]) {
-				point[fieldName] = this.#bandScale(key)?.categoryAt(value as number) ?? value;
+				// Not `??`: the NULL category decodes to null, which must stay null
+				// (Toggle selects it) rather than fall back to the raw id.
+				const category = this.#bandScale(key)?.categoryAt(value as number);
+				point[fieldName] = category === undefined ? value : category;
 				continue;
 			}
 

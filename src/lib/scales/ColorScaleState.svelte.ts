@@ -23,7 +23,8 @@ import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordina
 import {
 	COLOR_CONFIG_BYTES,
 	COLOR_CONFIG_SLOT_BASE_OFFSET,
-	NO_SLOT_TABLE
+	NO_SLOT_TABLE,
+	NULL_COLOR_RANK
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
@@ -561,6 +562,8 @@ export class ColorScaleState {
 		for (const value of this.domain) {
 			const id = identity.ids.get(value as never);
 			if (id === undefined || this.#paletteRank.has(id)) continue;
+			// The NULL category takes no palette slot (see below).
+			if (id === identity.nullId) continue;
 			this.#paletteRank.set(id, this.#nextRank++);
 		}
 
@@ -569,6 +572,12 @@ export class ColorScaleState {
 		for (const [id, rank] of this.#paletteRank) {
 			if (id >= 0 && id < table.length) table[id] = rank;
 		}
+		// The NULL category and the Other buckets draw the null colour: no palette
+		// slot, so they read as missing data or "the rest" and shift no category's
+		// colour. Not -1, which the shader draws transparent: a category outside
+		// this scale's domain.
+		if (identity.nullId !== null) table[identity.nullId] = NULL_COLOR_RANK;
+		for (const id of identity.synthetic) if (id < table.length) table[id] = NULL_COLOR_RANK;
 		const slots = this.#slots;
 		slots.from = table;
 		slots.to = table;
@@ -613,9 +622,9 @@ export class ColorScaleState {
 	 * performs, for tooltips and legends. Undefined without identity, where the
 	 * channel carries a palette index and the caller should read the domain.
 	 */
-	categoryAt(id: number): string | number | undefined {
+	categoryAt(id: number): string | number | null | undefined {
 		if (!this.hasIdentity) return undefined;
-		return this.#identity!.values[id] as string | number | undefined;
+		return this.#identity!.values[id] as string | number | null | undefined;
 	}
 
 	/** Called from #uploadToGPU only, which has refreshed the ranks. */
