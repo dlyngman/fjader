@@ -93,6 +93,7 @@ import {
 	registerDataDerivedDomains
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
+import { transformScaleKey } from './transform-scale-key';
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -536,7 +537,12 @@ export class MarkLifecycleV2 {
 			let config = scaleRequirements.x.config || {};
 			if (scaleRequirements.x.type === 'band' && hasCatReducing) {
 				const key = this.#transformCompiler.getCategoryTransformKey();
-				if (key) config = { ...config, transformKey: `${table}:${key}` };
+				if (key) {
+					config = {
+						...config,
+						transformKey: transformScaleKey(table, key, this.#chartContext.config)
+					};
+				}
 			}
 			this.#chartContext.registerScaleType(
 				'x',
@@ -552,7 +558,12 @@ export class MarkLifecycleV2 {
 			let config = scaleRequirements.y.config || {};
 			if (scaleRequirements.y.type === 'band' && hasCatReducing) {
 				const key = this.#transformCompiler.getCategoryTransformKey();
-				if (key) config = { ...config, transformKey: `${table}:${key}` };
+				if (key) {
+					config = {
+						...config,
+						transformKey: transformScaleKey(table, key, this.#chartContext.config)
+					};
+				}
 			}
 			this.#chartContext.registerScaleType(
 				'y',
