@@ -161,6 +161,22 @@ export class ColorScaleState {
 	/** The identity version the rank table was last built from. */
 	#ranksVersion = -1;
 	/**
+	 * Bumped whenever the ranks change, so a reader of getColor (a legend's
+	 * swatches) re-reads once identity lands. The ranks are a plain Map, and the
+	 * domain usually arrives first: without this a legend kept the colours it
+	 * computed before there were ranks.
+	 */
+	#ranksRevision = $state(0);
+
+	/**
+	 * Reactive: changes whenever the palette ranks are rebuilt, which is also when
+	 * identity is adopted. A reader of `identityKey` or `getColor` in a derived
+	 * reads this to re-run then.
+	 */
+	get ranksRevision(): number {
+		return this.#ranksRevision;
+	}
+	/**
 	 * Where this scale's block sits in the shared identity slot table. Assigned
 	 * by the coordinator's packer.
 	 *
@@ -548,6 +564,11 @@ export class ColorScaleState {
 	}
 
 	/** True once this scale's channel carries dim ids rather than palette indices. */
+	/** The field's live id <-> value bijection, once adopted. */
+	get identity(): FieldIdentity | null {
+		return this.#identity ?? null;
+	}
+
 	get hasIdentity(): boolean {
 		return this.isOrdinal && (this.#identity?.present ?? false);
 	}
@@ -591,6 +612,7 @@ export class ColorScaleState {
 		// this scale's domain.
 		if (identity.nullId !== null) table[identity.nullId] = NULL_COLOR_RANK;
 		for (const id of identity.synthetic) if (id < table.length) table[id] = NULL_COLOR_RANK;
+		this.#ranksRevision++;
 		const slots = this.#slots;
 		slots.from = table;
 		slots.to = table;
@@ -859,6 +881,7 @@ export class ColorScaleState {
 		// buckets. Not through the d3 scale, whose domain is stringified: a null
 		// (or a number) would miss it, and d3 would hand the value the next
 		// palette colour.
+		void this.#ranksRevision;
 		if (this.#hasRanks()) return this.#rankedColor(value);
 		if (!this.#d3Scale) return '#000000';
 		if (this.#transformType === 'log' && typeof value === 'number' && value <= 0) {
