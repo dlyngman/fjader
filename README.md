@@ -16,6 +16,8 @@ pip install fjader                 # Python: marimo and Jupyter
 pip install "fjader[streamlit]"    # Python: Streamlit
 ```
 
+`@uwdata/mosaic-sql` is a peer dependency (0.34 or 0.35), so your app and fjader share one copy. Two copies would not recognise each other's expressions: an aggregate such as `sum(...)` written with one would be misread by the other.
+
 fjader needs Chrome 149 or later, or another Chromium browser on that version. It relies on two recent features other browsers don't ship yet: WebGPU's `immediate_address_space`, through which every chart passes its scales to the shaders (so every zoom and pan uses it), and the `Temporal` API, used for calendar offsets. There is no fallback renderer.
 
 Three things to know before using it in a deployed app:
