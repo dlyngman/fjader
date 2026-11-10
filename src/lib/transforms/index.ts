@@ -194,6 +194,40 @@ function resolveTopNColumns(
 export const RANK_COLUMN = '__dplot_rank';
 
 /**
+ * The Other row's members: the ids of the categories folded into it, and each
+ * one's measure, as two aligned lists ordered by id. NULL on every other row.
+ *
+ * Returned by the query rather than worked out on the client, because only the
+ * query knows exactly what Other summed: under every filter the chart receives,
+ * NULL (`-1`) included when it was folded. Clicking Other selects these, and
+ * its selected share is computed from them.
+ *
+ * `__dplot_`-prefixed, like the rank, so tooltips never show them; and the SQL
+ * tooltip table leaves out every `OTHER_MEMBER_PREFIX` column, so a hover never
+ * ships them back.
+ */
+export const OTHER_MEMBER_PREFIX = '__dplot_other_';
+export const OTHER_IDS_COLUMN = `${OTHER_MEMBER_PREFIX}ids`;
+export const OTHER_VALUES_COLUMN = `${OTHER_MEMBER_PREFIX}values`;
+
+/**
+ * `sql` without Other's member lists, for tables queried on every hover. A
+ * COLUMNS filter rather than EXCLUDE, which errors on a column that is absent,
+ * as it is on every mark without an Other bucket.
+ *
+ * The `lambda c:` form, not `c ->`: DuckDB deprecated the arrow lambda in 1.3,
+ * and every SQL tooltip table goes through this, so an upgrade dropping it would
+ * break tooltips on every mark. Both DuckDB-WASM 1.30 (DuckDB 1.3.2) and the
+ * DuckDB the tests run accept it.
+ */
+export function withoutOtherMembers(sql: string): string {
+	return `SELECT COLUMNS(lambda c: NOT starts_with(c, '${OTHER_MEMBER_PREFIX}')) FROM (${sql})`;
+}
+
+/** The original band id, carried through bucketing, which rewrites the band column. */
+const BAND_SOURCE_COLUMN = '__dplot_band_src';
+
+/**
  * Give every category in the dim a row, at zero past the cutoff.
  *
  * This is what makes a departing category animate instead of disappearing: it
@@ -245,6 +279,11 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// Another group key, enumerated from its own dim: the padded row for a
 			// missing (category, series) pair carries that series' real id.
 			select[alias] = rawSql(`${crossed}."id"`) as ExprNode;
+		} else if (alias.startsWith(OTHER_MEMBER_PREFIX)) {
+			// Other's member lists: NULL on a padded row, as on every row but
+			// Other's. Never COALESCEd to 0 like a measure, which is a type error on
+			// a list.
+			select[alias] = rawSql(`a.${column(alias)}`) as ExprNode;
 		} else if (plan.identity[alias]?.dim === dim) {
 			// Same dim as the band, so this channel IS the category — the ordinary
 			// "colour the bars by their own category" chart. Its value for a row
@@ -781,7 +820,36 @@ function collapseIntoOther(
 		}
 	}
 	bucket[RANK_COLUMN] = sqlTag`CASE WHEN ${kept} THEN ${rank} ELSE ${n + 1} END` as ExprNode;
+	// The band column is rewritten to the Other id above, so the category each
+	// folded row came from is carried beside it for the member lists.
+	bucket[BAND_SOURCE_COLUMN] = column(band);
 	const bucketed = Query.from({ __topn_ranked: ranked }).select(bucket);
+
+	// PER MEMBER first: one row per group key and folded category. A grouped mark
+	// already has one row per (category, series), so this changes nothing there;
+	// an ungrouped one (raw rows, no groupKeys) would otherwise list one entry per
+	// RAW ROW past the cutoff — ids repeated, and a list that grows with the table
+	// rather than the field. Every aggregate below (SUM, MAX, MIN) gives the same
+	// answer over these rows as over the raw ones, so Other's values are unchanged.
+	const src = column(BAND_SOURCE_COLUMN);
+	const member: Record<string, ExprNode> = {};
+	const memberKeys: ExprNode[] = [src];
+	for (const alias of aliases) {
+		const col = column(alias);
+		if (isKey(alias)) {
+			member[alias] = col;
+			memberKeys.push(col);
+		} else if (alias === by) {
+			member[alias] = sqlTag`SUM(${col})` as ExprNode;
+		} else {
+			member[alias] = sqlTag`MAX(${col})` as ExprNode;
+		}
+	}
+	member[RANK_COLUMN] = sqlTag`MIN(${rank})` as ExprNode;
+	member[BAND_SOURCE_COLUMN] = src;
+	const members = Query.from({ __topn_bucketed: bucketed })
+		.select(member)
+		.groupby(...memberKeys);
 
 	const collapse: Record<string, ExprNode> = {};
 	const keys: ExprNode[] = [];
@@ -797,7 +865,17 @@ function collapseIntoOther(
 		}
 	}
 	collapse[RANK_COLUMN] = sqlTag`MIN(${rank})` as ExprNode;
-	return Query.from({ __topn_bucketed: bucketed })
+	// Other's members, from the rows the bucket step moved past the cutoff (their
+	// rank is n + 1 there): one entry per folded category, from the step above. A
+	// kept row's group has none, so its lists are NULL. Cast so they arrive as
+	// Int32Array and Float64Array children: ids are REAL in the channel, and a
+	// COUNT measure is BIGINT, which would arrive as BigInt64Array.
+	const past = sqlTag`${rank} > ${n}`;
+	collapse[OTHER_IDS_COLUMN] =
+		sqlTag`list(CAST(${src} AS INTEGER) ORDER BY ${src}) FILTER (WHERE ${past})` as ExprNode;
+	collapse[OTHER_VALUES_COLUMN] =
+		sqlTag`list(CAST(${column(by)} AS DOUBLE) ORDER BY ${src}) FILTER (WHERE ${past})` as ExprNode;
+	return Query.from({ __topn_members: members })
 		.select(collapse)
 		.groupby(...keys);
 }

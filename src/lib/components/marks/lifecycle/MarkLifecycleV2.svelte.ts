@@ -37,7 +37,7 @@ import {
 import type { ExprNode, ExprValue, FilterExpr, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories, withRanking } from '$lib/transforms';
+import { withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -1832,9 +1832,15 @@ export class MarkLifecycleV2 {
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
 				}
 
+				// Without Other's member lists: every hover query is `SELECT *` from
+				// this table, so lists of up to the field's cardinality would ship on
+				// each one. Only those, not every `__dplot_` column as Path B drops:
+				// the rest are scalars (the rank, id columns), cheap to keep, and the
+				// lists are the only ones whose size grows with the field.
+				const withoutMembers = withoutOtherMembers(tooltipQuery);
 				await this.#queryEngine.exec([
 					`DROP TABLE IF EXISTS "${tableName}"`,
-					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${tooltipQuery})${orderClause}`
+					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`
 				]);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
