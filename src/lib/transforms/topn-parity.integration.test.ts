@@ -11,7 +11,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { Query, column, sum, eq, literal, sql as sqlTag, type ExprNode } from '@uwdata/mosaic-sql';
-import { topN, stackY, TransformCompiler, RANK_COLUMN, withDenseCategories } from './index';
+import {
+	topN,
+	stackY,
+	TransformCompiler,
+	RANK_COLUMN,
+	withDenseCategories,
+	OTHER_IDS_COLUMN,
+	OTHER_VALUES_COLUMN,
+	withoutOtherMembers
+} from './index';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -1043,6 +1052,104 @@ describe('topN includeOthers in SQL', () => {
 			expect(ids).toEqual([...all.slice(0, 5).map((t) => t.id), otherId]);
 			// Pairs, as for any series: 11 categories x (3 regions + the NULL -1).
 			expect(rows.length).toBe((otherId + 1) * 4);
+		}
+	});
+
+	// -----------------------------------------------------------------------
+	// Other's members: what the click and the share read
+	// -----------------------------------------------------------------------
+
+	const idsOf = (r: Record<string, unknown>) =>
+		r[OTHER_IDS_COLUMN] == null ? null : (r[OTHER_IDS_COLUMN] as unknown[]).map(Number);
+	const valuesOf = (r: Record<string, unknown>) =>
+		r[OTHER_VALUES_COLUMN] == null ? null : (r[OTHER_VALUES_COLUMN] as unknown[]).map(Number);
+
+	it('lists the folded categories and their measures on the Other row, by id', async () => {
+		const rows = await run({});
+		const folded = (await totals()).slice(5).sort((a, b) => a.id - b.id);
+		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
+
+		expect(idsOf(otherRow)).toEqual(folded.map((f) => f.id));
+		valuesOf(otherRow)!.forEach((v, i) => expect(v).toBeCloseTo(folded[i].v, 3));
+		// The values are exactly what Other summed.
+		const sum = valuesOf(otherRow)!.reduce((a, b) => a + b, 0);
+		expect(sum).toBeCloseTo(Number(otherRow.y2), 3);
+		// Every shown row has no members.
+		for (const r of rows) if (Number(r.x) !== otherId) expect(idsOf(r)).toBeNull();
+	});
+
+	it("lists each series its own members, with that series' measures", async () => {
+		const rows = await run({ series: true });
+		const top = new Set((await totals()).slice(0, 5).map((t) => t.id));
+		const expected = await db.all(
+			`SELECT region_idx AS s, category_idx AS c, SUM(revenue)::DOUBLE AS v FROM sales_o2
+			 GROUP BY region_idx, category_idx ORDER BY region_idx, category_idx`
+		);
+		for (const r of rows.filter((r) => Number(r.x) === otherId)) {
+			const mine = expected.filter((e) => Number(e.s) === Number(r.fill) && !top.has(Number(e.c)));
+			expect(idsOf(r)).toEqual(mine.map((e) => Number(e.c)));
+			valuesOf(r)!.forEach((v, i) => expect(v).toBeCloseTo(Number(mine[i].v), 3));
+		}
+	});
+
+	it("leaves out a category the chart's filters removed: members are what Other summed", async () => {
+		// A crossfilter that removes one category entirely, one that would fold.
+		const gone = (await totals()).at(-1)!.id;
+		const unfiltered = await run({});
+		expect(idsOf(unfiltered.find((r) => Number(r.x) === otherId)!)).toContain(gone);
+
+		const where = `category_idx <> ${gone}`;
+		const rows = await run({ where });
+		const folded = (await totals(where))
+			.slice(5)
+			.map((f) => f.id)
+			.sort((a, b) => a - b);
+		const otherRow = rows.find((r) => Number(r.x) === otherId)!;
+		expect(idsOf(otherRow)).toEqual(folded);
+		expect(idsOf(otherRow)).not.toContain(gone);
+	});
+
+	it('keeps the lists through dense(), NULL on every padded row', async () => {
+		const sparse = await run({});
+		const dense = await run({ dense: true });
+		const sparseOther = sparse.find((r) => Number(r.x) === otherId)!;
+		const denseOthers = dense.filter((r) => Number(r.x) === otherId);
+		expect(denseOthers).toHaveLength(1);
+		expect(idsOf(denseOthers[0])).toEqual(idsOf(sparseOther));
+		for (const r of dense) if (!isRanked(r)) expect(idsOf(r)).toBeNull();
+	});
+
+	it('keeps hover tables free of the lists, and works where there are none', async () => {
+		for (const other of [otherId, null]) {
+			let q = Query.from('sales_o2')
+				.select({ x: column('category_idx'), y2: sum(column('revenue')) })
+				.groupby(column('category_idx')) as SelectQuery;
+			const config = {
+				markType: 'barY',
+				table: 'sales_o2',
+				x: 'x',
+				y: 'y2',
+				groupKeys: ['x'],
+				identity: {
+					x: {
+						dim: CAT,
+						size: otherId + 1,
+						positional: true,
+						...(other != null ? { otherId: other } : {})
+					}
+				}
+			} as MarkConfig;
+			q = (topN(5, { by: 'y2', includeOthers: true }) as unknown as SqlTransform).apply(q, config);
+			// As #writeTooltipTable builds it: REPLACE over the filtered columns.
+			const rows = await db.all(
+				`SELECT * REPLACE (CAST(x AS DOUBLE) AS x) FROM (${withoutOtherMembers(String(q))})`
+			);
+			expect(rows.length).toBeGreaterThan(0);
+			for (const r of rows) {
+				expect(OTHER_IDS_COLUMN in r).toBe(false);
+				expect(OTHER_VALUES_COLUMN in r).toBe(false);
+				expect('y2' in r).toBe(true);
+			}
 		}
 	});
 });

@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import duckdb from 'duckdb';
 import { CategoricalIdentity } from './categorical-identity';
-import { topN, RANK_COLUMN } from '$lib/transforms';
+import { topN, RANK_COLUMN, OTHER_IDS_COLUMN, OTHER_VALUES_COLUMN } from '$lib/transforms';
 import { Query, column, sql } from '@uwdata/mosaic-sql';
 import type { MarkConfig, SqlTransform } from '$lib/types';
 
@@ -93,7 +93,11 @@ describe('identity ids through topN', () => {
 		} as MarkConfig;
 		const out = (topN(2, { includeOthers: true }) as SqlTransform).apply(query, config);
 		const rows = await db.all(`SELECT * FROM (${out}) ORDER BY "${RANK_COLUMN}"`);
-		return { xs: rows.map((r) => Number(r.x)), totals: rows.map((r) => Number(r.total)) };
+		return {
+			xs: rows.map((r) => Number(r.x)),
+			totals: rows.map((r) => Number(r.total)),
+			rows
+		};
 	}
 
 	it('carries a reserved id through the query and back to its label', async () => {
@@ -116,6 +120,18 @@ describe('identity ids through topN', () => {
 
 		// And it decodes through the ordinary accessor, with no special case.
 		expect(xs.map((id) => values[id])).toEqual(['bravo', 'charlie', 'Other']);
+	});
+
+	it("lists a folded NULL among Other's members as id -1", async () => {
+		await db.run(`INSERT INTO sales VALUES (NULL, 5)`);
+		await identity.ensureColumns('sales', { categorical: ['category'] });
+		const bucket = await identity.acquireSynthetic('category', 'Other');
+
+		const { xs, rows } = await topTwoWithOther('category', bucket.id);
+		const other = rows[xs.indexOf(bucket.id)];
+		// alpha (0) 10, delta (3) 20, and NULL 5, in id order.
+		expect((other[OTHER_IDS_COLUMN] as unknown[]).map(Number)).toEqual([-1, 0, 3]);
+		expect((other[OTHER_VALUES_COLUMN] as unknown[]).map(Number)).toEqual([5, 10, 20]);
 	});
 
 	it('keeps a real "Other" a ranked category beside the bucket', async () => {
