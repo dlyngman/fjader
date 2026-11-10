@@ -158,9 +158,7 @@ export class FieldActivity {
 		const identity = this.#identity;
 		if (identity && identity === this.#host.identityOf(this.key)) {
 			const id = identity.ids.get(value as never);
-			if (id != null && id < group.table.count) {
-				return selectionOpacity(group.table.activityOf(id), inactiveOpacity);
-			}
+			if (id != null) return this.opacityOfId(index, id, inactiveOpacity);
 		}
 		const values = group.values;
 		return values == null || values.has(value) ? 1 : inactiveOpacity;

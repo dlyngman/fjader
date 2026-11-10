@@ -1389,6 +1389,10 @@ export class MarkLifecycleV2 {
 				const scale = (
 					axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
 				) as BandScaleState | null;
+				// Always there by now: `axes` holds only axes whose resolved type is
+				// band or point, and ChartScales resolves the scale instance eagerly
+				// from registerScaleType, in this mark's constructor, so the scale
+				// exists before setup runs. The guard is for the type, not a case.
 				if (!scale) continue;
 				// One Other per band scale, shared by every mark on it (see
 				// retainOther). The scale also takes it as its Other id, so an

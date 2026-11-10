@@ -279,7 +279,7 @@
 		// A 'filter' mark (NO_GROUP) never dims, as its GPU marks do not.
 		if (!setup || !filterGroups || setup.groupIndex === NO_GROUP) return null;
 		const groups = [setup.groupIndex];
-		const sources: Array<{ key: string; ids: ArrayLike<number> }> = [];
+		const sources: Array<{ key: string; ids: ArrayLike<unknown> }> = [];
 		for (const axis of ['x', 'y'] as const) {
 			const type = chartContext.scaleTypes?.[axis];
 			if (type !== 'band' && type !== 'point') continue;
@@ -289,12 +289,12 @@
 			// filters the labels, so they do not dim by it too.
 			const key = band?.identityKey;
 			if (!key || !raw) continue;
-			sources.push({ key, ids: raw as ArrayLike<number> });
+			sources.push({ key, ids: raw as ArrayLike<unknown> });
 		}
 		const color = markColor.scaleState;
 		const raw = fillRaw;
 		const colorKey = color?.isOrdinal ? color.identityKey : null;
-		if (colorKey && raw) sources.push({ key: colorKey, ids: raw as ArrayLike<number> });
+		if (colorKey && raw) sources.push({ key: colorKey, ids: raw as ArrayLike<unknown> });
 		return sources.length ? { groups, sources } : null;
 	});
 
@@ -304,10 +304,14 @@
 		if (!d) return 1;
 		let opacity = 1;
 		for (const source of d.sources) {
-			opacity = Math.min(
-				opacity,
-				filterGroups.opacityOfId(source.key, d.groups, Number(source.ids[idx]))
-			);
+			const raw = source.ids[idx];
+			// An id reads its fade by id. Anything else (a string from a channel
+			// that never carried ids, a null) is a value, read as one: never coerced
+			// to a number, where a string becomes NaN and null becomes category 0.
+			const selected = Number.isInteger(raw)
+				? filterGroups.opacityOfId(source.key, d.groups, raw as number)
+				: filterGroups.opacityOfValue(source.key, d.groups, raw);
+			opacity = Math.min(opacity, selected);
 		}
 		return opacity;
 	}

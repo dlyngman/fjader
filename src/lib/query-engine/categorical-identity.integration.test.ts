@@ -410,6 +410,26 @@ describe('CategoricalIdentity', () => {
 		expect(Number(rows[0].n)).toBe(1);
 	});
 
+	it('aborts an acquire a reset overtakes, in flight or queued, writing no row', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		// The first is in flight when the reset lands, the second still queued
+		// behind it on the field's chain.
+		const inFlight = identity.acquireSynthetic('species', 'Other');
+		const queued = identity.acquireSynthetic('species', 'Other');
+		const reset = identity.reset();
+		await expect(inFlight).rejects.toMatchObject({ name: 'AbortError' });
+		await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+		await reset;
+
+		// The new dim holds no orphan bucket from the superseded acquire.
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		expect(identity.identity('species').synthetic.size).toBe(0);
+		const rows = await db.all(
+			`SELECT COUNT(*) AS n FROM "${identity.dimTable('species')}" WHERE label IS NOT NULL`
+		);
+		expect(Number(rows[0].n)).toBe(0);
+	});
+
 	it('ignores a release from before a reset', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const stale = await identity.acquireSynthetic('species', 'Other');

@@ -44,7 +44,6 @@
 
 import { IDENTITY_SLOT_CAPACITY } from '$lib/gpu/identity-slot-packing';
 
-/** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
 /**
  * A synthetic id handed out by `acquireSynthetic`: what to release it with.
  * `generation` ties it to the dims it was acquired from, so a release after a
@@ -58,6 +57,7 @@ export interface SyntheticId {
 	readonly generation: number;
 }
 
+/** The subset of QueryEngine this module needs. Keeps it testable in isolation. */
 export interface IdentityExec {
 	exec(sql: string | string[]): Promise<void>;
 	/** Rows as plain objects. Callers adapt whatever their driver returns. */
@@ -690,12 +690,31 @@ export class CategoricalIdentity {
 		if (!free.includes(synthetic.id)) free.push(synthetic.id);
 	}
 
+	/**
+	 * Abort an acquire that a reset overtook. An AbortError, which a mark's setup
+	 * treats as superseded rather than failed: the reset re-runs that setup, and
+	 * it acquires again from the new dim.
+	 */
+	#throwIfSuperseded(generation: number, field: string, label: string): void {
+		if (this.#generation === generation) return;
+		const superseded = new Error(`Acquiring "${label}" for "${field}" was superseded by a reset.`);
+		superseded.name = 'AbortError';
+		throw superseded;
+	}
+
 	async #acquireSyntheticNow(
 		dim: DimEntry,
 		field: string,
 		requested: string,
 		generation: number
 	): Promise<SyntheticId> {
+		// Queued behind work that outlived a reset, as #ensureDimNow checks too.
+		// Without this the INSERT would write a bucket row into the NEW dim (same
+		// name) that no one holds and no release can return: releases from an
+		// older generation are ignored.
+		// Checked again after each await: a reset landing mid-flight drops the dim
+		// the row went into, and the identity read afterwards is a new one.
+		this.#throwIfSuperseded(generation, field, requested);
 		const identity = this.identity(field);
 		let label = requested;
 		while (identity.ids.has(label)) label = `${label} (rest)`;
@@ -724,7 +743,9 @@ export class CategoricalIdentity {
 				`(SELECT COALESCE(MAX(id), -1) + 1 FROM ${dimName})::INT ` +
 				`RETURNING id`
 		);
+		this.#throwIfSuperseded(generation, field, requested);
 		await this.#refreshValues(field);
+		this.#throwIfSuperseded(generation, field, requested);
 
 		const id = Number(rows[0]?.id);
 		if (!Number.isInteger(id) || !identity.synthetic.has(id)) {
