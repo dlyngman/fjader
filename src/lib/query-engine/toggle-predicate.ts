@@ -10,10 +10,21 @@ import { and as sqlAnd, isIn, isNotDistinct, literal, or, type ExprNode } from '
  */
 export function togglePredicate(exprs: ExprNode[], tuples: unknown[][]): ExprNode {
 	if (exprs.length === 1) {
-		return isIn(
-			exprs[0],
-			tuples.map((t) => literal(t[0]))
-		);
+		// NULL is a category, but `IN (…, NULL)` never matches it: NULL = NULL is
+		// not true. It goes beside the list as IS NULL instead.
+		const values = tuples.map((t) => t[0]);
+		const real = values.filter((v) => v !== null);
+		const hasNull = real.length < values.length;
+		const inList =
+			real.length > 0
+				? isIn(
+						exprs[0],
+						real.map((v) => literal(v))
+					)
+				: null;
+		const isNull = hasNull ? isNotDistinct(exprs[0], literal(null)) : null;
+		if (inList && isNull) return or([inList, isNull]);
+		return inList ?? isNull ?? isIn(exprs[0], []);
 	}
 	const clauses = tuples.map((t) => sqlAnd(t.map((v, i) => isNotDistinct(exprs[i], literal(v)))));
 	return clauses.length === 1 ? clauses[0] : or(clauses);

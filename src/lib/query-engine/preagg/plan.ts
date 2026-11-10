@@ -231,7 +231,8 @@ export function planPreagg(
 			activeMeta.push({ kind: 'value', field, column: channel, byId: true });
 			return;
 		}
-		// One more group for -1: NULL, or a value the dim does not hold.
+		// One more group for -1: a value the dim does not hold yet. NULL has an id
+		// of its own, counted in the values.
 		const idGroups = identity.values(field).length + 1;
 		if (identity.dimCovers(field, baseTable)) {
 			// Case 2.

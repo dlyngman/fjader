@@ -122,16 +122,30 @@ describe('identity ids through topN', () => {
 		expect(xs.map((id) => values[id])).toEqual(['bravo', 'charlie', 'Other']);
 	});
 
-	it("lists a folded NULL among Other's members as id -1", async () => {
+	it("lists a folded NULL among Other's members, under the NULL category's id", async () => {
 		await db.run(`INSERT INTO sales VALUES (NULL, 5)`);
 		await identity.ensureColumns('sales', { categorical: ['category'] });
 		const bucket = await identity.acquireSynthetic('category', 'Other');
+		const nullId = identity.identity('category').nullId!;
+		// alpha/bravo/charlie/delta are 0..3, NULL is 4 (last), Other 5.
+		expect(nullId).toBe(4);
 
 		const { xs, rows } = await topTwoWithOther('category', bucket.id);
 		const other = rows[xs.indexOf(bucket.id)];
-		// alpha (0) 10, delta (3) 20, and NULL 5, in id order.
-		expect((other[OTHER_IDS_COLUMN] as unknown[]).map(Number)).toEqual([-1, 0, 3]);
-		expect((other[OTHER_VALUES_COLUMN] as unknown[]).map(Number)).toEqual([5, 10, 20]);
+		// alpha (0) 10, delta (3) 20, NULL (4) 5, in id order.
+		expect((other[OTHER_IDS_COLUMN] as unknown[]).map(Number)).toEqual([0, 3, nullId]);
+		expect((other[OTHER_VALUES_COLUMN] as unknown[]).map(Number)).toEqual([10, 20, 5]);
+	});
+
+	it('ranks NULL by its measure like any category: the largest takes a slot', async () => {
+		await db.run(`INSERT INTO sales VALUES (NULL, 1000)`);
+		await identity.ensureColumns('sales', { categorical: ['category'] });
+		const bucket = await identity.acquireSynthetic('category', 'Other');
+		const values = identity.identity('category').values;
+
+		const { xs, totals } = await topTwoWithOther('category', bucket.id);
+		expect(xs.map((id) => values[id])).toEqual([null, 'bravo', 'Other']);
+		expect(totals).toEqual([1000, 400, 330]);
 	});
 
 	it('keeps a real "Other" a ranked category beside the bucket', async () => {

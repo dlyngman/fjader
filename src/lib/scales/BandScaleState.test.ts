@@ -1944,3 +1944,25 @@ describe('BandScaleState Other bucket', () => {
 		expect(release).not.toHaveBeenCalled();
 	});
 });
+
+describe('BandScaleState NULL category', () => {
+	it('keeps NULL as a category on the axis, at its id', () => {
+		const scale = new BandScaleState('category');
+		const identity = new FieldIdentity(['a', 'b', null]);
+		scale.setIdentity(identity);
+		// Ranked by a topN: NULL first, then a.
+		scale.addMarkIds([2, 0], 'bar', { sorted: true });
+		scale.updateDomainFromExtents();
+		expect(scale.effectiveDomain).toEqual([null, 'a']);
+		expect(scale.categoryAt(2)).toBeNull();
+		expect(scale.categoryAt(7)).toBeUndefined();
+	});
+
+	it('maps a registered null value to the NULL id', () => {
+		const scale = new BandScaleState('category');
+		scale.setIdentity(new FieldIdentity(['a', null]));
+		scale.addMark(['a', null], 'axis');
+		scale.updateDomainFromExtents();
+		expect(scale.effectiveDomain).toEqual(['a', null]);
+	});
+});

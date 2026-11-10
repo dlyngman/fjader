@@ -13,6 +13,7 @@
 	import { identityKeyFor } from '$lib/query-engine/identity-key';
 	import { checkFacetCells } from './facet-limits';
 	import ChartCell from './ChartCell.svelte';
+	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 
 	interface Props {
 		xLabel?: string | null;
@@ -481,7 +482,7 @@
 					<ChartCell
 						cellChartId={facetChartIds[i]}
 						facetIndex={i}
-						facetLabel={String(cat)}
+						facetLabel={String(categoryLabel(cat))}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
 						{chartConfig}

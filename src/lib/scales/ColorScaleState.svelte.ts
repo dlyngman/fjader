@@ -23,7 +23,8 @@ import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordina
 import {
 	COLOR_CONFIG_BYTES,
 	COLOR_CONFIG_SLOT_BASE_OFFSET,
-	NO_SLOT_TABLE
+	NO_SLOT_TABLE,
+	NULL_COLOR_RANK
 } from '$lib/gpu/ColorScaleShaderLib';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
@@ -144,8 +145,36 @@ export class ColorScaleState {
 	 */
 	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
 
+	/**
+	 * Read by the packer every frame. The rank table covers the ids the field had
+	 * when it was built, and the field's identity grows in place: another table
+	 * appends categories, and a chart acquiring an Other bucket appends its id,
+	 * any chart, since this scale is shared per field. An id past the table's end
+	 * reads as unranked and draws transparent, so a grown identity rebuilds it
+	 * here, once per growth.
+	 */
 	get slots(): SlotSource {
+		const identity = this.#identity;
+		if (identity?.present && identity.version !== this.#ranksVersion) this.#refreshRanks();
 		return this.#slots;
+	}
+	/** The identity version the rank table was last built from. */
+	#ranksVersion = -1;
+	/**
+	 * Bumped whenever the ranks change, so a reader of getColor (a legend's
+	 * swatches) re-reads once identity lands. The ranks are a plain Map, and the
+	 * domain usually arrives first: without this a legend kept the colours it
+	 * computed before there were ranks.
+	 */
+	#ranksRevision = $state(0);
+
+	/**
+	 * Reactive: changes whenever the palette ranks are rebuilt, which is also when
+	 * identity is adopted. A reader of `identityKey` or `getColor` in a derived
+	 * reads this to re-run then.
+	 */
+	get ranksRevision(): number {
+		return this.#ranksRevision;
 	}
 	/**
 	 * Where this scale's block sits in the shared identity slot table. Assigned
@@ -535,6 +564,11 @@ export class ColorScaleState {
 	}
 
 	/** True once this scale's channel carries dim ids rather than palette indices. */
+	/** The field's live id <-> value bijection, once adopted. */
+	get identity(): FieldIdentity | null {
+		return this.#identity ?? null;
+	}
+
 	get hasIdentity(): boolean {
 		return this.isOrdinal && (this.#identity?.present ?? false);
 	}
@@ -557,10 +591,13 @@ export class ColorScaleState {
 	#refreshRanks(): void {
 		const identity = this.#identity;
 		if (!identity?.present) return;
+		this.#ranksVersion = identity.version;
 
 		for (const value of this.domain) {
 			const id = identity.ids.get(value as never);
 			if (id === undefined || this.#paletteRank.has(id)) continue;
+			// The NULL category takes no palette slot (see below).
+			if (id === identity.nullId) continue;
 			this.#paletteRank.set(id, this.#nextRank++);
 		}
 
@@ -569,6 +606,13 @@ export class ColorScaleState {
 		for (const [id, rank] of this.#paletteRank) {
 			if (id >= 0 && id < table.length) table[id] = rank;
 		}
+		// The NULL category and the Other buckets draw the null colour: no palette
+		// slot, so they read as missing data or "the rest" and shift no category's
+		// colour. Not -1, which the shader draws transparent: a category outside
+		// this scale's domain.
+		if (identity.nullId !== null) table[identity.nullId] = NULL_COLOR_RANK;
+		for (const id of identity.synthetic) if (id < table.length) table[id] = NULL_COLOR_RANK;
+		this.#ranksRevision++;
 		const slots = this.#slots;
 		slots.from = table;
 		slots.to = table;
@@ -613,9 +657,9 @@ export class ColorScaleState {
 	 * performs, for tooltips and legends. Undefined without identity, where the
 	 * channel carries a palette index and the caller should read the domain.
 	 */
-	categoryAt(id: number): string | number | undefined {
+	categoryAt(id: number): string | number | null | undefined {
 		if (!this.hasIdentity) return undefined;
-		return this.#identity!.values[id] as string | number | undefined;
+		return this.#identity!.values[id] as string | number | null | undefined;
 	}
 
 	/** Called from #uploadToGPU only, which has refreshed the ranks. */
@@ -831,12 +875,30 @@ export class ColorScaleState {
 	 * Returns NULL_COLOR for values that are unmappable under the current
 	 * transform (e.g. non-positive values under log), mirroring the GPU shader.
 	 */
-	getColor(value: string | number): string {
+	getColor(value: string | number | null): string {
+		// With palette ranks, the colour is exactly the shader's: value -> id ->
+		// rank -> palette, and the null colour for the NULL category and the Other
+		// buckets. Not through the d3 scale, whose domain is stringified: a null
+		// (or a number) would miss it, and d3 would hand the value the next
+		// palette colour.
+		void this.#ranksRevision;
+		if (this.#hasRanks()) return this.#rankedColor(value);
 		if (!this.#d3Scale) return '#000000';
 		if (this.#transformType === 'log' && typeof value === 'number' && value <= 0) {
 			return ColorScaleState.NULL_COLOR;
 		}
-		return (this.#d3Scale as (v: string | number) => string)(value);
+		return (this.#d3Scale as (v: string | number) => string)(value as string | number);
+	}
+
+	#rankedColor(value: string | number | null): string {
+		const identity = this.#identity!;
+		const id = identity.ids.get(value as never);
+		const rank = id === undefined ? undefined : this.#paletteRank.get(id);
+		if (rank === undefined) return ColorScaleState.NULL_COLOR;
+		let colors = getOrdinalColors(this.#scheme) ?? [];
+		if (this.#reverse) colors = [...colors].reverse();
+		// Same wrap the shader applies, so an over-32 palette agrees too.
+		return colors.length ? colors[rank % colors.length] : ColorScaleState.NULL_COLOR;
 	}
 
 	/**

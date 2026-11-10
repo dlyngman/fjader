@@ -272,17 +272,18 @@ export class DomainResolver {
 		// #extents encodes at the boundary, which is the whole point of the two
 		// registration methods, so its input was already ids that had passed the
 		// same check, and the list it was given had just been deduplicated. Its
-		// range check is subsumed by the `value == null` test below, which drops
-		// an id past the end, a negative one and a non-integer one alike, because
-		// all three index the value array to undefined.
+		// range check is subsumed by the `value === undefined` test below, which
+		// drops an id past the end, a negative one and a non-integer one alike,
+		// because all three index the value array to undefined. Not `== null`:
+		// the NULL category's value IS null, and it is a category like any other.
 		//
 		// An id with no value is dropped from the IDS, before either projection.
 		// Filtering only the values would shorten the value list without
 		// shortening the permutation, and the two would disagree with the band
 		// index space d3 and the shader's categoryCount use — by one, with
-		// nothing failing. Unreachable today (the dim has no NULL values and
-		// synthetic rows carry a label), which is why the two are built together
-		// rather than checked against each other.
+		// nothing failing. Unreachable today (every dim row has a value: a real
+		// one, a synthetic row's label, or the NULL category's null), which is
+		// why the two are built together rather than checked against each other.
 		const seen = new Set<DimValue | number>();
 		const orderedIds: number[] = [];
 		const resolved: DimValue[] = [];
@@ -297,7 +298,7 @@ export class DomainResolver {
 					continue;
 				}
 				const value = values[category as number];
-				if (value == null) continue;
+				if (value === undefined) continue;
 				orderedIds.push(category as number);
 				resolved.push(value);
 			}
@@ -380,7 +381,9 @@ export class DomainResolver {
 		const out: number[] = [];
 		const seen = new Set<number>();
 		for (const item of items) {
-			if (item == null) continue;
+			// A value of null is the NULL category, which `ids` maps to its id; an
+			// encoded null is no id at all.
+			if (item === undefined || (encoded && item === null)) continue;
 			const id = encoded ? (item as number) : identity.ids.get(item as DimValue);
 			if (id === undefined || !Number.isInteger(id) || id < 0 || id >= limit) continue;
 			if (seen.has(id)) continue;

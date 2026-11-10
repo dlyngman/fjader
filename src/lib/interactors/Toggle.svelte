@@ -77,8 +77,9 @@
 		const slot = bandState.invertScreenToData(innerPos, extent, axis === 'y');
 		if (slot == null) return null;
 		const id = bandState.idAtSlot(slot);
-		const value = id == null ? null : (bandState.categoryAt(id) ?? null);
-		return value == null ? null : { field: bandState.sourceField, value };
+		// undefined is "no category here"; null is the NULL category, a real one.
+		const value = id == null ? undefined : bandState.categoryAt(id);
+		return value === undefined ? null : { field: bandState.sourceField, value };
 	}
 
 	chart.onChartClick = (event) => {
@@ -91,7 +92,8 @@
 		// pointer micro-movement during click hides tooltip but data stays valid)
 		if (xInBounds && yInBounds && tm?.currentPoint) {
 			const tuple = fields.map((f) => tm.currentPoint![f]);
-			if (tuple.some((v) => v == null)) return;
+			// A missing field is undefined; null is the NULL category, selectable.
+			if (tuple.some((v) => v === undefined)) return;
 			declared.toggle(tuple, isMulti);
 			return;
 		}

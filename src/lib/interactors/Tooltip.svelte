@@ -12,6 +12,7 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
 	import { format as d3format } from 'd3-format';
+	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 	import type { ChartContext, ContinuousScaleState } from '$lib/types';
 
 	const commaFormat = d3format(',.4~g');
@@ -117,7 +118,7 @@
 			if (fmt) return fmt(value);
 			return commaFormat(value);
 		}
-		return String(value);
+		return String(categoryLabel(value));
 	}
 
 	const channelIcons: Record<string, string> = { x: '\u2192', y: '\u2191' };
