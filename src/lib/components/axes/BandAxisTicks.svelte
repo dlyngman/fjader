@@ -85,9 +85,17 @@
 	 */
 	const key = $derived(scale.identityKey ?? scale.sourceField);
 
-	/** A label's opacity: the scale's own (travel, clipping) times its selection fade. */
+	/**
+	 * A label's opacity: the scale's own (travel, clipping) times its selection
+	 * fade. Read by id where the tick's key is one — the only way to reach an
+	 * Other bucket, whose label is not a value — and by value before identity.
+	 */
 	function opacityOf(tick: BandTick): number {
-		const selected = filterGroups ? filterGroups.opacityOfValue(key, groups, tick.value) : 1;
+		const selected = !filterGroups
+			? 1
+			: scale.hasIdentity
+				? filterGroups.opacityOfId(key, groups, tick.key)
+				: filterGroups.opacityOfValue(key, groups, tick.value);
 		return scale.tickOpacity(tick.key) * selected;
 	}
 

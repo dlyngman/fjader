@@ -2,7 +2,7 @@
 
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
-import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
+import type { DimValue, FieldIdentity, SyntheticId } from '$lib/query-engine/categorical-identity';
 import type { ClockLoop } from '$lib/animation';
 import { SlotTransition, type BandSlots } from './SlotTransition';
 import { DomainResolver } from './DomainResolver';
@@ -409,6 +409,52 @@ export class BandScaleState {
 	setOtherId(id: number | null): void {
 		this.#slots.otherId = id;
 	}
+
+	/**
+	 * This axis's Other bucket, shared by every mark on it that has one.
+	 *
+	 * One id per band scale, not per mark or per chart: marks share a band scale
+	 * only when they agree on what Other is — the scale's key carries the table
+	 * and the category-reducing transform (its `transformKey`), N included — so
+	 * everything drawn on one axis lines up in one Other band. A bar and its
+	 * value labels, or two charts with the identical topN, share it.
+	 *
+	 * Reference-counted by mark id. The first holder acquires; holders arriving
+	 * while that is in flight share it; the last to release gives it back.
+	 */
+	retainOther(holder: string, acquire: () => Promise<SyntheticId>): Promise<SyntheticId> {
+		this.#otherHolders.add(holder);
+		if (!this.#other) {
+			const pending = acquire();
+			this.#other = pending;
+			pending.then(
+				(other) => {
+					if (this.#other === pending) this.setOtherId(other.id);
+				},
+				() => {
+					if (this.#other === pending) this.#other = null;
+				}
+			);
+		}
+		return this.#other;
+	}
+
+	/**
+	 * Drop `holder`'s claim on the Other bucket. The last one out hands the id to
+	 * `release` — once the acquire has landed, if it is still in flight.
+	 */
+	releaseOther(holder: string, release: (other: SyntheticId) => void): void {
+		if (!this.#otherHolders.delete(holder) || this.#otherHolders.size > 0) return;
+		const pending = this.#other;
+		this.#other = null;
+		this.setOtherId(null);
+		pending?.then(release, () => {});
+	}
+
+	/** The marks holding this axis's Other bucket. */
+	#otherHolders = new Set<string>();
+	/** The bucket they share, while any holds it. */
+	#other: Promise<SyntheticId> | null = null;
 
 	// -------------------------------------------------------------------------
 	// IDENTITY <-> DISPLAY, FOR CPU CONSUMERS

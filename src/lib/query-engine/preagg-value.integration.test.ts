@@ -257,7 +257,7 @@ describe('preagg for value dims', () => {
 		// coloured by filters it, though the legend sits in the mark's own
 		// chart. Bars by kind, top 1 plus Other, coloured by cat.
 		await engine.ensureColumns('t', { categorical: ['cat', 'kind'] });
-		const otherId = await engine.reserveSyntheticIdentity('kind', 'Other');
+		const { id: otherId } = await engine.acquireSyntheticIdentity('kind', 'Other');
 		const view = engine.identitySourceFor('t');
 		const select = {
 			x: castReal(column(idOf('kind'))),

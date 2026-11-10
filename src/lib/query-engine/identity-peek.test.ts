@@ -30,4 +30,13 @@ describe('identity lookups', () => {
 		expect(engine.peekIdentity('carrier')).toBeNull();
 		expect(engine.identityFor('carrier')).not.toBe(before);
 	});
+
+	it('categoryValues lists the real categories, without Other buckets', () => {
+		const engine = new QueryEngine(conn);
+		// As #refreshValues writes it: a real 'Other' at 1, a bucket at 3.
+		engine.identityFor('carrier').reset(['AA', 'Other', 'UA', 'Other (rest)'], [3]);
+		expect(engine.categoryValues('carrier')).toEqual(['AA', 'Other', 'UA']);
+		// A snapshot, so a domain registering it cannot see a later bucket.
+		expect(engine.categoryValues('carrier')).not.toBe(engine.identityFor('carrier').values);
+	});
 });

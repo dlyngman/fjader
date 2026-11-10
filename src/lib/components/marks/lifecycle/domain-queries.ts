@@ -82,10 +82,11 @@ export async function fetchCategoricalDomains(
 		//
 		//  - Order. DISTINCT has no ORDER BY, so today's domain is whatever DuckDB
 		//    returned, then "first-appearance order" in updateDomainFromExtents.
-		//    Arbitrary. Dim labels are ordered by id, so the domain is
-		//    deterministic — and position-in-domain now EQUALS the dim id, which
-		//    is the invariant that lets the query switch to the view's id column
-		//    without moving a single bar.
+		//    Arbitrary. Dim values are listed in id order, so the domain is
+		//    deterministic. It is the real categories only (`categoryValues`
+		//    leaves out Other buckets), so position-in-domain equals the dim id
+		//    only until a bucket's row: the scale encodes each value to its id
+		//    rather than relying on position.
 		//  - Multi-table. The dim spans every table registering the field, so two
 		//    marks on one shared scale agree on the category set by construction.
 		//
@@ -103,10 +104,10 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [identityField] });
-				const categories = coordinator.identityValues(identityField.key);
-				// The scale adopts this same array in MarkLifecycleV2's
-				// #ensureIdentityColumns, which also covers the explicit-domain axes
-				// that never reach this branch.
+				const categories = coordinator.categoryValues(identityField.key);
+				// A snapshot of the real categories. The scale adopts the live
+				// identity itself in MarkLifecycleV2's #ensureIdentityColumns, which
+				// also covers the explicit-domain axes that never reach this branch.
 				if (categories.length > 0) scaleState.addMark(categories, markId);
 			})()
 		);
@@ -161,7 +162,7 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [facetKey] });
-				const categories = coordinator.identityValues(facetKey.key);
+				const categories = coordinator.categoryValues(facetKey.key);
 				if (categories.length > 0) facetBandScale.addMark(categories, markId);
 			})()
 		);
@@ -237,7 +238,7 @@ export async function fetchCategoricalDomains(
 						(async () => {
 							// Idempotent and coalesced — the mark's own setup calls this too.
 							await coordinator.ensureColumns(table, { categorical: [colorIdentity] });
-							const categories = coordinator.identityValues(colorIdentity.key);
+							const categories = coordinator.categoryValues(colorIdentity.key);
 							if (categories.length > 0) {
 								colorScaleState.setDomain(categories as (string | number)[]);
 							}
@@ -295,7 +296,7 @@ export async function fetchCategoricalDomains(
 			fetches.push(
 				(async () => {
 					await coordinator.ensureColumns(table, { categorical: [seriesIdentity] });
-					const categories = coordinator.identityValues(seriesIdentity.key);
+					const categories = coordinator.categoryValues(seriesIdentity.key);
 					if (categories.length > 0) {
 						seriesScaleState.setDomain(categories as (string | number)[]);
 					}

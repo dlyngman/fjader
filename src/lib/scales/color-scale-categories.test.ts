@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ColorScaleState } from './ColorScaleState.svelte';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
+import { FieldIdentity } from '$lib/query-engine/categorical-identity';
 
 /**
  * The ordinal colour channel's raw-value path, and the cache behind it.
@@ -77,5 +78,20 @@ describe('ColorScaleState ordinal categories', () => {
 		const scale = ordinal(['a', 'b']);
 		const ids = new Float32Array([1, 0, 1]);
 		expect(scale.processDataForGPU(ids)).toBe(ids);
+	});
+
+	it('gives an Other bucket no palette rank, so it draws the null colour', () => {
+		// Colour on the band's own field: the Other row carries the bucket's id in
+		// the colour channel. A bucket is not a category, so it takes no palette
+		// slot and shifts no category's colour; it draws grey, like a null.
+		const identity = new FieldIdentity();
+		identity.reset(['a', 'b', 'Other'], [2]);
+		const scale = ordinal(['a', 'b']);
+		scale.setIdentity(identity);
+
+		const ranks = Array.from(scale.slots.to as Float32Array);
+		expect(ranks[0]).toBeGreaterThanOrEqual(0);
+		expect(ranks[1]).toBeGreaterThanOrEqual(0);
+		expect(ranks[2]).toBe(-1);
 	});
 });
