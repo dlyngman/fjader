@@ -95,6 +95,42 @@ describe('CategoricalIdentity', () => {
 		]);
 	});
 
+	it('records the ids each table holds, apart from the dim they share', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor'), ('Adelie')`);
+		await identity.ensureColumns('more_penguins', { categorical: ['species'] });
+
+		const ids = identity.identity('species').ids;
+		const mine = identity.presentIds('species', 'penguins')!;
+		const theirs = identity.presentIds('species', 'more_penguins')!;
+		// Emperor is in the dim, but only the second table holds it.
+		expect(mine.has(ids.get('Emperor')!)).toBe(false);
+		expect(theirs.has(ids.get('Emperor')!)).toBe(true);
+		expect(theirs.has(ids.get('Gentoo')!)).toBe(false);
+		expect(mine.has(ids.get('Gentoo')!)).toBe(true);
+
+		// The same ids as a table, for dense() to pad from.
+		const rows = await db.all(
+			`SELECT id FROM "${identity.presentTable('species', 'more_penguins')}" ORDER BY id`
+		);
+		expect(rows.map((r) => Number(r.id))).toEqual([...theirs].sort((a, b) => a - b));
+	});
+
+	it('never records a synthetic id as held by a table, and drops the records on reset', async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		const other = await identity.acquireSynthetic('species', 'Other');
+		expect(identity.presentIds('species', 'penguins')!.has(other.id)).toBe(false);
+
+		const name = identity.presentTable('species', 'penguins')!;
+		await identity.reset();
+		expect(identity.presentTable('species', 'penguins')).toBeNull();
+		const left = await db.all(
+			`SELECT COUNT(*) AS n FROM duckdb_tables() WHERE table_name = '${name}'`
+		);
+		expect(Number(left[0].n)).toBe(0);
+	});
+
 	it('reports which tables a dim covers and which fields a view exposes', async () => {
 		expect(identity.dimCovers('species', 'penguins')).toBe(false);
 		expect(identity.viewHas('penguins', 'species')).toBe(false);

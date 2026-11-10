@@ -324,22 +324,37 @@ export class QueryEngine {
 	}
 
 	/**
-	 * The field's categories as of now, in id order: every real value of the dim,
-	 * without the synthetic Other buckets. What a domain registers — a bucket is
-	 * not a category of the data, and another chart's bucket must not appear on
-	 * an axis, a facet or a colour legend that has none.
+	 * The field's categories as of now, in id order, without the synthetic Other
+	 * buckets: a bucket is not a category of the data, and another chart's bucket
+	 * must not appear on an axis, a facet or a colour legend that has none.
+	 *
+	 * With `table`, only the categories that table holds: the dim spans every
+	 * table registering the field, and an axis over one table must not show a
+	 * slot for a category only another has. Without it (a scale shared per field,
+	 * like ordinal colour), every category of the dim.
 	 *
 	 * A snapshot, not the live array: for decoding ids, hold `identityFor(field)`.
 	 */
-	categoryValues(field: string): DimValue[] {
+	categoryValues(field: string, table?: string): DimValue[] {
 		const identity = this.#identity.identity(field);
 		const values = identity.values;
-		if (identity.synthetic.size === 0) return values.slice();
+		const present = table ? this.#identity.presentIds(field, table) : null;
+		if (identity.synthetic.size === 0 && !present) return values.slice();
 		const out: DimValue[] = [];
 		for (let id = 0; id < values.length; id++) {
-			if (!identity.synthetic.has(id)) out.push(values[id]);
+			if (identity.synthetic.has(id)) continue;
+			if (present && !present.has(id)) continue;
+			out.push(values[id]);
 		}
 		return out;
+	}
+
+	/**
+	 * The table of ids `table` holds for `field`, for `dense()` to pad from, or
+	 * null before the table has folded into the field's dim.
+	 */
+	presentTableFor(field: string, table: string): string | null {
+		return this.#identity.presentTable(field, table);
 	}
 
 	/**

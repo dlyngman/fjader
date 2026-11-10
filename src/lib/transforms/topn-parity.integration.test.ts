@@ -425,6 +425,72 @@ describe('topN dense join', () => {
 // That failure took four attempts to find once already, which is why it is
 // pinned here against real DuckDB rather than asserted on the SQL string.
 
+describe('dense pads only the categories its own table holds', () => {
+	let db: DB;
+	const DIM = '__dplot_dim_cat_present';
+	const PRESENT = '__dplot_dim_cat_present_t_mine';
+
+	beforeAll(async () => {
+		db = openDB();
+		// A dim shared by two tables: ids 0..3 are this table's, 4 only another
+		// table's, 5 an Other bucket (label set).
+		await db.run(
+			`CREATE TABLE "${DIM}" AS SELECT * FROM (VALUES
+				('a', NULL, 0), ('b', NULL, 1), ('c', NULL, 2), ('d', NULL, 3),
+				('elsewhere', NULL, 4), (NULL, 'Other', 5)) t(value, label, id)`
+		);
+		await db.run(`CREATE TABLE "${PRESENT}" AS SELECT * FROM (VALUES (0), (1), (2), (3)) t(id)`);
+		await db.run(
+			`CREATE TABLE mine AS SELECT * FROM (VALUES (0, 10), (1, 20), (2, 30), (3, 40)) t(cat_idx, v)`
+		);
+	});
+	afterAll(async () => await db.close());
+
+	async function run(present: boolean, n = 2) {
+		const config = {
+			markType: 'barY',
+			table: 'mine',
+			x: 'x',
+			y: 'y2',
+			groupKeys: ['x'],
+			identity: {
+				x: {
+					dim: DIM,
+					size: 6,
+					positional: true,
+					otherId: 5,
+					...(present ? { present: PRESENT } : {})
+				}
+			}
+		} as MarkConfig;
+		let q = Query.from('mine')
+			.select({ x: column('cat_idx'), y2: sum(column('v')) })
+			.groupby(column('cat_idx')) as SelectQuery;
+		for (const t of withDenseCategories([topN(n, { by: 'y2', includeOthers: true })]))
+			q = (t as SqlTransform).apply(q, config);
+		return db.all(String(q));
+	}
+
+	it('pads no row for a category only another table holds', async () => {
+		const xs = (await run(true)).map((r) => Number(r.x));
+		expect(xs).not.toContain(4);
+		// Its own four, and the Other row.
+		expect(new Set(xs)).toEqual(new Set([0, 1, 2, 3, 5]));
+	});
+
+	it('padded from the whole dim when the table is not recorded, as before', async () => {
+		const xs = (await run(false)).map((r) => Number(r.x));
+		expect(xs).toContain(4);
+	});
+
+	it('keeps the Other row and its value', async () => {
+		const rows = await run(true);
+		const other = rows.find((r) => Number(r.x) === 5)!;
+		// Top 2 are d (40) and c (30); Other is a + b.
+		expect(Number(other.y2)).toBeCloseTo(30, 5);
+	});
+});
+
 describe('dense row order', () => {
 	let db: DB;
 	const DIM = '__dplot_dim_order_test';

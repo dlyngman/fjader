@@ -115,6 +115,13 @@ interface DimEntry {
 	 * appended, and its categories vanish from a shared scale.
 	 */
 	chain: Promise<void>;
+	/**
+	 * The ids each folded table actually holds, as a table name and in JS. The dim
+	 * spans every table registering the field; a chart pads and lists only the
+	 * categories of its own table, so it never shows a slot for one only another
+	 * table has. Built once per table when it folds in: the data is static.
+	 */
+	present: Map<string, { name: string; ids: Set<number> }>;
 }
 
 interface ViewEntry {
@@ -408,6 +415,36 @@ export class CategoricalIdentity {
 		return `__dplot_dim_${identityToken(field)}_s${this.#session}`;
 	}
 
+	/**
+	 * The table of ids `table` holds for `field`, or null before that table has
+	 * folded into the dim. What `dense()` pads from, so a chart never pads a
+	 * category only another table has.
+	 */
+	presentTable(field: string, table: string): string | null {
+		return this.#dims.get(field)?.present.get(table)?.name ?? null;
+	}
+
+	/** The ids `table` holds for `field`, or null before that table has folded in. */
+	presentIds(field: string, table: string): ReadonlySet<number> | null {
+		return this.#dims.get(field)?.present.get(table)?.ids ?? null;
+	}
+
+	/**
+	 * Record which of the dim's ids `table` holds: the ids of its distinct values,
+	 * joined as the view joins (NULL to a NULL row, never to a synthetic one).
+	 * Once per table, when it folds in.
+	 */
+	async #recordPresent(dim: DimEntry, table: string, expr: string, src: string): Promise<void> {
+		const name = `${dim.name}_t_${identityToken(table)}`;
+		await this.#exec.exec(
+			`CREATE OR REPLACE TABLE ${quote(name)} AS ` +
+				`SELECT DISTINCT d.id FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
+				`JOIN ${quote(dim.name)} d ON s.v IS NOT DISTINCT FROM d.value AND d.label IS NULL`
+		);
+		const rows = await this.#exec.queryRows(`SELECT id FROM ${quote(name)}`);
+		dim.present.set(table, { name, ids: new Set(rows.map((r) => Number(r.id))) });
+	}
+
 	/** Name of the view that carries id columns for `table`. */
 	viewTable(table: string): string {
 		return `${identityToken(table)}_v_s${this.#session}`;
@@ -622,7 +659,8 @@ export class CategoricalIdentity {
 				sql: this.#sqlFor.get(field) ?? quote(field),
 				tables: new Set(),
 				refusal: null,
-				chain: Promise.resolve()
+				chain: Promise.resolve(),
+				present: new Map()
 			};
 			this.#dims.set(field, dim);
 		}
@@ -816,6 +854,7 @@ export class CategoricalIdentity {
 
 		dim.tables.add(table);
 		await this.#refreshValues(field);
+		await this.#recordPresent(dim, table, expr, src);
 
 		// The gate above saw ONE table. The dim spans every table that registers
 		// the field, so two tables of 6k each pass it individually and produce a
@@ -990,7 +1029,10 @@ export class CategoricalIdentity {
 		this.#generation++;
 
 		const views = [...this.#views.keys()].map((t) => this.viewTable(t));
-		const dims = [...this.#dims.values()].map((d) => d.name);
+		const dims = [...this.#dims.values()].flatMap((d) => [
+			d.name,
+			...[...d.present.values()].map((p) => p.name)
+		]);
 		this.#views.clear();
 		this.#dims.clear();
 		// In place, so any scale still holding the reference empties with it.

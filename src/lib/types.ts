@@ -132,6 +132,13 @@ export interface ChannelIdentity {
 	positional: boolean;
 	/** The reserved id past-the-cutoff rows are bucketed into, once reserved. */
 	otherId?: number;
+	/**
+	 * The table of ids the mark's own table holds, which `dense()` pads from: the
+	 * dim spans every table on the field, and a chart must not pad a slot for a
+	 * category only another table has. Absent before that table has folded in,
+	 * when dense() pads from the whole dim as it did before.
+	 */
+	present?: string;
 }
 
 export interface MarkConfig {
