@@ -1309,10 +1309,12 @@ export class MarkLifecycleV2 {
 		// one id, which does not move a row limit that coarse.
 		const identity: Record<string, ChannelIdentity> = {};
 		const describe = (channel: string, key: string, positional: boolean) => {
+			const present = this.#queryEngine.presentTableFor(key, this.#config.table);
 			identity[channel] = {
 				dim: this.#queryEngine.dimTableFor(key),
 				size: this.#queryEngine.identityFor(key).values.length,
-				positional
+				positional,
+				...(present ? { present } : {})
 			};
 		};
 		for (const { axis, key } of axes) describe(axis, key, true);

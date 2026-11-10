@@ -104,7 +104,8 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [identityField] });
-				const categories = coordinator.categoryValues(identityField.key);
+				// This table's categories: the dim spans every table on the field.
+				const categories = coordinator.categoryValues(identityField.key, table);
 				// A snapshot of the real categories. The scale adopts the live
 				// identity itself in MarkLifecycleV2's #ensureIdentityColumns, which
 				// also covers the explicit-domain axes that never reach this branch.
@@ -162,7 +163,7 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [facetKey] });
-				const categories = coordinator.categoryValues(facetKey.key);
+				const categories = coordinator.categoryValues(facetKey.key, table);
 				if (categories.length > 0) facetBandScale.addMark(categories, markId);
 			})()
 		);

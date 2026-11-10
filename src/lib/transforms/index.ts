@@ -332,8 +332,8 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 	// NULL carries -1, and a join over the dim's ids alone would drop it.
 	const joins = cross
 		.map(
-			([, keyDim], i) =>
-				` CROSS JOIN (SELECT "id" FROM ${quoteTable(keyDim)} UNION ALL SELECT -1) AS k${i}`
+			([key, keyDim], i) =>
+				` CROSS JOIN (SELECT "id" FROM ${padIds(plan.identity[key], keyDim)} UNION ALL SELECT -1) AS k${i}`
 		)
 		.join('');
 	const on = [
@@ -341,7 +341,7 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 		...cross.map(([key], i) => `a.${column(key)} = k${i}."id"`)
 	].join(' AND ');
 	return Query.from(
-		rawSql(`${quoteTable(dim)} AS d${joins} LEFT JOIN (${inner}) AS a ON ${on}`)
+		rawSql(`${padIds(plan.identity[band], dim)} AS d${joins} LEFT JOIN (${inner}) AS a ON ${on}`)
 	).select(select);
 }
 
@@ -364,6 +364,25 @@ interface DensePlan {
 	/** Every other group key with a dim of its own, crossed in: [channel, dim]. */
 	cross: [string, string][];
 	identity: Record<string, ChannelIdentity>;
+}
+
+/**
+ * The ids a channel pads from: the ids its mark's own table holds, plus every
+ * Other bucket of the dim, when the table's ids are known; the whole dim before.
+ *
+ * The dim spans every table registering the field, so padding from all of it
+ * gave a chart a zero row, and a slot on a sorted axis, for every category only
+ * another table has. Other buckets stay in: an Other row must find its padding
+ * row, and another mark's bucket is kept off the axis by its NaN rank, as
+ * before.
+ */
+function padIds(id: ChannelIdentity | undefined, dim: string): string {
+	const present = id?.present;
+	if (!present) return `(SELECT "id" FROM ${quoteTable(dim)})`;
+	return (
+		`(SELECT "id" FROM ${quoteTable(present)} UNION ALL ` +
+		`SELECT "id" FROM ${quoteTable(dim)} WHERE "label" IS NOT NULL)`
+	);
 }
 
 /**
