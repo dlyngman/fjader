@@ -109,4 +109,28 @@ describe('ColorScaleState ordinal categories', () => {
 		// 'a' and 'b' rank 0 and 1: NULL left no gap between them.
 		expect([ranks[0], ranks[2]].sort()).toEqual([0, 1]);
 	});
+
+	it('extends its rank table when the identity grows, so a later Other is not transparent', () => {
+		// The rank table was built before the bucket existed; another chart's
+		// acquire appends the bucket's id to the same live identity.
+		const identity = new FieldIdentity();
+		identity.reset(['a', 'b']);
+		const scale = ordinal(['a', 'b']);
+		scale.setIdentity(identity);
+		expect(scale.slots.to.length).toBe(2);
+
+		identity.reset(['a', 'b', 'Other'], [2]);
+		const ranks = Array.from(scale.slots.to as Float32Array);
+		expect(ranks).toHaveLength(3);
+		expect(ranks[2]).toBe(NULL_COLOR_RANK);
+	});
+
+	it('gives the legend the colour the bar draws: grey for NULL, the palette for the rest', () => {
+		const identity = new FieldIdentity(['a', null, 'b']);
+		const scale = ordinal(['a', null as unknown as string, 'b']);
+		scale.setIdentity(identity);
+		expect(scale.getColor(null)).toBe(ColorScaleState.NULL_COLOR);
+		expect(scale.getColor('a')).not.toBe(ColorScaleState.NULL_COLOR);
+		expect(scale.getColor('b')).not.toBe(scale.getColor('a'));
+	});
 });

@@ -145,9 +145,21 @@ export class ColorScaleState {
 	 */
 	#slots = { count: 0, from: new Float32Array(0), to: new Float32Array(0), t: 1, version: 0 };
 
+	/**
+	 * Read by the packer every frame. The rank table covers the ids the field had
+	 * when it was built, and the field's identity grows in place: another table
+	 * appends categories, and a chart acquiring an Other bucket appends its id,
+	 * any chart, since this scale is shared per field. An id past the table's end
+	 * reads as unranked and draws transparent, so a grown identity rebuilds it
+	 * here, once per growth.
+	 */
 	get slots(): SlotSource {
+		const identity = this.#identity;
+		if (identity?.present && identity.version !== this.#ranksVersion) this.#refreshRanks();
 		return this.#slots;
 	}
+	/** The identity version the rank table was last built from. */
+	#ranksVersion = -1;
 	/**
 	 * Where this scale's block sits in the shared identity slot table. Assigned
 	 * by the coordinator's packer.
@@ -558,6 +570,7 @@ export class ColorScaleState {
 	#refreshRanks(): void {
 		const identity = this.#identity;
 		if (!identity?.present) return;
+		this.#ranksVersion = identity.version;
 
 		for (const value of this.domain) {
 			const id = identity.ids.get(value as never);
@@ -840,12 +853,29 @@ export class ColorScaleState {
 	 * Returns NULL_COLOR for values that are unmappable under the current
 	 * transform (e.g. non-positive values under log), mirroring the GPU shader.
 	 */
-	getColor(value: string | number): string {
+	getColor(value: string | number | null): string {
+		// With palette ranks, the colour is exactly the shader's: value -> id ->
+		// rank -> palette, and the null colour for the NULL category and the Other
+		// buckets. Not through the d3 scale, whose domain is stringified: a null
+		// (or a number) would miss it, and d3 would hand the value the next
+		// palette colour.
+		if (this.#hasRanks()) return this.#rankedColor(value);
 		if (!this.#d3Scale) return '#000000';
 		if (this.#transformType === 'log' && typeof value === 'number' && value <= 0) {
 			return ColorScaleState.NULL_COLOR;
 		}
-		return (this.#d3Scale as (v: string | number) => string)(value);
+		return (this.#d3Scale as (v: string | number) => string)(value as string | number);
+	}
+
+	#rankedColor(value: string | number | null): string {
+		const identity = this.#identity!;
+		const id = identity.ids.get(value as never);
+		const rank = id === undefined ? undefined : this.#paletteRank.get(id);
+		if (rank === undefined) return ColorScaleState.NULL_COLOR;
+		let colors = getOrdinalColors(this.#scheme) ?? [];
+		if (this.#reverse) colors = [...colors].reverse();
+		// Same wrap the shader applies, so an over-32 palette agrees too.
+		return colors.length ? colors[rank % colors.length] : ColorScaleState.NULL_COLOR;
 	}
 
 	/**
