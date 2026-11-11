@@ -65,6 +65,16 @@ export interface SourceOpts extends SourceRegistration {
 	 * once per write and stored on the clause.
 	 */
 	augment?: (value: unknown) => FilterSchema | null;
+	/**
+	 * The source's clause was removed by someone other than this registration:
+	 * `clearAll`, a `clearSource` from outside (a filter pill's remove button), or
+	 * another registration under the same id clearing it. A control that keeps what
+	 * it drew (a brush's rectangle) resets it here, because it reads no clause. Not
+	 * called for the registration's own `clear()` or `destroy()`, which it initiated;
+	 * and a control that clears itself from here does not loop, since the clause is
+	 * already gone.
+	 */
+	onCleared?: () => void;
 }
 
 export interface SourceHandle {
@@ -259,7 +269,8 @@ export class FilterGroup {
 				};
 				this.#afterUpdate(sourceId, selection.update(sourceId, next), next);
 			},
-			clear: () => this.clearSource(sourceId),
+			// The registration's own clear: it already reset what it drew.
+			clear: () => this.clearSource(sourceId, opts),
 			activate: () => this.#activate(sourceId),
 			destroy: () => {
 				// Once only: a second call must not remove a newer registration
@@ -272,7 +283,8 @@ export class FilterGroup {
 					// while the registration is still in place, so the removal is
 					// routed by it: the marks re-queried are those the clause filtered.
 					this.#engine?.forgetSource(this, sourceId);
-					this.clearSource(sourceId);
+					// Quietly: the registration is going away, nothing of it to reset.
+					this.clearSource(sourceId, opts);
 					selection.removeRegistration(sourceId, opts);
 					return;
 				}
@@ -462,17 +474,37 @@ export class FilterGroup {
 	/**
 	 * Remove a source's clause. Re-queries only when there was a clause to
 	 * remove: an unmount or a clear with nothing selected changes no mark's data.
+	 *
+	 * The source's registrations are told (`onCleared`) so a control that drew the
+	 * selection resets it, all of them from outside, and all but `by` when a
+	 * registration is the one clearing (it has reset itself).
 	 */
-	clearSource(sourceId: string): void {
+	clearSource(sourceId: string, by?: SourceOpts): void {
 		if (!this.selection.isActive(sourceId)) return;
 		this.#afterUpdate(sourceId, this.selection.update(sourceId, null), null);
+		this.#notifyCleared(sourceId, by);
 	}
 
+	/** Remove every clause, and tell the controls that drew them (`onCleared`). */
 	clearAll(): void {
+		const cleared = this.selection.items.map((item) => item.sourceId);
 		this.selection.clear();
 		for (const key of this.#selectedFields) this.#activityOf(key).set(this.index, null);
 		this.#selectedFields.clear();
 		this.#engine?.onFilterChange(this);
+		for (const sourceId of cleared) this.#notifyCleared(sourceId);
+	}
+
+	/** Tell a source's registrations, but `except`, that its clause is gone. */
+	#notifyCleared(sourceId: string, except?: SourceOpts): void {
+		const registrations = this.selection.registrationsOf(sourceId) as
+			| ReadonlySet<SourceOpts>
+			| undefined;
+		if (!registrations) return;
+		// A copy: a control resetting itself may register or destroy while this runs.
+		for (const opts of [...registrations]) {
+			if (opts !== except) opts.onCleared?.();
+		}
 	}
 
 	// -----------------------------------------------------------------

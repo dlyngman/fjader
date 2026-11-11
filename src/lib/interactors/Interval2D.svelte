@@ -97,7 +97,12 @@
 			yColumn: resolvedYField,
 			xValues: (value as unknown[][])?.[0],
 			yValues: (value as unknown[][])?.[1]
-		})
+		}),
+		// The clause was removed from outside (clearAll, a filter pill): take the
+		// rectangle down too, which only this control holds.
+		onCleared: () => {
+			if (brush.active) clearBrush();
+		}
 	});
 
 	// Pointer state (reused to avoid GC)
