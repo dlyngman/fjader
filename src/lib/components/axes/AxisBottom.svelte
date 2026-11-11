@@ -8,9 +8,14 @@
 	interface Props {
 		ticksNumber?: number;
 		tickFormat?: ((value: unknown) => string) | null;
+		/**
+		 * Draw the scale's label as the axis title (default). `false` draws none; the
+		 * label still names the scale, so charts sharing it still link their zoom.
+		 */
+		title?: boolean;
 	}
 
-	let { ticksNumber = 5, tickFormat = null }: Props = $props();
+	let { ticksNumber = 5, tickFormat = null, title = true }: Props = $props();
 	const c = getContext<ChartContext>('chart');
 
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
@@ -47,10 +52,6 @@
 					{tickFormatter(tick)}
 				</text>
 			{/each}
-
-			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
-				{c.xLabel}
-			</text>
 		{:else if c.scaleTypes.x === 'band' && c.xScale}
 			<BandAxisTicks
 				scale={c.xScaleState as BandScaleState}
@@ -60,7 +61,9 @@
 				tickLength={5}
 				labelGap={16}
 			/>
+		{/if}
 
+		{#if title && c.xScale}
 			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
 				{c.xLabel}
 			</text>
