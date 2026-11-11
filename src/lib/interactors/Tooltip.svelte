@@ -14,6 +14,7 @@
 	import { format as d3format } from 'd3-format';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 	import type { ChartContext, ContinuousScaleState } from '$lib/types';
+	import { otherTooltipRows } from './other-tooltip';
 
 	const commaFormat = d3format(',.4~g');
 
@@ -111,6 +112,14 @@
 			: null
 	);
 
+	// An Other bar's rows, after the point's own: written with the value axis's format.
+	let otherRows = $derived.by(() => {
+		const stats = tm?.focusedOtherStats;
+		if (!stats || !point) return [];
+		const format = ('__bandIdX' in point ? yFormat : xFormat) ?? commaFormat;
+		return otherTooltipRows(stats, format);
+	});
+
 	function formatValue(key: string, value: unknown) {
 		if (formatters[key]) return formatters[key](value);
 		if (typeof value === 'number') {
@@ -154,6 +163,12 @@
 				{/if}
 				{formatValue(key, point?.[key])}
 			</span>
+		</div>
+	{/each}
+	{#each otherRows as row (row.key)}
+		<div class="row">
+			<span class="key">{row.key}</span>
+			<span class="value">{row.value}</span>
 		</div>
 	{/each}
 	<div class="dots" class:show={isMulti}>

@@ -1,5 +1,6 @@
 // src/lib/interactors/TooltipManager.svelte.ts
 
+import type { OtherRowStats } from '$lib/components/marks/lifecycle/other-rows.svelte';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 import type { D3Scale, D3BandScale, ScaleStateInstance } from '$lib/types';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
@@ -49,6 +50,11 @@ interface TooltipMarkRegistration {
 	sizeScaleState?: { getRenderedRadius: (value: number) => number };
 	constantRadius?: number;
 	displayFields?: string[] | null;
+	/**
+	 * What an Other bar's point holds, for the tooltip to add its rows; read at
+	 * display time, so a selection that changes under the pointer shows at once.
+	 */
+	otherStats?: (point: DataRow) => OtherRowStats | null;
 	proximityAxis: 'x' | 'y' | 'xy';
 	enabled: boolean;
 }
@@ -112,6 +118,12 @@ export class TooltipManager {
 	}
 	get focusedMatch(): MatchedPoint | null {
 		return this.matchedPoints[this.focusedIndex] ?? null;
+	}
+	/** The focused point's Other numbers, or null where it is not an Other bar. */
+	get focusedOtherStats(): OtherRowStats | null {
+		const point = this.focusedPoint;
+		const stats = this.currentMarkId ? this.#marks.get(this.currentMarkId)?.otherStats : null;
+		return point && stats ? stats(point) : null;
 	}
 
 	// Backwards-compat getters

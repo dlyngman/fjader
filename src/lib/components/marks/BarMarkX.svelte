@@ -282,7 +282,14 @@
 					colorColumn: 'fill',
 					bandAxes: { y: true },
 					markColor,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					otherStats: (point) => {
+						const id = point.__bandIdY;
+						const facet = point.__facetId;
+						return typeof id === 'number'
+							? setup!.otherRows.statsAt(id, typeof facet === 'number' ? facet : null)
+							: null;
+					}
 				})
 			);
 		});
