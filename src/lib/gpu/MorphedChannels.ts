@@ -34,6 +34,9 @@ import { immediatesSupported } from './immediates';
  * The coordinator's slice this needs. Structural, so tests can supply a fake.
  * It is also the loop an owned clock joins — the clock does that itself.
  */
+/** No bindings: the default for `write`'s `land`. */
+const NO_BINDINGS: readonly number[] = [];
+
 export interface MorphHost extends ClockLoop {
 	registerComputeWork(key: string, fn: (encoder: GPUCommandEncoder) => void): void;
 	removeComputeWork(key: string): void;
@@ -68,6 +71,8 @@ interface Channel {
 	/** Rows in use; the dispatch covers these and no more. */
 	count: number;
 	bindGroup: GPUBindGroup | null;
+	/** Written to land at once rather than travel: `from` takes `to` at the next encode. */
+	land: boolean;
 }
 
 /**
@@ -165,10 +170,16 @@ export class MorphedChannels {
 	 *
 	 * All channels in one call, so one update starts one transition. Returns
 	 * whether any buffer was (re)allocated, which the caller must rebind.
+	 *
+	 * `land`: bindings whose new values take effect at once while the rest
+	 * travel. For a channel whose change is shown some other way at that moment
+	 * (an Other bar's split, when both sides of it look the same): sliding it
+	 * would draw a movement nothing asked for.
 	 */
 	write(
 		rowIds: ArrayLike<number>,
-		channels: readonly (readonly [number, AllowSharedBufferSource])[]
+		channels: readonly (readonly [number, AllowSharedBufferSource])[],
+		land: readonly number[] = NO_BINDINGS
 	): boolean {
 		const key = alignmentKey(rowIds);
 		let travels = this.#alignmentKey === key;
@@ -182,6 +193,7 @@ export class MorphedChannels {
 				reallocated = true;
 			}
 			channel.count = data.byteLength >> 2;
+			channel.land = land.includes(binding);
 			this.#device.queue.writeBuffer(channel.to, 0, data as ArrayBufferView<ArrayBuffer>);
 		}
 		// A fresh buffer holds nothing that was ever on screen, so there is
@@ -240,8 +252,10 @@ export class MorphedChannels {
 
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
-			if (snap) {
+			if (snap || channel.land) {
+				// A landed channel: from = to, so the mix is its new value at any t.
 				encoder.copyBufferToBuffer(channel.to, 0, channel.from, 0, channel.size);
+				channel.land = false;
 			} else if (this.#foldPending) {
 				// A transition interrupted mid-flight continues from where it is,
 				// and one at rest copies `to` onto itself, which is correct without
@@ -310,7 +324,8 @@ export class MorphedChannels {
 			resolved: make('resolved'),
 			size,
 			count: 0,
-			bindGroup: null
+			bindGroup: null,
+			land: false
 		};
 		this.#channels.set(binding, channel);
 		this.#channelList = [...this.#channels.values()];

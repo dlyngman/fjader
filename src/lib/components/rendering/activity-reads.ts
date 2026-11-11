@@ -172,6 +172,23 @@ export function colorActivityWGSL(
  * three arguments; `x` and `y` are the band channel values; `group` the mark's
  * group index.
  */
+/**
+ * The activity of an Other row: the same terms as markActivityWGSL without the
+ * band axes', and without colour's when colour is the band's own field
+ * (`skipColor`, a WGSL bool). Those read the Other bucket's own fade, and the
+ * bar's split already shows how much of it is selected (Rects); multiplying
+ * them in as well would dim it twice. Activity on any other field stays.
+ */
+export function otherRowActivityWGSL(
+	reads: ActivityReads,
+	args: { color: string; group: string; skipColor: string }
+): string {
+	const color = reads.color
+		? `select(markColorActivity(${args.color}, ${args.group}), 1.0, ${args.skipColor})`
+		: '1.0';
+	return `markActivity(${color}, 1.0, 1.0)`;
+}
+
 export function markActivityWGSL(
 	reads: ActivityReads,
 	args: { color: string; x: string; y: string; group: string }

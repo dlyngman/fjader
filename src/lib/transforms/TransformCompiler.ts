@@ -183,6 +183,13 @@ export class TransformCompiler {
 		return this.transforms.some((t) => t.type === 'topN' && t.spec?.includeOthers === true);
 	}
 
+	/** The `by` a topN Other bucket ranks by when stated explicitly, else null (its default). */
+	otherBy(): string | null {
+		const t = this.transforms.find((t) => t.type === 'topN' && t.spec?.includeOthers === true);
+		const by = (t?.spec as { by?: unknown } | undefined)?.by;
+		return typeof by === 'string' ? by : null;
+	}
+
 	getCategoryTransformKey(): string | null {
 		const parts: string[] = [];
 		for (const t of this.transforms) {
