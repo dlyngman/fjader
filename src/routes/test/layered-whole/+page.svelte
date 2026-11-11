@@ -178,9 +178,9 @@
 			<div class="chart-panel">
 				<h3>4. The same with topN(5, includeOthers)</h3>
 				<p class="desc">
-					As chart 3, with Other on the solid layer. Known gap: the faint layer has no Other row yet
-					(it would fold the categories outside the domain into Other), so the solid Other bar has
-					no whole behind it.
+					As chart 3, with Other on the solid layer. Known limit: the faint layer has no Other row,
+					so its bars of categories that leave the top 5 gather at Other's slot until the animation
+					ends and then go, and the solid Other bar has no whole behind it.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
