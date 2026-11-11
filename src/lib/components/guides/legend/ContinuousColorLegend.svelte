@@ -194,7 +194,13 @@
 					column: scaleState.field,
 					label: scaleState.field,
 					values: value ? [(value as number[])[0], (value as number[])[1]] : []
-				})
+				}),
+				// The clause was removed from outside (clearAll, a filter pill): take the
+				// brush down too, which only this legend holds.
+				onCleared: () => {
+					brushT0 = null;
+					brushT1 = null;
+				}
 			})
 		: null;
 

@@ -83,7 +83,16 @@
 			column,
 			label: column,
 			values: value ? [(value as number[])[0], (value as number[])[1]] : []
-		})
+		}),
+		// The clause was removed from outside (clearAll, a filter pill): take this
+		// axis's rectangle down too, which only ParallelBrushes' state holds.
+		onCleared: () => {
+			const axis = axes.get(column);
+			if (!axis) return;
+			axis.brush.clear();
+			axis.lastEmitted.min = null;
+			axis.lastEmitted.max = null;
+		}
 	});
 
 	axes.set(column, { handle, brush: new BrushState1D(), lastEmitted: { min: null, max: null } });

@@ -84,7 +84,12 @@
 
 	<!-- Filter status display -->
 	<div class="filter-status">
-		<h3>Active Filters: {filterGroup?.activeCount ?? 0}</h3>
+		<h3>
+			Active Filters: {filterGroup?.activeCount ?? 0}
+			{#if filterGroup?.activeCount}
+				<button class="clear-all" onclick={() => filterGroup?.clearAll()}>Clear all</button>
+			{/if}
+		</h3>
 		{#if filterGroup?.items.length}
 			<div class="filter-chips">
 				{#each filterGroup.items as item (item.sourceId)}
@@ -205,6 +210,16 @@
 		justify-content: center;
 		border-radius: 50%;
 		transition: all 0.2s;
+	}
+
+	.clear-all {
+		margin-left: 0.75rem;
+		font-size: 0.8rem;
+		padding: 0.15rem 0.6rem;
+		border: 1px solid var(--brush-stroke, rgba(100, 150, 255, 0.7));
+		border-radius: 12px;
+		background: white;
+		cursor: pointer;
 	}
 
 	.chip-clear:hover {

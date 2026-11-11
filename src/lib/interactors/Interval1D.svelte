@@ -97,7 +97,12 @@
 			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
 			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
 			values: value ? [(value as number[])[0], (value as number[])[1]] : []
-		})
+		}),
+		// The clause was removed from outside (clearAll, a filter pill): take the
+		// rectangle down too, which only this control holds.
+		onCleared: () => {
+			if (brush.active) clearBrush();
+		}
 	});
 
 	// Pointer state (reused to avoid GC)

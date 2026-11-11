@@ -273,6 +273,96 @@ describe('FilterGroup', () => {
 	});
 });
 
+describe('onCleared: a control that drew a selection is told it is gone', () => {
+	/** A brush that keeps what it drew, as Interval1D does. */
+	function brush(group: FilterGroup, id: string) {
+		const state = { drawn: false };
+		const handle = group.register(id, {
+			chart: CHART,
+			onCleared: () => {
+				state.drawn = false;
+			}
+		});
+		const draw = () => {
+			state.drawn = true;
+			handle.update(`${id} BETWEEN 1 AND 2`, [1, 2]);
+		};
+		return { state, handle, draw };
+	}
+
+	it('clearAll resets every control that has a clause, and none that has not', () => {
+		const group = new FilterGroup();
+		const a = brush(group, 'brush-a');
+		const b = brush(group, 'brush-b');
+		const idle = brush(group, 'brush-idle');
+		idle.state.drawn = true; // drew something, never emitted a clause
+		a.draw();
+		b.draw();
+
+		group.clearAll();
+
+		expect(a.state.drawn).toBe(false);
+		expect(b.state.drawn).toBe(false);
+		expect(idle.state.drawn).toBe(true);
+	});
+
+	it('a clearSource from outside resets the control, and the control clearing itself does not call back', () => {
+		const group = new FilterGroup();
+		const calls: string[] = [];
+		const handle = group.register('brush-x', {
+			chart: CHART,
+			onCleared: () => calls.push('cleared')
+		});
+
+		handle.update('x BETWEEN 1 AND 2', [1, 2]);
+		handle.clear(); // its own
+		expect(calls).toEqual([]);
+
+		handle.update('x BETWEEN 1 AND 2', [1, 2]);
+		group.clearSource('brush-x'); // a filter pill's remove button
+		expect(calls).toEqual(['cleared']);
+	});
+
+	it('another registration under the same id is told when one clears', () => {
+		const group = new FilterGroup();
+		const calls: string[] = [];
+		const first = group.register('legend-x', { onCleared: () => calls.push('first') });
+		group.register('legend-x', { onCleared: () => calls.push('second') });
+
+		first.update('x < 5', [5]);
+		first.clear();
+
+		expect(calls).toEqual(['second']);
+	});
+
+	it('destroying the last registration does not call back, and a control that clears itself does not loop', () => {
+		const group = new FilterGroup();
+		let calls = 0;
+		const handle = group.register('brush-x', {
+			chart: CHART,
+			onCleared: () => {
+				calls++;
+				handle.clear(); // as a control's clearBrush does
+			}
+		});
+		handle.update('x BETWEEN 1 AND 2', [1, 2]);
+		group.clearAll();
+		expect(calls).toBe(1);
+
+		handle.update('x BETWEEN 1 AND 2', [1, 2]);
+		handle.destroy();
+		expect(calls).toBe(1);
+	});
+
+	it('clearAll with no clauses tells no one', () => {
+		const group = new FilterGroup();
+		const calls: string[] = [];
+		group.register('brush-x', { onCleared: () => calls.push('x') });
+		group.clearAll();
+		expect(calls).toEqual([]);
+	});
+});
+
 describe('registerToggle', () => {
 	it('single-select replaces the selection, and toggling the only value clears it', () => {
 		const group = new FilterGroup();
