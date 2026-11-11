@@ -7,7 +7,7 @@ describe('clearTitleOffset', () => {
 	});
 
 	it('moves out past the widest label, its gap and a clearance', () => {
-		expect(clearTitleOffset(40, 75)).toBe(9 + 40 + 6);
+		expect(clearTitleOffset(40, 75)).toBe(9 + 40 + 12);
 	});
 
 	it('stays inside the margin, with room for the title itself', () => {

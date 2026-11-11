@@ -48,18 +48,29 @@
 	const tickFormatter = $derived(c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : String);
 
 	// The title's distance from the axis. Measured only for 'auto', from the labels
-	// drawn (band labels once per distinct name, then cached).
+	// drawn (each distinct string once, then cached). It follows the widest label
+	// seen on this scale and never moves back in: pan and zoom change the ticks
+	// all the time, and a title that followed them would jitter. Taking the
+	// maximum is idempotent, so re-evaluating this changes nothing.
+	let widestSeen = 0;
+	let widestScale: unknown = null;
 	const titleX = $derived.by(() => {
 		if (titleOffset !== 'auto') return titleOffset;
-		let widest = 0;
-		if (c.scaleTypes?.y === 'band') {
-			for (const tick of bandTicks)
-				widest = Math.max(widest, textWidth(String(categoryLabel(tick.value))));
-		} else {
-			for (const tick of continuousTicks)
-				widest = Math.max(widest, textWidth(String(tickFormatter(tick))));
+		const scale = c.yScaleState;
+		if (scale !== widestScale) {
+			widestScale = scale;
+			widestSeen = 0;
 		}
-		return clearTitleOffset(widest, c.margin.left);
+		if (c.scaleTypes?.y === 'band') {
+			for (const tick of bandTicks) {
+				widestSeen = Math.max(widestSeen, textWidth(String(categoryLabel(tick.value))));
+			}
+		} else {
+			for (const tick of continuousTicks) {
+				widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(tick))));
+			}
+		}
+		return clearTitleOffset(widestSeen, c.margin.left);
 	});
 </script>
 

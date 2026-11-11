@@ -9,8 +9,8 @@
 
 /** Where the tick labels end, from the axis line: AxisLeft's text x and BandAxisTicks' labelGap. */
 const TICK_GAP = 9;
-/** Between the widest label and the title's baseline. */
-const CLEARANCE = 6;
+/** Between the widest label and the title's baseline; the title's descenders reach into it. */
+const CLEARANCE = 12;
 /** A rotated title's glyphs sit on the far side of its baseline, away from the axis. */
 const TITLE_BODY = 10;
 /** The title's offset when nothing says otherwise, and the least `'auto'` uses. */
