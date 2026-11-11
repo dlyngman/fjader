@@ -9,6 +9,9 @@ import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { AutoBinNode } from '$lib/sql/bin';
 import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
+
+/** What a mark does with NULL in its categorical channels; see BaseMarkProps.nulls. */
+export type NullsResponse = 'keep' | 'drop';
 import type { RollingAvgNode } from '$lib/sql/rolling-avg';
 
 // ---------------------------------------------------------------------------
@@ -139,6 +142,11 @@ export interface ChannelIdentity {
 	 * when dense() pads from the whole dim as it did before.
 	 */
 	present?: string;
+	/**
+	 * The NULL category's id, when the mark drops NULL (`nulls="drop"`): `dense()`
+	 * pads no row for it, as its rows are filtered out.
+	 */
+	dropNullId?: number;
 }
 
 export interface MarkConfig {
@@ -326,6 +334,16 @@ export interface BaseMarkProps {
 	 * own chart, so the marks under it do not move while it is dragged.
 	 */
 	selectionResponse?: SelectionResponse;
+	/**
+	 * What this mark does with NULL in its categorical channels: its band axis,
+	 * ordinal colour, series and facet.
+	 *
+	 * - `'keep'` (the default): NULL is a category like any other. It is ranked
+	 *   by its measure, drawn, and labelled "(null)", in the null colour.
+	 * - `'drop'`: rows whose value in any of those channels is NULL are left out
+	 *   before any transform, so a top N ranks, and Other sums, without them.
+	 */
+	nulls?: NullsResponse;
 	scheme?: ColorScheme;
 	limit?: number;
 	transforms?: Transform[];

@@ -12,6 +12,7 @@
 
 <script lang="ts">
 	import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
+	import type { NullsResponse } from '$lib/types';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { ParallelLines } from '../rendering';
@@ -34,6 +35,7 @@
 		selection?: string;
 		/** How this mark responds to selections in its group (see BaseMarkProps). */
 		selectionResponse?: SelectionResponse;
+		nulls?: NullsResponse;
 		transforms?: Transform[];
 	}
 
@@ -47,6 +49,7 @@
 		curve = 'linear',
 		selection = undefined,
 		selectionResponse = undefined,
+		nulls = undefined,
 		transforms = []
 	}: Props = $props();
 
@@ -64,6 +67,7 @@
 		scheme: () => scheme,
 		selection: () => selection,
 		selectionResponse: () => selectionResponse,
+		nulls: () => nulls,
 		transforms: () => transforms
 	});
 

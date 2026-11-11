@@ -378,9 +378,11 @@ interface DensePlan {
  */
 function padIds(id: ChannelIdentity | undefined, dim: string): string {
 	const present = id?.present;
-	if (!present) return `(SELECT "id" FROM ${quoteTable(dim)})`;
+	// A mark that drops NULL pads no row for it: its rows were filtered out.
+	const notNull = id?.dropNullId != null ? ` WHERE "id" <> ${id.dropNullId}` : '';
+	if (!present) return `(SELECT "id" FROM ${quoteTable(dim)}${notNull})`;
 	return (
-		`(SELECT "id" FROM ${quoteTable(present)} UNION ALL ` +
+		`(SELECT "id" FROM ${quoteTable(present)}${notNull} UNION ALL ` +
 		`SELECT "id" FROM ${quoteTable(dim)} WHERE "label" IS NOT NULL)`
 	);
 }

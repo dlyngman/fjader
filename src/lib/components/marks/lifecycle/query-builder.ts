@@ -10,6 +10,8 @@ import {
 	rewrite,
 	sql,
 	isNotNull,
+	neq,
+	literal,
 	and,
 	sum,
 	avg,
@@ -54,6 +56,48 @@ export interface QueryParts {
 	 *  CAST for ORDER BY, ordinal CASE for PARTITION BY). Used by preagg to
 	 *  fold redundant window col refs into channel aliases. */
 	passthroughChannels: Map<string, string>;
+	/**
+	 * `nulls="drop"`: the categorical channels whose NULL the mark leaves out.
+	 * Stated by CHANNEL, not by source column, so every path filters in the
+	 * terms of its own select: `assembleQuery` reads each channel's expression
+	 * from the `selectDef` it is given — the id column on the base table, the
+	 * preagg table's column when preagg rewrote it — and ANDs the predicate
+	 * into the base scan, before any transform.
+	 */
+	nullDrops?: readonly NullDrop[];
+}
+
+/**
+ * One channel whose NULL a mark drops. With `nullId`, the channel carries dim
+ * ids and the NULL category is that id: `<channel> <> nullId`. Without (a raw
+ * value, or a dim with no NULL row): `<channel> IS NOT NULL`.
+ */
+export interface NullDrop {
+	channel: string;
+	nullId: number | null;
+}
+
+/**
+ * The predicates for `drops`, each on its channel's expression in `selectDef`.
+ * A dropped channel must be a row-level group key of the query; one the query
+ * does not select would be left unfiltered, so that is an error, not a skip.
+ */
+export function nullDropPredicates(
+	drops: readonly NullDrop[],
+	selectDef: Record<string, unknown>
+): ExprNode[] {
+	const out: ExprNode[] = [];
+	for (const { channel, nullId } of drops) {
+		const value = selectDef[channel];
+		if (value === undefined) {
+			throw new Error(
+				`nulls="drop" filters the "${channel}" channel, which this query does not select.`
+			);
+		}
+		const expr = (typeof value === 'string' ? sqlColumn(value) : value) as ExprNode;
+		out.push(nullId === null ? isNotNull(expr) : neq(expr, literal(nullId)));
+	}
+	return out;
 }
 
 /** Window functions to apply in an outer CTE over the assembled inner query. */
@@ -68,7 +112,6 @@ export interface AssembleOptions {
 	parts: QueryParts;
 	/** Per-call filter predicates (crossfilter, bin filters). */
 	filter?: unknown[];
-	/** Columns to add IS NOT NULL predicates for. */
 	transformCompiler: TransformCompiler;
 	limit?: number | null;
 	/** When set, the inner query is wrapped in a CTE and these window
@@ -328,7 +371,7 @@ export function buildQueryParts(
  * Order is fixed and shared by the flat, window-CTE, and preagg paths:
  *
  *   SELECT parts.selectDef FROM table [GROUP BY dims]
- *   WHERE filter AND nulls          — on the base scan, so transform CTEs
+ *   WHERE filter AND nullDrops      — on the base scan, so transform CTEs
  *                                     (topN ranking etc.) see filtered rows
  *   → SQL transforms (CTE wrapping)
  *   → [window CTE: outer SELECT applies window fns over the inner result]
@@ -395,7 +438,10 @@ export function assembleQuery(opts: AssembleOptions): Query {
 		q.groupby(nonAggregateGroupBy as ExprNode[]);
 	}
 
-	const allFilters = [...filter] as ExprNode[];
+	const allFilters = [
+		...(filter as ExprNode[]),
+		...nullDropPredicates(parts.nullDrops ?? [], selectDef)
+	];
 	if (allFilters.length > 0) {
 		q.where(and(allFilters));
 	}

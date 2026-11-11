@@ -495,7 +495,11 @@ export function preaggQuerySQL(
 		hasSQLTransforms: parts.hasSQLTransforms,
 		orderChannels: parts.orderChannels,
 		aliasMap: parts.aliasMap,
-		passthroughChannels: parts.passthroughChannels
+		passthroughChannels: parts.passthroughChannels,
+		// nulls="drop", read through this select: each dropped channel is a group
+		// key, so the table keeps NULL as its own group, and dropping that group
+		// here removes exactly what the base scan would have left out.
+		nullDrops: parts.nullDrops
 	};
 
 	return assembleQuery({

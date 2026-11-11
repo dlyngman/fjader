@@ -48,7 +48,8 @@ import type {
 	MarkConfig,
 	ChartContext,
 	ScaleStateInstance,
-	ContinuousScaleState
+	ContinuousScaleState,
+	NullsResponse
 } from '$lib/types';
 import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
@@ -85,7 +86,13 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
-import { buildQueryParts, assembleQuery, castReal, type QueryParts } from './query-builder';
+import {
+	buildQueryParts,
+	assembleQuery,
+	castReal,
+	type NullDrop,
+	type QueryParts
+} from './query-builder';
 import {
 	setScalesReady,
 	markDeferredScalesReady,
@@ -149,6 +156,7 @@ export interface ReactiveConfig {
 	readonly fitDomain: 'x' | 'y' | boolean | undefined;
 	readonly tip: (unknown | '*')[] | false | undefined;
 	readonly selectionResponse: SelectionResponse | undefined;
+	readonly nulls: NullsResponse | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,9 +325,69 @@ export class MarkLifecycleV2 {
 			this.#transformCompiler.hasSQLTransforms(),
 			passthroughChannels
 		);
+		const nullDrops = this.#nullDrops(semanticSelect, resolvedSelect);
+		if (nullDrops.length > 0) parts.nullDrops = nullDrops;
 
 		return parts;
 	});
+
+	/**
+	 * The mark's categorical channels, each with the source expression it draws:
+	 * a band or point axis, an ordinal colour, a separate series, and the facet
+	 * (`__facet`, from the chart's fx). What `nulls="drop"` filters.
+	 */
+	#categoricalChannels(select: Record<string, unknown>): [channel: string, source: unknown][] {
+		const out: [string, unknown][] = [];
+		const categorical = (type: string) => type === 'band' || type === 'point';
+		if (categorical(this.actualXScaleType)) out.push(['x', select.x]);
+		if (categorical(this.actualYScaleType)) out.push(['y', select.y]);
+		const colorChannel = this.#config.colorChannel || 'fill';
+		if (this.#colorScaleState?.isOrdinal) out.push([colorChannel, select[colorChannel]]);
+		const seriesChannel = this.#config._orderConfig?.seriesChannel ?? null;
+		if (seriesChannel && seriesChannel !== colorChannel) {
+			out.push([seriesChannel, select[seriesChannel]]);
+		}
+		if (this.#chartContext.fx) out.push(['__facet', this.#chartContext.fx]);
+		// Only row-level values: an aggregate has no NULL category to drop.
+		return out.filter(
+			([, source]) =>
+				source != null &&
+				typeof source !== 'number' &&
+				!(isNode(source) && isAggregateExpression(source as ExprNode))
+		);
+	}
+
+	/**
+	 * `nulls="drop"`, by channel (see QueryParts.nullDrops). A channel the query
+	 * selects as its dim's id column drops the NULL category's id; one still
+	 * carrying its raw value (identity not landed yet) drops SQL NULL. Read off
+	 * the select itself, so the two cannot disagree: inlining an id column is
+	 * what changes the channel's expression.
+	 */
+	#nullDrops(semantic: Record<string, unknown>, resolved: Record<string, unknown>): NullDrop[] {
+		if (this.#reactiveConfig.nulls !== 'drop') return [];
+		const drops: NullDrop[] = [];
+		for (const [channel, source] of this.#categoricalChannels(semantic)) {
+			const encoded = channel === '__facet' ? '__facet' in resolved : resolved[channel] !== source;
+			if (channel === '__facet' && !encoded) continue;
+			const key = encoded ? identityKeyFor(source as FieldRef)?.key : null;
+			const nullId = key ? this.#queryEngine.identityFor(key).nullId : null;
+			drops.push({ channel, nullId });
+		}
+		return drops;
+	}
+
+	/**
+	 * `nulls="drop"` for a query over the RAW select (no id columns, no
+	 * `__facet`): `<source> IS NOT NULL` per categorical channel, the facet's
+	 * on the chart's fx. Passed as that query's filter.
+	 */
+	#rawNullFilters(select: Record<string, unknown>): unknown[] {
+		if (this.#reactiveConfig.nulls !== 'drop') return [];
+		return this.#categoricalChannels(select).map(([, source]) =>
+			isNotNull((typeof source === 'string' ? sqlColumn(source) : source) as ExprValue)
+		);
+	}
 
 	// --- Domain State ---
 	#channelsNeedingDataDomain: Set<string> = new Set();
@@ -840,7 +908,8 @@ export class MarkLifecycleV2 {
 					seriesKey,
 					this.#bandDomainFromData,
 					this.#markId,
-					this.#reactiveConfig.domain
+					this.#reactiveConfig.domain,
+					this.#reactiveConfig.nulls === 'drop'
 				),
 				fetchGlobalAggregates(
 					this.#queryEngine,
@@ -1310,11 +1379,16 @@ export class MarkLifecycleV2 {
 		const identity: Record<string, ChannelIdentity> = {};
 		const describe = (channel: string, key: string, positional: boolean) => {
 			const present = this.#queryEngine.presentTableFor(key, this.#config.table);
+			// nulls="drop": its rows are filtered out, and dense() must not pad a
+			// zero row for it either, or a sorted axis keeps a "(null)" slot.
+			const nullId =
+				this.#reactiveConfig.nulls === 'drop' ? this.#queryEngine.identityFor(key).nullId : null;
 			identity[channel] = {
 				dim: this.#queryEngine.dimTableFor(key),
 				size: this.#queryEngine.identityFor(key).values.length,
 				positional,
-				...(present ? { present } : {})
+				...(present ? { present } : {}),
+				...(nullId !== null ? { dropNullId: nullId } : {})
 			};
 		};
 		for (const { axis, key } of axes) describe(axis, key, true);
@@ -1516,10 +1590,12 @@ export class MarkLifecycleV2 {
 			this.#config._orderConfig ?? null,
 			this.#transformCompiler.hasSQLTransforms()
 		);
+		// Domains from the rows the mark draws: without what nulls="drop" leaves
+		// out. This select is raw, so the filter is on the raw values.
 		const q = assembleQuery({
 			table: this.#config.table,
 			parts,
-			filter,
+			filter: [...filter, ...this.#rawNullFilters(this.#config.select)],
 			transformCompiler: this.#transformCompiler
 		});
 		if (!q) return null;
@@ -1971,6 +2047,9 @@ export class MarkLifecycleV2 {
 			undefined,
 			this.#transformCompiler.hasSQLTransforms()
 		);
+		// The same rows as the mark: it leaves out what the mark leaves out. Its
+		// select holds every non-aggregate channel, so each dropped one is there.
+		sidecarParts.nullDrops = this.#resolvedQueryParts.nullDrops;
 
 		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const sidecarQuery = assembleQuery({

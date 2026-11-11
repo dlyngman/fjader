@@ -19,7 +19,7 @@ export function buildReactiveConfig(
 	entry: Partial<
 		Pick<
 			MarkEntry,
-			'sort' | 'limit' | 'domain' | 'tooltip' | 'tip' | 'fitDomain' | 'selectionResponse'
+			'sort' | 'limit' | 'domain' | 'tooltip' | 'tip' | 'fitDomain' | 'selectionResponse' | 'nulls'
 		>
 	>,
 	opts?: {
@@ -47,6 +47,9 @@ export function buildReactiveConfig(
 		},
 		get selectionResponse() {
 			return entry.selectionResponse;
+		},
+		get nulls() {
+			return entry.nulls;
 		}
 	};
 }

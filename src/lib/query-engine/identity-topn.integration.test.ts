@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import duckdb from 'duckdb';
 import { CategoricalIdentity } from './categorical-identity';
 import { topN, RANK_COLUMN, OTHER_IDS_COLUMN, OTHER_VALUES_COLUMN } from '$lib/transforms';
-import { Query, column, sql } from '@uwdata/mosaic-sql';
+import { Query, column, isNotNull, sql } from '@uwdata/mosaic-sql';
 import type { MarkConfig, SqlTransform } from '$lib/types';
 
 interface DB {
@@ -73,14 +73,16 @@ describe('identity ids through topN', () => {
 	 * through topN(2, includeOthers) with the reserved id handed over under the
 	 * channel alias, exactly as the lifecycle keys it. Rows in rank order.
 	 */
-	async function topTwoWithOther(field: string, otherId: number) {
+	async function topTwoWithOther(field: string, otherId: number, dropNull = false) {
 		const idCol = identity.idColumn(field);
-		const query = Query.from(identity.sourceFor('sales'))
+		let query = Query.from(identity.sourceFor('sales'))
 			.select({
 				x: sql`CAST(${column(idCol)} AS REAL)`,
 				total: sql`SUM(amount)::REAL`
 			})
 			.groupby(column(idCol));
+		// nulls="drop": the static filter on the mark's own scan, before topN.
+		if (dropNull) query = query.where(isNotNull(column(field)));
 		const config = {
 			markType: 'bar',
 			table: 'sales',
@@ -135,6 +137,21 @@ describe('identity ids through topN', () => {
 		// alpha (0) 10, delta (3) 20, NULL (4) 5, in id order.
 		expect((other[OTHER_IDS_COLUMN] as unknown[]).map(Number)).toEqual([0, 3, nullId]);
 		expect((other[OTHER_VALUES_COLUMN] as unknown[]).map(Number)).toEqual([10, 20, 5]);
+	});
+
+	it('with nulls="drop", ranks and sums Other without NULL, even the largest', async () => {
+		await db.run(`INSERT INTO sales VALUES (NULL, 1000)`);
+		await identity.ensureColumns('sales', { categorical: ['category'] });
+		const bucket = await identity.acquireSynthetic('category', 'Other');
+		const values = identity.identity('category').values;
+		const nullId = identity.identity('category').nullId!;
+
+		const { xs, totals, rows } = await topTwoWithOther('category', bucket.id, true);
+		expect(xs.map((id) => values[id])).toEqual(['bravo', 'charlie', 'Other']);
+		// alpha 10 + delta 20; the NULL 1000 is left out, not folded.
+		expect(totals).toEqual([400, 300, 30]);
+		const other = rows[xs.indexOf(bucket.id)];
+		expect((other[OTHER_IDS_COLUMN] as unknown[]).map(Number)).not.toContain(nullId);
 	});
 
 	it('ranks NULL by its measure like any category: the largest takes a slot', async () => {

@@ -22,6 +22,7 @@ import type {
 	SortConfig,
 	ColorScheme,
 	CurveType,
+	NullsResponse,
 	Transform
 } from '$lib/types';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
@@ -49,6 +50,7 @@ export interface MarkEntry {
 	transforms?: Transform[];
 	selection?: string;
 	selectionResponse?: SelectionResponse;
+	nulls?: NullsResponse;
 	limit?: number;
 	preferredXScaleType?: string | null;
 	preferredYScaleType?: string | null;
