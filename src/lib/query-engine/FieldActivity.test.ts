@@ -25,10 +25,13 @@ function hostWith(identity: FieldIdentity | null, withLoop = false) {
 }
 
 const table = (activity: FieldActivity, group = 0) => activity.fadeOf(group) as ActivityTable;
+/** Each id's activity now: the free slot past them is left out (see its own tests). */
 const now = (activity: FieldActivity, group = 0) =>
-	Array.from({ length: table(activity, group).count }, (_, id) =>
+	Array.from({ length: table(activity, group).count - 1 }, (_, id) =>
 		table(activity, group).activityOf(id)
 	);
+/** A table's from or to, without the free slot. */
+const ids = (array: Float32Array) => Array.from(array).slice(0, -1);
 const values = (...v: string[]) => new Set<unknown>(v);
 
 describe('FieldActivity', () => {
@@ -75,8 +78,8 @@ describe('FieldActivity', () => {
 
 		host.identity = new FieldIdentity(['a', 'b', 'c'], 'f');
 		expect(activity.reconcile()).toBe(true);
-		expect(Array.from(table(activity).from)).toEqual([0, 1, 0]);
-		expect(Array.from(table(activity).to)).toEqual([0, 1, 0]);
+		expect(ids(table(activity).from)).toEqual([0, 1, 0]);
+		expect(ids(table(activity).to)).toEqual([0, 1, 0]);
 	});
 
 	it('reconciles to nothing when nothing moved', () => {
@@ -113,8 +116,8 @@ describe('FieldActivity', () => {
 
 		host.identity = new FieldIdentity(['c', 'b', 'a'], 'f');
 		activity.reconcile();
-		expect(Array.from(table(activity).from)).toEqual([0, 0, 1]);
-		expect(Array.from(table(activity).to)).toEqual([0, 0, 1]);
+		expect(ids(table(activity).from)).toEqual([0, 0, 1]);
+		expect(ids(table(activity).to)).toEqual([0, 0, 1]);
 	});
 
 	it('keeps existing fades when the dim grows, and a new id starts in its state', () => {
@@ -126,9 +129,14 @@ describe('FieldActivity', () => {
 
 		identity.reset(['a', 'b', 'c']);
 		activity.reconcile();
-		expect(table(activity).count).toBe(3);
-		expect(Array.from(table(activity).from)).toEqual([1, 1, 0]);
-		expect(Array.from(table(activity).to)).toEqual([1, 0, 0]);
+		// Three ids and the free slot past them.
+		expect(table(activity).count).toBe(4);
+		expect(ids(table(activity).from)).toEqual([1, 1, 0]);
+		expect(ids(table(activity).to)).toEqual([1, 0, 0]);
+		// The free slot's own fade (1 -> 0: something is now selected) moved to the
+		// new end; 'c' did not inherit it.
+		expect(table(activity).from[3]).toBe(1);
+		expect(table(activity).to[3]).toBe(0);
 	});
 
 	it('gives a reader the inactive opacity at rest, and a fade in between', () => {
@@ -203,6 +211,32 @@ describe('FieldActivity', () => {
 			activity.set(0, values('a'));
 			host.identity = null;
 			expect(activity.opacityOfId(0, 1)).toBe(1);
+		});
+	});
+
+	describe('the free slot', () => {
+		/** The slot past every id: 1 while nothing is selected, 0 while anything is. */
+		const free = (activity: FieldActivity, group = 0) =>
+			table(activity, group).activityOf(table(activity, group).count - 1);
+
+		it('is 1 with nothing selected, 0 with anything selected, and 1 again once cleared', () => {
+			const activity = new FieldActivity('f', hostWith(new FieldIdentity(['a', 'b'], 'f')));
+			activity.set(0, null);
+			expect(table(activity).count).toBe(3);
+			expect(free(activity)).toBe(1);
+			activity.set(0, values('a'));
+			expect(free(activity)).toBe(0);
+			activity.set(0, null);
+			expect(free(activity)).toBe(1);
+		});
+
+		it('is per group, and is no id: a value never maps to it', () => {
+			const activity = new FieldActivity('f', hostWith(new FieldIdentity(['a', 'b'], 'f')));
+			activity.set(1, values('b'));
+			activity.set(0, null);
+			expect(free(activity, 1)).toBe(0);
+			expect(free(activity, 0)).toBe(1);
+			expect(activity.opacityOfValue(1, 'b')).toBe(1);
 		});
 	});
 });

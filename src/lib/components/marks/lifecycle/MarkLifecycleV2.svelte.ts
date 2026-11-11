@@ -108,7 +108,7 @@ import {
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
-import { otherSplit, splittable } from './other-split';
+import { otherSplit, splittable, type OtherSplit } from './other-split';
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -1594,7 +1594,12 @@ export class MarkLifecycleV2 {
 	 * is what Other sums: see #otherSplitAxis.
 	 */
 	get otherSplit(): Float32Array | null {
-		return this.#otherSplit;
+		return this.#otherSplit?.split ?? null;
+	}
+
+	/** Whether the latest split travels with this write or lands at once (see OtherSplit.slides). */
+	get otherSplitSlides(): boolean {
+		return this.#otherSplit?.slides ?? true;
 	}
 
 	/** Whether colour is the band's own field, so an Other row's colour term reads its id too. */
@@ -1608,7 +1613,7 @@ export class MarkLifecycleV2 {
 		return !!color?.isOrdinal && !!band?.identityKey && color.identityKey === band.identityKey;
 	}
 
-	#otherSplit: Float32Array | null = $derived.by(() => {
+	#otherSplit: OtherSplit | null = $derived.by(() => {
 		const axis = this.#otherSplitAxis;
 		if (!axis) return null;
 		void this.dataVersion;
@@ -1620,16 +1625,26 @@ export class MarkLifecycleV2 {
 		const band = table?.getChild(axis) ?? null;
 		if (!table || otherId == null || !key || !ids || !values || !band) return null;
 
-		return otherSplit({
+		// The last split, for the same result only: a selection change holds a
+		// flat row's position. A new result starts afresh and travels with the bar.
+		const dataVersion = this.dataVersion;
+		const last = this.#lastSplit;
+		const next = otherSplit({
 			rows: table.numRows,
 			band,
 			otherId,
 			ids,
 			values,
 			selected: this.#filterGroup.activity(key).selectedValues(this.#filterGroup.index),
-			decode: this.#queryEngine.identityFor(key).values
+			decode: this.#queryEngine.identityFor(key).values,
+			previous: last && last.dataVersion === dataVersion ? last.split : null
 		});
+		this.#lastSplit = { dataVersion, split: next };
+		return next;
 	});
+
+	/** The split last computed, and for which result: what a selection change holds against. */
+	#lastSplit: { dataVersion: number; split: OtherSplit } | null = null;
 
 	/**
 	 * The band axis whose Other bar splits, or null. Only where a share is what

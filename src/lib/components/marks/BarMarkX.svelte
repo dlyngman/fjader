@@ -306,6 +306,7 @@
 		colorValueData={markColor.data}
 		alphaData={opacityData}
 		splitData={setup?.otherSplit ?? null}
+		splitSlides={setup?.otherSplitSlides ?? true}
 		splitAlongX={true}
 		otherColorOnBand={setup?.otherColorOnBand ?? false}
 		colorMode={markColor.colorMode}

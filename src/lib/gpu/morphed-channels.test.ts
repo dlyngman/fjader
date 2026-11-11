@@ -186,6 +186,36 @@ describe('MorphedChannels', () => {
 		expect(issued).toContain('imm count=3 t=0');
 	});
 
+	it('lands a channel it is told to, while the others in the same write travel', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+
+		// Channel 3 lands at once (an Other split leaving a flat state); 2 travels.
+		m.write(
+			ids,
+			[
+				[2, values(2, 3, 4)],
+				[3, values(5, 6, 7)]
+			],
+			[3]
+		);
+		expect(f.slots.starts).toBe(1);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		expect(issued).toContain('copy m-3-to -> m-3-from');
+		expect(issued).not.toContain('copy m-3-resolved -> m-3-from');
+
+		// Landing is per write: the next update travels again.
+		m.write(ids, [
+			[2, values(3, 4, 5)],
+			[3, values(6, 7, 8)]
+		]);
+		const next = f.frame();
+		expect(next).toContain('copy m-3-resolved -> m-3-from');
+	});
+
 	it('joins a restart it has not folded yet, instead of issuing a second one', () => {
 		// The reorder a result causes restarts the clock first; the mark's own
 		// write lands right behind it. A second restart would repeat the scale's

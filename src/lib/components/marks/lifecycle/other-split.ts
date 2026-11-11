@@ -8,13 +8,38 @@ export interface RowColumn {
 	at(row: number): unknown;
 }
 
+/** One computed split: the channel, and which Other rows are flat. */
+export interface OtherSplit {
+	/** 0 on rows that are not an Other row, `1 + share` (or a held position) on one. */
+	split: Float32Array;
+	/**
+	 * 1 on an Other row whose two parts look the same: nothing selected (both
+	 * lit), or none of its members selected (both dim). Its split position is
+	 * invisible there, so it is held, and moving out of it lands rather than
+	 * slides.
+	 */
+	flat: Uint8Array;
+	/**
+	 * Whether the split travels with this write (the renderer morphs it) or
+	 * lands at once. It lands when a row leaves a flat state: both sides of it
+	 * look the same at that moment, so a slide would be a movement the eye
+	 * reads as meaning something; the fades show the change instead.
+	 */
+	slides: boolean;
+}
+
 /**
- * The split channel for the bar renderer: 0 on every row that is not an Other
- * row, `1 + share` on one, where share = Σ values · selected / Σ values over the
- * row's own member lists. Selection is by value (`decode` maps an id to its
- * value), so the NULL category needs nothing special; with nothing selected
- * (`selected` null) every share is 1. A row whose members mix signs gets no
- * split (0): a share of a sum that cancels means nothing.
+ * The split channel for the bar renderer, per row: share = Σ values · selected
+ * / Σ values over the row's own member lists. Selection is by value (`decode`
+ * maps an id to its value), so the NULL category needs nothing special. A row
+ * whose members mix signs gets no split (0): a share of a sum that cancels
+ * means nothing.
+ *
+ * `previous`: the last split for the SAME rows (the same result), when only the
+ * selection changed. A flat row then holds its previous position, so going flat
+ * (a selection cleared, or one that no longer reaches into Other) is a fade,
+ * not a slide. Without it (a new result) every row takes its value, and the
+ * split travels with the bar's own morph.
  */
 export function otherSplit(opts: {
 	rows: number;
@@ -24,9 +49,13 @@ export function otherSplit(opts: {
 	values: RowColumn;
 	selected: ReadonlySet<unknown> | null;
 	decode: ArrayLike<unknown>;
-}): Float32Array {
+	previous?: OtherSplit | null;
+}): OtherSplit {
 	const { rows, band, otherId, ids, values, selected, decode } = opts;
-	const out = new Float32Array(rows);
+	const previous = opts.previous && opts.previous.split.length === rows ? opts.previous : null;
+	const split = new Float32Array(rows);
+	const flat = new Uint8Array(rows);
+	let slides = true;
 	for (let row = 0; row < rows; row++) {
 		if (Number(band.at(row)) !== otherId) continue;
 		const memberIds = ids.at(row) as ArrayLike<number> | null;
@@ -44,10 +73,18 @@ export function otherSplit(opts: {
 			if (selected?.has(decode[memberIds[k]])) picked += v;
 		}
 		if (positive && negative) continue;
-		const share = selected == null ? 1 : total === 0 ? 0 : picked / total;
-		out[row] = 1 + Math.min(1, Math.max(0, share));
+		const share = selected == null ? 1 : total === 0 ? 0 : Math.min(1, Math.max(0, picked / total));
+		const isFlat = selected == null || share === 0;
+		flat[row] = isFlat ? 1 : 0;
+		if (isFlat && previous) {
+			const held = previous.split[row];
+			split[row] = held > 0.5 ? held : 2;
+		} else {
+			split[row] = 1 + share;
+		}
+		if (previous && previous.flat[row] === 1 && !isFlat) slides = false;
 	}
-	return out;
+	return { split, flat, slides };
 }
 
 /**

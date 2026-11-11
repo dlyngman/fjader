@@ -79,6 +79,14 @@ class GroupFade {
  * `reconcile` runs from the packer and from `set`, never from a reader, so
  * nothing is resized or retargeted while a template renders.
  */
+/**
+ * THE FREE SLOT. Each group's table holds one slot past the field's ids: 1 while
+ * the group selects nothing on the field, 0 while it selects anything, faded on
+ * the same clock as every id. The shader reads it as the last slot of the
+ * group's run (identityFreeActivity): an Other bar's unselected part dims by it,
+ * so clearing a selection fades it back in with the other bars, rather than its
+ * split sliding.
+ */
 export class FieldActivity {
 	readonly key: string;
 	#host: FieldActivityHost;
@@ -101,9 +109,12 @@ export class FieldActivity {
 		this.#host = host;
 	}
 
-	/** How many ids the tables cover: the applied identity's, 0 without one. */
+	/**
+	 * How many slots the tables cover: one per id of the applied identity, and
+	 * one past them (FREE_SLOT); 0 without an identity.
+	 */
 	get count(): number {
-		return this.#identity ? this.#identity.values.length : 0;
+		return this.#identity ? this.#identity.values.length + 1 : 0;
 	}
 
 	/**
@@ -349,10 +360,13 @@ export class FieldActivity {
 			group.table.resize(0);
 			return;
 		}
-		const count = identity.values.length;
+		// Every id, and the free slot past them: clear() sets it to 1 and
+		// setActive() leaves it out, so it fades to 0 while anything is selected
+		// and back to 1 once nothing is (see FieldActivity's FREE_SLOT note).
+		const count = identity.values.length + 1;
 		const values = group.values;
 		if (values == null) {
-			group.table.resize(count, null);
+			group.table.resize(count, null, true);
 			group.table.clear();
 			return;
 		}
@@ -363,7 +377,7 @@ export class FieldActivity {
 			if (id != null) ids.push(id);
 		}
 		this.#lightOthers(this.#groups.indexOf(group), ids, count);
-		group.table.resize(count, ids);
+		group.table.resize(count, ids, true);
 		group.table.setActive(ids);
 	}
 

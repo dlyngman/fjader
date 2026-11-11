@@ -311,7 +311,9 @@ export class BaseGPURenderer {
 	writeMorphed(
 		bandAxis: 'x' | 'y',
 		bandIds: ArrayLike<number>,
-		channels: readonly (readonly [number, AllowSharedBufferSource])[]
+		channels: readonly (readonly [number, AllowSharedBufferSource])[],
+		/** Bindings that land at once rather than travel (see MorphedChannels.write). */
+		land?: readonly number[]
 	): void {
 		if (!this.#device) return;
 
@@ -358,7 +360,7 @@ export class BaseGPURenderer {
 		}
 
 		this.#morphAxis = bandAxis;
-		if (this.#morphed.write(bandIds, channels) || rebind) {
+		if (this.#morphed.write(bandIds, channels, land) || rebind) {
 			this.#scheduleBindGroupUpdate();
 		} else if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();

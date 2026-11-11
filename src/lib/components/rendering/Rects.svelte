@@ -66,6 +66,8 @@
 		splitData?: Float32Array | null;
 		/** The bars run along x (horizontal bars), so the split is along x. */
 		splitAlongX?: boolean;
+		/** Whether this split travels (morphs) or lands at once; see OtherSplit.slides. */
+		splitSlides?: boolean;
 		/** Colour is the band's own field: an Other row's colour term is skipped too. */
 		otherColorOnBand?: boolean;
 		facetData?: Float32Array | null;
@@ -101,6 +103,7 @@
 		alphaData,
 		splitData = null,
 		splitAlongX = false,
+		splitSlides = true,
 		otherColorOnBand = false,
 		facetData = null,
 		dataVersion,
@@ -175,6 +178,9 @@
       // fragment sits along the bar, 0 at its base, 1 at its end.
       @location(2) @interpolate(flat) share: f32,
       @location(3) along: f32,
+      // An Other bar's unselected part: dimmed by the other fields' activity and
+      // by the field's free slot, so it fades as the rest of the chart does.
+      @location(4) alphaRest: f32,
     };
 
     @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
@@ -220,8 +226,12 @@
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
-      // An Other row (split > 0) is dimmed by its share, in the fragment, rather
-      // than by its own field's activity: the rest of its activity still applies.
+      // An Other row (split > 0) is drawn in two parts, mixed in the fragment at
+      // its share. Below: as any bar, by its full activity, its own field's
+      // included, so it dims and lights with the bucket's lit state (#23). Above:
+      // by the other fields' activity and the field's free slot, so it is lit
+      // only while nothing is selected. Both fade on the selection clock, and the
+      // split only moves when the share moves between two parts that differ.
       let split = splitValues[instanceIdx];
       let isOther = split > 0.5;
       output.share = select(-1.0, split - 1.0, isOther);
@@ -237,7 +247,13 @@
 				group: 'markConstants.groupIndex',
 				skipColor: 'markConstants.otherColorOnBand == 1u'
 			})};
-      output.alpha = alpha * selectionDim(select(activity, otherActivity, isOther));
+      let free = select(
+        bandFreeActivityX(markConstants.groupIndex),
+        bandFreeActivityY(markConstants.groupIndex),
+        markConstants.splitAlongX == 1u
+      );
+      output.alpha = alpha * selectionDim(activity);
+      output.alphaRest = alpha * selectionDim(min(otherActivity, free));
       return output;
     }
   
@@ -261,12 +277,12 @@
       }
   
       var finalAlpha = baseColor.a * input.alpha;
-      // An Other bar's split: lit up to its selected share, from its base,
-      // dimmed above it, with an anti-aliased edge. At share 1 (all of it, or
-      // nothing selected) it is lit throughout, with no half-lit top row.
+      // An Other bar's split: its own part up to the selected share, from its
+      // base, its unselected part above, with an anti-aliased edge. At share 1
+      // the whole bar is its own part, with no half-dimmed top row.
       if (input.share >= 0.0 && input.share < 1.0) {
-        let lit = 1.0 - smoothstep(input.share - aa, input.share + aa, input.along);
-        finalAlpha *= selectionDim(lit);
+        let below = 1.0 - smoothstep(input.share - aa, input.share + aa, input.along);
+        finalAlpha = baseColor.a * mix(input.alphaRest, input.alpha, below);
       }
       return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
@@ -321,10 +337,21 @@
 		// split and the bar land together. A share that changes alone (a click)
 		// starts a transition of its own on that clock.
 		const split = splitData ? ([[BINDINGS.SPLIT, splitData]] as const) : [];
+		const land = splitData && !splitSlides ? [BINDINGS.SPLIT] : undefined;
 		if (bandAxis === 'x') {
-			renderer.writeMorphed('x', x0Data, [[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split]);
+			renderer.writeMorphed(
+				'x',
+				x0Data,
+				[[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split],
+				land
+			);
 		} else {
-			renderer.writeMorphed('y', y0Data, [[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split]);
+			renderer.writeMorphed(
+				'y',
+				y0Data,
+				[[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split],
+				land
+			);
 		}
 	});
 	// Without a band axis the share is written as is. A mark that had shares and

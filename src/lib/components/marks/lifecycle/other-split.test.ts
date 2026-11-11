@@ -1,24 +1,31 @@
 import { describe, it, expect } from 'vitest';
 import { avg, count, max, sql, sum, column } from '@uwdata/mosaic-sql';
-import { otherSplit, splittable } from './other-split';
+import { otherSplit, splittable, type OtherSplit } from './other-split';
 
 const col = (values: unknown[]) => ({ at: (row: number) => values[row] });
 
 /** a b c d NULL as ids 0..4, Other is 9. */
 const decode = ['a', 'b', 'c', 'd', null];
 
+function compute(
+	selected: Set<unknown> | null,
+	rows = defaultRows,
+	previous: OtherSplit | null = null
+): OtherSplit {
+	return otherSplit({
+		rows: rows.band.length,
+		band: col(rows.band),
+		otherId: 9,
+		ids: col(rows.ids),
+		values: col(rows.values),
+		selected,
+		decode,
+		previous
+	});
+}
+
 function split(selected: Set<unknown> | null, rows = defaultRows) {
-	return Array.from(
-		otherSplit({
-			rows: rows.band.length,
-			band: col(rows.band),
-			otherId: 9,
-			ids: col(rows.ids),
-			values: col(rows.values),
-			selected,
-			decode
-		})
-	);
+	return Array.from(compute(selected, rows).split);
 }
 
 // Two shown rows (ids 0, 1), then Other holding c (30), d (10) and NULL (60).
@@ -60,6 +67,40 @@ describe('otherSplit', () => {
 			values: [Float64Array.from([10, -4])]
 		};
 		expect(split(new Set(['c']), rows)).toEqual([0]);
+	});
+});
+
+describe('otherSplit: a selection change fades a flat bar, and only slides between shares', () => {
+	it('holds the position when the selection stops reaching into Other', () => {
+		const partial = compute(new Set(['c']));
+		const none = compute(new Set(['a']), defaultRows, partial);
+		// Share 0, but the split stays at 0.3: the bucket's lit state fades the
+		// part below it, as every other bar fades.
+		expect(none.split[2]).toBeCloseTo(1.3, 6);
+		expect(none.flat[2]).toBe(1);
+	});
+
+	it('holds the position when the selection is cleared', () => {
+		const partial = compute(new Set(['c']));
+		const cleared = compute(null, defaultRows, partial);
+		expect(cleared.split[2]).toBeCloseTo(1.3, 6);
+		expect(cleared.flat[2]).toBe(1);
+	});
+
+	it('lands, not slides, when a row leaves a flat state', () => {
+		const nothing = compute(null);
+		const partial = compute(new Set(['c']), defaultRows, nothing);
+		expect(partial.split[2]).toBeCloseTo(1.3, 6);
+		expect(partial.slides).toBe(false);
+	});
+
+	it('slides between two shares, and with a new result', () => {
+		const a = compute(new Set(['c']));
+		const b = compute(new Set(['c', 'd']), defaultRows, a);
+		expect(b.slides).toBe(true);
+		expect(b.split[2]).toBeCloseTo(1.4, 6);
+		// No previous: a new result, which travels with the bar's own morph.
+		expect(compute(new Set(['c'])).slides).toBe(true);
 	});
 });
 

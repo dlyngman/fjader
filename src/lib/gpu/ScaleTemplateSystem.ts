@@ -587,6 +587,9 @@ export class ScaleTemplateSystem {
 			if (type !== 'band' && type !== 'point') {
 				return `fn bandActivity${axis}(value: f32, group: u32) -> f32 {
       return 1.0;
+    }
+    fn bandFreeActivity${axis}(group: u32) -> f32 {
+      return 1.0;
     }`;
 			}
 			return `fn bandActivity${axis}(value: f32, group: u32) -> f32 {
@@ -594,6 +597,9 @@ export class ScaleTemplateSystem {
         return 1.0;
       }
       return identityActivity(u32(chartScale${axis}().p4), group, u32(value));
+    }
+    fn bandFreeActivity${axis}(group: u32) -> f32 {
+      return identityFreeActivity(u32(chartScale${axis}().p4), group);
     }`;
 		};
 		return `
@@ -676,6 +682,21 @@ export class ScaleTemplateSystem {
         return 1.0;
       }
       return identitySlots[actRef + n * group + id];
+    }
+
+    fn identityFreeActivity(base: u32, group: u32) -> f32 {
+      // The last slot of the group's run, past every id: 1 while the group
+      // selects nothing on the field, 0 while it selects anything, at the
+      // selection clock (FieldActivity's FREE SLOT). 1 without a block.
+      if (group == ${NO_GROUP}u) {
+        return 1.0;
+      }
+      let actRef = u32(identitySlots[base + 1u]);
+      let n = u32(identitySlots[base + 2u]);
+      if (n == 0u) {
+        return 1.0;
+      }
+      return identitySlots[actRef + n * group + n - 1u];
     }
     `;
 	}

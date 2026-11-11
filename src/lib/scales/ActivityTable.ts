@@ -137,10 +137,17 @@ export class ActivityTable {
 	 * fade down from 1.
 	 *
 	 * `resize(0)` drops every id, for ids that stopped meaning their category.
+	 *
+	 * `trailing`: the last slot is not an id but a slot of its own that stays
+	 * last (FieldActivity's free slot). Its fade moves to the new end, and the
+	 * slot it leaves is a new id like any other, rather than inheriting it.
 	 */
-	resize(count: number, active?: readonly number[] | null): void {
+	resize(count: number, active?: readonly number[] | null, trailing = false): void {
 		if (count === this.#to.length) return;
-		const keep = Math.min(this.#to.length, count);
+		const oldLength = this.#to.length;
+		const tail = trailing && oldLength > 0 && count > 0;
+		const keep = tail ? Math.min(oldLength - 1, count - 1) : Math.min(oldLength, count);
+		const ids = tail ? count - 1 : count;
 		const selecting = active === undefined ? this.#selecting : active !== null;
 		const fill = selecting ? 0 : 1;
 		const grown = (old: Float32Array) => {
@@ -148,8 +155,9 @@ export class ActivityTable {
 			next.fill(fill);
 			next.set(old.subarray(0, keep), 0);
 			if (active) {
-				for (const id of active) if (id >= keep && id < count) next[id] = 1;
+				for (const id of active) if (id >= keep && id < ids) next[id] = 1;
 			}
+			if (tail) next[count - 1] = old[oldLength - 1];
 			return next;
 		};
 		this.#from = grown(this.#from);

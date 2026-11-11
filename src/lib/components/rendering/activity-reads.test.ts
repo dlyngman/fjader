@@ -142,15 +142,19 @@ describe('an Other row reads no activity on its own field', () => {
 		expect(wgsl).toBe('markActivity(select(markColorActivity(c, g), 1.0, flag), 1.0, 1.0)');
 	});
 
-	it('Rects uses it for Other rows and splits in the fragment, after an unconditional fwidth', async () => {
+	it('Rects draws an Other row in two parts, mixed in the fragment after an unconditional fwidth', async () => {
 		const { readFileSync } = await import('node:fs');
 		const { fileURLToPath } = await import('node:url');
 		const source = readFileSync(fileURLToPath(new URL('./Rects.svelte', import.meta.url)), 'utf8');
 		expect(source).toContain('@group(1) @binding(7) var<storage, read> splitValues');
-		expect(source).toContain('selectionDim(select(activity, otherActivity, isOther))');
+		// Below the split: as any bar. Above it: the other fields' activity and
+		// the field's free slot, so it fades in when the selection is cleared.
+		expect(source).toContain('output.alpha = alpha * selectionDim(activity)');
+		expect(source).toContain('output.alphaRest = alpha * selectionDim(min(otherActivity, free))');
+		expect(source).toContain('bandFreeActivityX(markConstants.groupIndex)');
 		const fragment = source.slice(source.indexOf('fn fragmentMain'));
 		expect(fragment.indexOf('fwidth(input.along)')).toBeGreaterThan(-1);
 		expect(fragment.indexOf('fwidth(input.along)')).toBeLessThan(fragment.indexOf('if ('));
-		expect(fragment).toContain('finalAlpha *= selectionDim(lit)');
+		expect(fragment).toContain('mix(input.alphaRest, input.alpha, below)');
 	});
 });
