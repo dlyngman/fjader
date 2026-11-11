@@ -219,6 +219,52 @@
 					</ChartContainer>
 				</div>
 			</div>
+
+			<div class="chart-panel">
+				<h3>8. AxisBottom titleAnchor="start"</h3>
+				<p class="desc">The x title at the plot's start edge.</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Category" yLabel="Revenue">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom titleAnchor="start" />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel">
+				<h3>9. AxisBottom titleAnchor="end"</h3>
+				<p class="desc">The x title at the plot's end edge.</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Category" yLabel="Revenue">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom titleAnchor="end" />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}

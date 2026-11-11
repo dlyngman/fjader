@@ -13,9 +13,19 @@
 		 * label still names the scale, so charts sharing it still link their zoom.
 		 */
 		title?: boolean;
+		/**
+		 * Where along the axis the title sits: `'center'` (default), or at the plot's
+		 * `'start'` (left) or `'end'` (right) edge.
+		 */
+		titleAnchor?: 'start' | 'center' | 'end';
 	}
 
-	let { ticksNumber = 5, tickFormat = null, title = true }: Props = $props();
+	let {
+		ticksNumber = 5,
+		tickFormat = null,
+		title = true,
+		titleAnchor = 'center'
+	}: Props = $props();
 	const c = getContext<ChartContext>('chart');
 
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
@@ -64,7 +74,11 @@
 		{/if}
 
 		{#if title && c.xScale}
-			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
+			<text
+				text-anchor={titleAnchor === 'start' ? 'start' : titleAnchor === 'end' ? 'end' : 'middle'}
+				x={titleAnchor === 'start' ? 0 : titleAnchor === 'end' ? c.innerWidth : c.innerWidth / 2}
+				y={28}
+			>
 				{c.xLabel}
 			</text>
 		{/if}
