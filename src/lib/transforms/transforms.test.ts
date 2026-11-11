@@ -3,6 +3,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
 	filter,
+	having,
+	rank,
 	topN,
 	stack,
 	stackY,
@@ -15,7 +17,7 @@ import {
 import { TransformCompiler } from './TransformCompiler';
 import type { MarkConfig } from '$lib/types';
 import { bin, AutoBinNode } from '../sql/bin';
-import { Query, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
+import { Query, count, gt, sum, column, type SelectQuery } from '@uwdata/mosaic-sql';
 import { ObjectDataAccessor } from '$lib/data/DataAccessor';
 
 /** Helper: wrap plain objects as DataAccessor for tests. */
@@ -524,5 +526,58 @@ describe('topN with a getter count', () => {
 		const compiler = new TransformCompiler([topN(() => (reads++, 4))], config);
 		void compiler.specs;
 		expect(reads).toBe(1);
+	});
+});
+
+describe('SQL transforms that filter, and the ones that do not', () => {
+	// A preagg table groups the source rows away, so a transform that names source
+	// rows or aggregates over them cannot run on it as it runs on the base table.
+	// This pins down which transforms those are. Only the user-facing filter() and
+	// having() are: the built-ins wrap the grouped query in a subquery and add window
+	// functions or joins, which work the same on a preagg table's aggregated result.
+	const config: MarkConfig = { markType: 'bary', table: 'sales', x: 'x', y: 'y2' };
+	const grouped = () =>
+		Query.from('sales')
+			.select({ x: column('category'), y2: sum('revenue') })
+			.groupby(column('category'));
+
+	it('no built-in transform adds a HAVING; if one starts to, hasHaving() must know it', () => {
+		const builtIns = {
+			topN: topN(3),
+			'topN with Other': topN(3, { includeOthers: true }),
+			rank: rank({ axis: 'x', channel: 'y2', direction: 'desc' }),
+			stackY: stackY(),
+			normalize: normalize(),
+			dense: dense()
+		};
+		for (const [name, transform] of Object.entries(builtIns)) {
+			const compiler = new TransformCompiler([transform], config);
+			const sql = compiler.applyToQuery(grouped()).toString();
+			expect(sql, name).not.toMatch(/HAVING/i);
+			expect(compiler.hasHaving(), name).toBe(false);
+			expect(compiler.rowFilters(), name).toEqual([]);
+		}
+	});
+
+	it('having() is found by hasHaving() and emits the HAVING', () => {
+		const compiler = new TransformCompiler([having(gt(count(), 100))], config);
+		expect(compiler.hasHaving()).toBe(true);
+		expect(compiler.applyToQuery(grouped()).toString()).toMatch(/HAVING.*> 100/);
+	});
+
+	it('filter() is a row filter: found by rowFilters(), and left out when the table has it', () => {
+		const compiler = new TransformCompiler([filter(gt('revenue', 0)), topN(3)], config);
+		expect(compiler.hasHaving()).toBe(false);
+		expect(compiler.rowFilters()).toHaveLength(1);
+
+		const applied = compiler.applyToQuery(grouped()).toString();
+		expect(applied).toMatch(/WHERE.*revenue.*> 0/);
+		// The topN still runs; only the filter is left out.
+		const skipped = compiler
+			.applyToQuery(grouped(), undefined, { skipRowFilters: true })
+			.toString();
+		expect(skipped).not.toMatch(/revenue.*> 0/);
+		// The topN's own WHERE (on its rank) is not a row filter and stays.
+		expect(skipped).toMatch(/"__dplot_rank" <= 3/);
 	});
 });

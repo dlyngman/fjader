@@ -192,7 +192,9 @@ export function planPreagg(
 } | null {
 	const { parts, table, baseTable, schema } = descriptor;
 	if (!parts.hasAggregates && !parts.hasWindowAggregates) return null;
-	// A having() on a preagg table would count its groups, not the source rows.
+	// A having() on a preagg table would count its groups, not the source rows, and
+	// return the wrong rows without an error. The built-in transforms add none; see
+	// TransformCompiler.hasHaving for why, and for what supporting it would take.
 	if (descriptor.transformCompiler.hasHaving()) return null;
 
 	// Analyze selectDef for preagg compatibility
