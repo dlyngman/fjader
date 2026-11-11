@@ -14,7 +14,8 @@
 		MarginLabel
 	} from '$lib/components';
 
-	const filterGroup = getContext('filter-group');
+	// The group the brush and the bars write to and read (selection="brush" below).
+	const filterGroup = getContext('filter-groups')?.get('brush');
 </script>
 
 <div class="demo-container">
