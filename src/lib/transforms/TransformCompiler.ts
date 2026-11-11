@@ -1,4 +1,4 @@
-import type { SelectQuery } from '@uwdata/mosaic-sql';
+import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { Transform, SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 
@@ -46,11 +46,17 @@ export class TransformCompiler {
 	 * than of the mark — its GROUP BY keys, say — merged over the mark config for
 	 * this call only, so the shared config object is never written per query.
 	 */
-	applyToQuery(query: SelectQuery, facts?: Partial<MarkConfig>): SelectQuery {
+	applyToQuery(
+		query: SelectQuery,
+		facts?: Partial<MarkConfig>,
+		/** The row filters are already in the table the query reads (a preagg table). */
+		options?: { skipRowFilters?: boolean }
+	): SelectQuery {
 		let result = query;
 		const config = this.#configFor(facts);
 
 		for (const transform of this.sqlTransforms) {
+			if (options?.skipRowFilters && transform.where !== undefined) continue;
 			try {
 				result = transform.apply(result, config);
 			} catch (error) {
@@ -62,6 +68,23 @@ export class TransformCompiler {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Whether a SQL transform filters on the groups' aggregates (`having`). Its
+	 * condition names aggregates over the source rows, which a pre-aggregated table
+	 * would recompute over its own groups: a different answer, with no error.
+	 */
+	hasHaving(): boolean {
+		return this.sqlTransforms.some((t) => t.type === 'having');
+	}
+
+	/**
+	 * The row predicates of the SQL transforms (`filter`), for a pre-aggregated
+	 * table to be built with: its read cannot apply them (see SqlTransform.where).
+	 */
+	rowFilters(): ExprNode[] {
+		return this.sqlTransforms.flatMap((t) => (t.where === undefined ? [] : [t.where as ExprNode]));
 	}
 
 	/**

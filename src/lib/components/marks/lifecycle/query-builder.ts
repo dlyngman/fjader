@@ -114,6 +114,8 @@ export interface AssembleOptions {
 	filter?: unknown[];
 	transformCompiler: TransformCompiler;
 	limit?: number | null;
+	/** The table already has the mark's row filters (`filter()`) applied: a preagg table. */
+	skipRowFilters?: boolean;
 	/** When set, the inner query is wrapped in a CTE and these window
 	 *  functions are applied in the outer SELECT. ORDER BY / LIMIT move to
 	 *  the outer query. */
@@ -429,7 +431,7 @@ export function outerOrder(
 }
 
 export function assembleQuery(opts: AssembleOptions): Query {
-	const { table, parts, filter = [], transformCompiler, limit, window } = opts;
+	const { table, parts, filter = [], transformCompiler, limit, window, skipRowFilters } = opts;
 	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;
 
 	const q = Query.from(table).select(selectDef as Record<string, ExprNode>);
@@ -448,7 +450,7 @@ export function assembleQuery(opts: AssembleOptions): Query {
 
 	let result: Query = q;
 	if (hasSQLTransforms) {
-		result = transformCompiler.applyToQuery(q, { groupKeys: parts.groupKeys });
+		result = transformCompiler.applyToQuery(q, { groupKeys: parts.groupKeys }, { skipRowFilters });
 	}
 
 	if (window) {

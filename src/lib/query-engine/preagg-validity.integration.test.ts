@@ -7,13 +7,14 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
-import { column, count, isBetween, isIn, literal } from '@uwdata/mosaic-sql';
+import { column, count, eq, isBetween, isIn, literal } from '@uwdata/mosaic-sql';
 import { QueryEngine, type BrushActivation, type DuckDBConnection } from './QueryEngine';
 import { buildBinExpr } from './sufficient-statistics';
 import { buildColumnRef } from '$lib/interactors/brush-utils';
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { filter } from '$lib/transforms';
 import { buildQueryParts } from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
@@ -182,6 +183,40 @@ describe('preagg validity', () => {
 			expect(lastQuery()).toContain('__dplot_preagg_');
 			expect(rows()).toEqual(await expected(`x BETWEEN ${lo} AND ${hi}`));
 		}
+	});
+
+	it('a mark with filter() reads its preagg table through a brush drag: its filter is in the table', async () => {
+		const filtered = engine.registerMark(
+			'bars-filtered',
+			{
+				table: 't',
+				baseTable: 't',
+				parts: buildQueryParts({ g: column('g'), n: count() }, null, true),
+				schema: new Map(),
+				transformCompiler: new TransformCompiler([filter(eq('cat', literal('a')))]),
+				route: { reads: [], chart: CHART_B }
+			},
+			group
+		);
+		const first = filtered.dataVersion;
+		filtered.updateParams({ sort: undefined, limit: undefined });
+		await vi.waitFor(() => expect(filtered.dataVersion).toBeGreaterThan(first));
+
+		await activate();
+		const own = creates().filter((c) => c.includes("'a'"));
+		expect(own).toHaveLength(1);
+		expect(own[0]).toMatch(/WHERE.*"cat" = 'a'/);
+
+		const version = filtered.dataVersion;
+		brush().update(isBetween(column('x'), [100, 599]), [100, 599]);
+		await vi.waitFor(() => expect(filtered.dataVersion).toBeGreaterThan(version));
+		expect(warn.mock.calls.some((args) => String(args[0]).includes('preagg read failed'))).toBe(
+			false
+		);
+		const got = (filtered.arrowTable as unknown as Array<{ g: number; n: number }>)
+			.map((r): [number, number] => [r.g, r.n])
+			.sort((a, b) => a[0] - b[0]);
+		expect(got).toEqual(await expected(`cat = 'a' AND x BETWEEN 100 AND 599`));
 	});
 
 	it('bakes a toggle on the brushed chart, and its bin bounds stay finite', async () => {

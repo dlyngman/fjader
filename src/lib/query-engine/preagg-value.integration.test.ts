@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
-import { column, count, isBetween, sql } from '@uwdata/mosaic-sql';
+import { column, count, gt, isBetween, sql } from '@uwdata/mosaic-sql';
 import {
 	QueryEngine,
 	type DuckDBConnection,
@@ -17,7 +17,7 @@ import {
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { topN } from '$lib/transforms';
+import { filter, having, topN } from '$lib/transforms';
 import type { MarkConfig, Transform } from '$lib/types';
 import {
 	buildQueryParts,
@@ -349,6 +349,50 @@ describe('preagg for value dims', () => {
 		expect(rowsOf(raw)).toEqual(
 			await expected(`SELECT g, count(*) FROM t WHERE cat = 'a' AND g IS NOT NULL GROUP BY g`)
 		);
+	});
+
+	it("serves a mark with filter() from preagg: the mark's own filter is in the table, not the read", async () => {
+		// The table groups the source rows, so a WHERE on a raw column (x here, which
+		// the table does not hold) only works inside the build.
+		const transforms = {
+			transforms: [filter(gt('x', 499))],
+			config: { markType: 'bar', table: 't', x: 'g', y: 'n' } as MarkConfig
+		};
+		const hist = await mark('hist-filter', { g: column('g'), n: count() }, { transforms });
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(1);
+		expect(creates()[0]).toMatch(/WHERE.*"x" > 499/);
+
+		const legend = group.registerToggle('cat');
+		const from = nonDDL().length;
+		await settle([hist], () => legend.toggle(['a'], false));
+		expect(lastQueriesSince(from).at(-1)).toContain('__dplot_preagg_');
+		expect(warn.mock.calls.some((args) => String(args[0]).includes('preagg read failed'))).toBe(
+			false
+		);
+		expect(rowsOf(hist)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE x > 499 AND cat = 'a' GROUP BY g`)
+		);
+	});
+
+	it('reads the base table for a mark with having(): a table would count its groups, not the rows', async () => {
+		const transforms = {
+			transforms: [having(gt(count(), 100))],
+			config: { markType: 'bar', table: 't', x: 'g', y: 'n' } as MarkConfig
+		};
+		const hist = await mark('hist-having', { g: column('g'), n: count() }, { transforms });
+		await activateToggle(['cat']);
+		expect(creates()).toHaveLength(0);
+
+		const legend = group.registerToggle('cat');
+		const from = nonDDL().length;
+		await settle([hist], () => legend.toggle(['a'], false));
+		expect(lastQueriesSince(from).at(-1)).not.toContain('__dplot_preagg_');
+		// Each g holds 125 rows of cat 'a', over the threshold of 100.
+		expect(rowsOf(hist)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE cat = 'a' GROUP BY g HAVING count(*) > 100`)
+		);
+		expect(rowsOf(hist)).toHaveLength(4);
 	});
 
 	it('serves a selection of hundreds of values (a large Other) with a bitmap, not a long IN', async () => {

@@ -90,6 +90,13 @@ export interface SqlTransform {
 	/** Channel aliases this transform adds to the result beyond the base select (e.g. stack's y0/y1). */
 	channels?: string[];
 	/**
+	 * The row predicate this transform adds to the query, when that is all it does
+	 * (`filter`). It applies to the source rows, before any grouping, so a query
+	 * over a pre-aggregated table cannot apply it (the columns it names are gone):
+	 * the table is built with it instead, and the read leaves it out.
+	 */
+	where?: unknown;
+	/**
 	 * The channels whose values identify each row, leading term first, when this
 	 * transform guarantees exactly one row per combination of them — or null when
 	 * it makes no such guarantee for a query with these aliases.
