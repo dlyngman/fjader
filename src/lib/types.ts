@@ -335,6 +335,16 @@ export interface BaseMarkProps {
 	 */
 	selectionResponse?: SelectionResponse;
 	/**
+	 * Whether this mark adds its categories to a band axis's domain (default
+	 * `true`). `false`: the mark follows the axis the other marks on it decide
+	 * (their categories, their order); rows of categories the axis does not show
+	 * are not drawn. For a layer that gives context to another, such as the whole
+	 * behind a part. It cannot rank or reduce its own categories, so `topN`, `sort`
+	 * and an explicit `domain` are refused with it (an error is logged and the
+	 * mark contributes).
+	 */
+	contributeDomain?: boolean;
+	/**
 	 * What this mark does with NULL in its categorical channels: its band axis,
 	 * ordinal colour, series and facet.
 	 *

@@ -158,6 +158,7 @@ export interface ReactiveConfig {
 	readonly tip: (unknown | '*')[] | false | undefined;
 	readonly selectionResponse: SelectionResponse | undefined;
 	readonly nulls: NullsResponse | undefined;
+	readonly contributeDomain: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -921,8 +922,8 @@ export class MarkLifecycleV2 {
 					this.#config.select,
 					this.actualXScaleType,
 					this.actualYScaleType,
-					this.#chartContext.xScaleState as BandScaleState | null,
-					this.#chartContext.yScaleState as BandScaleState | null,
+					this.#bandScaleForDomain('x'),
+					this.#bandScaleForDomain('y'),
 					this.#chartContext.facetBandScale,
 					this.#chartContext.fx,
 					this.#config.colorChannel || 'fill',
@@ -1243,8 +1244,8 @@ export class MarkLifecycleV2 {
 				xState,
 				yState,
 				this.#bandDomainFromData,
-				this.#chartContext.xScaleState as BandScaleState | null,
-				this.#chartContext.yScaleState as BandScaleState | null,
+				this.#bandScaleForDomain('x'),
+				this.#bandScaleForDomain('y'),
 				this.#markId,
 				false, // isRebinning
 				this.#colorScaleState
@@ -1549,6 +1550,54 @@ export class MarkLifecycleV2 {
 		for (const scale of this.#otherScales) {
 			if (!otherScales.has(scale)) this.#releaseOther(scale);
 		}
+	}
+
+	#warnedFollow = false;
+
+	/**
+	 * Whether this mark follows its band axes instead of adding its categories to
+	 * them (`contributeDomain={false}`). It cannot also choose its own categories
+	 * or their order: a topN or a ranking would be what a follower exists not to
+	 * do, and an explicit domain is a contribution. Such a mark is refused, once,
+	 * and contributes as usual.
+	 */
+	get #followsDomain(): boolean {
+		if (this.#reactiveConfig.contributeDomain !== false) return false;
+		const reason = this.#transformCompiler.hasCategoryReducingTransforms()
+			? 'a category-reducing transform (topN)'
+			: this.#rankingSort
+				? 'a sort'
+				: this.#reactiveConfig.domain
+					? 'an explicit domain'
+					: null;
+		if (!reason) return true;
+		if (!this.#warnedFollow) {
+			this.#warnedFollow = true;
+			console.error(
+				`[${this.#markId}] Unsupported: contributeDomain={false} with ${reason}. A mark that ` +
+					`follows its band axis cannot choose its own categories or their order. It will ` +
+					`contribute to the domain as usual.`
+			);
+		}
+		return false;
+	}
+
+	/**
+	 * The band scale of an axis, for registering this mark's categories on it:
+	 * null for a mark that follows, so it registers nothing and withdraws what it
+	 * had (the prop can change). The scale still draws the mark's rows, only those
+	 * of categories it shows.
+	 */
+	#bandScaleForDomain(axis: 'x' | 'y'): BandScaleState | null {
+		const scale = (
+			axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+		) as BandScaleState | null;
+		// Only a band or point axis has categories to follow; a value axis is
+		// the mark's own.
+		const type = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+		if ((type !== 'band' && type !== 'point') || !this.#followsDomain) return scale;
+		scale?.removeMark(this.#markId);
+		return null;
 	}
 
 	/** What this mark's Other rows hold, and what is done with it. */
