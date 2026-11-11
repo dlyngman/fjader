@@ -194,6 +194,31 @@
 					</ChartContainer>
 				</div>
 			</div>
+
+			<div class="chart-panel">
+				<h3>7. titlePlacement="top"</h3>
+				<p class="desc">
+					Horizontal, above the plot at the axis, so it can't meet the tick labels. Default margin.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Category" yLabel="Revenue">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft titlePlacement="top" />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}

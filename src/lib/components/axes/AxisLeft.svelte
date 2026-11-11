@@ -20,9 +20,22 @@
 		 * clear of the widest tick label, as far as the chart's left margin allows.
 		 */
 		titleOffset?: number | 'auto';
+		/**
+		 * Where the title goes: `'side'` (default), rotated beside the tick labels, or
+		 * `'top'`, horizontal above the plot at the axis. `'top'` cannot meet the tick
+		 * labels, so it needs no `titleOffset` and no room in the left margin; it takes
+		 * the space above the plot (the chart's top margin).
+		 */
+		titlePlacement?: 'side' | 'top';
 	}
 
-	let { ticksNumber = 5, tickFormat = null, title = true, titleOffset = 32 }: Props = $props();
+	let {
+		ticksNumber = 5,
+		tickFormat = null,
+		title = true,
+		titleOffset = 32,
+		titlePlacement = 'side'
+	}: Props = $props();
 	const c = getContext<ChartContext>('chart');
 
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
@@ -108,12 +121,18 @@
 		{/if}
 
 		{#if title && c.yScale}
-			<text
-				text-anchor="middle"
-				transform={`translate(${-titleX}, ${c.innerHeight / 2}) rotate(-90)`}
-			>
-				{c.yLabel}
-			</text>
+			{#if titlePlacement === 'top'}
+				<text text-anchor="start" x={0} y={-18}>
+					{c.yLabel}
+				</text>
+			{:else}
+				<text
+					text-anchor="middle"
+					transform={`translate(${-titleX}, ${c.innerHeight / 2}) rotate(-90)`}
+				>
+					{c.yLabel}
+				</text>
+			{/if}
 		{/if}
 	</g>
 {/if}
