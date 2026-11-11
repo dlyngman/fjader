@@ -306,10 +306,10 @@
 		{y1Data}
 		colorValueData={markColor.data}
 		alphaData={opacityData}
-		splitData={setup?.otherSplit ?? null}
-		splitSlides={setup?.otherSplitSlides ?? true}
+		splitData={setup?.otherRows.split?.data ?? null}
+		splitSlides={setup?.otherRows.split?.slides ?? true}
 		splitAlongX={false}
-		otherColorOnBand={setup?.otherColorOnBand ?? false}
+		otherColorOnBand={setup?.otherRows.split?.colorOnBand ?? false}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		groupIndex={setup?.groupIndex ?? 0}
