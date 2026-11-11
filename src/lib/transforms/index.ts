@@ -28,6 +28,7 @@ export function filter(condition: ExprNode): SqlTransform {
 		stage: 'sql',
 		type: 'filter',
 		spec: { transform: 'filter', condition: condition.toString() },
+		where: condition,
 		apply(query: SelectQuery) {
 			return query.where(condition);
 		},

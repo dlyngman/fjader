@@ -112,6 +112,11 @@ export interface PreaggCreation {
 	groupby: ExprNode[];
 	orderby: ExprNode[];
 	/**
+	 * The mark's own row filters (`filter()`), applied to the source rows inside the
+	 * build: the table groups them away, so the read could not apply them.
+	 */
+	where: ExprNode[];
+	/**
 	 * Fields grouped by value inside and mapped to their ids on the grouped
 	 * result: `raw` is the inner column, `alias` the id column, `dim` the dim
 	 * table joined on value. Empty for every other table.
@@ -187,6 +192,10 @@ export function planPreagg(
 } | null {
 	const { parts, table, baseTable, schema } = descriptor;
 	if (!parts.hasAggregates && !parts.hasWindowAggregates) return null;
+	// A having() on a preagg table would count its groups, not the source rows, and
+	// return the wrong rows without an error. The built-in transforms add none; see
+	// TransformCompiler.hasHaving for why, and for what supporting it would take.
+	if (descriptor.transformCompiler.hasHaving()) return null;
 
 	// Analyze selectDef for preagg compatibility
 	const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels);
@@ -271,6 +280,7 @@ export function planPreagg(
 			groupby: [...preaggGroupBy, ...activeGroupBy] as ExprNode[],
 			// Sorted by bin columns for fast range scans
 			orderby: binOrder,
+			where: descriptor.transformCompiler.rowFilters(),
 			joins
 		},
 		outputSelect,
@@ -523,6 +533,8 @@ export function preaggQuerySQL(
 		parts: preaggParts,
 		filter: filters,
 		transformCompiler,
+		// The table was built with them.
+		skipRowFilters: true,
 		limit: params.limit,
 		window: windowChannels ? { channels: windowChannels, cteName: '__preagg_cte' } : null
 	}).toString();
@@ -531,7 +543,8 @@ export function preaggQuerySQL(
 /** A preagg table's SELECT. Build and validity check share it, so equal SQL means an equal table. */
 export function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[]): string {
 	const query = Query.from(creation.table).select(creation.select).groupby(creation.groupby);
-	if (filters.length > 0) query.where(and(filters as ExprNode[]));
+	const where = [...creation.where, ...(filters as ExprNode[])];
+	if (where.length > 0) query.where(and(where));
 	if (creation.joins.length === 0) return query.orderby(creation.orderby).toString();
 
 	// Map fields grouped by value to their ids on the grouped result: a join
