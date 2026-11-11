@@ -95,7 +95,8 @@
 		if (!point) return [];
 		if (displayFields) return displayFields.filter((k) => k in point);
 		if (fields) return fields.filter((k) => k in point);
-		return Object.keys(point);
+		// Keys starting with `_` are kept for clicks (a band's raw id), never shown.
+		return Object.keys(point).filter((k) => !k.startsWith('_'));
 	});
 
 	// Scale-aware formatters for numeric values (same as MarginLabel)

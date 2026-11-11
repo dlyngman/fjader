@@ -70,7 +70,7 @@
 	function bandCategoryAt(
 		axis: 'x' | 'y',
 		innerPos: number
-	): { field: string; value: unknown } | null {
+	): { field: string; value: unknown; otherId: number | null } | null {
 		if (chart.scaleTypes?.[axis] !== 'band') return null;
 		const bandState = chart[`${axis}ScaleState`] as BandScaleState;
 		const extent = axis === 'x' ? chart.innerWidth : chart.innerHeight;
@@ -79,7 +79,28 @@
 		const id = bandState.idAtSlot(slot);
 		// undefined is "no category here"; null is the NULL category, a real one.
 		const value = id == null ? undefined : bandState.categoryAt(id);
-		return value === undefined ? null : { field: bandState.sourceField, value };
+		if (value === undefined) return null;
+		// The axis's Other bucket: its label is no value, so the click selects
+		// what it holds instead.
+		const otherId = id != null && id === bandState.otherId ? id : null;
+		return { field: bandState.sourceField, value, otherId };
+	}
+
+	/**
+	 * The Other bucket an inner click hit, or null: the hit row's band id on an
+	 * axis of the declared field, when it is that axis's Other. The label in
+	 * the row can't say, so the tooltip keeps the raw id beside it.
+	 */
+	function otherHit(point: Record<string, unknown>): number | null {
+		if (!declaredField) return null;
+		for (const axis of ['x', 'y'] as const) {
+			if (chart.scaleTypes?.[axis] !== 'band') continue;
+			const bandState = chart[`${axis}ScaleState`] as BandScaleState;
+			if (bandState.sourceField !== declaredField) continue;
+			const id = point[axis === 'x' ? '__bandIdX' : '__bandIdY'];
+			if (typeof id === 'number' && id === bandState.otherId) return id;
+		}
+		return null;
 	}
 
 	chart.onChartClick = (event) => {
@@ -91,6 +112,12 @@
 		// Path 1: Inner area click — use tooltip hit data (don't require visible —
 		// pointer micro-movement during click hides tooltip but data stays valid)
 		if (xInBounds && yInBounds && tm?.currentPoint) {
+			const otherId = otherHit(tm.currentPoint);
+			if (otherId !== null) {
+				const facetId = tm.currentPoint.__facetId;
+				declared.toggleOther(otherId, typeof facetId === 'number' ? facetId : null, isMulti);
+				return;
+			}
 			const tuple = fields.map((f) => tm.currentPoint![f]);
 			// A missing field is undefined; null is the NULL category, selectable.
 			if (tuple.some((v) => v === undefined)) return;
@@ -106,7 +133,9 @@
 					? bandCategoryAt('x', innerPoint.x)
 					: null;
 		if (hit) {
-			toggleFor(hit.field)?.toggle([hit.value], isMulti);
+			const toggle = toggleFor(hit.field);
+			if (hit.otherId !== null) toggle?.toggleOther(hit.otherId, null, isMulti);
+			else toggle?.toggle([hit.value], isMulti);
 			return;
 		}
 

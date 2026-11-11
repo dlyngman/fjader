@@ -351,6 +351,25 @@ describe('preagg for value dims', () => {
 		);
 	});
 
+	it('serves a selection of hundreds of values (a large Other) with a bitmap, not a long IN', async () => {
+		// big: 100 000 rows, 1 000 values of x, so a table grouped by x pays off.
+		await engine.ensureColumns('big', { categorical: ['x'] });
+		const hist = await mark('hist-many', { g: column('g'), n: count() }, { baseTable: 'big' });
+		await activateToggle(['x']);
+
+		const toggle = group.registerToggle('x');
+		const picked = Array.from({ length: 300 }, (_, i) => i * 3);
+		const from = nonDDL().length;
+		await settle([hist], () => toggle.set(picked.map((v) => [v])));
+		const last = lastQueriesSince(from).at(-1)!;
+		expect(last).toContain('__dplot_preagg_');
+		expect(last).toContain('get_bit(');
+		expect(last).not.toMatch(/NOT IN/);
+		expect(rowsOf(hist)).toEqual(
+			await expected(`SELECT g, count(*) FROM big WHERE x IN (${picked.join(',')}) GROUP BY g`)
+		);
+	});
+
 	it('a legend hover builds no table for a mark that reads the field, which dims instead', async () => {
 		const view = engine.identitySourceFor('t');
 		const bars = await mark(

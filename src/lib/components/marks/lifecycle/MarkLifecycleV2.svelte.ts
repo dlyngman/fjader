@@ -37,7 +37,12 @@ import {
 import type { ExprNode, ExprValue, FilterExpr, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
+import {
+	OTHER_IDS_COLUMN,
+	withDenseCategories,
+	withoutOtherMembers,
+	withRanking
+} from '$lib/transforms';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -65,6 +70,7 @@ import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
+import type { OtherEntry } from '$lib/query-engine/FieldActivity.svelte';
 import {
 	activityReads,
 	groupIndexForResponse,
@@ -578,7 +584,8 @@ export class MarkLifecycleV2 {
 		if (this.#destroyed) return;
 		this.#identityFields.clear();
 		// The Other ids name rows of the dropped dims. Every holder lets go, so
-		// the scale acquires afresh when setup re-runs.
+		// the scale acquires afresh when setup re-runs; so do the registered rows.
+		this.#unregisterOtherMembers();
 		for (const scale of [...this.#otherScales]) this.#releaseOther(scale);
 		// Every dim it names just went away — topN must not bucket into one.
 		this.#setIdentity(null);
@@ -753,6 +760,7 @@ export class MarkLifecycleV2 {
 
 			untrack(() => {
 				this.#handleDataDomains(dv);
+				this.#registerOtherMembers();
 			});
 		});
 
@@ -1526,6 +1534,56 @@ export class MarkLifecycleV2 {
 		}
 	}
 
+	/**
+	 * Register this result's Other rows with their field: what each Other bucket
+	 * holds, per facet cell, for a click on it to select (FieldActivity.setOther).
+	 * Per result, so the members follow the filters the mark receives. A mark
+	 * filtered by the selection (`'filter'`) registers with no group, which is
+	 * how a click on its Other knows to drill down rather than toggle off.
+	 */
+	#registerOtherMembers(): void {
+		const table = this.#handle?.arrowTable ?? null;
+		const identity = this.#identity;
+		const group =
+			this.#reactiveConfig.selectionResponse === 'filter' ? null : this.#filterGroup.index;
+		const now = new Map<string, number>();
+		const ids = table?.getChild(OTHER_IDS_COLUMN) ?? null;
+		if (table && identity && ids) {
+			const facets = table.getChild('__facet');
+			for (const axis of ['x', 'y'] as const) {
+				const otherId = identity[axis]?.otherId;
+				const key = this.#identityKey(axis)?.key;
+				const band = table.getChild(axis);
+				if (otherId == null || !key || !band) continue;
+				const rows: OtherEntry['rows'] = [];
+				for (let i = 0; i < table.numRows; i++) {
+					if (Number(band.at(i)) !== otherId) continue;
+					const members = ids.at(i) as ArrayLike<number> | null;
+					if (!members) continue;
+					rows.push({ facetId: facets ? Number(facets.at(i)) : null, ids: members });
+				}
+				this.#filterGroup.activity(key).setOther(otherId, this.#markId, { group, rows });
+				now.set(key, otherId);
+			}
+		}
+		// A field or bucket this mark no longer draws an Other on gives its rows up.
+		for (const [key, otherId] of this.#otherRegistered) {
+			if (now.get(key) !== otherId)
+				this.#filterGroup.activity(key).setOther(otherId, this.#markId, null);
+		}
+		this.#otherRegistered = now;
+	}
+
+	/** The (field, Other id) pairs this mark has rows registered under. */
+	#otherRegistered = new Map<string, number>();
+
+	#unregisterOtherMembers(): void {
+		for (const [key, otherId] of this.#otherRegistered) {
+			this.#filterGroup.activity(key).setOther(otherId, this.#markId, null);
+		}
+		this.#otherRegistered = new Map();
+	}
+
 	/** The band scales whose Other bucket this mark holds a claim on. */
 	#otherScales = new Set<BandScaleState>();
 
@@ -2269,6 +2327,7 @@ export class MarkLifecycleV2 {
 		this.#destroyed = true;
 		this.#identityResetOff?.();
 		this.#identityResetOff = null;
+		this.#unregisterOtherMembers();
 		for (const scale of [...this.#otherScales]) this.#releaseOther(scale);
 		this.#handle?.destroy();
 		clearTimeout(this.#fitDomainTimeout!);

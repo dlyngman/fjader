@@ -438,6 +438,42 @@
 					</ChartContainer>
 				</div>
 			</div>
+			<!-- Chart 10: what chart 8's Other selects -->
+			<div class="chart-panel">
+				<h3>10. Every category of chart 8's data — in chart 8's group</h3>
+				<p class="desc">
+					No topN: all ten categories and "(null)". Click Other in chart 8 (its bar, its axis label
+					or its legend entry): here exactly the six categories it holds stay lit, Toys through
+					Music (chart 8's top 5 includes "(null)"), and the rest dim. Click Other again to take
+					them back; shift-click adds to a selection. (Chart 8's own Other bar lights with phase 5.)
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Every category" yLabel="Revenue">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="top_n_nulls"
+										x="category"
+										y={sum('revenue')}
+										fill="category"
+										sort={{ x: 'y', order: 'desc' }}
+										selection="nulls"
+										tooltip
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}

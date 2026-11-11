@@ -735,6 +735,12 @@ export class TooltipManager {
 		for (let i = 0; i < entries.length; i++) {
 			const [key, value] = entries[i];
 
+			// The facet cell's dim id, kept for a click (Toggle reads it to pick the
+			// clicked cell's Other); not displayed: `_` keys never are.
+			if (key === '__facet') {
+				point.__facetId = value;
+				continue;
+			}
 			// Skip internal columns
 			if (key.startsWith('_') || key.startsWith('__dplot_')) continue;
 
@@ -757,6 +763,9 @@ export class TooltipManager {
 				// (Toggle selects it) rather than fall back to the raw id.
 				const category = this.#bandScale(key)?.categoryAt(value as number);
 				point[fieldName] = category === undefined ? value : category;
+				// The raw id beside it: a label can't name an Other bucket (several
+				// share one, and it is no value), so a click on Other reads this.
+				point[key === 'x' ? '__bandIdX' : '__bandIdY'] = value;
 				continue;
 			}
 

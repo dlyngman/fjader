@@ -7,6 +7,20 @@ import {
 import type { FieldIdentity } from './categorical-identity';
 
 /** What a FieldActivity needs from the page around it. */
+/** One mark's Other rows for one bucket: what a click on it selects. */
+export interface OtherEntry {
+	/** The mark's filter group, or null when it is filtered by the selection (`'filter'`). */
+	group: number | null;
+	/** One per Other row: a facet cell (null without facets) and its folded ids. */
+	rows: { facetId: number | null; ids: ArrayLike<number> }[];
+}
+
+/** What a click on Other does to a selection: values to set, add or remove. */
+export interface OtherClick {
+	action: 'replace' | 'add' | 'remove';
+	values: unknown[];
+}
+
 export interface FieldActivityHost {
 	/** Drives the fades; null in unit tests and before a coordinator exists, and fades land at once. */
 	readonly loop: ClockLoop | null;
@@ -193,6 +207,99 @@ export class FieldActivity {
 			return 1;
 		}
 		return values.has(identity.values[id]) ? 1 : inactiveOpacity;
+	}
+
+	// -----------------------------------------------------------------
+	// Other buckets: what each one holds, for a click to select
+	// -----------------------------------------------------------------
+
+	/**
+	 * Every Other bucket's members, by its id and the mark that drew it. Each
+	 * mark registers its Other rows per result (`setOther`): the folded ids its
+	 * query returned, per facet cell. A click on Other reads them, so what it
+	 * selects is exactly what the bar summed.
+	 */
+	#others = new Map<number, Map<string, OtherEntry>>();
+	/**
+	 * What an Other click contributed to a group's selection, by `group:otherId`:
+	 * how a second click on the same Other knows what to take back. Dropped with
+	 * the id's last entry, so a reused id starts with no memory.
+	 */
+	#otherMemory = new Map<string, ReadonlySet<unknown>>();
+
+	/** Register `markId`'s Other rows under `otherId`; null removes them. */
+	setOther(otherId: number, markId: string, entry: OtherEntry | null): void {
+		let byMark = this.#others.get(otherId);
+		if (entry) {
+			if (!byMark) this.#others.set(otherId, (byMark = new Map()));
+			byMark.set(markId, entry);
+			return;
+		}
+		if (!byMark?.delete(markId) || byMark.size > 0) return;
+		this.#others.delete(otherId);
+		for (const memKey of [...this.#otherMemory.keys()]) {
+			if (memKey.endsWith(`:${otherId}`)) this.#otherMemory.delete(memKey);
+		}
+	}
+
+	/**
+	 * What a click on Other `otherId` does to group `group`'s selection, given
+	 * the values it holds now (`current`), and records it. Null when nothing is
+	 * registered under the id (no result yet) or it holds no members.
+	 *
+	 * - The members: every registered row under the id, or only facet cell
+	 *   `facetId`'s when the click came from a cell.
+	 * - Shift-click adds them, or takes back what this Other added before if it
+	 *   is still selected.
+	 * - A plain click on an Other whose marks all filter by the selection (no
+	 *   group: `'filter'`) drills down, replacing the selection: such an Other is
+	 *   computed inside the selection, so a second click means "the rest of it".
+	 * - Otherwise a plain click toggles: it takes back what this Other added if
+	 *   that is still selected, and replaces the selection with the members if not.
+	 */
+	otherClick(
+		group: number,
+		otherId: number,
+		facetId: number | null,
+		current: ReadonlySet<unknown>,
+		multi: boolean
+	): OtherClick | null {
+		const entries = this.#others.get(otherId);
+		const identity = this.#host.identityOf(this.key);
+		if (!entries || entries.size === 0 || !identity) return null;
+
+		const members = new Set<unknown>();
+		let drill = true;
+		for (const entry of entries.values()) {
+			if (entry.group !== null) drill = false;
+			for (const row of entry.rows) {
+				if (facetId !== null && row.facetId !== facetId) continue;
+				for (let i = 0; i < row.ids.length; i++) {
+					const id = row.ids[i];
+					if (identity.synthetic.has(id)) continue;
+					const value = identity.values[id];
+					if (value !== undefined) members.add(value);
+				}
+			}
+		}
+		if (members.size === 0) return null;
+
+		const memKey = `${group}:${otherId}`;
+		const before = this.#otherMemory.get(memKey);
+		const stillSelected = !!before && before.size > 0 && [...before].every((v) => current.has(v));
+
+		if (stillSelected && (multi || !drill)) {
+			this.#otherMemory.delete(memKey);
+			return { action: 'remove', values: [...before!] };
+		}
+		if (!multi) {
+			// A replace: what any other Other added is gone from the selection.
+			for (const key of [...this.#otherMemory.keys()]) {
+				if (key.startsWith(`${group}:`)) this.#otherMemory.delete(key);
+			}
+		}
+		this.#otherMemory.set(memKey, members);
+		return { action: multi ? 'add' : 'replace', values: [...members] };
 	}
 
 	#group(index: number): GroupFade {

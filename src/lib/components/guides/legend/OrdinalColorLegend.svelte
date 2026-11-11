@@ -65,7 +65,7 @@
 		id: number | null;
 		value: DimValue;
 		color: string;
-		/** An Other bucket: shown, not clickable (it names no value). */
+		/** An Other bucket: a click selects what it holds (see toggleOther). */
 		bucket: boolean;
 	}
 
@@ -128,8 +128,11 @@
 	onDestroy(() => toggle?.destroy());
 
 	// Shift/meta-click adds or removes; selecting every value clears instead.
-	function handleClick(value: DimValue, event: MouseEvent) {
-		toggle?.toggle([value], event.shiftKey || event.metaKey, scaleState.domain.length);
+	function handleClick(item: Item, event: MouseEvent) {
+		const multi = event.shiftKey || event.metaKey;
+		// An Other bucket names no value: the click selects what it holds.
+		if (item.bucket && item.id !== null) toggle?.toggleOther(item.id, null, multi);
+		else toggle?.toggle([item.value], multi, scaleState.domain.length);
 	}
 </script>
 
@@ -149,11 +152,11 @@
 	>
 		{#each items as item (item.id ?? item.value)}
 			{@const { value, color } = item}
-			{#if isInteractive && !item.bucket}
+			{#if isInteractive}
 				<button
 					class="legend-item legend-item-interactive"
 					style:opacity={opacityOf(item)}
-					onclick={(e) => handleClick(value, e)}
+					onclick={(e) => handleClick(item, e)}
 				>
 					<span
 						class="legend-swatch"

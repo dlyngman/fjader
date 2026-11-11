@@ -25,7 +25,7 @@ import {
 	type ExprNode,
 	type WindowNode
 } from '@uwdata/mosaic-sql';
-import { togglePredicate } from '../toggle-predicate';
+import { BITMAP_MIN_IDS, idBitmapPredicate, togglePredicate } from '../toggle-predicate';
 import {
 	rewriteForPreagg,
 	buildBinExpr,
@@ -452,8 +452,9 @@ export function preaggQuerySQL(
 		}
 		if (valueExprs && valueMeta) {
 			// A toggle's clause holds tuples in its field order. Id columns
-			// filter by id; a value with no id (NULL, or not in the dim) cannot
-			// be expressed, so this query goes to the base table instead.
+			// filter by id (the NULL category has one); a value with no id (not in
+			// the dim yet) cannot be expressed, so this query goes to the base
+			// table instead.
 			const tuples: unknown[][] = [];
 			for (const tuple of clause.value as unknown[][]) {
 				const mapped: unknown[] = [];
@@ -465,7 +466,22 @@ export function preaggQuerySQL(
 				}
 				tuples.push(mapped);
 			}
-			filters.push(togglePredicate(valueExprs, tuples));
+			// One field by id, and many of them (a click on a large Other): a
+			// constant-size bitmap rather than a long IN list, which DuckDB spends
+			// most of its time parsing. Measured on a preagg table: 1 ms against
+			// 20 ms for IN of 9 000 ids.
+			const only = valueMeta.length === 1 ? valueMeta[0] : null;
+			if (only?.byId && tuples.length > BITMAP_MIN_IDS) {
+				filters.push(
+					idBitmapPredicate(
+						valueExprs[0],
+						tuples.map((t) => t[0] as number),
+						identity.identity(only.field).values.length
+					)
+				);
+			} else {
+				filters.push(togglePredicate(valueExprs, tuples));
+			}
 		}
 	}
 
