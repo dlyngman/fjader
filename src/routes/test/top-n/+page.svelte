@@ -445,7 +445,10 @@
 					No topN: all ten categories and "(null)". Click Other in chart 8 (its bar, its axis label
 					or its legend entry): here exactly the six categories it holds stay lit, Toys through
 					Music (chart 8's top 5 includes "(null)"), and the rest dim. Click Other again to take
-					them back; shift-click adds to a selection. (Chart 8's own Other bar lights with phase 5.)
+					them back; shift-click adds to a selection. Click a bar or label here to select one
+					category: chart 8's Other lights if it holds it (Toys through Music), and dims if not
+					(Electronics). Chart 8's own Other bar stays lit while the selection holds any of its
+					members.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Every category" yLabel="Revenue">
@@ -470,6 +473,9 @@
 									/>
 								{/snippet}
 							</WebGPUCanvas>
+						{/snippet}
+						{#snippet interactors()}
+							<Toggle selection="nulls" field="category" />
 						{/snippet}
 					</ChartContainer>
 				</div>

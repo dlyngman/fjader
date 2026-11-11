@@ -142,3 +142,50 @@ describe('ToggleHandle.toggleOther', () => {
 		expect(new Set(toggle.values)).toEqual(new Set(['a']));
 	});
 });
+
+describe('FieldActivity: an Other bucket is lit while the selection reaches into it', () => {
+	const fade = (activity: FieldActivity, id: number) =>
+		(activity.fadeOf(0) as { activityOf(id: number): number }).activityOf(id);
+
+	it('lights the bucket when a member is selected, and dims it when none is', () => {
+		const activity = new FieldActivity('f', host(identity()));
+		activity.setOther(OTHER, 'bar', { group: 0, rows: [{ facetId: null, ids: [2, 3] }] });
+		activity.set(0, new Set(['c']));
+		expect(fade(activity, OTHER)).toBe(1);
+		expect(fade(activity, 0)).toBe(0);
+		activity.set(0, new Set(['a']));
+		expect(fade(activity, OTHER)).toBe(0);
+		activity.set(0, null);
+		expect(fade(activity, OTHER)).toBe(1);
+	});
+
+	it("is not lit by a mark that is filtered by the selection ('filter')", () => {
+		const activity = new FieldActivity('f', host(identity()));
+		activity.setOther(OTHER, 'bar', { group: null, rows: [{ facetId: null, ids: [2, 3] }] });
+		activity.set(0, new Set(['c']));
+		expect(fade(activity, OTHER)).toBe(0);
+	});
+
+	it('follows a new result: the same selection lights it once the bucket holds a member', () => {
+		const activity = new FieldActivity('f', host(identity()));
+		activity.setOther(OTHER, 'bar', { group: 0, rows: [{ facetId: null, ids: [2, 3] }] });
+		activity.set(0, new Set(['a']));
+		expect(fade(activity, OTHER)).toBe(0);
+		// A brush elsewhere re-ranked the chart: 'a' now falls into Other.
+		activity.setOther(OTHER, 'bar', { group: 0, rows: [{ facetId: null, ids: [0, 3] }] });
+		expect(fade(activity, OTHER)).toBe(1);
+		// The bucket goes: nothing lights it.
+		activity.setOther(OTHER, 'bar', null);
+		expect(fade(activity, OTHER)).toBe(0);
+	});
+
+	it('leaves no stale mark between updates', () => {
+		const activity = new FieldActivity('f', host(identity()));
+		activity.setOther(OTHER, 'bar', { group: 0, rows: [{ facetId: null, ids: [2] }] });
+		activity.set(0, new Set(['c']));
+		expect(fade(activity, OTHER)).toBe(1);
+		// 'c' is no longer selected; a mask left set at id 2 would keep Other lit.
+		activity.set(0, new Set(['a']));
+		expect(fade(activity, OTHER)).toBe(0);
+	});
+});
