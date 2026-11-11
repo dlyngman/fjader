@@ -32,6 +32,11 @@ export * from './transforms';
 export * from './sql/bin';
 export * from './types';
 
+// Selection state: the registry initFjader() returns, for code outside it (is anything
+// brushed? which groups exist?). Read from the same context.
+export { getFilterGroups } from '$lib/query-engine';
+export type { FilterGroupRegistry, FilterGroup, FilterItem } from '$lib/query-engine';
+
 // Spec-driven rendering API
 export { Fjader, render } from './spec';
 export type { FjaderSpec, FjaderHandle, RenderOptions } from './spec';

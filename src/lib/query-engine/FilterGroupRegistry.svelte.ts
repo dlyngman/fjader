@@ -17,6 +17,18 @@ import type { QueryEngine } from './QueryEngine';
 
 export class FilterGroupRegistry {
 	#groups = new Map<string, FilterGroup>();
+
+	/**
+	 * The groups in creation order, as a reactive reader sees them: the names and
+	 * the groups, each a new array when a group is created (never mutated), so a
+	 * reader re-renders. Written in a microtask, not by `get`: templates and
+	 * deriveds call `get`, where writing state throws (`state_unsafe_mutation`). A
+	 * reader of `has`, `isActive`, `names` or `groups` re-runs one microtask after a
+	 * group appears; the plain `#groups` is current at once.
+	 */
+	#names = $state.raw<readonly string[]>([]);
+	#all = $state.raw<readonly FilterGroup[]>([]);
+	#announcing = false;
 	#engine: QueryEngine | null = null;
 
 	#fields = new Map<string, FieldActivity>();
@@ -75,13 +87,56 @@ export class FilterGroupRegistry {
 			g = new FilterGroup(this.#groups.size, (field) => this.field(field));
 			if (this.#engine) g.setEngine(this.#engine);
 			this.#groups.set(key, g);
+			this.#announce();
 		}
 		return g;
 	}
 
-	/** Check if a named group exists (without creating it). */
-	has(name: string): boolean {
-		return this.#groups.has(name);
+	/** Publish the groups to reactive readers, once per microtask however many were created. */
+	#announce(): void {
+		if (this.#announcing) return;
+		this.#announcing = true;
+		queueMicrotask(() => {
+			this.#announcing = false;
+			this.#names = [...this.#groups.keys()];
+			this.#all = [...this.#groups.values()];
+		});
+	}
+
+	/**
+	 * Whether a named group exists, without creating it. Reactive: a reader re-runs
+	 * when the group is created. (`get` creates, and a group created inside the
+	 * reading derived is state that derived cannot track.)
+	 */
+	has(name?: string | null): boolean {
+		void this.#names;
+		return this.#groups.has(name ?? 'default');
+	}
+
+	/**
+	 * Whether a named group has a selection (a brush, a toggle, a legend), without
+	 * creating it: false for a group no chart has made yet. Reactive in both the
+	 * group appearing and its clauses changing, so `$derived(groups.isActive('brush'))`
+	 * is safe before any chart exists.
+	 */
+	isActive(name?: string | null): boolean {
+		void this.#names;
+		const group = this.#groups.get(name ?? 'default');
+		return group ? group.activeCount > 0 : false;
+	}
+
+	/**
+	 * The names of the groups, in creation order. Reactive; a new array when a
+	 * group is created. For app code that must reach every group the page's marks
+	 * use, such as a clause that applies to the whole page.
+	 */
+	get names(): readonly string[] {
+		return this.#names;
+	}
+
+	/** The groups, in the order of `names`. Reactive in the same way. */
+	get groups(): readonly FilterGroup[] {
+		return this.#all;
 	}
 
 	/** How many groups the page has: the packer writes one activity half per group. */
