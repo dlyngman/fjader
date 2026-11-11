@@ -129,3 +129,28 @@ describe('activity reads', () => {
 		expect(check).toBeLessThan(firstRead);
 	});
 });
+
+describe('an Other row reads no activity on its own field', () => {
+	it('drops the band terms, and colour when colour is the band field', async () => {
+		const { otherRowActivityWGSL, activityReads } = await import('./activity-reads');
+		const wgsl = otherRowActivityWGSL(activityReads('rects'), {
+			color: 'c',
+			group: 'g',
+			skipColor: 'flag'
+		});
+		expect(wgsl).not.toMatch(/bandActivity/);
+		expect(wgsl).toBe('markActivity(select(markColorActivity(c, g), 1.0, flag), 1.0, 1.0)');
+	});
+
+	it('Rects uses it for Other rows and splits in the fragment, after an unconditional fwidth', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { fileURLToPath } = await import('node:url');
+		const source = readFileSync(fileURLToPath(new URL('./Rects.svelte', import.meta.url)), 'utf8');
+		expect(source).toContain('@group(1) @binding(7) var<storage, read> splitValues');
+		expect(source).toContain('selectionDim(select(activity, otherActivity, isOther))');
+		const fragment = source.slice(source.indexOf('fn fragmentMain'));
+		expect(fragment.indexOf('fwidth(input.along)')).toBeGreaterThan(-1);
+		expect(fragment.indexOf('fwidth(input.along)')).toBeLessThan(fragment.indexOf('if ('));
+		expect(fragment).toContain('finalAlpha *= selectionDim(lit)');
+	});
+});

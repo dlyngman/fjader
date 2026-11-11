@@ -305,6 +305,9 @@
 		{y1Data}
 		colorValueData={markColor.data}
 		alphaData={opacityData}
+		splitData={setup?.otherSplit ?? null}
+		splitAlongX={true}
+		otherColorOnBand={setup?.otherColorOnBand ?? false}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		groupIndex={setup?.groupIndex ?? 0}

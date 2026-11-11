@@ -106,6 +106,15 @@ export class FieldActivity {
 		return this.#identity ? this.#identity.values.length : 0;
 	}
 
+	/**
+	 * Group `index`'s selected values, or null when it selects nothing on this
+	 * field. Reactive: a reader re-runs when the selection changes.
+	 */
+	selectedValues(index: number): ReadonlySet<unknown> | null {
+		void this.#groupsVersion;
+		return this.#groups[index]?.values ?? null;
+	}
+
 	/** Group `index`'s fade, or null when that group never selected on this field. */
 	fadeOf(index: number): ActivityTable | null {
 		return this.#groups[index]?.table ?? null;

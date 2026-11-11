@@ -5,7 +5,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
-	import { activityReads, markActivityWGSL } from './activity-reads';
+	import { activityReads, markActivityWGSL, otherRowActivityWGSL } from './activity-reads';
 
 	const rectRendererDefinition = {
 		x: { concept: 'extent', channels: ['x0', 'x1'] },
@@ -21,7 +21,18 @@
 		Y1: 3,
 		COLOR: 4,
 		ALPHA: 5,
-		CONSTANTS: 6
+		CONSTANTS: 6,
+		/**
+		 * An Other bar's selected share, per row: 0 on rows that are not an Other
+		 * (so the zero-filled stand-in buffer means "no split anywhere"), `1 +
+		 * share` on one. Morphed with the bar's length.
+		 *
+		 * The vertex stage's 8th storage buffer: six channels, the identity slot
+		 * table and this fill WebGPU's default maxStorageBuffersPerShaderStage. A
+		 * further per-row channel needs another container (an instance vertex
+		 * attribute) or a raised device limit.
+		 */
+		SPLIT: 7
 	};
 
 	// Facet uses vertex buffer slot 1 (not a storage binding)
@@ -35,8 +46,9 @@
 		GROUP_INDEX: 12,
 		CONSTANT_COLOR: 16,
 		DX: 32,
-		DY: 36
-		// 40-47: padding for 16-byte alignment
+		DY: 36,
+		OTHER_COLOR_ON_BAND: 40,
+		SPLIT_ALONG_X: 44
 	};
 
 	interface Props {
@@ -46,6 +58,16 @@
 		y1Data: Float32Array;
 		colorValueData: Float32Array | null;
 		alphaData: Float32Array | null;
+		/**
+		 * The Other bar's selected share per row (see BINDINGS.SPLIT), or null for
+		 * none: a bar mark with a topN Other bucket passes its lifecycle's
+		 * `otherSplit`. The fragment draws the bar above the share dimmed.
+		 */
+		splitData?: Float32Array | null;
+		/** The bars run along x (horizontal bars), so the split is along x. */
+		splitAlongX?: boolean;
+		/** Colour is the band's own field: an Other row's colour term is skipped too. */
+		otherColorOnBand?: boolean;
 		facetData?: Float32Array | null;
 		dataVersion: number;
 		zIndex?: number;
@@ -77,6 +99,9 @@
 		y1Data,
 		colorValueData,
 		alphaData,
+		splitData = null,
+		splitAlongX = false,
+		otherColorOnBand = false,
 		facetData = null,
 		dataVersion,
 		zIndex = 0,
@@ -137,8 +162,8 @@
       constantColor: vec4<f32>, // Used when colorMode = 0
       dx: f32,                  // Horizontal pixel offset
       dy: f32,                  // Vertical pixel offset
-      _pad1: f32,
-      _pad2: f32,
+      otherColorOnBand: u32,    // 1: an Other row skips its colour activity too
+      splitAlongX: u32,         // 1: an Other bar splits along x (horizontal bars)
     };
     @group(1) @binding(6) var<uniform> markConstants: MarkConstants;
 
@@ -146,6 +171,10 @@
       @builtin(position) position: vec4<f32>,
       @location(0) colorValue: f32,   // Raw value for scale lookup
       @location(1) alpha: f32,
+      // The Other bar's selected share, or -1 on every other row; and where this
+      // fragment sits along the bar, 0 at its base, 1 at its end.
+      @location(2) @interpolate(flat) share: f32,
+      @location(3) along: f32,
     };
 
     @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
@@ -154,6 +183,7 @@
     @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
     @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
     @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
+    @group(1) @binding(7) var<storage, read> splitValues: array<f32>;
 
     @vertex
     fn vertexMain(
@@ -190,19 +220,32 @@
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
-      output.alpha = alpha * selectionDim(
-        ${markActivityWGSL(ACTIVITY_READS, {
-					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
-					x: 'x0',
-					y: 'y0',
-					group: 'markConstants.groupIndex'
-				})}
-      );
+      // An Other row (split > 0) is dimmed by its share, in the fragment, rather
+      // than by its own field's activity: the rest of its activity still applies.
+      let split = splitValues[instanceIdx];
+      let isOther = split > 0.5;
+      output.share = select(-1.0, split - 1.0, isOther);
+      output.along = select(rectCorner.y, rectCorner.x, markConstants.splitAlongX == 1u);
+      let activity = ${markActivityWGSL(ACTIVITY_READS, {
+				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+				x: 'x0',
+				y: 'y0',
+				group: 'markConstants.groupIndex'
+			})};
+      let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
+				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+				group: 'markConstants.groupIndex',
+				skipColor: 'markConstants.otherColorOnBand == 1u'
+			})};
+      output.alpha = alpha * selectionDim(select(activity, otherActivity, isOther));
       return output;
     }
   
     @fragment
     fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
+      // Before any branch: a derivative must be taken in uniform control flow.
+      let aa = max(fwidth(input.along), 1e-4);
+
       // Get color based on mode
       var baseColor: vec4<f32>;
       if (markConstants.colorMode == 0u) {
@@ -217,7 +260,14 @@
         );
       }
   
-      let finalAlpha = baseColor.a * input.alpha;
+      var finalAlpha = baseColor.a * input.alpha;
+      // An Other bar's split: lit up to its selected share, from its base,
+      // dimmed above it, with an anti-aliased edge. At share 1 (all of it, or
+      // nothing selected) it is lit throughout, with no half-lit top row.
+      if (input.share >= 0.0 && input.share < 1.0) {
+        let lit = 1.0 - smoothstep(input.share - aa, input.share + aa, input.along);
+        finalAlpha *= selectionDim(lit);
+      }
       return vec4<f32>(baseColor.rgb * finalAlpha, finalAlpha);
     }
   `
@@ -248,6 +298,7 @@
 		{ binding: BINDINGS.Y1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.SPLIT, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -266,16 +317,29 @@
 	// a fraction that the slot table resolves to a DIFFERENT category.
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !bandAxis) return;
+		// The Other share travels with the bar's length, on the same clock, so the
+		// split and the bar land together. A share that changes alone (a click)
+		// starts a transition of its own on that clock.
+		const split = splitData ? ([[BINDINGS.SPLIT, splitData]] as const) : [];
 		if (bandAxis === 'x') {
-			renderer.writeMorphed('x', x0Data, [
-				[BINDINGS.Y0, y0Data],
-				[BINDINGS.Y1, y1Data]
-			]);
+			renderer.writeMorphed('x', x0Data, [[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split]);
 		} else {
-			renderer.writeMorphed('y', y0Data, [
-				[BINDINGS.X0, x0Data],
-				[BINDINGS.X1, x1Data]
-			]);
+			renderer.writeMorphed('y', y0Data, [[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split]);
+		}
+	});
+	// Without a band axis the share is written as is. A mark that had shares and
+	// has none now writes one array of zeros, which also drops a morphed channel:
+	// left alone, the shader would keep reading the last shares. A mark that
+	// never had any writes nothing and reads the zero-filled stand-in.
+	let splitWritten = false;
+	$effect(() => {
+		if (!renderer?.resourcesCreated) return;
+		if (splitData) {
+			if (!bandAxis) renderer.writeAttribute(BINDINGS.SPLIT, splitData);
+			splitWritten = true;
+		} else if (splitWritten) {
+			renderer.writeAttribute(BINDINGS.SPLIT, new Float32Array(Math.max(1, x0Data.length)));
+			splitWritten = false;
 		}
 	});
 	$effect(() => {
@@ -324,7 +388,8 @@
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
 			view.setFloat32(UNIFORM_OFFSETS.DX, dx, LE);
 			view.setFloat32(UNIFORM_OFFSETS.DY, dy, LE);
-			// padding at 40-47
+			view.setUint32(UNIFORM_OFFSETS.OTHER_COLOR_ON_BAND, otherColorOnBand ? 1 : 0, LE);
+			view.setUint32(UNIFORM_OFFSETS.SPLIT_ALONG_X, splitAlongX ? 1 : 0, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 		}

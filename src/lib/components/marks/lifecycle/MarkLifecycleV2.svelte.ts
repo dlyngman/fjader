@@ -39,6 +39,7 @@ import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import {
 	OTHER_IDS_COLUMN,
+	OTHER_VALUES_COLUMN,
 	withDenseCategories,
 	withoutOtherMembers,
 	withRanking
@@ -107,6 +108,7 @@ import {
 } from './domain-registration';
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
+import { otherSplit, splittable } from './other-split';
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -1572,6 +1574,84 @@ export class MarkLifecycleV2 {
 				this.#filterGroup.activity(key).setOther(otherId, this.#markId, null);
 		}
 		this.#otherRegistered = now;
+	}
+
+	/**
+	 * The Other bar's selected share, per row, for the bar renderer to split at:
+	 * 0 on every row that is not an Other row, `1 + share` on one (so a buffer of
+	 * zeros, as an unbound channel reads, means "no split anywhere").
+	 *
+	 * share = Σ values[k] · selected(ids[k]) / Σ values[k] over the row's own
+	 * member lists: the part of the bar the selection holds. Selection is tested
+	 * by value, so the NULL category needs nothing special; with nothing selected
+	 * on the field every share is 1.
+	 *
+	 * A weighted sum over values the query already returned, in JS, per result
+	 * and per selection change: the alternative is re-querying a mark that dims,
+	 * which is what dimming exists to avoid.
+	 *
+	 * Null (no split; the bar is lit or dim as a whole) unless the bar's length
+	 * is what Other sums: see #otherSplitAxis.
+	 */
+	get otherSplit(): Float32Array | null {
+		return this.#otherSplit;
+	}
+
+	/** Whether colour is the band's own field, so an Other row's colour term reads its id too. */
+	get otherColorOnBand(): boolean {
+		const axis = this.#otherSplitAxis;
+		if (!axis) return false;
+		const color = this.#colorScaleState;
+		const band = (
+			axis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState
+		) as BandScaleState | null;
+		return !!color?.isOrdinal && !!band?.identityKey && color.identityKey === band.identityKey;
+	}
+
+	#otherSplit: Float32Array | null = $derived.by(() => {
+		const axis = this.#otherSplitAxis;
+		if (!axis) return null;
+		void this.dataVersion;
+		const table = this.#handle?.arrowTable ?? null;
+		const otherId = this.#identity?.[axis]?.otherId;
+		const key = this.#identityKey(axis)?.key;
+		const ids = table?.getChild(OTHER_IDS_COLUMN) ?? null;
+		const values = table?.getChild(OTHER_VALUES_COLUMN) ?? null;
+		const band = table?.getChild(axis) ?? null;
+		if (!table || otherId == null || !key || !ids || !values || !band) return null;
+
+		return otherSplit({
+			rows: table.numRows,
+			band,
+			otherId,
+			ids,
+			values,
+			selected: this.#filterGroup.activity(key).selectedValues(this.#filterGroup.index),
+			decode: this.#queryEngine.identityFor(key).values
+		});
+	});
+
+	/**
+	 * The band axis whose Other bar splits, or null. Only where a share is what
+	 * it looks like:
+	 * - a bar mark ('bary', 'barx') with a topN Other bucket, dimming (not
+	 *   'filter', which never dims) and without JS transforms, whose rows would
+	 *   no longer line up with the query's;
+	 * - whose length is the measure topN ranks by, which is what Other sums;
+	 * - and that measure a bare COUNT or SUM, or a raw column: a mean or a max
+	 *   summed into Other is no total, and a share of it would mean nothing.
+	 */
+	get #otherSplitAxis(): 'x' | 'y' | null {
+		if (!this.setupComplete) return null;
+		if (this.#reactiveConfig.selectionResponse === 'filter') return null;
+		if (!this.#transformCompiler.hasSyntheticOtherBucket()) return null;
+		if (this.#transformCompiler.jsTransforms.length > 0) return null;
+		const markType = this.#transformConfig.markType;
+		if (markType !== 'bary' && markType !== 'barx') return null;
+		const axis: 'x' | 'y' = markType === 'barx' ? 'y' : 'x';
+		const length = markType === 'barx' ? this.#transformConfig.x : this.#transformConfig.y;
+		const by = this.#transformCompiler.otherBy();
+		return splittable(length, by, length ? this.#config.select[length] : undefined) ? axis : null;
 	}
 
 	/** The (field, Other id) pairs this mark has rows registered under. */
