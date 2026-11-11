@@ -282,7 +282,14 @@
 					colorColumn: 'fill',
 					bandAxes: { y: true },
 					markColor,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					otherStats: (point) => {
+						const id = point.__bandIdY;
+						const facet = point.__facetId;
+						return typeof id === 'number'
+							? setup!.otherRows.statsAt(id, typeof facet === 'number' ? facet : null)
+							: null;
+					}
 				})
 			);
 		});
@@ -305,10 +312,7 @@
 		{y1Data}
 		colorValueData={markColor.data}
 		alphaData={opacityData}
-		splitData={setup?.otherSplit ?? null}
-		splitSlides={setup?.otherSplitSlides ?? true}
-		splitAlongX={true}
-		otherColorOnBand={setup?.otherColorOnBand ?? false}
+		share={setup?.otherRows.split ?? null}
 		colorMode={markColor.colorMode}
 		colorScaleIndex={markColor.colorScaleIndex}
 		groupIndex={setup?.groupIndex ?? 0}

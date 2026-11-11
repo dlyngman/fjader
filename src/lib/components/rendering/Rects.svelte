@@ -5,6 +5,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import type { SplitProp } from '../marks/lifecycle/other-rows.svelte';
 	import { activityReads, markActivityWGSL, otherRowActivityWGSL } from './activity-reads';
 
 	const rectRendererDefinition = {
@@ -32,7 +33,7 @@
 		 * further per-row channel needs another container (an instance vertex
 		 * attribute) or a raised device limit.
 		 */
-		SPLIT: 7
+		SHARE: 7
 	};
 
 	// Facet uses vertex buffer slot 1 (not a storage binding)
@@ -59,17 +60,11 @@
 		colorValueData: Float32Array | null;
 		alphaData: Float32Array | null;
 		/**
-		 * The Other bar's selected share per row (see BINDINGS.SPLIT), or null for
-		 * none: a bar mark with a topN Other bucket passes its lifecycle's
-		 * `otherSplit`. The fragment draws the bar above the share dimmed.
+		 * A bar's selected share per row (see BINDINGS.SHARE), or null for none: a
+		 * bar mark with a topN Other bucket passes its lifecycle's `otherRows.split`.
+		 * The fragment draws the bar above the share dimmed.
 		 */
-		splitData?: Float32Array | null;
-		/** The bars run along x (horizontal bars), so the split is along x. */
-		splitAlongX?: boolean;
-		/** Whether this split travels (morphs) or lands at once; see OtherSplit.slides. */
-		splitSlides?: boolean;
-		/** Colour is the band's own field: an Other row's colour term is skipped too. */
-		otherColorOnBand?: boolean;
+		share?: SplitProp | null;
 		facetData?: Float32Array | null;
 		dataVersion: number;
 		zIndex?: number;
@@ -101,10 +96,7 @@
 		y1Data,
 		colorValueData,
 		alphaData,
-		splitData = null,
-		splitAlongX = false,
-		splitSlides = true,
-		otherColorOnBand = false,
+		share = null,
 		facetData = null,
 		dataVersion,
 		zIndex = 0,
@@ -119,6 +111,11 @@
 		bandAxis = null
 	}: Props = $props();
 
+	const splitData = $derived(share?.data ?? null);
+	const splitSlides = $derived(share?.slides ?? true);
+	// Bars grouped on y run along x, so their split does too.
+	const splitAlongX = $derived(share?.axis === 'y');
+	const otherColorOnBand = $derived(share?.colorOnBand ?? false);
 	const morphX = $derived(bandAxis === 'y');
 	const morphY = $derived(bandAxis === 'x');
 
@@ -242,18 +239,23 @@
 				y: 'y0',
 				group: 'markConstants.groupIndex'
 			})};
-      let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
-				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
-				group: 'markConstants.groupIndex',
-				skipColor: 'markConstants.otherColorOnBand == 1u'
-			})};
-      let free = select(
-        bandFreeActivityX(markConstants.groupIndex),
-        bandFreeActivityY(markConstants.groupIndex),
-        markConstants.splitAlongX == 1u
-      );
       output.alpha = alpha * selectionDim(activity);
-      output.alphaRest = alpha * selectionDim(min(otherActivity, free));
+      // The unselected part is drawn only on an Other row: every other bar skips
+      // its activity reads.
+      output.alphaRest = output.alpha;
+      if (isOther) {
+        let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					group: 'markConstants.groupIndex',
+					skipColor: 'markConstants.otherColorOnBand == 1u'
+				})};
+        let free = select(
+          bandFreeActivityX(markConstants.groupIndex),
+          bandFreeActivityY(markConstants.groupIndex),
+          markConstants.splitAlongX == 1u
+        );
+        output.alphaRest = alpha * selectionDim(min(otherActivity, free));
+      }
       return output;
     }
   
@@ -314,7 +316,7 @@
 		{ binding: BINDINGS.Y1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.SPLIT, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.SHARE, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -336,8 +338,8 @@
 		// The Other share travels with the bar's length, on the same clock, so the
 		// split and the bar land together. A share that changes alone (a click)
 		// starts a transition of its own on that clock.
-		const split = splitData ? ([[BINDINGS.SPLIT, splitData]] as const) : [];
-		const land = splitData && !splitSlides ? [BINDINGS.SPLIT] : undefined;
+		const split = splitData ? ([[BINDINGS.SHARE, splitData]] as const) : [];
+		const land = splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
 		if (bandAxis === 'x') {
 			renderer.writeMorphed(
 				'x',
@@ -362,10 +364,10 @@
 	$effect(() => {
 		if (!renderer?.resourcesCreated) return;
 		if (splitData) {
-			if (!bandAxis) renderer.writeAttribute(BINDINGS.SPLIT, splitData);
+			if (!bandAxis) renderer.writeAttribute(BINDINGS.SHARE, splitData);
 			splitWritten = true;
 		} else if (splitWritten) {
-			renderer.writeAttribute(BINDINGS.SPLIT, new Float32Array(Math.max(1, x0Data.length)));
+			renderer.writeAttribute(BINDINGS.SHARE, new Float32Array(Math.max(1, x0Data.length)));
 			splitWritten = false;
 		}
 	});

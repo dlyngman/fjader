@@ -1,3 +1,4 @@
+import type { OtherRowStats } from '$lib/components/marks/lifecycle/other-rows.svelte';
 import type { ChartContext } from '$lib/types';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
@@ -35,6 +36,7 @@ interface TooltipConfigParams {
 	constantRadius?: number;
 	sizeScaleState?: SizeScaleState | null;
 	displayFields?: string[] | null;
+	otherStats?: TooltipConfig['otherStats'];
 }
 
 interface TooltipConfig {
@@ -60,6 +62,7 @@ interface TooltipConfig {
 	constantRadius?: number;
 	sizeScaleState?: SizeScaleState | null;
 	displayFields?: string[] | null;
+	otherStats?: (point: Record<string, unknown>) => OtherRowStats | null;
 	enabled: boolean;
 }
 
@@ -77,7 +80,8 @@ export function buildTooltipConfig({
 	proximityAxis,
 	constantRadius,
 	sizeScaleState,
-	displayFields
+	displayFields,
+	otherStats
 }: TooltipConfigParams): TooltipConfig {
 	const colorScaleState = markColor.scaleState;
 	const constantColor = markColor.constantCssColor;
@@ -113,6 +117,7 @@ export function buildTooltipConfig({
 		...(constantRadius != null && { constantRadius }),
 		...(sizeScaleState && { sizeScaleState }),
 		...(displayFields && { displayFields }),
+		...(otherStats && { otherStats }),
 		enabled: true
 	};
 }
