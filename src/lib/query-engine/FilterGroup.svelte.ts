@@ -96,6 +96,13 @@ export interface ToggleHandle extends Omit<SourceHandle, 'update'> {
 	toggle(tuple: unknown[], multi: boolean, total?: number): void;
 	/** Select exactly these tuples; empty clears. */
 	set(tuples: unknown[][]): void;
+	/**
+	 * A click on Other bucket `otherId` (from facet cell `facetId`, or null):
+	 * selects, adds or takes back the categories it holds, as its field's
+	 * registry says (FieldActivity.otherClick). A one-field toggle only: a
+	 * bucket names no value in a tuple of several.
+	 */
+	toggleOther(otherId: number, facetId: number | null, multi: boolean): void;
 }
 
 /**
@@ -383,6 +390,25 @@ export class FilterGroup {
 				write([...next.values()]);
 			},
 			set: (tuples) => write(tuples),
+			toggleOther: (otherId, facetId, multi) => {
+				if (list.length !== 1 || categoricalKey === null) return;
+				const click = this.activity(categoricalKey).otherClick(
+					this.index,
+					otherId,
+					facetId,
+					keysOf(selection.get(sourceId)),
+					multi
+				);
+				if (!click) return;
+				const next = new Map(tuplesOf(selection.get(sourceId)).map((t) => [tupleKey(t), t]));
+				if (click.action === 'replace') next.clear();
+				for (const value of click.values) {
+					const tuple = [value];
+					if (click.action === 'remove') next.delete(tupleKey(tuple));
+					else next.set(tupleKey(tuple), tuple);
+				}
+				write([...next.values()]);
+			},
 			clear: () => write([]),
 			activate: source.activate,
 			destroy: source.destroy

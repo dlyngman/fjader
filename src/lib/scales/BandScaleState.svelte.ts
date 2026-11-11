@@ -410,6 +410,11 @@ export class BandScaleState {
 		this.#slots.otherId = id;
 	}
 
+	/** This axis's Other bucket id, while a mark on it has one; null otherwise. */
+	get otherId(): number | null {
+		return this.#slots.otherId;
+	}
+
 	/**
 	 * This axis's Other bucket, shared by every mark on it that has one.
 	 *
