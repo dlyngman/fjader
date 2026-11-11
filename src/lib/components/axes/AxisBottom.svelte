@@ -8,9 +8,24 @@
 	interface Props {
 		ticksNumber?: number;
 		tickFormat?: ((value: unknown) => string) | null;
+		/**
+		 * Draw the scale's label as the axis title (default). `false` draws none; the
+		 * label still names the scale, so charts sharing it still link their zoom.
+		 */
+		title?: boolean;
+		/**
+		 * Where along the axis the title sits: `'center'` (default), or at the plot's
+		 * `'start'` (left) or `'end'` (right) edge.
+		 */
+		titleAnchor?: 'start' | 'center' | 'end';
 	}
 
-	let { ticksNumber = 5, tickFormat = null }: Props = $props();
+	let {
+		ticksNumber = 5,
+		tickFormat = null,
+		title = true,
+		titleAnchor = 'center'
+	}: Props = $props();
 	const c = getContext<ChartContext>('chart');
 
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
@@ -47,10 +62,6 @@
 					{tickFormatter(tick)}
 				</text>
 			{/each}
-
-			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
-				{c.xLabel}
-			</text>
 		{:else if c.scaleTypes.x === 'band' && c.xScale}
 			<BandAxisTicks
 				scale={c.xScaleState as BandScaleState}
@@ -60,8 +71,14 @@
 				tickLength={5}
 				labelGap={16}
 			/>
+		{/if}
 
-			<text text-anchor="middle" x={c.innerWidth / 2} y={28}>
+		{#if title && c.xScale}
+			<text
+				text-anchor={titleAnchor === 'start' ? 'start' : titleAnchor === 'end' ? 'end' : 'middle'}
+				x={titleAnchor === 'start' ? 0 : titleAnchor === 'end' ? c.innerWidth : c.innerWidth / 2}
+				y={28}
+			>
 				{c.xLabel}
 			</text>
 		{/if}

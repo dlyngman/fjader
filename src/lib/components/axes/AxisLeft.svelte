@@ -4,13 +4,38 @@
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
+	import { categoryLabel } from '$lib/query-engine/categorical-identity';
+	import { clearTitleOffset, sameTicks, textWidth } from './axis-title';
 
 	interface Props {
 		ticksNumber?: number;
 		tickFormat?: ((value: unknown) => string) | null;
+		/**
+		 * Draw the scale's label as the axis title (default). `false` draws none; the
+		 * label still names the scale, so charts sharing it still link their zoom.
+		 */
+		title?: boolean;
+		/**
+		 * How far left of the axis the title sits, in px (default 32), or `'auto'`:
+		 * clear of the widest tick label, as far as the chart's left margin allows.
+		 */
+		titleOffset?: number | 'auto';
+		/**
+		 * Where the title goes: `'side'` (default), rotated beside the tick labels, or
+		 * `'top'`, horizontal above the plot at the axis. `'top'` cannot meet the tick
+		 * labels, so it needs no `titleOffset` and no room in the left margin; it takes
+		 * the space above the plot (the chart's top margin).
+		 */
+		titlePlacement?: 'side' | 'top';
 	}
 
-	let { ticksNumber = 5, tickFormat = null }: Props = $props();
+	let {
+		ticksNumber = 5,
+		tickFormat = null,
+		title = true,
+		titleOffset = 32,
+		titlePlacement = 'side'
+	}: Props = $props();
 	const c = getContext<ChartContext>('chart');
 
 	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
@@ -34,6 +59,43 @@
 
 	// Unified formatter interface - all scale states have tickFormat()
 	const tickFormatter = $derived(c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : String);
+
+	// The title's distance from the axis. Measured only for 'auto', from the labels
+	// drawn (each distinct string once, then cached). It follows the widest label
+	// seen on this scale and never moves back in: pan and zoom change the ticks
+	// all the time, and a title that followed them would jitter. Taking the
+	// maximum is idempotent, so re-evaluating this changes nothing.
+	let widestSeen = 0;
+	let widestScale: unknown = null;
+	// The ticks and formatter the widest was last taken from: a pan that only moves
+	// the same ticks measures (and formats) nothing.
+	let measuredTicks: ArrayLike<unknown> | null = null;
+	let measuredFormatter: unknown = null;
+	const titleX = $derived.by(() => {
+		if (titleOffset !== 'auto') return titleOffset;
+		const scale = c.yScaleState;
+		if (scale !== widestScale) {
+			widestScale = scale;
+			widestSeen = 0;
+			measuredTicks = null;
+		}
+		const band = c.scaleTypes?.y === 'band';
+		const ticks: ArrayLike<unknown> = band ? bandTicks : continuousTicks;
+		if (!sameTicks(measuredTicks, ticks) || (!band && measuredFormatter !== tickFormatter)) {
+			if (band) {
+				for (const tick of bandTicks) {
+					widestSeen = Math.max(widestSeen, textWidth(String(categoryLabel(tick.value))));
+				}
+			} else {
+				for (const tick of continuousTicks) {
+					widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(tick))));
+				}
+			}
+			measuredTicks = ticks;
+			measuredFormatter = tickFormatter;
+		}
+		return clearTitleOffset(widestSeen, c.margin.left);
+	});
 </script>
 
 {#if c.isReady && c.scaleTypes}
@@ -47,10 +109,6 @@
 					{tickFormatter(tick)}
 				</text>
 			{/each}
-
-			<text text-anchor="middle" transform={`translate(-32, ${c.innerHeight / 2}) rotate(-90)`}>
-				{c.yLabel}
-			</text>
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
 			<BandAxisTicks
 				scale={c.yScaleState as BandScaleState}
@@ -60,10 +118,21 @@
 				dir={-1}
 				textAnchor="end"
 			/>
+		{/if}
 
-			<text text-anchor="middle" transform={`translate(-32, ${c.innerHeight / 2}) rotate(-90)`}>
-				{c.yLabel}
-			</text>
+		{#if title && c.yScale}
+			{#if titlePlacement === 'top'}
+				<text text-anchor="start" x={0} y={-18}>
+					{c.yLabel}
+				</text>
+			{:else}
+				<text
+					text-anchor="middle"
+					transform={`translate(${-titleX}, ${c.innerHeight / 2}) rotate(-90)`}
+				>
+					{c.yLabel}
+				</text>
+			{/if}
 		{/if}
 	</g>
 {/if}
