@@ -230,16 +230,30 @@ export class FieldActivity {
 	/** Register `markId`'s Other rows under `otherId`; null removes them. */
 	setOther(otherId: number, markId: string, entry: OtherEntry | null): void {
 		let byMark = this.#others.get(otherId);
+		const before = byMark?.get(markId)?.group;
 		if (entry) {
 			if (!byMark) this.#others.set(otherId, (byMark = new Map()));
 			byMark.set(markId, entry);
-			return;
+		} else {
+			if (!byMark?.delete(markId)) return;
+			if (byMark.size === 0) {
+				this.#others.delete(otherId);
+				for (const memKey of [...this.#otherMemory.keys()]) {
+					if (memKey.endsWith(`:${otherId}`)) this.#otherMemory.delete(memKey);
+				}
+			}
 		}
-		if (!byMark?.delete(markId) || byMark.size > 0) return;
-		this.#others.delete(otherId);
-		for (const memKey of [...this.#otherMemory.keys()]) {
-			if (memKey.endsWith(`:${otherId}`)) this.#otherMemory.delete(memKey);
-		}
+		// The bucket's members moved (a new result), or it came or went: whether it
+		// is lit may have changed in the group its marks dim under. A fade it does
+		// not change costs nothing (#retarget returns early).
+		this.#reapply(before);
+		if (entry && entry.group !== before) this.#reapply(entry.group);
+	}
+
+	#reapply(index: number | null | undefined): void {
+		if (index == null) return;
+		const group = this.#groups[index];
+		if (group && group.values != null) this.#apply(group);
 	}
 
 	/**
@@ -339,7 +353,42 @@ export class FieldActivity {
 			const id = identity.ids.get(value as never);
 			if (id != null) ids.push(id);
 		}
+		this.#lightOthers(this.#groups.indexOf(group), ids, count);
 		group.table.resize(count, ids);
 		group.table.setActive(ids);
 	}
+
+	/**
+	 * Add to `ids` (the selected ids) every Other bucket that holds one of them,
+	 * by the members its marks in group `index` registered: a bucket is lit while
+	 * the selection reaches into it. In the same pass as the rest of the group's
+	 * fade, so it is one retarget per update, never two. Marks filtered by the
+	 * selection (no group) are skipped: they never dim.
+	 */
+	#lightOthers(index: number, ids: number[], count: number): void {
+		if (this.#others.size === 0 || index < 0) return;
+		let mask = this.#selectedMask;
+		if (mask.length < count) mask = this.#selectedMask = new Uint8Array(count);
+		const selected = ids.length;
+		for (let i = 0; i < selected; i++) mask[ids[i]] = 1;
+
+		for (const [otherId, entries] of this.#others) {
+			if (otherId >= count) continue;
+			let lit = false;
+			for (const entry of entries.values()) {
+				if (entry.group !== index) continue;
+				for (const row of entry.rows) {
+					for (let i = 0; i < row.ids.length && !lit; i++) lit = mask[row.ids[i]] === 1;
+					if (lit) break;
+				}
+				if (lit) break;
+			}
+			if (lit) ids.push(otherId);
+		}
+		// Unmark only what was marked: the selected ids, not the Others pushed after.
+		for (let i = 0; i < selected; i++) mask[ids[i]] = 0;
+	}
+
+	/** Reused by #lightOthers: 1 at each selected id, 0 elsewhere between calls. */
+	#selectedMask = new Uint8Array(0);
 }
