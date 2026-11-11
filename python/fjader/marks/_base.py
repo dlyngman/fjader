@@ -52,6 +52,11 @@ class Mark:
     # dims; a legend, Toggle or band label filters it in its own chart too,
     # while a brush still skips its own chart.
     selection_response: Literal["auto", "filter"] | None = None
+    # NULL in the mark's categorical channels (band axis, ordinal colour,
+    # series, facet). "keep" (default): a category like any other, drawn and
+    # labelled "(null)". "drop": those rows are left out before any transform,
+    # so a top N ranks, and Other sums, without them.
+    nulls: Literal["keep", "drop"] | None = None
     scheme: ColorScheme | None = None
     limit: int | None = None
     transforms: list[TransformSpec] | None = None

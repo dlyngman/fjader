@@ -45,8 +45,14 @@ export async function fetchCategoricalDomains(
 	seriesChannel: string | null,
 	bandDomainFromData: boolean,
 	markId: string,
-	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null
+	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null,
+	/** nulls="drop": the band and facet domains leave out the NULL category. */
+	dropNull = false
 ): Promise<number> {
+	const categoriesOf = (key: string): DimValue[] => {
+		const categories = coordinator.categoryValues(key, table);
+		return dropNull ? categories.filter((c) => c !== null) : categories;
+	};
 	const fetches: Promise<void>[] = [];
 
 	const setupFetch = (axis: string, field: unknown, scaleState: BandScaleState | null): void => {
@@ -105,7 +111,7 @@ export async function fetchCategoricalDomains(
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [identityField] });
 				// This table's categories: the dim spans every table on the field.
-				const categories = coordinator.categoryValues(identityField.key, table);
+				const categories = categoriesOf(identityField.key);
 				// A snapshot of the real categories. The scale adopts the live
 				// identity itself in MarkLifecycleV2's #ensureIdentityColumns, which
 				// also covers the explicit-domain axes that never reach this branch.
@@ -163,7 +169,7 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [facetKey] });
-				const categories = coordinator.categoryValues(facetKey.key, table);
+				const categories = categoriesOf(facetKey.key);
 				if (categories.length > 0) facetBandScale.addMark(categories, markId);
 			})()
 		);

@@ -25,3 +25,19 @@ describe('selectionResponse plumbing', () => {
 		}
 	});
 });
+
+describe('nulls plumbing', () => {
+	const marks = readdirSync(dir).filter(
+		(f) => f.endsWith('Mark.svelte') || /Mark[XY]\.svelte$/.test(f)
+	);
+
+	it.each(marks)('%s passes nulls', (file) => {
+		const source = readFileSync(dir + file, 'utf8');
+		expect(source).toMatch(/nulls = undefined,/);
+		if (source.includes('selection: () => selection,')) {
+			expect(source).toMatch(/nulls: \(\) => nulls,/);
+		} else {
+			expect(source).toMatch(/get nulls\(\) \{\s*return nulls;/);
+		}
+	});
+});

@@ -19,7 +19,11 @@ import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { topN } from '$lib/transforms';
 import type { MarkConfig, Transform } from '$lib/types';
-import { buildQueryParts, castReal } from '$lib/components/marks/lifecycle/query-builder';
+import {
+	buildQueryParts,
+	castReal,
+	type NullDrop
+} from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -153,13 +157,17 @@ async function mark(
 		into?: FilterGroup;
 		chart?: object;
 		response?: 'auto' | 'filter';
+		nullDrops?: NullDrop[];
 	} = {}
 ): Promise<MarkHandle> {
 	const baseTable = opts.baseTable ?? 't';
 	const descriptor: QueryDescriptor = {
 		table: opts.table ?? baseTable,
 		baseTable,
-		parts: buildQueryParts(select, null, !!opts.transforms),
+		parts: {
+			...buildQueryParts(select, null, !!opts.transforms),
+			...(opts.nullDrops ? { nullDrops: opts.nullDrops } : {})
+		},
 		schema: new Map(),
 		transformCompiler: new TransformCompiler(
 			opts.transforms?.transforms ?? [],
@@ -303,6 +311,44 @@ describe('preagg for value dims', () => {
 		expect(rowsOf(viaPreagg)).toEqual(rowsOf(viaBase));
 		// Top 1 kind within cat 'a', plus Other: two rows.
 		expect(rowsOf(viaPreagg)).toHaveLength(2);
+	});
+
+	it('serves a nulls="drop" mark from preagg: the dropped group goes at read time', async () => {
+		// The preagg table is unfiltered and shared, and keeps NULL as its own
+		// group: kind is a group key. The drop is read through the preagg select.
+		await engine.ensureColumns('t', { categorical: ['cat', 'kind'] });
+		const view = engine.identitySourceFor('t');
+		const nullId = engine.identityFor('kind').nullId;
+		expect(nullId).not.toBeNull();
+		const bars = await mark(
+			'kind-drop',
+			{ x: castReal(column(idOf('kind'))), n: count() },
+			{ table: view, nullDrops: [{ channel: 'x', nullId }] }
+		);
+		const raw = await mark(
+			'g-drop',
+			{ g: column('g'), n: count() },
+			{ nullDrops: [{ channel: 'g', nullId: null }] }
+		);
+		await activateToggle(['cat']);
+
+		const legend = group.registerToggle('cat');
+		const from = nonDDL().length;
+		await settle([bars, raw], () => legend.toggle(['a'], false));
+		const after = lastQueriesSince(from);
+		expect(after.length).toBeGreaterThanOrEqual(2);
+		expect(after.every((q) => q.includes('__dplot_preagg_'))).toBe(true);
+
+		// The base query's answer, on the view's id column with NULL left out.
+		const expectedBars = await expected(
+			`SELECT "${idOf('kind')}", count(*) FROM "${view}" WHERE cat = 'a' AND kind IS NOT NULL GROUP BY 1`
+		);
+		const sort = (rows: unknown[][]) => [...rows].sort((a, b) => Number(a[0]) - Number(b[0]));
+		expect(sort(rowsOf(bars))).toEqual(sort(expectedBars));
+		expect(rowsOf(bars).some(([x]) => Number(x) === nullId)).toBe(false);
+		expect(rowsOf(raw)).toEqual(
+			await expected(`SELECT g, count(*) FROM t WHERE cat = 'a' AND g IS NOT NULL GROUP BY g`)
+		);
 	});
 
 	it('a legend hover builds no table for a mark that reads the field, which dims instead', async () => {

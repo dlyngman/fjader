@@ -437,16 +437,20 @@ describe('dense pads only the categories its own table holds', () => {
 		await db.run(
 			`CREATE TABLE "${DIM}" AS SELECT * FROM (VALUES
 				('a', NULL, 0), ('b', NULL, 1), ('c', NULL, 2), ('d', NULL, 3),
-				('elsewhere', NULL, 4), (NULL, 'Other', 5)) t(value, label, id)`
+				('elsewhere', NULL, 4), (NULL, 'Other', 5), (NULL, NULL, 6)) t(value, label, id)`
 		);
-		await db.run(`CREATE TABLE "${PRESENT}" AS SELECT * FROM (VALUES (0), (1), (2), (3)) t(id)`);
+		// Id 6 is the NULL category, which this table holds (and which a mark
+		// dropping NULL filters out of its own rows).
 		await db.run(
-			`CREATE TABLE mine AS SELECT * FROM (VALUES (0, 10), (1, 20), (2, 30), (3, 40)) t(cat_idx, v)`
+			`CREATE TABLE "${PRESENT}" AS SELECT * FROM (VALUES (0), (1), (2), (3), (6)) t(id)`
+		);
+		await db.run(
+			`CREATE TABLE mine AS SELECT * FROM (VALUES (0, 10), (1, 20), (2, 30), (3, 40), (6, 5)) t(cat_idx, v)`
 		);
 	});
 	afterAll(async () => await db.close());
 
-	async function run(present: boolean, n = 2) {
+	async function run(present: boolean, n = 2, dropNull = false) {
 		const config = {
 			markType: 'barY',
 			table: 'mine',
@@ -456,16 +460,19 @@ describe('dense pads only the categories its own table holds', () => {
 			identity: {
 				x: {
 					dim: DIM,
-					size: 6,
+					size: 7,
 					positional: true,
 					otherId: 5,
-					...(present ? { present: PRESENT } : {})
+					...(present ? { present: PRESENT } : {}),
+					...(dropNull ? { dropNullId: 6 } : {})
 				}
 			}
 		} as MarkConfig;
 		let q = Query.from('mine')
 			.select({ x: column('cat_idx'), y2: sum(column('v')) })
 			.groupby(column('cat_idx')) as SelectQuery;
+		// nulls="drop": the mark's static filter, on its own scan.
+		if (dropNull) q = q.where(sqlTag`cat_idx <> 6`) as SelectQuery;
 		for (const t of withDenseCategories([topN(n, { by: 'y2', includeOthers: true })]))
 			q = (t as SqlTransform).apply(q, config);
 		return db.all(String(q));
@@ -475,6 +482,12 @@ describe('dense pads only the categories its own table holds', () => {
 		const xs = (await run(true)).map((r) => Number(r.x));
 		expect(xs).not.toContain(4);
 		// Its own four, and the Other row.
+		expect(new Set(xs)).toEqual(new Set([0, 1, 2, 3, 5, 6]));
+	});
+
+	it('pads no row for NULL when the mark drops it', async () => {
+		const xs = (await run(true, 2, true)).map((r) => Number(r.x));
+		expect(xs).not.toContain(6);
 		expect(new Set(xs)).toEqual(new Set([0, 1, 2, 3, 5]));
 	});
 
@@ -486,8 +499,11 @@ describe('dense pads only the categories its own table holds', () => {
 	it('keeps the Other row and its value', async () => {
 		const rows = await run(true);
 		const other = rows.find((r) => Number(r.x) === 5)!;
-		// Top 2 are d (40) and c (30); Other is a + b.
-		expect(Number(other.y2)).toBeCloseTo(30, 5);
+		// Top 2 are d (40) and c (30); Other is a + b + the NULL category (5).
+		expect(Number(other.y2)).toBeCloseTo(35, 5);
+		// Dropping NULL leaves it out of Other too.
+		const dropped = (await run(true, 2, true)).find((r) => Number(r.x) === 5)!;
+		expect(Number(dropped.y2)).toBeCloseTo(30, 5);
 	});
 });
 

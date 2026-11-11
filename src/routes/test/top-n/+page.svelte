@@ -395,6 +395,49 @@
 					</ChartContainer>
 				</div>
 			</div>
+			<!-- Chart 9: nulls="drop" -->
+			<div class="chart-panel">
+				<h3>9. Chart 8 with nulls="drop"</h3>
+				<p class="desc">
+					The same data and marks as chart 8, with nulls="drop": no "(null)" anywhere. Expect chart
+					1's top 5 (Electronics, Clothing, Food, Books, Toys) plus Other, Other summing only Sports
+					through Music (320), and no "(null)" in the axis or the legend.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Category (NULL dropped)" yLabel="Revenue" legendPosition="top">
+						{#snippet legend()}
+							<Legend color="category" selection="nulls-drop" />
+						{/snippet}
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkY
+										table="top_n_nulls"
+										x="category"
+										y={sum('revenue')}
+										fill="category"
+										sort={{ x: 'y', order: 'desc' }}
+										selection="nulls-drop"
+										transforms={[topN(5, { includeOthers: true })]}
+										nulls="drop"
+										tooltip
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+						{#snippet interactors()}
+							<Toggle selection="nulls-drop" field="category" />
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}

@@ -43,6 +43,7 @@
 		table,
 		selection = undefined,
 		selectionResponse = undefined,
+		nulls = undefined,
 		x,
 		y,
 		text,
@@ -130,6 +131,9 @@
 		},
 		get selectionResponse() {
 			return selectionResponse;
+		},
+		get nulls() {
+			return nulls;
 		},
 		get limit() {
 			return limit;

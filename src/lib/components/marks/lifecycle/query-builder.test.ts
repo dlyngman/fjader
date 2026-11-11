@@ -233,6 +233,45 @@ describe('assembleQuery', () => {
 		expect(s).toContain('"a" > 10');
 	});
 
+	it('ANDs nulls="drop" into the base scan, on each channel\'s own expression', () => {
+		const raw = {
+			...simpleParts({ x: 'c', y: count() }),
+			nullDrops: [{ channel: 'x', nullId: null }]
+		};
+		expect(assemble(raw)).toMatch(/WHERE \("c" IS NOT NULL\)/);
+		// An id channel drops the NULL category's id, beside the selection's filter.
+		const ids = {
+			...simpleParts({ x: sql`CAST("c_idx" AS REAL)`, y: count() }),
+			nullDrops: [{ channel: 'x', nullId: 6 }]
+		};
+		const both = assemble(ids, { filter: [sql`"a" > 10`] });
+		expect(both).toContain('"a" > 10');
+		expect(both).toContain('CAST("c_idx" AS REAL) <> 6');
+	});
+
+	it('refuses to drop NULL on a channel the query does not select, rather than skip it', () => {
+		const parts = { ...simpleParts({ y: count() }), nullDrops: [{ channel: 'x', nullId: 6 }] };
+		expect(() => assemble(parts)).toThrow(/"x" channel/);
+	});
+
+	it('drops NULL before a transform, so topN ranks without those rows', () => {
+		const compiler = new TransformCompiler([topN(3)], {
+			markType: 'barY',
+			table: 't',
+			x: 'x',
+			y: 'y'
+		});
+		const parts = {
+			...buildQueryParts({ x: 'c', y: count() }, undefined, true),
+			nullDrops: [{ channel: 'x', nullId: null }]
+		};
+		const s = String(assembleQuery({ table: 't', parts, transformCompiler: compiler }));
+		// On the base table's own scan, which topN wraps and ranks: once, inside.
+		expect(s).toMatch(/FROM "t" WHERE \("c" IS NOT NULL\)/);
+		expect(s.split('IS NOT NULL').length - 1).toBe(1);
+		expect(s.indexOf('ROW_NUMBER')).toBeLessThan(s.indexOf('FROM "t"'));
+	});
+
 	it('adds ORDER BY for connected config', () => {
 		const parts = simpleParts(
 			{ x: 'date', y: 'value', stroke: 'series' },
