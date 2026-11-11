@@ -5,7 +5,7 @@
 	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
-	import { clearTitleOffset, textWidth } from './axis-title';
+	import { clearTitleOffset, sameTicks, textWidth } from './axis-title';
 
 	interface Props {
 		ticksNumber?: number;
@@ -54,21 +54,32 @@
 	// maximum is idempotent, so re-evaluating this changes nothing.
 	let widestSeen = 0;
 	let widestScale: unknown = null;
+	// The ticks and formatter the widest was last taken from: a pan that only moves
+	// the same ticks measures (and formats) nothing.
+	let measuredTicks: ArrayLike<unknown> | null = null;
+	let measuredFormatter: unknown = null;
 	const titleX = $derived.by(() => {
 		if (titleOffset !== 'auto') return titleOffset;
 		const scale = c.yScaleState;
 		if (scale !== widestScale) {
 			widestScale = scale;
 			widestSeen = 0;
+			measuredTicks = null;
 		}
-		if (c.scaleTypes?.y === 'band') {
-			for (const tick of bandTicks) {
-				widestSeen = Math.max(widestSeen, textWidth(String(categoryLabel(tick.value))));
+		const band = c.scaleTypes?.y === 'band';
+		const ticks: ArrayLike<unknown> = band ? bandTicks : continuousTicks;
+		if (!sameTicks(measuredTicks, ticks) || (!band && measuredFormatter !== tickFormatter)) {
+			if (band) {
+				for (const tick of bandTicks) {
+					widestSeen = Math.max(widestSeen, textWidth(String(categoryLabel(tick.value))));
+				}
+			} else {
+				for (const tick of continuousTicks) {
+					widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(tick))));
+				}
 			}
-		} else {
-			for (const tick of continuousTicks) {
-				widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(tick))));
-			}
+			measuredTicks = ticks;
+			measuredFormatter = tickFormatter;
 		}
 		return clearTitleOffset(widestSeen, c.margin.left);
 	});

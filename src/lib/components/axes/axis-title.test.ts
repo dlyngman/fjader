@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearTitleOffset, textWidth, DEFAULT_TITLE_OFFSET } from './axis-title';
+import { clearTitleOffset, sameTicks, textWidth, DEFAULT_TITLE_OFFSET } from './axis-title';
 
 describe('clearTitleOffset', () => {
 	it('keeps the default for short labels', () => {
@@ -25,5 +25,19 @@ describe('textWidth', () => {
 		expect(textWidth('40,000')).toBe(36);
 		expect(textWidth('40,000')).toBe(36);
 		expect(textWidth('')).toBe(0);
+	});
+});
+
+describe('sameTicks', () => {
+	it('is true for equal values, and false for none, another length or another value', () => {
+		expect(sameTicks([0, 5, 10], [0, 5, 10])).toBe(true);
+		expect(sameTicks(null, [0])).toBe(false);
+		expect(sameTicks([0, 5], [0, 5, 10])).toBe(false);
+		expect(sameTicks([0, 5, 10], [0, 5, 15])).toBe(false);
+	});
+
+	it('takes band ticks of the same key as the same, whatever else moved', () => {
+		expect(sameTicks([{ key: 1, pos: 3 }], [{ key: 1, pos: 4 }])).toBe(true);
+		expect(sameTicks([{ key: 1 }], [{ key: 2 }])).toBe(false);
 	});
 });

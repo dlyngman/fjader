@@ -53,3 +53,28 @@ export function clearTitleOffset(widest: number, marginLeft: number): number {
 	const wanted = Math.max(TICK_GAP + widest + CLEARANCE, DEFAULT_TITLE_OFFSET);
 	return Math.max(0, Math.min(wanted, marginLeft - TITLE_BODY));
 }
+
+/**
+ * Whether two tick lists are the same ticks: equal values, or band ticks of the
+ * same key. A loop with no allocation, to skip re-measuring labels when a pan
+ * moved the ticks but did not change them.
+ */
+export function sameTicks(a: ArrayLike<unknown> | null, b: ArrayLike<unknown>): boolean {
+	if (!a || a.length !== b.length) return false;
+	for (let i = 0; i < b.length; i++) {
+		const x = a[i];
+		const y = b[i];
+		if (x === y) continue;
+		if (
+			typeof x === 'object' &&
+			typeof y === 'object' &&
+			x !== null &&
+			y !== null &&
+			(x as { key?: unknown }).key !== undefined &&
+			(x as { key?: unknown }).key === (y as { key?: unknown }).key
+		)
+			continue;
+		return false;
+	}
+	return true;
+}
