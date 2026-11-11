@@ -84,6 +84,11 @@ describe('otherSplit: what the share is made of', () => {
 		expect([r.picked[2], r.total[2], r.pickedCount[2], r.memberCount[2]]).toEqual([100, 100, 3, 3]);
 	});
 
+	it('says whether the field has a selection', () => {
+		expect(compute(null).active).toBe(false);
+		expect(compute(new Set(['a'])).active).toBe(true);
+	});
+
 	it('has none for members of mixed signs, whose sum means nothing', () => {
 		const rows = {
 			band: [9],

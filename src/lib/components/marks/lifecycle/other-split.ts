@@ -36,6 +36,8 @@ export interface OtherSplit {
 	total: Float64Array;
 	pickedCount: Int32Array;
 	memberCount: Int32Array;
+	/** The field has a selection: without one, everything counts as picked, which says nothing. */
+	active: boolean;
 }
 
 /**
@@ -113,7 +115,16 @@ export function otherSplit(opts: {
 		}
 		if (previous && previous.flat[row] === 1 && !isFlat) slides = false;
 	}
-	return { split, flat, slides, picked: pickedSums, total: totals, pickedCount, memberCount };
+	return {
+		split,
+		flat,
+		slides,
+		picked: pickedSums,
+		total: totals,
+		pickedCount,
+		memberCount,
+		active: selected != null
+	};
 }
 
 /**

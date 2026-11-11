@@ -52,6 +52,8 @@ export interface OtherRowStats {
 	total: number;
 	pickedCount: number;
 	memberCount: number;
+	/** The field has a selection; without one picked is everything and says nothing. */
+	active: boolean;
 }
 
 export interface OtherRowsDeps {
@@ -164,8 +166,32 @@ export class OtherRows {
 			picked: computed.picked[row],
 			total: computed.total[row],
 			pickedCount: computed.pickedCount[row],
-			memberCount: computed.memberCount[row]
+			memberCount: computed.memberCount[row],
+			active: computed.active
 		};
+	}
+
+	/**
+	 * `stats` of the Other row a tooltip point names: its band id and, with
+	 * facets, its cell (null: any). A tooltip's rows are not the result's, so it
+	 * finds its row by identity. A scan of the result's rows, per hover change
+	 * and not per frame; null where the point is not an Other row of this mark's
+	 * split.
+	 */
+	statsAt(bandId: number, facetId: number | null): OtherRowStats | null {
+		const axis = this.#splitAxis;
+		const table = this.#deps.table();
+		const otherId = axis ? this.#deps.identity()?.[axis]?.otherId : null;
+		if (!axis || !table || otherId == null || bandId !== otherId) return null;
+		const band = table.getChild(axis);
+		const facets = facetId == null ? null : table.getChild('__facet');
+		if (!band) return null;
+		for (let row = 0; row < table.numRows; row++) {
+			if (Number(band.at(row)) !== bandId) continue;
+			if (facets && Number(facets.at(row)) !== facetId) continue;
+			return this.stats(row);
+		}
+		return null;
 	}
 
 	/**
