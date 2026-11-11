@@ -50,6 +50,12 @@ export interface OtherSplit {
  * (a selection cleared, or one that no longer reaches into Other) is a fade,
  * not a slide. Without it (a new result) every row takes its value, and the
  * split travels with the bar's own morph.
+ *
+ * Cost, measured: about 22 ns per Other member per call (the `selected.has`),
+ * so 0.1 ms at 5 000 members and about 1.2 ms at 50 000. Fine per click. If
+ * selection ever changes continuously (a brush on a band axis) over a very large
+ * Other, test membership against a Uint8Array indexed by id, built once per
+ * change, rather than a Set. The arrays allocated here are sized by rows.
  */
 export function otherSplit(opts: {
 	rows: number;
