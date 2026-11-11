@@ -239,18 +239,23 @@
 				y: 'y0',
 				group: 'markConstants.groupIndex'
 			})};
-      let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
-				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
-				group: 'markConstants.groupIndex',
-				skipColor: 'markConstants.otherColorOnBand == 1u'
-			})};
-      let free = select(
-        bandFreeActivityX(markConstants.groupIndex),
-        bandFreeActivityY(markConstants.groupIndex),
-        markConstants.splitAlongX == 1u
-      );
       output.alpha = alpha * selectionDim(activity);
-      output.alphaRest = alpha * selectionDim(min(otherActivity, free));
+      // The unselected part is drawn only on an Other row: every other bar skips
+      // its activity reads.
+      output.alphaRest = output.alpha;
+      if (isOther) {
+        let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					group: 'markConstants.groupIndex',
+					skipColor: 'markConstants.otherColorOnBand == 1u'
+				})};
+        let free = select(
+          bandFreeActivityX(markConstants.groupIndex),
+          bandFreeActivityY(markConstants.groupIndex),
+          markConstants.splitAlongX == 1u
+        );
+        output.alphaRest = alpha * selectionDim(min(otherActivity, free));
+      }
       return output;
     }
   
