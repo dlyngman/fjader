@@ -50,6 +50,7 @@ export interface MarkEntry {
 	transforms?: Transform[];
 	selection?: string;
 	selectionResponse?: SelectionResponse;
+	contributeDomain?: boolean;
 	nulls?: NullsResponse;
 	limit?: number;
 	preferredXScaleType?: string | null;

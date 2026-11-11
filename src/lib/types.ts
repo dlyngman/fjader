@@ -335,6 +335,23 @@ export interface BaseMarkProps {
 	 */
 	selectionResponse?: SelectionResponse;
 	/**
+	 * Whether this mark adds its categories to a band axis's domain (default
+	 * `true`). `false`: the mark follows the axis the other marks on it decide
+	 * (their categories, their order); rows of categories the axis does not show
+	 * are not drawn. For a layer that gives context to another, such as the whole
+	 * behind a part. It cannot rank or reduce its own categories, so `topN`, `sort`
+	 * and an explicit `domain` are refused with it (an error is logged and the
+	 * mark contributes).
+	 *
+	 * Known limit: when the axis shows an Other bucket (another mark's topN with
+	 * `includeOthers`), a follower has no Other row of its own. Its bars of
+	 * categories that leave the axis walk to Other's slot and are gone when the
+	 * transition ends, and nothing draws the whole behind Other. Folding such
+	 * categories into an Other row would need the follower's query to depend on
+	 * the axis's current categories.
+	 */
+	contributeDomain?: boolean;
+	/**
 	 * What this mark does with NULL in its categorical channels: its band axis,
 	 * ordinal colour, series and facet.
 	 *
