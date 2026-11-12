@@ -340,6 +340,27 @@ describe('Transforms', () => {
 			expect(result.isAutoBinNode).toBe(true);
 		});
 
+		it('re-buckets a time interval by whole units when the step multiplier changes', () => {
+			// Zooming scales the step; `INTERVAL 6.78 day` would be a parser error.
+			const stats = { date: { min: 0, max: 400 * 86_400_000 } };
+			const weekly = bin('date', { interval: 'day', step: 7 });
+			const sqlAt = (m: number) => String(weekly.resolve(stats, 'time', null, null, m));
+			expect(sqlAt(1)).toContain('INTERVAL 7 day');
+			expect(sqlAt(1.03)).toContain('INTERVAL 7 day');
+			expect(sqlAt(1.2)).toContain('INTERVAL 6 day');
+			expect(sqlAt(0.5)).toContain('INTERVAL 14 day');
+			expect(sqlAt(20)).toContain('INTERVAL 1 day');
+			expect(weekly.padding(stats, 'time', null, 1.2, 0)).toMatchObject({
+				interval: 'INTERVAL 6 day'
+			});
+			// A numeric step keeps its fraction.
+			expect(
+				String(
+					bin('v', { step: 7 }).resolve({ v: { min: 0, max: 100 } }, 'linear', null, null, 1.2)
+				)
+			).not.toContain('INTERVAL');
+		});
+
 		it('creates AutoBinNode for explicit step', () => {
 			const result = bin('age', { step: 5 });
 
@@ -506,8 +527,8 @@ describe('dense().alignment on a binned axis', () => {
 	// min + alpha * (k + offset), and a rect carries the same bins twice, its
 	// upper edge at offset 1.
 	const bins = (count = 40) => ({
-		x1: { min: 0, alpha: 50, count, offset: 0 },
-		x2: { min: 0, alpha: 50, count, offset: 1 }
+		x1: { kind: 'number' as const, min: 0, alpha: 50, count, offset: 0 },
+		x2: { kind: 'number' as const, min: 0, alpha: 50, count, offset: 1 }
 	});
 	const histogram = {
 		markType: 'recty',
@@ -539,7 +560,7 @@ describe('dense().alignment on a binned axis', () => {
 		const twoD = {
 			...histogram,
 			groupKeys: ['x1', 'x2', 'y1', 'y2'],
-			bins: { ...bins(), y1: { min: 0, alpha: 1, count: 30, offset: 0 } }
+			bins: { ...bins(), y1: { kind: 'number' as const, min: 0, alpha: 1, count: 30, offset: 0 } }
 		} as MarkConfig;
 		expect(dense().alignment!(['x1', 'x2', 'y1', 'y2', 'fill'], twoD)).toBeNull();
 		const beside = {
@@ -554,6 +575,25 @@ describe('dense().alignment on a binned axis', () => {
 			expect.stringMatching(/beside a categorical one/),
 			expect.stringMatching(/20000 bins/)
 		]);
+		spy.mockRestore();
+	});
+
+	it('aligns time buckets like numeric bins, and counts their estimate against the limit', () => {
+		const months = (count: number, offset: number) => ({
+			kind: 'time' as const,
+			interval: 'INTERVAL 1 month',
+			minMs: 0,
+			maxMs: 1,
+			t0: 0,
+			count,
+			offset
+		});
+		const timeHistogram = { ...histogram, bins: { x1: months(48, 0), x2: months(48, 1) } };
+		expect(dense().alignment!(ALIASES, timeHistogram)).toEqual(['x1']);
+		const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+		const tooMany = { ...histogram, bins: { x1: months(20_000, 0), x2: months(20_000, 1) } };
+		expect(dense().alignment!(ALIASES, tooMany)).toBeNull();
+		expect(spy).toHaveBeenCalledTimes(1);
 		spy.mockRestore();
 	});
 

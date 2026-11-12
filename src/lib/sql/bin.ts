@@ -1,5 +1,5 @@
 import type { ExprNode, ExprValue, BinHistogramOptions, BinDateOptions } from '@uwdata/mosaic-sql';
-import { binDate, binHistogram, binSpec, column } from '@uwdata/mosaic-sql';
+import { binDate, binHistogram, binSpec, column, interval, timeInterval } from '@uwdata/mosaic-sql';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { BinPadding } from '$lib/types';
 
@@ -15,6 +15,19 @@ interface FieldInfo {
 	max?: number;
 	type?: string;
 }
+
+/** A time unit's typical length, for estimating a bucket count. */
+const UNIT_MS: Record<string, number> = {
+	year: 365 * 86_400_000,
+	quarter: 91 * 86_400_000,
+	month: 30 * 86_400_000,
+	day: 86_400_000,
+	hour: 3_600_000,
+	minute: 60_000,
+	second: 1000,
+	millisecond: 1,
+	microsecond: 0.001
+};
 
 export function bin(field: string | ExprNode, options: BinOptions = {}): AutoBinNode {
 	return new AutoBinNode(field, options);
@@ -57,20 +70,25 @@ export class AutoBinNode {
 	}
 
 	/**
-	 * The bins `resolve` produces with the same arguments, as numbers: edge k
-	 * is `min + alpha * (k + offset)` for k in [0, count), every bin a value of
+	 * The bins `resolve` produces with the same arguments: every bin a value of
 	 * the field can fall in. What `dense()` pads a histogram from, so a bin
 	 * emptied by a filter stays as a zero row and the bars can morph.
 	 *
-	 * Null where the bins cannot be enumerated that way: temporal bins (a month
-	 * is not a fixed width) and a field with a single value, which
-	 * binHistogram floors instead of binning.
+	 * Numeric bins as numbers, edge k at `min + alpha * (k + offset)`. Time
+	 * buckets as the interval `time_bucket` steps by, and the field's extent;
+	 * those need `t0`, the time scale's origin in epoch seconds, because a time
+	 * channel is drawn as seconds from it, and are null without it (before the
+	 * scale has one, the channel is not rewritten either).
+	 *
+	 * Null for a field with a single value, which binHistogram floors instead
+	 * of binning.
 	 */
 	padding(
 		fieldInfo: Record<string, FieldInfo>,
 		scaleType: string,
 		currentDomain: [number, number] | null = null,
-		binStepMultiplier: number = 1.0
+		binStepMultiplier: number = 1.0,
+		t0: number | null = null
 	): BinPadding | null {
 		const { min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
@@ -78,15 +96,34 @@ export class AutoBinNode {
 			currentDomain,
 			binStepMultiplier
 		);
-		if (isTemporal || max === min) return null;
+		const offset = binOptions.offset ?? 0;
+		if (isTemporal) {
+			if (t0 === null) return null;
+			// binDate's own choice of unit and step.
+			const { unit, step = 1 } = binOptions.interval
+				? { unit: binOptions.interval, step: binOptions.step }
+				: timeInterval(min, max, binOptions.steps || 40);
+			const width = (UNIT_MS[unit] ?? UNIT_MS.day) * step;
+			return {
+				kind: 'time',
+				interval: String(interval(unit, step)),
+				minMs: min,
+				maxMs: max,
+				t0,
+				count: Math.ceil((max - min) / width) + 2,
+				offset
+			};
+		}
+		if (max === min) return null;
 		// binHistogram's own derivation, with the linear transform it is given.
 		const b = binSpec(min, max, binOptions);
 		const alpha = (b.max - b.min) / b.steps || 1;
 		return {
+			kind: 'number',
 			min: b.min,
 			alpha,
 			count: Math.floor((max - b.min) / alpha) + 1,
-			offset: binOptions.offset ?? 0
+			offset
 		};
 	}
 
@@ -139,7 +176,10 @@ export class AutoBinNode {
 				binOptions.steps = Math.max(1, Math.round(binOptions.steps * binStepMultiplier));
 			}
 			if (binOptions.step) {
-				binOptions.step = binOptions.step / binStepMultiplier;
+				// A time interval counts whole units: `INTERVAL 6.78 day` is not SQL.
+				binOptions.step = binOptions.interval
+					? Math.max(1, Math.round(binOptions.step / binStepMultiplier))
+					: binOptions.step / binStepMultiplier;
 			}
 		}
 

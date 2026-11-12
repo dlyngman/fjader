@@ -281,7 +281,7 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// Every row's edge from its bin index, real and padded alike, so the
 			// edges are the same bits on every update: they are what tells the
 			// renderer the row set has not changed (alignmentKey).
-			select[alias] = rawSql(`CAST(${binEdge(bin, 'd.k')} AS REAL)`) as ExprNode;
+			select[alias] = rawSql(binEdge(bin, 'd.k')) as ExprNode;
 		} else if (alias === band) {
 			select[alias] = sqlTag`d."id"` as ExprNode;
 		} else if (crossed) {
@@ -346,22 +346,49 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 		)
 		.join('');
 	const bandBin = binOf.get(band);
-	// A bin is matched by its index, recovered from its edge: the edge is a
-	// REAL in the result (and in a preagg table), so comparing it to an edge
-	// computed here could miss by a rounding.
-	const bandOn = bandBin
-		? `round((CAST(a.${column(band)} AS DOUBLE) - ${sqlNumber(bandBin.min)}) / ${sqlNumber(bandBin.alpha)}) - ${bandBin.offset} = d.k`
-		: `a.${column(band)} = d."id"`;
+	const bandOn = bandBin ? binMatch(bandBin, `a.${column(band)}`) : `a.${column(band)} = d."id"`;
 	const on = [bandOn, ...cross.map(([key], i) => `a.${column(key)} = k${i}."id"`)].join(' AND ');
-	const source = bandBin
-		? `range(0, ${bandBin.count}) AS d(k)`
-		: `${padIds(plan.identity[band], dim)} AS d`;
+	const source = bandBin ? binSource(bandBin) : `${padIds(plan.identity[band], dim)} AS d`;
 	return Query.from(rawSql(`${source}${joins} LEFT JOIN (${inner}) AS a ON ${on}`)).select(select);
 }
 
-/** Bin `k`'s edge, `min + alpha * (k + offset)`, in DOUBLE arithmetic. */
+/**
+ * Every bin, as `d.k`: an index for numeric bins, a bucket start for time
+ * buckets. Time buckets come from `time_bucket` itself over the field's
+ * extent, so they are exactly the buckets the query's own expression makes,
+ * months and years included, which are not a fixed width.
+ */
+function binSource(bin: BinPadding): string {
+	if (bin.kind === 'number') return `range(0, ${bin.count}) AS d(k)`;
+	const first = `time_bucket(${bin.interval}, epoch_ms(${Math.round(bin.minMs)}))`;
+	const last = `time_bucket(${bin.interval}, epoch_ms(${Math.round(bin.maxMs)}))`;
+	return `range(${first}, ${last} + ${bin.interval}, ${bin.interval}) AS d(k)`;
+}
+
+/**
+ * Bin `k`'s edge as the REAL the query draws. Numeric: `min + alpha * (k +
+ * offset)`, in DOUBLE arithmetic. Time: the bucket start plus `offset`
+ * intervals, as seconds from `t0`, the form the mark's time channels take.
+ */
 function binEdge(bin: BinPadding, k: string): string {
-	return `(${sqlNumber(bin.min)} + ${sqlNumber(bin.alpha)} * (${k} + ${bin.offset}))`;
+	if (bin.kind === 'number') {
+		return `CAST((${sqlNumber(bin.min)} + ${sqlNumber(bin.alpha)} * (${k} + ${bin.offset})) AS REAL)`;
+	}
+	return `CAST((epoch(${k} + (${bin.interval}) * ${bin.offset}) - ${bin.t0}) AS REAL)`;
+}
+
+/**
+ * Whether the result row's edge `edge` is bin `d.k`. Numeric bins match by
+ * index, recovered from the edge: the edge is a REAL in the result (and in a
+ * preagg table), so comparing it to an edge computed here could miss by a
+ * rounding. A time edge is computed by the same expression on both sides, so
+ * the REALs are equal.
+ */
+function binMatch(bin: BinPadding, edge: string): string {
+	if (bin.kind === 'number') {
+		return `round((CAST(${edge} AS DOUBLE) - ${sqlNumber(bin.min)}) / ${sqlNumber(bin.alpha)}) - ${bin.offset} = d.k`;
+	}
+	return `${edge} = ${binEdge(bin, 'd.k')}`;
 }
 
 /** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
