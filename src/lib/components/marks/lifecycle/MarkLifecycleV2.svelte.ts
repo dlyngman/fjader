@@ -336,11 +336,12 @@ export class MarkLifecycleV2 {
 	#binArgs(channel: string) {
 		const axis = channel.startsWith('x') ? 'x' : 'y';
 		return {
+			axis,
 			fieldInfo: this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
 			scaleType: axis === 'x' ? this.actualXScaleType : this.actualYScaleType,
 			currentDomain: this.#lastBinDomain[axis] ?? null,
 			multiplier: this.#chartContext.binStepMultiplier || 1.0
-		};
+		} as const;
 	}
 
 	/** The bins of each numeric bin channel, for dense() to pad from; null without any. */
@@ -349,8 +350,14 @@ export class MarkLifecycleV2 {
 		let out: Record<string, BinPadding> | null = null;
 		for (const [ch, value] of Object.entries(this.#config.select)) {
 			if (!isBinExpression(value)) continue;
-			const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
-			const padding = value.padding(fieldInfo, scaleType, currentDomain, multiplier);
+			const { axis, fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
+			const padding = value.padding(
+				fieldInfo,
+				scaleType,
+				currentDomain,
+				multiplier,
+				this.#timeOrigin(axis)
+			);
 			if (padding) (out ??= {})[ch] = padding;
 		}
 		return out;
@@ -1132,12 +1139,9 @@ export class MarkLifecycleV2 {
 			['x', ['x', 'x1', 'x2']],
 			['y', ['y', 'y1', 'y2']]
 		] as const) {
-			const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			if (scaleType !== 'time') continue;
-			const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState | null;
-			if (!scaleState?.t0) continue;
-
-			const t0Epoch = Math.floor(scaleState.t0.getTime() / 1000);
+			const t0Epoch = this.#timeOrigin(axis);
+			if (t0Epoch === null) continue;
+			const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState;
 
 			for (const ch of channels) {
 				if (!(ch in select)) continue;
@@ -1151,6 +1155,19 @@ export class MarkLifecycleV2 {
 				}
 			}
 		}
+	}
+
+	/**
+	 * The time axis's origin in epoch seconds, which its channels are drawn
+	 * relative to, or null when the axis is not a time scale or has no origin
+	 * yet. Its channels are rewritten, and its time buckets padded, only with one.
+	 */
+	#timeOrigin(axis: 'x' | 'y'): number | null {
+		const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+		if (scaleType !== 'time') return null;
+		const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState | null;
+		if (!scaleState?.t0) return null;
+		return Math.floor(scaleState.t0.getTime() / 1000);
 	}
 
 	/**

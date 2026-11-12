@@ -157,13 +157,34 @@ export interface ChannelIdentity {
 }
 
 /**
- * One binned channel's bins, as `bin()` resolved them for a query: edge k is
- * `min + alpha * (k + offset)` for k in [0, count). A rect's upper edge is the
- * same bins with offset 1.
+ * One binned channel's bins, as `bin()` resolved them for a query, which
+ * `dense()` pads a histogram from. A rect's upper edge is the same bins with
+ * offset 1.
  */
-export interface BinPadding {
+export type BinPadding = NumericBinPadding | TimeBinPadding;
+
+/** Numeric bins: edge k is `min + alpha * (k + offset)` for k in [0, count). */
+export interface NumericBinPadding {
+	kind: 'number';
 	min: number;
 	alpha: number;
+	count: number;
+	offset: number;
+}
+
+/**
+ * Time buckets of `interval` (SQL, as `time_bucket` takes it) over the field's
+ * extent, minMs to maxMs. An edge is the bucket start plus `offset` intervals,
+ * drawn as seconds from the time scale's origin `t0` (epoch seconds), the form
+ * a time channel takes in the query. `count` estimates the buckets, for the
+ * row limit: months and years are not a fixed width.
+ */
+export interface TimeBinPadding {
+	kind: 'time';
+	interval: string;
+	minMs: number;
+	maxMs: number;
+	t0: number;
 	count: number;
 	offset: number;
 }

@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
 import { column, count, gt, isBetween, sql } from '@uwdata/mosaic-sql';
+import type { ExprNode } from '@uwdata/mosaic-sql';
 import {
 	QueryEngine,
 	type DuckDBConnection,
@@ -255,7 +256,7 @@ describe('a histogram padded to every bin', () => {
 		);
 
 	it('enumerates the bins binHistogram produces', async () => {
-		expect(bins.x1).toEqual({ min: 0, alpha: 50, count: 20, offset: 0 });
+		expect(bins.x1).toEqual({ kind: 'number', min: 0, alpha: 50, count: 20, offset: 0 });
 		expect(bins.x2.offset).toBe(1);
 		const edges = await conn.all(
 			`SELECT DISTINCT CAST(${lower.resolve(stats, 'linear')} AS DOUBLE) AS e FROM t ORDER BY e`
@@ -288,6 +289,55 @@ describe('a histogram padded to every bin', () => {
 		// Every channel stays a REAL, so it reaches the GPU without a copy.
 		const types = await conn.all(`DESCRIBE ${nonDDL().at(-1)}`);
 		expect(types.map((t) => t.column_type)).toEqual(['FLOAT', 'FLOAT', 'FLOAT']);
+	});
+
+	it('pads monthly time buckets the same way, months not being a fixed width', async () => {
+		// 400 days from 2024-01-01: 14 months. g = 0 keeps the first 100 days, so
+		// January to April have rows and the ten months after come back as zeros.
+		await conn.exec!(
+			`CREATE TABLE days AS SELECT CAST(DATE '2024-01-01' + INTERVAL (i) DAY AS DATE) AS d, i // 100 AS g FROM range(400) r(i)`
+		);
+		await engine.ensureColumns('days', { categorical: ['g'] });
+		const minMs = Date.UTC(2024, 0, 1);
+		const maxMs = minMs + 399 * 86_400_000;
+		const t0 = minMs / 1000;
+		const dayStats = { d: { min: minMs, max: maxMs, type: 'date' } };
+		const month = bin('d', { interval: 'month' });
+		const next = month.withOffset(1);
+		// The rewrite a time channel gets in the query: seconds from t0.
+		const seconds = (node: ExprNode) => castReal(sql`CAST((epoch(${node}) - ${t0}) AS REAL)`);
+		const timeSelect = {
+			x1: seconds(month.resolve(dayStats, 'time')),
+			x2: seconds(next.resolve(dayStats, 'time')),
+			y: count()
+		};
+		const timeBins = {
+			x1: month.padding(dayStats, 'time', null, 1, t0)!,
+			x2: next.padding(dayStats, 'time', null, 1, t0)!
+		};
+		expect(timeBins.x1).toMatchObject({ kind: 'time', interval: 'INTERVAL 1 month', offset: 0 });
+		// No origin yet, no padding: the channel is not rewritten either.
+		expect(month.padding(dayStats, 'time')).toBeNull();
+
+		const opts = { baseTable: 'days', transforms, bins: timeBins };
+		const viaPreagg = await mark('months', timeSelect, opts);
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('months-ref', timeSelect, { ...opts, into: reference });
+
+		await activateToggle(['g']);
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+
+		const rows = ordered(viaPreagg);
+		expect(rows).toEqual(ordered(viaBase));
+		const monthStart = (m: number) => (Date.UTC(2024, m, 1) - minMs) / 1000;
+		expect(rows.map((r) => r[0])).toEqual(Array.from({ length: 14 }, (_, m) => monthStart(m)));
+		expect(rows.map((r) => r[1])).toEqual(Array.from({ length: 14 }, (_, m) => monthStart(m + 1)));
+		expect(rows.map((r) => r[2])).toEqual([31, 29, 31, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 	});
 });
 
