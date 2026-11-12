@@ -2,6 +2,13 @@ import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type { Transform, SqlTransform, JsTransform, MarkConfig, ScaleMap } from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 
+/**
+ * SQL transforms that give the same rows over a table holding its padding as
+ * padding gives their result: row filters (applied to the table's build), and
+ * what runs after padding (rank, stack, normalize).
+ */
+const PAD_SAFE = new Set(['dense', 'filter', 'rank', 'stack', 'normalize']);
+
 export class TransformCompiler {
 	transforms: Transform[];
 	sqlTransforms: SqlTransform[];
@@ -68,6 +75,25 @@ export class TransformCompiler {
 		}
 
 		return result;
+	}
+
+	/**
+	 * The padding rows of this mark's queries (see SqlTransform.padRows), for a
+	 * pre-aggregated table to hold, or null when they cannot live in a table.
+	 *
+	 * Only when padding is the last thing that changes which rows exist: every
+	 * other SQL transform is one that runs the same over a padded table as over
+	 * a padded result. A topN ranks before padding, so zero rows in its table
+	 * would enter the ranking; anything else not listed is not known to be safe.
+	 */
+	padRows(aliases: string[], facts?: Partial<MarkConfig>): string | null {
+		if (!this.sqlTransforms.every((t) => PAD_SAFE.has(t.type))) return null;
+		const config = this.#configFor(facts);
+		for (const transform of this.sqlTransforms) {
+			const rows = transform.padRows?.(aliases, config);
+			if (rows) return rows;
+		}
+		return null;
 	}
 
 	/**

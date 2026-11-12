@@ -106,6 +106,12 @@ export interface SqlTransform {
 	 * band a mark may morph along.
 	 */
 	alignment?(aliases: string[], config?: MarkConfig): string[] | null;
+	/**
+	 * The rows this transform would add to a result to pad it, as a SELECT of
+	 * every alias, or null when it pads nothing. A pre-aggregated table is
+	 * built with them, so its reads need no padding of their own (`padded`).
+	 */
+	padRows?(aliases: string[], config?: MarkConfig): string | null;
 	describe?(): string;
 }
 
@@ -166,6 +172,8 @@ export type BinPadding = NumericBinPadding | TimeBinPadding;
 /** Numeric bins: edge k is `min + alpha * (k + offset)` for k in [0, count). */
 export interface NumericBinPadding {
 	kind: 'number';
+	/** The binned column or expression, as SQL: a bin is NULL exactly where it is. */
+	source: string;
 	min: number;
 	alpha: number;
 	count: number;
@@ -181,6 +189,8 @@ export interface NumericBinPadding {
  */
 export interface TimeBinPadding {
 	kind: 'time';
+	/** The binned column or expression, as SQL: a bucket is NULL exactly where it is. */
+	source: string;
 	interval: string;
 	minMs: number;
 	maxMs: number;
@@ -201,6 +211,8 @@ export interface MarkConfig {
 	groupKeys?: string[] | null;
 	/** The numeric `bin()` channels and their bins, which `dense()` pads from. Per query. */
 	bins?: Record<string, BinPadding> | null;
+	/** The query reads a table that already holds its padding rows. Per query. */
+	padded?: boolean;
 	[key: string]: unknown;
 }
 

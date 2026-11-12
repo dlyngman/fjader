@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
-import { column, count, gt, isBetween, sql } from '@uwdata/mosaic-sql';
+import { avg, column, count, gt, isBetween, sql } from '@uwdata/mosaic-sql';
 import type { ExprNode } from '@uwdata/mosaic-sql';
 import {
 	QueryEngine,
@@ -256,7 +256,14 @@ describe('a histogram padded to every bin', () => {
 		);
 
 	it('enumerates the bins binHistogram produces', async () => {
-		expect(bins.x1).toEqual({ kind: 'number', min: 0, alpha: 50, count: 20, offset: 0 });
+		expect(bins.x1).toEqual({
+			kind: 'number',
+			source: '"x"',
+			min: 0,
+			alpha: 50,
+			count: 20,
+			offset: 0
+		});
 		expect(bins.x2.offset).toBe(1);
 		const edges = await conn.all(
 			`SELECT DISTINCT CAST(${lower.resolve(stats, 'linear')} AS DOUBLE) AS e FROM t ORDER BY e`
@@ -275,7 +282,8 @@ describe('a histogram padded to every bin', () => {
 		const toggle = group.registerToggle('g');
 		const referenceToggle = reference.registerToggle('g');
 		await settle([viaPreagg], () => toggle.set([[0]]));
-		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		const preaggRead = nonDDL().at(-1)!;
+		expectStoredPadding(preaggRead);
 		await settle([viaBase], () => referenceToggle.set([[0]]));
 		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
 
@@ -286,9 +294,40 @@ describe('a histogram padded to every bin', () => {
 		expect(rows.map((r) => r[1])).toEqual(Array.from({ length: 20 }, (_, k) => 50 * (k + 1)));
 		expect(rows.map((r) => r[2])).toEqual(Array.from({ length: 20 }, (_, k) => (k < 5 ? 50 : 0)));
 
-		// Every channel stays a REAL, so it reaches the GPU without a copy.
-		const types = await conn.all(`DESCRIBE ${nonDDL().at(-1)}`);
-		expect(types.map((t) => t.column_type)).toEqual(['FLOAT', 'FLOAT', 'FLOAT']);
+		// Every channel stays a REAL on both paths, so it reaches the GPU
+		// without a copy and with the same bits.
+		for (const read of [preaggRead, nonDDL().at(-1)!]) {
+			const types = await conn.all(`DESCRIBE ${read}`);
+			expect(types.map((t) => t.column_type)).toEqual(['FLOAT', 'FLOAT', 'FLOAT']);
+		}
+	});
+
+	it('leaves NULL values out of the stored padding, as padding a base read drops them', async () => {
+		// Every tenth x is NULL: a NULL bin, never drawn. The base read drops it
+		// when padding; the table must not hold it either, or the preagg read
+		// would return a row the base read does not.
+		await conn.exec!(
+			`CREATE TABLE tn AS SELECT CASE WHEN i % 10 = 0 THEN NULL ELSE i END AS x, i // 250 AS g FROM range(1000) r(i)`
+		);
+		await engine.ensureColumns('tn', { categorical: ['g'] });
+		const opts = { baseTable: 'tn', transforms, bins };
+		const viaPreagg = await mark('hist-nulls', select, opts);
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('hist-nulls-ref', select, { ...opts, into: reference });
+
+		await activateToggle(['g']);
+		expect(creates().at(-1)).toContain('("x") IS NOT NULL');
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0], [1]]));
+		expectStoredPadding(nonDDL().at(-1)!);
+		await settle([viaBase], () => referenceToggle.set([[0], [1]]));
+
+		const rows = ordered(viaPreagg);
+		expect(rows).toEqual(ordered(viaBase));
+		expect(rows).toHaveLength(20);
+		expect(rows.every((r) => !Number.isNaN(r[0]))).toBe(true);
 	});
 
 	it('pads monthly time buckets the same way, months not being a fixed width', async () => {
@@ -329,7 +368,7 @@ describe('a histogram padded to every bin', () => {
 		const toggle = group.registerToggle('g');
 		const referenceToggle = reference.registerToggle('g');
 		await settle([viaPreagg], () => toggle.set([[0]]));
-		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		expectStoredPadding(nonDDL().at(-1)!);
 		await settle([viaBase], () => referenceToggle.set([[0]]));
 
 		const rows = ordered(viaPreagg);
@@ -339,7 +378,80 @@ describe('a histogram padded to every bin', () => {
 		expect(rows.map((r) => r[1])).toEqual(Array.from({ length: 14 }, (_, m) => monthStart(m + 1)));
 		expect(rows.map((r) => r[2])).toEqual([31, 29, 31, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
 	});
+
+	it('stores the padding of bars with a series: every (category, series) pair', async () => {
+		// Bands g (4), series cat (2, plus -1 for NULL). Selecting g = 0 leaves
+		// bands 1..3 with no rows: zeros for every series, as padding gives.
+		await engine.ensureColumns('t', { categorical: ['g'] });
+		const view = engine.identitySourceFor('t');
+		const barSelect = {
+			x: castReal(column(idOf('g'))),
+			fill: castReal(column(idOf('cat'))),
+			y: count()
+		};
+		const identity = {
+			x: {
+				dim: engine.dimTableFor('g'),
+				size: engine.identityFor('g').values.length,
+				positional: true
+			},
+			fill: {
+				dim: engine.dimTableFor('cat'),
+				size: engine.identityFor('cat').values.length,
+				positional: false
+			}
+		};
+		const barTransforms = {
+			transforms: [dense()],
+			config: { markType: 'bary', table: 't', identity } as MarkConfig
+		};
+		const opts = { table: view, transforms: barTransforms };
+		const viaPreagg = await mark('bars-series', barSelect, opts);
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('bars-series-ref', barSelect, { ...opts, into: reference });
+
+		await activateToggle(['g']);
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		expectStoredPadding(nonDDL().at(-1)!);
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+
+		const rows = ordered(viaPreagg);
+		expect(rows).toEqual(ordered(viaBase));
+		expect(rows).toHaveLength(4 * 3);
+		expect(rows.filter((r) => r[2] > 0).map((r) => r[0])).toEqual([0, 0]);
+	});
+
+	it('keeps padding at read time for a mean, whose empty bin would read 0 / 0', async () => {
+		await engine.ensureColumns('t', { categorical: ['g'] });
+		const meanSelect = { ...select, y: avg('x') };
+		const viaPreagg = await mark('hist-mean', meanSelect, { transforms, bins });
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('hist-mean-ref', meanSelect, { transforms, bins, into: reference });
+
+		await activateToggle(['g']);
+		expect(creates().at(-1)).not.toContain('UNION ALL BY NAME');
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		const read = nonDDL().at(-1)!;
+		expect(read).toContain('__dplot_preagg_');
+		expect(read).toContain('LEFT JOIN');
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+		expect(ordered(viaPreagg)).toEqual(ordered(viaBase));
+	});
 });
+
+/** A read of a preagg table that holds its padding: filtered with the marker, no join. */
+function expectStoredPadding(read: string): void {
+	expect(read).toContain('__dplot_preagg_');
+	expect(read).toContain('"__pad" OR');
+	expect(read).not.toContain('LEFT JOIN');
+	expect(creates().at(-1)).toContain('UNION ALL BY NAME');
+}
 
 describe('preagg for value dims', () => {
 	it('legend hover then click: every case reads a preagg table and matches the base query', async () => {

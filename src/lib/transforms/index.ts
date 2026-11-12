@@ -19,6 +19,7 @@ import type {
 	ScaleMap
 } from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
+import { numericBinEdgeSQL } from '$lib/sql/bin';
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
@@ -283,11 +284,14 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// renderer the row set has not changed (alignmentKey).
 			select[alias] = rawSql(binEdge(bin, 'd.k')) as ExprNode;
 		} else if (alias === band) {
-			select[alias] = sqlTag`d."id"` as ExprNode;
+			// REAL, as the inner query's id columns are: an INTEGER column would
+			// reach the GPU through a copy, and hand the renderer other bits than
+			// a preagg read, which keeps the REAL ids.
+			select[alias] = rawSql(`CAST(d."id" AS REAL)`) as ExprNode;
 		} else if (crossed) {
 			// Another group key, enumerated from its own dim: the padded row for a
 			// missing (category, series) pair carries that series' real id.
-			select[alias] = rawSql(`${crossed}."id"`) as ExprNode;
+			select[alias] = rawSql(`CAST(${crossed}."id" AS REAL)`) as ExprNode;
 		} else if (alias.startsWith(OTHER_MEMBER_PREFIX)) {
 			// Other's member lists: NULL on a padded row, as on every row but
 			// Other's. Never COALESCEd to 0 like a measure, which is a type error on
@@ -302,14 +306,14 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// This is what keeps a DEPARTING bar its colour. It is still on screen
 			// while it shrinks, and a sentinel would turn it grey on the frame its
 			// data disappeared — the one frame where the colour matters most.
-			select[alias] = sqlTag`d."id"` as ExprNode;
+			select[alias] = rawSql(`CAST(d."id" AS REAL)`) as ExprNode;
 		} else if (plan.identity[alias]) {
 			// A category id from some OTHER field that is not a group key — an
 			// aggregate over ids. There is no correct value for a row with no data,
 			// so the absent sentinel it is. Never 0, which is a real category: it
 			// would enter the colour scale's domain, shift every palette rank after
 			// it, and repaint bars that had not changed.
-			select[alias] = sqlTag`COALESCE(a.${column(alias)}, -1)` as ExprNode;
+			select[alias] = sqlTag`COALESCE(a.${column(alias)}, CAST(-1 AS REAL))` as ExprNode;
 		} else {
 			// A measure. 0 is the point: it is what makes a departing bar shrink to
 			// nothing rather than vanish.
@@ -372,7 +376,7 @@ function binSource(bin: BinPadding): string {
  */
 function binEdge(bin: BinPadding, k: string): string {
 	if (bin.kind === 'number') {
-		return `CAST((${sqlNumber(bin.min)} + ${sqlNumber(bin.alpha)} * (${k} + ${bin.offset})) AS REAL)`;
+		return `CAST(${numericBinEdgeSQL(bin.min, bin.alpha, bin.offset, k)} AS REAL)`;
 	}
 	return `CAST((epoch(${k} + (${bin.interval}) * ${bin.offset}) - ${bin.t0}) AS REAL)`;
 }
@@ -643,9 +647,26 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 			return plan ? [plan.band, ...plan.cross.map(([key]) => key)] : null;
 		},
 		apply(query: SelectQuery, config?: MarkConfig) {
+			// A preagg table built with padRows() below: its rows are already one
+			// per category or bin, and only the order is left, which the query's
+			// ORDER BY takes from alignment() as for any other read.
+			if (config?.padded) return query;
 			const aliases = getSelectAliases(query);
 			const plan = densePlan(aliases, config, enabled, reported);
 			return plan ? densify(query, aliases, plan) : query;
+		},
+		/**
+		 * The rows apply() would add, as the padding of an empty result: the same
+		 * join and the same rules for every channel, so a table built with them
+		 * holds exactly what padding its reads would have added.
+		 */
+		padRows(aliases: string[], config?: MarkConfig) {
+			const plan = densePlan(aliases, config, enabled, reported);
+			if (!plan) return null;
+			const empty = Query.select(
+				Object.fromEntries(aliases.map((alias) => [alias, rawSql('NULL')]))
+			).where(rawSql('false')) as SelectQuery;
+			return String(densify(empty, aliases, plan));
 		},
 		describe() {
 			return 'Dense categories';

@@ -21,6 +21,7 @@ import {
 	isBetween,
 	literal,
 	Query,
+	collectAggregates,
 	sql as sqlTag,
 	type ExprNode,
 	type WindowNode
@@ -122,7 +123,19 @@ export interface PreaggCreation {
 	 * table joined on value. Empty for every other table.
 	 */
 	joins: Array<{ raw: string; alias: string; dim: string }>;
+	/**
+	 * The mark's padding rows, held in the table so its reads need no padding
+	 * (see TransformCompiler.padRows), or null. `rows` is their SELECT over
+	 * every channel; the table takes its group channels (`dims`), 0 for every
+	 * partial (`partials`: count and sum only, for which 0 adds nothing), and
+	 * `__pad` true. Source rows whose bin is NULL are left out (in `where`):
+	 * those bins are never drawn, and padding a base read drops them too.
+	 */
+	pad: { rows: string; dims: string[]; partials: string[] } | null;
 }
+
+/** The column marking a preagg table's padding rows; real rows hold false. */
+export const PAD_COLUMN = '__pad';
 
 /**
  * How each active dim appears in a preagg table. A `bin` dim is a pixel-bin
@@ -265,6 +278,8 @@ export function planPreagg(
 		activeKeys.push({ column: null, groups: null });
 	});
 
+	const pad = analysis.windowChannels ? null : padPlan(descriptor, preaggCols);
+
 	// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
 	// Partial-aggregate and active columns stay raw for recombination.
 	for (const [ch, expr] of Object.entries(preaggCols)) {
@@ -280,14 +295,55 @@ export function planPreagg(
 			groupby: [...preaggGroupBy, ...activeGroupBy] as ExprNode[],
 			// Sorted by bin columns for fast range scans
 			orderby: binOrder,
-			where: descriptor.transformCompiler.rowFilters(),
-			joins
+			where: [...descriptor.transformCompiler.rowFilters(), ...(pad?.where ?? [])],
+			joins,
+			pad: pad?.pad ?? null
 		},
 		outputSelect,
 		activeMeta,
 		windowChannels: analysis.windowChannels,
 		activeKeys
 	};
+}
+
+/**
+ * The padding rows a mark's table can hold, or null when its reads must pad
+ * themselves: the mark pads nothing, a transform would see the rows differently
+ * (TransformCompiler.padRows), or a measure is not a count or a sum. A mean of
+ * an empty bin would read 0 / 0 from a padding row, where padding gives 0.
+ */
+function padPlan(
+	descriptor: QueryDescriptor,
+	preaggCols: Record<string, ExprNode>
+): { pad: NonNullable<PreaggCreation['pad']>; where: ExprNode[] } | null {
+	const { parts, transformCompiler } = descriptor;
+	for (const expr of Object.values(parts.selectDef)) {
+		if (!isNode(expr) || !isAggregateExpression(expr as ExprNode)) continue;
+		for (const agg of collectAggregates(expr as ExprNode)) {
+			const name = agg.name.toLowerCase();
+			if (agg.isDistinct || (name !== 'count' && name !== 'sum')) return null;
+		}
+	}
+	const rows = transformCompiler.padRows(Object.keys(parts.selectDef), {
+		groupKeys: parts.groupKeys,
+		bins: parts.bins ?? null
+	});
+	if (!rows) return null;
+	const dims: string[] = [];
+	const partials: string[] = [];
+	for (const [col, expr] of Object.entries(preaggCols)) {
+		if (col.startsWith('__ps')) partials.push(col);
+		else if (col.startsWith('__active') || col.startsWith('__raw')) continue;
+		else if (!isAggregateExpression(expr)) dims.push(col);
+	}
+	// A filter on the source column, not on the bin: on the bin it would be
+	// pushed below the GROUP BY and compute every row's bin twice (measured:
+	// half again the build time), where a NULL test on the column is free.
+	const sources = new Set(dims.flatMap((col) => parts.bins?.[col]?.source ?? []));
+	const where = [...sources].map(
+		(source) => sqlTag([`(${source}) IS NOT NULL`] as unknown as TemplateStringsArray) as ExprNode
+	);
+	return { pad: { rows, dims, partials }, where };
 }
 
 /** The mark's channel that is `field`'s id channel (see idFieldOf), or null. */
@@ -512,14 +568,25 @@ export function preaggQuerySQL(
 		}
 	}
 
+	// A table holding its padding: those rows pass whatever the brush says, and
+	// the read's GROUP BY folds them into the real rows of the same group.
+	if (preagg.creation.pad && filters.length > 0) {
+		filters.splice(
+			0,
+			filters.length,
+			sqlTag`(${column(PAD_COLUMN)} OR ${and(filters)})` as ExprNode
+		);
+	}
+
 	const preaggParts: QueryParts = {
 		selectDef: castSelect,
 		nonAggregateGroupBy: preaggGroupBy,
 		hasAggregates: true,
 		groupKeys: preaggGroupKeys,
 		// The table keeps the bin channels as columns of the same bins, so the
-		// read pads exactly as the base read does.
+		// read pads exactly as the base read does, or is padded already.
 		bins: parts.bins,
+		padded: !!preagg.creation.pad,
 		hasWindowAggregates: false,
 		hasSQLTransforms: parts.hasSQLTransforms,
 		orderChannels: parts.orderChannels,
@@ -545,10 +612,30 @@ export function preaggQuerySQL(
 
 /** A preagg table's SELECT. Build and validity check share it, so equal SQL means an equal table. */
 export function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[]): string {
+	const pad = creation.pad;
+	if (!pad) return realRowsSQL(creation, filters, true);
+	// By name: the padding rows name only what they set, and the brush and
+	// value columns they leave out come back NULL. Ordered once, outside.
+	const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+	const padRows =
+		`SELECT ${pad.dims.map((col) => `p.${quote(col)}`).join(', ')}` +
+		pad.partials.map((col) => `, 0 AS ${quote(col)}`).join('') +
+		`, true AS ${quote(PAD_COLUMN)} FROM (${pad.rows}) AS p`;
+	const order = creation.orderby.length ? ` ORDER BY ${creation.orderby.join(', ')}` : '';
+	return (
+		`SELECT * FROM (SELECT *, false AS ${quote(PAD_COLUMN)} FROM (${realRowsSQL(creation, filters, false)}) AS r` +
+		` UNION ALL BY NAME ${padRows})${order}`
+	);
+}
+
+/** The table's real rows: the mark's groups over the source rows. */
+function realRowsSQL(creation: PreaggCreation, filters: FilterExpr[], ordered: boolean): string {
 	const query = Query.from(creation.table).select(creation.select).groupby(creation.groupby);
 	const where = [...creation.where, ...(filters as ExprNode[])];
 	if (where.length > 0) query.where(and(where));
-	if (creation.joins.length === 0) return query.orderby(creation.orderby).toString();
+	if (creation.joins.length === 0) {
+		return (ordered ? query.orderby(creation.orderby) : query).toString();
+	}
 
 	// Map fields grouped by value to their ids on the grouped result: a join
 	// over the table's groups, not over every source row. The filters stay in
@@ -561,7 +648,8 @@ export function preaggSelectSQL(creation: PreaggCreation, filters: FilterExpr[])
 	const joins = creation.joins
 		.map((j, k) => `LEFT JOIN ${quote(j.dim)} AS d${k} ON p.${quote(j.raw)} = d${k}.value`)
 		.join(' ');
-	const order = creation.orderby.length ? ` ORDER BY ${creation.orderby.join(', ')}` : '';
+	const order =
+		ordered && creation.orderby.length ? ` ORDER BY ${creation.orderby.join(', ')}` : '';
 	return `SELECT p.* EXCLUDE (${raws}), ${ids} FROM (${query}) AS p ${joins}${order}`;
 }
 
