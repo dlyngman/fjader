@@ -20,6 +20,7 @@ export class MarkSeries {
 	#setupState: () => MarkSetupState;
 	#scaleRegistry: ScaleRegistry;
 	#chartContext: ChartContext;
+	#colorScale: () => ColorScaleState | null;
 
 	scaleState: ColorScaleState | null = $state(null);
 
@@ -28,13 +29,15 @@ export class MarkSeries {
 		channelName: string,
 		getSetup: () => MarkSetupState,
 		scaleRegistry: ScaleRegistry,
-		chartContext: ChartContext
+		chartContext: ChartContext,
+		getColorScale: () => ColorScaleState | null = () => null
 	) {
 		this.#seriesProp = getSeries;
 		this.#channelName = channelName;
 		this.#setupState = getSetup;
 		this.#scaleRegistry = scaleRegistry;
 		this.#chartContext = chartContext;
+		this.#colorScale = getColorScale;
 
 		// Lifecycle: Create/Destroy Scale
 		// Series grouping is always ordinal
@@ -111,6 +114,25 @@ export class MarkSeries {
 
 		return this.scaleState.processDataForGPU(raw);
 	});
+
+	/**
+	 * Whether the renderer reads selection activity through the series scale:
+	 * 1 for a `z` of its own, a field that carries ids, so a selection on it
+	 * dims the other series. 0 without `z` (the series is the colour, read
+	 * already), for a `z` on the colour field (the registry hands both
+	 * channels one scale, and reading it twice is a load for nothing), and
+	 * before the scale has an identity, while its values are not ids yet.
+	 * Routing (MarkLifecycleV2's reads) lists the same field in the same
+	 * cases, so the mark dims rather than filters exactly when this is 1.
+	 */
+	activityMode: number = $derived.by(() => {
+		const scale = this.scaleState;
+		if (this.#channelName !== 'z' || !scale?.hasIdentity) return 0;
+		return scale === this.#colorScale() ? 0 : 1;
+	});
+
+	/** The series scale's colour config index, read when `activityMode` is 1. */
+	activityScaleIndex: number = $derived(this.scaleState?.gpuIndex ?? 0);
 
 	// Ready when: no field (single series) or scale is ready
 	ready: boolean = $derived(!this.#field || (this.scaleState?.ready ?? false));
