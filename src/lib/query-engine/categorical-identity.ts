@@ -978,6 +978,18 @@ export class CategoricalIdentity {
 	 * a full read cannot drift out of sync with the ids the way an incremental
 	 * one can if an append is ever missed.
 	 */
+	/**
+	 * Bumped whenever a dim's rows change: a table folding in, an Other bucket
+	 * reserved, a reset. A query that reads a dim (dense padding, an id join)
+	 * returns different rows afterwards under the same SQL text, so whatever
+	 * caches results by that text must also key on this. Only ever increases.
+	 */
+	get version(): number {
+		return this.#version;
+	}
+
+	#version = 0;
+
 	async #refreshValues(field: string): Promise<void> {
 		const rows = await this.#exec.queryRows(
 			`SELECT id, value, label FROM ${quote(this.dimTable(field))} ORDER BY id`
@@ -998,6 +1010,10 @@ export class CategoricalIdentity {
 			rows.map((row) => (row.label ?? row.value) as DimValue),
 			synthetic
 		);
+		// After the rows are written, never before: a query keyed on the new
+		// version must see them. One keyed on the old version may also see them,
+		// which costs a re-run later, not a stale result.
+		this.#version++;
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */
@@ -1061,6 +1077,7 @@ export class CategoricalIdentity {
 		// Before any await: work already in flight compares against this and
 		// stops rather than re-creating what is about to be dropped.
 		this.#generation++;
+		this.#version++;
 
 		const views = [...this.#views.keys()].map((t) => this.viewTable(t));
 		const dims = [...this.#dims.values()].flatMap((d) => [

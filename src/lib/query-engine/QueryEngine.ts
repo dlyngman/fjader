@@ -201,7 +201,15 @@ export class QueryEngine {
 	#preagg: Preagg;
 	/** When a filter last changed, in any group (performance.now()). */
 	#lastFilterChangeAt = 0;
-	/** LRU query cache: SQL string → Arrow Table (or Promise<Table> while inflight). */
+	/**
+	 * LRU query cache: Arrow Table (or Promise<Table> while inflight), keyed by
+	 * `#cacheKey`, the SQL text and the dims' version. A mark's query reads dim
+	 * tables (dense padding pads every category the dim holds), and dims grow
+	 * after the first queries run: a table folding in, a topN mark reserving its
+	 * Other. The text does not change when they do, so keyed by text alone the
+	 * cache served a result from before, with fewer rows: the row set changed
+	 * between updates and the bars snapped instead of morphing.
+	 */
 	#queryCache = lruCache<Table>({ max: 1000, ttl: 3 * 60 * 60 * 1000 });
 	/**
 	 * Per-instance suffix for every table and view this engine creates.
@@ -460,7 +468,7 @@ export class QueryEngine {
 		// Opt out with cache: false for queries against volatile temp tables.
 		const useCache = opts?.cache !== false;
 		if (useCache) {
-			const cached = this.#queryCache.get(sqlStr);
+			const cached = this.#queryCache.get(this.#cacheKey(sqlStr));
 			if (cached !== undefined) {
 				return cached instanceof Promise ? cached : Promise.resolve(cached);
 			}
@@ -503,6 +511,14 @@ export class QueryEngine {
 		return this.#queryRaw(sqlStr);
 	}
 
+	/**
+	 * The cache key for a query: its text and the dims' version, so a result read
+	 * against a dim that has since grown is not served again.
+	 */
+	#cacheKey(sqlStr: string): string {
+		return `${this.#identity.version}\u0000${sqlStr}`;
+	}
+
 	async #executeForCaller(
 		callerId: string,
 		sqlStr: string,
@@ -511,6 +527,7 @@ export class QueryEngine {
 	): Promise<Table> {
 		const controller = new AbortController();
 		this.#inflight.set(callerId, controller);
+		let key: string | null = null;
 
 		if (signal) {
 			signal.addEventListener('abort', () => controller.abort(), { once: true });
@@ -521,25 +538,29 @@ export class QueryEngine {
 				throw new DOMException('Query superseded', 'AbortError');
 			}
 
+			// Keyed when it runs, not when it was asked for: a pending query runs
+			// later, against whatever the dims hold by then.
+			key = this.#cacheKey(sqlStr);
+
 			// Cache the Promise so concurrent identical queries share one inflight
 			const queryPromise = this.#queryRaw(sqlStr);
-			if (cache) this.#queryCache.set(sqlStr, queryPromise);
+			if (cache) this.#queryCache.set(key, queryPromise);
 
 			const result = await queryPromise;
 
 			// Replace Promise with resolved data for future lookups
-			if (cache) this.#queryCache.set(sqlStr, result);
+			if (cache) this.#queryCache.set(key, result);
 
 			if (controller.signal.aborted) {
 				// Don't cache results from aborted queries
-				this.#queryCache.delete(sqlStr);
+				this.#queryCache.delete(key);
 				throw new DOMException('Query superseded', 'AbortError');
 			}
 
 			return result;
 		} catch (e) {
 			// Remove failed query from cache so we don't serve a rejected Promise
-			this.#queryCache.delete(sqlStr);
+			if (key !== null) this.#queryCache.delete(key);
 			throw e;
 		} finally {
 			// Only clean up if we're still the current query for this caller
