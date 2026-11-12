@@ -79,12 +79,14 @@
 		markId?: string;
 		/**
 		 * The band axis, when this mark's rows are one per category in category
-		 * order and may therefore morph. null to morph nothing.
+		 * order and may therefore morph; or a histogram's binned axis, one row per
+		 * bin in bin order. null to morph nothing.
 		 *
 		 * The OTHER axis's channels morph. The band's never do: they carry a
 		 * category id that the shader resolves through the slot table, and
 		 * interpolating an identity produces a fraction that resolves to some
-		 * other category. Position already animates, through the slot table.
+		 * other category. Position already animates, through the slot table. A
+		 * bin's edges do not change under a filter, and a re-bin snaps.
 		 */
 		bandAxis?: 'x' | 'y' | null;
 	}

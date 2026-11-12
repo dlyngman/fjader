@@ -9,6 +9,7 @@
 import { Query, column, sql as sqlTag } from '@uwdata/mosaic-sql';
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type {
+	BinPadding,
 	ChannelIdentity,
 	SqlTransform,
 	JsTransform,
@@ -269,12 +270,19 @@ const BAND_SOURCE_COLUMN = '__dplot_band_src';
  * instead, and the query assembler orders the outermost query by it.
  */
 function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): SelectQuery {
-	const { band, dim, cross } = plan;
+	const { band, dim, cross, bins } = plan;
 	const crossAlias = new Map(cross.map(([key], i) => [key, `k${i}`]));
+	const binOf = new Map(bins);
 	const select: Record<string, ExprNode> = {};
 	for (const alias of aliases) {
 		const crossed = crossAlias.get(alias);
-		if (alias === band) {
+		const bin = binOf.get(alias);
+		if (bin) {
+			// Every row's edge from its bin index, real and padded alike, so the
+			// edges are the same bits on every update: they are what tells the
+			// renderer the row set has not changed (alignmentKey).
+			select[alias] = rawSql(`CAST(${binEdge(bin, 'd.k')} AS REAL)`) as ExprNode;
+		} else if (alias === band) {
 			select[alias] = sqlTag`d."id"` as ExprNode;
 		} else if (crossed) {
 			// Another group key, enumerated from its own dim: the padded row for a
@@ -285,7 +293,7 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 			// Other's. Never COALESCEd to 0 like a measure, which is a type error on
 			// a list.
 			select[alias] = rawSql(`a.${column(alias)}`) as ExprNode;
-		} else if (plan.identity[alias]?.dim === dim) {
+		} else if (!bins && plan.identity[alias]?.dim === dim) {
 			// Same dim as the band, so this channel IS the category — the ordinary
 			// "colour the bars by their own category" chart. Its value for a row
 			// with no data is not unknown, it is that category's id, so take it
@@ -337,13 +345,28 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 				` CROSS JOIN (SELECT "id" FROM ${padIds(plan.identity[key], keyDim)} UNION ALL SELECT -1) AS k${i}`
 		)
 		.join('');
-	const on = [
-		`a.${column(band)} = d."id"`,
-		...cross.map(([key], i) => `a.${column(key)} = k${i}."id"`)
-	].join(' AND ');
-	return Query.from(
-		rawSql(`${padIds(plan.identity[band], dim)} AS d${joins} LEFT JOIN (${inner}) AS a ON ${on}`)
-	).select(select);
+	const bandBin = binOf.get(band);
+	// A bin is matched by its index, recovered from its edge: the edge is a
+	// REAL in the result (and in a preagg table), so comparing it to an edge
+	// computed here could miss by a rounding.
+	const bandOn = bandBin
+		? `round((CAST(a.${column(band)} AS DOUBLE) - ${sqlNumber(bandBin.min)}) / ${sqlNumber(bandBin.alpha)}) - ${bandBin.offset} = d.k`
+		: `a.${column(band)} = d."id"`;
+	const on = [bandOn, ...cross.map(([key], i) => `a.${column(key)} = k${i}."id"`)].join(' AND ');
+	const source = bandBin
+		? `range(0, ${bandBin.count}) AS d(k)`
+		: `${padIds(plan.identity[band], dim)} AS d`;
+	return Query.from(rawSql(`${source}${joins} LEFT JOIN (${inner}) AS a ON ${on}`)).select(select);
+}
+
+/** Bin `k`'s edge, `min + alpha * (k + offset)`, in DOUBLE arithmetic. */
+function binEdge(bin: BinPadding, k: string): string {
+	return `(${sqlNumber(bin.min)} + ${sqlNumber(bin.alpha)} * (${k} + ${bin.offset}))`;
+}
+
+/** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
+function sqlNumber(n: number): string {
+	return `CAST(${JSON.stringify(n)} AS DOUBLE)`;
 }
 
 /**
@@ -359,9 +382,14 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 export const DENSE_ROW_LIMIT = 10_000;
 
 interface DensePlan {
-	/** The channel joined against its dim, and that dim. */
+	/**
+	 * The channel joined against its dim, and that dim. For a binned axis, the
+	 * first of its bin channels, and no dim.
+	 */
 	band: string;
 	dim: string;
+	/** A binned axis: its bin channels (the band first) and their bins. */
+	bins: [string, BinPadding][] | null;
 	/** Every other group key with a dim of its own, crossed in: [channel, dim]. */
 	cross: [string, string][];
 	identity: Record<string, ChannelIdentity>;
@@ -428,21 +456,25 @@ function densePlan(
 		if (reported.has(key)) return;
 		reported.add(key);
 		console.info(
-			`[dense] ${reason} Categories on this mark will snap between updates ` +
-				`rather than morphing, and a category leaving will vanish rather than shrink out.`
+			`[dense] ${reason} Categories or bins on this mark will snap between updates ` +
+				`rather than morphing, and one leaving will vanish rather than shrink out.`
 		);
 	};
 
 	if (!enabled) return null;
-
-	const identity = config?.identity;
-	if (!identity) return null;
 
 	// Stated by whoever built the select, because it cannot be recovered from
 	// the query by the time this runs: topN has already wrapped it, and the
 	// GROUP BY is several levels down.
 	const groupKeys = config?.groupKeys;
 	if (!groupKeys) return null;
+
+	// A histogram: its bins are enumerable like a dim's ids.
+	const binned = binPlan(aliases, groupKeys, config, say);
+	if (binned !== undefined) return binned;
+
+	const identity = config?.identity;
+	if (!identity) return null;
 
 	const candidates = aliases.filter((ch) => identity[ch]?.positional);
 	if (candidates.length !== 1) {
@@ -485,7 +517,65 @@ function densePlan(
 		return null;
 	}
 
-	return { band, dim, cross, identity };
+	return { band, dim, cross, bins: null, identity };
+}
+
+/**
+ * The plan for a binned axis: one row per bin, from the bins `bin()`
+ * resolved, crossed with each other group key's ids as for a categorical band.
+ * Null with nothing binned. Refuses, saying why, what it cannot enumerate: bins
+ * on both axes (a 2D histogram) or beside a categorical axis, a group key with
+ * no dim, and too many rows. Silent while identity has not landed for a group
+ * key that will get it.
+ */
+function binPlan(
+	aliases: string[],
+	groupKeys: string[],
+	config: MarkConfig | undefined,
+	say: (reason: string) => void
+): DensePlan | null | undefined {
+	const specs = config?.bins;
+	if (!specs) return undefined;
+	const bins = aliases
+		.filter((ch) => specs[ch] && groupKeys.includes(ch))
+		.map((ch) => [ch, specs[ch]] as [string, BinPadding])
+		.sort((a, b) => a[1].offset - b[1].offset);
+	if (bins.length === 0) return undefined;
+
+	const identity = config?.identity ?? null;
+	if (new Set(bins.map(([ch]) => ch[0])).size > 1) {
+		say('Bins on both axes (a 2D histogram), and padding is defined for one.');
+		return null;
+	}
+	const categorical = identity ? aliases.filter((ch) => identity[ch]?.positional) : [];
+	if (categorical.length > 0) {
+		say(`A binned axis beside a categorical one (${categorical.join(', ')}).`);
+		return null;
+	}
+
+	const binned = new Set(bins.map(([ch]) => ch));
+	const cross: [string, string][] = [];
+	let rows = bins[0][1].count;
+	for (const key of groupKeys) {
+		if (binned.has(key) || !aliases.includes(key)) continue;
+		const keyIdentity = identity?.[key];
+		// Before identity setup a series has no dim yet; it will.
+		if (!identity) return null;
+		if (!keyIdentity) {
+			say(`the group key "${key}" has no dim, so its missing combinations cannot be enumerated.`);
+			return null;
+		}
+		cross.push([key, keyIdentity.dim]);
+		rows *= keyIdentity.size + 1;
+	}
+	if (rows > DENSE_ROW_LIMIT) {
+		say(
+			`padding would produce about ${rows} rows, over the ${DENSE_ROW_LIMIT} limit ` +
+				`(${bins[0][1].count} bins${cross.length > 0 ? ` across ${cross.length + 1} group keys` : ''}).`
+		);
+		return null;
+	}
+	return { band: bins[0][0], dim: '', cross, bins, identity: identity ?? {} };
 }
 
 /**

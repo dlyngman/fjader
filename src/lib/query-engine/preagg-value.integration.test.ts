@@ -17,8 +17,9 @@ import {
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { filter, having, topN } from '$lib/transforms';
-import type { MarkConfig, Transform } from '$lib/types';
+import { dense, filter, having, topN } from '$lib/transforms';
+import { bin } from '$lib/sql/bin';
+import type { BinPadding, MarkConfig, Transform } from '$lib/types';
 import {
 	buildQueryParts,
 	castReal,
@@ -158,6 +159,7 @@ async function mark(
 		chart?: object;
 		response?: 'auto' | 'filter';
 		nullDrops?: NullDrop[];
+		bins?: Record<string, BinPadding>;
 	} = {}
 ): Promise<MarkHandle> {
 	const baseTable = opts.baseTable ?? 't';
@@ -166,7 +168,8 @@ async function mark(
 		baseTable,
 		parts: {
 			...buildQueryParts(select, null, !!opts.transforms),
-			...(opts.nullDrops ? { nullDrops: opts.nullDrops } : {})
+			...(opts.nullDrops ? { nullDrops: opts.nullDrops } : {}),
+			...(opts.bins ? { bins: opts.bins } : {})
 		},
 		schema: new Map(),
 		transformCompiler: new TransformCompiler(
@@ -227,6 +230,66 @@ function activateToggle(fields: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('a histogram padded to every bin', () => {
+	// x: 0..999 in 20 bins of 50. Selecting g = 0 keeps x < 250, which empties
+	// bins 5..19: they must come back as zero rows, in bin order, from the
+	// preagg table exactly as from the base table.
+	const stats = { x: { min: 0, max: 999 } };
+	const lower = bin('x', { steps: 20 });
+	const upper = lower.withOffset(1);
+	const select = {
+		x1: castReal(lower.resolve(stats, 'linear')),
+		x2: castReal(upper.resolve(stats, 'linear')),
+		y: count()
+	};
+	const bins = { x1: lower.padding(stats, 'linear')!, x2: upper.padding(stats, 'linear')! };
+	const transforms = {
+		transforms: [dense()],
+		config: { markType: 'recty', table: 't' } as MarkConfig
+	};
+	/** A handle's rows in result order, which is what the GPU gets. */
+	const ordered = (handle: MarkHandle) =>
+		(handle.arrowTable as unknown as Record<string, unknown>[]).map((r) =>
+			Object.values(r).map(Number)
+		);
+
+	it('enumerates the bins binHistogram produces', async () => {
+		expect(bins.x1).toEqual({ min: 0, alpha: 50, count: 20, offset: 0 });
+		expect(bins.x2.offset).toBe(1);
+		const edges = await conn.all(
+			`SELECT DISTINCT CAST(${lower.resolve(stats, 'linear')} AS DOUBLE) AS e FROM t ORDER BY e`
+		);
+		expect(edges.map((r) => r.e)).toEqual(Array.from({ length: 20 }, (_, k) => 50 * k));
+	});
+
+	it('reads a preagg table padded like the base read, zeros in place, as REAL', async () => {
+		await engine.ensureColumns('t', { categorical: ['g'] });
+		const viaPreagg = await mark('hist-padded', select, { transforms, bins });
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('hist-padded-ref', select, { transforms, bins, into: reference });
+
+		await activateToggle(['g']);
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
+
+		const rows = ordered(viaPreagg);
+		expect(rows).toEqual(ordered(viaBase));
+		expect(rows).toHaveLength(20);
+		expect(rows.map((r) => r[0])).toEqual(Array.from({ length: 20 }, (_, k) => 50 * k));
+		expect(rows.map((r) => r[1])).toEqual(Array.from({ length: 20 }, (_, k) => 50 * (k + 1)));
+		expect(rows.map((r) => r[2])).toEqual(Array.from({ length: 20 }, (_, k) => (k < 5 ? 50 : 0)));
+
+		// Every channel stays a REAL, so it reaches the GPU without a copy.
+		const types = await conn.all(`DESCRIBE ${nonDDL().at(-1)}`);
+		expect(types.map((t) => t.column_type)).toEqual(['FLOAT', 'FLOAT', 'FLOAT']);
+	});
+});
 
 describe('preagg for value dims', () => {
 	it('legend hover then click: every case reads a preagg table and matches the base query', async () => {

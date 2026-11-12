@@ -1,6 +1,7 @@
 import type { ExprNode, ExprValue, BinHistogramOptions, BinDateOptions } from '@uwdata/mosaic-sql';
-import { binDate, binHistogram, column } from '@uwdata/mosaic-sql';
+import { binDate, binHistogram, binSpec, column } from '@uwdata/mosaic-sql';
 import { isTemporalScale } from '$lib/scales/scale-categories';
+import type { BinPadding } from '$lib/types';
 
 type BinOptions = BinHistogramOptions & BinDateOptions;
 
@@ -44,6 +45,58 @@ export class AutoBinNode {
 		currentDomain: [number, number] | null = null,
 		binStepMultiplier: number = 1.0
 	): ExprNode {
+		const { col, min, max, isTemporal, binOptions } = this.#plan(
+			fieldInfo,
+			scaleType,
+			currentDomain,
+			binStepMultiplier
+		);
+		return isTemporal
+			? binDate(col, [min, max], binOptions)
+			: binHistogram(col, [min, max], binOptions);
+	}
+
+	/**
+	 * The bins `resolve` produces with the same arguments, as numbers: edge k
+	 * is `min + alpha * (k + offset)` for k in [0, count), every bin a value of
+	 * the field can fall in. What `dense()` pads a histogram from, so a bin
+	 * emptied by a filter stays as a zero row and the bars can morph.
+	 *
+	 * Null where the bins cannot be enumerated that way: temporal bins (a month
+	 * is not a fixed width) and a field with a single value, which
+	 * binHistogram floors instead of binning.
+	 */
+	padding(
+		fieldInfo: Record<string, FieldInfo>,
+		scaleType: string,
+		currentDomain: [number, number] | null = null,
+		binStepMultiplier: number = 1.0
+	): BinPadding | null {
+		const { min, max, isTemporal, binOptions } = this.#plan(
+			fieldInfo,
+			scaleType,
+			currentDomain,
+			binStepMultiplier
+		);
+		if (isTemporal || max === min) return null;
+		// binHistogram's own derivation, with the linear transform it is given.
+		const b = binSpec(min, max, binOptions);
+		const alpha = (b.max - b.min) / b.steps || 1;
+		return {
+			min: b.min,
+			alpha,
+			count: Math.floor((max - b.min) / alpha) + 1,
+			offset: binOptions.offset ?? 0
+		};
+	}
+
+	/** The column, extent and options both `resolve` and `padding` bin with. */
+	#plan(
+		fieldInfo: Record<string, FieldInfo>,
+		scaleType: string,
+		currentDomain: [number, number] | null,
+		binStepMultiplier: number
+	): { col: ExprValue; min: number; max: number; isTemporal: boolean; binOptions: BinOptions } {
 		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
 		const info = fieldInfo[fieldName] || {};
 		const { min, max, type } = info;
@@ -90,9 +143,7 @@ export class AutoBinNode {
 			}
 		}
 
-		return isTemporal
-			? binDate(col, [min, max], binOptions)
-			: binHistogram(col, [min, max], binOptions);
+		return { col, min, max, isTemporal, binOptions };
 	}
 
 	withOffset(offset: number): AutoBinNode {

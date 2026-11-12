@@ -44,6 +44,7 @@ import type {
 	FieldRef,
 	NormalizedSortConfig,
 	Transform,
+	BinPadding,
 	ChannelIdentity,
 	MarkConfig,
 	ChartContext,
@@ -269,19 +270,10 @@ export class MarkLifecycleV2 {
 		// Resolve AutoBinNodes — reads #fieldStats ($state), #lastBinDomain ($state),
 		// binStepMultiplier (reactive on chartContext)
 		if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
-			const binStepMultiplier = this.#chartContext.binStepMultiplier || 1.0;
 			for (const [ch, value] of Object.entries(resolvedSelect)) {
 				if (isBinExpression(value)) {
-					const axis = ch.startsWith('x') ? 'x' : 'y';
-					const scaleType = axis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-					const currentDomain = this.#lastBinDomain[axis] ?? null;
-					resolvedSelect[ch] = value.resolve(
-						this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
-						scaleType,
-						null,
-						currentDomain,
-						binStepMultiplier
-					);
+					const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
+					resolvedSelect[ch] = value.resolve(fieldInfo, scaleType, null, currentDomain, multiplier);
 				}
 			}
 		}
@@ -330,9 +322,39 @@ export class MarkLifecycleV2 {
 		);
 		const nullDrops = this.#nullDrops(semanticSelect, resolvedSelect);
 		if (nullDrops.length > 0) parts.nullDrops = nullDrops;
+		parts.bins = this.#binPadding();
 
 		return parts;
 	});
+
+	/**
+	 * What a bin channel resolves with: the field's stats, the axis's scale
+	 * type and last re-bin domain, and the chart's step multiplier. One place,
+	 * so the bin expression and its padding cannot be resolved differently.
+	 * Reactive reads, from the deriveds that call it.
+	 */
+	#binArgs(channel: string) {
+		const axis = channel.startsWith('x') ? 'x' : 'y';
+		return {
+			fieldInfo: this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
+			scaleType: axis === 'x' ? this.actualXScaleType : this.actualYScaleType,
+			currentDomain: this.#lastBinDomain[axis] ?? null,
+			multiplier: this.#chartContext.binStepMultiplier || 1.0
+		};
+	}
+
+	/** The bins of each numeric bin channel, for dense() to pad from; null without any. */
+	#binPadding(): Record<string, BinPadding> | null {
+		if (this.#autoBinNodes.size === 0 || !this.#fieldStats) return null;
+		let out: Record<string, BinPadding> | null = null;
+		for (const [ch, value] of Object.entries(this.#config.select)) {
+			if (!isBinExpression(value)) continue;
+			const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
+			const padding = value.padding(fieldInfo, scaleType, currentDomain, multiplier);
+			if (padding) (out ??= {})[ch] = padding;
+		}
+		return out;
+	}
 
 	/**
 	 * The mark's categorical channels, each with the source expression it draws:
@@ -1667,6 +1689,11 @@ export class MarkLifecycleV2 {
 	 * never mixed, the other axis's channels morph, and the band scale owns the
 	 * clock both run on.
 	 *
+	 * A histogram's binned axis aligns too: one row per bin, in bin order. Its
+	 * channels are bin edges rather than ids, still never mixed, and with no
+	 * slot clock on a linear scale the mark's channels run on a clock of their
+	 * own.
+	 *
 	 * The first channel of the transforms' alignment — `dense()`'s plan, over the
 	 * same select and facts its `apply()` sees — so the conditions are written
 	 * once. Derived rather than recorded at apply time: apply runs for every
@@ -1679,10 +1706,13 @@ export class MarkLifecycleV2 {
 		void this.#identity;
 		// Asked exactly as assembleQuery asks when it orders the query, so this and
 		// the rows cannot disagree about which channel they are aligned on.
-		const band = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
-			groupKeys: parts.groupKeys
+		const aligned = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
+			groupKeys: parts.groupKeys,
+			bins: parts.bins ?? null
 		})?.[0];
-		return band === 'x' || band === 'y' ? band : null;
+		// A band is `x` or `y`; a binned axis aligns on its lower edge, `x1`.
+		const axis = aligned?.[0];
+		return axis === 'x' || axis === 'y' ? axis : null;
 	});
 
 	/**

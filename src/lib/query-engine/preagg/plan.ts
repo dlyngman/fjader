@@ -517,6 +517,9 @@ export function preaggQuerySQL(
 		nonAggregateGroupBy: preaggGroupBy,
 		hasAggregates: true,
 		groupKeys: preaggGroupKeys,
+		// The table keeps the bin channels as columns of the same bins, so the
+		// read pads exactly as the base read does.
+		bins: parts.bins,
 		hasWindowAggregates: false,
 		hasSQLTransforms: parts.hasSQLTransforms,
 		orderChannels: parts.orderChannels,

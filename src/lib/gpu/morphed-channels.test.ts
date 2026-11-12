@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { MorphedChannels, type ClockHost, type MorphHost } from './MorphedChannels';
+import { MorphedChannels, alignmentKey, type ClockHost, type MorphHost } from './MorphedChannels';
 import { TransitionClock } from '$lib/animation/TransitionClock';
 
 // A fake device that records what reaches the GPU, so the claims below are
@@ -451,5 +451,21 @@ describe('MorphedChannels', () => {
 		expect(m.drop(2)).toBe(false);
 		expect(m.resolved(2)).toBeUndefined();
 		expect(m.resolved(3)).toBeDefined();
+	});
+});
+
+describe('alignmentKey', () => {
+	it('tells bin edges apart by their fractions, which a sum would truncate', () => {
+		// A re-bin keeps the row count but moves every edge by half a bin.
+		const before = new Float32Array([1.25, 2.25]);
+		const after = new Float32Array([1.5, 2.5]);
+		expect(alignmentKey(before)).not.toBe(alignmentKey(after));
+		expect(alignmentKey(new Float32Array([1.25, 2.25]))).toBe(alignmentKey(before));
+	});
+
+	it('reads a view at an offset, as an Arrow column can be', () => {
+		const buffer = new Float32Array([9, 1.5, 2.5]);
+		const view = new Float32Array(buffer.buffer, 4, 2);
+		expect(alignmentKey(view)).toBe(alignmentKey(new Float32Array([1.5, 2.5])));
 	});
 });

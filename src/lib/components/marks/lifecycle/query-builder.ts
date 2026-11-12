@@ -25,6 +25,7 @@ import {
 import { isWindowExpression, isVerbatimWindowExpression } from '$lib/sql/expression-utils';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import type { ColumnSchema } from '$lib/query-engine/QueryEngine';
+import type { BinPadding } from '$lib/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +49,12 @@ export interface QueryParts {
 	 * combination, and cannot recover from a query topN has already wrapped.
 	 */
 	groupKeys: string[] | null;
+	/**
+	 * The numeric `bin()` channels and their bins, set by the mark from the
+	 * same resolution its bin expressions came from. With them `dense()` pads a
+	 * histogram to every bin; preagg reads copy them, so both paths pad alike.
+	 */
+	bins?: Record<string, BinPadding> | null;
 	orderChannels: string[] | null;
 	aliasMap: Map<string, string>;
 	/** Channels whose raw config value was a column-name passthrough (string
@@ -450,7 +457,11 @@ export function assembleQuery(opts: AssembleOptions): Query {
 
 	let result: Query = q;
 	if (hasSQLTransforms) {
-		result = transformCompiler.applyToQuery(q, { groupKeys: parts.groupKeys }, { skipRowFilters });
+		result = transformCompiler.applyToQuery(
+			q,
+			{ groupKeys: parts.groupKeys, bins: parts.bins ?? null },
+			{ skipRowFilters }
+		);
 	}
 
 	if (window) {
@@ -478,7 +489,10 @@ export function assembleQuery(opts: AssembleOptions): Query {
 	}
 
 	const alignment = hasSQLTransforms
-		? transformCompiler.alignment(Object.keys(selectDef), { groupKeys: parts.groupKeys })
+		? transformCompiler.alignment(Object.keys(selectDef), {
+				groupKeys: parts.groupKeys,
+				bins: parts.bins ?? null
+			})
 		: null;
 	const order = outerOrder(orderChannels, alignment);
 	if (order) {
