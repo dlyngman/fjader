@@ -22,7 +22,6 @@ class BarXMark(Mark):
     padding: float | None = None
     padding_inner: float | None = None
     padding_outer: float | None = None
-    align: float | None = None
     inset: float | None = None
     dx: float | None = None
     dy: float | None = None
@@ -41,7 +40,6 @@ class BarYMark(Mark):
     padding: float | None = None
     padding_inner: float | None = None
     padding_outer: float | None = None
-    align: float | None = None
     inset: float | None = None
     dx: float | None = None
     dy: float | None = None

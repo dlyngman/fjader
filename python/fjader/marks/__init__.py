@@ -115,7 +115,6 @@ def bar_x(
     padding: float | None = None,
     padding_inner: float | None = None,
     padding_outer: float | None = None,
-    align: float | None = None,
     inset: float | None = None,
     dx: float | None = None,
     dy: float | None = None,
@@ -145,7 +144,6 @@ def bar_x(
         padding: Band scale padding (0–1), shorthand for inner + outer.
         padding_inner: Space between bars within a group (0–1).
         padding_outer: Space at band edges (0–1).
-        align: Band alignment (0–1).
         inset: Pixel inset within each band.
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
@@ -175,7 +173,7 @@ def bar_x(
     return BarXMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
-        align=align, inset=inset, dx=dx, dy=dy,
+        inset=inset, dx=dx, dy=dy,
         selection=selection, selection_response=selection_response, nulls=nulls, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
@@ -197,7 +195,6 @@ def bar_y(
     padding: float | None = None,
     padding_inner: float | None = None,
     padding_outer: float | None = None,
-    align: float | None = None,
     inset: float | None = None,
     dx: float | None = None,
     dy: float | None = None,
@@ -227,7 +224,6 @@ def bar_y(
         padding: Band scale padding (0–1), shorthand for inner + outer.
         padding_inner: Space between bars within a group (0–1).
         padding_outer: Space at band edges (0–1).
-        align: Band alignment (0–1).
         inset: Pixel inset within each band.
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
@@ -257,7 +253,7 @@ def bar_y(
     return BarYMark(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
-        align=align, inset=inset, dx=dx, dy=dy,
+        inset=inset, dx=dx, dy=dy,
         selection=selection, selection_response=selection_response, nulls=nulls, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
@@ -535,7 +531,6 @@ def rect(
     padding: float | None = None,
     padding_inner: float | None = None,
     padding_outer: float | None = None,
-    align: float | None = None,
     inset: float | None = None,
     dx: float | None = None,
     dy: float | None = None,
@@ -569,7 +564,6 @@ def rect(
         padding: Band scale padding (0–1).
         padding_inner: Space between rects (0–1).
         padding_outer: Space at band edges (0–1).
-        align: Band alignment (0–1).
         inset: Pixel inset within each band.
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
@@ -602,7 +596,7 @@ def rect(
         preferred_x_scale_type=preferred_x_scale_type,
         preferred_y_scale_type=preferred_y_scale_type,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
-        align=align, inset=inset, dx=dx, dy=dy,
+        inset=inset, dx=dx, dy=dy,
         selection=selection, selection_response=selection_response, nulls=nulls, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
