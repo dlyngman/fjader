@@ -8,7 +8,12 @@
 import type { ChartConfig, MarkEntry } from '$lib/config/ChartConfig.svelte';
 import type { Transform } from '$lib/types';
 import { fieldRefToSpec } from './ExpressionParser';
-import { SPEC_MARK_TYPES, FIELD_CHANNELS, STROKE_AS_FIELD_MARKS } from './MarkRegistry';
+import {
+	SPEC_MARK_TYPES,
+	FIELD_CHANNELS,
+	STROKE_AS_FIELD_MARKS,
+	isColorFieldSpec
+} from './MarkRegistry';
 import type { PlotSpec, MarkSpec, TransformSpec } from './types';
 
 /** Props handled specially (not passthrough) or internal-only (skip entirely). */
@@ -72,13 +77,21 @@ function entryToMarkSpec(entry: MarkEntry): MarkSpec | null {
 	for (const ch of FIELD_CHANNELS) {
 		const val = entry[ch as keyof MarkEntry];
 		if (val == null) continue;
+		// Explicit colours: the colour prop's object form is already spec-shaped
+		if (isColorFieldSpec(val)) {
+			spec[ch] = { ...val };
+			continue;
+		}
 		const converted = fieldRefToSpec(val);
 		if (converted != null) spec[ch] = converted;
 	}
 
 	// stroke: data-driven on lines, CSS constant on areas
 	if (entry.stroke != null) {
-		if (STROKE_AS_FIELD_MARKS.has(entry.markType)) {
+		const stroke: unknown = entry.stroke;
+		if (STROKE_AS_FIELD_MARKS.has(entry.markType) && isColorFieldSpec(stroke)) {
+			spec.stroke = { ...stroke };
+		} else if (STROKE_AS_FIELD_MARKS.has(entry.markType)) {
 			const converted = fieldRefToSpec(entry.stroke);
 			if (converted != null) spec.stroke = converted;
 		} else if (typeof entry.stroke === 'string') {
