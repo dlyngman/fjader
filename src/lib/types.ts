@@ -329,6 +329,11 @@ export interface BaseMarkProps {
 	 * - `'filter'`: every selection filters it, even on a field it draws by, so
 	 *   its aggregates are recomputed for the subset: top N within the selected
 	 *   region, shares within the selected groups.
+	 * - `'ignore'`: no selection filters or dims it, its own chart's controls
+	 *   included, and a selection change never re-queries it. For context: the
+	 *   whole drawn faintly behind a filtered part, on the same scales, whose
+	 *   extent then keeps the axis still while the part changes. A click on its
+	 *   Other bar toggles, as under `'auto'`.
 	 *
 	 * A `'filter'` mark never dims. A legend, Toggle or band label filters it
 	 * in its own chart too: every such control on the same fields shares one

@@ -4,6 +4,7 @@
 	import type { ChartContext } from '$lib/types';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import { dimsBySelection } from '$lib/components/rendering/activity-reads';
 
 	/**
 	 * The labels on a band axis, wherever that axis is drawn.
@@ -71,8 +72,8 @@
 		if (!chart || !filterGroups) return [];
 		const indices: number[] = [];
 		for (const entry of chart.config.entries.values()) {
-			// A 'filter' mark never dims; its labels follow it.
-			if (entry.selectionResponse === 'filter') continue;
+			// A 'filter' or 'ignore' mark never dims; its labels follow it.
+			if (!dimsBySelection(entry.selectionResponse)) continue;
 			const index = filterGroups.get(entry.selection).index;
 			if (!indices.includes(index)) indices.push(index);
 		}

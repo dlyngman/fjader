@@ -20,6 +20,9 @@ const inChart = (chart: object | null, reads: string[] = []): MarkRoute => ({ re
 /** A selectionResponse 'filter' mark: it reads nothing, as its lifecycle builds it. */
 const filterIn = (chart: object | null): MarkRoute => ({ reads: [], chart, response: 'filter' });
 
+/** A selectionResponse 'ignore' mark: it reads nothing either. */
+const ignoreIn = (chart: object | null): MarkRoute => ({ reads: [], chart, response: 'ignore' });
+
 /** A selection whose sources skip the given charts. */
 function selection(sources: Record<string, object | null> = {}): CrossfilterSelection {
 	const sel = new CrossfilterSelection();
@@ -80,6 +83,14 @@ describe('CrossfilterSelection', () => {
 			sel.update('brush', makeClause('hour BETWEEN 3 AND 9'));
 			expect(sel.predicate(inChart(CHART_A, ['hour']))).toEqual(['hour BETWEEN 3 AND 9']);
 		});
+
+		it("gives an 'ignore' mark no predicate, so a clause change never re-queries it", () => {
+			const sel = selection({ brush: CHART_A, legend: null });
+			sel.update('brush', makeClause('x BETWEEN 1 AND 2'));
+			sel.update('legend', makeClause("carrier IN ('UA')", ['UA'], 'carrier'));
+			expect(sel.predicate(ignoreIn(CHART_B))).toEqual([]);
+			expect(sel.applies('legend', sel.get('legend')!, ignoreIn(CHART_B))).toBe(false);
+		});
 	});
 
 	describe('filters()', () => {
@@ -109,6 +120,15 @@ describe('CrossfilterSelection', () => {
 			const sel = selection({ brush: CHART_A });
 			expect(sel.filters(filterIn(CHART_A), 'brush', null)).toBe(false);
 			expect(sel.filters(filterIn(CHART_B), 'brush', null)).toBe(true);
+		});
+
+		it("filters an 'ignore' mark by nothing: brush, category or its own chart's click", () => {
+			const sel = selection({ brush: CHART_A });
+			sel.addRegistration('toggle-region', { chart: CHART_B, discrete: true });
+			expect(sel.filters(ignoreIn(CHART_C), 'brush', null)).toBe(false);
+			expect(sel.filters(ignoreIn(CHART_C), 'toggle-region', 'region')).toBe(false);
+			expect(sel.filters(ignoreIn(CHART_B), 'toggle-region', 'region')).toBe(false);
+			expect(sel.filters(ignoreIn(null), 'manual', null)).toBe(false);
 		});
 	});
 

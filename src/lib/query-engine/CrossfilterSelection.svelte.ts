@@ -18,6 +18,7 @@
  */
 
 import { SvelteMap } from 'svelte/reactivity';
+import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 import type { ExprNode } from '@uwdata/mosaic-sql';
 
 // ---------------------------------------------------------------------------
@@ -64,12 +65,13 @@ export interface Clause {
  * faceted chart's cells have ids of their own, but share one config.
  * `response` 'filter' makes every selection filter the mark, and a click
  * control's (a discrete registration's) in its own chart too; brushes still
- * skip their own chart.
+ * skip their own chart. 'ignore' makes no selection filter it, so no clause
+ * change re-queries it and preagg builds nothing for it.
  */
 export interface MarkRoute {
 	readonly reads: readonly string[];
 	readonly chart: object | null;
-	readonly response?: 'auto' | 'filter';
+	readonly response?: SelectionResponse;
 }
 
 /**
@@ -136,6 +138,7 @@ export class CrossfilterSelection {
 	 * no allocation, as it runs per mark per clause on every brush frame.
 	 */
 	filters(route: MarkRoute, sourceId: string, key: string | null): boolean {
+		if (route.response === 'ignore') return false;
 		if (key !== null && route.reads.includes(key)) return false;
 		const chart = route.chart;
 		if (chart) {

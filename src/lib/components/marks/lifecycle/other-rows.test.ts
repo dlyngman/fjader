@@ -19,7 +19,7 @@ const columns: Record<string, unknown> = {
 	])
 };
 
-function make(selected: Set<unknown> | null, plan: Partial<SplitPlan> = {}) {
+function make(selected: Set<unknown> | null, plan: Partial<SplitPlan> = {}, dims = true) {
 	const table = {
 		numRows: 4,
 		getChild: (name: string) => columns[name] ?? null
@@ -33,6 +33,7 @@ function make(selected: Set<unknown> | null, plan: Partial<SplitPlan> = {}) {
 		identity: () => ({ x: { otherId: 9 } }) as never,
 		identityKey: () => 'species',
 		filtered: () => false,
+		dims: () => dims,
 		plan: () => ({
 			markType: 'bary',
 			length: 'y',
@@ -78,5 +79,9 @@ describe('OtherRows.statsAt', () => {
 	it('has none where the bar does not split', () => {
 		expect(make(null, { hasJsTransforms: true }).statsAt(9, 0)).toBeNull();
 		expect(make(null, { markType: 'dots' }).statsAt(9, 0)).toBeNull();
+	});
+
+	it('has none for a mark that never dims (filter, ignore)', () => {
+		expect(make(new Set(['b', 'c']), {}, false).statsAt(9, 0)).toBeNull();
 	});
 });
