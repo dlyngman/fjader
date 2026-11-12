@@ -108,8 +108,8 @@ export class TooltipManager {
 	currentChannelFields: Record<string, string> | null = $state(null);
 	currentDisplayFields: string[] | null = $state(null);
 	visible: boolean = $state(false);
-	pointerScreenX: number = $state(0);
-	pointerScreenY: number = $state(0);
+	pointerClientX: number = $state(0);
+	pointerClientY: number = $state(0);
 	matchedRadius: number | null = $state(null);
 
 	// Focused point getters — used by Tooltip and HoverIndicator
@@ -222,12 +222,13 @@ export class TooltipManager {
 	}
 
 	/**
-	 * Update raw screen position for tooltip positioning.
-	 * Called from chart container's pointer move handler.
+	 * The pointer's viewport (client) position, where the tooltip is placed: it
+	 * renders in the top layer, outside the chart's clipping ancestors. Called from
+	 * the chart's pointer move handler.
 	 */
-	updatePointerScreen(x: number, y: number): void {
-		this.pointerScreenX = x;
-		this.pointerScreenY = y;
+	updatePointerClient(x: number, y: number): void {
+		this.pointerClientX = x;
+		this.pointerClientY = y;
 	}
 
 	// =========================================================================
