@@ -897,7 +897,7 @@
 			if (overBrush) {
 				tooltipManager?.updatePosition(null, null);
 			} else {
-				tooltipManager?.updatePointerScreen(x, y);
+				tooltipManager?.updatePointerClient(x + svgLeft, y + svgTop);
 				tooltipManager?.updatePosition(
 					scales.xScaleState?.currentDataPoint,
 					scales.yScaleState?.currentDataPoint
