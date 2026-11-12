@@ -46,13 +46,20 @@
 
 		<!-- Same data with thicker lines and constant color -->
 		<div class="chart-wrapper">
-			<h3>Thick Lines (strokeWidth=5, constant color)</h3>
+			<h3>Thick Lines (strokeWidth=5, constant color, z=series)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
 				{#snippet canvas()}
 					<WebGPUCanvas>
 						{#snippet canvasComponents()}
 							<Grid />
-							<LineMark table="timeseries" x="x" y="y" stroke="#2196f3" strokeWidth={5} />
+							<LineMark
+								table="timeseries"
+								x="x"
+								y="y"
+								z="series"
+								stroke="#2196f3"
+								strokeWidth={5}
+							/>
 						{/snippet}
 					</WebGPUCanvas>
 				{/snippet}
