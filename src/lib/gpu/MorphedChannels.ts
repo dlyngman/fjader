@@ -84,10 +84,16 @@ interface Channel {
  * travelling to its neighbour's value and back. So the claim is checked, and a
  * change snaps rather than interpolates. A hash rather than a comparison
  * because it costs one pass and no retained copy.
+ *
+ * Over the values' bits, read through a view of the same buffer: a
+ * histogram's rows are keyed by bin edges, fractions a sum would truncate
+ * away, so a re-bin could otherwise hash like the bins it replaced.
  */
 export function alignmentKey(ids: ArrayLike<number>): number {
-	let hash = ids.length;
-	for (let i = 0; i < ids.length; i++) hash = (hash * 31 + ids[i]) | 0;
+	const bits =
+		ids instanceof Float32Array ? new Uint32Array(ids.buffer, ids.byteOffset, ids.length) : ids;
+	let hash = bits.length;
+	for (let i = 0; i < bits.length; i++) hash = (Math.imul(hash, 31) + bits[i]) | 0;
 	return hash;
 }
 

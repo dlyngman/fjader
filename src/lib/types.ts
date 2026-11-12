@@ -156,6 +156,18 @@ export interface ChannelIdentity {
 	dropNullId?: number;
 }
 
+/**
+ * One binned channel's bins, as `bin()` resolved them for a query: edge k is
+ * `min + alpha * (k + offset)` for k in [0, count). A rect's upper edge is the
+ * same bins with offset 1.
+ */
+export interface BinPadding {
+	min: number;
+	alpha: number;
+	count: number;
+	offset: number;
+}
+
 export interface MarkConfig {
 	markType: string;
 	table: string;
@@ -166,6 +178,8 @@ export interface MarkConfig {
 	identity?: Record<string, ChannelIdentity>;
 	/** The query's GROUP BY channels, or null when it does not aggregate. Per query. */
 	groupKeys?: string[] | null;
+	/** The numeric `bin()` channels and their bins, which `dense()` pads from. Per query. */
+	bins?: Record<string, BinPadding> | null;
 	[key: string]: unknown;
 }
 

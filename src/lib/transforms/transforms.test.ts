@@ -501,6 +501,68 @@ describe('dense().alignment', () => {
 	});
 });
 
+describe('dense().alignment on a binned axis', () => {
+	// A histogram's bins are enumerable like a dim's ids: edge k is
+	// min + alpha * (k + offset), and a rect carries the same bins twice, its
+	// upper edge at offset 1.
+	const bins = (count = 40) => ({
+		x1: { min: 0, alpha: 50, count, offset: 0 },
+		x2: { min: 0, alpha: 50, count, offset: 1 }
+	});
+	const histogram = {
+		markType: 'recty',
+		table: 't',
+		groupKeys: ['x1', 'x2'],
+		bins: bins()
+	} as MarkConfig;
+	const ALIASES = ['x1', 'x2', 'y'];
+
+	it('aligns on the lower edge, with no identity at all', () => {
+		expect(dense().alignment!(ALIASES, histogram)).toEqual(['x1']);
+	});
+
+	it('crosses a series in, once its dim has landed, and waits for it silently before', () => {
+		const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+		const series = { ...histogram, groupKeys: ['x1', 'x2', 'fill'] } as MarkConfig;
+		expect(dense().alignment!([...ALIASES, 'fill'], series)).toBeNull();
+		const withDim = {
+			...series,
+			identity: { fill: { dim: 'dim_carrier', size: 10, positional: false } }
+		} as MarkConfig;
+		expect(dense().alignment!([...ALIASES, 'fill'], withDim)).toEqual(['x1', 'fill']);
+		expect(spy).not.toHaveBeenCalled();
+		spy.mockRestore();
+	});
+
+	it('refuses, saying why, bins on both axes, bins beside a band, and too many rows', () => {
+		const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+		const twoD = {
+			...histogram,
+			groupKeys: ['x1', 'x2', 'y1', 'y2'],
+			bins: { ...bins(), y1: { min: 0, alpha: 1, count: 30, offset: 0 } }
+		} as MarkConfig;
+		expect(dense().alignment!(['x1', 'x2', 'y1', 'y2', 'fill'], twoD)).toBeNull();
+		const beside = {
+			...histogram,
+			groupKeys: ['x1', 'x2', 'y'],
+			identity: { y: { dim: 'dim_species', size: 3, positional: true } }
+		} as MarkConfig;
+		expect(dense().alignment!(ALIASES, beside)).toBeNull();
+		expect(dense().alignment!(ALIASES, { ...histogram, bins: bins(20_000) })).toBeNull();
+		expect(spy.mock.calls.map((c) => c[0])).toEqual([
+			expect.stringMatching(/both axes/),
+			expect.stringMatching(/beside a categorical one/),
+			expect.stringMatching(/20000 bins/)
+		]);
+		spy.mockRestore();
+	});
+
+	it('pads nothing for a bin channel that is not a group key, or a select without one', () => {
+		expect(dense().alignment!(['x', 'y'], { ...histogram, groupKeys: ['x'] })).toBeNull();
+		expect(dense().alignment!(ALIASES, { ...histogram, groupKeys: null })).toBeNull();
+	});
+});
+
 describe('topN with a getter count', () => {
 	// A getter keeps the transform the same object while the count changes, so a
 	// mark is not rebuilt; the SQL reads it when assembled, and `specs` is what a
