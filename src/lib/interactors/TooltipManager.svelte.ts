@@ -166,6 +166,15 @@ export class TooltipManager {
 	}
 
 	/**
+	 * Run the hover query again at the last position, if the pointer is still
+	 * in the chart: a mark's tooltip table was rewritten under a still pointer,
+	 * so the row it shows is the old data's. The next frame runs it.
+	 */
+	refresh(): void {
+		if (this.#cursorActive) this.#hasPending = true;
+	}
+
+	/**
 	 * Cycle the focused point index by delta. Wraps around.
 	 * Remembers the focused category so it persists across cursor moves.
 	 */

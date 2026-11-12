@@ -782,12 +782,32 @@ export class MarkLifecycleV2 {
 			});
 		});
 
-		// Tooltip: write tooltip table when data updates (debounced).
+		// Tooltip: two effects, so a data update does not take the table away.
+		//
+		// This one owns the table's lifetime: it drops it when tooltips go from
+		// wanted to not. It used to be one effect with the write below, and its
+		// cleanup then ran on every data update too: the table was dropped and
+		// marked not ready, the mark's tooltip unregistered, and the hovered row
+		// went with it. A click right after a data update found no row under the
+		// pointer, read as a click on empty space and cleared the selection, and
+		// the next click did nothing until the pointer moved.
 		$effect(() => {
 			const tooltipConfig = this.#reactiveConfig.tooltip;
 			const fitDomain = this.#reactiveConfig.fitDomain;
-			const tooltipWanted = tooltipConfig !== false || !!fitDomain;
-			if (!tooltipWanted) return;
+			if (tooltipConfig === false && !fitDomain) return;
+			return () => {
+				clearTimeout(this.#tooltipWriteTimeout!);
+				this.#tooltipTableReady = false;
+				this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
+			};
+		});
+
+		// And this one rewrites it when data updates (debounced). The old table
+		// stays readable until the rewrite replaces it.
+		$effect(() => {
+			const tooltipConfig = this.#reactiveConfig.tooltip;
+			const fitDomain = this.#reactiveConfig.fitDomain;
+			if (tooltipConfig === false && !fitDomain) return;
 
 			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
@@ -799,13 +819,7 @@ export class MarkLifecycleV2 {
 					if (data && data.length > 0) this.#writeTooltipTable(data);
 				}, 300);
 			});
-
-			// Cleanup: when tooltip goes true→false, drop the temp table.
-			return () => {
-				clearTimeout(this.#tooltipWriteTimeout!);
-				this.#tooltipTableReady = false;
-				this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
-			};
+			return () => clearTimeout(this.#tooltipWriteTimeout!);
 		});
 
 		// fitDomain — query DuckDB for fitted axis extent on driving axis change.
@@ -2008,10 +2022,10 @@ export class MarkLifecycleV2 {
 				// the rest are scalars (the rank, id columns), cheap to keep, and the
 				// lists are the only ones whose size grows with the field.
 				const withoutMembers = withoutOtherMembers(tooltipQuery);
-				await this.#queryEngine.exec([
-					`DROP TABLE IF EXISTS "${tableName}"`,
-					`CREATE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`
-				]);
+				// One statement: a hover query never finds the table missing.
+				await this.#queryEngine.exec(
+					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`
+				);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
 				// JS transforms produce small datasets (tens of rows).
@@ -2066,6 +2080,9 @@ export class MarkLifecycleV2 {
 			}
 
 			this.#tooltipTableReady = true;
+			// The row under a still pointer was read from the old table: read it
+			// again, so the tooltip and a click show the new data without a move.
+			this.#chartContext.tooltipManager?.refresh();
 			this.#onTooltipTableWritten();
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
