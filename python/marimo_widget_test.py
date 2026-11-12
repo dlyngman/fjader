@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.20.4"
+__generated_with = "0.25.2"
 app = marimo.App(width="full")
 
 
@@ -288,6 +288,54 @@ def _():
 
 @app.cell
 def _():
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell(expand_output=True)
+def _(fj, weather):
+    # --- Background totals with a top 3: contribute_domain=False on one layer ---
+    # Brush max temperature. In both bar charts the coloured part shrinks over
+    # its grey total. Ranked over the whole: the same three weather types stay.
+    # Re-ranked within the selection: brushing the hot tail can change them.
+    temps = fj.plot(
+        fj.rect_y(data=weather, x=fj.bin("temp_max"), y=fj.count(), selection="brush"),
+        height=200,
+        x_label="temp_max",
+        y_label="days",
+        interactors=[fj.interval_x()],
+    )
+    ranked_on_whole = fj.plot(
+        fj.bar_y(
+            data=weather, x="weather", y=fj.count(), fill="#999", opacity=0.25,
+            selection="brush", selection_response="ignore", transforms=[fj.topN(3)],
+        ),
+        fj.bar_y(
+            data=weather, x="weather", y=fj.count(), fill="weather",
+            selection="brush", contribute_domain=False,
+        ),
+        height=250,
+        x_label="weather, top 3 of all days",
+        y_label="days, top 3 of all days",
+    )
+    ranked_on_part = fj.plot(
+        fj.bar_y(
+            data=weather, x="weather", y=fj.count(), fill="#999", opacity=0.25,
+            selection="brush", selection_response="ignore", contribute_domain=False,
+        ),
+        fj.bar_y(
+            data=weather, x="weather", y=fj.count(), fill="weather",
+            selection="brush", transforms=[fj.topN(3)],
+        ),
+        height=250,
+        x_label="weather, top 3 of brushed days",
+        y_label="days, top 3 of brushed days",
+    )
+    fj.show(fj.vconcat(temps, ranked_on_whole, ranked_on_part))
     return
 
 

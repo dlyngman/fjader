@@ -60,6 +60,19 @@ class TestBarMarks:
         assert d["mark"] == "barX"
         assert d["inset"] == 1
 
+    def test_contribute_domain(self):
+        # The top N background-totals layering: the faint whole ranks, the part
+        # follows its axis. False is the value that matters, so it must survive.
+        whole = fj.bar_y(
+            table="t", x="carrier", y=fj.count(), opacity=0.2,
+            selection_response="ignore", transforms=[fj.topN(4)],
+        )
+        part = fj.bar_y(table="t", x="carrier", y=fj.count(), contribute_domain=False)
+        assert "contributeDomain" not in whole.to_mark_dict()
+        assert part.to_mark_dict()["contributeDomain"] is False
+        horizontal = fj.bar_x(table="t", x="n", y="c", contribute_domain=False)
+        assert horizontal.to_mark_dict()["contributeDomain"] is False
+
     def test_bar_y_with_transforms(self):
         m = fj.bar_y(
             table="t", x="species", y="count()", fill="species",

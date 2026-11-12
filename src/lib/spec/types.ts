@@ -235,6 +235,11 @@ export interface BarXMarkSpec extends BaseMarkSpec {
 	inset?: number;
 	dx?: number;
 	dy?: number;
+	/**
+	 * `false`: follow the band axis the other marks on it decide, adding no
+	 * categories to it; see BaseMarkProps. Default `true`.
+	 */
+	contributeDomain?: boolean;
 }
 
 export interface BarYMarkSpec extends BaseMarkSpec {
@@ -251,6 +256,11 @@ export interface BarYMarkSpec extends BaseMarkSpec {
 	inset?: number;
 	dx?: number;
 	dy?: number;
+	/**
+	 * `false`: follow the band axis the other marks on it decide, adding no
+	 * categories to it; see BaseMarkProps. Default `true`.
+	 */
+	contributeDomain?: boolean;
 }
 
 export interface LineMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
