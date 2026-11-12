@@ -7,6 +7,7 @@ import {
 	ruleHasExtent,
 	readsForResponse,
 	groupIndexForResponse,
+	dimsBySelection,
 	NO_GROUP,
 	rendererForMark
 } from './activity-reads';
@@ -133,6 +134,15 @@ describe('activity reads', () => {
 		expect(readsForResponse(undefined, ['carrier'])).toEqual(['carrier']);
 		expect(groupIndexForResponse('filter', 2)).toBe(NO_GROUP);
 		expect(groupIndexForResponse(undefined, 2)).toBe(2);
+	});
+
+	it("'ignore' never dims: no reads and no group, like 'filter'", () => {
+		expect(dimsBySelection(undefined)).toBe(true);
+		expect(dimsBySelection('auto')).toBe(true);
+		expect(dimsBySelection('filter')).toBe(false);
+		expect(dimsBySelection('ignore')).toBe(false);
+		expect(readsForResponse('ignore', ['carrier'])).toEqual([]);
+		expect(groupIndexForResponse('ignore', 2)).toBe(NO_GROUP);
 	});
 
 	it('identityActivity returns fully active for NO_GROUP before reading anything', async () => {

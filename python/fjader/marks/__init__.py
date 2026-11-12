@@ -42,7 +42,7 @@ def dot(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -71,7 +71,8 @@ def dot(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -116,7 +117,7 @@ def bar_x(
     dx: float | None = None,
     dy: float | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -150,7 +151,8 @@ def bar_x(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -194,7 +196,7 @@ def bar_y(
     dx: float | None = None,
     dy: float | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -228,7 +230,8 @@ def bar_y(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -270,7 +273,7 @@ def line(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -302,7 +305,8 @@ def line(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -349,7 +353,7 @@ def area_y(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -384,7 +388,8 @@ def area_y(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -431,7 +436,7 @@ def area_x(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -466,7 +471,8 @@ def area_x(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -516,7 +522,7 @@ def rect(
     dx: float | None = None,
     dy: float | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -554,7 +560,8 @@ def rect(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -600,7 +607,7 @@ def rect_x(
     dy: float | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -633,7 +640,8 @@ def rect_x(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -676,7 +684,7 @@ def rect_y(
     dy: float | None = None,
     preferred_x_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -709,7 +717,8 @@ def rect_y(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -754,7 +763,7 @@ def text(
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
     selection: str | None = None,
-    selection_response: Literal["auto", "filter"] | None = None,
+    selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
     scheme: ColorScheme | None = None,
     limit: int | None = None,
@@ -789,7 +798,8 @@ def text(
             a field it draws by (top N within the selected region), and it never
             dims. A legend, Toggle or band label filters it in its own chart too;
             a brush still skips its own chart. "auto" (default) dims it for a
-            categorical selection on such a field.
+            categorical selection on such a field. "ignore": no selection
+            filters or dims it; context, such as the whole behind a filtered part.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".

@@ -66,8 +66,16 @@ export interface OtherRowsDeps {
 	identity: () => Record<string, ChannelIdentity> | null;
 	/** The identity key of a band axis, or null when it has none. */
 	identityKey: (axis: 'x' | 'y') => string | null;
-	/** The mark is filtered by the selection rather than dimmed by it. */
+	/**
+	 * The mark is filtered by every selection (`'filter'`): its Other is
+	 * recomputed inside the selection, so a click on it drills down.
+	 */
 	filtered: () => boolean;
+	/**
+	 * A selection can dim the mark (`'auto'`). Not under `'filter'` or
+	 * `'ignore'`, whose Other bars get no selected share.
+	 */
+	dims: () => boolean;
 	/** The mark's plan, or null before its setup completes. */
 	plan: () => SplitPlan | null;
 	/** The identity key of the mark's ordinal colour scale, or null. */
@@ -198,7 +206,7 @@ export class OtherRows {
 	 * The band axis whose Other bar splits, or null. Only where a share is what
 	 * it looks like:
 	 * - a bar mark ('bary', 'barx') with a topN Other bucket, dimming (not
-	 *   'filter', which never dims) and without JS transforms, whose rows would
+	 *   'filter' or 'ignore', which never dim) and without JS transforms, whose rows would
 	 *   no longer line up with the query's;
 	 * - whose length is the measure topN ranks by, which is what Other sums;
 	 * - and that measure a bare COUNT or SUM, or a raw column: a mean or a max
@@ -206,7 +214,7 @@ export class OtherRows {
 	 */
 	get #splitAxis(): 'x' | 'y' | null {
 		const plan = this.#deps.plan();
-		if (!plan || this.#deps.filtered()) return null;
+		if (!plan || !this.#deps.dims()) return null;
 		if (!plan.hasOther || plan.hasJsTransforms) return null;
 		if (plan.markType !== 'bary' && plan.markType !== 'barx') return null;
 		return splittable(plan.length, plan.by, plan.expr)

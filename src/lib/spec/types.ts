@@ -192,7 +192,7 @@ interface BaseMarkSpec {
 	table: string;
 	selection?: string; // selection group name (auto-created in SelectionRegistry)
 	/** How the mark responds to selections in its group; see BaseMarkProps. Default 'auto'. */
-	selectionResponse?: 'auto' | 'filter';
+	selectionResponse?: 'auto' | 'filter' | 'ignore';
 	/** What the mark does with NULL in its categorical channels; see BaseMarkProps. Default 'keep'. */
 	nulls?: 'keep' | 'drop';
 	scheme?: ColorScheme;

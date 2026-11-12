@@ -50,8 +50,9 @@ class Mark:
     # it. "filter": every selection filters it, so aggregates are recomputed
     # for the subset (top N within the selected region). A "filter" mark never
     # dims; a legend, Toggle or band label filters it in its own chart too,
-    # while a brush still skips its own chart.
-    selection_response: Literal["auto", "filter"] | None = None
+    # while a brush still skips its own chart. "ignore": no selection filters
+    # or dims it; context, such as the whole drawn behind a filtered part.
+    selection_response: Literal["auto", "filter", "ignore"] | None = None
     # NULL in the mark's categorical channels (band axis, ordinal colour,
     # series, facet). "keep" (default): a category like any other, drawn and
     # labelled "(null)". "drop": those rows are left out before any transform,

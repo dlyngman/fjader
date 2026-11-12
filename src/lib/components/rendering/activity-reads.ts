@@ -139,25 +139,35 @@ export const NO_READS: readonly string[] = [];
  * by (its band axes, its ordinal colour) dims it, and any other selection
  * filters it. 'filter': every selection filters it, even on a field it draws
  * by, so its aggregates are recomputed for the subset (top N within a region).
+ * 'ignore': no selection filters or dims it; context, such as the whole
+ * drawn behind a filtered part.
  */
-export type SelectionResponse = 'auto' | 'filter';
+export type SelectionResponse = 'auto' | 'filter' | 'ignore';
 
 export { NO_GROUP };
 
-/** A mark's reads under its selection response: none for 'filter', which never dims. */
+/**
+ * Whether a selection can dim the mark: only under 'auto'. A 'filter' mark is
+ * filtered instead, and an 'ignore' mark neither.
+ */
+export function dimsBySelection(response: SelectionResponse | undefined): boolean {
+	return response !== 'filter' && response !== 'ignore';
+}
+
+/** A mark's reads under its selection response: none for a mark that never dims. */
 export function readsForResponse(
 	response: SelectionResponse | undefined,
 	reads: readonly string[]
 ): readonly string[] {
-	return response === 'filter' ? NO_READS : reads;
+	return dimsBySelection(response) ? reads : NO_READS;
 }
 
-/** The group index a mark's shader reads activity with: NO_GROUP for 'filter'. */
+/** The group index a mark's shader reads activity with: NO_GROUP for a mark that never dims. */
 export function groupIndexForResponse(
 	response: SelectionResponse | undefined,
 	groupIndex: number
 ): number {
-	return response === 'filter' ? NO_GROUP : groupIndex;
+	return dimsBySelection(response) ? groupIndex : NO_GROUP;
 }
 
 /**

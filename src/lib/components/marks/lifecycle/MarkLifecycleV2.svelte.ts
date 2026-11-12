@@ -67,6 +67,7 @@ import { identityKeyFor } from '$lib/query-engine/identity-key';
 import type { MarkRoute } from '$lib/query-engine/CrossfilterSelection.svelte';
 import {
 	activityReads,
+	dimsBySelection,
 	groupIndexForResponse,
 	NO_READS,
 	readsFor,
@@ -494,6 +495,7 @@ export class MarkLifecycleV2 {
 			identity: () => this.#identity,
 			identityKey: (axis) => this.#identityKey(axis)?.key ?? null,
 			filtered: () => this.#reactiveConfig.selectionResponse === 'filter',
+			dims: () => dimsBySelection(this.#reactiveConfig.selectionResponse),
 			plan: () => this.#splitPlan,
 			colorKey: () => {
 				const color = this.#colorScaleState;
