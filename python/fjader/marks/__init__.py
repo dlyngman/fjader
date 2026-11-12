@@ -73,6 +73,9 @@ def dot(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.dot(..., selection_response="ignore", opacity=0.2) * fj.dot(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -153,6 +156,9 @@ def bar_x(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.bar_x(..., selection_response="ignore", opacity=0.2) * fj.bar_x(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -232,6 +238,9 @@ def bar_y(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.bar_y(..., selection_response="ignore", opacity=0.2) * fj.bar_y(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -307,6 +316,9 @@ def line(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.line(..., selection_response="ignore", opacity=0.2) * fj.line(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -390,6 +402,9 @@ def area_y(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.area_y(..., selection_response="ignore", opacity=0.2) * fj.area_y(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -473,6 +488,9 @@ def area_x(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.area_x(..., selection_response="ignore", opacity=0.2) * fj.area_x(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -562,6 +580,9 @@ def rect(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.rect(..., selection_response="ignore", opacity=0.2) * fj.rect(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -642,6 +663,9 @@ def rect_x(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.rect_x(..., selection_response="ignore", opacity=0.2) * fj.rect_x(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -719,6 +743,9 @@ def rect_y(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.rect_y(..., selection_response="ignore", opacity=0.2) * fj.rect_y(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".
@@ -800,6 +827,9 @@ def text(
             a brush still skips its own chart. "auto" (default) dims it for a
             categorical selection on such a field. "ignore": no selection
             filters or dims it; context, such as the whole behind a filtered part.
+            Background totals are two layers:
+            ``fj.text(..., selection_response="ignore", opacity=0.2) * fj.text(...)``
+            draws the filtered part over its faint total.
         nulls: "drop" leaves out rows whose band axis, ordinal colour, series
             or facet value is NULL, before any transform. "keep" (default) draws
             NULL as a category, labelled "(null)".

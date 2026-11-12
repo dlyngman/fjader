@@ -51,7 +51,8 @@ class Mark:
     # for the subset (top N within the selected region). A "filter" mark never
     # dims; a legend, Toggle or band label filters it in its own chart too,
     # while a brush still skips its own chart. "ignore": no selection filters
-    # or dims it; context, such as the whole drawn behind a filtered part.
+    # or dims it; context, such as the whole drawn behind a filtered part:
+    # fj.bar_y(..., selection_response="ignore", opacity=0.2) * fj.bar_y(...).
     selection_response: Literal["auto", "filter", "ignore"] | None = None
     # NULL in the mark's categorical channels (band axis, ordinal colour,
     # series, facet). "keep" (default): a category like any other, drawn and
