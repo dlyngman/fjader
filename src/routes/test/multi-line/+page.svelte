@@ -14,6 +14,7 @@
 		Legend
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
+	import Toggle from '$lib/interactors/Toggle.svelte';
 
 	const { queryEngine } = initFjader();
 	let isLoaded = $state(false);
@@ -45,7 +46,7 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<h3>stroke="industry" (group + color)</h3>
+				<h3>stroke="industry" (group + color), click a line or the legend</h3>
 				<ChartContainer legendPosition="top">
 					{#snippet legend()}
 						<Legend color="industry" />
@@ -73,11 +74,17 @@
 					{#snippet foreground()}
 						<Crosshair />
 					{/snippet}
+					{#snippet interactors()}
+						<Toggle field="industry" />
+					{/snippet}
 				</ChartContainer>
 			</div>
 
 			<div class="chart-wrapper">
 				<h3>z="industry" (group only, constant color)</h3>
+				<!-- Selections do not dim lines grouped by z alone yet: dimming reads the
+				     stroke colour, which is constant here. -->
+				<p class="note">No click-to-dim yet: lines dim by stroke colour, not by z.</p>
 				<ChartContainer>
 					{#snippet background()}
 						<Frame />
@@ -134,6 +141,12 @@
 		height: 460px;
 		display: flex;
 		flex-direction: column;
+	}
+
+	.note {
+		margin: 0 0 8px;
+		font-size: 12px;
+		color: #888;
 	}
 
 	h3 {

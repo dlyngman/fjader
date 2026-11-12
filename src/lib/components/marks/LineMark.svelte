@@ -148,7 +148,9 @@
 		inferMarkScaleType(entry.y, entry.table, entry.preferredYScaleType)
 	);
 
-	// Series grouping: z overrides stroke for grouping
+	// Series grouping: z overrides stroke for grouping. A selection dims a line
+	// by its stroke colour only; dimming by a separate z field is not supported
+	// yet (see activityReads in activity-reads.ts).
 	const seriesChannelKey = entry.z != null ? 'z' : 'stroke';
 	const markSeries = new MarkSeries(
 		() => entry.z ?? entry.stroke,
